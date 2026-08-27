@@ -158,11 +158,6 @@ export class EventEntity {
   @Column({ type: 'text', default: 'confirmed' })
   status!: string;
 
-  // last_accessed stays on the hot table (read-path touch). salience /
-  // access_count / other unused analytics live in ci.event_analytics.
-  @Column({ type: 'timestamptz', nullable: true, name: 'last_accessed' })
-  lastAccessed!: Date | null;
-
   // Consent / sharing scope (mirrors ci.answers.sharing_level). Stored raw at
   // ingest; redaction happens at read based on the consumer's scope (G2).
   @Column({ type: 'text', default: 'private', name: 'sharing_level' })
@@ -247,7 +242,6 @@ export class EventEntity {
       parentEventId: entity.parentEventId,
       taskId: entity.taskId,
       plannedMinutes: entity.plannedMinutes,
-      lastAccessed: entity.lastAccessed,
       sharingLevel: entity.sharingLevel,
       createdBy: entity.createdBy,
       userId: entity.userId,

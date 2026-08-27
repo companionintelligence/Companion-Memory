@@ -21,8 +21,6 @@ function makeParams() {
 // Quoted-printable and base64 multipart sample (simplified)
 const SAMPLE = `From someone@example.com Sat Jan 01 00:00:00 2024\nDate: Sat, 01 Jan 2024 00:00:00 +0000\nFrom: Someone <someone@example.com>\nTo: Friend <friend@example.com>\nMessage-ID: <abc123@mx.example.com>\nSubject: First Mail\nContent-Type: multipart/alternative; boundary="b1"\n\n--b1\nContent-Type: text/plain\nContent-Transfer-Encoding: quoted-printable\n\nHello=2C world!\n--b1\nContent-Type: text/html\n\n<p>Hello world!</p>\n--b1--\nFrom other@example.com Sat Jan 01 00:10:00 2024\nDate: Sat, 01 Jan 2024 00:10:00 +0000\nFrom: Other <other@example.com>\nTo: Someone <someone@example.com>\nIn-Reply-To: <abc123@mx.example.com>\nReferences: <abc123@mx.example.com> <def456@mx.example.com>\nSubject: =?UTF-8?B?UmU6IEZpcnN0IE1haWw=?=\nContent-Transfer-Encoding: base64\n\nU2Vjb25kIGJvZHkgbGluZQ==\n`;
 
-// Minimal RFC2047 base64 subject decode (leave for importer future enhancement) just tests existing stored value
-
 describe('Gmail advanced mbox parsing', () => {
   it('parses multiple messages with decoding and threading metadata', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-gmail-adv-'));
@@ -42,5 +40,9 @@ describe('Gmail advanced mbox parsing', () => {
     expect(second?.item?.metadata?.References).toContain('abc123@mx.example.com');
     // ensure base64 body decoded ("Second body line" sample decodes to 'Second body line')
     expect((await second?.item?.content.data?.())?.toString()).toContain('Second body line');
+    // The RFC 2047 encoded-word Subject ("=?UTF-8?B?...?=") is decoded, not
+    // stored raw — parseHeaders now runs every header value through
+    // decodeHeaderField (email_mime.ts).
+    expect(second?.item?.metadata?.Subject).toBe('Re: First Mail');
   });
 });

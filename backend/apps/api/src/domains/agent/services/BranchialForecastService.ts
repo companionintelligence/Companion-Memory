@@ -221,6 +221,7 @@ export class BranchialForecastService {
       if (!result.success) {
         return null;
       }
+
       parsed = result.data;
     } catch {
       return null;

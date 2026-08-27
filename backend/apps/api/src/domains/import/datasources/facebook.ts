@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { htmlToText as sharedHtmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Metadata } from './timeline';
@@ -133,14 +134,13 @@ function decodeEntities(s: string): string {
     .replace(/&#x27;/gi, "'");
 }
 
-// Strip <style>/<script> blocks, then all remaining tags, decode entities, collapse whitespace.
+// Strip tags via the shared parser-based flattener (real tag nesting, the
+// full HTML5 entity table — see its own doc comment), then collapse to ONE
+// flat line: a heading or message bubble here has no paragraph structure of
+// its own, so a newline the flattener introduces at a Meta div boundary is
+// export markup, not something the person wrote.
 function htmlToText(fragment: string): string {
-  const noScript = fragment
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ');
-  const noTags = noScript.replace(/<[^>]+>/g, ' ');
-
-  return decodeEntities(noTags).replace(/\s+/g, ' ').trim();
+  return sharedHtmlToText(fragment).replace(/\s+/g, ' ').trim();
 }
 
 // Extract a timestamp from an entry fragment. Prefer a machine-readable

@@ -9,13 +9,7 @@
 
 /** Lifecycle states of an Ask. See ARCHITECTURE.md §6 (ask lifecycle). */
 export type AskStatus =
-  | 'sent'
-  | 'delivered'
-  | 'under_review'
-  | 'answering'
-  | 'answered'
-  | 'declined'
-  | 'expired';
+  'sent' | 'delivered' | 'under_review' | 'answering' | 'answered' | 'declined' | 'expired';
 
 /** Terminal outcome recorded in the per-ask audit log. */
 export type AskAuditOutcome = 'answered' | 'auto_answered' | 'declined' | 'expired';
@@ -26,6 +20,12 @@ export type AskAuditOutcome = 'answered' | 'auto_answered' | 'declined' | 'expir
  * default), `block` denies outright.
  */
 export type GrantMode = 'auto' | 'review' | 'block';
+
+/**
+ * The kinds of object a grant may name directly, rather than by class of
+ * question. Pinned to the `ask_grants_resource_type_chk` CHECK.
+ */
+export type AskGrantResourceType = 'saved_search';
 
 /** Outcome of evaluating an ask against the owner's standing grants. */
 export type GrantDecision = 'auto' | 'review' | 'deny';
@@ -105,6 +105,15 @@ export interface AskQuery {
   dataClass?: string;
   /** The natural-language question as composed by the asker (shown back to both sides). */
   prompt: string;
+  /**
+   * What is making this ask, when the asker declares it.
+   *
+   * A FIRST-CLASS FIELD rather than one more key in `filters`: it is matched by
+   * the consent evaluator and rendered at the consent moment, and `filters` is
+   * the bag of things that reach the executor. Burying a consent-relevant fact
+   * among search parameters is how it ends up being treated as one.
+   */
+  actor?: AskActor;
   /** Optional structured filters mirroring the explorer capture (who / where / when). */
   filters?: Record<string, unknown>;
 }
@@ -133,6 +142,11 @@ export interface AskGrantScope {
   notAfter?: string;
   /** Purpose the grant is limited to, matched against the ask's stated purpose. */
   purpose?: string;
+  /**
+   * Who may exercise this grant. Absent = no restriction from this dimension.
+   * See {@link AskDelegation}.
+   */
+  delegation?: AskDelegation;
   [key: string]: unknown;
 }
 
@@ -149,8 +163,59 @@ export interface GrantEvaluation {
   maxDisclosure?: DisclosureRung;
 }
 
+/**
+ * WHO may exercise a grant — the person, or something acting for them.
+ *
+ * Adapted from UMA-for-agents' recommendation #25, which adds a
+ * `delegation: none | first-party-only | any-agent` field for exactly this
+ * question. Until now a grant said WHO may ask and WHAT about, and had no way
+ * to say whether "Bob" meant Bob or Bob's assistant. That stops being academic
+ * the moment asks arrive from the Intent Catalog / MCP tool registry rather
+ * than from a person at a keyboard.
+ *
+ *   none              — the person themselves, and nothing acting for them.
+ *   first-party-only  — the grantee's own Companion may ask on their behalf.
+ *   any-agent         — including a third-party agent they delegated to.
+ *
+ * Absent means no restriction from this dimension, which is the contract every
+ * other {@link AskGrantScope} field holds. The safety is on the ASK side: an
+ * ask that does not say who is acting cannot satisfy a grant that restricts it.
+ * See `scopeCoversQuery`.
+ */
+export type AskDelegation = 'none' | 'first-party-only' | 'any-agent';
+
+/** What is making an ask — a person, or software acting for them. */
+export type AskActorKind = 'person' | 'first-party-agent' | 'third-party-agent';
+
+export interface AskActor {
+  kind: AskActorKind;
+  /**
+   * Opaque label for the acting software, shown to the owner at the consent
+   * moment. Never used for matching — {@link AskDelegation} matches on `kind`
+   * alone, because a name is a claim the asker writes and a kind is a
+   * commitment they make.
+   */
+  label?: string;
+}
+
 /** Whether an ask is local to this box, sent to a peer, or received from one. */
 export type AskDirection = 'local' | 'outbound' | 'inbound';
+
+/**
+ * How an ask arrived, when it arrived signed.
+ *
+ * All three fields travel together or none do — a thumbprint with no timestamp
+ * claims a verification that never happened, and a timestamp with no thumbprint
+ * claims one by nobody (`asks_channel_paired_chk`).
+ */
+export interface AskChannelProvenance {
+  /** RFC 7638 thumbprint of the key that signed the request, as of arrival. */
+  keyThumbprint: string;
+  /** When this box verified it. */
+  verifiedAt: Date;
+  /** The signature base's covered components, as actually presented. */
+  covered: string[];
+}
 
 export interface CreateAskDto {
   id?: string;
@@ -164,6 +229,12 @@ export interface CreateAskDto {
    */
   peerLinkId?: string | null;
   direction?: AskDirection;
+  /**
+   * Set when the request that produced this ask carried a verified RFC 9421
+   * signature. Omitted means it did not — an unsigned channel, which the ask
+   * surfaces state plainly rather than hiding.
+   */
+  channel?: AskChannelProvenance | null;
 }
 
 export interface CreateAskGrantDto {
@@ -172,6 +243,12 @@ export interface CreateAskGrantDto {
   granteeUserId?: string | null;
   /** Grant addressed to a linked peer Companion (federated asks). */
   granteePeerLinkId?: string | null;
+  /**
+   * The single object this grant covers. Both or neither — a resource id with
+   * no type names nothing, a type with no id is a wildcard.
+   */
+  resourceType?: AskGrantResourceType | null;
+  resourceId?: string | null;
   queryType: string;
   dataClass?: string | null;
   scope?: AskGrantScope | null;
@@ -197,7 +274,13 @@ export interface UpdateAskGrantDto {
 }
 
 export interface RecordAskAuditDto {
-  askId: string;
+  /**
+   * The ask this outcome belongs to, or NULL for a disclosure with no ask
+   * behind it — a read through a shared saved search, which is pre-authorized
+   * and therefore has no request lifecycle to model. The column has been
+   * nullable since it was written (`ON DELETE SET NULL`).
+   */
+  askId: string | null;
   /** NULL for an inbound peer ask — the asker is identified by `peerLinkId`. */
   askerUserId: string | null;
   peerLinkId?: string | null;

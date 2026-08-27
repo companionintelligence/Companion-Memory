@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { Button, Dialog, IconButton, Label, useToast } from '@ci/shadcn';
-import { Check, ClipboardCopy, Mail, MessageSquare } from '@ci/shadcn/icons';
+import { Check, ClipboardCopy, Mail, MessageSquare, QrCode as QrCodeIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { QrCode } from '@/components/QrCode';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { SavedSearchGridItemFragment } from './SavedSearch';
@@ -40,6 +41,7 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
   const { toast } = useToast();
 
   const [copied, setCopied] = useState<'link' | null>(null);
+  const [showQr, setShowQr] = useState(false);
   const copyTimer = useRef<number | null>(null);
   // Local sharing state seeded from the (non-reactive) fragment and advanced by
   // the mutation result, so the link/embed appear the instant sharing is toggled.
@@ -103,7 +105,10 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
         window.clearTimeout(copyTimer.current);
       }
 
-      copyTimer.current = window.setTimeout(() => setCopied((current) => (current === 'link' ? null : current)), 1500);
+      copyTimer.current = window.setTimeout(
+        () => setCopied((current) => (current === 'link' ? null : current)),
+        1500,
+      );
       toast.success('Link copied');
     } catch {
       // Clipboard can be blocked (insecure context / denied permission); the text
@@ -143,8 +148,8 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
         <Dialog.Header>
           <Dialog.Title>Share “{name}”</Dialog.Title>
           <Dialog.Description>
-            Anyone signed in to this Companion who has the link can view this search's results, run as
-            you. They'll need an account here first — this isn't a public link.
+            Anyone signed in to this Companion who has the link can view this search's results, run as you.
+            They'll need an account here first — this isn't a public link.
           </Dialog.Description>
         </Dialog.Header>
 
@@ -213,7 +218,40 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
                       </a>
                     </Button>
                   ))}
+                  {/*
+                    A tile, not a link: the QR is the same intra-household hand-off
+                    the mailto/sms tiles are, for the case where the other person is
+                    stood next to you with their phone out and typing the token is
+                    the only alternative.
+                  */}
+                  <Button
+                    variant={showQr ? 'default' : 'outline'}
+                    size="sm"
+                    aria-pressed={showQr}
+                    aria-label={showQr ? t('SAVED_SEARCH_HIDE_QR') : t('SAVED_SEARCH_SHOW_QR')}
+                    onClick={() => setShowQr((current) => !current)}
+                  >
+                    <QrCodeIcon className="w-4 h-4" />
+                    <span className="ml-1">QR code</span>
+                  </Button>
                 </div>
+
+                {showQr && (
+                  <div className="pt-2">
+                    <QrCode value={url} fallback={url} caption="Scan to open on another device" mark />
+                    {/*
+                      Same caveat as the modal's own description, restated here
+                      because a QR invites being pointed at a stranger's phone:
+                      `/shared/:token` sits inside ProtectedRoute (App.tsx), so a
+                      scan by someone without an account on this appliance lands
+                      on the login wall, not the search.
+                    */}
+                    <p className="mt-2 text-center text-xs text-muted-foreground">
+                      Scanning still lands on the sign-in screen for anyone without an account on this
+                      Companion.
+                    </p>
+                  </div>
+                )}
               </div>
             </>
           )}

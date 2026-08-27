@@ -20,8 +20,21 @@ const UPDATE_PLACE = gql(`
 
 type PlaceProperties = {
   address?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
+  /**
+   * The coordinate as the WRITERS spell it. Nothing writes `latitude`/
+   * `longitude` into this bag: `PlaceService.upsert` writes `lat`/`lng`
+   * (PlaceService.ts), and LifeScope-style rows carry `geolocation` as
+   * [lng, lat]. This component used to read `properties.latitude`, which is
+   * never set, so the Coordinates row was blank for every place — including
+   * ones whose coordinate was known to full precision in `location_point`.
+   *
+   * The typed `latitude`/`longitude` on PlaceType are the right source: the
+   * entity's @AfterLoad already resolves all three shapes into them
+   * (PlaceEntity.loadPropertiesFromJsonb). These keys stay only as a last
+   * resort for a row the resolver did not hydrate.
+   */
+  lat?: number | null;
+  lng?: number | null;
 };
 
 interface Props {
@@ -33,7 +46,9 @@ export function PlaceDetails({ entity }: Props) {
   const [updatePlace] = useMutation(UPDATE_PLACE);
 
   const properties = (data.properties ?? {}) as PlaceProperties;
-  const hasCoordinates = properties.latitude != null && properties.longitude != null;
+  const latitude = data.latitude ?? properties.lat ?? null;
+  const longitude = data.longitude ?? properties.lng ?? null;
+  const hasCoordinates = latitude != null && longitude != null;
 
   return (
     <EntityDetailScaffold
@@ -61,7 +76,7 @@ export function PlaceDetails({ entity }: Props) {
       metaItems={[
         {
           label: 'Where',
-          value: hasCoordinates ? `${properties.latitude}, ${properties.longitude}` : null,
+          value: hasCoordinates ? `${latitude}, ${longitude}` : null,
         },
         { label: 'Type', value: 'Place' },
       ]}

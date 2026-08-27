@@ -76,6 +76,34 @@ describe('GraphEventListener.handleNodeUpserted', () => {
     }
   });
 
+  it('emits exactly ONE search event per node — never a second, generic embed job', async () => {
+    // A graph node reaches the search index through the per-type
+    // `*Created`/`*UpdatedEvent` alone, because the matching
+    // `*SearchIndexListener` re-reads the row and builds a weighted document
+    // (name@10 + description@5), manages the `ci_search.index_skips` marker the
+    // backfill sweep reads, and REMOVES a stale vector when the text goes away.
+    //
+    // The deleted `search.embed.entity` path did none of that: it embedded the
+    // payload's `searchContent` through the message-tuned `embedSkipReason`
+    // bar, which classifies a legitimate concept name ('AI', 'Node.js') as
+    // `too-short` — the exact misclassification `ConceptSearchIndexListener`
+    // documents as a bug it must not inherit. So a second embed job here is not
+    // extra coverage, it is a worse duplicate. Pinned by count, not by name, so
+    // ANY additional emission fails this.
+    for (const [type, event] of [
+      ['Person', 'person.created'],
+      ['Location', 'place.created'],
+      ['Concept', 'concept.created'],
+    ] as const) {
+      const { listener, send } = makeListener(true, type);
+
+      await listener.handleNodeUpserted(payload(type));
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(event, expect.anything());
+    }
+  });
+
   it('uses the persisted entity_type, not the payload type, when resolving the event', async () => {
     // createOrUpdateNode is the authority on the stored discriminator: an
     // entity.update may omit entityType entirely.

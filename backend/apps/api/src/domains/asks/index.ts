@@ -34,6 +34,7 @@ import { AskExpiryService } from './services/AskExpiryService';
 import { AskRateLimitService } from './services/AskRateLimitService';
 import { AskService } from './services/AskService';
 import { GrantService } from './services/GrantService';
+import { SharedSearchConsentService } from './services/SharedSearchConsentService';
 
 /**
  * @internal
@@ -54,6 +55,7 @@ import { GrantService } from './services/GrantService';
     AskExecutorService,
     AskAnswerService,
     AskExpiryService,
+    SharedSearchConsentService,
     // Registered as a provider so its @Cron method is discovered by the
     // scheduler; nothing injects it, so it is deliberately NOT exported.
     AskExpiryCron,
@@ -66,6 +68,7 @@ import { GrantService } from './services/GrantService';
     AskExecutorService,
     AskAnswerService,
     AskExpiryService,
+    SharedSearchConsentService,
   ],
 })
 export class AsksModule {}
@@ -79,9 +82,28 @@ export {
   AskExecutorService,
   AskAnswerService,
   AskExpiryService,
+  SharedSearchConsentService,
 };
+export {
+  SAVED_SEARCH_RESOURCE,
+  SHARE_QUERY_TYPE,
+  shareAuditQuery,
+} from './services/SharedSearchConsentService';
+export type { ShareAuthorization } from './services/SharedSearchConsentService';
+export { SHARE_DISCLOSURE, applySearchCeiling, ceilingForShare } from './searchCeiling';
+export type { ClampableConnection, ShareDisclosure } from './searchCeiling';
 export { evaluateGrant, canonicalDataClass, canonicalQueryType, isGrantActive } from './grantMatch';
 export { checkSlidingWindow } from './rateLimit';
+export {
+  DEFAULT_WINDOW_MS,
+  UNATTRIBUTED,
+  counterpartyOf,
+  recentShare,
+  summarizeDisclosures,
+} from './disclosureSummary';
+export type { DisclosureCounterparty, DisclosureSummary } from './disclosureSummary';
+export { MAX_AUDIT_ROWS } from './services/AskAuditService';
+export type { AuditFilter, GrantUsage, ListedAudit } from './services/AskAuditService';
 export {
   MAX_ASK_DATA_CLASS_LENGTH,
   MAX_ASK_PROMPT_LENGTH,
@@ -89,7 +111,11 @@ export {
   parseAskPrompt,
   parseAskQueryInput,
   parseAskQueryType,
+  parseAskActor,
+  parseDisclosureRung,
   parseGrantQueryType,
+  ASK_ACTOR_KINDS,
+  MAX_ACTOR_LABEL_LENGTH,
 } from './askInput';
 export { ASK_TTL_HOURS_ENV_VAR, DEFAULT_ASK_TTL_HOURS, askTtlHours, defaultAskExpiry } from './askDeadline';
 export { inferAnswerForm, buildDisclosedAnswer, formDisclosesItems, countFreeSummary } from './disclosure';
@@ -136,6 +162,7 @@ export type {
   AskGrantScope,
   GrantEvaluation,
   CreateAskDto,
+  AskChannelProvenance,
   CreateAskGrantDto,
   UpdateAskGrantDto,
   RecordAskAuditDto,
@@ -146,4 +173,8 @@ export type {
   CreateAskAnswerDto,
   TrustTier,
   DisclosureRung,
+  AskGrantResourceType,
+  AskDelegation,
+  AskActor,
+  AskActorKind,
 } from './types';

@@ -5,6 +5,15 @@ __metadata:
   version: 8
   cacheKey: 10c0
 
+"@capacitor-community/background-geolocation@npm:^1.2.26":
+  version: 1.2.26
+  resolution: "@capacitor-community/background-geolocation@npm:1.2.26"
+  peerDependencies:
+    "@capacitor/core": ">=3.0.0"
+  checksum: 10c0/32904b5821885fafb51cbcbb35c088351644b410b62a3f98658447147ca13dc63ea1bc60491ffc3e09d3de3feccfd9eca4f9b95aeb05deea2ecbeb5ae94c217e
+  languageName: node
+  linkType: hard
+
 "@capacitor-community/sqlite@npm:^7.0.1":
   version: 7.0.3
   resolution: "@capacitor-community/sqlite@npm:7.0.3"
@@ -13,6 +22,15 @@ __metadata:
   peerDependencies:
     "@capacitor/core": ">=7.0.0"
   checksum: 10c0/fb81677d80a53e6c3e283c09f3d5d4442f8d1988adf1b5bf7a6066cc34bb8c4151ab34c529549d7124ecc1c750867a663bef8b4e70d846943d9f4ead53219e33
+  languageName: node
+  linkType: hard
+
+"@capacitor-mlkit/barcode-scanning@npm:^7.5.0":
+  version: 7.5.0
+  resolution: "@capacitor-mlkit/barcode-scanning@npm:7.5.0"
+  peerDependencies:
+    "@capacitor/core": ">=7.0.0"
+  checksum: 10c0/66f6763f833301f3b1e584fd2bfe38f8f54bfebe292673af472f161b52878dc5f9919befec5590386c931511b72b83ab74ed299f62bda47e36f1f56829c1ee57
   languageName: node
   linkType: hard
 
@@ -153,7 +171,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@ci/fe-ios@workspace:."
   dependencies:
+    "@capacitor-community/background-geolocation": "npm:^1.2.26"
     "@capacitor-community/sqlite": "npm:^7.0.1"
+    "@capacitor-mlkit/barcode-scanning": "npm:^7.5.0"
     "@capacitor/app": "npm:^7.0.0"
     "@capacitor/browser": "npm:^7.0.0"
     "@capacitor/camera": "npm:^7.0.0"

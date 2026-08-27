@@ -146,6 +146,63 @@ Editing here keeps the saved search in sync everywhere it runs — the explorer 
 - Schema: `ci.saved_searches` — see
   [`Database.md`](architecture/Database.md#connectors-auth-misc).
 
+### The token is the invitation, not the authorization
+
+Until `20260826151123_add_saved_search_share_consent.sql`, holding the token **was** the
+whole of the authorization. Next to the ask path — which carries standing grants, a
+disclosure ceiling, an expiry, a supersede chain and a durable audit row per disclosure —
+the share path carried none of it. Five things were inexpressible:
+
+| | Ask path | Share path (before) |
+| --- | --- | --- |
+| Who read my memory? | `ci.ask_audit.asker_user_id` | nobody knew — every holder was the same anonymous principal |
+| Revoke **one** reader | revoke their grant | impossible; `setSharing(false)` cut off everyone |
+| "How many, not which" | `scope.maxDisclosure` | inexpressible — full result nodes or nothing |
+| Link lapses on its own | `ask_grants.expires_at` | never; it stood until the owner remembered |
+| Written down | `ci.ask_audit` | **nothing** — the one disclosure surface absent from Disclosure History |
+
+The token keeps the job it is good at (travelling in a URL) and is now **exchanged, on
+first use by a signed-in reader, for a `ci.ask_grants` row naming that reader and that
+saved search** — the standing, owner-visible, individually revocable handle the token could
+never be. It is the same object the Grant Manager already lists and revokes. See
+[`asks-system-guide.md` §2](asks-system-guide.md) for the consent layer itself.
+
+What that buys, concretely:
+
+- **A ceiling.** `saved_searches.share_max_disclosure` holds a `DISCLOSURE_RUNGS` rung, and
+  `applySearchCeiling` (`domains/asks/searchCeiling.ts`) clamps the result connection to it
+  — items, magnitude, tag facets and the right to page beyond the window, as four
+  independent axes. NULL means *this share declares no ceiling*, which is what every link
+  created before the column existed carries and why they keep disclosing exactly what they
+  always did. NULL is **not** `full`: absent and `full` are different statements and only
+  one of them is something the owner said.
+- **An expiry.** `share_expires_at`, enforced *in SQL* inside `findByShareToken`, so a
+  lapsed link is indistinguishable from an unknown one — there is no branch that could
+  report which it was.
+- **Per-reader revocation that sticks.** A grant the owner revoked is a **standing denial**,
+  not a gap the next read mints a replacement into. Without that rule "revoke Dana" would
+  last exactly until Dana hit refresh. A `superseded` grant is excluded — that reason marks
+  a row replaced by `GrantService.supersede`, which leaves a live successor.
+- **The capture-at-consent-time rule.** The ceiling is stamped on the reader's grant when it
+  is minted and then combined with the share's live ceiling by `narrowestRung`, never
+  replaced by it. Read only the live value and an owner who clears the share posture makes
+  every existing reader's answer **grow** — the same defect
+  `20260821010000_add_ask_disclosure_ceiling` exists to prevent on the ask path.
+- **An audit row per read**, with `disclosed_entities` (what crossed, post-ceiling) kept
+  apart from `backing_entities` (what the box read to produce it). One row per **read**, not
+  per reader: that access exists is a fact about the grant; that it was *used*, when, and
+  how much crossed is what the audit is for.
+
+Four outcomes share one response — an unknown token, a revoked link, a lapsed link, and a
+reader the owner specifically revoked all return the same empty connection. Which of the
+four it was is a fact about the owner's posture, and a refused reader does not need it in
+order to be refused. (Same rule as `PEER_ASK_PENDING` on the federated ask path.)
+
+**Not in this change:** a `review`-mode share (first open needs the owner's approval) and
+the UI for setting a ceiling or an expiry. `setSavedSearchSharing` accepts `maxDisclosure`
+and `expiresAt` today; `ShareSavedSearchModal` does not send them yet, so every share
+created through the product still has the pre-existing posture.
+
 ### Where the code lives
 
 | Area | Path |
@@ -159,10 +216,19 @@ Editing here keeps the saved search in sync everywhere it runs — the explorer 
 
 ### Tests
 
-- Backend (jest): `SavedSearchService` (mint/rotate/clear, owner scoping, token lookup,
-  create/update **filters**), `SavedSearchResolver`, `SearchResolver.runSharedSearch`
-  (filter-stripping / run-as-owner / **filters applied** / bad-token), and the OIDC
-  open-redirect guard.
+- Backend (jest): `SavedSearchService` (mint/rotate/clear, posture stamping, owner scoping,
+  token lookup, lapse-in-SQL, create/update **filters**), `SavedSearchResolver` (rung
+  parsing, past-expiry rejection), `SearchResolver.runSharedSearch` (filter-stripping /
+  run-as-owner / **filters applied** / bad-token / consent-refusal / ceiling clamping /
+  disclosed-vs-backing audit), `SharedSearchConsentService` (mint, reuse, standing denial,
+  supersede, lapse, ceiling algebra, mint race), and the OIDC open-redirect guard.
+- `searchCeiling.spec.ts` carries the **monotonicity property test**: walking the ladder,
+  every rung must disclose a superset of the one below and strictly more on at least one
+  axis. That is what makes threat-model **D2** — `clampAvailability` pointing `redacted` at
+  the same branch as `full`, so a ceiling the owner picked restricted nothing —
+  unrepeatable on this surface. A per-rung unit test cannot catch it, because the defect
+  lives in the *relationship* between two rungs; mutation-verified by re-pointing `redacted`
+  at `full` (2 tests fail) and reverting.
 - Frontend (vitest): the pure builders — `shareLink`, `savedSearchFilters` (capture),
   `savedSearchFiltersEdit` (edit transforms).
 - Stories double as render smoke-tests for the new UI.

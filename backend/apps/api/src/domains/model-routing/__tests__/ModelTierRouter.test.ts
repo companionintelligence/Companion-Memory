@@ -63,6 +63,27 @@ describe('ModelTierRouter', () => {
     expect(router.decide({ reasoningLevel: 'light' }).reasoningLevel).toBe('light');
   });
 
+  it('judges context against a caller-supplied window instead of the estimate', () => {
+    // 20k tokens escalates against the estimated 8k on-device profile...
+    expect(router.decide({ estimatedInputTokens: 20_000, cloudAvailable: true }).tier).toBe('private_cloud');
+
+    // ...but not when the caller says the on-device model really holds 128k.
+    const d = router.decide({
+      estimatedInputTokens: 20_000,
+      cloudAvailable: true,
+      onDeviceContextTokens: 131_072,
+    });
+
+    expect(d.tier).toBe('on_device');
+    expect(d.downgraded).toBe(false);
+    // The decision reports the window it was judged against, not the estimate.
+    expect(d.profile.maxContextTokens).toBe(131_072);
+  });
+
+  it('leaves the estimated profile alone when no window is supplied', () => {
+    expect(router.decide({ estimatedInputTokens: 10 }).profile.maxContextTokens).toBe(8_192);
+  });
+
   it('exposes both tier profiles', () => {
     const tiers = router.getProfiles().map((p) => p.tier);
 

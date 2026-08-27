@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { type RequestContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { fenceUntrusted, untrustedBlock } from '@ci/common/prompt/untrustedBlock';
 import { ForecastContextService, RecallService } from '@ci/domains/agent';
 import { AnswerService } from '@ci/domains/intelligence';
 import { UserContextService } from '@ci/domains/memory';
@@ -78,11 +79,13 @@ export class PersonaContextPackService {
       .slice(0, RECENT_ANSWERS);
 
     if (recentAnswers.length > 0) {
-      const lines = ['## Recent answers (first-person)', ''];
+      // Question text is curated, but the answer is free text the user typed or
+      // a model inferred from imported mail, so both go through the fence.
+      const lines: string[] = [];
       for (const answer of recentAnswers) {
         const questionText = answer.question?.text?.trim();
-        lines.push(questionText ? `Q: ${questionText}` : 'Q: (unspecified)');
-        lines.push(`A: ${answer.answer}`);
+        lines.push(questionText ? `Q: ${fenceUntrusted(questionText)}` : 'Q: (unspecified)');
+        lines.push(`A: ${fenceUntrusted(answer.answer)}`);
         lines.push('');
         evidence.push({
           kind: 'answer',
@@ -91,7 +94,7 @@ export class PersonaContextPackService {
         });
       }
 
-      sections.push(lines.join('\n'));
+      sections.push(untrustedBlock(lines.join('\n'), '## Recent answers (first-person)'));
     }
 
     const summaries = await this.summaryService.findRecent(context, RECENT_SUMMARIES);
@@ -99,10 +102,10 @@ export class PersonaContextPackService {
     const summaryPick = (dailyOrWeekly.length > 0 ? dailyOrWeekly : summaries).slice(0, 2);
 
     if (summaryPick.length > 0) {
-      const lines = ['## Recent period summaries', ''];
+      const lines: string[] = [];
       for (const summary of summaryPick) {
         const headline = summary.title?.trim() || summary.summaryText?.trim() || '(untitled)';
-        lines.push(`- [${summary.periodType}] ${truncate(headline, 160)}`);
+        lines.push(`- [${summary.periodType}] ${fenceUntrusted(truncate(headline, 160))}`);
         evidence.push({
           kind: 'summary',
           id: summary.summaryId,
@@ -110,7 +113,7 @@ export class PersonaContextPackService {
         });
       }
 
-      sections.push(lines.join('\n'));
+      sections.push(untrustedBlock(lines.join('\n'), '## Recent period summaries'));
     }
 
     if (options.includeRecall !== false && options.taskQuery?.trim()) {

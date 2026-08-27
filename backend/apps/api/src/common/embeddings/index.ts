@@ -11,7 +11,6 @@ export class EmbeddingModule {}
 export { EmbeddingGenerationService };
 export {
   embedSkipReason,
-  entityEmbedSkipReason,
   isEmbeddable,
   isEmbeddableType,
   normalizeEmbeddableType,

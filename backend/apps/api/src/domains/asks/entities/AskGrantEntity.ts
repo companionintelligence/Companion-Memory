@@ -1,6 +1,6 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
 
-import type { AskGrantScope, GrantMode, GrantRevocationReason } from '../types';
+import type { AskGrantResourceType, AskGrantScope, GrantMode, GrantRevocationReason } from '../types';
 
 /**
  * `ci.ask_grants` — standing consent for the ask path. Replaces reliance on the
@@ -34,6 +34,23 @@ export class AskGrantEntity {
   /** The peer link this grant is for (federated asks). */
   @Column({ type: 'uuid', name: 'grantee_peer_link_id', nullable: true })
   granteePeerLinkId!: string | null;
+
+  /**
+   * The single object this grant covers, when it covers an object rather than a
+   * class of question. Both columns are set together or neither is
+   * (`ask_grants_resource_paired_chk`).
+   *
+   * A grant is normally addressed by (`queryType`, `dataClass`) — "photos, from
+   * Dana". A SHARED SAVED SEARCH is not a class of question but one specific
+   * row, and folding it into `dataClass` would have run a uuid through
+   * `canonicalDataClass` (a normalizer for words like 'photos') and matched it
+   * against the tier ceiling tables keyed on that same vocabulary.
+   */
+  @Column({ type: 'text', name: 'resource_type', nullable: true })
+  resourceType!: AskGrantResourceType | null;
+
+  @Column({ type: 'uuid', name: 'resource_id', nullable: true })
+  resourceId!: string | null;
 
   @Column({ type: 'text', name: 'query_type' })
   queryType!: string;
@@ -90,6 +107,8 @@ export class AskGrantEntity {
       ownerUserId: entity.ownerUserId,
       granteeUserId: entity.granteeUserId,
       granteePeerLinkId: entity.granteePeerLinkId,
+      resourceType: entity.resourceType,
+      resourceId: entity.resourceId,
       queryType: entity.queryType,
       dataClass: entity.dataClass,
       scope: entity.scope,

@@ -5,6 +5,11 @@ import type { NextFunction, Request, Response } from 'express';
 
 import { BODY_LIMIT_KEY } from '../decorators';
 
+/** An express request carrying the unparsed body, for signature verification. */
+export interface RawBodyRequest extends Request {
+  rawBody?: string;
+}
+
 /**
  * Body size limit for the single POST /graphql endpoint. The GraphQL route is
  * mounted by the Apollo driver via `app.use('/graphql', expressMiddleware(...))`,
@@ -50,6 +55,21 @@ const PORTABILITY_IMPORT_PATH = '/api/account/import/stream';
 const NDJSON_CONTENT_TYPE = 'application/x-ndjson';
 
 /**
+ * The peer surface, whose requests are RFC 9421 signed.
+ *
+ * A signature covers a `Content-Digest` of the body, so verifying one needs the
+ * bytes the peer actually sent -- not `JSON.stringify` of the parsed object,
+ * which is not guaranteed to reproduce them (key order, number formatting,
+ * unicode escapes). Re-serializing before digesting is the classic way to make
+ * a signature check pass over content the sender never signed.
+ *
+ * Scoped to this ONE prefix on purpose. `verify` retains the whole buffer, and
+ * doing that for every request would hold a second copy of every 10mb GraphQL
+ * and bulk-ingest body for the life of the request.
+ */
+const SIGNED_PEER_PREFIX = '/agent/v1';
+
+/**
  * Middleware that dynamically applies JSON body size limits based on route metadata.
  * Uses the @BodyLimit decorator to determine the appropriate limit for each route.
  * Falls back to a default of 100kb if no limit is specified.
@@ -91,9 +111,24 @@ export class BodyParserMiddleware implements NestMiddleware {
     const bodyLimit =
       limit || (isGraphql ? GRAPHQL_BODY_LIMIT : isBulkIngest ? BULK_INGEST_BODY_LIMIT : '100kb');
 
+    // Retain the exact bytes for the signed peer surface only. `verify` runs
+    // before parsing and receives the raw buffer, which is the only hook that
+    // sees the body as sent.
+    const isSignedPeerRoute =
+      routePath === SIGNED_PEER_PREFIX || routePath.startsWith(`${SIGNED_PEER_PREFIX}/`);
+
     // Chain both parsers so each checks the Content-Type header and only the
     // matching one actually parses the body. `next` is called exactly once at the end.
-    json({ limit: bodyLimit })(req, res, (err?: unknown) => {
+    json({
+      limit: bodyLimit,
+      ...(isSignedPeerRoute
+        ? {
+            verify: (request: Request, _response: Response, buffer: Buffer) => {
+              (request as RawBodyRequest).rawBody = buffer.toString('utf8');
+            },
+          }
+        : {}),
+    })(req, res, (err?: unknown) => {
       if (err) {
         return next(err as Error);
       }

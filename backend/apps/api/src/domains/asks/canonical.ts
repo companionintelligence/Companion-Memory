@@ -139,3 +139,24 @@ export function canonicalDataClass(value: unknown): string | null {
 export function canonicalQueryType(value: unknown): string | null {
   return canonicalToken(value);
 }
+
+/**
+ * Canonical form of a stated PURPOSE, for the one place a purpose is matched:
+ * a purpose-limited grant against the ask that claims the same purpose.
+ *
+ * ═══ WHY IT IS ITS OWN FUNCTION AND NOT `canonicalDataClass` ═══
+ *
+ * `scopeCoversQuery` compared purposes by running both through
+ * `canonicalDataClass`. That works today only because the three canonicalizers
+ * happen to share one implementation — and the whole reason this file exists is
+ * that they must not be assumed to. A data class is a token from a closed
+ * vocabulary and may one day be singularized, aliased or mapped; a purpose is a
+ * short human phrase and must not be. Borrowing the wrong one is how "photos"
+ * and "photo" would start meaning the same purpose.
+ *
+ * Same normalizer TODAY, different contract, and the contract is what a future
+ * change will read.
+ */
+export function canonicalPurpose(value: unknown): string | null {
+  return canonicalToken(value);
+}

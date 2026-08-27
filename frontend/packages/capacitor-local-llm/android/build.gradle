@@ -81,7 +81,13 @@ dependencies {
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
 
     // On-device inference (LiteRT-LM). Group com.google.ai.edge.* resolves via google().
-    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.11.0'
+    // Pinned to 0.14.0 to match iOS's vendored CLiteRTLM.xcframework (ios/App/Frameworks/
+    // fetch-clitertlm-xcframework.sh) — the two had drifted (this was 0.11.0) with no
+    // record of why. Verified source- and binary-compatible with this module's usage
+    // (EngineConfig/ConversationConfig/Conversation/ToolProvider surfaces are unchanged,
+    // Kotlin metadata is still mv=[2,3,0], same as 0.11.0) by diffing `javap` output
+    // against both AARs before bumping.
+    implementation 'com.google.ai.edge.litertlm:litertlm-android:0.14.0'
 
     // Resumable foreground download of the (~530 MiB) model file.
     implementation 'androidx.work:work-runtime-ktx:2.10.0'

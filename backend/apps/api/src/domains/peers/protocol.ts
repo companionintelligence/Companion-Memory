@@ -78,7 +78,27 @@ export const availabilityAskSchema = z.object({
  */
 export const PEER_ASK_ID_PATTERN = /^[\w.:-]{8,64}$/;
 
+/**
+ * What is making an ask, when the asker declares it.
+ *
+ * Optional on the wire, and its ABSENCE is meaningful: a grant that restricts
+ * delegation (`AskGrantScope.delegation`) is not satisfied by an ask that
+ * declines to say who is acting, so an omitted actor lands the ask in the
+ * owner's review inbox rather than being auto-answered. Declaring `person`
+ * dishonestly is a lie a peer can tell; declining to declare is not a way
+ * around the restriction.
+ *
+ * `label` is shown to the owner at the consent moment and is NEVER matched on —
+ * a name is a claim the asker writes, a kind is a commitment they make.
+ */
+export const askActorSchema = z.object({
+  kind: z.enum(['person', 'first-party-agent', 'third-party-agent']),
+  label: z.string().max(80).optional(),
+});
+
 export const peerAskBodySchema = z.object({
+  /** What is making this ask. See {@link askActorSchema}. */
+  actor: askActorSchema.optional(),
   /**
    * Correlation id minted by the asker, and a REAL idempotency key.
    *
@@ -102,6 +122,34 @@ export const peerAskBodySchema = z.object({
   askerHandle: z.string().min(1).max(120),
   /** Natural-language question, shown to the responder in their review inbox. */
   prompt: z.string().min(1).max(500),
+  /**
+   * WHY the asker wants this, in their own words.
+   *
+   * ═══ IT WAS ON THE GRANT AND NOT ON THE WIRE ═══
+   *
+   * `AskGrantScope.purpose` has always been matchable, and `scopeCoversQuery`
+   * requires a purpose-limited grant to see the SAME purpose on the ask. But
+   * `toAskQuery` never wrote one for any archetype — `availability` folded its
+   * `purpose` into the prompt and the other two had no field at all — so a
+   * purpose-limited grant matched NO inbound peer ask, ever. It failed closed
+   * (the ask was downgraded to review, never widened), so nothing leaked; the
+   * feature was simply dead across boxes, silently, with no signal to the owner
+   * who set it.
+   *
+   * ═══ CARRIED WHETHER OR NOT ANY GRANT MATCHES ON IT ═══
+   *
+   * UMA-for-agents' recommendation #15 is *stated intent, never evaluated*:
+   * carry the requester's purpose unread, and let policy notice its ABSENCE
+   * rather than judge its truthfulness. That is right for the DEFAULT case and
+   * is what happens here — the purpose is shown to the owner at the consent
+   * moment for every ask that states one.
+   *
+   * A purpose-LIMITED grant is the exception, and deliberately so: that is an
+   * owner writing down a restriction ("only for the wedding invites"), and an
+   * owner's own narrowing is the one thing that should be enforced. It can only
+   * ever refuse to match, never widen.
+   */
+  purpose: z.string().min(1).max(200).optional(),
   /** The structured request. */
   request: z.discriminatedUnion('archetype', [
     relationshipAskSchema,

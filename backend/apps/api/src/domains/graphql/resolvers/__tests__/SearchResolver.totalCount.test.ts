@@ -93,6 +93,12 @@ describe('SearchResolver — timed-path totalCount', () => {
       stub('getEntitiesForReceipts') as never,
       stub('getEntitiesForAnswers') as never,
       { findByShareToken: jest.fn().mockResolvedValue(null) } as never,
+      {
+        // Authorizes with no ceiling: these suites are not about consent, and a
+        // share created before `share_max_disclosure` existed reads exactly this way.
+        authorize: jest.fn().mockResolvedValue({ grantId: 'grant-test', ceiling: undefined }),
+        recordRead: jest.fn().mockResolvedValue(undefined),
+      } as never,
       { search: jest.fn().mockResolvedValue([]) } as never,
       {
         getEntitiesForTags: jest.fn().mockResolvedValue([]),

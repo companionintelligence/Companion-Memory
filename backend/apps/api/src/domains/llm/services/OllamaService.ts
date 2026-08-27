@@ -13,6 +13,7 @@ import { type ApiKeyCapability, FULL_CAPABILITY } from '@ci/common/decorators';
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
+import { ModelTierRouter, type RoutingDecision } from '@ci/domains/model-routing';
 import {
   ToolRegistry,
   capabilityAllows,
@@ -176,6 +177,18 @@ interface PromptOptions {
   enableTools?: boolean;
   enableThinking?: boolean;
   /**
+   * Context window to ask the backend for, in tokens (Ollama `options.num_ctx`).
+   * Absent leaves the backend's own default alone, which is what every caller
+   * did before {@link ContextBudget} existed.
+   */
+  numCtx?: number;
+  /**
+   * Cap on the model's own answer, in tokens. Maps to OpenAI `max_tokens`;
+   * native Ollama has no separate output cap (`num_ctx` bounds the whole
+   * transcript), so it is only sent on the OpenAI-compat path.
+   */
+  maxOutputTokens?: number;
+  /**
    * `'json'` asks for syntactically valid JSON and nothing more — the model is
    * still free to invent key names, which small models reliably do. A JSON
    * Schema object instead constrains generation to that shape via grammar, so
@@ -183,6 +196,22 @@ interface PromptOptions {
    * JSON. Prefer the schema form for anything that will be parsed.
    */
   format?: string | Record<string, unknown>;
+}
+
+/** Characters per token, the usual rough English/code ratio. */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Cheap prompt-size estimate for tier routing. Deliberately a character count and
+ * not a real tokenizer: the router only needs to know which side of a context
+ * window a turn lands on, and loading a tokenizer per turn would cost more than
+ * the decision is worth. Rounds up, so a turn is never reported as smaller than
+ * it is.
+ */
+export function estimateInputTokens(messages: OllamaMessage[]): number {
+  const characters = messages.reduce((total, message) => total + (message.content?.length ?? 0), 0);
+
+  return Math.ceil(characters / CHARS_PER_TOKEN);
 }
 
 interface ValidateModelOptions {
@@ -240,6 +269,7 @@ export class OllamaService implements OnModuleInit {
     private readonly toolRegistry: ToolRegistry,
     private readonly logger: LoggerService,
     private readonly featureService: FeatureService,
+    private readonly modelTierRouter: ModelTierRouter,
   ) {
     this.logger.setContext(OllamaService.name);
   }
@@ -471,8 +501,8 @@ export class OllamaService implements OnModuleInit {
   async chatStream(
     context: ChatRequestContext,
     messages: OllamaMessage[],
-    { model, signal, enableTools = false, enableThinking = true }: PromptOptions,
-  ): Promise<AsyncGenerator<ChatResponse> & { messages: OllamaMessage[] }> {
+    { model, signal, enableTools = false, enableThinking = true, numCtx, maxOutputTokens }: PromptOptions,
+  ): Promise<AsyncGenerator<ChatResponse> & { messages: OllamaMessage[]; error?: Error }> {
     await this.validateModel(context, model);
 
     const inputMessages = messages.slice();
@@ -490,6 +520,13 @@ export class OllamaService implements OnModuleInit {
     // advertised-tool generate.
     const maxToolRounds = 2;
     let generateRounds = 0;
+    // A backend failure inside the generator is logged and the stream ends
+    // quietly (an empty assistant row) rather than throwing at the consumer —
+    // long-standing behavior the SSE controller depends on. Recording it here
+    // additively lets a caller that CAN do something about a specific failure
+    // (ChatTurnService retrying a context overflow with a smaller history
+    // budget) see it, without changing what happens to every other caller.
+    let streamError: Error | undefined;
 
     const stream = (async function* (self) {
       do {
@@ -524,6 +561,7 @@ export class OllamaService implements OnModuleInit {
               signal,
               enableThinking,
               salvageTools: enableTools,
+              maxTokens: maxOutputTokens,
             });
 
             for await (const chunk of iterator) {
@@ -552,6 +590,11 @@ export class OllamaService implements OnModuleInit {
               // branch above and uses chat_template_kwargs.enable_thinking.
               ...(enableThinking && { think: true }),
               ...(iterationWillCallTools && { tools: ollamaTools }),
+              // Ollama sizes num_ctx from the memory it sees, which on a
+              // unified-memory box means the model's full window (and a giant
+              // KV cache) for a one-line chat. CI-Hub already computed the
+              // right number for this hardware; honor it when it reached us.
+              ...(numCtx != null && numCtx > 0 && { options: { num_ctx: numCtx } }),
             });
 
             handleAbort = () => iterator.abort();
@@ -593,6 +636,8 @@ export class OllamaService implements OnModuleInit {
         } catch (err) {
           if (!(err instanceof DOMException && err.name === 'AbortError')) {
             const error = err as Error;
+
+            streamError = error instanceof Error ? error : new Error(String(err));
 
             self.logger.error('LLM prompt evaluation completed', {
               model: lastChunk?.model ?? model,
@@ -650,7 +695,12 @@ export class OllamaService implements OnModuleInit {
       get: () => accumulatedMessages,
     });
 
-    return stream as typeof stream & { messages: OllamaMessage[] };
+    Object.defineProperty(stream, 'error', {
+      enumerable: true,
+      get: () => streamError,
+    });
+
+    return stream as typeof stream & { messages: OllamaMessage[]; error?: Error };
   }
 
   /**
@@ -750,6 +800,7 @@ export class OllamaService implements OnModuleInit {
       await this.validateModel(context, resolvedModel);
     } else {
       resolvedModel = await this.resolveServedChatModel(requestedModel, messages);
+      resolvedModel = await this.applyTierRouting(resolvedModel, messages, resolvedThinking);
     }
 
     return {
@@ -757,6 +808,81 @@ export class OllamaService implements OnModuleInit {
       enableThinking: resolvedThinking,
       enableTools: resolvedTools,
     };
+  }
+
+  /**
+   * Consult {@link ModelTierRouter} for the chat model, when the operator has opted
+   * in via `llm.tierRouting.enabled` (`LLM_TIER_ROUTING_ENABLED`).
+   *
+   * ── Why this is opt-in ──────────────────────────────────────────────────────
+   *
+   * The router's on-device context window (`TIER_PROFILES.on_device`, 8_192) is an
+   * *estimate* mirroring Apple's on-device/PCC split — its own doc comment says so.
+   * Turning that guess into the default escalation threshold for every chat turn
+   * would change model selection on every appliance for a number nobody measured.
+   * So the flag defaults to `false` and this method returns `baseModel` untouched,
+   * reproducing pre-routing selection exactly. An operator who turns it on names
+   * the two model ids AND, ideally, the real context window
+   * (`LLM_TIER_ROUTING_ON_DEVICE_CONTEXT_TOKENS`), which replaces the estimate.
+   *
+   * ── What it does NOT touch ──────────────────────────────────────────────────
+   *
+   * Vision turns. A turn carrying images is resolved by model *capability*
+   * (`resolveServedChatModel`), and a tier has no opinion about whether its model
+   * can see. Routing is skipped outright so the vision choice survives verbatim.
+   *
+   * The chosen id flows into whichever driver `chat`/`chatStream` picks — native
+   * `ollama.chat` or `OpenAiCompatChatDriver` — because both take their model from
+   * this one resolution. Routing is a *selection* concern, not a transport one.
+   */
+  private async applyTierRouting(
+    baseModel: string,
+    messages: OllamaMessage[],
+    enableThinking: boolean,
+  ): Promise<string> {
+    const routing = config.llm.tierRouting;
+
+    if (!routing.enabled) {
+      return baseModel;
+    }
+
+    if (messages.some((message) => message.images && message.images.length > 0)) {
+      return baseModel;
+    }
+
+    const onDeviceModel = routing.onDeviceModel.trim();
+    const escalatedModel = routing.escalatedModel.trim();
+    const served = await this.listServedChatModelIds();
+    // No escalation target, or one the backend is not serving, is exactly the
+    // "PCC unavailable" case the router already knows how to fall back from.
+    const cloudAvailable = escalatedModel.length > 0 && served.includes(escalatedModel);
+
+    const decision: RoutingDecision = this.modelTierRouter.decide({
+      estimatedInputTokens: estimateInputTokens(messages),
+      // A user who asked for thinking asked for deeper reasoning.
+      reasoningLevel: enableThinking ? 'deep' : 'moderate',
+      cloudAvailable,
+      ...(routing.onDeviceContextTokens > 0 && {
+        onDeviceContextTokens: routing.onDeviceContextTokens,
+      }),
+    });
+
+    const target = decision.tier === 'private_cloud' ? escalatedModel : onDeviceModel;
+    // An unconfigured or unserved tier model means "no opinion" — keep what the
+    // served-model resolution already chose rather than failing the turn.
+    const model = target.length > 0 && served.includes(target) ? target : baseModel;
+
+    this.logger.debug('Model tier routing decision', {
+      tier: decision.tier,
+      reasoningLevel: decision.reasoningLevel,
+      downgraded: decision.downgraded,
+      reasons: decision.reasons,
+      maxContextTokens: decision.profile.maxContextTokens,
+      baseModel,
+      model,
+    });
+
+    return model;
   }
 
   /**

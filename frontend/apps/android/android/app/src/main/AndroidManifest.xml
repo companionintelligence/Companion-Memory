@@ -8,6 +8,13 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
+
+        <!-- @capacitor-mlkit/barcode-scanning: required so Play Services can resolve the
+             on-demand ML Kit barcode model at scan time (the `scan()` entry point used by
+             the QR-to-connect flow launches Google's own scanner UI/module, not a bundled
+             model, so this only advertises which ML Kit dependency to fetch). -->
+        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="barcode_ui" />
+
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
             android:name=".MainActivity"

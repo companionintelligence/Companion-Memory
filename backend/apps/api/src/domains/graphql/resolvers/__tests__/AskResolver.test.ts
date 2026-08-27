@@ -38,7 +38,7 @@ function makeResolver(enabled: boolean) {
     // No matching grant → review, and therefore no grant-imposed ceiling.
     evaluate: jest.fn().mockResolvedValue({ decision: 'review' }),
   };
-  const auditService = { listForResponder: jest.fn().mockResolvedValue([]) };
+  const auditService = { listForResponder: jest.fn().mockResolvedValue({ rows: [], truncated: false }) };
   const rateLimitService = { consume: jest.fn() };
   const executorService = { execute: jest.fn().mockResolvedValue([{ id: 'e1', type: 'file' }]) };
   const answerService = {

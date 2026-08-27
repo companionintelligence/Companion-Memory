@@ -77,7 +77,7 @@ describe('the Asks GraphQL surface is signed-in only', () => {
  */
 describe('askDisclosureHistory is scoped to the caller', () => {
   it('passes the CALLER’s context to the audit service, not a bare or borrowed one', async () => {
-    const auditService = { listForResponder: jest.fn().mockResolvedValue([]) };
+    const auditService = { listForResponder: jest.fn().mockResolvedValue({ rows: [], truncated: false }) };
     const resolver = new AskResolver(
       {} as never,
       {} as never,
@@ -92,7 +92,15 @@ describe('askDisclosureHistory is scoped to the caller', () => {
 
     await resolver.askDisclosureHistory({ userId: 'responder-1' } as unknown as RequestContext);
 
-    expect(auditService.listForResponder).toHaveBeenCalledWith({ userId: 'responder-1' });
+    // The responder scope is the FIRST argument and does not depend on the
+    // filter — a filter can only ever narrow within it.
+    const [scope, filter] = auditService.listForResponder.mock.calls[0];
+    expect(scope).toEqual({ userId: 'responder-1' });
+
+    // With no input, the filter narrows on nothing: no counterparty clause is
+    // even present, so it cannot be the thing that scopes the read.
+    expect(filter).not.toHaveProperty('askerUserId');
+    expect(filter).not.toHaveProperty('peerLinkId');
   });
 
   it('reads nothing at all while the feature flag is off', async () => {
@@ -111,7 +119,7 @@ describe('askDisclosureHistory is scoped to the caller', () => {
 
     expect(
       await resolver.askDisclosureHistory({ userId: 'responder-1' } as unknown as RequestContext),
-    ).toEqual([]);
+    ).toEqual({ rows: [], truncated: false });
     expect(auditService.listForResponder).not.toHaveBeenCalled();
   });
 });

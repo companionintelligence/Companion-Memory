@@ -308,12 +308,47 @@ describeWithDatabase(`ask deadlines and ownership — against real Postgres (${a
       await askService.decline(owner, ask.id);
 
       const ownerHistory = await auditService.listForResponder(owner);
-      expect(ownerHistory.some((row) => row.askId === ask.id)).toBe(true);
+      expect(ownerHistory.rows.some((row) => row.askId === ask.id)).toBe(true);
 
       // The ASKER is a participant in this very ask and still sees nothing:
       // the history is the RESPONDER's record of what left their box.
-      expect(await auditService.listForResponder(asker)).toEqual([]);
-      expect(await auditService.listForResponder(stranger)).toEqual([]);
+      expect((await auditService.listForResponder(asker)).rows).toEqual([]);
+      expect((await auditService.listForResponder(stranger)).rows).toEqual([]);
+    });
+
+    /**
+     * The narrowing filters must not be a way OUT of the responder scope. Every
+     * one of them is an additional WHERE on the same query, so a filter can only
+     * ever shrink the owner's own set — but that is the kind of property worth
+     * pinning rather than reasoning about, because the filters arrive from a
+     * client.
+     */
+    it('cannot be widened past the responder by any filter', async () => {
+      const ask = await createAsk('filter scoping');
+      await askService.decline(owner, ask.id);
+
+      // The asker filters for their OWN id against the stranger's history and
+      // still gets nothing: the responder clause is applied first and always.
+      const escaped = await auditService.listForResponder(stranger, {
+        askerUserId: asker.userId,
+        outcomes: ['declined'],
+      });
+      expect(escaped.rows).toEqual([]);
+
+      // And the same filter, run by the actual responder, does find it.
+      const found = await auditService.listForResponder(owner, { outcomes: ['declined'] });
+      expect(found.rows.some((row) => row.askId === ask.id)).toBe(true);
+    });
+
+    it('folds the owner’s rows by relationship, and nobody else’s', async () => {
+      const ask = await createAsk('summary scoping');
+      await askService.decline(owner, ask.id);
+
+      const { summaries } = await auditService.summaryForResponder(owner);
+      const mine = summaries.find((s) => s.counterparty.askerUserId === asker.userId);
+      expect(mine?.declined).toBeGreaterThanOrEqual(1);
+
+      expect((await auditService.summaryForResponder(stranger)).summaries).toEqual([]);
     });
   });
 });

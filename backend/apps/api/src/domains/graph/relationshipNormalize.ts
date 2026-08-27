@@ -40,6 +40,49 @@ export const SYMMETRIC_RELATIONSHIP_TYPES: ReadonlySet<RelationshipType> = new S
 ]);
 
 /**
+ * Types for which ONE subject may hold at most one active edge at a time.
+ *
+ * ── This set is a claim about the world, and a wrong entry closes a true fact ──
+ *
+ * Nothing in this repo enforces single-valuedness today, and this constant does
+ * not start enforcing it: its only consumer is `clean.single_valued_edge_audit`,
+ * a DETECTOR that counts contradictions and writes no edge. That ordering is
+ * deliberate. A type declared single-valued here and then fed to a superseder
+ * would have that superseder deactivate the incumbent edge — and if the type is
+ * genuinely multi-valued, the edge it closed was TRUE. `PARENT_OF` is the
+ * obvious trap (two parents), `MEMBER_OF` the less obvious one (several groups),
+ * and `WORKS_AT` the one that looks single-valued right up until somebody has
+ * two jobs. So the rule is: an entry earns its place by the audit reporting
+ * contradictions for it that a human agrees are contradictions, not by seeming
+ * obvious.
+ *
+ * ── Why LIVES_IN is the one entry ─────────────────────────────────────────────
+ *
+ * It is the one type with a MEASURED, reachable defect behind it.
+ * `KnownPlacesService.upsertSelfRelationship` keys its upsert on
+ * `(from_entity_id, to_entity_id, relationship_type)` — the columns of
+ * `relationships_unique_directed_idx` — so confirming a NEW home inserts a
+ * second row rather than updating the first, and nothing anywhere deactivates
+ * the previous one. `getKnownPlaces(context, 'home')` then returns a LIST, and
+ * `HomeConfirmService` only asks whether that list is non-empty
+ * (`homes.length > 0`), so the appliance reports "home is labelled" while
+ * holding two contradictory answers to where home is.
+ *
+ * A person can of course own two homes. That is why the audit does not treat
+ * two `LIVES_IN` edges as a contradiction on their own: it also asks whether
+ * their date ranges OVERLAP. See `SingleValuedEdgeAuditStage` for how little
+ * that test can currently see — nearly every writer leaves `start_date` and
+ * `end_date` NULL.
+ *
+ * A `ReadonlySet` for the reason {@link SYMMETRIC_RELATIONSHIP_TYPES} is one:
+ * membership is the only question anybody asks of it, and a frozen set makes
+ * the answer O(1) and the constant unmodifiable by a consumer.
+ */
+export const SINGLE_VALUED_RELATIONSHIP_TYPES: ReadonlySet<RelationshipType> = new Set([
+  RelationshipType.LIVES_IN,
+]);
+
+/**
  * Map a raw relationship-type string onto the canonical stored form.
  * Unknown strings return null (caller treats as not in enum).
  */

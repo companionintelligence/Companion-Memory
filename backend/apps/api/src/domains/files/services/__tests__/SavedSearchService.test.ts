@@ -151,16 +151,57 @@ describe('SavedSearchService.setSharing', () => {
     expect(result).not.toBeNull();
   });
 
-  it('clears the token when disabling', async () => {
+  it('clears the token AND the posture when disabling', async () => {
     const repo = makeRepo();
     repo.update.mockResolvedValue({ affected: 1 });
     repo.findOne.mockResolvedValue({ id: 'id1' });
     const { service } = makeService(repo);
 
-    await service.setSharing(ownerCtx, 'id1', false);
+    await service.setSharing(ownerCtx, 'id1', false, {
+      maxDisclosure: 'count',
+      expiresAt: new Date('2027-01-01'),
+    });
+
+    // The posture belongs to the LINK. Leaving a ceiling or an expiry behind
+    // would mean a later re-share silently inherited a restriction the owner
+    // wrote for a different audience — or, worse, appeared to and did not.
+    const [, payload] = repo.update.mock.calls[0];
+    expect(payload).toEqual({
+      isPublic: false,
+      shareToken: null,
+      shareMaxDisclosure: null,
+      shareExpiresAt: null,
+    });
+  });
+
+  it('stamps the ceiling and the expiry when enabling', async () => {
+    const repo = makeRepo();
+    repo.update.mockResolvedValue({ affected: 1 });
+    repo.findOne.mockResolvedValue({ id: 'id1' });
+    const { service } = makeService(repo);
+    const expiresAt = new Date('2027-01-01T00:00:00.000Z');
+
+    await service.setSharing(ownerCtx, 'id1', true, { maxDisclosure: 'count', expiresAt });
 
     const [, payload] = repo.update.mock.calls[0];
-    expect(payload).toEqual({ isPublic: false, shareToken: null });
+    expect(payload.shareMaxDisclosure).toBe('count');
+    expect(payload.shareExpiresAt).toBe(expiresAt);
+  });
+
+  it('records NO ceiling when the owner declares none, rather than defaulting to full', async () => {
+    const repo = makeRepo();
+    repo.update.mockResolvedValue({ affected: 1 });
+    repo.findOne.mockResolvedValue({ id: 'id1' });
+    const { service } = makeService(repo);
+
+    await service.setSharing(ownerCtx, 'id1', true);
+
+    // Absent and `full` are different statements, and only one of them is
+    // something the owner said. `ceilingForShare` reads NULL as "no ceiling
+    // from this source", which is the pre-existing behaviour of every link.
+    const [, payload] = repo.update.mock.calls[0];
+    expect(payload.shareMaxDisclosure).toBeNull();
+    expect(payload.shareExpiresAt).toBeNull();
   });
 
   it('rotates the token on every re-enable so an old link cannot be resurrected', async () => {
@@ -199,10 +240,35 @@ describe('SavedSearchService.findByShareToken', () => {
 
     await service.findByShareToken('tok');
 
+    // Two branches OR'd: no expiry, or an expiry still in the future.
     const { where } = repo.findOne.mock.calls[0][0];
-    expect(where).toEqual({ shareToken: 'tok', isPublic: true });
-    // The non-scoping is the whole point — the viewer is not the owner.
-    expect(where).not.toHaveProperty('userId');
+    expect(Array.isArray(where)).toBe(true);
+    expect(where).toHaveLength(2);
+
+    for (const branch of where) {
+      expect(branch.shareToken).toBe('tok');
+      expect(branch.isPublic).toBe(true);
+      // The non-scoping is the whole point — the viewer is not the owner.
+      expect(branch).not.toHaveProperty('userId');
+    }
+  });
+
+  it('will not resolve a link whose expiry has passed', async () => {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({ id: 'id1', userId: 'owner-1' });
+    const { service } = makeService(repo);
+    const now = new Date('2026-08-26T12:00:00.000Z');
+
+    await service.findByShareToken('tok', now);
+
+    // The lapse is enforced in SQL, not after the read, so there is no branch
+    // above this that could report "expired" rather than "no such link" — the
+    // two have to stay indistinguishable to the caller.
+    const { where } = repo.findOne.mock.calls[0][0];
+    const [noExpiry, stillLive] = where;
+    expect(noExpiry.shareExpiresAt._type).toBe('isNull');
+    expect(stillLive.shareExpiresAt._type).toBe('moreThan');
+    expect(stillLive.shareExpiresAt._value).toBe(now);
   });
 
   it('returns the raw entity including the owner userId (runSharedSearch needs it)', async () => {

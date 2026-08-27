@@ -327,7 +327,8 @@ describe('JobMonitorService.getDashboard', () => {
    * newest rows with no owner predicate, so a job payload it serialises is
    * handed to whoever opens /jobs — not to the user who generated it.
    * `graph.person.created` carries name, email, phone and bio;
-   * `search.embed.entity` carries the entity's searchable text.
+   * `graph.node.upserted` carries the node's name, description and searchable
+   * text.
    *
    * Nothing that is not on this projection may cross the wire.
    */

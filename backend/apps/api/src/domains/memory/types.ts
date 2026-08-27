@@ -708,7 +708,6 @@ export interface CreatePersonDto {
   searchContent?: string;
   linkedId?: string;
   linkedTable?: string;
-  lastAccessed?: Date;
   properties?: {
     email?: string;
     firstName?: string;
@@ -727,7 +726,6 @@ export interface UpdatePersonDto {
   searchContent?: string;
   linkedId?: string;
   linkedTable?: string;
-  lastAccessed?: Date;
   properties?: {
     email?: string;
     firstName?: string;
@@ -942,7 +940,6 @@ export interface CreateConceptDto {
   searchContent?: string;
   linkedId?: string | null;
   linkedTable?: string | null;
-  lastAccessed?: Date;
   properties?: Record<string, unknown>;
 }
 
@@ -952,7 +949,6 @@ export interface UpdateConceptDto {
   searchContent?: string;
   linkedId?: string | null;
   linkedTable?: string | null;
-  lastAccessed?: Date;
   properties?: Record<string, unknown>;
 }
 

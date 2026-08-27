@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import { parseActivityCell, sha1, watchTitle, youtubeActivityGraph } from './_youtube_activity';
 import { parseCSV } from './csv';
+import { matchingDivCloseIndex } from './htmlBlocks';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph } from './timeline';
@@ -38,9 +39,13 @@ function subscriptionsHeaderMatches(text: string): boolean {
   return header.includes('Channel Id') && header.includes('Channel Url') && header.includes('Channel Title');
 }
 
-// Google MyActivity exports separate each entry with this cell container.
-const ENTRY_RE =
-  /<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">([\s\S]*?)<\/div>/g;
+// Google MyActivity exports separate each entry with this cell container,
+// matched by its OPENING tag only — the close comes from
+// matchingDivCloseIndex (./htmlBlocks), not a non-greedy `[\s\S]*?<\/div>`:
+// some product types nest a thumbnail/icon div inside the cell, and a
+// non-greedy match stops at THAT close and truncates the entry (see
+// google_my_activity.ts, which shares this exact cell shape and history).
+const ENTRY_OPEN_RE = /<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">/g;
 
 export class YouTubeFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
@@ -214,9 +219,15 @@ export class YouTubeFileImporter implements FileImporter {
     const isSearch = base.startsWith('search');
     let index = 0;
     let m: RegExpExecArray | null;
-    ENTRY_RE.lastIndex = 0;
-    while ((m = ENTRY_RE.exec(raw)) !== null) {
-      const cell = parseActivityCell(m[1]);
+    ENTRY_OPEN_RE.lastIndex = 0;
+    while ((m = ENTRY_OPEN_RE.exec(raw)) !== null) {
+      const start = m.index + m[0].length;
+      const end = matchingDivCloseIndex(raw, start);
+      // Resume scanning AFTER the cell, not from the regex's own default
+      // (right after the opening tag): a cell that nests another div must not
+      // be re-entered and its content double-counted.
+      ENTRY_OPEN_RE.lastIndex = end;
+      const cell = parseActivityCell(raw.slice(start, end));
       if (!cell.anchors.length || !timeframeContains(params.timeframe, cell.ts)) {
         continue;
       }

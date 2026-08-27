@@ -24,7 +24,8 @@ export interface JobFailureDto {
  *
  * This deliberately does NOT carry `data` or `output` verbatim. A job payload is
  * user content — `graph.person.created` carries name, email, phone and bio;
- * `search.embed.entity` carries the entity's searchable text — and the dashboard
+ * `graph.node.upserted` carries a node's name, description and searchable text —
+ * and the dashboard
  * endpoint is guarded only by "some user is authenticated", with no owner
  * predicate on the rows it returns. Serialising the payloads therefore handed
  * any signed-in user the most recent 25 jobs of whoever happened to generate

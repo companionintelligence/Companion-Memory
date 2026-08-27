@@ -4,7 +4,7 @@ import { Badge, Button, Card, Input } from '@ci/shadcn';
 
 import { PersonAvatar } from '@/components/PersonAvatar';
 
-import { type GrantMode, grantModeBadge, grantModeLabel } from './askPresentation';
+import { grantUsageLine, type GrantMode, grantModeBadge, grantModeLabel } from './askPresentation';
 
 export interface GrantRow {
   id: string;
@@ -31,6 +31,15 @@ export interface GrantRow {
    * still honours it is the owner believing they are safe when they are not.
    */
   active?: boolean;
+  /**
+   * How often a disclosure has actually cited this grant, and when last.
+   *
+   * DORMANT IS A STATE. The matrix showed what the owner allowed and never
+   * whether anything came of it, so a grant firing daily and one that has never
+   * matched looked identical — and they call for opposite actions.
+   */
+  useCount?: number;
+  lastUsedAt?: string | null;
 }
 
 export interface GranteeGroup {
@@ -171,6 +180,12 @@ export function GrantManager({
                     {grant.note ? (
                       <p className="text-muted-foreground truncate text-xs">{grant.note}</p>
                     ) : null}
+                    {/* Whether it has ever fired. Muted: "Never used" is the
+                        ordinary state of a grant written in advance, which is
+                        what standing consent is for. */}
+                    <span className="text-muted-foreground text-xs">
+                      {grantUsageLine({ useCount: grant.useCount ?? 0, lastUsedAt: grant.lastUsedAt })}
+                    </span>
                     {grant.expiresAt ? (
                       <p className="text-muted-foreground text-xs">
                         {lapsed ? 'Lapsed' : 'Expires'} {formatDate(grant.expiresAt)}

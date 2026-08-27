@@ -1,7 +1,8 @@
 import { ForbiddenException, Injectable, type OnModuleInit } from '@nestjs/common';
 import { z, type ZodTypeAny } from 'zod';
 
-import { INTENTS_SCOPE } from '@ci/common/decorators';
+import { ContextService } from '@ci/common/context';
+import { INTENTS_SCOPE, type ApiKeyCapability } from '@ci/common/decorators';
 import { type ApiKeyScopedRequest, apiKeyCapabilityOf, isScopeLimitedApiKey } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import {
@@ -11,6 +12,8 @@ import {
   capabilityAllows,
   capabilityRequiredFor,
   intentToolName,
+  outcomeOf,
+  type ToolInvocationOutcome,
 } from '@ci/domains/tools';
 
 import type { McpRegisteredTool } from '../types';
@@ -152,7 +155,33 @@ export class McpToolService implements OnModuleInit {
         throw new Error(`GraphQL tool not found: ${name}`);
       }
 
-      return this.executorService.executeTool(graphqlTool, args, context);
+      // This plane never touches ToolRegistry — it returns through the GraphQL executor — so it
+      // was the one dispatcher that emitted no `tool.invoked` at all and left no ledger row. An
+      // MCP client calling `deleteMemory` here was invisible to exactly the surface built to see
+      // it. Recorded through the registry so there is still one emit path, not two.
+      const startedAt = Date.now();
+
+      try {
+        const data = await this.executorService.executeTool(graphqlTool, args, context);
+
+        await this.recordGraphqlInvocation(tool, context.req, capability, {
+          outcome: 'success',
+          durationMs: Date.now() - startedAt,
+        });
+
+        return data;
+      } catch (error) {
+        const failure = { success: false, error: describeFailure(error) };
+
+        await this.recordGraphqlInvocation(tool, context.req, capability, {
+          outcome: outcomeOf(failure),
+          errorCode: failure.error.code,
+          error: failure.error.message,
+          durationMs: Date.now() - startedAt,
+        });
+
+        throw error;
+      }
     }
 
     if (!this.mayRunIntents(context.req)) {
@@ -165,7 +194,15 @@ export class McpToolService implements OnModuleInit {
     // the transport: the registry re-checks it, so the pre-check above is the courtesy of a precise
     // 403 and this is what actually authorizes the execution.
     const userId = (context.req.user as { id?: string })?.id;
-    const invocationContext: ToolInvocationContext = { userId, capability };
+    // Spread the ambient request context rather than building one from scratch: `traceId` and
+    // `apiKeyId` live there (ApiKeyStrategy stamps the latter), and a hand-built literal dropped
+    // both — which made every MCP-originated row in the tool-invocation ledger record a NULL actor
+    // and no correlation id.
+    const invocationContext: ToolInvocationContext = {
+      ...ContextService.getContext(),
+      userId,
+      capability,
+    };
     const result = await this.toolRegistry.executeTool(name, invocationContext, args);
 
     if (!result.success) {
@@ -173,6 +210,43 @@ export class McpToolService implements OnModuleInit {
     }
 
     return result.data;
+  }
+
+  /**
+   * Append one GraphQL-plane call to the tool-invocation ledger.
+   *
+   * `intent` is the GraphQL operation name because that is the only id this plane has — there is
+   * no dotted intent behind it — and `source: 'graphql'` is what tells a reader that, so the two
+   * planes stay distinguishable in one table. Never throws: telemetry must not turn a completed
+   * GraphQL call into a failed one.
+   */
+  private async recordGraphqlInvocation(
+    tool: McpRegisteredTool,
+    req: ApiKeyScopedRequest,
+    capability: ApiKeyCapability,
+    outcome: {
+      outcome: ToolInvocationOutcome;
+      errorCode?: string;
+      error?: string;
+      durationMs?: number;
+    },
+  ): Promise<void> {
+    const context = ContextService.getContext();
+
+    await this.toolRegistry.recordInvocation({
+      intent: tool.name,
+      tool: tool.name,
+      source: 'graphql',
+      userId: (req.user as { id?: string } | undefined)?.id ?? context?.userId,
+      correlationId: context?.traceId,
+      apiKeyId: req.apiKeyId ?? context?.apiKeyId,
+      capability,
+      occurredAt: new Date().toISOString(),
+      access: tool.privacy.access,
+      external: tool.privacy.external,
+      destructive: tool.privacy.destructive,
+      ...outcome,
+    });
   }
 
   private registerGraphQLTools() {
@@ -284,4 +358,26 @@ export class McpToolService implements OnModuleInit {
         return z.unknown();
     }
   }
+}
+
+/**
+ * Shape a thrown GraphQL-plane error like a `ToolError` so one `outcomeOf` decides the outcome for
+ * both planes.
+ *
+ * The exception CLASS is the code, because the class is the closest thing this plane has to the
+ * error code the intent plane supplies: a Nest `ForbiddenException` and a driver `TimeoutError`
+ * are exactly the distinction the `outcome` column is trying to preserve. Read off
+ * `constructor.name` rather than `error.name`, which is the string `'Error'` for any subclass that
+ * did not bother to set it.
+ */
+export function describeFailure(error: unknown): { code: string; message: string; retryable: boolean } {
+  if (!(error instanceof Error)) {
+    return { code: 'UNKNOWN_ERROR', message: String(error), retryable: false };
+  }
+
+  return {
+    code: error.constructor?.name ?? error.name ?? 'UNKNOWN_ERROR',
+    message: error.message,
+    retryable: false,
+  };
 }

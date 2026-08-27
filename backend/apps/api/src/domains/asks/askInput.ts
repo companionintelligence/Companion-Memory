@@ -2,7 +2,8 @@ import { BadRequestException } from '@nestjs/common';
 
 import { ASK_ARCHETYPES, type AskArchetype } from './askGrammar';
 import { canonicalQueryType, normalizeText } from './canonical';
-import type { AskQuery } from './types';
+import { DISCLOSURE_RUNGS } from './policy';
+import type { AskActor, AskActorKind, AskQuery, DisclosureRung } from './types';
 
 /**
  * The boundary where an asker's raw strings become an {@link AskQuery}.
@@ -216,13 +217,102 @@ export function parseAskQueryInput(raw: {
   queryType: unknown;
   dataClass?: unknown;
   prompt: unknown;
+  actor?: unknown;
 }): AskQuery {
   const queryType = parseAskQueryType(raw.queryType);
   const dataClass = parseAskDataClass(raw.dataClass);
   const prompt = parseAskPrompt(raw.prompt);
+  const actor = parseAskActor(raw.actor);
 
   // Built field by field rather than spread from `raw`: the input object is
   // attacker-shaped, and spreading it would carry unknown keys straight into
   // the `ci.asks.query` jsonb column and from there into the audit replay.
-  return dataClass == null ? { queryType, prompt } : { queryType, dataClass, prompt };
+  return {
+    queryType,
+    prompt,
+    ...(dataClass == null ? {} : { dataClass }),
+    ...(actor == null ? {} : { actor }),
+  };
+}
+
+/** The actor kinds an ask may declare. Anything else is not an actor. */
+export const ASK_ACTOR_KINDS: readonly AskActorKind[] = ['person', 'first-party-agent', 'third-party-agent'];
+
+/** The longest label an acting agent may carry. Shown to a human, so bounded like a prompt. */
+export const MAX_ACTOR_LABEL_LENGTH = 80;
+
+/**
+ * Parse a declared actor.
+ *
+ * ═══ AN UNPARSEABLE ACTOR IS NO ACTOR, NOT A DEFAULTED ONE ═══
+ *
+ * Returns `undefined` for anything off-contract rather than throwing, and
+ * rather than defaulting to `person`. Both alternatives are wrong in the same
+ * direction:
+ *
+ * - defaulting to `person` would let an agent satisfy a `delegation: 'none'`
+ *   grant by sending a malformed actor, which is strictly easier than sending
+ *   an honest one;
+ * - throwing would make a field nobody sends today into a hard error on every
+ *   legacy client.
+ *
+ * `undefined` satisfies no delegation restriction at all (see
+ * `actorSatisfiesDelegation`), so the failure mode is owner review — the
+ * documented floor of this gate.
+ *
+ * The LABEL is truncated rather than rejected, unlike a prompt. A prompt is the
+ * question being consented to and must never be silently altered; a label is
+ * decoration beside it, and an over-long one should not cost the asker their
+ * ask.
+ */
+export function parseAskActor(raw: unknown): AskActor | undefined {
+  if (raw == null || typeof raw !== 'object') {
+    return undefined;
+  }
+
+  const candidate = raw as { kind?: unknown; label?: unknown };
+  const kind = typeof candidate.kind === 'string' ? candidate.kind.trim().toLowerCase() : '';
+
+  if (!(ASK_ACTOR_KINDS as readonly string[]).includes(kind)) {
+    return undefined;
+  }
+
+  // `normalizeText` is total over `unknown` and answers null for anything it
+  // cannot normalize, so the null check is the one that matters here — not the
+  // typeof above it.
+  const normalized = normalizeText(candidate.label)?.slice(0, MAX_ACTOR_LABEL_LENGTH) ?? '';
+  const label = normalized.trim() ? normalized : undefined;
+
+  return label == null ? { kind: kind as AskActorKind } : { kind: kind as AskActorKind, label };
+}
+
+/**
+ * Parse an owner-supplied disclosure rung at the API boundary.
+ *
+ * REJECTS rather than coercing, which is the opposite direction from
+ * `grantMatch.ceilingOf` and `ceilingForShare` — and both are right for where
+ * they sit. Those two READ a value that is already stored and must fail closed,
+ * because the alternative is disclosing more than the owner asked for. This one
+ * WRITES, and an owner who typed `summry` meant a restriction: silently storing
+ * `none` would hand them a share that discloses nothing and no explanation, so
+ * a 400 they can act on is the honest answer.
+ *
+ * `null`/`undefined` pass through as "no ceiling declared", which is a real and
+ * intentional posture (the pre-existing behaviour of every share).
+ */
+export function parseDisclosureRung(raw: unknown, field = 'maxDisclosure'): DisclosureRung | null {
+  if (raw == null) {
+    return null;
+  }
+
+  if (typeof raw !== 'string') {
+    throw new BadRequestException(`${field} must be a string`);
+  }
+
+  const canonical = raw.trim().toLowerCase();
+  if (!(DISCLOSURE_RUNGS as readonly string[]).includes(canonical)) {
+    throw new BadRequestException(`${field} must be one of: ${DISCLOSURE_RUNGS.join(', ')}`);
+  }
+
+  return canonical as DisclosureRung;
 }

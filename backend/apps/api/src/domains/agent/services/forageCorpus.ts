@@ -49,6 +49,7 @@ export function slugName(name: string, used: Set<string>): string {
   while (used.has(id)) {
     id = `${base}_${n++}`;
   }
+
   used.add(id);
 
   return id;
@@ -80,9 +81,11 @@ export function observationCue(item: {
   if (item.supports_branches.length === 1) {
     return `${item.supports_branches[0]}_mention`;
   }
+
   if (item.supports_people.length === 1) {
     return `${item.supports_people[0]}_mention`;
   }
+
   if (item.source === 'place' || item.source === 'person') {
     return 'place_mention';
   }
@@ -118,6 +121,7 @@ export function eventParticipantIds(events: Array<{
     if (event.organizer_entity_id) {
       ids.add(event.organizer_entity_id);
     }
+
     for (const id of event.participant_entity_ids ?? []) {
       if (id) {
         ids.add(id);
@@ -141,6 +145,7 @@ export function branchesFromClusters(
       best.set(key, cluster);
       continue;
     }
+
     best.set(key, {
       ...prev,
       p_occur: Math.max(prev.p_occur, cluster.p_occur),

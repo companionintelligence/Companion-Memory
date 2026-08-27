@@ -62,6 +62,62 @@ export interface McpDiscoveredTool {
   inputSchema: Record<string, unknown>;
 }
 
+/**
+ * One entry in `approved_tools`: a human's grant over a specific tool AT a specific schema.
+ *
+ * Adding the server is not the grant — see `acknowledgedHighRisk` on
+ * {@link CreateMcpServerConfigDto}, which is the same distinction one level up (that one gates
+ * *adding* a high-risk catalog server; nothing before this type gated its tools).
+ */
+export interface McpApprovedTool {
+  name: string;
+  /** sha256 hex over the canonicalised `inputSchema` — see `services/mcpToolDigest.ts`. */
+  schemaDigest: string;
+  /** ISO 8601. */
+  approvedAt: string;
+  /** User id, or `legacy:grandfathered` for a row converted from the pre-gate NULL state. */
+  approvedBy: string;
+}
+
+export type McpToolApprovalState =
+  /** Offered, approved, and the schema still digests to what was approved. */
+  | 'approved'
+  /** Offered but never approved — invisible to chat. */
+  | 'new'
+  /** Approved under a different schema; the capability changed — invisible to chat until re-approved. */
+  | 'schema_changed'
+  /** Approved, but the server no longer offers it. */
+  | 'unavailable'
+  /** Row predates the approval gate (`approved_tools IS NULL`); passthrough until the next connect. */
+  | 'legacy';
+
+/** Per-tool approval state, computed server-side so the digest has exactly one implementation. */
+export interface McpToolApproval {
+  name: string;
+  /** Digest of what the server currently offers; `null` for an `unavailable` entry. */
+  schemaDigest: string | null;
+  state: McpToolApprovalState;
+  approvedAt: string | null;
+  /** Digest that was approved, when it differs from `schemaDigest` this is the drift. */
+  approvedDigest: string | null;
+}
+
+/**
+ * Body of `POST mcp/servers/:id/approve-tools`.
+ *
+ * `tools[]` carries the digest the client was actually shown; the server re-derives it from the
+ * currently-discovered schema and rejects a mismatch, so a schema that drifted between the render
+ * and the click cannot be approved sight-unseen. `approveAll` is the deliberate escape hatch — a
+ * strict pin with no one-click path to re-bless a legitimately-updated upstream server is a pin
+ * people turn off.
+ */
+export interface ApproveMcpToolsDto {
+  approveAll?: boolean;
+  tools?: Array<{ name: string; schemaDigest: string }>;
+  /** Tool names to drop from the approved set. */
+  revoke?: string[];
+}
+
 /** The full shape of a server config as the application layer works with it (decrypted). */
 export interface McpServerConfigDraft {
   name: string;
@@ -109,6 +165,9 @@ export interface McpServerConfigEgress {
   source: McpConfigSource;
   catalogSlug: string | null;
   discoveredTools: McpDiscoveredTool[] | null;
+  approvedTools: McpApprovedTool[] | null;
+  /** Derived from `discoveredTools` × `approvedTools`; the settings UI's drift view. */
+  toolApprovals: McpToolApproval[];
   connectionStatus: McpConnectionStatus;
   lastConnectedAt: Date | null;
   lastError: string | null;

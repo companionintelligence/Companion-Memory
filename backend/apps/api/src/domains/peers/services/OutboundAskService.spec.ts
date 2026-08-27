@@ -394,9 +394,15 @@ describe('toStoredAnswer', () => {
  */
 describe('OutboundAskService — a refused endpoint leaves no trace of an answer', () => {
   function realClient(): PeerAskClient {
-    const logger = { setContext: jest.fn(), warn: jest.fn(), log: jest.fn(), error: jest.fn(), debug: jest.fn() };
+    const logger = {
+      setContext: jest.fn(),
+      warn: jest.fn(),
+      log: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    };
 
-    return new PeerAskClient(logger as never);
+    return new PeerAskClient(unsignedSigner() as never, logger as never);
   }
 
   beforeEach(() => {
@@ -493,3 +499,11 @@ describe('OutboundAskService — a refused endpoint leaves no trace of an answer
     expect(persisted.status).toBe('answered');
   });
 });
+
+/**
+ * A signer with no key configured, which is every box until an operator sets
+ * `peers.signingKeyJwk`. These suites are about the call, not the signature.
+ */
+function unsignedSigner() {
+  return { signOutbound: () => null };
+}

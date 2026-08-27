@@ -57,3 +57,32 @@ describe('readCoordinates ({ latitude, longitude })', () => {
     expect(readCoordinates(input)).toBeNull();
   });
 });
+
+// The properties bag is written as `{ lat, lng }` — PlaceService.upsert and the
+// geocode path both use the short spelling. Reading only `latitude`/`longitude`
+// meant every place resolved to null and rendered no pin, while its coordinate
+// sat correct and full-precision in `location_point`. The original tests here
+// only exercised the long spelling, so they agreed with the bug.
+describe('readCoordinates ({ lat, lng }) — the shape writers actually produce', () => {
+  it('reads a lat/lng bag', () => {
+    expect(readCoordinates({ lat: 34.0522, lng: -118.2437 })).toEqual({ lat: 34.0522, lng: -118.2437 });
+  });
+
+  it('prefers the typed latitude/longitude when both spellings are present', () => {
+    expect(readCoordinates({ latitude: 1, longitude: 2, lat: 9, lng: 9 })).toEqual({ lat: 1, lng: 2 });
+  });
+
+  it('still rejects null island in the short spelling', () => {
+    expect(readCoordinates({ lat: 0, lng: 0 })).toBeNull();
+  });
+
+  it('still rejects a half-populated short pair', () => {
+    expect(readCoordinates({ lat: 34.0522 })).toBeNull();
+    expect(readCoordinates({ lng: -118.2437 })).toBeNull();
+  });
+
+  it('keeps a legitimate zero on one axis', () => {
+    // Greenwich: longitude 0 is a real coordinate, only (0,0) is the sentinel.
+    expect(readCoordinates({ lat: 51.4769, lng: 0 })).toEqual({ lat: 51.4769, lng: 0 });
+  });
+});

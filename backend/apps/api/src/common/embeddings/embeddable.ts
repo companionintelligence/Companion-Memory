@@ -14,9 +14,8 @@ import config from '@ci/configuration';
  *  2. **Entity type** — given an entity TYPE, is that type embeddable at all,
  *     and (for graph producers) which canonical search-vocabulary type does it
  *     map onto? Entry points: {@link normalizeEmbeddableType},
- *     {@link isEmbeddableType}, {@link shouldEmbedType} (the operator allowlist),
- *     and {@link entityEmbedSkipReason} (the combined guard for
- *     `SEARCH_EMBED_ENTITY` producers).
+ *     {@link isEmbeddableType} and {@link shouldEmbedType} (the operator
+ *     allowlist).
  *
  * Keyword/tsvector indexing is NOT gated by anything here — only dense
  * embeddings are. Both concerns are conservative: they only drop what is
@@ -266,35 +265,4 @@ export function shouldEmbedType(entityType: string, allowlist?: readonly string[
   }
 
   return types.includes(entityType);
-}
-
-/**
- * Combined skip guard for producers that embed an arbitrary
- * `(entityType, searchContent)` pair directly off an event payload — notably
- * graph person/concept nodes pushed via `Events.SEARCH_EMBED_ENTITY`, which
- * don't own a first-class memory row and so never flow through a per-domain
- * `*SearchIndexListener`.
- *
- * Applies BOTH concerns so these producers get the same treatment as everything
- * else: the content must clear the same quality bar (non-empty, long enough, not
- * a bare trivial reaction or URL), AND the entity TYPE must be embeddable in the
- * search vocabulary. Returns a human-readable reason to skip, or `null` when the
- * entity is embeddable. Content reasons are reported before the type reason — a
- * blank/low-value document is uninteresting regardless of type.
- */
-export function entityEmbedSkipReason(input: {
-  entityType?: string | null;
-  searchContent?: string | null;
-}): string | null {
-  const contentSkip = embedSkipReason(input.searchContent);
-
-  if (contentSkip != null) {
-    return contentSkip === 'empty' ? 'search content is empty' : `search content is ${contentSkip}`;
-  }
-
-  if (!isEmbeddableType(input.entityType)) {
-    return `entity type "${input.entityType ?? '(unspecified)'}" is not embeddable`;
-  }
-
-  return null;
 }

@@ -69,16 +69,19 @@ describe('EventService.create — ranking + consent columns', () => {
   });
 });
 
-describe('EventEntity.toEgressType — ranking + consent surfaced', () => {
-  it('exposes lastAccessed and sharingLevel (analytics columns live on ci.event_analytics)', () => {
-    const accessed = new Date('2026-02-02T00:00:00Z');
+describe('EventEntity.toEgressType — consent surfaced, recency gone', () => {
+  it('exposes sharingLevel and no longer emits lastAccessed', () => {
     const egress = EventEntity.toEgressType({
       id: 'e1',
-      lastAccessed: accessed,
       sharingLevel: 'household',
     } as EventEntity);
 
-    expect(egress.lastAccessed).toBe(accessed);
     expect(egress.sharingLevel).toBe('household');
+
+    // ci.events.last_accessed was dropped (migration 20260826202418) after it
+    // spent its whole life NULL — nothing ever wrote it on a read path and
+    // nothing read it. Re-adding the egress key would resurrect a field with no
+    // writer, so assert on the emitted key set, not just the value.
+    expect(Object.keys(egress)).not.toContain('lastAccessed');
   });
 });

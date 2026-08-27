@@ -1,4 +1,5 @@
-import { expect, type Page, test } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './fixtures/authenticated';
 
 // Authenticated (the chromium project inherits the auth project's storageState).
 //

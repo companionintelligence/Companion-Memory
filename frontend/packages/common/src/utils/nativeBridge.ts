@@ -190,6 +190,25 @@ interface CameraPlugin {
   requestPermissions?(options?: { permissions?: Array<'camera' | 'photos'> }): Promise<unknown>;
 }
 
+type BarcodeScannerPermissionState = 'prompt' | 'prompt-with-rationale' | 'granted' | 'denied' | 'limited';
+
+/**
+ * `@capacitor-mlkit/barcode-scanning`. Declared locally, not imported from the plugin
+ * package, for the same reason every other plugin interface here is: it keeps the web
+ * bundle free of `@capacitor/*`-family native deps.
+ *
+ * Only the ready-to-use `scan()` surface is used — a full-screen native scanner UI, not
+ * the WebView-overlaid `startScan()`/`stopScan()` pair (which needs its own camera-preview
+ * layout work this app doesn't have). On Android, `scan()` launches Google Play Services'
+ * own scanner activity and resolves the on-demand ML Kit barcode model itself; it does not
+ * consult `checkPermissions`/`requestPermissions` the way iOS does.
+ */
+interface BarcodeScannerPlugin {
+  checkPermissions(): Promise<{ camera: BarcodeScannerPermissionState }>;
+  requestPermissions(): Promise<{ camera: BarcodeScannerPermissionState }>;
+  scan(options?: { formats?: string[] }): Promise<{ barcodes: Array<{ rawValue: string }> }>;
+}
+
 interface CapacitorPlugins {
   SecureStoragePlugin?: SecureStoragePlugin;
   LocalHub?: LocalHubPlugin;
@@ -201,6 +220,7 @@ interface CapacitorPlugins {
   LocalNotifications?: LocalNotificationsPlugin;
   LocalLLM?: LocalLlmPlugin;
   Camera?: CameraPlugin;
+  BarcodeScanner?: BarcodeScannerPlugin;
 }
 
 export interface LocalNotification {
@@ -901,6 +921,84 @@ function fileFromDataUrl(dataUrl: string, name: string, fallbackType: string): F
     return new File([bytes], name, { type: mime });
   } catch {
     return null;
+  }
+}
+
+export type BarcodeScanErrorCode = 'denied' | 'unavailable';
+
+/**
+ * Camera-permission refusal or scanner failure from {@link scanQrCode}. The user simply
+ * closing the scanner is not an error — that resolves to `null` instead, matching how
+ * {@link takeNativePhoto} treats a cancelled camera.
+ */
+export class BarcodeScanError extends Error {
+  readonly code: BarcodeScanErrorCode;
+
+  constructor(message: string, code: BarcodeScanErrorCode) {
+    super(message);
+    this.name = 'BarcodeScanError';
+    this.code = code;
+  }
+}
+
+export function isBarcodeScanError(error: unknown): error is BarcodeScanError {
+  return error instanceof Error && error.name === 'BarcodeScanError' && 'code' in error;
+}
+
+/**
+ * Opens the native QR scanner (`@capacitor-mlkit/barcode-scanning`'s ready-to-use `scan()`
+ * — a full-screen native camera UI, not a WebView overlay) and returns the raw decoded
+ * string of the first barcode found. Restricted to the QR format: this is used to read a
+ * Memory Server URL, not a general-purpose barcode reader.
+ *
+ * Returns `null` on web, when the plugin is missing, or when the user backs out of the
+ * scanner without scanning anything — none of those are errors the caller should surface.
+ * Throws {@link BarcodeScanError} with code `'denied'` when camera permission is refused,
+ * and `'unavailable'` for any other scan failure (e.g. no Google Play Services on
+ * Android), so the caller can show a message distinct from a plain cancel.
+ */
+export async function scanQrCode(): Promise<string | null> {
+  const scanner = plugins()?.BarcodeScanner;
+
+  if (!isNativePlatform() || !scanner) {
+    return null;
+  }
+
+  // iOS gates scan() on the OS camera permission; Android's scan() opens Google Play
+  // Services' own scanner activity and manages permission itself, so a 'denied' result
+  // here is only ever meaningful on iOS. Best-effort: if checkPermissions/requestPermissions
+  // itself throws (e.g. an older plugin build), fall through and let scan() fail clearly.
+  try {
+    const current = await scanner.checkPermissions();
+    const needsPrompt = current.camera === 'prompt' || current.camera === 'prompt-with-rationale';
+    const status = needsPrompt ? (await scanner.requestPermissions()).camera : current.camera;
+
+    if (status === 'denied') {
+      throw new BarcodeScanError('Camera access is needed to scan a QR code.', 'denied');
+    }
+  } catch (error) {
+    if (isBarcodeScanError(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    const { barcodes } = await scanner.scan({ formats: ['QR_CODE'] });
+
+    return barcodes[0]?.rawValue ?? null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (/denied|permission/i.test(message)) {
+      throw new BarcodeScanError('Camera access is needed to scan a QR code.', 'denied');
+    }
+
+    if (/cancel/i.test(message)) {
+      // The user backed out of the scanner — not an error.
+      return null;
+    }
+
+    throw new BarcodeScanError('Could not open the scanner.', 'unavailable');
   }
 }
 

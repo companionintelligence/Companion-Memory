@@ -95,7 +95,9 @@ function averageMaps(maps: Array<Record<string, number>>): Record<string, number
       sums[key] = (sums[key] ?? 0) + (Number(value) || 0);
     }
   }
+
   const n = Math.max(maps.length, 1);
+
   return Object.fromEntries(Object.entries(sums).map(([key, value]) => [key, value / n]));
 }
 
@@ -160,10 +162,12 @@ function mergeScheduled(
     if (!name) {
       continue;
     }
+
     const part = topDaypart(cluster.daypart_probs) ?? remaining[0];
     if (!remaining.some((row) => row.id === part.id)) {
       continue;
     }
+
     let step = steps.find((row) => row.id === part.id);
     if (!step) {
       step = {
@@ -174,9 +178,11 @@ function mergeScheduled(
       };
       steps.push(step);
     }
+
     if (step.branches.some((branch) => branch.title === name)) {
       continue;
     }
+
     step.branches.unshift({
       id: `${part.id}:${cluster.cluster_id}`,
       title: name,
@@ -210,6 +216,7 @@ export function buildOccupancyTree(args: {
       if (Number.isNaN(start.getTime()) || start < now) {
         return false;
       }
+
       const hour = hourInZone(bucket.start_time, args.timezone);
 
       return hour >= part.startHour && hour < part.endHour;

@@ -12,11 +12,11 @@ const CONTEXT: UserServiceContext = { userId: USER } as UserServiceContext;
 /**
  * ConceptEntity's persisted-column count as reported by
  * repository.metadata.columns.length: the 7 columns inherited from BaseEntity,
- * the `entity_type` STI discriminator, and ConceptEntity's own 4
- * (search_content, linked_table, linked_id, last_accessed). Drives
- * computeChunkSize in the bulk insert.
+ * the `entity_type` STI discriminator, and ConceptEntity's own 3
+ * (search_content, linked_table, linked_id). Drives computeChunkSize in the
+ * bulk insert.
  */
-const CONCEPT_COLUMN_COUNT = 12;
+const CONCEPT_COLUMN_COUNT = 11;
 
 function makeSelectBuilder(rows: ConceptEntity[]) {
   const qb: Record<string, unknown> = {};

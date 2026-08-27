@@ -20,6 +20,50 @@ import { CandidateService } from './CandidateService';
 /** Cap per source so one noisy generator cannot flood the slate. */
 const MAX_PER_SOURCE = 25;
 
+/**
+ * The one `feedback_reason` that retires an *idea* rather than one proposal of it.
+ *
+ * The column's whole value space, as written today:
+ *   `not_now` | `wrong_time` | `not_like_this` | `never`  — CandidateService.decline
+ *   `not_now`                                             — CandidateService.snooze
+ *   `source_dismissed`                                    — retireStale, below
+ *   NULL                                                  — accept / returnToSlate
+ *
+ * Only `never` means "stop having this idea". It has to be read off
+ * `feedback_reason` and not off `status`, because `never` and `not_like_this`
+ * both land on `status = 'never'` while meaning opposite things: `never`
+ * retires the idea, `not_like_this` says the idea is right and only this
+ * framing is wrong, so it must stay re-proposable.
+ */
+const RETIRED_IDEA_REASON = 'never';
+
+/**
+ * Normalised identity of an idea, independent of the id it was minted under.
+ *
+ * `insight:<summary_id>:<index>` dedupe keys are only as stable as the parent
+ * insight: regenerate the insight and the same key action comes back under a
+ * new summary id, so the ON CONFLICT do-not-resurrect rule in
+ * CandidateService.upsert never sees a collision and the retired idea is
+ * proposed again. Matching on the text closes that hole.
+ *
+ * Title *and* detail, because insight key actions routinely share a label
+ * ("Pre-Read Prep: …"), and a title-only key would retire an unrelated task.
+ * Exact match after normalisation only — nothing fuzzy: a false suppression is
+ * invisible to the user, who simply never sees a card they wanted.
+ */
+function ideaKey(title: string | null | undefined, description: string | null | undefined): string {
+  return [title ?? '', description ?? '']
+    .map((part) =>
+      part
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/[.!?…]+$/, ''),
+    )
+    .join('\n')
+    .trim();
+}
+
 /** ci.actions.priority runs 1..5, low number = urgent. Map onto fit's 0..1, high = better. */
 function priorityToFit(priority: number | null): number {
   if (priority == null) {
@@ -122,16 +166,22 @@ export class SuggestionSyncService {
     const timezone = context.userId ? await this.placement.timezoneFor(context.userId) : 'UTC';
     const { windowStart, windowEnd } = this.placement.flexWindow(timezone, now);
 
-    const proposals = [
+    const proposed = [
       ...(await this.fromActions(context, windowStart, windowEnd)),
       ...(await this.fromInsights(context, windowStart, windowEnd)),
     ];
 
-    if (proposals.length === 0) {
+    if (proposed.length === 0) {
       await this.retireStale(context);
 
       return 0;
     }
+
+    // An idea the user retired outright never reaches the slate again, whatever
+    // id it is minted under this time. An empty result is passed through rather
+    // than short-circuited: upsert([]) is a no-op, and retireStale /
+    // tryAutoAccept still have work to do on rows already on the slate.
+    const proposals = await this.suppressRetiredIdeas(context, proposed);
 
     const written = await this.candidateService.upsert(context, proposals);
 
@@ -140,11 +190,60 @@ export class SuggestionSyncService {
     await this.tryAutoAccept(context);
 
     this.logger.log('Synced schedule suggestions', {
-      proposed: proposals.length,
+      proposed: proposed.length,
+      suppressed: proposed.length - proposals.length,
       written: written.length,
     });
 
     return written.length;
+  }
+
+  /**
+   * Drop proposals for ideas the user has explicitly retired.
+   *
+   * This is the consumer of `ci.event_candidates.feedback_reason`: every
+   * decline writes one and, until now, nothing read it back, so a `never` was
+   * only ever honoured for as long as the proposal's `dedupe_key` happened to
+   * stay stable.
+   *
+   * Deliberately narrow. `not_now` and `wrong_time` are deferrals — snooze
+   * already handles those, and suppressing on them would delete a card the user
+   * asked to see later. `source_dismissed` is not a user verdict at all, so an
+   * action that comes back should bring its candidate back with it. Only
+   * {@link RETIRED_IDEA_REASON} suppresses.
+   *
+   * Scoped to this service on purpose: TaskBreakdownService reaches
+   * CandidateService.upsert directly for things the user typed themselves, and
+   * a hand-written task must never be silently swallowed by an old decline.
+   */
+  private async suppressRetiredIdeas(
+    context: UserServiceContext,
+    proposals: CreateCandidateDto[],
+  ): Promise<CreateCandidateDto[]> {
+    const retired = await this.candidateRepository.find({
+      where: { userId: context.userId, feedbackReason: RETIRED_IDEA_REASON },
+      select: { id: true, title: true, description: true },
+    });
+
+    const retiredKeys = new Set(
+      retired.map((row) => ideaKey(row.title, row.description)).filter((key) => key.length > 0),
+    );
+
+    if (retiredKeys.size === 0) {
+      return proposals;
+    }
+
+    const kept = proposals.filter(
+      (proposal) => !retiredKeys.has(ideaKey(proposal.title, proposal.description)),
+    );
+
+    if (kept.length < proposals.length) {
+      this.logger.log('Suppressed proposals for ideas the user retired', {
+        suppressed: proposals.length - kept.length,
+      });
+    }
+
+    return kept;
   }
 
   /** Live feed actions — already the system's answer to "what should I do next?". */

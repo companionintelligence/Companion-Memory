@@ -33,16 +33,20 @@ export function isDisplayableLabel(name: string): boolean {
   if (!trimmed) {
     return false;
   }
+
   if (isUnknownClass(trimmed)) {
     return false;
   }
+
   if (/_\d+$/.test(trimmed)) {
     return false;
   }
+
   const letters = lettersOf(trimmed);
   if (letters.length < 4) {
     return false;
   }
+
   if (NEWS_LIKE.has(letters) || JUNK_PHRASES.has(letters)) {
     return false;
   }
@@ -65,6 +69,7 @@ export function displayNameFor(cluster: QualityCluster): string | null {
   if (isDisplayableLabel(cluster.name)) {
     return cluster.name;
   }
+
   if (!isUnknownClass(cluster.l0_class) && isDisplayableLabel(cluster.l0_class)) {
     return cluster.l0_class;
   }

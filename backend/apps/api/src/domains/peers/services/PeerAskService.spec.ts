@@ -1162,3 +1162,68 @@ describe('clampAvailability — the magnitude it reports', () => {
     expect(clampAvailability(freeBusy, 'none', 'They').disclosedCount).toBe(0);
   });
 });
+
+describe('toAskQuery — the stated purpose reaches the consent evaluator', () => {
+  const base = { askId: 'abc12345', askerHandle: 'ana', prompt: 'hi' };
+
+  /**
+   * THE BUG THIS CLOSES. `scopeCoversQuery` reads `filters.purpose`, and
+   * nothing ever wrote one: availability folded its purpose into the PROMPT and
+   * the other two archetypes had no field at all. So a purpose-limited grant
+   * matched NO inbound peer ask, ever — failing closed (downgraded to review,
+   * never widened), so nothing leaked; the feature was simply dead across
+   * boxes, silently, with no signal to the owner who set it.
+   */
+  it.each(['relationship', 'content'] as const)(
+    'carries a body-level purpose on the %s archetype',
+    (archetype) => {
+      const request =
+        archetype === 'relationship'
+          ? { archetype, subject: 'David Miller' }
+          : { archetype, subject: 'the deck' };
+
+      const query = toAskQuery({ ...base, purpose: 'wedding invites', request } as never);
+
+      expect(query.filters?.purpose).toBe('wedding invites');
+    },
+  );
+
+  it('carries a body-level purpose on availability too', () => {
+    const query = toAskQuery({
+      ...base,
+      purpose: 'lunch',
+      request: {
+        archetype: 'availability',
+        from: '2026-09-01T00:00:00.000Z',
+        to: '2026-09-02T00:00:00.000Z',
+      },
+    } as never);
+
+    expect(query.filters?.purpose).toBe('lunch');
+  });
+
+  it('falls back to availability’s own purpose, so an older peer still binds', () => {
+    const query = toAskQuery({
+      ...base,
+      request: {
+        archetype: 'availability',
+        from: '2026-09-01T00:00:00.000Z',
+        to: '2026-09-02T00:00:00.000Z',
+        purpose: 'lunch at Zuni',
+      },
+    } as never);
+
+    expect(query.filters?.purpose).toBe('lunch at Zuni');
+  });
+
+  it('sets no purpose key at all when none was stated', () => {
+    const query = toAskQuery({
+      ...base,
+      request: { archetype: 'relationship', subject: 'David Miller' },
+    } as never);
+
+    // Absent rather than empty-string: `scopeCoversQuery` distinguishes "stated
+    // nothing" from "stated something blank", and only the first is honest.
+    expect(query.filters).not.toHaveProperty('purpose');
+  });
+});

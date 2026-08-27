@@ -444,11 +444,38 @@ endpoint — authenticated with the same `x-api-key` the App Intents already use
 connection costs nothing. It still lives in the app target rather than that package (which declares
 itself Android-only); moving it there needs a podspec + vendored xcframework + Podfile regeneration.
 
-> ⚠️ **Android's model catalog is currently broken and this is not an iOS problem.** Every
-> Gemma-derived repo under `litert-community` is now `gated: "auto"` on Hugging Face, so the `.task`
-> URL in `LocalLlmModels.kt` / `definitions.ts` answers `401 GatedRepo` to an anonymous download —
-> meaning no new Android user can fetch the only model offered. iOS ships the ungated Qwen3-0.6B
-> instead. Android needs the same swap (or a token); see `LocalLLMModels.swift` for the measurements.
+> ✅ **Fixed 2026-08-26 — Android's model catalog used to be broken.** It pointed at
+> `litert-community/Gemma3-1B-IT`, a repo Hugging Face now serves `gated: "auto"`, so the `.task`
+> URL in `LocalLlmModels.kt` / `definitions.ts` answered `401 GatedRepo` to an anonymous download —
+> meaning no new Android user could fetch the only model offered. Android now ships the same
+> ungated Qwen3-0.6B iOS already used (`litert-community/Qwen3-0.6B`); both platforms ship the
+> identical model file. See `LocalLLMModels.swift` and `LocalLlmModels.kt` for the measurements.
+
+**Also fixed 2026-08-26, same pass:**
+
+- **iOS had no multi-turn memory.** `LocalLLMEngine` used to create a fresh, historyless
+  `Conversation` on every `generate()`/`generateStream()` call; Android kept one alive across
+  calls. Both platforms now keep a single `Conversation` per loaded model, created once in
+  `load()` (which is also where tools are now bound, not per-call), so turn history
+  accumulates natively on both platforms the same way.
+- **No thermal or battery governor existed at all.** Both platforms now check the OS's live
+  thermal signal (`ProcessInfo.thermalState` / `PowerManager.getCurrentThermalStatus()`) before
+  starting generation, and cancel an in-flight one if the device crosses `.critical` /
+  `THERMAL_STATUS_SEVERE` mid-stream.
+- **Nothing protected an in-flight generation from being killed if briefly backgrounded** — only
+  the model *download* had that. Android now wraps `generate()`/`generateStream()` in a
+  foreground service; iOS wraps them in `beginBackgroundTask`. Both are best-effort, not a
+  guarantee — see `LocalLLMPlugin.swift`'s doc comment for why `BGContinuedProcessingTask`
+  (iOS 26+) is the fuller answer and a separate, UX-affecting change.
+- **The Android AAR and iOS xcframework had drifted** (0.11.0 vs 0.14.0 of the same upstream
+  LiteRT-LM release) with no record of why. Reconciled to 0.14.0 on both.
+- **The RAM floor was unreconciled 2x between platforms** (Android 3 GB total RAM vs iOS 6 GB
+  physical memory) for models with the same ~2 GB estimated peak RSS. Both now gate at 4 GB.
+- **LiteRT-LM's own constrained-decoding flag** (`enableConversationConstrainedDecoding`) is now
+  wired on both platforms but left `false` — Google's own default, and it stays that way until
+  someone can verify it against a real device rather than flip an experimental native decoding
+  path on top of a baseline no commit has confirmed runs inference at all. See the constant's
+  doc comment in `LocalLLMEngine.swift` / `LocalLlmEngine.kt` to turn it on once that's possible.
 
 ## Not yet wired (later phases)
 

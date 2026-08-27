@@ -23,6 +23,7 @@ import { PeerAskService } from './services/PeerAskService';
 import { PeerDirectoryService } from './services/PeerDirectoryService';
 import { PeerLinkService } from './services/PeerLinkService';
 import { PeerRateLimitService } from './services/PeerRateLimitService';
+import { PeerSignatureService } from './services/PeerSignatureService';
 
 @Module({
   imports: [
@@ -43,6 +44,7 @@ import { PeerRateLimitService } from './services/PeerRateLimitService';
     PeerAskCorrelationService,
     PeerAskService,
     PeerRateLimitService,
+    PeerSignatureService,
     OutboundAskService,
   ],
   exports: [
@@ -52,6 +54,7 @@ import { PeerRateLimitService } from './services/PeerRateLimitService';
     PeerAskCorrelationService,
     PeerAskService,
     PeerRateLimitService,
+    PeerSignatureService,
     OutboundAskService,
   ],
 })
@@ -59,6 +62,15 @@ export class PeersModule {}
 
 export { PeerLinkEntity, PeerAskCorrelationEntity };
 export { PeerRateLimitService } from './services/PeerRateLimitService';
+export { PeerSignatureService } from './services/PeerSignatureService';
+export type { SignatureFailure, VerificationResult } from './services/PeerSignatureService';
+export {
+  PEER_SIGNATURE_ALG,
+  PEER_SIGNATURE_LABEL,
+  contentDigest,
+  jwkThumbprint,
+  publicKeyFromJwk,
+} from './httpSignature';
 export { OutboundAskService } from './services/OutboundAskService';
 export type { SendAskDto, SendAskResult } from './services/OutboundAskService';
 export { PeerLinkService, PeerDirectoryService, PeerAskClient, PeerAskService };

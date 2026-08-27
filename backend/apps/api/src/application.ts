@@ -65,6 +65,7 @@ import { PowerSyncModule } from '@ci/domains/powersync';
 import { PredictionsModule } from '@ci/domains/predictions';
 import { PrivacyModule } from '@ci/domains/privacy';
 import { PythonFunctionsModule } from '@ci/domains/python-functions';
+import { RetrievalPolicyModule } from '@ci/domains/retrieval-policy';
 import { ScheduleModule } from '@ci/domains/schedule';
 import { SearchIngressModule } from '@ci/domains/search-ingress';
 import { SearchNextModule } from '@ci/domains/search-next';
@@ -73,7 +74,6 @@ import { SolidModule } from '@ci/domains/solid';
 import { SummariesModule } from '@ci/domains/summaries';
 import { ToolsModule } from '@ci/domains/tools';
 import { UserModule } from '@ci/domains/user';
-import { UserSnapshotsModule } from '@ci/domains/user-snapshots';
 import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
 
 @Module({
@@ -142,6 +142,7 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     PredictionsModule,
     PrivacyModule,
     PythonFunctionsModule,
+    RetrievalPolicyModule,
     ToolsModule,
     MemoryModule,
     GeocodeModule,
@@ -154,7 +155,6 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     SolidModule,
     SummariesModule,
     UserModule,
-    UserSnapshotsModule,
   ],
   controllers: [HealthController, MapsConfigController, TelemetryConfigController],
   providers: [

@@ -128,12 +128,14 @@ export {
   getNativeCurrentLocation,
   hasNotificationPermission,
   hideSplashScreen,
+  isBarcodeScanError,
   isDeviceLocationError,
   openExternalUrl,
   openNativeAppSettings,
   openNativeLocationSettings,
   removeBackgroundLocationWatcher,
   requestNotificationPermission,
+  scanQrCode,
   scheduleLocalNotification,
   secureStorageGet,
   secureStorageRemove,
@@ -144,11 +146,12 @@ export {
 } from './src/utils/nativeBridge';
 export type {
   BackgroundGeolocationError,
+  BarcodeScanErrorCode,
   DeviceLocationErrorCode,
   LocalNotification,
   NativeCurrentLocation,
 } from './src/utils/nativeBridge';
-export { DeviceLocationError } from './src/utils/nativeBridge';
+export { BarcodeScanError, DeviceLocationError } from './src/utils/nativeBridge';
 export {
   OIDC_NATIVE_CALLBACK_URL,
   OIDC_NATIVE_CLIENT_FLAG,

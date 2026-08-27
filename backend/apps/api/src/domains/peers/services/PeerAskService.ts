@@ -21,6 +21,7 @@ import {
   type AskQuery,
   type DisclosedAnswer,
   type DisclosureRung,
+  type AskChannelProvenance,
 } from '@ci/domains/asks';
 import { EventEntity } from '@ci/domains/memory';
 
@@ -73,6 +74,11 @@ export class PeerAskService {
   async handle(
     peerIdentity: { issuer: string; subject: string },
     body: PeerAskBody,
+    /**
+     * How the request arrived, when it arrived signed. Null means an unsigned
+     * channel — a fact the owner's surfaces state plainly, not an absence.
+     */
+    channel: AskChannelProvenance | null = null,
   ): Promise<PeerAskResponse> {
     const link = await this.resolveLink(peerIdentity);
     const context: UserServiceContext = { userId: link.ownerUserId };
@@ -115,6 +121,7 @@ export class PeerAskService {
       query,
       peerLinkId: link.id,
       direction: 'inbound',
+      channel,
     });
 
     // Recorded BEFORE the ask is evaluated, so an ask that reaches the owner's
@@ -835,22 +842,45 @@ export function boundedWindow(fromIso: string, toIso: string): { from: Date; to:
 
 /** Translate a wire archetype into the local ask query vocabulary. */
 export function toAskQuery(body: PeerAskBody): AskQuery {
+  // Carried on EVERY archetype: delegation is a property of who is asking, not
+  // of what they are asking about, and an archetype that dropped it would be a
+  // way around a `delegation` restriction rather than a gap in one.
+  const actor = body.actor ? { actor: body.actor } : {};
+
+  // WHY, carried on every archetype.
+  //
+  // `scopeCoversQuery` reads `filters.purpose`, and nothing ever wrote one:
+  // availability folded its purpose into the PROMPT and the other two had no
+  // field at all, so a purpose-limited grant matched no inbound peer ask ever.
+  // The body-level `purpose` is preferred; availability's own is the fallback,
+  // so a peer that predates the body field still binds correctly.
+  const statedPurpose =
+    body.purpose ?? (body.request.archetype === 'availability' ? body.request.purpose : undefined);
+  const purpose = statedPurpose ? { purpose: statedPurpose } : {};
+
   switch (body.request.archetype) {
     case 'relationship':
-      return { queryType: 'relationship', prompt: body.request.subject };
+      return {
+        queryType: 'relationship',
+        prompt: body.request.subject,
+        filters: { ...purpose },
+        ...actor,
+      };
     case 'content':
       return {
         queryType: 'content',
         dataClass: body.request.dataClass,
         prompt: body.request.subject,
-        filters: { from: body.request.from, to: body.request.to },
+        filters: { from: body.request.from, to: body.request.to, ...purpose },
+        ...actor,
       };
     case 'availability':
       return {
         queryType: 'availability',
         dataClass: 'calendar',
         prompt: body.request.purpose ?? body.prompt,
-        filters: { from: body.request.from, to: body.request.to },
+        filters: { from: body.request.from, to: body.request.to, ...purpose },
+        ...actor,
       };
   }
 }

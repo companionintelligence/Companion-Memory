@@ -59,6 +59,29 @@ export class AskEntity {
   @Column({ type: 'text', name: 'disclosure_ceiling', nullable: true })
   disclosureCeiling!: DisclosureRung | null;
 
+  /**
+   * HOW this ask arrived — the channel facts, beside the consent facts above.
+   *
+   * NULL across all three means the ask came in over an UNSIGNED channel, which
+   * is a real answer and not an absence: `peers.requireHttpSignature` ships off,
+   * and a local ask never crosses a network boundary at all. The surfaces say
+   * "unsigned" plainly rather than leaving a blank, because an owner who cannot
+   * tell "unsigned" from "not recorded" cannot use the distinction.
+   *
+   * Denormalized AS OF ARRIVAL. Re-reading the peer link later would report the
+   * key the peer uses NOW, and an audit that quietly updates itself when a key
+   * is rotated cannot answer "what signed this at the time".
+   */
+  @Column({ type: 'text', name: 'channel_key_thumbprint', nullable: true })
+  channelKeyThumbprint!: string | null;
+
+  @Column({ type: 'timestamptz', name: 'channel_verified_at', nullable: true })
+  channelVerifiedAt!: Date | null;
+
+  /** The signature base's covered components, as actually presented. */
+  @Column({ type: 'text', array: true, name: 'channel_covered', nullable: true })
+  channelCovered!: string[] | null;
+
   @CreateDateColumn({ type: 'timestamptz', name: 'created_at' })
   createdAt!: Date;
 
@@ -79,6 +102,9 @@ export class AskEntity {
       status: entity.status,
       consentBasis: entity.consentBasis,
       disclosureCeiling: entity.disclosureCeiling ?? null,
+      channelKeyThumbprint: entity.channelKeyThumbprint ?? null,
+      channelVerifiedAt: entity.channelVerifiedAt ?? null,
+      channelCovered: entity.channelCovered ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
       expiresAt: entity.expiresAt,

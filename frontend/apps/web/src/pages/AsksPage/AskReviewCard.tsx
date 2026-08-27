@@ -1,11 +1,26 @@
+import { useState } from 'react';
+
 import { Badge, Button, Card } from '@ci/shadcn';
-import { ShieldAlert, ShieldCheck } from '@ci/shadcn/icons';
+import { Bot, ShieldAlert, ShieldCheck } from '@ci/shadcn/icons';
 
 import { PersonAvatar } from '@/components/PersonAvatar';
 import type { AnswerForm } from '@/graphql/graphql';
 
 import { AskerQuote } from './AskerQuote';
-import { answerFormLabel, askApproveLabel, askDecisionNote, type AskDecisionState } from './askPresentation';
+import {
+  purposeAbsentNote,
+  purposeLine,
+  actorIsDelegated,
+  actorLine,
+  type AskActorView,
+  answerFormLabel,
+  askApproveLabel,
+  askDecisionNote,
+  type AskDecisionState,
+} from './askPresentation';
+import { ConsentDetailModal, type ConsentRecord } from './ConsentDetailModal';
+import { ConsentLock } from './ConsentLock';
+import { consentLockState } from './consentProvenance';
 
 export interface AskReviewItem {
   id: string;
@@ -52,6 +67,28 @@ interface Props {
   decision: AskDecisionState;
   /** Answer forms the owner can cap this ask at instead of declining. */
   downgrades?: AnswerForm[];
+  /**
+   * What is making this ask, when the asker declared it.
+   *
+   * Omitted renders no line at all — an ask that declares nothing is the
+   * ordinary case today, and inventing "a person, presumably" would be a claim
+   * about the one thing the asker declined to commit to.
+   */
+  actor?: AskActorView | null;
+  /**
+   * The purpose the asker stated, if any. Shown attributed — this box cannot
+   * verify why anyone wants anything, and a card implying it had checked would
+   * assert something nobody checked.
+   */
+  statedPurpose?: string | null;
+  /**
+   * What protected this request, for the lock and the signature modal.
+   *
+   * Optional because a container that cannot answer it must not guess: the lock
+   * is a claim about what was checked, and rendering one from invented facts is
+   * worse than rendering none. Omitted, no lock appears.
+   */
+  consent?: ConsentRecord;
   onToggleItem?: (id: string) => void;
   onApprove: () => void;
   onDowngrade?: (form: AnswerForm) => void;
@@ -85,12 +122,16 @@ export function AskReviewCard({
   items = [],
   decision,
   downgrades = [],
+  actor,
+  statedPurpose,
+  consent,
   onToggleItem,
   onApprove,
   onDowngrade,
   onDecline,
   busy = false,
 }: Props) {
+  const [showConsent, setShowConsent] = useState(false);
   const kept = items.filter((item) => !item.withheld);
   const shareLabel = items.length > 0 ? `Share ${kept.length} of ${items.length}` : askApproveLabel(decision);
   const preAuthorized = decision === 'pre-authorized';
@@ -119,6 +160,15 @@ export function AskReviewCard({
               Already authorized
             </Badge>
           ) : null}
+          {/* The lock answers "should I trust this request?", which is a
+              different question from "do I want to answer it?" — and it is the
+              one the owner has no other way to ask. */}
+          {consent ? (
+            <ConsentLock
+              state={consentLockState({ consent: consent.consent, channel: consent.channel })}
+              onOpen={() => setShowConsent(true)}
+            />
+          ) : null}
         </div>
 
         <Button size="sm" onClick={onApprove} disabled={busy}>
@@ -130,6 +180,23 @@ export function AskReviewCard({
           controls every character here, including the ones that used to close
           the quote and let them finish the sentence in the app's voice. */}
       <AskerQuote prompt={prompt} attribution={`${askerName} asked:`} />
+
+      {/* WHO is asking, when they said. Its own line rather than a chip beside
+          the name: "Ana is asking" and "something Ana delegated to is asking"
+          are different consent decisions, and the second is the less familiar
+          of the two — it does not belong in the smallest type on the card. */}
+      {/* WHY, in their words. Carried and shown, never judged — this box has
+          no way to verify a purpose, so it is attributed like the prompt. */}
+      <p className="text-muted-foreground text-xs">
+        {purposeLine(statedPurpose) ?? purposeAbsentNote(statedPurpose)}
+      </p>
+
+      {actorLine(actor) ? (
+        <p className="text-muted-foreground flex items-start gap-1.5 text-xs">
+          {actorIsDelegated(actor) ? <Bot className="mt-0.5 size-3 shrink-0" aria-hidden /> : null}
+          <span>{actorLine(actor)}</span>
+        </p>
+      ) : null}
 
       {/* What was asked for, and what that actually costs. The second line is
           never omitted: a data class the responder's box does not recognise
@@ -201,6 +268,10 @@ export function AskReviewCard({
           Decline
         </Button>
       </div>
+
+      {showConsent && consent ? (
+        <ConsentDetailModal record={consent} onClose={() => setShowConsent(false)} />
+      ) : null}
     </Card>
   );
 }
