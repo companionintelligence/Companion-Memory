@@ -20,7 +20,7 @@ import type { Message as OllamaMessage } from 'ollama';
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { RelationshipService } from '@ci/domains/graph';
-import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm';
+import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm';
 import {
   ConceptService,
   ItemService,
@@ -349,7 +349,7 @@ export class MemoryCompactionService {
 
       // ----------------------------------------------------------------
       // The batch produced NO extraction result — either the call threw
-      // (Ollama down, PROMPT_MODEL missing) or the model's output was
+      // (Ollama down, UTILITY_MODEL missing) or the model's output was
       // truncated / not JSON. Neither is an empty extraction, so leave
       // processed_at unset and let the next run retry, bounded by
       // MAX_EXTRACTION_ATTEMPTS so a permanently-unparseable fragment
@@ -466,7 +466,7 @@ export class MemoryCompactionService {
   private async callOllamaChat(messages: OllamaMessage[]): Promise<string> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await this.ollamaService.chat({} as any, messages, {
-      model: PROMPT_MODEL,
+      model: UTILITY_MODEL,
       format: 'json',
     });
 

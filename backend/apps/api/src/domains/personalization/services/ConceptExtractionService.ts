@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { type RequestContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm/services/OllamaService';
+import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
 
 /**
  * Relationship types this extractor may propose.
@@ -139,7 +139,7 @@ export class ConceptExtractionService {
       const response = await this.ollamaService.chat(
         llmContext,
         [{ role: 'user', content: this.buildPrompt(input.questionText ?? null, answerText) }],
-        { model: PROMPT_MODEL, enableTools: false, format: EXTRACTION_JSON_SCHEMA },
+        { model: UTILITY_MODEL, enableTools: false, format: EXTRACTION_JSON_SCHEMA },
       );
 
       const parsed = EXTRACTION_SCHEMA.parse(JSON.parse(response.message.content));

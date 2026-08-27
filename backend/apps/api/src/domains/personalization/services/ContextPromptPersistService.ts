@@ -14,7 +14,7 @@ import {
 } from '@ci/domains/daily-metrics';
 import { GraphIngestService } from '@ci/domains/graph';
 import { AnswerService, QuestionService } from '@ci/domains/intelligence';
-import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm/services/OllamaService';
+import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
 import { EventService } from '@ci/domains/memory';
 
 import {
@@ -469,7 +469,7 @@ export class ContextPromptPersistService {
         { userId } as RequestContext,
         [{ role: 'user', content: prompt }],
         {
-          model: PROMPT_MODEL,
+          model: UTILITY_MODEL,
           enableTools: false,
           format: TIMES_JSON_SCHEMA,
         },

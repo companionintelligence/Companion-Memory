@@ -282,9 +282,9 @@ interface ValidateModelResult {
  * It is NOT what stops the generation itself. The ollama client posts a
  * one-shot non-streaming request with no signal, so a race here would leave
  * the server generating to completion on an abandoned request; see
- * {@link OllamaService.runNativeChat}, which calls the client's own `abort()`
- * so the request is genuinely torn down. Both are needed: this bounds the
- * turn, that releases the backend.
+ * {@link OllamaService.runNativeChat}, which routes the signal into the
+ * client's `fetch` so the socket is genuinely torn down. Both are needed: this
+ * bounds the turn, that releases the backend.
  */
 function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) {
@@ -296,6 +296,16 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 
     if (signal.aborted) {
       onAbort();
+
+      // `promise` is already running and nothing downstream will ever look at
+      // it, so it still needs a handler or its eventual failure surfaces as an
+      // unhandled rejection and takes the process down. The old early return
+      // skipped straight past the one below and left exactly that hole: it went
+      // unnoticed only because the inner promise usually settled by RESOLVING,
+      // which needs no handler. Anything that makes the aborted path fail
+      // promptly — a caller that checks the signal before doing work — turns it
+      // into a crash.
+      promise.catch(() => undefined);
 
       return;
     }

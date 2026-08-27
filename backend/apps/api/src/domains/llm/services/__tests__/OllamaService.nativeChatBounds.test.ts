@@ -34,14 +34,31 @@ const MODEL = 'test-model';
 
 const chatMock = jest.fn();
 const abortMock = jest.fn();
+// Retained only so the fake client shape matches the real one; the fix does not
+// rely on abort(), which is a no-op for non-streaming requests.
+
 const listMock = jest.fn();
 
+/**
+ * Every config the service handed to `new Ollama(...)`. The signal reaches the
+ * socket through `config.fetch` and nowhere else, so the test has to be able to
+ * reach in and exercise that wrapper — asserting on the client's `abort()`
+ * instead would assert nothing, since on a non-streaming request that method
+ * provably does nothing (it walks `ongoingStreamedRequests`, which only the
+ * streaming branch populates).
+ */
+const constructedWith: any[] = [];
+
 jest.mock('ollama', () => ({
-  Ollama: jest.fn().mockImplementation(() => ({
-    chat: (...args: any[]) => chatMock(...args),
-    abort: (...args: any[]) => abortMock(...args),
-    list: (...args: any[]) => listMock(...args),
-  })),
+  Ollama: jest.fn().mockImplementation((config: any) => {
+    constructedWith.push(config);
+
+    return {
+      chat: (...args: any[]) => chatMock(...args),
+      abort: (...args: any[]) => abortMock(...args),
+      list: (...args: any[]) => listMock(...args),
+    };
+  }),
 }));
 
 function makeLogger() {
@@ -84,42 +101,77 @@ beforeEach(() => {
 });
 
 describe('native chat is cancellable', () => {
-  it('tears down the in-flight request when the signal aborts', async () => {
-    const controller = new AbortController();
+  /** The config used for the `chat` call, i.e. the last one constructed. */
+  function chatClientConfig() {
+    return constructedWith[constructedWith.length - 1];
+  }
 
-    // A generation that never settles on its own — the only way it can end is
-    // if something actually cancels it, which is the whole point.
-    chatMock.mockImplementation(
-      () =>
-        new Promise((_resolve, reject) => {
-          abortMock.mockImplementation(() => reject(new Error('aborted by client')));
-        }),
-    );
-
-    const service = makeService();
-    const promise = service.chat(context, messages, { model: MODEL, signal: controller.signal });
-
-    // Let validateModel's round trip settle so the chat call is genuinely in flight.
-    await Promise.resolve();
-    await Promise.resolve();
-
-    controller.abort();
-
-    await expect(promise).rejects.toThrow();
-
-    // The assertion that matters: the pre-fix code freed the caller via the
-    // abortable() race and left the server generating, so abort() was never
-    // reached.
-    expect(abortMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not abort a call that completes normally', async () => {
+  it('gives the client a fetch that carries the caller signal to the socket', async () => {
     const controller = new AbortController();
     const service = makeService();
 
     await service.chat(context, messages, { model: MODEL, signal: controller.signal });
 
-    expect(abortMock).not.toHaveBeenCalled();
+    // The mechanism, asserted directly: drive the injected fetch and confirm the
+    // signal reaches the underlying one. Asserting `client.abort()` was called
+    // would prove nothing — on a non-streaming request that method walks an
+    // empty list. This is the only path by which the request can be torn down.
+    const injected = chatClientConfig().fetch;
+
+    expect(typeof injected).toBe('function');
+
+    const seen: any[] = [];
+    const realFetch = globalThis.fetch;
+
+    globalThis.fetch = (async (input: any, init: any) => {
+      seen.push({ input, init });
+
+      return { ok: true, json: async () => ({}) };
+    }) as never;
+
+    try {
+      await injected('http://example.invalid/api/chat', { method: 'POST' });
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].init.signal).toBe(controller.signal);
+    // The wrapper must forward what it was given, not replace it.
+    expect(seen[0].init.method).toBe('POST');
+  });
+
+  it('leaves fetch alone when the caller passes no signal', async () => {
+    const service = makeService();
+
+    await service.chat(context, messages, { model: MODEL });
+
+    // No signal means nothing to forward; overriding fetch anyway would be a
+    // behavior change for every caller that never asked for cancellation.
+    expect(chatClientConfig().fetch).toBeUndefined();
+  });
+
+  it('does not start a generation when the signal already aborted', async () => {
+    const controller = new AbortController();
+    const service = makeService();
+
+    // `abortable` only races — it frees the caller without stopping `runChat`,
+    // which continues through `validateModel` (its own network round trip) into
+    // the chat call. So on a slow host the budget can expire before the request
+    // is even issued, and issuing it then would orphan it outright: a listener
+    // added to an already-aborted signal never fires, so nothing could cancel
+    // it. Aborting up front reproduces that ordering deterministically.
+    controller.abort();
+
+    await service
+      .chat(context, messages, { model: MODEL, signal: controller.signal })
+      .catch(() => undefined);
+
+    // Let `runChat` finish walking past validateModel to where the request
+    // would be issued, so this asserts the guard rather than just the race.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(chatMock).not.toHaveBeenCalled();
   });
 });
 

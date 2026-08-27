@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { type RequestContext, toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm';
+import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm';
 import { UserContextService } from '@ci/domains/memory';
 import { HbpeService } from '@ci/domains/predictions';
 import { UserService } from '@ci/domains/user';
@@ -190,7 +190,7 @@ export class BranchialForecastService {
         { userId: service.userId },
         [{ role: 'user', content: prompt }],
         {
-          model: PROMPT_MODEL,
+          model: UTILITY_MODEL,
           enableTools: false,
           format: GUESS_JSON_SCHEMA,
           signal: AbortSignal.timeout(GUESS_TIMEOUT_MS),
