@@ -83,6 +83,13 @@ function makeResolver(enabled: boolean) {
     answerService as never,
     peerLinkService as never,
     outboundAskService as never,
+    {
+      // The household-tier service. `resolveTier` consults it for a LOCAL
+      // asker; undefined member means the default (`household`) still applies.
+      tierFor: jest.fn().mockResolvedValue('household'),
+      listForOwner: jest.fn().mockResolvedValue([]),
+      setTier: jest.fn(),
+    } as never,
     featureService as never,
   );
 

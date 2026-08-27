@@ -4,7 +4,13 @@ import { Badge, Button, Card, Input } from '@ci/shadcn';
 
 import { PersonAvatar } from '@/components/PersonAvatar';
 
-import { grantUsageLine, type GrantMode, grantModeBadge, grantModeLabel } from './askPresentation';
+import {
+  peerTrustLabel,
+  grantUsageLine,
+  type GrantMode,
+  grantModeBadge,
+  grantModeLabel,
+} from './askPresentation';
 
 export interface GrantRow {
   id: string;
@@ -42,12 +48,31 @@ export interface GrantRow {
   lastUsedAt?: string | null;
 }
 
+/**
+ * The tiers an owner may assign another LOCAL account, widest first.
+ *
+ * Mirrors `TRUST_TIERS` on the backend. `household` is included and `stranger`
+ * is too: the whole point is that the range is available, since the previous
+ * behaviour was the widest one with no alternative.
+ */
+const HOUSEHOLD_TIER_OPTIONS = ['household', 'family', 'trusted', 'peer', 'stranger'] as const;
+
 export interface GranteeGroup {
   id: string;
   name: string;
   /** The grantee's photo, when it's a peer whose link resolved one. Null renders initials. */
   avatarUrl?: string | null;
   tier: string;
+  /**
+   * The opaque local user id, for a grantee on THIS box.
+   *
+   * Present only for a local grantee — a peer's tier lives on their peer link
+   * and is set in "People I'm linked to". When it is present the tier badge
+   * becomes a CONTROL, which until `ci.household_tiers` existed it could not
+   * be: every local asker was `household`, the widest ceiling on the ladder,
+   * and there was nothing anywhere that could say otherwise (G6 / threat T1).
+   */
+  memberId?: string | null;
   grants: GrantRow[];
 }
 
@@ -58,6 +83,8 @@ interface Props {
   onChangeMode?: (grantId: string, mode: GrantMode) => void;
   /** Set (or move) the date a grant stops applying. ISO 8601, always future. */
   onSetExpiry?: (grantId: string, expiresAtIso: string) => void;
+  /** Demote or restore a LOCAL grantee. Omitted leaves the tier a static label. */
+  onSetHouseholdTier?: (memberId: string, trustTier: string) => void;
   onRevoke?: (grantId: string) => void;
   onAddGrant?: () => void;
   onOpenHistory?: () => void;
@@ -112,6 +139,7 @@ export function GrantManager({
   defaultMode = 'review',
   onChangeMode,
   onSetExpiry,
+  onSetHouseholdTier,
   onRevoke,
   onAddGrant,
   onOpenHistory,
@@ -155,9 +183,28 @@ export function GrantManager({
           <div className="flex flex-wrap items-center gap-2">
             <PersonAvatar name={group.name} avatarUrl={group.avatarUrl} size="xs" />
             <span className="font-medium">{group.name}</span>
-            <Badge variant="secondary" className="text-xs">
-              {group.tier}
-            </Badge>
+            {group.memberId && onSetHouseholdTier ? (
+              // A LOCAL grantee's tier is the owner's own verdict, so it is
+              // editable here. `household` stays in the list: it is the default
+              // this control exists to move away from, and undoing a demotion
+              // must not mean deleting the setting.
+              <select
+                className="border-input bg-background rounded-md border px-2 py-0.5 text-xs"
+                value={group.tier}
+                aria-label={`Trust tier for ${group.name}`}
+                onChange={(event) => onSetHouseholdTier(group.memberId as string, event.target.value)}
+              >
+                {HOUSEHOLD_TIER_OPTIONS.map((tier) => (
+                  <option key={tier} value={tier}>
+                    {peerTrustLabel(tier)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <Badge variant="secondary" className="text-xs">
+                {group.tier}
+              </Badge>
+            )}
           </div>
 
           <ul className="flex flex-col divide-y">

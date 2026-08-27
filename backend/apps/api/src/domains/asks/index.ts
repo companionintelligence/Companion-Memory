@@ -27,6 +27,7 @@ import { AskAnswerEntity } from './entities/AskAnswerEntity';
 import { AskAuditEntity } from './entities/AskAuditEntity';
 import { AskEntity } from './entities/AskEntity';
 import { AskGrantEntity } from './entities/AskGrantEntity';
+import { HouseholdTierEntity } from './entities/HouseholdTierEntity';
 import { AskAnswerService } from './services/AskAnswerService';
 import { AskAuditService } from './services/AskAuditService';
 import { AskExecutorService } from './services/AskExecutorService';
@@ -34,6 +35,7 @@ import { AskExpiryService } from './services/AskExpiryService';
 import { AskRateLimitService } from './services/AskRateLimitService';
 import { AskService } from './services/AskService';
 import { GrantService } from './services/GrantService';
+import { HouseholdTierService } from './services/HouseholdTierService';
 import { SharedSearchConsentService } from './services/SharedSearchConsentService';
 
 /**
@@ -44,7 +46,14 @@ import { SharedSearchConsentService } from './services/SharedSearchConsentServic
     // UserEntity is registered read-only: AskService probes it to refuse an ask
     // aimed at an account that does not exist, WITHOUT letting the FK violation
     // answer that question for an attacker.
-    TypeOrmModule.forFeature([AskEntity, AskGrantEntity, AskAuditEntity, AskAnswerEntity, UserEntity]),
+    TypeOrmModule.forFeature([
+      AskEntity,
+      AskGrantEntity,
+      AskAuditEntity,
+      AskAnswerEntity,
+      HouseholdTierEntity,
+      UserEntity,
+    ]),
     SearchNextModule,
   ],
   providers: [
@@ -56,6 +65,7 @@ import { SharedSearchConsentService } from './services/SharedSearchConsentServic
     AskAnswerService,
     AskExpiryService,
     SharedSearchConsentService,
+    HouseholdTierService,
     // Registered as a provider so its @Cron method is discovered by the
     // scheduler; nothing injects it, so it is deliberately NOT exported.
     AskExpiryCron,
@@ -69,11 +79,12 @@ import { SharedSearchConsentService } from './services/SharedSearchConsentServic
     AskAnswerService,
     AskExpiryService,
     SharedSearchConsentService,
+    HouseholdTierService,
   ],
 })
 export class AsksModule {}
 
-export { AskEntity, AskGrantEntity, AskAuditEntity, AskAnswerEntity };
+export { AskEntity, AskGrantEntity, AskAuditEntity, AskAnswerEntity, HouseholdTierEntity };
 export {
   AskService,
   GrantService,
@@ -83,7 +94,10 @@ export {
   AskAnswerService,
   AskExpiryService,
   SharedSearchConsentService,
+  HouseholdTierService,
 };
+export { DEFAULT_HOUSEHOLD_TIER } from './services/HouseholdTierService';
+export type { HouseholdTier } from './entities/HouseholdTierEntity';
 export {
   SAVED_SEARCH_RESOURCE,
   SHARE_QUERY_TYPE,
@@ -93,6 +107,7 @@ export type { ShareAuthorization } from './services/SharedSearchConsentService';
 export { SHARE_DISCLOSURE, applySearchCeiling, ceilingForShare } from './searchCeiling';
 export type { ClampableConnection, ShareDisclosure } from './searchCeiling';
 export { evaluateGrant, canonicalDataClass, canonicalQueryType, isGrantActive } from './grantMatch';
+export { TRUST_TIERS } from './types';
 export { checkSlidingWindow } from './rateLimit';
 export {
   DEFAULT_WINDOW_MS,

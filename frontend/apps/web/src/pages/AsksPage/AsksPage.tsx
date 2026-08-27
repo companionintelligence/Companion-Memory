@@ -43,7 +43,9 @@ import {
   MY_ASK_ADDRESS,
   MY_ASK_GRANTS,
   MY_PEER_LINKS,
+  MY_HOUSEHOLD_TIERS,
   REVOKE_ASK_GRANT,
+  SET_HOUSEHOLD_TIER,
   REVOKE_PEER_LINK,
   RUN_ASK,
   UPDATE_ASK_GRANT,
@@ -151,11 +153,18 @@ export function AsksPage() {
     void history.refetch();
   };
 
+  const householdTiers = useQuery(MY_HOUSEHOLD_TIERS);
+
   const [approveAsk, approving] = useMutation(APPROVE_ASK, { onCompleted: refetchAll });
   const [declineAsk, declining] = useMutation(DECLINE_ASK, { onCompleted: refetchAll });
   const [runAsk, running] = useMutation(RUN_ASK, { onCompleted: refetchAll });
   const [revokeGrant, revoking] = useMutation(REVOKE_ASK_GRANT, {
     onCompleted: () => void grants.refetch(),
+  });
+  // Refetches the TIER LIST, not the grants: demoting somebody changes the
+  // ceiling on every future disclosure to them, and none of the grant rows.
+  const [setHouseholdTier] = useMutation(SET_HOUSEHOLD_TIER, {
+    onCompleted: () => void householdTiers.refetch(),
   });
   const [updateGrant, updatingGrant] = useMutation(UPDATE_ASK_GRANT, {
     onCompleted: () => void grants.refetch(),
@@ -263,6 +272,10 @@ export function AsksPage() {
   // matrix that cannot see the tier shows a `full` grant as full when the peer
   // is a `stranger` and the answer will be a yes/no.
   const grantGroups: GranteeGroup[] = groupGrants(
+    // Only rows the owner ACTIVELY set. An account with no row is at the
+    // default, and materializing one for every local user would turn "I have
+    // not thought about this" into "I decided household".
+    new Map((householdTiers.data?.myHouseholdTiers ?? []).map((row) => [row.memberId, row.trustTier])),
     grants.data?.myAskGrants ?? [],
     peers.data?.myPeerLinks ?? [],
   );
@@ -442,6 +455,9 @@ export function AsksPage() {
             }
             onSetExpiry={(grantId, expiresAt) =>
               runAction(updateGrant({ variables: { id: grantId, input: { expiresAt } } }))
+            }
+            onSetHouseholdTier={(memberId, trustTier) =>
+              runAction(setHouseholdTier({ variables: { input: { memberId, trustTier } } }))
             }
             onRevoke={(grantId) => runAction(revokeGrant({ variables: { id: grantId } }))}
             onAddGrant={addingGrant ? undefined : () => setAddingGrant(true)}
@@ -701,6 +717,7 @@ function LoadFailure({ what, onRetry }: { what: string; onRetry: () => void }) {
  * the selection set.
  */
 function groupGrants(
+  householdTiers: ReadonlyMap<string, string>,
   rows: readonly {
     id: string;
     mode: string;
@@ -748,13 +765,20 @@ function groupGrants(
         //     or the link was hard-deleted) has a tier this page simply failed
         //     to read — saying "unknown" there would read as "there is no
         //     ceiling", which is the opposite of what a missing read means;
-        //   - a LOCAL grantee genuinely has no tier on the wire at all.
+        //   - a LOCAL grantee's tier is the OWNER's own verdict, read from
+        //     `myHouseholdTiers`. Absent means they have said nothing, which is
+        //     the default (`household`) rather than "unknown" — and the select
+        //     beside it is what makes that a choice instead of a fact.
         tier: link
           ? peerTrustLabel(link.trustTier)
           : row.granteePeerLinkId
             ? 'tier not loaded'
-            : 'tier unknown',
+            : (householdTiers.get(row.granteeId ?? '') ?? 'household'),
         grants: [],
+        // Only a LOCAL grantee: a peer's tier lives on their peer link and is
+        // set in "People I'm linked to". Present here is what turns the tier
+        // badge into a control.
+        memberId: row.granteePeerLinkId ? null : (row.granteeId ?? null),
       };
       byGrantee.set(key, group);
     }

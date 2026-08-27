@@ -9,6 +9,7 @@ import {
   ASK_ANSWER,
   ASK_DISCLOSURE_HISTORY,
   ASK_DISCLOSURE_SUMMARY,
+  MY_HOUSEHOLD_TIERS,
   ASK_INBOX,
   ASK_OUTBOX,
   CREATE_ASK,
@@ -140,6 +141,12 @@ const historyOk = (rows: unknown[], counterpartyKey = SUMMARY_KEY) => ({
 
 const SUMMARY_KEY = 'peer:link-1';
 
+/** The owner's own verdicts about other LOCAL accounts. Absent = the default. */
+const householdTiersOk = (rows: unknown[] = []) => ({
+  request: { query: MY_HOUSEHOLD_TIERS },
+  result: { data: { myHouseholdTiers: rows } },
+});
+
 /** The INDEX read — what the history tab shows first. */
 const summaryOk = (summaries: unknown[]) => ({
   request: { query: ASK_DISCLOSURE_SUMMARY, variables: { input: undefined } },
@@ -186,6 +193,7 @@ const defaultMocks = [
   ...repeated(grantsOk([])),
   ...repeated(peersOk([])),
   ...repeated(summaryOk([])),
+  ...repeated(householdTiersOk()),
 ];
 
 /** Open a tab by its button label and wait for the switch to take effect. */
@@ -1141,6 +1149,81 @@ describe('AsksPage', () => {
     // A yes/no discloses no items and is still a disclosure. Rendering it the
     // same as a declined row makes the owner's own receipt understate itself.
     expect(await screen.findByText(/an answer is still something shared/i)).toBeInTheDocument();
+  });
+
+  it('lets the owner demote a LOCAL grantee — the control G6 said did not exist', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(
+        grantsOk([
+          {
+            __typename: 'AskGrantType',
+            id: 'g1',
+            mode: 'auto',
+            queryType: 'content',
+            dataClass: 'photos',
+            purpose: null,
+            granteeId: 'user_sam',
+            granteePeerLinkId: null,
+            revokedAt: null,
+            expiresAt: null,
+            active: true,
+            useCount: 0,
+            lastUsedAt: null,
+            createdAt: new Date('2026-08-01T00:00:00.000Z').toISOString(),
+          },
+        ]),
+      ),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([])),
+      ...repeated(householdTiersOk()),
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    openTab('Who can ask me what');
+
+    // Until `ci.household_tiers` existed, every local asker was `household` —
+    // the widest ceiling on the ladder, exempt from the sensitive-class floor,
+    // with nothing anywhere that could say otherwise.
+    const select = await screen.findByRole('combobox', { name: /Trust tier for/i });
+    expect(select).toHaveValue('household');
+  });
+
+  it('shows a peer’s tier as a LABEL, not a control — it belongs on their link', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(
+        grantsOk([
+          {
+            __typename: 'AskGrantType',
+            id: 'g1',
+            mode: 'auto',
+            queryType: 'content',
+            dataClass: 'photos',
+            purpose: null,
+            granteeId: null,
+            granteePeerLinkId: 'link-1',
+            revokedAt: null,
+            expiresAt: null,
+            active: true,
+            useCount: 0,
+            lastUsedAt: null,
+            createdAt: new Date('2026-08-01T00:00:00.000Z').toISOString(),
+          },
+        ]),
+      ),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([])),
+      ...repeated(householdTiersOk()),
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    openTab('Who can ask me what');
+
+    await screen.findByText(/tier not loaded/i);
+    expect(screen.queryByRole('combobox', { name: /Trust tier for/i })).toBeNull();
   });
 
   it('opens the history on RELATIONSHIPS, not on a flat event list', async () => {

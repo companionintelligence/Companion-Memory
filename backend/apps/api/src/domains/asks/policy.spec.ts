@@ -211,3 +211,56 @@ describe('narrowerForm', () => {
     expect(narrowerForm('boolean', 'identity')).toBe('boolean');
   });
 });
+
+/**
+ * ═══ D6: THE HOUSEHOLD EXEMPTION, PINNED ═══
+ *
+ * From docs/asks-threat-model.md §10: *"The `household` half of the
+ * sensitive-class exemption is pinned by no test"* — mutation-verified there by
+ * deleting `tier !== 'household'` from `disclosureCeiling`, after which **544
+ * tests passed and 0 failed**.
+ *
+ * These pin it. They are deliberately written as a STATEMENT OF THE CURRENT
+ * DECISION rather than as an assertion that it is correct: whether a housemate
+ * should keep the widest ceiling and the sensitive-class exemption is threat
+ * model §12 decision #1, and it is written up in docs/asks-household-default.md.
+ *
+ * Whichever way that goes, these tests are what makes the change DELIBERATE —
+ * flipping the default now turns them red, which is the point. Do not delete
+ * them to make a change pass; update them, and update the doc with it.
+ */
+describe('the household exemption (D6)', () => {
+  const SENSITIVE = ['health', 'medical', 'financial', 'finance', 'secrets', 'credentials', 'location'];
+
+  it('exempts household from the sensitive-class floor — every class, at full', () => {
+    for (const dataClass of SENSITIVE) {
+      expect(disclosureCeiling('household', dataClass)).toBe('full');
+    }
+  });
+
+  it('exempts family too, which is the other half of the same clause', () => {
+    // `family` has its own `location: 'redacted'` entry, so it is not uniformly
+    // `full` — but it is exempt from the `none` floor, which is the clause.
+    for (const dataClass of SENSITIVE) {
+      expect(disclosureCeiling('family', dataClass)).not.toBe('none');
+    }
+  });
+
+  it('applies the floor to every OTHER tier, which is what makes the exemption an exemption', () => {
+    for (const tier of ['trusted', 'peer', 'stranger'] as const) {
+      for (const dataClass of SENSITIVE) {
+        expect(disclosureCeiling(tier, dataClass)).toBe('none');
+      }
+    }
+  });
+
+  /**
+   * The reason the exemption mattered so much: a local asker could not be
+   * anything BUT household. Now they can, and a demoted housemate picks up the
+   * floor like anyone else — which is the whole point of `ci.household_tiers`.
+   */
+  it('a demoted housemate gets the floor, because the tier is what decides it', () => {
+    expect(disclosureCeiling('household', 'health')).toBe('full');
+    expect(disclosureCeiling('trusted', 'health')).toBe('none');
+  });
+});

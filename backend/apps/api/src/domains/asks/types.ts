@@ -47,7 +47,18 @@ export type GrantRevocationReason = 'revoked' | 'superseded';
  * (declared here rather than imported because peers depends on asks, not the
  * reverse).
  */
-export type TrustTier = 'household' | 'family' | 'trusted' | 'peer' | 'stranger';
+export type TrustTier = (typeof TRUST_TIERS)[number];
+
+/**
+ * Every trust tier, coarsest trust LAST.
+ *
+ * A runtime list beside the type, because both write boundaries that accept a
+ * tier (`HouseholdTierService.setTier`, `PeerLinkService`) need to validate one
+ * that arrived as JSON — and a type alone stops nothing there. `PEER_TRUST_TIERS`
+ * derives its own narrower list from this one by `Exclude`, so the two cannot
+ * drift.
+ */
+export const TRUST_TIERS = ['household', 'family', 'trusted', 'peer', 'stranger'] as const;
 
 /**
  * How much an answer may disclose, coarsest first. See {@link DISCLOSURE_RUNGS}

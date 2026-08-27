@@ -505,3 +505,37 @@ export const REVOKE_PEER_LINK = gql(`
     }
   }
 `);
+
+/**
+ * Demote (or restore) another LOCAL account.
+ *
+ * The mutation G6 and threat T1 name as missing. Until `ci.household_tiers`
+ * existed, every local asker resolved to `household` — the widest ceiling on
+ * the ladder and the only tier exempt from the sensitive-class floor — and
+ * there was no column, mutation or UI that could say otherwise.
+ *
+ * `household` is a legal value here: it is the DEFAULT this control exists to
+ * move away from, and undoing a demotion must not mean deleting the setting.
+ */
+export const SET_HOUSEHOLD_TIER = gql(`
+  mutation SetHouseholdTier($input: SetHouseholdTierInput!) {
+    setHouseholdTier(input: $input) {
+      id
+      memberId
+      trustTier
+      updatedAt
+    }
+  }
+`);
+
+/** The tiers this owner has ACTIVELY set. An account with no row is at the default. */
+export const MY_HOUSEHOLD_TIERS = gql(`
+  query MyHouseholdTiers {
+    myHouseholdTiers {
+      id
+      memberId
+      trustTier
+      updatedAt
+    }
+  }
+`);

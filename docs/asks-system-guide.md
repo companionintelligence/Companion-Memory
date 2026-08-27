@@ -1004,7 +1004,15 @@ revocation timestamp**. (c) `PeerLinkResolver`'s five operations are **not gated
 by the `ask` feature flag**, while all sixteen of `AskResolver`'s are.
 
 **G6 — A household `auto` grant on a sensitive class discloses full item
-references with no human in the loop.** `household` is exempt from the
+references with no human in the loop.** ⚠️ **Mechanism shipped; the DEFAULT is
+unchanged and is a product decision** — see
+[`asks-household-default.md`](asks-household-default.md). `ci.household_tiers`
+now lets an owner demote another local account, `resolveTier` reads it, and the
+Grant Manager's tier badge is a control for local grantees. The exemption is
+also now pinned by a test (closing **D6**): removing `tier !== 'household'` from
+`disclosureCeiling` fails 2 tests, where the threat model measured 544 passed /
+0 failed. What has NOT changed: an owner who has said nothing still gets
+`household`. Original text follows. `household` is exempt from the
 sensitive-class floor and its ceiling is `{'*': 'full'}`. Every local asker is
 `household` unconditionally — `resolveTier` is a `return` statement, there is no
 column, no mutation and no UI that could store anything else — so there is no way

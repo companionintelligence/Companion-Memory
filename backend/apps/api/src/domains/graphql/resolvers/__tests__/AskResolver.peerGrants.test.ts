@@ -76,6 +76,13 @@ function makeResolver(options: { links?: Record<string, unknown>[] } = {}) {
     {} as never,
     peerLinkService as never,
     {} as never,
+    {
+      // The household-tier service. `resolveTier` consults it for a LOCAL
+      // asker; undefined member means the default (`household`) still applies.
+      tierFor: jest.fn().mockResolvedValue('household'),
+      listForOwner: jest.fn().mockResolvedValue([]),
+      setTier: jest.fn(),
+    } as never,
     featureService as never,
   );
 
@@ -190,6 +197,13 @@ describe('exactly one grantee, refused at the input layer', () => {
       {} as never,
       {} as never,
       {} as never,
+      {
+        // The household-tier service. `resolveTier` consults it for a LOCAL
+        // asker; undefined member means the default (`household`) still applies.
+        tierFor: jest.fn().mockResolvedValue('household'),
+        listForOwner: jest.fn().mockResolvedValue([]),
+        setTier: jest.fn(),
+      } as never,
       { isFeatureEnabled: jest.fn().mockResolvedValue(false) } as never,
     );
 

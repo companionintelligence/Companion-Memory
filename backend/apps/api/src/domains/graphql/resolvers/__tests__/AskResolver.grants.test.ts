@@ -61,6 +61,11 @@ function makeResolver(enabled = true) {
     {} as never,
     {} as never,
     {} as never,
+    {
+      tierFor: jest.fn().mockResolvedValue('household'),
+      listForOwner: jest.fn(),
+      setTier: jest.fn(),
+    } as never,
     featureService as never,
   );
 

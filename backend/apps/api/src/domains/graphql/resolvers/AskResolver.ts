@@ -14,6 +14,7 @@ import {
   AskRateLimitService,
   AskService,
   GrantService,
+  HouseholdTierService,
   applyDisclosureCeiling,
   buildDisclosedAnswer,
   disclosureCeiling,
@@ -61,6 +62,7 @@ import {
   AskType,
 } from '../types/AskType';
 import { GlobalUID } from '../types/GlobalUID';
+import { HouseholdTierType, SetHouseholdTierInput } from '../types/HouseholdTierType';
 
 /**
  * GraphQL surface for the interpersonal ask feature (epic #1712, Phase 0). Every
@@ -94,6 +96,7 @@ export class AskResolver {
     private readonly answerService: AskAnswerService,
     private readonly peerLinkService: PeerLinkService,
     private readonly outboundAskService: OutboundAskService,
+    private readonly householdTierService: HouseholdTierService,
     private readonly featureService: FeatureService,
   ) {}
 
@@ -237,7 +240,7 @@ export class AskResolver {
       // ask carries no link, resolves to null, and takes the `household` tier.
       const link = await this.resolvePeerLink(responderContext, ask);
       const { ask: completed } = await this.disclose(responderContext, ask, {
-        tier: resolveTier(ask, link),
+        tier: resolveTier(ask, link, await this.householdTierFor(responderContext, ask)),
         peerHandle: link?.peerHandle ?? null,
       });
 
@@ -366,7 +369,7 @@ export class AskResolver {
       answer,
       disclosed,
     } = await this.disclose(serviceContext, ask, {
-      tier: resolveTier(ask, link),
+      tier: resolveTier(ask, link, await this.householdTierFor(serviceContext, ask)),
       peerHandle: link?.peerHandle ?? null,
       redactItemIds,
       disclosureForm: disclosureForm as AnswerForm | undefined,
@@ -520,6 +523,22 @@ export class AskResolver {
    * a legitimate viewer resolves their own link and anybody else resolves
    * nothing rather than learning a peer's handle.
    */
+  /**
+   * The owner's own verdict about a LOCAL asker, or undefined for a federated
+   * ask (whose tier comes from the peer link instead).
+   *
+   * Returns undefined rather than the default so `resolveTier` keeps ONE place
+   * where "the owner said nothing" becomes `household` — two defaults for the
+   * same question is how they drift.
+   */
+  private async householdTierFor(context: UserServiceContext, ask: Ask): Promise<TrustTier | undefined> {
+    if (ask.peerLinkId != null || ask.askerUserId == null) {
+      return undefined;
+    }
+
+    return this.householdTierService.tierFor(context.userId, ask.askerUserId);
+  }
+
   private async resolvePeerLink(context: UserServiceContext, ask: Ask): Promise<PeerLink | null> {
     if (ask.peerLinkId == null) {
       return null;
@@ -808,6 +827,51 @@ export class AskResolver {
     return found ? this.toAskType(serviceContext, found) : null;
   }
 
+  /**
+   * The tiers this owner has assigned to other LOCAL accounts.
+   *
+   * Only rows they have ACTIVELY SET. An account with no row is at the default,
+   * and inventing a row for every local user would turn "I have not thought
+   * about this" into "I decided household", which is a different statement.
+   */
+  @Query(() => [HouseholdTierType])
+  async myHouseholdTiers(@Context() context: RequestContext): Promise<HouseholdTierType[]> {
+    if (!(await this.enabled())) {
+      return [];
+    }
+
+    const rows = await this.householdTierService.listForOwner(toServiceContext(context));
+
+    return rows.map(HouseholdTierType.toType);
+  }
+
+  /**
+   * Demote (or restore) another local account.
+   *
+   * The mutation G6 and threat T1 name as missing: until it existed, a
+   * housemate was by construction the most privileged asker on the box, with
+   * the widest ceiling, exempt from the sensitive-class floor, and no way to
+   * change it.
+   *
+   * Owner-scoped in the service, so one member of a household cannot edit
+   * another's posture — which is not a nicety, since in exactly the households
+   * this feature is least safe in, that would be the whole attack.
+   */
+  @Mutation(() => HouseholdTierType)
+  async setHouseholdTier(
+    @Context() context: RequestContext,
+    @Args('input') input: SetHouseholdTierInput,
+  ): Promise<HouseholdTierType> {
+    if (!(await this.enabled())) {
+      throw new BadRequestException('Asks are not enabled');
+    }
+
+    const memberId = GlobalUID.parse('user', input.memberId);
+    const row = await this.householdTierService.setTier(toServiceContext(context), memberId, input.trustTier);
+
+    return HouseholdTierType.toType(row);
+  }
+
   /** Standing grants owned by the caller (the Grant Manager). */
   @Query(() => [AskGrantType])
   async myAskGrants(@Context() context: RequestContext): Promise<AskGrantType[]> {
@@ -1062,9 +1126,18 @@ function contextLogger(context: string): LoggerService {
  *
  * Pure.
  */
-function resolveTier(ask: Ask, link: PeerLink | null): TrustTier {
+function resolveTier(ask: Ask, link: PeerLink | null, householdTier?: TrustTier): TrustTier {
   if (ask.peerLinkId == null) {
-    return 'household';
+    // A LOCAL asker. This used to be a bare `return 'household'` — the widest
+    // ceiling on the ladder and the only tier exempt from the sensitive-class
+    // floor — with no column, mutation or UI that could say otherwise. That is
+    // G6, and threat T1: the person who shares the appliance was by
+    // construction the most privileged asker and could not be demoted.
+    //
+    // `householdTier` is the owner's own verdict about that account, and
+    // omitting it still yields `household` so nothing changes for a box where
+    // the owner has said nothing. See `HouseholdTierService`.
+    return householdTier ?? 'household';
   }
 
   return (link?.trustTier as TrustTier | undefined) ?? 'stranger';

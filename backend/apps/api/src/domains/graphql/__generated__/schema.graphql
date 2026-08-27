@@ -1437,6 +1437,13 @@ type GraphType {
   nodes: [GraphNodeType!]!
 }
 
+type HouseholdTierType {
+  id: ID!
+  memberId: ID!
+  trustTier: String!
+  updatedAt: DateTime!
+}
+
 input IngestUserSnapshotInput {
   cwd: String
   deviceId: ID!
@@ -2070,6 +2077,7 @@ type Mutation {
     startTime: DateTime
   ): ScheduleTaskPayload!
   sendPeerAsk(input: SendPeerAskInput!): SendPeerAskPayload!
+  setHouseholdTier(input: SetHouseholdTierInput!): HouseholdTierType!
   setSavedSearchSharing(input: SetSavedSearchSharingInput!): UpdateSavedSearchPayload!
 
   """Defer a candidate until a future instant"""
@@ -2830,6 +2838,7 @@ type Query {
   metricSuggestions(includeDismissed: Boolean): [MetricSuggestionType!]!
   myAskGrantHistory: [AskGrantType!]!
   myAskGrants: [AskGrantType!]!
+  myHouseholdTiers: [HouseholdTierType!]!
   myPeerLinks: [PeerLinkType!]!
   node(id: ID!): Node
   note(id: ID!): NoteType
@@ -3277,6 +3286,13 @@ type SendPeerAskPayload {
   reason: String
   status: String
   success: Boolean!
+}
+
+input SetHouseholdTierInput {
+  memberId: ID!
+
+  """One of: household, family, trusted, peer, stranger"""
+  trustTier: String!
 }
 
 input SetSavedSearchSharingInput {

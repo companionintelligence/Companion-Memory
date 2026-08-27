@@ -3,6 +3,7 @@ type ResourceType =
   | 'answer'
   | 'ask'
   | 'ask-grant'
+  | 'household-tier'
   | 'ask-audit'
   | 'ask-answer'
   | 'browser-activity'
