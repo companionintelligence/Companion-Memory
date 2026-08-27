@@ -27,8 +27,28 @@ import type { OllamaModel } from '../types';
 
 import { LlmEndpointService } from './LlmEndpointService';
 
-/** Default model used for background inference tasks (extraction, Q&A, etc.). */
+/**
+ * The model a PERSON is talking to.
+ *
+ * Despite the name this is `llm.chatModel`, the operator's interactive-chat
+ * choice — so it can be, and on real appliances is, a very large model. Prefer
+ * {@link UTILITY_MODEL} for anything running on a cron or a queue; see its doc
+ * for why sharing one setting between the two silently breaks background work.
+ */
 export const PROMPT_MODEL = config.llm.chatModel;
+
+/**
+ * The model BACKGROUND work should use — extraction, classification, anything
+ * whose output is parsed rather than read.
+ *
+ * Separate from {@link PROMPT_MODEL} because the two jobs want opposite things,
+ * and sharing one setting made raising the chat model for quality silently
+ * disable every background job on the box: an identical ~1170-token extraction
+ * prompt measured over 170s on a 31B model versus 3.6s on a 1B one, cold load
+ * included. Prompt evaluation dominates that cost, so neither a longer timeout
+ * nor an output cap can recover it — only a smaller model.
+ */
+export const UTILITY_MODEL = config.llm.utilityModel;
 const DEMO_VISION_MODEL = 'gemma3:27b';
 const DEMO_TEXT_MODEL = 'qwen3:14b';
 const INTERNAL_MODELS = new Set(['nomic-embed-text', 'nomic-embed-text-v2-moe']);
@@ -415,10 +435,21 @@ export class OllamaService implements OnModuleInit {
    * failure that motivated this method — observed as ten consecutive planning
    * scans aborting at their 60s budget while the backend never went idle.
    *
-   * The pinned client exposes `abort()` on the client OBJECT, not per-request,
-   * and it tears down every request that client has in flight. That is safe
-   * only because `this.ollama` is a fresh instance per access, so the one
-   * built here owns exactly this call — do not hoist it to a shared field.
+   * The signal reaches the socket through a wrapped `fetch`, and that detail is
+   * load-bearing — the obvious approaches do not work:
+   *
+   *   - The client's own `abort()` is a NO-OP here. It walks
+   *     `ongoingStreamedRequests`, and only the streaming branch ever registers
+   *     one; the non-streaming branch posts with `{ headers }` and no signal at
+   *     all (`ollama@0.5.17`, `browser.mjs` `processStreamableRequest`). Calling
+   *     it on a non-streaming turn iterates an empty array.
+   *   - `ChatRequest` has no per-request `signal` field to pass instead.
+   *
+   * `Config.fetch` is the one seam the client leaves open, so injecting the
+   * signal there is what actually tears the request down. Verified against the
+   * pinned client with a server that accepts the POST and never answers:
+   * `abort()` leaves the socket open and the promise pending, the wrapped fetch
+   * closes the socket and rejects.
    */
   private async runNativeChat({
     model,
@@ -437,24 +468,28 @@ export class OllamaService implements OnModuleInit {
     maxOutputTokens?: number;
     keepAlive?: string | number;
   }): Promise<ChatResponse> {
-    const client = this.ollama;
-    const onAbort = () => client.abort();
+    // A signal that is ALREADY aborted must not start a generation at all.
+    // `runChat` awaits `validateModel` — its own network round trip — before
+    // getting here, so on a slow host the budget can expire in that window.
+    // Without this guard the caller has already been freed by `abortable`, and
+    // the request issued below would be orphaned the instant it starts: an
+    // abort listener attached to an already-aborted signal never fires.
+    signal?.throwIfAborted();
 
-    signal?.addEventListener('abort', onAbort, { once: true });
+    const client = new Ollama({
+      host: this.llmEndpointService.getOllamaHost(),
+      ...(signal && { fetch: (input, init) => fetch(input, { ...init, signal }) }),
+    });
 
-    try {
-      return await client.chat({
-        model,
-        messages,
-        ...(format && { format }),
-        ...(tools && tools.length > 0 && { tools }),
-        ...(keepAlive != null && { keep_alive: keepAlive }),
-        ...(maxOutputTokens != null &&
-          maxOutputTokens > 0 && { options: { num_predict: maxOutputTokens } }),
-      });
-    } finally {
-      signal?.removeEventListener('abort', onAbort);
-    }
+    return await client.chat({
+      model,
+      messages,
+      ...(format && { format }),
+      ...(tools && tools.length > 0 && { tools }),
+      ...(keepAlive != null && { keep_alive: keepAlive }),
+      ...(maxOutputTokens != null &&
+        maxOutputTokens > 0 && { options: { num_predict: maxOutputTokens } }),
+    });
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
