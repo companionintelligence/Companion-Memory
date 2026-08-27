@@ -183,9 +183,20 @@ interface PromptOptions {
    */
   numCtx?: number;
   /**
-   * Cap on the model's own answer, in tokens. Maps to OpenAI `max_tokens`;
-   * native Ollama has no separate output cap (`num_ctx` bounds the whole
-   * transcript), so it is only sent on the OpenAI-compat path.
+   * Cap on the model's own answer, in tokens. Maps to OpenAI `max_tokens` on
+   * the compat path and to Ollama `options.num_predict` on the native one.
+   *
+   * An earlier revision of this comment claimed native Ollama had no separate
+   * output cap and that `num_ctx` bounding the whole transcript was the only
+   * lever, so this was sent on the OpenAI-compat path alone. That is wrong:
+   * `options.num_predict` is exactly an output cap and the pinned client
+   * declares it (`ollama@0.5.17`, `Options.num_predict: number`). The mistake
+   * had teeth, because the native path is the one that runs here — an
+   * unbounded `num_predict` combined with a grammar-constrained unbounded
+   * array (`format` holding a JSON Schema whose `items` has no `maxItems`)
+   * lets a single call generate until the context window is full. That is
+   * what made a 60s budget unmeetable for the planning scan, on a prompt of
+   * only ~1.6k tokens.
    */
   maxOutputTokens?: number;
   /**
@@ -196,6 +207,18 @@ interface PromptOptions {
    * JSON. Prefer the schema form for anything that will be parsed.
    */
   format?: string | Record<string, unknown>;
+  /**
+   * How long the backend should keep this model resident after the call
+   * (Ollama `keep_alive`; a duration string like `'30m'`, or seconds).
+   *
+   * Absent leaves the server default alone (`OLLAMA_KEEP_ALIVE`, 5 minutes).
+   * That default is the reason a periodic job pays a cold model load on most
+   * runs: a scan that fires less often than the eviction window always finds
+   * the model gone, and reloading a large one costs far more than the call
+   * itself. Worse, the load happens INSIDE the caller's timeout budget, so a
+   * job whose generation would comfortably fit still fails.
+   */
+  keepAlive?: string | number;
 }
 
 /** Characters per token, the usual rough English/code ratio. */
@@ -232,11 +255,16 @@ interface ValidateModelResult {
  * first. Without a signal the promise is handed back untouched, so a caller that
  * passes none is completely unaffected.
  *
- * Racing is the only way to honour a signal on a non-streaming request: the
- * ollama client builds its own AbortController on the STREAMING path only, and
- * posts a one-shot request with no signal at all, so there is nothing for it to
- * cancel. The socket is left to the runtime; what the race buys is that the
- * caller stops waiting on a host that is down or a model still loading.
+ * This races; it does not cancel. It is what bounds the parts of a turn that
+ * are not a single client call — notably the `validateModel` round trip — and
+ * what stops a caller waiting on a host that is down.
+ *
+ * It is NOT what stops the generation itself. The ollama client posts a
+ * one-shot non-streaming request with no signal, so a race here would leave
+ * the server generating to completion on an abandoned request; see
+ * {@link OllamaService.runNativeChat}, which calls the client's own `abort()`
+ * so the request is genuinely torn down. Both are needed: this bounds the
+ * turn, that releases the backend.
  */
 function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) {
@@ -371,6 +399,62 @@ export class OllamaService implements OnModuleInit {
 
   private get ollama(): Ollama {
     return new Ollama({ host: this.llmEndpointService.getOllamaHost() });
+  }
+
+  /**
+   * One non-streaming native `/api/chat` turn that a signal can actually stop.
+   *
+   * {@link abortable} alone cannot stop one. It races the caller's promise
+   * against the signal, so an abort frees the CALLER while the request stays
+   * in flight and the server generates to completion, holding its model slot
+   * the whole time. For a periodic job that retries on timeout that is
+   * actively harmful rather than merely wasteful: every timed-out attempt
+   * leaves a full-length generation running, and the next attempt queues
+   * behind the pile its predecessors left. A run of retries can therefore make
+   * a loaded backend progressively LESS able to answer, which is exactly the
+   * failure that motivated this method — observed as ten consecutive planning
+   * scans aborting at their 60s budget while the backend never went idle.
+   *
+   * The pinned client exposes `abort()` on the client OBJECT, not per-request,
+   * and it tears down every request that client has in flight. That is safe
+   * only because `this.ollama` is a fresh instance per access, so the one
+   * built here owns exactly this call — do not hoist it to a shared field.
+   */
+  private async runNativeChat({
+    model,
+    messages,
+    format,
+    tools,
+    signal,
+    maxOutputTokens,
+    keepAlive,
+  }: {
+    model: string;
+    messages: OllamaMessage[];
+    format?: string | Record<string, unknown>;
+    tools?: Tool[];
+    signal?: AbortSignal;
+    maxOutputTokens?: number;
+    keepAlive?: string | number;
+  }): Promise<ChatResponse> {
+    const client = this.ollama;
+    const onAbort = () => client.abort();
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+
+    try {
+      return await client.chat({
+        model,
+        messages,
+        ...(format && { format }),
+        ...(tools && tools.length > 0 && { tools }),
+        ...(keepAlive != null && { keep_alive: keepAlive }),
+        ...(maxOutputTokens != null &&
+          maxOutputTokens > 0 && { options: { num_predict: maxOutputTokens } }),
+      });
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -719,7 +803,15 @@ export class OllamaService implements OnModuleInit {
   private async runChat(
     context: ChatRequestContext,
     messages: OllamaMessage[],
-    { model, enableTools = false, format, enableThinking = false }: PromptOptions,
+    {
+      model,
+      enableTools = false,
+      format,
+      enableThinking = false,
+      signal,
+      maxOutputTokens,
+      keepAlive,
+    }: PromptOptions,
   ): Promise<ChatResponse> {
     await this.validateModel(context, model);
 
@@ -742,11 +834,14 @@ export class OllamaService implements OnModuleInit {
           format: openAiFormat,
           enableThinking,
         })
-      : await this.ollama.chat({
-          model: model,
+      : await this.runNativeChat({
+          model,
           messages: inputMessages,
-          ...(format && { format }),
-          ...(enableTools && ollamaTools.length > 0 && { tools: ollamaTools }),
+          format,
+          tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
+          signal,
+          maxOutputTokens,
+          keepAlive,
         });
 
     const willCallTools =

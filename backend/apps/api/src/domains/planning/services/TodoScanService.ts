@@ -21,7 +21,35 @@ const MAX_SURFACED = 12;
 // before the model could respond at all — the daily todo scan had never
 // once produced a proposal because of this, on every appliance running a
 // large enough local model, not just under unusual load.
+//
+// A budget is only meetable if the work is bounded, which is what the two
+// constants below do. Widening the timeout alone did NOT make this scan
+// succeed: with generation unbounded it simply aborted at 60s instead of 20s.
 export const SCAN_TIMEOUT_MS = 60_000;
+
+/**
+ * Output cap for the scan turn (Ollama `options.num_predict`).
+ *
+ * The scan asks for grammar-constrained JSON whose `items` array is bounded to
+ * {@link MAX_SURFACED} entries, so a complete answer is small — a few hundred
+ * tokens at most. Left uncapped, though, "bounded array" does not mean
+ * "bounded generation": a model that keeps emitting still runs until the
+ * context window fills, and the caller's timeout fires long before that. The
+ * cap is set well above a full {@link MAX_SURFACED}-item answer so it truncates
+ * only runaway generation, never a legitimate one.
+ */
+const SCAN_MAX_OUTPUT_TOKENS = 1_500;
+
+/**
+ * Keep the chat model resident between scans (Ollama `keep_alive`).
+ *
+ * The scan runs on a daily cron while the backend evicts after 5 minutes by
+ * default, so without this every single run pays a cold load of a
+ * multi-gigabyte model — and pays it INSIDE the scan's own timeout, which is
+ * what turned a fast call into a guaranteed abort on a busy host. An hour
+ * outlives a scan and its retries without pinning the model indefinitely.
+ */
+const SCAN_KEEP_ALIVE = '1h';
 const MEMORY_LOOKBACK_QUERY =
   'tasks to-dos errands appointments commitments deadlines things I need to do or finish';
 
@@ -40,6 +68,12 @@ const RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
   properties: {
     items: {
       type: 'array',
+      // The grammar this schema compiles to is what actually constrains
+      // generation, so an array with no upper bound licenses the model to keep
+      // emitting entries indefinitely. Only MAX_SURFACED of them are ever used
+      // downstream; asking for more is generation the caller pays for and then
+      // discards.
+      maxItems: MAX_SURFACED,
       items: {
         type: 'object',
         properties: {
@@ -271,6 +305,13 @@ export class TodoScanService {
         enableTools: false,
         format: RESPONSE_JSON_SCHEMA,
         signal: controller.signal,
+        // Without these two the timeout above is not a budget the call can
+        // actually meet: generation is otherwise unbounded (see
+        // SCAN_MAX_OUTPUT_TOKENS), and a scan that runs less often than the
+        // backend's 5-minute eviction window reloads the model inside the
+        // budget on nearly every run.
+        maxOutputTokens: SCAN_MAX_OUTPUT_TOKENS,
+        keepAlive: SCAN_KEEP_ALIVE,
       });
 
       const parsed = responseSchema.safeParse(JSON.parse(response.message.content || '{}'));
