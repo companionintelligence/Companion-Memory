@@ -105,6 +105,7 @@ export class SteamFriendsTransformService {
           // Create Event for when the friendship was established
           if (friend.friend_since > 0) {
             await this.eventService.create(context, {
+              connection_id: connection.id,
               title: `Became friends with ${friend.personaname}`,
               description: `Became friends with ${friend.personaname} on Steam`,
               event_type: 'friend_added',

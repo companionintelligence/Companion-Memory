@@ -308,6 +308,7 @@ export class OutlookCalendarTransformService {
       location_coordinates: location_coordinates || undefined,
       source_type: 'ETL',
       source_system: 'outlook_calendar',
+      connection_id: connectionId,
       source_id: event.id || undefined,
       is_recurring: !!event.recurrence || !!event.seriesMasterId,
       is_all_day: event.isAllDay || false,

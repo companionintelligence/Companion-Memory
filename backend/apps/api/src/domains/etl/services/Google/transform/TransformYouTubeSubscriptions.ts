@@ -166,6 +166,7 @@ export class YouTubeSubscriptionsTransformService {
       source_type: 'ETL',
       source_system: YOUTUBE_SOURCE_SYSTEM,
       source_id: `subscription:${channelId}`,
+      connection_id: connectionId,
       source_data: {
         connectionId,
         channelId,

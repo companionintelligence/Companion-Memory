@@ -80,6 +80,7 @@ export class SpotifySavedShowsTransformService {
           // save of it. Event first so the content row can point at it.
           const [event] = showItem.added_at
             ? await this.eventService.create(context, {
+                connection_id: connection.id,
                 title: `Saved ${existingShowIsAudiobook.length > 0 ? 'audiobook' : 'show'} ${show.name}`,
                 description: `Saved ${show.name} on Spotify at ${showItem.added_at}`,
                 event_type: 'favorite',
@@ -103,6 +104,7 @@ export class SpotifySavedShowsTransformService {
             existing: [...existingShowIsAudiobook, ...existingShow],
             eventId: event?.id,
             input: {
+              connection_id: connection.id,
               title: show.name,
               type: 'Show',
               url: show.external_urls?.spotify || '',

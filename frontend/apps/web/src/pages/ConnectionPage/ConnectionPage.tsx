@@ -405,7 +405,7 @@ export function ConnectionPage() {
   const handleDeleteConnection = async () => {
     if (
       !confirm(
-        'Are you sure you want to delete this connection? Data from this connection will not be deleted.',
+        'Delete this connection? Its sign-in, every page fetched from the service, and the messages, events, photos, videos, people and organizations it created will be permanently deleted. Copied media files stay until the account is deleted.',
       )
     ) {
       return;

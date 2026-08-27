@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm/services/OllamaService';
+import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
@@ -21,7 +21,42 @@ const MAX_SURFACED = 12;
 // before the model could respond at all — the daily todo scan had never
 // once produced a proposal because of this, on every appliance running a
 // large enough local model, not just under unusual load.
+//
+// The budget is headroom, not the cure. What made this scan actually complete
+// was moving it to the utility model tier and bounding generation (the two
+// constants below): on the operator's chat model, prompt evaluation alone
+// exceeded even 60s, so widening this on its own only moved the abort from
+// 20s to 60s.
 export const SCAN_TIMEOUT_MS = 60_000;
+
+/**
+ * Output cap for the scan turn (Ollama `options.num_predict`).
+ *
+ * The scan asks for grammar-constrained JSON whose `items` array is bounded to
+ * {@link MAX_SURFACED} entries, so a complete answer is small — a few hundred
+ * tokens at most. Left uncapped, though, "bounded array" does not mean
+ * "bounded generation": a model that keeps emitting still runs until the
+ * context window fills, and the caller's timeout fires long before that. The
+ * cap is set well above a full {@link MAX_SURFACED}-item answer so it truncates
+ * only runaway generation, never a legitimate one.
+ */
+const SCAN_MAX_OUTPUT_TOKENS = 1_500;
+
+/**
+ * Keep the utility model resident (Ollama `keep_alive`).
+ *
+ * Note what this does NOT do. This scan is daily, and no keep-alive shorter
+ * than a day holds a model across that gap, so the first call of a run still
+ * pays whatever load is due; the value is not chosen for this scan alone.
+ *
+ * What an hour buys is the rest of the tier. `InboxScanService` runs every 30
+ * minutes and `TodoProcessService` makes many sequential calls per run, all on
+ * the same utility model — an hour keeps it warm across that traffic, and keeps
+ * this scan's own pg-boss retries from each reloading it inside their budget.
+ * Cold start on an otherwise idle appliance is a separate problem and wants a
+ * separate fix (a warm-up outside the timed section), not a longer keep-alive.
+ */
+const SCAN_KEEP_ALIVE = '1h';
 const MEMORY_LOOKBACK_QUERY =
   'tasks to-dos errands appointments commitments deadlines things I need to do or finish';
 
@@ -40,11 +75,27 @@ const RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
   properties: {
     items: {
       type: 'array',
+      // The grammar this schema compiles to is what actually constrains
+      // generation, so an array with no upper bound licenses the model to keep
+      // emitting entries indefinitely. Only MAX_SURFACED of them are ever used
+      // downstream; asking for more is generation the caller pays for and then
+      // discards.
+      //
+      // Enforcement is the SERVER's, not this client's, so it was verified
+      // rather than assumed: asking a model for ten items under a `maxItems: 2`
+      // schema returned exactly two and stopped (`done_reason: stop`).
+      maxItems: MAX_SURFACED,
       items: {
         type: 'object',
         properties: {
-          title: { type: 'string' },
-          detail: { type: 'string' },
+          // Bounded so SCAN_MAX_OUTPUT_TOKENS is provably above a full answer
+          // rather than merely believed to be. MAX_SURFACED items at these
+          // lengths is roughly 900 tokens against a 1,500 cap; unbounded
+          // strings make that arithmetic impossible and put a legitimate
+          // answer at risk of the truncation handled above. These are also
+          // generous for what the UI shows — a task title and a one-line note.
+          title: { type: 'string', maxLength: 120 },
+          detail: { type: 'string', maxLength: 200 },
           confidence: { type: 'number' },
         },
         required: ['title'],
@@ -267,11 +318,33 @@ export class TodoScanService {
       ].join('\n');
 
       const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
-        model: PROMPT_MODEL,
+        model: UTILITY_MODEL,
         enableTools: false,
         format: RESPONSE_JSON_SCHEMA,
         signal: controller.signal,
+        // Without these two the timeout above is not a budget the call can
+        // actually meet: generation is otherwise unbounded (see
+        // SCAN_MAX_OUTPUT_TOKENS), and a scan that runs less often than the
+        // backend's 5-minute eviction window reloads the model inside the
+        // budget on nearly every run.
+        maxOutputTokens: SCAN_MAX_OUTPUT_TOKENS,
+        keepAlive: SCAN_KEEP_ALIVE,
       });
+
+      // A response cut off by the output cap stops mid-grammar, so its JSON is
+      // unterminated and `JSON.parse` throws. Left to the generic handler that
+      // reads as "the model failed", which is both wrong and unactionable: the
+      // model was fine, the CAP was too low, and the operator's fix is to raise
+      // SCAN_MAX_OUTPUT_TOKENS rather than to go looking at the backend. Worth
+      // naming precisely because the failure is otherwise silent and permanent
+      // — every subsequent run truncates in exactly the same place.
+      if (response.done_reason === 'length') {
+        this.logger.warn('Todo scan hit its output cap; raise SCAN_MAX_OUTPUT_TOKENS', {
+          maxOutputTokens: SCAN_MAX_OUTPUT_TOKENS,
+        });
+
+        return null;
+      }
 
       const parsed = responseSchema.safeParse(JSON.parse(response.message.content || '{}'));
 

@@ -129,10 +129,12 @@ describe('PersonalizationService.decide for planning task kinds', () => {
     const profile = PersonalizationService.profileForTrustMode('balanced');
 
     expect(PersonalizationService.decide(profile, { kind: 'task_create', confidence: 0.9 })).toBe('auto');
+    // task_complete keeps its own 0.85 bar — see the dedicated test below for
+    // why it does not share `autoPromoteThresholdBalanced`.
     expect(PersonalizationService.decide(profile, { kind: 'task_complete', confidence: 0.85 })).toBe('auto');
-    // Planning kinds share `autoPromoteThresholdBalanced` with inferred_fact, so
-    // lowering it for answers moved these too. 0.8 now promotes; the boundary
-    // this test guards is the 0.55 floor beneath it.
+    // task_create/task_mutate/event_revise DO share `autoPromoteThresholdBalanced`
+    // with inferred_fact, so lowering it for answers moved these too. 0.8 now
+    // promotes; the boundary this test guards is the 0.55 floor beneath it.
     expect(PersonalizationService.decide(profile, { kind: 'task_mutate', confidence: 0.8 })).toBe('auto');
     expect(PersonalizationService.decide(profile, { kind: 'task_mutate', confidence: 0.54 })).toBe('review');
   });
@@ -142,5 +144,30 @@ describe('PersonalizationService.decide for planning task kinds', () => {
 
     expect(PersonalizationService.decide(profile, { kind: 'event_revise', confidence: 0.72 })).toBe('auto');
     expect(PersonalizationService.decide(profile, { kind: 'task_create', confidence: 0.65 })).toBe('review');
+  });
+
+  it('balanced keeps task_complete at the original 0.85 bar, decoupled from autoPromoteThresholdBalanced', () => {
+    const profile = PersonalizationService.profileForTrustMode('balanced');
+
+    // 0.8 is VerifyDoneService's ATTRIBUTED_DONE_CONFIDENCE — the strongest
+    // signal it ever reports for a completed task. It must still review in
+    // balanced: sharing the 0.55 autoPromoteThreshold here would silently
+    // complete tasks (and their calendar blocks) in the default trust mode.
+    expect(PersonalizationService.decide(profile, { kind: 'task_complete', confidence: 0.8 })).toBe('review');
+    expect(PersonalizationService.decide(profile, { kind: 'task_complete', confidence: 0.84 })).toBe(
+      'review',
+    );
+    expect(PersonalizationService.decide(profile, { kind: 'task_complete', confidence: 0.85 })).toBe('auto');
+
+    // Other planning kinds are unaffected and still share the 0.55 bar.
+    expect(PersonalizationService.decide(profile, { kind: 'task_mutate', confidence: 0.8 })).toBe('auto');
+  });
+
+  it('thresholdForKind reports the same task_complete bar decide() uses', () => {
+    const balanced = PersonalizationService.profileForTrustMode('balanced');
+    const handsOff = PersonalizationService.profileForTrustMode('hands_off');
+
+    expect(PersonalizationService.thresholdForKind(balanced, 'task_complete')).toBe(0.85);
+    expect(PersonalizationService.thresholdForKind(handsOff, 'task_complete')).toBe(0.7);
   });
 });

@@ -21,6 +21,7 @@ export const createContentSchema = z.object({
   mimetype: z.string().optional(),
   external_id: z.string().optional(),
   source_url: z.string().optional(),
+  connection_id: z.string().uuid().nullable().optional(),
   user_id: z.string().optional(),
   event_id: z.string().optional(),
 });
@@ -33,6 +34,7 @@ export const updateContentSchema = z.object({
   mimetype: z.string().optional(),
   external_id: z.string().optional(),
   source_url: z.string().optional(),
+  connection_id: z.string().uuid().nullable().optional(),
   user_id: z.string().optional(),
   event_id: z.string().optional(),
 });
@@ -63,6 +65,8 @@ export interface CreateEventDto {
   source_type?: string;
   source_system?: string;
   source_id?: string;
+  /** The connection whose sync produced this event; null for manual/imported/predicted. */
+  connection_id?: string | null;
   confidence_score?: number;
   is_recurring?: boolean;
   recurrence_pattern?: Record<string, unknown>;
@@ -110,6 +114,8 @@ export interface UpdateEventDto {
   source_type?: string;
   source_system?: string;
   source_id?: string;
+  /** The connection whose sync produced this event; null for manual/imported/predicted. */
+  connection_id?: string | null;
   confidence_score?: number;
   is_recurring?: boolean;
   recurrence_pattern?: Record<string, unknown>;
@@ -191,6 +197,8 @@ export interface CreateContentDto {
   source_type?: string;
   source_system?: string;
   source_id?: string;
+  /** The connection whose sync produced this row; null for uploads/imports. */
+  connection_id?: string | null;
   event?: {
     id: string;
   };
@@ -216,6 +224,8 @@ export interface UpdateContentDto {
   source_type?: string;
   source_system?: string;
   source_id?: string;
+  /** The connection whose sync produced this row; null for uploads/imports. */
+  connection_id?: string | null;
   event?: {
     id: string;
   };
@@ -1097,6 +1107,7 @@ const createEventSchemaRoot = z.object({
   source_type: z.string().optional(),
   source_system: z.string().optional(),
   source_id: z.string().optional(),
+  connection_id: z.string().uuid().nullable().optional(),
   confidence_score: z.number().optional(),
   is_recurring: z.boolean().optional(),
   recurrence_pattern: z.record(z.unknown()).optional(),
@@ -1140,6 +1151,7 @@ export const updateEventSchema = z.object({
   source_type: z.string().optional(),
   source_system: z.string().optional(),
   source_id: z.string().optional(),
+  connection_id: z.string().uuid().nullable().optional(),
   confidence_score: z.number().optional(),
   is_recurring: z.boolean().optional(),
   recurrence_pattern: z.record(z.unknown()).optional(),

@@ -64,6 +64,7 @@ export class SpotifyRecentlyPlayedTransformService {
           // Event first so the content row can point at it — see upsertContentForEvent.
           const playedAt = trackItem.played_at!;
           const [event] = await this.eventService.create(context, {
+            connection_id: connection.id,
             title: `Played ${track.name}`,
             description: `Played ${track.name} by ${track.artists!.map((artist) => artist.name).join(', ')} on Spotify at ${trackItem.played_at}`,
             event_type: 'played_music',
@@ -95,6 +96,7 @@ export class SpotifyRecentlyPlayedTransformService {
             existing: existingTrack,
             eventId: event?.id,
             input: {
+              connection_id: connection.id,
               title: track.name,
               type: 'Music',
               url: track.external_urls?.spotify || '',

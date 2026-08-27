@@ -75,6 +75,7 @@
     "apiBase": "LLM_API_BASE",
     "apiKey": "LLM_API_KEY",
     "chatModel": "LLM_DEFAULT_CHAT_MODEL",
+    "utilityModel": "LLM_UTILITY_MODEL",
     "tierRouting": {
       "enabled": {
         "__name": "LLM_TIER_ROUTING_ENABLED",

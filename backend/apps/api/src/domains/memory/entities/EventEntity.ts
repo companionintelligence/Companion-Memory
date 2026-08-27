@@ -116,6 +116,14 @@ export class EventEntity {
   @Column({ type: 'text', nullable: true, name: 'source_id' })
   sourceId!: string | null;
 
+  /**
+   * The ci.connections row whose sync produced this event, so disconnecting
+   * that service can purge exactly its events. Null for events that did not
+   * come from a connection (manual, imported archives, predicted).
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'connection_id' })
+  connectionId!: string | null;
+
   @Column({ type: 'double precision', default: 1.0, name: 'confidence_score' })
   confidenceScore!: number;
 
@@ -223,6 +231,7 @@ export class EventEntity {
       sourceType: entity.sourceType,
       sourceSystem: entity.sourceSystem,
       sourceId: entity.sourceId,
+      connectionId: entity.connectionId,
       confidenceScore: entity.confidenceScore,
       isRecurring: entity.isRecurring,
       recurrencePattern: entity.recurrencePattern,

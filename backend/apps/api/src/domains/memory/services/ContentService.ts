@@ -134,6 +134,7 @@ export class ContentService {
       sourceType: item.source_type ?? undefined,
       sourceSystem: item.source_system ?? undefined,
       sourceId: item.source_id ?? undefined,
+      connectionId: item.connection_id ?? undefined,
       event,
       userId: context.userId,
     });
@@ -811,6 +812,10 @@ export class ContentService {
 
     if (data.external_id !== undefined) {
       updateData.externalId = data.external_id;
+    }
+
+    if (data.connection_id !== undefined) {
+      updateData.connectionId = data.connection_id;
     }
 
     if (data.external_id_kind !== undefined) {

@@ -15,6 +15,15 @@ export interface CloudTokenResponse {
   refresh_token: string;
 }
 
+/** Outcome of `POST /api/oauth/token/revoke` on CI Portal. */
+export interface CloudRevokeResponse {
+  success: boolean;
+  /** Stored credential rows Portal hard-deleted for this device. */
+  tokens_deleted: number;
+  /** False when Portal attempted an upstream revocation and the provider refused it. */
+  revocation_ok: boolean;
+}
+
 /** User-installed Hub app recorded in CI Portal for this device. */
 export interface PortalDeviceApplication {
   id: string;
@@ -180,9 +189,22 @@ export class CloudOAuthProxyService {
   }
 
   /**
-   * Revoke a token using its proxy refresh token.
+   * Revoke and delete the credential CI Portal holds for a proxied connection.
+   *
+   * Portal revokes its stored provider refresh token upstream (best-effort),
+   * then hard-deletes the row, so the grant actually ends and nothing about
+   * the connection survives in the cloud. The row is addressed by the proxy
+   * refresh token when the box still has a usable one, and by `provider` +
+   * `userProviderId` otherwise — that pair is always known (it is the
+   * connection's provider and `external_id`), so a stale or already-consumed
+   * proxy token cannot leave an orphan behind. Idempotent on Portal's side: a
+   * credential that is already gone is a successful no-op.
    */
-  async revokeToken(proxyRefreshToken: string): Promise<void> {
+  async revokeToken(input: {
+    proxyRefreshToken?: string | null;
+    provider: string;
+    userProviderId?: string | null;
+  }): Promise<CloudRevokeResponse> {
     if (!config.ciPortal.deviceId) {
       this.logger.error('Missing Hub Device ID');
       throw new Error('HUB_DEVICE_ID is not configured');
@@ -193,13 +215,28 @@ export class CloudOAuthProxyService {
       throw new Error('HUB_API_KEY is not configured');
     }
 
+    const body: Record<string, string> = { provider: input.provider };
+
+    if (input.proxyRefreshToken) {
+      body.refresh_token = input.proxyRefreshToken;
+    }
+
+    if (input.userProviderId) {
+      body.user_provider_id = input.userProviderId;
+    }
+
+    if (!body.refresh_token && !body.user_provider_id) {
+      // Nothing Portal could match a row on; there is nothing to revoke.
+      return { success: true, tokens_deleted: 0, revocation_ok: true };
+    }
+
     const response = await fetch(`${this.baseUrl}/api/oauth/token/revoke`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: this.authorizationHeader,
       },
-      body: JSON.stringify({ refresh_token: proxyRefreshToken }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -207,6 +244,8 @@ export class CloudOAuthProxyService {
       this.logger.error('CI Cloud token revoke failed', { status: response.status, body: text });
       throw new Error(`CI Cloud token revoke failed: ${text}`);
     }
+
+    return (await response.json()) as CloudRevokeResponse;
   }
 
   /** Whether CI Portal credentials are present (best-effort reads may still fail). */
