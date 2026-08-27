@@ -32,6 +32,33 @@ import { z } from 'zod';
  */
 export const DEFAULT_CHAT_MODEL = 'gemma4:e4b';
 
+/**
+ * Model for BACKGROUND inference — extraction, classification, JSON shaping —
+ * as opposed to the model a person is talking to.
+ *
+ * These are two different jobs and they want opposite things. An operator picks
+ * `LLM_DEFAULT_CHAT_MODEL` for conversational quality and will happily set a
+ * 31B model for it. Background jobs want a model that returns grammar-
+ * constrained JSON quickly, and are ruined by a large one: measured on a real
+ * appliance, an identical ~1170-token extraction prompt took over 170 seconds
+ * on `gemma4:31b` (never returned inside the job's timeout) and 3.6 seconds on
+ * a 1B model — INCLUDING its cold load — with correct, schema-valid output.
+ * The cost is dominated by prompt evaluation, so no output cap or longer
+ * timeout can rescue it; only a smaller model can.
+ *
+ * Before this existed both jobs read `llm.chatModel`, so raising the chat model
+ * for quality silently broke every background job on the appliance. The
+ * planning scans failed that way indefinitely, logging a generic LLM timeout
+ * that named neither the model nor the real cause. Several of those services
+ * were even written ASSUMING this was small — see `TaskBreakdownService`'s
+ * "a small `PROMPT_MODEL` reliably [invents key names]".
+ *
+ * Defaults to {@link DEFAULT_CHAT_MODEL} so a deployment that never sets it
+ * behaves exactly as it did before, rather than suddenly pulling a model the
+ * box has not got.
+ */
+export const DEFAULT_UTILITY_MODEL = DEFAULT_CHAT_MODEL;
+
 const booleanStringSchema = z.preprocess((val) => {
   if (val === 'true') {
     return true;
@@ -232,6 +259,8 @@ export const ConfigSchema = z.object({
       apiBase: z.string().optional(),
       apiKey: z.string().default('ollama'),
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
+      /** Background extraction/classification model. See {@link DEFAULT_UTILITY_MODEL}. */
+      utilityModel: z.string().default(DEFAULT_UTILITY_MODEL),
       /**
        * Model-tier routing (`domains/model-routing`, `ModelTierRouter`) applied to
        * chat model selection in `OllamaService.resolveModel`.
@@ -1065,6 +1094,14 @@ if (!parsed.llm.apiKey) {
 
 if (!parsed.llm.chatModel) {
   parsed.llm.chatModel = DEFAULT_CHAT_MODEL;
+}
+
+// An empty LLM_UTILITY_MODEL means "not configured", not "use the empty
+// string" — same normalization chatModel gets just above. Falling back to the
+// small compiled-in default rather than to `chatModel` is deliberate: inheriting
+// the operator's chat model is exactly the coupling this setting exists to break.
+if (!parsed.llm.utilityModel) {
+  parsed.llm.utilityModel = DEFAULT_UTILITY_MODEL;
 }
 
 // GEOCODING_API_KEY takes precedence; fall back to the legacy GOOGLE_MAPS_KEY so

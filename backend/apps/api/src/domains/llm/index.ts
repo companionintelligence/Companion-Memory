@@ -63,7 +63,7 @@ export class LLMModule {}
 
 export { LlmCoreModule } from './core.module';
 export { OllamaService } from './services/OllamaService';
-export { PROMPT_MODEL, type ChatRequestContext } from './services/OllamaService';
+export { PROMPT_MODEL, UTILITY_MODEL, type ChatRequestContext } from './services/OllamaService';
 export { LLM_QUEUE, LLM_QUEUE_OPTIONS } from './constants';
 export {
   ANSWER_SUPPORT_LEVELS,
