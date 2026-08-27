@@ -701,6 +701,55 @@ describe('avatar_url from PHOTO', () => {
     expect(entity!.metadata?.avatar_url).toBeUndefined();
   });
 
+  it('drops a photo past the tsvector-safe cap even when it is well under MAX_PHOTO_BASE64_CHARS', async () => {
+    // ci.entities maintains a functional index over to_tsvector('english', ...
+    // || properties::text) (20251203202414_update_search_vector_logic.sql),
+    // and Postgres's tsvector representation has a hard 1,048,575-BYTE ceiling
+    // — independent of MAX_PHOTO_BASE64_CHARS, which only bounds the
+    // accumulator this parser uses while READING a PHOTO property. A photo
+    // comfortably under 2,000,000 chars (so it reads and accumulates fine)
+    // can still exceed 1,048,575 once embedded as a data: URI, and previously
+    // sailed straight through into avatar_url — confirmed against a real
+    // 9,911-contact export, where the resulting oversized row failed its
+    // INSERT/UPDATE outright with "string is too long for tsvector", taking
+    // the rest of that upsert BATCH down with it (a shared error attributed
+    // to every entity in the batch, not just the one with the bad photo), and
+    // degraded push throughput roughly 10x while other batches kept retrying.
+    //
+    // 900,000 chars sits between the two thresholds: past the 700,000-char
+    // embed cap, comfortably under the 2,000,000-char accumulator cap — the
+    // exact gap the old code left uncovered.
+    const bigB64 = 'A'.repeat(900_000);
+    const foldedLines = bigB64.match(/.{1,72}/g)!.map((chunk) => ` ${chunk}`);
+    const raw = `BEGIN:VCARD\nFN:Big Photo\nTEL:+15559990006\nPHOTO;ENCODING=b:\n${foldedLines.join('\n')}\nEND:VCARD\n`;
+
+    const { pipeline } = await importRaw(raw);
+    const [entity] = contactEntities(pipeline);
+
+    expect(entity!.metadata?.avatar_url).toBeUndefined();
+    // The rest of the card still imports — a dropped photo degrades to the
+    // same "no avatar" shape as a card that never had one, not a lost contact.
+    expect(entity!.name).toBe('Big Photo');
+  });
+
+  it('keeps a photo right at the safe cap, and drops one character past it', async () => {
+    const atCapB64 = 'A'.repeat(700_000 - 'data:image/jpeg;base64,'.length);
+    const overCapB64 = atCapB64 + 'A';
+
+    const cardWith = (name: string, b64: string) => {
+      const folded = b64.match(/.{1,72}/g)!.map((chunk) => ` ${chunk}`);
+
+      return `BEGIN:VCARD\nFN:${name}\nPHOTO;ENCODING=b:\n${folded.join('\n')}\nEND:VCARD\n`;
+    };
+
+    const { pipeline } = await importRaw(cardWith('At Cap', atCapB64) + cardWith('Over Cap', overCapB64));
+    const entities = contactEntities(pipeline);
+    const byName = new Map(entities.map((e) => [e!.name, e]));
+
+    expect(byName.get('At Cap')?.metadata?.avatar_url).toBe(`data:image/jpeg;base64,${atCapB64}`);
+    expect(byName.get('Over Cap')?.metadata?.avatar_url).toBeUndefined();
+  });
+
   it('aligns each card to its OWN photo across a multi-card file, not an off-by-one neighbor', async () => {
     // The regression this guards: extractCardPhotos and the main BEGIN/END loop
     // walk the file independently and must agree on where card N starts and

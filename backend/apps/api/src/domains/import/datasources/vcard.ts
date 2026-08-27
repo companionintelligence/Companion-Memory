@@ -315,6 +315,34 @@ export interface CardPhoto {
 /** A PHOTO payload too large to be worth keeping as a `properties` value. */
 const MAX_PHOTO_BASE64_CHARS = 2_000_000; // ~1.5MB decoded
 
+/**
+ * The largest `data:` URI this parser will embed directly into
+ * `properties.avatar_url`, in characters.
+ *
+ * `ci.entities` maintains a functional search index over
+ * `to_tsvector('english', ... || properties::text)` (migration
+ * 20251203202414_update_search_vector_logic.sql), and Postgres's tsvector
+ * representation has a hard 1,048,575-BYTE ceiling — INDEPENDENT of
+ * MAX_PHOTO_BASE64_CHARS above, which only bounds the accumulator this parser
+ * uses while READING a PHOTO property, not what gets embedded here. A card
+ * whose photo falls between the two thresholds passed accumulation fine and
+ * then failed the INSERT/UPDATE itself with "string is too long for
+ * tsvector", taking the whole upsert BATCH down with it — confirmed against a
+ * real 9,911-contact export, where it also cratered push throughput roughly
+ * 10x (many-minute retries on the failing batches) for every contact sharing
+ * that batch, not just the one with the oversized photo.
+ *
+ * 700,000 leaves comfortable headroom under the limit for the OTHER fields
+ * the same trigger concatenates (name, description, search_content, and the
+ * rest of properties), while still embedding the vast majority of real
+ * contact photos — a phone-camera headshot's base64 is typically well under
+ * 200KB. A photo past this cap is dropped from `avatar_url` entirely rather
+ * than truncated: half a base64 image decodes to nothing, so keeping a
+ * fragment would be strictly worse than the "no photo" case this already
+ * degrades to when a card has none.
+ */
+const MAX_AVATAR_DATA_URI_CHARS = 700_000;
+
 const PHOTO_TYPE_PARAM = /(?:^|;)TYPE=([A-Za-z0-9.+-]+)/i;
 const PHOTO_MIME_BY_TYPE: Record<string, string> = {
   JPEG: 'image/jpeg',
@@ -1043,7 +1071,11 @@ export function buildContact(lines: ContentLine[], file: string, photo?: CardPho
   // URI is bytes the moment this row is written. Most real exports (Apple/
   // Google/Android Contacts) only ever embed base64, so this is the common case.
   if (!avatarUrl && photo && /^[A-Za-z0-9+/=\s]+$/.test(photo.base64)) {
-    avatarUrl = `data:${photo.mimeType};base64,${photo.base64.replace(/\s+/g, '')}`;
+    const dataUri = `data:${photo.mimeType};base64,${photo.base64.replace(/\s+/g, '')}`;
+
+    if (dataUri.length <= MAX_AVATAR_DATA_URI_CHARS) {
+      avatarUrl = dataUri;
+    }
   }
 
   const item: Item = {
