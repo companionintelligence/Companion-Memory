@@ -5,7 +5,12 @@ import { PersonalizationService } from '@ci/domains/personalization';
 import type { SearchService } from '@ci/domains/search-next';
 
 import type { TaskService } from '../TaskService';
-import { EventNowService, TodoProcessService, VerifyDoneService } from '../TodoProcessService';
+import {
+  EventNowService,
+  PROCESS_TIMEOUT_MS,
+  TodoProcessService,
+  VerifyDoneService,
+} from '../TodoProcessService';
 
 const CTX_USER = 'user-1';
 
@@ -425,5 +430,14 @@ describe('TodoProcessService', () => {
     // The hydration query is scoped to the caller and asks for exactly the ids
     // search() returned.
     expect(dataSource.query).toHaveBeenCalledWith(expect.any(String), [[HIT_ID], CTX_USER]);
+  });
+});
+
+describe('TodoProcessService LLM budget', () => {
+  it('allows the LLM at least 60s before aborting, not 15', () => {
+    // Was 15s — the tightest of the three planning-domain LLM budgets, and
+    // the same failure mode as TodoScanService/InboxScanService: a local
+    // model under real load needs far more than 15s for a first token.
+    expect(PROCESS_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
   });
 });

@@ -15,8 +15,27 @@ import { TaskService } from './TaskService';
 
 const MAX_MESSAGES = 30;
 const MAX_SURFACED = 12;
-const LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000;
-const SCAN_TIMEOUT_MS = 20_000;
+// 30 days, not 3. A 3-day window means every run after the owner's most recent
+// import gap (a personal export is historical by construction — its newest
+// message is whenever the export was taken, not "now") finds literally
+// nothing, silently, forever. Measured against a real 432k-message import:
+// the most recent communication was over two months old, so a 3-day lookback
+// swept zero rows on every single run. 30 days still bounds the LLM prompt to
+// a reasonable size and keeps this a "recent inbox" triage rather than a full
+// history scan (that is extract_graph's job), while actually having a chance
+// of finding something on an appliance that is not being messaged every day.
+export const LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+// 60s, not 20. `PROMPT_MODEL` is whatever local model the operator configured
+// — on real hardware that can be a 30B+ parameter model with no GPU
+// acceleration, and 20s is not enough to reliably get a first token, let
+// alone a full JSON response, from one of those. A too-tight budget doesn't
+// corrupt anything (a timeout degrades to "propose nothing this cycle," see
+// the docstring on surfaceItems below) but it does mean the feature can go
+// quiet indefinitely on exactly the hardware most likely to need a generous
+// budget. 60s is not a promise every model responds in time; it is a
+// deliberately generous ceiling so a real answer is not thrown away for
+// arriving in 25s instead of 20.
+export const SCAN_TIMEOUT_MS = 60_000;
 const INBOX_TYPES = ['email', 'sms', 'chat'];
 
 const itemSchema = z.object({
@@ -197,9 +216,7 @@ export class InboxScanService {
     return this.proposedReconcile.reconcileStaleProposed(context, {
       sourceKind: 'inbox',
       relevantTitles: surfaced.map((item) => item.title),
-      relevantSourceRefs: surfaced.map((item) =>
-        TaskService.memoryScanSourceRef(item.title.trim(), 'inbox'),
-      ),
+      relevantSourceRefs: surfaced.map((item) => TaskService.memoryScanSourceRef(item.title.trim(), 'inbox')),
     });
   }
 

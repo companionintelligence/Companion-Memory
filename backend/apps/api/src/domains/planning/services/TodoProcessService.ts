@@ -12,7 +12,12 @@ import { SearchService } from '@ci/domains/search-next';
 
 import { TaskService } from './TaskService';
 
-const PROCESS_TIMEOUT_MS = 15_000;
+// 60s, not 15 — same reasoning as InboxScanService.ts's SCAN_TIMEOUT_MS. This
+// was the tightest of the three planning-domain LLM budgets; a local model
+// under real load needs far more than 15s for a first token, and this
+// service shares that failure mode with TodoScanService and InboxScanService
+// (all three independently invented their own too-tight abort budget).
+export const PROCESS_TIMEOUT_MS = 60_000;
 
 const CANCEL_PHRASES = [
   'cancelled',

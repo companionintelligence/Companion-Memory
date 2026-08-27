@@ -6,7 +6,7 @@ import type { SearchService } from '@ci/domains/search-next';
 import type { PlannedBlockService } from '../PlannedBlockService';
 import type { ProposedTaskReconcileService } from '../ProposedTaskReconcileService';
 import type { TaskService } from '../TaskService';
-import { TodoScanService } from '../TodoScanService';
+import { SCAN_TIMEOUT_MS, TodoScanService } from '../TodoScanService';
 
 const USER_ID = 'user-1';
 const HIT_ID = '11111111-1111-7111-8111-111111111111';
@@ -125,7 +125,11 @@ describe('TodoScanService stale proposed sweep', () => {
     const logger = makeLogger();
 
     const service = new TodoScanService(
-      { findBySourceRef: jest.fn(), findByTitleMatch: jest.fn(), create: jest.fn() } as unknown as TaskService,
+      {
+        findBySourceRef: jest.fn(),
+        findByTitleMatch: jest.fn(),
+        create: jest.fn(),
+      } as unknown as TaskService,
       searchService,
       makeOllamaService([]),
       { decideAction: jest.fn() } as unknown as PersonalizationService,
@@ -153,7 +157,11 @@ describe('TodoScanService stale proposed sweep', () => {
     const proposedReconcile = makeProposedReconcile();
 
     const service = new TodoScanService(
-      { findBySourceRef: jest.fn(), findByTitleMatch: jest.fn(), create: jest.fn() } as unknown as TaskService,
+      {
+        findBySourceRef: jest.fn(),
+        findByTitleMatch: jest.fn(),
+        create: jest.fn(),
+      } as unknown as TaskService,
       makeSearchService(),
       ollamaService,
       { decideAction: jest.fn() } as unknown as PersonalizationService,
@@ -203,5 +211,17 @@ describe('TodoScanService stale proposed sweep', () => {
         dueAt: new Date('2026-08-26T12:00:00.000Z'),
       }),
     );
+  });
+});
+
+describe('TodoScanService LLM budget', () => {
+  it('allows the LLM at least 60s before aborting, not 20', () => {
+    // Was 20s. The one production run this scan ever made against a real
+    // local model aborted with "This operation was aborted" before the
+    // model responded at all — a bare one-word completion against the same
+    // model took over two minutes on the same hardware. 20s was not a
+    // safety margin, it was a guarantee this feature would never produce a
+    // proposal on the hardware most likely to need a generous budget.
+    expect(SCAN_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
   });
 });

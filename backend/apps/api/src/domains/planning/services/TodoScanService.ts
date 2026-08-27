@@ -14,7 +14,14 @@ import { ProposedTaskReconcileService } from './ProposedTaskReconcileService';
 import { TaskService } from './TaskService';
 
 const MAX_SURFACED = 12;
-const SCAN_TIMEOUT_MS = 20_000;
+// 60s, not 20 — see InboxScanService.ts's SCAN_TIMEOUT_MS for the full
+// reasoning. Confirmed live: a bare one-word Ollama completion against the
+// configured local model took over two minutes on real hardware, and the
+// one production run tonight aborted with "This operation was aborted"
+// before the model could respond at all — the daily todo scan had never
+// once produced a proposal because of this, on every appliance running a
+// large enough local model, not just under unusual load.
+export const SCAN_TIMEOUT_MS = 60_000;
 const MEMORY_LOOKBACK_QUERY =
   'tasks to-dos errands appointments commitments deadlines things I need to do or finish';
 
