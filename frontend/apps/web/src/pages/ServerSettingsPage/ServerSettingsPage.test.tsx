@@ -1,3 +1,4 @@
+import { BarcodeScanError } from '@ci/common';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,19 +23,27 @@ vi.mock('react-router-dom', async (importOriginal) => {
 const h = vi.hoisted(() => ({
   apiBaseUrl: '',
   persistApiBaseUrl: vi.fn(),
+  isNativePlatform: vi.fn(() => false),
+  scanQrCode: vi.fn(),
 }));
 
 // Spread the real module rather than allow-listing exports. This page's health check
 // runs through the real `probeMemoryOrigin` (./DeviceConnectPage/portal-client), which
 // itself imports `apiFetch` from `@ci/common` — so an allow-list mock blanks a
 // dependency the page never names, and every probe throws before reaching `fetch`.
-// Only the three origin helpers are stubbed: the first two so the test drives the
-// configured origin, the third so it is asserted on and never hits localStorage.
+// Only the origin/native helpers are stubbed: the first two so the test drives the
+// configured origin, `persistApiBaseUrl` so it is asserted on and never hits
+// localStorage, and `isNativePlatform`/`scanQrCode` so the scan button and its
+// outcome can be driven per-test (the real `isNativePlatform` is always false in
+// jsdom, which would hide the Scan QR Code path entirely). `isBarcodeScanError` is
+// left real — it only inspects an error's `name`/`code`, nothing environmental.
 vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   getApiBaseUrl: () => h.apiBaseUrl,
   buildApiUrl: (path: string) => `${h.apiBaseUrl}${path}`,
   persistApiBaseUrl: h.persistApiBaseUrl,
+  isNativePlatform: h.isNativePlatform,
+  scanQrCode: h.scanQrCode,
 }));
 
 function fillUrl(value: string) {
@@ -60,6 +69,8 @@ function submit() {
 beforeEach(() => {
   h.apiBaseUrl = '';
   h.persistApiBaseUrl.mockReset();
+  h.isNativePlatform.mockReset().mockReturnValue(false);
+  h.scanQrCode.mockReset();
   navigate.mockReset();
 });
 
@@ -183,5 +194,75 @@ describe('ServerSettingsPage', () => {
     resolveFetch?.();
 
     await waitFor(() => expect(screen.getByRole('button', { name: /test & connect/i })).not.toBeDisabled());
+  });
+
+  describe('QR scan (native only)', () => {
+    it('hides the scan button on web', () => {
+      h.isNativePlatform.mockReturnValue(false);
+
+      render(<ServerSettingsPage />);
+
+      expect(screen.queryByRole('button', { name: /scan qr code/i })).not.toBeInTheDocument();
+    });
+
+    it('fills the field with the scanned origin, but does not health-check or persist it', async () => {
+      h.isNativePlatform.mockReturnValue(true);
+      h.scanQrCode.mockResolvedValue('https://scanned.example.com/some/path?x=1');
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(<ServerSettingsPage />);
+      fireEvent.click(screen.getByRole('button', { name: /scan qr code/i }));
+
+      // Path/query are stripped by the same `toOrigin` the typed-URL path uses.
+      await waitFor(() => expect(screen.getByLabelText('Memory Server URL')).toHaveValue('https://scanned.example.com'));
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(h.persistApiBaseUrl).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when the user cancels the scan (scanQrCode resolves null)', async () => {
+      h.isNativePlatform.mockReturnValue(true);
+      h.scanQrCode.mockResolvedValue(null);
+
+      render(<ServerSettingsPage />);
+      fillUrl('https://unchanged.example.com');
+      fireEvent.click(screen.getByRole('button', { name: /scan qr code/i }));
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /scan qr code/i })).not.toBeDisabled());
+      expect(screen.getByLabelText('Memory Server URL')).toHaveValue('https://unchanged.example.com');
+      expect(screen.queryByText(/could not|denied|valid memory server/i)).not.toBeInTheDocument();
+    });
+
+    it('shows the same invalid-URL error as a typed URL when the QR payload is not a valid origin', async () => {
+      h.isNativePlatform.mockReturnValue(true);
+      h.scanQrCode.mockResolvedValue('not a url');
+
+      render(<ServerSettingsPage />);
+      fireEvent.click(screen.getByRole('button', { name: /scan qr code/i }));
+
+      expect(await screen.findByText(/did not contain a valid memory server url/i)).toBeInTheDocument();
+      expect(h.persistApiBaseUrl).not.toHaveBeenCalled();
+    });
+
+    it('shows a clear message on camera-permission denial, distinct from a plain cancel', async () => {
+      h.isNativePlatform.mockReturnValue(true);
+      h.scanQrCode.mockRejectedValue(new BarcodeScanError('Camera access is needed to scan a QR code.', 'denied'));
+
+      render(<ServerSettingsPage />);
+      fireEvent.click(screen.getByRole('button', { name: /scan qr code/i }));
+
+      expect(await screen.findByText(/camera access is needed/i)).toBeInTheDocument();
+    });
+
+    it('shows a generic scanner error for any other scan failure', async () => {
+      h.isNativePlatform.mockReturnValue(true);
+      h.scanQrCode.mockRejectedValue(new BarcodeScanError('Could not open the scanner.', 'unavailable'));
+
+      render(<ServerSettingsPage />);
+      fireEvent.click(screen.getByRole('button', { name: /scan qr code/i }));
+
+      expect(await screen.findByText(/could not open the scanner/i)).toBeInTheDocument();
+    });
   });
 });

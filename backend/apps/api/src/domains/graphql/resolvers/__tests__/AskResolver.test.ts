@@ -38,7 +38,7 @@ function makeResolver(enabled: boolean) {
     // No matching grant → review, and therefore no grant-imposed ceiling.
     evaluate: jest.fn().mockResolvedValue({ decision: 'review' }),
   };
-  const auditService = { listForResponder: jest.fn().mockResolvedValue([]) };
+  const auditService = { listForResponder: jest.fn().mockResolvedValue({ rows: [], truncated: false }) };
   const rateLimitService = { consume: jest.fn() };
   const executorService = { execute: jest.fn().mockResolvedValue([{ id: 'e1', type: 'file' }]) };
   const answerService = {
@@ -83,6 +83,21 @@ function makeResolver(enabled: boolean) {
     answerService as never,
     peerLinkService as never,
     outboundAskService as never,
+    {
+      // The household-tier service. `resolveTier` consults it for a LOCAL
+      // asker; undefined member means the default (`household`) still applies.
+      tierFor: jest.fn().mockResolvedValue('household'),
+      listForOwner: jest.fn().mockResolvedValue([]),
+      setTier: jest.fn(),
+    } as never,
+    {
+      // The broadcast service. `createAskBroadcast` / `myAskBroadcasts` are the
+      // only callers; every other operation here never touches it.
+      create: jest.fn(),
+      listForAsker: jest.fn().mockResolvedValue([]),
+      asksForBroadcasts: jest.fn().mockResolvedValue(new Map()),
+      findForAsker: jest.fn(),
+    } as never,
     featureService as never,
   );
 

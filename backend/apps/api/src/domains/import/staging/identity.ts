@@ -109,6 +109,92 @@ export const CONTACT_STAGED_TYPE = 'contact';
 export const SHORT_CODE_STAGED_TYPE = 'short_code';
 
 /**
+ * The staged `type` for an entity {@link resolveEntityType} recognises as an
+ * organizational mailbox rather than a named person — see
+ * {@link isOrganizationalAddress}. Not in `push/entities.ts` `ENTITY_TYPES`,
+ * so it falls through to `Concept` there like any other type the map does not
+ * know, the same way `email_thread` does for its own (excluded) reason.
+ */
+export const ORGANIZATIONAL_STAGED_TYPE = 'organization';
+
+/**
+ * Local-parts that are never a specific person's mailbox, whatever the
+ * domain — a parent company's support desk mails from a different domain
+ * than the brand a user actually deals with, so matching on the sender's
+ * domain alone would miss it. Mirrors the shape of the same discovery in
+ * wslyvh/paperweight's `role-mailboxes.ts`.
+ *
+ * A missing entry here is a safe miss: the sender still becomes a `Person`,
+ * as it always has. A wrong entry misfiles a real 1:1 correspondent as a
+ * `Concept` instead — not data loss (the communication itself, and its
+ * participant edge, are untouched either way), just a milder cost than the
+ * unbounded list this stays deliberately smaller than.
+ */
+const ORGANIZATIONAL_LOCAL_PARTS = new Set([
+  'info',
+  'support',
+  'service',
+  'shop',
+  'sales',
+  'contact',
+  'hello',
+  'office',
+  'admin',
+  'billing',
+  'help',
+  'noreply',
+  'no-reply',
+  'donotreply',
+  'do-not-reply',
+  'notification',
+  'notifications',
+  'newsletter',
+  'news',
+  'press',
+  'jobs',
+  'privacy',
+  'security',
+  'marketing',
+  'mailer-daemon',
+  'postmaster',
+  'bounce',
+  'bounces',
+]);
+
+// RFC 2606 / RFC 6761 non-routable TLDs, plus the conventional corporate
+// ones: mail infrastructure leaks machine addresses at these, so a mailbox
+// there is a server, not a person. `.example` is deliberately excluded — RFC
+// 2606 reserves it for documentation, which is exactly what this file's own
+// synthetic fixtures use, and listing it would misfile every one of them.
+const NON_ROUTABLE_TLDS = new Set(['intern', 'internal', 'local', 'lan', 'test', 'invalid', 'localhost']);
+
+/**
+ * True for an email address that is never a specific person's own mailbox: a
+ * role inbox (`support@`, `noreply@`, …) at any domain, or an address on a
+ * non-routable/internal TLD. A plus-suffix never changes the verdict —
+ * `support+ticket123@` is still support.
+ */
+export function isOrganizationalAddress(email: string): boolean {
+  const at = email.lastIndexOf('@');
+
+  if (at === -1) {
+    return false;
+  }
+
+  const local = email.slice(0, at).toLowerCase();
+  const domain = email.slice(at + 1).toLowerCase();
+  const base = local.split('+')[0] ?? '';
+
+  if (ORGANIZATIONAL_LOCAL_PARTS.has(base)) {
+    return true;
+  }
+
+  const tld = domain.split('.').pop() ?? '';
+
+  return NON_ROUTABLE_TLDS.has(tld);
+}
+
+/**
  * The natural key a staged entity resolves under: its type, then the handle it
  * keys on, or its trimmed lower-cased name when it has none.
  *
@@ -220,12 +306,29 @@ export function hasContactIdentity(entity: Entity): boolean {
 }
 
 /**
+ * True when every identity handle this entity carries (see
+ * {@link identityHandles}) is an organizational email — {@link
+ * isOrganizationalAddress} — with no phone and no personal-looking email
+ * alongside it. A mixed entity (a role mailbox found next to a real phone) is
+ * left alone: the other identity is still a real way to reach a person.
+ */
+function hasOnlyOrganizationalIdentity(entity: Entity): boolean {
+  const handles = identityHandles(entity);
+
+  return handles.length > 0 && handles.every((handle) => handle.includes('@') && isOrganizationalAddress(handle));
+}
+
+/**
  * Resolve the staged `type` for an entity.
  *
  * Datasources that only know they captured a person's handle (gmail, telegram,
  * …) omit `type`; those default to 'contact' so they do not land as null rows
- * the push then mis-maps. Entities with no contact identity keep their
- * (possibly null) type untouched.
+ * the push then mis-maps — UNLESS the only identity on offer is an
+ * organizational mailbox ({@link hasOnlyOrganizationalIdentity}), in which case
+ * it defaults to {@link ORGANIZATIONAL_STAGED_TYPE} instead: `noreply@stripe.com`
+ * is a real, reachable address, but it is not a named person's address book
+ * entry. Entities with no contact identity keep their (possibly null) type
+ * untouched.
  *
  * ## This is a handle-based default, NOT a source-based one
  *
@@ -247,6 +350,13 @@ export function hasContactIdentity(entity: Entity): boolean {
 export function resolveEntityType(entity: Entity): string | null {
   if (entity.type && entity.type.trim()) {
     return entity.type;
+  }
+
+  // hasOnlyOrganizationalIdentity implies hasContactIdentity (both walk the
+  // same qualifying attributes), so it is checked first rather than gated
+  // behind a redundant call.
+  if (hasOnlyOrganizationalIdentity(entity)) {
+    return ORGANIZATIONAL_STAGED_TYPE;
   }
 
   if (hasContactIdentity(entity)) {

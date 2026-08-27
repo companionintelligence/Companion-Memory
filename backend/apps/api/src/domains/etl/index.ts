@@ -37,6 +37,7 @@ import { CloudFileIngestLedgerService } from './services/CloudFileIngestLedgerSe
 import { CloudFileIngestService } from './services/CloudFileIngestService';
 import { ConnectionSyncJobService } from './services/ConnectionSyncJobService';
 import { EndpointServiceMap } from './services/EndpointServiceMap';
+import { FacebookMediaService } from './services/Facebook/FacebookMediaService';
 import { FacebookFriendsTransformService } from './services/Facebook/transform/TransformFacebookFriends';
 import { FacebookLikesTransformService } from './services/Facebook/transform/TransformFacebookLikes';
 import { FacebookPhotosTransformService } from './services/Facebook/transform/TransformFacebookPhotos';
@@ -102,6 +103,7 @@ import { SyncNowService } from './services/SyncNowService';
     SyncOrchestrator,
     CloudFileIngestLedgerService,
     CloudFileIngestService,
+    FacebookMediaService,
     FacebookFriendsTransformService,
     FacebookLikesTransformService,
     FacebookPhotosTransformService,

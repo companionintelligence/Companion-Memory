@@ -90,16 +90,14 @@ export class PersonalizationService {
       throw new Error('Self entity not found');
     }
 
-    const properties = {
-      ...(self.properties ?? {}),
-      planner: {
-        ...((self.properties?.planner as Record<string, unknown> | undefined) ?? {}),
-        trust_mode: trustMode,
-        source: 'settings',
-      },
-    };
-
-    await this.personService.patch(context, self.id, { propertiesPatch: properties });
+    // Write the two leaves we own, never the whole `planner` sub-object: a
+    // read-modify-write of `planner` here loses whatever another writer (e.g.
+    // ImageDescriptionPreferenceService) committed to a different leaf in
+    // between our read and our write.
+    await this.personService.patchPropertyLeaves(context, self.id, [
+      { path: ['planner', 'trust_mode'], value: trustMode },
+      { path: ['planner', 'source'], value: 'settings' },
+    ]);
     this.invalidateCache(context.userId!);
 
     return PersonalizationService.profileForTrustMode(trustMode);

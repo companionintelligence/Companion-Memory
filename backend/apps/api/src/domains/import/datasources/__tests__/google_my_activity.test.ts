@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { allDataSources } from '../registry';
@@ -306,5 +308,44 @@ describe('Google My Activity — standalone file with YouTube entries', () => {
     const items = await runImport(STANDALONE, 'MyActivity.html', { since: new Date('2026-06-18T00:00:00Z') });
     expect(items.filter((i) => i.classification === 'watch')).toHaveLength(1);
     expect(items.filter((i) => i.classification === 'page_view')).toHaveLength(0);
+  });
+});
+
+describe('body cell extraction survives a nested div', () => {
+  // The exact failure mode googlevoice.ts hit on real MMS attachments: a
+  // non-greedy `[\s\S]*?<\/div>` stops at the FIRST `</div>`, which here would
+  // close the thumbnail wrapper and drop the real action text and timestamp
+  // that follow it — some Takeout product types (Maps, Photos) wrap a
+  // thumbnail/icon in its own div INSIDE the body cell.
+  function writeFixture(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-import-tests-gma-'));
+    const file = path.join(dir, 'MyActivity.html');
+    fs.writeFileSync(
+      file,
+      '<html><body>' +
+        '<div class="outer-cell mdl-cell mdl-cell--12-col mdl-shadow--2dp"><div class="mdl-grid">' +
+        '<div class="header-cell mdl-cell mdl-cell--12-col"><p class="mdl-typography--title">Maps<br></p></div>' +
+        '<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">' +
+        '<div class="thumbnail"><img src="thumb.png"></div>' +
+        'Explored on Google Maps<br>Jun 18, 2026, 6:59:05 PM PDT<br>' +
+        '</div>' +
+        '<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1 mdl-typography--text-right"></div>' +
+        '</div></div>' +
+        '</body></html>',
+      'utf8',
+    );
+
+    return file;
+  }
+
+  it('reads the action text and timestamp AFTER a nested div, not just up to its close', async () => {
+    const items = await runImport(writeFixture());
+    expect(items).toHaveLength(1);
+    const [entry] = items;
+    // Truncated-at-the-nested-close would leave Action empty/undefined and
+    // the timestamp unparsed (no ts within the (empty) timeframe check).
+    expect(entry.metadata?.Action).toContain('Explored on Google Maps');
+    expect(entry.timestamp).toBeInstanceOf(Date);
+    expect(entry.metadata?.Product).toBe('Maps');
   });
 });

@@ -47,6 +47,21 @@ export class SavedSearchType implements Node {
   @Field(() => String, { nullable: true })
   shareToken!: string | null;
 
+  /**
+   * The ceiling this share declares, as a `DISCLOSURE_RUNGS` rung. NULL means
+   * the share declares none — not `full`; see the column comment.
+   *
+   * Owner-facing like {@link shareToken}: it describes the owner's posture, and
+   * telling a reader which rung capped their results tells them how much they
+   * are not seeing.
+   */
+  @Field(() => String, { nullable: true })
+  shareMaxDisclosure!: string | null;
+
+  /** When the share link lapses. NULL = stands until the owner unshares. */
+  @Field(() => Date, { nullable: true })
+  shareExpiresAt!: Date | null;
+
   /** True for a row `ensureDefaults` seeded from the starter library, not one the user created. */
   @Field(() => Boolean)
   isSeed!: boolean;
@@ -70,6 +85,8 @@ export class SavedSearchType implements Node {
       filters: SavedSearchFiltersType.toType(savedSearch.filters),
       isPublic: savedSearch.isPublic ?? false,
       shareToken: savedSearch.shareToken ?? null,
+      shareMaxDisclosure: savedSearch.shareMaxDisclosure ?? null,
+      shareExpiresAt: savedSearch.shareExpiresAt ?? null,
       isSeed: savedSearch.isSeed ?? false,
       createdAt: savedSearch.createdAt,
       updatedAt: savedSearch.updatedAt,

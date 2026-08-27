@@ -49,7 +49,4 @@ export class GraphNodeEntity {
 
   @UpdateDateColumn({ type: 'timestamptz' })
   updated_at!: Date;
-
-  @Column({ type: 'timestamptz', default: () => 'NOW()' })
-  last_accessed!: Date;
 }

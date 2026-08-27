@@ -41,6 +41,28 @@ export class SavedSearchEntity {
   @Column({ type: 'text', name: 'share_token', nullable: true })
   shareToken!: string | null;
 
+  /**
+   * The most a reader of this share may ever receive, as a
+   * `DISCLOSURE_RUNGS` rung. Stamped onto each reader's `ci.ask_grants` row
+   * when they first open the link, then combined with whatever this column says
+   * later by taking the NARROWER of the two — so tightening a live share
+   * tightens existing readers, and loosening it does not retroactively widen
+   * what they already consented under.
+   *
+   * Typed `string | null` rather than `DisclosureRung | null` on purpose: this
+   * is the RAW column, and `ceilingForShare` in the asks domain is the total
+   * function that resolves it (absent -> no ceiling, unreadable -> the
+   * strictest one). Typing it as the union here would assert a guarantee the
+   * column cannot make and would hide the unreadable case from the one place
+   * that handles it.
+   */
+  @Column({ type: 'text', name: 'share_max_disclosure', nullable: true })
+  shareMaxDisclosure!: string | null;
+
+  /** Scheduled lapse for the link. NULL = stands until the owner unshares. */
+  @Column({ type: 'timestamptz', name: 'share_expires_at', nullable: true })
+  shareExpiresAt!: Date | null;
+
   // Marks a row `ensureDefaults` bulk-inserted from the starter library, as
   // opposed to one the user created themselves. Never set outside seeding.
   @Column({ type: 'boolean', name: 'is_seed', default: false })
@@ -64,6 +86,8 @@ export class SavedSearchEntity {
       userId: entity.userId,
       isPublic: entity.isPublic,
       shareToken: entity.shareToken,
+      shareMaxDisclosure: entity.shareMaxDisclosure,
+      shareExpiresAt: entity.shareExpiresAt,
       isSeed: entity.isSeed,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,

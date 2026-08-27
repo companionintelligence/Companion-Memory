@@ -26,6 +26,21 @@ const MAX_TRANSFORM_JOBS_PER_TICK = 2;
  */
 const STALLED_SYNC_MS = 60 * 60 * 1000;
 
+/**
+ * Minimum gap between one incremental sync finishing and the next one being
+ * queued for the same endpoint.
+ *
+ * The first incremental job on a fresh connection is not subject to this — it
+ * is created on the first sweep so a new connection shows data straight away.
+ * Every one after that used to be queued the moment the previous one
+ * succeeded, so each incremental endpoint made a provider call every minute
+ * whether or not anything had changed. Two costs: a Facebook connection with
+ * three incremental endpoints burned ~180 of its 200 calls/hour on empty
+ * `since=` polls, and every one of those polls produced a sync job the
+ * transform sweep then had to spend a slot on.
+ */
+const INCREMENTAL_SYNC_INTERVAL_MS = 10 * 60 * 1000;
+
 /** One endpoint of the provider a connection belongs to. */
 type ProviderEndpoint = NonNullable<Connection['provider']>['endpoints'][number];
 
@@ -72,7 +87,8 @@ export class SyncOrchestrator {
 
   /**
    * This method creates sync jobs for connection endpoints that are ready to be run again.
-   * For incremental syncs, this is where there are no prior ones, or the last one was successful.
+   * For incremental syncs, this is where there are no prior ones, or the last one was successful
+   * and finished at least INCREMENTAL_SYNC_INTERVAL_MS ago.
    * For historical syncs, this is where there are no prior ones, or the last one was successful and has a nextCursor,
    * or the last one was successful and has no nextCursor but was completed more than TTL ago.
    */
@@ -152,7 +168,9 @@ export class SyncOrchestrator {
 
   /**
    * Incremental: hold one live job per endpoint, and start the next one from the
-   * cursor the last successful one left behind.
+   * cursor the last successful one left behind — once
+   * {@link INCREMENTAL_SYNC_INTERVAL_MS} has passed since that success. The very
+   * first job for an endpoint is started immediately.
    */
   private async orchestrateIncremental(connection: Connection, endpoint: string): Promise<void> {
     const live = await this.findLiveJob(connection, endpoint, 'incremental');
@@ -175,7 +193,13 @@ export class SyncOrchestrator {
     const lastSuccess = await this.findLatestSuccess(connection, endpoint, 'incremental');
 
     if (lastSuccess) {
-      await this.createSyncJob(connection, endpoint, 'incremental', lastSuccess.nextCursor);
+      // `completedAt` is what `handleSyncJobExecuteEvent` stamps on success;
+      // `updatedAt` is the fallback for a row that predates that stamp.
+      const finishedAt = new Date(lastSuccess.completedAt ?? lastSuccess.updatedAt).getTime();
+
+      if (Date.now() >= finishedAt + INCREMENTAL_SYNC_INTERVAL_MS) {
+        await this.createSyncJob(connection, endpoint, 'incremental', lastSuccess.nextCursor);
+      }
 
       return;
     }
@@ -263,7 +287,20 @@ export class SyncOrchestrator {
     return live;
   }
 
-  /** The most recent successful job for this endpoint and iteration type. */
+  /**
+   * The most recently COMPLETED successful job for this endpoint and iteration
+   * type.
+   *
+   * By `completed_at`, not `updated_at`. `updated_at` moves whenever the
+   * transform sweep claims or finishes a job, and that sweep now drains its
+   * backlog oldest-first — so once a minute some OLD success is touched and,
+   * under an `updated_at` sort, became "the latest". Two things followed from
+   * that: its `completedAt` was long past the incremental interval, so the
+   * back-off never held (a new poll every tick, the exact load the interval
+   * exists to remove), and for a historical endpoint an old page still
+   * carries its `nextLink`, so the walk restarted from that page — every
+   * transform of an old page re-fetched everything after it.
+   */
   private async findLatestSuccess(
     connection: Connection,
     endpoint: string,
@@ -277,7 +314,7 @@ export class SyncOrchestrator {
         endpointName: endpoint,
         type,
         status: 'success',
-        orderBy: 'updated_at:DESC',
+        orderBy: 'completed_at:DESC',
         limit: 1,
       },
     );
@@ -567,7 +604,21 @@ export class SyncOrchestrator {
         // spends both of its two slots re-sending the same long transform
         // every minute until it finishes, starving the queue behind it.
         transformClaimable: true,
-        orderBy: 'updated_at:DESC',
+        // Oldest first, and this is not a style choice. This sweep is one
+        // queue for the whole appliance — two slots a minute across EVERY
+        // connection — and the sync executor completes up to two jobs a
+        // minute PER connection. The moment a second connection existed the
+        // backlog grew every minute, and with newest-first the two slots always
+        // went to the two jobs that had just finished, so whatever had once
+        // fallen a minute behind was never looked at again: a Facebook
+        // connection's entire historical Posts and Photos payload sat
+        // untransformed beside hundreds of empty incremental polls, and the
+        // Google connection sharing the box started silently dropping Gmail
+        // history pages the same minute. Oldest-first turns the backlog into a
+        // queue that drains instead of a graveyard. ASC walks
+        // `connection_sync_jobs_untransformed_idx` (updated_at, id) forward,
+        // so it costs no more than DESC did.
+        orderBy: 'updated_at:ASC',
         limit: MAX_TRANSFORM_JOBS_PER_TICK,
       },
     );

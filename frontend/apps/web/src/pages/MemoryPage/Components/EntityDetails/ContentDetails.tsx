@@ -30,9 +30,16 @@ export function ContentDetails({ entity }: Props) {
   // variant), with the PREVIEW painted while it downloads, same as the event
   // pane. Rows without a linked file (bookmarks, articles) fall back to the
   // row's own url/sourceUrl exactly as before.
-  const isImage = data.mimetype?.startsWith('image/') ?? false;
-  const mediaSrc = isImage ? resolveStaticUrl(data.mediaUrl ?? data.contentUrl ?? data.sourceUrl) : undefined;
-  const mediaPreviewSrc = isImage ? resolveStaticUrl(data.previewUrl) : undefined;
+  //
+  // Video too, not only image: EntityMedia already renders a <video> for a
+  // video/* mimetype, but this gate never let one through, so a stored video
+  // (a Facebook upload, say) showed nothing at all in the drawer. A REMOTE
+  // video src still ends in EntityMedia's "couldn't be loaded" state — the
+  // gateway's CSP is media-src 'self' — which is the honest outcome, and the
+  // "Open original" link it offers is the only thing that can work for one.
+  const isMedia = /^(image|video)\//.test(data.mimetype ?? '');
+  const mediaSrc = isMedia ? resolveStaticUrl(data.mediaUrl ?? data.contentUrl ?? data.sourceUrl) : undefined;
+  const mediaPreviewSrc = isMedia ? resolveStaticUrl(data.previewUrl) : undefined;
 
   return (
     <EntityDetailScaffold

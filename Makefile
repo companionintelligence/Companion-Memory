@@ -759,6 +759,7 @@ lint: ## Check the source for lint and formatting errors, both stacks
 	@uv lock --check || { printf "$(RED)✗$(RESET) uv.lock is out of date with the manifests. Run 'uv lock' and retry.\n\n"; exit 1; }
 
 	@sh scripts/check-ci-namespace.sh
+	@node scripts/check-capacitor-native-sync.mjs
 
 	@printf "\nNo lint errors found.\n\n"
 

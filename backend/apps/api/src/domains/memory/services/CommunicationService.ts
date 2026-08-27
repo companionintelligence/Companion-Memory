@@ -412,6 +412,13 @@ export class CommunicationService {
       updateData.participantsMetadata = data.participants_metadata;
     }
 
+    // Was never mapped, so a connector re-transform could refresh a post's
+    // text and attachments but not the metadata beside them — a permalink
+    // that arrived on a later sync stayed missing on every existing row.
+    if (data.metadata !== undefined) {
+      updateData.metadata = data.metadata;
+    }
+
     if (data.subject) {
       updateData.subject = data.subject;
     }
@@ -424,19 +431,26 @@ export class CommunicationService {
       updateData.attachments = data.attachments;
     }
 
-    if (data.duration_seconds) {
+    // Numbers and booleans are checked against `undefined`, not truthiness.
+    // A truthiness guard cannot express "set this to zero" or "set this to
+    // false": a 0-second call (every missed call), a neutral sentiment of 0.0,
+    // an importance or urgency of 0, and un-archiving or un-encrypting a
+    // conversation were all silently dropped — the PATCH returned success and
+    // the old value stayed. `preview` below was already fixed for the same
+    // reason; these are the rest of the same bug.
+    if (data.duration_seconds !== undefined) {
       updateData.durationSeconds = data.duration_seconds;
     }
 
-    if (data.sentiment_score) {
+    if (data.sentiment_score !== undefined) {
       updateData.sentimentScore = data.sentiment_score;
     }
 
-    if (data.importance_score) {
+    if (data.importance_score !== undefined) {
       updateData.importanceScore = data.importance_score;
     }
 
-    if (data.urgency_score) {
+    if (data.urgency_score !== undefined) {
       updateData.urgencyScore = data.urgency_score;
     }
 
@@ -452,11 +466,11 @@ export class CommunicationService {
       updateData.connectionId = data.connection_id;
     }
 
-    if (data.is_encrypted) {
+    if (data.is_encrypted !== undefined) {
       updateData.isEncrypted = data.is_encrypted;
     }
 
-    if (data.is_archived) {
+    if (data.is_archived !== undefined) {
       updateData.isArchived = data.is_archived;
     }
 
@@ -552,6 +566,35 @@ export class CommunicationService {
     });
 
     return true;
+  }
+
+  /**
+   * The communication a provenance triple already resolves to, if any.
+   *
+   * The per-row ETL transforms use `create()` (so the row is indexed live —
+   * see the note in Slack's TransformMessages) and therefore cannot use the
+   * ON CONFLICT path `createMany` has. Until this existed, a re-synced row's
+   * only signal was the 23505 from communications_source_triple_uniq, which
+   * every connector swallowed — fine for a chat message that never changes,
+   * useless for a post whose attachments are catalogued after the row exists.
+   * This is the read half of "find, then update" for those callers.
+   */
+  async findBySource(
+    context: ServiceContext,
+    source: { source_type: string; source_system: string; source_id: string },
+  ): Promise<Communication | null> {
+    const entity = await this.communicationRepository.findOne({
+      where: {
+        ...(context.userId !== SYSTEM_USER && {
+          userId: context.userId,
+        }),
+        sourceType: source.source_type,
+        sourceSystem: source.source_system,
+        sourceId: source.source_id,
+      },
+    });
+
+    return entity ? CommunicationEntity.toEgressType(entity) : null;
   }
 
   async findByThreadId(context: ServiceContext, threadId: string): Promise<CommunicationEntity[]> {

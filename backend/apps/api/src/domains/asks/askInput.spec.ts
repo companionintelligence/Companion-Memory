@@ -164,7 +164,68 @@ describe('parseAskQueryInput — the only shape allowed downstream', () => {
       dataClass: 'photos',
       prompt: 'photos of the lake trip?',
     });
-    expect(Object.keys(parsed)).toEqual(['queryType', 'dataClass', 'prompt']);
+    // The SET of keys, not their order: this pins "nothing else got through",
+    // and jsonb key order carries no meaning downstream.
+    expect(Object.keys(parsed).sort()).toEqual(['dataClass', 'prompt', 'queryType']);
+  });
+
+  describe('actor — who is making the ask', () => {
+    it('carries a declared actor through', () => {
+      const parsed = parseAskQueryInput({
+        queryType: 'content',
+        prompt: 'the deck',
+        actor: { kind: 'first-party-agent', label: 'Ana’s Companion' },
+      });
+
+      expect(parsed.actor).toEqual({ kind: 'first-party-agent', label: 'Ana’s Companion' });
+    });
+
+    it('omits the key entirely when none is declared', () => {
+      expect(parseAskQueryInput({ queryType: 'content', prompt: 'x' })).not.toHaveProperty('actor');
+    });
+
+    /**
+     * An off-contract actor parses to NO actor rather than to `person`.
+     * Defaulting would let an agent satisfy a `delegation: 'none'` grant by
+     * sending something malformed, which is strictly easier than sending
+     * something honest.
+     */
+    it.each([
+      ['an unknown kind', { kind: 'robot' }],
+      ['no kind at all', { label: 'something' }],
+      ['a non-object', 'person'],
+      ['null', null],
+      ['a numeric kind', { kind: 7 }],
+    ])('drops %s rather than defaulting to a person', (_name, actor) => {
+      expect(parseAskQueryInput({ queryType: 'content', prompt: 'x', actor } as never)).not.toHaveProperty(
+        'actor',
+      );
+    });
+
+    it('accepts a kind in any casing, because the vocabulary is the point', () => {
+      expect(
+        parseAskQueryInput({ queryType: 'content', prompt: 'x', actor: { kind: ' PERSON ' } }).actor,
+      ).toEqual({ kind: 'person' });
+    });
+
+    it('truncates an over-long label rather than refusing the ask', () => {
+      // Unlike a prompt — which is the question being consented to and must
+      // never be silently altered — a label is decoration beside it.
+      const parsed = parseAskQueryInput({
+        queryType: 'content',
+        prompt: 'x',
+        actor: { kind: 'third-party-agent', label: 'z'.repeat(500) },
+      });
+
+      expect(parsed.actor?.label).toHaveLength(80);
+    });
+
+    it('drops a blank label instead of storing whitespace', () => {
+      expect(
+        parseAskQueryInput({ queryType: 'content', prompt: 'x', actor: { kind: 'person', label: '   ' } })
+          .actor,
+      ).toEqual({ kind: 'person' });
+    });
   });
 
   it('omits dataClass entirely when the ask names none', () => {

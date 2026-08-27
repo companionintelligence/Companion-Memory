@@ -1,6 +1,6 @@
 require_relative '../../node_modules/@capacitor/ios/scripts/pods_helpers'
 
-platform :ios, '15.0'
+platform :ios, '15.5'
 use_frameworks!
 
 # workaround to avoid Xcode caching of Pods that requires
@@ -27,7 +27,9 @@ install! 'cocoapods', :disable_input_output_paths => true
 def capacitor_pods
   pod 'Capacitor', :path => '../../node_modules/@capacitor/ios'
   pod 'CapacitorCordova', :path => '../../node_modules/@capacitor/ios'
+  pod 'CapacitorCommunityBackgroundGeolocation', :path => '../../node_modules/@capacitor-community/background-geolocation'
   pod 'CapacitorCommunitySqlite', :path => '../../node_modules/@capacitor-community/sqlite'
+  pod 'CapacitorMlkitBarcodeScanning', :path => '../../node_modules/@capacitor-mlkit/barcode-scanning'
   pod 'CapacitorApp', :path => '../../node_modules/@capacitor/app'
   pod 'CapacitorBrowser', :path => '../../node_modules/@capacitor/browser'
   pod 'CapacitorCamera', :path => '../../node_modules/@capacitor/camera'

@@ -90,11 +90,62 @@ describe('SavedSearchResolver.setSavedSearchSharing', () => {
     const gid = GlobalUID.encode('saved-search', RAW_ID);
     const result = await resolver.setSavedSearchSharing(ownerCtx, { id: gid, isPublic: true });
 
-    expect(savedSearchService.setSharing).toHaveBeenCalledWith({ userId: 'owner-1' }, RAW_ID, true);
+    expect(savedSearchService.setSharing).toHaveBeenCalledWith({ userId: 'owner-1' }, RAW_ID, true, {
+      maxDisclosure: null,
+      expiresAt: null,
+    });
     expect(result.success).toBe(true);
     expect(result.savedSearch?.name).toBe('My search');
     // The owner path DOES return the token (unlike the viewer path above).
     expect(result.savedSearch?.shareToken).toBe('secret-token');
+  });
+
+  it('passes a declared ceiling and expiry through to the service', async () => {
+    const { resolver, savedSearchService } = makeResolver();
+    savedSearchService.setSharing.mockResolvedValue(sampleEntity);
+    const expiresAt = new Date('2027-01-01T00:00:00.000Z');
+
+    await resolver.setSavedSearchSharing(ownerCtx, {
+      id: GlobalUID.encode('saved-search', RAW_ID),
+      isPublic: true,
+      maxDisclosure: 'COUNT ',
+      expiresAt,
+    });
+
+    // Canonicalized on the way in, so the stored value is one the read path
+    // recognises rather than one `ceilingForShare` has to fail closed on.
+    expect(savedSearchService.setSharing).toHaveBeenCalledWith({ userId: 'owner-1' }, RAW_ID, true, {
+      maxDisclosure: 'count',
+      expiresAt,
+    });
+  });
+
+  it('rejects a ceiling that names no rung instead of silently storing the strictest', async () => {
+    const { resolver, savedSearchService } = makeResolver();
+
+    await expect(
+      resolver.setSavedSearchSharing(ownerCtx, {
+        id: GlobalUID.encode('saved-search', RAW_ID),
+        isPublic: true,
+        maxDisclosure: 'summry',
+      }),
+    ).rejects.toThrow(/maxDisclosure must be one of/);
+
+    expect(savedSearchService.setSharing).not.toHaveBeenCalled();
+  });
+
+  it('rejects an expiry in the past', async () => {
+    const { resolver, savedSearchService } = makeResolver();
+
+    await expect(
+      resolver.setSavedSearchSharing(ownerCtx, {
+        id: GlobalUID.encode('saved-search', RAW_ID),
+        isPublic: true,
+        expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+      }),
+    ).rejects.toThrow(/expiresAt must be in the future/);
+
+    expect(savedSearchService.setSharing).not.toHaveBeenCalled();
   });
 
   it('returns {success:false} when nothing matched (non-owner / not found)', async () => {

@@ -121,6 +121,16 @@ describe('job taxonomy', () => {
     }
   });
 
+  it('names the chat-turn memory producer rather than leaving it unclassified', () => {
+    // TurnFragmentCron fans this out one job per user; on the Jobs dashboard a
+    // per-user fan-out with no entry here is a wall of identical event names.
+    const descriptor = describeJob('agent-memory.turn-fragments');
+
+    expect(descriptor.label).not.toBe('Unclassified job');
+    expect(descriptor.category).toBe(JOB_CATEGORIES.ingest);
+    expect(descriptor.description.length).toBeGreaterThan(20);
+  });
+
   it('drops the promotion_review rotation-work label the migration already retired', () => {
     expect(SMART_ROTATION_WORK_LABELS.promotion_review).toBeUndefined();
     expect(Object.keys(SMART_ROTATION_WORK_LABELS)).not.toContain('promotion_review');

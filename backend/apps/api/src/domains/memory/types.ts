@@ -209,6 +209,13 @@ export interface UpdateContentDto {
   external_id_kind?: 'file' | 'external_uri';
   source_url?: string;
   source_data?: Record<string, unknown>;
+  // Provenance triple (see CreateContentDto). Updatable so a row written
+  // before its connector keyed on the triple can be claimed by it in place —
+  // the Facebook transforms migrate their pre-triple photo/video rows this way
+  // rather than minting a second row per object.
+  source_type?: string;
+  source_system?: string;
+  source_id?: string;
   event?: {
     id: string;
   };
@@ -701,7 +708,6 @@ export interface CreatePersonDto {
   searchContent?: string;
   linkedId?: string;
   linkedTable?: string;
-  lastAccessed?: Date;
   properties?: {
     email?: string;
     firstName?: string;
@@ -720,7 +726,6 @@ export interface UpdatePersonDto {
   searchContent?: string;
   linkedId?: string;
   linkedTable?: string;
-  lastAccessed?: Date;
   properties?: {
     email?: string;
     firstName?: string;
@@ -935,7 +940,6 @@ export interface CreateConceptDto {
   searchContent?: string;
   linkedId?: string | null;
   linkedTable?: string | null;
-  lastAccessed?: Date;
   properties?: Record<string, unknown>;
 }
 
@@ -945,7 +949,6 @@ export interface UpdateConceptDto {
   searchContent?: string;
   linkedId?: string | null;
   linkedTable?: string | null;
-  lastAccessed?: Date;
   properties?: Record<string, unknown>;
 }
 
@@ -1032,6 +1035,9 @@ export interface UpdateCommunicationDto {
   from_entity_id?: string;
   to_entity_ids?: string[];
   participants_metadata?: Record<string, unknown>;
+  // Replaces the whole document (no patch semantics), like content's
+  // source_data: a connector re-sync carries the complete set.
+  metadata?: Record<string, unknown>;
   subject?: string;
   content: string;
   attachments?: unknown[];

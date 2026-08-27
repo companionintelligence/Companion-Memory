@@ -198,6 +198,26 @@ New peer links default to `stranger` at the GraphQL layer
 (`CreatePeerLinkInput`), deliberately narrower than `PeerLinkService.upsert`'s
 own `peer` fallback: adding a person is not the same gesture as trusting them.
 
+### 2.5b Delegation — may their AGENT ask?
+
+`AskGrantScope.delegation` answers a question a grant previously could not: whether "Bob" means Bob, or something acting for him. Adapted from UMA-for-agents recommendation #25, and it stops being academic the moment asks arrive from the Intent Catalog / MCP tool registry rather than from a person at a keyboard.
+
+| Setting | Admits |
+|---|---|
+| `none` | the person, and nothing acting for them |
+| `first-party-only` | the person, or their own Companion acting for them |
+| `any-agent` | including third-party software they delegated to |
+| *(absent)* | no restriction from this dimension — the contract every scope field holds |
+
+The safety is on the **ask** side, and it mirrors `autoGrantNamesQueryClass` exactly: `AskQuery.actor` is optional and asker-supplied, so "the owner restricted this to Bob himself" must not be enforced against a label Bob chooses whether to write. **An ask that declares no actor satisfies no delegation restriction** — omitting the field is not a narrowing, it is the broadest an ask can be. Such an ask is *downgraded to review*, not denied.
+
+Two further asymmetries:
+
+- **Matching is on `kind`, never on `label`.** A kind is a commitment the asker makes; a label is a name they write. Admitting an agent because it called itself *"Trusted First Party Assistant"* would make the restriction decorative — pinned by a test.
+- **An off-contract actor parses to NO actor, never to `person`.** Defaulting would let an agent satisfy a `delegation: 'none'` grant by sending something *malformed*, which is strictly easier than sending something honest. An unreadable `delegation` value reads as the strictest setting, the same way `ceilingOf` treats an unreadable ceiling.
+
+At the consent moment the review card gives the actor **its own line**, not a chip beside the name: *"Ana is asking"* and *"software Ana delegated to is asking"* are different decisions, and the second is the less familiar of the two. The label is attributed — *"calling itself …"* — rather than stated.
+
 ### 2.6 Sensitive classes
 
 ```ts
@@ -251,6 +271,16 @@ asker ask again — never as a side effect of withdrawing one.
 A `deny` at approval time stamps `none`: if a block grant covers this ask *now*,
 the owner's tap must not be able to push anything past it.
 
+### 2.7b Dormant grants, and grants about to lapse
+
+The matrix showed what an owner **allowed** and never whether anything came of it, so a grant firing daily and one that has never once matched looked identical — and they call for opposite actions. The dormant one is clutter to tidy up; the busy one is the thing to look at twice.
+
+`AskGrantType.useCount` / `lastUsedAt` are folded from **`ci.ask_audit.consent_basis`** — the grant id a disclosure actually cited — never from the grant's own row, which records what it *permits* and never what it *did*. One usage read is joined onto the whole list in memory, rather than a lookup per grant: this is the tab an owner opens to scan everything at once, and a per-row query would be an N+1 over the audit.
+
+Usage is carried on **revoked and superseded rows too**: *"this fired 40 times before I withdrew it"* is exactly what a consent history is for.
+
+Beside it, the Grant Manager now nudges about grants that will **lapse on their own** within 30 days. `grantsLapsingWithin` counts only grants that are live (by the server's own `active`, never re-derived) *and* carry an expiry *and* whose expiry is still ahead — a revoked grant cannot lapse, one with no expiry never will, and one already past has lapsed rather than being about to. The banner renders **only when there is something to say**: one that appears every time teaches people to look past it, and then the once it matters they look past it too.
+
 ### 2.8 Grants supersede; they are never updated
 
 `ci.ask_grants` is **append-only by design**. `revoke` stamps `revoked_at` with
@@ -285,6 +315,28 @@ parameter is exactly how it was lost the first time — the method never mention
 the field and every call site inherited the wrong answer in silence.
 
 ---
+
+### 2.9 Broadcasts — one question, several people
+
+`ci.asks` names exactly ONE responder, so every use case that is really *"ask the group"* was inexpressible: **F9** (pool everyone's photos from the reunion), **W7** (anyone from the '19 cohort now in climate?), and asking a household rather than a housemate.
+
+**A broadcast is N independent asks, not one ask with N responders.** That is the whole design, and the alternative is worse in a way that is easy to miss. A single ask row with several responders would mean **one** consent decision, **one** ceiling and **one** audit row covering several people's memories — so the strictest person's posture would either be overridden by the group's, or would silently cap everybody else's. There is no version of that which is not somebody's consent being decided by somebody else.
+
+Instead the broadcast is a **correlation**. Each responder gets their own `ci.asks` row: their own grants decide it, their own tier caps it, their own inbox reviews it, their own hand redacts it, their own history audits it.
+
+Three privacy properties, each pinned by a test:
+
+| | |
+|---|---|
+| **A responder never learns who else was asked** | `AskType.broadcastId` is **asker-only** — the mirror image of `consentBasis` being responder-only. Who else was asked is a fact about the *asker's* relationships, and telling a responder is a third-party disclosure nobody consented to. An omitted viewer lands on the safe projection, as everywhere else. |
+| **The aggregate is not a per-recipient oracle** | Declined, expired, in-review and never-heard-from are **one** `waiting` number. Splitting them would hand the asker a read on each responder's consent posture — the oracle `askerVisibleStatus` collapses for a single ask. A broadcast must not be a cheaper way to run the same probe N times. |
+| **`ci.ask_broadcasts` holds no member list** | The asks *are* the list, and they are already scoped per party. There is nothing there for a responder-scoped read to accidentally return. |
+
+`MAX_BROADCAST_RECIPIENTS` (25) is an **abuse control, not a cost bound**: every recipient is an ask in a human's review inbox, and the per-asker rate limit counts *requests*, of which a broadcast is one. [#2364](https://github.com/companionintelligence/CI-Server/issues/2364)'s pend budget is the general form; until it exists, the cap is what stops one submit filling N inboxes.
+
+One failure does not sink the rest — a stale recipient id is dropped and logged rather than cancelling a question the asker meant to put to everybody else. If *nobody* could be asked, the grouping row is deleted rather than left naming a question nobody received.
+
+**Not reachable through the product yet:** the composer is single-recipient. `createAskBroadcast` is complete, tested and unwired — which is the same shape as G2/G4 and should be read the same way.
 
 ## 3. The lifecycle of an ask
 
@@ -873,6 +925,50 @@ stated in the owner's language rather than in ladder vocabulary — *"Answers ar
 redacted at most — the items you keep, never the ones you hold back. Location,
 health, finances and secrets are never disclosed at this tier."*
 
+### The consent lock and signature detail
+
+Every review card and every disclosure row carries a **lock**, and it is a button: `ConsentLock.tsx` renders one of four states — `sealed` (consent *and* a verified RFC 9421 signature), `consented` (consent, unsigned channel), `pending` (undecided), `open` (no basis recorded) — and opens `ConsentDetailModal.tsx`.
+
+The modal separates what the lock compresses:
+
+| Section | Answers |
+|---|---|
+| What authorized this | standing grant vs your own decision; the grant's posture; the ceiling that applied |
+| How it reached you | signed or not; the key thumbprint; when *this box* verified it; each covered component beside what it protects |
+| When and how it was collected | arrival time, path (local / inbound / outbound), who asked |
+
+Two invariants live in `consentProvenance.ts` and are pinned by `consentProvenance.test.ts`:
+
+- **Weakest wins** — `consentLockState` returns `pending` for an undecided ask *even when the signature verified*. A signature proves who asked, not that they were allowed to.
+- **Unrecorded ≠ unsigned** — `ci.ask_audit` has no channel columns, so `DisclosureHistory` passes `channelRecorded: false` and the modal says so. Rendering a null as "arrived unsigned" would assert a fact nobody checked.
+
+Protocol reference: [`SIGNATURES.md`](https://github.com/companionintelligence/CI-Engineering/blob/main/projects/decentralized-trust-graphs/SIGNATURES.md) in CI-Engineering.
+
+### The disclosure history, by relationship
+
+![Disclosure history folded by relationship](images/asks/disclosure-relationships.png)
+
+`askDisclosureHistory` used to take **no arguments** — no filter, no window, no cap — and the page rendered every audit row this box held in one flat reverse-chronological list. A standing grant answering twice a day writes some seven hundred rows a year, so the surface whose stated purpose is *"you cannot withdraw consent you cannot see the consequences of"* was at its least usable exactly when it had most to say.
+
+Pagination would not have fixed it, because **the unit was wrong**. Nobody arrives asking "what happened at 14:07 on Tuesday"; they arrive asking *"what has Ana been getting?"*. So the history now opens on the fold and the flat list is the drill-in.
+
+| Layer | Query | Notes |
+|---|---|---|
+| Index | `askDisclosureSummary` | One row per counterparty. `disclosureSummary.ts` is the fold — pure, 21 tests |
+| Drill-in | `askDisclosureHistory(input: { counterpartyKey })` | Not fetched at all until a relationship is opened |
+
+Four properties worth keeping:
+
+- **`autoAnswered` and `reviewed` never merge.** They differ by whether a human was in the loop, which is the entire question. `activityLine` leads with the automatic count because that is the one an owner might want to go and stop — a decision they made themselves, they remember making.
+- **Magnitude, not ask count.** "14 asks" and "213 items" are different facts; only the second describes what the other person now holds.
+- **The unattributed bucket is never merged into a person.** Rows whose counterparty was erased group under one key labelled as a bucket. Attributing an unattributable disclosure to somebody specific is the one error this surface must not make, since the owner may act on it by revoking them.
+
+  ![The unattributed bucket](images/asks/disclosure-unattributed.png)
+
+- **`truncated` is on the wire.** The read is capped at `MAX_AUDIT_ROWS` (5,000) — a cost bound, not a privacy control — and the fold says so, because the totals beside a capped read are floors. A completeness surface presenting a floor as a total is the failure the flag exists to prevent.
+
+`accelerationNote` states a fact — *"90% of everything they have ever received arrived in this window"* — and stops there. There is **no enforced disclosure budget** yet ([#2364](https://github.com/companionintelligence/CI-Server/issues/2364)); a threshold rendered here would be a number with nothing behind it.
+
 ### The disclosure history — **What I've shared**
 
 ![The disclosure history](images/asks/07-what-i-ve-shared.png)
@@ -930,7 +1026,15 @@ revocation timestamp**. (c) `PeerLinkResolver`'s five operations are **not gated
 by the `ask` feature flag**, while all sixteen of `AskResolver`'s are.
 
 **G6 — A household `auto` grant on a sensitive class discloses full item
-references with no human in the loop.** `household` is exempt from the
+references with no human in the loop.** ⚠️ **Mechanism shipped; the DEFAULT is
+unchanged and is a product decision** — see
+[`asks-household-default.md`](asks-household-default.md). `ci.household_tiers`
+now lets an owner demote another local account, `resolveTier` reads it, and the
+Grant Manager's tier badge is a control for local grantees. The exemption is
+also now pinned by a test (closing **D6**): removing `tier !== 'household'` from
+`disclosureCeiling` fails 2 tests, where the threat model measured 544 passed /
+0 failed. What has NOT changed: an owner who has said nothing still gets
+`household`. Original text follows. `household` is exempt from the
 sensitive-class floor and its ceiling is `{'*': 'full'}`. Every local asker is
 `household` unconditionally — `resolveTier` is a `return` statement, there is no
 column, no mutation and no UI that could store anything else — so there is no way
@@ -944,8 +1048,11 @@ scenario runs. The second succeeds.
 the effective limit, and a restart resets the window. Both files say so
 themselves; a shared store is needed before the ask path goes multi-instance.
 
-**G9 — Rate limits bound RATE, not TOTAL.** Nothing tracks cumulative
-disclosure. A patient asker with a narrow, legitimately-granted permission can
+**G9 — Rate limits bound RATE, not TOTAL.** Nothing *enforces* a cumulative
+disclosure budget. (The owner can now SEE consumption per relationship — see
+"The disclosure history, by relationship" in §8 — but seeing is not a limit;
+enforcement is [#2364](https://github.com/companionintelligence/CI-Server/issues/2364).)
+Nothing tracks cumulative disclosure. A patient asker with a narrow, legitimately-granted permission can
 reconstruct a great deal through many individually-legitimate asks. The ceiling
 is 28,800 local asks and 14,400 peer asks per day. `ci.ask_audit` already holds
 everything a budget would need (`disclosed_count`, `backing_entities`,

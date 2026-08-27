@@ -1,7 +1,10 @@
 /* Minimal MIME parsing utility for email/gmail datasources (incremental).
    Supports single-level multipart with alternative & attachments.
-   NOT implementing full RFC 2047/2231. */
+   RFC 2047 encoded-word headers and RFC 2231 single-segment extended
+   filenames are decoded; multi-segment RFC 2231 continuation is not. */
 import { Buffer } from 'node:buffer';
+
+import { htmlToText } from './htmlToText';
 
 export interface ParsedAttachment {
   filename?: string;
@@ -55,12 +58,12 @@ export function parseMime(rawHeaders: string, body: string): ParsedMimeResult {
       }
 
       if (ct.startsWith('text/plain') && !result.textBody) {
-        result.textBody = data.toString('utf8');
+        result.textBody = decodeWithCharset(data, extractCharset(partContentTypeHeader));
         continue;
       }
 
       if (ct.startsWith('text/html') && !result.htmlBody) {
-        result.htmlBody = data.toString('utf8');
+        result.htmlBody = decodeWithCharset(data, extractCharset(partContentTypeHeader));
         continue;
       }
 
@@ -76,92 +79,48 @@ export function parseMime(rawHeaders: string, body: string): ParsedMimeResult {
 
   // Single part
   const decoded = decodeBody(body, transferEncoding);
+  const charset = extractCharset(contentTypeHeader);
   if (contentType.startsWith('text/html')) {
-    return { htmlBody: decoded.toString('utf8'), attachments: [] };
+    return { htmlBody: decodeWithCharset(decoded, charset), attachments: [] };
   }
 
-  return { textBody: decoded.toString('utf8'), attachments: [] };
+  return { textBody: decodeWithCharset(decoded, charset), attachments: [] };
 }
 
-/** The five predefined XML entities plus the ones real mail actually uses. */
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-  nbsp: ' ',
-};
-
-/** A numeric entity's character, or '' when the code point is not representable. */
-function safeCodePoint(code: number): string {
-  if (!Number.isFinite(code) || code < 0 || code > 0x10ffff) {
-    return '';
-  }
-
-  try {
-    return String.fromCodePoint(code);
-  } catch {
-    return '';
-  }
+/** The `charset` parameter of a Content-Type header, if any. */
+function extractCharset(contentTypeHeader: string): string | undefined {
+  return /charset\s*=\s*"?([^";]+)"?/i.exec(contentTypeHeader)?.[1];
 }
 
 /**
- * Flatten an HTML mail body to readable plain text — dependency-free.
- *
- * WHY. A receipt is very often HTML-ONLY (no text/plain alternative), and
- * {@link parseMime} hands that body back as raw markup. Everything downstream
- * then reads tag soup: the metadata `Text` snippet is `<table style=…`, the
- * receipt detector's body signal cannot see the total through the attributes,
- * and the embedding indexes CSS. This is the smallest transform that makes such
- * a body mean something:
- *
- *   - `<script>` / `<style>` blocks are removed WITH their contents (CSS and JS
- *     are not text the user wrote).
- *   - `<br>`, `</p>`, `</tr>`, `</div>`, block ends → newline; `</td>`/`</th>`
- *     → tab, so a receipt's item/price columns stay side by side and a total
- *     stays next to its label.
- *   - every other tag is dropped, entities decoded (`&amp;`, `&nbsp;`, `&#39;`,
- *     `&#x27;`), and runs of blank lines collapsed.
- *
- * Not an HTML parser and not trying to be: no DOM, no nesting rules, no
- * attribute semantics. It converts markup to text well enough to read, which is
- * strictly more than the raw markup did.
+ * Decode bytes using the MIME charset label, falling back to UTF-8 for an
+ * absent or unrecognized one. `Buffer#toString` only understands a handful of
+ * encodings (utf8/ascii/latin1/utf16le/base64/hex) — real mail declares
+ * iso-8859-1, windows-1252, shift_jis and the like, and forcing those through
+ * as UTF-8 silently corrupts every non-ASCII character. `TextDecoder` covers
+ * the labels IANA actually assigns (Node ships full ICU by default), so this
+ * costs nothing beyond the charset lookup itself.
  */
-export function htmlToText(html: string | undefined | null): string {
-  if (!html) {
-    return '';
+function decodeWithCharset(bytes: Buffer, charset: string | undefined): string {
+  const label = (charset ?? '').trim().toLowerCase();
+  if (!label || label === 'utf-8' || label === 'utf8' || label === 'us-ascii') {
+    return bytes.toString('utf8');
   }
 
-  let out = html
-    // Drop script/style/comment noise with their contents.
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, ' ')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    // Cell boundaries become tabs so a label and its amount stay on one line.
-    .replace(/<\/\s*(?:td|th)\s*>/gi, '\t')
-    // Line-breaking elements become newlines.
-    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
-    .replace(/<\/\s*(?:p|div|tr|table|li|ul|ol|h[1-6]|blockquote|section|article|header|footer)\s*>/gi, '\n')
-    .replace(/<\s*(?:p|div|tr|li|h[1-6])\b[^>]*>/gi, '\n')
-    // Everything else: gone.
-    .replace(/<[^>]*>/g, '');
-
-  out = out
-    .replace(/&#x([0-9a-f]+);/gi, (_m, hex: string) => safeCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_m, dec: string) => safeCodePoint(parseInt(dec, 10)))
-    .replace(/&([a-z]+);/gi, (m, name: string) => NAMED_ENTITIES[name.toLowerCase()] ?? m);
-
-  return (
-    out
-      // Non-breaking space is whitespace once decoded; keep it from gluing words.
-      .replace(/\u00a0/g, ' ')
-      .replace(/[ \t]+\n/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .replace(/^[ \t]+|[ \t]+$/gm, '')
-      .trim()
-  );
+  try {
+    return new TextDecoder(label).decode(bytes);
+  } catch {
+    return bytes.toString('utf8');
+  }
 }
+
+// Flatten an HTML mail body to readable plain text — re-exported from the
+// shared parser-based flattener in `./htmlToText` (see its own doc comment:
+// a receipt is very often HTML-only, and a regex tag-stripper here used to
+// leave tag soup for everything downstream to choke on). Kept under this
+// name because `readableBody` below and doc comments across gmail.ts/
+// email.ts/receipt_detect.ts already refer to "email_mime.htmlToText".
+export { htmlToText };
 
 /**
  * The readable body of a parsed message: the text/plain part when the sender
@@ -237,15 +196,93 @@ function decodeBody(body: string, cte?: string): Buffer {
   }
 
   if (enc === 'quoted-printable') {
-    return Buffer.from(
-      body
-        .replace(/=\r?\n/g, '')
-        .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16))),
-      'utf8',
-    );
+    return decodeQuotedPrintableBody(body.replace(/=\r?\n/g, ''));
   }
 
   return Buffer.from(body, 'utf8');
+}
+
+/**
+ * Quoted-printable body decode to RAW BYTES, not a UTF-8 round-trip.
+ *
+ * Each `=XX` escape is a byte in the part's OWN declared charset, which is not
+ * necessarily UTF-8. Treating the escaped byte as if it were itself a Unicode
+ * code point — `String.fromCharCode(n)` joined into one string and then
+ * `Buffer.from(str, 'utf8')` — corrupts any multi-byte sequence: a UTF-8 'é'
+ * written as `=C3=A9` decoded to 4 bytes (each of 0xC3 and 0xA9 individually
+ * re-encoded as its own 2-byte UTF-8 sequence) instead of the original 2.
+ *
+ * A run of LITERAL (non-escaped) text is already real Unicode text — this
+ * file is read from disk as UTF-8 — so only literal runs are (re-)encoded as
+ * UTF-8; escaped bytes are pushed verbatim and decoded downstream by
+ * {@link decodeWithCharset} using whatever charset the part actually declared.
+ */
+function decodeQuotedPrintableBody(text: string): Buffer {
+  const chunks: Buffer[] = [];
+  let literal = '';
+  const flushLiteral = (): void => {
+    if (literal) {
+      chunks.push(Buffer.from(literal, 'utf8'));
+      literal = '';
+    }
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const hex = text[i] === '=' ? text.slice(i + 1, i + 3) : '';
+    const byte = hex.length === 2 ? parseInt(hex, 16) : NaN;
+
+    if (Number.isNaN(byte)) {
+      literal += text[i];
+      continue;
+    }
+
+    flushLiteral();
+    chunks.push(Buffer.from([byte]));
+    i += 2;
+  }
+
+  flushLiteral();
+
+  return Buffer.concat(chunks);
+}
+
+/**
+ * A non-ASCII attachment filename ("café.pdf") in RFC 2231 §4 extended
+ * notation: `filename*=UTF-8''caf%C3%A9.pdf` — a charset, an (unused)
+ * language tag, then percent-encoded bytes in THAT charset. Real clients that
+ * emit this also send a plain `filename=` fallback (usually a transliterated
+ * or truncated ASCII name) in every case observed so far, so the rarer
+ * multi-segment continuation form (`filename*0*=`, `filename*1*=`, …) is not
+ * handled here — the plain fallback below still resolves.
+ */
+function extractExtendedFilename(headerValue: string): string | undefined {
+  const m = /filename\*\s*=\s*([^']*)'[^']*'([^;]+)/i.exec(headerValue);
+
+  if (!m) {
+    return undefined;
+  }
+
+  const [, charset, encoded] = m;
+  const name = decodeWithCharset(percentDecodeToBytes(encoded.trim()), charset);
+
+  return name || undefined;
+}
+
+/** Percent-decoded bytes (RFC 3986 %XX), not a string — the caller decides the charset. */
+function percentDecodeToBytes(s: string): Buffer {
+  const bytes: number[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const hex = s[i] === '%' ? s.slice(i + 1, i + 3) : '';
+    const code = hex.length === 2 ? parseInt(hex, 16) : NaN;
+    if (Number.isNaN(code)) {
+      bytes.push(s.charCodeAt(i));
+    } else {
+      bytes.push(code);
+      i += 2;
+    }
+  }
+
+  return Buffer.from(bytes);
 }
 
 function extractFilename(headerValue?: string): string | undefined {
@@ -255,7 +292,7 @@ function extractFilename(headerValue?: string): string | undefined {
 
   const m = /filename="?([^";]+)"?/i.exec(headerValue);
 
-  return m?.[1];
+  return extractExtendedFilename(headerValue) ?? m?.[1];
 }
 
 // RFC 2047 encoded-word decoding for header fields. Handles both Q (quoted-
@@ -315,10 +352,7 @@ export function decodeHeaderField(raw: string): string {
         decoded = decodeQEncoded(payload);
       }
 
-      const text = decoded.toString(
-        (charset.toLowerCase() === 'us-ascii' ? 'ascii' : 'utf8') as BufferEncoding,
-      );
-      tokens.push({ kind: 'enc', text });
+      tokens.push({ kind: 'enc', text: decodeWithCharset(decoded, charset) });
     } catch {
       tokens.push({ kind: 'lit', text: m[0] });
     }

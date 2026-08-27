@@ -13,7 +13,9 @@ import {
   AskExecutorService,
   AskRateLimitService,
   AskService,
+  AskBroadcastService,
   GrantService,
+  HouseholdTierService,
   applyDisclosureCeiling,
   buildDisclosedAnswer,
   disclosureCeiling,
@@ -29,10 +31,15 @@ import {
   type DisclosureRung,
   type GrantMode,
   type TrustTier,
+  UNATTRIBUTED,
+  type AuditFilter,
+  type AskAuditOutcome,
+  type AskDelegation,
 } from '@ci/domains/asks';
 import { OutboundAskService, type PeerAskRequest, type PeerLink, PeerLinkService } from '@ci/domains/peers';
 
 import { AnswerFormEnum, AskAnswerType } from '../types/AskAnswerType';
+import { AskDisclosureHistoryInput, AskDisclosureSummaryInput } from '../types/AskDisclosureInputs';
 import {
   CreateAskGrantInput,
   CreateAskInput,
@@ -47,8 +54,18 @@ import {
   RunAskPayload,
   SendPeerAskPayload,
 } from '../types/AskPayloads';
-import { AskAuditType, AskGrantType, AskType } from '../types/AskType';
+import {
+  AskAuditType,
+  AskBroadcastType,
+  AskDisclosureHistoryPayload,
+  AskDisclosureSummaryPayload,
+  AskDisclosureSummaryType,
+  AskGrantType,
+  AskType,
+} from '../types/AskType';
+import { CreateAskBroadcastInput } from '../types/CreateAskBroadcastInput';
 import { GlobalUID } from '../types/GlobalUID';
+import { HouseholdTierType, SetHouseholdTierInput } from '../types/HouseholdTierType';
 
 /**
  * GraphQL surface for the interpersonal ask feature (epic #1712, Phase 0). Every
@@ -82,6 +99,8 @@ export class AskResolver {
     private readonly answerService: AskAnswerService,
     private readonly peerLinkService: PeerLinkService,
     private readonly outboundAskService: OutboundAskService,
+    private readonly householdTierService: HouseholdTierService,
+    private readonly broadcastService: AskBroadcastService,
     private readonly featureService: FeatureService,
   ) {}
 
@@ -225,7 +244,7 @@ export class AskResolver {
       // ask carries no link, resolves to null, and takes the `household` tier.
       const link = await this.resolvePeerLink(responderContext, ask);
       const { ask: completed } = await this.disclose(responderContext, ask, {
-        tier: resolveTier(ask, link),
+        tier: resolveTier(ask, link, await this.householdTierFor(responderContext, ask)),
         peerHandle: link?.peerHandle ?? null,
       });
 
@@ -354,7 +373,7 @@ export class AskResolver {
       answer,
       disclosed,
     } = await this.disclose(serviceContext, ask, {
-      tier: resolveTier(ask, link),
+      tier: resolveTier(ask, link, await this.householdTierFor(serviceContext, ask)),
       peerHandle: link?.peerHandle ?? null,
       redactItemIds,
       disclosureForm: disclosureForm as AnswerForm | undefined,
@@ -508,6 +527,22 @@ export class AskResolver {
    * a legitimate viewer resolves their own link and anybody else resolves
    * nothing rather than learning a peer's handle.
    */
+  /**
+   * The owner's own verdict about a LOCAL asker, or undefined for a federated
+   * ask (whose tier comes from the peer link instead).
+   *
+   * Returns undefined rather than the default so `resolveTier` keeps ONE place
+   * where "the owner said nothing" becomes `household` — two defaults for the
+   * same question is how they drift.
+   */
+  private async householdTierFor(context: UserServiceContext, ask: Ask): Promise<TrustTier | undefined> {
+    if (ask.peerLinkId != null || ask.askerUserId == null) {
+      return undefined;
+    }
+
+    return this.householdTierService.tierFor(context.userId, ask.askerUserId);
+  }
+
   private async resolvePeerLink(context: UserServiceContext, ask: Ask): Promise<PeerLink | null> {
     if (ask.peerLinkId == null) {
       return null;
@@ -796,6 +831,112 @@ export class AskResolver {
     return found ? this.toAskType(serviceContext, found) : null;
   }
 
+  /**
+   * Put ONE question to several people at once.
+   *
+   * Each recipient gets their own independent ask — their own grants decide it,
+   * their own tier caps it, their own inbox reviews it. The broadcast is only
+   * a correlation, so nothing about the group changes what any one of them
+   * discloses. See {@link AskBroadcastService}.
+   *
+   * ═══ THE N DECISIONS DO NOT LEAVE THIS METHOD ═══
+   *
+   * `submit` makes one grant decision per recipient, and each is a read on that
+   * responder's grant matrix. `createAsk` returns the constant
+   * {@link ASK_ACCEPTED} for exactly this reason; a broadcast returning N
+   * decisions would hand back N probes for the price of one request. They are
+   * used here to run the auto-answer pipeline and then dropped.
+   */
+  @Mutation(() => AskBroadcastType)
+  async createAskBroadcast(
+    @Context() context: RequestContext,
+    @Args('input') input: CreateAskBroadcastInput,
+  ): Promise<AskBroadcastType> {
+    if (!(await this.enabled())) {
+      throw new BadRequestException('Asks are not enabled');
+    }
+
+    const serviceContext = toServiceContext(context);
+    // Rate-limited as ONE ask, because it is one request — and then bounded
+    // again by MAX_BROADCAST_RECIPIENTS, which is what actually stops one
+    // request filling N inboxes. See that constant.
+    this.rateLimitService.consume(serviceContext.userId);
+
+    const { broadcast, members } = await this.broadcastService.create(serviceContext, {
+      responderUserIds: input.responderIds.map((id) => GlobalUID.parse('user', id)),
+      query: parseAskQueryInput(input.query),
+    });
+
+    // Sequentially, for the same reason `create` submits sequentially: each
+    // auto-answer runs a search in a responder's memory.
+    const asks = [];
+    for (const member of members) {
+      asks.push(member.decision === 'auto' ? await this.autoAnswer(member.ask) : member.ask);
+    }
+
+    return AskBroadcastType.toType(broadcast, asks);
+  }
+
+  /** The caller's own broadcasts, newest first. Asker-scoped in the service. */
+  @Query(() => [AskBroadcastType])
+  async myAskBroadcasts(@Context() context: RequestContext): Promise<AskBroadcastType[]> {
+    if (!(await this.enabled())) {
+      return [];
+    }
+
+    const serviceContext = toServiceContext(context);
+    const broadcasts = await this.broadcastService.listForAsker(serviceContext);
+    // ONE read for every child ask, rather than a query per broadcast.
+    const asks = await this.broadcastService.asksForBroadcasts(broadcasts.map((b) => b.id));
+
+    return broadcasts.map((broadcast) => AskBroadcastType.toType(broadcast, asks.get(broadcast.id) ?? []));
+  }
+
+  /**
+   * The tiers this owner has assigned to other LOCAL accounts.
+   *
+   * Only rows they have ACTIVELY SET. An account with no row is at the default,
+   * and inventing a row for every local user would turn "I have not thought
+   * about this" into "I decided household", which is a different statement.
+   */
+  @Query(() => [HouseholdTierType])
+  async myHouseholdTiers(@Context() context: RequestContext): Promise<HouseholdTierType[]> {
+    if (!(await this.enabled())) {
+      return [];
+    }
+
+    const rows = await this.householdTierService.listForOwner(toServiceContext(context));
+
+    return rows.map(HouseholdTierType.toType);
+  }
+
+  /**
+   * Demote (or restore) another local account.
+   *
+   * The mutation G6 and threat T1 name as missing: until it existed, a
+   * housemate was by construction the most privileged asker on the box, with
+   * the widest ceiling, exempt from the sensitive-class floor, and no way to
+   * change it.
+   *
+   * Owner-scoped in the service, so one member of a household cannot edit
+   * another's posture — which is not a nicety, since in exactly the households
+   * this feature is least safe in, that would be the whole attack.
+   */
+  @Mutation(() => HouseholdTierType)
+  async setHouseholdTier(
+    @Context() context: RequestContext,
+    @Args('input') input: SetHouseholdTierInput,
+  ): Promise<HouseholdTierType> {
+    if (!(await this.enabled())) {
+      throw new BadRequestException('Asks are not enabled');
+    }
+
+    const memberId = GlobalUID.parse('user', input.memberId);
+    const row = await this.householdTierService.setTier(toServiceContext(context), memberId, input.trustTier);
+
+    return HouseholdTierType.toType(row);
+  }
+
   /** Standing grants owned by the caller (the Grant Manager). */
   @Query(() => [AskGrantType])
   async myAskGrants(@Context() context: RequestContext): Promise<AskGrantType[]> {
@@ -803,21 +944,57 @@ export class AskResolver {
       return [];
     }
 
-    const rows = await this.grantService.listForOwner(toServiceContext(context));
+    const serviceContext = toServiceContext(context);
+    // ONE usage read for the whole list, joined in memory. A per-grant lookup
+    // here would be an N+1 over the audit table, on the tab an owner opens to
+    // scan every grant at once.
+    const [rows, usage] = await Promise.all([
+      this.grantService.listForOwner(serviceContext),
+      this.auditService.usageByGrant(serviceContext),
+    ]);
 
-    return rows.map(AskGrantType.toType);
+    return rows.map((row) => AskGrantType.toType(row, usage.get(row.id)));
   }
 
-  /** The caller's disclosure history (asks they responded to). */
-  @Query(() => [AskAuditType])
-  async askDisclosureHistory(@Context() context: RequestContext): Promise<AskAuditType[]> {
+  /** The caller's disclosure history (asks they responded to), newest first. */
+  @Query(() => AskDisclosureHistoryPayload)
+  async askDisclosureHistory(
+    @Context() context: RequestContext,
+    @Args('input', { nullable: true }) input?: AskDisclosureHistoryInput,
+  ): Promise<AskDisclosureHistoryPayload> {
     if (!(await this.enabled())) {
-      return [];
+      return { rows: [], truncated: false };
     }
 
-    const rows = await this.auditService.listForResponder(toServiceContext(context));
+    const { rows, truncated } = await this.auditService.listForResponder(
+      toServiceContext(context),
+      toAuditFilter(input),
+    );
 
-    return rows.map(AskAuditType.toType);
+    return { rows: rows.map(AskAuditType.toType), truncated };
+  }
+
+  /**
+   * The same record, folded BY RELATIONSHIP — the unit an owner arrives with.
+   *
+   * Responder-scoped by exactly the same service call the flat history uses, so
+   * there is one place where "whose disclosures are these" is decided. A second
+   * scoping clause here would be a second place to get it wrong.
+   */
+  @Query(() => AskDisclosureSummaryPayload)
+  async askDisclosureSummary(
+    @Context() context: RequestContext,
+    @Args('input', { nullable: true }) input?: AskDisclosureSummaryInput,
+  ): Promise<AskDisclosureSummaryPayload> {
+    if (!(await this.enabled())) {
+      return { summaries: [], truncated: false };
+    }
+
+    const { summaries, truncated } = await this.auditService.summaryForResponder(toServiceContext(context), {
+      windowMs: windowMsFrom(input?.windowDays),
+    });
+
+    return { summaries: summaries.map(AskDisclosureSummaryType.toType), truncated };
   }
 
   /**
@@ -892,9 +1069,15 @@ export class AskResolver {
       return [];
     }
 
-    const rows = await this.grantService.listHistoryForOwner(toServiceContext(context));
+    const serviceContext = toServiceContext(context);
+    const [rows, usage] = await Promise.all([
+      this.grantService.listHistoryForOwner(serviceContext),
+      this.auditService.usageByGrant(serviceContext),
+    ]);
 
-    return rows.map(AskGrantType.toType);
+    // Usage is carried on revoked and superseded rows too: "this fired 40 times
+    // before I withdrew it" is exactly what a consent history is for.
+    return rows.map((row) => AskGrantType.toType(row, usage.get(row.id)));
   }
 
   /**
@@ -943,15 +1126,48 @@ export class AskResolver {
  * it whole. An empty object would tell create to store `{}` and tell supersede
  * to merge nothing — the same value meaning two different, wrong things.
  */
-function toGrantScope(input: { dataClasses?: string[]; maxDisclosure?: string }): AskGrantScope | undefined {
+function toGrantScope(input: {
+  dataClasses?: string[];
+  maxDisclosure?: string;
+  delegation?: string;
+}): AskGrantScope | undefined {
   const scope: AskGrantScope = {
     // An empty `dataClasses` list is a real instruction ("no classes permitted"),
     // so the presence test is `!= null`, not truthiness.
     ...(input.dataClasses != null ? { dataClasses: input.dataClasses } : {}),
     ...(input.maxDisclosure != null ? { maxDisclosure: input.maxDisclosure as DisclosureRung } : {}),
+    ...parseDelegation(input.delegation),
   };
 
   return Object.keys(scope).length > 0 ? scope : undefined;
+}
+
+/**
+ * Parse the owner's delegation setting, REJECTING anything off-vocabulary.
+ *
+ * Same direction as `parseDisclosureRung` and for the same reason: this is the
+ * WRITE boundary. `actorSatisfiesDelegation` fails closed when it READS an
+ * unreadable value, which is right there — but silently storing a restriction
+ * that will later be read as "deny everything" hands the owner a grant that
+ * never fires and no explanation of why. A 400 they can act on is the honest
+ * answer.
+ *
+ * Returns a spreadable object so an omitted value adds no key at all, keeping
+ * `toGrantScope`'s "empty scope means undefined" contract intact.
+ */
+function parseDelegation(raw: string | undefined): { delegation?: AskDelegation } {
+  if (raw == null) {
+    return {};
+  }
+
+  const canonical = raw.trim().toLowerCase();
+  const known: AskDelegation[] = ['none', 'first-party-only', 'any-agent'];
+
+  if (!(known as string[]).includes(canonical)) {
+    throw new BadRequestException(`delegation must be one of: ${known.join(', ')}`);
+  }
+
+  return { delegation: canonical as AskDelegation };
 }
 
 /** A {@link LoggerService} already tagged with its owner's name. */
@@ -975,9 +1191,18 @@ function contextLogger(context: string): LoggerService {
  *
  * Pure.
  */
-function resolveTier(ask: Ask, link: PeerLink | null): TrustTier {
+function resolveTier(ask: Ask, link: PeerLink | null, householdTier?: TrustTier): TrustTier {
   if (ask.peerLinkId == null) {
-    return 'household';
+    // A LOCAL asker. This used to be a bare `return 'household'` — the widest
+    // ceiling on the ladder and the only tier exempt from the sensitive-class
+    // floor — with no column, mutation or UI that could say otherwise. That is
+    // G6, and threat T1: the person who shares the appliance was by
+    // construction the most privileged asker and could not be demoted.
+    //
+    // `householdTier` is the owner's own verdict about that account, and
+    // omitting it still yields `household` so nothing changes for a box where
+    // the owner has said nothing. See `HouseholdTierService`.
+    return householdTier ?? 'household';
   }
 
   return (link?.trustTier as TrustTier | undefined) ?? 'stranger';
@@ -1025,4 +1250,77 @@ function toPeerAskRequest(input: SendPeerAskInput): PeerAskRequest {
     default:
       throw new BadRequestException(`Unsupported ask archetype: ${input.archetype}`);
   }
+}
+
+/**
+ * Translate the GraphQL filter into the service's, resolving the counterparty
+ * key back into the column it came from.
+ *
+ * A key that names neither column narrows to NOTHING rather than to everything.
+ * An unrecognized filter that silently widens the read is the shape of bug this
+ * whole domain keeps closing — an omitted `dataClass` that read as a wildcard,
+ * an unreadable ceiling that read as no ceiling. Same rule here.
+ */
+function toAuditFilter(input?: AskDisclosureHistoryInput): AuditFilter {
+  const filter: AuditFilter = {
+    from: input?.from ?? null,
+    to: input?.to ?? null,
+    limit: input?.limit ?? null,
+    outcomes: parseOutcomes(input?.outcomes),
+  };
+
+  const key = input?.counterpartyKey?.trim();
+  if (!key) {
+    return filter;
+  }
+
+  if (key.startsWith('user:')) {
+    return { ...filter, askerUserId: key.slice('user:'.length) };
+  }
+
+  if (key.startsWith('peer:')) {
+    return { ...filter, peerLinkId: key.slice('peer:'.length) };
+  }
+
+  if (key === UNATTRIBUTED) {
+    // Rows naming neither party. Expressed as explicit nulls so the service
+    // filters on them rather than dropping the clause.
+    return { ...filter, askerUserId: null, peerLinkId: null };
+  }
+
+  // A key we do not recognize. Narrow to nothing.
+  return { ...filter, askerUserId: NO_SUCH_ID };
+}
+
+/**
+ * A uuid that cannot match any row, for the unrecognized-key case.
+ *
+ * The nil uuid rather than a random one so the behaviour is deterministic, and
+ * a uuid rather than a sentinel string because the column is typed and Postgres
+ * would reject anything else with a 22P02 — a 500 where a clean empty result
+ * belongs.
+ */
+const NO_SUCH_ID = '00000000-0000-0000-0000-000000000000';
+
+/** Keep only outcomes the audit actually records; anything else is dropped. */
+function parseOutcomes(outcomes?: readonly string[]): AskAuditOutcome[] | undefined {
+  if (outcomes == null || outcomes.length === 0) {
+    return undefined;
+  }
+
+  const known: AskAuditOutcome[] = ['answered', 'auto_answered', 'declined', 'expired'];
+  const kept = outcomes.filter((o): o is AskAuditOutcome => (known as string[]).includes(o));
+
+  // An all-unrecognized list must not read as "no filter" — that would WIDEN
+  // the read on a typo. One impossible value keeps it narrow.
+  return kept.length > 0 ? kept : ['__none__' as AskAuditOutcome];
+}
+
+/** Days -> ms, with anything unreadable falling back to the default window. */
+function windowMsFrom(days?: number | null): number | undefined {
+  if (days == null || !Number.isFinite(days) || days <= 0) {
+    return undefined;
+  }
+
+  return Math.trunc(days) * 24 * 60 * 60 * 1000;
 }

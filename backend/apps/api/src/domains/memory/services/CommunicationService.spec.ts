@@ -175,3 +175,63 @@ describe('CommunicationService bulk createMany', () => {
     expect(bulkInsertMock).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A PATCH guarded by truthiness cannot express "set this to zero" or "set this
+ * to false". Every numeric and boolean field on the update path was written as
+ * `if (data.x)`, so a 0-second call (which is every missed call), a neutral
+ * sentiment of 0.0, an importance or urgency of 0, and un-archiving or
+ * un-encrypting a conversation were all silently dropped: the request returned
+ * success and the old value stayed. `preview` carried a comment about having
+ * been fixed for the same reason, which is what makes the rest a bug and not a
+ * deliberate "only set meaningful values" policy.
+ *
+ * These assert on the patch handed to the aggregate, which is exactly what
+ * would be written.
+ */
+describe('CommunicationService update: falsy-but-legitimate values', () => {
+  function patchFor(data: Record<string, unknown>) {
+    const { service } = makeService();
+
+    const captured: Record<string, unknown>[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).aggregate = {
+      applyUpdate: jest.fn(async (_ctx: unknown, _id: string, patch: { detail: Record<string, unknown> }) => {
+        captured.push(patch.detail);
+
+        return null;
+      }),
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (service as any).update(CONTEXT, 'c-1', data).then(() => captured[0] ?? {});
+  }
+
+  it('persists a zero duration — a missed call is not "no duration"', async () => {
+    await expect(patchFor({ duration_seconds: 0 })).resolves.toMatchObject({ durationSeconds: 0 });
+  });
+
+  it('persists a neutral sentiment of 0', async () => {
+    await expect(patchFor({ sentiment_score: 0 })).resolves.toMatchObject({ sentimentScore: 0 });
+  });
+
+  it('persists importance and urgency of 0', async () => {
+    await expect(patchFor({ importance_score: 0 })).resolves.toMatchObject({ importanceScore: 0 });
+    await expect(patchFor({ urgency_score: 0 })).resolves.toMatchObject({ urgencyScore: 0 });
+  });
+
+  it('can un-archive and un-encrypt', async () => {
+    await expect(patchFor({ is_archived: false })).resolves.toMatchObject({ isArchived: false });
+    await expect(patchFor({ is_encrypted: false })).resolves.toMatchObject({ isEncrypted: false });
+  });
+
+  it('still leaves an omitted field untouched', async () => {
+    const patch = await patchFor({ sentiment_score: 0 });
+    expect(patch).not.toHaveProperty('durationSeconds');
+    expect(patch).not.toHaveProperty('isArchived');
+  });
+
+  it('still sets a non-zero value', async () => {
+    await expect(patchFor({ duration_seconds: 42 })).resolves.toMatchObject({ durationSeconds: 42 });
+  });
+});

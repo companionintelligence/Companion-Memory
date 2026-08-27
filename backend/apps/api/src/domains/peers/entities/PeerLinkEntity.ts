@@ -93,6 +93,26 @@ export class PeerLinkEntity {
   @Column({ type: 'text', name: 'peer_subject', nullable: true })
   peerSubject!: string | null;
 
+  /**
+   * The peer's Ed25519 PUBLIC key as a JWK, and its RFC 7638 thumbprint.
+   *
+   * The thumbprint is the identity an RFC 9421 signature names in `keyid`, and
+   * it is denormalized rather than derived per request because it is the LOOKUP
+   * key -- resolving an inbound signature must be one index hit, not a scan
+   * that hashes every peer's key.
+   *
+   * Nullable, and null for every link that predates signing. A link with no key
+   * authenticates exactly as it always did (Portal OIDC bearer), which is what
+   * keeps `peers.requireHttpSignature` a rollout switch rather than a breaking
+   * change. `publicKeyFromJwk` refuses a JWK carrying `d`, so a private key
+   * cannot be stored here and then used to verify its own signatures.
+   */
+  @Column({ type: 'jsonb', name: 'peer_key_jwk', nullable: true })
+  peerKeyJwk!: Record<string, unknown> | null;
+
+  @Column({ type: 'text', name: 'peer_key_thumbprint', nullable: true })
+  peerKeyThumbprint!: string | null;
+
   /** The person in the owner's memory graph this peer corresponds to. */
   @Column({ type: 'uuid', name: 'person_entity_id', nullable: true })
   personEntityId!: string | null;
@@ -121,6 +141,8 @@ export class PeerLinkEntity {
       memoryEndpoint: entity.memoryEndpoint,
       peerIssuer: entity.peerIssuer,
       peerSubject: entity.peerSubject,
+      peerKeyJwk: entity.peerKeyJwk,
+      peerKeyThumbprint: entity.peerKeyThumbprint,
       personEntityId: entity.personEntityId,
       trustTier: entity.trustTier,
       status: entity.status,

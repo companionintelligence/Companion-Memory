@@ -9,7 +9,9 @@ import { HIGH_RISK_CATALOG_SLUGS } from '../catalog/mcpSuggestedCatalog';
 import { McpServerConfigEntity } from '../entities/McpServerConfigEntity';
 import { decryptedDraftFromEntity } from '../mapping';
 import type {
+  ApproveMcpToolsDto,
   CreateMcpServerConfigDto,
+  McpApprovedTool,
   McpProbeResult,
   McpServerConfigEgress,
   McpTransport,
@@ -19,6 +21,7 @@ import type {
 
 import { McpClientManagerService } from './McpClientManagerService';
 import { McpSecretCodec } from './McpSecretCodec';
+import { computeSchemaDigest, grandfatherApprovals } from './mcpToolDigest';
 
 /**
  * CRUD over `ci.mcp_server_configs`, scoped to the calling user, plus the security-critical
@@ -75,6 +78,9 @@ export class McpServerConfigService {
       source: dto.source ?? 'user_added',
       catalogSlug: dto.catalogSlug ?? null,
       discoveredTools: null,
+      // `[]`, never null: a server added after the approval gate exists contributes zero tools to
+      // chat until someone approves them. null is reserved for pre-gate rows (legacy passthrough).
+      approvedTools: [],
       connectionStatus: 'disconnected',
     });
 
@@ -144,6 +150,69 @@ export class McpServerConfigService {
     return McpServerConfigEntity.toEgressType(updated);
   }
 
+  /**
+   * Approve (or revoke) individual tools on one server — the grant `McpToolProvider` intersects
+   * against. Merge semantics, not replace: a request naming three tools leaves every other stored
+   * approval alone, so the settings screen can approve one drifted tool without silently revoking
+   * the twenty that were fine.
+   *
+   * Each `tools[]` entry must carry the digest the client was shown. It is re-derived from the
+   * schema currently stored in `discovered_tools` and a mismatch is rejected — otherwise a schema
+   * that drifted between rendering the list and clicking Approve would be approved sight-unseen,
+   * which is the exact failure this feature exists to prevent.
+   */
+  async approveTools(userId: string, id: string, dto: ApproveMcpToolsDto): Promise<McpServerConfigEgress> {
+    const existing = await this.findOwned(userId, id);
+    const discovered = existing.discoveredTools ?? [];
+    const approvedAt = new Date().toISOString();
+
+    let next: McpApprovedTool[];
+
+    if (dto.approveAll) {
+      // The escape hatch a strict pin needs: re-bless everything this server currently offers,
+      // preserving the provenance of every entry whose digest did not actually move.
+      next = grandfatherApprovals(discovered, existing.approvedTools, userId, approvedAt);
+    } else {
+      const byName = new Map((existing.approvedTools ?? []).map((entry) => [entry.name, entry]));
+
+      for (const requested of dto.tools ?? []) {
+        const tool = discovered.find((candidate) => candidate.name === requested.name);
+
+        if (!tool) {
+          throw new BadRequestException(`"${requested.name}" is not currently offered by this MCP server`);
+        }
+
+        const actual = computeSchemaDigest(tool);
+
+        if (actual !== requested.schemaDigest) {
+          throw new BadRequestException(
+            `The schema for "${requested.name}" changed since it was shown to you; re-review it before approving`,
+          );
+        }
+
+        byName.set(requested.name, {
+          name: requested.name,
+          schemaDigest: actual,
+          approvedAt,
+          approvedBy: userId,
+        });
+      }
+
+      for (const name of dto.revoke ?? []) {
+        byName.delete(name);
+      }
+
+      next = Array.from(byName.values());
+    }
+
+    await this.repo.update(id, { approvedTools: next } as never);
+    await this.manager.onToolApprovalsChanged();
+
+    const updated = await this.findOwned(userId, id);
+
+    return McpServerConfigEntity.toEgressType(updated);
+  }
+
   async testConnection(userId: string, id: string): Promise<McpProbeResult> {
     const existing = await this.findOwned(userId, id);
     const draft = decryptedDraftFromEntity(existing, this.secretCodec);
@@ -182,7 +251,6 @@ export class McpServerConfigService {
     let candidate = base;
     let suffix = 2;
 
-     
     while (await this.repo.exist({ where: { userId, slug: candidate } })) {
       candidate = `${base}-${suffix}`;
       suffix += 1;

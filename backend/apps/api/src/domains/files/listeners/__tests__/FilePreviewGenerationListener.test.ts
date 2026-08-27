@@ -1,3 +1,4 @@
+import { FilePreviewService } from '../../services/FilePreviewService';
 import { FilePreviewGenerationListener } from '../FilePreviewGenerationListener';
 
 /**
@@ -75,7 +76,11 @@ function makeListener(
   };
   const eventService = { send: jest.fn(async () => {}) };
 
-  const listener = new FilePreviewGenerationListener(
+  // The generator moved into FilePreviewService (so the enrich.file_preview
+  // stage can share it); the listener is the upload-path trigger over it.
+  // Every assertion below is about the generator's behaviour, so the service
+  // is built with the same mocks and driven through the listener as before.
+  const service = new FilePreviewService(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     fileService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -85,6 +90,7 @@ function makeListener(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
   );
+  const listener = new FilePreviewGenerationListener(service);
 
   return { listener, fileService, eventService, created, logger };
 }

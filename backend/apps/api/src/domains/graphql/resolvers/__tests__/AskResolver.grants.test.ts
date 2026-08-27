@@ -52,12 +52,21 @@ function makeResolver(enabled = true) {
   const resolver = new AskResolver(
     {} as never,
     grantService as never,
+    // The audit service, for grant USAGE. `myAskGrants` joins "how often has
+    // this fired" onto every row, so a bare {} here fails at the call rather
+    // than silently reporting every grant dormant.
+    { usageByGrant: jest.fn().mockResolvedValue(new Map()) } as never,
     {} as never,
     {} as never,
     {} as never,
     {} as never,
     {} as never,
-    {} as never,
+    {
+      tierFor: jest.fn().mockResolvedValue('household'),
+      listForOwner: jest.fn(),
+      setTier: jest.fn(),
+    } as never,
+    { listForAsker: jest.fn(), asksForBroadcasts: jest.fn(), create: jest.fn() } as never,
     featureService as never,
   );
 

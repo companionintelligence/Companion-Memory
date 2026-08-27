@@ -38,14 +38,26 @@ describe('resolveFileTileUrl', () => {
     ).toBe('/static/u/shot.png');
   });
 
-  it('falls back to sourceUrl for video when preview is missing', () => {
+  it('gives a preview-less video NO thumbnail rather than pointing an <img> at the .mp4', () => {
+    // The old fallback handed the tile the video file itself, which an <img>
+    // cannot decode: a full download followed by a broken-image glyph.
     expect(
       resolveFileTileUrl({
         contentType: 'video/mp4',
         previewUrl: null,
         sourceUrl: '/u/clip.mp4',
       }),
-    ).toBe('/static/u/clip.mp4');
+    ).toBeUndefined();
+  });
+
+  it('still uses the preview for a video when one exists', () => {
+    expect(
+      resolveFileTileUrl({
+        contentType: 'video/mp4',
+        previewUrl: '/u/clip-preview.jpg',
+        sourceUrl: '/u/clip.mp4',
+      }),
+    ).toBe('/static/u/clip-preview.jpg');
   });
 
   it('does not use sourceUrl for non-media content types', () => {

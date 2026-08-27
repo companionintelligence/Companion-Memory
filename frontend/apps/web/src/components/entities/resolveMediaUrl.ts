@@ -13,9 +13,15 @@ export function resolveMediaUrl(value?: string | null): string | undefined {
 
 /**
  * Tile/row thumbnail for a FileType: prefer the derived preview, then the
- * original source for images (and videos when no preview exists yet).
- * Matches Gallery `getEntityMedia` so Capture screenshots render before
+ * original source for images — so a Capture screenshot renders before
  * preview generation finishes.
+ *
+ * A preview-less VIDEO gets no thumbnail, matching the gallery's
+ * `pickThumbUrl`: every caller puts this URL in an `<img>`, and an `<img>`
+ * pointed at an .mp4 never decodes — the tile downloaded the whole file and
+ * then showed the browser's broken-image glyph (or a black box) anyway.
+ * The placeholder icon is the honest state; the `enrich.file_preview` sweep
+ * is what fills it in.
  */
 export function resolveFileTileUrl(opts: {
   contentType?: string | null;
@@ -27,8 +33,7 @@ export function resolveFileTileUrl(opts: {
     return preview;
   }
 
-  const contentType = opts.contentType ?? '';
-  if (contentType.startsWith('image/') || contentType.startsWith('video/')) {
+  if ((opts.contentType ?? '').startsWith('image/')) {
     return resolveMediaUrl(opts.sourceUrl);
   }
 

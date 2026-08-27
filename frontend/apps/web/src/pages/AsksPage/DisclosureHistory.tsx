@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 import { Badge, Card } from '@ci/shadcn';
 
 import { PersonAvatar } from '@/components/PersonAvatar';
@@ -10,6 +12,9 @@ import {
   outcomeBadge,
   outcomeSentence,
 } from './askPresentation';
+import { ConsentDetailModal, type ConsentRecord } from './ConsentDetailModal';
+import { ConsentLock } from './ConsentLock';
+import { consentLockState } from './consentProvenance';
 
 export interface DisclosureRow {
   id: string;
@@ -61,6 +66,11 @@ interface Props {
  * request that does — it is a claim about something that already happened.
  */
 export function DisclosureHistory({ rows }: Props) {
+  // One modal for the whole list rather than one per row: the detail is a
+  // focused read of a single disclosure, and mounting a dialog per row would
+  // put N of them in the tree for a list that is meant to be scanned.
+  const [open, setOpen] = useState<ConsentRecord | null>(null);
+
   return (
     <ul className="flex flex-col gap-3">
       {rows.map((row) => {
@@ -79,6 +89,13 @@ export function DisclosureHistory({ rows }: Props) {
                 <Badge variant={badge.variant} className="text-xs">
                   {badge.label}
                 </Badge>
+                {/* The lock is the doorway to WHY this was allowed. It sits on
+                    the identity line because that is the line an owner scans:
+                    who asked, what happened, and on what authority. */}
+                <ConsentLock
+                  state={consentLockState({ consent: consentOf(row), channel: UNRECORDED_CHANNEL })}
+                  onOpen={() => setOpen(recordFor(row))}
+                />
                 <span className="text-muted-foreground ml-auto text-xs">{formatWhen(row.createdAt)}</span>
               </div>
 
@@ -102,8 +119,50 @@ export function DisclosureHistory({ rows }: Props) {
           </li>
         );
       })}
+
+      {open ? <ConsentDetailModal record={open} onClose={() => setOpen(null)} /> : null}
     </ul>
   );
+}
+
+/**
+ * The channel facts a Disclosure History row can honestly claim: none.
+ *
+ * `ci.ask_audit` is the durable disclosure record and does not carry channel
+ * provenance — `ci.asks` does, and that row can be deleted while the audit
+ * outlives it. So the modal is told the channel was NOT RECORDED rather than
+ * being handed a null that would render as "arrived unsigned", which would
+ * assert a fact nobody checked. Carrying it into the audit is the follow-up.
+ */
+const UNRECORDED_CHANNEL = { keyThumbprint: null, verifiedAt: null, covered: [] as string[] };
+
+/**
+ * What authorized this row, from the two facts the audit actually holds.
+ *
+ * `auto_answered` means a standing grant released it without asking; anything
+ * else that produced a disclosure was the owner's own decision. Deliberately
+ * derived from the OUTCOME rather than from `consentBasis` alone: a declined ask
+ * also cites the block grant that refused it, and calling that "a standing grant
+ * authorized this" would be exactly backwards.
+ */
+function consentOf(row: DisclosureRow): ConsentRecord['consent'] {
+  return row.outcome === 'auto_answered' ? 'standing-grant' : 'owner-decision';
+}
+
+function recordFor(row: DisclosureRow): ConsentRecord {
+  return {
+    askerName: row.askerName,
+    consent: consentOf(row),
+    channel: UNRECORDED_CHANNEL,
+    channelRecorded: false,
+    ceiling: null,
+    grantMode: row.consentBasis ? 'auto' : null,
+    arrivedAt: row.createdAt,
+    // The audit records the peer FK-lessly and this projection does not carry
+    // it, so the honest answer is the one the modal can defend.
+    direction: 'inbound',
+    hasBody: true,
+  };
 }
 
 /**

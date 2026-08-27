@@ -23,18 +23,20 @@ struct LocalLLMModelInfo {
 }
 
 enum LocalLLMModels {
-  /// The only model offered today: Qwen3-0.6B, INT4 block-32 weights / FP32 activations.
+  /// The only model offered today: Qwen3-0.6B, INT4 block-32 weights / FP32 activations — and,
+  /// as of `LocalLlmModels.kt`'s matching fix, the same model Android ships too.
   ///
-  /// **Not the Gemma3-1B the Android plugin lists, and that is deliberate.** Every Gemma-derived
-  /// repo under `litert-community` is `gated: "auto"` — an HF account plus a Gemma-licence
-  /// click-through — so an anonymous in-app download gets `401 GatedRepo`. Measured, not assumed:
+  /// **Android originally listed Gemma3-1B instead; that repo is `gated: "auto"` on Hugging
+  /// Face** — an HF account plus a Gemma-licence click-through — so an anonymous in-app download
+  /// got `401 GatedRepo` for every user who had not already fetched the file by hand. Measured,
+  /// not assumed, at the time:
   ///
   ///     $ curl -sIL -o /dev/null -w '%{http_code}' \
   ///         '…/Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task?download=true'
   ///     401        (x-error-code: GatedRepo)
   ///
-  /// (That same 401 makes the **Android** catalog's only entry unreachable for any user who has not
-  /// already downloaded it — a separate, pre-existing bug, not something this file can fix.)
+  /// That made Android's catalog entry unreachable for any new user — a real, shipping bug, now
+  /// fixed by pointing Android at this same model instead of a different, gated one.
   ///
   /// Qwen3-0.6B is ungated and half the size, verified with no token in the environment:
   ///

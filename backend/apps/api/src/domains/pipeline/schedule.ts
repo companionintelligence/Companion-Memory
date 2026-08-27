@@ -294,6 +294,20 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
   },
 
   /**
+   * Same shape as media_dimensions, and for the same reasons: local CPU
+   * (sharp / ffmpeg) plus an object-storage read per file, and the upload
+   * path already covers the common case — this sweep is the net under it.
+   * An on-demand run is available through `POST /api/maintenance/file-preview-sweep`.
+   */
+  [STAGE_IDS.ENRICH_FILE_PREVIEW]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  /**
    * Every key is a request to someone else's server, so this is metered even
    * though nobody bills for it: provider oEmbed endpoints and Wikimedia both
    * rate-limit, and a full-corpus first pass (tens of thousands of YouTube and
@@ -381,6 +395,33 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
    * it runs. Same tier, same night, ordering handled by the graph.
    */
   [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  /**
+   * NIGHTLY. Counts contradictory single-valued edges; changes none of them.
+   *
+   * Same tier as its `clean.*` siblings, and the reasoning is the same one
+   * `clean.object_duplicate_detect` gives: the output is a REPORT nobody can
+   * act on until they look at it, so an hour of freshness buys nothing, and
+   * arrival-triggering a corpus-wide group-by at import rate is exactly the
+   * shape this file exists to refuse.
+   *
+   * `cost: 'local'` is exact — one SELECT per slice over
+   * `relationships_from_idx`, no provider and no Ollama. Not `metered`, so no
+   * `perRunCap`: there is no bill for a cap to bound, and capping a stage whose
+   * entire deliverable is a COUNT would make that count a sample of itself.
+   *
+   * No `STAGE_DEPENDENCIES` ordering. It reads `ci.relationships`, which the
+   * `promote.edge_*` legs write, but it is a detector: running before them
+   * counts fewer edges rather than wrong ones, and the next night's pass sees
+   * whatever landed. A gate would buy precision this stage does not claim.
+   */
+  [STAGE_IDS.CLEAN_SINGLE_VALUED_EDGE_AUDIT]: {
     trigger: 'scheduled',
     cost: 'local',
     window: 'enrichment',

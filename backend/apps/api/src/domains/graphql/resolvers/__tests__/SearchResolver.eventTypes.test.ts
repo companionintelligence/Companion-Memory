@@ -107,6 +107,12 @@ describe('SearchResolver — event-type ("how") filter', () => {
       receiptService as never,
       answerService as never,
       savedSearchService as never,
+      {
+        // Authorizes with no ceiling: these suites are not about consent, and a
+        // share created before `share_max_disclosure` existed reads exactly this way.
+        authorize: jest.fn().mockResolvedValue({ grantId: 'grant-test', ceiling: undefined }),
+        recordRead: jest.fn().mockResolvedValue(undefined),
+      } as never,
       searchService as never,
       tagService as never,
       { isFeatureEnabled: jest.fn().mockResolvedValue(true) } as never,

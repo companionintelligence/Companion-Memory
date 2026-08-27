@@ -139,6 +139,7 @@ export class AskService {
       id: data.id ?? uuidv7(),
       askerUserId: isInbound ? null : context.userId,
       peerLinkId: data.peerLinkId ?? null,
+      broadcastId: data.broadcastId ?? null,
       direction,
       responderUserId: data.responderUserId,
       query: data.query,
@@ -157,6 +158,12 @@ export class AskService {
       // one of them is safe. A caller that genuinely wants a different deadline
       // passes a Date.
       expiresAt: data.expiresAt ?? defaultAskExpiry(),
+      // Channel provenance travels as one unit or not at all, matching
+      // `asks_channel_paired_chk`. A partially-populated channel would claim a
+      // verification nobody performed.
+      channelKeyThumbprint: data.channel?.keyThumbprint ?? null,
+      channelVerifiedAt: data.channel?.verifiedAt ?? null,
+      channelCovered: data.channel?.covered ?? null,
     });
 
     const entity = await this.askRepository.save(record);

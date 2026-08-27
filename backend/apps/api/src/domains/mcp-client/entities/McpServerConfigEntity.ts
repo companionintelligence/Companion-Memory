@@ -1,6 +1,8 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 
+import { buildToolApprovals } from '../services/mcpToolDigest';
 import type {
+  McpApprovedTool,
   McpAuthConfig,
   McpConfigSource,
   McpConnectionStatus,
@@ -63,6 +65,15 @@ export class McpServerConfigEntity {
   @Column({ type: 'jsonb', name: 'discovered_tools', nullable: true })
   discoveredTools!: McpDiscoveredTool[] | null;
 
+  /**
+   * The human-approved subset — the grant {@link McpToolProvider} intersects `discoveredTools`
+   * against. `null` is a pre-approval-gate row (legacy passthrough until its next connect
+   * grandfathers it); `[]` is gated with nothing approved. See
+   * `20260826205522_add_approved_tools_to_mcp_server_configs.sql`.
+   */
+  @Column({ type: 'jsonb', name: 'approved_tools', nullable: true })
+  approvedTools!: McpApprovedTool[] | null;
+
   @Column({ type: 'text', name: 'connection_status', default: 'disconnected' })
   connectionStatus!: McpConnectionStatus;
 
@@ -98,6 +109,10 @@ export class McpServerConfigEntity {
       source: entity.source,
       catalogSlug: entity.catalogSlug,
       discoveredTools: entity.discoveredTools,
+      approvedTools: entity.approvedTools ?? null,
+      // Derived here rather than in the client so the sha256 canonicalisation has exactly one
+      // implementation — a second one in the browser would silently disagree on key order.
+      toolApprovals: buildToolApprovals(entity.discoveredTools, entity.approvedTools),
       connectionStatus: entity.connectionStatus,
       lastConnectedAt: entity.lastConnectedAt,
       lastError: entity.lastError,

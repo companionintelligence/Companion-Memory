@@ -12,6 +12,7 @@ import type {
 
 import { buildMcpIntentName } from '../naming';
 import { McpClientManagerService } from '../services/McpClientManagerService';
+import { isToolApproved } from '../services/mcpToolDigest';
 import { McpDynamicTool } from '../tools/McpDynamicTool';
 import type { McpDiscoveredTool } from '../types';
 
@@ -23,6 +24,18 @@ import type { McpDiscoveredTool } from '../types';
  * assistant-only. Re-publishing them on CI-Server's own outbound `/api/intents` manifest or its
  * own MCP server surface would let an outside caller reach back through CI-Server to the very
  * external server it came from — the recursive re-exposure that flag exists to prevent.
+ *
+ * Discovery is not adoption. `getAvailableTools()` INTERSECTS what each server currently offers
+ * against that server's stored `approved_tools`, so a tool nobody approved — or one whose
+ * `inputSchema` no longer digests to what was approved — is not merely flagged, it is absent from
+ * the assistant's tool set entirely. Before this, `tools/list` on every reconnect was written
+ * straight into `discovered_tools` and rebuilt this cache with nothing to compare against.
+ *
+ * The uniform pessimistic privacy label below is NOT a substitute for that gate, despite looking
+ * like one: it demands FULL capability, but `apiKeyCapabilityOf` (`common/guards/apiKeyScopeEnforcement.ts`)
+ * returns FULL_CAPABILITY whenever `apiKeyScopes === undefined`, which is exactly what a JWT/session
+ * principal is. Browser chat authenticates by JWT, so the label filters nothing on the surface where
+ * a drifted tool actually lands.
  *
  * Every discovered tool gets the SAME synthetic privacy label, deliberately not configurable
  * per-tool in this version: raw `tools/list` carries no privacy metadata at all, and treating an
@@ -64,7 +77,16 @@ export class McpToolProvider implements ToolProvider {
     const entries = await this.manager.listAllDiscoveredTools();
     const next = new Map<string, McpDynamicTool>();
 
-    for (const { configId, slug, tool } of entries) {
+    for (const { configId, userId, slug, tool, approvedTools } of entries) {
+      if (!isToolApproved(tool, approvedTools)) {
+        this.logger.debug('Withholding unapproved MCP tool from the assistant tool set', {
+          configId,
+          slug,
+          tool: tool.name,
+        });
+        continue;
+      }
+
       const intentName = buildMcpIntentName(slug, tool.name);
 
       if (next.has(intentName)) {
@@ -72,7 +94,7 @@ export class McpToolProvider implements ToolProvider {
         continue;
       }
 
-      next.set(intentName, this.buildDynamicTool(intentName, configId, tool));
+      next.set(intentName, this.buildDynamicTool(intentName, configId, userId, tool));
     }
 
     this.toolCache = next;
@@ -97,7 +119,12 @@ export class McpToolProvider implements ToolProvider {
     };
   }
 
-  private buildDynamicTool(intentName: string, configId: string, tool: McpDiscoveredTool): McpDynamicTool {
+  private buildDynamicTool(
+    intentName: string,
+    configId: string,
+    ownerUserId: string,
+    tool: McpDiscoveredTool,
+  ): McpDynamicTool {
     const schema: IntentDefinition = {
       name: intentName,
       domain: 'mcp',
@@ -107,8 +134,16 @@ export class McpToolProvider implements ToolProvider {
       privacy: { access: 'write', sensitivity: 'sensitive', destructive: true, external: true },
       localCapable: false,
       category: 'mcp',
+      // Unlike a native intent, this tool is not a capability of the appliance: it is a bound call
+      // into one user's configured server, authenticated with the secrets that user saved (the
+      // `configId` closed over below decides whose credentials go out on the wire). The registry
+      // is process-global, so without this the tool would be listed to, and runnable by, every
+      // other account on the box.
+      ownerUserId,
     };
 
-    return new McpDynamicTool(schema, this.logger, (input) => this.manager.callTool(configId, tool.name, input));
+    return new McpDynamicTool(schema, this.logger, (input) =>
+      this.manager.callTool(configId, tool.name, input),
+    );
   }
 }

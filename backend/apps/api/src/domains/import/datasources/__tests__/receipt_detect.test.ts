@@ -231,12 +231,16 @@ describe('htmlToText (the body an HTML-only receipt actually has)', () => {
     );
   });
 
-  it('survives an unrepresentable numeric entity instead of throwing', () => {
-    expect(htmlToText('<p>a&#1114112;b</p>')).toBe('ab');
+  it('survives an out-of-range numeric entity instead of throwing', () => {
+    // Per the HTML5 spec, a numeric character reference beyond the last valid
+    // code point (0x10FFFF) is replaced with U+FFFD, not silently dropped.
+    expect(htmlToText('<p>a&#1114112;b</p>')).toBe('a�b');
   });
 
-  it('leaves an unknown named entity alone rather than eating it', () => {
-    expect(htmlToText('<p>&fnof;</p>')).toBe('&fnof;');
+  it('decodes the full HTML5 named-entity table, not a hand-picked few', () => {
+    // &fnof; (florin, U+0192) is a real HTML5 entity outside the six the old
+    // hand-rolled decoder here recognized (amp/lt/gt/quot/apos/nbsp).
+    expect(htmlToText('<p>&fnof;</p>')).toBe('ƒ');
   });
 
   it('is empty for empty input', () => {

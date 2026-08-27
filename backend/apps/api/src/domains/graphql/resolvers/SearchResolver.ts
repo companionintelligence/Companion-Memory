@@ -5,6 +5,7 @@ import { type FindOptionsOrder } from 'typeorm';
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { SharedSearchConsentService, applySearchCeiling } from '@ci/domains/asks';
 import { BrowserActivityEntity, BrowserActivityService } from '@ci/domains/browser-activity';
 import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
 import { FileService, SavedSearchService, resolveSavedSearchDateRange } from '@ci/domains/files';
@@ -146,6 +147,21 @@ const BROWSE_OPT_IN_TYPES: ReadonlySet<IndexableEntity> = new Set([
   'receipt',
 ]);
 
+/**
+ * Entity ids behind a page of search results, for the disclosure audit.
+ *
+ * `node` is a GraphQL union (`SearchResultType`) whose members all carry an
+ * `id`, but the union itself declares none — so this reads defensively rather
+ * than casting to a member type. An edge with no readable id is dropped instead
+ * of audited as `undefined`: a wrong id in a disclosure record is worse than a
+ * missing one, and the count that sits beside it comes from the same array.
+ */
+function searchResultIds(edges: readonly { node: unknown }[]): string[] {
+  return edges
+    .map((edge) => (edge.node as { id?: unknown } | null)?.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
 /** PageInfo for an empty connection (e.g. an unknown/revoked share token). */
 const EMPTY_PAGE_INFO = {
   hasNextPage: false,
@@ -237,6 +253,7 @@ export class SearchResolver {
     private readonly receiptService: ReceiptService,
     private readonly answerService: AnswerService,
     private readonly savedSearchService: SavedSearchService,
+    private readonly sharedSearchConsentService: SharedSearchConsentService,
     private readonly searchService: SearchService,
     private readonly tagService: TagService,
     private readonly featureService: FeatureService,
@@ -261,7 +278,7 @@ export class SearchResolver {
         return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
       }
 
-      return this.runSharedSearch(input);
+      return this.runSharedSearch(toServiceContext(context), input);
     }
 
     return this.executeSearch(toServiceContext(context), input, { matchTags: true });
@@ -378,17 +395,48 @@ export class SearchResolver {
   }
 
   /**
-   * Run a shared saved search as its owner. The viewer cannot influence which
-   * data is returned beyond paging/sort — the query, entity-type and tag filters
-   * are taken verbatim from the stored saved search, so a leaked token can only
-   * ever surface exactly what the owner chose to share. Unknown/revoked tokens
-   * yield an empty result rather than an error so the viewer can show a tidy
-   * "link expired" state.
+   * Run a shared saved search as its owner, under the reader's standing grant.
+   *
+   * The viewer cannot influence which data is returned beyond paging/sort — the
+   * query, entity-type and tag filters are taken verbatim from the stored saved
+   * search, so a leaked token can only ever surface exactly what the owner chose
+   * to share.
+   *
+   * ═══ THE TOKEN IS NO LONGER THE WHOLE AUTHORIZATION ═══
+   *
+   * It used to be: holding the string got you the owner's full result set,
+   * forever, anonymously, and unrecorded. The token is now the INVITATION, and
+   * {@link SharedSearchConsentService.authorize} exchanges it for a
+   * `ci.ask_grants` row naming THIS reader — which is what makes a ceiling, an
+   * expiry, a per-reader revocation and a Disclosure History entry expressible
+   * at all. See that service for why each of those was impossible before.
+   *
+   * FOUR OUTCOMES, ONE RESPONSE. An unknown token, a revoked link, a lapsed
+   * link, and a reader the owner specifically revoked all return the same empty
+   * connection. The viewer gets the same tidy "link unavailable" state for all
+   * four, which is the `PEER_ASK_PENDING` rule applied here: which of the four
+   * it was is a fact about the owner's posture, and a refused reader does not
+   * need it in order to be refused.
    */
-  private async runSharedSearch(input: SearchInput): Promise<SearchResultConnection> {
+  private async runSharedSearch(
+    context: UserServiceContext,
+    input: SearchInput,
+  ): Promise<SearchResultConnection> {
     const saved = await this.savedSearchService.findByShareToken(input.shareToken ?? '');
 
     if (saved == null || saved.userId == null) {
+      return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
+    }
+
+    const authorization = await this.sharedSearchConsentService.authorize({
+      ownerUserId: saved.userId,
+      viewerUserId: context.userId,
+      savedSearchId: saved.id,
+      declaredCeiling: saved.shareMaxDisclosure,
+      shareExpiresAt: saved.shareExpiresAt,
+    });
+
+    if (authorization == null) {
       return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
     }
 
@@ -398,7 +446,7 @@ export class SearchResolver {
     const filters = saved.filters ?? {};
     const dateRange = resolveSavedSearchDateRange(filters);
 
-    return this.executeSearch(
+    const unclamped = await this.executeSearch(
       { userId: saved.userId },
       {
         query: saved.query ?? undefined,
@@ -420,6 +468,25 @@ export class SearchResolver {
         after: input.after,
       },
     );
+
+    const disclosed = applySearchCeiling(unclamped, authorization.ceiling);
+
+    // Written AFTER the clamp and from BOTH sets, because they answer different
+    // questions: `disclosedEntities` is what crossed to the reader, and
+    // `backingEntities` is what the owner's box read to produce it. Auditing the
+    // pre-clamp set as "disclosed" is the exact disagreement
+    // 20260820224500_add_ask_audit_backing_entities was written to end.
+    await this.sharedSearchConsentService.recordRead({
+      ownerUserId: saved.userId,
+      viewerUserId: context.userId,
+      savedSearchId: saved.id,
+      savedSearchName: saved.name,
+      grantId: authorization.grantId,
+      disclosedEntityIds: searchResultIds(disclosed.edges),
+      backingEntityIds: searchResultIds(unclamped.edges),
+    });
+
+    return disclosed;
   }
 
   private async executeSearch(
@@ -1004,10 +1071,7 @@ export class SearchResolver {
         // entity as appearedAt so getEntityTimestamp, the cursor, and the
         // GraphQL field all read the same value. Do not add a ResolveField that
         // overwrites this with first-ever — that would lose in-window time.
-        if (
-          identifier.sortTime != null &&
-          (identifier.type === 'person' || identifier.type === 'place')
-        ) {
+        if (identifier.sortTime != null && (identifier.type === 'person' || identifier.type === 'place')) {
           (entry.entity as { appearedAt?: Date }).appearedAt = identifier.sortTime;
         }
 

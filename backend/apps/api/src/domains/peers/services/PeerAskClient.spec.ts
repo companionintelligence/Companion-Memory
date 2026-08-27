@@ -28,7 +28,7 @@ function client(): { subject: PeerAskClient; warn: jest.Mock } {
   const warn = jest.fn();
   const logger = { setContext: jest.fn(), warn, log: jest.fn(), error: jest.fn(), debug: jest.fn() };
 
-  return { subject: new PeerAskClient(logger as never), warn };
+  return { subject: new PeerAskClient(unsignedSigner() as never, logger as never), warn };
 }
 
 function link(memoryEndpoint: string): PeerLink {
@@ -249,3 +249,11 @@ describe('PeerAskClient — a refusal and an outage are different facts', () => 
     expect(reply.reason).toBe('Peer endpoint not permitted');
   });
 });
+
+/**
+ * A signer with no key configured, which is every box until an operator sets
+ * `peers.signingKeyJwk`. These suites are about the call, not the signature.
+ */
+function unsignedSigner() {
+  return { signOutbound: () => null };
+}

@@ -1,19 +1,13 @@
 import { type ApiKeyCapability, FULL_CAPABILITY } from '@ci/common/decorators';
 
-import type { IntentDefinition } from '../core/types';
+import { DISPATCH_TIERS, type DispatchTier, type IntentDefinition } from '../core/types';
 
 import { capabilityAllows, capabilityRequiredFor, removesData } from './capabilityPolicy';
 
-/**
- * Where an intent is being dispatched from.
- *
- * - `appliance` — the CI-Server itself: full corpus, network, and the user's own authority.
- * - `local` — the on-device tier (the mobile Local Hub sidecar / on-device model), running against
- *   a partial mirror, possibly offline, and with no way to ask the appliance anything right now.
- */
-export const DISPATCH_TIERS = ['appliance', 'local'] as const;
-
-export type DispatchTier = (typeof DISPATCH_TIERS)[number];
+// Re-exported for every existing importer of `DISPATCH_TIERS`/`DispatchTier` from this module —
+// `core/types.ts` is now the canonical definition (see its own docblock for why), this module just
+// carries the name forward so nothing importing from here has to change.
+export { DISPATCH_TIERS, type DispatchTier };
 
 /**
  * What a dispatcher should do with an intent.

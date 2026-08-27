@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ASK_ANSWER,
   ASK_DISCLOSURE_HISTORY,
+  ASK_DISCLOSURE_SUMMARY,
   CREATE_ASK,
   CREATE_PEER_LINK,
   MY_ASK_GRANTS,
@@ -31,6 +32,16 @@ function selectedFields(document: unknown, rootField = 0): string[] {
   const root = operation(document).selectionSet.selections[rootField] as FieldNode;
 
   return (root.selectionSet?.selections ?? []).map((selection) => (selection as FieldNode).name.value);
+}
+
+/** Fields selected inside one named sub-selection of the root field. */
+function nestedFields(document: unknown, path: string): string[] {
+  const root = operation(document).selectionSet.selections[0] as FieldNode;
+  const child = (root.selectionSet?.selections ?? []).find(
+    (selection) => (selection as FieldNode).name.value === path,
+  ) as FieldNode | undefined;
+
+  return (child?.selectionSet?.selections ?? []).map((selection) => (selection as FieldNode).name.value);
 }
 
 describe('RUN_ASK', () => {
@@ -87,8 +98,46 @@ describe('ASK_DISCLOSURE_HISTORY', () => {
     // the history's auto-vs-reviewed distinction. Drop it and the surface that
     // makes a coerced grant survivable stops being able to show the thing worth
     // noticing.
-    expect(selectedFields(ASK_DISCLOSURE_HISTORY)).toEqual(
+    expect(nestedFields(ASK_DISCLOSURE_HISTORY, 'rows')).toEqual(
       expect.arrayContaining(['outcome', 'disclosedCount', 'askerId', 'createdAt']),
+    );
+  });
+
+  it('selects `truncated`, so a capped read cannot render as a complete one', () => {
+    expect(selectedFields(ASK_DISCLOSURE_HISTORY)).toEqual(expect.arrayContaining(['truncated', 'rows']));
+  });
+
+  it('accepts a filter, so the drill-in does not re-read every row', () => {
+    expect(operation(ASK_DISCLOSURE_HISTORY).variableDefinitions?.map((d) => d.variable.name.value)).toEqual([
+      'input',
+    ]);
+  });
+});
+
+describe('ASK_DISCLOSURE_SUMMARY', () => {
+  it('keeps auto-answered and reviewed as SEPARATE counts on the wire', () => {
+    // Summing them server-side would destroy the one distinction the surface
+    // exists to make: whether a human was in the loop.
+    expect(nestedFields(ASK_DISCLOSURE_SUMMARY, 'summaries')).toEqual(
+      expect.arrayContaining(['autoAnswered', 'reviewed', 'declined', 'expired']),
+    );
+  });
+
+  it('selects the magnitude, not only the ask count', () => {
+    // "14 asks" and "213 items" are different facts, and only the second
+    // describes what the other person now holds.
+    expect(nestedFields(ASK_DISCLOSURE_SUMMARY, 'summaries')).toEqual(
+      expect.arrayContaining(['itemsDisclosed', 'itemsInWindow', 'asksInWindow']),
+    );
+  });
+
+  it('selects the grouping key the drill-in filters by', () => {
+    expect(nestedFields(ASK_DISCLOSURE_SUMMARY, 'summaries')).toContain('key');
+  });
+
+  it('selects `truncated`, because the totals beside it are then floors', () => {
+    expect(selectedFields(ASK_DISCLOSURE_SUMMARY)).toEqual(
+      expect.arrayContaining(['truncated', 'summaries']),
     );
   });
 });

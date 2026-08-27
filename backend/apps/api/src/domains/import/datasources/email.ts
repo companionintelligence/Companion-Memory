@@ -8,7 +8,7 @@ import readline from 'node:readline';
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
 import { mboxFromLineDate, receivedDate } from './email_date';
 import { emailDirection, isDraft } from './email_direction';
-import { parseMime, readableBody, type ParsedMimeResult } from './email_mime';
+import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
 import {
   extractReceiptFields,
   isLikelyReceipt,
@@ -417,7 +417,10 @@ function parseHeaders(raw: string): Record<string, string> {
     }
 
     const key = line.slice(0, idx).trim();
-    const val = line.slice(idx + 1).trim();
+    // decodeHeaderField is a cheap no-op (one .includes('=?') check) unless a
+    // value actually carries a `=?charset?…?=` encoded-word — see gmail.ts's
+    // parseHeaders for why decoding unconditionally here is safe.
+    const val = decodeHeaderField(line.slice(idx + 1).trim());
     if (!map[key]) {
       map[key] = val;
     } else {

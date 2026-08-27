@@ -117,6 +117,7 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
 | **A non-answer says nothing about why** | The wire carries `answered` or `pending`, and one constant reason. A block grant, an ask in the owner's review inbox, an ask that expired, and an `askId` this box has never seen are the SAME reply. `declined` vs `pending_review` was a one-bit read on the grant matrix, mappable at 10 probes a minute — the same oracle #2210/#2216 closed for a local asker, which this had been cited as the precedent for. The collapse is made at the **responder**: hiding it on receipt would bind only a well-behaved asker while the word stayed on the wire. |
 | **No SSRF** | Every server-side fetch goes through `peerEgressFetch()`, which is the only dialer in the domain. Three guards, not one: (1) `checkEgressUrl()` on the URL — https only, no credentials, no non-standard ports, no private/loopback/link-local/CGNAT/metadata/documentation address, no `.local`/`.internal`/bare-label name — including IPv4-mapped IPv6 in **both** spellings, since `URL` normalizes `::ffff:10.0.0.1` to hex, and every decimal/octal/hex/short IPv4 spelling, which `URL` folds to a dotted quad; (2) the resolved address is checked **at connect time** through the dispatcher's `lookup`, so there is no rebind window (see below); (3) **redirects are refused, not followed** — a peer answering `307 Location: http://127.0.0.1:11434/api/pull` used to have this box re-issue the POST, body intact, inside its own network. |
 | **Token can't be replayed at another box** | The peer surface verifies the token against **this box's own `peers.audience`**, not the broad first-party list. It refuses to accept anything until that is configured. |
+| **A leaked token is not, by itself, enough** | Requests carry an **RFC 9421 HTTP message signature** over `@method`, `@target-uri` and an RFC 9530 `Content-Digest` of the body, with a nonce and a bounded window. See [Message signatures](#message-signatures) — this is what a bearer token structurally cannot give: binding to *this* request, and detectable replay. |
 | **Inbound flooding is bounded** | `PeerRateLimitService` limits on the verified `(issuer, subject)` **before** the peer-link lookup, so an unknown caller is limited too. |
 | **Timezone-independent availability** | All-day events expand on **UTC** day boundaries, so two boxes in different zones compute identical busy spans. |
 
@@ -125,7 +126,7 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
 | Table | Holds |
 |---|---|
 | `ci.federated_identities` | `(issuer, subject) → user`, the binding key. `bind_method` records `sub` vs one-time `email_link`. |
-| `ci.peer_links` | The local half of the trust graph: handle, endpoint, peer `(iss,sub)`, trust tier, revocation, and `person_entity_id` — the person in *your* memory this peer is (what makes "do you know X?" resolvable). |
+| `ci.peer_links` | The local half of the trust graph: handle, endpoint, peer `(iss,sub)`, **the peer's Ed25519 public JWK + its RFC 7638 thumbprint**, trust tier, revocation, and `person_entity_id` — the person in *your* memory this peer is (what makes "do you know X?" resolvable). One live link per `(owner, key)`, so which link answers is never decided by heap order. |
 | `ci.asks` | Gains `peer_link_id` + `direction`. `asker_user_id` is **nullable** with a CHECK that exactly one of `(asker_user_id, peer_link_id)` identifies the asker — an inbound ask has no local asker. |
 | `ci.ask_grants` | Gains `grantee_peer_link_id` (exactly-one CHECK) so consent can address a peer, not just a household member. |
 | `ci.ask_audit` | Records the peer **FK-lessly**, matching its durability contract: removing a peer must not erase the record of what was disclosed to them. |
@@ -215,6 +216,76 @@ Two details worth knowing:
 - An outbound ask that was **not** answered writes no audit row at all. It is not a terminal outcome — it can still be collected — and the previous behaviour (an `outcome: 'declined'` row beside an ask still sitting at `delivered`) both contradicted itself and would now double-count once the answer was collected.
 
 An unknown handle and a revoked link are refused **identically**, so a caller cannot use the error to discover which handles the owner has ever been linked to.
+
+### Purpose, and what it is for
+
+`peerAskBodySchema` carries a body-level `purpose`, and `toAskQuery` writes it into `filters.purpose` on **every** archetype.
+
+It did not, and that was a real (if fail-closed) defect: `scopeCoversQuery` reads `filters.purpose`, and nothing ever wrote one — `availability` folded its purpose into the *prompt* and the other two archetypes had no field at all. A purpose-limited grant therefore matched **no inbound peer ask, ever**. It failed closed, so nothing leaked; the feature was simply dead across boxes, silently, with no signal to the owner who set it.
+
+Two different treatments, deliberately:
+
+- **Stated intent is carried, shown, and never judged.** UMA-for-agents' recommendation #15 — carry a requester's purpose unread and let policy notice its *absence* rather than judge its truthfulness. This box cannot verify why anyone wants anything, so the review card attributes it (*"They say this is for: …"*) and says so plainly when none was stated.
+- **A purpose-LIMITED grant is enforced**, because that is the owner writing down their own narrowing ("only for the wedding invites"). It can only ever refuse to match, never widen — and a grant that names a purpose is not satisfied by an ask that states none.
+
+`canonicalPurpose` is its own function rather than a reuse of `canonicalDataClass`. Same normalizer today, different contract: a data class is a token from a closed vocabulary and may one day be aliased or singularized; a purpose is a short human phrase and must not be.
+
+### Message signatures
+<a id="message-signatures"></a>
+
+The bearer token answers "who is asking". It cannot answer "is this the request they asked", and that gap is a property of bearer tokens rather than of the implementation:
+
+- **A leaked token is a complete impersonation** for its whole lifetime — nothing binds it to the request it arrived on.
+- **Nothing binds it to the body.** Anything on the path can rewrite the question and the token still verifies.
+- **Replay is undetectable.** Only the `askId` idempotency key limits the damage, and it limits it per-key, not per-request.
+
+UMA-for-agents makes retiring bearer RPTs its recommendation #4 for exactly this. Both peer routes now accept an RFC 9421 signature:
+
+```
+Content-Digest: sha-256=:<base64>:
+Signature-Input: ci=("@method" "@target-uri" "content-digest");created=…;expires=…;keyid="<thumbprint>";alg="ed25519";nonce="…"
+Signature: ci=:<base64>:
+```
+
+The profile is deliberately narrow — `ed25519` only, exactly five parameters, exactly one label — and `httpSignature.ts` **rejects** anything outside it rather than skipping past it. A permissive parser here accepts signatures that cover less than they appear to.
+
+Details that are load-bearing rather than incidental:
+
+- **The digest covers the raw bytes.** `BodyParserMiddleware` retains the unparsed body for `/agent/v1` only (a `verify` hook on express `json()`), because `JSON.stringify` of a parsed object is not guaranteed to reproduce what the sender sent. Re-serializing before digesting is the classic way to make a check pass over content nobody signed. Scoped to that one prefix so a second copy of every 10mb GraphQL body is not retained.
+- **`@target-uri` is built from config, never from `Host`.** It is a *signed* component, so whatever this box reconstructs is what gets checked; letting a caller pick the authority half would let a signature minted for `evil.example` verify here. The origin comes from `peers.memoryEndpoint` and the path from the route — the same rule as UMA's "authorization inputs never come from transport headers". A box with no published endpoint refuses to verify at all rather than guessing.
+- **The window is bounded at both ends.** `expires` is the *sender's* choice, so `MAX_SIGNATURE_LIFETIME_MS` (5 min) caps it — otherwise a peer signs one request with a year-long window and has a bearer token again. That bound is also what keeps the nonce cache finite.
+- **The nonce cache is the replay defence**, checked *last* and only for an otherwise-valid signature: checking earlier would let an attacker burn a victim's nonce with a corrupted copy and deny the honest request behind it. Scoped per key thumbprint so one peer cannot burn another's. In-memory and per-process — the same caveat as the rate limiters (guide §9, G8).
+- **The key and the token must agree.** A signature is accepted only when a live link holds that key *and* names the same `(issuer, subject)` the token asserts. Accepting any link that merely holds the key would let peer A's signature authorize a request carrying peer B's token.
+- **One refusal for every failure.** Missing, malformed, unknown key, bad digest, replayed, wrong peer — all raise the identical 401. Which check failed is a fact about this box's configuration and the owner's links; the reason is logged where the operator sees it and the caller does not.
+
+**Rollout is two switches, deliberately.** Setting `peers.signingKeyJwk` makes this box *sign*; setting `peers.requireHttpSignature` makes it *demand* signatures. An offered signature is always verified even when not required, which is what lets an operator confirm both sides interoperate before flipping the second switch. Generate a key with:
+
+```bash
+node -e "const {generateKeyPairSync}=require('node:crypto');console.log(JSON.stringify(generateKeyPairSync('ed25519').privateKey.export({format:'jwk'})))"
+```
+
+The peer records the **public** half on its `ci.peer_links` row (`peer_key_jwk` + `peer_key_thumbprint`); `publicKeyFromJwk` refuses a JWK carrying `d`, so a private key cannot be stored there and then used to "verify" its own signatures.
+
+### What the owner sees
+
+Verification outcomes are **persisted, not merely logged** — `ci.asks` gains `channel_key_thumbprint`, `channel_verified_at` and `channel_covered`, stamped as of arrival so a later key rotation cannot rewrite what signed a past request. `AskType.channel` exposes them, responder-only for the same reason `consentBasis` is: they describe what the *responder's* box checked, and handing them to the asker is a probe into this box's configuration.
+
+The surfaces are a **lock** on every ask and disclosure row, opening a **signature detail modal**:
+
+- `frontend/apps/web/src/pages/AsksPage/ConsentLock.tsx` — four states (`sealed` / `consented` / `pending` / `open`), each carried in text beside the icon.
+- `.../ConsentDetailModal.tsx` — consent, channel and collection as three separate sections, with each covered component rendered beside *the thing it protects*.
+- `.../consentProvenance.ts` — the pure vocabulary, unit-tested.
+
+Two rules the components are built around, both in `consentProvenance.ts`:
+
+- **Weakest wins.** A signature proves who asked, not that they were allowed to, so an undecided ask reads *Awaiting you* even when it arrived signed. The lock never rounds up.
+- **The common case is not a warning.** Signing ships off and a local ask never crosses a network, so *Consented* is the honest reading of most disclosures and is rendered as a plain badge. A UI that painted the ordinary case as a problem would teach people to ignore it.
+
+`ci.ask_audit` does **not** carry channel provenance, so a Disclosure History row says the channel was *not recorded* rather than rendering a null as "unsigned" — asserting a fact nobody checked. Carrying it into the audit is the follow-up.
+
+Full protocol reference, with the verification-order chart and the threat table: [`CI-Engineering/projects/decentralized-trust-graphs/SIGNATURES.md`](https://github.com/companionintelligence/CI-Engineering/blob/main/projects/decentralized-trust-graphs/SIGNATURES.md). User-facing guide: [Asking Other Companions](https://docs.ci.computer/docs/companion-memory/asking-other-companions).
+
+**Not yet:** the key is a *second factor*, not the identity. Downstream routing still resolves a link by `(issuer, subject)`. Making the thumbprint primary and the Portal token an optional attestation — UMA's `FLOW.md` result, that the owner's policy is identical under every identity regime — needs the thumbprint threaded through `PeerAskService`, and is the follow-up. Our consent code already agrees with that direction: nothing in `grantMatch.ts` or `policy.ts` mentions an issuer.
 
 ### The token
 

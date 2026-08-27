@@ -74,7 +74,6 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
           linkedTable: data.linkedTable ?? null,
           linkedId: data.linkedId ?? null,
           searchContent: data.searchContent ?? null,
-          lastAccessed: data.lastAccessed,
           userId: context.userId,
           properties: data.properties ?? {},
         });
@@ -103,7 +102,7 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
     }
 
     // Reload so @AfterLoad projects the jsonb helpers (type/category/aliases)
-    // and DB-side defaults (e.g. last_accessed) are present. `save` runs
+    // and DB-side defaults (e.g. created_at) are present. `save` runs
     // neither, so the saved instance alone would egress them empty.
     const created = await this.repository.findOne({ where: { id: entity.id } });
 
@@ -141,7 +140,6 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
         linkedTable: item.linkedTable ?? null,
         linkedId: item.linkedId ?? null,
         searchContent: item.searchContent ?? null,
-        lastAccessed: item.lastAccessed,
         userId: context.userId,
         properties: item.properties ?? {},
       }),

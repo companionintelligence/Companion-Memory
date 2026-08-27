@@ -8,6 +8,8 @@ import {
   APPROVE_ASK,
   ASK_ANSWER,
   ASK_DISCLOSURE_HISTORY,
+  ASK_DISCLOSURE_SUMMARY,
+  MY_HOUSEHOLD_TIERS,
   ASK_INBOX,
   ASK_OUTBOX,
   CREATE_ASK,
@@ -127,10 +129,55 @@ const peersOk = (links: unknown[]) => ({
   request: { query: MY_PEER_LINKS },
   result: { data: { myPeerLinks: links } },
 });
-const historyOk = (rows: unknown[]) => ({
-  request: { query: ASK_DISCLOSURE_HISTORY },
-  result: { data: { askDisclosureHistory: rows } },
+/**
+ * The DRILL-IN read. Scoped to one counterparty, because the history tab now
+ * opens on the relationship fold and only fetches individual rows once a
+ * relationship is opened.
+ */
+const historyOk = (rows: unknown[], counterpartyKey = SUMMARY_KEY) => ({
+  request: { query: ASK_DISCLOSURE_HISTORY, variables: { input: { counterpartyKey } } },
+  result: { data: { askDisclosureHistory: { truncated: false, rows } } },
 });
+
+const SUMMARY_KEY = 'peer:link-1';
+
+/** The owner's own verdicts about other LOCAL accounts. Absent = the default. */
+const householdTiersOk = (rows: unknown[] = []) => ({
+  request: { query: MY_HOUSEHOLD_TIERS },
+  result: { data: { myHouseholdTiers: rows } },
+});
+
+/** The INDEX read — what the history tab shows first. */
+const summaryOk = (summaries: unknown[]) => ({
+  request: { query: ASK_DISCLOSURE_SUMMARY, variables: { input: undefined } },
+  result: { data: { askDisclosureSummary: { truncated: false, summaries } } },
+});
+
+const summaryRow = (overrides: Record<string, unknown> = {}) => ({
+  __typename: 'AskDisclosureSummaryType',
+  key: SUMMARY_KEY,
+  askerId: null,
+  peerLinkId: 'link-1',
+  peerHandle: 'ana',
+  total: 2,
+  autoAnswered: 1,
+  reviewed: 1,
+  declined: 0,
+  expired: 0,
+  itemsDisclosed: 4,
+  asksInWindow: 2,
+  itemsInWindow: 4,
+  firstAt: new Date('2026-08-01T00:00:00.000Z').toISOString(),
+  lastAt: new Date('2026-08-20T00:00:00.000Z').toISOString(),
+  ...overrides,
+});
+
+/** Open the history tab and drill into the one relationship the mocks provide. */
+async function openRelationship(): Promise<void> {
+  openTab('What I’ve shared');
+  const seeAll = await screen.findByRole('button', { name: /See all/i });
+  fireEvent.click(seeAll);
+}
 
 function renderPage(mocks: readonly MockedResponse[]) {
   // The shared helper supplies every provider the app shell expects (router,
@@ -145,7 +192,8 @@ const defaultMocks = [
   ...repeated(outboxOk),
   ...repeated(grantsOk([])),
   ...repeated(peersOk([])),
-  ...repeated(historyOk([])),
+  ...repeated(summaryOk([])),
+  ...repeated(householdTiersOk()),
 ];
 
 /** Open a tab by its button label and wait for the switch to take effect. */
@@ -1065,6 +1113,7 @@ describe('AsksPage', () => {
       ...repeated(outboxOk),
       ...repeated(grantsOk([])),
       ...repeated(peersOk([])),
+      ...repeated(summaryOk([summaryRow()])),
       ...repeated(
         historyOk([
           auditRow({ id: 'audit-1', outcome: 'auto_answered', consentBasis: 'grant-1' }),
@@ -1074,7 +1123,7 @@ describe('AsksPage', () => {
     ]);
 
     await screen.findByText(/No one is waiting on you/i);
-    openTab('What I’ve shared');
+    await openRelationship();
 
     // Collapsing these into one "Answered" badge hides the only outcome in the
     // list an owner might want to go and stop — a rule they wrote once, acting
@@ -1090,15 +1139,168 @@ describe('AsksPage', () => {
       ...repeated(outboxOk),
       ...repeated(grantsOk([])),
       ...repeated(peersOk([])),
+      ...repeated(summaryOk([summaryRow()])),
       ...repeated(historyOk([auditRow({ outcome: 'answered', disclosedCount: 0 })])),
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    await openRelationship();
+
+    // A yes/no discloses no items and is still a disclosure. Rendering it the
+    // same as a declined row makes the owner's own receipt understate itself.
+    expect(await screen.findByText(/an answer is still something shared/i)).toBeInTheDocument();
+  });
+
+  it('lets the owner demote a LOCAL grantee — the control G6 said did not exist', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(
+        grantsOk([
+          {
+            __typename: 'AskGrantType',
+            id: 'g1',
+            mode: 'auto',
+            queryType: 'content',
+            dataClass: 'photos',
+            purpose: null,
+            granteeId: 'user_sam',
+            granteePeerLinkId: null,
+            revokedAt: null,
+            expiresAt: null,
+            active: true,
+            useCount: 0,
+            lastUsedAt: null,
+            createdAt: new Date('2026-08-01T00:00:00.000Z').toISOString(),
+          },
+        ]),
+      ),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([])),
+      ...repeated(householdTiersOk()),
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    openTab('Who can ask me what');
+
+    // Until `ci.household_tiers` existed, every local asker was `household` —
+    // the widest ceiling on the ladder, exempt from the sensitive-class floor,
+    // with nothing anywhere that could say otherwise.
+    const select = await screen.findByRole('combobox', { name: /Trust tier for/i });
+    expect(select).toHaveValue('household');
+  });
+
+  it('shows a peer’s tier as a LABEL, not a control — it belongs on their link', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(
+        grantsOk([
+          {
+            __typename: 'AskGrantType',
+            id: 'g1',
+            mode: 'auto',
+            queryType: 'content',
+            dataClass: 'photos',
+            purpose: null,
+            granteeId: null,
+            granteePeerLinkId: 'link-1',
+            revokedAt: null,
+            expiresAt: null,
+            active: true,
+            useCount: 0,
+            lastUsedAt: null,
+            createdAt: new Date('2026-08-01T00:00:00.000Z').toISOString(),
+          },
+        ]),
+      ),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([])),
+      ...repeated(householdTiersOk()),
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    openTab('Who can ask me what');
+
+    await screen.findByText(/tier not loaded/i);
+    expect(screen.queryByRole('combobox', { name: /Trust tier for/i })).toBeNull();
+  });
+
+  it('opens the history on RELATIONSHIPS, not on a flat event list', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([summaryRow()])),
     ]);
 
     await screen.findByText(/No one is waiting on you/i);
     openTab('What I’ve shared');
 
-    // A yes/no discloses no items and is still a disclosure. Rendering it the
-    // same as a declined row makes the owner's own receipt understate itself.
-    expect(await screen.findByText(/an answer is still something shared/i)).toBeInTheDocument();
+    // The fold's whole reason for existing: "what has Ana been getting?" is
+    // answered without scrolling and tallying.
+    expect(await screen.findByText('ana')).toBeInTheDocument();
+    expect(screen.getByText(/1 answered automatically/)).toBeInTheDocument();
+    expect(screen.getByText(/4 items shared/)).toBeInTheDocument();
+  });
+
+  it('does not read a single audit row until a relationship is opened', async () => {
+    // The index must not be built by loading every row — that is the unbounded
+    // read the fold replaces. With no drill-in mock supplied, a page that
+    // fetched the flat list here would error rather than render.
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([summaryRow()])),
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    openTab('What I’ve shared');
+
+    expect(await screen.findByText('ana')).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn.t load/i)).toBeNull();
+  });
+
+  it('can get back to the index from a relationship', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated(summaryOk([summaryRow()])),
+      ...repeated(historyOk([auditRow({ outcome: 'answered' })])),
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    await openRelationship();
+    expect(await screen.findByText('You answered')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /All relationships/i }));
+
+    expect(await screen.findByRole('button', { name: /See all/i })).toBeInTheDocument();
+  });
+
+  it('says the totals are minimums when the fold ran over a capped read', async () => {
+    renderPage([
+      ...repeated(inboxOk([])),
+      ...repeated(outboxOk),
+      ...repeated(grantsOk([])),
+      ...repeated(peersOk([])),
+      ...repeated({
+        request: { query: ASK_DISCLOSURE_SUMMARY, variables: { input: undefined } },
+        result: { data: { askDisclosureSummary: { truncated: true, summaries: [summaryRow()] } } },
+      }),
+    ]);
+
+    await screen.findByText(/No one is waiting on you/i);
+    openTab('What I’ve shared');
+
+    // A completeness surface presenting a floor as a total is the failure the
+    // flag was put on the wire to prevent.
+    expect(await screen.findByText(/these totals are minimums/i)).toBeInTheDocument();
   });
 
   it('does not claim nothing has been shared when that request failed', async () => {
@@ -1107,7 +1309,10 @@ describe('AsksPage', () => {
       ...repeated(outboxOk),
       ...repeated(grantsOk([])),
       ...repeated(peersOk([])),
-      { request: { query: ASK_DISCLOSURE_HISTORY }, error: new Error('network down') },
+      {
+        request: { query: ASK_DISCLOSURE_SUMMARY, variables: { input: undefined } },
+        error: new Error('network down'),
+      },
     ]);
 
     await screen.findByText(/No one is waiting on you/i);

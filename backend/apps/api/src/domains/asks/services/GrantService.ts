@@ -56,6 +56,8 @@ export class GrantService {
       ownerUserId: context.userId,
       granteeUserId: data.granteeUserId ?? null,
       granteePeerLinkId: data.granteePeerLinkId ?? null,
+      resourceType: data.resourceType ?? null,
+      resourceId: data.resourceId ?? null,
       queryType: data.queryType,
       dataClass: data.dataClass ?? null,
       scope: data.scope ?? null,

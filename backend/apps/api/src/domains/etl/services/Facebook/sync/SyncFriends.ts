@@ -10,7 +10,7 @@ export async function syncFriends({
   nextCursor: Record<string, unknown>;
 }): Promise<{ data: Record<string, unknown>; nextCursor?: Record<string, unknown> }> {
   try {
-    client.logger.log('Performing historical Facebook Posts sync', {
+    client.logger.log('Performing historical Facebook Friends sync', {
       connectionId: connection.id,
       nextCursor,
     });
@@ -48,7 +48,7 @@ export async function syncFriends({
         : {},
     };
   } catch (err) {
-    client.logger.error('Error during Facebook Videos sync', {
+    client.logger.error('Error during Facebook Friends sync', {
       connectionId: connection.id,
       error: err instanceof Error ? err.message : 'Unknown error',
     });

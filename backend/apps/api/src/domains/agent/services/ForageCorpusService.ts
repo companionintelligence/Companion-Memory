@@ -13,7 +13,6 @@ import {
 } from '@ci/domains/predictions';
 import { SearchService } from '@ci/domains/search-next';
 
-import { SerializerService } from './SerializerService';
 import {
   branchesFromClusters,
   eventParticipantIds,
@@ -28,6 +27,7 @@ import {
   type ForageLakePerson,
   type ForageLakeSpec,
 } from './forageCorpus';
+import { SerializerService } from './SerializerService';
 
 const MAX_PEOPLE = 8;
 const MAX_ITEMS = 40;
@@ -90,6 +90,7 @@ export class ForageCorpusService {
     if (!current) {
       return null;
     }
+
     const extra = await this.expand(context, current);
     if (extra.length > 0) {
       await this.hbpeService.ingestForage(context, extra);
@@ -154,6 +155,7 @@ export class ForageCorpusService {
       if (seen.has(item.id) || items.length >= MAX_ITEMS) {
         return;
       }
+
       seen.add(item.id);
       items.push({ ...item, observation: observationCue(item) });
     };
@@ -363,6 +365,7 @@ export class ForageCorpusService {
       if (hits.length === 0) {
         return [];
       }
+
       const resolved = await this.entityResolution.resolve(context, hits);
       const items: ForageLakeItem[] = [];
       for (const hit of hits) {
@@ -371,6 +374,7 @@ export class ForageCorpusService {
         if (!label) {
           continue;
         }
+
         const supportsPeople =
           hit.type === 'person' && personByEntity.get(hit.id) ? [personByEntity.get(hit.id) as string] : [];
         items.push({

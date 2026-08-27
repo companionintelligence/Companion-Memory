@@ -1,6 +1,15 @@
 import { Field, GraphQLISODateTime, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
 
-import { isGrantActive, type Ask, type AskAudit, type AskGrant, type AskQuery } from '@ci/domains/asks';
+import {
+  isGrantActive,
+  type Ask,
+  type AskAudit,
+  type AskGrant,
+  type AskQuery,
+  type DisclosureSummary,
+  type GrantUsage,
+  type AskBroadcast,
+} from '@ci/domains/asks';
 
 import { GlobalUID } from './GlobalUID';
 
@@ -30,6 +39,17 @@ export enum AskAuditOutcomeEnum {
 }
 registerEnumType(AskAuditOutcomeEnum, { name: 'AskAuditOutcome' });
 
+/** What made an ask — a person, or software acting for them. */
+@ObjectType()
+export class AskActorType {
+  @Field(() => String)
+  kind!: string;
+
+  /** Display only. Never matched on — see `actorSatisfiesDelegation`. */
+  @Field(() => String, { nullable: true })
+  label!: string | null;
+}
+
 /** The bounded, asker-supplied query carried by an ask. */
 @ObjectType()
 export class AskQueryType {
@@ -42,16 +62,78 @@ export class AskQueryType {
   @Field(() => String)
   prompt!: string;
 
+  /**
+   * What made this ask, when the asker declared it. Null means they did not —
+   * which is itself the reason a delegation-restricted grant will not
+   * auto-answer it.
+   */
+  @Field(() => AskActorType, { nullable: true })
+  actor!: AskActorType | null;
+
+  /**
+   * The purpose the asker stated, lifted out of `filters` for display.
+   *
+   * A first-class field on the OUTPUT even though it lives in `filters` on the
+   * way in: the consent surface renders it, and making every client reach into
+   * an untyped bag for a consent-relevant fact is how it ends up unrendered.
+   * Null means none was stated — which is itself an input to the decision.
+   */
+  @Field(() => String, { nullable: true })
+  purpose!: string | null;
+
   static toType(query: AskQuery): AskQueryType {
     return {
       queryType: query.queryType,
       dataClass: query.dataClass ?? null,
       prompt: query.prompt,
+      actor: query.actor ? { kind: query.actor.kind, label: query.actor.label ?? null } : null,
+      // Only a string counts. `filters` is jsonb and a non-string there is not
+      // a purpose somebody stated — rendering `[object Object]` beside "they
+      // say this is for" would be worse than showing nothing.
+      purpose: typeof query.filters?.purpose === 'string' ? query.filters.purpose : null,
     };
   }
 }
 
 /** An interpersonal ask directed at another user's memory. */
+/**
+ * HOW an ask arrived — the channel facts, beside the consent facts.
+ *
+ * Present only when the request carried a verified RFC 9421 signature. Its
+ * ABSENCE is the answer for every other ask: an unsigned channel, which the
+ * surfaces state plainly rather than leaving blank. An owner who cannot tell
+ * "unsigned" from "not recorded" cannot use the distinction at all.
+ */
+@ObjectType()
+export class AskChannelType {
+  /** RFC 7638 thumbprint of the key that signed the request, as of arrival. */
+  @Field(() => String)
+  keyThumbprint!: string;
+
+  /**
+   * When THIS box verified the signature — not the sender's `created`, which is
+   * their claim about when they signed it.
+   */
+  @Field(() => GraphQLISODateTime)
+  verifiedAt!: Date;
+
+  /** The signature base's covered components, as actually presented. */
+  @Field(() => [String])
+  covered!: string[];
+
+  static toType(ask: Ask): AskChannelType | null {
+    if (ask.channelKeyThumbprint == null || ask.channelVerifiedAt == null) {
+      return null;
+    }
+
+    return {
+      keyThumbprint: ask.channelKeyThumbprint,
+      verifiedAt: ask.channelVerifiedAt,
+      covered: ask.channelCovered ?? [],
+    };
+  }
+}
+
 @ObjectType()
 export class AskType {
   @Field(() => ID)
@@ -118,6 +200,29 @@ export class AskType {
   expiresAt!: Date | null;
 
   /**
+   * How this ask arrived. RESPONDER-ONLY, for the same reason
+   * {@link consentBasis} is: it describes what the RESPONDER's box checked and
+   * accepted, and the asker — who signed the request themselves and already
+   * knows — gains nothing from it but a probe into the responder's
+   * configuration (is `requireHttpSignature` on? which of my keys does this box
+   * hold?). Null means an unsigned channel.
+   */
+  @Field(() => AskChannelType, { nullable: true })
+  channel!: AskChannelType | null;
+
+  /**
+   * Correlates asks the ASKER sent as one question to several people.
+   *
+   * ASKER-ONLY, and that is the mirror image of {@link consentBasis} being
+   * responder-only. Who else was asked is a fact about the ASKER's
+   * relationships — a responder learning it would be a third-party disclosure
+   * nobody consented to, of the same shape as the peer handle and the decline
+   * oracle this domain closes elsewhere.
+   */
+  @Field(() => ID, { nullable: true })
+  broadcastId!: string | null;
+
+  /**
    * `viewerUserId` decides whether the responder's private reasoning is
    * included. Callers that omit it get the safe projection — an omitted argument
    * must never be the disclosing case.
@@ -147,6 +252,13 @@ export class AskType {
       createdAt: ask.createdAt,
       updatedAt: isResponder ? ask.updatedAt : askerVisibleUpdatedAt(ask),
       expiresAt: ask.expiresAt,
+      channel: isResponder ? AskChannelType.toType(ask) : null,
+      // The ONE field on this type that is asker-only rather than
+      // responder-only. `isResponder` is not simply negated: a viewer who is
+      // neither party gets null from both branches, which is the safe default
+      // an omitted `viewerUserId` must always land on.
+      broadcastId:
+        viewerUserId != null && viewerUserId === ask.askerUserId ? ask.broadcastId : null,
     };
   }
 }
@@ -288,7 +400,26 @@ export class AskGrantType {
   @Field(() => Boolean)
   active!: boolean;
 
-  static toType(grant: AskGrant): AskGrantType {
+  /**
+   * How many disclosures have cited this grant, and when the last one did.
+   *
+   * `useCount: 0` with a null `lastUsedAt` means DORMANT — the owner allowed
+   * something and nothing ever came of it. That is a different state from
+   * "revoked" and from "lapsed", and the matrix could not previously express
+   * it: a grant firing daily and one that has never matched looked identical,
+   * and they call for opposite actions.
+   *
+   * Read from `ci.ask_audit.consent_basis` — what a disclosure actually cited —
+   * never from the grant's own row, which records what it permits and never
+   * what it did.
+   */
+  @Field(() => Int)
+  useCount!: number;
+
+  @Field(() => GraphQLISODateTime, { nullable: true })
+  lastUsedAt!: Date | null;
+
+  static toType(grant: AskGrant, usage?: GrantUsage): AskGrantType {
     return {
       id: GlobalUID.encode('ask-grant', grant.id),
       granteeId: grant.granteeUserId ? GlobalUID.encode('user', grant.granteeUserId) : null,
@@ -307,6 +438,176 @@ export class AskGrantType {
         ? GlobalUID.encode('ask-grant', grant.supersedesGrantId)
         : null,
       active: isGrantActive(grant),
+      useCount: usage?.useCount ?? 0,
+      lastUsedAt: usage?.lastUsedAt ?? null,
+    };
+  }
+}
+
+/**
+ * One relationship's disclosure record, folded.
+ *
+ * The unit an owner actually arrives with. A flat event list makes "what has
+ * Ana been getting?" a scrolling-and-tallying exercise; this answers it.
+ */
+@ObjectType()
+export class AskDisclosureSummaryType {
+  /** Stable grouping key — `user:<id>`, `peer:<linkId>`, or `unattributed`. */
+  @Field(() => String)
+  key!: string;
+
+  /** Opaque local asker id, when the counterparty is on this box. */
+  @Field(() => ID, { nullable: true })
+  askerId!: string | null;
+
+  @Field(() => ID, { nullable: true })
+  peerLinkId!: string | null;
+
+  /** The peer's handle as of the most recent disclosure. Null for a local asker. */
+  @Field(() => String, { nullable: true })
+  peerHandle!: string | null;
+
+  @Field(() => Int)
+  total!: number;
+
+  /**
+   * Released by a standing grant with no human in the loop.
+   *
+   * Kept apart from {@link reviewed} on the wire, not merged into one
+   * "answered" count, for the reason `DisclosureHistory` states: "a rule you
+   * wrote once released this without asking you" is the outcome an owner needs
+   * to notice, and a decision they made themselves is not.
+   */
+  @Field(() => Int)
+  autoAnswered!: number;
+
+  @Field(() => Int)
+  reviewed!: number;
+
+  @Field(() => Int)
+  declined!: number;
+
+  @Field(() => Int)
+  expired!: number;
+
+  /** Items that actually crossed, all time — magnitude, not ask count. */
+  @Field(() => Int)
+  itemsDisclosed!: number;
+
+  @Field(() => Int)
+  asksInWindow!: number;
+
+  @Field(() => Int)
+  itemsInWindow!: number;
+
+  @Field(() => GraphQLISODateTime)
+  firstAt!: Date;
+
+  @Field(() => GraphQLISODateTime)
+  lastAt!: Date;
+
+  static toType(summary: DisclosureSummary): AskDisclosureSummaryType {
+    return {
+      key: summary.counterparty.key,
+      askerId: summary.counterparty.askerUserId
+        ? GlobalUID.encode('user', summary.counterparty.askerUserId)
+        : null,
+      peerLinkId: summary.counterparty.peerLinkId,
+      peerHandle: summary.counterparty.peerHandle,
+      total: summary.total,
+      autoAnswered: summary.autoAnswered,
+      reviewed: summary.reviewed,
+      declined: summary.declined,
+      expired: summary.expired,
+      itemsDisclosed: summary.itemsDisclosed,
+      asksInWindow: summary.asksInWindow,
+      itemsInWindow: summary.itemsInWindow,
+      firstAt: summary.firstAt,
+      lastAt: summary.lastAt,
+    };
+  }
+}
+
+/**
+ * A disclosure read, with whether it was complete.
+ *
+ * `truncated` is on the wire rather than inferred from `rows.length` because
+ * the client cannot know the server's cap — and a completeness surface that
+ * quietly shows part of the record is worse than one that admits it.
+ */
+@ObjectType()
+export class AskDisclosureHistoryPayload {
+  @Field(() => [AskAuditType])
+  rows!: AskAuditType[];
+
+  @Field(() => Boolean)
+  truncated!: boolean;
+}
+
+@ObjectType()
+export class AskDisclosureSummaryPayload {
+  @Field(() => [AskDisclosureSummaryType])
+  summaries!: AskDisclosureSummaryType[];
+
+  /** True when the fold ran over a truncated read — so the totals are floors. */
+  @Field(() => Boolean)
+  truncated!: boolean;
+}
+
+/**
+ * One question the asker put to several people, as the ASKER sees it.
+ *
+ * The counts fold each child through the same `askerVisibleStatus` an
+ * individual ask goes through — so a broadcast reveals nothing per-recipient
+ * that a single ask would not. `waiting` is every child that is not answered:
+ * declined, expired, still in review and never-heard-from are one number, for
+ * exactly the reason `PEER_ASK_PENDING` is one word.
+ */
+@ObjectType()
+export class AskBroadcastType {
+  @Field(() => ID)
+  id!: string;
+
+  @Field(() => AskQueryType)
+  query!: AskQueryType;
+
+  /** How many people were actually asked. */
+  @Field(() => Int)
+  recipients!: number;
+
+  /** How many have an answer waiting. */
+  @Field(() => Int)
+  answered!: number;
+
+  /**
+   * Everyone else, as ONE number.
+   *
+   * Declined, expired, still in review and never-heard-from are deliberately
+   * not separated: splitting them would hand the asker a per-recipient read on
+   * each responder's consent posture, which is the oracle
+   * `askerVisibleStatus` collapses for a single ask. A broadcast must not be a
+   * cheaper way to run the same probe N times.
+   */
+  @Field(() => Int)
+  waiting!: number;
+
+  @Field(() => GraphQLISODateTime)
+  createdAt!: Date;
+
+  @Field(() => GraphQLISODateTime, { nullable: true })
+  expiresAt!: Date | null;
+
+  static toType(broadcast: AskBroadcast, asks: readonly Ask[]): AskBroadcastType {
+    const answered = asks.filter((ask) => ask.status === 'answered').length;
+
+    return {
+      id: GlobalUID.encode('ask-broadcast', broadcast.id),
+      query: AskQueryType.toType(broadcast.query),
+      recipients: asks.length,
+      answered,
+      waiting: asks.length - answered,
+      createdAt: broadcast.createdAt,
+      expiresAt: broadcast.expiresAt,
     };
   }
 }

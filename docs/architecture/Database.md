@@ -68,7 +68,6 @@ Authoritative column lists live in the migrations and the matching TypeORM entit
 | Table | What it holds | Entity |
 |---|---|---|
 | `ci.events` | Timeline events (calendar, photos-as-events, captures, planned blocks) — PostGIS coordinates, provenance, participants, confidence. **CTI detail table**: every row requires a `ci.entities` `'Event'` base row sharing its uuid | `memory/entities/EventEntity.ts` (+ `EventBaseEntity.ts`) |
-| `ci.event_analytics` | Side table for rarely-written analytics columns moved off the hot events row (`salience`, `access_count`, …) | — |
 | `ci.communications` | Email/SMS/chat/calls — **plain table** (de-hypertabled; see [Hypertables](#hypertables)). **CTI detail table** (`'Communication'`) | `memory/entities/CommunicationEntity.ts` (+ `CommunicationBaseEntity.ts`) |
 | `ci.content` | Rich content records (articles, media, web pages), optional FK to an event (`content.event_id`). **CTI detail table** (`'Content'`) | `memory/entities/ContentEntity.ts` (+ `ContentBaseEntity.ts`) |
 | `ci.objects` | The owned **units** — one row per physical thing, with `product_id` pointing at the catalog model. **CTI detail table** (`'Item'`) | `memory/entities/ItemEntity.ts` (+ `ItemBaseEntity.ts`) |
@@ -204,7 +203,7 @@ instances — Slack and Reddit were added on 2026-08-19), `ci_etl.connection_syn
 `ci.users`, `ci.sessions`, `ci.signup_code`,
 `ci.api_keys` (which carry both `scopes` and a `capability` of read/write/full);
 `ci.devices`, `ci.position` (GPS/relative-coordinate **time-only
-hypertable**, supports AR headpose), `ci.user_snapshots` (time-only hypertable),
+hypertable**, supports AR headpose),
 `ci.geocode_cache` (`20260622120000`; gained a `bounds` JSONB in `20260819173404` so a
 cached place keeps its footprint), `ci.saved_searches` (captured explorer
 `filters` JSONB + `is_public`/`share_token` sharing — see
@@ -321,12 +320,13 @@ Hypertables that remain (criteria in [ADR-0002](./adr/0002-timescaledb-hypertabl
 | Table | Partitioning | Notes |
 |---|---|---|
 | `ci.position` | **time-only** hypertable on `time`, `chunk_time_interval => 1 month` | space partition removed (`20260807071631`); sensor stream. The month-scale chunk is deliberate: the table is backfilled with years of history, and the 7-day default would have produced ~1,300 chunks on day one |
-| `ci.user_snapshots` | **time-only** hypertable on `observed_at`, `chunk_time_interval => 7 days` | space partition removed (`20260807072056`) |
 | `hbpe.prediction_log` | time hypertable on `predicted_at` | reference specimen in ADR-0002; the only one that was configured correctly from the start, and the only one with a real (90-day) retention policy |
 
 Twelve tables have been hypertables at some point (fourteen `create_hypertable` calls on
 the way up — `ci.position` and `ci.user_snapshots` were each re-created when their space
-partition was removed); these three are what is left. Seven of those tables were dropped
+partition was removed); these two are what is left. `ci.user_snapshots` was dropped outright in
+`20260826202515_retire_user_snapshots`: it had no `SELECT` anywhere in the repo, and its ingest
+mutation had no reachable caller, so it was unbounded growth with no consumer. Seven of those tables were dropped
 outright, `browser_activity` was de-partitioned (`20260104075933`), and `communications`
 was rebuilt as a plain table (`20260807072321`) after its
 partition-column-in-the-unique-index requirement produced duplicate rows. Nothing new

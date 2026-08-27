@@ -50,6 +50,23 @@ registerEnumType(DisclosureRungEnum, { name: 'DisclosureRung' });
  *    something go red. A checked value binds all of them.
  */
 @InputType()
+export class AskActorInput {
+  /**
+   * The kind of actor. MATCHED ON; the label is not.
+   *
+   * A name is a claim the asker writes and a kind is a commitment they make —
+   * admitting an agent because it called itself something reassuring would make
+   * the delegation restriction decorative.
+   */
+  @Field(() => String)
+  kind!: string;
+
+  /** Shown to the owner at the consent moment. Truncated, never matched on. */
+  @Field(() => String, { nullable: true })
+  label?: string;
+}
+
+@InputType()
 export class AskQueryInput {
   /**
    * The ask's ARCHETYPE — one of `ASK_ARCHETYPES`, and half the key every
@@ -66,6 +83,22 @@ export class AskQueryInput {
   /** Coarse data class, e.g. `photos`. Normalized and length-capped on the way in. */
   @Field(() => String, { nullable: true })
   dataClass?: string;
+
+  /**
+   * What is making this ask — `person`, `first-party-agent`, or
+   * `third-party-agent`, optionally with a display label.
+   *
+   * Optional, and its ABSENCE is meaningful rather than neutral: a grant that
+   * restricts delegation is not satisfied by an ask that declines to say who is
+   * acting, so an omitted actor routes to owner review instead of being
+   * auto-answered. See `AskGrantScope.delegation`.
+   *
+   * An off-contract value parses to NO actor rather than to `person` — the
+   * alternative would let an agent satisfy a `delegation: 'none'` grant by
+   * sending something malformed, which is easier than sending something honest.
+   */
+  @Field(() => AskActorInput, { nullable: true })
+  actor?: AskActorInput;
 
   /**
    * The natural-language question, shown back to both sides. Never executed.
@@ -164,6 +197,16 @@ export class CreateAskGrantInput {
 
   @Field(() => GrantModeEnum)
   mode!: GrantModeEnum;
+
+  /**
+   * Who may exercise this grant — `none` (the person only), `first-party-only`
+   * (their own Companion may act for them), or `any-agent`.
+   *
+   * Absent = no restriction from this dimension, matching every other scope
+   * field. Adapted from UMA-for-agents recommendation #25.
+   */
+  @Field(() => String, { nullable: true })
+  delegation?: string;
 
   /** Optional DPV purpose URI (ECOSYSTEM.md Δ2). */
   @Field(() => String, { nullable: true })

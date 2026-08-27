@@ -94,6 +94,12 @@ function makeResolver() {
     receiptService as never,
     answerService as never,
     savedSearchService as never,
+    {
+      // Authorizes with no ceiling: these suites are not about consent, and a
+      // share created before `share_max_disclosure` existed reads exactly this way.
+      authorize: jest.fn().mockResolvedValue({ grantId: 'grant-test', ceiling: undefined }),
+      recordRead: jest.fn().mockResolvedValue(undefined),
+    } as never,
     searchService as never,
     tagService as never,
     { isFeatureEnabled: jest.fn().mockResolvedValue(true) } as never,
@@ -362,9 +368,8 @@ describe('SearchResolver.search — undated types stay out of the unfiltered bro
       endTime: '2024-03-31T23:59:59.000Z',
     } as SearchInput);
 
-    const toSearchResult = (
-      resolver as unknown as { toSearchResult: { mock: { calls: Array<[Entry]> } } }
-    ).toSearchResult;
+    const toSearchResult = (resolver as unknown as { toSearchResult: { mock: { calls: Array<[Entry]> } } })
+      .toSearchResult;
     expect(toSearchResult.mock.calls[0][0].entity).toEqual(expect.objectContaining({ appearedAt }));
   });
 

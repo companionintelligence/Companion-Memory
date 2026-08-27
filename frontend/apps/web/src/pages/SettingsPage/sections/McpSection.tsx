@@ -41,6 +41,60 @@ interface McpTool {
   description: string;
 }
 
+/**
+ * Per-tool approval state, computed server-side (`buildToolApprovals`). The sha256 digest is
+ * deliberately NOT recomputed here — a second canonicalisation implementation in the browser would
+ * silently disagree with the backend's on key order and turn every reconnect into false drift.
+ */
+type McpToolApprovalState = 'approved' | 'new' | 'schema_changed' | 'unavailable' | 'legacy';
+
+interface McpToolApproval {
+  name: string;
+  schemaDigest: string | null;
+  state: McpToolApprovalState;
+  approvedAt: string | null;
+  approvedDigest: string | null;
+}
+
+/** States that mean the tool is NOT currently reachable by chat and wants a human decision. */
+const PENDING_APPROVAL_STATES = new Set<McpToolApprovalState>(['new', 'schema_changed']);
+
+function approvalBadge(state: McpToolApprovalState) {
+  switch (state) {
+    case 'approved':
+      return (
+        <Badge variant="outline" className="text-[10px] text-green-700 dark:text-green-400">
+          Approved
+        </Badge>
+      );
+    case 'new':
+      return (
+        <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-400">
+          New — not approved
+        </Badge>
+      );
+    case 'schema_changed':
+      return (
+        <Badge variant="outline" className="text-[10px] text-amber-700 dark:text-amber-400">
+          Schema changed
+        </Badge>
+      );
+    case 'unavailable':
+      return (
+        <Badge variant="outline" className="text-[10px] text-muted-foreground">
+          No longer offered
+        </Badge>
+      );
+    case 'legacy':
+    default:
+      return (
+        <Badge variant="outline" className="text-[10px] text-muted-foreground">
+          Approve to pin
+        </Badge>
+      );
+  }
+}
+
 interface McpEnvVar {
   key: string;
   label?: string;
@@ -73,6 +127,11 @@ interface McpServerConfig {
   source: 'user_added' | 'catalog';
   catalogSlug?: string;
   discoveredTools?: McpTool[];
+  /**
+   * Union of what the server currently offers and what was previously approved. Only `approved`
+   * (and, on a pre-gate row, `legacy`) tools are visible to the assistant — see McpToolProvider.
+   */
+  toolApprovals?: McpToolApproval[];
   connectionStatus: McpConnectionStatus;
   lastConnectedAt?: string;
   lastError?: string;
@@ -608,6 +667,7 @@ export function McpSection() {
   const [error, setError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [approvingId, setApprovingId] = useState<string | null>(null);
 
   const [catalog, setCatalog] = useState<McpCatalogResponse>({ normal: [], highRisk: [] });
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -707,6 +767,37 @@ export function McpSection() {
       setError(`Failed to ${server.enabled ? 'disable' : 'enable'} “${server.name}”`);
     } finally {
       setTogglingId(null);
+    }
+  };
+
+  /**
+   * Approving is the grant — adding the server never was. `tools[]` carries back the exact digest
+   * this list was rendered from, and the server rejects it if the schema moved in between, so a
+   * tool cannot be approved on the strength of a description the user is no longer looking at.
+   *
+   * `approveAll` is the one-click path for a legitimately-updated upstream server. Without it a
+   * strict pin is the kind of thing people switch off wholesale after the second false alarm.
+   */
+  const handleApproveTools = async (
+    server: McpServerConfig,
+    body: { approveAll: true } | { tools: Array<{ name: string; schemaDigest: string }> },
+  ) => {
+    try {
+      setApprovingId(server.id);
+      setError(null);
+      const updated = await fetchJson<McpServerConfig>(`/api/mcp/servers/${server.id}/approve-tools`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(body),
+      });
+
+      if (updated) {
+        setServers((prev) => prev.map((s) => (s.id === server.id ? updated : s)));
+      }
+    } catch {
+      setError(`Failed to approve tools for “${server.name}”`);
+    } finally {
+      setApprovingId(null);
     }
   };
 
@@ -992,6 +1083,11 @@ export function McpSection() {
               {servers.map((server) => {
                 const expanded = expandedTools.has(server.id);
                 const toolCount = server.discoveredTools?.length;
+                const approvals = server.toolApprovals ?? [];
+                const descriptionOf = new Map(
+                  (server.discoveredTools ?? []).map((tool) => [tool.name, tool.description]),
+                );
+                const pending = approvals.filter((entry) => PENDING_APPROVAL_STATES.has(entry.state));
 
                 return (
                   <Card key={server.id}>
@@ -1035,15 +1131,67 @@ export function McpSection() {
                                 )}
                                 {toolCount} {toolCount === 1 ? 'tool' : 'tools'}
                               </button>
-                              {expanded && toolCount > 0 && (
-                                <ul className="mt-2 space-y-1 rounded-md border bg-muted/40 p-3">
-                                  {server.discoveredTools!.map((tool) => (
-                                    <li key={tool.name} className="text-xs">
-                                      <span className="font-mono font-medium">{tool.name}</span>
-                                      <span className="text-muted-foreground"> — {tool.description}</span>
-                                    </li>
-                                  ))}
-                                </ul>
+                              {pending.length > 0 && (
+                                <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-400">
+                                  <AlertTriangle className="h-3 w-3" />
+                                  {pending.length} awaiting approval
+                                </span>
+                              )}
+                              {expanded && approvals.length > 0 && (
+                                <div className="mt-2 space-y-2 rounded-md border bg-muted/40 p-3">
+                                  {pending.length > 0 && (
+                                    <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2">
+                                      <p className="text-xs text-muted-foreground">
+                                        Tools awaiting approval are not available to the assistant.
+                                      </p>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={approvingId === server.id}
+                                        onClick={() => void handleApproveTools(server, { approveAll: true })}
+                                      >
+                                        Approve all changes
+                                      </Button>
+                                    </div>
+                                  )}
+                                  <ul className="space-y-1.5">
+                                    {approvals.map((approval) => (
+                                      <li
+                                        key={approval.name}
+                                        className="flex items-start justify-between gap-2 text-xs"
+                                      >
+                                        <span className="min-w-0">
+                                          <span className="font-mono font-medium">{approval.name}</span>{' '}
+                                          {approvalBadge(approval.state)}
+                                          <span className="block text-muted-foreground">
+                                            {descriptionOf.get(approval.name) ??
+                                              'This tool is no longer offered by the server.'}
+                                          </span>
+                                        </span>
+                                        {approval.schemaDigest && approval.state !== 'approved' && (
+                                          <Button
+                                            size="sm"
+                                            variant="ghost"
+                                            className="shrink-0"
+                                            disabled={approvingId === server.id}
+                                            onClick={() =>
+                                              void handleApproveTools(server, {
+                                                tools: [
+                                                  {
+                                                    name: approval.name,
+                                                    schemaDigest: approval.schemaDigest!,
+                                                  },
+                                                ],
+                                              })
+                                            }
+                                          >
+                                            Approve
+                                          </Button>
+                                        )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
                               )}
                             </div>
                           )}

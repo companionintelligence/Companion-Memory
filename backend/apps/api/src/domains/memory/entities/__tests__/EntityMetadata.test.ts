@@ -22,31 +22,39 @@ import { PlaceEntity } from '../PlaceEntity';
  * all of them against one physical table; this guards that the coexistence
  * keeps constructing as children are added — without a database connection.
  */
+/**
+ * Builds and registers metadata without connecting. `buildMetadatas` is
+ * protected (initialize() is its only production caller), but it is exactly the
+ * connection-free half these tests need.
+ */
+async function buildMetadata(): Promise<DataSource> {
+  const dataSource = new DataSource({
+    type: 'postgres',
+    entities: [
+      BaseEntity,
+      PersonEntity,
+      ConceptEntity,
+      FileEntity,
+      ItemBaseEntity,
+      ItemEntity,
+      EventBaseEntity,
+      EventEntity,
+      CommunicationBaseEntity,
+      PlaceEntity,
+      GraphNodeEntity,
+      NodeEntity,
+      UserEntity,
+    ],
+  });
+
+  await (dataSource as unknown as { buildMetadatas(): Promise<void> }).buildMetadatas();
+
+  return dataSource;
+}
+
 describe('memory entity metadata', () => {
   it('builds the STI tree beside the standalone ci.entities mappings', async () => {
-    const dataSource = new DataSource({
-      type: 'postgres',
-      entities: [
-        BaseEntity,
-        PersonEntity,
-        ConceptEntity,
-        FileEntity,
-        ItemBaseEntity,
-        ItemEntity,
-        EventBaseEntity,
-        EventEntity,
-        CommunicationBaseEntity,
-        PlaceEntity,
-        GraphNodeEntity,
-        NodeEntity,
-        UserEntity,
-      ],
-    });
-
-    // Builds and registers metadata without connecting. `buildMetadatas` is
-    // protected (initialize() is its only production caller), but it is exactly
-    // the connection-free half this test needs.
-    await (dataSource as unknown as { buildMetadatas(): Promise<void> }).buildMetadatas();
+    const dataSource = await buildMetadata();
 
     const discriminatorOf = (target: unknown) => dataSource.getMetadata(target as never).discriminatorValue;
 
@@ -72,5 +80,25 @@ describe('memory entity metadata', () => {
     expect(person.columns.find((column) => column.databaseName === 'entity_type')?.isDiscriminator).toBe(
       true,
     );
+  });
+
+  it('maps no `last_accessed` column on any ci.entities or ci.events mapping', async () => {
+    const dataSource = await buildMetadata();
+
+    const offenders = dataSource.entityMetadatas.flatMap((metadata) =>
+      metadata.columns
+        .filter((column) => column.databaseName === 'last_accessed')
+        .map((column) => `${metadata.name}.${column.propertyName}`),
+    );
+
+    // `last_accessed` was dropped from ci.events and ci.entities (migration
+    // 20260826202418_drop_unwritten_last_accessed_columns): it was declared as a
+    // retrieval-recency input, never got the read-path writer that would give it
+    // meaning, and nothing ever read it. A stray @Column left behind — or added
+    // back — puts the name into every generated SELECT and fails with 42703 at
+    // runtime, which no typecheck catches. Hence a metadata guard rather than a
+    // type-level one.
+    expect(offenders).toStrictEqual([]);
+    expect(offenders).toHaveLength(0);
   });
 });

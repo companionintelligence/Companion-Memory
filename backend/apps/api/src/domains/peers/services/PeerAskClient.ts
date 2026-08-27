@@ -7,6 +7,8 @@ import { type PeerLink } from '../entities/PeerLinkEntity';
 import type { AskerVisiblePeerReply, PeerAskBody, PeerAskResponse } from '../protocol';
 import { EgressBlockedError, peerEgressFetch } from '../urlPolicy';
 
+import { PeerSignatureService } from './PeerSignatureService';
+
 /**
  * Talks to a peer Companion's `/agent/v1` — the only code in this box that
  * calls `fetch` at a peer.
@@ -28,7 +30,10 @@ import { EgressBlockedError, peerEgressFetch } from '../urlPolicy';
  */
 @Injectable()
 export class PeerAskClient {
-  constructor(private readonly logger: LoggerService) {
+  constructor(
+    private readonly signatureService: PeerSignatureService,
+    private readonly logger: LoggerService,
+  ) {
     this.logger.setContext(PeerAskClient.name);
   }
 
@@ -65,6 +70,21 @@ export class PeerAskClient {
   ): Promise<AskerVisiblePeerReply> {
     const url = `${peer.memoryEndpoint.replace(/\/+$/, '')}${path}`;
 
+    // RFC 9421 signature over the method, the target and a digest of the body.
+    // `null` when this box has no signing key: signing is additive while
+    // `peers.requireHttpSignature` rolls out, and an unconfigured box must
+    // still reach a peer that does not require one.
+    //
+    // Signed over `url` — the SAME string handed to the dialer below, not a
+    // rebuilt one. Two spellings of the target here would produce a signature
+    // over an authority the request never went to, and the peer would refuse
+    // every honest call.
+    const signature = this.signatureService.signOutbound({
+      method: init.method,
+      targetUri: url,
+      body: init.body,
+    });
+
     // ═══ SSRF GUARD — AND IT IS THE DIALER, NOT A PRECHECK ═══
     //
     // `memoryEndpoint` originates from a directory descriptor, so it is
@@ -86,6 +106,7 @@ export class PeerAskClient {
           authorization: `Bearer ${accessToken}`,
           ...(init.body ? { 'content-type': 'application/json' } : {}),
           accept: 'application/json',
+          ...(signature ?? {}),
         },
         ...(init.body ? { body: init.body } : {}),
         signal: AbortSignal.timeout(config.peers.timeoutMs ?? 10_000),

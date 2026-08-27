@@ -20,6 +20,8 @@ import {
 } from './askBinding';
 import { AskComposer } from './AskComposer';
 import {
+  grantsLapsingWithin,
+  lapseNudge,
   type AskAuditOutcome,
   askDecisionState,
   askStatusLabel,
@@ -31,6 +33,7 @@ import { AskReviewCard } from './AskReviewCard';
 import {
   APPROVE_ASK,
   ASK_DISCLOSURE_HISTORY,
+  ASK_DISCLOSURE_SUMMARY,
   ASK_INBOX,
   ASK_OUTBOX,
   CREATE_ASK,
@@ -40,7 +43,9 @@ import {
   MY_ASK_ADDRESS,
   MY_ASK_GRANTS,
   MY_PEER_LINKS,
+  MY_HOUSEHOLD_TIERS,
   REVOKE_ASK_GRANT,
+  SET_HOUSEHOLD_TIER,
   REVOKE_PEER_LINK,
   RUN_ASK,
   UPDATE_ASK_GRANT,
@@ -48,9 +53,32 @@ import {
 } from './asksOperations';
 import { COMPOSER_SHAPES, composeRecipients, unreachablePeers } from './composeRecipients';
 import { DisclosureHistory } from './DisclosureHistory';
+import { DisclosureRelationships } from './DisclosureRelationships';
 import { GrantManager, type GranteeGroup } from './GrantManager';
 import { NewGrantForm } from './NewGrantForm';
 import { PeerManager } from './PeerManager';
+import type { RelationshipSummary } from './relationshipPresentation';
+
+/**
+ * The recency window the relationship fold reports against, and the cap the
+ * fold runs over.
+ *
+ * Both MIRROR the server (`DEFAULT_WINDOW_MS` and `MAX_AUDIT_ROWS` in the asks
+ * domain) rather than being sent to it: the client does not get to choose how
+ * much of the owner's history is counted. They exist here only so the copy can
+ * say "the last 30 days" and "your 5,000 most recent" in words rather than
+ * leaving the reader to guess what window a number covers.
+ */
+const DISCLOSURE_WINDOW_DAYS = 30;
+
+/**
+ * How far ahead the Grant Manager looks for grants about to lapse.
+ *
+ * A month, matching the disclosure window above — the unit people reason about
+ * consent in. Far enough ahead to act on, near enough that the nudge stays rare.
+ */
+const LAPSE_HORIZON_DAYS = 30;
+const MAX_COUNTED_DISCLOSURES = 5_000;
 
 type Tab = 'inbox' | 'compose' | 'outbox' | 'grants' | 'peers' | 'history';
 
@@ -106,7 +134,16 @@ export function AsksPage() {
   const outbox = useQuery(ASK_OUTBOX);
   const grants = useQuery(MY_ASK_GRANTS);
   const peers = useQuery(MY_PEER_LINKS);
-  const history = useQuery(ASK_DISCLOSURE_HISTORY);
+  // The relationship fold is the index; the flat list is the drill-in, and it
+  // is NOT fetched until a relationship is opened. Loading every audit row to
+  // render a summary would reintroduce the unbounded read the fold exists to
+  // replace.
+  const [openRelationship, setOpenRelationship] = useState<RelationshipSummary | null>(null);
+  const disclosureSummary = useQuery(ASK_DISCLOSURE_SUMMARY);
+  const history = useQuery(ASK_DISCLOSURE_HISTORY, {
+    variables: { input: { counterpartyKey: openRelationship?.key } },
+    skip: openRelationship == null,
+  });
 
   const refetchAll = () => {
     void inbox.refetch();
@@ -116,11 +153,18 @@ export function AsksPage() {
     void history.refetch();
   };
 
+  const householdTiers = useQuery(MY_HOUSEHOLD_TIERS);
+
   const [approveAsk, approving] = useMutation(APPROVE_ASK, { onCompleted: refetchAll });
   const [declineAsk, declining] = useMutation(DECLINE_ASK, { onCompleted: refetchAll });
   const [runAsk, running] = useMutation(RUN_ASK, { onCompleted: refetchAll });
   const [revokeGrant, revoking] = useMutation(REVOKE_ASK_GRANT, {
     onCompleted: () => void grants.refetch(),
+  });
+  // Refetches the TIER LIST, not the grants: demoting somebody changes the
+  // ceiling on every future disclosure to them, and none of the grant rows.
+  const [setHouseholdTier] = useMutation(SET_HOUSEHOLD_TIER, {
+    onCompleted: () => void householdTiers.refetch(),
   });
   const [updateGrant, updatingGrant] = useMutation(UPDATE_ASK_GRANT, {
     onCompleted: () => void grants.refetch(),
@@ -228,6 +272,10 @@ export function AsksPage() {
   // matrix that cannot see the tier shows a `full` grant as full when the peer
   // is a `stranger` and the answer will be a yes/no.
   const grantGroups: GranteeGroup[] = groupGrants(
+    // Only rows the owner ACTIVELY set. An account with no row is at the
+    // default, and materializing one for every local user would turn "I have
+    // not thought about this" into "I decided household".
+    new Map((householdTiers.data?.myHouseholdTiers ?? []).map((row) => [row.memberId, row.trustTier])),
     grants.data?.myAskGrants ?? [],
     peers.data?.myPeerLinks ?? [],
   );
@@ -267,6 +315,8 @@ export function AsksPage() {
                 scopeSummary={scopeSummary(ask.query)}
                 searchBreadth={searchBreadthNote(ask.query)}
                 downgrades={[...OWNER_ANSWER_FORMS]}
+                actor={ask.query.actor}
+                statedPurpose={ask.query.purpose}
                 busy={busy}
                 onApprove={() => handleApprove(ask.id)}
                 onDowngrade={(form) => handleApprove(ask.id, form)}
@@ -381,8 +431,20 @@ export function AsksPage() {
       // `GrantManager` is only rendered once at least one grant exists — so the
       // one screen a new owner actually sees was the one screen with no way to
       // write the first grant.
+      // Grants that will lapse ON THEIR OWN soon. Rendered above the matrix
+      // and only when there is something to say — a banner that appears every
+      // time teaches people to look past the banner, and then the one time it
+      // matters they look past it too.
+      const lapsing = lapseNudge(
+        grantsLapsingWithin(grants.data?.myAskGrants ?? [], LAPSE_HORIZON_DAYS).length,
+        LAPSE_HORIZON_DAYS,
+      );
+
       content = grantGroups.length ? (
         <div className="flex flex-col gap-4">
+          {lapsing ? (
+            <p className="text-muted-foreground bg-muted rounded-md px-3 py-2 text-xs">{lapsing}</p>
+          ) : null}
           {addingGrant ? newGrantForm : null}
           <GrantManager
             groups={grantGroups}
@@ -393,6 +455,9 @@ export function AsksPage() {
             }
             onSetExpiry={(grantId, expiresAt) =>
               runAction(updateGrant({ variables: { id: grantId, input: { expiresAt } } }))
+            }
+            onSetHouseholdTier={(memberId, trustTier) =>
+              runAction(setHouseholdTier({ variables: { input: { memberId, trustTier } } }))
             }
             onRevoke={(grantId) => runAction(revokeGrant({ variables: { id: grantId } }))}
             onAddGrant={addingGrant ? undefined : () => setAddingGrant(true)}
@@ -441,30 +506,57 @@ export function AsksPage() {
         />
       );
     }
-  } else if (tab === 'history') {
+  } else if (tab === 'history' && openRelationship != null) {
+    // ── Drill-in: one relationship's individual disclosures ──────────────
     if (history.error) {
       content = <LoadFailure what="what you have shared" onRetry={() => void history.refetch()} />;
     } else if (history.loading) {
       content = <LoadingPage />;
     } else {
-      const rows = history.data?.askDisclosureHistory ?? [];
+      const rows = history.data?.askDisclosureHistory?.rows ?? [];
 
-      content = rows.length ? (
-        <DisclosureHistory
-          rows={rows.map((row) => {
-            const asker = partyAvatar(row.peerHandle, row.askerId, peerLinks);
+      content = (
+        <div className="flex flex-col gap-3">
+          <Button variant="ghost" size="sm" className="self-start" onClick={() => setOpenRelationship(null)}>
+            ← All relationships
+          </Button>
 
-            return {
-              id: row.id,
-              askerName: asker.name,
-              askerAvatarUrl: asker.avatarUrl,
-              outcome: row.outcome as AskAuditOutcome,
-              disclosedCount: row.disclosedCount,
-              consentBasis: row.consentBasis,
-              createdAt: row.createdAt as string,
-              query: row.query,
-            };
-          })}
+          <DisclosureHistory
+            rows={rows.map((row) => {
+              const asker = partyAvatar(row.peerHandle, row.askerId, peerLinks);
+
+              return {
+                id: row.id,
+                askerName: asker.name,
+                askerAvatarUrl: asker.avatarUrl,
+                outcome: row.outcome as AskAuditOutcome,
+                disclosedCount: row.disclosedCount,
+                consentBasis: row.consentBasis,
+                createdAt: row.createdAt as string,
+                query: row.query,
+              };
+            })}
+          />
+        </div>
+      );
+    }
+  } else if (tab === 'history') {
+    // ── Index: the same record, folded by relationship ───────────────────
+    if (disclosureSummary.error) {
+      content = <LoadFailure what="what you have shared" onRetry={() => void disclosureSummary.refetch()} />;
+    } else if (disclosureSummary.loading) {
+      content = <LoadingPage />;
+    } else {
+      const payload = disclosureSummary.data?.askDisclosureSummary;
+      const summaries = payload?.summaries ?? [];
+
+      content = summaries.length ? (
+        <DisclosureRelationships
+          summaries={summaries}
+          windowDays={DISCLOSURE_WINDOW_DAYS}
+          truncated={payload?.truncated ?? false}
+          countedRows={MAX_COUNTED_DISCLOSURES}
+          onOpen={setOpenRelationship}
         />
       ) : (
         <EmptyState message="Nothing has been shared from your Companion yet." />
@@ -625,6 +717,7 @@ function LoadFailure({ what, onRetry }: { what: string; onRetry: () => void }) {
  * the selection set.
  */
 function groupGrants(
+  householdTiers: ReadonlyMap<string, string>,
   rows: readonly {
     id: string;
     mode: string;
@@ -636,6 +729,8 @@ function groupGrants(
     revokedAt?: unknown;
     expiresAt?: unknown;
     active?: boolean | null;
+    useCount?: number | null;
+    lastUsedAt?: unknown;
   }[],
   peerLinks: readonly {
     id: string;
@@ -670,13 +765,20 @@ function groupGrants(
         //     or the link was hard-deleted) has a tier this page simply failed
         //     to read — saying "unknown" there would read as "there is no
         //     ceiling", which is the opposite of what a missing read means;
-        //   - a LOCAL grantee genuinely has no tier on the wire at all.
+        //   - a LOCAL grantee's tier is the OWNER's own verdict, read from
+        //     `myHouseholdTiers`. Absent means they have said nothing, which is
+        //     the default (`household`) rather than "unknown" — and the select
+        //     beside it is what makes that a choice instead of a fact.
         tier: link
           ? peerTrustLabel(link.trustTier)
           : row.granteePeerLinkId
             ? 'tier not loaded'
-            : 'tier unknown',
+            : (householdTiers.get(row.granteeId ?? '') ?? 'household'),
         grants: [],
+        // Only a LOCAL grantee: a peer's tier lives on their peer link and is
+        // set in "People I'm linked to". Present here is what turns the tier
+        // badge into a control.
+        memberId: row.granteePeerLinkId ? null : (row.granteeId ?? null),
       };
       byGrantee.set(key, group);
     }
@@ -689,6 +791,8 @@ function groupGrants(
       expiresAt: asIsoString(row.expiresAt),
       revokedAt: asIsoString(row.revokedAt),
       active: row.active ?? undefined,
+      useCount: row.useCount ?? 0,
+      lastUsedAt: asIsoString(row.lastUsedAt),
     });
   }
 

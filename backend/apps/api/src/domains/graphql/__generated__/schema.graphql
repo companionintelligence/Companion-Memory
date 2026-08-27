@@ -160,6 +160,16 @@ type AnswerType implements Node {
   question: QuestionType!
 }
 
+input AskActorInput {
+  kind: String!
+  label: String
+}
+
+type AskActorType {
+  kind: String!
+  label: String
+}
+
 type AskAnswerType {
   answerSource: AnswerSource!
   askId: ID!
@@ -193,6 +203,61 @@ type AskAuditType {
   responderId: ID
 }
 
+type AskBroadcastType {
+  answered: Int!
+  createdAt: DateTime!
+  expiresAt: DateTime
+  id: ID!
+  query: AskQueryType!
+  recipients: Int!
+  waiting: Int!
+}
+
+type AskChannelType {
+  covered: [String!]!
+  keyThumbprint: String!
+  verifiedAt: DateTime!
+}
+
+input AskDisclosureHistoryInput {
+  counterpartyKey: String
+  from: DateTime
+  limit: Int
+  outcomes: [String!]
+  to: DateTime
+}
+
+type AskDisclosureHistoryPayload {
+  rows: [AskAuditType!]!
+  truncated: Boolean!
+}
+
+input AskDisclosureSummaryInput {
+  windowDays: Int
+}
+
+type AskDisclosureSummaryPayload {
+  summaries: [AskDisclosureSummaryType!]!
+  truncated: Boolean!
+}
+
+type AskDisclosureSummaryType {
+  askerId: ID
+  asksInWindow: Int!
+  autoAnswered: Int!
+  declined: Int!
+  expired: Int!
+  firstAt: DateTime!
+  itemsDisclosed: Int!
+  itemsInWindow: Int!
+  key: String!
+  lastAt: DateTime!
+  peerHandle: String
+  peerLinkId: ID
+  reviewed: Int!
+  total: Int!
+}
+
 type AskGrantPayload {
   grant: AskGrantType
   success: Boolean!
@@ -206,6 +271,7 @@ type AskGrantType {
   granteeId: ID
   granteePeerLinkId: ID
   id: ID!
+  lastUsedAt: DateTime
   mode: GrantMode!
   purpose: String
   queryType: String!
@@ -213,6 +279,7 @@ type AskGrantType {
   revokedAt: DateTime
   supersedesGrantId: ID
   updatedAt: DateTime!
+  useCount: Int!
   version: Int!
 }
 
@@ -222,14 +289,17 @@ type AskPayload {
 }
 
 input AskQueryInput {
+  actor: AskActorInput
   dataClass: String
   prompt: String!
   queryType: String!
 }
 
 type AskQueryType {
+  actor: AskActorType
   dataClass: String
   prompt: String!
+  purpose: String
   queryType: String!
 }
 
@@ -245,6 +315,8 @@ enum AskStatus {
 
 type AskType {
   askerId: ID
+  broadcastId: ID
+  channel: AskChannelType
   consentBasis: String
   createdAt: DateTime!
   direction: String!
@@ -389,6 +461,7 @@ type CommunicationType implements Node & Taggable {
   direction: String!
   from: PersonType
   id: ID!
+  metadata: JSON!
   participantsMetadata: JSON!
   preview: String
   sourceId: String
@@ -517,9 +590,17 @@ input CreateAnswerInput {
   questionId: String!
 }
 
+input CreateAskBroadcastInput {
+  query: AskQueryInput!
+
+  """2–25 recipients."""
+  responderIds: [ID!]!
+}
+
 input CreateAskGrantInput {
   dataClass: String
   dataClasses: [String!]
+  delegation: String
   granteeId: ID
   granteePeerLinkId: ID
   maxDisclosure: DisclosureRung
@@ -1375,22 +1456,11 @@ type GraphType {
   nodes: [GraphNodeType!]!
 }
 
-input IngestUserSnapshotInput {
-  cwd: String
-  deviceId: ID!
-  focusApp: String
-  focusTitle: String
-  fsEventCount: Int!
-  monotonicMs: Float!
-  observedAt: DateTime!
-  payload: JSON!
-  sessionId: ID!
-  snapshotKind: String!
-}
-
-type IngestUserSnapshotPayload {
-  errorMessage: String
-  success: Boolean!
+type HouseholdTierType {
+  id: ID!
+  memberId: ID!
+  trustTier: String!
+  updatedAt: DateTime!
 }
 
 type InsightItemType {
@@ -1846,6 +1916,7 @@ type Mutation {
   createAnswer(input: CreateAnswerInput!): AnswerType!
   createAnswers(input: [CreateAnswerInput!]!): [AnswerType!]!
   createAsk(input: CreateAskInput!): CreateAskPayload!
+  createAskBroadcast(input: CreateAskBroadcastInput!): AskBroadcastType!
   createAskGrant(input: CreateAskGrantInput!): AskGrantPayload!
   createBrowserActivities(input: [CreateBrowserActivityInput!]!): [BrowserActivityType!]!
   createCommunications(input: [CreateCommunicationInput!]!): [CommunicationType!]!
@@ -1921,7 +1992,6 @@ type Mutation {
   Name occupancy branches from memory via the LLM; falls back to occupancy labels on failure
   """
   guessBranchialForecast: BranchialTreeType
-  ingestUserSnapshot(input: IngestUserSnapshotInput!): IngestUserSnapshotPayload!
   linkItemToProduct(input: LinkItemToProductInput!): UpdateItemPayload!
 
   """Mark an action as dismissed"""
@@ -2008,6 +2078,7 @@ type Mutation {
     startTime: DateTime
   ): ScheduleTaskPayload!
   sendPeerAsk(input: SendPeerAskInput!): SendPeerAskPayload!
+  setHouseholdTier(input: SetHouseholdTierInput!): HouseholdTierType!
   setSavedSearchSharing(input: SetSavedSearchSharingInput!): UpdateSavedSearchPayload!
 
   """Defer a candidate until a future instant"""
@@ -2634,7 +2705,8 @@ type Query {
   answers(after: String, before: String, first: Int, last: Int): AnswerConnection!
   ask(id: ID!): AskType
   askAnswer(id: ID!): AskAnswerType
-  askDisclosureHistory: [AskAuditType!]!
+  askDisclosureHistory(input: AskDisclosureHistoryInput): AskDisclosureHistoryPayload!
+  askDisclosureSummary(input: AskDisclosureSummaryInput): AskDisclosureSummaryPayload!
   askGrant(id: ID!): AskGrantType
   askInbox: [AskType!]!
   askOutbox: [AskType!]!
@@ -2765,8 +2837,10 @@ type Query {
   Evidence-linked suggestions. Findings persist even when derivation.engines is off.
   """
   metricSuggestions(includeDismissed: Boolean): [MetricSuggestionType!]!
+  myAskBroadcasts: [AskBroadcastType!]!
   myAskGrantHistory: [AskGrantType!]!
   myAskGrants: [AskGrantType!]!
+  myHouseholdTiers: [HouseholdTierType!]!
   myPeerLinks: [PeerLinkType!]!
   node(id: ID!): Node
   note(id: ID!): NoteType
@@ -3113,6 +3187,8 @@ type SavedSearchType implements Node {
   isSeed: Boolean!
   name: String
   query: String
+  shareExpiresAt: DateTime
+  shareMaxDisclosure: String
   shareToken: String
   tags: [String!]
   updatedAt: DateTime!
@@ -3214,9 +3290,18 @@ type SendPeerAskPayload {
   success: Boolean!
 }
 
+input SetHouseholdTierInput {
+  memberId: ID!
+
+  """One of: household, family, trusted, peer, stranger"""
+  trustTier: String!
+}
+
 input SetSavedSearchSharingInput {
+  expiresAt: DateTime
   id: ID!
   isPublic: Boolean!
+  maxDisclosure: String
 }
 
 type SummaryConnection implements Connection {

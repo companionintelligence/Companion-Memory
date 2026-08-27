@@ -88,3 +88,68 @@ export const BooleanOnly: Story = {
     downgrades: ['boolean'],
   },
 };
+
+/**
+ * A federated ask that arrived SIGNED — the consent moment with the lock on it.
+ *
+ * The lock reads "Awaiting you" rather than "Signed", because nothing has been
+ * shared yet: a verified signature proves who asked, not that they were allowed
+ * to, and the weaker of the two axes is what the lock shows. Clicking it opens
+ * the signature detail.
+ */
+export const SignedPeerAsk: Story = {
+  args: {
+    askerName: 'Ana',
+    tier: 'trusted',
+    decision: 'unreviewed',
+    prompt: 'Were you at the Tuesday standup? I’m reconstructing who was there.',
+    scopeSummary: 'Calendar · 19 August',
+    searchBreadth: 'Your Companion recognises “calendar”, so this is confined to calendar entries.',
+    items: [],
+    downgrades: ['boolean'],
+    consent: {
+      askerName: 'Ana',
+      consent: 'undecided',
+      channel: {
+        keyThumbprint: 'k9Bx2Qf7TzR0mLpV3sYhJ8nCwE1aUdG5oXi6ZrQtNbM',
+        verifiedAt: '2026-08-26T09:14:22.000Z',
+        covered: ['@method', '@target-uri', 'content-digest'],
+      },
+      ceiling: null,
+      grantMode: 'review',
+      arrivedAt: '2026-08-26T09:14:21.000Z',
+      direction: 'inbound',
+      hasBody: true,
+    },
+  },
+};
+
+/**
+ * An ask made by SOFTWARE the asker delegated to, not by the asker.
+ *
+ * The line is its own, not a chip beside the name: "Ana is asking" and
+ * "something Ana delegated to is asking" are different consent decisions, and
+ * the second is the less familiar one. The label is attributed rather than
+ * asserted — the asker writes it and this box never verifies it.
+ */
+export const DelegatedAgentAsk: Story = {
+  args: {
+    askerName: 'Ana',
+    tier: 'trusted',
+    decision: 'unreviewed',
+    prompt: 'What’s on Sam’s wishlist? I’m putting together birthday options.',
+    scopeSummary: 'Content · wishlist',
+    searchBreadth: 'Your Companion recognises “wishlist”, so this is confined to those notes.',
+    items: [],
+    downgrades: ['boolean'],
+    actor: { kind: 'third-party-agent', label: 'GiftFinder' },
+  },
+};
+
+/** The same ask, made by the person. Same card, materially different decision. */
+export const PersonAsk: Story = {
+  args: {
+    ...DelegatedAgentAsk.args,
+    actor: { kind: 'person' },
+  } as Story['args'],
+};

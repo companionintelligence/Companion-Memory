@@ -152,48 +152,52 @@ export interface OutlookMailMessageEntity {
   attachments?: OutlookAttachment[];
 }
 
+/**
+ * One entry of a post's `attachments{...}` edge, or of an album attachment's
+ * `subattachments{...}`. `target.id` is the Graph id of the photo/video the
+ * attachment points at — the same id `/me/photos` and `/me/videos` list — so
+ * a post's media and the standalone media endpoints resolve to one object.
+ */
+export interface FacebookPostAttachment {
+  target?: {
+    id: string;
+    url: string;
+  };
+  /** e.g. `photo`, `video_inline`, `album`, `share`, `cover_photo`. */
+  type?: string;
+  /** e.g. `photo`, `video`, `album`, `link`. Narrower than `type`. */
+  media_type?: string;
+  url?: string;
+  media?: {
+    image?: {
+      height: number;
+      src: string;
+      width: number;
+    };
+    /** Direct (CDN, expiring) URL of the video file for video attachments. */
+    source?: string;
+  };
+  subattachments?: {
+    data: FacebookPostAttachment[];
+  };
+}
+
 export interface FacebookPost {
   id: string;
   created_time: string;
-  link: string;
-  type: string;
+  message?: string;
+  story?: string;
+  link?: string;
+  type?: string;
+  permalink_url?: string;
   full_picture?: string;
   picture?: string;
+  from?: {
+    id: string;
+    name: string;
+  };
   attachments?: {
-    data: Array<{
-      target?: {
-        id: string;
-        url: string;
-      };
-      type: string;
-      url: string;
-      media?: {
-        image?: {
-          height: number;
-          src: string;
-          width: number;
-        };
-        source?: string;
-      };
-      subattachments?: {
-        data: Array<{
-          media?: {
-            image?: {
-              height: number;
-              src: string;
-              width: number;
-            };
-            source: string;
-          };
-          target?: {
-            id: string;
-            url: string;
-          };
-          type?: string;
-          url?: string;
-        }>;
-      };
-    }>;
+    data: FacebookPostAttachment[];
   };
 }
 

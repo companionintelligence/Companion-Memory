@@ -8,6 +8,7 @@ import { EVENT_FRAGMENT } from '../EntityCard/EventCard';
 import { eventDisplayTitle, formatBytes } from '../utils';
 
 import { EntityDetailScaffold, EntityMedia, resolveStaticUrl } from './EntityDetailScaffold';
+import { pickPageUrl } from './GenericDetails';
 import { hasRichMedia, RichMediaCard } from './RichMediaCard';
 
 const UPDATE_EVENT = gql(`
@@ -234,6 +235,13 @@ export function EventDetails({ entity }: Props) {
     mediaContentType: data.mediaContentType,
   });
 
+  // The thing the event is ABOUT, when it lives on another service: a
+  // connector stamps the source's own page URL into `metadata` (a liked
+  // Facebook Page's `page_url`, a post's `permalink_url`). The related
+  // entity's relationship card is the in-app way there; this is the way OUT,
+  // and it opens a new tab like every other off-appliance link in the drawer.
+  const pageUrl = pickPageUrl((data.metadata ?? {}) as Record<string, unknown>);
+
   return (
     <EntityDetailScaffold
       entity={entity}
@@ -269,6 +277,19 @@ export function EventDetails({ entity }: Props) {
         { label: 'Ends', value: formatDateTime(data.endTime) },
         { label: 'Duration', value: formatDuration(data.startTime, data.endTime) },
         { label: 'Type', value: formatTitleCase(eventFields.eventType) ?? 'Event' },
+        {
+          label: 'Link',
+          value: pageUrl ? (
+            <a
+              href={pageUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="break-all text-primary hover:underline"
+            >
+              {pageUrl}
+            </a>
+          ) : null,
+        },
         { label: 'Media type', value: data.mediaContentType },
         { label: 'Dimensions', value: dimensions },
         { label: 'Size', value: data.mediaSize != null ? formatBytes(data.mediaSize) : null },

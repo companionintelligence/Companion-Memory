@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 
 import type { LoggerService } from '@ci/common/logging';
+import { RETRIEVAL_POLICY_DEFAULTS } from '@ci/domains/retrieval-policy';
 import { SearchService } from '@ci/domains/search-next';
 
 import { createSyntheticTestUser } from '../../../__tests__/support/applianceUser';
@@ -152,7 +153,12 @@ describeWithDatabase(`RecallProbeService against the live schema (${availability
     service = new RecallProbeService(
       dataSource,
       dataSource.getRepository(RecallProbeResultEntity),
-      new SearchService(dataSource, { generateEmbeddingString: jest.fn() } as never),
+      new SearchService(
+        dataSource,
+        { generateEmbeddingString: jest.fn() } as never,
+        { get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS) } as never,
+        { send: jest.fn().mockResolvedValue([]) } as never,
+      ),
       noopLogger,
     );
   });

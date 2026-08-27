@@ -131,6 +131,32 @@ export class PeerLinkService {
     return rows.map(PeerLinkEntity.toEgressType);
   }
 
+  /**
+   * All ACTIVE links across this box holding a given signing key.
+   *
+   * The KEY-FIRST half of inbound routing, and it returns a list for the same
+   * reason {@link findActiveByPeerIdentity} does: two members of a household may
+   * each have linked the same peer, and the caller must disambiguate rather than
+   * answering as an arbitrary one.
+   *
+   * Note what this deliberately does NOT consult: the OIDC issuer or subject.
+   * A signature proves possession of the key; whether the peer also presented a
+   * Portal token that says who operates it is a separate, additive fact. Mixing
+   * the two here would put the issuer back in the identity path, which is the
+   * coupling the key is meant to remove.
+   */
+  async findActiveByKeyThumbprint(thumbprint: string): Promise<PeerLink[]> {
+    if (!thumbprint) {
+      return [];
+    }
+
+    const rows = await this.repository.find({
+      where: { peerKeyThumbprint: thumbprint, status: 'active', revokedAt: IsNull() },
+    });
+
+    return rows.map(PeerLinkEntity.toEgressType);
+  }
+
   /** Revoke a peer link — takes effect on the next inbound ask. */
   async revoke(context: UserServiceContext, handle: string): Promise<PeerLink> {
     const row = await this.repository.findOne({

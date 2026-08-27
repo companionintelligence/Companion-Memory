@@ -4,6 +4,7 @@ import { Mutation, Query, Resolver, Args, ID } from '@nestjs/graphql';
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { parseDisclosureRung } from '@ci/domains/asks';
 import { SavedSearchService } from '@ci/domains/files';
 import { UpdateSavedSearchPayload } from '@ci/domains/graphql/types/UpdateSavedSearchPayload';
 import type { IndexableEntity } from '@ci/domains/search-next';
@@ -105,7 +106,20 @@ export class SavedSearchResolver {
 
     const id = GlobalUID.parse('saved-search', input.id);
 
-    const entity = await this.savedSearchService.setSharing(serviceContext, id, input.isPublic);
+    // Parsed at the boundary rather than coerced on read: an owner who typed a
+    // rung that does not exist meant a restriction, and silently storing the
+    // strictest one would hand them a link that discloses nothing, with no
+    // explanation. See `parseDisclosureRung`.
+    const maxDisclosure = parseDisclosureRung(input.maxDisclosure);
+
+    if (input.expiresAt != null && input.expiresAt.getTime() <= Date.now()) {
+      throw new BadRequestException('expiresAt must be in the future');
+    }
+
+    const entity = await this.savedSearchService.setSharing(serviceContext, id, input.isPublic, {
+      maxDisclosure,
+      expiresAt: input.expiresAt ?? null,
+    });
 
     if (entity == null) {
       return {

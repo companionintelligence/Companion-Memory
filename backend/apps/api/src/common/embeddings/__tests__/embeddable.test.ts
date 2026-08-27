@@ -1,6 +1,5 @@
 import {
   embedSkipReason,
-  entityEmbedSkipReason,
   isEmbeddable,
   isEmbeddableType,
   normalizeEmbeddableType,
@@ -132,46 +131,5 @@ describe('isEmbeddableType', () => {
     expect(isEmbeddableType('place')).toBe(true);
     expect(isEmbeddableType('Goal')).toBe(false);
     expect(isEmbeddableType(undefined)).toBe(false);
-  });
-});
-
-describe('entityEmbedSkipReason', () => {
-  it('returns null when content is present and the type is embeddable', () => {
-    expect(entityEmbedSkipReason({ entityType: 'Person', searchContent: 'Dana Scully' })).toBeNull();
-  });
-
-  it('skips empty or whitespace-only content', () => {
-    expect(entityEmbedSkipReason({ entityType: 'Person', searchContent: '' })).toBe(
-      'search content is empty',
-    );
-    expect(entityEmbedSkipReason({ entityType: 'Person', searchContent: '   ' })).toBe(
-      'search content is empty',
-    );
-    expect(entityEmbedSkipReason({ entityType: 'Person', searchContent: null })).toBe(
-      'search content is empty',
-    );
-  });
-
-  it('skips low-value content using the shared content-quality bar', () => {
-    // trivial reaction phrase and a single bare URL are dropped too, surfacing
-    // the underlying SkipReason in the message.
-    expect(entityEmbedSkipReason({ entityType: 'Person', searchContent: 'thanks' })).toBe(
-      'search content is trivial',
-    );
-    expect(entityEmbedSkipReason({ entityType: 'Concept', searchContent: 'https://example.com' })).toBe(
-      'search content is url-only',
-    );
-  });
-
-  it('skips non-embeddable types, naming the offending type', () => {
-    expect(entityEmbedSkipReason({ entityType: 'Goal', searchContent: 'be happy' })).toContain('Goal');
-    expect(entityEmbedSkipReason({ entityType: undefined, searchContent: 'orphan content' })).toContain(
-      '(unspecified)',
-    );
-  });
-
-  it('prioritises the content reason over the type reason', () => {
-    // A blank document is uninteresting regardless of type — report that first.
-    expect(entityEmbedSkipReason({ entityType: 'Goal', searchContent: '' })).toBe('search content is empty');
   });
 });

@@ -25,6 +25,9 @@ export const EVENT_FRAGMENT = gql(`
     title
     description
     sourceSystem
+    # The connector's catch-all for what has no column — for a social.like
+    # event that is the liked Page's URL, which the drawer offers as a link.
+    metadata
     startTime
     endTime
     timeSource

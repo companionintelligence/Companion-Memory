@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  actorIsDelegated,
+  grantUsageLine,
+  grantsLapsingWithin,
+  lapseNudge,
+  purposeAbsentNote,
+  purposeLine,
+  actorLine,
   answerFormLabel,
   askApproveLabel,
   askDecisionNote,
@@ -252,5 +259,173 @@ describe('peer trust ladder', () => {
     // somebody needs in front of them.
     expect(peerTrustCeilingNote('family')).toMatch(/only tier where health, finances and secrets/i);
     expect(peerTrustCeilingNote('trusted')).not.toMatch(/only tier/i);
+  });
+});
+
+describe('actorLine — who, or what, is asking', () => {
+  it('says nothing when the ask declares no actor', () => {
+    // Inventing "a person, presumably" would be a claim about the one thing
+    // the asker declined to commit to.
+    expect(actorLine(null)).toBeNull();
+    expect(actorLine(undefined)).toBeNull();
+  });
+
+  it('distinguishes a person from their Companion from delegated software', () => {
+    expect(actorLine({ kind: 'person' })).toMatch(/a person is asking/);
+    expect(actorLine({ kind: 'first-party-agent' })).toMatch(/own Companion/);
+    expect(actorLine({ kind: 'third-party-agent' })).toMatch(/delegated to/);
+  });
+
+  /**
+   * `label` is a string the ASKER writes and this box never verifies — the same
+   * class of input as the prompt. So it is attributed, not asserted.
+   */
+  it('quotes the label rather than asserting it', () => {
+    const line = actorLine({ kind: 'third-party-agent', label: 'Definitely Safe Assistant' }) ?? '';
+
+    expect(line).toContain('calling itself');
+    expect(line).toContain('Definitely Safe Assistant');
+  });
+
+  it('omits the quoting clause for a blank label', () => {
+    expect(actorLine({ kind: 'first-party-agent', label: '  ' })).not.toContain('calling itself');
+  });
+
+  it('claims nothing it cannot support for an unrecognized kind', () => {
+    const line = actorLine({ kind: 'quantum-butler' }) ?? '';
+
+    expect(line).toMatch(/does not recognise/);
+    expect(line).not.toContain('quantum-butler');
+  });
+});
+
+describe('actorIsDelegated', () => {
+  it('is true only for software acting on someone’s behalf', () => {
+    expect(actorIsDelegated({ kind: 'first-party-agent' })).toBe(true);
+    expect(actorIsDelegated({ kind: 'third-party-agent' })).toBe(true);
+    expect(actorIsDelegated({ kind: 'person' })).toBe(false);
+  });
+
+  /**
+   * An ask with no actor is the ordinary case today — nothing sends the field
+   * yet. Marking every ask as noteworthy would make the mark worthless by the
+   * time it means something.
+   */
+  it('is false for an undeclared actor, not true-by-default', () => {
+    expect(actorIsDelegated(null)).toBe(false);
+    expect(actorIsDelegated(undefined)).toBe(false);
+  });
+});
+
+describe('purposeLine / purposeAbsentNote — why they say they want this', () => {
+  it('attributes the purpose rather than asserting it', () => {
+    // This box cannot verify why anyone wants anything. A line that read
+    // "For: wedding invites" would assert something nobody checked.
+    const line = purposeLine('wedding invites') ?? '';
+
+    expect(line).toMatch(/They say/);
+    expect(line).toContain('wedding invites');
+  });
+
+  it('trims, so padding does not become part of the quoted phrase', () => {
+    expect(purposeLine('  lunch  ')).toContain('“lunch”');
+  });
+
+  it.each([[null], [undefined], [''], ['   '], [42], [{}]])('reports %p as no stated purpose', (value) => {
+    expect(purposeLine(value)).toBeNull();
+    expect(purposeAbsentNote(value)).toMatch(/did not say/);
+  });
+
+  /**
+   * "They did not say why" is a real input to a consent decision. A card that
+   * simply omitted the line would leave the owner unable to tell it from "the
+   * app did not show me".
+   */
+  it('says nothing extra once a purpose IS stated', () => {
+    expect(purposeAbsentNote('wedding invites')).toBeNull();
+  });
+});
+
+describe('grantUsageLine — dormant vs busy', () => {
+  const NOW = new Date('2026-08-26T12:00:00.000Z');
+  const at = (days: number) => new Date(NOW.getTime() - days * 86_400_000).toISOString();
+
+  it('states "Never used" plainly and without alarm', () => {
+    // The ordinary state of a grant somebody wrote in advance — which is
+    // exactly what standing consent is for.
+    expect(grantUsageLine({ useCount: 0, lastUsedAt: null }, NOW)).toBe('Never used');
+    expect(grantUsageLine({ useCount: 0 }, NOW)).toBe('Never used');
+  });
+
+  it('treats a count with no timestamp as never used, rather than half-reporting', () => {
+    expect(grantUsageLine({ useCount: 5, lastUsedAt: null }, NOW)).toBe('Never used');
+  });
+
+  it('singularizes one use', () => {
+    expect(grantUsageLine({ useCount: 1, lastUsedAt: at(3) }, NOW)).toBe('Used once · last 3 days ago');
+  });
+
+  it.each([
+    [0, 'today'],
+    [1, 'yesterday'],
+    [9, '9 days ago'],
+    [45, '1 month ago'],
+    [90, '3 months ago'],
+  ])('renders %s days since last use as "%s"', (days, expected) => {
+    expect(grantUsageLine({ useCount: 4, lastUsedAt: at(days) }, NOW)).toBe(
+      `Used 4 times · last ${expected}`,
+    );
+  });
+
+  it('drops the "last" clause rather than printing a bad date', () => {
+    expect(grantUsageLine({ useCount: 4, lastUsedAt: 'not a date' }, NOW)).toBe('Used 4 times');
+  });
+});
+
+describe('grantsLapsingWithin / lapseNudge', () => {
+  const NOW = new Date('2026-08-26T12:00:00.000Z');
+  const inDays = (days: number) => new Date(NOW.getTime() + days * 86_400_000).toISOString();
+
+  const grant = (over: Partial<{ active: boolean; expiresAt: string | null }> = {}) => ({
+    active: true,
+    expiresAt: inDays(10),
+    ...over,
+  });
+
+  it('finds live grants expiring inside the horizon', () => {
+    expect(grantsLapsingWithin([grant(), grant({ expiresAt: inDays(2) })], 30, NOW)).toHaveLength(2);
+  });
+
+  it('excludes grants expiring beyond it', () => {
+    expect(grantsLapsingWithin([grant({ expiresAt: inDays(90) })], 30, NOW)).toEqual([]);
+  });
+
+  /**
+   * A revoked grant cannot lapse, and one with no expiry never will. Counting
+   * either inflates a nudge whose whole value is being rare enough to read.
+   */
+  it('excludes revoked grants and grants with no expiry', () => {
+    expect(grantsLapsingWithin([grant({ active: false })], 30, NOW)).toEqual([]);
+    expect(grantsLapsingWithin([grant({ expiresAt: null })], 30, NOW)).toEqual([]);
+  });
+
+  it('excludes an expiry already in the past — that lapsed, it is not about to', () => {
+    expect(grantsLapsingWithin([grant({ expiresAt: inDays(-1) })], 30, NOW)).toEqual([]);
+  });
+
+  it('ignores an unparseable expiry rather than counting it', () => {
+    expect(grantsLapsingWithin([grant({ expiresAt: 'soon' })], 30, NOW)).toEqual([]);
+  });
+
+  it('says nothing at all when nothing is lapsing', () => {
+    // A banner that renders every time teaches people to look past the banner.
+    expect(lapseNudge(0, 30)).toBeNull();
+  });
+
+  it('singularizes one grant and explains the consequence', () => {
+    const nudge = lapseNudge(1, 30) ?? '';
+
+    expect(nudge).toContain('1 grant');
+    expect(nudge).toMatch(/stop answering/);
   });
 });

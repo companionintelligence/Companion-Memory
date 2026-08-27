@@ -1220,6 +1220,65 @@ export class QuestionService {
     );
   }
 
+  /**
+   * Bump `times_answered` on the question a newly recorded answer belongs to —
+   * the counterpart of the `times_asked` bump in
+   * {@link recordFeedQuestionPresentation}, and the only writer of that column.
+   *
+   * Counts ANSWERS RECORDED, not distinct questions answered and not distinct
+   * people: `ci.questions` is an appliance-wide catalogue (a row is shared until
+   * somebody's edit forks it — see `forkedFromQuestionId`), so this is the same
+   * appliance-wide usage statistic `times_asked` already is. Editing an existing
+   * answer does not bump it; only a new `ci.answers` row does.
+   *
+   * The UPDATE is relative (`times_answered + 1`) rather than a read of the
+   * current value followed by a write of value+1, so two answers landing
+   * concurrently cannot lose one another's increment.
+   */
+  async recordQuestionAnswered(questionId: string): Promise<void> {
+    await this.dataSource.query(
+      `
+      UPDATE ci.questions
+      SET times_answered = times_answered + 1
+      WHERE question_id = $1;
+      `,
+      [questionId],
+    );
+  }
+
+  /**
+   * Batched {@link recordQuestionAnswered}: bump `times_answered` for a whole
+   * ingest batch in one UPDATE instead of N.
+   *
+   * Takes the question id of every answer in the batch, duplicates included —
+   * answering the same question twice in one batch must count twice, exactly as
+   * two separate `recordQuestionAnswered` calls would. The ids are folded into
+   * (id, count) pairs here so the statement touches each row once, and the
+   * addition stays relative for the same lost-update reason as the single path.
+   */
+  async recordManyQuestionsAnswered(questionIds: string[]): Promise<void> {
+    if (questionIds.length === 0) {
+      return;
+    }
+
+    const counts = new Map<string, number>();
+    for (const questionId of questionIds) {
+      counts.set(questionId, (counts.get(questionId) ?? 0) + 1);
+    }
+
+    await this.dataSource.query(
+      `
+      UPDATE ci.questions q
+      SET times_answered = q.times_answered + c.n
+      FROM (
+        SELECT unnest($1::uuid[]) AS question_id, unnest($2::int[]) AS n
+      ) AS c
+      WHERE q.question_id = c.question_id;
+      `,
+      [[...counts.keys()], [...counts.values()]],
+    );
+  }
+
   /** Ensure at least one unanswered question is queued when candidates exist. */
   async ensureFeedQueueHasQuestion(userId: string): Promise<boolean> {
     type QueueCountRow = { count: string };

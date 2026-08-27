@@ -110,6 +110,17 @@ export const STAGE_IDS = {
   ENRICH_MEDIA_DIMENSIONS: 'enrich.media_dimensions',
 
   /**
+   * Generate the 300px JPEG `PREVIEW` variant for `ci.files` originals that
+   * have none. The upload path (`FilePreviewGenerationListener`) only ever
+   * ran once per upload and had no way back: a preview that was lost — to
+   * the hash dedup that used to collapse identical previews across parents,
+   * to a worker restart, or simply to predating the listener — stayed lost,
+   * and the explorer drew the file's full original (or, for a video, nothing
+   * decodable) in its place. Same generator, driven by the ledger.
+   */
+  ENRICH_FILE_PREVIEW: 'enrich.file_preview',
+
+  /**
    * Dense-embed `ci.content` into `ci_search.embeddings`. The conversion that
    * justifies the whole rebuild, because its version is not a hand-chosen
    * integer: it is a function of `(embedding model, pgvector width)`, so
@@ -280,6 +291,24 @@ export const STAGE_IDS = {
    * Idempotent by construction.
    */
   CLEAN_IDENTIFIER_NORMALIZE: 'clean.identifier_normalize',
+
+  /**
+   * COUNT contradictory single-valued relationships. Repair none of them.
+   *
+   * A subject holding more than one active edge of a type that can only have
+   * one true answer — two `LIVES_IN` homes at once — is a contradiction, and
+   * `ci.relationships` has no way to say a fact stopped being true. Fixing that
+   * is supersession, which touches every writer; this stage is the evidence for
+   * whether it is worth doing. It has no writer, closes no incumbent and adds
+   * no column: it groups, counts, and records the number in the ledger's
+   * `reason`.
+   *
+   * The precedent is `ci.facts`, which shipped `valid_from`, `valid_until`,
+   * `supersedes_fact_id`, `is_current` and two indexes for them, was never
+   * written by anything, and was dropped whole in
+   * `20260212191500_drop_unused_tables_and_document_chunk_function.sql`.
+   */
+  CLEAN_SINGLE_VALUED_EDGE_AUDIT: 'clean.single_valued_edge_audit',
 
   /**
    * Promote a resolved event location into a first-class place: the entity, its

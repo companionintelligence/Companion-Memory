@@ -537,3 +537,149 @@ describe('a block cannot be evaded by respelling the query', () => {
     );
   });
 });
+
+describe('delegation — whether their AGENT may exercise a grant', () => {
+  const base = { queryType: 'content', dataClass: 'photos', prompt: 'lake trip' } as const;
+
+  function grantWith(delegation: unknown) {
+    return [
+      {
+        id: 'g1',
+        mode: 'auto',
+        queryType: 'content',
+        dataClass: 'photos',
+        revokedAt: null,
+        expiresAt: null,
+        scope: { delegation },
+      },
+    ] as unknown as Parameters<typeof evaluateGrant>[1];
+  }
+
+  it('admits only the person under `none`', () => {
+    expect(evaluateGrant({ ...base, actor: { kind: 'person' } }, grantWith('none')).decision).toBe('auto');
+    expect(evaluateGrant({ ...base, actor: { kind: 'first-party-agent' } }, grantWith('none')).decision).toBe(
+      'review',
+    );
+  });
+
+  it('admits the grantee’s own Companion under `first-party-only`', () => {
+    expect(
+      evaluateGrant({ ...base, actor: { kind: 'first-party-agent' } }, grantWith('first-party-only'))
+        .decision,
+    ).toBe('auto');
+    expect(
+      evaluateGrant({ ...base, actor: { kind: 'third-party-agent' } }, grantWith('first-party-only'))
+        .decision,
+    ).toBe('review');
+  });
+
+  it('admits everything under `any-agent`', () => {
+    for (const kind of ['person', 'first-party-agent', 'third-party-agent'] as const) {
+      expect(evaluateGrant({ ...base, actor: { kind } }, grantWith('any-agent')).decision).toBe('auto');
+    }
+  });
+
+  /**
+   * The mirror of `autoGrantNamesQueryClass`. The field is optional and
+   * asker-supplied, so "the owner restricted this to Bob himself" must not be
+   * enforced against a label Bob chooses whether to write. Omitting it is not a
+   * narrowing — it is the broadest an ask can be.
+   *
+   * DOWNGRADED to review, not denied: the owner still sees it and answers in
+   * one tap.
+   */
+  it('does not let an ask escape the restriction by declaring NO actor', () => {
+    for (const delegation of ['none', 'first-party-only'] as const) {
+      expect(evaluateGrant(base, grantWith(delegation)).decision).toBe('review');
+    }
+  });
+
+  it('reads an unreadable delegation setting as the STRICTEST one', () => {
+    // `scope` is jsonb and can hold anything a client or a migration wrote.
+    // A typo in the owner's own restriction must not be its loosest reading.
+    for (const bogus of ['any_agent', 'ANY-AGENT ', 42, null, {}]) {
+      expect(evaluateGrant({ ...base, actor: { kind: 'person' } }, grantWith(bogus)).decision).toBe(
+        bogus === null ? 'auto' : 'review',
+      );
+    }
+  });
+
+  it('ignores a grant with no delegation clause, as every other scope field does', () => {
+    const noClause = [
+      {
+        id: 'g1',
+        mode: 'auto',
+        queryType: 'content',
+        dataClass: 'photos',
+        revokedAt: null,
+        expiresAt: null,
+        scope: {},
+      },
+    ] as unknown as Parameters<typeof evaluateGrant>[1];
+
+    expect(evaluateGrant(base, noClause).decision).toBe('auto');
+    expect(evaluateGrant({ ...base, actor: { kind: 'third-party-agent' } }, noClause).decision).toBe('auto');
+  });
+
+  it('matches on KIND, never on the label the asker wrote', () => {
+    const flattering = { kind: 'third-party-agent', label: 'Trusted First Party Assistant' } as const;
+
+    expect(evaluateGrant({ ...base, actor: flattering }, grantWith('first-party-only')).decision).toBe(
+      'review',
+    );
+  });
+});
+
+describe('purpose binding', () => {
+  const purposeGrant = [
+    {
+      id: 'g1',
+      mode: 'auto',
+      queryType: 'content',
+      dataClass: 'photos',
+      revokedAt: null,
+      expiresAt: null,
+      scope: { purpose: 'wedding invites' },
+    },
+  ] as unknown as Parameters<typeof evaluateGrant>[1];
+
+  const ask = (purpose?: string) =>
+    ({
+      queryType: 'content',
+      dataClass: 'photos',
+      prompt: 'the address',
+      ...(purpose == null ? {} : { filters: { purpose } }),
+    }) as Parameters<typeof evaluateGrant>[0];
+
+  it('auto-answers when the ask states the purpose the grant names', () => {
+    expect(evaluateGrant(ask('wedding invites'), purposeGrant).decision).toBe('auto');
+  });
+
+  it('normalizes both sides, so casing and padding do not decide consent', () => {
+    expect(evaluateGrant(ask('  Wedding Invites '), purposeGrant).decision).toBe('auto');
+  });
+
+  it('does not match a DIFFERENT purpose', () => {
+    expect(evaluateGrant(ask('marketing'), purposeGrant).decision).toBe('review');
+  });
+
+  /**
+   * The same rule every other "the ask must name it too" clause in this file
+   * follows: a grant that names a purpose is not satisfied by an ask that
+   * states none. Downgraded to review, never widened.
+   */
+  it('does not match an ask that states NO purpose', () => {
+    expect(evaluateGrant(ask(), purposeGrant).decision).toBe('review');
+  });
+
+  it('ignores a non-string purpose on the ask rather than coercing it', () => {
+    const weird = {
+      queryType: 'content',
+      dataClass: 'photos',
+      prompt: 'x',
+      filters: { purpose: { toString: () => 'wedding invites' } },
+    } as unknown as Parameters<typeof evaluateGrant>[0];
+
+    expect(evaluateGrant(weird, purposeGrant).decision).toBe('review');
+  });
+});

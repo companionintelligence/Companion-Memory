@@ -12,6 +12,7 @@ import { ToolRegistry } from '@ci/domains/tools';
 import { McpServerConfigEntity } from '../entities/McpServerConfigEntity';
 import { decryptedDraftFromEntity } from '../mapping';
 import type {
+  McpApprovedTool,
   McpAuthConfig,
   McpDiscoveredTool,
   McpProbeResult,
@@ -20,6 +21,7 @@ import type {
 } from '../types';
 
 import { McpSecretCodec } from './McpSecretCodec';
+import { grandfatherApprovals } from './mcpToolDigest';
 
 interface LiveConnection {
   client: Client;
@@ -73,7 +75,9 @@ export class McpClientManagerService implements OnModuleDestroy {
 
     this.reconnectTimers.clear();
 
-    await Promise.allSettled(Array.from(this.connections.keys()).map((configId) => this.disconnect(configId)));
+    await Promise.allSettled(
+      Array.from(this.connections.keys()).map((configId) => this.disconnect(configId)),
+    );
   }
 
   /**
@@ -93,10 +97,13 @@ export class McpClientManagerService implements OnModuleDestroy {
     try {
       await this.withTimeout(sweep, McpClientManagerService.BOOT_SWEEP_TIMEOUT_MS, 'MCP boot connect sweep');
     } catch (error) {
-      this.logger.warn('MCP boot connect sweep exceeded its time budget; remaining connects continue in background', {
-        error: (error as Error)?.message,
-        configCount: configs.length,
-      });
+      this.logger.warn(
+        'MCP boot connect sweep exceeded its time budget; remaining connects continue in background',
+        {
+          error: (error as Error)?.message,
+          configCount: configs.length,
+        },
+      );
     }
   }
 
@@ -156,6 +163,20 @@ export class McpClientManagerService implements OnModuleDestroy {
 
       await this.persist(configId, {
         discoveredTools,
+        // One-shot conversion of a pre-approval-gate row (approved_tools IS NULL): grandfather
+        // whatever this server offers right now so an appliance that was already using these tools
+        // does not lose them at deploy, then leave an explicit set behind so the NEXT reconnect's
+        // drift is caught. Rows created after the gate start at `[]` and never take this branch.
+        ...(config.approvedTools == null
+          ? {
+              approvedTools: grandfatherApprovals(
+                discoveredTools,
+                null,
+                'legacy:grandfathered',
+                new Date().toISOString(),
+              ),
+            }
+          : {}),
         connectionStatus: 'connected',
         lastConnectedAt: new Date(),
         lastError: null,
@@ -236,18 +257,58 @@ export class McpClientManagerService implements OnModuleDestroy {
     return config?.discoveredTools ?? [];
   }
 
-  /** Every discovered tool across every enabled config, for {@link McpToolProvider}. */
-  async listAllDiscoveredTools(): Promise<Array<{ configId: string; slug: string; tool: McpDiscoveredTool }>> {
+  /**
+   * Every discovered tool across every enabled config, for {@link McpToolProvider}, each carrying
+   * its server's stored grant. The approval set travels WITH the tool rather than being fetched
+   * separately by the provider so the intersect can never read a grant from a different row than
+   * the tool it is judging.
+   *
+   * Deliberately NOT filtered by user, for the same reason {@link connectAllEnabled} is not: the
+   * provider is loaded into the process-global {@link ToolRegistry} once, outside any request, so
+   * there is no user to filter by at this point. Each entry instead carries the `userId` that owns
+   * the config, and the provider stamps it onto the synthesized intent as `ownerUserId` — that is
+   * what the registry filters on, per request, when it lists or executes a tool.
+   */
+  async listAllDiscoveredTools(): Promise<
+    Array<{
+      configId: string;
+      userId: string;
+      slug: string;
+      tool: McpDiscoveredTool;
+      approvedTools: McpApprovedTool[] | null;
+    }>
+  > {
     const configs = await this.repo.find({ where: { enabled: true } });
-    const entries: Array<{ configId: string; slug: string; tool: McpDiscoveredTool }> = [];
+    const entries: Array<{
+      configId: string;
+      userId: string;
+      slug: string;
+      tool: McpDiscoveredTool;
+      approvedTools: McpApprovedTool[] | null;
+    }> = [];
 
     for (const config of configs) {
       for (const tool of config.discoveredTools ?? []) {
-        entries.push({ configId: config.id, slug: config.slug, tool });
+        entries.push({
+          configId: config.id,
+          userId: config.userId,
+          slug: config.slug,
+          tool,
+          approvedTools: config.approvedTools ?? null,
+        });
       }
     }
 
     return entries;
+  }
+
+  /**
+   * An approval changed — rebuild the assistant's MCP tool set without touching the live
+   * connection. Deliberately not routed through {@link onConfigChanged}: approving a tool must not
+   * tear down and respawn a working stdio subprocess.
+   */
+  async onToolApprovalsChanged(): Promise<void> {
+    await this.safeRefreshProvider();
   }
 
   /** Route a `tools/call` to the live connection. Throws if the server is not currently connected. */
@@ -449,7 +510,11 @@ export class McpClientManagerService implements OnModuleDestroy {
   }
 }
 
-function toDiscoveredTool(tool: { name: string; description?: string; inputSchema: unknown }): McpDiscoveredTool {
+function toDiscoveredTool(tool: {
+  name: string;
+  description?: string;
+  inputSchema: unknown;
+}): McpDiscoveredTool {
   return {
     name: tool.name,
     description: tool.description,
@@ -525,7 +590,9 @@ function extractTextContent(result: unknown): string | undefined {
   const text = content
     .filter(
       (block): block is { type: 'text'; text: string } =>
-        typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text' &&
+        typeof block === 'object' &&
+        block !== null &&
+        (block as { type?: unknown }).type === 'text' &&
         typeof (block as { text?: unknown }).text === 'string',
     )
     .map((block) => block.text)

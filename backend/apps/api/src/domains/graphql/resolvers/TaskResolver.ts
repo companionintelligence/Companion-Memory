@@ -300,7 +300,8 @@ export class TaskResolver {
     @Args('endTime', {
       type: () => Date,
       nullable: true,
-      description: 'Paired with `startTime`. Omit to keep the task’s own estimate (or the existing block’s duration, if moving one).',
+      description:
+        'Paired with `startTime`. Omit to keep the task’s own estimate (or the existing block’s duration, if moving one).',
     })
     endTime?: Date,
   ): Promise<ScheduleTaskPayload> {
@@ -309,7 +310,13 @@ export class TaskResolver {
     const taskId = GlobalUID.parse('task', gid);
 
     const outcome = startTime
-      ? await this.plannedBlockService.scheduleTaskAt(serviceContext, taskId, startTime, endTime, estimatedMinutes)
+      ? await this.plannedBlockService.scheduleTaskAt(
+          serviceContext,
+          taskId,
+          startTime,
+          endTime,
+          estimatedMinutes,
+        )
       : await this.plannedBlockService.scheduleTask(serviceContext, taskId, { estimatedMinutes, date });
 
     return {

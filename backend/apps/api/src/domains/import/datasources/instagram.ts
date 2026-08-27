@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Metadata } from './timeline';
@@ -42,16 +43,10 @@ interface IGPost {
   creation_timestamp?: number;
 }
 
-// ---- HTML helpers (dependency-free, mirrors mastodon.ts style) ----
-
-function stripTags(h: string): string {
-  return h
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<\/(p|div|tr|li|h\d)\s*>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ');
-}
+// ---- HTML helpers (mirrors mastodon.ts style) ----
+// decodeHtml below is for attribute/date-fragment-scoped strings ALREADY
+// pulled out of a larger document by a regex capture group; body-flattening
+// goes through the shared htmlToText instead (see its own doc comment).
 
 function decodeHtml(h: string): string {
   return h
@@ -64,13 +59,6 @@ function decodeHtml(h: string): string {
     .replace(/&#39;/g, "'")
     .replace(/&apos;/g, "'")
     .replace(/&nbsp;/g, ' ');
-}
-
-function htmlToText(html: string): string {
-  return decodeHtml(stripTags(html))
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 // Per-entry date div used across Meta HTML activity logs.
@@ -95,7 +83,7 @@ interface HtmlEntry {
   ts?: Date;
   /**
    * The entry's own markup (already de-duplicated, see dedupeRepeatedFieldRows).
-   * `text` is what survives stripTags, which throws away every identity the
+   * `text` is what survives htmlToText, which throws away every identity the
    * entry carries — the post permalink lives in an `<a href>` ATTRIBUTE and the
    * media file in an `<img src>`, neither of which a tag strip can reach. The
    * activity importer reads those off the markup before falling back to text.
