@@ -1,10 +1,12 @@
 import { useMutation } from '@apollo/client';
 
 import { CONTENT_FRAGMENT } from '@/components/entities/grid/ContentGridItem';
+import { formatEntityLabel, formatEntityTimestamp } from '@/components/EntityFields';
 import { gql, useFragment } from '@/graphql';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 
+import { DocumentFileActions, formatBytes, isHttpUrl } from './DocumentFileActions';
 import { EntityDetailScaffold, EntityMedia, resolveStaticUrl } from './EntityDetailScaffold';
 import { hasRichMedia, RichMediaCard } from './RichMediaCard';
 
@@ -20,6 +22,10 @@ const UPDATE_CONTENT = gql(`
 
 interface Props {
   entity: MemoryEntityOf<'ContentType'>;
+}
+
+function originHref(...candidates: Array<string | null | undefined>): string | undefined {
+  return candidates.find((value): value is string => isHttpUrl(value));
 }
 
 export function ContentDetails({ entity }: Props) {
@@ -40,11 +46,14 @@ export function ContentDetails({ entity }: Props) {
   const isMedia = /^(image|video)\//.test(data.mimetype ?? '');
   const mediaSrc = isMedia ? resolveStaticUrl(data.mediaUrl ?? data.contentUrl ?? data.sourceUrl) : undefined;
   const mediaPreviewSrc = isMedia ? resolveStaticUrl(data.previewUrl) : undefined;
+  const fileHref = resolveStaticUrl(data.mediaUrl);
+  const sourceHref = originHref(data.sourceUrl, data.contentUrl);
+  const showFileOpen = Boolean(fileHref) && !isMedia;
 
   return (
     <EntityDetailScaffold
       entity={entity}
-      title={data.title || 'Content'}
+      title={data.title || data.mediaFilename || 'Content'}
       subtitle="Content"
       taggable
       media={
@@ -64,7 +73,7 @@ export function ContentDetails({ entity }: Props) {
       }
       editFields={[
         { key: 'title', label: 'Title', value: data.title ?? '' },
-        { key: 'text', label: 'Text', value: data.text ?? '', multiline: true },
+        { key: 'text', label: 'Text', value: data.text ?? '', multiline: true, hideWhenEmpty: true },
       ]}
       onSave={async (values) => {
         await updateContent({
@@ -72,22 +81,35 @@ export function ContentDetails({ entity }: Props) {
         });
       }}
       metaItems={[
-        { label: 'Type', value: data.mimetype ?? 'Content' },
+        { label: 'Filename', value: data.mediaFilename },
+        { label: 'Type', value: data.mimetype },
+        { label: 'Size', value: formatBytes(data.mediaSize) },
+        { label: 'Source', value: formatEntityLabel(data.sourceSystem) },
+        { label: 'Source type', value: formatEntityLabel(data.sourceType) },
         {
-          label: 'Link',
-          value: data.contentUrl ? (
+          label: 'Source URL',
+          value: sourceHref ? (
             <a
-              href={data.contentUrl}
+              href={sourceHref}
               target="_blank"
               rel="noopener noreferrer"
               className="break-all text-primary hover:underline"
             >
-              {data.contentUrl}
+              {sourceHref}
             </a>
           ) : null,
         },
+        {
+          label: 'Created',
+          value: data.createdAt ? formatEntityTimestamp(String(data.createdAt)) : null,
+        },
       ]}
       rawData={data}
-    />
+    >
+      {showFileOpen && fileHref && (
+        <DocumentFileActions href={fileHref} filename={data.mediaFilename} />
+      )}
+      {!fileHref && sourceHref && <DocumentFileActions href={sourceHref} label="Open source" />}
+    </EntityDetailScaffold>
   );
 }

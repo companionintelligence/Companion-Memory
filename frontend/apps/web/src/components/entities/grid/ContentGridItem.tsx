@@ -13,8 +13,14 @@ export const CONTENT_FRAGMENT = gql(`
     text
     contentUrl: url
     sourceUrl
+    sourceType
+    sourceSystem
+    sourceId
+    createdAt
     mimetype
     mediaUrl
+    mediaFilename
+    mediaSize
     previewUrl
     ...RichMediaData
   }

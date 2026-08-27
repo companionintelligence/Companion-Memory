@@ -11,6 +11,7 @@ import { formatMinor } from '@/lib/money';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 
+import { DocumentFileActions } from './DocumentFileActions';
 import { useEntityDrawerHost } from './drawerHost';
 import { EntityDetailScaffold, EntityMedia, resolveStaticUrl } from './EntityDetailScaffold';
 import { useReadOnly } from './readOnly';
@@ -215,17 +216,8 @@ function SourceDocumentSection({ documentContentId }: { documentContentId: strin
           />
         )}
 
-        {/* A PDF has no inline rendering here; the file itself is the escape,
-            same as the media fallback above. */}
-        {mimetype === 'application/pdf' && fileSrc && (
-          <a
-            href={fileSrc}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex w-fit items-center gap-1 text-sm text-primary hover:underline"
-          >
-            Open the PDF <span aria-hidden>↗</span>
-          </a>
+        {fileSrc && !mimetype.startsWith('image/') && (
+          <DocumentFileActions href={fileSrc} filename={content?.title} />
         )}
 
         {/* The extracted text is the fallback evidence for an emailed receipt,

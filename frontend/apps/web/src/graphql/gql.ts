@@ -65,7 +65,7 @@ type Documents = {
     "\n  fragment BrowserActivityGridItemData on BrowserActivityType {\n    id\n    title\n    url\n  }\n": typeof types.BrowserActivityGridItemDataFragmentDoc,
     "\n  fragment CommunicationGridItemData on CommunicationType {\n    id\n    subject\n    preview\n    time\n    type\n    direction\n    from {\n      id\n      name\n    }\n  }\n": typeof types.CommunicationGridItemDataFragmentDoc,
     "\n  fragment ConceptGridItemData on ConceptType {\n    id\n    name\n    description\n  }\n": typeof types.ConceptGridItemDataFragmentDoc,
-    "\n  fragment ContentGridItemData on ContentType {\n    id\n    title\n    text\n    contentUrl: url\n    sourceUrl\n    mimetype\n    mediaUrl\n    previewUrl\n    ...RichMediaData\n  }\n": typeof types.ContentGridItemDataFragmentDoc,
+    "\n  fragment ContentGridItemData on ContentType {\n    id\n    title\n    text\n    contentUrl: url\n    sourceUrl\n    sourceType\n    sourceSystem\n    sourceId\n    createdAt\n    mimetype\n    mediaUrl\n    mediaFilename\n    mediaSize\n    previewUrl\n    ...RichMediaData\n  }\n": typeof types.ContentGridItemDataFragmentDoc,
     "\n  fragment EventGridItemData on EventType {\n    id\n    title\n    description\n    startTime\n    eventType\n    locationName\n    sourceSystem\n  }\n": typeof types.EventGridItemDataFragmentDoc,
     "\n  fragment FileChunkGridItemData on FileChunkType {\n    id\n    sectionTitle\n    chunkContent: content\n    sourceLocator\n    file {\n      id\n      filename\n    }\n  }\n": typeof types.FileChunkGridItemDataFragmentDoc,
     "\n  fragment FileGridItemData on FileType {\n    id\n    filename\n    previewUrl\n    contentType\n    sourceUrl\n    title\n    description\n    size\n    createdAt\n  }\n": typeof types.FileGridItemDataFragmentDoc,
@@ -319,7 +319,7 @@ const documents: Documents = {
     "\n  fragment BrowserActivityGridItemData on BrowserActivityType {\n    id\n    title\n    url\n  }\n": types.BrowserActivityGridItemDataFragmentDoc,
     "\n  fragment CommunicationGridItemData on CommunicationType {\n    id\n    subject\n    preview\n    time\n    type\n    direction\n    from {\n      id\n      name\n    }\n  }\n": types.CommunicationGridItemDataFragmentDoc,
     "\n  fragment ConceptGridItemData on ConceptType {\n    id\n    name\n    description\n  }\n": types.ConceptGridItemDataFragmentDoc,
-    "\n  fragment ContentGridItemData on ContentType {\n    id\n    title\n    text\n    contentUrl: url\n    sourceUrl\n    mimetype\n    mediaUrl\n    previewUrl\n    ...RichMediaData\n  }\n": types.ContentGridItemDataFragmentDoc,
+    "\n  fragment ContentGridItemData on ContentType {\n    id\n    title\n    text\n    contentUrl: url\n    sourceUrl\n    sourceType\n    sourceSystem\n    sourceId\n    createdAt\n    mimetype\n    mediaUrl\n    mediaFilename\n    mediaSize\n    previewUrl\n    ...RichMediaData\n  }\n": types.ContentGridItemDataFragmentDoc,
     "\n  fragment EventGridItemData on EventType {\n    id\n    title\n    description\n    startTime\n    eventType\n    locationName\n    sourceSystem\n  }\n": types.EventGridItemDataFragmentDoc,
     "\n  fragment FileChunkGridItemData on FileChunkType {\n    id\n    sectionTitle\n    chunkContent: content\n    sourceLocator\n    file {\n      id\n      filename\n    }\n  }\n": types.FileChunkGridItemDataFragmentDoc,
     "\n  fragment FileGridItemData on FileType {\n    id\n    filename\n    previewUrl\n    contentType\n    sourceUrl\n    title\n    description\n    size\n    createdAt\n  }\n": types.FileGridItemDataFragmentDoc,
@@ -731,7 +731,7 @@ export function gql(source: "\n  fragment ConceptGridItemData on ConceptType {\n
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function gql(source: "\n  fragment ContentGridItemData on ContentType {\n    id\n    title\n    text\n    contentUrl: url\n    sourceUrl\n    mimetype\n    mediaUrl\n    previewUrl\n    ...RichMediaData\n  }\n"): (typeof documents)["\n  fragment ContentGridItemData on ContentType {\n    id\n    title\n    text\n    contentUrl: url\n    sourceUrl\n    mimetype\n    mediaUrl\n    previewUrl\n    ...RichMediaData\n  }\n"];
+export function gql(source: "\n  fragment ContentGridItemData on ContentType {\n    id\n    title\n    text\n    contentUrl: url\n    sourceUrl\n    sourceType\n    sourceSystem\n    sourceId\n    createdAt\n    mimetype\n    mediaUrl\n    mediaFilename\n    mediaSize\n    previewUrl\n    ...RichMediaData\n  }\n"): (typeof documents)["\n  fragment ContentGridItemData on ContentType {\n    id\n    title\n    text\n    contentUrl: url\n    sourceUrl\n    sourceType\n    sourceSystem\n    sourceId\n    createdAt\n    mimetype\n    mediaUrl\n    mediaFilename\n    mediaSize\n    previewUrl\n    ...RichMediaData\n  }\n"];
 /**
  * The gql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

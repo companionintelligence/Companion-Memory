@@ -1,5 +1,4 @@
 import { useMutation } from '@apollo/client';
-import { Download } from '@ci/shadcn/icons';
 
 import { FILE_FRAGMENT } from '@/components/entities/grid/FileGridItem';
 import { resolveFileTileUrl, resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
@@ -7,6 +6,7 @@ import { gql, useFragment } from '@/graphql';
 
 import type { MemoryEntityOf } from '../../useEntityService';
 
+import { DocumentFileActions, formatBytes } from './DocumentFileActions';
 import { EntityDetailScaffold, EntityMedia, resolveStaticUrl } from './EntityDetailScaffold';
 
 // `updateFile` decodes the GlobalUID server-side, so pass the encoded id.
@@ -19,27 +19,6 @@ const UPDATE_FILE = gql(`
     }
   }
 `);
-
-function formatBytes(bytes?: number | null): string | null {
-  if (bytes == null) {
-    return null;
-  }
-
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let value = bytes / 1024;
-  let unit = 0;
-
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-
-  return `${value.toFixed(1)} ${units[unit]}`;
-}
 
 interface Props {
   entity: MemoryEntityOf<'FileType'>;
@@ -86,15 +65,7 @@ export function FileDetails({ entity }: Props) {
       rawData={data}
     >
       {downloadUrl && (
-        <a
-          href={downloadUrl}
-          download={data.filename ?? undefined}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex w-fit items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
-        >
-          <Download className="size-4" /> Download
-        </a>
+        <DocumentFileActions href={downloadUrl} filename={data.filename} download />
       )}
     </EntityDetailScaffold>
   );
