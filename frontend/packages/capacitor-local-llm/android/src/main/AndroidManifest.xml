@@ -2,7 +2,19 @@
 
     <!-- The model download runs as a foreground WorkManager service (large, resumable
          transfer) so it survives backgrounding; Android 14+ (API 34) requires declaring
-         the specific foreground service type permission alongside FOREGROUND_SERVICE. -->
+         the specific foreground service type permission alongside FOREGROUND_SERVICE.
+         The same pair also covers LocalLlmGenerationService below — one in-flight
+         generation, same "long-running, keep the process alive" justification. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <application>
+        <!-- Protects an in-flight generate()/generateStream() call from being killed if the
+             app is briefly backgrounded mid-answer. See LocalLlmGenerationService's doc
+             comment; started/stopped by LocalLlmPlugin around each call, never by itself. -->
+        <service
+            android:name=".LocalLlmGenerationService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
 </manifest>

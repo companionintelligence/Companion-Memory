@@ -12,9 +12,16 @@ import {
   type ToolSchema,
   type ToolResult,
 } from '../core/types';
-import { ToolInvokedEvent } from '../events';
+import {
+  TOOL_INVOCATION_ERROR_MAX_LENGTH,
+  ToolInvokedEvent,
+  type ToolInvocationOutcome,
+  type ToolInvokedPayload,
+} from '../events';
 import { capabilityAllows, capabilityRequiredFor } from '../policy';
+import type { ToolGateRuling } from '../policy/toolGate';
 import type { ToolProvider, ProviderHealthStatus } from '../providers/ToolProvider';
+import { PendingActionService } from '../services/PendingActionService';
 
 /**
  * Centralized registry for managing all tools from various providers.
@@ -35,6 +42,7 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly logger: LoggerService,
     private readonly events: EventService,
+    private readonly pendingActions: PendingActionService,
   ) {
     this.logger.setContext(ToolRegistry.name);
   }
@@ -177,9 +185,17 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
    * Get all available tool schemas (for LLM function calling). Schemas carry the dotted intent
    * `name`; callers that advertise to the LLM/MCP derive the executable name via
    * {@link intentToolName}.
+   *
+   * Tools that name an {@link IntentDefinition.ownerUserId} are visible only to that user. This
+   * map is process-global and every provider loads into it once, so an MCP-client tool built from
+   * one account's stored server config would otherwise be offered to every other account's chat —
+   * along with the description of a server they never configured. `context` was previously logged
+   * here and nothing else; it now decides what the caller is shown.
    */
   getAvailableTools(context?: RequestContext): ToolSchema[] {
-    const schemas = Array.from(this.tools.values()).map((tool) => tool.schema);
+    const schemas = Array.from(this.tools.values())
+      .map((tool) => tool.schema)
+      .filter((schema) => this.isVisibleTo(schema, context?.userId));
 
     this.logger.debug(`Retrieved ${schemas.length} available tools`, {
       userId: context?.userId,
@@ -187,6 +203,17 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
     });
 
     return schemas;
+  }
+
+  /**
+   * An unowned tool is everyone's; an owned one is only its owner's.
+   *
+   * A caller with no `userId` (an api-key request that never resolved to a user, an in-process
+   * system job) is deliberately treated as "nobody", not as "everybody": the alternative would
+   * make an unauthenticated surface the widest one.
+   */
+  private isVisibleTo(schema: ToolSchema, userId: string | undefined): boolean {
+    return schema.ownerUserId == null || schema.ownerUserId === userId;
   }
 
   /**
@@ -219,7 +246,12 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
         return provider?.includeInOutboundCatalog !== false;
       })
-      .map(([, tool]) => tool.schema);
+      .map(([, tool]) => tool.schema)
+      // A user-owned tool is never part of the appliance's public manifest, whatever its
+      // provider's flag says. Today the two rules agree (the only owning provider is also the
+      // only one opted out of the catalog), and this is the one that stays true if a future
+      // provider sets ownership without opting out.
+      .filter((schema) => this.isVisibleTo(schema, context?.userId));
 
     this.logger.debug(`Retrieved ${schemas.length} outbound-catalog tools`, {
       userId: context?.userId,
@@ -278,6 +310,19 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
    * giving the model a legible "you are not allowed to do that" to relay instead of an opaque
    * "tool execution failed". Transports that owe their client an HTTP status (MCP) keep their own
    * pre-check and throw there; this is the backstop underneath it.
+   *
+   * ## Two gates, in this order, and the order is the security property
+   *
+   * 1. `capabilityAllows` → `TOOL_FORBIDDEN`. A caller without the authority is refused, full
+   *    stop. **A denial is never written to `ci.pending_actions`.** `dispatchPolicy.ts` orders
+   *    capability before tier for exactly this reason: queuing a refusal would turn "you may not
+   *    do that" into "you may do that after one extra tap".
+   * 2. {@link PendingActionService.evaluate} → `TOOL_QUEUED`. An intent the caller IS authorised
+   *    for but that must not fire unconfirmed — destructive or external work under a cautious
+   *    trust dial, or anything `resolveDispatch` refuses to run in the tier the call came from —
+   *    is parked as a pending action and reported back, symmetrically with the refusal above: a
+   *    ToolResult, never a throw, so the model receives it conversationally and can tell the user
+   *    their appliance is waiting on them.
    */
   async executeTool(name: string, context: ToolInvocationContext, input: unknown): Promise<ToolResult> {
     const resolved = this.resolveRegisteredTool(name);
@@ -301,6 +346,29 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
     const { name: toolName, tool } = resolved;
 
+    // Ownership before capability, and reported as "not found" rather than "forbidden": a tool
+    // built from someone else's stored config does not exist as far as this caller is concerned,
+    // and a distinct refusal would confirm that another account has a server by that name.
+    // Hiding it from `getAvailableTools` is presentation only — a model (or a client naming a
+    // tool directly) can ask for anything, which is why the refusal lives here.
+    if (!this.isVisibleTo(tool.schema, context.userId)) {
+      this.logger.warn(`Refused tool owned by another user: ${name}`, {
+        toolName,
+        intent: tool.schema.name,
+        userId: context.userId,
+        provider: this.toolToProvider.get(toolName),
+      });
+
+      return {
+        success: false,
+        error: {
+          code: 'TOOL_NOT_FOUND',
+          message: `Tool '${name}' not found`,
+          retryable: false,
+        },
+      };
+    }
+
     const { privacy } = tool.schema;
 
     if (!capabilityAllows(privacy, context.capability)) {
@@ -308,8 +376,7 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
       // Warn, not debug: a refused call is a caller trying to do something it was not granted —
       // whether that is a misconfigured integration or an injected chat message, an operator wants
-      // to see it. Deliberately NOT emitted as `tool.invoked`: nothing was invoked, and feeding a
-      // refusal into the behavioral signal would teach prediction that the user did this.
+      // to see it.
       this.logger.warn(`Refused tool: ${name}`, {
         toolName: name,
         intent: tool.schema.name,
@@ -320,25 +387,53 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
         destructive: privacy.destructive,
       });
 
+      const message = `Tool '${name}' requires "${required}" access, but this caller is "${context.capability}"`;
+
+      // Emitted as `tool.invoked` with `outcome: 'refused'`. This used to be deliberately silent,
+      // with a good reason: nothing was invoked, and feeding a refusal into the behavioral signal
+      // would teach prediction that the user did this. That reason is intact and now expressed in
+      // the data instead of in the absence of it — HBPE and any other behavioural consumer filter
+      // `outcome <> 'refused'` and see exactly what they saw before. What changes is that the
+      // operator, for whom a denied call is the single most interesting row in the ledger, can now
+      // see it after the log line has scrolled away.
+      await this.recordInvocation({
+        ...this.invocationFacts(toolName, tool, context),
+        outcome: 'refused',
+        errorCode: 'TOOL_FORBIDDEN',
+        error: message,
+        // No duration: nothing ran, so there is nothing to have taken time. A zero here would read
+        // as "the tool returned instantly".
+      });
+
       return {
         success: false,
         error: {
           code: 'TOOL_FORBIDDEN',
-          message: `Tool '${name}' requires "${required}" access, but this caller is "${context.capability}"`,
+          message,
           retryable: false,
         },
       };
     }
 
+    // The dispatch gate. Reached only by a caller the capability check already cleared, so
+    // everything below decides WHETHER TO ASK, never whether the caller is allowed.
+    const gate = await this.pendingActions.evaluate(tool.schema, context);
+
+    if (gate.decision !== 'execute') {
+      return this.refuseOrQueue(toolName, tool, context, input, gate);
+    }
+
     if (privacy.external) {
       // `external` is the label that says data leaves the appliance, which is the one thing CI
-      // promises it does not do quietly. It gates nothing today (see the README note on the warn
-      // path); surfacing every egress in the log is the floor, not the finished feature.
+      // promises it does not do quietly. It no longer gates nothing: an external intent that
+      // reaches this line is one the gate above cleared — the trust dial said auto, or the
+      // pending action was confirmed. The warn stays as the record of every egress.
       this.logger.warn(`Intent leaves the appliance: ${name}`, {
         toolName: name,
         intent: tool.schema.name,
         userId: context.userId,
         sensitivity: privacy.sensitivity,
+        gate: gate.reason,
       });
     }
 
@@ -350,35 +445,146 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
 
     const result = await tool.execute(context, input);
 
-    await this.emitInvoked(toolName, tool, context, result);
+    await this.recordInvocation({
+      ...this.invocationFacts(toolName, tool, context),
+      outcome: outcomeOf(result),
+      errorCode: result.error?.code,
+      error: result.error?.message,
+      durationMs: result.executionTimeMs,
+    });
 
     return result;
   }
 
   /**
-   * Emit the durable `tool.invoked` behavioral signal (routed to the `telemetry` queue). Never
-   * throws: a telemetry failure must not fail an already-completed tool call.
+   * Turn a non-`execute` gate ruling into a {@link ToolResult}.
+   *
+   * A `deny` (which `capabilityAllows` above has already caught — this is the belt to its braces)
+   * is refused outright and **never** written to the queue. A `queue` is parked and named, so the
+   * caller has an id to approve.
+   *
+   * Deliberately NOT emitted as `tool.invoked`, for the same reason a refusal is not: nothing was
+   * invoked, and feeding a queued proposal into the behavioural signal would teach prediction that
+   * the user did this.
    */
-  private async emitInvoked(
+  private async refuseOrQueue(
     toolName: string,
     tool: BaseTool,
-    context: RequestContext,
-    result: ToolResult,
-  ): Promise<void> {
+    context: ToolInvocationContext,
+    input: unknown,
+    gate: ToolGateRuling,
+  ): Promise<ToolResult> {
+    if (gate.decision === 'deny') {
+      this.logger.warn(`Refused tool at dispatch gate: ${toolName}`, {
+        toolName,
+        intent: tool.schema.name,
+        userId: context.userId,
+        capability: context.capability,
+        reason: gate.reason,
+      });
+
+      return {
+        success: false,
+        error: { code: 'TOOL_FORBIDDEN', message: gate.explanation, retryable: false },
+      };
+    }
+
+    if (!context.userId) {
+      // The queue is owner-scoped: there is nobody to ask. Refusing is the safe direction —
+      // executing anyway would be the gate quietly deciding it did not matter.
+      this.logger.warn(`Cannot queue intent without an owner: ${toolName}`, {
+        toolName,
+        intent: tool.schema.name,
+        reason: gate.reason,
+      });
+
+      return {
+        success: false,
+        error: {
+          code: 'TOOL_CONFIRMATION_UNAVAILABLE',
+          message: `${gate.explanation}, but this call has no user to confirm it`,
+          retryable: false,
+        },
+      };
+    }
+
+    const action = await this.pendingActions.propose(
+      tool.schema,
+      toolName,
+      { ...context, userId: context.userId },
+      input,
+      gate,
+    );
+
+    return {
+      success: false,
+      error: {
+        code: 'TOOL_QUEUED',
+        message: gate.explanation,
+        // Retryable in the sense that matters to a caller: the same call succeeds once the owner
+        // approves. Re-issuing it blindly only queues a second proposal, which is why the id and
+        // the deadline are handed back.
+        retryable: false,
+        details: {
+          pendingActionId: action.id,
+          reason: gate.reason,
+          expiresAt: action.expiresAt?.toISOString() ?? null,
+        },
+      },
+    };
+  }
+
+  /**
+   * The half of a {@link ToolInvokedPayload} that is the same whether the call ran or was refused:
+   * who called, what they named, and the curated privacy facets of it.
+   *
+   * `occurredAt` is stamped here rather than left to the consumer because the event is durable —
+   * it can be delivered minutes later, or replayed off a dead letter, and a row timestamped at
+   * insert time would silently date every replayed call to the replay.
+   */
+  private invocationFacts(
+    toolName: string,
+    tool: BaseTool,
+    context: ToolInvocationContext,
+  ): Omit<ToolInvokedPayload, 'outcome'> {
     const { schema } = tool;
 
+    return {
+      intent: schema.name,
+      tool: toolName,
+      domain: schema.domain,
+      source: this.toolToProvider.get(toolName) ?? 'unknown',
+      userId: context.userId,
+      correlationId: context.traceId,
+      apiKeyId: context.apiKeyId,
+      capability: context.capability,
+      occurredAt: new Date().toISOString(),
+      access: schema.privacy.access,
+      external: schema.privacy.external,
+      destructive: schema.privacy.destructive,
+    };
+  }
+
+  /**
+   * Emit the durable `tool.invoked` signal (routed to the `telemetry` queue), which
+   * {@link ToolInvokedListener} appends to `ci.tool_invocations`. Never throws: a telemetry
+   * failure must not fail an already-completed tool call.
+   *
+   * Public because the GraphQL-over-MCP plane does not go through this registry at all —
+   * `McpToolService` branches on `tool.source === 'graphql'` and returns via the GraphQL executor,
+   * so without a way in it would be the one dispatcher with no ledger row. It calls this.
+   *
+   * Truncates `error` to {@link TOOL_INVOCATION_ERROR_MAX_LENGTH} at the emit rather than only at
+   * the insert: the payload is serialised into `pgboss.job` on the way, and an unbounded tool
+   * error message would be copied into the queue table too.
+   */
+  async recordInvocation(payload: ToolInvokedPayload): Promise<void> {
     try {
       await this.events.send(
         ToolInvokedEvent,
         {
-          intent: schema.name,
-          tool: toolName,
-          domain: schema.domain,
-          userId: context.userId,
-          success: result.success,
-          durationMs: result.executionTimeMs,
-          access: schema.privacy.access,
-          external: schema.privacy.external,
+          ...payload,
+          error: payload.error?.slice(0, TOOL_INVOCATION_ERROR_MAX_LENGTH),
         },
         { queue: 'telemetry' },
       );
@@ -418,4 +624,21 @@ export class ToolRegistry implements OnModuleInit, OnModuleDestroy {
       .filter(([toolName]) => this.toolToProvider.get(toolName) === providerName)
       .map(([, tool]) => tool.schema);
   }
+}
+
+/**
+ * Which of the four outcomes a completed {@link ToolResult} represents.
+ *
+ * A deadline is separated from an ordinary failure because the two need different operator
+ * responses — a timeout says the appliance or a third party is slow, an error says the call was
+ * wrong — and the only evidence either way is the error code the tool chose.
+ */
+export function outcomeOf(result: ToolResult): ToolInvocationOutcome {
+  if (result.success) {
+    return 'success';
+  }
+
+  return result.error?.code != null && /TIMEOUT|TIMED_OUT|ETIMEDOUT/i.test(result.error.code)
+    ? 'timeout'
+    : 'error';
 }

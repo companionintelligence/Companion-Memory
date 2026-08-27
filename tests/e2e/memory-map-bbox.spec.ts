@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/authenticated';
 
 // Authenticated. The map view scopes results to located events; an explicit
 // `?bbox=minLon,minLat,maxLon,maxLat` narrows them to a geographic window.

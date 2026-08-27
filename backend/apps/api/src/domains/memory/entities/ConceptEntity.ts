@@ -22,9 +22,6 @@ export class ConceptEntity extends BaseEntity {
   @Column({ type: 'text', name: 'linked_id', nullable: true })
   linkedId!: string | null;
 
-  @Column({ type: 'timestamptz', name: 'last_accessed', default: () => 'NOW()' })
-  lastAccessed!: Date;
-
   // Derived helpers populated from properties JSONB
   type!: string | null;
 
@@ -63,7 +60,6 @@ export class ConceptEntity extends BaseEntity {
       userId: entity.userId ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
-      lastAccessed: entity.lastAccessed,
     };
   }
 }

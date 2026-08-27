@@ -8,7 +8,8 @@ import { LoggerService } from '@ci/common/logging';
 import { Cron } from '@ci/common/schedule';
 import { ActionService } from '@ci/domains/intelligence';
 
-import { type RetrievalHealthAlert, RetrievalHealthService } from '../services/RetrievalHealthService';
+import { type RaisableAlert, RetrievalHealthService } from '../services/RetrievalHealthService';
+import { RetrievalQueryLogService } from '../services/RetrievalQueryLogService';
 
 /**
  * 03:40:50 UTC daily.
@@ -59,6 +60,7 @@ export class RetrievalHealthCron {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly retrievalHealthService: RetrievalHealthService,
+    private readonly retrievalQueryLogService: RetrievalQueryLogService,
     private readonly actionService: ActionService,
     private readonly featureService: FeatureService,
     private readonly logger: LoggerService,
@@ -70,22 +72,37 @@ export class RetrievalHealthCron {
   async captureRetrievalHealth(): Promise<void> {
     const run = await this.retrievalHealthService.capture();
 
-    if (run.alerts.length === 0) {
+    // The second measurement, run unconditionally alongside the first for the
+    // same reason: it rolls up and PRUNES ci.retrieval_query_log, so skipping
+    // it when there is nothing to alert about would leave the table unbounded.
+    // It answers the question coverage cannot — what the appliance actually
+    // returned to real questions — so it is a peer of the coverage run, not a
+    // branch of it.
+    const queryRun = await this.retrievalQueryLogService.capture();
+
+    if (run.alerts.length === 0 && queryRun.alerts.length === 0) {
       return;
     }
 
     if (!(await this.featureService.isFeatureEnabled('actions'))) {
-      // Measurement still landed in ci.retrieval_health_snapshots; only the
-      // feed cards are suppressed.
+      // Measurement still landed in ci.retrieval_health_snapshots and
+      // ci.retrieval_query_log; only the feed cards are suppressed.
       this.logger.warn('Retrieval-health alerts suppressed: actions feature disabled', {
         runId: run.runId,
-        alerts: run.alerts.map((alert) => alert.key),
+        alerts: [...run.alerts, ...queryRun.alerts.map((entry) => entry.alert)].map((alert) => alert.key),
       });
 
       return;
     }
 
     await this.raiseAlerts(run.alerts);
+
+    // Per-USER, not fanned out. A zero-result rate is measured from one
+    // person's own queries, so raising it against every onboarded account would
+    // tell four other people about a hole only the fifth one hit.
+    for (const { userId, alert } of queryRun.alerts) {
+      await this.raiseAlert(userId, alert);
+    }
   }
 
   /**
@@ -115,48 +132,55 @@ export class RetrievalHealthCron {
    * would let a still-broken index go quiet, so the alert does come back, a
    * week later, while it is still true.
    */
-  private async raiseAlerts(alerts: RetrievalHealthAlert[]): Promise<void> {
+  private async raiseAlerts(alerts: RaisableAlert[]): Promise<void> {
     const userIds = await this.listOnboardedUserIds();
 
     for (const userId of userIds) {
       for (const alert of alerts) {
-        try {
-          if (await this.hasRecentAlert(userId, alert.key)) {
-            continue;
-          }
-
-          await this.actionService.create(toServiceContext({ userId }), {
-            title: alert.title,
-            text: alert.text,
-            // NOT 'anomaly'/'suggestion': those two share a cap of three cards
-            // per local day (ActionService.countDerivedOnLocalDay), and an
-            // infrastructure alert must not spend the budget the Brief's
-            // anomaly and suggestion engines are counting on.
-            source: 'legacy',
-            metadata: {
-              key: alert.key,
-              kind: 'retrieval_health',
-              reason: alert.reason,
-              entityType: alert.entityType,
-              ...alert.detail,
-            },
-          });
-
-          this.logger.warn('Raised retrieval-health alert', {
-            userId,
-            key: alert.key,
-            reason: alert.reason,
-            entityType: alert.entityType,
-          });
-        } catch (error) {
-          // One user's failed card must not cost the others theirs.
-          this.logger.error('Failed to raise retrieval-health alert', {
-            userId,
-            key: alert.key,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+        await this.raiseAlert(userId, alert);
       }
+    }
+  }
+
+  /** One card, for one user, deduped on `metadata->>'key'`. Never throws. */
+  private async raiseAlert(userId: string, alert: RaisableAlert): Promise<void> {
+    try {
+      if (await this.hasRecentAlert(userId, alert.key)) {
+        return;
+      }
+
+      await this.actionService.create(toServiceContext({ userId }), {
+        title: alert.title,
+        text: alert.text,
+        // NOT 'anomaly'/'suggestion': those two share a cap of three cards
+        // per local day (ActionService.countDerivedOnLocalDay), and an
+        // infrastructure alert must not spend the budget the Brief's
+        // anomaly and suggestion engines are counting on.
+        source: 'legacy',
+        metadata: {
+          key: alert.key,
+          kind: 'retrieval_health',
+          reason: alert.reason,
+          // Omitted rather than null for the zero-result-rate card, which is
+          // about a user's queries and not about any one entity type.
+          ...(alert.entityType == null ? {} : { entityType: alert.entityType }),
+          ...alert.detail,
+        },
+      });
+
+      this.logger.warn('Raised retrieval-health alert', {
+        userId,
+        key: alert.key,
+        reason: alert.reason,
+        entityType: alert.entityType,
+      });
+    } catch (error) {
+      // One user's failed card must not cost the others theirs.
+      this.logger.error('Failed to raise retrieval-health alert', {
+        userId,
+        key: alert.key,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

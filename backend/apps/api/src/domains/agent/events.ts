@@ -49,12 +49,43 @@ export type AgentMemoryRemovedPayload = {
   userId: string;
 };
 
+/**
+ * One user's share of a chat-turn distillation tick.
+ *
+ * Sent by {@link TurnFragmentCron} (one job per user with recent completed
+ * turns) and consumed by {@link TurnFragmentListener}. The fan-out exists so a
+ * user whose scan throws retries on its own instead of ending the tick for
+ * everyone behind them, and so the singleton key can refuse a second copy of
+ * the same user+window while the first is still queued.
+ *
+ * @see {@link TurnFragmentCron.cronWriteTurnFragments} - The method that emits this event
+ */
+export const AgentTurnFragmentsEvent = 'agent-memory.turn-fragments';
+
+/**
+ * Payload of {@link AgentTurnFragmentsEvent}.
+ *
+ * Carries the user and the window boundaries the cron resolved, not just the
+ * user: a job that sits in the queue for a retry cycle must distil the window
+ * it was enqueued FOR, not the one that happens to be current when it runs.
+ */
+export type AgentTurnFragmentsPayload = {
+  /** Owner whose turns this job distils. */
+  userId: string;
+  /** Inclusive lower bound on `ci.messages.updated_at`, ISO-8601. */
+  since: string;
+  /** Exclusive upper bound on `ci.messages.updated_at`, ISO-8601. */
+  until: string;
+};
+
 defineEvent<AgentMemoryCreatedPayload>(AgentMemoryCreatedEvent);
 defineEvent<AgentMemoryRemovedPayload>(AgentMemoryRemovedEvent);
+defineEvent<AgentTurnFragmentsPayload>(AgentTurnFragmentsEvent);
 
 declare module '@ci/domains/events/registry' {
   interface EventRegistry {
     [AgentMemoryCreatedEvent]: AgentMemoryCreatedPayload;
     [AgentMemoryRemovedEvent]: AgentMemoryRemovedPayload;
+    [AgentTurnFragmentsEvent]: AgentTurnFragmentsPayload;
   }
 }

@@ -287,6 +287,20 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   /** v1 — initial identifier canonicaliser. Deliberately NOT tied to IDENTITY_SPEC_VERSION, which versions the object identity ladder. */
   [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: 1,
 
+  /**
+   * v1 — initial single-valued contradiction audit. A literal mirroring the
+   * derivation in `SingleValuedEdgeAuditStage.ts`, which throws at module load
+   * if this line disagrees: SINGLE_VALUED_AUDIT_RULE_GENERATION, which versions
+   * `SINGLE_VALUED_RELATIONSHIP_TYPES` together with the overlap test.
+   *
+   * Expect to bump this OFTEN and deliberately. The declared type set starts at
+   * one entry (`LIVES_IN`) and the whole purpose of the stage is to tell us
+   * which other types belong in it; adding one and bumping here is how the
+   * corpus gets re-counted under the wider rule. A bump costs one Postgres
+   * group-by per slice and nothing else — no provider, no bill.
+   */
+  [STAGE_IDS.CLEAN_SINGLE_VALUED_EDGE_AUDIT]: 1,
+
   /** v1 — place promotion. Derives from the forward-geocode generation: a better provider makes every hierarchy provisional. Cheap to bump — no provider call. */
   [STAGE_IDS.PROMOTE_PLACE]: 1,
 

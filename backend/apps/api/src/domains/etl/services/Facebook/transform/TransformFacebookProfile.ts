@@ -161,7 +161,6 @@ export class FacebookProfileTransformService {
         await this.personService.update({ userId }, existingEntity.id, {
           name: updatedName,
           properties: mergedProperties,
-          lastAccessed: new Date(),
         });
         this.logger.log('Updated existing person with Facebook profile', {
           userId,

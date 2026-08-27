@@ -121,6 +121,12 @@ export class OpenAiCompatChatDriver {
     signal?: AbortSignal;
     enableThinking?: boolean;
     salvageTools?: boolean;
+    /**
+     * Cap on the completion, in tokens. Unlike Ollama's `num_ctx` this bounds
+     * only the answer — the prompt is bounded upstream by the context budget's
+     * admission pass. Absent leaves the server's default alone.
+     */
+    maxTokens?: number;
   }): AsyncGenerator<ChatResponse> {
     const extraBody = vllmThinkingExtraBody(request.enableThinking);
     const stream = await this.client.chat.completions.create(
@@ -129,6 +135,7 @@ export class OpenAiCompatChatDriver {
         messages: toOpenAiMessages(request.messages),
         stream: true,
         ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
+        ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
         ...extraBody,
       },
       { signal: request.signal, timeout: 180_000, maxRetries: 0 },
@@ -340,7 +347,6 @@ function hoistSystemMessages(messages: ChatCompletionMessageParam[]): ChatComple
 
   return [{ role: 'system', content: systemParts.join('\n\n') }, ...rest];
 }
-
 
 /**
  * Lift Qwen/vLLM tool markup out of assistant text. Ollama already returns

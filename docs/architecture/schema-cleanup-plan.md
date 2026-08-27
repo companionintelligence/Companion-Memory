@@ -1266,8 +1266,12 @@ ALTER TABLE ci.events
   DROP COLUMN related_event_ids,
   DROP COLUMN supersedes_event_id,
   DROP COLUMN salience,
-  DROP COLUMN access_count,
-  DROP COLUMN last_accessed;
+  DROP COLUMN access_count;
+-- Δ 2026-08-26: `salience` and `access_count` had already moved to
+-- ci.event_analytics (20260808150100), and `last_accessed` was dropped from both
+-- ci.events and ci.entities by 20260826202418. All three are gone from this
+-- block; the migrate:down below still restores them, which is harmless but no
+-- longer symmetric with an up that no longer drops them.
 
 COMMENT ON COLUMN ci.events.is_inferred IS
   'TRUE when the row was completed by inference rather than captured. Sole writer: LocationEstimateService.estimateBatch (backfills location_coordinates). Deliberately kept INLINE rather than in a 1:1 side table: measured at 300k rows, a side table for is_inferred + inference_sources is a 24.7% net size regression once its own PK index and tuple overhead are charged.';

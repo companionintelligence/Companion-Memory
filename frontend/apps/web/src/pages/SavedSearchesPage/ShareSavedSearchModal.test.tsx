@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -32,5 +32,26 @@ describe('ShareSavedSearchModal — no controls that promise a public link', () 
     renderWithProviders(<ShareSavedSearchModal savedSearch={mockSavedSearch()} onClose={() => {}} />);
 
     expect(await screen.findByText(/isn't a public link/i)).toBeInTheDocument();
+  });
+
+  /**
+   * The QR tile is a hand-off to the person next to you, so it inherits the
+   * same caveat as the rest of the modal and has to say so on screen — a code
+   * pointed at a stranger's phone lands them on the sign-in wall.
+   */
+  it('shows the QR code on demand, with its own sign-in caveat and the link in text', async () => {
+    renderWithProviders(<ShareSavedSearchModal savedSearch={mockSavedSearch()} onClose={() => {}} />);
+
+    const toggle = await screen.findByRole('button', { name: 'Show QR code' });
+
+    expect(screen.queryByText('Scan to open on another device')).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(screen.getByText('Scan to open on another device')).toBeInTheDocument();
+    expect(screen.getByText(/lands on the sign-in screen/i)).toBeInTheDocument();
+    // The fallback: the same URL the code encodes, selectable rather than scanned.
+    expect(screen.getAllByText(/\/shared\//).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Hide QR code' })).toBeInTheDocument();
   });
 });

@@ -7,7 +7,12 @@ import { ValidationPipe } from '@ci/common/pipes';
 
 import { getMcpSuggestedCatalog } from '../catalog/mcpSuggestedCatalog';
 import { McpServerConfigService } from '../services/McpServerConfigService';
-import type { CreateMcpServerConfigDto, TestMcpServerConfigDraftDto, UpdateMcpServerConfigDto } from '../types';
+import type {
+  ApproveMcpToolsDto,
+  CreateMcpServerConfigDto,
+  TestMcpServerConfigDraftDto,
+  UpdateMcpServerConfigDto,
+} from '../types';
 
 const mcpSecretEntrySchema = z.object({
   key: z.string().min(1),
@@ -42,6 +47,24 @@ const createMcpServerConfigSchema = mcpDraftSchema.extend({
 const updateMcpServerConfigSchema = mcpDraftSchema.partial().extend({
   enabled: z.boolean().optional(),
 });
+
+/**
+ * `tools[].schemaDigest` is required, not optional: it is the digest the client was actually shown,
+ * and {@link McpServerConfigService.approveTools} re-derives and compares it. An approve request
+ * that cannot say which schema it reviewed is not an approval.
+ */
+const approveMcpToolsSchema = z
+  .object({
+    approveAll: z.boolean().optional(),
+    tools: z.array(z.object({ name: z.string().min(1), schemaDigest: z.string().min(1) })).optional(),
+    revoke: z.array(z.string().min(1)).optional(),
+  })
+  .refine(
+    (value) => value.approveAll === true || (value.tools?.length ?? 0) > 0 || (value.revoke?.length ?? 0) > 0,
+    {
+      message: 'Specify approveAll, tools, or revoke',
+    },
+  );
 
 /**
  * `@Controller('mcp')` sub-routes, all under `mcp/servers` (plus `mcp/catalog` and the bare
@@ -113,6 +136,22 @@ export class McpServerConfigController {
     const { userId } = toServiceContext(context);
 
     return this.configService.setEnabled(userId, id, false);
+  }
+
+  /**
+   * Installing the server is not the grant; approving its tools is. Admin-gated like every other
+   * config mutation — an approval widens what the assistant can reach out and do.
+   */
+  @UseGuards(JwtOrPortalAuthGuard, AdminOnlyGuard)
+  @Post('servers/:id/approve-tools')
+  async approveTools(
+    @Context() context: RequestContext,
+    @Param('id') id: string,
+    @Body(new ValidationPipe(approveMcpToolsSchema)) input: ApproveMcpToolsDto,
+  ) {
+    const { userId } = toServiceContext(context);
+
+    return this.configService.approveTools(userId, id, input);
   }
 
   @UseGuards(JwtOrPortalAuthGuard, AdminOnlyGuard)

@@ -26,7 +26,6 @@ import { BrowserActivitySearchIndexListener } from './listeners/BrowserActivityS
 import { CommunicationSearchIndexListener } from './listeners/CommunicationSearchIndexListener';
 import { ConceptSearchIndexListener } from './listeners/ConceptSearchIndexListener';
 import { ContentSearchIndexListener } from './listeners/ContentSearchIndexListener';
-import { EntityEmbeddingListener } from './listeners/EntityEmbeddingListener';
 import { EventSearchIndexListener } from './listeners/EventSearchIndexListener';
 import { FileChunkSearchIndexListener } from './listeners/FileChunkSearchIndexListener';
 import { FileSearchIndexListener } from './listeners/FileSearchIndexListener';
@@ -68,7 +67,6 @@ import { VectorService } from './services/VectorService';
     ConceptSearchIndexListener,
     ContentSearchIndexListener,
     EmbeddingService,
-    EntityEmbeddingListener,
     EventSearchIndexListener,
     FileChunkSearchIndexListener,
     FileSearchIndexListener,

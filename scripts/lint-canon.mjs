@@ -1,15 +1,54 @@
 #!/usr/bin/env node
-// CI design-canon lint gate (v3). Zero deps. Usage: node scripts/lint-canon.mjs [targetDir]
-//  FAIL: any `--primary` custom property that is not CI phthalo (#0a6358 / #c5e8dc), any notation.
+// CI design-canon lint gate (v5). Zero deps. Usage: node scripts/lint-canon.mjs [targetDir]
+//  FAIL: any `--primary` custom property that is not CI phthalo (#0a6358 / #c5e8dc), any notation
+//        — in CSS/markup AND inside JS/TS template literals (CSS-in-JS, generated stylesheets);
+//        any JS/TS brand-primary property (`primary`, `brandTeal`, `brandPrimary`, ...) whose
+//        literal colour is not canon; scanning a directory target and finding ZERO scannable
+//        files (see the v5 note below).
 //  WARN (non-blocking): CI-token `var(--X)` used but never defined (partial-swap bug);
 //        enriched token used as a Tailwind utility but not mapped in `@theme` (v4 fallback-to-default bug);
 //        hardcoded hex in component source.
+//
+//  v4 exists because v3 scanned ZERO files in packages/video-kit and exited 0 reporting "canon OK".
+//  Every source file there is `.mjs`, which was in neither CSS_EXT nor COMP_EXT, so the product-video
+//  kit sat on the retired #0f717a teal and Montserrat for months with a green gate over it. Two
+//  changes closed that: `.mjs`/`.cjs`/`.mts`/`.cts` are now component extensions, and a brand primary
+//  declared as a JS object property is a FAIL rather than an anonymous "hardcoded hex" warning.
+//
+//  v5 closes the SAME failure mode one level up: v4 fixed the extension gap, but nothing stopped a
+//  future gap (a new file type, a wrong TARGET path, an IGNORE entry that's too broad) from silently
+//  reproducing it — `scanned: 0 css/markup, 0 component file(s)` printed as a harmless line, then
+//  `✔ lint-canon: canon OK` because zero non-canon values were found in zero files. A gate that can
+//  pass by finding nothing to check is not a gate. When TARGET is a directory, scanning zero files is
+//  now a FAIL, not a silent green light — see lint-canon.test.mjs for the fixture regression test.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, extname, relative } from 'node:path';
 
 const TARGET = process.argv[2] || '.';
 const CANON = [{ rgb: [10, 99, 88] }, { rgb: [197, 232, 220] }]; // #0a6358 / #c5e8dc
+// Retired brand values. lint-canon still FAILs on these (they are not canon), but names the
+// replacement instead of just reporting "not canon" — the whole point is telling a drifted value
+// apart from a typo. Add an entry here whenever `--primary` moves; never delete an old one.
+const RETIRED = [
+  {
+    rgb: [15, 113, 122],
+    hex: '#0f717a',
+    name: 'teal-600 (light --primary pre-v0.3.0)',
+    replacedBy: '#0a6358 (phthalo)',
+    since: '@companionintelligence/tokens v0.3.0',
+  },
+  {
+    rgb: [171, 212, 216],
+    hex: '#abd4d8',
+    name: 'teal-200 (dark --primary pre-v0.3.0)',
+    replacedBy: '#c5e8dc (sage)',
+    since: '@companionintelligence/tokens v0.3.0',
+  },
+];
 const TOL = 14;
+// __fixtures__ deliberately included: lint-canon.test.mjs's fixtures contain intentional
+// non-canon values (that's the point of the retired-primary fixture), and would otherwise
+// fail a whole-repo scan of the very repo that authors this script.
 const IGNORE = new Set([
   'node_modules',
   '.git',
@@ -24,10 +63,11 @@ const IGNORE = new Set([
   'target',
   '.output',
   '.vercel',
+  '__fixtures__',
 ]);
 // CI design-token namespace the transition manages — undefined uses of these are real bugs.
 const CI_TOKENS =
-  /^--(primary|secondary|muted|accent|destructive|success|warning|info|border|input|ring|card|popover|background|foreground|sidebar|chart-\d|teal-\d{2,3}|aqua|aqua-light|mint|teal-accent|teal-mid|gradient-\w+|shadow-(sm|md|lg)|radius-\w+)(-foreground)?$/;
+  /^--(primary|secondary|muted|accent|destructive|success|warning|info|border|input|ring|card|popover|background|foreground|sidebar|chart-\d|teal-\d{2,3}|aqua|aqua-light|teal-accent|teal-mid|gradient-\w+|shadow-(sm|md|lg)|radius-\w+)(-foreground)?$/;
 // standard/framework vars that are legitimately defined elsewhere (never flag as undefined)
 const FRAMEWORK_VAR = /^--(tw-|radix-|swiper-|leaflet-|vp-|shiki|nextra|fd-|chakra-|mantine-|ck-)/;
 
@@ -130,6 +170,7 @@ function parseColor(raw) {
 
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 const isTeal = (rgb) => CANON.some((c) => dist(rgb, c.rgb) <= TOL);
+const retiredMatch = (rgb) => RETIRED.find((r) => dist(rgb, r.rgb) <= TOL);
 
 function walk(d, o = []) {
   let e;
@@ -161,7 +202,22 @@ function walk(d, o = []) {
 }
 
 const CSS_EXT = new Set(['.css', '.scss', '.sass', '.less', '.html', '.htm', '.vue', '.svelte', '.astro']);
-const COMP_EXT = new Set(['.tsx', '.jsx', '.ts', '.js', '.vue', '.svelte', '.astro', '.html', '.htm']);
+// .mjs/.cjs/.mts/.cts are here deliberately — see the v4 note at the top of this file.
+const COMP_EXT = new Set([
+  '.tsx',
+  '.jsx',
+  '.ts',
+  '.js',
+  '.mjs',
+  '.cjs',
+  '.mts',
+  '.cts',
+  '.vue',
+  '.svelte',
+  '.astro',
+  '.html',
+  '.htm',
+]);
 const cssText = (f, x) => {
   const raw = readFileSync(f, 'utf8');
 
@@ -190,7 +246,26 @@ const HEX =
   /(?:bg-\[|text-\[|border-\[|from-\[|to-\[|fill=["']?|stroke=["']?|(?:background|color|fill|stroke)\s*[:=]\s*["']?)#([0-9a-fA-F]{3,8})\b/g;
 // enriched Tailwind utilities whose token must be in @theme (else v4 falls back to default)
 const UTIL =
-  /\b(?:bg|text|border|ring|from|to|fill|stroke)-(teal-(?:50|100|200|300|400|500|600|700|800|900|950)|success|warning|info|aqua|mint)\b|\b(shadow-(?:sm|md|lg))\b/g;
+  /\b(?:bg|text|border|ring|from|to|fill|stroke)-(teal-(?:50|100|200|300|400|500|600|700|800|900|950)|success|warning|info|aqua)\b|\b(shadow-(?:sm|md|lg))\b/g;
+// A brand primary declared as a JS/TS object property — a `brandTeal` key holding the retired
+// #0F717A, say — is the same canon violation as the equivalent `--primary` declaration, and is
+// exactly how the video kit drifted. The leading character class excludes `.primary` (member
+// access) and `--primary` (already handled by PRIMARY above).
+// Deliberately no literal `<key>: "<hex>"` example in this comment: v4 scans .mjs, so the gate
+// would flag its own documentation.
+//
+// GENERIC vs BRANDED keys (v5): `primary`/`primaryColor`/`primaryColour` are common third-party
+// config keys with nothing to do with CI's brand — Mermaid.js's own `themeVariables.primaryColor`
+// and a legitimate user-selectable alternate app theme both use exactly this shape with an
+// unrelated color, and both false-failed a real fleet-wide run before this split existed. Only
+// `brand*`-prefixed keys (a name nobody else's config happens to use) FAIL on ANY non-canon color;
+// the generic keys FAIL only when the color actually resembles a RETIRED CI value — that keeps
+// catching the exact video-kit scenario (retired teal renamed to `primaryColor`) while not
+// flagging every third-party or user-preference theme that happens to use the word "primary".
+const JS_PRIMARY_BRANDED =
+  /(?:^|[^\w$.-])(brand|brandTeal|brandColor|brandPrimary)\s*:\s*(['"`])(#[0-9a-fA-F]{3,8}|rgba?\([^)'"`]*\)|hsla?\([^)'"`]*\)|oklch\([^)'"`]*\))\2/g;
+const JS_PRIMARY_GENERIC =
+  /(?:^|[^\w$.-])(primary|primaryColor|primaryColour)\s*:\s*(['"`])(#[0-9a-fA-F]{3,8}|rgba?\([^)'"`]*\)|hsla?\([^)'"`]*\)|oklch\([^)'"`]*\))\2/g;
 
 for (const f of files) {
   const x = extname(f).toLowerCase();
@@ -201,7 +276,7 @@ for (const f of files) {
     for (const m of t.matchAll(PRIMARY)) {
       const rgb = parseColor(m[1].trim());
       if (rgb && !isTeal(rgb)) {
-        fails.push({ rel, line: lineOf(t, m.index), val: m[1].trim(), rgb });
+        fails.push({ rel, line: lineOf(t, m.index), val: m[1].trim(), rgb, what: '--primary' });
       }
     }
 
@@ -223,6 +298,31 @@ for (const f of files) {
   if (COMP_EXT.has(x)) {
     compN++;
     const raw = readFileSync(f, 'utf8');
+    // JS/TS carries CSS too — template-literal stylesheets, CSS-in-JS, a generated <style> block.
+    // Run the same --primary rule over it rather than trusting that CSS only ever lives in .css.
+    if (!CSS_EXT.has(x)) {
+      for (const m of raw.matchAll(PRIMARY)) {
+        const rgb = parseColor(m[1].trim());
+        if (rgb && !isTeal(rgb)) {
+          fails.push({ rel, line: lineOf(raw, m.index), val: m[1].trim(), rgb, what: '--primary' });
+        }
+      }
+    }
+
+    for (const m of raw.matchAll(JS_PRIMARY_BRANDED)) {
+      const rgb = parseColor(m[3]);
+      if (rgb && !isTeal(rgb)) {
+        fails.push({ rel, line: lineOf(raw, m.index), val: m[3], rgb, what: m[1] });
+      }
+    }
+
+    for (const m of raw.matchAll(JS_PRIMARY_GENERIC)) {
+      const rgb = parseColor(m[3]);
+      if (rgb && !isTeal(rgb) && retiredMatch(rgb)) {
+        fails.push({ rel, line: lineOf(raw, m.index), val: m[3], rgb, what: m[1] });
+      }
+    }
+
     for (const m of raw.matchAll(HEX)) {
       warns.push({ type: 'hex', rel, line: lineOf(raw, m.index), msg: '#' + m[1] });
     }
@@ -278,8 +378,22 @@ if (hasTheme) {
   }
 }
 
+// A directory target that scans zero files means the scan is broken, not clean — see the v5 note
+// at the top of this file. A file target (single-file invocations, e.g. from an editor) is exempt:
+// scanning "zero files" there just means the one file's extension isn't recognized, which is a
+// caller error, not a gate hole.
+const isDirTarget = statSync(TARGET).isDirectory();
+if (isDirTarget && cssN === 0 && compN === 0) {
+  console.log('CI design-canon lint (v5)');
+  console.log(`  target: ${TARGET}\n  scanned: 0 css/markup, 0 component file(s)\n`);
+  console.log(`✖ scanned 0 files under ${TARGET} — that is a broken gate, not a clean one.`);
+  console.log('  Check TARGET is correct and that CSS_EXT/COMP_EXT cover the file types in this repo.');
+  console.log('lint-canon: FAILED');
+  process.exit(1);
+}
+
 // report
-console.log('CI design-canon lint (v3)');
+console.log('CI design-canon lint (v5)');
 console.log(`  target: ${TARGET}\n  scanned: ${cssN} css/markup, ${compN} component file(s)\n`);
 const grp = (t) => warns.filter((w) => w.type === t);
 for (const [t, label] of [
@@ -305,17 +419,23 @@ for (const [t, label] of [
 }
 
 if (fails.length) {
-  console.log(`✖ ${fails.length} non-canon --primary value(s):`);
+  console.log(`✖ ${fails.length} non-canon brand-primary value(s):`);
   for (const x of fails) {
-    console.log(`  FAIL ${x.rel}:${x.line}  --primary: ${x.val} -> rgb(${x.rgb.join(',')})`);
+    const retired = retiredMatch(x.rgb);
+    const note = retired
+      ? `  — this is ${retired.name}, replaced by ${retired.replacedBy} in ${retired.since}`
+      : '';
+    console.log(`  FAIL ${x.rel}:${x.line}  ${x.what}: ${x.val} -> rgb(${x.rgb.join(',')})${note}`);
   }
 
-  console.log('\n  --primary must be CI phthalo #0a6358 / #c5e8dc (any notation).\nlint-canon: FAILED');
+  console.log(
+    '\n  The brand primary must be CI phthalo #0a6358 / #c5e8dc (any notation).\nlint-canon: FAILED',
+  );
   process.exit(1);
 }
 
 console.log(
-  '✔ lint-canon: canon OK (all --primary are CI phthalo)' +
+  '✔ lint-canon: canon OK (every brand primary is CI phthalo)' +
     (warns.length ? ` — ${warns.length} non-blocking warning(s) above` : ''),
 );
 process.exit(0);

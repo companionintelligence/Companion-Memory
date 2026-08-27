@@ -42,6 +42,7 @@ import { EmbedModule } from '@ci/domains/embed';
 import { EventsModule } from '@ci/domains/events';
 import { FileEntity, FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
+import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MaintenanceModule } from '@ci/domains/maintenance';
 import { MemoryModule } from '@ci/domains/memory';
 
@@ -70,6 +71,7 @@ import { STAGE_REGISTRY, StageRegistry } from './services/StageRegistry';
 import { DuplicateDetectStage } from './stages/clean/DuplicateDetectStage';
 import { IdentifierNormalizeStage } from './stages/clean/IdentifierNormalizeStage';
 import { ObjectDuplicateDetectStage } from './stages/clean/ObjectDuplicateDetectStage';
+import { SingleValuedEdgeAuditStage } from './stages/clean/SingleValuedEdgeAuditStage';
 import { TemporalRepairStage } from './stages/clean/TemporalRepairStage';
 import { EstimateLocationStage } from './stages/enrich/EstimateLocationStage';
 import { EventReverseStage } from './stages/enrich/EventReverseStage';
@@ -179,6 +181,13 @@ const stageProviders: Provider[] = [
     useClass: ObjectDuplicateDetectStage,
   },
   { provide: STAGE_REGISTRY[STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE], useClass: IdentifierNormalizeStage },
+  // A DETECTOR, not a repairer: it counts subjects holding more than one active
+  // edge of a single-valued type and writes nothing to `ci.relationships`. See
+  // the file for why the count has to come before any supersession work.
+  {
+    provide: STAGE_REGISTRY[STAGE_IDS.CLEAN_SINGLE_VALUED_EDGE_AUDIT],
+    useClass: SingleValuedEdgeAuditStage,
+  },
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_PLACE], useClass: PlacePromoteStage },
   // The same promotion over `ci.position` — a second id because a Stage has
   // exactly one `source` and this is a different table. It is the only writer
@@ -256,6 +265,13 @@ const stageProviders: Provider[] = [
     //                        legs. The projection is shared with the operator
     //                        backfill endpoint rather than re-implemented here.
     MaintenanceModule,
+    //  - `IntelligenceModule` -> ActionService, for the one card
+    //                        `clean.single_valued_edge_audit` raises when it
+    //                        finds a contradiction. It imports only
+    //                        TypeOrmModule.forFeature + EventsModule, so nothing
+    //                        in its graph reaches back here and no `forwardRef`
+    //                        is needed.
+    IntelligenceModule,
   ],
   providers: [
     PipelineStateService,

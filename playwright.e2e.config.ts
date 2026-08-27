@@ -31,7 +31,17 @@ export default defineConfig({
   reporter: process.env.CI
     ? [['html', { open: 'never' }], ['github'], ['list']]
     : [['html', { open: 'never' }], ['list']],
-  globalSetup: require.resolve('./tests/e2e/global-setup.ts'),
+  // No globalSetup and no shared storageState. Authenticated specs import
+  // `test` from `tests/e2e/fixtures/authenticated.ts`, which signs in inside
+  // each test's own context.
+  //
+  // A shared state file cannot work against this API: sessions are bound to
+  // `ip + user_agent` AND the token rotates on the `/api/authenticate/refresh`
+  // the app makes on load, with only a 30s grace window
+  // (`auth.session.refreshGracePeriod`). One file replayed across a four-minute
+  // serial suite goes stale partway through, and the specs that follow fail on
+  // page assertions while the real cause is a 401 nobody sees. See that
+  // fixture's header.
   use: {
     baseURL,
     actionTimeout: 10_000,
@@ -39,9 +49,6 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
     trace: 'on-first-retry',
-    // Authenticated state captured once by global-setup; the `auth` project
-    // overrides this to start logged-out.
-    storageState: 'playwright/.auth/user.json',
   },
   projects: [
     {
@@ -50,7 +57,7 @@ export default defineConfig({
       // already-authenticated session would just bounce /signup).
       name: 'auth',
       testMatch: /(auth|onboarding)\.spec\.ts/,
-      use: { ...devices['Desktop Chrome'], storageState: undefined },
+      use: { ...devices['Desktop Chrome'] },
     },
     {
       name: 'chromium',
@@ -72,7 +79,17 @@ export default defineConfig({
       port: API_PORT,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
-      env: { PORT: String(API_PORT) },
+      env: {
+        PORT: String(API_PORT),
+        // `require.signup.codes` defaults to TRUE (backend/apps/api/config/default.json),
+        // and `.env.default` — which e2e.yml copies verbatim — leaves
+        // ENABLE_REQUIRE_SIGNUP_CODES commented out, so that default applies.
+        // onboarding.spec.ts creates a throwaway account to reach the wizard;
+        // without this it is rejected with "Must provide a valid signup code"
+        // and never leaves /signup. Pin the flag here rather than relying on a
+        // product default that is free to change.
+        ENABLE_REQUIRE_SIGNUP_CODES: 'false',
+      },
       stdout: 'pipe',
       stderr: 'pipe',
     },

@@ -276,15 +276,15 @@ describe('JobsPage table', () => {
   it('renders the taxonomy label and the raw event name for each job', () => {
     render({
       list: list({
-        items: [job({ label: 'Embed for semantic search', event: 'search.embed.entity' })],
+        items: [job({ label: 'Generate chat reply', event: 'chat.generate' })],
         total: 1,
       }),
     });
 
-    // "Embed for semantic search" is the point: `search.embed.entity` on
-    // `search-index` says nothing about what the appliance is doing.
-    expect(screen.getByText('Embed for semantic search')).toBeInTheDocument();
-    expect(screen.getByText('search.embed.entity')).toBeInTheDocument();
+    // "Generate chat reply" is the point: the raw `chat.generate`, and the queue
+    // it happens to run on, say nothing about what the appliance is doing.
+    expect(screen.getByText('Generate chat reply')).toBeInTheDocument();
+    expect(screen.getByText('chat.generate')).toBeInTheDocument();
   });
 
   it('shows a failure message inline and its stack when the row is expanded', () => {
@@ -705,17 +705,13 @@ describe('JobsPage refresh', () => {
     // A `refreshAll` that returned void — which is what it did — flashed this
     // away on the next frame, which on a phone is indistinguishable from a
     // gesture that was never wired up.
-    await waitFor(() =>
-      expect(screen.getByTestId('pull-to-refresh')).toHaveAttribute('aria-busy', 'true'),
-    );
+    await waitFor(() => expect(screen.getByTestId('pull-to-refresh')).toHaveAttribute('aria-busy', 'true'));
 
     await act(async () => {
       settle();
     });
 
-    await waitFor(() =>
-      expect(screen.getByTestId('pull-to-refresh')).not.toHaveAttribute('aria-busy'),
-    );
+    await waitFor(() => expect(screen.getByTestId('pull-to-refresh')).not.toHaveAttribute('aria-busy'));
   });
 
   it('spins the button while a refresh runs and leaves the figures up', async () => {
@@ -832,7 +828,7 @@ describe('JobsPage phone layout', () => {
     setViewport(true);
     render({
       list: list({
-        items: [job({ label: 'Embed for semantic search', event: 'search.embed.entity' })],
+        items: [job({ label: 'Generate chat reply', event: 'chat.generate' })],
         total: 1,
       }),
     });
@@ -841,8 +837,8 @@ describe('JobsPage phone layout', () => {
       expect(screen.queryByRole('columnheader', { name: 'Duration' })).not.toBeInTheDocument();
     });
 
-    expect(screen.getByText('Embed for semantic search')).toBeInTheDocument();
-    expect(screen.getByText(/search\.embed\.entity/)).toBeInTheDocument();
+    expect(screen.getByText('Generate chat reply')).toBeInTheDocument();
+    expect(screen.getByText(/chat\.generate/)).toBeInTheDocument();
   });
 
   it('asks the server for a shorter page so a phone is a scan, not a novel', async () => {

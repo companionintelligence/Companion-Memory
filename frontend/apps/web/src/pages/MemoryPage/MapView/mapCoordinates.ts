@@ -5,7 +5,19 @@
  * and temporally-estimated event coordinates.
  */
 
-export type Coordinates = { latitude?: number | null; longitude?: number | null };
+export type Coordinates = {
+  latitude?: number | null;
+  longitude?: number | null;
+  /**
+   * The short spelling, which is what the WRITERS actually use:
+   * `PlaceService.upsert` stores `{ lat, lng }` in a place's properties bag,
+   * and the geocode path does the same. Reading only `latitude`/`longitude`
+   * meant a place whose coordinate was perfectly well known resolved to null
+   * and never rendered a pin.
+   */
+  lat?: number | null;
+  lng?: number | null;
+};
 
 /** A resolved marker position, or null when the input has no usable coordinate. */
 export type LatLng = { lat: number; lng: number };
@@ -20,7 +32,11 @@ export function readCoordinates(props: unknown): LatLng | null {
     return null;
   }
 
-  const { latitude, longitude } = props as Coordinates;
+  const bag = props as Coordinates;
+  // Accept both spellings. `latitude`/`longitude` is what PlaceType exposes as
+  // typed fields; `lat`/`lng` is what lands in the raw properties jsonb.
+  const latitude = bag.latitude ?? bag.lat;
+  const longitude = bag.longitude ?? bag.lng;
 
   if (
     typeof latitude !== 'number' ||

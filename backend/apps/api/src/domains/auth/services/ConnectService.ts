@@ -1,7 +1,13 @@
 import { Injectable } from '@nestjs/common';
 
 import { SYSTEM_USER } from '@ci/common/context';
-import { INTENTS_SCOPE, MCP_SCOPE, MEMORY_SCOPE } from '@ci/common/decorators';
+import {
+  INTENTS_SCOPE,
+  MCP_SCOPE,
+  MEMORY_SCOPE,
+  WRITE_CAPABILITY,
+  type ApiKeyCapability,
+} from '@ci/common/decorators';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { UserService } from '@ci/domains/user';
@@ -46,6 +52,47 @@ export function scopesForApp(appUrn: string): string[] {
       // e.g. ci-import-tools (a bulk importer needing graphql/ingest/files/
       // maintenance) and any unknown consumer → full access.
       return [];
+  }
+}
+
+/**
+ * The authority level a connect key is minted with, per app — the second axis to
+ * {@link scopesForApp}'s first. Scopes say *which* surfaces the key opens;
+ * capability says what it may DO there (`read` < `write` < `full`).
+ *
+ * Stated here, next to the scopes, so the two halves of one grant are chosen
+ * together and read in one place. Before this existed the mint passed no
+ * capability at all and every connect key silently inherited
+ * `DEFAULT_API_KEY_CAPABILITY` — an authority level nobody had picked for these
+ * apps, and one that would move under them if that default ever changed.
+ *
+ * Every app currently lands on `write`, deliberately — but chosen, not inherited:
+ *
+ * - the chat agents (`ci-openclaw`, `ci-hermes`) record as well as recall, so
+ *   `read` would break them (`POST /memory/write` and `/memory/turn` are
+ *   `@RequireCapability(write)`), while `full` would hand a chat agent the
+ *   ability to DELETE memories — the one thing worth asking a user about
+ *   separately.
+ * - the default branch (the bulk importer `ci-import-tools`, and any app whose
+ *   needs we have not enumerated) already gets full *surface* from `scopesForApp`;
+ *   it does not also need destructive authority. Bulk ingest is
+ *   `@RequireCapability(write)`.
+ *
+ * Pinned to the literal rather than tracking `DEFAULT_API_KEY_CAPABILITY`: these
+ * are agent credentials minted on a user's consent, so raising the default for
+ * hand-made keys must not silently promote every connected app.
+ */
+export function capabilityForApp(appUrn: string): ApiKeyCapability {
+  const appName = appUrn.split(':')[0];
+
+  switch (appName) {
+    case 'ci-openclaw':
+    case 'ci-hermes':
+      // Chat-agent tier: recall AND remember, never delete.
+      return WRITE_CAPABILITY;
+    default:
+      // Bulk importer / un-enumerated app: writes a lot, still destroys nothing.
+      return WRITE_CAPABILITY;
   }
 }
 
@@ -185,6 +232,7 @@ export class ConnectService {
       {
         name: this.keyName(consumed.appUrn),
         scopes: scopesForApp(consumed.appUrn),
+        capability: capabilityForApp(consumed.appUrn),
         expires_at: expiresAt,
       },
       // Records that CI-Hub owns this key's lifecycle, so revoke/rotate can find it
@@ -204,10 +252,11 @@ export class ConnectService {
    * key is currently connected for the app. Called by the trusted Hub path (key
    * rotation before expiry); no re-consent is needed because the user already
    * consented to the connection — this only refreshes the same grant. The fresh
-   * key's scopes are re-derived from {@link scopesForApp}, so a rotate also
-   * heals a key minted under a previous scope policy. Assumes the single-owner
-   * appliance; {@link ApiKeyService.findUserIdByName} returns null (no rotate)
-   * if multiple owners hold the same `app:<urn>` name.
+   * key's scopes and capability are re-derived from {@link scopesForApp} and
+   * {@link capabilityForApp}, so a rotate also heals a key minted under a
+   * previous policy. Assumes the single-owner appliance;
+   * {@link ApiKeyService.findUserIdByName} returns null (no rotate) if multiple
+   * owners hold the same `app:<urn>` name.
    */
   async rotateByApp(appUrn: string): Promise<ExchangedConnect | null> {
     const name = this.keyName(appUrn);
@@ -220,7 +269,12 @@ export class ConnectService {
     const expiresAt = new Date(Date.now() + CONNECT_KEY_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const minted = await this.apiKeyService.createOrRotate(
       { userId },
-      { name, scopes: scopesForApp(appUrn), expires_at: expiresAt },
+      {
+        name,
+        scopes: scopesForApp(appUrn),
+        capability: capabilityForApp(appUrn),
+        expires_at: expiresAt,
+      },
       CONNECT_PROVENANCE,
     );
 

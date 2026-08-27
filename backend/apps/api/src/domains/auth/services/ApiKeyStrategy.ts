@@ -98,6 +98,12 @@ export class ApiKeyStrategy extends PassportStrategy(RequestStrategy, 'api-key')
 
     ContextService.set({
       userId: user.id,
+      // Also onto the async-local context, not only onto the request: services below the
+      // controller (ToolRegistry, writing the tool-invocation ledger) never see the express
+      // request, and "which agent key called" is exactly what that ledger exists to record.
+      // `RequestContextMiddleware` cannot carry it — it runs before the guards, so nothing has
+      // authenticated yet when it opens the store.
+      apiKeyId: result.keyId,
     });
 
     // Expose the key's scopes so enforceApiKeyScopes (run inside the api-key auth

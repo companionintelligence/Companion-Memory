@@ -57,6 +57,7 @@ export const STAGE_REGISTRY: Record<StageId, string> = {
   [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: 'PipelineStage:clean.duplicate_detect',
   [STAGE_IDS.CLEAN_OBJECT_DUPLICATE_DETECT]: 'PipelineStage:clean.object_duplicate_detect',
   [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: 'PipelineStage:clean.identifier_normalize',
+  [STAGE_IDS.CLEAN_SINGLE_VALUED_EDGE_AUDIT]: 'PipelineStage:clean.single_valued_edge_audit',
   [STAGE_IDS.PROMOTE_PLACE]: 'PipelineStage:promote.place',
   [STAGE_IDS.PROMOTE_PLACE_POSITION]: 'PipelineStage:promote.place_position',
   [STAGE_IDS.PROMOTE_OBJECT]: 'PipelineStage:promote.object',

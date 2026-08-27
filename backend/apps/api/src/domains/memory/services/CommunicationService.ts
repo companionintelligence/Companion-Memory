@@ -424,19 +424,26 @@ export class CommunicationService {
       updateData.attachments = data.attachments;
     }
 
-    if (data.duration_seconds) {
+    // Numbers and booleans are checked against `undefined`, not truthiness.
+    // A truthiness guard cannot express "set this to zero" or "set this to
+    // false": a 0-second call (every missed call), a neutral sentiment of 0.0,
+    // an importance or urgency of 0, and un-archiving or un-encrypting a
+    // conversation were all silently dropped — the PATCH returned success and
+    // the old value stayed. `preview` below was already fixed for the same
+    // reason; these are the rest of the same bug.
+    if (data.duration_seconds !== undefined) {
       updateData.durationSeconds = data.duration_seconds;
     }
 
-    if (data.sentiment_score) {
+    if (data.sentiment_score !== undefined) {
       updateData.sentimentScore = data.sentiment_score;
     }
 
-    if (data.importance_score) {
+    if (data.importance_score !== undefined) {
       updateData.importanceScore = data.importance_score;
     }
 
-    if (data.urgency_score) {
+    if (data.urgency_score !== undefined) {
       updateData.urgencyScore = data.urgency_score;
     }
 
@@ -452,11 +459,11 @@ export class CommunicationService {
       updateData.connectionId = data.connection_id;
     }
 
-    if (data.is_encrypted) {
+    if (data.is_encrypted !== undefined) {
       updateData.isEncrypted = data.is_encrypted;
     }
 
-    if (data.is_archived) {
+    if (data.is_archived !== undefined) {
       updateData.isArchived = data.is_archived;
     }
 

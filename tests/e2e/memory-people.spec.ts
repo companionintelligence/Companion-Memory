@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/authenticated';
 
 // Authenticated. /memory/people (PeoplePage.tsx) had a real production bug:
 // the default sort surfaced garbage-named contacts first instead of the

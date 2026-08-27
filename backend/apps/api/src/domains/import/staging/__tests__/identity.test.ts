@@ -4,10 +4,12 @@ import {
   entityKey,
   hasContactIdentity,
   hashItem,
+  isOrganizationalAddress,
   isShortCode,
   mergeAccumulatedMetadata,
   needsContentDigest,
   normalizeHandle,
+  ORGANIZATIONAL_STAGED_TYPE,
   resolveEntityType,
 } from '../identity';
 
@@ -132,6 +134,48 @@ describe('resolveEntityType', () => {
   it('leaves the type of a handle-less entity alone, including when it is absent', () => {
     expect(resolveEntityType({ name: 'Paris' })).toBeNull();
     expect(hasContactIdentity({ name: 'Paris' })).toBe(false);
+  });
+
+  it('defaults a role-mailbox participant to organization instead of contact', () => {
+    // gmail.ts's addParticipants stages exactly this shape: no `type`, one
+    // `{name: 'from'|'to'|'cc', value, identity: true}` attribute — the kind
+    // name carries no 'email'/'phone' signal, only `identity: true` does.
+    const entity: Entity = { name: 'Support', attributes: [{ name: 'from', value: 'noreply@stripe.com', identity: true }] };
+
+    expect(resolveEntityType(entity)).toBe(ORGANIZATIONAL_STAGED_TYPE);
+  });
+
+  it('keeps a mixed entity (a role mailbox found alongside a real phone) as contact', () => {
+    const entity: Entity = {
+      attributes: [
+        { name: 'email', value: 'support@acme.example' },
+        { name: 'phone', value: '+1 555 010 9999' },
+      ],
+    };
+
+    expect(resolveEntityType(entity)).toBe('contact');
+  });
+});
+
+describe('isOrganizationalAddress', () => {
+  it('flags role local-parts at any domain', () => {
+    for (const address of ['noreply@stripe.com', 'support@acme.example', 'billing+receipts@shop.example']) {
+      expect(isOrganizationalAddress(address)).toBe(true);
+    }
+  });
+
+  it('flags an address on a non-routable/internal TLD', () => {
+    expect(isOrganizationalAddress('server-42@build.internal')).toBe(true);
+  });
+
+  it('leaves a real person addressed at any domain alone', () => {
+    for (const address of ['alice@example.com', 'a@b.com', 'jose.garcia@somecompany.example']) {
+      expect(isOrganizationalAddress(address)).toBe(false);
+    }
+  });
+
+  it('is false for a value with no @ at all', () => {
+    expect(isOrganizationalAddress('not-an-email')).toBe(false);
   });
 });
 

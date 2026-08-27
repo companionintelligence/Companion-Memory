@@ -27,15 +27,21 @@ import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 
 import { isYouTubeProduct, parseActivityCell, youtubeActivityGraph } from './_youtube_activity';
+import { matchingDivCloseIndex } from './htmlBlocks';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Metadata } from './timeline';
 import { timeframeContains } from './timeline';
 
-// The action body cell of one activity. The text-right variant and the caption
-// cell carry no activity text, so we only match the plain body-1 cell.
-const BODY_CELL_RE =
-  /<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">([\s\S]*?)<\/div>/g;
+// The action body cell of one activity, matched by its OPENING tag only — the
+// close comes from matchingDivCloseIndex (./htmlBlocks), not a non-greedy
+// `[\s\S]*?<\/div>`: some product types nest a thumbnail/icon div inside the
+// body cell, and a non-greedy match stops at THAT close and truncates the
+// entry, the same failure mode googlevoice.ts hit on real MMS attachments.
+// The text-right variant and the caption cell carry no activity text, so the
+// class match ends exactly at `body-1">` — their class attribute continues
+// past this point, so they never match.
+const BODY_CELL_OPEN_RE = /<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">/g;
 // The header cell naming the product, immediately before each body cell.
 const HEADER_TITLE = 'mdl-typography--title">';
 // Header and body are adjacent in the entry; anything further back belongs to
@@ -205,11 +211,17 @@ export class GoogleMyActivityFileImporter implements FileImporter {
     // How many body cells this file actually offered the parser — the floor
     // `reconciled` checks every produced/dropped entry against.
     let total = 0;
-    BODY_CELL_RE.lastIndex = 0;
+    BODY_CELL_OPEN_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
-    while ((m = BODY_CELL_RE.exec(raw)) !== null) {
+    while ((m = BODY_CELL_OPEN_RE.exec(raw)) !== null) {
       total++;
-      const cellHtml = m[1];
+      const start = m.index + m[0].length;
+      const end = matchingDivCloseIndex(raw, start);
+      const cellHtml = raw.slice(start, end);
+      // Resume scanning AFTER the cell, not from the regex's own default
+      // (right after the opening tag): a body cell that nests another div
+      // must not be re-entered and its content double-counted.
+      BODY_CELL_OPEN_RE.lastIndex = end;
       // The empty text-right body cell appears once per activity; skip it.
       if (!cellHtml.trim()) {
         params.pipeline.drop?.('empty_after_parse');

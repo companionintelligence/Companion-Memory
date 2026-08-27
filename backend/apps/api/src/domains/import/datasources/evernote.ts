@@ -9,6 +9,7 @@ import path from 'node:path';
 
 import { parseStringPromise } from 'xml2js';
 
+import { htmlToText } from './htmlToText';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -43,21 +44,6 @@ function parseEnexDate(raw: string | undefined): Date | undefined {
   const d = new Date(iso);
 
   return isNaN(d.getTime()) ? undefined : d;
-}
-
-// Strip ENML/HTML tags and decode a handful of basic entities to plain text.
-function stripHtml(html: string): string {
-  return html
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/[ \t\f\v]+/g, ' ')
-    .replace(/\s*\n\s*/g, '\n')
-    .trim();
 }
 
 function firstString(v: string[] | undefined): string | undefined {
@@ -289,7 +275,7 @@ export class EvernoteFileImporter implements FileImporter {
       : [];
 
     const rawContent = firstString(note.content) || '';
-    const text = stripHtml(rawContent) || title || '';
+    const text = htmlToText(rawContent) || title || '';
 
     params.pipeline.push({
       item: {

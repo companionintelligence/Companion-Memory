@@ -17,7 +17,7 @@ jest.mock('@ci/configuration', () => {
   };
 });
 
-import { ConnectService, scopesForApp } from '../services/ConnectService';
+import { ConnectService, capabilityForApp, scopesForApp } from '../services/ConnectService';
 
 /**
  * Unit tests for ConnectService — the connect-flow orchestration and its
@@ -153,6 +153,9 @@ describe('ConnectService.exchange', () => {
     expect(data.name).toBe('app:ci-openclaw:ci-marketplace');
     // Scopes come from scopesForApp (the same source the consent page reads).
     expect(data.scopes).toEqual(['memory', 'intents', 'mcp']);
+    // Capability is CHOSEN at mint time, not inherited from the api-key default:
+    // a chat agent may remember as well as recall, but never delete.
+    expect(data.capability).toBe('write');
     const ttlDays = (new Date(data.expires_at).getTime() - Date.now()) / (24 * 60 * 60 * 1000);
     expect(ttlDays).toBeGreaterThan(89);
     expect(ttlDays).toBeLessThan(91);
@@ -176,6 +179,25 @@ describe('ConnectService.exchange', () => {
 
     const [, data] = apiKeyService.createOrRotate.mock.calls[0];
     expect(data.scopes).toEqual([]);
+    // Full SURFACE (empty scopes) still does not mean full authority — the
+    // importer is minted `write`, so it can never delete.
+    expect(data.capability).toBe('write');
+  });
+
+  it('mints an explicitly-stated capability for an app nobody enumerated', async () => {
+    const { service, apiKeyService, connectCodeService } = makeDeps();
+    connectCodeService.consume.mockResolvedValue({
+      userId: 'user-1',
+      appUrn: 'some-third-party-app:ci-marketplace',
+    });
+    apiKeyService.createOrRotate.mockResolvedValue({ key: 'raw-key' });
+
+    await service.exchange('one-time-code');
+
+    const [, data] = apiKeyService.createOrRotate.mock.calls[0];
+    // Not `undefined` — the whole point is that the mint states a level rather
+    // than letting ApiKeyService fall back to DEFAULT_API_KEY_CAPABILITY.
+    expect(data.capability).toBe('write');
   });
 
   it('returns null for an invalid/expired/used code without minting', async () => {
@@ -224,8 +246,10 @@ describe('ConnectService.rotateByApp', () => {
     expect(apiKeyService.findUserIdByName).toHaveBeenCalledWith('app:ci-openclaw:ci-marketplace');
     const [ctx, data] = apiKeyService.createOrRotate.mock.calls[0];
     expect(ctx).toEqual({ userId: 'user-1' });
-    // A rotate re-derives scopes, so it also heals a key minted under an older policy.
+    // A rotate re-derives scopes AND capability, so it also heals a key minted
+    // under an older policy (including one minted before capability was chosen).
     expect(data.scopes).toEqual(['memory', 'intents', 'mcp']);
+    expect(data.capability).toBe('write');
     expect(result?.key).toBe('rotated-key');
   });
 
@@ -235,6 +259,36 @@ describe('ConnectService.rotateByApp', () => {
 
     expect(await service.rotateByApp('ci-hermes:ci-marketplace')).toBeNull();
     expect(apiKeyService.createOrRotate).not.toHaveBeenCalled();
+  });
+});
+
+describe('capabilityForApp (authority chosen per app, never inherited)', () => {
+  it('gives the chat agents write — enough to remember, never enough to delete', () => {
+    expect(capabilityForApp('ci-openclaw:ci-marketplace')).toBe('write');
+    expect(capabilityForApp('ci-hermes:ci-marketplace')).toBe('write');
+  });
+
+  it('gives the bulk importer write, not full — full surface is not full authority', () => {
+    expect(capabilityForApp('ci-import-tools:ci-marketplace')).toBe('write');
+  });
+
+  it('defaults an unknown app to the narrow write level', () => {
+    expect(capabilityForApp('some-third-party-app:ci-marketplace')).toBe('write');
+  });
+
+  it('never mints a destructive key for any app URN', () => {
+    for (const appUrn of [
+      'ci-openclaw:ci-marketplace',
+      'ci-hermes:ci-marketplace',
+      'ci-import-tools:ci-marketplace',
+      'some-third-party-app:some-other-store',
+    ]) {
+      expect(capabilityForApp(appUrn)).not.toBe('full');
+    }
+  });
+
+  it('keys on the app name segment, ignoring the store', () => {
+    expect(capabilityForApp('ci-openclaw:some-other-store')).toBe('write');
   });
 });
 

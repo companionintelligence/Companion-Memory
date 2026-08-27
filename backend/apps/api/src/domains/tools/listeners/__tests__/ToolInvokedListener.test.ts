@@ -13,16 +13,26 @@ function makeLogger() {
   } as any; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
+function makeLedger() {
+  return { record: jest.fn().mockResolvedValue({ id: 'row-1' }) } as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+}
+
 function makePayload(overrides: Partial<ToolInvokedPayload> = {}): ToolInvokedPayload {
   return {
     intent: 'memory.recall',
     tool: 'memory_recall',
     domain: 'memory',
+    source: 'native',
     userId: 'user-1',
-    success: true,
+    correlationId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    apiKeyId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    capability: 'full',
+    occurredAt: '2026-08-26T12:00:00.000Z',
+    outcome: 'success',
     durationMs: 42,
     access: 'read',
     external: false,
+    destructive: false,
     ...overrides,
   };
 }
@@ -35,46 +45,63 @@ describe('ToolInvokedListener', () => {
     expect(EventListenerRegistry.getQueuesFor(ToolInvokedEvent)).toEqual(new Set(['telemetry']));
   });
 
-  it('records the full invocation payload, not a hand-picked subset of it', () => {
-    const logger = makeLogger();
-    const listener = new ToolInvokedListener(logger);
+  it('PERSISTS the invocation, which is the whole point — a debug line is not a record', async () => {
+    const ledger = makeLedger();
+    const listener = new ToolInvokedListener(ledger, makeLogger());
+    const payload = makePayload();
 
-    listener.handleToolInvoked(makePayload());
+    await listener.handleToolInvoked(payload);
+
+    expect(ledger.record).toHaveBeenCalledTimes(1);
+    expect(ledger.record).toHaveBeenCalledWith(payload);
+  });
+
+  it('persists a refused invocation the same way it persists a successful one', async () => {
+    const ledger = makeLedger();
+    const listener = new ToolInvokedListener(ledger, makeLogger());
+
+    await listener.handleToolInvoked(
+      makePayload({ outcome: 'refused', errorCode: 'TOOL_FORBIDDEN', tool: 'memory_forget' }),
+    );
+
+    expect(ledger.record).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'refused', tool: 'memory_forget' }),
+    );
+  });
+
+  it('still logs the full payload, not a hand-picked subset of it', async () => {
+    const logger = makeLogger();
+    const listener = new ToolInvokedListener(makeLedger(), logger);
+
+    await listener.handleToolInvoked(makePayload());
 
     expect(logger.debug).toHaveBeenCalledWith('tool.invoked', {
       intent: 'memory.recall',
       tool: 'memory_recall',
       domain: 'memory',
+      source: 'native',
       access: 'read',
       external: false,
-      success: true,
+      destructive: false,
+      outcome: 'success',
+      errorCode: undefined,
       durationMs: 42,
       userId: 'user-1',
+      apiKeyId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      correlationId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      capability: 'full',
     });
   });
 
-  it('records a failed invocation the same way a successful one is recorded', () => {
-    const logger = makeLogger();
-    const listener = new ToolInvokedListener(logger);
+  it('does not throw when the optional fields (userId, durationMs) are absent', async () => {
+    const ledger = makeLedger();
+    const listener = new ToolInvokedListener(ledger, makeLogger());
 
-    listener.handleToolInvoked(makePayload({ success: false, tool: 'memory_forget' }));
-
-    expect(logger.debug).toHaveBeenCalledWith(
-      'tool.invoked',
-      expect.objectContaining({ success: false, tool: 'memory_forget' }),
-    );
-  });
-
-  it('does not throw when the optional fields (userId, durationMs) are absent', () => {
-    const logger = makeLogger();
-    const listener = new ToolInvokedListener(logger);
-
-    expect(() =>
+    await expect(
       listener.handleToolInvoked(makePayload({ userId: undefined, durationMs: undefined })),
-    ).not.toThrow();
+    ).resolves.toBeUndefined();
 
-    expect(logger.debug).toHaveBeenCalledWith(
-      'tool.invoked',
+    expect(ledger.record).toHaveBeenCalledWith(
       expect.objectContaining({ userId: undefined, durationMs: undefined }),
     );
   });

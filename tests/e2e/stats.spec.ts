@@ -1,4 +1,5 @@
-import { expect, type Page, test } from '@playwright/test';
+import { type Page } from '@playwright/test';
+import { expect, test } from './fixtures/authenticated';
 
 // Authenticated. /stats (StatsPage.tsx) had a real production bug: the
 // spending chart read `metadata.Amount` while an importer wrote `Total`, so
