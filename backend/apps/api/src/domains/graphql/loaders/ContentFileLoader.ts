@@ -9,12 +9,13 @@ import { Loader } from './Loader';
 /**
  * The binary behind a `ci.content` row whose `external_id` is a `ci.files.id`:
  * the PREVIEW variant's URL (the thumbnail, when one has been generated), the
- * ORIGINAL's URL, and the ORIGINAL's content type and byte size.
+ * ORIGINAL's URL, and the ORIGINAL's content type, filename and byte size.
  */
 export interface ContentFileMedia {
   previewUrl: string | null;
   mediaUrl: string | null;
   contentType: string | null;
+  filename: string | null;
   size: number | null;
 }
 
@@ -68,6 +69,7 @@ export class ContentFileLoader extends Loader<ContentFileMedia | null, string> {
         previewUrl: preview?.url ?? null,
         mediaUrl: original?.url ?? null,
         contentType: original?.contentType ?? null,
+        filename: original?.filename ?? null,
         size: original?.size != null ? Number(original.size) : null,
       };
     });

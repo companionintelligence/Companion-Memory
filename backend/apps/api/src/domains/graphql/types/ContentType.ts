@@ -40,6 +40,18 @@ export class ContentType implements Node, Taggable {
   @Field(() => String, { nullable: true })
   sourceUrl!: string | null;
 
+  @Field(() => String, { nullable: true })
+  sourceType!: string | null;
+
+  @Field(() => String, { nullable: true })
+  sourceSystem!: string | null;
+
+  @Field(() => String, { nullable: true })
+  sourceId!: string | null;
+
+  @Field(() => Date)
+  createdAt!: Date;
+
   @Field(() => GraphQLJSONObject, { nullable: true })
   sourceData!: Record<string, unknown> | null;
 
@@ -63,6 +75,10 @@ export class ContentType implements Node, Taggable {
   /** Byte size of the linked ORIGINAL — lets a client avoid using it as a thumbnail. */
   @Field(() => Float, { nullable: true })
   mediaSize?: number | null;
+
+  /** Filename of the linked ORIGINAL, when the content row points at a file. */
+  @Field(() => String, { nullable: true })
+  mediaFilename?: string | null;
 
   /**
    * Provider-hosted player derived from `url` / `externalId` alone (YouTube,
@@ -93,6 +109,10 @@ export class ContentType implements Node, Taggable {
       mimetype: entity.mimetype,
       externalId: entity.externalId,
       sourceUrl: entity.sourceUrl,
+      sourceType: entity.sourceType,
+      sourceSystem: entity.sourceSystem,
+      sourceId: entity.sourceId,
+      createdAt: entity.createdAt,
       sourceData: entity.sourceData,
       tags: [], // Hydrated by resolver
     };

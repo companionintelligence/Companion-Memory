@@ -1,6 +1,6 @@
 import type { RequestContext } from '@ci/common/context';
 
-import type { ContentType } from '../../types/ContentType';
+import { ContentType } from '../../types/ContentType';
 import { ContentResolver } from '../ContentResolver';
 
 /**
@@ -17,6 +17,7 @@ const media = {
   previewUrl: '/files/thumb.jpg',
   mediaUrl: '/files/original.jpg',
   contentType: 'image/jpeg',
+  filename: 'original.jpg',
   size: 2048,
 };
 
@@ -46,6 +47,7 @@ describe('ContentResolver media fields', () => {
     await expect(resolver.previewUrl(CTX, parent)).resolves.toBe('/files/thumb.jpg');
     await expect(resolver.mediaUrl(CTX, parent)).resolves.toBe('/files/original.jpg');
     await expect(resolver.mediaSize(CTX, parent)).resolves.toBe(2048);
+    await expect(resolver.mediaFilename(CTX, parent)).resolves.toBe('original.jpg');
   });
 
   it('scopes the file lookup to the content row owner', async () => {
@@ -91,5 +93,39 @@ describe('ContentResolver media fields', () => {
       resolver.mediaUrl(CTX, node({ externalId: null, externalIdKind: null })),
     ).resolves.toBeNull();
     expect(load).not.toHaveBeenCalled();
+  });
+
+  it('resolves mediaFilename to null when the row has no linked file', async () => {
+    const { resolver } = makeResolver();
+
+    await expect(
+      resolver.mediaFilename(CTX, node({ externalId: null, externalIdKind: null })),
+    ).resolves.toBeNull();
+  });
+});
+
+describe('ContentType.toType provenance', () => {
+  it('copies sourceType, sourceSystem, sourceId and createdAt from the entity', () => {
+    const createdAt = new Date('2026-08-26T12:00:00.000Z');
+    const type = ContentType.toType({
+      id: 'c1',
+      type: 'document',
+      title: 'invoice.pdf',
+      text: null,
+      url: null,
+      mimetype: 'application/pdf',
+      externalId: FILE_ID,
+      sourceUrl: 'https://mail.google.com/mail/u/0/#inbox',
+      sourceType: 'email',
+      sourceSystem: 'gmail',
+      sourceId: 'msg-1',
+      createdAt,
+      sourceData: null,
+    } as never);
+
+    expect(type.sourceType).toBe('email');
+    expect(type.sourceSystem).toBe('gmail');
+    expect(type.sourceId).toBe('msg-1');
+    expect(type.createdAt).toBe(createdAt);
   });
 });

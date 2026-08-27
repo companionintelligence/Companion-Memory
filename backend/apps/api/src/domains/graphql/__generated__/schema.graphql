@@ -567,15 +567,20 @@ type ContentEdge implements Edge {
 }
 
 type ContentType implements Node & Taggable {
+  createdAt: DateTime!
   event: EventType
   externalId: String
   id: ID!
+  mediaFilename: String
   mediaSize: Float
   mediaUrl: String
   mimetype: String
   player: EmbedPlayerType
   previewUrl: String
   sourceData: JSON
+  sourceId: String
+  sourceSystem: String
+  sourceType: String
   sourceUrl: String
   tags: [EntityTagType!]!
   text: String

@@ -329,6 +329,15 @@ export class ContentResolver {
     return (await this.resolveFileMedia(context, parent))?.size ?? null;
   }
 
+  /** Filename of the linked ORIGINAL. */
+  @ResolveField(() => String, { nullable: true })
+  async mediaFilename(
+    @Context() context: RequestContext,
+    @Parent() parent: ContentType,
+  ): Promise<string | null> {
+    return (await this.resolveFileMedia(context, parent))?.filename ?? null;
+  }
+
   /**
    * Tier-0 embed: a pure function of the row's URL, so no loader and no I/O.
    * `externalId` is tried first because import writes the provider's native
