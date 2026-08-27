@@ -116,7 +116,7 @@ Known gaps to cover by hand (§4) until they are closed:
 
 - **Eleven page directories have zero tests:** `CommunicationPage`, `ConceptPage`, `ContentPage`, `EventPage`, `OAuthCallbackPage`, `OpenIDCallbackPage`, `PersonPage`, `PlacePage`, `SharedSearchPage`, `SplashPage`, `SummaryDetailPage`. The two OAuth/OpenID callbacks and `SharedSearchPage` (an unauthenticated public surface) are the ones that matter most.
 - **No E2E for** the nav shell itself, Plan, Self/Profile, Reflections, Saved Searches, Asks, Jobs, or Sources.
-- **Provider-stubbed tests can hide DI faults.** `ActivityRollupService.test.ts` stubs every provider as `{ aggregateHourlyActivity }` and so cannot fail for the duplicate-`FileService` bug that breaks that service at runtime (baseline §6.4). When a service's job is *wiring*, at least one test must exercise the real module graph.
+- **Provider-stubbed tests hide DI faults, and this has bitten twice.** `ActivityRollupService.test.ts` stubs every provider as `{ aggregateHourlyActivity }` and so cannot fail for the duplicate-`FileService` bug that breaks it at runtime (baseline §6.4); `AnswerInferenceListener.test.ts` supplies its own `ollamaService` double and so cannot fail for the barrel-cycle bug that makes `this.ollamaService.chat is not a function` on every cron run (§6.4b). **Both were found by running the app, not by any suite.** When a service's job is *wiring*, at least one test must exercise the real module graph — and the smoke check for it is simply: does the seed run clean, and is the cron log empty?
 
 ## 4. Manual scripts
 
