@@ -86,6 +86,7 @@ export class FacebookLikesTransformService {
           const likedAt = like.created_time ? new Date(like.created_time) : null;
 
           await this.eventService.create(context, {
+            connection_id: connection.id,
             title: `Liked Facebook page ${name}`,
             description: like.category ? `${name} — ${like.category}` : name,
             event_type: FACEBOOK_LIKE_EVENT_TYPE,

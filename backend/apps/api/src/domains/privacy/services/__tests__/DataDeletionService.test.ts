@@ -110,10 +110,25 @@ class FakeGoogleClient extends BaseOAuth2Client {
 }
 
 function makeService(opts: {
-  connections: Array<{ id: string; userId: string; providerId: string | null }>;
+  connections: Array<{
+    id: string;
+    userId: string;
+    providerId: string | null;
+    accessToken?: string | null;
+    refreshToken?: string | null;
+    externalId?: string | null;
+  }>;
   store: Record<string, Row[]>;
   client?: BaseOAuth2Client | null;
   clientThrows?: boolean;
+  /** The user's own OAuth app keys for the provider (null = brokered by CI Portal). */
+  providerKey?: { clientId: string; clientSecret: string } | null;
+  /** CI Portal proxy state. Unconfigured by default so existing tests exercise the direct path. */
+  portal?: {
+    configured: boolean;
+    providerName?: string | null;
+    revoke?: jest.Mock;
+  };
 }) {
   const { dataSource, store, query } = makeDataSource(opts.store);
 
@@ -154,6 +169,20 @@ function makeService(opts: {
   const cleanOrphans = jest.fn(async () => ({ results: [], totalDeleted: 0, dryRun: false }));
   const orphanCleanupService = { cleanOrphans };
 
+  const providerKeyService = {
+    findByProviderId: jest.fn(async () => opts.providerKey ?? null),
+  };
+
+  const portalRevoke =
+    opts.portal?.revoke ?? jest.fn(async () => ({ success: true, tokens_deleted: 1, revocation_ok: true }));
+  const cloudOAuthProxyService = {
+    isPortalConfigured: jest.fn(() => opts.portal?.configured ?? false),
+    getProviderNameForId: jest.fn(() =>
+      opts.portal?.providerName === undefined ? 'google' : (opts.portal.providerName ?? undefined),
+    ),
+    revokeToken: portalRevoke,
+  };
+
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 
   const service = new DataDeletionService(
@@ -162,10 +191,23 @@ function makeService(opts: {
     auditRepository as never,
     clientFactory as never,
     orphanCleanupService as never,
+    providerKeyService as never,
+    cloudOAuthProxyService as never,
     logger as never,
   );
 
-  return { service, store, query, savedAudits, connectionRepository, clientFactory, cleanOrphans, client };
+  return {
+    service,
+    store,
+    query,
+    savedAudits,
+    connectionRepository,
+    clientFactory,
+    cleanOrphans,
+    client,
+    portalRevoke,
+    providerKeyService,
+  };
 }
 
 describe('DataDeletionService.disconnectConnection', () => {
@@ -179,6 +221,16 @@ describe('DataDeletionService.disconnectConnection', () => {
           { user: 'user-1', connection: 'conn-2' }, // another connection — must survive
         ],
         'ci_etl.connection_sync_jobs': [{ user: 'user-1', connection: 'conn-1' }],
+        // Photos/videos and events carry connection_id since
+        // 20260827185926_add_connection_id_to_events_and_content; a row from
+        // another connection, and one with no connection (an archive import),
+        // must both survive.
+        'ci.content': [
+          { user: 'user-1', connection: 'conn-1' },
+          { user: 'user-1', connection: 'conn-2' },
+          { user: 'user-1' },
+        ],
+        'ci.events': [{ user: 'user-1', connection: 'conn-1' }, { user: 'user-1' }],
         'ci.entities': [{ user: 'user-1', graphConnection: 'conn-1' }],
         'ci.relationships': [{ user: 'user-1', graphConnection: 'conn-1' }],
       },
@@ -192,6 +244,10 @@ describe('DataDeletionService.disconnectConnection', () => {
 
     // conn-1's derived communication purged; conn-2's untouched.
     expect(store['ci.communications']).toEqual([{ user: 'user-1', connection: 'conn-2' }]);
+    expect(store['ci.content']).toEqual([{ user: 'user-1', connection: 'conn-2' }, { user: 'user-1' }]);
+    expect(store['ci.events']).toEqual([{ user: 'user-1' }]);
+    expect(result.deletedCounts['ci.content']).toBe(1);
+    expect(result.deletedCounts['ci.events']).toBe(1);
     // Connection-derived tables + the connection row itself gone.
     expect(store['ci_etl.connection_sync_jobs']).toEqual([]);
     expect(store['ci.entities']).toEqual([]);
@@ -312,5 +368,156 @@ describe('DataDeletionService.deleteAccount', () => {
     // Connections (holding OAuth tokens) are purged as part of the account sweep.
     expect(order).toContain('ci.connections');
     expect(order).toContain('ci.provider_keys');
+  });
+});
+
+describe('DataDeletionService.revokeConnectionGrant via CI Portal', () => {
+  const proxied = {
+    id: 'conn-1',
+    userId: 'user-1',
+    providerId: 'google-provider-id',
+    accessToken: 'google-access-token',
+    refreshToken: 'portal-proxy-refresh-token',
+    externalId: 'google-user-123',
+  };
+
+  it('asks CI Portal to revoke + delete its credential instead of posting the proxy token to the provider', async () => {
+    const { service, client, portalRevoke, savedAudits } = makeService({
+      connections: [proxied],
+      store: { 'ci.connections': [{ user: 'user-1', connection: 'conn-1' }] },
+      portal: { configured: true, providerName: 'google' },
+      providerKey: null,
+    });
+
+    const result = await service.disconnectConnection({ userId: 'user-1' }, 'conn-1');
+
+    expect(portalRevoke).toHaveBeenCalledTimes(1);
+    expect(portalRevoke).toHaveBeenCalledWith({
+      proxyRefreshToken: 'portal-proxy-refresh-token',
+      provider: 'google',
+      userProviderId: 'google-user-123',
+    });
+    // The proxy refresh token is a Portal secret the provider has never seen —
+    // it must not be sent to the provider's revoke endpoint.
+    expect((client as FakeGoogleClient).revoke).not.toHaveBeenCalled();
+    expect(result.tokenRevoked).toBe(true);
+    expect(savedAudits[0]).toMatchObject({ tokenRevoked: true });
+  });
+
+  it('uses the direct provider path when the user brought their own app keys', async () => {
+    const { service, client, portalRevoke } = makeService({
+      connections: [proxied],
+      store: { 'ci.connections': [{ user: 'user-1', connection: 'conn-1' }] },
+      portal: { configured: true, providerName: 'google' },
+      providerKey: { clientId: 'own-app', clientSecret: 'own-secret' },
+    });
+
+    const result = await service.disconnectConnection({ userId: 'user-1' }, 'conn-1');
+
+    expect(portalRevoke).not.toHaveBeenCalled();
+    expect((client as FakeGoogleClient).revoke).toHaveBeenCalledTimes(1);
+    expect(result.tokenRevoked).toBe(true);
+  });
+
+  it('uses the direct provider path when Portal is not configured on this appliance', async () => {
+    const { service, client, portalRevoke } = makeService({
+      connections: [proxied],
+      store: { 'ci.connections': [{ user: 'user-1', connection: 'conn-1' }] },
+      portal: { configured: false },
+      providerKey: null,
+    });
+
+    await service.disconnectConnection({ userId: 'user-1' }, 'conn-1');
+
+    expect(portalRevoke).not.toHaveBeenCalled();
+    expect((client as FakeGoogleClient).revoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports tokenRevoked=false when Portal held nothing (e.g. Facebook, which issues no refresh token)', async () => {
+    const { service, portalRevoke } = makeService({
+      connections: [{ ...proxied, refreshToken: null, externalId: 'fb-user-1' }],
+      store: { 'ci.connections': [{ user: 'user-1', connection: 'conn-1' }] },
+      portal: {
+        configured: true,
+        providerName: 'facebook',
+        revoke: jest.fn(async () => ({ success: true, tokens_deleted: 0, revocation_ok: true })),
+      },
+      providerKey: null,
+    });
+
+    const result = await service.disconnectConnection({ userId: 'user-1' }, 'conn-1');
+
+    expect(portalRevoke).toHaveBeenCalledWith({
+      proxyRefreshToken: null,
+      provider: 'facebook',
+      userProviderId: 'fb-user-1',
+    });
+    expect(result.tokenRevoked).toBe(false);
+  });
+
+  it('reports tokenRevoked=false when Portal deleted the row but the provider refused the upstream revoke', async () => {
+    const { service } = makeService({
+      connections: [proxied],
+      store: { 'ci.connections': [{ user: 'user-1', connection: 'conn-1' }] },
+      portal: {
+        configured: true,
+        providerName: 'google',
+        revoke: jest.fn(async () => ({ success: true, tokens_deleted: 1, revocation_ok: false })),
+      },
+      providerKey: null,
+    });
+
+    const result = await service.disconnectConnection({ userId: 'user-1' }, 'conn-1');
+
+    expect(result.tokenRevoked).toBe(false);
+  });
+
+  it('still purges locally when Portal is unreachable', async () => {
+    const { service, store, savedAudits } = makeService({
+      connections: [proxied],
+      store: {
+        'ci.connections': [{ user: 'user-1', connection: 'conn-1' }],
+        'ci.communications': [{ user: 'user-1', connection: 'conn-1' }],
+      },
+      portal: {
+        configured: true,
+        providerName: 'google',
+        revoke: jest.fn(async () => {
+          throw new Error('portal down');
+        }),
+      },
+      providerKey: null,
+    });
+
+    const result = await service.disconnectConnection({ userId: 'user-1' }, 'conn-1');
+
+    expect(result.tokenRevoked).toBe(false);
+    expect(store['ci.connections']).toEqual([]);
+    expect(store['ci.communications']).toEqual([]);
+    expect(savedAudits[0]).toMatchObject({ scope: 'connection', tokenRevoked: false });
+  });
+
+  it('goes through Portal for every proxied connection during account deletion', async () => {
+    const { service, portalRevoke, client } = makeService({
+      connections: [
+        proxied,
+        { ...proxied, id: 'conn-2', externalId: 'google-user-456', refreshToken: 'proxy-2' },
+      ],
+      store: {
+        'ci.users': [{ user: 'user-1' }],
+        'ci.connections': [
+          { user: 'user-1', connection: 'conn-1' },
+          { user: 'user-1', connection: 'conn-2' },
+        ],
+      },
+      portal: { configured: true, providerName: 'google' },
+      providerKey: null,
+    });
+
+    const result = await service.deleteAccount({ userId: 'user-1' });
+
+    expect(portalRevoke).toHaveBeenCalledTimes(2);
+    expect((client as FakeGoogleClient).revoke).not.toHaveBeenCalled();
+    expect(result.revocations.every((r) => r.tokenRevoked)).toBe(true);
   });
 });

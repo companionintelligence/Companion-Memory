@@ -306,6 +306,7 @@ export class GoogleCalendarTransformService {
       ...(location_confidence !== null ? { confidence_score: location_confidence } : {}),
       source_type: 'ETL',
       source_system: 'google_calendar',
+      connection_id: connectionId,
       source_id: eventDetails.id,
       is_recurring: eventDetails.isRecurring,
       is_all_day: isAllDay,

@@ -180,7 +180,14 @@ export class GoogleDriveTransformService {
           });
 
           await this.createPointerFile({ userId, fileName, mimeType, webViewLink, file });
-          await this.createPlaceholderContent({ userId, fileId, fileName, mimeType, webViewLink });
+          await this.createPlaceholderContent({
+            userId,
+            connectionId,
+            fileId,
+            fileName,
+            mimeType,
+            webViewLink,
+          });
         } else if (result.outcome === 'downloaded') {
           this.logger.log('Downloaded Drive document content and started an import run', {
             fileId,
@@ -202,7 +209,14 @@ export class GoogleDriveTransformService {
         // alt=media — deliberately out of scope for this pass (see the
         // audit's notDone). Keep today's pointer + placeholder behavior.
         await this.createPointerFile({ userId, fileName, mimeType, webViewLink, file });
-        await this.createPlaceholderContent({ userId, fileId, fileName, mimeType, webViewLink });
+        await this.createPlaceholderContent({
+          userId,
+          connectionId,
+          fileId,
+          fileName,
+          mimeType,
+          webViewLink,
+        });
       } else {
         // Not a document at all (image, video, etc.) — there is no "content"
         // to import, so the webViewLink-as-pointer design is correct as-is.
@@ -255,12 +269,14 @@ export class GoogleDriveTransformService {
   /** The `Google Drive document: <name>` placeholder content entity. */
   private async createPlaceholderContent({
     userId,
+    connectionId,
     fileId,
     fileName,
     mimeType,
     webViewLink,
   }: {
     userId: string;
+    connectionId: string;
     fileId: string;
     fileName: string;
     mimeType: string;
@@ -269,6 +285,7 @@ export class GoogleDriveTransformService {
     await this.contentService.create(
       { userId },
       {
+        connection_id: connectionId,
         type: 'google_drive_document',
         title: fileName,
         text: `Google Drive document: ${fileName}`,

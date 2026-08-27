@@ -8,7 +8,9 @@ import { LoggerService } from '@ci/common/logging';
 import {
   BaseOAuth2Client,
   ClientFactory,
+  CloudOAuthProxyService,
   ConnectionEntity,
+  ProviderKeyService,
   type BaseClient,
   type Connection,
 } from '@ci/domains/connections';
@@ -72,6 +74,8 @@ export class DataDeletionService {
     private readonly auditRepository: Repository<DataDeletionAuditEntity>,
     private readonly clientFactory: ClientFactory,
     private readonly orphanCleanupService: OrphanCleanupService,
+    private readonly providerKeyService: ProviderKeyService,
+    private readonly cloudOAuthProxyService: CloudOAuthProxyService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(DataDeletionService.name);
@@ -270,6 +274,10 @@ export class DataDeletionService {
       return false;
     }
 
+    if (await this.isProxiedThroughPortal(connection)) {
+      return this.revokeViaPortal(connection);
+    }
+
     try {
       // revoke() reads only { id, accessToken, refreshToken }; pass those
       // directly rather than routing through ConnectionEntity.toEgressType (which
@@ -285,6 +293,74 @@ export class DataDeletionService {
       // revoke() is already best-effort internally, but guard here too so a
       // deletion is never blocked by a provider outage.
       this.logger.error('Connection grant revocation threw; continuing with purge', {
+        connectionId: connection.id,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+
+      return false;
+    }
+  }
+
+  /**
+   * Whether this connection was authorized through CI Portal's OAuth proxy
+   * rather than the user's own provider app. The two are told apart the same
+   * way `BaseOAuth2Client` decides how to refresh: a `ci.provider_keys` row for
+   * this user + provider means the user brought their own app and the tokens
+   * on the connection are the provider's; no row means Portal brokered the
+   * grant, the connection's `refresh_token` is a Portal-issued proxy token,
+   * and — for providers that issue refresh tokens — Portal holds the real one.
+   */
+  private async isProxiedThroughPortal(connection: ConnectionEntity): Promise<boolean> {
+    if (connection.providerId == null || !this.cloudOAuthProxyService.isPortalConfigured()) {
+      return false;
+    }
+
+    if (this.cloudOAuthProxyService.getProviderNameForId(connection.providerId) == null) {
+      return false;
+    }
+
+    const ownKeys = await this.providerKeyService.findByProviderId(
+      { userId: connection.userId },
+      connection.providerId,
+    );
+
+    return ownKeys == null;
+  }
+
+  /**
+   * Ask CI Portal to revoke and delete the credential it holds for this
+   * connection. Portal revokes the real provider refresh token upstream and
+   * hard-deletes its row; the appliance's own copy is purged by the caller.
+   * Best-effort like the direct path: a Portal outage never blocks deletion.
+   *
+   * Posting the connection's tokens to the provider ourselves would be
+   * pointless here — its `refresh_token` is a Portal proxy token the provider
+   * has never seen, and the access token dies on its own within the hour.
+   *
+   * @returns true only when Portal deleted at least one credential and every
+   *   upstream revocation it attempted succeeded — so a provider that never
+   *   issues refresh tokens (Facebook) reports false, as before, because there
+   *   was nothing held anywhere but here.
+   */
+  private async revokeViaPortal(connection: ConnectionEntity): Promise<boolean> {
+    try {
+      const provider = this.cloudOAuthProxyService.getProviderNameForId(connection.providerId!)!;
+      const result = await this.cloudOAuthProxyService.revokeToken({
+        proxyRefreshToken: connection.refreshToken,
+        provider,
+        userProviderId: connection.externalId,
+      });
+
+      if (result.tokens_deleted > 0 && !result.revocation_ok) {
+        this.logger.warn('CI Portal deleted the stored credential but the provider refused revocation', {
+          connectionId: connection.id,
+          provider,
+        });
+      }
+
+      return result.tokens_deleted > 0 && result.revocation_ok;
+    } catch (error) {
+      this.logger.error('CI Portal credential revocation failed; continuing with local purge', {
         connectionId: connection.id,
         error: error instanceof Error ? error.message : 'Unknown error',
       });

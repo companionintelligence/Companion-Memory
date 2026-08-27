@@ -100,6 +100,7 @@ export class SpotifySavedAudiobooksTransformService {
           } else {
             // Create new content entry for the audiobook
             await this.contentService.create(context, {
+              connection_id: connection.id,
               title: audiobook.name,
               type: 'Audiobook',
               url: audiobook.external_urls?.spotify || '',

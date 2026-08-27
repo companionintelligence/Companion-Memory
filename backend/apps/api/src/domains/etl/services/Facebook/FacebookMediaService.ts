@@ -155,6 +155,7 @@ export class FacebookMediaService {
     };
 
     const fields = {
+      connection_id: connectionId,
       type: 'media',
       title: media.title,
       text: media.text ?? '',

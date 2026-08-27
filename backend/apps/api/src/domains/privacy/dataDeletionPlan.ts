@@ -123,4 +123,6 @@ export interface ConnectionScopedTable {
 export const CONNECTION_SCOPED_TABLES: readonly ConnectionScopedTable[] = [
   { schema: 'ci_etl', table: 'connection_sync_jobs', connectionColumn: 'connection_id' },
   { schema: 'ci', table: 'communications', connectionColumn: 'connection_id' },
+  { schema: 'ci', table: 'content', connectionColumn: 'connection_id' },
+  { schema: 'ci', table: 'events', connectionColumn: 'connection_id' },
 ];

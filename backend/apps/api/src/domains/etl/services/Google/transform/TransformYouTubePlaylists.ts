@@ -154,6 +154,7 @@ export class YouTubePlaylistsTransformService {
       source_type: 'ETL',
       source_system: YOUTUBE_SOURCE_SYSTEM,
       source_id: `playlist:${playlistId}`,
+      connection_id: connectionId,
       source_data: {
         connectionId,
         channelTitle,

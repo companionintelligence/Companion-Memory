@@ -276,6 +276,10 @@ export class EventService {
       toCreate.sourceId = item.source_id;
     }
 
+    if (item.connection_id) {
+      toCreate.connectionId = item.connection_id;
+    }
+
     if (item.sharing_level) {
       toCreate.sharingLevel = item.sharing_level;
     }
@@ -779,6 +783,10 @@ export class EventService {
 
     if (data.organizer_entity_id) {
       updateData.organizerEntityId = data.organizer_entity_id;
+    }
+
+    if (data.connection_id !== undefined) {
+      updateData.connectionId = data.connection_id;
     }
 
     if (data.source_type) {

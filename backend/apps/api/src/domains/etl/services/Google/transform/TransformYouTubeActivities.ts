@@ -181,6 +181,7 @@ export class YouTubeActivitiesTransformService {
       source_type: 'ETL',
       source_system: YOUTUBE_SOURCE_SYSTEM,
       source_id: `upload:${videoId}`,
+      connection_id: connectionId,
       source_data: {
         connectionId,
         channelTitle: snippet.channelTitle ?? '',
