@@ -67,12 +67,22 @@ const RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
       // emitting entries indefinitely. Only MAX_SURFACED of them are ever used
       // downstream; asking for more is generation the caller pays for and then
       // discards.
+      //
+      // Enforcement is the SERVER's, not this client's, so it was verified
+      // rather than assumed: asking a model for ten items under a `maxItems: 2`
+      // schema returned exactly two and stopped (`done_reason: stop`).
       maxItems: MAX_SURFACED,
       items: {
         type: 'object',
         properties: {
-          title: { type: 'string' },
-          detail: { type: 'string' },
+          // Bounded so SCAN_MAX_OUTPUT_TOKENS is provably above a full answer
+          // rather than merely believed to be. MAX_SURFACED items at these
+          // lengths is roughly 900 tokens against a 1,500 cap; unbounded
+          // strings make that arithmetic impossible and put a legitimate
+          // answer at risk of the truncation handled above. These are also
+          // generous for what the UI shows — a task title and a one-line note.
+          title: { type: 'string', maxLength: 120 },
+          detail: { type: 'string', maxLength: 200 },
           confidence: { type: 'number' },
         },
         required: ['title'],
@@ -307,6 +317,21 @@ export class TodoScanService {
         maxOutputTokens: SCAN_MAX_OUTPUT_TOKENS,
         keepAlive: SCAN_KEEP_ALIVE,
       });
+
+      // A response cut off by the output cap stops mid-grammar, so its JSON is
+      // unterminated and `JSON.parse` throws. Left to the generic handler that
+      // reads as "the model failed", which is both wrong and unactionable: the
+      // model was fine, the CAP was too low, and the operator's fix is to raise
+      // SCAN_MAX_OUTPUT_TOKENS rather than to go looking at the backend. Worth
+      // naming precisely because the failure is otherwise silent and permanent
+      // — every subsequent run truncates in exactly the same place.
+      if (response.done_reason === 'length') {
+        this.logger.warn('Todo scan hit its output cap; raise SCAN_MAX_OUTPUT_TOKENS', {
+          maxOutputTokens: SCAN_MAX_OUTPUT_TOKENS,
+        });
+
+        return null;
+      }
 
       const parsed = responseSchema.safeParse(JSON.parse(response.message.content || '{}'));
 
