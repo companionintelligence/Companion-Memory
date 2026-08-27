@@ -31,45 +31,39 @@ A consent-path or nav change usually touches both. Verified by running each on
 > jest (`domains/auth/__tests__/SessionController.test.ts`) — re-run or
 > `--runInBand`; it is not your change.
 
-> **Known failure (frontend), and this one is not a flake.** On `origin/main` at
-> `b82014a1b`, `yarn workspace @ci/fe-web test` is **1 failed | 283 passed
-> (284 files)** — `src/test/nativeAppConfig.node.test.ts` §"does not request iOS
-> Screen Time or full-library photo access" asserts
-> `expect(plist).not.toContain('NSPhotoLibraryUsageDescription')`, and
-> `frontend/apps/ios/ios/App/App/Info.plist:59` declares exactly that key
-> (added by `3634ced8f chore(ios): update Info.plist and documentation for photo
-> library usage`, while the test forbidding it was left in place). Two committed
-> decisions contradict each other; the suite is reporting that honestly. Someone
-> has to pick — either the app really needs full-library read access and the
-> assertion is obsolete, or the key should be dropped for
-> `NSPhotoLibraryAddUsageDescription` alone. Until then, **assume this one red
-> file is not yours**, and do not "fix" it by deleting the assertion without
-> settling the App Store data-safety answer it encodes.
+> **Resolved (was: a red frontend test).** This document used to record
+> `src/test/nativeAppConfig.node.test.ts` as reliably red over
+> `NSPhotoLibraryUsageDescription`, on the grounds that the test forbade a key
+> the Info.plist declared. That contradiction has been settled the other way:
+> the test now asserts the key is **present**, deliberately, and the file passes.
+> Re-measured 2026-08-26.
 
-> **CI is mostly manual — but no longer entirely.** There are **ten** workflows
-> under `.github/workflows/` (verified 2026-08-23), and **eight** are
-> `workflow_dispatch`-only: `ci.yml`, `consent-path-gate.yml`, `e2e.yml`,
-> `migration-integrity-check.yml`, `mobile-build.yml`, `publish.yml`,
+> **CI is mostly manual — and the two automatic lanes do not check what you
+> would assume.** There are **thirteen** workflows under `.github/workflows/`
+> (re-verified 2026-08-26), and **eleven** are `workflow_dispatch`-only:
+> `ci.yml`, `codeql.yml`, `consent-path-gate.yml`, `desktop-build.yml`,
+> `e2e.yml`, `migration-integrity-check.yml`, `mobile-build.yml`, `publish.yml`,
 > `style-canon-lint.yml`, `xcode-cloud-manual-only.yml`. For those, an absent or
 > green check means **nobody dispatched it**, not that the suite passed — run one
 > deliberately with `gh workflow run <file> --ref <branch>`.
 >
-> Two are **not** dispatch-only, and any doc claiming "nothing runs on push" is
-> now wrong:
+> What runs on its own:
 >
-> - **`codeql.yml`** — `push`/`pull_request` on `main` plus a Monday cron. Added
->   2026-08-23 in [#2261](https://github.com/companionintelligence/CI-Server/pull/2261).
->   **It fails on every run**, and not because of your code: the analysis itself
->   completes, then the SARIF upload is rejected with `Code Security must be
->   enabled for this repository to use code scanning`. Until someone enables
->   GitHub Code Security on this private repo, a red **Analyze
->   (javascript-typescript)** / **Analyze (python)** is the baseline, exactly like
->   the Xcode Cloud build.
-> - **`mobile-release.yml`** — `push` on `ios-v*` / `android-v*` /
->   `mobile-release-v*` tags (plus dispatch). It never runs on a PR.
+> - **`benchmark-unit.yml`** — the only workflow that runs on a **pull request**,
+>   path-filtered to `scripts/benchmark/**`. It runs `pytest` and **no linter**,
+>   which is exactly how 141 ruff violations reached that directory unnoticed
+>   while `ci.yml`'s `python` lane sat undispatched.
+> - **`mobile-release.yml` / `desktop-release.yml`** — `push` on `ios-v*` /
+>   `android-v*` / `mobile-release-v*` and `desktop-v*` tags. Neither runs on a PR.
 >
-> That makes §5's enforcement question more urgent, not less: what runs
-> automatically today is a scanner that cannot report, and neither test job.
+> **`codeql.yml` is no longer push/PR/cron.** An earlier revision of this
+> document said it was; it has since been gated to `workflow_dispatch` because
+> every run failed on `Code Security must be enabled for this repository`.
+>
+> `main` has no `required_status_checks` and `required_approving_review_count: 0`,
+> so nothing blocks a merge. See [`../qa/ci-gate-proposal.md`](../qa/ci-gate-proposal.md)
+> for the measured cost of that and the minimum gate worth turning on, and
+> [`../qa/baseline-2026-08-26.md`](../qa/baseline-2026-08-26.md) for what it let through.
 
 ## 2. Where to invest, in order
 

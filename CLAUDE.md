@@ -57,24 +57,31 @@ make build
 `packageManager`, `uv` present — any mismatch exits 1), then hard-fails unless `overmind`,
 `caddy` (admin API live on `:2019`) and `ollama` (on `:11434`) are present.
 
-**CI is `workflow_dispatch`-only, with two exceptions.** Eight of the ten
-workflows do not run on push, pull request, tag or schedule — for those, an
-absent check means nobody dispatched it, not that anything passed. Start one
-with `gh workflow run <file> --ref <branch-or-tag>`; see `docs/CI.md` for the
-full table. The exceptions (verified 2026-08-23):
+**CI is `workflow_dispatch`-only, with three exceptions.** Eleven of the
+thirteen workflows do not run on push, pull request, tag or schedule — for
+those, an absent check means nobody dispatched it, not that anything passed.
+Start one with `gh workflow run <file> --ref <branch-or-tag>`; see `docs/CI.md`
+for the full table. The exceptions (re-verified 2026-08-26):
 
 - **`mobile-release.yml`** — push `ios-v*`, `android-v*`, or
   `mobile-release-v*` to upload to TestFlight / Play internal.
-- **`codeql.yml`** — runs on push and pull_request against `main`, plus a weekly
-  cron. **It fails on every run** and not because of your change: the scan
-  completes, then the upload is rejected with `Code Security must be enabled for
-  this repository to use code scanning`. Red is the baseline until Code Security
-  is turned on for the repo — as is the App Store Connect `App | BuildTestFlight`
-  check, which is Xcode Cloud rather than GitHub Actions.
+- **`desktop-release.yml`** — push `desktop-v*`.
+- **`benchmark-unit.yml`** — the only one that runs on a **pull request**, and
+  only for `scripts/benchmark/**`. It runs `pytest` and *no linter*, which is
+  how 141 ruff violations landed in that directory unnoticed.
+
+**`codeql.yml` is now `workflow_dispatch`-only** (an earlier revision of this
+file said push/PR/cron — that is stale). It was gated because it failed every
+run for reasons unrelated to any change: the scan completes, then the upload is
+rejected with `Code Security must be enabled for this repository to use code
+scanning`. The App Store Connect `App | BuildTestFlight` check is Xcode Cloud
+rather than GitHub Actions, so none of this gating touches it; a red one there
+is still the baseline.
 
 **Nothing gates a merge.** `main`'s branch protection has no
-`required_status_checks` block and `required_approving_review_count: 0`, so
-neither red check blocks anything either.
+`required_status_checks` block and `required_approving_review_count: 0`, so no
+red check blocks anything either. See `docs/qa/` for the release QA programme,
+the measured baseline, and a proposal for the minimum gate worth turning on.
 
 See `README.md` for the full prerequisite setup and the complete `make` command reference.
 
