@@ -58,10 +58,13 @@ const CANCEL_LOOKBEHIND_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Confidence for completion evidence that names the task AND postdates the
- * block. Deliberately BELOW balanced's 0.85 autoPromoteThreshold: balanced is
- * the default (and the fallback when no self identity exists), so a user who
+ * block. Deliberately BELOW `PersonalizationService`'s
+ * `TASK_COMPLETE_AUTO_PROMOTE_THRESHOLD_BALANCED` (0.85): balanced is the
+ * default (and the fallback when no self identity exists), so a user who
  * never touched the trust dial gets a confirmation rather than a silent
- * complete + calendar overwrite. Only hands_off (0.7) auto-applies it.
+ * complete + calendar overwrite. Only hands_off (0.7) auto-applies it. This is
+ * a dedicated threshold, not the shared `autoPromoteThresholdBalanced` (0.55)
+ * used for reflection answers — see that constant's doc comment for why.
  */
 const ATTRIBUTED_DONE_CONFIDENCE = 0.8;
 

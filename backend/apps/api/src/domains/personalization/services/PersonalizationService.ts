@@ -36,6 +36,22 @@ const PLANNING_ACTION_KINDS = new Set<PersonalizationActionKind>([
   'schedule_accept',
 ]);
 
+/**
+ * Confidence at/above which `task_complete` auto-applies in balanced mode.
+ * Deliberately decoupled from `autoPromoteThreshold` — see `TodoProcessService`
+ * (`ATTRIBUTED_DONE_CONFIDENCE`, 0.8), which is only ever reported for
+ * completion evidence that names the task and postdates its calendar block,
+ * and is picked to sit below this bar so completing a task (and marking its
+ * block done) still asks for confirmation in the default trust mode; only
+ * hands_off's lower threshold (0.7) auto-applies it.
+ *
+ * `autoPromoteThresholdBalanced` was lowered from 0.85 to 0.55 for the
+ * reflection-answer use case (see its schema comment) — completing a task is
+ * a different, less reversible action than writing an inferred answer, so it
+ * keeps the original bar rather than sharing that lower one.
+ */
+const TASK_COMPLETE_AUTO_PROMOTE_THRESHOLD_BALANCED = 0.85;
+
 @Injectable()
 export class PersonalizationService {
   private readonly profileCache = new Map<string, { profile: PersonalizationProfile; expiresAt: number }>();
@@ -182,7 +198,12 @@ export class PersonalizationService {
     }
 
     if (kind === 'inferred_fact' || PLANNING_ACTION_KINDS.has(kind)) {
-      return confidence >= profile.autoPromoteThreshold ? 'auto' : 'review';
+      const threshold =
+        kind === 'task_complete'
+          ? TASK_COMPLETE_AUTO_PROMOTE_THRESHOLD_BALANCED
+          : profile.autoPromoteThreshold;
+
+      return confidence >= threshold ? 'auto' : 'review';
     }
 
     if (confidence >= profile.autoPromoteThreshold) {
@@ -199,6 +220,10 @@ export class PersonalizationService {
 
     if (kind === 'schedule_accept') {
       return profile.autoSchedule ? 0.7 : 0.95;
+    }
+
+    if (kind === 'task_complete' && profile.trustMode === 'balanced') {
+      return TASK_COMPLETE_AUTO_PROMOTE_THRESHOLD_BALANCED;
     }
 
     return profile.autoPromoteThreshold;
