@@ -787,3 +787,99 @@ describe('imessage thread ids', () => {
     expect(pushed.find((g) => g.item?.id === 'unknown-orphan-guid')!.item.metadata.ThreadId).toBeUndefined();
   });
 });
+
+// Recent macOS leaves `message.text` NULL and writes the body only into the
+// binary `attributedBody` column. These cover the WIRING — that the column is
+// selected, survives the `has(...)` schema guard, and reaches item metadata.
+// The decoder itself is unit-tested in attributed_body.test.ts.
+describe('imessage attributedBody bodies', () => {
+  /** A typedstream blob shaped the way chat.db writes one. */
+  function typedstream(text: string): Buffer {
+    const body = Buffer.from(text, 'utf8');
+    const len =
+      body.length < 0x80
+        ? Buffer.from([body.length])
+        : (() => {
+            const b = Buffer.alloc(3);
+            b[0] = 0x81;
+            b.writeUInt16LE(body.length, 1);
+            return b;
+          })();
+    return Buffer.concat([
+      Buffer.from([0x04, 0x0b]),
+      Buffer.from('streamtyped', 'ascii'),
+      Buffer.from([0x81, 0xe8, 0x03, 0x84, 0x01, 0x40, 0x84, 0x84, 0x84]),
+      Buffer.from('NSMutableAttributedString', 'ascii'),
+      Buffer.from([0x00, 0x84, 0x84, 0x08]),
+      Buffer.from('NSObject', 'ascii'),
+      Buffer.from([0x00, 0x85, 0x92, 0x84, 0x84, 0x84]),
+      Buffer.from('NSString', 'ascii'),
+      Buffer.from([0x01, 0x95, 0x84, 0x01, 0x2b]),
+      len,
+      body,
+      Buffer.from([0x86, 0x84, 0x02, 0x69, 0x49, 0x01]),
+    ]);
+  }
+
+  async function runImport(rows: Array<{ id: number; text: string | null; blob: Buffer | null }>) {
+    const importer = getImporter('imessage');
+    const dir = await fs.promises.mkdtemp(path.join(tmpdir(), 'imsg-ab-'));
+    await fs.promises.mkdir(path.join(dir, 'Attachments'));
+    const db = new Database(path.join(dir, 'chat.db'));
+    db.exec(`
+      CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, text TEXT,
+                            attributedBody BLOB, is_from_me INTEGER, service TEXT, handle_id INTEGER);
+      CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+      CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, guid TEXT, filename TEXT, mime_type TEXT);
+      CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+    `);
+    db.prepare('INSERT INTO handle (ROWID, id) VALUES (1, ?)').run('+15551234567');
+    for (const r of rows) {
+      db.prepare(
+        `INSERT INTO message (ROWID, guid, date, text, attributedBody, is_from_me, service, handle_id)
+         VALUES (?, ?, ?, ?, ?, 0, 'iMessage', 1)`,
+      ).run(r.id, `guid-${r.id}`, 700000000000000000 + r.id, r.text, r.blob);
+    }
+    db.close();
+
+    const pushed: EmittedGraph[] = [];
+    await importer.fileImport(
+      {},
+      { filename: dir, fullPath: dir } as DirEntry,
+      {
+        pipeline: { push: (g: Graph) => pushed.push(g as EmittedGraph) },
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams,
+    );
+    return pushed;
+  }
+
+  const textOf = (pushed: EmittedGraph[], id: number) =>
+    pushed.find((g) => g.item?.id === `guid-${id}`)?.item.metadata.Text;
+
+  it('recovers the body of a message that has no text column at all', async () => {
+    const pushed = await runImport([{ id: 1, text: null, blob: typedstream('dinner at 8?') }]);
+    expect(textOf(pushed, 1)).toBe('dinner at 8?');
+  });
+
+  it('recovers a body when text is present but empty', async () => {
+    const pushed = await runImport([{ id: 2, text: '', blob: typedstream('on my way') }]);
+    expect(textOf(pushed, 2)).toBe('on my way');
+  });
+
+  it('prefers the plain text column when both are populated', async () => {
+    const pushed = await runImport([{ id: 3, text: 'plain wins', blob: typedstream('blob loses') }]);
+    expect(textOf(pushed, 3)).toBe('plain wins');
+  });
+
+  it('leaves Text unset when neither source has a body', async () => {
+    const pushed = await runImport([{ id: 4, text: null, blob: null }]);
+    expect(textOf(pushed, 4)).toBeUndefined();
+  });
+
+  it('does not invent a body from an unreadable blob', async () => {
+    const pushed = await runImport([{ id: 5, text: null, blob: Buffer.from('not a typedstream') }]);
+    expect(textOf(pushed, 5)).toBeUndefined();
+  });
+});
