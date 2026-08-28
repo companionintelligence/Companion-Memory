@@ -47,6 +47,7 @@ export class RedditCommentsTransformService {
         await this.contentService.create(
           { userId },
           {
+            connection_id: connection.id,
             type: 'reddit_comment',
             title: `Comment on "${comment.link_title}" in r/${comment.subreddit}`,
             text: comment.body,
@@ -76,6 +77,7 @@ export class RedditCommentsTransformService {
         await this.eventService.create(
           { userId },
           {
+            connection_id: connection.id,
             event_type: 'reddit_comment',
             source_id: comment.name,
             start_time: new Date(comment.created_utc * 1000),

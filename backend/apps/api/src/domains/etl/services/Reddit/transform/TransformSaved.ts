@@ -56,6 +56,7 @@ export class RedditSavedTransformService {
         await this.contentService.create(
           { userId },
           {
+            connection_id: connection.id,
             type: contentType,
             title,
             text,
@@ -85,6 +86,7 @@ export class RedditSavedTransformService {
         await this.eventService.create(
           { userId },
           {
+            connection_id: connection.id,
             event_type: eventType,
             source_id: item.name,
             start_time: new Date(item.created_utc * 1000),

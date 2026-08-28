@@ -18,12 +18,11 @@ import { TaskService } from './TaskService';
 // service shares that failure mode with TodoScanService and InboxScanService
 // (all three independently invented their own too-tight abort budget).
 //
-// The budget is headroom, not the fix. On the UTILITY tier a single
-// enum-shaped answer returns in seconds; on the operator's chat model prompt
-// evaluation alone exceeded even 60s, which is why widening this never helped
-// by itself. If this call is ever re-pointed at `PROMPT_MODEL`, the constant is
-// wrong rather than generous.
-export const PROCESS_TIMEOUT_MS = 60_000;
+// The budget presumes the UTILITY tier, and is headroom on top of it rather
+// than a substitute for it: a single enum-shaped answer from a small model
+// returns in seconds, while on the operator's chat model prompt evaluation
+// alone exceeded even 60s. If this call is ever re-pointed at `PROMPT_MODEL`,
+// this constant is wrong rather than generous.export const PROCESS_TIMEOUT_MS = 60_000;
 
 /**
  * Output cap for one suggestion (Ollama `options.num_predict`).
@@ -89,10 +88,13 @@ const CANCEL_LOOKBEHIND_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Confidence for completion evidence that names the task AND postdates the
- * block. Deliberately BELOW balanced's 0.85 autoPromoteThreshold: balanced is
- * the default (and the fallback when no self identity exists), so a user who
+ * block. Deliberately BELOW `PersonalizationService`'s
+ * `TASK_COMPLETE_AUTO_PROMOTE_THRESHOLD_BALANCED` (0.85): balanced is the
+ * default (and the fallback when no self identity exists), so a user who
  * never touched the trust dial gets a confirmation rather than a silent
- * complete + calendar overwrite. Only hands_off (0.7) auto-applies it.
+ * complete + calendar overwrite. Only hands_off (0.7) auto-applies it. This is
+ * a dedicated threshold, not the shared `autoPromoteThresholdBalanced` (0.55)
+ * used for reflection answers — see that constant's doc comment for why.
  */
 const ATTRIBUTED_DONE_CONFIDENCE = 0.8;
 

@@ -76,6 +76,7 @@ export class SteamOwnedGamesTransformService {
               : undefined;
 
             await this.contentService.create(context, {
+              connection_id: connection.id,
               type: 'game',
               title: game.name,
               url: `https://store.steampowered.com/app/${game.appid}`,
@@ -107,6 +108,7 @@ export class SteamOwnedGamesTransformService {
 
             if (existingEvents.length === 0) {
               await this.eventService.create(context, {
+                connection_id: connection.id,
                 title: `Played ${game.name}`,
                 description: `Played ${game.name} on Steam`,
                 event_type: 'game_played',

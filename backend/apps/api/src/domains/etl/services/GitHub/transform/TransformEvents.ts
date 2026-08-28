@@ -79,6 +79,7 @@ export class GitHubEventsTransformService {
             await this.contentService.create(
               { userId },
               {
+                connection_id: connection.id,
                 type: 'github_comment',
                 title: `Commented on commit ${comment.commit_id.slice(0, 8)} in repo ${event.repo.name}`,
                 text: comment.body,
@@ -93,6 +94,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: 'github_comment',
                 source_id: event.id.toString(),
                 start_time: new Date(event.created_at),
@@ -112,6 +114,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: 'github_branch_creation',
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -124,6 +127,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: 'github_tag_creation',
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -136,6 +140,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: 'github_repository_creation',
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -155,6 +160,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: 'github_branch_deletion',
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -166,6 +172,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: 'github_tag_deletion',
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -184,6 +191,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: 'github_discussion_creation',
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -202,6 +210,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: 'github_repo_fork',
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -223,6 +232,7 @@ export class GitHubEventsTransformService {
             await this.contentService.create(
               { userId },
               {
+                connection_id: connection.id,
                 type: 'github_comment',
                 title: `Commented on issue ${thisEvent.payload.issue.number} in repo ${thisEvent.repo.name}`,
                 text: thisEvent.payload.comment.body,
@@ -237,6 +247,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: 'github_comment',
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -259,6 +270,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: `github_issue_${thisEvent.payload.action}`,
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -280,6 +292,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: `github_pull_request_${thisEvent.payload.action}`,
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.payload.pull_request.updated_at),
@@ -301,6 +314,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: `github_pull_request_review_${thisEvent.payload.action}`,
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -322,6 +336,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: `github_pull_request_review_comment_${thisEvent.payload.action}`,
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -340,6 +355,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: `github_push`,
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),
@@ -361,6 +377,7 @@ export class GitHubEventsTransformService {
             await this.eventService.create(
               { userId },
               {
+                connection_id: connection.id,
                 event_type: `github_release_${thisEvent.payload.action}`,
                 source_id: thisEvent.id.toString(),
                 start_time: new Date(thisEvent.created_at),

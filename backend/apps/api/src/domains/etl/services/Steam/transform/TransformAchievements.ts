@@ -77,6 +77,7 @@ export class SteamAchievementsTransformService {
           } else {
             // Create Content entity for the achievement
             await this.contentService.create(context, {
+              connection_id: connection.id,
               type: 'achievement',
               title: achievementName,
               text: achievementDescription,
@@ -103,6 +104,7 @@ export class SteamAchievementsTransformService {
 
             if (existingEvents.length === 0) {
               await this.eventService.create(context, {
+                connection_id: connection.id,
                 title: `Earned achievement: ${achievementName}`,
                 description: `Earned achievement: ${achievementName} in ${gameName}`,
                 event_type: 'achievement_unlocked',

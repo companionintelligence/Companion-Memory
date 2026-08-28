@@ -723,7 +723,21 @@ export class OllamaService implements OnModuleInit {
               // unified-memory box means the model's full window (and a giant
               // KV cache) for a one-line chat. CI-Hub already computed the
               // right number for this hardware; honor it when it reached us.
-              ...(numCtx != null && numCtx > 0 && { options: { num_ctx: numCtx } }),
+              //
+              // `num_predict` rides in the same `options` bag and must not
+              // clobber it — this branch used to send `num_ctx` alone, so a
+              // caller's `maxOutputTokens` was silently dropped on the native
+              // streaming path while the OpenAI branch above honored it as
+              // `maxTokens`. ChatTurnService passes one, so the primary
+              // interactive chat path was the one losing it.
+              ...(((numCtx != null && numCtx > 0) ||
+                (maxOutputTokens != null && maxOutputTokens > 0)) && {
+                options: {
+                  ...(numCtx != null && numCtx > 0 && { num_ctx: numCtx }),
+                  ...(maxOutputTokens != null &&
+                    maxOutputTokens > 0 && { num_predict: maxOutputTokens }),
+                },
+              }),
             });
 
             handleAbort = () => iterator.abort();
@@ -916,9 +930,18 @@ export class OllamaService implements OnModuleInit {
       });
     }
 
-    return this.ollama.chat({
+    // The follow-up turn is a second full generation on a LONGER transcript
+    // (the original messages plus every tool result), so it is the more
+    // expensive of the two — and it used to be issued bare: no signal, no
+    // output cap, no keep_alive. A caller whose budget had already expired got
+    // an uncancellable generation here no matter what it passed, which is the
+    // same orphaning `runNativeChat` exists to prevent.
+    return this.runNativeChat({
       model,
       messages: inputMessages.concat(accumulatedMessages),
+      signal,
+      maxOutputTokens,
+      keepAlive,
     });
   }
 

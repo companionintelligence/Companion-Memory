@@ -36,6 +36,7 @@ export class SlackChannelsTransformService {
       await this.contentService.create(
         { userId },
         {
+          connection_id: connection.id,
           type: 'slack_channel',
           title,
           text: `Slack channel ${title}`,

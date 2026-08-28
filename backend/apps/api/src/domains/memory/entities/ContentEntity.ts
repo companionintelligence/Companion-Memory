@@ -76,6 +76,14 @@ export class ContentEntity {
   @Column({ type: 'text', nullable: true, name: 'source_id' })
   sourceId!: string | null;
 
+  /**
+   * The ci.connections row whose sync produced this content, so disconnecting
+   * that service can purge exactly its rows. Null for content that did not
+   * come from a connection (uploads, imported archives).
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'connection_id' })
+  connectionId!: string | null;
+
   @ManyToOne(() => UserEntity)
   @JoinColumn({ name: 'user_id' })
   user?: UserEntity;
@@ -111,6 +119,7 @@ export class ContentEntity {
       sourceType: entity.sourceType || null,
       sourceSystem: entity.sourceSystem || null,
       sourceId: entity.sourceId || null,
+      connectionId: entity.connectionId || null,
       userId: entity.userId ?? entity.user?.id ?? null,
       eventId: entity.event?.id || null,
       user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,

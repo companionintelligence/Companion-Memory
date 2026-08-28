@@ -221,6 +221,7 @@ export class OneDriveTransformService {
         await this.contentService.create(
           { userId },
           {
+            connection_id: connectionId,
             type: 'onedrive_document',
             title: itemName,
             text: `OneDrive document: ${itemName}`,
