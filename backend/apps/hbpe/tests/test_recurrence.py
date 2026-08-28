@@ -40,7 +40,9 @@ def _dates(start: str, step_days: list[int]) -> list[datetime.date]:
 
 
 def test_profile_stats_weekly_habit_is_high_confidence():
-    dates = _dates("2026-01-05", [7] * 10)  # every Monday, 11 occurrences
+    today = datetime.datetime.utcnow().date()
+    last_monday = today - datetime.timedelta(days=today.weekday())
+    dates = [last_monday - datetime.timedelta(weeks=10 - i) for i in range(11)]
     s = rec._profile_stats(dates, [[1]] * len(dates))
 
     assert s["n_days"] == 11
@@ -48,8 +50,9 @@ def test_profile_stats_weekly_habit_is_high_confidence():
     assert s["median"] == 7.0
     assert s["std"] == 0.0
     assert s["conf"] == 1.0  # metronomic + enough samples
-    assert s["dow"][0] == 11  # all Mondays
-    assert sum(s["dow"]) == 11
+    assert s["dow"][0] > 0
+    assert s["dow"][0] == max(s["dow"])
+    assert all(v == 0 for v in s["dow"][1:])
     assert s["daypart"] == [0, 11, 0, 0]  # all morning
 
 
@@ -600,9 +603,23 @@ def test_expand_occurrences_honours_count():
 def test_rrule_cadence_days():
     assert rec._rrule_cadence_days(rec.parse_recurrence("FREQ=WEEKLY")) == 7.0
     assert rec._rrule_cadence_days(rec.parse_recurrence("FREQ=MONTHLY")) == 30.0
+    assert rec._rrule_cadence_days(rec.parse_recurrence("FREQ=YEARLY")) == 365.25
     assert rec._rrule_cadence_days(
         rec.parse_recurrence("FREQ=WEEKLY;BYDAY=MO,WE,FR")
     ) == round(7 / 3, 1)
+
+
+def test_parse_and_expand_yearly():
+    rule = rec.parse_recurrence("FREQ=YEARLY")
+    assert rule is not None
+    assert rule["freq"] == "YEARLY"
+    occ = rec.expand_occurrences(
+        rule,
+        datetime.date(2024, 7, 4),
+        datetime.date(2026, 1, 1),
+        datetime.date(2026, 12, 31),
+    )
+    assert occ == [datetime.date(2026, 7, 4)]
 
 
 # ── Reconciliation: due_list (Layer 1) + week_forecast (Layer 2) ────────────────

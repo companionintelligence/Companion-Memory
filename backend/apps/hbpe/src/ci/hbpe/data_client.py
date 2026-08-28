@@ -118,20 +118,31 @@ def _ensure_events_cti_schema(conn) -> None:
     _events_cti_ready = True
 
 
-def get_unlabeled_events(user_id: str, limit: int = 1000) -> list[dict]:
+def get_unlabeled_events(
+    user_id: str,
+    limit: int = 1000,
+    after_start: datetime | None = None,
+    after_id: str | None = None,
+) -> list[dict]:
     """
     Return events that have no entry in hbpe.l1_event_cluster.
 
-    Keys: event_id (str), title (str|None), description (str|None)
+    Kinds present in hbpe.kind_l0_map are excluded — the static labeler owns
+    those. Keyset (start_time, event_id) pages the drain loop.
 
-    SQL rationale: EventService.findAll() loads all rows server-side before
-    cursor-slicing, making paginated GraphQL requests O(n·pages) expensive.
-    The search endpoint hard-caps at 25 results.  A single SQL JOIN is O(n).
+    Keys: event_id (str), title (str|None), description (str|None)
     """
-    # title/description live on the event's CTI base row (ci.entities),
-    # joined and aliased back so callers keep their dict keys.
-    sql = """
-        SELECT e.event_id::text, b.name AS title, b.description AS description
+    from ci.hbpe.tokenizer.static_labeler import mapped_kind_sql
+
+    keyset = ""
+    params: list = [str(user_id)]
+    if after_start is not None and after_id:
+        keyset = "AND (e.start_time, e.event_id) > (%s::timestamptz, %s::uuid)"
+        params.extend([after_start, after_id])
+    params.append(limit)
+
+    sql = f"""
+        SELECT e.event_id::text, e.start_time, b.name AS title, b.description AS description
         FROM ci.events e
         JOIN ci.entities b ON b.entity_id = e.event_id
         LEFT JOIN hbpe.l1_event_cluster ec ON ec.event_id = e.event_id
@@ -140,13 +151,15 @@ def get_unlabeled_events(user_id: str, limit: int = 1000) -> list[dict]:
           AND e.event_type IS DISTINCT FROM 'planned_block'
           AND ec.event_id  IS NULL
           AND e.start_time >= '2010-01-01'::timestamptz
-        ORDER BY e.start_time
+          AND NOT ({mapped_kind_sql()})
+          {keyset}
+        ORDER BY e.start_time, e.event_id
         LIMIT %s
     """
     with get_conn() as conn:
         _ensure_events_cti_schema(conn)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, (str(user_id), limit))
+            cur.execute(sql, params)
             return [dict(r) for r in cur.fetchall()]
 
 
@@ -167,6 +180,14 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
             SELECT
                 e.event_id,
                 e.start_time,
+                e.end_time,
+                e.priority,
+                COALESCE(m.tier, cl1.tier, 'anchor') AS tier,
+                COALESCE(m.default_duration_min, 5) AS default_duration_min,
+                EXTRACT(epoch FROM (e.start_time - date_trunc('day', e.start_time))) / 60.0
+                    AS start_min,
+                EXTRACT(epoch FROM (e.end_time - date_trunc('day', e.start_time))) / 60.0
+                    AS end_min,
                 EXTRACT(epoch FROM (e.start_time - date_trunc('day', e.start_time))) / {BUCKET_SECONDS}
                     AS bucket_idx_raw,
                 cl1.l0_class          AS l0_class,
@@ -175,6 +196,7 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
             FROM ci.events e
             JOIN hbpe.l1_event_cluster ec  ON ec.event_id   = e.event_id
             JOIN hbpe.l1_clusters      cl1 ON cl1.cluster_id = ec.cluster_id
+            LEFT JOIN hbpe.kind_l0_map m ON e.event_type LIKE m.kind_pattern
             WHERE e.user_id    = %s
               AND e.is_deleted = FALSE
               AND e.event_type IS DISTINCT FROM 'planned_block'
@@ -187,6 +209,11 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
             de.l0_class,
             de.l1_cluster_id,
             de.l1_sim,
+            de.tier,
+            de.start_min,
+            de.end_min,
+            de.default_duration_min,
+            de.priority,
             LEAST(GREATEST(de.bucket_idx_raw::int, 0), {MAX_BUCKET_INDEX}) AS bucket_idx,
             lc.cluster_id::text AS l2_cluster_id,
             lc.similarity       AS l2_sim
@@ -206,6 +233,45 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
+def get_completed_tasks_for_day(user_id: str, date_str: str) -> list[dict]:
+    """
+    Done tasks with an L0 class, occurring at completed_at on date_str.
+
+    Open/scheduled tasks are reconciliation-only and never become tokens.
+    """
+    sql = """
+        SELECT
+            t.l0_class,
+            t.l1_cluster_id::text AS l1_cluster_id,
+            1.0 AS l1_sim,
+            'anchor' AS tier,
+            EXTRACT(epoch FROM (t.completed_at - date_trunc('day', t.completed_at))) / 60.0
+                AS start_min,
+            EXTRACT(epoch FROM (t.completed_at - date_trunc('day', t.completed_at))) / 60.0
+                + COALESCE(NULLIF(t.actual_minutes, 0), t.estimated_minutes, 15)
+                AS end_min,
+            COALESCE(NULLIF(t.actual_minutes, 0), t.estimated_minutes, 15) AS default_duration_min,
+            t.priority,
+            NULL::text AS l2_cluster_id,
+            NULL::float AS l2_sim
+        FROM ci.tasks t
+        WHERE t.user_id = %s::uuid
+          AND t.status = 'done'
+          AND t.completed_at >= %s::date
+          AND t.completed_at < (%s::date + INTERVAL '1 day')
+          AND t.l0_class IS NOT NULL
+          AND t.l0_class <> 'UNKNOWN'
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, (str(user_id), date_str, date_str))
+                return [dict(r) for r in cur.fetchall()]
+    except Exception as exc:
+        log.info("completed-task tokens skipped: %s", exc)
+        return []
+
+
 # ── Content ───────────────────────────────────────────────────────────────────
 
 
@@ -218,8 +284,9 @@ def get_unlabeled_content(user_id: str, limit: int = 1000) -> list[dict]:
     SQL rationale: same bulk-query reasoning as get_unlabeled_events.
     """
     sql = """
-        SELECT c.id::text AS content_id, c.title, c.type AS content_type
+        SELECT c.id::text AS content_id, e.name AS title, c.type AS content_type
         FROM ci.content c
+        JOIN ci.entities e ON e.entity_id = c.id
         LEFT JOIN hbpe.l2_content_cluster lc ON lc.content_id = c.id
         WHERE c.user_id     = %s::uuid
           AND lc.content_id IS NULL
@@ -396,8 +463,14 @@ def _get_summary_labels(summary_ids: list[str]) -> dict[str, tuple[str, str | No
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT summary_id::text, l0_class, l1_cluster_id::text "
-                "FROM hbpe.summary_l1_label WHERE summary_id = ANY(%s::uuid[])",
+                """
+                SELECT sl.summary_id::text, sl.l0_class, sl.l1_cluster_id::text
+                FROM hbpe.summary_l1_label sl
+                LEFT JOIN hbpe.l1_clusters c ON c.cluster_id = sl.l1_cluster_id
+                WHERE sl.summary_id = ANY(%s::uuid[])
+                  AND sl.l0_class IS DISTINCT FROM 'UNKNOWN'
+                  AND (sl.l1_cluster_id IS NULL OR c.is_active)
+                """,
                 (summary_ids,),
             )
             return {row[0]: (row[1], row[2]) for row in cur.fetchall()}

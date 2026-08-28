@@ -49,8 +49,24 @@ async def serialize_token_stream(user_id: str) -> dict:
             return {"rows": 0, "reason": "no_events"}
 
         start_date, end_date = str(row[0]), str(row[1])
-        total_rows = TokenSerializer().serialize_range(user_id, start_date, end_date)
-        return {"rows": total_rows, "start": start_date, "end": end_date}
+        # Cap the raw serialize window at 90 days so overnight stays cheap;
+        # older history lives in recurrence/seasonal SQL, not the HMT corpus.
+        from datetime import date, timedelta
+
+        end = date.fromisoformat(end_date)
+        start = max(date.fromisoformat(start_date), end - timedelta(days=90))
+        total_rows = TokenSerializer().serialize_range(
+            user_id, start.isoformat(), end.isoformat()
+        )
+        from ci.hbpe.pipeline.token_rollup import rebuild_token_rollups
+
+        rollup = rebuild_token_rollups(user_id)
+        return {
+            "rows": total_rows,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "rollup": rollup,
+        }
 
     return await asyncio.get_event_loop().run_in_executor(None, _run)
 
@@ -63,7 +79,14 @@ async def train_hmt_model(user_id: str) -> dict:
         from ci.hbpe.model.trainer import train_hmt_joint, train_l0_mae
 
         splits = make_splits(user_id)
-        train_ds = TokenStreamDataset(user_id, splits["train"])
+        extra: list[list[dict]] = []
+        try:
+            from ci.hbpe.pipeline.token_rollup import fetch_rollup_days
+
+            extra = [_rollup_as_day(day) for day in fetch_rollup_days(user_id)]
+        except Exception:
+            extra = []
+        train_ds = TokenStreamDataset(user_id, splits["train"], extra)
         val_ds = TokenStreamDataset(user_id, splits["val"])
 
         if len(train_ds) == 0:
@@ -104,3 +127,27 @@ async def calibrate_and_export_onnx(user_id: str) -> dict:
         }
 
     return await asyncio.get_event_loop().run_in_executor(None, _run)
+
+
+def _rollup_as_day(day: dict) -> list[dict]:
+    from ci.hbpe.buckets import BUCKETS_PER_DAY
+
+    body = [
+        {
+            "level": t["level"],
+            "token_id": t["token_id"],
+            "soft_prob": t["soft_prob"],
+            "bucket_idx": t["bucket_idx"],
+        }
+        for t in day["tokens"]
+    ]
+    return [
+        {"level": "SOD", "token_id": "SOD", "soft_prob": [1.0], "bucket_idx": 0},
+        *body,
+        {
+            "level": "EOD",
+            "token_id": "EOD",
+            "soft_prob": [1.0],
+            "bucket_idx": BUCKETS_PER_DAY - 1,
+        },
+    ]

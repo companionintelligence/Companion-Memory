@@ -92,49 +92,63 @@ async def label_unlabeled(user_id: str) -> dict:
     """
 
     def _run(should_stop) -> dict:
+        import time
+
+        from ci.hbpe.config import settings
         from ci.hbpe.data_client import get_unlabeled_content, get_unlabeled_events
         from ci.hbpe.functions import update_pipeline_progress
         from ci.hbpe.tokenizer.qwen_labeler import QwenLabeler
+        from ci.hbpe.tokenizer.static_labeler import label_mapped_events
+        from ci.hbpe.tokenizer.vocab_cleanup import cleanup_junk_vocab
+
+        cleanup = cleanup_junk_vocab(user_id)
+        static = label_mapped_events(user_id)
 
         labeler = QwenLabeler()
         new_labels = 0
         labeled_events = 0
         labeled_content = 0
         errors = 0
-
-        # ── Unlabeled events ─────────────────────────────────────────────────
-        unlabeled_events = get_unlabeled_events(user_id)
-        unlabeled_content = get_unlabeled_content(user_id)
-        total = len(unlabeled_events) + len(unlabeled_content)
+        deadline = time.monotonic() + settings.label_budget_seconds
+        after_start = None
+        after_id = None
         done = 0
-        update_pipeline_progress(
-            user_id, done=0, total=max(total, 1), detail=f"0 of {total}"
-        )
 
-        for row in unlabeled_events:
-            if should_stop.is_set():
+        while time.monotonic() < deadline and not should_stop.is_set():
+            batch = get_unlabeled_events(
+                user_id, after_start=after_start, after_id=after_id
+            )
+            if not batch:
                 break
-            try:
-                result = labeler.label_event(
-                    event_id=row["event_id"],
-                    user_id=user_id,
-                    title=row.get("title") or "",
-                    description=row.get("description"),
-                )
-                labeled_events += 1
-                if result.get("is_new_l1"):
-                    new_labels += 1
-            except Exception:
-                log.exception(
-                    "label_unlabeled event failed: event_id=%s", row["event_id"]
-                )
-                errors += 1
-            done += 1
-            if done == 1 or done % 10 == 0 or done == total:
-                update_pipeline_progress(user_id, done=done, total=max(total, 1))
+            for row in batch:
+                if should_stop.is_set() or time.monotonic() >= deadline:
+                    break
+                try:
+                    result = labeler.label_event(
+                        event_id=row["event_id"],
+                        user_id=user_id,
+                        title=row.get("title") or "",
+                        description=row.get("description"),
+                    )
+                    labeled_events += 1
+                    if result.get("is_new_l1"):
+                        new_labels += 1
+                except Exception:
+                    log.exception(
+                        "label_unlabeled event failed: event_id=%s", row["event_id"]
+                    )
+                    errors += 1
+                done += 1
+                after_start = row.get("start_time")
+                after_id = row["event_id"]
+                if done == 1 or done % 10 == 0:
+                    update_pipeline_progress(
+                        user_id, done=done, total=max(done + 10, 1)
+                    )
 
+        unlabeled_content = get_unlabeled_content(user_id)
         for row in unlabeled_content:
-            if should_stop.is_set():
+            if should_stop.is_set() or time.monotonic() >= deadline:
                 break
             try:
                 result = labeler.label_content(
@@ -152,13 +166,15 @@ async def label_unlabeled(user_id: str) -> dict:
                 )
                 errors += 1
             done += 1
-            if done == 1 or done % 10 == 0 or done == total:
-                update_pipeline_progress(user_id, done=done, total=max(total, 1))
+            if done == 1 or done % 10 == 0:
+                update_pipeline_progress(user_id, done=done, total=max(done + 10, 1))
 
         return {
             "user_id": user_id,
             "labeled_events": labeled_events,
             "labeled_content": labeled_content,
+            "static": static,
+            "cleanup": cleanup,
             "new_labels": new_labels,
             "errors": errors,
         }
@@ -173,7 +189,7 @@ async def label_summary_tokens(user_id: str) -> dict:
     """
     Step 1b: Label yesterday's hourly summaries with L0+L1 via Qwen.
 
-    Summary tokens fill 30-min buckets that have no event-derived coverage
+    Summary tokens fill 15-min buckets that have no event-derived coverage
     (sleep, leisure, off-calendar hours).  Labels are stored in
     ci.summary_l1_label and merged into the token stream at serialization time.
     """
@@ -348,6 +364,14 @@ async def recurrence_profile(user_id: str) -> dict:
 
         result = build_recurrence_profiles(user_id)
         result["occurrence_actuals"] = backfill_occurrence_actuals(user_id)["updated"]
+        try:
+            from ci.hbpe.pipeline.seasonal import rebuild_seasonal_profiles
+            from ci.hbpe.pipeline.token_rollup import rebuild_token_rollups
+
+            result["rollup"] = rebuild_token_rollups(user_id)
+            result["seasonal"] = rebuild_seasonal_profiles(user_id)
+        except Exception as exc:
+            log.info("rollup/seasonal skipped: %s", exc)
         return result
 
     return await asyncio.get_event_loop().run_in_executor(None, _run)

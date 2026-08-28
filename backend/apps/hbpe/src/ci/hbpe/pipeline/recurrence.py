@@ -146,10 +146,16 @@ _UPSERT_PROFILE_SQL = """
 
 def _profile_stats(dates: list[datetime.date], daypart_lists: list[list[int]]) -> dict:
     """Compute the statistical fields of one cluster's profile row."""
-    dow = [0] * 7
+    from math import exp
+
+    from ci.hbpe.pipeline.kernel import DECAY_LAMBDA
+
+    as_of = datetime.datetime.utcnow().date()
+    dow = [0.0] * 7
     daypart = [0] * 4
     for d, parts in zip(dates, daypart_lists, strict=True):
-        dow[d.weekday()] += 1
+        weight = exp(-max((as_of - d).days, 0) / DECAY_LAMBDA)
+        dow[d.weekday()] += weight
         for p in parts:
             if 0 <= p < 4:
                 daypart[p] += 1
@@ -161,7 +167,7 @@ def _profile_stats(dates: list[datetime.date], daypart_lists: list[list[int]]) -
         "n_days": len(dates),
         "first_seen": dates[0],
         "last_seen": dates[-1],
-        "dow": dow,
+        "dow": [round(v * 10) for v in dow],
         "daypart": daypart,
         "gaps": gaps,
         "median": None,
@@ -274,6 +280,8 @@ def build_recurrence_profiles(user_id: str, history_days: int = HISTORY_DAYS) ->
 
 _LOAD_PROFILES_SQL = """
     SELECT p.l1_cluster_id::text, c.label, c.l0_class,
+           COALESCE(c.tier, 'anchor') AS tier,
+           COALESCE(c.naming_method, 'LLM') AS naming_method,
            p.n_occurrence_days, p.first_seen, p.last_seen,
            p.dow_counts, p.daypart_counts, p.intervals_days,
            p.interval_median, p.interval_p25, p.interval_p75, p.interval_p90,
@@ -291,10 +299,21 @@ def _load_profiles(user_id: str) -> list[dict]:
             rows = [dict(r) for r in cur.fetchall()]
     # Human-readable name from the label slug, matching
     # InferenceEngine._load_l1_display_names (display_name column was dropped
-    # in 20260413000003).
+    # in 20260413000003). Ambient / junk names never become "Thursday usually".
+    from ci.hbpe.tokenizer.label_quality import is_displayable_label
+
+    visible: list[dict] = []
     for r in rows:
-        r["display_name"] = (r.pop("label") or "").replace("_", " ").title()
-    return rows
+        label = r.pop("label") or ""
+        r["display_name"] = label.replace("_", " ").title()
+        if r.get("tier") == "ambient":
+            continue
+        if not is_displayable_label(r["display_name"]) and not is_displayable_label(
+            label
+        ):
+            continue
+        visible.append(r)
+    return visible
 
 
 def _hazard(gaps: list[int]) -> np.ndarray:
@@ -438,7 +457,7 @@ def parse_recurrence(pattern) -> dict | None:
         return None
 
     freq = str(parts.get("FREQ", "")).upper() or None
-    if freq not in ("DAILY", "WEEKLY", "MONTHLY"):
+    if freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
         return None
 
     try:
@@ -518,6 +537,13 @@ def expand_occurrences(
                     d.month - series_start.month
                 )
                 hit = d.day == series_start.day and months % interval == 0
+            elif freq == "YEARLY":
+                years = d.year - series_start.year
+                hit = (
+                    d.month == series_start.month
+                    and d.day == series_start.day
+                    and years % interval == 0
+                )
         if hit:
             seen += 1
             if d >= win_start:
@@ -532,7 +558,7 @@ def _rrule_cadence_days(rule: dict | None) -> float | None:
     """Effective inter-arrival gap (days) implied by a recurrence rule, or None."""
     if not rule:
         return None
-    base = {"DAILY": 1, "WEEKLY": 7, "MONTHLY": 30}.get(rule["freq"])
+    base = {"DAILY": 1, "WEEKLY": 7, "MONTHLY": 30, "YEARLY": 365.25}.get(rule["freq"])
     if base is None:
         return None
     if rule["freq"] == "WEEKLY" and rule["byday"]:
@@ -573,6 +599,42 @@ def _load_upcoming_events(user_id: str, horizon_days: int) -> list[dict]:
                 _UPCOMING_EVENTS_SQL, {"user_id": user_id, "horizon": horizon_days}
             )
             rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        r["display_name"] = (r.pop("label") or "").replace("_", " ").title()
+    rows.extend(_load_upcoming_tasks(user_id, horizon_days))
+    return rows
+
+
+def _load_upcoming_tasks(user_id: str, horizon_days: int) -> list[dict]:
+    """Open/scheduled tasks with an L1 id pin occurrence; they never train."""
+    sql = """
+        SELECT t.l1_cluster_id::text AS cluster_id,
+               c.label, c.l0_class,
+               COALESCE(t.due_at, (t.scheduled_for::timestamptz)) AS start_time,
+               'confirmed' AS status,
+               FALSE AS is_recurring,
+               NULL AS recurrence_pattern
+        FROM ci.tasks t
+        JOIN hbpe.l1_clusters c ON c.cluster_id = t.l1_cluster_id AND c.is_active
+        WHERE t.user_id = %s::uuid
+          AND t.status IN ('open', 'in_progress')
+          AND t.l1_cluster_id IS NOT NULL
+          AND (
+                (t.due_at IS NOT NULL AND t.due_at::date >= (NOW() AT TIME ZONE 'UTC')::date
+                 AND t.due_at::date < (NOW() AT TIME ZONE 'UTC')::date + %s::int)
+             OR (t.scheduled_for IS NOT NULL
+                 AND t.scheduled_for >= (NOW() AT TIME ZONE 'UTC')::date
+                 AND t.scheduled_for < (NOW() AT TIME ZONE 'UTC')::date + %s::int)
+          )
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, (str(user_id), horizon_days, horizon_days))
+                rows = [dict(r) for r in cur.fetchall()]
+    except Exception as exc:
+        log.info("upcoming tasks skipped: %s", exc)
+        return []
     for r in rows:
         r["display_name"] = (r.pop("label") or "").replace("_", " ").title()
     return rows

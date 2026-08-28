@@ -13,6 +13,7 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
+from ci.hbpe.buckets import BUCKETS_PER_DAY  # noqa: E402
 from ci.hbpe.pipeline.baselines import (  # noqa: E402
     b0_probs,
     b1_probs,
@@ -80,7 +81,7 @@ def test_forward_backward_smooths_flicker():
     # Sticky transitions
     tr = np.eye(8) * 0.8 + 0.2 / 8
     tr = np.stack([tr] * 4)
-    out = forward_backward(em, tr, n_buckets=48)
+    out = forward_backward(em, tr, n_buckets=BUCKETS_PER_DAY)
     assert out.shape == (3, 8)
     assert out[1, 0] > em[1, 0]  # WORK recovered in the flicker bucket
     np.testing.assert_allclose(out.sum(axis=1), 1.0, atol=1e-6)
@@ -107,7 +108,7 @@ def test_occupancy_b0_b1_and_b2():
     p1 = b1_probs(b1, 20, datetime.date(2026, 8, 3).weekday())
     assert p1[WORK] >= 0.3
     b2 = b2_day_emissions(b1, trans, datetime.date(2026, 8, 3).weekday())
-    assert b2.shape == (48, 8)
+    assert b2.shape == (BUCKETS_PER_DAY, 8)
     np.testing.assert_allclose(b2.sum(axis=1), 1.0, atol=1e-6)
 
 
@@ -274,7 +275,9 @@ def test_histogram_keeps_pipeline_step_while_still_learning(monkeypatch):
         lambda _uid: {"eta_seconds": 2700, "detail": "3 of 50"},
     )
     out = build_histogram(
-        _Engine(), user_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", system_status="NIGHTLY:train"
+        _Engine(),
+        user_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        system_status="NIGHTLY:train",
     )
     assert out["system_status"] == "NIGHTLY:train"
     assert out["pipeline_eta_seconds"] == 2700
