@@ -22,7 +22,8 @@ import { TaskService } from './TaskService';
 // than a substitute for it: a single enum-shaped answer from a small model
 // returns in seconds, while on the operator's chat model prompt evaluation
 // alone exceeded even 60s. If this call is ever re-pointed at `PROMPT_MODEL`,
-// this constant is wrong rather than generous.export const PROCESS_TIMEOUT_MS = 60_000;
+// this constant is wrong rather than generous.
+export const PROCESS_TIMEOUT_MS = 60_000;
 
 /**
  * Output cap for one suggestion (Ollama `options.num_predict`).

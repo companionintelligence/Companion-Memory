@@ -26,7 +26,8 @@ const MAX_SURFACED = 12;
 // was moving it to the utility model tier and bounding generation (the two
 // constants below): on the operator's chat model, prompt evaluation alone
 // exceeded even 60s, so widening this on its own only moved the abort from
-// 20s to 60s.export const SCAN_TIMEOUT_MS = 60_000;
+// 20s to 60s.
+export const SCAN_TIMEOUT_MS = 60_000;
 
 /**
  * Output cap for the scan turn (Ollama `options.num_predict`).
