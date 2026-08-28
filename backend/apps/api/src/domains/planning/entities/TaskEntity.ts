@@ -77,6 +77,12 @@ export class TaskEntity {
   @Column({ type: 'text', name: 'source_ref', nullable: true })
   sourceRef!: string | null;
 
+  @Column({ type: 'text', name: 'l0_class', nullable: true })
+  l0Class!: string | null;
+
+  @Column({ type: 'uuid', name: 'l1_cluster_id', nullable: true })
+  l1ClusterId!: string | null;
+
   @Column({ type: 'jsonb', default: () => "'{}'" })
   metadata!: Record<string, unknown>;
 
@@ -106,6 +112,8 @@ export class TaskEntity {
       completedAt: entity.completedAt,
       sourceKind: entity.sourceKind,
       sourceRef: entity.sourceRef,
+      l0Class: entity.l0Class,
+      l1ClusterId: entity.l1ClusterId,
       metadata: entity.metadata,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
