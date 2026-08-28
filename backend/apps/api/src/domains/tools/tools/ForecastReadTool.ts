@@ -83,7 +83,7 @@ export class ForecastReadTool extends BaseTool<ForecastReadInput, ForecastReadOu
     domain: 'forecast',
     title: 'Read Forecast',
     description:
-      'Predict what the user will likely be doing over the next day. Returns 48 half-hour buckets, ' +
+      'Predict what the user will likely be doing over the next day. Returns 96 fifteen-minute buckets, ' +
       'each with the dominant predicted activity class (L0) and its probability plus the most likely ' +
       'fine-grained activity (L1), and the engine status (COLD_START/TRAINING/READY).',
     privacy: { access: 'read', sensitivity: 'personal', destructive: false, external: false },
@@ -101,7 +101,7 @@ export class ForecastReadTool extends BaseTool<ForecastReadInput, ForecastReadOu
           type: 'string',
           enum: ['24h'],
           default: '24h',
-          description: "Forecast horizon; only '24h' (48 × 30-minute buckets) is supported.",
+          description: "Forecast horizon; only '24h' (96 × 15-minute buckets) is supported.",
         },
       },
     },
