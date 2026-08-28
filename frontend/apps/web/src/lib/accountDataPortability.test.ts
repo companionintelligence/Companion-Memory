@@ -9,7 +9,10 @@ import {
 
 // Only `fetchJson` is used by this module (the legacy import path); the streamed
 // export/import paths below go straight through the global `fetch`.
-vi.mock('@ci/common', () => ({ fetchJson: vi.fn() }));
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  fetchJson: vi.fn(),
+}));
 
 const mockedFetchJson = vi.mocked(fetchJson);
 

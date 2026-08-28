@@ -4,27 +4,41 @@
 > Tracks `planning.md` → **G1: Unified capture event schema**.
 > Owner: CI-Server. Affects every capture client.
 
-## Implementation status (2026-07-06)
+## Implementation status (re-verified 2026-08-19)
 
 **Shipped:**
 
-- **`POST /v1/events`** — batch capture ingest, zod-validated, idempotent on
-  `(user_id, source_system, source_id)`
-  (`backend/apps/api/src/domains/memory/controllers/EventsIngestController.ts`,
-  guarded by `JwtOrApiKeyAuthGuard`). Response shape `{ ingested, duplicate, rejected }`.
+- **`POST /v1/events`** — batch capture ingest, zod-validated, idempotent on the
+  provenance triple `(source_type, source_system, source_id)`; re-POSTing the same triple
+  returns `duplicate + 1`, not an error. It now lives on
+  `backend/apps/api/src/domains/ingest/controllers/BulkIngestController.ts`
+  (`@Controller('v1')`, method-level `@UseGuards(JwtOrApiKeyAuthGuard)`, class-level
+  `@RequireScopes(CAPTURE_SCOPE)` + `@RequireCapability(WRITE_CAPABILITY)`) — the old
+  `domains/memory/controllers/EventsIngestController.ts` no longer exists. Response shape
+  `{ ingested, duplicate, rejected }`.
   Reference: [docs/api/rest.md — Ingest](../api/rest.md#ingest-bulk-capture-write-path).
 - The **`ci.capture_events` raw log** (migration `20260621021634`) with a soft link to the
   materialized `ci.events` row — layers 1–2 of §5.
+- **Nine sibling lanes on the same controller**, all sharing `captureAndMaterialize`:
+  `communications`, `contents`, `inventory`, `browser-activity`, `notes`, `positions`,
+  `receipts`, `product-models`, `observations`. `POST /v1/files` is a separate controller
+  (`domains/files/controllers/BulkFilesController.ts`). Events are the only lane that is
+  JSON-envelope-only; the rest accept NDJSON.
 
 **Not (yet) built from this spec:** `POST /v1/events/:id/media`, `GET /v1/events/:id`,
 `GET /v1/timeline`, `DELETE /v1/events/:id`, the per-device API-key binding, the per-kind
 JSON-Schema registry, and the migration of existing typed controllers onto this path.
 
 **Superseded in part:** bulk *import* (as opposed to live capture) did not converge on
-`/v1/events` — the importer (CI-Server's native import domain, ported from the now-retired
-CI-Import-Tools) pushes through the **GraphQL bulk mutations**
-(`createEvents`, `createCommunications`, …) with the same provenance-triple idempotency and
-deferred search indexing. See
+`/v1/events`. The 2026-07-06 revision of this note said the importer pushes through the
+GraphQL bulk mutations; **that is no longer true.** Since the import domain was brought
+in-process, the push stage
+(`backend/apps/api/src/domains/import/stages/PushStage.ts:281-287`) injects and calls the
+NestJS services directly — `CommunicationService`, `ContentService`, `EventService`,
+`ItemService`, `PositionService`, `BrowserActivityService`, `GraphIngestService` — with the
+same provenance-triple idempotency and the same deferred search indexing. The GraphQL bulk
+mutations still exist, but as the surface for **external** bulk clients, not the importer's
+path. See
 [docs/api/graphql.md §4.7](../api/graphql.md#47-bulk-ingest-mutations-the-importer-surface--detailed)
 and the [bulk load runbook](../../backend/apps/api/db/postgres/BULK_LOAD_RUNBOOK.md).
 
@@ -41,7 +55,7 @@ What's missing is the **single public HTTP surface** that every capture source w
 
 - `CI-Browser-Extension` posts to `browser-activity`
 - `Companion-Pipe` (screenpipe) has no documented integration path at all
-- `CI-Import-Tools` writes to its own local SQLite *(since resolved differently: it now pushes to CI-Server via the GraphQL bulk mutations — see the status block above)*
+- `CI-Import-Tools` writes to its own local SQLite *(since resolved differently: that repo was retired — renamed `ZARCHIVED-CI-Import-Tools` — and its parsers now run in-process as CI-Server's `domains/import`, whose push stage calls the NestJS services directly. No SQLite mirror, no HTTP transport. See the status block above.)*
 - `CI-Even-Realities`, `CI-Pebble`, `CI-OMI`, `CI-MaixCAM` write through whichever controller a developer chose at the time
 - `CI-Active-Inference` produces derived events but has no destination
 
@@ -169,7 +183,7 @@ Existing typed controllers (`browser-activity`, `position`, `files`) **do not ch
 
 ```mermaid
 flowchart LR
-    Source[Capture source<br/>browser ext · Pipe ·<br/>glasses · imports] -->|POST /v1/events| Ingest[EventsIngestController]
+    Source[Capture source<br/>browser ext · Pipe ·<br/>glasses · imports] -->|POST /v1/events| Ingest[BulkIngestController]
     Ingest --> RawLog[(ci.capture_events<br/>append-only)]
     Ingest --> Memory[(ci.events EventEntity)]
     Memory --> Bus[(PGBoss<br/>event.ingested.*)]
@@ -195,7 +209,7 @@ flowchart LR
 - **Contract:** every consumer (`browser-activity`, `files`, `position`) gets a fixture that drives it via `event.ingested`, not direct service calls.
 - **E2E:** browser extension fixture → `/v1/events` → `/v1/timeline` returns the event within 1 s.
 
-Coverage gate: this controller is the highest-leverage place to invest test budget. Target **>90% line coverage on `domains/events/controllers/EventsIngestController.ts` and its zod schemas**, not the platform-wide 70% from planning.md.
+Coverage gate: this controller is the highest-leverage place to invest test budget. Target **>90% line coverage on the `/v1` ingest controller and its zod schemas**, not the platform-wide 70% from planning.md. As of 2026-08-19 that controller is `backend/apps/api/src/domains/ingest/controllers/BulkIngestController.ts` (the spec's `EventsIngestController` was folded into it), so the target now covers ten lanes rather than one.
 
 ## 8. Open questions
 
@@ -206,6 +220,9 @@ Coverage gate: this controller is the highest-leverage place to invest test budg
 - **Cross-device dedup**: same event captured by two devices (e.g. phone + glasses) — same person at same place — should there be server-side merge, or always one row per `(source_system, source_id)`? Recommendation: one row per source, with a `same_as` edge in `RelationshipEntity` populated by an enrichment derivation.
 
 ## 9. Definition of done
+
+*(Original checklist, unticked as written. The first item shipped without a flag, on
+`BulkIngestController`; see the status block at the top for what else landed.)*
 
 - [ ] `EventsIngestController` lands behind a feature flag.
 - [ ] Zod + JSON Schema for ≥5 `kind`s (`web.page_view`, `desktop.screen`, `audio.transcript`, `location.fix`, `capture.photo`).

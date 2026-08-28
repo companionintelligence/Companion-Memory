@@ -15,7 +15,7 @@ import { type IngestFinishRequest, ingestFinishSchema } from '../types';
 
 /**
  * Bulk-ingest lifecycle for the `/v1` machine-ingest plane. The bulk endpoints
- * (POST /v1/{events,communications,contents,inventory,browser-activity,
+ * (POST /v1/{events,communications,contents,things,browser-activity,
  * positions}) all defer indexing — no per-row *CreatedEvent fan-out — so a bulk
  * load is a three-step conversation a client can hold entirely on `/v1/*`,
  * never needing the operator-facing `/api/maintenance/*` paths:

@@ -21,7 +21,6 @@ describe('resolveRelatedEntityTarget', () => {
     otherEntityType: 'person',
     otherEntityDescription: null as string | null,
     otherEntityProperties: {} as Record<string, unknown>,
-    relationshipDetails: [] as Array<{ label: string; value: string }>,
   };
 
   it('keeps communication neighbors as-is', () => {

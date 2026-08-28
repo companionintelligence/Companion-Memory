@@ -78,7 +78,7 @@ export class PlanningJobsCron {
       return;
     }
 
-    const users = await this.userService.findAll();
+    const users = await this.userService.findAllOnboarded();
     let enqueued = 0;
 
     for (const user of users) {

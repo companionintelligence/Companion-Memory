@@ -5,6 +5,61 @@ import logo from '@/assets/logo.png';
 
 import { usePowerRail } from './PowerRailContext';
 
+// Glass capsule: `p-1` + a 32px disc = 40px. Max-width is what opens and
+// closes it — same property both ways, so closing is the reverse of opening
+// instead of unmounting the wordmark.
+const CAPSULE =
+  'inline-flex h-10 min-w-0 items-center overflow-hidden rounded-full border border-white/55 bg-white/30 p-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.7),0_1px_2px_rgba(0,0,0,0.08)] backdrop-blur-md transition-[max-width,padding,gap] duration-200 ease-in-out dark:border-white/20 dark:bg-white/10';
+
+/**
+ * Mark and name. One definition, so the phone drawer and the pinned dock can
+ * never disagree about what the app is called.
+ */
+function RailMark({ showName, truncateName = false }: { showName: boolean; truncateName?: boolean }) {
+  return (
+    <>
+      {/* Full-size mark on a white disc. `max-w-none` defeats Tailwind
+          preflight `img { max-width: 100% }` so it stays round. */}
+      <span className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-full bg-white -translate-x-px">
+        <img src={logo} alt="" className="size-8 max-w-none rounded-full" />
+      </span>
+      <span
+        aria-hidden={!showName}
+        className={cn(
+          '-translate-y-px text-left text-sm font-semibold leading-tight',
+          // The dock capsule animates its own max-width and wipes the name as
+          // it closes; a shrinkable span would put an ellipsis in the middle of
+          // that. The drawer instead has a fixed 224px to share with the close
+          // chevron, so there the name is the part that gives way.
+          truncateName ? 'min-w-0 truncate' : 'overflow-hidden whitespace-nowrap',
+        )}
+      >
+        Companion Memory
+      </span>
+    </>
+  );
+}
+
+/**
+ * The name of the app, stated, not clickable.
+ *
+ * For the phone drawer, where the chevron beside it already opens and closes
+ * the rail — a second control with the same effect and the same accessible
+ * name is one control too many. Desktop keeps the toggle below, because there
+ * the mark IS the button.
+ *
+ * No capsule either: the drawer is already a pane of glass, and a bordered pill
+ * inside it is a border drawn on a border — one that would also cost the width
+ * the chevron needs.
+ */
+export function PowerRailWordmark() {
+  return (
+    <span className="flex min-w-0 items-center gap-2" data-testid="power-rail-wordmark">
+      <RailMark showName truncateName />
+    </span>
+  );
+}
+
 /**
  * The home control. It used to be a link — either to `/feed` or to the
  * marketing site — which meant the one button that looks like "this app"
@@ -27,33 +82,24 @@ export function PowerRailToggle() {
           <button
             type="button"
             aria-label={label}
-            aria-expanded={expanded}
+            // Pinned, not merely hover-expanded — a mouse brushing the rail
+            // open must not tell assistive tech the menu was deliberately
+            // opened. Only a pin (a click, persisted) is "expanded" here.
+            aria-expanded={pinned}
             aria-controls="power-rail"
             onClick={toggle}
-            // Glass capsule: `p-1` + a 32px disc = 40px. Max-width is what
-            // opens and closes it — same property both ways, so closing is
-            // the reverse of opening instead of unmounting the wordmark.
+            // PINNED, not merely expanded. This button sits in the same `auto`
+            // grid column as the rail, so a wordmark appearing here widens the
+            // column and shoves the header and page content sideways — which is
+            // exactly what a hover-opened drawer must never do. Pinning is the
+            // one case where a reflow is intended, and permanent.
             className={cn(
-              'inline-flex h-10 items-center overflow-hidden rounded-full border border-white/55 bg-white/30 p-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.7),0_1px_2px_rgba(0,0,0,0.08)] backdrop-blur-md transition-[max-width,padding,gap] duration-200 ease-in-out hover:bg-white/45 dark:border-white/20 dark:bg-white/10 dark:hover:bg-white/20',
+              CAPSULE,
+              'hover:bg-white/45 dark:hover:bg-white/20',
               pinned ? 'max-w-52 gap-2 pr-3' : 'max-w-10 gap-0',
             )}
           >
-            {/* Full-size mark on a white disc. `max-w-none` defeats Tailwind
-              preflight `img { max-width: 100% }` so it stays round. */}
-            <span className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-full bg-white -translate-x-[1px]">
-              <img src={logo} alt="" className="size-8 max-w-none rounded-full -translate-x-[0px]" />
-            </span>
-            {/* PINNED, not merely expanded. This button sits in the same `auto`
-              grid column as the rail, so a wordmark appearing here widens the
-              column and shoves the header and page content sideways — which is
-              exactly what a hover-opened drawer must never do. Pinning is the
-              one case where a reflow is intended, and permanent. */}
-            <span
-              aria-hidden={!pinned}
-              className="overflow-hidden whitespace-nowrap text-left text-sm font-semibold leading-tight"
-            >
-              Companion Memory
-            </span>
+            <RailMark showName={pinned} />
           </button>
         </Tooltip.Trigger>
       </Tooltip>

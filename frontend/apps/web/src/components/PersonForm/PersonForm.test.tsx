@@ -79,6 +79,36 @@ describe('PersonForm', () => {
   it('disables every field while saving', () => {
     render(<PersonForm value={emptyPersonDraft()} onChange={() => {}} disabled />);
 
-    expect(screen.getByLabelText('Name')).toBeDisabled();
+    expect(screen.getByLabelText(/Display name/)).toBeDisabled();
+  });
+
+  // The modals open *because* the user is about to type, so they keep the
+  // focus grab. A page that merely contains this form does not want it: on a
+  // phone it scrolls past the heading into the middle of the form and opens
+  // the keyboard over it.
+  it('focuses First name on mount for the modal call sites', () => {
+    render(<Harness />);
+
+    expect(screen.getByLabelText('First name')).toHaveFocus();
+  });
+
+  it('leaves focus alone when the caller opts out', () => {
+    render(<PersonForm value={emptyPersonDraft()} onChange={() => {}} autoFocusName={false} />);
+
+    expect(screen.getByLabelText('First name')).not.toHaveFocus();
+  });
+
+  // The contact row's fixed columns (type 6rem + label 7rem + remove 2.25rem
+  // + gaps) came to ~17rem, which left the value field — the only one that
+  // matters — about three characters wide on a phone. It has to be able to
+  // take the full row instead.
+  it('lets a contact row wrap so the value field is full width on a phone', () => {
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Add email/ }));
+
+    const row = screen.getByLabelText('Email address').closest('div')?.parentElement;
+    expect(row?.className).toContain('w-full');
+    expect(row?.className).toContain('sm:flex-1');
   });
 });

@@ -1,7 +1,7 @@
 import type { LatLngBounds } from 'leaflet';
 import { describe, expect, it } from 'vitest';
 
-import { boundsToBbox, bboxCenter, formatBbox, parseBbox, type Bbox } from './bbox';
+import { boundsToBbox, bboxCenter, clampBboxSpan, formatBbox, parseBbox, type Bbox } from './bbox';
 
 describe('parseBbox', () => {
   it('parses four finite numbers into a tuple', () => {
@@ -68,5 +68,55 @@ describe('bboxCenter', () => {
 
   it('handles negative coordinates', () => {
     expect(bboxCenter([-118.5, 33.7, -118.1, 34.1])).toEqual([(33.7 + 34.1) / 2, (-118.5 + -118.1) / 2]);
+  });
+});
+
+describe('clampBboxSpan', () => {
+  it('leaves a bbox already inside both limits untouched', () => {
+    const bbox: Bbox = [-118.5, 33.7, -118.1, 34.1];
+
+    expect(clampBboxSpan(bbox, 120, 60)).toEqual(bbox);
+  });
+
+  it('shrinks a too-tall bbox around its own centre, not its south-west corner', () => {
+    // 80° of latitude — over a 60° cap — centred on the equator.
+    const bbox: Bbox = [-10, -40, 10, 40];
+
+    const clamped = clampBboxSpan(bbox, 120, 60);
+
+    expect(clamped[3] - clamped[1]).toBeCloseTo(60);
+    // Symmetric around the SAME centre — a corner-anchored shrink would move
+    // the box, not just narrow it, and silently point the viewport read
+    // somewhere the user isn't looking.
+    expect(bboxCenter(clamped)).toEqual(bboxCenter(bbox));
+    // Longitude, untouched by the lat cap, survives exactly.
+    expect(clamped[0]).toBe(-10);
+    expect(clamped[2]).toBe(10);
+  });
+
+  it('shrinks a too-wide bbox the same way', () => {
+    const bbox: Bbox = [-100, -10, 100, 10];
+
+    const clamped = clampBboxSpan(bbox, 120, 60);
+
+    expect(clamped[2] - clamped[0]).toBeCloseTo(120);
+    expect(bboxCenter(clamped)).toEqual(bboxCenter(bbox));
+  });
+
+  it('is exactly what a padded viewport needs: the case that motivated it', () => {
+    // TraceLayer pads a raw viewport by 0.35 (35% on each edge) before
+    // sending it — a raw 38° lat span (a plausible tall/portrait viewport,
+    // not a contrived one) pads out past the server's 60° safe-envelope
+    // ceiling, which would otherwise make the server drop the spatial filter
+    // entirely rather than narrow it.
+    const rawLatSpan = 38;
+    const padded = rawLatSpan * 1.7; // pad(0.35) adds 0.35 to EACH edge.
+
+    expect(padded).toBeGreaterThan(60);
+
+    const bbox: Bbox = [-118, 20 - padded / 2, -118, 20 + padded / 2];
+    const clamped = clampBboxSpan(bbox, 120, 60);
+
+    expect(clamped[3] - clamped[1]).toBeLessThanOrEqual(60);
   });
 });

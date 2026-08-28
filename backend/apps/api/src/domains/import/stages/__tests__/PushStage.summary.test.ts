@@ -52,9 +52,22 @@ function stageOver(
   };
 
   const noop = {} as never;
-  const stage = new PushStage(dataSource as never, noop, noop, noop, noop, noop, noop, noop, noop, {
-    setContext: jest.fn(),
-  } as never);
+  const stage = new PushStage(
+    dataSource as never,
+    noop,
+    noop,
+    noop,
+    noop,
+    noop,
+    noop,
+    noop,
+    noop,
+    noop,
+    noop,
+    noop,
+    noop,
+    { setContext: jest.fn() } as never,
+  );
 
   return stage as unknown as Summarizable;
 }

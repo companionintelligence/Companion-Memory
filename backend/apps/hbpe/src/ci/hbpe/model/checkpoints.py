@@ -18,9 +18,13 @@ trigger a re-bootstrap (see CI-Server-ad4).
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from ci.hbpe.config import settings
+
+ARCH_STAMP = "architecture.json"
+ONNX_EXPORT_REPORT = "onnx_export_report.json"
 
 
 def user_ckpt_dir(user_id: str, *, create: bool = False) -> Path:
@@ -55,6 +59,67 @@ HMT_CALIBRATED = "hmt_calibrated.pt"
 HMT_FP32_ONNX = "hmt_fp32.onnx"
 HMT_INT8_ONNX = "hmt_int8.onnx"
 MODEL_ARTIFACTS = (HMT_INT8_ONNX, HMT_FP32_ONNX, HMT_CALIBRATED, HMT_CKPT)
+
+
+def architecture_fingerprint() -> str:
+    """Stable id of the compiled-in HMT shape.
+
+    Stored beside checkpoints so a Hub image that grew the model (64-d → 256-d)
+    refuses to keep serving the old weights and nightly/bootstrap retrains.
+    """
+    from ci.hbpe.model.transformer import D_FF, D_MODEL, N_HEADS, N_LAYERS
+
+    return f"{D_MODEL}x{N_LAYERS}h{N_HEADS}ff{D_FF}"
+
+
+def write_architecture_stamp(user_id: str) -> Path:
+    """Write architecture.json next to this user's checkpoints."""
+    from ci.hbpe.model.transformer import D_FF, D_MODEL, DROPOUT, N_HEADS, N_LAYERS
+
+    d = user_ckpt_dir(user_id, create=True)
+    path = d / ARCH_STAMP
+    path.write_text(
+        json.dumps(
+            {
+                "fingerprint": architecture_fingerprint(),
+                "d_model": D_MODEL,
+                "n_heads": N_HEADS,
+                "n_layers": N_LAYERS,
+                "d_ff": D_FF,
+                "dropout": DROPOUT,
+            },
+            indent=2,
+        )
+    )
+    return path
+
+
+def architecture_matches(user_id: str) -> bool:
+    """True when architecture.json exists and matches the running binary."""
+    path = user_ckpt_dir(user_id) / ARCH_STAMP
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, TypeError):
+        return False
+    return data.get("fingerprint") == architecture_fingerprint()
+
+
+def int8_is_servable(user_id: str) -> bool:
+    """True only when the last ONNX export proved INT8 within the accuracy delta.
+
+    A failed INT8 graph (L0 acc collapsing ~30 pp) must not be preferred over
+    FP32 just because the file exists on disk.
+    """
+    path = user_ckpt_dir(user_id) / ONNX_EXPORT_REPORT
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError, TypeError):
+        return False
+    return data.get("delta_passed") is True
 
 
 def lora_adapter_path(user_id: str, *, create: bool = False) -> Path:

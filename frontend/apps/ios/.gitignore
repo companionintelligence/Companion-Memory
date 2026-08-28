@@ -9,6 +9,10 @@ node_modules/
 !.yarn/releases
 !.yarn/plugins
 
+# Built Safari MV3 copied in by scripts/sync-safari-extension.sh
+ios/App/SafariWebExtension/Resources/*
+!ios/App/SafariWebExtension/Resources/.gitkeep
+
 # Generated iOS native project artifacts. The ios/ tree is committed.
 ios/App/Pods/
 ios/App/build/

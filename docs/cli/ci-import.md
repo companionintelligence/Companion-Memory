@@ -3,9 +3,15 @@
 > **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 
 CI-Import-Tools shipped a `ci-import` binary. When the importer was consolidated
-into CI-Server the MCP half came across — six tools on `@Controller('mcp')` — and
-the command line did not. This is that command line, rebuilt against the domain
-as it now exists.
+into CI-Server the MCP half came across — six tools in
+`src/domains/tools/tools/Import*Tool.ts`, served through the shared tool registry
+at `@Controller('mcp')` — and the command line did not. This is that command
+line, rebuilt against the domain as it now exists.
+
+The upstream repo is retired: it was renamed **`ZARCHIVED-CI-Import-Tools`**
+(the `ZARCHIVED-` prefix is the retirement signal — GitHub still reports
+`isArchived: false` for it). Everything below is CI-Server's own
+`backend/apps/api/src/domains/import/`.
 
 It is **not** a revival of `scripts/cli/ci-server.sh` (PR #1420, reverted in
 `7ae057916`). That was a hub-setup / portal-registration / app-lifecycle wizard
@@ -46,11 +52,14 @@ context and driving `ImportRunService` in-process — is worse in three specific
 ways:
 
 1. **It would run a second set of workers.** An import is durable stages on the
-   `import-stages` pg-boss queue, consumed by `ImportStageListener`. Registering
-   `ImportModule` in a CLI process starts that listener *there too*, racing the
-   server's workers for the same stage claims. Going through the API means a run
-   started here is the same `ImportRunService.startRun` call the web wizard
-   makes, in the same process, against the same queue — not an equivalent one.
+   four per-kind pg-boss queues — `import-unpack`, `import-parse`,
+   `import-media`, `import-push` (`IMPORT_STAGE_QUEUE_BY_KIND` in
+   `domains/import/constants.ts`) — consumed by `ImportStageListener`.
+   Registering `ImportModule` in a CLI process starts those listeners *there
+   too*, racing the server's workers for the same stage claims. Going through the
+   API means a run started here is the same `ImportRunService.startRun` call the
+   web wizard makes, in the same process, against the same queues — not an
+   equivalent one.
 2. **It would need the appliance's credentials.** Postgres, MinIO, Ollama. On a
    machine with several worktree stacks up, "which database am I on?" is
    answered by a port lookup that can silently fall back to a `.env` pointing
@@ -97,7 +106,12 @@ reads the same piped as it does in a terminal.
 
 ### `datasources [--catalog] [--json]`
 
-The registered importers. `--catalog` switches to the authored **services** list
+The registered importers — **71** of them (`datasources/index.ts` is the barrel;
+one `registerDataSource` call per file). Three registered ids differ from their
+filename and the id is what matters, because it is what `staged_items.data_source`
+records and what `--only` / `--skip` match on: `applecontacts.ts` registers
+`apple_contacts`, `contactlist.ts` registers `contact_list`, and `googlevoice.ts`
+registers `google_voice`. `--catalog` switches to the authored **services** list
 instead — several services share the `generic` parser, and one whose importer is
 not written yet still appears (`ready` blank) rather than being invisible.
 
@@ -133,15 +147,26 @@ leaves the scratch tree as the only copy, and the scratch tree is reclaimed with
 the run. It is a warning and not a refusal because "stage now, push later" is a
 legitimate request.
 
-### `inbox [--start] [--only] [--skip] [--units] [--label] [--wait] [--json]`
+### `inbox [--start] [--only] [--skip] [--units] [--label] [--wait] [--timeout] [--json]`
 
 Scans **this account's** inbox subtree; with `--start`, imports it, smallest unit
 first.
+
+**The scan prints floors as floors.** A walk that hit `MAX_UNIT_SIZING_ENTRIES`
+renders its size as `~3.0GB` and its file count as `49788+`, and a footer names
+the units that were cut. Recognition runs under one scan-wide deadline, so the
+biggest unit can come back with an **empty** parser list — which then matches no
+`--only <source>`, and the run reports success over a smaller corpus than you
+asked for. That case gets its own line naming the units. Both lines are silent
+when nothing was truncated.
 
 The inbox is namespaced per user: `CI_IMPORT_INBOX_DIR` is a root, and each
 account owns one subtree under it, named by lowercasing the account's email and
 replacing every character outside `[A-Za-z0-9._-]` with `_`. So
 `test@example.com` reads and writes `<root>/test_example.com/` and nothing else.
+The folder the command **prints** is that subtree as the host sees it when the
+appliance runs in a container with `CI_IMPORT_INBOX_HOST_DIR` set (the scan's
+`displayDir`); without it, the API's own path (`inboxDir`).
 Inside it, the scan creates a drop
 folder per service (`amazon/`, `google-takeout/`, …); a unit dropped in one
 declares that service as the run's `declared_sources`. A path in the old flat
@@ -158,7 +183,7 @@ Scanning is the safe default; importing is a verb you type.
 vocabulary); `--units` takes exact paths from a scan. A unit another run already
 holds is never offered.
 
-### `runs [runId] [--limit] [--wait] [--json]`
+### `runs [runId] [--limit] [--wait] [--timeout] [--json]`
 
 Runs and their stage bars. This is upstream's `jobs`, renamed to what the server
 calls it. The rename is not cosmetic: there are two progress surfaces here for
@@ -166,7 +191,7 @@ two audiences — `ci_import.import_runs` in a vocabulary the person who uploade
 the archive recognizes, and pg-boss under `/jobs` for whoever is asked why the
 queue is deep. This command is the first. The second is deliberately not wrapped.
 
-### `push [--run <id>] [--dry-run] [--wait] [--json]`
+### `push [--run <id>] [--dry-run] [--wait] [--timeout] [--json]`
 
 The wizard's Sync step: append a `push` stage to every run whose rows are staged
 and uncommitted. Same name as upstream's command, entirely different thing —
@@ -181,16 +206,26 @@ row, not a shortfall.
 
 ### `doctor [--list] [--check <id>] [--timeout <ms>] [--failures-only] [--json]`
 
-Nineteen data-quality checks over what the importers actually **wrote**, via
-`GET /import/doctor` (and `GET /import/doctor/checks` for `--list`). Every other
-command answers "did the import run"; this is the only one that answers "did it
-write the right rows" — the distinction that matters, because every defect the
-2026-08 QA pass found sat behind a push stage reporting 100%.
+**Twenty-one** data-quality checks over what the importers actually **wrote**,
+via `GET /import/doctor` (and `GET /import/doctor/checks` for `--list`). Every
+other command answers "did the import run"; this is the only one that answers
+"did it write the right rows" — the distinction that matters, because every
+defect the 2026-08 QA pass found sat behind a push stage reporting 100%.
 
-Each check is a regression detector for a defect that really shipped, and each
-one names the guard in `push/inputs.ts` or the backfill migration whose predicate
-it **mirrors**, so the two are maintained together. The registry is
-`src/domains/import/doctor/checks.ts`.
+Each check is a regression detector for a defect that really shipped. Where a
+check copies a live predicate, its `mirrors` field names the twin — nowadays a
+**guard** (`push/inputs.ts isNotAPlaceName`, `push/canonical.ts destinationsFor`,
+`push/canonical.ts isSocialAffiliation`, …) rather than a one-off backfill
+migration, since the guard is what stays. Only **seven** of the twenty-one name
+a twin at all — six a guard, one the migration that defined the `time_source`
+vocabulary — and `mirrors` is `null` for the other fourteen. Do not read a null
+as "pipeline check": the four `pipeline-*` checks are null because they watch a
+control plane rather than a data shape, but so are ten data-shape checks whose
+predicate copies no single reusable guard — `events-dated-before-1990` has no
+guard to point at, and `contact-cards-typed-as-concept` deliberately matches the
+*shape* so it catches the next parser to make the mistake rather than the
+sources already fixed. The registry is
+`src/domains/import/doctor/checks.ts`; `--list` is the authoritative count.
 
 - `--list` prints the vocabulary and runs nothing; `--list --json` includes each
   check's full `remedy`.
@@ -220,7 +255,11 @@ impossible": unknown check id, no api key, no appliance.
 `medium` findings never gate. The split is about whether a machine can act on a
 finding without a human deciding first, not about how much it annoys you —
 future-dated events are the canonical `medium`, because a calendar is a list of
-things that have not happened yet.
+things that have not happened yet. The second reason to make a check `medium` is
+that its floor is not zero on *correct* data: `comms-missing-thread-id` was
+downgraded from `high` for exactly that, because Apple's own `chat.db` holds
+genuinely unthreadable messages (37,181 of 432,173 on the reference corpus), and
+a `high` check that can never read zero would fail the gate forever.
 
 Counts are **global**, not user-scoped, matching `/api/maintenance/ingest-status`
 and `/search/coverage`: the question is "is this appliance's data sound", and

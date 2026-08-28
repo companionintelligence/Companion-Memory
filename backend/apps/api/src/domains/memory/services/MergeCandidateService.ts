@@ -7,6 +7,8 @@ import { LoggerService } from '@ci/common/logging';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
 
+import { PersonMergeService } from './PersonMergeService';
+
 /** The three states `ci.merge_candidates.status` is CHECK-constrained to. */
 export type MergeCandidateStatus = 'pending' | 'accepted' | 'rejected';
 
@@ -47,6 +49,21 @@ export interface MergeCandidatePage {
 
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 100;
+/**
+ * Deterministic pairs (shared email, E.164-exact phone) are merged, not
+ * reviewed. Bound one request so a backlog cannot hang the People page;
+ * leftovers stay hidden from the queue and fold on the next load.
+ */
+const AUTO_MERGE_DETERMINISTIC_LIMIT = 100;
+
+export function hasEmailEvidence(evidence: readonly MergeCandidateEvidence[]): boolean {
+  return evidence.some((item) => item.kind === 'email');
+}
+
+/** Phone evidence at the E.164-exact tier — the same strength as an email. */
+export function hasExactPhoneEvidence(evidence: readonly MergeCandidateEvidence[]): boolean {
+  return evidence.some((item) => item.kind === 'phone' && item.score != null && item.score >= 0.95);
+}
 
 /**
  * Opaque keyset cursor over the review order (`score DESC, id ASC`).
@@ -136,6 +153,73 @@ const LIVE_PAIR_PREDICATE = `EXISTS (
                AND blk.entity_id_a = mc.entity_id_a
                AND blk.entity_id_b = mc.entity_id_b)`;
 
+/**
+ * These two people already share an identity — a mailbox or an international
+ * phone number. That is not a review question; it is a fold. Used both to
+ * select auto-merge work and to keep leftovers off the People page if this
+ * request's cap ran out.
+ *
+ * `ci.entity_identifiers` cannot answer this: it is unique on
+ * `(owner, kind, value)`, so two live people cannot both hold the same email
+ * there. Claims and properties still can, which is how the duplicates exist.
+ */
+const SHARES_DETERMINISTIC_IDENTITY = `(
+            mc.evidence @> '[{"kind":"email"}]'::jsonb
+            OR EXISTS (
+              SELECT 1
+                FROM jsonb_array_elements(mc.evidence) ev
+               WHERE ev->>'kind' = 'phone'
+                 AND COALESCE((ev->>'score')::float, 0) >= 0.95)
+            OR EXISTS (
+              SELECT 1
+                FROM ci.identifier_claims ca
+                JOIN ci.identifier_claims cb
+                  ON ca.owner_user_id = cb.owner_user_id
+                 AND ca.kind = 'email'
+                 AND cb.kind = 'email'
+                 AND ca.value_normalized = cb.value_normalized
+               WHERE ca.owner_user_id = mc.owner_user_id
+                 AND ca.entity_id = mc.entity_id_a
+                 AND cb.entity_id = mc.entity_id_b
+                 AND ca.disposition IS DISTINCT FROM 'rejected'
+                 AND cb.disposition IS DISTINCT FROM 'rejected')
+            OR EXISTS (
+              SELECT 1
+                FROM ci.identifier_claims ca
+                JOIN ci.identifier_claims cb
+                  ON ca.owner_user_id = cb.owner_user_id
+                 AND ca.kind = 'phone'
+                 AND cb.kind = 'phone'
+                 AND ca.value_e164 IS NOT NULL
+                 AND ca.value_e164 = cb.value_e164
+               WHERE ca.owner_user_id = mc.owner_user_id
+                 AND ca.entity_id = mc.entity_id_a
+                 AND cb.entity_id = mc.entity_id_b
+                 AND ca.disposition IS DISTINCT FROM 'rejected'
+                 AND cb.disposition IS DISTINCT FROM 'rejected')
+            OR EXISTS (
+              SELECT 1
+                FROM ci.entities ea
+                JOIN ci.entities eb
+                  ON ea.owner_user_id = eb.owner_user_id
+               WHERE ea.entity_id = mc.entity_id_a
+                 AND eb.entity_id = mc.entity_id_b
+                 AND (
+                   (lower(btrim(COALESCE(ea.properties->>'email', ''))) <> ''
+                    AND lower(btrim(ea.properties->>'email'))
+                      = lower(btrim(eb.properties->>'email')))
+                   OR EXISTS (
+                     SELECT 1
+                       FROM jsonb_array_elements_text(
+                              COALESCE(ea.properties->'emails', '[]'::jsonb)
+                            ) a_email
+                       JOIN jsonb_array_elements_text(
+                              COALESCE(eb.properties->'emails', '[]'::jsonb)
+                            ) b_email
+                         ON lower(btrim(a_email)) = lower(btrim(b_email))
+                      WHERE lower(btrim(a_email)) <> '')))
+          )`;
+
 interface CandidateRow {
   merge_candidate_id: string;
   entity_type: string;
@@ -169,8 +253,66 @@ export class MergeCandidateService {
     @InjectRepository(PersonEntity)
     private readonly personRepository: Repository<PersonEntity>,
     private readonly logger: LoggerService,
+    private readonly personMergeService: PersonMergeService,
   ) {
     this.logger.setContext(MergeCandidateService.name);
+  }
+
+  /**
+   * Fold pending pairs that already share an identity.
+   *
+   * A shared mailbox or an E.164-exact phone is not a review question — two
+   * stubs that use the same email are the same person, even when the detector
+   * filed them as a name-only pair because claims had not landed yet. Name
+   * overlap and last-ten-only phones stay on the queue for a human. Keep the
+   * self person when it is in the pair, otherwise the detector's ordered
+   * `entity_id_a`.
+   */
+  async autoMergePendingEmailPairs(context: UserServiceContext): Promise<number> {
+    const [selfRow]: Array<{ entity_id: string | null }> = await this.personRepository.manager.query(
+      `SELECT entity_id FROM ci.users WHERE id = $1`,
+      [context.userId],
+    );
+    const selfId = selfRow?.entity_id ?? null;
+
+    const rows: Array<{ merge_candidate_id: string; entity_id_a: string; entity_id_b: string }> =
+      await this.personRepository.manager.query(
+        `SELECT mc.merge_candidate_id, mc.entity_id_a, mc.entity_id_b
+           FROM ci.merge_candidates mc
+          WHERE mc.owner_user_id = $1
+            AND mc.entity_type = 'Person'
+            AND mc.status = 'pending'
+            AND ${SHARES_DETERMINISTIC_IDENTITY}
+            AND ${LIVE_PAIR_PREDICATE}
+          ORDER BY mc.score DESC, mc.merge_candidate_id ASC
+          LIMIT $2`,
+        [context.userId, AUTO_MERGE_DETERMINISTIC_LIMIT],
+      );
+
+    let merged = 0;
+
+    for (const row of rows) {
+      const targetId = selfId === row.entity_id_b ? row.entity_id_b : row.entity_id_a;
+      const sourceId = targetId === row.entity_id_a ? row.entity_id_b : row.entity_id_a;
+
+      try {
+        await this.personMergeService.mergePeople(context, [sourceId], targetId);
+        await this.resolvePairs(context, [row.entity_id_a, row.entity_id_b], 'accepted');
+        merged += 1;
+      } catch (err: unknown) {
+        this.logger.warn('Deterministic auto-merge skipped a pair', {
+          err,
+          entityIdA: row.entity_id_a,
+          entityIdB: row.entity_id_b,
+        });
+      }
+    }
+
+    if (merged > 0) {
+      this.logger.log('Auto-merged deterministic people', { merged, considered: rows.length });
+    }
+
+    return merged;
   }
 
   /**
@@ -195,6 +337,9 @@ export class MergeCandidateService {
     const entityType = options.entityType ?? 'Person';
     const limit = Math.min(Math.max(options.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
     const cursor = options.after ? decodeMergeCandidateCursor(options.after) : null;
+    // Same-email / E.164-phone pairs are folded above; any the cap left behind
+    // must not appear as "are these the same person?" on the review queue.
+    const hideDeterministic = status === 'pending' ? `AND NOT ${SHARES_DETERMINISTIC_IDENTITY}` : '';
 
     // One extra row answers hasNextPage without a second round-trip.
     const rows: CandidateRow[] = await this.personRepository.manager.query(
@@ -208,6 +353,7 @@ export class MergeCandidateService {
                OR mc.score < $4::float8
                OR (mc.score = $4::float8 AND mc.merge_candidate_id > $5::uuid))
           AND ${LIVE_PAIR_PREDICATE}
+          ${hideDeterministic}
         ORDER BY mc.score DESC, mc.merge_candidate_id ASC
         LIMIT $6`,
       [context.userId, entityType, status, cursor?.score ?? null, cursor?.id ?? null, limit + 1],
@@ -219,7 +365,8 @@ export class MergeCandidateService {
         WHERE mc.owner_user_id = $1
           AND mc.entity_type = $2
           AND mc.status = $3
-          AND ${LIVE_PAIR_PREDICATE}`,
+          AND ${LIVE_PAIR_PREDICATE}
+          ${hideDeterministic}`,
       [context.userId, entityType, status],
     );
 

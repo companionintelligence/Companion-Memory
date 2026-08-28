@@ -22,6 +22,7 @@ import { GraphNodeEntity, GraphQueryService, GraphReadService, RelationshipEntit
 
 import type { BaseTool } from '../../core/BaseTool';
 import { NativeToolProvider } from '../../providers/NativeToolProvider';
+import { openGate } from '../../registry/__tests__/gateDouble';
 import { ToolRegistry } from '../../registry/ToolRegistry';
 import { GetEntertainmentPreferencesTool } from '../GetEntertainmentPreferencesTool';
 import { GetFamilyMembersTool } from '../GetFamilyMembersTool';
@@ -80,7 +81,6 @@ function buildNode(ownerUserId: string, seed: SeedNode): GraphNodeEntity {
   node.is_archived = false;
   node.created_at = new Date('2026-01-01T00:00:00.000Z');
   node.updated_at = new Date('2026-01-01T00:00:00.000Z');
-  node.last_accessed = new Date('2026-01-01T00:00:00.000Z');
 
   return node;
 }
@@ -436,7 +436,7 @@ export async function createGraphToolHarness(): Promise<GraphToolHarness> {
   ];
 
   const provider = new NativeToolProvider(tools, makeFakeLogger());
-  const registry = new ToolRegistry(makeFakeLogger(), { send: async () => [] } as any);
+  const registry = new ToolRegistry(makeFakeLogger(), { send: async () => [] } as any, openGate().double);
   await registry.registerProvider(provider);
 
   return {

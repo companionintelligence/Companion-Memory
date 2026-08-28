@@ -1,0 +1,16 @@
+{
+  "name": "@ci/fe-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local orchestrator desktop app (Tauri) for macOS/Windows/Linux — brings up CI-Server's own Docker Compose stack and shows it. Standalone project (NOT a yarn workspace) so the root Yarn PnP install stays intact; it has no dependency on anything else in the monorepo. Unlike frontend/apps/ios and frontend/apps/android (thin clients that wrap @ci/fe-web and point it at a remote appliance), this app manages its own local backend — see README.md.",
+  "packageManager": "yarn@4.9.1",
+  "scripts": {
+    "sync": "node scripts/sync-compose-resources.cjs",
+    "dev": "yarn sync && tauri dev",
+    "build": "yarn sync && tauri build",
+    "icons": "tauri icon src-tauri/icons/app-icon-source.png"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}

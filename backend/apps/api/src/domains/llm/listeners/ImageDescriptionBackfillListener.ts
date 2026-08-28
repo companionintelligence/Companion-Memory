@@ -9,8 +9,7 @@ import {
   PreviewGeneratedEvent,
 } from '@ci/domains/files';
 
-/** Same queue as live description work so requeues share one worker pool. */
-export const IMAGE_DESCRIPTION_QUEUE = 'image-description';
+import { IMAGE_DESCRIPTION_QUEUE, IMAGE_DESCRIPTION_QUEUE_OPTIONS } from '../constants';
 
 const DEFAULT_LIMIT = 500;
 
@@ -29,7 +28,10 @@ export class ImageDescriptionBackfillListener {
     this.logger.setContext(ImageDescriptionBackfillListener.name);
   }
 
-  @OnEvent(ImageDescriptionBackfillRequestEvent, { queue: IMAGE_DESCRIPTION_QUEUE })
+  @OnEvent(ImageDescriptionBackfillRequestEvent, {
+    queue: IMAGE_DESCRIPTION_QUEUE,
+    queueOptions: IMAGE_DESCRIPTION_QUEUE_OPTIONS,
+  })
   async handle(payload: ImageDescriptionBackfillRequestPayload): Promise<void> {
     const limit = payload.limit ?? DEFAULT_LIMIT;
     const candidates = await this.fileService.findUndescribedImagePreviews(payload.userId, limit);

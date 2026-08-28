@@ -31,19 +31,27 @@ export interface RegisteredDevice {
  * devices sees anyway.
  */
 export function useDevices(): { devices: readonly RegisteredDevice[]; loading: boolean } {
-  const [{ authToken }] = useAuth();
+  const [{ authToken, authenticated }] = useAuth();
   const [devices, setDevices] = useState<readonly RegisteredDevice[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!authToken) {
+    // `authenticated`, not `authToken`. The latter is the web JWT and is null
+    // inside the Capacitor app, whose durable credential is a keystore API key
+    // `fetchJson` attaches as `x-api-key` on its own — so this returned before
+    // it fetched and the phone's Devices half was permanently empty, while
+    // `loading` stayed true forever underneath it. Same defect `useJobsAuth`
+    // documents for Jobs and `useImportApi` carried for the import half.
+    if (!authenticated) {
       return;
     }
 
     let cancelled = false;
 
     void fetchJson<RegisteredDevice[]>('/api/devices', {
-      headers: { Authorization: `Bearer ${authToken}` },
+      // Only when there IS one. An empty bearer is a malformed header on a
+      // request that would otherwise authenticate with the key.
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
     })
       .then((rows) => {
         if (!cancelled) {
@@ -61,7 +69,7 @@ export function useDevices(): { devices: readonly RegisteredDevice[]; loading: b
     return () => {
       cancelled = true;
     };
-  }, [authToken]);
+  }, [authToken, authenticated]);
 
   return { devices, loading };
 }

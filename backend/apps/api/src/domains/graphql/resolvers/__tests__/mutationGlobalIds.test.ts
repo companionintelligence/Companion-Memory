@@ -81,6 +81,7 @@ const cases: Case[] = [
         undefined as never,
         undefined as never,
         undefined as never,
+        undefined as never,
       );
 
       return { service, call: (id: string) => resolver.removeContent(context, id) };
@@ -112,6 +113,9 @@ const cases: Case[] = [
       const service = jest.fn().mockResolvedValue(true);
       const resolver = new PlaceResolver(
         { remove: service } as never,
+        undefined as never,
+        undefined as never,
+        undefined as never,
         undefined as never,
         undefined as never,
         undefined as never,

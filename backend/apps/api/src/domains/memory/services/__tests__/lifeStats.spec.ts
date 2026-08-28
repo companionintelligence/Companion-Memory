@@ -100,7 +100,7 @@ describe('buildLifeInsights', () => {
       time: {
         mode: 'hours',
         coverage: { timedEvents: 3, consideredEvents: 3 },
-        rows: [{ bucket: 'calendar', label: 'Calendar', minutes: 120, count: 3 }],
+        rows: [{ bucket: 'calendar', label: 'Calendar', minutes: 120, count: 3, spanCount: 0, spanDays: 0 }],
       },
       conversations: [
         {
@@ -137,7 +137,7 @@ describe('buildLifeInsights', () => {
       time: {
         mode: 'counts',
         coverage: { timedEvents: 0, consideredEvents: 10 },
-        rows: [{ bucket: 'media', label: 'Media', minutes: 0, count: 10 }],
+        rows: [{ bucket: 'media', label: 'Media', minutes: 0, count: 10, spanCount: 0, spanDays: 0 }],
       },
       conversations: [],
       channels: [],

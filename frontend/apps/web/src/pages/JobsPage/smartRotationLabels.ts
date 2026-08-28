@@ -9,7 +9,7 @@ export const SMART_ROTATION_WORK_LABELS: Record<string, string> = {
   graph_enrich: 'Graph enrichment',
   context_prompt: 'Context prompt',
   hydrate_answers: 'Hydrate answers',
-  hydrate_inventory: 'Hydrate inventory',
+  hydrate_things: 'Hydrate things',
 };
 
 export function formatJobHandlerLabel(handler: string): string {

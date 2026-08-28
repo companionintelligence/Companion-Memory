@@ -9,6 +9,10 @@ function makeListener(content: Record<string, unknown> | null = null) {
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
   };
+  const indexSkipService = {
+    recordSkip: jest.fn().mockResolvedValue(undefined),
+    clearSkip: jest.fn().mockResolvedValue(true),
+  };
   const vectorService = {
     upsert: jest.fn().mockResolvedValue(null),
     remove: jest.fn().mockResolvedValue(true),
@@ -19,11 +23,12 @@ function makeListener(content: Record<string, unknown> | null = null) {
     contentService as never,
     embeddingGenerationService as never,
     embeddingService as never,
+    indexSkipService as never,
     vectorService as never,
     logger as never,
   );
 
-  return { listener, contentService, embeddingService, vectorService, logger };
+  return { listener, contentService, embeddingService, indexSkipService, vectorService, logger };
 }
 
 const SUBSTANTIVE = {
@@ -36,8 +41,8 @@ const SUBSTANTIVE = {
 };
 
 describe('ContentSearchIndexListener.indexRemove', () => {
-  it('removes the embedding and the vector for (content, id), under the system context', async () => {
-    const { listener, embeddingService, vectorService } = makeListener();
+  it('removes the embedding, the vector, and any skip marker for (content, id), under the system context', async () => {
+    const { listener, embeddingService, vectorService, indexSkipService } = makeListener();
 
     await listener.unindexContent({ contentId: 'content-1' } as never);
 
@@ -49,6 +54,94 @@ describe('ContentSearchIndexListener.indexRemove', () => {
       { userId: SYSTEM_USER },
       { entityType: 'content', entityId: 'content-1' },
     );
+    expect(indexSkipService.clearSkip).toHaveBeenCalledWith({
+      entityType: 'content',
+      entityId: 'content-1',
+    });
+  });
+});
+
+// Skip-marker convergence: a content row the listener examines but
+// intentionally does NOT embed must leave a ci_search.index_skips row behind,
+// or the backfill sweep (LEFT JOIN on ci_search.embeddings) re-finds it on
+// every run. Ported from CommunicationSearchIndexListener, the reference
+// implementation for this pattern.
+describe('ContentSearchIndexListener.indexContent skip markers', () => {
+  it('records a skip marker (and no embedding) for low-value content', async () => {
+    // 'ok' is an exact trivial phrase AND below the min length — either way, a
+    // skip reason, not an embedding.
+    const { listener, embeddingService, indexSkipService } = makeListener({
+      id: 'content-1',
+      userId: 'user-1',
+      type: null,
+      title: null,
+      text: 'ok',
+      url: null,
+      mimetype: null,
+    });
+
+    await listener.indexContent({ contentId: 'content-1' } as never);
+
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(indexSkipService.clearSkip).not.toHaveBeenCalled();
+    expect(indexSkipService.recordSkip).toHaveBeenCalledTimes(1);
+    expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
+      entityType: 'content',
+      entityId: 'content-1',
+      reason: expect.any(String),
+    });
+  });
+
+  it('records an "empty" skip marker when there is no search document at all', async () => {
+    const { listener, embeddingService, vectorService, indexSkipService } = makeListener({
+      id: 'content-2',
+      userId: 'user-1',
+      type: null,
+      title: null,
+      text: null,
+      url: null,
+      mimetype: null,
+    });
+
+    await listener.indexContent({ contentId: 'content-2' } as never);
+
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).not.toHaveBeenCalled();
+    expect(indexSkipService.recordSkip).toHaveBeenCalledWith({
+      entityType: 'content',
+      entityId: 'content-2',
+      reason: 'empty',
+    });
+  });
+
+  it('clears any stale skip marker after a successful embed upsert', async () => {
+    const { listener, embeddingService, indexSkipService } = makeListener({
+      ...SUBSTANTIVE,
+      userId: 'user-1',
+    });
+
+    await listener.indexContent({ contentId: 'content-1' } as never);
+
+    expect(embeddingService.upsert).toHaveBeenCalledTimes(1);
+    expect(embeddingService.upsert).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({ entityType: 'content', entityId: 'content-1' }),
+    );
+    expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
+    expect(indexSkipService.clearSkip).toHaveBeenCalledWith({
+      entityType: 'content',
+      entityId: 'content-1',
+    });
+  });
+
+  it('entity-not-found is a warn, NOT a skip marker (transient — the row may land later)', async () => {
+    const { listener, indexSkipService, logger } = makeListener(null);
+
+    await listener.indexContent({ contentId: 'content-ghost' } as never);
+
+    expect(logger.warn).toHaveBeenCalled();
+    expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
+    expect(indexSkipService.clearSkip).not.toHaveBeenCalled();
   });
 });
 

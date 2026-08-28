@@ -266,6 +266,7 @@ describe('Audible datasource', () => {
       expect(items.length).toBe(3);
       const fools = items.find((i) => i.metadata.ASIN === 'B00XP2TTMU')!;
       expect(fools.metadata.Author).toBe('Robin Hobb');
+      expect(fools.metadata.URL).toBe('https://www.audible.com/pd/B00XP2TTMU');
       expect(fools.metadata.Narrator).toBe('Elliot Hill');
       expect(fools.metadata.Series).toBe('Realms of the Elderlings, Fitz and the Fool');
       expect(fools.metadata.Subtitle).toBe('Fitz and the Fool, Book 2');

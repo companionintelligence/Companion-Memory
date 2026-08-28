@@ -27,6 +27,7 @@ describe('ImportScanInboxTool', () => {
     const scan = jest.fn(async () => ({
       available: true,
       inboxDir: '/inbox',
+      displayDir: '/inbox',
       units: [{ path: 'export.zip', kind: 'file' }],
       skippedSymlinks: 0,
       truncated: false,

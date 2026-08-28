@@ -81,6 +81,11 @@ function ChatInput(
     resolver: formDataResolver(FormSchema),
     defaultValues: { message: initialDraft, fileIds: [] },
   });
+  const { reset, getValues } = form;
+
+  useEffect(() => {
+    reset({ message: initialDraft, fileIds: getValues('fileIds') ?? [] });
+  }, [getValues, initialDraft, reset]);
 
   useEffect(() => {
     if (uploadedFiles.length === 0) {

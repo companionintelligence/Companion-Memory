@@ -66,8 +66,8 @@ export function metaAttachments(value: MetadataValue): MediaAttachment[] {
  * The value tests pass as `ImportParams['pipeline']`.
  *
  * An array already satisfies the `push(g)` half of ImportPipeline, which is why
- * the tests hand one straight in. Some also attach a `drop` sink afterwards to
- * observe the importer's drop ledger; this alias names that shape so doing so
- * doesn't need a cast through `any`.
+ * the tests hand one straight in. Some also attach a `drop` or `consumed` sink
+ * afterwards to observe the importer's drop ledger / records-read count; this
+ * alias names that shape so doing so doesn't need a cast through `any`.
  */
-export type TestPipeline = EmittedGraph[] & Pick<ImportPipeline, 'drop'>;
+export type TestPipeline = EmittedGraph[] & Pick<ImportPipeline, 'drop' | 'consumed'>;

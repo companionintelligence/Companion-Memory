@@ -1,7 +1,13 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, UpdateDateColumn } from 'typeorm';
 
-/** Which surface started a run. */
-export type ImportRunSource = 'wizard' | 'api' | 'mcp';
+/**
+ * Which surface started a run. 'connections' is a background ETL sync tick
+ * (CloudFileIngestService, via SyncOrchestrator's cron) rather than anything
+ * a person typed, called, or POSTed — see migration
+ * 20260821224653_add_connections_import_run_source for why that is its own
+ * value and not folded into 'api'.
+ */
+export type ImportRunSource = 'wizard' | 'api' | 'mcp' | 'connections';
 
 /**
  * Rollup state of a run.

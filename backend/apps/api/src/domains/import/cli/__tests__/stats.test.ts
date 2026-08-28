@@ -3,7 +3,7 @@ import { statsCommand } from '../commands/stats';
 import { harness } from './support/harness';
 
 const ingest = {
-  tables: { communications: 1_030_500, events: 88_000, content: 366_862, inventory: 0, browser_activity: 12 },
+  tables: { communications: 1_030_500, events: 88_000, content: 366_862, objects: 0, browser_activity: 12 },
   searchIndex: {
     embeddingsByType: { content: 300_000, event: 5_000 },
     skipsByType: { content: 60_000 },

@@ -17,7 +17,7 @@ import path from 'node:path';
 import type { Graph, ImportParams, Item, MediaAttachment } from '../timeline';
 import { TwitterFileImporter } from '../twitter';
 
-import type { EmittedGraph } from './support/emitted';
+import type { EmittedGraph, TestPipeline } from './support/emitted';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 const ROOT = path.join(FIXTURES_DIR, 'twitter-archive');
@@ -602,13 +602,14 @@ describe('Twitter participant identity', () => {
   const dmConvo = (conversationId: string, messages: object[]) => ({ conversationId, messages });
   const msg = (m: object) => ({ messageCreate: { createdAt: '2025-01-08T23:50:38.598Z', text: 'hi', ...m } });
 
-  it('names a DM partner the account publicly mentioned, and leaves the rest as ids', async () => {
+  it('names a DM partner the account publicly mentioned, and namespaces the rest', async () => {
     const root = writeArchive({
       tweets: [tweetMentioning([{ screen_name: 'known', id_str: '2000' }])],
       dms: [
         dmConvo('1000-2000', [msg({ id: 'd1', senderId: '2000', recipientId: OWNER })]),
         // 3000 is never mentioned anywhere — the archive simply has no name for
-        // them, so the id has to stand.
+        // them, so the account id has to stand in, under a namespace that says
+        // what it is.
         dmConvo('1000-3000', [msg({ id: 'd2', senderId: '3000', recipientId: OWNER })]),
       ],
     });
@@ -616,10 +617,87 @@ describe('Twitter participant identity', () => {
     const { byId } = await runImport({}, root);
 
     expect(byId('twitter:dm:d1').metadata?.Sender).toBe('@known');
-    expect(byId('twitter:dm:d2').metadata?.Sender).toBe('3000');
+    expect(byId('twitter:dm:d2').metadata?.Sender).toBe('twitter:id:3000');
     // Resolved or not, the id is always preserved.
     expect(byId('twitter:dm:d1').metadata?.SenderId).toBe('2000');
     expect(byId('twitter:dm:d2').metadata?.SenderId).toBe('3000');
+  });
+
+  /**
+   * The defect this namespace exists to prevent, stated as the rule that has to
+   * hold rather than as the string that happens to satisfy it today.
+   *
+   * `classifyParticipant` (domains/graph/utils/normalizeIdentifier.ts) types a
+   * participant as a phone when it is PHONE-SHAPED — `+()-./`, whitespace and
+   * digits, nothing else — and carries at least `PHONE_MIN_DIGITS` = 7 of them.
+   * There is no upper bound, so a bare 18-19 digit snowflake cleared that test
+   * and `normalizePhone` kept its last ten digits: a Person named after an
+   * account id, holding a phone number belonging to nobody, linkable to a real
+   * contact at 0.85 confidence by `PersonLinkStage`'s phone_last10 rule.
+   *
+   * Both id shapes in the corpus are checked — the 18-19 digit snowflakes AND
+   * the 7-15 digit ids of early accounts, which are the ones that matter most
+   * because a fabricated number in that range is indistinguishable from a real
+   * one.
+   */
+  it('never emits a DM participant that can be read as a phone number', async () => {
+    // Phone-shaped, restated from `classifyParticipant` — a value made only of
+    // digits and the punctuation phone numbers are written with.
+    const PHONE_SHAPED = /^[+()\-.\s\d]+$/;
+    const digitsIn = (value: string) => value.replace(/\D/g, '').length;
+
+    const root = writeArchive({
+      dms: [
+        // A snowflake (19 digits) and an early sequential id (7 digits): the
+        // two shapes a real archive holds.
+        dmConvo('1000-a', [msg({ id: 'd1', senderId: '1657380978392702976', recipientId: OWNER })]),
+        dmConvo('1000-b', [msg({ id: 'd2', senderId: '6245902', recipientId: OWNER })]),
+      ],
+    });
+
+    const { byId } = await runImport({}, root);
+
+    for (const id of ['twitter:dm:d1', 'twitter:dm:d2']) {
+      const dm = byId(id);
+      const participants = [dm.metadata?.Sender, ...((dm.metadata?.To as string[] | undefined) ?? [])].filter(
+        (value): value is string => typeof value === 'string',
+      );
+
+      // The rule below is a for-loop over a list this import produces, so an
+      // empty list would satisfy it without testing anything.
+      expect(participants).toHaveLength(2);
+
+      for (const participant of participants) {
+        expect(PHONE_SHAPED.test(participant) && digitsIn(participant) >= 7).toBe(false);
+      }
+    }
+
+    // And the correspondent is still named — refusing to emit the participant
+    // at all would leave a real conversation with nobody on the other end.
+    expect(byId('twitter:dm:d1').metadata?.Sender).toBe('twitter:id:1657380978392702976');
+    expect(byId('twitter:dm:d2').metadata?.Sender).toBe('twitter:id:6245902');
+  });
+
+  it('namespaces an unresolvable recipient too, not only a sender', async () => {
+    const root = writeArchive({
+      tweets: [tweetMentioning([{ screen_name: 'known', id_str: '2000' }])],
+      groups: [
+        dmConvo('g1', [
+          msg({ id: 'g-m1', senderId: OWNER }),
+          {
+            joinConversation: {
+              initiatingUserId: OWNER,
+              participantsSnapshot: [OWNER, '2000', '31353900'],
+              createdAt: '2025-01-01T00:00:00.000Z',
+            },
+          },
+        ]),
+      ],
+    });
+
+    const { byId } = await runImport({}, root);
+
+    expect(byId('twitter:dm:g-m1').metadata?.To).toEqual(['@known', 'twitter:id:31353900']);
   });
 
   it('resolves a handle from a reply, not just a mention', async () => {
@@ -699,7 +777,7 @@ describe('Twitter participant identity', () => {
 
     // Everyone but the sender, named where the archive allows it.
     expect(m.metadata?.RecipientIds).toEqual(['2000', '3000']);
-    expect(m.metadata?.To).toEqual(['@alice', '3000']);
+    expect(m.metadata?.To).toEqual(['@alice', 'twitter:id:3000']);
   });
 
   it('merges a conversation split across several rows before building its roster', async () => {
@@ -771,5 +849,170 @@ describe('Twitter participant identity', () => {
 
     const { byId } = await runImport({}, root);
     expect(byId('twitter:dm:d1').metadata?.RecipientIds).toEqual(['2000']);
+  });
+});
+
+describe('parser loss reporting (reconciliation)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-tw-reconcile-'));
+    fs.mkdirSync(path.join(dir, 'data'));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const writeTweets = (tweets: object[]) =>
+    fs.writeFileSync(
+      path.join(dir, 'data', 'tweets.js'),
+      'window.YTD.tweets.part0 = ' + JSON.stringify(tweets.map((t) => ({ tweet: t }))),
+    );
+
+  const writeDms = (conversations: object[]) =>
+    fs.writeFileSync(
+      path.join(dir, 'data', 'direct-messages.js'),
+      'window.YTD.direct_messages.part0 = ' +
+        JSON.stringify(conversations.map((c) => ({ dmConversation: c }))),
+    );
+
+  async function run(pipeline: TestPipeline): Promise<void> {
+    await new TwitterFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      options: { includeReplies: true, includeRetweets: true },
+      timeframe: {},
+      log: () => {},
+      pipeline,
+    } as unknown as ImportParams);
+  }
+
+  it('reconciles against the fixture archive: consumed === produced + dropped', async () => {
+    // The real fixture: 5 tweets.js rows (1 undated retweet drops, the other
+    // 4 push) + 2 direct-messages.js rows (both push) = 7 consumed, 6
+    // produced, 1 dropped.
+    const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+      drop: jest.fn(),
+      consumed: jest.fn(),
+    });
+    await new TwitterFileImporter().fileImport({}, { filename: 'twitter-archive', fullPath: ROOT }, {
+      options: { includeReplies: true, includeRetweets: true },
+      timeframe: {},
+      log: () => {},
+      pipeline,
+    } as unknown as ImportParams);
+
+    const consumedSum = (pipeline.consumed as jest.Mock).mock.calls.reduce(
+      (sum: number, [n]: [number]) => sum + n,
+      0,
+    );
+    const producedCount = pipeline.filter((g) => g.item).length;
+    const droppedCount = (pipeline.drop as jest.Mock).mock.calls.length;
+
+    expect(pipeline.drop).toHaveBeenCalledWith('undated_retweet', '5');
+    expect(consumedSum).toBe(producedCount + droppedCount);
+  });
+
+  it('drops a tweet with no id instead of silently skipping it', async () => {
+    writeTweets([{ created_at: 'Fri Jan 03 12:00:00 +0000 2025', full_text: 'no id on this row' }]);
+    const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+      drop: jest.fn(),
+      consumed: jest.fn(),
+    });
+
+    await run(pipeline);
+
+    expect(pipeline.length).toBe(0);
+    expect(pipeline.drop).toHaveBeenCalledWith('tweet_without_id');
+    expect(pipeline.consumed).toHaveBeenCalledWith(1);
+  });
+
+  it('drops a timeframe-excluded tweet instead of silently skipping it', async () => {
+    writeTweets([{ id_str: '1', created_at: 'Fri Jan 03 12:00:00 +0000 2025', full_text: 'old news' }]);
+    const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+      drop: jest.fn(),
+      consumed: jest.fn(),
+    });
+
+    await new TwitterFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      options: { includeReplies: true, includeRetweets: true },
+      timeframe: { since: new Date('2027-01-01T00:00:00Z') },
+      log: () => {},
+      pipeline,
+    } as unknown as ImportParams);
+
+    expect(pipeline.length).toBe(0);
+    expect(pipeline.drop).toHaveBeenCalledWith('outside_timeframe');
+    expect(pipeline.consumed).toHaveBeenCalledWith(1);
+  });
+
+  it('reports an extra consumed() unit when a retweet carries media that is not imported', async () => {
+    writeTweets([
+      {
+        id_str: '9',
+        created_at: 'Mon Jan 06 08:00:00 +0000 2025',
+        full_text: 'RT @someone: worth a look',
+        extended_entities: {
+          media: [
+            { type: 'photo', id_str: '1', url: 'https://t.co/pic', media_url_https: 'https://x/pic.jpg' },
+          ],
+        },
+      },
+    ]);
+    const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+      drop: jest.fn(),
+      consumed: jest.fn(),
+    });
+
+    await run(pipeline);
+
+    // The retweet still pushes (1 item), and the media-not-imported drop
+    // rides the same row — 2 ledger events from 1 tweets.js row.
+    expect(pipeline.filter((g) => g.item).length).toBe(1);
+    expect(pipeline.drop).toHaveBeenCalledWith('retweet_media_not_imported', expect.stringContaining('9'));
+    const consumedSum = (pipeline.consumed as jest.Mock).mock.calls.reduce(
+      (sum: number, [n]: [number]) => sum + n,
+      0,
+    );
+    expect(consumedSum).toBe(2);
+  });
+
+  it('drops a non-message DM conversation event (join/leave/rename) instead of silently skipping it', async () => {
+    writeDms([{ conversationId: 'c1', messages: [{ participantsJoin: { userIds: ['2000'] } }] }]);
+    const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+      drop: jest.fn(),
+      consumed: jest.fn(),
+    });
+
+    await run(pipeline);
+
+    expect(pipeline.length).toBe(0);
+    expect(pipeline.drop).toHaveBeenCalledWith('non_message');
+    expect(pipeline.consumed).toHaveBeenCalledWith(1);
+  });
+
+  it('drops a timeframe-excluded DM instead of silently skipping it', async () => {
+    writeDms([
+      {
+        conversationId: 'c1',
+        messages: [
+          {
+            messageCreate: { id: 'd1', createdAt: '2025-01-08T23:50:38.598Z', text: 'hi', senderId: '2000' },
+          },
+        ],
+      },
+    ]);
+    const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+      drop: jest.fn(),
+      consumed: jest.fn(),
+    });
+
+    await new TwitterFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      options: { includeReplies: true, includeRetweets: true },
+      timeframe: { since: new Date('2027-01-01T00:00:00Z') },
+      log: () => {},
+      pipeline,
+    } as unknown as ImportParams);
+
+    expect(pipeline.length).toBe(0);
+    expect(pipeline.drop).toHaveBeenCalledWith('outside_timeframe');
+    expect(pipeline.consumed).toHaveBeenCalledWith(1);
   });
 });

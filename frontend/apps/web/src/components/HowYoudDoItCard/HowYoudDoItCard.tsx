@@ -1,6 +1,5 @@
 import { Button, cn } from '@ci/shadcn';
-import { Loader2, Sparkles, UserRound } from '@ci/shadcn/icons';
-import { Link } from 'react-router-dom';
+import { Loader2, Sparkles } from '@ci/shadcn/icons';
 
 import type { HowYoudDoItResult } from '@/api/usePersonaCompose';
 
@@ -9,6 +8,10 @@ interface HowYoudDoItCardProps {
   applying?: boolean;
   applyNote?: string | null;
   onApply?: () => void;
+  /**
+   * Answering a follow-up is what sharpens the next compose. When omitted the
+   * questions still render, as plain text rather than dead buttons.
+   */
   onFollowUp?: (question: string) => void;
   className?: string;
 }
@@ -94,16 +97,22 @@ export function HowYoudDoItCard({
       {result.followUps.length > 0 && (
         <div className="mb-3 space-y-1.5">
           <p className="text-[11px] font-medium text-muted-foreground">Follow-ups</p>
-          {result.followUps.map((question) => (
-            <button
-              key={question}
-              type="button"
-              onClick={() => onFollowUp?.(question)}
-              className="block w-full rounded-md border border-border px-2.5 py-1.5 text-left text-[12px] text-foreground hover:border-primary/50"
-            >
-              {question}
-            </button>
-          ))}
+          {result.followUps.map((question) =>
+            onFollowUp ? (
+              <button
+                key={question}
+                type="button"
+                onClick={() => onFollowUp(question)}
+                className="block w-full rounded-md border border-border px-2.5 py-1.5 text-left text-[12px] text-foreground hover:border-primary/50"
+              >
+                {question}
+              </button>
+            ) : (
+              <p key={question} className="text-[12px] text-muted-foreground">
+                {question}
+              </p>
+            ),
+          )}
         </div>
       )}
 
@@ -118,13 +127,6 @@ export function HowYoudDoItCard({
             Add to Possibilities
           </Button>
         )}
-
-        <Button variant="outline" size="sm" className="h-7 text-xs" asChild>
-          <Link to="/settings/about-you">
-            <UserRound className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
-            This isn’t me
-          </Link>
-        </Button>
 
         {applyNote && <span className="text-[11px] text-muted-foreground">{applyNote}</span>}
       </div>

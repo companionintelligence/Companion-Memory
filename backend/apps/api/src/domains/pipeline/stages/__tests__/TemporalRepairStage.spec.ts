@@ -300,6 +300,50 @@ describe('classifyEventTime', () => {
       expect(decision.patch?.shiftMs).toBe(0);
     });
 
+    it('marks a moderated subreddit as an ingest stamp with unknown precision', () => {
+      // The two reddit rows on this appliance
+      // (reddit:moderated_subreddit:bitscoop, :u_liambroza) both carry the
+      // identical 2026-08-21T00:43:50.949Z — one import wall clock — because
+      // moderated_subreddits.csv is `subreddit` only and the push's affiliation
+      // branch keeps an undated affiliation on the timeline anyway. Before
+      // reddit joined SOURCE_TIME_SPECS this row was skipped outright, so it
+      // sat at the top of the timeline dated today with no label to say so.
+      const start = new Date('2026-08-21T00:43:50.949Z');
+      const decision = classifyEventTime(
+        row({
+          source_system: 'reddit',
+          start_time: start,
+          metadata: { Kind: 'moderated_subreddit', Subreddit: 'bitscoop' },
+        }),
+        'America/Los_Angeles',
+      );
+
+      expect(decision.result.outcome).toBe('done');
+      expect(decision.result.detail?.repairClass).toBe('undated_ingest_stamp');
+      expect(decision.patch?.timeSource).toBe(TIME_SOURCES.INGEST);
+      expect(decision.patch?.timePrecision).toBe(TIME_PRECISIONS.UNKNOWN);
+      // Marked, never moved — there is no date to recover.
+      expect(decision.patch?.startTime).toEqual(start);
+      expect(decision.patch?.shiftMs).toBe(0);
+    });
+
+    it('leaves a dated reddit record alone', () => {
+      // posts.csv / comments.csv / messages_archive.csv all carry real dates
+      // (reddit.ts parseRedditDate), so only the two affiliation kinds are
+      // Class 1 — widening the spec must not relabel the dated majority.
+      const decision = classifyEventTime(
+        row({
+          source_system: 'reddit',
+          start_time: new Date('2022-09-16T07:04:49.000Z'),
+          metadata: { Kind: 'post', Subreddit: 'bitscoop' },
+        }),
+        'America/Los_Angeles',
+      );
+
+      expect(decision.patch?.timeSource).not.toBe(TIME_SOURCES.INGEST);
+      expect(decision.patch?.shiftMs).toBe(0);
+    });
+
     it('leaves a dated record from the same source alone', () => {
       // `place_review` shares the source system and DOES have a real date. Only
       // the declared undated kinds are marked.
@@ -568,6 +612,7 @@ describe('SOURCE_TIME_SPECS', () => {
       'google_calendar',
       'google_maps_places',
       'outlook_calendar',
+      'reddit',
     ]);
   });
 

@@ -22,7 +22,7 @@ export type DeterministicEdgeSource =
   | 'communications'
   | 'events'
   | 'content'
-  | 'inventory'
+  | 'objects'
   | 'receipts'
   | 'observations'
   | 'positions'
@@ -73,7 +73,8 @@ export interface DeterministicEdgeRule {
  * | content.event_id                              | Content -DOCUMENTS→ Event                  |
  * | entities.parent_place_id (Place/Location)     | Place -PART_OF→ Place                      |
  * | files.parent_id (via File entity mirror)      | File -DERIVED_FROM→ File                   |
- * | inventory.last_seen_place_entity_id           | Item -LOCATED_AT→ Place                    |
+ * | communications.attachments (type=file)        | File -ATTACHED_TO→ Communication            |
+ * | objects.last_seen_place_entity_id           | Item -LOCATED_AT→ Place                    |
  * | receipts.merchant × place_entity_id           | Merchant -LOCATED_AT→ Place                |
  * | receipts.document_content_id × event_id       | Content -PART_OF→ Event (the purchase)     |
  * | receipts.event_id × place_entity_id           | Event -HAPPENED_AT→ Place                  |
@@ -202,13 +203,13 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     candidateWhere: 'ct.event_id IS NOT NULL',
   },
   {
-    id: 'inventory.located_at',
+    id: 'object.located_at',
     description: 'Item → the Place it was last seen at',
     relationshipType: RelationshipType.LOCATED_AT,
     strength: 0.6,
-    properties: { derived_from: 'inventory.last_seen_place_entity_id' },
-    source: 'inventory',
-    table: 'ci.inventory i',
+    properties: { derived_from: 'objects.last_seen_place_entity_id' },
+    source: 'objects',
+    table: 'ci.objects i',
     userColumn: 'i.user_id',
     timeColumn: 'i.created_at',
     idColumn: 'i.object_id',
@@ -381,6 +382,44 @@ export const DETERMINISTIC_EDGE_RULES: readonly DeterministicEdgeRule[] = [
     fromIdExpr: 'ef.entity_id',
     toIdExpr: 'ep.entity_id',
     candidateWhere: 'f.parent_id IS NOT NULL',
+  },
+  {
+    // A message attachment, resolved through the linked File graph entity.
+    // ci.communications.id IS the Communication entity's entity_id (CTI,
+    // migration 20260811061411), so unlike the file.derived_from rule above
+    // only ONE side needs a pre-join here.
+    //
+    // Scoped to type='file' attachments only: a type='content' entry (a
+    // richer catalogued attachment some sources opt into) points at
+    // ci.content, not ci.files, and RelationshipMap has no content<->
+    // communication cell to write into yet — that is a separate, narrower gap
+    // this rule does not close.
+    id: 'communication.has_attachment',
+    description: 'File entity → the Communication it was attached to (ci.communications.attachments)',
+    relationshipType: RelationshipType.ATTACHED_TO,
+    strength: 0.6,
+    properties: { derived_from: 'communications.attachments' },
+    source: 'communications',
+    table:
+      `ci.communications c ` +
+      `CROSS JOIN LATERAL jsonb_array_elements(c.attachments) AS att ` +
+      // Postgres does NOT guarantee AND operands short-circuit left to right
+      // (a WHERE-style guard-then-cast is not safe), so the id-format check
+      // has to live inside a CASE instead: a non-UUID id ("survives a
+      // reference shape nobody wrote" is an actual prior defect class in
+      // this codebase) evaluates to NULL and simply fails to match, rather
+      // than aborting this whole batched statement at the cast.
+      `JOIN ci.entities ef ON ef.linked_table = 'files' ` +
+      `AND ef.linked_id = (CASE WHEN att->>'id' ~ ` +
+      `'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' ` +
+      `THEN att->>'id' END)::uuid ` +
+      `AND ef.owner_user_id = c.user_id AND ef.entity_type = 'File' AND ef.is_active = TRUE`,
+    userColumn: 'c.user_id',
+    timeColumn: 'c.time',
+    idColumn: 'c.id',
+    fromIdExpr: 'ef.entity_id',
+    toIdExpr: 'c.id',
+    candidateWhere: `att->>'type' = 'file'`,
   },
 ];
 

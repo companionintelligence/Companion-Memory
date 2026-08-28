@@ -1,8 +1,19 @@
+import type { Acknowledgement } from '@ci/domains/events';
+import type { DocumentParsedPayload } from '@ci/domains/parsing';
+
 import { FileChunkSearchIndexListener } from '../FileChunkSearchIndexListener';
+
+function makeAck(): Acknowledgement {
+  return { done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+}
 
 function makeListener(chunks: Record<string, unknown>[]) {
   const chunkService = { findByIds: jest.fn().mockResolvedValue(chunks) };
-  const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
+  const embeddingGenerationService = {
+    generateEmbeddings: jest
+      .fn()
+      .mockImplementation(async (inputs: string[]) => inputs.map(() => [0.1, 0.2])),
+  };
   const embeddingService = { upsert: jest.fn().mockResolvedValue(null) };
   const vectorService = { upsert: jest.fn().mockResolvedValue(null) };
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
@@ -15,7 +26,20 @@ function makeListener(chunks: Record<string, unknown>[]) {
     logger as never,
   );
 
-  return { listener, chunkService, embeddingGenerationService, embeddingService, vectorService, logger };
+  // @OnEvent wraps the descriptor at class-definition time in an
+  // autoAcknowledge try/catch (see OnEvent.ts): it calls ack.done() when the
+  // wrapped promise resolves and ack.fail() when it rejects, and never lets
+  // the rejection reach the caller. Calling through this same wrapper — the
+  // same path pg-boss's worker drives — is what makes the throw-vs-swallow
+  // fix observable.
+  const call = (payload: DocumentParsedPayload, ack: Acknowledgement) =>
+    (
+      listener as unknown as {
+        indexChunks: (p: DocumentParsedPayload, a: Acknowledgement) => Promise<void>;
+      }
+    ).indexChunks(payload, ack);
+
+  return { call, chunkService, embeddingGenerationService, embeddingService, vectorService, logger };
 }
 
 function chunk(overrides: Record<string, unknown> = {}) {
@@ -31,14 +55,21 @@ function chunk(overrides: Record<string, unknown> = {}) {
 
 describe('FileChunkSearchIndexListener.indexChunks', () => {
   it('looks up every chunk id from the payload and indexes each one, scoped to its own user', async () => {
-    const { listener, chunkService, embeddingService, vectorService } = makeListener([
+    const { call, chunkService, embeddingGenerationService, embeddingService, vectorService } = makeListener([
       chunk({ id: 'c1', userId: 'user-1', content: 'First chunk of text.' }),
       chunk({ id: 'c2', userId: 'user-2', content: 'Second chunk of text.' }),
     ]);
+    const ack = makeAck();
 
-    await listener.indexChunks({ fileId: 'file-1', chunkIds: ['c1', 'c2'] } as never);
+    await call({ fileId: 'file-1', chunkIds: ['c1', 'c2'] } as never, ack);
 
     expect(chunkService.findByIds).toHaveBeenCalledWith(['c1', 'c2']);
+    // One batched call over both chunks' content, not one call per chunk.
+    expect(embeddingGenerationService.generateEmbeddings).toHaveBeenCalledTimes(1);
+    expect(embeddingGenerationService.generateEmbeddings).toHaveBeenCalledWith([
+      'First chunk of text.',
+      'Second chunk of text.',
+    ]);
     expect(embeddingService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'file-chunk', entityId: 'c1' }),
@@ -48,14 +79,16 @@ describe('FileChunkSearchIndexListener.indexChunks', () => {
       expect.objectContaining({ entityType: 'file-chunk', entityId: 'c2' }),
     );
     expect(vectorService.upsert).toHaveBeenCalledTimes(2);
+    expect(ack.done).toHaveBeenCalledTimes(1);
+    expect(ack.fail).not.toHaveBeenCalled();
   });
 
   it('weights an available sectionTitle above the chunk content', async () => {
-    const { listener, vectorService } = makeListener([
+    const { call, vectorService } = makeListener([
       chunk({ sectionTitle: 'Introduction', content: 'The chunk body.' }),
     ]);
 
-    await listener.indexChunks({ fileId: 'file-1', chunkIds: ['chunk-1'] } as never);
+    await call({ fileId: 'file-1', chunkIds: ['chunk-1'] } as never, makeAck());
 
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -69,9 +102,9 @@ describe('FileChunkSearchIndexListener.indexChunks', () => {
   });
 
   it('omits the sectionTitle entry when the chunk has none', async () => {
-    const { listener, vectorService } = makeListener([chunk({ sectionTitle: null, content: 'Body only.' })]);
+    const { call, vectorService } = makeListener([chunk({ sectionTitle: null, content: 'Body only.' })]);
 
-    await listener.indexChunks({ fileId: 'file-1', chunkIds: ['chunk-1'] } as never);
+    await call({ fileId: 'file-1', chunkIds: ['chunk-1'] } as never, makeAck());
 
     expect(vectorService.upsert).toHaveBeenCalledWith(
       { userId: 'user-1' },
@@ -79,45 +112,88 @@ describe('FileChunkSearchIndexListener.indexChunks', () => {
     );
   });
 
-  // The whole point of the per-chunk try/catch: a single bad chunk (a failed
-  // embedding call, a malformed row) must not abort the rest of the document's
-  // chunks. Losing this would turn one flaky embed into a fully unindexed file.
-  it('continues indexing the remaining chunks when ONE chunk fails to embed', async () => {
-    const { listener, embeddingGenerationService, embeddingService, vectorService, logger } = makeListener([
+  /**
+   * The bug: every chunk failing to embed was swallowed by a per-chunk
+   * try/catch that only logged a warning, so indexChunks still returned
+   * normally and OnEvent's autoAcknowledge wrapper called ack.done() — pg-boss
+   * marked the job "done" even though nothing was indexed. Because file-chunk
+   * has no backfill sweep or pipeline stage, a transient Ollama outage during
+   * parsing permanently and silently dropped that document's searchability.
+   * Throwing routes it to ack.fail() instead, so pg-boss can retry/dead-letter it.
+   */
+  it('fails the job (ack.fail) when every chunk fails to embed, instead of silently ack.done()-ing it', async () => {
+    const { call, embeddingGenerationService, embeddingService, vectorService, logger } = makeListener([
+      chunk({ id: 'c1', content: 'First chunk.' }),
+      chunk({ id: 'c2', content: 'Second chunk.' }),
+    ]);
+    const ack = makeAck();
+    const embedError = new Error('ollama unreachable');
+    embeddingGenerationService.generateEmbeddings.mockRejectedValue(embedError);
+
+    await expect(call({ fileId: 'file-1', chunkIds: ['c1', 'c2'] } as never, ack)).resolves.toBeUndefined();
+
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).not.toHaveBeenCalled();
+    expect(ack.done).not.toHaveBeenCalled();
+    expect(ack.fail).toHaveBeenCalledTimes(1);
+    expect(ack.fail).toHaveBeenCalledWith(embedError);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('Embedding call failed for 2 chunks'),
+      expect.any(Error),
+    );
+  });
+
+  /**
+   * The embedding call is batched (one Ollama round trip for the whole
+   * document), so a single chunk can no longer fail it independently — but a
+   * per-row write failure must still be isolated to that chunk (the others
+   * still get written), while the job as a whole still fails since there is
+   * no sweep to catch a partially-indexed document later.
+   */
+  it('still writes the chunks that succeed when one fails to persist, but fails the job overall', async () => {
+    const { call, embeddingService, vectorService, logger } = makeListener([
       chunk({ id: 'c1', content: 'Good chunk one.' }),
       chunk({ id: 'c2', content: 'Bad chunk.' }),
       chunk({ id: 'c3', content: 'Good chunk three.' }),
     ]);
-    embeddingGenerationService.generateEmbedding
-      .mockResolvedValueOnce([0.1])
-      .mockRejectedValueOnce(new Error('embedding service unavailable'))
-      .mockResolvedValueOnce([0.3]);
+    const ack = makeAck();
+    const writeError = new Error('db write failed');
+    embeddingService.upsert.mockImplementation(async (_ctx: unknown, dto: { entityId: string }) => {
+      if (dto.entityId === 'c2') {
+        throw writeError;
+      }
 
-    await listener.indexChunks({ fileId: 'file-1', chunkIds: ['c1', 'c2', 'c3'] } as never);
+      return null;
+    });
 
-    expect(embeddingService.upsert).toHaveBeenCalledTimes(2); // c1 and c3 only
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
-      { userId: 'user-1' },
-      expect.objectContaining({ entityId: 'c1' }),
-    );
-    expect(embeddingService.upsert).toHaveBeenCalledWith(
-      { userId: 'user-1' },
-      expect.objectContaining({ entityId: 'c3' }),
-    );
-    // The failed chunk's vector write is also skipped — it throws before reaching it.
+    await expect(
+      call({ fileId: 'file-1', chunkIds: ['c1', 'c2', 'c3'] } as never, ack),
+    ).resolves.toBeUndefined();
+
+    expect(embeddingService.upsert).toHaveBeenCalledTimes(3);
+    // The failed chunk's vector write is skipped — it throws before reaching it.
     expect(vectorService.upsert).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalledWith(
       'Failed to index chunk, continuing',
-      expect.objectContaining({ chunkId: 'c2', error: 'embedding service unavailable' }),
+      expect.objectContaining({ chunkId: 'c2', error: 'db write failed' }),
+    );
+    expect(ack.done).not.toHaveBeenCalled();
+    expect(ack.fail).toHaveBeenCalledTimes(1);
+    expect(ack.fail).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('c2') }),
     );
   });
 
   it('is a no-op with no chunks found for the payload ids', async () => {
-    const { listener, embeddingService, vectorService } = makeListener([]);
+    const { call, embeddingGenerationService, embeddingService, vectorService } = makeListener([]);
+    const ack = makeAck();
 
-    await listener.indexChunks({ fileId: 'file-1', chunkIds: ['missing'] } as never);
+    await call({ fileId: 'file-1', chunkIds: ['missing'] } as never, ack);
 
+    expect(embeddingGenerationService.generateEmbeddings).not.toHaveBeenCalled();
     expect(embeddingService.upsert).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
+    expect(ack.done).toHaveBeenCalledTimes(1);
+    expect(ack.fail).not.toHaveBeenCalled();
   });
 });

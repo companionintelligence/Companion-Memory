@@ -33,6 +33,8 @@ function makeResolver() {
 
   const fileService = { getEntitiesForFiles: jest.fn().mockResolvedValue([]) };
   const fileChunkService = { getEntitiesForFileChunks: jest.fn().mockResolvedValue([]) };
+  const productModelService = { getEntitiesForProducts: jest.fn().mockResolvedValue([] as Identifier[]) };
+  const receiptService = { getEntitiesForReceipts: jest.fn().mockResolvedValue([] as Identifier[]) };
   const resolver = new SearchResolver(
     browserActivityService as never,
     communicationService as never,
@@ -46,8 +48,16 @@ function makeResolver() {
     noteService as never,
     personService as never,
     placeService as never,
+    productModelService as never,
+    receiptService as never,
     answerService as never,
     savedSearchService as never,
+    {
+      // Authorizes with no ceiling: these suites are not about consent, and a
+      // share created before `share_max_disclosure` existed reads exactly this way.
+      authorize: jest.fn().mockResolvedValue({ grantId: 'grant-test', ceiling: undefined }),
+      recordRead: jest.fn().mockResolvedValue(undefined),
+    } as never,
     searchService as never,
     tagService as never,
     { isFeatureEnabled: jest.fn().mockResolvedValue(true) } as never,

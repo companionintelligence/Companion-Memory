@@ -36,12 +36,19 @@ export interface ImportWizardProps {
   onStepChange?: (step: Step) => void;
   /** Whether Export is reachable yet, for a host rendering the step buttons. */
   onCanExportChange?: (canExport: boolean) => void;
+  /**
+   * `contained` pins Continue and scrolls only the catalog. `page` is the
+   * /sources/import column and onboarding: the host scrolls, so the search
+   * box and catalog grow with the header and steps above them.
+   */
+  scroll?: 'contained' | 'page';
 }
 
 export function ImportWizard({
   step: controlledStep,
   onStepChange,
   onCanExportChange,
+  scroll = 'contained',
 }: ImportWizardProps = {}) {
   const api = useImportApi();
   const [ownStep, setOwnStep] = useState<Step>('pick');
@@ -119,21 +126,26 @@ export function ImportWizard({
     });
   }, []);
 
+  const pageScroll = scroll === 'page';
+
   return (
-    <div className="flex h-full min-h-0 flex-col gap-6">
+    <div className={cn('flex flex-col gap-6', pageScroll ? '' : 'h-full min-h-0')}>
       {catalogError != null && <p className="shrink-0 text-sm text-destructive">{catalogError}</p>}
 
-      {/* The scroll region. Pick manages its own scrolling (its Continue stays
-          pinned, only the grid scrolls), so this wrapper hides overflow for it;
-          Export and Sync scroll whole. Either way the scrollbar lives in here,
-          where its appearance only narrows content that is left-aligned or
-          re-laying-out anyway. */}
-      <div className={cn('min-h-0 flex-1', step === 'pick' ? 'overflow-hidden' : 'overflow-y-auto')}>
+      {/* Contained: Pick pins Continue and this wrapper is the scroller.
+          Page (onboarding): the catalog grows; the host page is the scroller. */}
+      <div
+        className={cn(
+          pageScroll ? '' : 'min-h-0 flex-1',
+          pageScroll ? '' : step === 'pick' ? 'overflow-hidden' : 'overflow-y-auto',
+        )}
+      >
         {step === 'pick' && (
           <PickStep
             catalog={catalog}
             picked={picked}
             onToggle={togglePicked}
+            pinContinue={!pageScroll}
             onContinue={() => {
               setExportIdx(0);
               setStep('export');

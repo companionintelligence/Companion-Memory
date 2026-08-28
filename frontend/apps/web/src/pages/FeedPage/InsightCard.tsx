@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { BentoCard } from '../../components/BentoCard';
+import { Markdown } from '../../components/Markdown';
 
 export const INSIGHT_CARD_FRAGMENT = gql(`
   fragment InsightCardData on InsightItemType {
@@ -41,7 +42,12 @@ export function InsightCard({ insight, onClick, onDismiss, isSeen = false, class
         )}
       </div>
 
-      <p className="text-base text-foreground">{data.summaryText}</p>
+      {/* A div, not a p: summaryText is model-authored and may be several
+          paragraphs or a list, and ReactMarkdown emits block elements that
+          cannot legally nest inside a <p>. */}
+      <div className="text-base text-foreground">
+        <Markdown>{data.summaryText}</Markdown>
+      </div>
 
       {data.keyActions && data.keyActions.length > 0 && (
         <div className="mt-1">
@@ -50,7 +56,11 @@ export function InsightCard({ insight, onClick, onDismiss, isSeen = false, class
             {data.keyActions.map((action, idx) => (
               <li key={idx} className="flex items-start gap-2 text-sm text-foreground/90">
                 <span className="mt-1.5 w-1.5 h-1.5 rounded-full bg-primary shrink-0" />
-                <span>{action}</span>
+                {/* inline: the li already provides the block and its own bullet
+                    glyph, so a paragraph wrapper here would break the flex row. */}
+                <span>
+                  <Markdown inline>{action}</Markdown>
+                </span>
               </li>
             ))}
           </ul>

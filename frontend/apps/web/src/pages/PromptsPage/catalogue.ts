@@ -5,6 +5,8 @@
  * from the hook so both can be unit-tested without a renderer.
  */
 
+import type { AnswerEvidenceWire } from '@/components/AnswerDetails';
+
 /** Mirrors `ci.questions.answer_tier` / the `ANSWER_TIERS` const on the API. */
 export const ANSWER_TIERS = ['factual', 'preference', 'narrative'] as const;
 
@@ -33,11 +35,30 @@ export interface CatalogueAnswer {
   source: string | null;
   confidence: number | null;
   rationale: string | null;
+  /**
+   * The database rows an inferred answer was read out of, as
+   * `QuestionCatalogueAnswer.evidence` sends it. Null for a typed answer, an
+   * import, and any inferred row written before the column existed — never an
+   * empty citation list, which the speaker gate discards rather than stores.
+   *
+   * Declared even though the provenance drawer reads it defensively off the
+   * whole row: it is what makes this object safe to pass on whole, and it is
+   * what breaks the build rather than the drawer if the field is ever renamed.
+   */
+  evidence: AnswerEvidenceWire | null;
   answeredAt: string;
 }
 
 export interface CatalogueEntry {
   id: string;
+  /**
+   * `ci.questions.question_key` — the stable slug a curated question is known
+   * by, seeded by the migration that creates it, null for the ~1.3k rows
+   * nobody addresses by name. Anything that hardcodes a fixed set of questions
+   * names them by this and not by `id`: ids are minted per appliance, so a
+   * hardcoded one matches nothing on anybody else's machine.
+   */
+  key: string | null;
   text: string;
   category: string | null;
   answerTier: string | null;

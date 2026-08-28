@@ -2,12 +2,17 @@
 
 > **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
-> Status: **implemented** on `feat/derivation-engines` (PR #2029). Later workstreams in §10 stay out of scope.
+> Status: **implemented and merged to `main`** — the `feat/derivation-engines` work
+> (PR #2029) reached `main` on 2026-08-17 inside
+> [#2032](https://github.com/companionintelligence/CI-Server/pull/2032). Later
+> workstreams in §10 stay out of scope.
 > Tracker: [CI-Engineering #55](https://github.com/companionintelligence/CI-Engineering/issues/55)
 > · epic [#49](https://github.com/companionintelligence/CI-Engineering/issues/49)
 > · ADRs [0006–0008](https://github.com/companionintelligence/CI-Engineering/pull/56).
 >
-> Grounded against `origin/main` on 2026-08-17. Path citations are to that tree.
+> Grounded against `origin/main` on 2026-08-17. Path citations spot-checked
+> against `main` on 2026-08-19 and still resolve; the numbers and prose below
+> were not re-derived.
 
 This is **PR 1 of the remaining derivation-layer work**. It fills the largest hole:
 daily-metrics and the question catalog are a dashboard, not a derivation layer.

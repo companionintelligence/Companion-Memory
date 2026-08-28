@@ -15,7 +15,7 @@ import type { DataSource } from 'typeorm';
  *
  * It is also the reason the spec wrote to the appliance. The two properties are
  * the same property: a test that reads the operator's tables is a test running
- * against a database it must not write to, and this one writes — `ci.inventory`
+ * against a database it must not write to, and this one writes — `ci.objects`
  * and `ci.events` are the OUTPUT of the two stages it drives. There is no
  * arrangement of transactions that makes "drive real enrichers over the user's
  * archive" safe by construction; there is only rollback discipline, which is a
@@ -102,7 +102,7 @@ export interface SeededCorpus {
   events: number;
   /** Rows `ObjectPromoteStage`'s predicate selects: purchases + order rollups. */
   commerce: number;
-  /** Rows that mint a `ci.inventory` object. */
+  /** Rows that mint a `ci.objects` object. */
   purchases: number;
   /** Order rollups — `skipped: order_rollup_no_line_item`. */
   orders: number;
@@ -218,7 +218,7 @@ async function seedUser(dataSource: DataSource, userId: string, name: string): P
  *
  * ── The columns that are not arbitrary ─────────────────────────────────────
  *
- * `source_system` is non-null on commerce rows because `ci.inventory`'s
+ * `source_system` is non-null on commerce rows because `ci.objects`'s
  * idempotency key is `(owner_user_id, source_type, source_system, source_id)`
  * and a NULL in a unique index never conflicts with anything — a corpus with a
  * null `source_system` would let `ObjectPromoteStage` mint a SECOND object for

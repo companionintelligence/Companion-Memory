@@ -44,6 +44,8 @@ export const AVAILABLE_ENTITY_TYPES = [
   'Note',
   'Person',
   'Place',
+  'Product',
+  'Receipt',
   'Thing',
 ];
 

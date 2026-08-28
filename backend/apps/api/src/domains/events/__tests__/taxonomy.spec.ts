@@ -1,4 +1,10 @@
-import { describeJob, jobCategoryIndex, JOB_CATEGORIES, JOB_TYPES } from '../taxonomy';
+import {
+  describeJob,
+  jobCategoryIndex,
+  JOB_CATEGORIES,
+  JOB_TYPES,
+  SMART_ROTATION_WORK_LABELS,
+} from '../taxonomy';
 
 /**
  * The taxonomy is the layer that makes the dashboard legible: without it, the
@@ -80,11 +86,103 @@ describe('job taxonomy', () => {
 
   it('covers the search-index lifecycle for every indexed entity', () => {
     // These are generated, so a missing one means the generator lost an entity
-    // rather than that someone forgot to type it out.
-    for (const entity of ['note', 'person', 'place', 'thread', 'communication']) {
+    // rather than that someone forgot to type it out. product/receipt are
+    // covered here because they previously had no entry anywhere in the file.
+    for (const entity of ['note', 'person', 'place', 'thread', 'communication', 'product', 'receipt']) {
       for (const verb of ['created', 'updated', 'deleted']) {
         expect(describeJob(`${entity}.${verb}`).category).toBe(JOB_CATEGORIES.search);
       }
     }
+  });
+
+  it('resolves content.created to its search-index description, not the stale pipeline duplicate', () => {
+    // JOB_TYPES used to carry two literal definitions for content.created —
+    // one generated (category 'search'), one hand-written later in the object
+    // (category 'pipeline') — and object-literal ordering meant the second,
+    // wrong one silently won for every content.* event.
+    for (const verb of ['created', 'updated', 'deleted']) {
+      const descriptor = describeJob(`content.${verb}`);
+
+      expect(descriptor.category).toBe(JOB_CATEGORIES.search);
+    }
+
+    expect(describeJob('content.created').description).toBe('Index a new content record for search');
+  });
+
+  it('classifies the newly-added maintenance sweep-request, backfill and lifecycle events', () => {
+    for (const event of [
+      'maintenance.graph-edge-backfill-request',
+      'maintenance.search-index-backfill-request',
+      'file.image-description-backfill-request',
+      'user.created',
+      'ingest.coalesce',
+    ]) {
+      expect(describeJob(event).label).not.toBe('Unclassified job');
+    }
+  });
+
+  it('names the chat-turn memory producer rather than leaving it unclassified', () => {
+    // TurnFragmentCron fans this out one job per user; on the Jobs dashboard a
+    // per-user fan-out with no entry here is a wall of identical event names.
+    const descriptor = describeJob('agent-memory.turn-fragments');
+
+    expect(descriptor.label).not.toBe('Unclassified job');
+    expect(descriptor.category).toBe(JOB_CATEGORIES.ingest);
+    expect(descriptor.description.length).toBeGreaterThan(20);
+  });
+
+  it('drops the promotion_review rotation-work label the migration already retired', () => {
+    expect(SMART_ROTATION_WORK_LABELS.promotion_review).toBeUndefined();
+    expect(Object.keys(SMART_ROTATION_WORK_LABELS)).not.toContain('promotion_review');
+  });
+
+  it('disambiguates an event two unrelated listeners share by the queue each runs on', () => {
+    // communication.created fires on both `search-index` (indexing) and
+    // `people-linking` (graph stub-Person creation) — real queue names from
+    // CommunicationSearchIndexListener / CommunicationParticipantLinkListener.
+    const indexing = describeJob('communication.created', null, 'search-index');
+    const linking = describeJob('communication.created', null, 'people-linking');
+
+    expect(indexing.category).toBe(JOB_CATEGORIES.search);
+    expect(linking.category).toBe(JOB_CATEGORIES.graph);
+    expect(linking.label).not.toBe(indexing.label);
+
+    // Without a queue, or on a queue with no override, the event-only
+    // description is still the fallback — existing single-listener callers
+    // are unaffected.
+    expect(describeJob('communication.created').category).toBe(JOB_CATEGORIES.search);
+    expect(describeJob('communication.created', null, 'some-other-queue').category).toBe(
+      JOB_CATEGORIES.search,
+    );
+  });
+
+  it('disambiguates content.created between search-indexing and the pipeline arrival dispatch', () => {
+    // Real queue names from ContentSearchIndexListener / StageArrivalListener.
+    const indexing = describeJob('content.created', null, 'search-index');
+    const arrival = describeJob('content.created', null, 'pipeline-index');
+
+    expect(indexing.category).toBe(JOB_CATEGORIES.search);
+    expect(arrival.category).toBe(JOB_CATEGORIES.pipeline);
+  });
+
+  it('disambiguates user.created between saved-search seeding and inbox provisioning', () => {
+    // Real queue names from SeedDefaultSavedSearchesListener (default) /
+    // InboxProvisionListener (import-inbox-provision).
+    const seeded = describeJob('user.created', null, 'default');
+    const provisioned = describeJob('user.created', null, 'import-inbox-provision');
+
+    expect(seeded.category).toBe(JOB_CATEGORIES.personalization);
+    expect(provisioned.category).toBe(JOB_CATEGORIES.import);
+    expect(provisioned.label).not.toBe(seeded.label);
+  });
+
+  it('disambiguates answer.created between search-indexing and home confirmation', () => {
+    // Real queue names from AnswerSearchIndexListener (search-index) /
+    // HomeConfirmListener (default — no queue option given).
+    const indexing = describeJob('answer.created', null, 'search-index');
+    const homeConfirm = describeJob('answer.created', null, 'default');
+
+    expect(indexing.category).toBe(JOB_CATEGORIES.search);
+    expect(homeConfirm.category).toBe(JOB_CATEGORIES.graph);
   });
 });

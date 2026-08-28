@@ -14,7 +14,16 @@ the SQL is wrong. This one can.
 | | Isolation | Use it when |
 | --- | --- | --- |
 | **`pipelineHarness.ts`** | A throwaway **schema** for its source table, plus a throwaway **stage id** for its ledger rows, in whatever database you point it at. | The stage under test is synthetic — you invent the table it sweeps. This is most pipeline tests. |
-| **`scratchDatabase.ts`** | A throwaway **database**, created and dropped per run, with this repo's migrations applied. | The test drives a **real declared stage**, which names real tables (`ci.events`, `ci.inventory`) and cannot be relocated into a scratch schema. |
+| **`scratchDatabase.ts`** — now at [`src/domains/__tests__/support/`](../../../__tests__/support/scratchDatabase.ts) | A throwaway **database**, created and dropped per run, with this repo's migrations applied. | The test drives a **real declared stage**, which names real tables (`ci.events`, `ci.objects`) and cannot be relocated into a scratch schema. |
+
+> **Moved 2026-08-13.** `scratchDatabase.ts` and the connection resolution it
+> shares with `pipelineHarness.ts` now live in `src/domains/__tests__/support/`,
+> because a second domain needed them — `user/services/__tests__/AccountPurgeService.integration.spec.ts`
+> builds a database of its own to prove an account's data is really gone. A spec
+> in one domain importing another domain's `__tests__` is a
+> `no-cross-domain-internals` violation, and shared test machinery is exactly
+> what `src/domains/__tests__/` is for. `pipelineHarness.ts` re-exports the
+> connection helpers, so every pipeline import reads as it did before.
 
 The second exists because of an incident, and the incident is worth reading
 before choosing: see [Why `enrichmentLoop` needs a whole
@@ -40,7 +49,7 @@ Just the integration suite:
 yarn test src/domains/pipeline/__tests__/pipeline.integration.spec.ts
 ```
 
-The whole suite is ~30 assertions and finishes in about two seconds.
+The whole suite is 38 tests and finishes in a few seconds.
 
 ### Prerequisites
 
@@ -56,7 +65,9 @@ The whole suite is ~30 assertions and finishes in about two seconds.
 
 ## Connection: read from the environment, never hardcoded
 
-`pipelineHarness.ts` resolves its connection in this order. (`scratchDatabase.ts`
+Connection resolution lives in
+[`src/domains/__tests__/support/databaseConnection.ts`](../../../__tests__/support/databaseConnection.ts)
+and is re-exported here. It resolves in this order. (`scratchDatabase.ts`
 uses only the **host and port** from it, and creates its own database — see
 [Credentials](#credentials-and-why-there-is-no-fallback).)
 
@@ -120,7 +131,7 @@ console.warn
   [pipeline.integration] SKIPPED — no database configured — set PIPELINE_TEST_DATABASE_URL or …
 
 Test Suites: 1 skipped, 0 of 1 total
-Tests:       31 skipped, 31 total
+Tests:       38 skipped, 38 total
 ```
 
 ### Three outcomes, deliberately different
@@ -197,14 +208,14 @@ it invents the stage id, so the ledger rows can be deleted by key.
 
 `enrichmentLoop.integration.spec.ts` owns neither. It drives two **real declared
 stages** — `ObjectPromoteStage` and `TemporalRepairStage` — and a real stage
-names real tables in its SQL: it reads `ci.events` and writes `ci.inventory` and
+names real tables in its SQL: it reads `ci.events` and writes `ci.objects` and
 `ci.events`. That is correct; they are the appliance's tables. It also means the
 suite has no way to be pointed away from them.
 
 The first version of that spec dealt with this by funnelling every statement
 through one `QueryRunner` inside a transaction it always rolled back, and said
 so at length in its header. **It did not hold.** A run against the dev appliance
-committed roughly 599,000 `ci.pipeline_state` rows, 2,147 `ci.inventory` objects
+committed roughly 599,000 `ci.pipeline_state` rows, 2,147 `ci.objects` objects
 and 2,875 `ci.events` rows carrying repaired time provenance into somebody's
 personal archive. Nothing was destroyed — `TemporalRepairStage` writes alongside
 a timestamp, never over it — but none of it was authorised.
@@ -256,7 +267,7 @@ four facts from the server:
    earlier run is refused too.
 
 Anything else throws `REFUSING TO RUN`, naming what it found. All four failure
-modes are exercised by `harness/__tests__/scratchDatabase.spec.ts`, including
+modes are exercised by `src/domains/__tests__/support/__tests__/scratchDatabase.spec.ts`, including
 pointing the guard at a real database with real rows in it: a guard nobody has
 watched fail is a guard nobody knows is wired up.
 
@@ -405,7 +416,7 @@ can predict which ids land in which slice.
 
 ## What the suite currently pins
 
-`pipeline.integration.spec.ts`, 31 tests in seven blocks:
+`pipeline.integration.spec.ts`, 38 tests in eight blocks:
 
 1. **A stage end to end** — one terminal ledger row per applicable entity at the
    current version, with `attempts = 1` and the user denormalized; the
@@ -432,6 +443,13 @@ can predict which ids land in which slice.
    the right coverage buckets; an id the stage said *nothing* about is recorded
    `failed: stage_returned_no_result` and never as success; a skip with no reason
    is refused before anything is written.
+8. **A transient failure** — a `provider_unavailable` outage never quarantines
+   however long it lasts, refunds every `attempts` charge while counting
+   `transient_attempts` separately, holds the gate at the cap instead of
+   hammering the provider, resets to the base delay once a row succeeds, still
+   quarantines a row whose failure is its own fault, and
+   `releaseQuarantined()` restores a full budget by reason without touching
+   another user's rows.
 
 ## Not covered yet
 
@@ -443,7 +461,8 @@ Named so nobody mistakes the harness for more than it is:
 - `DeadLetterReaperListener` (it reads `pgboss.job`, which needs a real pg-boss).
 - `ci.pipeline_runs` / `ci.pipeline_shards` — not by *this* harness.
   `enrichmentLoop.integration.spec.ts` drives both, over a scratch database.
-- `JobMonitorService`, `IngestResetService`, `SyncOrchestrator`,
-  `MaintenanceOrchestratorService` — still without specs.
+- End-to-end coverage of `JobMonitorService`, `IngestResetService`,
+  `SyncOrchestrator` and `MaintenanceOrchestratorService`. Each now has a unit
+  spec of its own, but none is driven against a real database by this harness.
 - Concurrency. The claim's `ON CONFLICT … WHERE` guard is exercised, but not two
   workers racing the same slice; that wants two connections and a barrier.

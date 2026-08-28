@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.version = package['version']
   s.summary = package['description']
   # This pod is private and never published to a spec repo -- it's consumed only via the
-  # generated `:path =>` entry in ../../apps/mobile/ios/App/Podfile (see capacitor_pods
+  # generated `:path =>` entry in ../../apps/ios/ios/App/Podfile (see capacitor_pods
   # there), exactly like CiCapacitorLocalHub. license/homepage/author are filler for
   # CocoaPods' benefit, not derived from package.json (which has neither field),
   # matching this repo's "Private & Confidential" status.

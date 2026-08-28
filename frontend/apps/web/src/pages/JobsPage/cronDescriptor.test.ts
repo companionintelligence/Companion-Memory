@@ -51,6 +51,46 @@ describe('describeCron', () => {
     expect(describeCron('SyncOrchestrator.orchestrateSyncJobs', null).category).toBe('import');
   });
 
+  it('categorises every planning schedule as planning, not maintenance', () => {
+    // All five fell through to the `maintenance` default, so the plan automation
+    // read as housekeeping — the one category an operator scrolls past.
+    const planning = [
+      'PlanningJobsCron.todoScan',
+      'PlanningJobsCron.todoProcess',
+      'PlanningJobsCron.inboxScan',
+      'PlanningJobsCron.eventNow',
+      'PlanningJobsCron.verifyDone',
+    ];
+
+    for (const name of planning) {
+      const d = describeCron(name, null);
+
+      expect(d.category).toBe('planning');
+      expect(d.categoryLabel).toBe('Planning');
+    }
+  });
+
+  it('categorises the import sweep and the account purge from their own classes', () => {
+    // The import resume sweep is import work; the purge really is maintenance,
+    // but by rule rather than by falling off the end of the table.
+    expect(describeCron('ImportStageListener.sweepOnSchedule', null).category).toBe('import');
+    expect(describeCron('AccountPurgeCron.purgeDueAccounts', null).category).toBe('maintenance');
+  });
+
+  it('labels two schedules on one class as that class doing two things', () => {
+    // These read as "Job metrics" and "Purge on schedule": two unrelated-looking
+    // rows for one collector, and the second never said what it purges.
+    expect(describeCron('JobMetricsCollector.sampleOnSchedule', null).label).toBe('Job metrics sample');
+    expect(describeCron('JobMetricsCollector.purgeOnSchedule', null).label).toBe('Job metrics purge');
+    expect(describeCron('ImportStageListener.sweepOnSchedule', null).label).toBe('Import stage sweep');
+  });
+
+  it('drops an OnSchedule verb the class already says', () => {
+    // "Dead letter reaper reap" is worse than either half of it.
+    expect(describeCron('DeadLetterReaperListener.reapOnSchedule', null).label).toBe('Dead letter reaper');
+    expect(describeCron('StagedUploadPurgeCron.runOnSchedule', null).label).toBe('Staged upload purge');
+  });
+
   it('gives distinct labels to the smart-rotation family', () => {
     const names = [
       'SmartRotationInsightsCron.run',
@@ -63,12 +103,23 @@ describe('describeCron', () => {
     expect(new Set(labels).size).toBe(labels.length);
   });
 
-  it('passes a UUID through rather than mangling it', () => {
-    // An unnamed @Cron still registers as a UUID; there is nothing better to say,
-    // and inventing a label would hide that it needs naming.
+  it('flags a scheduler-minted key instead of rendering around it', () => {
+    // A UUID key means the @Cron shipped without a `name`, so it is re-minted
+    // every boot and its durable history can never be found. The descriptor used
+    // to pass the UUID through as a label under a made-up `maintenance`
+    // category, which made a backend bug look like a settled row.
     const uuid = '007c9ac0-fb23-4203-809b-c2d100b373e4';
+    const d = describeCron(uuid, null);
 
-    expect(describeCron(uuid, null).label).toBe(uuid);
+    expect(d.unnamed).toBe(true);
+    expect(d.category).toBe('unclassified');
+    // The key itself stays: it is the only thing that identifies the row.
+    expect(d.label).toBe(uuid);
+  });
+
+  it('leaves a properly named cron unflagged', () => {
+    expect(describeCron('PipelineTickCron.runOnSchedule', null).unnamed).toBe(false);
+    expect(describeCron('file.uploaded', TAXONOMY).unnamed).toBe(false);
   });
 
   it('falls back to maintenance for an unrecognised class', () => {

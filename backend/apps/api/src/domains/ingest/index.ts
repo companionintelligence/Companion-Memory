@@ -1,7 +1,8 @@
 /**
  * REST bulk-ingest plane (`/v1/*`). Hosts the G1 unified capture ingest
  * (POST /v1/events) and the batch ingest endpoints for every bulk kind —
- * communications, contents, inventory, browser-activity, positions, notes
+ * communications, contents, things, browser-activity, positions, notes,
+ * receipts, product-models, observations
  * (batch file upload lives on the files domain's BulkFilesController at
  * POST /v1/files) —
  * plus the bulk lifecycle pair POST /v1/ingest/finish + GET /v1/ingest/status,

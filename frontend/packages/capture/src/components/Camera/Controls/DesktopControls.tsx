@@ -23,14 +23,14 @@ import { useRecorder } from '../useRecorder';
 import { useRecordingMode } from '../useRecordingMode';
 
 interface Props {
-  onRecordingModeChange?: (mode: 'photo' | 'video' | 'inventory') => void;
+  onRecordingModeChange?: (mode: 'photo' | 'video' | 'thing') => void;
 }
 
 export function DesktopControls({ onRecordingModeChange }: Props) {
   const [{ isRecording }, { captureFrame, toggleRecording }] = useRecorder();
   const [{ microphoneEnabled, cameraEnabled }, { toggleMicrophone, toggleCamera }] = useMuteControls();
   const [{ facingMode }, { swapFacingMode }] = useFacingMode();
-  const [{ recordingMode }, { setPhotoMode, setVideoMode, setInventoryMode }] = useRecordingMode();
+  const [{ recordingMode }, { setPhotoMode, setVideoMode, setThingMode }] = useRecordingMode();
   const [{ cameras, selectedCamera, setSelectedCamera }] = useInputDevices();
 
   const RecordingIcon = isRecording ? CircleStop : Circle;
@@ -54,10 +54,10 @@ export function DesktopControls({ onRecordingModeChange }: Props) {
     captureFrame('photo');
   }
 
-  function handleInventoryCapture() {
-    setInventoryMode();
-    onRecordingModeChange?.('inventory');
-    captureFrame('inventory');
+  function handleThingCapture() {
+    setThingMode();
+    onRecordingModeChange?.('thing');
+    captureFrame('thing');
   }
 
   return (
@@ -81,9 +81,9 @@ export function DesktopControls({ onRecordingModeChange }: Props) {
 
         <Icon
           icon={Package}
-          tooltip="Capture inventory image"
-          className={recordingMode === 'inventory' ? 'text-yellow-300' : 'text-white'}
-          onClick={handleInventoryCapture}
+          tooltip="Capture a thing"
+          className={recordingMode === 'thing' ? 'text-yellow-300' : 'text-white'}
+          onClick={handleThingCapture}
         />
 
         <Divider />

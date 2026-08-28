@@ -407,12 +407,15 @@ ios/
 The Android and iOS stores share no code -- the schema, status vocabulary, `MAX_ATTEMPTS`,
 and capacity policy are duplicated by hand and must be changed together.
 
-> **Build gotcha:** `frontend/apps/android/node_modules/@ci/capacitor-local-hub` is a real
-> *copy* of this package on a `node-modules`-linker install (not a symlink), and Gradle
-> builds that copy. Editing a file here does not reach the build until `yarn install` is
-> re-run inside `frontend/apps/android` -- and Gradle will still report `BUILD SUCCESSFUL`
-> against the stale copy, so it looks like it worked. Re-run `yarn install` after every
-> edit to this package.
+> **Build gotcha:** the apps declare this package with Yarn's `portal:` protocol, which
+> materializes `node_modules/@ci/capacitor-local-hub` as a **symlink** into this directory
+> -- that is why the generated iOS Podfile lines point straight at
+> `../../../../packages/capacitor-local-hub` and CocoaPods compiles the working tree.
+> Where Yarn ends up **copying** instead, Gradle builds the copy: editing a file here does
+> not reach the build until `yarn install` is re-run inside `frontend/apps/android`, and
+> Gradle will still report `BUILD SUCCESSFUL` against the stale copy, so it looks like it
+> worked. If you are unsure which you have, re-run `yarn install` after every edit to this
+> package.
 
 Consumed by `frontend/apps/ios` and `frontend/apps/android` via `"@ci/capacitor-local-hub": "portal:../../packages/capacitor-local-hub"`,
 picked up by `npx cap sync` on the Android side (`capacitor.settings.gradle` /

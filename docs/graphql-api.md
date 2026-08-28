@@ -15,11 +15,19 @@
   `/api/graphql` (the proxy strips `/api`). Details:
   [api/graphql.md §1](api/graphql.md#1-endpoint--how-to-call-it).
 - Every resolver requires a credential — session JWT Bearer, `x-api-key`, or Portal OIDC
-  Bearer via `JwtOrApiKeyAuthGuard`. Details:
-  [api/auth-and-conventions.md §1–2](api/auth-and-conventions.md#1-authentication-mechanisms).
+  Bearer via `JwtOrApiKeyAuthGuard`, which every resolver but one declares. The exception is no
+  looser: `GraphResolver` declares no guard but still refuses an anonymous caller, because its `graph`
+  query resolves the user through `toServiceContext`, which throws `UnauthorizedException` when
+  the request carries no principal. No GraphQL field is pre-auth.
+  Details: [api/auth-and-conventions.md §1–2](api/auth-and-conventions.md#1-authentication-mechanisms).
 - API keys are created under **Settings → API Keys** (full value shown once) or via
-  `POST /keys`; send as the `x-api-key` header. Details:
+  `POST /keys` — which needs a browser session or a CI-Portal bearer, never another key;
+  send the key as the `x-api-key` header. Details:
   [api/auth-and-conventions.md §1.2](api/auth-and-conventions.md#12-api-keys-programmatic-clients).
+- **Create the key without scopes.** A key carrying a non-empty `scopes` array is confined
+  deny-by-default to the routes that grant one of its scopes, and no GraphQL resolver declares
+  a scope — so a scoped key authenticates and is then refused on every field. Leave `scopes`
+  empty (full user authority) for a GraphiQL/exploration key.
 
 ```bash
 # Query the API with a key
@@ -71,7 +79,8 @@ you upgrade. GraphiQL's own light/dark toggle still works — the branding carri
 
 > **User-facing version:** the "API Playground (GraphiQL)" walkthrough for end users lives on
 > the **Companion Memory** page in CI-Docs
-> (`src/content/docs/first-party-apps/digital-memory-server.mdx` → *API Access*).
+> (`src/content/docs/apps-available/first-party-apps/companion-memory-server.mdx` → *API Access*).
+> The pre-2026-07 slug `/docs/first-party-apps/digital-memory-server` still resolves via a 301.
 
 ## Schema & code generation
 
@@ -100,6 +109,8 @@ hand-merging.
 | Symptom | Likely cause / fix |
 |---|---|
 | `401 Unauthorized` from GraphiQL | No/expired key. Create one in Settings → API Keys and Save it in the GraphiQL bar. |
+| `Forbidden resource` on every query, with a key that authenticates | The key is **scope-limited**. GraphQL resolvers declare no scopes, so deny-by-default refuses them. Use an unscoped key. |
+| `Error fetching schema` in production | Introspection is off when `NODE_ENV=production` (`domains/graphql/index.ts:122`). Queries still work; the schema explorer does not. |
 | `Error fetching schema` in GraphiQL when hitting the backend port directly | The fetcher targets `/api/graphql`; open GraphiQL via the app origin (`/api/graphiql`) so the proxy maps `/api/graphql` → `/graphql`. |
 | `Query is too complex: N` | Exceeds `graphql.maxQueryComplexity` (150 — [api/graphql.md §1](api/graphql.md#1-endpoint--how-to-call-it)). Request fewer fields / smaller `first`, or raise the limit in config. |
 | HTTP 413 on a big mutation | The 10 MB `/graphql` body limit ([api/graphql.md §1](api/graphql.md#1-endpoint--how-to-call-it)); split the batch. |

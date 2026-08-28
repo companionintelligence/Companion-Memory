@@ -1,228 +1,354 @@
-import { createEvent, fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, createEvent, fireEvent, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { ScheduleCandidate } from '@/api/useScheduleCandidates';
-import { CANDIDATE_DRAG_TYPE, EVENT_DRAG_TYPE, EVENT_EXTERNAL_DRAG_TYPE } from '@/lib/scheduleDrag';
+import { CANDIDATE_DRAG_TYPE } from '@/lib/scheduleDrag';
+import { HOLD_MS, cancelSchedulePointerDrag, getSchedulePointerDrag } from '@/lib/schedulePointerDrag';
+import { groupIntoSections } from '@/pages/PlanPage/taskSections';
+import type { PlanTask } from '@/pages/PlanPage/usePlanTasks';
+import { renderWithProviders } from '@/test/renderWithProviders';
 
-import { TaskSlate } from './TaskSlate';
+import { TaskSlate, TaskSlateDrawer } from './TaskSlate';
 
-const featureState = vi.hoisted(() => ({ chatPage: true }));
+const TODAY = '2026-08-23';
 
-vi.mock('@/hooks', () => ({
-  useAuth: () => [{ authToken: 'test-token' }],
-}));
-
-vi.mock('@/common/feature', () => ({
-  useFeatures: () => ({
-    isFeatureEnabled: (name: string) => name === 'chat.page' && featureState.chatPage,
-  }),
-}));
-
-vi.mock('@/components/ChatWithAgent', () => ({
-  ChatWithAgentMenu: () => <button type="button">Chat</button>,
-}));
-
-function candidate(overrides: Partial<ScheduleCandidate> = {}): ScheduleCandidate {
+function task(overrides: Partial<PlanTask> = {}): PlanTask {
   return {
-    id: 'c1',
+    id: 't1',
     title: 'Book the dentist',
-    description: null,
-    rationale: 'You wrote this down.',
-    rationaleSources: [{ kind: 'answer', id: 'a1', note: null }],
-    windowStart: new Date(2026, 7, 3).toISOString(),
-    windowEnd: new Date(2026, 7, 10).toISOString(),
-    timeFlex: 'week',
-    durationMinutes: 30,
-    l0Class: null,
-    fitScore: null,
     status: 'open',
-    generator: 'braindump/llm',
-    confidence: 0.9,
-    personalization: null,
+    priority: 3,
     ...overrides,
   };
 }
 
-/** jsdom has no DragEvent; hand-build one carrying our dataTransfer stub. */
-function dragEventOn(
-  node: HTMLElement,
-  kind: 'dragOver' | 'drop' | 'dragStart' | 'dragEnd',
-  types: string[],
-  data: Record<string, string> = {},
-) {
-  const evt = createEvent[kind](node, {
-    dataTransfer: {
-      types,
-      getData: (key: string) => data[key] ?? '',
-      setData: () => {},
-      dropEffect: '',
-      effectAllowed: '',
-    },
-  });
-  fireEvent(node, evt);
-
-  return evt;
+function backlog(tasks: PlanTask[]) {
+  return groupIntoSections(tasks, TODAY).filter(
+    (section) => section.key === 'proposed' || section.key === 'unscheduled',
+  );
 }
 
-function panel(container: HTMLElement) {
-  return container.querySelector('.rounded-xl') as HTMLElement;
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
 }
 
-const NOOP = { loading: false, onDecline: () => {}, onSnooze: () => {} };
+const NOOP = { loading: false };
 
-describe('TaskSlate — taking a committed event back off the week', () => {
-  it('returns an event dropped on the rail', () => {
-    const onReturnEvent = vi.fn();
-    const { container } = render(
-      <TaskSlate candidates={[candidate()]} {...NOOP} onReturnEvent={onReturnEvent} />,
+describe('TaskSlate — Plan backlog', () => {
+  it('shows Proposed and Unscheduled from the same bucketing as Plan', async () => {
+    renderWithProviders(
+      <TaskSlate
+        sections={backlog([
+          task({ id: 'p1', title: 'Try this', status: 'proposed' }),
+          task({ id: 'u1', title: 'Call Mum', dueAt: '2026-08-25T17:00:00.000Z' }),
+        ])}
+        {...NOOP}
+      />,
     );
 
-    dragEventOn(panel(container), 'drop', [EVENT_DRAG_TYPE], {
-      [EVENT_DRAG_TYPE]: JSON.stringify({ id: 'event-9', grabOffsetMs: 0 }),
+    expect(await screen.findByRole('heading', { name: /^proposed/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^unscheduled/i })).toBeInTheDocument();
+    expect(screen.getByText('Try this')).toBeInTheDocument();
+    expect(screen.getByText('Call Mum')).toBeInTheDocument();
+    expect(screen.queryByText(/scheduled on calendar/i)).not.toBeInTheDocument();
+  });
+
+  it('does not put scheduled or done work on the rail', () => {
+    renderWithProviders(
+      <TaskSlate
+        sections={backlog([
+          task({ id: 's1', title: 'Already placed', scheduledFor: '2026-08-24', dueAt: '2026-08-24T17:00:00.000Z' }),
+          task({ id: 'd1', title: 'Finished', status: 'done' }),
+        ])}
+        {...NOOP}
+      />,
+    );
+
+    expect(screen.queryByText('Already placed')).not.toBeInTheDocument();
+    expect(screen.queryByText('Finished')).not.toBeInTheDocument();
+    expect(screen.getByText(/Nothing in Proposed or Unscheduled/)).toBeInTheDocument();
+  });
+
+  it('stamps a card drag with the task id the calendar drop handlers already read', async () => {
+    renderWithProviders(
+      <TaskSlate
+        sections={backlog([task({ id: 'task-9', title: 'Call Mum', dueAt: '2026-08-25T17:00:00.000Z' })])}
+        {...NOOP}
+      />,
+    );
+
+    const card = (await screen.findByText('Call Mum')).closest('li') as HTMLElement;
+    const data: Record<string, string> = {};
+    const event = createEvent.dragStart(card, {
+      dataTransfer: {
+        setData: (key: string, value: string) => {
+          data[key] = value;
+        },
+        effectAllowed: '',
+        types: [],
+        getData: () => '',
+      },
     });
+    fireEvent(card, event);
 
-    expect(onReturnEvent).toHaveBeenCalledWith('event-9');
+    expect(data[CANDIDATE_DRAG_TYPE]).toBe('task-9');
+    expect(data['text/plain']).toBe('Call Mum');
   });
 
-  it('refuses an event a synced calendar owns', () => {
-    // There is no candidate behind a mirrored row, so the server would reject
-    // it; declining the drop here means the user learns before the gesture ends.
-    const onReturnEvent = vi.fn();
-    const { container } = render(
-      <TaskSlate candidates={[candidate()]} {...NOOP} onReturnEvent={onReturnEvent} />,
+  it('offers dismiss only on proposed cards', async () => {
+    const onDismissProposed = vi.fn();
+
+    renderWithProviders(
+      <TaskSlate
+        sections={backlog([
+          task({ id: 'p1', title: 'Try this', status: 'proposed' }),
+          task({ id: 'u1', title: 'Call Mum', dueAt: '2026-08-25T17:00:00.000Z' }),
+        ])}
+        {...NOOP}
+        onDismissProposed={onDismissProposed}
+      />,
     );
 
-    dragEventOn(panel(container), 'drop', [EVENT_DRAG_TYPE, EVENT_EXTERNAL_DRAG_TYPE], {
-      [EVENT_DRAG_TYPE]: JSON.stringify({ id: 'event-9', grabOffsetMs: 0, externallyOwned: true }),
-    });
-
-    expect(onReturnEvent).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByLabelText('Dismiss Try this'));
+    expect(onDismissProposed).toHaveBeenCalledWith('p1');
+    expect(screen.queryByLabelText('Dismiss Call Mum')).not.toBeInTheDocument();
   });
 
-  it('does not offer to take an externally-owned event, rather than refusing after the drop', () => {
-    // getData is blanked during dragover, so returnability rides as a type KEY.
-    // Without it the rail would promise "drop to take it off the week" and then
-    // silently do nothing — a worse way to find out than never offering.
-    const { container } = render(<TaskSlate candidates={[candidate()]} {...NOOP} onReturnEvent={() => {}} />);
-
-    const mine = dragEventOn(panel(container), 'dragOver', [EVENT_DRAG_TYPE]);
-    expect(mine.defaultPrevented).toBe(true);
-
-    const theirs = dragEventOn(panel(container), 'dragOver', [EVENT_DRAG_TYPE, EVENT_EXTERNAL_DRAG_TYPE]);
-    expect(theirs.defaultPrevented).toBe(false);
-  });
-
-  it('ignores a payload that is not ours', () => {
-    const onReturnEvent = vi.fn();
-    const { container } = render(
-      <TaskSlate candidates={[candidate()]} {...NOOP} onReturnEvent={onReturnEvent} />,
+  it('lists overdue after upcoming instead of pinning it to the column foot', async () => {
+    renderWithProviders(
+      <TaskSlate
+        sections={backlog([
+          task({ id: 'u1', title: 'Call Mum', dueAt: '2026-08-25T17:00:00.000Z' }),
+          task({ id: 'o1', title: 'Pay the bill', dueAt: '2026-08-20T17:00:00.000Z' }),
+        ])}
+        {...NOOP}
+      />,
     );
 
-    dragEventOn(panel(container), 'drop', [EVENT_DRAG_TYPE], { [EVENT_DRAG_TYPE]: 'not json' });
+    const upcoming = await screen.findByRole('heading', { name: /^upcoming/i });
+    const overdue = screen.getByRole('heading', { name: /^overdue/i });
 
-    expect(onReturnEvent).not.toHaveBeenCalled();
-  });
-
-  it('takes no event drops when returning is not wired up', () => {
-    const { container } = render(<TaskSlate candidates={[candidate()]} {...NOOP} />);
-
-    expect(() =>
-      dragEventOn(panel(container), 'drop', [EVENT_DRAG_TYPE], {
-        [EVENT_DRAG_TYPE]: JSON.stringify({ id: 'event-9', grabOffsetMs: 0 }),
-      }),
-    ).not.toThrow();
-  });
-});
-
-describe('TaskSlate — dragging a card away to dismiss it', () => {
-  function startCardDrag(container: HTMLElement) {
-    const card = container.querySelector('li[draggable]') as HTMLElement;
-    dragEventOn(card, 'dragStart', [CANDIDATE_DRAG_TYPE]);
-
-    return card;
-  }
-
-  it('offers the dismiss zone only while a card is in flight', () => {
-    const { container } = render(<TaskSlate candidates={[candidate()]} {...NOOP} />);
-
-    expect(screen.queryByText('drop to dismiss')).not.toBeInTheDocument();
-
-    const card = startCardDrag(container);
-    expect(screen.getByText('drop to dismiss')).toBeInTheDocument();
-
-    // However the drag ends, the zone goes away — it must not strand on screen.
-    dragEventOn(card, 'dragEnd', [CANDIDATE_DRAG_TYPE]);
-    expect(screen.queryByText('drop to dismiss')).not.toBeInTheDocument();
-  });
-
-  it('declines the card dropped on it', () => {
-    const onDecline = vi.fn();
-    const { container } = render(
-      <TaskSlate candidates={[candidate({ id: 'c7' })]} {...NOOP} onDecline={onDecline} />,
+    expect(upcoming.compareDocumentPosition(overdue) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
     );
-
-    startCardDrag(container);
-    const zone = screen.getByText('drop to dismiss').closest('div') as HTMLElement;
-
-    dragEventOn(zone, 'drop', [CANDIDATE_DRAG_TYPE], { [CANDIDATE_DRAG_TYPE]: 'c7' });
-
-    // `not_now` rather than `never`: the user dragged it away, they did not say
-    // they never want to see it again. That is what the ✕ is for.
-    expect(onDecline).toHaveBeenCalledWith('c7', 'not_now');
-  });
-
-  it('ignores a drop carrying no candidate', () => {
-    const onDecline = vi.fn();
-    const { container } = render(<TaskSlate candidates={[candidate()]} {...NOOP} onDecline={onDecline} />);
-
-    startCardDrag(container);
-    const zone = screen.getByText('drop to dismiss').closest('div') as HTMLElement;
-
-    dragEventOn(zone, 'drop', [CANDIDATE_DRAG_TYPE], { [CANDIDATE_DRAG_TYPE]: '' });
-
-    expect(onDecline).not.toHaveBeenCalled();
-  });
-});
-
-describe('TaskSlate — chat actions', () => {
-  it('hides chat and personalize controls when chat.page is off', () => {
-    featureState.chatPage = false;
-    render(<TaskSlate candidates={[candidate()]} {...NOOP} />);
-
-    expect(screen.queryByLabelText(/Personalize Book the dentist/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Chat' })).not.toBeInTheDocument();
-
-    featureState.chatPage = true;
+    expect(overdue.parentElement).not.toHaveClass('mt-auto');
   });
 });
 
 describe('TaskSlate — the header hint', () => {
   it('tells you what to do with the cards that are there', () => {
-    render(<TaskSlate candidates={[candidate()]} {...NOOP} />);
+    renderWithProviders(
+      <TaskSlate
+        sections={backlog([task({ status: 'proposed' })])}
+        {...NOOP}
+      />,
+    );
 
     expect(screen.getByText('drag one onto a day above')).toBeInTheDocument();
   });
 
   it('says nothing at all when the rail is empty', () => {
-    // The slot is an affordance hint. It used to fall back to "unplaced" — a
-    // noun describing the zero cards that are not there, sitting where an
-    // instruction belongs. The empty-state paragraph is what explains an empty
-    // rail.
-    render(<TaskSlate candidates={[]} {...NOOP} />);
+    renderWithProviders(<TaskSlate sections={[]} {...NOOP} />);
 
     expect(screen.queryByText('unplaced')).not.toBeInTheDocument();
-    expect(screen.getByText(/Nothing waiting yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Nothing in Proposed or Unscheduled/)).toBeInTheDocument();
+  });
+});
+
+describe('TaskSlate — failed and loading fetches', () => {
+  it('shows the slate as failed rather than empty', () => {
+    renderWithProviders(<TaskSlate sections={[]} loading={false} error />);
+
+    expect(screen.getByText(/Could not load your plan/)).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing in Proposed or Unscheduled/)).not.toBeInTheDocument();
   });
 
-  it('aligns the empty state to the top of the row, not its centre', () => {
-    // `self-center` centred the copy against the whole compose column (textarea
-    // plus the button beneath it), dropping it below the placeholder it reads
-    // next to — and centred it horizontally once the row stacks on mobile.
-    render(<TaskSlate candidates={[]} {...NOOP} />);
+  it('says it is loading only while there is nothing to show yet', () => {
+    renderWithProviders(<TaskSlate sections={[]} loading />);
 
-    const empty = screen.getByText(/Nothing waiting yet/);
+    expect(screen.getByText(/Loading your plan/)).toBeInTheDocument();
+  });
+});
 
-    expect(empty.className).toContain('self-start');
-    expect(empty.className).not.toContain('self-center');
+describe('TaskSlate — phone tabs', () => {
+  afterEach(() => {
+    setViewport(false);
+    cancelSchedulePointerDrag();
+    vi.useRealTimers();
+  });
+
+  it('shows one Plan column at a time behind a tablist', async () => {
+    setViewport(true);
+
+    renderWithProviders(
+      <TaskSlate
+        sections={backlog([
+          task({ id: 'p1', title: 'Try this', status: 'proposed' }),
+          task({ id: 'u1', title: 'Call Mum', dueAt: '2026-08-20T17:00:00.000Z' }),
+        ])}
+        {...NOOP}
+      />,
+    );
+
+    expect(await screen.findByRole('tablist')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^proposed/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Try this')).toBeInTheDocument();
+    expect(screen.queryByText('Call Mum')).not.toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /unscheduled/i }), { button: 0 });
+
+    expect(await screen.findByText('Call Mum')).toBeInTheDocument();
+    expect(screen.queryByText('Try this')).not.toBeInTheDocument();
+  });
+
+  it('tells a phone to drag the handle rather than hold the card', async () => {
+    setViewport(true);
+
+    renderWithProviders(
+      <TaskSlate sections={backlog([task({ status: 'proposed' })])} {...NOOP} />,
+    );
+
+    expect(await screen.findByText('drag the handle onto the day above')).toBeInTheDocument();
+  });
+
+  it('picks a card up after a touch hold so it can be dropped on the calendar', async () => {
+    setViewport(true);
+    vi.useFakeTimers();
+
+    renderWithProviders(
+      <TaskSlate sections={backlog([task({ id: 'task-9', title: 'Call Mum', status: 'proposed' })])} {...NOOP} />,
+    );
+
+    const card = screen.getByText('Call Mum').closest('li') as HTMLElement;
+    fireEvent.pointerDown(card, {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+      button: 0,
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(HOLD_MS);
+    });
+
+    expect(getSchedulePointerDrag()?.payload).toEqual({
+      kind: 'candidate',
+      id: 'task-9',
+      title: 'Call Mum',
+    });
+
+    fireEvent.pointerUp(window, { pointerId: 1, pointerType: 'touch', clientX: 10, clientY: 10 });
+    expect(getSchedulePointerDrag()).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it('starts a drag from the six-dot handle without waiting for a hold', async () => {
+    setViewport(true);
+
+    renderWithProviders(
+      <TaskSlate sections={backlog([task({ id: 'task-9', title: 'Call Mum', status: 'proposed' })])} {...NOOP} />,
+    );
+
+    const handle = await screen.findByRole('button', { name: /drag call mum onto the calendar/i });
+    fireEvent.pointerDown(handle, {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+      button: 0,
+    });
+
+    expect(getSchedulePointerDrag()?.payload).toEqual({
+      kind: 'candidate',
+      id: 'task-9',
+      title: 'Call Mum',
+    });
+
+    fireEvent.pointerUp(window, { pointerId: 1, pointerType: 'touch', clientX: 40, clientY: 80 });
+    expect(getSchedulePointerDrag()).toBeNull();
+  });
+});
+
+/**
+ * On a phone the backlog moves off the calendar board entirely. It is reachable
+ * — that is the point of the drawer — but it is not a second place to schedule
+ * work, because the drawer covers the only day column the phone has.
+ */
+describe('TaskSlateDrawer — the phone drawer', () => {
+  afterEach(() => setViewport(false));
+
+  it('stays shut until it is asked for', () => {
+    renderWithProviders(
+      <TaskSlateDrawer
+        open={false}
+        onOpenChange={() => {}}
+        sections={backlog([task({ status: 'proposed' })])}
+        {...NOOP}
+      />,
+    );
+
+    expect(screen.queryByText('Book the dentist')).not.toBeInTheDocument();
+  });
+
+  it('lists the backlog without offering a drag onto a calendar it covers', async () => {
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
+        {...NOOP}
+      />,
+    );
+
+    const card = (await screen.findByText('Try this')).closest('li') as HTMLElement;
+
+    expect(card).toHaveAttribute('draggable', 'false');
+    expect(
+      screen.queryByRole('button', { name: /drag try this onto the calendar/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/Schedule it on the Plan page/)).toBeInTheDocument();
+  });
+
+  it('still lets a proposed card be declined', async () => {
+    const onDismissProposed = vi.fn();
+
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
+        {...NOOP}
+        onDismissProposed={onDismissProposed}
+      />,
+    );
+
+    fireEvent.click(await screen.findByLabelText('Dismiss Try this'));
+    expect(onDismissProposed).toHaveBeenCalledWith('p1');
+  });
+
+  it('says the plan failed rather than that there is nothing waiting', async () => {
+    renderWithProviders(
+      <TaskSlateDrawer open onOpenChange={() => {}} sections={[]} loading={false} error />,
+    );
+
+    expect(await screen.findByText(/Could not load your plan/)).toBeInTheDocument();
+    expect(screen.queryByText(/Nothing in Proposed or Unscheduled/)).not.toBeInTheDocument();
+  });
+
+  it('does not tell an empty drawer to drop anything on a day', async () => {
+    renderWithProviders(<TaskSlateDrawer open onOpenChange={() => {}} sections={[]} {...NOOP} />);
+
+    expect(await screen.findByText(/Nothing in Proposed or Unscheduled/)).toBeInTheDocument();
+    expect(screen.queryByText(/drop onto a day/)).not.toBeInTheDocument();
   });
 });

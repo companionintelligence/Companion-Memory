@@ -42,8 +42,71 @@ const GET_EVENT_TYPES = gql(`
   }
 `);
 
-const EXPAND_LABEL_CLASS =
-  'max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover:ml-1.5 group-hover:max-w-[7rem] group-hover:opacity-100 group-focus-visible:ml-1.5 group-focus-visible:max-w-[7rem] group-focus-visible:opacity-100 group-data-[state=open]:ml-1.5 group-data-[state=open]:max-w-[7rem] group-data-[state=open]:opacity-100';
+const EXPAND_LABEL_BASE_CLASS =
+  'overflow-hidden text-ellipsis whitespace-nowrap transition-all duration-200 ease-out';
+
+/** Collapsed to nothing until the pointer (or keyboard focus, or the open menu) asks for it. */
+const EXPAND_LABEL_HOVER_CLASS =
+  'max-w-0 opacity-0 group-hover:ml-1.5 group-hover:max-w-[7rem] group-hover:opacity-100 group-focus-visible:ml-1.5 group-focus-visible:max-w-[7rem] group-focus-visible:opacity-100 group-data-[state=open]:ml-1.5 group-data-[state=open]:max-w-[7rem] group-data-[state=open]:opacity-100';
+
+/**
+ * An engaged filter keeps its label on screen. A phone has no hover, so the
+ * hover-only reveal left the selected categories as anonymous icons (#2312);
+ * the cap plus `text-ellipsis` keeps a long value (a person's name, a pile of
+ * tags) from stretching the bar on a 375px viewport.
+ */
+const EXPAND_LABEL_REVEALED_CLASS = 'ml-1.5 max-w-[7rem] opacity-100';
+
+function expandLabelClass(revealed: boolean) {
+  return cn(EXPAND_LABEL_BASE_CLASS, revealed ? EXPAND_LABEL_REVEALED_CLASS : EXPAND_LABEL_HOVER_CLASS);
+}
+
+/** The dropdown caret keeps its gap from a label that is already showing. */
+function chevronClass(revealed: boolean) {
+  return cn(
+    'h-3.5 w-3.5 shrink-0 opacity-50 transition-transform duration-200 group-data-[state=open]:rotate-180',
+    revealed ? 'ml-1' : 'ml-0 group-hover:ml-1 group-data-[state=open]:ml-1',
+  );
+}
+
+/**
+ * Voice-over reads the button's aria-label instead of its visible text, so the
+ * chosen value has to ride along with the category word.
+ */
+function filterAriaLabel(categoryLabel: string, valueLabel: string) {
+  return valueLabel === categoryLabel ? categoryLabel : `${categoryLabel}: ${valueLabel}`;
+}
+
+/**
+ * What a group dropdown (Content, Things) is narrowed to right now: the chosen
+ * item's label, the category word when the whole group is chosen, or null when
+ * the current filter isn't confined to this group at all.
+ */
+function groupSelectionLabel(
+  category: Extract<WhatCategory, { kind: 'group' }>,
+  selectedEntityTypes: string[],
+  isFiltered: boolean,
+): string | null {
+  if (!isFiltered || selectedEntityTypes.length === 0) {
+    return null;
+  }
+
+  const types = entityTypesForCategory(category);
+
+  if (!selectedEntityTypes.every((type) => types.includes(type))) {
+    return null;
+  }
+
+  const chosen = category.items.filter((item) => selectedEntityTypes.includes(item.entityType));
+
+  if (chosen.length === 0) {
+    return null;
+  }
+
+  return chosen.length === category.items.length
+    ? category.label
+    : chosen.map((item) => item.label).join(', ');
+}
 
 function categoryButtonClass(selected: boolean, active: boolean) {
   return cn(
@@ -127,7 +190,7 @@ function StandaloneWhatButton({
   selected: boolean;
   active: boolean;
 }) {
-  // No tooltip here: EXPAND_LABEL_CLASS already animates the label into view on
+  // No tooltip here: expandLabelClass already animates the label into view on
   // hover and focus, so a bubble would paint the same text a second time, on top
   // of the text it duplicates.
   return (
@@ -139,7 +202,7 @@ function StandaloneWhatButton({
       className={categoryButtonClass(selected, active)}
     >
       <CategoryIcon icon={category.icon} toneClass={WHAT_BAR_ICON_CLASS[category.id]} entityIcon />
-      <span className={EXPAND_LABEL_CLASS}>{category.label}</span>
+      <span className={expandLabelClass(selected)}>{category.label}</span>
     </button>
   );
 }
@@ -147,6 +210,7 @@ function StandaloneWhatButton({
 function GroupWhatDropdown({
   category,
   selectedEntityTypes,
+  isFiltered,
   isGroupSelected,
   isGroupActive,
   onSelectOnly,
@@ -154,6 +218,7 @@ function GroupWhatDropdown({
 }: {
   category: Extract<WhatCategory, { kind: 'group' }>;
   selectedEntityTypes: string[];
+  isFiltered: boolean;
   isGroupSelected: (types: string[]) => boolean;
   isGroupActive: (types: string[]) => boolean;
   onSelectOnly: (entityType: string) => void;
@@ -161,29 +226,30 @@ function GroupWhatDropdown({
 }) {
   const [open, setOpen] = useState(false);
   const types = entityTypesForCategory(category);
-  const selected = isGroupSelected(types);
+  // "Only Receipts" narrows to one member of the group, which is still this
+  // category being the filter — hence the chosen-value check alongside the
+  // whole-group one.
+  const chosenLabel = groupSelectionLabel(category, selectedEntityTypes, isFiltered);
+  const selected = isGroupSelected(types) || chosenLabel !== null;
   const active = isGroupActive(types);
+  const valueLabel = chosenLabel ?? category.label;
   const { CheckboxItem, Content, Label, Separator, Trigger } = DropdownMenu;
 
   return (
     <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
-      {/* No tooltip: the label already expands inline on hover (EXPAND_LABEL_CLASS). */}
+      {/* No tooltip: the label already expands inline on hover (expandLabelClass). */}
       <Trigger asChild>
         <button
           type="button"
           aria-pressed={active}
           aria-expanded={open}
           aria-haspopup="menu"
-          aria-label={category.label}
+          aria-label={filterAriaLabel(category.label, valueLabel)}
           className={categoryButtonClass(selected, active)}
         >
           <CategoryIcon icon={category.icon} toneClass={WHAT_BAR_ICON_CLASS[category.id]} entityIcon />
-          <span className={EXPAND_LABEL_CLASS}>{category.label}</span>
-          <ChevronDown
-            className={cn(
-              'ml-0 h-3.5 w-3.5 shrink-0 opacity-50 transition-transform duration-200 group-hover:ml-1 group-data-[state=open]:ml-1 group-data-[state=open]:rotate-180',
-            )}
-          />
+          <span className={expandLabelClass(selected)}>{valueLabel}</span>
+          <ChevronDown className={chevronClass(selected)} />
         </button>
       </Trigger>
 
@@ -279,6 +345,9 @@ function EventsWhatDropdown({
   const { CheckboxItem, Content, Label, Separator, Trigger } = DropdownMenu;
 
   const filterEngaged = selected || selectedEventTypes.length > 0;
+  // The kinds are the value here: "Events" alone says nothing about which
+  // activities survived the filter.
+  const valueLabel = selectedEventTypes.length > 0 ? selectedEventTypes.join(', ') : category.label;
 
   const setEventTypes = (next: string[]) => {
     setSearchParams((params) => {
@@ -302,23 +371,19 @@ function EventsWhatDropdown({
 
   return (
     <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
-      {/* No tooltip: the label already expands inline on hover (EXPAND_LABEL_CLASS). */}
+      {/* No tooltip: the label already expands inline on hover (expandLabelClass). */}
       <Trigger asChild>
         <button
           type="button"
           aria-pressed={active}
           aria-expanded={open}
           aria-haspopup="menu"
-          aria-label={category.label}
+          aria-label={filterAriaLabel(category.label, valueLabel)}
           className={categoryButtonClass(filterEngaged, active)}
         >
           <CategoryIcon icon={category.icon} toneClass={WHAT_BAR_ICON_CLASS[category.id]} entityIcon />
-          <span className={EXPAND_LABEL_CLASS}>{category.label}</span>
-          <ChevronDown
-            className={cn(
-              'ml-0 h-3.5 w-3.5 shrink-0 opacity-50 transition-transform duration-200 group-hover:ml-1 group-data-[state=open]:ml-1 group-data-[state=open]:rotate-180',
-            )}
-          />
+          <span className={expandLabelClass(filterEngaged)}>{valueLabel}</span>
+          <ChevronDown className={chevronClass(filterEngaged)} />
         </button>
       </Trigger>
 
@@ -384,25 +449,22 @@ function TagWhatDropdown({ tags, onTagsChange }: { tags: string[]; onTagsChange:
   const suggestions = data?.tags?.edges.map(({ node }: { node: { label: string } }) => node.label) ?? [];
   const { Content, Label, Trigger } = DropdownMenu;
   const { t } = useTranslation();
+  const valueLabel = active ? tags.join(', ') : 'Tag';
 
   return (
     <DropdownMenu modal={false} open={open} onOpenChange={setOpen}>
-      {/* No tooltip: the label already expands inline on hover (EXPAND_LABEL_CLASS). */}
+      {/* No tooltip: the label already expands inline on hover (expandLabelClass). */}
       <Trigger asChild>
         <button
           type="button"
           aria-expanded={open}
           aria-haspopup="dialog"
-          aria-label={t('MEMORY_ENTITY_TYPE_FILTER_TAG')}
+          aria-label={filterAriaLabel(t('MEMORY_ENTITY_TYPE_FILTER_TAG'), valueLabel)}
           className={categoryButtonClass(active, active)}
         >
           <CategoryIcon icon={TagIcon} toneClass={WHAT_BAR_ICON_CLASS.tag} />
-          <span className={EXPAND_LABEL_CLASS}>Tag</span>
-          <ChevronDown
-            className={cn(
-              'ml-0 h-3.5 w-3.5 shrink-0 opacity-50 transition-transform duration-200 group-hover:ml-1 group-data-[state=open]:ml-1 group-data-[state=open]:rotate-180',
-            )}
-          />
+          <span className={expandLabelClass(active)}>{valueLabel}</span>
+          <ChevronDown className={chevronClass(active)} />
         </button>
       </Trigger>
 
@@ -434,6 +496,7 @@ function TagWhatDropdown({ tags, onTagsChange }: { tags: string[]; onTagsChange:
 /** Entity-type toggles for the Memory explorer — grouped What categories. */
 export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
   const {
+    isFiltered,
     isEntityTypeSelected,
     isGroupSelected,
     isGroupActive,
@@ -477,6 +540,7 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
                   key={category.id}
                   category={category}
                   selectedEntityTypes={selectedEntityTypes}
+                  isFiltered={isFiltered}
                   isGroupSelected={isGroupSelected}
                   isGroupActive={isGroupActive}
                   onSelectOnly={selectOnlyEntityType}

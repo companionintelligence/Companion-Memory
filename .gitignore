@@ -90,3 +90,9 @@ frontend/packages/*/android/build/
 # breakage was invisible until someone added a file.
 .local/
 /tools/
+
+# Two-box federation harness runtime state: allocated ports, api PIDs, the
+# minted api keys, both boxes' logs, and the bounded staging copy of whatever
+# real archive was loaded. Per-machine and per-run; never committed.
+# See backend/apps/api/scripts/federation-harness/README.md
+.federation-harness/

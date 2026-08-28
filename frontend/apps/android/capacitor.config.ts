@@ -10,7 +10,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
  */
 const config: CapacitorConfig = {
   appId: 'com.companionintelligence.app',
-  appName: 'Companion',
+  appName: 'Memory',
   webDir: '../web/dist',
   server: {
     androidScheme: 'https',
@@ -18,6 +18,10 @@ const config: CapacitorConfig = {
   },
   android: {
     allowMixedContent: true,
+    // Required by @capacitor-community/background-geolocation: without it, location
+    // updates delivered through the legacy Capacitor bridge stop after ~5 minutes in
+    // the background. See https://github.com/capacitor-community/background-geolocation/issues/89.
+    useLegacyBridge: true,
   },
   plugins: {
     SplashScreen: {

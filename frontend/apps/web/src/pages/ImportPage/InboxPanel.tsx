@@ -135,7 +135,7 @@ export function InboxPanel() {
           <h2 className="text-lg font-medium">Inbox folder</h2>
           <p className="text-muted-foreground text-sm">
             Move export archives — or whole unzipped export folders — into{' '}
-            <code className="text-xs">{scan.inboxDir}</code> and import them all at once. Everything here is
+            <code className="text-xs">{scan.displayDir}</code> and import them all at once. Everything here is
             treated as a copy; each item is removed from the folder as its import consumes it.
           </p>
         </div>

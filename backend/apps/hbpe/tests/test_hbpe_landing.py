@@ -246,3 +246,38 @@ def test_histogram_keeps_b1_ready_while_still_learning():
     # The API used to pass COLD_START from checkpoint absence and skip this override.
     overridden = build_histogram(_Engine(), user_id=None, system_status="COLD_START")
     assert overridden["system_status"] == "READY"
+
+
+def test_histogram_keeps_pipeline_step_while_still_learning(monkeypatch):
+    from ci.hbpe.pipeline.histogram_api import build_histogram
+
+    class _Engine:
+        last_model_version = "b1"
+        last_still_learning = True
+
+        def predict(self, horizon_start=None):
+            return [
+                {
+                    "bucket_index": 0,
+                    "start_time": "2026-08-18T00:00:00Z",
+                    "l0_probs": {WORK: 0.6, SLEEP: 0.4},
+                    "l1_probs": {},
+                    "l2_probs": {},
+                }
+            ]
+
+    monkeypatch.setattr(
+        "ci.hbpe.pipeline.histogram_api._log_prediction", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        "ci.hbpe.pipeline.histogram_api._pipeline_progress",
+        lambda _uid: {"eta_seconds": 2700, "detail": "3 of 50"},
+    )
+    out = build_histogram(
+        _Engine(), user_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", system_status="NIGHTLY:train"
+    )
+    assert out["system_status"] == "NIGHTLY:train"
+    assert out["pipeline_eta_seconds"] == 2700
+    assert out["pipeline_detail"] == "3 of 50"
+    assert out["still_learning"] is True
+    assert out["model_version"] == "b1"

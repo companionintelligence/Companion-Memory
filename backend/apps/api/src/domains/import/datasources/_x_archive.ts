@@ -224,6 +224,13 @@ export function importGrokChats(root: string, params: ImportParams): void {
     return;
   }
 
+  // How many rows grok-chat-item.js actually offered the parser — the floor
+  // `reconciled` checks every produced/dropped row against. An attachment is
+  // a SECOND thing a row can offer beyond its message text, and it always
+  // resolves to its own push() or drop(), so it earns its own unit below,
+  // additive to this one.
+  params.pipeline.consumed?.(rows.length);
+
   const media = grokMediaIndex(dataDir);
 
   // Per-chat running index, assigned in the order the archive lists rows.
@@ -231,6 +238,7 @@ export function importGrokChats(root: string, params: ImportParams): void {
   for (const row of rows) {
     const chatId = row.chatId;
     if (!chatId) {
+      params.pipeline.drop?.('grok_unknown_conversation');
       continue;
     }
 
@@ -247,6 +255,7 @@ export function importGrokChats(root: string, params: ImportParams): void {
     const ts = row.createdAt ? new Date(row.createdAt) : undefined;
     const when = ts && !isNaN(ts.getTime()) ? ts : undefined;
     if (!timeframeContains(params.timeframe, when)) {
+      params.pipeline.drop?.('outside_timeframe');
       continue;
     }
 
@@ -272,9 +281,23 @@ export function importGrokChats(root: string, params: ImportParams): void {
           },
         },
       });
+    } else if ((row.attachments ?? []).length > 0) {
+      // An image-only turn is not a loss — the attachment below fully
+      // accounts for what this row actually contains — but the base unit
+      // reported for this row above (rows.length) still has to resolve to
+      // SOMETHING, and "no text" is that something, distinct from a row that
+      // is genuinely empty.
+      params.pipeline.drop?.('grok_media_only_turn');
+    } else {
+      // No text AND no attachments: genuinely nothing to show for this row.
+      params.pipeline.drop?.('empty_after_parse');
     }
 
     for (const a of row.attachments ?? []) {
+      // A second (or third, …) thing this row offers the parser beyond its
+      // message text, and it always resolves to one push() or one drop().
+      params.pipeline.consumed?.(1);
+
       const abs = findGrokMedia(media, a);
       // A referenced attachment whose bytes the archive didn't ship: record the
       // loss rather than dropping it silently.

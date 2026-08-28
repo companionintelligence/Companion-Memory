@@ -17,6 +17,7 @@ import { ContextPromptEntity } from './entities/ContextPromptEntity';
 import { ContextPromptPersistListener } from './listeners/ContextPromptPersistListener';
 import { FeedQueuePopulationListener } from './listeners/FeedQueuePopulationListener';
 import { PlacementService } from './placement';
+import { ConceptExtractionService } from './services/ConceptExtractionService';
 import { ContextPromptGenerateService } from './services/ContextPromptGenerateService';
 import { ContextPromptPersistService } from './services/ContextPromptPersistService';
 import { ContextPromptService } from './services/ContextPromptService';
@@ -43,6 +44,7 @@ import { PersonalizationService } from './services/PersonalizationService';
     ContextPromptGenerateService,
     ContextPromptPersistService,
     ContextPromptPersistListener,
+    ConceptExtractionService,
     CrossTableHydrationService,
     LifeContextService,
     FeedQueuePopulationListener,

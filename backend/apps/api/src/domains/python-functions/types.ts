@@ -22,15 +22,22 @@ export const PYTHON_FUNCTION_QUEUES: Record<PythonFunctionTarget, string> = {
  * jobs: if the Python service dies without calling back, the job stays
  * `active` until this window elapses, then pg-boss retries it. It must exceed
  * the longest legitimate run on that target.
+ *
+ * `policy: 'short'` is what makes every caller's singletonKey-based dedup
+ * (fan-out crons, SmartRotationListener, ForecastResolver.triggerHbpe) actually
+ * refuse a duplicate — pg-boss's default `standard` policy stores a
+ * singletonKey but never enforces it. Safe here because PythonFunctionService
+ * only omits the key when a caller doesn't pass one, and every real caller
+ * does.
  */
 export const PYTHON_FUNCTION_QUEUE_OPTIONS: Record<
   PythonFunctionTarget,
-  { expireInSeconds: number; retryLimit: number; retryDelay: number }
+  { policy: 'short'; expireInSeconds: number; retryLimit: number; retryDelay: number }
 > = {
   // Summaries/insights/actions: LLM-bound, minutes per run on CPU.
-  summary: { expireInSeconds: 30 * 60, retryLimit: 3, retryDelay: 60 },
+  summary: { policy: 'short', expireInSeconds: 30 * 60, retryLimit: 3, retryDelay: 60 },
   // HBPE nightly is long; bootstrap trains models and can take hours.
-  hbpe: { expireInSeconds: 4 * 60 * 60, retryLimit: 2, retryDelay: 300 },
+  hbpe: { policy: 'short', expireInSeconds: 4 * 60 * 60, retryLimit: 2, retryDelay: 300 },
 };
 
 /**

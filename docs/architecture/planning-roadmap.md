@@ -1,6 +1,6 @@
 # Planning — roadmap and object model
 
-> Status: **M0 landed** (flags + this document). M1 in progress; planning automation jobs + `proposed` status landed as an M5 slice.
+> Status (re-verified against `main` 2026-08-19): **M0 and M1 landed.** M3 and M5 have landed in slices — see [Milestones](#milestones). M2 and M4 are not started.
 > Feature flags: `planning.enabled` (backend GraphQL gate, `ENABLE_PLANNING`, default **on**), `planning.page` (Plan route + rail, `ENABLE_PLANNING_PAGE`, default **on**), `planning.emptyState` (Plan page empty state, `ENABLE_PLANNING_EMPTY_STATE`, default **off**).
 
 ## Why planning lives here
@@ -23,7 +23,7 @@ Everything that client asks for is already here, on the other side of a boundary
 | Scheduled block | **`ci.events`, `event_type='planned_block'`** | Extended, not duplicated. See the guardrails below. Columns: `task_id`, `planned_minutes`; GraphQL exposes `parentEventId`. |
 | Task dependencies, timer sessions | **`ci.task_dependencies`, `ci.time_entries`** (new) | `ci.relationships` can't hold them — tasks aren't `ci.entities` rows, and its FKs to entities were removed by `20260127185821`. `time_entries` needs `UNIQUE (user_id) WHERE ended_at IS NULL`, which on `ci.events` would fail against every point-in-time capture row. |
 | Taxonomy (direction / intention / category) | **`ci_search.tags` + `ci_search.entity_tag`, extended** | `tags` gains `kind`, `muted`, `is_base`; `entity_tag` gains `level`. Positional categories live in a separate `ci_search.entity_categories` so `getTagsForEntity`'s contract is unchanged for existing readers. |
-| Objectives | **`ci.objectives`** (new) + a `ci.entities` projection | `entity_type='Objective'` passes `valid_entity_type`, but `progress_cache` updates on every task completion and `entities_search_vector_trigger` fires `BEFORE UPDATE OF … properties` → a GIN rebuild per recompute. Project via `linked_table`/`linked_id` instead — the pattern `ci.files`/`ci.inventory` already use. Graph-visible without being graph-resident. |
+| Objectives | **`ci.objectives`** (new) + a `ci.entities` projection | `entity_type='Objective'` passes `valid_entity_type`, but `progress_cache` updates on every task completion and `entities_search_vector_trigger` fires `BEFORE UPDATE OF … properties` → a GIN rebuild per recompute. Project via `linked_table`/`linked_id` instead — the pattern `ci.files`/`ci.objects` already use. Graph-visible without being graph-resident. |
 | Reflections | **`ci.reflections`** (new) | `ci.notes` has no `kind`/`period_key`/`position` and no composite key, so "the 2nd item of today's goals" is not upsertable. Folding in would also embed empty bodies via `NoteSearchIndexListener`. |
 | Daily recap | **`ci.daily_recap`** (new), prose projected into `ci.summaries` | `ci.summaries` has no unique constraint on `(user_id, period_type, period_start)`, so regeneration would duplicate, and it feeds `ci.feed_queue` — every regeneration would surface a new feed card. Keep the freeze semantics in a real table; publish one-way for the feed. |
 | Preferences | **`ci.planning_prefs`** (new) | There is no user-preferences store. `ci.users.settings`/`display_preferences`/`permissions` jsonb exist in Postgres but `UserEntity` maps none of them and nothing reads them. **No `timezone` column** — `ci.users.timezone` is the source of truth (already used by `ForecastContextService`). |
@@ -84,21 +84,21 @@ Carried over from CI-Planning's glossary; these nine nouns are the whole budget.
 ### Shipped
 
 - **M0** — feature flags, this document.
-
-### In progress
-
-- **M1 — Tasks, end to end.** `ci.tasks` + `ci.task_dependencies`; `TaskEntity`/`TaskService`; the GraphQL Task slice (type, connection, edge, inputs, payloads, resolver, `GlobalUID`, `NodeResolver` case); `PlanningTimeService` (a verbatim port of CI-Planning's `lib/tz.ts` minus `sqliteUtcToISO`) with DST tests at both boundaries; `/plan` page on the `NotesPage` template.
+- **M1 — Tasks, end to end.** `ci.tasks` + `ci.task_dependencies` (`20260808150000_schedule_planning_and_hbpe.sql`); `TaskEntity`/`TaskService`; the GraphQL Task slice (`TaskType implements Node`, `tasks`, `createTask`, `updateTask`); `PlanningTimeService` (a verbatim port of CI-Planning's `lib/tz.ts` minus `sqliteUtcToISO`) with DST tests at both boundaries; `/plan` page (`frontend/apps/web/src/pages/PlanPage/`). Note the timezone helpers themselves — `isValidTimezone`, `localDateInTZ`, `todayInTZ`, `zonedWallTimeToUTC` — have since moved to `@ci/common/time/zoned`; `domains/planning/index.ts` re-exports them, so callers are unaffected.
 
 ### Next
 
-- **M2 — Taxonomy.** Extend `ci_search.tags`/`entity_tag`; new join/pref tables; `'task'` in `TAGGABLE_ENTITIES`; `TaskType.tags` through the existing `TagLoader`. Watch: `TagService.validateLabel` lowercases every label, and adding `kind` changes what the explorer's tag picker returns.
-- **M3 — Scheduling.** The `ci.events` extension plus all six guards; a SQL-pushdown `plannedBlocks(from, to)`; `ci.planning_prefs`; a **simple deterministic placer** — a pure `computePlacement(input): PlacementPlan` answering one question: given the workday window, existing events and an estimate, where does this task go? No two-pass autoplan, no reflow, no LLM. Scheduling is by form and button; drag comes later.
-- **M4 — Search, recall, MCP.** `'task'` in `INDEXABLE_ENTITIES` + `ENTITY_SOURCE_MAP`; `TaskSearchIndexListener` cloned from `NoteSearchIndexListener`; task cases in `SerializerService` and `domains/entity-resolution`; a `planning` intent domain with `planning.findTasks` / `planning.createTask`.
-- **M5 — Jobs (partial).** Queue `planning` on pg-boss; Jobs page category `planning`. Landed handlers:
-  - `planning.todo_scan` — daily fan-out; search memory → LLM surface → dedupe → `decide(task_create)` → `open` or `proposed`
-  - `planning.todo_process` — every 6h; append / revise / reparent / complete under `task_mutate` / `task_complete`
-  - `planning.event_now` — hourly; revise planned blocks entering the present (`event_revise`)
-  - `planning.verify_done` — hourly; after block end, auto-complete or ask on Plan
+- **M2 — Taxonomy.** *Not started* — `'task'` is not in `TAGGABLE_ENTITIES`, and no `ci_search.entity_categories` exists. Extend `ci_search.tags`/`entity_tag`; new join/pref tables; `'task'` in `TAGGABLE_ENTITIES`; `TaskType.tags` through the existing `TagLoader`. Watch: `TagService.validateLabel` lowercases every label, and adding `kind` changes what the explorer's tag picker returns.
+- **M3 — Scheduling (partial).** The `ci.events` extension plus all six guards; a SQL-pushdown `plannedBlocks(from, to)`; `ci.planning_prefs`; a **simple deterministic placer** — a pure `computePlacement(input): PlacementPlan` answering one question: given the workday window, existing events and an estimate, where does this task go? No two-pass autoplan, no reflow, no LLM. Scheduling is by form and button; drag comes later.
+  **Landed:** `computePlacement` (`domains/planning/engine/computePlacement.ts`), `PlannedBlockService`, the `plannedBlocks(from: DateTime!, to: DateTime!)` GraphQL query, and the `ci.events` columns `task_id` + `planned_minutes` (`20260818185920_task_proposed_and_pending_changes.sql`).
+  **Not landed:** `ci.planning_prefs` (no table, no migration), and the rest of the `ci.events` extension named above (`is_locked`, `is_auto`, `occurrence_date`, `recurrence_*`, `last_moved_at`, `auto_run_id`, `category_tag_id`, `color_token`, the widened `status` CHECK).
+- **M4 — Search, recall, MCP.** *Not started* — `'task'` is absent from `INDEXABLE_ENTITIES`. `'task'` in `INDEXABLE_ENTITIES` + `ENTITY_SOURCE_MAP`; `TaskSearchIndexListener` cloned from `NoteSearchIndexListener`; task cases in `SerializerService` and `domains/entity-resolution`; a `planning` intent domain with `planning.findTasks` / `planning.createTask`. **Adjacent, not M4:** Plan overdue reschedule (web + Plan-shaped iOS App Intents) takes off toward shared Time types in [shared-time-selectors.plan.md](shared-time-selectors.plan.md). When `planning.rescheduleTask` exists, its `day` argument is that shared type.
+- **M5 — Jobs (partial).** Queue `planning` on pg-boss; Jobs page category `planning`. Five landed handlers, fanned out by `PlanningJobsCron`:
+  - `planning.todo_scan` (`0 6 * * *`) — daily fan-out; search memory → LLM surface → dedupe → `decide(task_create)` → `open` or `proposed`
+  - `planning.todo_process` (`0 */6 * * *`) — every 6h; append / revise / reparent / complete under `task_mutate` / `task_complete`
+  - `planning.inbox_scan` (`*/30 * * * *`) — LLM triage of recent email/SMS/chat into surfaced tasks, matching CI-Planning's `ingest_gmail` cadence (`InboxScanService`)
+  - `planning.event_now` (`15 * * * *`) — hourly; revise planned blocks entering the present (`event_revise`)
+  - `planning.verify_done` (`45 * * * *`) — hourly; after block end, auto-complete or ask on Plan
   Plan page remains the only user backlog (Proposed / Needs confirmation / date buckets). `/jobs` shows process jobs only — not a second to-do list.
   Still TODO for full M5: `ci.reminders` + web push.
 

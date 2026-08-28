@@ -1,0 +1,7 @@
+{
+  "tasks": [
+    { "name": "Buy milk" },
+    { "name": "Renew passport" },
+    { "name": "Pay rent", "date_completed": "2026-08-01T09:15:00Z" }
+  ]
+}

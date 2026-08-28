@@ -24,7 +24,8 @@ const h = vi.hoisted(() => ({
   addBackButtonListener: vi.fn(),
 }));
 
-vi.mock('@ci/common', () => ({
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
   isNativePlatform: h.isNativePlatform,
   hideSplashScreen: h.hideSplashScreen,
   syncNativeIntentConfig: h.syncNativeIntentConfig,

@@ -5,18 +5,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import App from './App';
 
-// Feature-gated routes (/stats, /tags, /prompts, …) are only added to the route
+// Feature-gated routes (/self, /tags, …) are only added to the route
 // table once `isFeatureEnabled` says yes, so a hard load of one of them matches
 // the "*" fallback until the flags arrive. These tests pin the fallback's
 // behaviour on both sides of that window.
+// `enabled` answers for every flag at once, which is all most of these need.
+// `off` names the exceptions, so a test can hold one flag against the rest —
+// Self's route tree is gated on `self.page` while the Reflections tab inside
+// it is gated on `insights.page`, and the interesting case is one without
+// the other.
 const h = vi.hoisted(() => ({
-  features: { loading: true, enabled: false },
+  features: { loading: true, enabled: false } as {
+    loading: boolean;
+    enabled: boolean;
+    off?: string[];
+  },
 }));
 
 vi.mock('@/common/feature', () => ({
   FeaturesProvider: ({ children }: { children: ReactNode }) => children,
   useFeatures: () => ({
-    isFeatureEnabled: () => h.features.enabled,
+    isFeatureEnabled: (flag: string) => h.features.enabled && !h.features.off?.includes(flag),
     loading: h.features.loading,
     refresh: async () => {},
   }),
@@ -97,7 +106,10 @@ vi.mock('@/api/powersync/PowerSyncProvider', () => ({
   PowerSyncProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
-const GATED_PATHS = ['/stats', '/tags', '/prompts'];
+const GATED_PATHS = ['/self', '/tags'];
+
+// The three addresses Reflections shipped under before it moved into Self.
+const LEGACY_REFLECTIONS_PATHS = ['/prompts', '/memory/questions', '/memory/reflections'];
 
 function renderAt(path: string, state?: unknown) {
   window.history.pushState(state ? { usr: state } : {}, '', path);
@@ -128,7 +140,7 @@ describe('App routing', () => {
   // /settings/* re-renders that background route, gated flags and all.
   it('does not flash 404 when a settings overlay is reloaded over a gated page', () => {
     const { container } = renderAt('/settings/appearance', {
-      backgroundLocation: { pathname: '/stats', search: '', hash: '', state: null, key: 'test' },
+      backgroundLocation: { pathname: '/self', search: '', hash: '', state: null, key: 'test' },
     });
 
     expect(container).not.toBeEmptyDOMElement();
@@ -193,13 +205,21 @@ describe('App routing', () => {
     });
   });
 
-  // The page the user reads as "Reflections" was called "Questions", and before
-  // that it lived at /prompts. Both older paths are in bookmarks and links, so
-  // they redirect rather than 404.
-  describe('the paths Reflections replaced', () => {
+  // /stats, /settings/about-you, /settings/account, and the three old
+  // addresses for Reflections ("Questions" at /prompts, then
+  // /memory/questions, then /memory/reflections under the Memory hub) were
+  // all folded into the Self tab. They stay as redirects so bookmarks and
+  // links keep working.
+  describe('the paths Self replaced', () => {
     it.each([
-      ['/prompts', '/memory/reflections'],
-      ['/memory/questions', '/memory/reflections'],
+      ['/stats', '/self/stats'],
+      ['/settings/about-you', '/self'],
+      ['/settings/account', '/self'],
+      ['/prompts', '/self/reflections'],
+      ['/memory/questions', '/self/reflections'],
+      ['/memory/reflections', '/self/reflections'],
+      ['/profile', '/self/settings'],
+      ['/profile/appearance', '/self/settings/appearance'],
     ])('redirects %s to %s', async (from, to) => {
       h.features = { loading: false, enabled: true };
 
@@ -207,6 +227,93 @@ describe('App routing', () => {
 
       await waitFor(() => expect(window.location.pathname).toBe(to));
       expect(notFound()).not.toBeInTheDocument();
+    });
+
+    it('redirects /stats to /self/stats', async () => {
+      h.features = { loading: false, enabled: true };
+
+      renderAt('/stats');
+
+      await waitFor(() => expect(window.location.pathname).toBe('/self/stats'));
+      expect(notFound()).not.toBeInTheDocument();
+    });
+
+    // /stats used to be registered UNCONDITIONALLY, on the reasoning that an
+    // old bookmark should still land on Self "even with the flag off — it just
+    // then hits Self's own fallback". That fallback lives inside SelfPage,
+    // which the same flag stops mounting, so what actually happened was a 404
+    // at /self/stats: an address the user never typed, reached by a redirect
+    // that outlived its target. It now sits inside the gate with /prompts and
+    // the rest, so the 404 — unavoidable with Self switched off — lands where
+    // the user actually asked.
+    it('404s at /stats itself, not at /self/stats, when Self is switched off', async () => {
+      h.features = { loading: false, enabled: false };
+
+      renderAt('/stats');
+
+      await waitFor(() => expect(notFound()).toBeInTheDocument());
+      expect(window.location.pathname).toBe('/stats');
+    });
+
+    // The Reflections redirects live inside the `self.page` gate with their
+    // destination. Nothing in the app links to them any more (the Power Rail
+    // points straight at /self/reflections, gated on `insights.page` — see
+    // selfSections.ts), so what these pin is the bookmark case: an old link
+    // arriving while the flags are unsettled, or with Self switched off.
+    describe('the legacy Reflections addresses', () => {
+      it.each(LEGACY_REFLECTIONS_PATHS)('holds %s while the flags are loading', (path) => {
+        // `loading: true` from beforeEach: the redirect is not in the table
+        // yet, so "*" takes it and paints the loading page. Redirecting here
+        // would commit to a destination before knowing whether it exists.
+        const { container } = renderAt(path);
+
+        expect(container).not.toBeEmptyDOMElement();
+        expect(notFound()).not.toBeInTheDocument();
+        expect(window.location.pathname).toBe(path);
+      });
+
+      it.each(LEGACY_REFLECTIONS_PATHS)('redirects %s once the flags arrive enabled', async (path) => {
+        const { rerender } = renderAt(path);
+
+        h.features = { loading: false, enabled: true };
+        rerender(<App />);
+
+        await waitFor(() => expect(window.location.pathname).toBe('/self/reflections'));
+        expect(notFound()).not.toBeInTheDocument();
+      });
+
+      // The combination that used to break: Reflections itself is on, but the
+      // flag that registers the tree it now lives in is off. Ungated, these
+      // bounced the user to /self/reflections — a path with no route behind
+      // it — and 404'd there. The 404 is unavoidable with Self switched off;
+      // landing it on the address the user actually opened is not.
+      it.each(LEGACY_REFLECTIONS_PATHS)(
+        'leaves %s where it is when self.page is off and insights.page is on',
+        async (path) => {
+          h.features = { loading: false, enabled: true, off: ['self.page'] };
+
+          renderAt(path);
+
+          await waitFor(() => expect(notFound()).toBeInTheDocument());
+          expect(window.location.pathname).toBe(path);
+        },
+      );
+
+      // The mirror of the above, and the reason the gate is `self.page` and
+      // not `insights.page`: with Self registered, the redirect is right even
+      // though the tab it points at is missing — SelfPage sends that miss back
+      // to /self rather than 404ing.
+      it.each(LEGACY_REFLECTIONS_PATHS)(
+        'still redirects %s when insights.page is off but self.page is on',
+        async (path) => {
+          h.features = { loading: false, enabled: true, off: ['insights.page'] };
+
+          renderAt(path);
+
+          await waitFor(() => expect(window.location.pathname).toBe('/self'));
+          expect(notFound()).not.toBeInTheDocument();
+        },
+      );
     });
   });
 });

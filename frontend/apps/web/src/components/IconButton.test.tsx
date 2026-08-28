@@ -46,6 +46,17 @@ describe('IconButton', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the accessible name when hideTooltip forces the bubble closed', () => {
+    render(
+      <IconButton label="Add" hideTooltip>
+        <X />
+      </IconButton>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+  });
+
   it('still renders an accessible name when disabled', () => {
     // Disabled buttons are wrapped in a span so the tooltip can still be hovered;
     // that wrapper must not cost the button its accessible name.

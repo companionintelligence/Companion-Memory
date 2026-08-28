@@ -964,7 +964,7 @@ const RENAMED_PK: PkColumn = { databaseName: 'event_id', propertyPath: 'id' };
 // ContentEntity/CommunicationEntity/BrowserActivityEntity: @PrimaryColumn('uuid') id
 const PLAIN_PK: PkColumn = { databaseName: 'id', propertyPath: 'id' };
 
-describe('bulkInsertIdempotent — inserted flag when the pk COLUMN is renamed (events / inventory)', () => {
+describe('bulkInsertIdempotent — inserted flag when the pk COLUMN is renamed (events / objects)', () => {
   it('emits the pk in RETURNING for a renamed pk column', async () => {
     const { repo, emitted } = makeReturningAwareRepository(RENAMED_PK);
 

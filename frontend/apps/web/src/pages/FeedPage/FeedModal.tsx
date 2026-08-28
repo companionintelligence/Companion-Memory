@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, type ReactNode } from 'react';
 
 import { ErrorPage, LoadingPage, useDeviceLayout } from '@ci/common';
 import { Dialog, IconButton, cn } from '@ci/shadcn';
@@ -49,6 +49,18 @@ export function FeedModal({ onClose }: Props) {
     },
     [detachChatStream, onClose],
   );
+
+  useLayoutEffect(() => {
+    if (!isMobile) {
+      return;
+    }
+
+    // PageContent is the page scroller. The chat used to be `absolute inset-0`
+    // inside it, so opening an action while scrolled down painted the dialog at
+    // the top of the page — out of view. Scroll back, then the portaled dialog
+    // covers the visible content and takes focus.
+    document.querySelector<HTMLElement>('[data-page-scroll]')?.scrollTo({ top: 0, behavior: 'instant' });
+  }, [isMobile]);
 
   const actionContext = useMemo(() => {
     if (!action?.metadata || typeof action.metadata !== 'object') {
@@ -117,7 +129,13 @@ export function FeedModal({ onClose }: Props) {
 
   if (isMobile) {
     return (
-      <InlineModal open onClose={onClose}>
+      <InlineModal
+        open
+        onClose={onClose}
+        portalId="content-modal"
+        autoFocus
+        aria-label={action?.title ?? 'Action'}
+      >
         <div className="flex items-center justify-between border-b bg-stone-50 dark:bg-secondary gap-2 p-2 pt-[max(1rem,env(safe-area-inset-top))]">
           {/* Spacer balancing the close button so the title stays centred. The
               model selector that used to sit here now lives in Settings ▸ Model. */}
@@ -134,6 +152,7 @@ export function FeedModal({ onClose }: Props) {
         </div>
 
         <Chat
+          autoFocus
           placeholder={renderTitle ? 'Continue the conversation...' : ''}
           disabled={!renderTitle}
           loading={chatRequestLoading}

@@ -218,6 +218,80 @@ describe('Calendar datasource', () => {
     }
   });
 
+  it("keeps the event's own properties when a nested VALARM repeats them", async () => {
+    // RFC 5545 §3.6.6 nests VALARM INSIDE the VEVENT, and every Apple/Google
+    // export emits it AFTER the event's own properties. The parser used to fold
+    // every line of the block into one flat last-wins map, so the alarm won
+    // every property name it shares with its parent:
+    //
+    //   DESCRIPTION -> "This is an event reminder" replaced the real body
+    //   UID         -> the alarm's UID became the event's items.id
+    //   SUMMARY     -> an EMAIL alarm's "Alarm notification" replaced the title
+    //
+    // On the reference Apple export (1,143 VEVENTs, 1,136 with a VALARM) that
+    // destroyed 996 real event descriptions outright and re-keyed 1,136 events
+    // onto their reminder's UID.
+    const pipeline = await importIcs(path.join(FIXTURES_DIR, 'apple-calendar-valarm.ics'));
+    const items = pipeline.filter((graph) => graph.item).map((graph) => graph.item);
+
+    const booked = items.find((item) => item.id === 'bgf7vr91iphqjomlis74k0udgg@example.com');
+
+    // The id is the VEVENT's UID, not the VALARM's.
+    expect(booked).toBeDefined();
+    expect(items.map((item) => item.id)).not.toContain('04AACD36-CF84-4420-AA2A-D25CB8B9C662');
+
+    // The body is the event's, not the reminder boilerplate. `\n` is a real
+    // RFC 5545 TEXT escape, decoded like everywhere else.
+    expect(booked?.metadata.Description).toBe(
+      '<b>Booked by</b>\nAva Booker\nava@example.com\n\nJoin with Google Meet: https://meet.example.com/fby-pwgg-pff',
+    );
+    expect(metaText(booked?.metadata.Description)).not.toContain('This is an event reminder');
+    expect(booked?.metadata.Summary).toBe('Meet w/ Liam (Ava Booker)');
+    expect(booked?.metadata.Location).toBe('Conference Room A');
+
+    // No item anywhere in the file carries the reminder text as its body — the
+    // series master's alarm is an ACTION:EMAIL one that also repeats SUMMARY
+    // and ATTENDEE, the latent half of the same clash.
+    expect(items.every((item) => item.metadata.Description !== 'This is an event reminder')).toBe(true);
+
+    const master = items.find(
+      (item) => item.id === '0vkr94uvv688d4grk3cns7g3aq_R20210326T210000@example.com',
+    );
+
+    expect(master?.metadata.Summary).toBe('XR3 Check-In');
+    expect(master?.metadata.Description).toBe('Weekly XR sync.\nAgenda in the shared doc.');
+    // RRULE lives on the VEVENT; the VALARM's TRIGGER must not be mistaken for it.
+    expect(master?.metadata.isRecurring).toBe(true);
+  });
+
+  it('keys a recurrence override on UID + RECURRENCE-ID, not UID alone', async () => {
+    // RFC 5545 §3.8.4.4: a modified instance of a series REPEATS the master's
+    // UID and is told apart only by RECURRENCE-ID. Until the nested-component
+    // fix the ids happened to differ because each block was keyed on its own
+    // alarm's UID; keying on the (now correct) VEVENT UID alone would collapse
+    // the master and both overrides onto one id, and `events_source_triple_uniq`
+    // would let the last push overwrite the other two. The reference Apple
+    // export carries 10 such overrides across 2 series.
+    const pipeline = await importIcs(path.join(FIXTURES_DIR, 'apple-calendar-valarm.ics'));
+    const items = pipeline.filter((graph) => graph.item).map((graph) => graph.item);
+
+    const seriesUid = '0vkr94uvv688d4grk3cns7g3aq_R20210326T210000@example.com';
+    const series = items.filter((item) => (item.id ?? '').startsWith(seriesUid));
+
+    expect(series.length).toBe(3);
+    expect(new Set(series.map((item) => item.id)).size).toBe(3);
+    expect(series.map((item) => item.metadata.Summary).sort()).toEqual([
+      'XR3 Check-In',
+      'XR3 Check-In (XRGolf)',
+      'XR3 Check-In (moved)',
+    ]);
+
+    // The master keeps the bare UID; only an override carries the suffix, so
+    // ids minted before overrides existed in a calendar stay stable.
+    expect(series.map((item) => item.id)).toContain(seriesUid);
+    expect(series.map((item) => item.id)).toContain(`${seriesUid}#20210330T140000`);
+  });
+
   it('keeps UID-less same-date events distinct and idempotent', async () => {
     // Two all-day events on the same DATE with no UID: before the fix both
     // hashed to sha1(… ISO(midnight) …) and one was dropped on insert.

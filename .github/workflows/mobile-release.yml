@@ -1,10 +1,12 @@
-# GATED TO MANUAL. The `mobile-release-v*` tag trigger was removed so this only
-# runs when dispatched — CI silence here means "nobody dispatched it", NOT
-# "everything passed".
+# The only automatic store upload. Pushing a matching tag is the release action;
+# every other GitHub workflow in this repo stays workflow_dispatch-only.
 #
-# RELEASE IMPACT: pushing a `mobile-release-v*` tag NO LONGER builds or submits.
-# Dispatch this workflow instead (its inputs are preserved below):
-#   gh workflow run mobile-release.yml --ref <tag> -f dry_run=false -f version_name=X.Y.Z
+#   git tag -a ios-v1.0.0 -m "iOS 1.0.0" && git push origin ios-v1.0.0
+#   git tag -a android-v1.0.0 -m "Android 1.0.0" && git push origin android-v1.0.0
+#   git tag -a mobile-release-v1.0.0 -m "1.0.0" && git push origin mobile-release-v1.0.0
+#
+# Rehearsal (no store submit) is always a dispatch on a branch:
+#   gh workflow run mobile-release.yml --ref main -f dry_run=true -f platform=ios
 name: Mobile Release
 
 # Signed, store-bound builds of the Capacitor app: a TestFlight upload and a Play
@@ -12,16 +14,11 @@ name: Mobile Release
 # `mobile-build.yml` remains the credential-free lane that produces an unsigned
 # simulator .app and a debug APK for sideloading.
 #
-# Trigger it from Actions → Mobile Release → Run workflow, or by pushing a
-# `mobile-release-v*` tag:
-#
-#     git tag mobile-release-v0.1.0 && git push origin mobile-release-v0.1.0
-#
-# `dry_run: true` (the default for manual runs) builds and signs everything and
-# uploads the artifacts to the run, but does NOT submit to Apple or Google. Use it to
-# prove the signing chain works before spending a real build number — Apple and Google
-# both permanently burn a build number on upload, so a failed submission after a
-# successful one still costs you that number.
+# A tag *push* always submits. A manual dispatch honours `dry_run` (default true)
+# even if you point `--ref` at a tag. Use that to prove the signing chain before
+# spending a real build number — Apple and Google both permanently burn a build
+# number on upload, so a failed submission after a successful one still costs
+# you that number.
 #
 # ── Required secrets ───────────────────────────────────────────────────────────
 # iOS (App Store Connect API key auth — no Apple ID, no 2FA prompt in CI):
@@ -46,6 +43,11 @@ name: Mobile Release
 # up one store before the other.
 
 on:
+  push:
+    tags:
+      - 'ios-v*'
+      - 'android-v*'
+      - 'mobile-release-v*'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -53,9 +55,17 @@ on:
         type: boolean
         default: true
       version_name:
-        description: 'Marketing version (e.g. 0.1.0). Defaults to the tag or 0.1.0.'
+        description: 'Marketing version (e.g. 1.0.0). Defaults to the tag or 0.1.0.'
         type: string
         required: false
+      platform:
+        description: 'Which store lane to run'
+        type: choice
+        options:
+          - ios
+          - android
+          - both
+        default: ios
 
 # The root install pulls the private @companionintelligence/tokens package from GitHub
 # Packages; .yarnrc.yml authenticates with ${NODE_AUTH_TOKEN}. Without `packages: read`
@@ -81,12 +91,18 @@ jobs:
       name: ${{ steps.v.outputs.name }}
       code: ${{ steps.v.outputs.code }}
       dry_run: ${{ steps.v.outputs.dry_run }}
+      run_ios: ${{ steps.v.outputs.run_ios }}
+      run_android: ${{ steps.v.outputs.run_android }}
     steps:
       - id: v
         run: |
           set -euo pipefail
           if [ -n "${{ inputs.version_name }}" ]; then
             NAME="${{ inputs.version_name }}"
+          elif [[ "${GITHUB_REF}" == refs/tags/ios-v* ]]; then
+            NAME="${GITHUB_REF#refs/tags/ios-v}"
+          elif [[ "${GITHUB_REF}" == refs/tags/android-v* ]]; then
+            NAME="${GITHUB_REF#refs/tags/android-v}"
           elif [[ "${GITHUB_REF}" == refs/tags/mobile-release-v* ]]; then
             NAME="${GITHUB_REF#refs/tags/mobile-release-v}"
           else
@@ -96,17 +112,37 @@ jobs:
           # "must never repeat, must always increase" contract both stores enforce.
           echo "name=${NAME}"                        >> "$GITHUB_OUTPUT"
           echo "code=${{ github.run_number }}"       >> "$GITHUB_OUTPUT"
-          # A tag push is always a real submission; a manual run honours the checkbox.
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+          # A tag *push* always submits. Dispatch honours the checkbox even on a tag ref.
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
           else
             echo "dry_run=${{ inputs.dry_run }}" >> "$GITHUB_OUTPUT"
           fi
-          echo "Version ${NAME} (build ${{ github.run_number }})"
+          # Which lanes to run: tag prefix, or the dispatch choice (default ios).
+          PLATFORM="${{ inputs.platform }}"
+          RUN_IOS=false
+          RUN_ANDROID=false
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            case "${GITHUB_REF}" in
+              refs/tags/ios-v*) RUN_IOS=true ;;
+              refs/tags/android-v*) RUN_ANDROID=true ;;
+              refs/tags/mobile-release-v*) RUN_IOS=true; RUN_ANDROID=true ;;
+            esac
+          else
+            case "${PLATFORM:-ios}" in
+              android) RUN_ANDROID=true ;;
+              both) RUN_IOS=true; RUN_ANDROID=true ;;
+              *) RUN_IOS=true ;;
+            esac
+          fi
+          echo "run_ios=${RUN_IOS}" >> "$GITHUB_OUTPUT"
+          echo "run_android=${RUN_ANDROID}" >> "$GITHUB_OUTPUT"
+          echo "Version ${NAME} (build ${{ github.run_number }}) ios=${RUN_IOS} android=${RUN_ANDROID}"
 
   ios:
     name: iOS → TestFlight
     needs: version
+    if: needs.version.outputs.run_ios == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -309,6 +345,7 @@ jobs:
   android:
     name: Android → Play (internal)
     needs: version
+    if: needs.version.outputs.run_android == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:

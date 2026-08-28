@@ -283,7 +283,10 @@ export class GooglePurchasesFileImporter implements FileImporter {
           Total: total,
           Currency: currency,
           Status: str(p.status),
-          OrderId: str(p.orderId) || str(p.orderNumber) || undefined,
+          // CANONICAL key (push/commerceKeys.ts). This used to be `OrderId`,
+          // which no reader looked at — toThingInput reads `Order ID` — so
+          // every Google order id was silently dropped on the way to ci.*.
+          'Order ID': str(p.orderId) || str(p.orderNumber) || undefined,
           Kind: 'purchase',
           Source: 'Google',
         },

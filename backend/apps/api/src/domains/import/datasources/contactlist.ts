@@ -187,6 +187,13 @@ export class ContactListFileImporter implements FileImporter {
         attributes.push({ name: 'gender', value: vals[CANON.GENDER][0] });
       }
 
+      // A Google/Outlook contact's Photo column is a hosted URL (contacts.google.com
+      // or similar), not embedded bytes, so — unlike vcard.ts's base64 PHOTO — this
+      // needs no decode/upload step: just a sanity check that it is actually an
+      // http(s) URL before handing it to <img src>.
+      const pictureUrl = vals[CANON.PICTURE]?.[0];
+      const avatarUrl = pictureUrl && /^https?:\/\//i.test(pictureUrl) ? pictureUrl : undefined;
+
       // minimal usefulness filter: at least 2 attributes or one attribute + name
       if (attributes.length < 2 && !(name && attributes.length === 1)) {
         continue;
@@ -200,7 +207,15 @@ export class ContactListFileImporter implements FileImporter {
           name,
           type: 'contact',
           attributes,
-          metadata: { Source: 'ContactList', File: path.basename(full) },
+          metadata: {
+            Source: 'ContactList',
+            File: path.basename(full),
+            // Lowercase, unlike the other keys here: this exact key is the contract
+            // `push/entities.ts` spreads straight into `ci.entities.properties`, and
+            // `PersonType.avatarUrl` (backend/.../types/PersonType.ts) reads it back
+            // as `properties.avatar_url`.
+            ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
+          },
         },
       });
     }

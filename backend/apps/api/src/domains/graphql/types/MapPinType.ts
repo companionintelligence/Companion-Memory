@@ -37,6 +37,16 @@ export class MapPinType {
 
   @Field(() => String, { nullable: true })
   locationName!: string | null;
+
+  /**
+   * `EventEntity.timeSource` — `'ingest'` marks `startTime` as the import wall
+   * clock rather than a real moment (a Google Maps saved place, an undated
+   * Reddit affiliation, …). The client uses this to caption the pin "Date
+   * unknown" instead of a fabricated time, mirroring `getEntityTimestamp`'s
+   * treatment of `EventType.timeSource` on the timeline/explorer side.
+   */
+  @Field(() => String, { nullable: true })
+  timeSource!: string | null;
 }
 
 /** The map's whole pin set for the current filters, plus how much of it was returned. */

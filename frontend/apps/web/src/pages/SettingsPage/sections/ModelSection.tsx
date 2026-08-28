@@ -5,7 +5,7 @@ import { Button, Card, Input, Label, Select, Switch } from '@ci/shadcn';
 import { Brain, Eye, Server, Wrench } from '@ci/shadcn/icons';
 
 import { ModelSelector } from '@/components/ModelSelector';
-import { useAuth, useModel } from '@/hooks';
+import { useModel, useSessionAuth } from '@/hooks';
 import { useLlmEndpoint, type LlmBackendKind } from '@/hooks/useLlmEndpoint';
 
 const BACKEND_OPTIONS: { value: LlmBackendKind; label: string; defaultPort: number; hint: string }[] = [
@@ -27,7 +27,7 @@ const BACKEND_OPTIONS: { value: LlmBackendKind; label: string; defaultPort: numb
  * Account-level LLM settings: inference endpoint, active model, and tool/thinking toggles.
  */
 export function ModelSection() {
-  const [{ authToken }] = useAuth();
+  const { ready, headers } = useSessionAuth();
   const [
     { selectedModel, thinkingSupported, thinkingEnabled, toolsSupported, toolsEnabled, error: modelsError },
     { toggleThinking, toggleTools, refetch: refetchModels },
@@ -55,7 +55,7 @@ export function ModelSection() {
   }, [config]);
 
   useEffect(() => {
-    if (!authToken) {
+    if (!ready) {
       setImageDescriptionLoading(false);
 
       return;
@@ -64,7 +64,7 @@ export function ModelSection() {
     let cancelled = false;
     setImageDescriptionLoading(true);
     void fetchJson<{ enabled: boolean }>('/api/personalization/image-description', {
-      headers: { Authorization: `Bearer ${authToken}` },
+      headers,
     })
       .then((payload) => {
         if (!cancelled) {
@@ -85,7 +85,7 @@ export function ModelSection() {
     return () => {
       cancelled = true;
     };
-  }, [authToken]);
+  }, [headers, ready]);
 
   const selectedBackend = useMemo(
     () => BACKEND_OPTIONS.find((option) => option.value === backend) ?? BACKEND_OPTIONS[0],
@@ -127,7 +127,7 @@ export function ModelSection() {
   };
 
   const handleImageDescriptionToggle = async (enabled: boolean) => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
@@ -140,7 +140,7 @@ export function ModelSection() {
       const payload = await fetchJson<{ enabled: boolean }>('/api/personalization/image-description', {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...headers,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({ enabled }),
@@ -343,7 +343,7 @@ export function ModelSection() {
                 id="model-image-description"
                 checked={imageDescriptionEnabled}
                 onCheckedChange={(checked) => void handleImageDescriptionToggle(checked)}
-                disabled={imageDescriptionLoading || imageDescriptionSaving || !authToken}
+                disabled={imageDescriptionLoading || imageDescriptionSaving || !ready}
               />
             </div>
 

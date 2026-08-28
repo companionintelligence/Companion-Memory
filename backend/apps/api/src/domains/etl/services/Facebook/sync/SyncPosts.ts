@@ -1,5 +1,18 @@
 import type { BaseClient, Connection, FacebookPost } from '@ci/domains/connections';
 
+/**
+ * `permalink_url` and `from` were never requested, though the transform read
+ * both. The attachment sub-fields are what let a post's media be identified:
+ * `target{id}` is the photo/video's own Graph id (the one `/me/photos` and
+ * `/me/videos` list), `media_type`/`type` say which it is, and `media.source`
+ * is the downloadable file for a video. `subattachments` carries the same
+ * shape for each item of an album attachment.
+ */
+const ATTACHMENT_FIELDS = 'media,media_type,type,target,url';
+export const POST_FIELDS =
+  'id,message,created_time,story,link,type,permalink_url,full_picture,picture,from,' +
+  `attachments{${ATTACHMENT_FIELDS},subattachments{${ATTACHMENT_FIELDS}}}`;
+
 export async function syncPosts({
   connection,
   client,
@@ -13,13 +26,12 @@ export async function syncPosts({
 }): Promise<{ data: Record<string, unknown>; nextCursor?: Record<string, unknown> }> {
   try {
     if (historical) {
-      client.logger.log('Performing historical Drive sync', {
+      client.logger.log('Performing historical Facebook Posts sync', {
         connectionId: connection.id,
         nextCursor,
       });
 
-      const fieldsList =
-        'id,message,created_time,story,link,type,full_picture,picture,attachments{media,subattachments}';
+      const fieldsList = POST_FIELDS;
 
       const params = new URLSearchParams({
         fields: fieldsList,
@@ -57,8 +69,7 @@ export async function syncPosts({
         nextCursor,
       });
 
-      const fieldsList =
-        'id,message,created_time,story,link,type,full_picture,picture,attachments{media,subattachments}';
+      const fieldsList = POST_FIELDS;
 
       const since = nextCursor.since ? (nextCursor.since as string) : connection.createdAt.toISOString();
       const params = new URLSearchParams({

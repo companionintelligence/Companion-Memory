@@ -5,8 +5,9 @@ import {
   DeviceLayoutProvider,
   LoadingPage,
   OutboxQueueProvider,
-  getApiBaseUrl,
   isNativePlatform,
+  needsNativeCloudConnect,
+  useDeviceLayout,
 } from '@ci/common';
 import {
   BrowserRouter as Router,
@@ -34,8 +35,10 @@ import {
   useLocationTracking,
   useNativeShell,
   usePreventOverscroll,
+  useStatusBarScrollToTop,
 } from '@/hooks';
 import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
+import { CHAT_BASE, chatThreadPath } from '@/pages/ChatPage/chatPaths';
 import LoginPage from '@/pages/LoginPage';
 import SignupPage from '@/pages/SignupPage';
 import SplashPage from '@/pages/SplashPage';
@@ -46,11 +49,14 @@ const ConceptPage = lazy(() => import('@/pages/ConceptPage'));
 const ConnectionPage = lazy(() => import('@/pages/ConnectionPage'));
 const ContentPage = lazy(() => import('@/pages/ContentPage'));
 const EventPage = lazy(() => import('@/pages/EventPage'));
+const AsksPage = lazy(() => import('@/pages/AsksPage'));
 const ForecastPage = lazy(() => import('@/pages/ForecastPage'));
 const ItemPage = lazy(() => import('@/pages/ItemPage'));
 const SourcesPage = lazy(() => import('@/pages/SourcesPage'));
 const JobsPage = lazy(() => import('@/pages/JobsPage'));
-const InventoryPage = lazy(() => import('@/pages/InventoryPage'));
+const ThingsPage = lazy(() => import('@/pages/ThingsPage'));
+const ReceiptsPage = lazy(() => import('@/pages/ReceiptsPage'));
+const ReceiptPage = lazy(() => import('@/pages/ReceiptPage'));
 const MemoryPage = lazy(() => import('@/pages/MemoryPage'));
 const NotePage = lazy(() => import('@/pages/NotePage'));
 const NotesPage = lazy(() => import('@/pages/NotesPage'));
@@ -63,20 +69,17 @@ const PersonPage = lazy(() => import('@/pages/PersonPage'));
 const PlacePage = lazy(() => import('@/pages/PlacePage'));
 const PlacesPage = lazy(() => import('@/pages/PlacesPage'));
 const ProviderPage = lazy(() => import('@/pages/ProviderPage'));
-const SearchPage = lazy(() => import('@/pages/SearchPage'));
-const FilesPage = lazy(() => import('@/pages/FilesPage'));
+const ContentLibraryPage = lazy(() => import('@/pages/ContentLibraryPage'));
 const SavedSearchesPage = lazy(() => import('@/pages/SavedSearchesPage'));
 const ServerSettingsPage = lazy(() => import('@/pages/ServerSettingsPage'));
 const DeviceConnectPage = lazy(() => import('@/pages/DeviceConnectPage'));
 const SharedSearchPage = lazy(() => import('@/pages/SharedSearchPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
-const StatsPage = lazy(() => import('@/pages/StatsPage'));
+const SelfPage = lazy(() => import('@/pages/SelfPage'));
 const TagsPage = lazy(() => import('@/pages/TagsPage'));
 // Pulls SchedulePage and FeedPage in with it — neither is routed on its own.
 const TodayPage = lazy(() => import('@/pages/TodayPage'));
 const SummaryDetailPage = lazy(() => import('@/pages/SummaryDetailPage'));
-const SystemPage = lazy(() => import('@/pages/SystemPage'));
-const PromptsPage = lazy(() => import('@/pages/PromptsPage'));
 
 function RedirectInsightsSummary() {
   const { id } = useParams<{ id: string }>();
@@ -85,17 +88,17 @@ function RedirectInsightsSummary() {
 }
 
 /**
- * The brief now lives inside Today, so both of its old addresses land there.
+ * The brief now lives inside Calendar, so both of its old addresses land there.
  *
- * Aimed at /today rather than chained through /brief, which would cost a second
- * redirect on every old link. The action id is carried across because the
- * brief's cards deep-link by it — dropping it would open the page but not the
- * card someone was sent.
+ * Aimed at /calendar rather than chained through /brief, which would cost a
+ * second redirect on every old link. The action id is carried across because
+ * the brief's cards deep-link by it — dropping it would open the page but not
+ * the card someone was sent.
  */
-function RedirectToToday() {
+function RedirectToCalendar() {
   const { id } = useParams<{ id?: string }>();
 
-  return <Navigate to={id ? `/today/${id}` : '/today'} replace />;
+  return <Navigate to={id ? `/calendar/${id}` : '/calendar'} replace />;
 }
 
 function RedirectFeedSummaryToBrief() {
@@ -104,11 +107,16 @@ function RedirectFeedSummaryToBrief() {
   return <Navigate to={`/brief/summaries/${id ?? ''}`} replace />;
 }
 
-/** Events explorer moved to /memory/events; keep query (view=, filters) intact. */
-function RedirectMemoryToEvents() {
-  const { search } = useLocation();
+function RedirectToChat() {
+  const { id } = useParams<{ id?: string }>();
 
-  return <Navigate to={{ pathname: '/memory/events', search }} replace />;
+  return <Navigate to={id ? chatThreadPath(id) : CHAT_BASE} replace />;
+}
+
+function RedirectProfileToSelfSettings() {
+  const rest = useParams()['*'];
+
+  return <Navigate to={rest ? `/self/settings/${rest}` : '/self/settings'} replace />;
 }
 
 function Providers({ children }: { children: ReactNode }) {
@@ -150,17 +158,23 @@ function AppRoutes() {
   // Native shell wiring (splash dismiss, Android back button). Inert on web.
   useNativeShell();
 
+  // Phone: tap the top safe area (status bar / notch) to jump the frontmost
+  // list back to the top — iOS convention, implemented in JS because pages
+  // scroll inner overflow containers rather than the webview itself.
+  const { isMobile } = useDeviceLayout();
+  useStatusBarScrollToTop(isMobile === true);
+
   // Browser location tracking (issue #1811): records ci.position fixes while
   // the user has enabled it in Settings -> Location. Inert when disabled.
   useLocationTracking();
 
-  // On the native app the API origin must be configured before anything else can
-  // load. Route to `/device-connect` (Portal picker). `/server` is Advanced URL
-  // entry. `/connect` is Sources and must not be used here.
+  // Native pairing: `/device-connect` is Portal cloud-connect; `/server` is the
+  // Advanced URL fallback. iOS always uses cloud-connect (a leftover docker/LAN
+  // origin does not skip it). `/connect` is Sources and must not be used here.
   useEffect(() => {
     const pairing = location.pathname === '/device-connect' || location.pathname === '/server';
 
-    if (isNativePlatform() && !getApiBaseUrl() && !pairing) {
+    if (needsNativeCloudConnect() && !pairing) {
       navigate('/device-connect', { replace: true });
     }
   }, [location.pathname, navigate]);
@@ -172,7 +186,9 @@ function AppRoutes() {
           path="/"
           element={
             <RedirectKnownUser>
-              <SplashPage />
+              {/* Native: Safari / cold start always reopens `/`. The marketing
+                  splash is web-only; the phone's first screen is cloud-connect. */}
+              {isNativePlatform() ? <Navigate to="/device-connect" replace /> : <SplashPage />}
             </RedirectKnownUser>
           }
         />
@@ -202,9 +218,16 @@ function AppRoutes() {
           <Route
             path="/login"
             element={
-              <RedirectKnownUser>
-                <LoginPage />
-              </RedirectKnownUser>
+              // Native shells always cloud-connect. Restoring `/login` from an
+              // earlier hop (or an Android deep-link cold start) used to drop
+              // Portal PKCE that only DeviceConnectPage resumes.
+              isNativePlatform() ? (
+                <Navigate to="/device-connect" replace />
+              ) : (
+                <RedirectKnownUser>
+                  <LoginPage />
+                </RedirectKnownUser>
+              )
             }
           />
 
@@ -238,7 +261,7 @@ function AppRoutes() {
           />
 
           <Route
-            path="/today/:id?"
+            path="/calendar/:id?"
             element={
               <ProtectedRoute>
                 <TodayPage />
@@ -246,38 +269,43 @@ function AppRoutes() {
             }
           />
 
-          <Route
-            path="/forecast"
-            element={
-              <ProtectedRoute>
-                <ForecastPage />
-              </ProtectedRoute>
-            }
-          />
+          {isFeatureEnabled('forecast.page') && (
+            <Route
+              path="/forecast"
+              element={
+                <ProtectedRoute>
+                  <ForecastPage />
+                </ProtectedRoute>
+              }
+            />
+          )}
 
           {/* Both former destinations now resolve to the page that absorbed
               them. /brief/summaries/:id is declared above and is more specific,
               so it still reaches the summary detail page. */}
-          <Route path="/brief/:id?" element={<RedirectToToday />} />
-          <Route path="/schedule" element={<RedirectToToday />} />
+          <Route path="/brief/:id?" element={<RedirectToCalendar />} />
+          <Route path="/schedule" element={<RedirectToCalendar />} />
+          <Route path="/today/:id?" element={<RedirectToCalendar />} />
 
           <Route path="/feed/summaries/:id" element={<RedirectFeedSummaryToBrief />} />
-          <Route path="/feed/:id?" element={<RedirectToToday />} />
+          <Route path="/feed/:id?" element={<RedirectToCalendar />} />
 
-          <Route
-            path="/search"
-            element={
-              <ProtectedRoute>
-                <SearchPage />
-              </ProtectedRoute>
-            }
-          />
+          {/* Nothing in the shell ever linked here — GlobalSearchBox is
+              embedded directly in both the desktop header and MobileTopBar
+              and commits straight to /memory/events?search=, and desktop
+              search itself is List View in Memory now (the old
+              DesktopSearchRedirect this replaced already said so). Kept as a
+              redirect, not deleted outright, in case an old bookmark or
+              external link still points at /search. */}
+          <Route path="/search" element={<Navigate to="/memory/events" replace />} />
 
+          {/* `/memory` is the unfiltered explorer (all kinds). `/memory/events`
+              is the same page with the Events submenu's type filter. */}
           <Route
             path="/memory"
             element={
               <ProtectedRoute>
-                <RedirectMemoryToEvents />
+                <MemoryPage />
               </ProtectedRoute>
             }
           />
@@ -290,41 +318,66 @@ function AppRoutes() {
             }
           />
 
-          {isFeatureEnabled('enable.inventory.page') && (
-            <>
-              <Route path="/inventory" element={<Navigate to="/memory/things" replace />} />
-              <Route
-                path="/memory/things"
-                element={
-                  <ProtectedRoute>
-                    <InventoryPage />
-                  </ProtectedRoute>
-                }
-              />
-            </>
-          )}
+          {/* Ungated, like /memory/people and /memory/places. The old
+              `enable.inventory.page` flag shipped `true` in the API's own
+              default.json and nothing in the repo turned it off, so it never
+              gated anything in practice — but it DID make the route 404 for the
+              moment before the global flag fetch settles, and it could not cover
+              the sibling Receipts surface (which has no flag of its own). Half a
+              gate over one coherent surface is worse than none; the flag is gone.
+
+              `/inventory` stays as a redirect, not a route: it is the URL the
+              retired feature shipped under and may sit in a bookmark. */}
+          <Route path="/inventory" element={<Navigate to="/memory/things" replace />} />
+          <Route
+            path="/memory/things"
+            element={
+              <ProtectedRoute>
+                <ThingsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route path="/receipts" element={<Navigate to="/memory/receipts" replace />} />
+          <Route
+            path="/memory/receipts"
+            element={
+              <ProtectedRoute>
+                <ReceiptsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/receipts/:id"
+            element={
+              <ProtectedRoute>
+                <ReceiptPage />
+              </ProtectedRoute>
+            }
+          />
 
           {isFeatureEnabled('files.page') && (
             <>
               <Route path="/files" element={<Navigate to="/memory/content" replace />} />
               {/*
-                The optional :fileId gives an individual file a shareable URL and
-                makes Back close the viewer. It is one route rather than two so
-                FilesPage stays mounted when the param changes — a second route
-                would remount it and throw away every page the user scrolled in.
+                The optional :contentId gives an individual content row a shareable
+                URL and makes Back close the drawer. It is one route rather than two
+                so ContentLibraryPage stays mounted when the param changes — a second
+                route would remount it and throw away every page the user scrolled in.
               */}
               <Route
-                path="/memory/content/:fileId?"
+                path="/memory/content/:contentId?"
                 element={
                   <ProtectedRoute>
-                    <FilesPage />
+                    <ContentLibraryPage />
                   </ProtectedRoute>
                 }
               />
             </>
           )}
 
-          <Route path="/insights" element={<Navigate to="/today" replace />} />
+          <Route path="/insights" element={<Navigate to="/calendar" replace />} />
           <Route
             path="/insights/:id"
             element={
@@ -333,26 +386,6 @@ function AppRoutes() {
               </ProtectedRoute>
             }
           />
-
-          {isFeatureEnabled('insights.page') && (
-            <>
-              {/*
-                "Questions" is what this page used to be called; it is
-                "Reflections" in the UI now. Both old paths stay as redirects so
-                bookmarks, docs and any link still in the wild keep working.
-              */}
-              <Route path="/prompts" element={<Navigate to="/memory/reflections" replace />} />
-              <Route path="/memory/questions" element={<Navigate to="/memory/reflections" replace />} />
-              <Route
-                path="/memory/reflections"
-                element={
-                  <ProtectedRoute>
-                    <PromptsPage />
-                  </ProtectedRoute>
-                }
-              />
-            </>
-          )}
 
           {isFeatureEnabled('tags.page') && (
             <>
@@ -368,28 +401,77 @@ function AppRoutes() {
             </>
           )}
 
-          {isFeatureEnabled('stats.page') && (
-            <Route
-              path="/stats"
-              element={
-                <ProtectedRoute>
-                  <StatsPage />
-                </ProtectedRoute>
-              }
-            />
+          {isFeatureEnabled('self.page') && (
+            <>
+              {/* Legacy addresses, INSIDE the gate that registers their target.
+                  These three sat outside it, violating the rule the comment
+                  below states: with the flag off they bounced an old bookmark
+                  to /self/stats or /self/settings and 404'd it there, at a URL
+                  the user never typed. Absent from the table they fall through
+                  to "*", which waits for the flags and only then decides. */}
+              <Route path="/stats" element={<Navigate to="/self/stats" replace />} />
+              <Route path="/profile/*" element={<RedirectProfileToSelfSettings />} />
+              <Route path="/system" element={<Navigate to="/self" replace />} />
+
+              {/* About You and Account moved into Self. Specific paths outrank
+                  the `/settings/*` wildcard regardless of declaration order, so
+                  old bookmarks land on the right Self tab instead of falling
+                  through to the settings dialog's appearance fallback. */}
+              <Route path="/settings/about-you" element={<Navigate to="/self" replace />} />
+              <Route path="/settings/account" element={<Navigate to="/self" replace />} />
+
+              <Route
+                path="/self/*"
+                element={
+                  <ProtectedRoute>
+                    <SelfPage />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* "Questions" is what this page used to be called; it was
+                  "Reflections" under Memory, and now lives under Self. All
+                  three old paths stay as redirects so bookmarks, docs and any
+                  link still in the wild keep working.
+
+                  Declared inside the gate alongside their destination, the way
+                  /tags and /files are. A gated route in this app is never
+                  registered rather than blocked, so a redirect that outlived
+                  its target would send an old bookmark to a URL the table does
+                  not contain and 404 it there instead — under a path the user
+                  never typed. Absent from the table, these fall through to "*",
+                  which holds the loading page until the flags settle and only
+                  then decides: redirect if Self exists, 404 at the address
+                  actually asked for if it does not.
+
+                  The Reflections tab behind them is separately gated on
+                  `insights.page` inside SelfPage, which sends its own misses
+                  back to /self rather than 404ing. */}
+              <Route path="/prompts" element={<Navigate to="/self/reflections" replace />} />
+              <Route path="/memory/questions" element={<Navigate to="/self/reflections" replace />} />
+              <Route path="/memory/reflections" element={<Navigate to="/self/reflections" replace />} />
+            </>
           )}
 
           <Route path="/memory/knowledge" element={<Navigate to="/memory/events?view=graph" replace />} />
 
+          {/* Chat moved under Memory — it's a bounded view over your own
+              history the same way Events/People/Places are, not a peer
+              destination. The old /chat/:id? address is kept as a redirect,
+              declared here alongside the route it now points at, so a
+              bookmark or an external deep-link still lands. */}
           {isFeatureEnabled('chat.page') && (
-            <Route
-              path="/chat/:id?"
-              element={
-                <ProtectedRoute>
-                  <ChatPage />
-                </ProtectedRoute>
-              }
-            />
+            <>
+              <Route
+                path="/memory/chat/:id?"
+                element={
+                  <ProtectedRoute>
+                    <ChatPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route path="/chat/:id?" element={<RedirectToChat />} />
+            </>
           )}
 
           {/* Admin / System */}
@@ -399,6 +481,22 @@ function AppRoutes() {
               element={
                 <ProtectedRoute>
                   <JobsPage />
+                </ProtectedRoute>
+              }
+            />
+          )}
+
+          {/* Asks — interpersonal questions between Companions. Gated on `ask`,
+              the same flag the backend resolvers check: with it off every ask
+              mutation returns `success: false`, so a registered route would be
+              a page of dead buttons. Flag-gated routes in this app are never
+              registered rather than blocked, which is what we want here. */}
+          {isFeatureEnabled('ask') && (
+            <Route
+              path="/asks"
+              element={
+                <ProtectedRoute>
+                  <AsksPage />
                 </ProtectedRoute>
               }
             />
@@ -434,20 +532,13 @@ function AppRoutes() {
             }
           />
 
+          {/* The Self-bound redirects for these paths are declared inside the
+              `self.page` gate above, alongside the route they point at. */}
           <Route
             path="/settings/*"
             element={
               <ProtectedRoute>
                 <SettingsPage />
-              </ProtectedRoute>
-            }
-          />
-
-          <Route
-            path="/system"
-            element={
-              <ProtectedRoute>
-                <SystemPage />
               </ProtectedRoute>
             }
           />
@@ -481,8 +572,15 @@ function AppRoutes() {
             />
           )}
 
+          {/* Notes used to be write-only from the shell — reachable to create
+              (Add ▸ Note) or open from search, but never browsed. Folded into
+              the Memory hub the same way Things/Receipts/Content were: the
+              list moves under /memory/*, the old address stays as a redirect
+              for whatever already links here. The detail/edit page keeps its
+              own top-level path, same as /people/:id and /receipts/:id. */}
+          <Route path="/notes" element={<Navigate to="/memory/notes" replace />} />
           <Route
-            path="/notes"
+            path="/memory/notes"
             element={
               <ProtectedRoute>
                 <NotesPage />
@@ -500,7 +598,7 @@ function AppRoutes() {
           />
 
           <Route
-            path="/saved-searches?"
+            path="/saved-searches"
             element={
               <ProtectedRoute>
                 <SavedSearchesPage />
@@ -546,8 +644,10 @@ function AppRoutes() {
           />
 
           <Route path="/places" element={<Navigate to="/memory/places" replace />} />
+          {/* The optional :placeId gives a place row a shareable URL and makes
+              Back close its drawer — same shape as /memory/content/:contentId. */}
           <Route
-            path="/memory/places"
+            path="/memory/places/:placeId?"
             element={
               <ProtectedRoute>
                 <PlacesPage />
@@ -604,7 +704,7 @@ function AppRoutes() {
         {/*
           Fallback. The feature-gated routes above are absent from the table
           until `/api/_internal/features` answers, so on a hard load of one of
-          them (/stats, /tags, /prompts, or a settings overlay whose restored
+          them (/self, /tags, /prompts, or a settings overlay whose restored
           backgroundLocation is one of them) this is what "*" matches. Rendering
           404 there flashed a not-found page over a route that was about to
           exist; wait for the flags instead, exactly as ProtectedRoute waits for

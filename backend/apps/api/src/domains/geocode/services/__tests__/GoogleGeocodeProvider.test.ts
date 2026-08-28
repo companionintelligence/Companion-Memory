@@ -189,3 +189,101 @@ describe('GoogleGeocodeProvider without an API key', () => {
     }
   });
 });
+
+describe('GoogleGeocodeProvider bounding box extraction (#2161)', () => {
+  afterEach(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    delete (global as any).fetch;
+    jest.restoreAllMocks();
+  });
+
+  /** Build an OK body whose geometry carries the given boxes. */
+  function bodyWithGeometry(geometry: Record<string, unknown>) {
+    return {
+      status: 'OK',
+      results: [
+        {
+          formatted_address: 'Mountain View, CA, USA',
+          place_id: 'place-mv',
+          partial_match: false,
+          geometry: { location: { lat: 37.386, lng: -122.083 }, ...geometry },
+          address_components: [],
+        },
+      ],
+    };
+  }
+
+  it('prefers geometry.bounds (true footprint) over geometry.viewport (padded display box)', async () => {
+    mockFetch(
+      bodyWithGeometry({
+        bounds: { northeast: { lat: 37.47, lng: -122.02 }, southwest: { lat: 37.32, lng: -122.12 } },
+        viewport: { northeast: { lat: 37.9, lng: -121.9 }, southwest: { lat: 37.0, lng: -122.5 } },
+      }),
+    );
+
+    const result = await makeProvider().geocode('Mountain View');
+
+    expect(result.bounds).toEqual({ north: 37.47, south: 37.32, east: -122.02, west: -122.12 });
+  });
+
+  it('falls back to geometry.viewport when no bounds are returned', async () => {
+    mockFetch(
+      bodyWithGeometry({
+        viewport: { northeast: { lat: 37.9, lng: -121.9 }, southwest: { lat: 37.0, lng: -122.5 } },
+      }),
+    );
+
+    const result = await makeProvider().geocode('Mountain View');
+
+    expect(result.bounds).toEqual({ north: 37.9, south: 37.0, east: -121.9, west: -122.5 });
+  });
+
+  it('returns no bounds when the geometry carries neither box', async () => {
+    mockFetch(bodyWithGeometry({ location_type: 'ROOFTOP' }));
+
+    const result = await makeProvider().geocode('1600 Amphitheatre Pkwy');
+
+    expect(result.bounds).toBeUndefined();
+    // The rest of the result is unaffected.
+    expect(result.status).toBe('OK');
+    expect(result.placeId).toBe('place-mv');
+  });
+
+  it('drops an antimeridian-crossing box rather than inverting it into a world-spanning envelope', async () => {
+    mockFetch(
+      bodyWithGeometry({
+        // Fiji: east of the antimeridian in the NE corner, west of it in the SW.
+        bounds: { northeast: { lat: -16.0, lng: -179.7 }, southwest: { lat: -18.3, lng: 177.0 } },
+      }),
+    );
+
+    const result = await makeProvider().geocode('Fiji');
+
+    expect(result.bounds).toBeUndefined();
+  });
+
+  it('drops a malformed box (non-numeric or inverted corners)', async () => {
+    mockFetch(
+      bodyWithGeometry({
+        bounds: { northeast: { lat: 'north', lng: -122.02 }, southwest: { lat: 37.32, lng: -122.12 } },
+        viewport: { northeast: { lat: 37.0, lng: -122.5 }, southwest: { lat: 37.9, lng: -121.9 } },
+      }),
+    );
+
+    const result = await makeProvider().geocode('Nowhere');
+
+    expect(result.bounds).toBeUndefined();
+  });
+
+  it('extracts bounds on the reverse path too', async () => {
+    mockFetch(
+      bodyWithGeometry({
+        bounds: { northeast: { lat: 37.47, lng: -122.02 }, southwest: { lat: 37.32, lng: -122.12 } },
+      }),
+    );
+
+    const result = await makeProvider().reverseGeocode(37.386, -122.083);
+
+    expect(result.bounds).toEqual({ north: 37.47, south: 37.32, east: -122.02, west: -122.12 });
+  });
+});

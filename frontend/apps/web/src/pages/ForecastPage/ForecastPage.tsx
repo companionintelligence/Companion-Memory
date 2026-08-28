@@ -6,8 +6,11 @@ import { useFeatures } from '@/common/feature';
 import { ForecastStrip } from '@/components/ForecastStrip';
 import { PageContent } from '@/components/layout';
 import { WeekAhead } from '@/components/WeekAhead';
+import { placeVisible } from '@/lib/forecastDisplay';
 
-import { CalibrationPanel, MetricBandsPanel, NextPlacesPanel, NextUpPanel } from './ForecastPanels';
+import { NextForecast } from './BranchialTree';
+import { NextPlacesPanel } from './ForecastPanels';
+import { OffScript } from './OffScript';
 import { useForecastExtras } from './useForecastExtras';
 
 export function ForecastPage() {
@@ -18,6 +21,7 @@ export function ForecastPage() {
   const [{ data: forecast, loading, error, stalled }] = useForecastService();
   const extras = useForecastExtras();
   const { week, due } = useWeekAheadService();
+  const places = extras.places.filter(placeVisible);
 
   return (
     <>
@@ -31,10 +35,17 @@ export function ForecastPage() {
         ) : error && !forecast ? (
           <ErrorPage error={error} />
         ) : !forecast ? (
+          // Reached only once hbpeEnabled is true and no error was thrown — the
+          // resolver's try/catch (ForecastResolver.ts) swallows a real HBPE
+          // failure and returns null either way. A genuinely untrained model
+          // does not land here: it returns real data with
+          // systemStatus: 'COLD_START' instead of a null forecast. So this is
+          // always a failed/unreachable call, never "not started yet" — the
+          // copy has to say that rather than point at Add → Predict.
           <div className="relative min-h-60 flex-1">
             <EmptyState
               icon={<CloudSun size={48} />}
-              message="No forecast yet. Use Add → Predict to start the model."
+              message="Couldn't reach the forecasting service just now. Try again shortly."
             />
           </div>
         ) : (
@@ -48,15 +59,17 @@ export function ForecastPage() {
                 stalled={stalled}
                 stillLearning={forecast.stillLearning}
                 modelVersion={forecast.modelVersion}
+                pipelineEtaSeconds={forecast.pipelineEtaSeconds}
+                pipelineDetail={forecast.pipelineDetail}
               />
             </div>
+            <NextForecast />
+            <OffScript
+              historyDays={extras.historyDays}
+              drift={Boolean(extras.calibration?.latest?.driftFlag)}
+            />
             <WeekAhead week={week} due={due} />
-            <div className="grid gap-4 lg:grid-cols-2">
-              <NextUpPanel buckets={forecast.buckets} historyDays={extras.historyDays} />
-              <MetricBandsPanel metrics={extras.metrics} />
-              <NextPlacesPanel places={extras.places} />
-              <CalibrationPanel calibration={extras.calibration} />
-            </div>
+            {places.length > 0 ? <NextPlacesPanel places={places} /> : null}
           </div>
         )}
       </PageContent>

@@ -2,6 +2,7 @@ import {
   addAppUrlOpenListener,
   addBackButtonListener,
   exitApp,
+  getCurrentDeviceLocation,
   hasNotificationPermission,
   hideSplashScreen,
   openExternalUrl,
@@ -13,6 +14,7 @@ import {
   secureStorageRemove,
   secureStorageSet,
   setStatusBarStyle,
+  takeNativePhoto,
 } from '@ci/common/src/utils/nativeBridge';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -536,5 +538,137 @@ describe('nativeBridge — local notifications', () => {
     expect(await hasNotificationPermission()).toBe(false);
     expect(await requestNotificationPermission()).toBe(false);
     expect(await scheduleLocalNotification('a', 'b')).toBe(false);
+  });
+});
+
+describe('nativeBridge — takeNativePhoto', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns null on web', async () => {
+    setWindow({});
+
+    expect(await takeNativePhoto()).toBeNull();
+  });
+
+  it('returns a File from the Camera plugin webPath', async () => {
+    const getPhoto = vi.fn(async () => ({ webPath: 'capacitor://localhost/photo.jpg', format: 'jpeg' }));
+    const requestPermissions = vi.fn(async () => ({ camera: 'granted' }));
+
+    setWindow({
+      Capacitor: {
+        isNativePlatform: () => true,
+        Plugins: { Camera: { getPhoto, requestPermissions } },
+      },
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        blob: async () => new Blob(['jpeg-bytes'], { type: 'image/jpeg' }),
+      })),
+    );
+
+    const file = await takeNativePhoto();
+
+    expect(getPhoto).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'CAMERA', resultType: 'uri', saveToGallery: false }),
+    );
+    expect(requestPermissions).toHaveBeenCalledWith({ permissions: ['camera'] });
+    expect(file).toBeInstanceOf(File);
+    expect(file?.type).toBe('image/jpeg');
+    expect(file?.name).toMatch(/^IMG_\d+\.jpg$/);
+  });
+
+  it('returns null when the user cancels', async () => {
+    setWindow({
+      Capacitor: {
+        isNativePlatform: () => true,
+        Plugins: {
+          Camera: {
+            getPhoto: vi.fn(async () => {
+              throw new Error('User cancelled photos app');
+            }),
+          },
+        },
+      },
+    });
+
+    expect(await takeNativePhoto()).toBeNull();
+  });
+});
+
+describe('nativeBridge — current device location', () => {
+  it('uses LocalHub on iOS', async () => {
+    const getCurrentLocation = vi.fn(async () => ({
+      latitude: 37.7823,
+      longitude: -122.4076,
+      accuracy: 8,
+    }));
+
+    setWindow({
+      Capacitor: {
+        isNativePlatform: () => true,
+        getPlatform: () => 'ios',
+        Plugins: { LocalHub: { getCurrentLocation } },
+      },
+    });
+
+    await expect(getCurrentDeviceLocation()).resolves.toEqual({
+      latitude: 37.7823,
+      longitude: -122.4076,
+      accuracy: 8,
+    });
+    expect(getCurrentLocation).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps a denied native error so the form can open Settings', async () => {
+    setWindow({
+      Capacitor: {
+        isNativePlatform: () => true,
+        getPlatform: () => 'ios',
+        Plugins: {
+          LocalHub: {
+            getCurrentLocation: vi.fn(async () => {
+              throw new Error('Location permission was denied');
+            }),
+          },
+        },
+      },
+    });
+
+    await expect(getCurrentDeviceLocation()).rejects.toMatchObject({
+      name: 'DeviceLocationError',
+      code: 'denied',
+    });
+  });
+
+  it('falls back to the browser geolocation API off iOS', async () => {
+    const getCurrentPosition = vi.fn((success: (position: GeolocationPosition) => void) => {
+      success({
+        coords: { latitude: 1.5, longitude: 2.5, accuracy: 12 },
+      } as GeolocationPosition);
+    });
+    const previousNavigator = globalThis.navigator;
+
+    setWindow({ Capacitor: { isNativePlatform: () => false } });
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: { geolocation: { getCurrentPosition } },
+    });
+
+    try {
+      await expect(getCurrentDeviceLocation()).resolves.toEqual({
+        latitude: 1.5,
+        longitude: 2.5,
+        accuracy: 12,
+      });
+    } finally {
+      Object.defineProperty(globalThis, 'navigator', {
+        configurable: true,
+        value: previousNavigator,
+      });
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { Field, ObjectType } from '@nestjs/graphql';
+import { Field, Int, ObjectType } from '@nestjs/graphql';
 
 import type { ForecastResponse } from '@ci/domains/predictions';
 
@@ -30,6 +30,18 @@ export class ForecastType {
   })
   stillLearning!: boolean;
 
+  @Field(() => Int, {
+    nullable: true,
+    description: 'Estimated seconds remaining in the active Predict/nightly step.',
+  })
+  pipelineEtaSeconds?: number | null;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Live progress inside the active step, e.g. "1200 of 8400".',
+  })
+  pipelineDetail?: string | null;
+
   @Field(() => [ForecastBucketType!]!)
   buckets!: ForecastBucketType[];
 
@@ -40,6 +52,8 @@ export class ForecastType {
       systemStatus: source.system_status,
       modelVersion: source.model_version ?? null,
       stillLearning: Boolean(source.still_learning),
+      pipelineEtaSeconds: source.pipeline_eta_seconds ?? null,
+      pipelineDetail: source.pipeline_detail ?? null,
       buckets: source.buckets.map(ForecastBucketType.toType),
     };
   }

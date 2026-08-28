@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 
-import { apiKeyHeaders, buildApiUrl, fetchJson } from '@ci/common';
+import { apiFetch, apiKeyHeaders, fetchJson } from '@ci/common';
 
-import { useAuth } from '@/hooks';
+import { useSessionAuth } from '@/hooks/useSessionAuth';
 
 import type { Thread } from './types';
 
@@ -19,20 +19,24 @@ type ReturnType = [
 ];
 
 export function useThreadListService(): ReturnType {
-  const [{ authToken }] = useAuth();
+  const { ready, headers } = useSessionAuth();
 
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
 
   const fetchThreads = useCallback(async () => {
+    if (!ready) {
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
     try {
       const data = await fetchJson<Thread[]>('/api/threads', {
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...headers,
           'Content-Type': 'application/json',
         },
       });
@@ -43,15 +47,15 @@ export function useThreadListService(): ReturnType {
     } finally {
       setLoading(false);
     }
-  }, [setLoading, setError, setThreads, authToken]);
+  }, [ready, headers]);
 
   const deleteThread = useCallback(
     async (id: string) => {
-      const res = await fetch(buildApiUrl(`/api/threads/${id}`), {
+      const res = await apiFetch(`/api/threads/${id}`, {
         method: 'DELETE',
         headers: {
           ...apiKeyHeaders(),
-          Authorization: `Bearer ${authToken}`,
+          ...headers,
         },
       });
 
@@ -61,11 +65,11 @@ export function useThreadListService(): ReturnType {
 
       setThreads((prev) => prev.filter((t) => t.id !== id));
     },
-    [authToken],
+    [headers],
   );
 
   useEffect(() => {
-    fetchThreads();
+    void fetchThreads();
   }, [fetchThreads]);
 
   const busy = threads.some(

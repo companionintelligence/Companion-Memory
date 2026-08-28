@@ -1,12 +1,12 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { PowerRailProvider } from '../PowerRailContext';
 
-import { MobileTopBar } from './MobileTopBar';
 import { MobileNavigation } from './MobileNavigation';
+import { MobileTopBar } from './MobileTopBar';
 
 vi.mock('@/common/feature', async () => {
   const actual = await vi.importActual<typeof import('@/common/feature')>('@/common/feature');
@@ -18,6 +18,25 @@ vi.mock('@/common/feature', async () => {
 });
 
 vi.mock('../SecondaryNavigation/useFeedBadgeCount', () => ({ useFeedBadgeCount: () => 0 }));
+vi.mock('../SecondaryNavigation/usePlanBadgeCount', () => ({ usePlanBadgeCount: () => 0 }));
+
+const recentThreads = vi.hoisted(() => ({ current: [] as { id: string; name: string | null }[] }));
+
+vi.mock('@/pages/ChatPage/useRecentThreads', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/pages/ChatPage/useRecentThreads')>(
+      '@/pages/ChatPage/useRecentThreads',
+    );
+
+  return {
+    ...actual,
+    useRecentThreads: ({ enabled }: { enabled: boolean }) => ({
+      threads: enabled ? recentThreads.current : [],
+      loading: false,
+      error: null,
+    }),
+  };
+});
 
 vi.mock('@/components/modals/CaptureModal', () => ({
   CaptureModal: () => <div data-testid="capture-modal" />,
@@ -29,7 +48,7 @@ vi.mock('@/components/modals/AddItemModal', () => ({
   AddPlaceModal: () => null,
 }));
 vi.mock('@/components/modals/AddItemModal/AddConceptModal.tsx', () => ({ AddConceptModal: () => null }));
-vi.mock('@/components/modals/InventoryItemModal', () => ({ InventoryItemModal: () => null }));
+vi.mock('@/components/modals/ThingModal', () => ({ ThingModal: () => null }));
 
 vi.mock('@/api', async () => {
   const actual = await vi.importActual<typeof import('@/api')>('@/api');
@@ -52,6 +71,11 @@ vi.mock('@/hooks', async () => {
   };
 });
 
+vi.mock('@/components/ThemePicker', () => ({
+  useTheme: () => ({ themeState: { mode: 'light' }, setTheme: vi.fn() }),
+  ColorPicker: () => null,
+}));
+
 vi.mock('@/components/SearchBox', () => ({
   GlobalSearchBox: () => <input aria-label="Search memory" />,
 }));
@@ -61,7 +85,7 @@ vi.mock('@/components/ConnectionModeIndicator', () => ({
   OutboxQueueIndicator: () => null,
 }));
 
-function renderMobileNav(route = '/today') {
+function renderMobileNav(route = '/calendar') {
   return renderWithProviders(
     <PowerRailProvider variant="overlay">
       <MobileTopBar />
@@ -74,6 +98,7 @@ function renderMobileNav(route = '/today') {
 describe('MobileNavigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    recentThreads.current = [];
   });
 
   it('starts closed, with chevron, search, and Add in the top row', () => {
@@ -84,7 +109,9 @@ describe('MobileNavigation', () => {
     expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Plan' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'More' })).not.toBeInTheDocument();
-    expect(document.querySelector('img[src*="logo"]')).toBeNull();
+    // The wordmark belongs to the drawer, which is off-canvas until opened —
+    // the top bar itself stays chevron, search, chips, Add.
+    expect(screen.getByRole('banner').querySelector('img[src*="logo"]')).toBeNull();
   });
 
   it('opens the glass rail with the same destinations as the desktop list', async () => {
@@ -93,8 +120,118 @@ describe('MobileNavigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
 
     expect(await screen.findByRole('link', { name: 'Plan' })).toHaveAttribute('href', '/plan');
-    expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', '/chat');
+    expect(screen.getByRole('link', { name: 'Memory' })).toHaveAttribute('href', '/memory');
+    expect(screen.queryByRole('link', { name: 'System' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Close menu' }).length).toBeGreaterThanOrEqual(1);
+  });
+
+  // The drawer never said which app it belonged to. Desktop only reveals the
+  // name when the rail is pinned, and the phone has no pinning at all.
+  it('names the app in the open drawer, logo and wordmark together', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    const nav = await screen.findByRole('navigation');
+    const wordmark = within(nav).getByTestId('power-rail-wordmark');
+
+    expect(within(wordmark).getByText('Companion Memory')).toHaveAttribute('aria-hidden', 'false');
+    expect(wordmark.querySelector('img[src*="logo"]')).not.toBeNull();
+  });
+
+  // The wordmark is a statement, not a second close button: the chevron beside
+  // it already owns that, and two controls with one accessible name is one too
+  // many for a thumb.
+  it('leaves the drawer with a single close control', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    const nav = await screen.findByRole('navigation');
+
+    expect(within(nav).getAllByRole('button', { name: 'Close menu' })).toHaveLength(1);
+  });
+
+  // ChatSidebar is portaled to `tertiary-navigation`, which the phone layout
+  // never renders — without this submenu there is no way to change thread.
+  // Chat lives under Memory now, whose group auto-opens on a memory-hub
+  // route, same as it did for the old dedicated Chat group.
+  it('switches among recent threads from the drawer', async () => {
+    recentThreads.current = [
+      { id: 't1', name: 'Dinner plans' },
+      { id: 't2', name: null },
+    ];
+
+    renderMobileNav('/memory/chat');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    expect(await screen.findByRole('link', { name: 'Dinner plans' })).toHaveAttribute(
+      'href',
+      '/memory/chat/t1',
+    );
+    expect(screen.getByRole('link', { name: 'Thread t2' })).toHaveAttribute('href', '/memory/chat/t2');
+  });
+
+  // Chat itself is a Memory hub section now, not a peer row — see the
+  // equivalent assertion in SecondaryNavigation.test.tsx.
+  it('lists Chat inside the Memory group, not as its own row', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    expect(screen.queryByRole('link', { name: 'Chat' })).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand Memory sections' }));
+
+    expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', '/memory/chat');
+  });
+
+  it('carries Asks inside the drawer Saved Searches group, not as its own row', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    await screen.findByRole('link', { name: 'Saved Searches' });
+    expect(screen.queryByRole('link', { name: 'Asks' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Saved Searches sections' }));
+
+    expect(screen.getByRole('link', { name: 'Asks' })).toHaveAttribute('href', '/asks');
+  });
+
+  it('puts Capture first in the drawer and Help, the user tile, and Settings at the foot', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    const nav = await screen.findByRole('navigation');
+    const close = nav.querySelector('[aria-label="Close menu"]');
+    const capture = screen.getByRole('button', { name: 'Capture' });
+    const plan = screen.getByRole('link', { name: 'Plan' });
+    const help = await screen.findByRole('button', { name: 'Help' });
+    const account = screen.getByRole('link', { name: 'Test User' });
+
+    expect(account).toHaveAttribute('href', '/self');
+    expect(close).toBeTruthy();
+    expect((close as Node).compareDocumentPosition(capture) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(capture.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(plan.compareDocumentPosition(help) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(help.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // D13: the phone drawer used to have no route to support or docs at all.
+  it('opens Support and Docs from the drawer footer', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Help' }));
+
+    expect(screen.getByRole('link', { name: 'Support' })).toHaveAttribute(
+      'href',
+      'https://ci.computer/support',
+    );
+    expect(screen.getByRole('link', { name: 'Docs' })).toBeInTheDocument();
   });
 
   it('opens on a right swipe from the left edge', async () => {
@@ -104,7 +241,71 @@ describe('MobileNavigation', () => {
     fireEvent.touchEnd(document, { changedTouches: [{ clientX: 80, clientY: 240 }] });
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Today' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Calendar' })).toBeInTheDocument();
     });
+  });
+
+  // The drawer names itself distinctly from the desktop rail's nav (see the
+  // "Main navigation" assertion in SecondaryNavigation.test.tsx), so a
+  // screen-reader user can tell which one they are in.
+  it('labels the drawer nav distinctly from the desktop rail nav', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    const nav = await screen.findByRole('navigation');
+
+    expect(nav).toHaveAttribute('aria-label', 'Main navigation drawer');
+  });
+
+  // H4: Escape is a standard way to dismiss any dialog-like overlay, and the
+  // drawer covers the whole screen on a phone.
+  it('closes the drawer when Escape is pressed', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+
+    expect(await screen.findByRole('link', { name: 'Plan' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(screen.queryByRole('link', { name: 'Plan' })).not.toBeInTheDocument();
+  });
+
+  // H4: without this, closing the drawer (by any means) strands keyboard
+  // focus on a node that just left the accessibility tree.
+  it('returns focus to the button that opened it once the drawer closes', async () => {
+    renderMobileNav();
+
+    const trigger = screen.getByRole('button', { name: 'Open menu' });
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    fireEvent.click(trigger);
+    await screen.findByRole('navigation');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  // H4: `aria-hidden` on the drawer already keeps the scrim-covered page out
+  // of the accessibility tree, but its links stayed tabbable. `inert` is what
+  // actually pulls them out of tab order (and pointer hit-testing) too.
+  it('makes the page behind the scrim inert, not just visually covered, while the drawer is open', async () => {
+    renderMobileNav();
+
+    const banner = screen.getByRole('banner');
+
+    expect(banner).not.toHaveAttribute('inert');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    await screen.findByRole('navigation');
+
+    expect(banner).toHaveAttribute('inert');
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(banner).not.toHaveAttribute('inert');
   });
 });

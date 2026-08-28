@@ -4,9 +4,12 @@ import {
   entityKey,
   hasContactIdentity,
   hashItem,
+  isOrganizationalAddress,
+  isShortCode,
   mergeAccumulatedMetadata,
   needsContentDigest,
   normalizeHandle,
+  ORGANIZATIONAL_STAGED_TYPE,
   resolveEntityType,
 } from '../identity';
 
@@ -72,6 +75,51 @@ describe('entityIdentityKey', () => {
   });
 });
 
+describe('isShortCode', () => {
+  /*
+   * The rule that keeps an SMS service out of somebody's address book. It has
+   * to split TWO kinds of phone from each other without ever catching a name,
+   * because the only caller that matters (googlevoice.ts participantType) uses
+   * it to decide between `Person` and `Concept`.
+   */
+  it('accepts the three-to-six digit codes a real export carries', () => {
+    // Every one of these is a name on the QA corpus's 142 mis-filed rows.
+    for (const code of ['411', '2222', '32665', '99217', '227898', '+411']) {
+      expect(isShortCode(code)).toBe(true);
+    }
+  });
+
+  it('stops exactly where normalizeHandle starts keying, so there is no gap', () => {
+    expect(isShortCode('123456')).toBe(true);
+    expect(normalizeHandle('123456')).toBe('');
+
+    expect(isShortCode('1234567')).toBe(false);
+    expect(normalizeHandle('1234567')).toBe('1234567');
+  });
+
+  it('refuses a number a person can be reached on, however it is punctuated', () => {
+    for (const phone of ['+15558887777', '555-888-7777', '(555) 888 7777', '+44 20 7946 0000']) {
+      expect(isShortCode(phone)).toBe(false);
+    }
+  });
+
+  it('refuses anything that is not a phone field at all', () => {
+    // A name, a name carrying a digit, an email, and the empty/absent cases.
+    // Without the phone-shape guard "Studio 54" would read as a short code.
+    for (const value of ['Dana Wu', 'Studio 54', '411@example.invalid', '', '   ', undefined, null, 42]) {
+      expect(isShortCode(value)).toBe(false);
+    }
+  });
+
+  it('refuses phone punctuation carrying no number at all', () => {
+    // Passes the shape test and normalizes to nothing, so only the digit count
+    // separates it from a short code. A `tel:` href really can be junk.
+    for (const value of ['+', '()', '- . -']) {
+      expect(isShortCode(value)).toBe(false);
+    }
+  });
+});
+
 describe('resolveEntityType', () => {
   it('defaults a handle-carrying entity to contact when the parser omitted a type', () => {
     expect(resolveEntityType({ attributes: [{ name: 'email', value: 'a@b.com' }] })).toBe('contact');
@@ -86,6 +134,48 @@ describe('resolveEntityType', () => {
   it('leaves the type of a handle-less entity alone, including when it is absent', () => {
     expect(resolveEntityType({ name: 'Paris' })).toBeNull();
     expect(hasContactIdentity({ name: 'Paris' })).toBe(false);
+  });
+
+  it('defaults a role-mailbox participant to organization instead of contact', () => {
+    // gmail.ts's addParticipants stages exactly this shape: no `type`, one
+    // `{name: 'from'|'to'|'cc', value, identity: true}` attribute — the kind
+    // name carries no 'email'/'phone' signal, only `identity: true` does.
+    const entity: Entity = { name: 'Support', attributes: [{ name: 'from', value: 'noreply@stripe.com', identity: true }] };
+
+    expect(resolveEntityType(entity)).toBe(ORGANIZATIONAL_STAGED_TYPE);
+  });
+
+  it('keeps a mixed entity (a role mailbox found alongside a real phone) as contact', () => {
+    const entity: Entity = {
+      attributes: [
+        { name: 'email', value: 'support@acme.example' },
+        { name: 'phone', value: '+1 555 010 9999' },
+      ],
+    };
+
+    expect(resolveEntityType(entity)).toBe('contact');
+  });
+});
+
+describe('isOrganizationalAddress', () => {
+  it('flags role local-parts at any domain', () => {
+    for (const address of ['noreply@stripe.com', 'support@acme.example', 'billing+receipts@shop.example']) {
+      expect(isOrganizationalAddress(address)).toBe(true);
+    }
+  });
+
+  it('flags an address on a non-routable/internal TLD', () => {
+    expect(isOrganizationalAddress('server-42@build.internal')).toBe(true);
+  });
+
+  it('leaves a real person addressed at any domain alone', () => {
+    for (const address of ['alice@example.com', 'a@b.com', 'jose.garcia@somecompany.example']) {
+      expect(isOrganizationalAddress(address)).toBe(false);
+    }
+  });
+
+  it('is false for a value with no @ at all', () => {
+    expect(isOrganizationalAddress('not-an-email')).toBe(false);
   });
 });
 

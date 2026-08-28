@@ -15,7 +15,12 @@ from pydantic_ai import Agent, NativeOutput, PromptedOutput, ToolOutput
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from .config import resolve_llm_model, settings
+from .config import (
+    resolve_embedding_api_base,
+    resolve_embedding_api_key,
+    resolve_llm_model,
+    settings,
+)
 
 logger = structlog.get_logger()
 
@@ -814,8 +819,8 @@ class Summarizer:
             # Direct HTTP call to embedding endpoint (no openai dependency)
             with httpx.Client(timeout=30.0) as client:
                 response = client.post(
-                    f"{settings.llm_api_base}/embeddings",
-                    headers={"Authorization": f"Bearer {settings.llm_api_key}"},
+                    f"{resolve_embedding_api_base(settings.llm_api_base)}/embeddings",
+                    headers={"Authorization": f"Bearer {resolve_embedding_api_key()}"},
                     json={
                         "model": settings.embedding_model,
                         "input": text,

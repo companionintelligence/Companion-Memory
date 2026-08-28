@@ -8,7 +8,13 @@ import readline from 'node:readline';
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
 import { mboxFromLineDate, receivedDate } from './email_date';
 import { emailDirection, isDraft } from './email_direction';
-import { parseMime } from './email_mime';
+import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
+import {
+  extractReceiptFields,
+  isLikelyReceipt,
+  receiptHeaderSignal,
+  receiptImportEnabled,
+} from './receipt_detect';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, Entity, EntityAttribute, Metadata, Relationship } from './timeline';
@@ -259,18 +265,61 @@ export class GmailFileImporter implements FileImporter {
       return;
     }
 
+    const subject = headersMap.Subject;
+
+    // RECEIPT DISCOVERY, and it must happen BEFORE the bulk gate below.
+    //
+    // Order confirmations, receipts and invoices arrive as exactly what
+    // isHumanCorrespondence rejects: Category Promotions/Updates,
+    // List-Unsubscribe, Precedence: bulk, no-reply@ senders. So the single
+    // richest commerce source in a mailbox was landing in the drop ledger and
+    // never reaching ci.* at all. A message that shows positive receipt
+    // evidence (see receipt_detect.ts) OVERRIDES the gate and is classified
+    // 'receipt' — kind commerce.receipt, which routes to the receipts
+    // destination rather than to communications: an order confirmation the mail
+    // gate rejected is not correspondence.
+    //
+    // The body is parsed lazily: an HTML-only receipt needs its markup
+    // flattened before the body signal can see the total, but a 5 GB mbox must
+    // not pay a MIME parse per message just to ask the question. The cheap
+    // header verdict gates that.
+    let mime: ParsedMimeResult | undefined;
+    let bodyText = '';
+    const readBody = (): string => {
+      if (!mime) {
+        mime = parseMime(headersRaw, bodyRaw);
+        bodyText = readableBody(mime);
+      }
+
+      return bodyText;
+    };
+
+    const isReceipt =
+      receiptImportEnabled() &&
+      receiptHeaderSignal(headersMap, subject) !== 'none' &&
+      isLikelyReceipt(headersMap, subject, readBody());
+
     // Keep only real human correspondence: drop spam, newsletters, promotions,
     // social/forum/update notifications, and other bulk/automated mail. Set
     // CI_GMAIL_INCLUDE_BULK=1 to import everything. See isHumanCorrespondence.
-    if (process.env.CI_GMAIL_INCLUDE_BULK !== '1' && !isHumanCorrespondence(headersMap)) {
+    const human = isHumanCorrespondence(headersMap);
+    if (!human && !isReceipt && process.env.CI_GMAIL_INCLUDE_BULK !== '1') {
       params.pipeline.drop?.('bulk_filtered');
 
       return;
     }
 
-    // MIME parse (single-level) for body + attachments
-    const mime = parseMime(headersRaw, bodyRaw);
-    const bodyText = mime.textBody || mime.htmlBody || '';
+    // The volume delta: exactly the messages the bulk gate WOULD have dropped
+    // and the receipt rule KEPT. It goes in the KEEP ledger, never the drop
+    // ledger — these records DO become staged rows, and counting them as drops
+    // corrupts the run's loss report with its own opposite.
+    if (isReceipt && !human) {
+      params.pipeline.keep?.('receipt_kept_from_bulk');
+    }
+
+    // MIME parse (single-level) for body + attachments — already done above
+    // when the receipt check needed the body.
+    readBody();
 
     // Participants
     const from = headersMap.From;
@@ -279,7 +328,6 @@ export class GmailFileImporter implements FileImporter {
     const msgID = headersMap['Message-ID'];
     const refs = headersMap.References;
     const inReply = headersMap['In-Reply-To'];
-    const subject = headersMap.Subject;
     // Participants hang off the email graph as edges (relation 'from'/'to'/'cc')
     // so persistGraph records an item→entity relationship for each. They used to
     // be pushed as SEPARATE top-level entity-only graphs, which persisted the
@@ -347,21 +395,35 @@ export class GmailFileImporter implements FileImporter {
     // (a live import copied 5.3 GB × 18 attachments = 95 GB before freezing).
     // Extraction failure (or zero bytes) → no descriptor: nothing on disk to
     // upload.
-    const mediaAttachments = mime.attachments.flatMap((att, attIdx) => {
+    const mediaAttachments = (mime?.attachments ?? []).flatMap((att, attIdx) => {
       const extracted = extractAttachmentToFile(fpath, att, params.log);
       if (!extracted) {
         return [];
       }
 
+      const kind = attachmentMediaKind(att.mediaType);
+
       return [
         {
           path: extracted,
           filename: att.filename || `attachment-${attIdx}`,
-          type: attachmentMediaKind(att.mediaType),
+          // A non-media attachment on a RECEIPT is the receipt document (the
+          // PDF invoice), not an anonymous 'file'. Photos stay photos — a
+          // picture attached to an order confirmation is still a picture.
+          type: isReceipt && kind === 'file' ? ('receipt_document' as const) : kind,
           mimetype: att.mediaType,
         },
       ];
     });
+    // Body cap: 4000 chars for correspondence (a snippet is enough to embed and
+    // preview), 32000 for a receipt — an itemised order confirmation IS its
+    // body, and clipping at 4k cuts the line items and the total off the end of
+    // every multi-item order.
+    const bodyCap = isReceipt ? 32000 : 4000;
+    // What the receipt states about itself: merchant, order id, total. Written
+    // under the CANONICAL commerce keys (push/commerceKeys.ts) so the receipt
+    // mapper reads them without a per-source special case.
+    const receiptFields = isReceipt ? extractReceiptFields(headersMap, bodyText) : undefined;
     const itemMetadata: Metadata = {
       Source: 'GmailMbox',
       Subject: subject,
@@ -372,9 +434,31 @@ export class GmailFileImporter implements FileImporter {
       MessageID: cleanMsgID,
       InReplyTo: inReply?.replace(/[<>]/g, ''),
       References: refs?.replace(/[<>]/g, ' '),
-      Text: bodyText ? bodyText.slice(0, 4000) : undefined,
+      Text: bodyText ? bodyText.slice(0, bodyCap) : undefined,
       MediaAttachments: mediaAttachments.length ? mediaAttachments : undefined,
+      Merchant: receiptFields?.merchant,
+      'Order ID': receiptFields?.orderId,
+      Total: receiptFields?.total,
+      Currency: receiptFields?.currency,
+      // Did the human-correspondence gate pass this message on its own merits?
+      // A receipt that would have been KEPT as mail must keep its
+      // communications home as well as gaining a receipt — the receipt lane
+      // only ever adds (see push/canonical.ts destinationsFor). A receipt
+      // RESCUED from the bulk filter was being dropped entirely, so it becomes
+      // a receipt alone.
+      HumanCorrespondence: isReceipt && human ? true : undefined,
+      CommunicationType: isReceipt && human ? 'email' : undefined,
     };
+    // The body AS `parseMime` hands it back — RAW markup for an HTML-only
+    // message — and NOT the flattened `bodyText` above.
+    //
+    // This feeds the Message-ID-less fallback id below, and an id must outlive
+    // a change to how a body is READ. `bodyText` used to be
+    // `mime.textBody || mime.htmlBody`; it is now flattened by `readableBody`,
+    // so hashing it would give every HTML-only message with no Message-ID a
+    // different id than a previous import produced — forking each one into a
+    // duplicate on the next re-import, with no migration to undo it.
+    const dedupBody = mime ? mime.textBody || mime.htmlBody || '' : bodyText;
     const item = {
       // Message-ID is the natural unique key. Without it the dedup hash collapses
       // to (dataSource, 'email', mbox basename, timestamp-second), so distinct
@@ -383,9 +467,10 @@ export class GmailFileImporter implements FileImporter {
         ? `gmail:${cleanMsgID}`
         : `gmail:nomid:${crypto
             .createHash('sha1')
-            .update(headersRaw + '\0' + bodyText)
+            .update(headersRaw + '\0' + dedupBody)
             .digest('hex')}`,
-      classification: 'email',
+      // 'receipt' → kind commerce.receipt → the receipts destination.
+      classification: isReceipt ? 'receipt' : 'email',
       timestamp: ts,
       intermediateLocation: fpath,
       content: {
@@ -526,7 +611,13 @@ function parseHeaders(raw: string): Record<string, string> {
     }
 
     const key = line.slice(0, idx).trim();
-    const val = line.slice(idx + 1).trim();
+    // decodeHeaderField is a cheap no-op (one .includes('=?') check) unless a
+    // value actually carries a `=?charset?…?=` encoded-word — Subject and a
+    // display name inside From/To/Cc are the fields real mail actually
+    // encodes this way, and nothing else legitimately contains the marker, so
+    // decoding unconditionally is safe and keeps this one map correct
+    // end-to-end rather than requiring every reader to remember to decode.
+    const val = decodeHeaderField(line.slice(idx + 1).trim());
     if (!map[key]) {
       map[key] = val;
     } else {

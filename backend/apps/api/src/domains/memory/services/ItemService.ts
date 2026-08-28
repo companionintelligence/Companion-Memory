@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { SYSTEM_USER, type UserServiceContext, type ServiceContext } from '@ci/common/context';
@@ -12,21 +12,29 @@ import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next'
 
 import { ItemBaseEntity } from '../entities/ItemBaseEntity';
 import { type Item, ItemEntity } from '../entities/ItemEntity';
-import {
-  PhysicalPropertyError,
-  normalizeColors,
-  normalizeMaterials,
-  normalizePhysicalProperties,
-} from '../physicalProperties';
-import type { CreateItemDto, PhysicalItemPropertiesDto, UpdateItemDto } from '../types';
+import { PhysicalPropertyError, normalizePhysicalProperties } from '../physicalProperties';
+import type {
+  CreateItemDto,
+  FindItemsFilter,
+  ItemKeyset,
+  ItemPage,
+  PhysicalItemPropertiesDto,
+  UpdateItemDto,
+} from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 
+/** Page size {@link ItemService.findPage} uses when the caller names none. */
+const DEFAULT_ITEM_PAGE_SIZE = 50;
+
+/** Hard ceiling on a page, so `limit: 100000` still costs one page. */
+const MAX_ITEM_PAGE_SIZE = 200;
+
 /**
- * Spanning-aggregate service for the inventory CTI split: an item is ONE
+ * Spanning-aggregate service for the object CTI split: an item is ONE
  * logical entity persisted as a `ci.entities` base row (discriminated 'Item',
- * see {@link ItemBaseEntity}) plus a `ci.inventory` detail row sharing the same
+ * see {@link ItemBaseEntity}) plus a `ci.objects` detail row sharing the same
  * uuid. The base row is the SOLE owner of `name`/`description`; the detail row
  * carries only item-specific data. This service hides the split — the shared
  * {@link CtiAggregate} machinery writes both rows in one transaction (also
@@ -52,12 +60,15 @@ export class ItemService {
       detailEntity: ItemEntity,
       baseEntity: ItemBaseEntity,
       baseRepository: this.itemBaseRepository,
-      linkedTable: 'inventory',
+      linkedTable: 'objects',
       scopedWhere: (context, id) => ({
         id,
         ...(context.userId !== SYSTEM_USER && {
           userId: context.userId,
         }),
+        // A tombstone lost a merge and its data is already folded into the
+        // survivor. Updating or deleting one writes to a row nothing reads.
+        mergedIntoObjectId: IsNull(),
       }),
     });
   }
@@ -125,6 +136,46 @@ export class ItemService {
   }
 
   /**
+   * The object-identity columns of a write (migration 20260803223025).
+   *
+   * EVERY key is optional and every one is omitted unless the caller named it,
+   * so a write that mentions none of them produces exactly the row the
+   * pre-object-identity code produced — the schema defaults (`lifecycle_state`
+   * 'active', everything else NULL) are what fill in, not this method. That
+   * property is what makes it safe to add the columns to the importer's hot
+   * path without re-testing every existing caller.
+   */
+  private objectIdentityPatch(data: CreateItemDto | UpdateItemDto): Partial<ItemEntity> {
+    const patch: Partial<ItemEntity> = {};
+
+    if (data.productId !== undefined) {
+      patch.productId = data.productId;
+    }
+
+    if (data.acquisitionReceiptId !== undefined) {
+      patch.acquisitionReceiptId = data.acquisitionReceiptId;
+    }
+
+    if (data.acquisitionLineItemId !== undefined) {
+      patch.acquisitionLineItemId = data.acquisitionLineItemId;
+    }
+
+    if (data.lifecycleState !== undefined) {
+      patch.lifecycleState = data.lifecycleState;
+    }
+
+    if (data.lastSeenAt !== undefined) {
+      patch.lastSeenAt = data.lastSeenAt;
+    }
+
+    if (data.lastSeenPlaceEntityId !== undefined) {
+      patch.lastSeenPlaceEntityId = data.lastSeenPlaceEntityId;
+    }
+
+    return patch;
+  }
+
+  /**
    * The identity claim of a write. `identity_confidence` defaults to 1.0, which
    * downstream reads as ground truth — so a caller that INFERRED the item (a
    * vision guess, a receipt line) must be able to say so, and a confidence
@@ -159,6 +210,7 @@ export class ItemService {
       where: {
         id,
         ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+        mergedIntoObjectId: IsNull(),
       },
     });
 
@@ -217,6 +269,7 @@ export class ItemService {
         sourceId: data.sourceId ?? null,
         ...(data.quantity !== undefined && { quantity: this.validQuantity(data.quantity) }),
         ...this.identityPatch(data),
+        ...this.objectIdentityPatch(data),
         ...this.physicalPatch(data),
       });
 
@@ -257,11 +310,11 @@ export class ItemService {
   }
 
   /**
-   * Batch, idempotent inventory ingest for the importer. Dedupes on the provenance
+   * Batch, idempotent things ingest for the importer. Dedupes on the provenance
    * triple (source_type, source_system, source_id), scoped to owner_user_id, via
    * one set-based INSERT ... ON CONFLICT DO NOTHING instead of a per-row findOne +
    * save loop. Re-syncing the same triple returns the existing row instead of
-   * inserting a duplicate. Paired with the inventory_source_triple_uniq partial
+   * inserting a duplicate. Paired with the objects_source_triple_uniq partial
    * unique index, which also absorbs a lost insert race.
    */
   async createMany(context: UserServiceContext, data: CreateItemDto[]): Promise<Item[]> {
@@ -310,6 +363,7 @@ export class ItemService {
         sourceId: item.sourceId ?? null,
         ...(item.quantity !== undefined && { quantity: this.validQuantity(item.quantity) }),
         ...this.identityPatch(item),
+        ...this.objectIdentityPatch(item),
         // Bulk ingest canonicalizes exactly like the single-row path: a batch
         // that would violate a measurement CHECK is rejected as a 400 naming
         // the field, before the set-based INSERT is built.
@@ -326,7 +380,7 @@ export class ItemService {
     // One transaction spans both halves of the CTI aggregate: the detail rows
     // land first (the triple arbiter decides which actually insert), then a
     // base row is written for exactly the inserted set. The deferred FK
-    // (inventory_object_id_entities_fk) tolerates the detail-before-base order.
+    // (objects_object_id_entities_fk) tolerates the detail-before-base order.
     const { detailResults, bases } = await this.itemRepository.manager.transaction(async (manager) => {
       const results = await bulkInsertIdempotent({
         repository: this.itemRepository,
@@ -414,16 +468,109 @@ export class ItemService {
     }));
   }
 
+  /**
+   * Every live unit for the user.
+   *
+   * Unbounded, and kept only for the callers that genuinely want the whole set
+   * (exports, small fixtures). Anything user-facing should use
+   * {@link findPage}, which pages in SQL instead of loading the table.
+   */
   async findAll(context: ServiceContext): Promise<Item[]> {
     const entities = await this.itemRepository.find({
       where: {
         ...(context.userId !== SYSTEM_USER && {
           userId: context.userId,
         }),
+        mergedIntoObjectId: IsNull(),
       },
     });
 
     return this.composeMany(entities);
+  }
+
+  /**
+   * One page of live units, newest first, paged in SQL.
+   *
+   * Walks `objects_live_keyset_idx` — `(user_id, created_at DESC, object_id
+   * DESC) WHERE merged_into_object_id IS NULL` — the index the migration added
+   * for exactly this query. The `merged_into_object_id IS NULL` predicate is
+   * therefore not just correctness, it is what makes the index applicable: drop
+   * it and the planner falls back to `objects_user_idx` plus a filter.
+   *
+   * Replaces the load-everything-then-slice shape {@link findAll} has: cost is
+   * bounded by the page size regardless of how many things the user owns, and
+   * one sentinel row past the page answers `hasMore` without a second COUNT.
+   */
+  async findPage(
+    context: ServiceContext,
+    filter: FindItemsFilter = {},
+    keyset: ItemKeyset = {},
+  ): Promise<ItemPage> {
+    const limit = Math.min(Math.max(keyset.limit ?? DEFAULT_ITEM_PAGE_SIZE, 1), MAX_ITEM_PAGE_SIZE);
+
+    const qb = this.itemRepository
+      .createQueryBuilder('item')
+      .where('item.merged_into_object_id IS NULL')
+      .orderBy('item.created_at', 'DESC')
+      .addOrderBy('item.object_id', 'DESC')
+      .limit(limit + 1);
+
+    if (context.userId !== SYSTEM_USER) {
+      qb.andWhere('item.user_id = :userId', { userId: context.userId });
+    }
+
+    if (filter.category != null) {
+      qb.andWhere('item.category = :category', { category: filter.category });
+    }
+
+    if (filter.subcategory != null) {
+      qb.andWhere('item.subcategory = :subcategory', { subcategory: filter.subcategory });
+    }
+
+    if (filter.brand != null) {
+      qb.andWhere('lower(btrim(item.brand)) = lower(btrim(:brand))', { brand: filter.brand });
+    }
+
+    if (filter.productId != null) {
+      qb.andWhere('item.product_id = :productId', { productId: filter.productId });
+    }
+
+    if (filter.lifecycleState != null) {
+      qb.andWhere('item.lifecycle_state = :lifecycleState', { lifecycleState: filter.lifecycleState });
+    }
+
+    if (filter.isDigital != null) {
+      qb.andWhere('item.is_digital = :isDigital', { isDigital: filter.isDigital });
+    }
+
+    if (filter.acquiredFrom != null) {
+      qb.andWhere('item.acquired_at >= :acquiredFrom', { acquiredFrom: filter.acquiredFrom });
+    }
+
+    if (filter.acquiredTo != null) {
+      qb.andWhere('item.acquired_at <= :acquiredTo', { acquiredTo: filter.acquiredTo });
+    }
+
+    // Composite seek past (createdAt, id). Both halves are required: created_at
+    // alone drops every row that shares a timestamp with the cursor, which on a
+    // bulk import is most of the page.
+    if (keyset.afterCreatedAt != null && keyset.afterId != null) {
+      qb.andWhere(
+        '(item.created_at < :afterCreatedAt OR (item.created_at = :afterCreatedAt AND item.object_id < :afterId))',
+        { afterCreatedAt: keyset.afterCreatedAt, afterId: keyset.afterId },
+      );
+    }
+
+    const rows = await qb.getMany();
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const last = page[page.length - 1];
+
+    return {
+      items: await this.composeMany(page),
+      hasMore,
+      nextCursor: hasMore && last ? { createdAt: last.createdAt, id: last.id } : null,
+    };
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(Item | null)[]> {
@@ -433,6 +580,7 @@ export class ItemService {
         ...(context.userId !== SYSTEM_USER && {
           userId: context.userId,
         }),
+        mergedIntoObjectId: IsNull(),
       },
     });
 
@@ -443,7 +591,7 @@ export class ItemService {
   }
 
   /**
-   * Lightweight identifiers for the most-recent inventory items, for the
+   * Lightweight identifiers for the most-recent things, for the
    * unified search/explorer feed. Full entities are batch-resolved downstream.
    */
   async getEntitiesForItems(
@@ -460,7 +608,10 @@ export class ItemService {
     let query = this.itemRepository
       .createQueryBuilder('item')
       .select('item.id', 'id')
-      .where('item.user_id = :userId', { userId: context.userId });
+      .where('item.user_id = :userId', { userId: context.userId })
+      // Tombstones must not enter the search/explorer feed: indexing one puts a
+      // merged-away unit back in front of the user.
+      .andWhere('item.merged_into_object_id IS NULL');
 
     if (options.startTime) {
       query = query.andWhere('item.created_at >= :startTime', { startTime: options.startTime });
@@ -502,7 +653,10 @@ export class ItemService {
   ): Promise<number> {
     let query = this.itemRepository
       .createQueryBuilder('item')
-      .where('item.user_id = :userId', { userId: context.userId });
+      .where('item.user_id = :userId', { userId: context.userId })
+      // Same predicate as getEntitiesForItems, or the count disagrees with the
+      // page it is supposed to describe.
+      .andWhere('item.merged_into_object_id IS NULL');
 
     if (options.startTime) {
       query = query.andWhere('item.created_at >= :startTime', { startTime: options.startTime });
@@ -522,6 +676,7 @@ export class ItemService {
         ...(context.userId !== SYSTEM_USER && {
           userId: context.userId,
         }),
+        mergedIntoObjectId: IsNull(),
       },
     });
 
@@ -545,12 +700,14 @@ export class ItemService {
       return [];
     }
 
-    const queryBuilder = this.itemRepository.createQueryBuilder('inventory');
+    const queryBuilder = this.itemRepository.createQueryBuilder('object');
 
-    queryBuilder.where("inventory.metadata->>'source_file_id' IN (:...fileIds)", { fileIds });
+    queryBuilder
+      .where("object.metadata->>'source_file_id' IN (:...fileIds)", { fileIds })
+      .andWhere('object.merged_into_object_id IS NULL');
 
     if (context.userId !== SYSTEM_USER) {
-      queryBuilder.andWhere('inventory.userId = :userId', { userId: context.userId });
+      queryBuilder.andWhere('object.userId = :userId', { userId: context.userId });
     }
 
     const entities = await queryBuilder.getMany();
@@ -628,6 +785,8 @@ export class ItemService {
     if (data.metadata !== undefined) {
       updateData.metadata = data.metadata;
     }
+
+    Object.assign(updateData, this.objectIdentityPatch(data));
 
     // Canonicalized measurements, appearance and acquisition — same helper the
     // create paths use, so there is one definition of what a stored millimetre
@@ -716,84 +875,5 @@ export class ItemService {
     });
 
     return true;
-  }
-
-  async search(context: ServiceContext, query: UpdateItemDto): Promise<Item[]> {
-    // name/description live on the CTI base row; the FK guarantees every
-    // detail row has one, so the base is joined unconditionally and its
-    // columns are hydrated in the SAME query — no second composition fetch.
-    let executable = this.itemRepository
-      .createQueryBuilder('item')
-      .innerJoin('ci.entities', 'base', 'base.entity_id = item.object_id')
-      .addSelect('base.name', 'base_name')
-      .addSelect('base.description', 'base_description')
-      .where('item.user_id = :userId', { userId: context.userId });
-
-    if (query.name) {
-      executable = executable.andWhere('base.name = :name', { name: query.name });
-    }
-
-    if (query.description) {
-      executable = executable.andWhere('base.description = :description', {
-        description: query.description,
-      });
-    }
-
-    if (query.category) {
-      executable = executable.andWhere('item.category = :category', { category: query.category });
-    }
-
-    if (query.subcategory) {
-      executable = executable.andWhere('item.subcategory = :subcategory', {
-        subcategory: query.subcategory,
-      });
-    }
-
-    if (query.brand) {
-      executable = executable.andWhere('item.brand = :brand', { brand: query.brand });
-    }
-
-    if (query.model) {
-      executable = executable.andWhere('item.model = :model', { model: query.model });
-    }
-
-    if (query.condition) {
-      executable = executable.andWhere('item.condition = :condition', { condition: query.condition });
-    }
-
-    // Containment, not equality: "made of leather" must match a leather-and-
-    // brass bag. Normalized through the same helper the writes use, so a query
-    // for 'Leather' finds rows stored as 'leather'; served by the GIN indexes.
-    const materials = normalizeMaterials(query.materials ?? null, 'materials');
-
-    if (materials) {
-      executable = executable.andWhere('item.materials @> :materials', { materials });
-    }
-
-    const colors = normalizeColors(query.colors ?? null, 'colors');
-
-    if (colors) {
-      executable = executable.andWhere('item.colors @> :colors', { colors });
-    }
-
-    if (query.metadata) {
-      for (const [key, val] of Object.entries(query.metadata)) {
-        executable = executable.andWhere(`item.metadata->>'${key}' = :${key}`, { [key]: val });
-      }
-    }
-
-    // The 1:1 join yields exactly one raw row per entity, in the same order,
-    // so the base columns compose positionally.
-    const { entities, raw } = await executable.getRawAndEntities<{
-      base_name: string | null;
-      base_description: string | null;
-    }>();
-
-    return entities.map((entity, index) =>
-      ItemEntity.toEgressType(entity, {
-        name: raw[index]?.base_name ?? null,
-        description: raw[index]?.base_description ?? null,
-      }),
-    );
   }
 }

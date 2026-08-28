@@ -208,7 +208,7 @@ export class ActivityTimelineService {
     timezone: string,
   ): Promise<ActivityDailyCount[]> {
     return this.dailyCountsByTimestampColumn(context, start, end, timezone, {
-      table: 'ci.inventory',
+      table: 'ci.objects',
       userColumn: 'user_id',
       timeColumn: 'created_at',
     });

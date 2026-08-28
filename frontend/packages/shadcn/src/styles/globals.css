@@ -12,6 +12,13 @@
   --color-input-fill: var(--input-fill);
 }
 
+@theme {
+  /* Mirrors apps/web/src/styles/index.css so components authored against this
+     file (the shadcn CLI entry) can use `device:` too. See that file for why
+     896px and why px. */
+  --breakpoint-device: 896px;
+}
+
 :root {
   --input-fill: var(--input);
 }

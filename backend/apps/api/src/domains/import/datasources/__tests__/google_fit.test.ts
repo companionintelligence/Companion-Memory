@@ -37,9 +37,38 @@ describe('Google Fit datasource', () => {
   it('does not recognize an unrelated directory', async () => {
     const fi = new GoogleFitFileImporter();
     const rec = await fi.recognize({}, { filename: 'fixtures', fullPath: FIXTURES_DIR });
-    // fixtures/ contains google_fit/ nested, so it may resolve to dir_threshold;
-    // confidence must not be a direct positive match for the wrong entry.
-    expect(rec.confidence).toBe(0.95); // nested Fit tree is discoverable
+    // fixtures/ has no `Fit` (or daily-metrics) folder as its OWN immediate
+    // child — the nested `google_fit/Fit/` tree belongs to an unrelated
+    // sibling fixture two levels down, and must not be attributed to the
+    // whole fixtures/ root. Regression: findFitRoot used to recurse into
+    // every subdirectory looking for a `Fit` folder anywhere below `root` and
+    // claimed confidence for `root` itself when it found one two levels down.
+    expect(rec.confidence).toBe(0);
+    expect(rec.dir_threshold).toBe(0.7);
+  });
+
+  it('does not recognize a Fit-like folder found deep in an unrelated tree', async () => {
+    // A real-world shape: a huge, unrelated export (e.g. a Drive dump) that
+    // happens to contain a folder literally named "Fit" several levels down,
+    // with none of the daily-metrics/sessions structure. That must not claim
+    // the ancestor directory it's nested under.
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ci-google-fit-fp-'));
+    try {
+      const deep = path.join(tmpRoot, 'Drive', 'personal', 'notes');
+      await fs.promises.mkdir(deep, { recursive: true });
+      await fs.promises.writeFile(path.join(deep, 'unrelated.txt'), 'hello');
+      // Coincidentally-named folder, several levels deep, with no Fit content.
+      await fs.promises.mkdir(path.join(deep, 'Fit'));
+
+      const fi = new GoogleFitFileImporter();
+      const rec = await fi.recognize({}, { filename: path.basename(tmpRoot), fullPath: tmpRoot });
+      expect(rec.confidence).toBe(0);
+      expect(rec.dir_threshold).toBe(0.7);
+    } finally {
+      await fs.promises.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it('aggregates a daily CSV into one observation', async () => {

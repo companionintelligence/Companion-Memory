@@ -14,6 +14,10 @@ import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm';
 import { GraphQueryService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
+import { type GraphEnrichmentProposalCategory } from '../entities/GraphEnrichmentProposalEntity';
+
+import { GraphEnrichmentReviewService } from './GraphEnrichmentReviewService';
+
 /**
  * Concept `properties.type` values the preference tools filter on. The graph
  * tools' CATEGORY_TYPE_MAP / MEDIA_TYPE_MAP (GetUserPreferencesTool,
@@ -288,6 +292,7 @@ export class GraphEnrichmentService {
     private readonly graphQuery: GraphQueryService,
     private readonly personalizationService: PersonalizationService,
     private readonly logger: LoggerService,
+    private readonly reviewService: GraphEnrichmentReviewService,
   ) {
     this.logger.setContext(GraphEnrichmentService.name);
   }
@@ -377,7 +382,13 @@ export class GraphEnrichmentService {
     // 1) Preferences: Concept nodes + self -> PREFERS/DISLIKES edges, all in batch.
     if (preferences.length > 0) {
       const input = GraphEnrichmentService.buildPreferenceInput(preferences);
-      const gated = await this.ingestWithPersonalization(context, input, 0.8, 'graph_edge');
+      const evidence = preferences.map(
+        (p) => `${p.sentiment === 'like' ? 'PREFERS' : 'DISLIKES'} ${p.concept} (${p.type})`,
+      );
+      const gated = await this.ingestWithPersonalization(context, input, 0.8, 'graph_edge', {
+        category: 'preference',
+        evidence,
+      });
       result.conceptsWritten += gated.entitiesProcessed;
       result.preferenceEdgesWritten += gated.relationshipsProcessed;
       result.reviewQueued += gated.reviewQueued;
@@ -392,7 +403,16 @@ export class GraphEnrichmentService {
       if (familyInput.relationships.length > 0) {
         const avgConfidence =
           family.reduce((sum, rel) => sum + rel.confidence, 0) / Math.max(family.length, 1);
-        const gated = await this.ingestWithPersonalization(context, familyInput, avgConfidence, 'graph_edge');
+        const gated = await this.ingestWithPersonalization(
+          context,
+          familyInput,
+          avgConfidence,
+          'graph_edge',
+          {
+            category: 'family_relation',
+            evidence: familyInput.evidence,
+          },
+        );
         result.familyEdgesWritten += gated.relationshipsProcessed;
         result.reviewQueued += gated.reviewQueued;
         result.errors.push(...gated.errors);
@@ -410,6 +430,7 @@ export class GraphEnrichmentService {
           generalInput,
           avgConfidence,
           'graph_edge',
+          { category: 'general_relation', evidence: generalInput.evidence },
         );
         result.generalEdgesWritten += gated.relationshipsProcessed;
         result.reviewQueued += gated.reviewQueued;
@@ -447,7 +468,7 @@ export class GraphEnrichmentService {
 
   /**
    * Parse the LLM's raw content into the extraction shape. Tolerant of markdown
-   * fences / leading prose (mirrors InventoryListener.parseAndValidateAnalysis):
+   * fences / leading prose (mirrors ThingVisionListener.parseAndValidateAnalysis):
    * slices to the outermost {...} before JSON.parse, then validates with zod.
    * Returns empty arrays on any parse/validation failure rather than throwing.
    */
@@ -635,8 +656,13 @@ export class GraphEnrichmentService {
   private async buildFamilyInput(
     userId: string,
     family: FamilyRelationItem[],
-  ): Promise<{ entities: GraphEntityInputDto[]; relationships: GraphRelationshipInputDto[] }> {
+  ): Promise<{
+    entities: GraphEntityInputDto[];
+    relationships: GraphRelationshipInputDto[];
+    evidence: string[];
+  }> {
     const relationships: GraphRelationshipInputDto[] = [];
+    const evidence: string[] = [];
     const pendingEntities = new Map<string, GraphEntityInputDto>();
     const cache = new Map<string, { id: string } | { key: string } | null>();
 
@@ -676,16 +702,22 @@ export class GraphEnrichmentService {
         ...('id' in to ? { toEntityId: to.id, toEntityType: 'Person' as const } : {}),
         properties: { source: SOURCE_SYSTEM },
       });
+      evidence.push(`${rel.relationship}: ${rel.person} ↔ ${rel.relatedPerson}`);
     }
 
-    return { entities: [...pendingEntities.values()], relationships };
+    return { entities: [...pendingEntities.values()], relationships, evidence };
   }
 
   private async buildGeneralInput(
     userId: string,
     general: GeneralRelationItem[],
-  ): Promise<{ entities: GraphEntityInputDto[]; relationships: GraphRelationshipInputDto[] }> {
+  ): Promise<{
+    entities: GraphEntityInputDto[];
+    relationships: GraphRelationshipInputDto[];
+    evidence: string[];
+  }> {
     const relationships: GraphRelationshipInputDto[] = [];
+    const evidence: string[] = [];
     const pendingEntities = new Map<string, GraphEntityInputDto>();
     const cache = new Map<string, { id: string } | { key: string } | null>();
 
@@ -723,9 +755,10 @@ export class GraphEnrichmentService {
         ...('id' in to ? { toEntityId: to.id, toEntityType: 'Person' as const } : {}),
         properties: { source: SOURCE_SYSTEM, confidence: rel.confidence, evidence: rel.evidence },
       });
+      evidence.push(`${rel.relationship}: ${rel.person} ↔ ${rel.relatedPerson}`);
     }
 
-    return { entities: [...pendingEntities.values()], relationships };
+    return { entities: [...pendingEntities.values()], relationships, evidence };
   }
 
   private async ingestWithPersonalization(
@@ -733,6 +766,7 @@ export class GraphEnrichmentService {
     input: { entities: GraphEntityInputDto[]; relationships: GraphRelationshipInputDto[] },
     confidence: number,
     kind: import('@ci/domains/personalization').PersonalizationActionKind,
+    review: { category: GraphEnrichmentProposalCategory; evidence: string[] },
   ): Promise<{
     entitiesProcessed: number;
     relationshipsProcessed: number;
@@ -750,6 +784,17 @@ export class GraphEnrichmentService {
     }
 
     if (decision === 'review') {
+      // Previously discarded outright — the batch that was about to be
+      // ingested is filed as a proposal instead, so a human can later accept
+      // (replays this exact batch through GraphIngestService.ingest) or
+      // reject it. See GraphEnrichmentReviewService / migration 20260824214141.
+      await this.reviewService.recordProposal(context, {
+        category: review.category,
+        input,
+        evidence: review.evidence,
+        confidence,
+      });
+
       return { entitiesProcessed: 0, relationshipsProcessed: 0, reviewQueued: 1, errors: [] };
     }
 

@@ -5,7 +5,10 @@ import { TodayPage } from './TodayPage';
 
 const features = vi.hoisted(() => ({ scheduleEnabled: true }));
 
-vi.mock('@ci/common', () => ({ usePageTitle: () => undefined }));
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  usePageTitle: () => undefined,
+}));
 vi.mock('@/common/feature', () => ({
   useFeatures: () => ({
     isFeatureEnabled: (flag: string) => (flag === 'schedule.page' ? features.scheduleEnabled : true),

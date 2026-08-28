@@ -2,12 +2,39 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Draft |
-| **Date** | 2026-04-03 |
+| **Status** | Shipped (V1) — the text below is the original draft, kept for the reasoning |
+| **Date** | 2026-04-03 (implementation state verified 2026-08-19) |
 | **Author(s)** | @max, @codex |
 | **Reviewers** | TBD |
 | **Feature** | TBD |
 | **Target Release** | 2026-Q2 |
+
+> **Implementation status (verified against the tree on 2026-08-19).** This is built, not
+> planned. The domain is [`backend/apps/api/src/domains/parsing/`](../../backend/apps/api/src/domains/parsing):
+>
+> - **Trigger.** `FileDocumentParseListener` consumes `FileUploadedEvent` on the
+>   `document-parsing` pg-boss queue — asynchronous, as specified.
+> - **Extraction.** `MarkItDownExtractor` POSTs the bytes to a MarkItDown FastAPI service
+>   (`ci.summary.parser:app`, started by `backend/apps/summary/entrypoint.sh` on port 8002
+>   inside the **summary** container; the API reaches it via `services.parser.host`). It
+>   accepts `application/pdf`, the Word/Excel MIME types, `text/csv`, `text/plain` and
+>   `text/markdown`, plus the extensions `.csv .doc .docx .md .pdf .txt .xls .xlsx`.
+> - **Persistence.** `ci.file_chunks` (migration `20260406000002_create_file_chunks.sql`),
+>   mapped by `FileChunkEntity`: `file_id`, `user_id`, `chunk_index`, `content`,
+>   `section_title`, `source_locator` JSONB, plus `parser_name` / `parser_version` /
+>   `chunker_version` for the versioned reprocessing boundary the PRD asked for.
+> - **Chunking.** `DocumentChunkerService`, `CHUNK_TARGET_CHARS = 4000` with
+>   `CHUNK_OVERLAP_CHARS = 600` (~15% overlap), `CHUNKER_VERSION = '1.2.0'`.
+> - **Parse lifecycle.** `ci.files.parse_status` / `parse_error`
+>   (`20260406000001_add_file_parse_status.sql`) with the exact four states the PRD named:
+>   `processing`, `completed`, `failed`, `skipped` (`ParseStatus` in `parsing/types.ts`).
+> - **Search.** `file-chunk` is an indexable entity type, maintained by
+>   `search-ingress/listeners/FileChunkSearchIndexListener.ts` and by the pipeline's
+>   `index.*` stages, and `FileChunkType` is a member of the GraphQL `SearchResultType`
+>   union, so chunk-level hits come back alongside file-level ones.
+>
+> What is still **not** done, matching the Non-Goals and Risks below: OCR for scanned PDFs,
+> and a document viewer.
 
 ## Problem Statement
 
@@ -121,10 +148,15 @@ No advanced document viewer is required for V1. A simple extracted-text preview 
 
 ## References
 
-- [Files domain](/Users/max/Code/CompInt/CI-Server/backend/apps/api/src/domains/files)
-- [Search ingress](/Users/max/Code/CompInt/CI-Server/backend/apps/api/src/domains/search-ingress)
-- [Search next](/Users/max/Code/CompInt/CI-Server/backend/apps/api/src/domains/search-next)
-- [Embeddings](/Users/max/Code/CompInt/CI-Server/backend/apps/api/src/common/embeddings)
-- [LLM domain](/Users/max/Code/CompInt/CI-Server/backend/apps/api/src/domains/llm)
-- [Dropped chunk/fact migration](/Users/max/Code/CompInt/CI-Server/backend/apps/api/db/postgres/migrations/20260212191500_drop_unused_tables_and_document_chunk_function.sql)
+Paths are repo-relative (they were absolute paths on the author's machine when this was
+drafted, which resolved for nobody else).
+
+- [Parsing domain (what shipped)](../../backend/apps/api/src/domains/parsing)
+- [Files domain](../../backend/apps/api/src/domains/files)
+- [Search ingress](../../backend/apps/api/src/domains/search-ingress)
+- [Search next](../../backend/apps/api/src/domains/search-next)
+- [Embeddings](../../backend/apps/api/src/common/embeddings)
+- [LLM domain](../../backend/apps/api/src/domains/llm)
+- [Dropped chunk/fact migration](../../backend/apps/api/db/postgres/migrations/20260212191500_drop_unused_tables_and_document_chunk_function.sql)
+- [The chunk table that replaced it](../../backend/apps/api/db/postgres/migrations/20260406000002_create_file_chunks.sql)
 - [MarkItDown](https://github.com/microsoft/markitdown)

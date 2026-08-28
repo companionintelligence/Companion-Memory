@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { type UserServiceContext } from '@ci/common/context';
+import config from '@ci/configuration';
 import { PersonService, UserContextService } from '@ci/domains/memory';
 
 import {
@@ -13,8 +14,12 @@ import {
 
 const DEFAULT_TRUST_MODE: TrustMode = 'balanced';
 
-/** Below this confidence, always ask the user before applying (all trust modes). */
-export const ALWAYS_REVIEW_BELOW_CONFIDENCE = 0.7;
+/**
+ * Below this confidence, always ask the user before applying (all trust
+ * modes) — env-configurable, see `config.reflection.alwaysReviewBelowConfidence`
+ * (`CI_REFLECTION_ALWAYS_REVIEW_BELOW_CONFIDENCE`).
+ */
+export const ALWAYS_REVIEW_BELOW_CONFIDENCE = config.reflection.alwaysReviewBelowConfidence;
 
 const GRAPH_CONNECTION_KINDS = new Set<PersonalizationActionKind>([
   'graph_edge',
@@ -30,6 +35,22 @@ const PLANNING_ACTION_KINDS = new Set<PersonalizationActionKind>([
   'event_revise',
   'schedule_accept',
 ]);
+
+/**
+ * Confidence at/above which `task_complete` auto-applies in balanced mode.
+ * Deliberately decoupled from `autoPromoteThreshold` — see `TodoProcessService`
+ * (`ATTRIBUTED_DONE_CONFIDENCE`, 0.8), which is only ever reported for
+ * completion evidence that names the task and postdates its calendar block,
+ * and is picked to sit below this bar so completing a task (and marking its
+ * block done) still asks for confirmation in the default trust mode; only
+ * hands_off's lower threshold (0.7) auto-applies it.
+ *
+ * `autoPromoteThresholdBalanced` was lowered from 0.85 to 0.55 for the
+ * reflection-answer use case (see its schema comment) — completing a task is
+ * a different, less reversible action than writing an inferred answer, so it
+ * keeps the original bar rather than sharing that lower one.
+ */
+const TASK_COMPLETE_AUTO_PROMOTE_THRESHOLD_BALANCED = 0.85;
 
 @Injectable()
 export class PersonalizationService {
@@ -85,16 +106,14 @@ export class PersonalizationService {
       throw new Error('Self entity not found');
     }
 
-    const properties = {
-      ...(self.properties ?? {}),
-      planner: {
-        ...((self.properties?.planner as Record<string, unknown> | undefined) ?? {}),
-        trust_mode: trustMode,
-        source: 'settings',
-      },
-    };
-
-    await this.personService.patch(context, self.id, { propertiesPatch: properties });
+    // Write the two leaves we own, never the whole `planner` sub-object: a
+    // read-modify-write of `planner` here loses whatever another writer (e.g.
+    // ImageDescriptionPreferenceService) committed to a different leaf in
+    // between our read and our write.
+    await this.personService.patchPropertyLeaves(context, self.id, [
+      { path: ['planner', 'trust_mode'], value: trustMode },
+      { path: ['planner', 'source'], value: 'settings' },
+    ]);
     this.invalidateCache(context.userId!);
 
     return PersonalizationService.profileForTrustMode(trustMode);
@@ -111,7 +130,7 @@ export class PersonalizationService {
       case 'cautious':
         return {
           trustMode,
-          autoPromoteThreshold: 1,
+          autoPromoteThreshold: config.reflection.autoPromoteThresholdCautious,
           autoSchedule: false,
           requireReviewForUserInput: true,
           feedActionLimit: 50,
@@ -120,7 +139,7 @@ export class PersonalizationService {
       case 'hands_off':
         return {
           trustMode,
-          autoPromoteThreshold: 0.7,
+          autoPromoteThreshold: config.reflection.autoPromoteThresholdHandsOff,
           autoSchedule: true,
           requireReviewForUserInput: false,
           feedActionLimit: 10,
@@ -130,7 +149,7 @@ export class PersonalizationService {
       default:
         return {
           trustMode,
-          autoPromoteThreshold: 0.85,
+          autoPromoteThreshold: config.reflection.autoPromoteThresholdBalanced,
           autoSchedule: false,
           requireReviewForUserInput: false,
           feedActionLimit: 25,
@@ -179,7 +198,12 @@ export class PersonalizationService {
     }
 
     if (kind === 'inferred_fact' || PLANNING_ACTION_KINDS.has(kind)) {
-      return confidence >= profile.autoPromoteThreshold ? 'auto' : 'review';
+      const threshold =
+        kind === 'task_complete'
+          ? TASK_COMPLETE_AUTO_PROMOTE_THRESHOLD_BALANCED
+          : profile.autoPromoteThreshold;
+
+      return confidence >= threshold ? 'auto' : 'review';
     }
 
     if (confidence >= profile.autoPromoteThreshold) {
@@ -196,6 +220,10 @@ export class PersonalizationService {
 
     if (kind === 'schedule_accept') {
       return profile.autoSchedule ? 0.7 : 0.95;
+    }
+
+    if (kind === 'task_complete' && profile.trustMode === 'balanced') {
+      return TASK_COMPLETE_AUTO_PROMOTE_THRESHOLD_BALANCED;
     }
 
     return profile.autoPromoteThreshold;

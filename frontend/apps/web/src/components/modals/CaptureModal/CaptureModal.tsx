@@ -1,9 +1,20 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 
 import { Camera } from '@ci/capture';
-import { fetchJson, useDeviceLayout } from '@ci/common';
-import { Dialog, cn, IconButton, Popover, useToast } from '@ci/shadcn';
-import { Send, Settings, X, Images } from '@ci/shadcn/icons';
+import { FetchJsonError, fetchJson, isNativePlatform, useDeviceLayout } from '@ci/common';
+import { Button, Dialog, cn, IconButton, Popover, useToast } from '@ci/shadcn';
+import {
+  Camera as CameraIcon,
+  FileUp,
+  Images,
+  Mic,
+  Send,
+  Settings,
+  Square,
+  Video,
+  X,
+} from '@ci/shadcn/icons';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
 import { useUploadFile } from '@/api';
@@ -11,8 +22,11 @@ import type { File as FileData, Thread } from '@/api/types';
 import { Chat, type FormData } from '@/components/Chat';
 import { InlineModal } from '@/components/InlineModal';
 import { ModelSelector } from '@/components/ModelSelector';
-import { useAuth, useChatRequester, useModel } from '@/hooks';
-import { pickPhotosFromLibrary } from '@/lib/pickPhotosFromLibrary';
+import { useAuth, useChatRequester, useModel, useSessionAuth } from '@/hooks';
+import { captureFromCamera, chooseFiles, chooseFromLibrary, type CameraMode } from '@/lib/captureMedia';
+import { enqueueMemoryUpload } from '@/lib/memoryUploadQueue';
+import { pickFromUserDevice, pickPhotosFromLibrary } from '@/lib/pickPhotosFromLibrary';
+import { canRecordAudio, startAudioRecording, type AudioRecordingSession } from '@/lib/recordAudio';
 import { getMediaType } from '@/lib/utils';
 
 interface Props {
@@ -20,15 +34,41 @@ interface Props {
   onClose?: () => void;
 }
 
-type CaptureMode = 'photo' | 'video' | 'inventory';
+type CaptureMode = 'photo' | 'video' | 'thing';
+
+/** Phone Capture: one native camera (photo/video) plus the non-camera sources. */
+type CaptureSheetMode = 'photo' | 'video' | 'audio' | 'files';
+
+const CAPTURE_SHEET_MODES: { mode: CaptureSheetMode; icon: typeof CameraIcon; labelKey: string }[] = [
+  { mode: 'photo', icon: CameraIcon, labelKey: 'CAPTURE_PHOTO' },
+  { mode: 'video', icon: Video, labelKey: 'CAPTURE_VIDEO' },
+  { mode: 'audio', icon: Mic, labelKey: 'CAPTURE_AUDIO' },
+  { mode: 'files', icon: FileUp, labelKey: 'CAPTURE_FILES' },
+];
 
 interface ModelCapabilitiesResponse {
   vision: boolean;
 }
 
 export function CaptureModal({ open = false, onClose }: Props) {
+  const { isMobile } = useDeviceLayout();
+
+  // Wait for the breakpoint so the phone does not mount desktop chat hooks.
+  if (isMobile == null) {
+    return null;
+  }
+
+  // Phone: save captured media to Memory. Desktop keeps main's camera + chat.
+  if (isMobile) {
+    return <MobileMemoryCapture open={open} onClose={onClose} />;
+  }
+
+  return <DesktopCaptureModal open={open} onClose={onClose} />;
+}
+
+function DesktopCaptureModal({ open = false, onClose }: Props) {
   const { t } = useTranslation();
-  const [{ authToken }] = useAuth();
+  const { ready, headers } = useSessionAuth();
   const [{ selectedVisionModel: selectedModel }] = useModel();
   const { toast } = useToast();
 
@@ -67,7 +107,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
   }, [open]);
 
   useEffect(() => {
-    if (authToken == null || selectedModel == null) {
+    if (!ready || selectedModel == null) {
       setSelectedModelSupportsVision(null);
       setCapabilityCheckFailed(false);
       setIsCheckingModelCapabilities(false);
@@ -99,7 +139,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${authToken}`,
+            ...headers,
           },
         });
 
@@ -126,7 +166,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
     return () => {
       canceled = true;
     };
-  }, [authToken, selectedModel]);
+  }, [headers, ready, selectedModel]);
 
   const ensureImageModelSupported = useCallback((): boolean => {
     if (selectedModel == null) {
@@ -164,14 +204,14 @@ export function CaptureModal({ open = false, onClose }: Props) {
         return;
       }
 
-      const inventoryCapture = isImage && mode === 'inventory';
+      const thingCapture = isImage && mode === 'thing';
       const uploaded = await upload([file], {
-        inventoryCapture,
+        thingCapture,
         model: selectedModel ?? undefined,
       });
 
-      if (inventoryCapture && uploaded) {
-        toast.success('Inventory analysis started. This may take a moment.');
+      if (thingCapture && uploaded) {
+        toast.success('Thing analysis started. This may take a moment.');
       }
     },
     [ensureImageModelSupported, selectedModel, toast, upload],
@@ -183,14 +223,14 @@ export function CaptureModal({ open = false, onClose }: Props) {
         return;
       }
 
-      const inventoryCapture = mode === 'inventory';
+      const thingCapture = mode === 'thing';
       const uploaded = await upload([file], {
-        inventoryCapture,
+        thingCapture,
         model: selectedModel ?? undefined,
       });
 
-      if (inventoryCapture && uploaded) {
-        toast.success('Inventory analysis started. This may take a moment.');
+      if (thingCapture && uploaded) {
+        toast.success('Thing analysis started. This may take a moment.');
       }
     },
     [ensureImageModelSupported, selectedModel, toast, upload],
@@ -209,7 +249,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${authToken}`,
+        ...headers,
       },
       body: JSON.stringify({
         model: selectedModel,
@@ -219,7 +259,7 @@ export function CaptureModal({ open = false, onClose }: Props) {
     if (thread) {
       setThreadId(thread.id);
     }
-  }, [authToken, selectedModel]);
+  }, [headers, selectedModel]);
 
   useEffect(() => {
     (async () => {
@@ -486,5 +526,357 @@ function Files({ files }: { files?: FileData[] | null }) {
         }
       })}
     </>
+  );
+}
+
+function fileLabel(files: File[]): string {
+  if (files.length === 1) {
+    return files[0].name;
+  }
+
+  return `${files.length} files`;
+}
+
+function MobileMemoryCapture({ open = false, onClose }: Props) {
+  const { t } = useTranslation();
+  const [{ authToken }] = useAuth();
+  const [{ selectedVisionModel: selectedModel }] = useModel();
+  const { toast } = useToast();
+  const [recording, setRecording] = useState(false);
+  const [mode, setMode] = useState<CaptureSheetMode>('photo');
+  const cameraOpenedRef = useRef(false);
+
+  const ingest = useCallback(
+    (files: File[], extra?: { inventoryCapture?: boolean }) => {
+      if (files.length === 0) {
+        return;
+      }
+
+      toast.message(t('CAPTURE_SAVING', { name: fileLabel(files) }));
+
+      void enqueueMemoryUpload(files, {
+        authToken,
+        model: extra?.inventoryCapture ? (selectedModel ?? undefined) : undefined,
+        inventoryCapture: extra?.inventoryCapture,
+      }).then(
+        () => {
+          toast.success(t('CAPTURE_SAVED'));
+        },
+        (error: unknown) => {
+          const message = error instanceof FetchJsonError ? error.message : t('CAPTURE_SAVE_FAILED');
+
+          toast.error(message);
+        },
+      );
+    },
+    [authToken, selectedModel, t, toast],
+  );
+
+  const handleCamera = useCallback(
+    async (cameraMode?: CameraMode) => {
+      const file = await captureFromCamera(cameraMode);
+
+      if (file) {
+        ingest([file]);
+      }
+    },
+    [ingest],
+  );
+
+  const handleLibrary = useCallback(async () => {
+    ingest(await chooseFromLibrary());
+  }, [ingest]);
+
+  const handleFiles = useCallback(async () => {
+    ingest(await chooseFiles());
+  }, [ingest]);
+
+  const handleAudioFiles = useCallback(async () => {
+    ingest(await pickFromUserDevice({ accept: 'audio/*', multiple: true }));
+  }, [ingest]);
+
+  const handleStartAudio = useCallback(() => {
+    if (canRecordAudio()) {
+      setRecording(true);
+
+      return;
+    }
+
+    void handleAudioFiles();
+  }, [handleAudioFiles]);
+
+  // The mode bar both selects and runs: a phone tap should not cost two taps to
+  // reach the same place the old tiles reached in one.
+  const handleMode = useCallback(
+    (next: CaptureSheetMode) => {
+      setMode(next);
+
+      switch (next) {
+        case 'photo':
+        case 'video':
+          void handleCamera(next);
+
+          return;
+        case 'audio':
+          handleStartAudio();
+
+          return;
+        case 'files':
+          void handleFiles();
+      }
+    },
+    [handleCamera, handleFiles, handleStartAudio],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      setRecording(false);
+      setMode('photo');
+      cameraOpenedRef.current = false;
+
+      return;
+    }
+
+    // Capture is a camera first: on the phone it opens the system camera itself
+    // (no mode, so that camera keeps its own Photo/Video toggle) and the mode bar
+    // is what you come back to. Browsers block unprompted file dialogs, so the
+    // web path waits for a tap instead.
+    if (cameraOpenedRef.current || !isNativePlatform()) {
+      return;
+    }
+
+    cameraOpenedRef.current = true;
+
+    void handleCamera();
+  }, [handleCamera, open]);
+
+  return (
+    <InlineCaptureShell open={open} onClose={onClose} title={t('CAPTURE_TITLE')}>
+      {recording ? (
+        <AudioRecorderPanel
+          onComplete={(file) => {
+            setRecording(false);
+            ingest([file]);
+          }}
+          onCancel={() => setRecording(false)}
+        />
+      ) : (
+        <CaptureActions mode={mode} onMode={handleMode} onLibrary={() => void handleLibrary()} />
+      )}
+    </InlineCaptureShell>
+  );
+}
+
+function InlineCaptureShell({
+  open,
+  onClose,
+  title,
+  children,
+}: {
+  open: boolean;
+  onClose?: () => void;
+  title: string;
+  children: ReactNode;
+}) {
+  const { t } = useTranslation();
+
+  if (!open) {
+    return null;
+  }
+
+  return createPortal(
+    <div data-testid="capture-shell" className="fixed inset-0 z-[100] flex flex-col bg-zinc-950 text-white">
+      <div className="flex shrink-0 items-center justify-between px-2 pt-[max(0.75rem,var(--safe-area-top))]">
+        <h1 className="px-3 text-lg font-semibold">{title}</h1>
+        <IconButton
+          label={t('COMMON_CLOSE')}
+          variant="ghost"
+          size="icon"
+          className="text-white"
+          onClick={onClose}
+        >
+          <X />
+        </IconButton>
+      </div>
+      {/* Children own the leftover height, so the sheet has no dead chrome under them. */}
+      <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+    </div>,
+    document.body,
+  );
+}
+
+function CaptureActions({
+  mode,
+  onMode,
+  onLibrary,
+}: {
+  mode: CaptureSheetMode;
+  onMode: (mode: CaptureSheetMode) => void;
+  onLibrary: () => void;
+}) {
+  const { t } = useTranslation();
+
+  const active = CAPTURE_SHEET_MODES.find((entry) => entry.mode === mode) ?? CAPTURE_SHEET_MODES[0];
+  const ActiveIcon = active.icon;
+
+  return (
+    <div className="flex flex-col h-full px-5 pb-[max(1.5rem,var(--safe-area-bottom))]">
+      <p className="text-sm text-zinc-400 px-1 mb-4">{t('CAPTURE_SUBTITLE')}</p>
+
+      <div
+        role="group"
+        aria-label={t('CAPTURE_TITLE')}
+        data-testid="capture-mode-bar"
+        className="flex shrink-0 items-center gap-1 rounded-2xl bg-white/10 p-1"
+      >
+        {CAPTURE_SHEET_MODES.map(({ mode: value, icon: Icon, labelKey }) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={value === mode}
+            onClick={() => onMode(value)}
+            className={cn(
+              'flex flex-1 flex-col items-center gap-1 rounded-xl py-2 text-xs font-medium transition-colors',
+              value === mode ? 'bg-white text-zinc-900' : 'text-zinc-300 active:bg-white/10',
+            )}
+          >
+            <Icon className="h-5 w-5" strokeWidth={1.5} />
+            {t(labelKey)}
+          </button>
+        ))}
+      </div>
+
+      {/* The active mode takes the leftover height, so Capture fills the sheet
+          instead of stacking a short block of tiles over empty chrome. */}
+      <button
+        type="button"
+        data-testid="capture-stage"
+        onClick={() => onMode(mode)}
+        className="mt-3 flex flex-1 min-h-32 flex-col items-center justify-center gap-3 rounded-3xl bg-white/10 hover:bg-white/15 active:scale-[0.99] transition-transform text-white"
+      >
+        <ActiveIcon className="h-12 w-12" strokeWidth={1.25} />
+        <span className="text-lg font-semibold">{t('CAPTURE_OPEN')}</span>
+        <span className="text-sm text-zinc-400">{t(active.labelKey)}</span>
+      </button>
+
+      <Button
+        variant="secondary"
+        className="mt-3 w-full h-12 rounded-2xl bg-white/10 text-white hover:bg-white/15 border-0"
+        onClick={onLibrary}
+      >
+        <Images className="h-4 w-4" />
+        {t('CAPTURE_LIBRARY')}
+      </Button>
+
+      <p className="pt-4 text-center text-xs text-zinc-500" data-testid="capture-background-hint">
+        {t('CAPTURE_BACKGROUND_HINT')}
+      </p>
+    </div>
+  );
+}
+
+function AudioRecorderPanel({
+  onComplete,
+  onCancel,
+}: {
+  onComplete: (file: File) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const { toast } = useToast();
+  const [elapsed, setElapsed] = useState(0);
+  const sessionRef = useRef<AudioRecordingSession | null>(null);
+  const onCancelRef = useRef(onCancel);
+  const toastRef = useRef(toast);
+  const tRef = useRef(t);
+
+  onCancelRef.current = onCancel;
+  toastRef.current = toast;
+  tRef.current = t;
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    (async () => {
+      try {
+        const session = await startAudioRecording();
+
+        if (cancelled) {
+          session.cancel();
+
+          return;
+        }
+
+        sessionRef.current = session;
+        timer = setInterval(() => setElapsed((value) => value + 1), 1000);
+      } catch {
+        if (!cancelled) {
+          toastRef.current.error(tRef.current('CAPTURE_SAVE_FAILED'));
+          onCancelRef.current();
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+
+      if (timer) {
+        clearInterval(timer);
+      }
+
+      sessionRef.current?.cancel();
+      sessionRef.current = null;
+    };
+  }, []);
+
+  const handleStop = useCallback(async () => {
+    const session = sessionRef.current;
+    sessionRef.current = null;
+
+    if (!session) {
+      onCancel();
+
+      return;
+    }
+
+    try {
+      onComplete(await session.stop());
+    } catch {
+      toast.error(t('CAPTURE_SAVE_FAILED'));
+      onCancel();
+    }
+  }, [onCancel, onComplete, t, toast]);
+
+  const handleCancel = useCallback(() => {
+    sessionRef.current?.cancel();
+    sessionRef.current = null;
+    onCancel();
+  }, [onCancel]);
+
+  const minutes = Math.floor(elapsed / 60)
+    .toString()
+    .padStart(2, '0');
+  const seconds = (elapsed % 60).toString().padStart(2, '0');
+
+  return (
+    <div className="flex flex-col items-center justify-center h-full gap-8 px-6">
+      <div className="flex items-center gap-3 text-red-400">
+        <span className="h-3 w-3 rounded-full bg-red-500 animate-pulse" />
+        <span className="text-sm font-medium tracking-wide uppercase">{t('CAPTURE_RECORDING')}</span>
+      </div>
+      <div className="text-5xl font-light tabular-nums tracking-tight">
+        {minutes}:{seconds}
+      </div>
+      <div className="flex gap-3">
+        <Button variant="secondary" onClick={handleCancel}>
+          {t('CAPTURE_CANCEL')}
+        </Button>
+        <Button onClick={() => void handleStop()}>
+          <Square className="h-3 w-3 fill-current" />
+          {t('CAPTURE_STOP')}
+        </Button>
+      </div>
+    </div>
   );
 }

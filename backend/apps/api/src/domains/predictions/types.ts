@@ -15,6 +15,8 @@ export interface ForecastResponse {
   system_status: string;
   model_version?: string;
   still_learning?: boolean;
+  pipeline_eta_seconds?: number | null;
+  pipeline_detail?: string | null;
   buckets: ForecastBucket[];
 }
 
@@ -58,4 +60,57 @@ export interface DueItem {
 export interface DueResponse {
   generated_at: string;
   due: DueItem[];
+}
+
+export interface ForageMass {
+  label: string;
+  mass: number;
+}
+
+export interface ForageBranch {
+  id: string;
+  mass: number;
+  ready: boolean;
+  past: boolean;
+  pinned: boolean;
+  top_texture: string;
+}
+
+export interface ForageItem {
+  gaze: number;
+  id: string;
+  label: string;
+  read: boolean;
+  G: number;
+  epistemic: number;
+  risk: number;
+  ambiguity: number;
+  source?: string;
+}
+
+export interface ForageRead {
+  item_id: string;
+  cue: string;
+  G: number;
+  epistemic: number;
+  branch_delta: Record<string, number>;
+}
+
+export interface ForageTrialResponse {
+  user_id: string;
+  question: string;
+  horizon: string;
+  kind?: string;
+  pin: string | null;
+  resolved: boolean;
+  ready: boolean;
+  pick: string | null;
+  texture: string | null;
+  texture_mass: number | null;
+  permutation_branch: string;
+  branches: ForageBranch[];
+  permutations: ForageMass[];
+  interests: Record<string, string[]>;
+  attention: ForageItem[];
+  reads: ForageRead[];
 }

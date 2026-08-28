@@ -162,12 +162,20 @@ export class SpotifyFileImporter implements FileImporter {
     try {
       arr = JSON.parse(raw);
     } catch {
+      params.pipeline.drop?.('unreadable_file', path.basename(fpath));
+
       return;
     }
 
     if (!Array.isArray(arr)) {
+      params.pipeline.drop?.('unreadable_file', path.basename(fpath));
+
       return;
     }
+
+    // How many records this file actually offered the parser — the floor
+    // `reconciled` checks every produced/dropped row against.
+    params.pipeline.consumed?.(arr.length);
 
     const base = path.basename(fpath).toLowerCase();
     // endsong_* and the current Streaming_History_Audio_*/_Video_* share the
@@ -200,11 +208,15 @@ export class SpotifyFileImporter implements FileImporter {
     const played = typeof e.ms_played === 'number' && e.ms_played >= 0 ? e.ms_played : undefined;
     // Sub-second plays are skip-throughs, not listening — drop the row.
     if (played !== undefined && played < 1000) {
+      params.pipeline.drop?.('sub_second_play');
+
       return;
     }
 
     const ts = end && played !== undefined ? new Date(end.getTime() - played) : end;
     if (!timeframeContains(params.timeframe, ts)) {
+      params.pipeline.drop?.('outside_timeframe');
+
       return;
     }
 
@@ -264,6 +276,8 @@ export class SpotifyFileImporter implements FileImporter {
         Skipped: e.skipped ?? undefined,
       };
     } else {
+      params.pipeline.drop?.('unresolvable_playback_stub');
+
       return;
     }
 
@@ -301,11 +315,15 @@ export class SpotifyFileImporter implements FileImporter {
     const played = typeof e.msPlayed === 'number' && e.msPlayed >= 0 ? e.msPlayed : undefined;
     // Sub-second plays are skip-throughs, not listening — drop the row.
     if (played !== undefined && played < 1000) {
+      params.pipeline.drop?.('sub_second_play');
+
       return;
     }
 
     const ts = end && played !== undefined ? new Date(end.getTime() - played) : end;
     if (!timeframeContains(params.timeframe, ts)) {
+      params.pipeline.drop?.('outside_timeframe');
+
       return;
     }
 

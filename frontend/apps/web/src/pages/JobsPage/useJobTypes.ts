@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 
-import { useAuth } from '@/hooks';
+import { readJobsSnapshot, writeJobsSnapshot } from './jobsSnapshots';
+import { useJobsAuth } from './useJobsAuth';
 
 export interface JobTypeDescriptor {
   readonly label: string;
@@ -25,31 +26,42 @@ export interface JobTypesResponse {
  * gaining a taxonomy entry shows up here as missing, instead of silently looking
  * like everything else. Fetched once; the taxonomy is static for a given build.
  */
+const JOB_TYPES_URL = '/api/jobs/types';
+
 export function useJobTypes(): { types: JobTypesResponse | null; loading: boolean } {
-  const [{ authToken }] = useAuth();
-  const [types, setTypes] = useState<JobTypesResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { ready, headers } = useJobsAuth();
+
+  // Static for a build, so a revisit re-labels the table on the first frame
+  // rather than showing raw event names until the taxonomy lands again.
+  const [restored] = useState(() => readJobsSnapshot<JobTypesResponse>(JOB_TYPES_URL));
+  const [types, setTypes] = useState<JobTypesResponse | null>(restored?.value ?? null);
+  const [loading, setLoading] = useState(restored == null);
 
   useEffect(() => {
     let cancelled = false;
 
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
-    fetchJson<JobTypesResponse>('/api/jobs/types', {
-      headers: { Authorization: `Bearer ${authToken}` },
-    })
+    fetchJson<JobTypesResponse>(JOB_TYPES_URL, { headers })
       .then((response) => {
+        if (response) {
+          writeJobsSnapshot(JOB_TYPES_URL, response);
+        }
+
         if (!cancelled) {
           setTypes(response ?? null);
         }
       })
       .catch(() => {
         // A missing taxonomy must not break the table — the filter simply
-        // offers nothing rather than the page failing to render.
+        // offers nothing rather than the page failing to render. A snapshot
+        // from earlier in the session is kept: it cannot have gone stale (the
+        // taxonomy is fixed for a build), and dropping it would un-label every
+        // row over a refetch the operator never asked for.
         if (!cancelled) {
-          setTypes(null);
+          setTypes((current) => current ?? null);
         }
       })
       .finally(() => {
@@ -61,7 +73,7 @@ export function useJobTypes(): { types: JobTypesResponse | null; loading: boolea
     return () => {
       cancelled = true;
     };
-  }, [authToken]);
+  }, [ready, headers]);
 
   return { types, loading };
 }

@@ -2,8 +2,11 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-import { GoogleVoiceFileImporter } from '../googlevoice';
-import type { ImportParams, Relationship } from '../timeline';
+import type { StagedEntity } from '../../entities/StagedEntityEntity';
+import { entityTypeFor } from '../../push/entities';
+import { hashItem, resolveEntityType } from '../../staging/identity';
+import { GoogleVoiceFileImporter, stripCopyIndex, threadKeyFor } from '../googlevoice';
+import type { Entity, ImportParams, Relationship } from '../timeline';
 
 import type { EmittedGraph } from './support/emitted';
 
@@ -189,6 +192,38 @@ describe('Google Voice datasource', () => {
     expect(attachment).toBeDefined();
     expect(attachment!.item.timestamp).toBeInstanceOf(Date);
     expect(attachment!.item.timestamp!.toISOString()).toBe('2025-01-15T09:33:00.000Z');
+  });
+
+  // MMS image attachments were pushed with classification 'message' and no
+  // way to be recognized as file-bearing, so 0 of them ever uploaded even
+  // though the message itself landed. MediaAttachments is the same
+  // descriptor shape (and the same MediaStage attachment leg) that already
+  // carries a voicemail recording — see 'voicemail recordings' below.
+  it('attaches the MMS image via MediaAttachments so MediaStage can upload it', async () => {
+    const exportDir = path.join(FIXTURES_DIR, 'google-voice-export');
+    const fi = new GoogleVoiceFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: 'google-voice-export', fullPath: exportDir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const attachment = pipeline.find((p) => p.item?.metadata?.Attachment === 'image');
+    expect(attachment).toBeDefined();
+    const mediaAttachments = attachment!.item.metadata?.MediaAttachments as
+      | Array<{ path: string; filename: string; type: string; mimetype: string }>
+      | undefined;
+    expect(mediaAttachments).toHaveLength(1);
+    expect(mediaAttachments![0].type).toBe('image');
+    expect(mediaAttachments![0].mimetype).toBe('image/jpeg');
+    expect(mediaAttachments![0].filename).toBe(attachment!.item.content?.filename);
+
+    // Left '' on purpose: a real MIME here would make MediaStage's primary
+    // media leg upload the same bytes a SECOND time via a separate, orphaned
+    // path — only the attachment leg (gated on MediaAttachments) should ever
+    // see this item as file-bearing.
+    expect(attachment!.item.content?.mediaType).toBe('');
   });
 
   it('imports call and voicemail records (haudio markup) as classification "call" instead of dropping them', async () => {
@@ -667,5 +702,458 @@ describe('Google Voice participants', () => {
     expect(attachment.item.metadata.Direction).toBeUndefined();
     expect(attachment.item.metadata.To).toBeUndefined();
     expect(participantEdges(attachment)).toHaveLength(0);
+  });
+});
+
+/*
+ * A Google Voice conversation's other end is not a person by construction: SMS
+ * SHORT CODES ("411", "99217", "227898") are the numbers services text from.
+ *
+ * Before this, nothing in the parser said so — the three entity pushes left
+ * `type` to `resolveEntityType`, which infers 'contact' only from an attribute
+ * long enough to be a handle, so a short code fell through to
+ * `DEFAULT_ENTITY_TYPE`. 142 rows on the QA corpus landed as `Concept` that
+ * way: the right answer, reached by accident, and the accident cut the other
+ * way on the `participant` edge, which hard-coded 'contact' and would have
+ * minted a `Person` named "411" on the next import.
+ */
+describe('a short code is a correspondent, not a person', () => {
+  /**
+   * Models the real chain: `StagedWriter` stores `resolveEntityType(entity)` as
+   * the staged type and push's `entityTypeFor` maps that to
+   * `ci.entities.entity_type`. Mirrors vcard.test.ts's `stagedEntityType`.
+   */
+  const graphType = (entity: Entity | undefined): string =>
+    entityTypeFor({ type: resolveEntityType(entity ?? {}) } as StagedEntity);
+
+  const stagedEntities = (pipeline: EmittedGraph[]): Entity[] =>
+    pipeline.flatMap((g) => (g.entity ? [g.entity] : []));
+
+  const edgeEntities = (pipeline: EmittedGraph[]): Entity[] =>
+    pipeline.flatMap((g) =>
+      (g.edges ?? [])
+        .filter((e) => e.relation === 'participant')
+        .flatMap((e) => (e.to.entity ? [e.to.entity] : [])),
+    );
+
+  const message = (tel: string, fn: string): string =>
+    `<html><body><div class="hChatLog hfeed"><div class="message">
+       <abbr class="dt" title="2025-03-01T12:00:00.000Z">Mar 1</abbr>:
+       <cite class="sender vcard"><a class="tel" href="tel:${tel}"><span class="fn">${fn}</span></a></cite>:
+       <q>your code is 402931</q>
+     </div></div></body></html>`;
+
+  const callLog = (tel: string, fn: string): string =>
+    `<html><body><div class="haudio">
+       <span class="fn">Received call from <a class="tel" href="tel:${tel}"><span class="fn">${fn}</span></a></span>
+       <abbr class="published" title="2025-01-15T09:30:00.000Z">Jan 15</abbr>
+     </div></body></html>`;
+
+  const importHtml = async (html: string, filename: string): Promise<EmittedGraph[]> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-code-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    fs.writeFileSync(
+      path.join(dir, 'Phones.vcf'),
+      'BEGIN:VCARD\nVERSION:3.0\nFN:My Phone\nTEL:+15551234567\nEND:VCARD\n',
+    );
+    fs.writeFileSync(path.join(dir, 'Calls', filename), html);
+
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return pipeline;
+  };
+
+  it('does not file the sender of a short-code text as a Person', async () => {
+    const pipeline = await importHtml(message('411', '411'), '411 - Text - 2025-03-01T12_00_00Z.html');
+    const staged = stagedEntities(pipeline);
+
+    // Guard against the vacuous pass: no entity means every assertion below
+    // would be checking `undefined` against `undefined`.
+    expect(staged.map((e) => e.name)).toEqual(['411']);
+    expect(staged.map(graphType)).toEqual(['Concept']);
+  });
+
+  it('does not file the counterpart of a short-code text as a Person either', async () => {
+    // The `participant` edge is the push that already declared a type, and the
+    // one that had never run against the corpus — so this is where a `Person`
+    // named "411" would first have appeared.
+    const pipeline = await importHtml(message('411', '411'), '411 - Text - 2025-03-01T12_00_00Z.html');
+    const edges = edgeEntities(pipeline);
+
+    expect(edges.map((e) => e.name)).toEqual(['411']);
+    expect(edges.map(graphType)).toEqual(['Concept']);
+  });
+
+  it('does not file a short-code caller as a Person', async () => {
+    const pipeline = await importHtml(callLog('+411', '+411'), '411 - Received - 2025-01-15T09_30_00Z.html');
+    const staged = stagedEntities(pipeline);
+
+    // '+411' is the shape the second QA database holds: the punctuation must
+    // not make it read as a name.
+    expect(staged.map((e) => e.name)).toEqual(['+411']);
+    expect(staged.map(graphType)).toEqual(['Concept']);
+  });
+
+  it('does not file a short code that arrives as the NAME as a Person', async () => {
+    // The gap #2150 left. Google Voice names most exports
+    // "<contact> - <Type> - <timestamp>.html" and that prefix becomes the
+    // contact NAME, so a marketing sender frequently arrives with a short code
+    // for a name and NO tel: at all. `participantType` read only the phone, so
+    // this typed as `contact` and became a Person.
+    //
+    // Measured on a fresh full-corpus import: 141 short-code participants typed
+    // correctly, 4 leaked through this path (1311, 14242, ...).
+    const pipeline = await importHtml(
+      `<html><body><div class="haudio">
+         <span class="fn">Received call from 262966</span>
+         <abbr class="published" title="2025-01-15T09:30:00.000Z">Jan 15</abbr>
+       </div></body></html>`,
+      '262966 - Received - 2025-01-15T09_30_00Z.html',
+    );
+    const staged = stagedEntities(pipeline);
+
+    expect(staged.map((e) => e.name)).toEqual(['262966']);
+    expect(staged.map(graphType)).toEqual(['Concept']);
+  });
+
+  /*
+   * The cases that already worked, kept so the short-code rule cannot be
+   * satisfied by simply refusing to type anybody.
+   */
+  it('still files a real phone number as a Person, from every push', async () => {
+    const pipeline = await importHtml(
+      message('+15558887777', 'Dana Wu'),
+      'Dana Wu - Text - 2025-03-01T12_00_00Z.html',
+    );
+
+    expect(stagedEntities(pipeline).map(graphType)).toEqual(['Person']);
+    expect(edgeEntities(pipeline).map(graphType)).toEqual(['Person']);
+  });
+
+  it('still files a caller the export named but gave no number as a Person', async () => {
+    // No `tel:` at all, so `hasContactIdentity` finds nothing and only the
+    // declared type can carry this row to `Person`.
+    const pipeline = await importHtml(
+      `<html><body><div class="haudio">
+         <span class="fn">Received call from Ada Lovelace</span>
+         <abbr class="published" title="2025-01-15T09:30:00.000Z">Jan 15</abbr>
+       </div></body></html>`,
+      'Ada Lovelace - Received - 2025-01-15T09_30_00Z.html',
+    );
+    const staged = stagedEntities(pipeline);
+
+    expect(staged.map((e) => e.name)).toEqual(['Ada Lovelace']);
+    expect(staged.some((e) => e.attributes?.length)).toBe(false);
+    expect(staged.map(graphType)).toEqual(['Person']);
+  });
+});
+
+// The transcript of a voicemail lived in `<span class="note">` in an older
+// export shape, and the parser read that class. A current export does not
+// contain it ONCE — 0 of 71,946 files in the reference corpus — so every
+// voicemail fell back to the synthesized "<Type> call from <contact>" label
+// and 2,521 real transcripts were never read.
+//
+// The reason this survived a green suite is worth stating: the existing
+// fixture above was written to match the PARSER, using `class="note"`, so it
+// could never falsify the parser's assumption. These fixtures use the markup a
+// real export actually ships — `<span class="full-text">` nested in
+// `<span class="description">`, with per-word timing spans as siblings AFTER
+// it — so they fail against the old regex.
+describe('voicemail transcripts in real export markup', () => {
+  async function importRealMarkup() {
+    const exportDir = path.join(FIXTURES_DIR, 'google-voice-export-realmarkup');
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport(
+      {},
+      { filename: 'google-voice-export-realmarkup', fullPath: exportDir },
+      { pipeline, timeframe: {}, log: () => {} } as unknown as ImportParams,
+    );
+
+    return pipeline.filter((p) => p.item?.classification === 'call').map((p) => p.item);
+  }
+
+  it('reads the transcript out of <span class="full-text">', async () => {
+    const calls = await importRealMarkup();
+    const bob = calls.find((c) => c.metadata.Contact === 'Bob Smith');
+    expect(bob).toBeDefined();
+    expect(bob!.metadata.Transcript).toBe("Hi it's Bob, the meeting moved to Thursday.");
+  });
+
+  it('does not swallow the per-word timing spans that follow it', async () => {
+    // The <span class="word …"> siblings carry start-time/end-time/confidence.
+    // A greedy match, or one that read the enclosing <span class="description">,
+    // would splice those numbers into the sentence.
+    const calls = await importRealMarkup();
+    const bob = calls.find((c) => c.metadata.Contact === 'Bob Smith');
+    const transcript = bob!.metadata.Transcript as string;
+    expect(transcript).not.toMatch(/0\.98|0\.42/);
+    expect(transcript).not.toMatch(/start-time|end-time|confidence/);
+    expect(transcript.endsWith('Thursday.')).toBe(true);
+  });
+
+  it('uses the transcript as the item body, not the synthesized label', async () => {
+    const calls = await importRealMarkup();
+    const bob = calls.find((c) => c.metadata.Contact === 'Bob Smith');
+    const body = await (bob!.content as { data: () => Promise<Buffer> }).data();
+    expect(body.toString()).toBe("Hi it's Bob, the meeting moved to Thursday.");
+    // The label is still recorded separately.
+    expect(bob!.metadata.Description).toContain('Voicemail call from');
+  });
+
+  it('falls back to the label when the element is present but empty', async () => {
+    // 297 of the 2,818 files in the corpus have an empty <span class="full-text">.
+    // Those must keep the old behaviour rather than store an empty body.
+    const calls = await importRealMarkup();
+    const carol = calls.find((c) => c.metadata.Contact === 'Carol Diaz');
+    expect(carol).toBeDefined();
+    expect(carol!.metadata.Transcript).toBeUndefined();
+    const body = await (carol!.content as { data: () => Promise<Buffer> }).data();
+    expect(body.toString()).toContain('Voicemail call from');
+  });
+
+  it('still reads the legacy <span class="note"> shape', async () => {
+    // An older export keeps working — the original fixture uses that markup.
+    const exportDir = path.join(FIXTURES_DIR, 'google-voice-export-calls');
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport(
+      {},
+      { filename: 'google-voice-export-calls', fullPath: exportDir },
+      { pipeline, timeframe: {}, log: () => {} } as unknown as ImportParams,
+    );
+    const vm = pipeline
+      .filter((p) => p.item?.classification === 'call')
+      .map((p) => p.item)
+      .find((c) => c.metadata.CallType === 'Voicemail');
+    expect(vm!.metadata.Transcript).toBe("Hey it's Alice, call me back when you get a chance.");
+  });
+});
+
+// Google Voice ships each voicemail's recording as a sibling .mp3 named by an
+// <audio src>. None of it was read: resolveAttachment only probes image
+// extensions, and it is unreachable from a call file anyway because fileImport
+// routes haudio to processCallLog and returns before the <img> loop. 3,066
+// files name a recording, 2,718 resolve to bytes, and ci.files held no audio
+// row from any source.
+describe('voicemail recordings', () => {
+  async function importRealMarkup() {
+    const exportDir = path.join(FIXTURES_DIR, 'google-voice-export-realmarkup');
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport(
+      {},
+      { filename: 'google-voice-export-realmarkup', fullPath: exportDir },
+      { pipeline, timeframe: {}, log: () => {} } as unknown as ImportParams,
+    );
+
+    return pipeline.filter((p) => p.item?.classification === 'call').map((p) => p.item);
+  }
+
+  const attachmentsOf = (call: { metadata: Record<string, unknown> }) =>
+    call.metadata.MediaAttachments as Array<Record<string, unknown>> | undefined;
+
+  it('attaches the recording that sits beside the html', async () => {
+    const calls = await importRealMarkup();
+    const bob = calls.find((c) => c.metadata.Contact === 'Bob Smith')!;
+    const atts = attachmentsOf(bob);
+    expect(atts).toHaveLength(1);
+    expect(atts![0].filename).toBe('Bob Smith - Voicemail - 2025-03-04T08_20_00Z.mp3');
+    expect(atts![0].type).toBe('audio');
+    expect(atts![0].mimetype).toBe('audio/mpeg');
+    expect(fs.existsSync(atts![0].path as string)).toBe(true);
+  });
+
+  it('resolves a percent-encoded href whose accents are stored decomposed on disk', async () => {
+    // Built at RUNTIME, not committed as a fixture: git's core.precomposeunicode
+    // rewrites a decomposed filename to NFC on add, so a committed fixture would
+    // arrive composed on a fresh checkout and this would silently stop testing
+    // the thing it names.
+    //
+    // The export names the file composed (NFC) and percent-encoded, while macOS
+    // stores it decomposed (NFD). Comparing raw strings finds nothing.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-nfd-'));
+    const calls = path.join(dir, 'Calls');
+    fs.mkdirSync(calls);
+    const nfd = 'Renée Dupré - Voicemail - 2025-03-06T10_00_00Z.mp3'.normalize('NFD');
+    const nfc = nfd.normalize('NFC');
+    expect(nfd).not.toBe(nfc); // the case only exists if these differ
+    fs.writeFileSync(path.join(calls, nfd), 'ID3fake');
+    const href = encodeURIComponent(nfc);
+    fs.writeFileSync(
+      path.join(calls, 'Renee Dupre - Voicemail - 2025-03-06T10_00_00Z.html'),
+      `<html><body><div class="haudio"><span class="album">Voicemail</span>` +
+        `<span class="fn">Voicemail from <a class="tel" href="tel:+15551237777"><span class="fn">Renee Dupre</span></a></span>` +
+        `<div class="contributor vcard"><a class="tel" href="tel:+15551237777"><span class="fn">Renee Dupre</span></a></div>` +
+        `<abbr class="published" title="2025-03-06T10:00:00.000Z">Mar 6</abbr>` +
+        `<span class="description"><span class="full-text">Accented filename case.</span></span><br />` +
+        `<audio controls="controls" src="${href}"><a rel="enclosure" href="${href}">x</a></audio>` +
+        `<abbr class="duration" title="PT00H00M09S">(00:00:09)</abbr></div></body></html>`,
+    );
+
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+    const renee = pipeline
+      .filter((p) => p.item?.classification === 'call')
+      .map((p) => p.item)
+      .find((c) => c.metadata.Contact === 'Renee Dupre');
+    expect(renee).toBeDefined();
+
+    const atts = attachmentsOf(renee!);
+    expect(atts).toHaveLength(1);
+
+    // The path must be the byte sequence the DIRECTORY holds, not the one the
+    // href spells. existsSync alone cannot show this on macOS, where APFS
+    // compares filenames normalization-INSENSITIVELY and the NFC path resolves
+    // regardless. The appliance runs Linux, where ext4 compares bytes and the
+    // NFC path would simply not exist — so assert the bytes.
+    const resolved = path.basename(atts![0].path as string);
+    expect(fs.readdirSync(calls)).toContain(resolved);
+    expect(fs.readFileSync(atts![0].path as string).length).toBeGreaterThan(0);
+  });
+
+  it('records no attachment when the export did not ship the audio', async () => {
+    // Unlike imessage.ts, a path-less descriptor is NOT recorded here: chat.db
+    // knows a purged attachment's name, type and guid, but a Voice export
+    // missing its mp3 says nothing the call record does not already say.
+    const calls = await importRealMarkup();
+    const dan = calls.find((c) => c.metadata.Contact === 'Dan Vale')!;
+    expect(dan).toBeDefined();
+    expect(attachmentsOf(dan)).toBeUndefined();
+  });
+
+  it('still imports the call itself when the audio is missing', async () => {
+    const calls = await importRealMarkup();
+    const dan = calls.find((c) => c.metadata.Contact === 'Dan Vale')!;
+    expect(dan.metadata.CallType).toBe('Voicemail');
+    expect(dan.metadata.Transcript).toBe('Missing audio case.');
+  });
+
+  it('does not attach anything to a call with no audio element', async () => {
+    // The legacy fixture's voicemail has a transcript but no <audio>.
+    const exportDir = path.join(FIXTURES_DIR, 'google-voice-export-calls');
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport(
+      {},
+      { filename: 'google-voice-export-calls', fullPath: exportDir },
+      { pipeline, timeframe: {}, log: () => {} } as unknown as ImportParams,
+    );
+    const calls = pipeline.filter((p) => p.item?.classification === 'call').map((p) => p.item);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((c) => c.metadata.MediaAttachments === undefined)).toBe(true);
+  });
+});
+
+describe('an export file replicated with a copy index is one record, not two', () => {
+  /**
+   * Google Voice call/voicemail items carry NO `item.id`, so `hashItem` keys
+   * them on `sha1(dataSource, classification, content.filename, isoTimestamp)`
+   * — the filename IS half the identity. A Drive/Takeout copy suffix therefore
+   * minted a second provenance triple for one call, and the
+   * `communications_source_triple_uniq` arbiter cannot collapse two different
+   * triples: on the QA appliance one 2013-06-14T15:07:34 call from Chris
+   * Spagnuolo sat in ci.communications three times, once per copy of its file.
+   *
+   * Asserted through `hashItem` rather than by eyeballing `content.filename`,
+   * because the hash is what actually decides whether the two rows merge.
+   */
+  const importCalls = async (files: Record<string, string>): Promise<EmittedGraph['item'][]> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-copy-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    for (const [filename, body] of Object.entries(files)) {
+      fs.writeFileSync(path.join(dir, 'Calls', filename), body);
+    }
+
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return pipeline.filter((p) => p.item?.classification === 'call').map((p) => p.item);
+  };
+
+  const callLog = (isoTitle: string, contact: string): string =>
+    `<html><body><div class="haudio">
+       <span class="fn">Missed call from <a class="tel" href="tel:+15551230099"><span class="fn">${contact}</span></a></span>
+       <abbr class="published" title="${isoTitle}">then</abbr>
+       <abbr class="duration" title="00:00:30">(00:00:30)</abbr>
+     </div></body></html>`;
+
+  it('hashes " (2)" and "(1)" copies of one call to the SAME key as the original', async () => {
+    const body = callLog('2013-06-14T15:07:34.000Z', 'Chris Spagnuolo');
+    const items = await importCalls({
+      'Chris Spagnuolo - Missed - 2013-06-14T15_07_34Z.html': body,
+      'Chris Spagnuolo - Missed - 2013-06-14T15_07_34Z (2).html': body,
+      // The space is optional — both forms occur in the same real corpus.
+      'Chris Spagnuolo - Missed - 2013-06-14T15_07_34Z(3).html': body,
+    });
+
+    // Guard against a vacuous pass: three files must have produced three items
+    // for the hash comparison below to mean anything.
+    expect(items).toHaveLength(3);
+
+    const hashes = new Set(items.map((item) => hashItem(item, 'google_voice')));
+    expect(hashes.size).toBe(1);
+  });
+
+  it('keeps two calls apart when the copy index disambiguates a TRUNCATED name', async () => {
+    // Google Voice cuts a long filename mid-timestamp and then appends its own
+    // "(n)" to make the truncated names unique — 428 files in the reference
+    // corpus, e.g. "…Turner - Missed - 2016-01-08T17_3(1).html" and "…(2)".
+    // Those are two different calls minutes apart, and merging them would
+    // delete one of them at staging.
+    const items = await importCalls({
+      'Elisabeth (Lisa) Turner - Missed - 2016-01-08T17_3(1).html': callLog(
+        '2016-01-08T17:30:00.000Z',
+        'Elisabeth Turner',
+      ),
+      'Elisabeth (Lisa) Turner - Missed - 2016-01-08T17_3(2).html': callLog(
+        '2016-01-08T17:38:00.000Z',
+        'Elisabeth Turner',
+      ),
+    });
+
+    expect(items).toHaveLength(2);
+    expect(new Set(items.map((item) => hashItem(item, 'google_voice'))).size).toBe(2);
+  });
+
+  it('strips only a copy index that follows a COMPLETE export timestamp', () => {
+    // The anchor is the whole safety argument, so it is pinned directly.
+    expect(stripCopyIndex('Chris Spagnuolo - 2013-06-14T15_07_34Z (2).html')).toBe(
+      'Chris Spagnuolo - 2013-06-14T15_07_34Z.html',
+    );
+    expect(stripCopyIndex('+16124140453 - 2013-08-09T15_04_51Z(1).html')).toBe(
+      '+16124140453 - 2013-08-09T15_04_51Z.html',
+    );
+
+    // Truncated name: the index is Google Voice's own collision breaker.
+    expect(stripCopyIndex('Elisabeth (Lisa) Turner - Missed - 2016-01-08T17_3(1).html')).toBe(
+      'Elisabeth (Lisa) Turner - Missed - 2016-01-08T17_3(1).html',
+    );
+
+    // A parenthesised number inside the contact label is part of the name.
+    expect(stripCopyIndex('Elisabeth (Lisa) Turner - Text - 2016-01-08T17_30_00Z.html')).toBe(
+      'Elisabeth (Lisa) Turner - Text - 2016-01-08T17_30_00Z.html',
+    );
+
+    // Nothing that is not a Google Voice export name is touched.
+    expect(stripCopyIndex('IMG_0001 (1).jpg')).toBe('IMG_0001 (1).jpg');
+  });
+
+  it('threads a copied group-conversation file with the original', () => {
+    // A file that names nobody threads on its own identity (GV_FILE_THREAD_PREFIX).
+    // Two copies of one group chat must not become two conversations.
+    expect(threadKeyFor('/Calls/Group Conversation - 2019-11-11T23_27_25Z (2).html', undefined)).toBe(
+      threadKeyFor('/Calls/Group Conversation - 2019-11-11T23_27_25Z.html', undefined),
+    );
   });
 });

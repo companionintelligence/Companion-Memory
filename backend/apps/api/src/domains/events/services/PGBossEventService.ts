@@ -14,7 +14,7 @@ import { DEAD_LETTER_QUEUE, DEFAULT_JOB_PRIORITY } from '../constants';
 import { EventDefinitionRegistry, EventListenerRegistry } from '../event-registration';
 import { type EventPayloads } from '../event-registry';
 import { EventRegistry } from '../registry';
-import type { EventSendOptions } from '../types';
+import type { EventSendOptions, QueueOptions } from '../types';
 
 import { EventService } from './EventService';
 
@@ -34,6 +34,21 @@ interface EventData {
 // parameter/row count so a multi-million-row backfill streams in fixed chunks
 // instead of one enormous statement.
 const PGBOSS_INSERT_CHUNK = 2000;
+
+// The queue policies whose unique index actually refuses a duplicate:
+// `short` on (name, COALESCE(singleton_key,'')) WHERE state='created',
+// `singleton` the same WHERE state='active', `stately` on
+// (name, state, COALESCE(singleton_key,'')) WHERE state <= 'active'
+// (pg-boss plans.js, job_i1..job_i3). Every one of them COALESCEs a MISSING
+// key to '', so keyless sends to such a queue de-duplicate against EACH OTHER
+// — and the insert is ON CONFLICT DO NOTHING, so the loser is discarded with
+// no error and `send()` merely resolves null. `standard` stores a singletonKey
+// and enforces nothing.
+const ENFORCING_QUEUE_POLICIES: ReadonlySet<NonNullable<QueueOptions['policy']>> = new Set([
+  'short',
+  'singleton',
+  'stately',
+]);
 
 // Serializes queue PROVISIONING across processes. The web and worker halves
 // both create/update every queue at boot, and pg-boss's create_queue
@@ -418,7 +433,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         return [];
       }
 
-      const jobId = await this.boss.send(options.queue, resolvedData, sendOptions);
+      const jobId = await this.sendToQueue(name, options.queue, resolvedData, sendOptions);
 
       return jobId ? [jobId] : [];
     }
@@ -447,7 +462,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       }
 
       try {
-        const jobId = await this.boss.send(queue, resolvedData, sendOptions);
+        const jobId = await this.sendToQueue(name, queue, resolvedData, sendOptions);
 
         if (jobId) {
           jobIds.push(jobId);
@@ -463,6 +478,66 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     this.logger.debug(`Sent event ${name} to ${jobIds.length} queues`);
 
     return jobIds;
+  }
+
+  /**
+   * The de-duplicating policy `queue` was DECLARED with, or undefined if it
+   * enforces none. Read from the same registry the queue was created from
+   * ({@link EventListenerRegistry.getQueueOptions}, populated by `@OnEvent`),
+   * so the send side and the `createQueue` side can never disagree about what
+   * a queue does.
+   */
+  private enforcingPolicyFor(queue: string): NonNullable<QueueOptions['policy']> | undefined {
+    const policy = EventListenerRegistry.getQueueOptions(queue)?.policy;
+
+    return policy !== undefined && ENFORCING_QUEUE_POLICIES.has(policy) ? policy : undefined;
+  }
+
+  /**
+   * Enqueue one job, and refuse to let pg-boss's two silent outcomes stay silent.
+   *
+   * A keyless send to a de-duplicating queue is a programming error that loses
+   * work: every such job COALESCEs to the same '' key, so all but the first are
+   * discarded. It is logged rather than thrown because `send()` sits on request
+   * and cron paths where turning a partial fan-out into a 500 would be a bigger
+   * outage than the drop — but it is never correct, and the message says so.
+   */
+  private async sendToQueue(
+    name: string,
+    queue: string,
+    data: EventData,
+    sendOptions: PgBoss.SendOptions,
+  ): Promise<string | null> {
+    const policy = this.enforcingPolicyFor(queue);
+
+    if (policy && !sendOptions.singletonKey) {
+      this.logger.error(
+        `Event ${name} was sent to queue ${queue} with no singletonKey, but that queue declares ` +
+          `policy '${policy}'. pg-boss de-duplicates keyless jobs against each other, so this job is ` +
+          `discarded whenever another keyless job is already waiting on ${queue}. Give the send a ` +
+          `singletonKey, or drop the policy from the queue's queueOptions.`,
+      );
+    }
+
+    const jobId = await this.boss.send(queue, data, sendOptions);
+
+    if (jobId == null) {
+      // pg-boss reports a de-duplicated insert by RESOLVING WITH NULL, not by
+      // throwing (manager.createJob returns null when the ON CONFLICT DO NOTHING
+      // insert returns no row). Folding that into "one fewer job id" made a
+      // dropped job indistinguishable from an enqueued one at every call site.
+      const detail =
+        `Event ${name} was not enqueued on queue ${queue}: pg-boss de-duplicated it against a job ` +
+        `already waiting (policy=${policy ?? 'standard'}, singletonKey=${sendOptions.singletonKey ?? 'none'})`;
+
+      if (policy && sendOptions.singletonKey) {
+        this.logger.debug(`${detail}. This is the queue's declared de-duplication working as intended.`);
+      } else {
+        this.logger.error(detail);
+      }
+    }
+
+    return jobId;
   }
 
   async sendMany(
@@ -493,6 +568,25 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       return;
     }
 
+    const enforcingPolicy = this.enforcingPolicyFor(queue);
+
+    if (enforcingPolicy) {
+      // This API has one singletonKey for the WHOLE batch (and a batch with no
+      // key COALESCEs to '' just the same), so on a de-duplicating queue the
+      // unique index keeps exactly one row and ON CONFLICT DO NOTHING discards
+      // the other N-1 without an error — a bulk enqueue that reports success
+      // having enqueued 1 of a million. A per-job key is not expressible here,
+      // so the call itself is wrong: refuse it at the caller instead of losing
+      // the batch in the database. No caller reaches this today (every sendMany
+      // target queue is policy-less); it exists so none can start to.
+      throw new Error(
+        `sendMany cannot enqueue ${events.length} events onto queue ${queue}: that queue declares ` +
+          `policy '${enforcingPolicy}', which de-duplicates on a single per-batch singletonKey and would ` +
+          `silently discard all but one job. Send these events individually with a per-job singletonKey, ` +
+          `or drop the policy from the queue's queueOptions.`,
+      );
+    }
+
     // pg-boss insert() bulk-creates jobs in ONE INSERT per chunk, routing through
     // pg-boss's own job schema (so partitioning/defaults are handled for us). This
     // replaces N awaited boss.send() round trips — the difference between the
@@ -506,10 +600,33 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       name: queue,
       data: { ...event.data, name: event.name },
       priority,
+      ...(options?.singletonKey ? { singletonKey: options.singletonKey } : {}),
+      // JobInsert's own type omits `number` even though insert()'s SQL parses a
+      // bulk-inserted startAfter the same way send()'s does (json_to_recordset
+      // extracts it as text, then `now() + interval` — see plans.js) — send()'s
+      // SendOptions (via JobOptions) declares the correct three-way union.
+      ...(options?.startAfter !== undefined
+        ? { startAfter: options.startAfter as PgBoss.JobInsert['startAfter'] }
+        : {}),
     }));
 
     for (let i = 0; i < jobs.length; i += PGBOSS_INSERT_CHUNK) {
-      await this.boss.insert(jobs.slice(i, i + PGBOSS_INSERT_CHUNK));
+      const chunk = jobs.slice(i, i + PGBOSS_INSERT_CHUNK);
+
+      // pg-boss's typings say insert() resolves to void; the implementation
+      // resolves with the ids it actually wrote (`manager.insert` →
+      // `rows.map(i => i.id)`), and its INSERT is ON CONFLICT DO NOTHING — so a
+      // short array is rows that were DISCARDED, reported as success. Read the
+      // ids when they are there, and stay quiet if a future version stops
+      // returning them rather than inventing a drop out of `undefined`.
+      const inserted = (await this.boss.insert(chunk)) as unknown as string[] | null | undefined;
+
+      if (Array.isArray(inserted) && inserted.length < chunk.length) {
+        this.logger.error(
+          `Bulk enqueue onto queue ${queue} lost ${chunk.length - inserted.length} of ${chunk.length} jobs: ` +
+            `pg-boss discarded them on insert conflict.`,
+        );
+      }
     }
 
     this.logger.debug(`Bulk-enqueued ${jobs.length} events onto queue ${queue}`);

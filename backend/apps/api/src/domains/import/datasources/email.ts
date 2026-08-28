@@ -8,7 +8,13 @@ import readline from 'node:readline';
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
 import { mboxFromLineDate, receivedDate } from './email_date';
 import { emailDirection, isDraft } from './email_direction';
-import { parseMime } from './email_mime';
+import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
+import {
+  extractReceiptFields,
+  isLikelyReceipt,
+  receiptHeaderSignal,
+  receiptImportEnabled,
+} from './receipt_detect';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph, EntityAttribute, Relationship } from './timeline';
@@ -243,9 +249,22 @@ export class EmailFileImporter implements FileImporter {
       return;
     }
 
-    // MIME parsing (single-level) for body + attachments
-    const mime = parseMime(headersRaw, bodyRaw);
-    const bodyText = mime.textBody || mime.htmlBody || '';
+    // MIME parsing (single-level) for body + attachments. `readableBody`
+    // flattens an HTML-only message to text (see email_mime.htmlToText) — the
+    // raw markup it used to hand back was unreadable to every consumer, and to
+    // the receipt detector below.
+    const mime: ParsedMimeResult = parseMime(headersRaw, bodyRaw);
+    const bodyText = readableBody(mime);
+
+    // Is this a receipt / order confirmation / invoice? The generic email
+    // importer has no bulk gate to override (that is gmail.ts), but the
+    // classification still matters: 'receipt' routes to the receipts
+    // destination instead of landing as one more undifferentiated
+    // communication.
+    const isReceipt =
+      receiptImportEnabled() &&
+      receiptHeaderSignal(headers, headers.Subject) !== 'none' &&
+      isLikelyReceipt(headers, headers.Subject, bodyText);
 
     // Participants hang off the email graph as edges (relation 'from'/'to'/'cc')
     // so persistGraph records an item→entity relationship for each — pushed as
@@ -314,19 +333,29 @@ export class EmailFileImporter implements FileImporter {
         return [];
       }
 
+      const kind = attachmentMediaKind(att.mediaType);
+
       return [
         {
           path: extracted,
           filename: att.filename || `attachment-${attIdx}`,
-          type: attachmentMediaKind(att.mediaType),
+          // A non-media attachment on a RECEIPT is the receipt document (the
+          // PDF invoice), not an anonymous 'file'.
+          type: isReceipt && kind === 'file' ? ('receipt_document' as const) : kind,
           mimetype: att.mediaType,
         },
       ];
     });
 
+    // 4000 chars for correspondence, 32000 for a receipt: an itemised order
+    // confirmation IS its body, and a 4k clip cuts the line items and the total
+    // off the end of every multi-item order.
+    const bodyCap = isReceipt ? 32000 : 4000;
+    const receiptFields = isReceipt ? extractReceiptFields(headers, bodyText) : undefined;
+
     const item = {
       id: cleanMsgID ? `email:${cleanMsgID}` : `email:${path.basename(location)}#${index}`,
-      classification: 'email',
+      classification: isReceipt ? 'receipt' : 'email',
       timestamp: ts,
       intermediateLocation: location,
       content: {
@@ -344,8 +373,19 @@ export class EmailFileImporter implements FileImporter {
         Cc: headers.Cc,
         Direction: direction,
         MessageID: cleanMsgID,
-        Text: bodyText ? bodyText.slice(0, 4000) : undefined,
+        Text: bodyText ? bodyText.slice(0, bodyCap) : undefined,
         MediaAttachments: mediaAttachments.length ? mediaAttachments : undefined,
+        // Receipt facts under the CANONICAL commerce keys (push/commerceKeys.ts).
+        Merchant: receiptFields?.merchant,
+        'Order ID': receiptFields?.orderId,
+        Total: receiptFields?.total,
+        Currency: receiptFields?.currency,
+        // The generic email importer has no bulk gate, so every message it
+        // keeps is correspondence it would have kept anyway: a receipt here
+        // ADDS a receipt row and keeps its communications home. See
+        // push/canonical.ts destinationsFor.
+        HumanCorrespondence: isReceipt ? true : undefined,
+        CommunicationType: isReceipt ? 'email' : undefined,
       },
     };
 
@@ -377,7 +417,10 @@ function parseHeaders(raw: string): Record<string, string> {
     }
 
     const key = line.slice(0, idx).trim();
-    const val = line.slice(idx + 1).trim();
+    // decodeHeaderField is a cheap no-op (one .includes('=?') check) unless a
+    // value actually carries a `=?charset?…?=` encoded-word — see gmail.ts's
+    // parseHeaders for why decoding unconditionally here is safe.
+    const val = decodeHeaderField(line.slice(idx + 1).trim());
     if (!map[key]) {
       map[key] = val;
     } else {

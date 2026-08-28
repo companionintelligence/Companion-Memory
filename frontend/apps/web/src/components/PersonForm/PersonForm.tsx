@@ -1,13 +1,16 @@
-import { type ReactNode, useId } from 'react';
+import { type ComponentType, type ReactNode, useId } from 'react';
 
 import { Button, IconButton, Input, Label, Select, Textarea } from '@ci/shadcn';
-import { Plus, Trash2 } from '@ci/shadcn/icons';
+import { Briefcase, Contact as ContactIcon, MapPin, Plus, StickyNote, Trash2, UserRound } from '@ci/shadcn/icons';
+
+import { PersonAvatar } from '@/components/PersonAvatar';
 
 import {
   type PersonAddressDraft,
   type PersonContactDraft,
   type PersonContactKind,
   type PersonDraft,
+  composedName,
   emptyAddress,
   emptyContact,
 } from './personDraft';
@@ -25,18 +28,18 @@ const ADDRESS_LABEL_SUGGESTIONS = ['home', 'work', 'mailing', 'other'];
 
 function Section({
   title,
-  description,
+  icon: Icon,
   children,
 }: {
   title: string;
-  description?: string;
+  icon: ComponentType<{ className?: string; strokeWidth?: number }>;
   children: ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-3">
-      <div>
+    <section className="flex flex-col gap-3 border-t border-border/60 pt-5 first:border-t-0 first:pt-0">
+      <div className="flex items-center gap-2">
+        <Icon className="h-4 w-4 text-muted-foreground" strokeWidth={1.5} />
         <h3 className="text-sm font-semibold">{title}</h3>
-        {description && <p className="text-xs text-muted-foreground">{description}</p>}
       </div>
       {children}
     </section>
@@ -86,6 +89,15 @@ interface Props {
   /** Shown under the name field; set when the caller rejected an empty name. */
   nameError?: string | null;
   disabled?: boolean;
+  /**
+   * Focus "First name" on mount. Right for the modals — the dialog opened
+   * *because* the user is about to type. Wrong for a form that is simply part
+   * of a page: mounting it there scrolls the viewport to this field and, on a
+   * phone, opens the keyboard over the page the user was trying to read.
+   * Defaults on so the modal call sites keep the behaviour they were written
+   * against.
+   */
+  autoFocusName?: boolean;
 }
 
 /**
@@ -96,7 +108,7 @@ interface Props {
  * single field each: a person has a home address *and* a work one, a personal
  * email *and* a work email, and collapsing them loses which is which.
  */
-export function PersonForm({ value, onChange, nameError, disabled }: Props) {
+export function PersonForm({ value, onChange, nameError, disabled, autoFocusName = true }: Props) {
   const uid = useId();
   const genderListId = `${uid}-genders`;
   const pronounListId = `${uid}-pronouns`;
@@ -122,7 +134,7 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
   };
 
   return (
-    <fieldset disabled={disabled} className="flex min-w-0 flex-col gap-6">
+    <fieldset disabled={disabled} className="flex min-w-0 flex-col gap-2">
       <datalist id={genderListId}>
         {GENDER_SUGGESTIONS.map((option) => (
           <option key={option} value={option} />
@@ -144,30 +156,13 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
         ))}
       </datalist>
 
-      <Section title="Identity">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${uid}-name`}>Name</Label>
-          <Input
-            id={`${uid}-name`}
-            value={value.name}
-            autoFocus
-            placeholder="Full name"
-            onChange={(event) => set('name', event.target.value)}
-          />
-          {nameError ? (
-            <p className="text-sm text-destructive">{nameError}</p>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              Leave blank to build it from the first, middle and last name.
-            </p>
-          )}
-        </div>
-
+      <Section title="Identity" icon={UserRound}>
         <div className="grid gap-3 sm:grid-cols-3">
           <Field
             id={`${uid}-first-name`}
             label="First name"
             value={value.firstName}
+            autoFocus={autoFocusName}
             onChange={(next) => set('firstName', next)}
           />
           <Field
@@ -184,7 +179,21 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
           />
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={`${uid}-name`} className="text-xs text-muted-foreground">
+            Display name{' '}
+            <span className="font-normal text-muted-foreground/70">(defaults to first + last)</span>
+          </Label>
+          <Input
+            id={`${uid}-name`}
+            value={value.name}
+            placeholder="Full name"
+            onChange={(event) => set('name', event.target.value)}
+          />
+          {nameError && <p className="text-sm text-destructive">{nameError}</p>}
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Field
             id={`${uid}-nickname`}
             label="Nickname"
@@ -217,11 +226,17 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
         </div>
       </Section>
 
-      <Section title="Contact" description="The first email and the first phone are the preferred ones.">
+      <Section title="Contact" icon={ContactIcon}>
         <div className="flex flex-col gap-2">
+          {/* Two lines on a phone, one from `sm` up. The fixed columns here
+              (type 6rem + label 7rem + remove 2.25rem + gaps) add up to
+              ~17rem, which on a 390px phone left the email/phone input — the
+              only field that actually matters — about three characters wide.
+              `order-*` puts the value under the other three rather than
+              between them once the row wraps. */}
           {value.contacts.map((contact) => (
-            <div key={contact.key} className="flex items-end gap-2">
-              <div className="flex w-24 shrink-0 flex-col gap-1.5">
+            <div key={contact.key} className="flex flex-wrap items-end gap-2">
+              <div className="order-1 flex w-24 shrink-0 flex-col gap-1.5">
                 <Label className="text-xs text-muted-foreground">Type</Label>
                 <Select
                   value={contact.kind}
@@ -237,7 +252,7 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
                 </Select>
               </div>
 
-              <div className="min-w-0 flex-1">
+              <div className="order-4 w-full min-w-0 sm:order-2 sm:w-auto sm:flex-1">
                 <Field
                   id={`${uid}-${contact.key}-value`}
                   label={contact.kind === 'email' ? 'Email address' : 'Phone number'}
@@ -248,7 +263,7 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
                 />
               </div>
 
-              <div className="w-28 shrink-0">
+              <div className="order-2 min-w-0 flex-1 sm:order-3 sm:w-28 sm:flex-none">
                 <Field
                   id={`${uid}-${contact.key}-label`}
                   label="Label"
@@ -262,7 +277,7 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
               <IconButton
                 type="button"
                 variant="ghost"
-                className="mb-0.5 size-9 shrink-0"
+                className="order-3 mb-0.5 size-9 shrink-0 sm:order-4"
                 label={`Remove ${contact.kind}`}
                 onClick={() =>
                   set(
@@ -297,7 +312,7 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
         </div>
       </Section>
 
-      <Section title="Addresses" description="Label them home, work, or anything else that helps.">
+      <Section title="Addresses" icon={MapPin}>
         <div className="flex flex-col gap-3">
           {value.addresses.map((address, index) => (
             <div key={address.key} className="flex flex-col gap-3 rounded-md border border-border/60 p-3">
@@ -328,20 +343,22 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
                 </IconButton>
               </div>
 
-              <Field
-                id={`${uid}-${address.key}-street`}
-                label="Street"
-                value={address.streetAddress}
-                onChange={(next) => updateAddress(address.key, { streetAddress: next })}
-              />
-              <Field
-                id={`${uid}-${address.key}-street-2`}
-                label="Apt, suite, floor"
-                value={address.streetAddress2}
-                onChange={(next) => updateAddress(address.key, { streetAddress2: next })}
-              />
-
               <div className="grid gap-3 sm:grid-cols-2">
+                <Field
+                  id={`${uid}-${address.key}-street`}
+                  label="Street"
+                  value={address.streetAddress}
+                  onChange={(next) => updateAddress(address.key, { streetAddress: next })}
+                />
+                <Field
+                  id={`${uid}-${address.key}-street-2`}
+                  label="Apt, suite, floor"
+                  value={address.streetAddress2}
+                  onChange={(next) => updateAddress(address.key, { streetAddress2: next })}
+                />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <Field
                   id={`${uid}-${address.key}-city`}
                   label="City"
@@ -399,8 +416,8 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
         </div>
       </Section>
 
-      <Section title="Work">
-        <div className="grid gap-3 sm:grid-cols-2">
+      <Section title="Work" icon={Briefcase}>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Field
             id={`${uid}-job-title`}
             label="Job title"
@@ -430,15 +447,24 @@ export function PersonForm({ value, onChange, nameError, disabled }: Props) {
         </div>
       </Section>
 
-      <Section title="Notes">
-        <Field
-          id={`${uid}-avatar-url`}
-          label="Avatar URL"
-          type="url"
-          value={value.avatarUrl}
-          placeholder="https://"
-          onChange={(next) => set('avatarUrl', next)}
-        />
+      <Section title="Notes" icon={StickyNote}>
+        <div className="flex items-end gap-3">
+          {/* Live preview: the same fallback (initials on a deterministic
+              colour) or broken-link handling this URL gets everywhere else
+              it is rendered, shown as it is typed rather than only after
+              saving. */}
+          <PersonAvatar name={composedName(value)} avatarUrl={value.avatarUrl} size="lg" className="mb-1.5" />
+          <div className="min-w-0 flex-1">
+            <Field
+              id={`${uid}-avatar-url`}
+              label="Avatar URL"
+              type="url"
+              value={value.avatarUrl}
+              placeholder="https://"
+              onChange={(next) => set('avatarUrl', next)}
+            />
+          </div>
+        </div>
 
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${uid}-description`} className="text-xs text-muted-foreground">

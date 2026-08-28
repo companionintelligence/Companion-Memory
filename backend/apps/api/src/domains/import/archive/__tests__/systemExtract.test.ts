@@ -65,7 +65,7 @@ function filesUnder(root: string): string[] {
 }
 
 describeIfZip('systemExtract', () => {
-  it('extracts an archive whose entry names are plain ASCII', () => {
+  it('extracts an archive whose entry names are plain ASCII', async () => {
     // Built in-process so CI's node:22 image does not need a `zip` binary.
     const work = scratch();
     const dest = path.join(work, 'dest');
@@ -74,7 +74,7 @@ describeIfZip('systemExtract', () => {
     const archive = path.join(work, 'plain.zip');
     fs.writeFileSync(archive, zipWithoutUtf8Flag('hello.txt', 'hello'));
 
-    const result = systemExtract(archive, dest);
+    const result = await systemExtract(archive, dest);
 
     expect({ ok: result.ok, detail: result.detail }).toEqual({ ok: true, detail: '' });
     expect(fs.readFileSync(path.join(dest, 'hello.txt'), 'utf8')).toBe('hello');
@@ -82,7 +82,7 @@ describeIfZip('systemExtract', () => {
     fs.rmSync(work, { recursive: true, force: true });
   });
 
-  it('extracts a non-ASCII entry name written without the UTF-8 flag', () => {
+  it('extracts a non-ASCII entry name written without the UTF-8 flag', async () => {
     // The exact shape that killed a 2.7GB Google Takeout at 0%.
     //
     // Note it is NOT enough to zip an accented filename with the `zip` binary:
@@ -100,7 +100,7 @@ describeIfZip('systemExtract', () => {
     const archive = path.join(work, 'no-utf8-flag.zip');
     fs.writeFileSync(archive, zipWithoutUtf8Flag(name, '<html></html>'));
 
-    const result = systemExtract(archive, dest, { exclusiveDest: true });
+    const result = await systemExtract(archive, dest, { exclusiveDest: true });
 
     expect(result.ok).toBe(true);
     // Compare on the decoded set rather than the literal name: the extractors
@@ -116,7 +116,7 @@ describeIfZip('systemExtract', () => {
     fs.rmSync(work, { recursive: true, force: true });
   });
 
-  it('extracts non-ASCII names nested under a non-ASCII directory', () => {
+  it('extracts non-ASCII names nested under a non-ASCII directory', async () => {
     // A mangled DIRECTORY component misplaces every file beneath it, so the
     // repair has to fix whole paths rather than basenames — and then clear the
     // mangled directory too, not just its contents.
@@ -136,7 +136,7 @@ describeIfZip('systemExtract', () => {
       ]),
     );
 
-    const result = systemExtract(archive, dest, { exclusiveDest: true });
+    const result = await systemExtract(archive, dest, { exclusiveDest: true });
 
     expect(result.ok).toBe(true);
     expect(filesUnder(dest)).toEqual(
@@ -149,7 +149,7 @@ describeIfZip('systemExtract', () => {
     fs.rmSync(work, { recursive: true, force: true });
   });
 
-  it('reports no name repair for an all-ASCII archive', () => {
+  it('reports no name repair for an all-ASCII archive', async () => {
     // The overwhelmingly common archive. Nothing is at risk, so the pass must
     // cost one central-directory read and report nothing.
     const work = scratch();
@@ -159,7 +159,7 @@ describeIfZip('systemExtract', () => {
     const archive = path.join(work, 'ascii.zip');
     fs.writeFileSync(archive, buildZip([{ name: 'Takeout/plain.txt', contents: 'ascii' }]));
 
-    const result = systemExtract(archive, dest);
+    const result = await systemExtract(archive, dest);
 
     expect(result.ok).toBe(true);
     expect(result.nameRepair).toBeUndefined();
@@ -168,7 +168,7 @@ describeIfZip('systemExtract', () => {
     fs.rmSync(work, { recursive: true, force: true });
   });
 
-  it('extracts a non-ASCII name even when the UTF-8 flag IS set', () => {
+  it('extracts a non-ASCII name even when the UTF-8 flag IS set', async () => {
     // Setting general-purpose bit 11 is the well-formed thing to do, and it
     // does not save you: Debian's unzip picks its charset from the "version
     // made by" host byte and ignores bit 11 entirely, so a correctly-flagged
@@ -180,7 +180,7 @@ describeIfZip('systemExtract', () => {
     const archive = path.join(work, 'flagged.zip');
     fs.writeFileSync(archive, buildZip([{ name: 'Mariña.txt', contents: 'ok', utf8Flag: true }]));
 
-    const result = systemExtract(archive, dest, { exclusiveDest: true });
+    const result = await systemExtract(archive, dest, { exclusiveDest: true });
 
     expect(result.ok).toBe(true);
     expect(filesUnder(dest)).toEqual(['Mariña.txt'.normalize('NFC')]);
@@ -188,7 +188,7 @@ describeIfZip('systemExtract', () => {
     fs.rmSync(work, { recursive: true, force: true });
   });
 
-  it('keeps a partly-extracted tree rather than discarding the whole archive', () => {
+  it('keeps a partly-extracted tree rather than discarding the whole archive', async () => {
     // Measured on a real 3.3GB Google Takeout: `unzip` exited 50 and `ditto`
     // exited 1 on two entries no extractor will take — a name used as both a
     // file and a directory (`Takeout/Drive/Unorganized/config: Not a
@@ -205,7 +205,7 @@ describeIfZip('systemExtract', () => {
     const notAZip = path.join(work, 'broken.zip');
     fs.writeFileSync(notAZip, 'neither extractor can read this');
 
-    const result = systemExtract(notAZip, dest);
+    const result = await systemExtract(notAZip, dest);
 
     expect(result.ok).toBe(true);
     expect(result.partial).toBe(true);
@@ -216,7 +216,7 @@ describeIfZip('systemExtract', () => {
     fs.rmSync(work, { recursive: true, force: true });
   });
 
-  it('reports a cause rather than succeeding on a file that is not an archive', () => {
+  it('reports a cause rather than succeeding on a file that is not an archive', async () => {
     const work = scratch();
     const dest = path.join(work, 'dest');
     fs.mkdirSync(dest, { recursive: true });
@@ -224,7 +224,7 @@ describeIfZip('systemExtract', () => {
     const notAZip = path.join(work, 'notazip.zip');
     fs.writeFileSync(notAZip, 'this is not a zip file');
 
-    const result = systemExtract(notAZip, dest);
+    const result = await systemExtract(notAZip, dest);
 
     expect(result.ok).toBe(false);
     expect(result.detail).not.toHaveLength(0);

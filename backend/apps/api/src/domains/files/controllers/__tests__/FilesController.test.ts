@@ -121,20 +121,36 @@ describe('FilesController.upload — in-batch dedup grouping', () => {
     await expect(controller.upload(ctx, [])).rejects.toThrow('At least one file is required');
   });
 
-  it('passes inventoryCapture/skipDescription/model through to FileService.upload', async () => {
+  it('passes thingCapture/skipDescription/model through to FileService.upload', async () => {
     const { controller, fileService } = makeController();
     fileService.getFileHash.mockResolvedValue('hash-a');
     fileService.upload.mockResolvedValue({ id: 'id-a' });
 
-    await controller.upload(ctx, [multerFile()], 'true', 'true', ' gemma4:e4b ');
+    await controller.upload(ctx, [multerFile()], 'true', undefined, 'true', ' gemma4:e4b ');
 
     expect(fileService.upload).toHaveBeenCalledWith(
       { userId: 'owner-1' },
       expect.objectContaining({
-        inventoryCapture: true,
+        thingCapture: true,
         skipDescription: true,
         model: 'gemma4:e4b',
       }),
+    );
+  });
+
+  // The retired inventory feature's form field. Capture clients live in other
+  // repos, so the old spelling still has to reach the same flag — a silently
+  // ignored field would turn thing capture into a plain upload with no error.
+  it('still honours the deprecated inventoryCapture form field', async () => {
+    const { controller, fileService } = makeController();
+    fileService.getFileHash.mockResolvedValue('hash-a');
+    fileService.upload.mockResolvedValue({ id: 'id-a' });
+
+    await controller.upload(ctx, [multerFile()], undefined, 'true');
+
+    expect(fileService.upload).toHaveBeenCalledWith(
+      { userId: 'owner-1' },
+      expect.objectContaining({ thingCapture: true }),
     );
   });
 });

@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, LessThan, Repository } from 'typeorm';
+import { In, IsNull, LessThan, Repository } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
@@ -24,6 +24,44 @@ import { uploadsRoot } from '../sources/importRoots';
  * a batch consumes them.
  */
 export const UPLOAD_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The statuses whose row names no bytes of its own once its run is gone.
+ *
+ * `staged_sources.run_id` is `ON DELETE SET NULL`, not CASCADE, and that is
+ * deliberate: deleting a run must never take the registry row of bytes that
+ * still exist. But SET NULL applied to EVERY status, so the rows below — one
+ * per completed run, one per released inbox claim — survived their run forever
+ * with nothing left to point at. They are what {@link ImportRetentionService}
+ * deletes alongside the run itself:
+ *
+ *  - `consumed` — the run completed and its bytes went with its scratch tree;
+ *  - `moved` — the bytes were moved INTO that same tree, and the retention
+ *    sweep refuses any run whose tree still exists, so by the time this list is
+ *    read they are gone too. The row also holds `staged_sources_active_path_uq`
+ *    against its path, so keeping it would make an inbox unit whose run was
+ *    retired permanently unclaimable;
+ *  - `released` — an inbox claim already handed back; the unit sits in the
+ *    user's own folder and the path is claimable again;
+ *  - `expired` — a TTL tombstone whose file the purge already deleted.
+ *
+ * The complement is the reason SET NULL exists — but only one status is in it.
+ * A `staged` upload names bytes in the uploads directory right now and has no
+ * run to be retired with in the first place. A `claimed` row does name live
+ * bytes, yet it cannot simply be left behind either: nothing would ever read it
+ * again. So the retirement settles it rather than orphaning it — an UPLOAD goes
+ * back to `staged` (see {@link StagedSourceService.restageOrphanedClaims}), an
+ * INBOX claim is deleted with the run because the row is only a claim on a file
+ * that never left the user's own folder, and the path it held in
+ * `staged_sources_active_path_uq` is claimable again. See
+ * {@link ImportRetentionService.retireRun}.
+ */
+export const SOURCE_STATUSES_SPENT_WITH_RUN = [
+  'consumed',
+  'moved',
+  'released',
+  'expired',
+] as const satisfies readonly StagedSourceStatus[];
 
 /** One row as the Postgres driver hands it back from `RETURNING *`. */
 interface StagedSourceRow {
@@ -192,8 +230,13 @@ export class StagedSourceService {
    *
    * A failed delete puts the row back to `staged` so the next sweep retries it
    * — the property the old file-first ordering was protecting, kept.
+   *
+   * Runs {@link StagedSourceService.restageOrphanedClaims} first, so an upload
+   * that lost its run reaches this sweep at all.
    */
   async purgeExpired(now: Date = new Date()): Promise<number> {
+    await this.restageOrphanedClaims();
+
     const stale = await this.sources.find({
       where: { origin: 'upload', status: 'staged', expiresAt: LessThan(now) },
     });
@@ -237,6 +280,44 @@ export class StagedSourceService {
     }
 
     return reclaimed;
+  }
+
+  /**
+   * Put uploads whose run no longer exists back in the staged pool.
+   *
+   * `run_id` is `ON DELETE SET NULL`, so a `claimed` row can outlive the run
+   * that claimed it, and such a row is a dead end in every direction:
+   * `listStagedUploads` does not show it, `releaseUpload` refuses it, a fresh
+   * `startRun` is told the upload "has already been claimed by another import
+   * run" that no longer exists, {@link StagedSourceService.purgeExpired} reads
+   * only `staged`, and {@link StagedSourceService.dropDirIsLive} counts
+   * `claimed` as live and so holds the bytes out of the orphan sweep too. Row
+   * and archive both, forever. That is what the schema's promise of a backstop
+   * for such a row amounted to before this existed.
+   *
+   * {@link ImportRetentionService.retireRun} does this transactionally with
+   * the run delete, so no code path leaves one behind. This is the floor under
+   * the CONSTRAINT — a restore, an operator's `DELETE`, a future caller — and
+   * it is safe precisely because such a row is unreachable: every reader of a
+   * claim finds it by `run_id` ({@link StagedSourceService.findByRunId}), so
+   * nothing can be part-way through using one.
+   *
+   * `staged` with a fresh window, which is the same answer `release` gives an
+   * upload whose run ended without consuming: the archive is back on the
+   * uploads list, back under the purge, and importable by the same dropId.
+   */
+  private async restageOrphanedClaims(): Promise<void> {
+    const restaged = await this.sources.update(
+      { origin: 'upload', status: 'claimed', runId: IsNull() },
+      { status: 'staged', claimedAt: null, expiresAt: new Date(Date.now() + UPLOAD_TTL_MS) },
+    );
+
+    if ((restaged.affected ?? 0) > 0) {
+      // `warn`: reaching this means a run row went away outside `retireRun`.
+      this.logger.warn('Re-staged uploads whose run no longer exists', {
+        restaged: restaged.affected,
+      });
+    }
   }
 
   /**

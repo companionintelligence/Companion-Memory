@@ -44,4 +44,23 @@ describe('StagedUploadPurgeCron', () => {
     await expect(cron.runOnSchedule()).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalled();
   });
+
+  // The sentence has to be the first argument: LoggerService.resolveArgs takes
+  // a leading Error as the message and puts the second argument under `data`,
+  // so the reversed call logged the raw error text as `msg` and buried the
+  // sentence in `data.message` — this cron's failures then grepped differently
+  // from every sibling cron's.
+  it('logs the failure with the human sentence as the message and the error beside it', async () => {
+    const { cron, sources, logger } = build();
+    const failure = new Error('database is down');
+
+    sources.purgeExpired.mockRejectedValueOnce(failure);
+
+    await cron.runOnSchedule();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Staged upload purge failed; will retry on the next sweep',
+      failure,
+    );
+  });
 });

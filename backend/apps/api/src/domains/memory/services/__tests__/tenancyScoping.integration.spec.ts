@@ -124,7 +124,7 @@ describeWithDb(
       });
       await dataSource.initialize();
 
-      // SHARED: this suite commits rows in ci.entities/ci.inventory/ci.events/
+      // SHARED: this suite commits rows in ci.entities/ci.objects/ci.events/
       // ci.communications/ci.users, which a migration suite may be altering
       // inside its own transaction. See domains/__tests__/support/schemaLock.ts.
       schemaLock = await acquireSchemaWriteLock(dataSource, 'memory/tenancyScoping.integration');
@@ -175,7 +175,7 @@ describeWithDb(
       if (dataSource?.isInitialized) {
         const users = [owner.userId, strangerId];
 
-        // Deleting the ci.entities row cascades ci.inventory/ci.events/
+        // Deleting the ci.entities row cascades ci.objects/ci.events/
         // ci.communications via their entities FK (see each *BaseEntity's
         // doc comment) — one statement cleans every table this suite touched.
         await dataSource.query('DELETE FROM ci.entities WHERE owner_user_id = ANY($1)', [users]);

@@ -56,7 +56,7 @@ export class CommunicationSearchIndexListener {
 
   @OnEvent(CommunicationRemovedEvent, { queue: 'search-index' })
   async indexRemove(payload: CommunicationDeletedPayload) {
-    this.logger.log('Removing person in search index', {
+    this.logger.log('Removing communication in search index', {
       communicationId: payload.communicationId,
     });
 

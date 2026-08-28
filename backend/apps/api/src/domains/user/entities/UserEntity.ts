@@ -7,6 +7,13 @@ export interface OnboardingProgress {
   updatedAt: string;
 }
 
+/**
+ * `ci.users.role` (20250925144200_enhance_users.sql) has existed since before any application
+ * code read it — no field on this entity, no @Roles/@RequireRole guard anywhere — until
+ * {@link AdminOnlyGuard} (MCP server config management) became the first consumer.
+ */
+export type UserRole = 'admin' | 'user' | 'readonly' | 'api_only';
+
 @Entity({ schema: 'ci', name: 'users' })
 export class UserEntity {
   @PrimaryColumn()
@@ -43,6 +50,10 @@ export class UserEntity {
   @Column({ type: 'jsonb', name: 'onboarding_progress', nullable: true })
   onboardingProgress?: OnboardingProgress | null;
 
+  /** See {@link UserRole}. Column default is `'user'`; not nullable at the DB layer. */
+  @Column({ type: 'text', default: 'user' })
+  role!: UserRole;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
@@ -77,6 +88,7 @@ export class UserEntity {
       entityId: entity.entityId,
       onboarded: entity.onboarded,
       onboardedAt: entity.onboardedAt ?? null,
+      role: entity.role,
       timezone: entity.timezone,
       onboardingProgress: entity.onboardingProgress ?? null,
       createdAt: entity.createdAt,

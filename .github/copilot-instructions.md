@@ -18,7 +18,7 @@ Personal database, REST/LLM API, RAG, and HBPE behavioral-prediction engine. The
 
 ## Tech stack
 
-- NestJS 10 (backend)
+- NestJS 11 (backend)
 - React/Vite (frontend)
 - PostgreSQL 18 + pgvector + TimescaleDB + PostGIS
 - Ollama (local LLM / embeddings)
@@ -30,13 +30,14 @@ Personal database, REST/LLM API, RAG, and HBPE behavioral-prediction engine. The
 ## Development
 
 ```bash
-yarn install   # install
-yarn test   # test
+yarn install                       # install
+make dev                           # full per-worktree dev stack (see README.md)
+cd backend/apps/api && yarn test   # run the backend API tests
 ```
 
 ## Database migrations
 
-SQL migration files in `backend/apps/api/db/postgres/migrations/` are hand-written and are the source of truth. Update the TypeORM entities to match.
+SQL migration files in `backend/apps/api/db/postgres/migrations/` are hand-written and are the source of truth (applied via dbmate). Update the TypeORM entities to match.
 
 ## HBPE sidecar
 

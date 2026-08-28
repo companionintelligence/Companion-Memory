@@ -16,6 +16,7 @@ function makeRepo() {
   return {
     update: jest.fn(),
     findOne: jest.fn(),
+    find: jest.fn().mockResolvedValue([]),
     count: jest.fn(),
     create: jest.fn((row: Record<string, unknown>) => row),
     save: jest.fn(async (row: Record<string, unknown>) => row),
@@ -75,6 +76,60 @@ describe('SavedSearchService.update', () => {
     expect(predicate).toEqual({ id: 'id1', userId: 'owner-1' });
     expect(payload.filters).toEqual(filters);
   });
+
+  // ═══ AN ABSENT `tags` MEANS "LEAVE IT ALONE", NOT "CLEAR IT" ═══
+  //
+  // `UpdateSavedSearchInput` makes every field optional, and the edit dialog
+  // used to update `name`/`description`/`filters` without ever selecting
+  // `tags` on its mutation — `assembleTags(data)` was called unconditionally
+  // with `data.tags || []`, so the update wrote an EMPTY array over whatever
+  // tags the row actually had. Renaming a search deleted its tag filter.
+  it('does not touch the tags column when the caller never named tags', async () => {
+    const repo = makeRepo();
+    repo.update.mockResolvedValue({ affected: 1 });
+    const { service } = makeService(repo);
+
+    await service.update(ownerCtx, 'id1', { name: 'renamed' });
+
+    const [, payload] = repo.update.mock.calls[0];
+    expect(payload).not.toHaveProperty('tags');
+  });
+
+  it('does not touch tags even when the query text changes and could carry hashtags', async () => {
+    const repo = makeRepo();
+    repo.update.mockResolvedValue({ affected: 1 });
+    const { service } = makeService(repo);
+
+    // A #hashtag here would previously have been scraped into a rebuilt
+    // (and otherwise emptied) tags array, discarding any non-hashtag tags
+    // the row already had.
+    await service.update(ownerCtx, 'id1', { query: 'lake trip #vacation' });
+
+    const [, payload] = repo.update.mock.calls[0];
+    expect(payload).not.toHaveProperty('tags');
+  });
+
+  it('still writes tags when the caller explicitly names them, hashtags included', async () => {
+    const repo = makeRepo();
+    repo.update.mockResolvedValue({ affected: 1 });
+    const { service } = makeService(repo);
+
+    await service.update(ownerCtx, 'id1', { query: 'lake trip #vacation', tags: ['work'] });
+
+    const [, payload] = repo.update.mock.calls[0];
+    expect(payload.tags).toEqual(expect.arrayContaining(['work', 'vacation']));
+  });
+
+  it('accepts an explicit empty array as "clear the tags", distinct from omitting the field', async () => {
+    const repo = makeRepo();
+    repo.update.mockResolvedValue({ affected: 1 });
+    const { service } = makeService(repo);
+
+    await service.update(ownerCtx, 'id1', { tags: [] });
+
+    const [, payload] = repo.update.mock.calls[0];
+    expect(payload).toHaveProperty('tags', []);
+  });
 });
 
 describe('SavedSearchService.setSharing', () => {
@@ -96,16 +151,57 @@ describe('SavedSearchService.setSharing', () => {
     expect(result).not.toBeNull();
   });
 
-  it('clears the token when disabling', async () => {
+  it('clears the token AND the posture when disabling', async () => {
     const repo = makeRepo();
     repo.update.mockResolvedValue({ affected: 1 });
     repo.findOne.mockResolvedValue({ id: 'id1' });
     const { service } = makeService(repo);
 
-    await service.setSharing(ownerCtx, 'id1', false);
+    await service.setSharing(ownerCtx, 'id1', false, {
+      maxDisclosure: 'count',
+      expiresAt: new Date('2027-01-01'),
+    });
+
+    // The posture belongs to the LINK. Leaving a ceiling or an expiry behind
+    // would mean a later re-share silently inherited a restriction the owner
+    // wrote for a different audience — or, worse, appeared to and did not.
+    const [, payload] = repo.update.mock.calls[0];
+    expect(payload).toEqual({
+      isPublic: false,
+      shareToken: null,
+      shareMaxDisclosure: null,
+      shareExpiresAt: null,
+    });
+  });
+
+  it('stamps the ceiling and the expiry when enabling', async () => {
+    const repo = makeRepo();
+    repo.update.mockResolvedValue({ affected: 1 });
+    repo.findOne.mockResolvedValue({ id: 'id1' });
+    const { service } = makeService(repo);
+    const expiresAt = new Date('2027-01-01T00:00:00.000Z');
+
+    await service.setSharing(ownerCtx, 'id1', true, { maxDisclosure: 'count', expiresAt });
 
     const [, payload] = repo.update.mock.calls[0];
-    expect(payload).toEqual({ isPublic: false, shareToken: null });
+    expect(payload.shareMaxDisclosure).toBe('count');
+    expect(payload.shareExpiresAt).toBe(expiresAt);
+  });
+
+  it('records NO ceiling when the owner declares none, rather than defaulting to full', async () => {
+    const repo = makeRepo();
+    repo.update.mockResolvedValue({ affected: 1 });
+    repo.findOne.mockResolvedValue({ id: 'id1' });
+    const { service } = makeService(repo);
+
+    await service.setSharing(ownerCtx, 'id1', true);
+
+    // Absent and `full` are different statements, and only one of them is
+    // something the owner said. `ceilingForShare` reads NULL as "no ceiling
+    // from this source", which is the pre-existing behaviour of every link.
+    const [, payload] = repo.update.mock.calls[0];
+    expect(payload.shareMaxDisclosure).toBeNull();
+    expect(payload.shareExpiresAt).toBeNull();
   });
 
   it('rotates the token on every re-enable so an old link cannot be resurrected', async () => {
@@ -144,10 +240,35 @@ describe('SavedSearchService.findByShareToken', () => {
 
     await service.findByShareToken('tok');
 
+    // Two branches OR'd: no expiry, or an expiry still in the future.
     const { where } = repo.findOne.mock.calls[0][0];
-    expect(where).toEqual({ shareToken: 'tok', isPublic: true });
-    // The non-scoping is the whole point — the viewer is not the owner.
-    expect(where).not.toHaveProperty('userId');
+    expect(Array.isArray(where)).toBe(true);
+    expect(where).toHaveLength(2);
+
+    for (const branch of where) {
+      expect(branch.shareToken).toBe('tok');
+      expect(branch.isPublic).toBe(true);
+      // The non-scoping is the whole point — the viewer is not the owner.
+      expect(branch).not.toHaveProperty('userId');
+    }
+  });
+
+  it('will not resolve a link whose expiry has passed', async () => {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({ id: 'id1', userId: 'owner-1' });
+    const { service } = makeService(repo);
+    const now = new Date('2026-08-26T12:00:00.000Z');
+
+    await service.findByShareToken('tok', now);
+
+    // The lapse is enforced in SQL, not after the read, so there is no branch
+    // above this that could report "expired" rather than "no such link" — the
+    // two have to stay indistinguishable to the caller.
+    const { where } = repo.findOne.mock.calls[0][0];
+    const [noExpiry, stillLive] = where;
+    expect(noExpiry.shareExpiresAt._type).toBe('isNull');
+    expect(stillLive.shareExpiresAt._type).toBe('moreThan');
+    expect(stillLive.shareExpiresAt._value).toBe(now);
   });
 
   it('returns the raw entity including the owner userId (runSharedSearch needs it)', async () => {
@@ -212,5 +333,60 @@ describe('SavedSearchService.ensureDefaults', () => {
     const rows = repo.save.mock.calls[0][0] as unknown as Array<{ name: string; tags: string[] }>;
     const diet = rows.find((row) => row.name === 'MicroFlesh Diet');
     expect(diet?.tags).toEqual(expect.arrayContaining(['NotBeyondMeat', 'PossibleBurger']));
+  });
+
+  // Every seeded row must be flaggable as a starter, so the frontend can put
+  // it in its own collapsed section instead of mixing it into what the user
+  // thinks they saved themselves.
+  it('marks every inserted row as seeded', async () => {
+    const repo = makeRepo();
+    repo.count.mockResolvedValue(0);
+    const { service } = makeService(repo);
+
+    await service.ensureDefaults(ownerCtx);
+
+    const rows = repo.save.mock.calls[0][0] as unknown as Array<{ isSeed: boolean }>;
+    expect(rows.every((row) => row.isSeed === true)).toBe(true);
+  });
+});
+
+describe('SavedSearchService.findAll', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  function entity(overrides: Partial<Record<string, unknown>>) {
+    return { userId: 'owner-1', name: '', description: null, tags: [], isSeed: false, ...overrides };
+  }
+
+  it('scopes to the caller by default, with no query or isSeed filter', async () => {
+    const repo = makeRepo();
+    const { service } = makeService(repo);
+
+    await service.findAll(ownerCtx);
+
+    expect(repo.find).toHaveBeenCalledWith({ where: { userId: 'owner-1' } });
+  });
+
+  it('filters at the database level by isSeed when asked', async () => {
+    const repo = makeRepo();
+    const { service } = makeService(repo);
+
+    await service.findAll(ownerCtx, { isSeed: true });
+
+    expect(repo.find).toHaveBeenCalledWith({ where: { userId: 'owner-1', isSeed: true } });
+  });
+
+  it('matches query text against name, description or tags, case-insensitively', async () => {
+    const repo = makeRepo();
+    repo.find.mockResolvedValue([
+      entity({ id: '1', name: 'Yoga for the Power Mad' }),
+      entity({ id: '2', name: 'Space Car', description: 'blueprints for a YOGA studio' }),
+      entity({ id: '3', name: 'Weekend trip', tags: ['Yoga'] }),
+      entity({ id: '4', name: 'Groceries' }),
+    ]);
+    const { service } = makeService(repo);
+
+    const result = await service.findAll(ownerCtx, { query: 'yoga' });
+
+    expect(result.map((row) => row.id)).toEqual(['1', '2', '3']);
   });
 });

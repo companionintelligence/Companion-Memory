@@ -101,12 +101,16 @@ export class GraphUtilityService {
    * ========================================================================
    */
 
-  async getNodeById(entityId: string, ownerUserId: string): Promise<GraphNodeEntity | null> {
+  async getNodeById(
+    entityId: string,
+    ownerUserId: string,
+    options: { includeInactive?: boolean } = {},
+  ): Promise<GraphNodeEntity | null> {
     return this.entityRepo.findOne({
       where: {
         entity_id: entityId,
         owner_user_id: ownerUserId,
-        is_active: true,
+        ...(options.includeInactive ? {} : { is_active: true }),
       },
     });
   }

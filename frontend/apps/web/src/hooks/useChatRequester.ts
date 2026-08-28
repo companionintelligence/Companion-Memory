@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { apiKeyHeaders, buildApiUrl } from '@ci/common';
+import { apiKeyHeaders, streamingFetch } from '@ci/common';
 import { useToast } from '@ci/shadcn';
 
 import type { FormData } from '@/components/Chat';
 
-import { useAuth } from './useAuth';
 import { useModel } from './useModel';
+import { useSessionAuth } from './useSessionAuth';
 
 type Opts = {
   threadId: string | null;
@@ -56,7 +56,7 @@ function pipeMonitor(
 }
 
 export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
-  const [{ authToken }] = useAuth();
+  const { headers: sessionHeaders } = useSessionAuth();
   const [{ selectedModel, thinkingEnabled, toolsEnabled, activeModels }] = useModel();
   const { toast } = useToast();
 
@@ -114,10 +114,10 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
       setHasStartedReceiving(false);
 
       try {
-        const res = await fetch(buildApiUrl(`/api/llm/threads/${id}/stream`), {
+        const res = await streamingFetch(`/api/llm/threads/${id}/stream`, {
           headers: {
             ...apiKeyHeaders(),
-            Authorization: `Bearer ${authToken}`,
+            ...sessionHeaders,
           },
           signal: controller.signal,
         });
@@ -146,7 +146,7 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
         setLoading(false);
       }
     },
-    [authToken, detach, openStream],
+    [detach, openStream, sessionHeaders],
   );
 
   const submit = useCallback(
@@ -182,12 +182,15 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
       let success = false;
 
       try {
-        const res = await fetch(buildApiUrl('/api/llm/generate'), {
+        // Always the appliance. On-device LocalLLM is a later opt-in once
+        // `getModelStatus` reports ready — `isAvailable()` is a RAM floor, not
+        // a loaded model, and must not steal traffic from Ollama/vLLM.
+        const res = await streamingFetch('/api/llm/generate', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             ...apiKeyHeaders(),
-            Authorization: `Bearer ${authToken}`,
+            ...sessionHeaders,
           },
           body: JSON.stringify({
             prompt: data.message.trim(),
@@ -229,7 +232,6 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
     },
     [
       activeModels,
-      authToken,
       selectedModel,
       onNewThread,
       toolsEnabled,
@@ -237,20 +239,21 @@ export function useChatRequester({ threadId, onNewThread }: Opts): ReturnType {
       toast,
       detach,
       openStream,
+      sessionHeaders,
     ],
   );
 
   const cancel = useCallback(
     (id: string) => {
-      void fetch(buildApiUrl(`/api/llm/threads/${id}/cancel`), {
+      void streamingFetch(`/api/llm/threads/${id}/cancel`, {
         method: 'POST',
         headers: {
           ...apiKeyHeaders(),
-          Authorization: `Bearer ${authToken}`,
+          ...sessionHeaders,
         },
       });
     },
-    [authToken],
+    [sessionHeaders],
   );
 
   const stop = useCallback(() => {

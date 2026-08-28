@@ -4,7 +4,14 @@ import { Args, Float, ID, Int, Mutation, Parent, Query, Resolver, ResolveField }
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { GraphQueryService, type PlaceKind, PlaceService } from '@ci/domains/memory';
+import {
+  EntityMergeBlockService,
+  GraphQueryService,
+  type PlaceKind,
+  PlaceDuplicateService,
+  PlaceMergeService,
+  PlaceService,
+} from '@ci/domains/memory';
 
 import { PlaceLoader } from '../loaders/PlaceLoader';
 import { PlaceVisitStatsLoader } from '../loaders/PlaceVisitStatsLoader';
@@ -14,8 +21,11 @@ import { DeleteByIdInput } from '../types/DeleteByIdInput';
 import { DeleteByIdPayload } from '../types/DeleteByIdPayload';
 import { EntityTagType } from '../types/EntityTagType';
 import { GlobalUID } from '../types/GlobalUID';
+import { MergePlacesInput } from '../types/MergePlacesInput';
+import { MergePlacesPayload, PlaceMergeCountsType } from '../types/MergePlacesPayload';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PlaceConnection } from '../types/PlaceConnection';
+import { PlaceDuplicatesPayload } from '../types/PlaceDuplicatesPayload';
 import { PlaceEdge } from '../types/PlaceEdge';
 import { PlaceNearType } from '../types/PlaceNearType';
 import { PlaceType } from '../types/PlaceType';
@@ -90,7 +100,85 @@ export class PlaceResolver {
     private readonly placeVisitStatsLoader: PlaceVisitStatsLoader,
     private readonly tagLoader: TagLoader,
     private readonly graphQuery: GraphQueryService,
+    private readonly placeDuplicateService: PlaceDuplicateService,
+    private readonly placeMergeService: PlaceMergeService,
+    private readonly entityMergeBlockService: EntityMergeBlockService,
   ) {}
+
+  /**
+   * Duplicate-place suggestions for the merge review UI: groups of live
+   * Locations sharing a provider place id, or the same name within 150 m.
+   * Suggestions only — merging is `mergePlaces`, and it is a user decision.
+   */
+  @Query(() => PlaceDuplicatesPayload)
+  async placeDuplicates(
+    @Context() context: RequestContext,
+    @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+    @Args('offset', { type: () => Int, nullable: true }) offset?: number,
+  ): Promise<PlaceDuplicatesPayload> {
+    const serviceContext = toServiceContext(context);
+
+    const page = await this.placeDuplicateService.findDuplicateGroups(serviceContext, {
+      limit: limit ?? undefined,
+      offset: offset ?? undefined,
+    });
+
+    return {
+      totalCount: page.totalCount,
+      hasMore: page.hasMore,
+      groups: page.groups.map((group) => ({
+        reason: group.reason,
+        value: group.value,
+        totalPlaces: group.totalPlaces,
+        places: group.places.map((place) => PlaceType.toType(place)),
+      })),
+    };
+  }
+
+  /**
+   * Merge duplicate places into one canonical row: re-points events, position
+   * fixes, child places, things, sightings, receipts and graph edges, folds the
+   * fields, and tombstones the sources. See PlaceMergeService.
+   */
+  @Mutation(() => MergePlacesPayload)
+  async mergePlaces(
+    @Context() context: RequestContext,
+    @Args('input') input: MergePlacesInput,
+  ): Promise<MergePlacesPayload> {
+    const serviceContext = toServiceContext(context);
+
+    const sourceIds = input.sourceIds.map((gid) => GlobalUID.parse('place', gid));
+    const targetId = GlobalUID.parse('place', input.targetId);
+
+    const { target, counts } = await this.placeMergeService.mergePlaces(serviceContext, sourceIds, targetId);
+
+    return {
+      success: true,
+      place: PlaceType.toType(target),
+      counts: PlaceMergeCountsType.toType(counts),
+    };
+  }
+
+  /**
+   * Record that a suggested duplicate group is NOT the same place, so it is
+   * never re-proposed. Every pair in the group is blocked in the
+   * entity-agnostic `ci.entity_merge_blocks`, which `PlaceDuplicateService`
+   * reads back — the same contract as `rejectItemDuplicates`.
+   */
+  @Mutation(() => Boolean, {
+    description: 'Mark a suggested duplicate group as distinct places, so it is never re-proposed',
+  })
+  async rejectPlaceDuplicates(
+    @Context() context: RequestContext,
+    @Args('placeIds', { type: () => [ID] }) placeIds: string[],
+  ): Promise<boolean> {
+    const ids = placeIds.map((gid) => GlobalUID.parse('place', gid));
+    const serviceContext = toServiceContext(context);
+
+    await this.entityMergeBlockService.blockAllPairs(serviceContext, ids, 'user_rejected');
+
+    return true;
+  }
 
   @Mutation(() => PlaceType)
   async createPlace(
@@ -374,6 +462,30 @@ export class PlaceResolver {
       place: PlaceType.toType(place),
       distanceMeters,
     }));
+  }
+
+  /**
+   * Places whose polygon footprint covers a point, most specific first — the
+   * containment half of #1811's "queried with GIS lookups" (#2161). Only places
+   * that carry a boundary can match; a place known as a bare point is not a
+   * container.
+   */
+  @Query(() => [PlaceType])
+  async placesContaining(
+    @Context() context: RequestContext,
+    @Args('latitude', { type: () => Float }) latitude: number,
+    @Args('longitude', { type: () => Float }) longitude: number,
+    @Args('limit', { type: () => Int, nullable: true }) limit?: number,
+  ): Promise<PlaceType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const places = await this.placeService.placesContaining(serviceContext, {
+      lat: latitude,
+      lng: longitude,
+      limit: limit ?? undefined,
+    });
+
+    return places.map((place) => PlaceType.toType(place));
   }
 
   @ResolveField(() => [EntityTagType])

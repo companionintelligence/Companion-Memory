@@ -174,6 +174,12 @@ function makeStage(
     noop as never,
     noop as never,
     noop as never,
+    // The commerce plane — unused by this test's records, but the constructor
+    // takes them.
+    { upsertFromExtraction: jest.fn(async () => undefined) } as never,
+    noop as never,
+    { createMany: jest.fn(async () => undefined) } as never,
+    { upsertForSubjects: jest.fn(async () => 0) } as never,
     { create: jest.fn(async () => undefined) } as never,
     noop as never,
     { ingest: jest.fn(async () => ({ entities: [], errors: [] })) } as never,

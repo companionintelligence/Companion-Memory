@@ -61,7 +61,9 @@ function build(rows: Array<Record<string, unknown>> = []) {
   const repo = {
     find: jest.fn(async () => rows),
     findOne: jest.fn(async () => rows[0] ?? null),
-    update: jest.fn(async () => ({ affected: 1 })),
+    update: jest.fn<Promise<{ affected: number }>, [Record<string, unknown>, unknown]>(async () => ({
+      affected: 1,
+    })),
     delete: jest.fn(async () => ({ affected: 1 })),
     exist: jest.fn<Promise<boolean>, [{ where: { dropId: string } }]>(async () => false),
     // `dropDirIsLive` falls through to a raw EXISTS over the run join when no
@@ -108,8 +110,10 @@ describe('purgeExpired', () => {
 
     // The live run's archive is untouched...
     expect((await stat(filePath)).size).toBe(5);
-    // ...and its claim was never tombstoned.
-    expect(repo.update).toHaveBeenCalledTimes(1);
+    // ...and its claim was never tombstoned: the CAS is the ONLY write aimed at
+    // this row. (The sweep's first statement is the run-less-claim adoption,
+    // which names no id — see `restageOrphanedClaims`.)
+    expect(repo.update.mock.calls.filter(([criteria]) => 'id' in criteria)).toHaveLength(1);
   });
 
   it('puts the row back when the delete fails, so the next sweep retries it', async () => {

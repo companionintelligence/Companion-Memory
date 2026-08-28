@@ -57,7 +57,7 @@ export class ThreadSearchIndexListener {
   @OnEvent(MessageCreatedEvent, { queue: 'search-index' })
   async updateThreadOnMessageCreated(payload: MessageCreatedPayload) {
     this.logger.log('Updating thread in search index', {
-      threadId: payload.messageId,
+      messageId: payload.messageId,
     });
 
     const context = {
@@ -86,9 +86,11 @@ export class ThreadSearchIndexListener {
    * last message was CREATED. An edited message kept its stale indexed text; a
    * deleted one stayed searchable indefinitely.
    *
-   * Both re-derive the thread the same way a new message does. Deletion needs no
-   * separate branch: the message is already gone by the time this runs, so the
-   * upsert simply rebuilds the thread from what survives.
+   * An edit re-derives the thread by looking the message back up. A delete
+   * needs its own branch: `MessageService.findById` filters `canceled: false`,
+   * so it returns null for both a hard delete and a soft delete, and the
+   * message can no longer say which thread it belonged to. `MessageDeletedPayload`
+   * carries `threadId` for exactly that reason.
    */
   @OnEvent(MessageUpdatedEvent, { queue: 'search-index' })
   async updateThreadOnMessageUpdated(payload: MessageUpdatedPayload) {
@@ -103,16 +105,25 @@ export class ThreadSearchIndexListener {
   async updateThreadOnMessageDeleted(payload: MessageDeletedPayload) {
     this.logger.log('Re-indexing thread after a message was deleted', {
       messageId: payload.messageId,
+      threadId: payload.threadId,
     });
 
-    await this.reindexThreadForMessage(payload.messageId);
+    if (!payload.threadId) {
+      this.logger.log('Deleted message has no associated thread, skipping re-index', {
+        messageId: payload.messageId,
+      });
+
+      return;
+    }
+
+    await this.upsertThread({ threadId: payload.threadId });
   }
 
   /**
-   * Re-derive a thread's indexed text from the message that changed.
+   * Re-derive a thread's indexed text from an edited message.
    *
-   * A deleted message no longer resolves, so its thread cannot always be found
-   * this way. That is not an error — it means there is nothing left to re-index
+   * The message can fail to resolve (e.g. concurrently deleted before this
+   * runs). That is not an error — it means there is nothing left to re-index
    * from this event, and the thread's own removal event covers the whole-thread
    * case.
    */

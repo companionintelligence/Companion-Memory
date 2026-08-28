@@ -11,7 +11,7 @@ export const INGEST_KIND_STAGES = {
   events: ['geocode', 'reverse_geocode', 'link_events', 'search_index'],
   communications: ['extract_people', 'link_communications', 'search_index'],
   content: ['search_index'],
-  inventory: ['reverse_inventory', 'search_index'],
+  things: ['reverse_object', 'search_index'],
   browser_activity: ['search_index'],
   position: ['reverse_position', 'estimate_locations', 'search_index'],
 } as const satisfies Record<string, readonly OrchestrateStage[]>;
@@ -29,7 +29,7 @@ export const COALESCE_STAGES: readonly OrchestrateStage[] = [
   'geocode',
   'reverse_geocode',
   'reverse_position',
-  'reverse_inventory',
+  'reverse_object',
   'estimate_locations',
   'search_index',
 ];

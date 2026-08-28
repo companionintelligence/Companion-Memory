@@ -36,6 +36,26 @@ export class EventType implements Node, Taggable {
   @Field(() => Date, { nullable: true })
   endTime!: Date | null;
 
+  @Field(() => String, {
+    nullable: true,
+    description:
+      "Provenance for `startTime`: 'source' | 'user' | 'repaired' | 'ingest', or null for a row " +
+      "written before this column existed. 'ingest' means the value is NOT a real date — the source " +
+      'gave this record no time, and `startTime` carries the import wall clock only because the ' +
+      'column is NOT NULL. A client MUST treat \'ingest\' as "no date" rather than sort or display it ' +
+      'as a real instant (see EventEntity.timeSource).',
+  })
+  timeSource!: string | null;
+
+  @Field(() => String, {
+    nullable: true,
+    description:
+      "How much of `startTime` is meaningful: 'second' | 'minute' | 'day' | 'ambiguous' | 'unknown'. " +
+      "'unknown' pairs with `timeSource = 'ingest'` — no field of the stored instant carries information " +
+      '(see EventEntity.timePrecision).',
+  })
+  timePrecision!: string | null;
+
   @Field(() => Int, { nullable: true })
   durationMinutes!: number | null;
 
@@ -124,6 +144,8 @@ export class EventType implements Node, Taggable {
       eventType: event.eventType,
       startTime: event.startTime,
       endTime: event.endTime,
+      timeSource: event.timeSource,
+      timePrecision: event.timePrecision,
       durationMinutes: event.durationMinutes,
       locationName: event.locationName,
       locationCoordinates: event.locationCoordinates,

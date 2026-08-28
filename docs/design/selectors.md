@@ -3,8 +3,12 @@
 > **Status:** ideation · **Updated:** 2026-08-11  
 > Interactive catalog: **[selectors-catalog.html](selectors-catalog.html)**
 
-Live sketches (click, drag, type) for prompting a person one decision at a time — Feed /
-Prompts / Onboarding / Memory confirmations — instead of open chat walls.
+Live sketches (click, drag, type) for prompting a person one decision at a time — Today /
+Reflections / Onboarding / Memory confirmations — instead of open chat walls. (The two
+surfaces were called Feed and Prompts when this was written; Feed is now embedded in
+**Calendar** at `/calendar`, and Prompts is **Reflections** at `/self/reflections`.
+Both moved again after this doc was written — `/today` and `/memory/reflections`
+still work, as redirects.)
 
 ## Categories in the catalog
 
@@ -21,6 +25,8 @@ Prompts / Onboarding / Memory confirmations — instead of open chat walls.
 | 9 | Graph | Node tap, edge type, lasso, path |
 | 10 | Data | Chart point, memory snippet, forecast slot, diff |
 | 11 | Compound packs | Identify→relate→when, binary→open, conflict triad |
+
+Time is the first catalog category with a code takeoff: Plan overdue reschedule shipped Plan-shaped copies (`WhenSelector`, iOS `PlanWhen`). Shared types (`RelativeDay`, `TimeScope`, `Cadence`) and what not to App-Intent are in [shared-time-selectors.plan.md](../architecture/shared-time-selectors.plan.md).
 
 ## View the page
 

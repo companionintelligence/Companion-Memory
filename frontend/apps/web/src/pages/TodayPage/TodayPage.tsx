@@ -26,13 +26,12 @@ import { SchedulePage } from '@/pages/SchedulePage';
  * PageContent is the scroll container, so nesting it would give the screen two
  * scrollbars and two sets of padding.
  *
- * "Today" rather than "Home": the page opens on a schedule that already carries
- * date navigation, so the name stays true when you page to another week — it is
- * today relative to what you are looking at — and it says what you will find
- * rather than where you are in the app.
+ * "Calendar" rather than "Home": the page opens on a schedule that already
+ * carries date navigation, so the name stays true when you page to another
+ * week, and it says what you will find rather than where you are in the app.
  */
 export function TodayPage() {
-  usePageTitle('Today - Companion Intelligence');
+  usePageTitle('Calendar - Companion Intelligence');
 
   // `schedule.page` used to gate a whole route. It still has to gate the
   // schedule itself, or turning the flag off would quietly stop hiding it —

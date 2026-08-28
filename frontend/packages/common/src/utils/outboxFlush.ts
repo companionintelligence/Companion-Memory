@@ -114,7 +114,12 @@ const DEFAULT_OUTBOX_ROUTES: Record<string, OutboxRoute> = {
   // INDEXABLE_ENTITIES but not in the appliance's BACKFILLABLE_ENTITIES.
   [NOTE_OUTBOX_KIND]: { path: '/api/v1/notes', finishStages: [] },
   communication: { path: '/api/v1/communications' },
-  inventory: { path: '/api/v1/inventory' },
+  thing: { path: '/api/v1/things' },
+  // The kind the retired inventory feature enqueued under. Kept because a
+  // device's local outbox can still hold rows written by an older build; they
+  // flush to the same endpoint the new kind does. Removable once no shipped
+  // client can still be holding one.
+  inventory: { path: '/api/v1/things' },
   'browser-activity': { path: '/api/v1/browser-activity' },
 };
 
@@ -194,7 +199,7 @@ const INGEST_FINISH_STAGE_ORDER = [
   'geocode',
   'reverse_geocode',
   'reverse_position',
-  'reverse_inventory',
+  'reverse_object',
   'estimate_locations',
   'media_dimensions',
   'search_index',

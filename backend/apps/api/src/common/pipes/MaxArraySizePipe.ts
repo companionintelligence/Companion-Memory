@@ -14,7 +14,7 @@ export const MAX_BULK_INPUT_SIZE = 10000;
 /**
  * Param-scoped pipe rejecting an oversized array argument with a 400 before it
  * reaches the resolver. The GraphQL bulk-create mutations
- * (createEvents / createCommunications / createInventoryItems /
+ * (createEvents / createCommunications / createThings /
  * createBrowserActivities) pass their input array through with no built-in
  * size guard, so this is the analogue of class-validator's `@ArrayMaxSize` for a
  * top-level array arg. class-validator is not a dependency of this app (the

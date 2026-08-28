@@ -7,7 +7,6 @@ import { ImportSurface } from '@/pages/ImportPage/ImportPage';
 
 import { ConnectPanel } from './ConnectPanel';
 import { DevicesPanel } from './DevicesPanel';
-import { PathHeader } from './PathHeader';
 import { SOURCE_PATHS, SourcePathTiles, type SourcePath } from './SourcePathTiles';
 import { useSourceCounts } from './useSourceCounts';
 
@@ -24,7 +23,8 @@ import { useSourceCounts } from './useSourceCounts';
  *
  * See `docs/design/sources-ia.md` for the full reasoning, including why the two
  * halves keep addressable URLs and why the empty state is the switch rather
- * than a screen of its own.
+ * than a screen of its own. The switch stays put; the active path scrolls
+ * under it, including Import's header, steps and search.
  */
 export function SourcesPage() {
   const { isFeatureEnabled } = useFeatures();
@@ -66,27 +66,18 @@ export function SourcesPage() {
             each path is for. A title and a paragraph restating all three pushed
             the only actionable thing on the screen below the fold.
 
-            The switch stays put; only the active path scrolls, in its own
-            region. The import path needs that anyway — its wizard pins a step
-            row and a Continue button and scrolls the service list between them,
-            which needs a real ceiling to scroll against. */}
+            The switch stays put; everything under it — path header, import
+            steps, search, catalog — scrolls in one region. Import used to pin
+            those and only scroll the service grid, which left most of the
+            page frozen. */}
         <div className="flex min-h-0 flex-1 flex-col gap-6">
           <SourcePathTiles active={active} counts={counts} paths={paths} />
 
-          {/* Import keeps its own scroll shape — the wizard pins a step row and
-              a Continue button and scrolls the list between them — so its header
-              sits outside that region rather than inside the scroller. */}
-          {active === 'import' ? (
-            <>
-              <PathHeader path="import" />
-              <ImportSurface />
-            </>
-          ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {active === 'connect' && <ConnectPanel />}
-              {active === 'devices' && <DevicesPanel />}
-            </div>
-          )}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            {active === 'import' && <ImportSurface />}
+            {active === 'connect' && <ConnectPanel />}
+            {active === 'devices' && <DevicesPanel />}
+          </div>
         </div>
       </PageContent>
     </>

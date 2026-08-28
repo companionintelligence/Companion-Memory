@@ -35,7 +35,7 @@ import {
  *  3. **Selection never anti-joins the sightings table.** Same ratchet argument
  *     `promote.object` makes: a scan would leave the candidate set the moment
  *     it had observations, so a better extractor could never revisit it.
- *  4. **It mints nothing.** No `ci.inventory` row, no resolution column. A scan
+ *  4. **It mints nothing.** No `ci.objects` row, no resolution column. A scan
  *     says a chair-shaped thing was at a point in a room; it does not say whose.
  */
 

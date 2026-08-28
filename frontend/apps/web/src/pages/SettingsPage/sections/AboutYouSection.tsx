@@ -1,10 +1,30 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button, Card, Textarea } from '@ci/shadcn';
-import { Loader2, UserRound } from '@ci/shadcn/icons';
+import { Loader2, Sparkles, UserRound } from '@ci/shadcn/icons';
 
-import { fetchAboutYou, submitAboutYouCorrection, type AboutYouView } from '@/api/usePersonaCompose';
+import {
+  fetchAboutYou,
+  submitAboutYouCorrection,
+  usePersonaCompose,
+  type AboutYouView,
+} from '@/api/usePersonaCompose';
+import { HowYoudDoItCard } from '@/components/HowYoudDoItCard';
 import { useAuth } from '@/hooks';
+
+/** Keys onboarding's TimeAndPlaceStep writes onto `properties.schedule`. */
+const SCHEDULE_FIELDS: Array<[string, string]> = [
+  ['wake_time', 'Wakes at'],
+  ['sleep_time', 'Sleeps at'],
+  ['work_start', 'Work starts'],
+  ['work_end', 'Work ends'],
+];
+
+const TRUST_MODE_LABELS: Record<string, string> = {
+  cautious: 'Cautious — asks before acting',
+  balanced: 'Balanced',
+  hands_off: 'Hands-off — acts on its own',
+};
 
 export function AboutYouSection() {
   const [{ authToken }] = useAuth();
@@ -14,6 +34,15 @@ export function AboutYouSection() {
   const [correction, setCorrection] = useState('');
   const [saving, setSaving] = useState(false);
   const [savedNote, setSavedNote] = useState<string | null>(null);
+
+  const [task, setTask] = useState('');
+  const [applying, setApplying] = useState(false);
+  const [applyNote, setApplyNote] = useState<string | null>(null);
+  // The follow-up the correction box is currently answering, if any.
+  const [answering, setAnswering] = useState<string | null>(null);
+  const correctionRef = useRef<HTMLTextAreaElement>(null);
+  const [{ loading: composing, error: composeError, result: composed }, { compose, apply, clear }] =
+    usePersonaCompose();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -42,6 +71,7 @@ export function AboutYouSection() {
     try {
       await submitAboutYouCorrection(authToken, trimmed);
       setCorrection('');
+      setAnswering(null);
       setSavedNote('Saved — the next “How you’d do it” will use this.');
       await load();
     } catch {
@@ -49,6 +79,48 @@ export function AboutYouSection() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleCompose = async () => {
+    const trimmed = task.trim();
+    if (!trimmed || composing) {
+      return;
+    }
+
+    setApplyNote(null);
+    try {
+      await compose(trimmed);
+    } catch {
+      // surfaced via composeError
+    }
+  };
+
+  const handleApply = async () => {
+    if (!composed || applying) {
+      return;
+    }
+
+    setApplying(true);
+    setApplyNote(null);
+    try {
+      const { added } = await apply(composed);
+      setApplyNote(
+        added > 0 ? `Added ${added} ${added === 1 ? 'card' : 'cards'} to Possibilities.` : 'Nothing to add.',
+      );
+    } catch {
+      setApplyNote('Could not add to Possibilities.');
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  // Follow-ups are the gaps that kept confidence low. Answering one is a
+  // correction, so send it through the box already wired to that endpoint
+  // rather than adding a second write path.
+  const handleFollowUp = (question: string) => {
+    setAnswering(question);
+    setSavedNote(null);
+    correctionRef.current?.focus();
   };
 
   if (loading) {
@@ -82,14 +154,14 @@ export function AboutYouSection() {
           <h2 className="text-lg font-semibold">About you</h2>
         </div>
         <p className="text-sm text-muted-foreground">
-          How Companion currently understands you — used to personalize “How you’d do it”. Wrong? Correct it
-          below.
+          How Companion currently understands you — used to personalize “How you’d do it”, which you can try
+          below. Wrong? Correct it below.
         </p>
       </div>
 
       {!view?.hasSignal && (
-        <Card className="mb-4 border-dashed">
-          <Card.Content className="p-4 text-sm text-muted-foreground">
+        <Card className="border-dashed py-0">
+          <Card.Content className="px-4 text-sm text-muted-foreground">
             Still thin — answer questions on the Feed, or add a correction below so Companion has something to
             work with.
           </Card.Content>
@@ -137,6 +209,33 @@ export function AboutYouSection() {
         </section>
       )}
 
+      {(view?.schedule || view?.trustMode) && (
+        <section className="mb-6 grid gap-4 sm:grid-cols-2">
+          {view.schedule && (
+            <div>
+              <h3 className="mb-2 text-sm font-medium">Schedule</h3>
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                {SCHEDULE_FIELDS.filter(([key]) => typeof view.schedule?.[key] === 'string').map(
+                  ([key, label]) => (
+                    <li key={key}>
+                      {label}: {view.schedule?.[key] as string}
+                    </li>
+                  ),
+                )}
+              </ul>
+            </div>
+          )}
+          {view.trustMode && (
+            <div>
+              <h3 className="mb-2 text-sm font-medium">Autonomy</h3>
+              <p className="text-sm text-muted-foreground">
+                {TRUST_MODE_LABELS[view.trustMode] ?? view.trustMode}
+              </p>
+            </div>
+          )}
+        </section>
+      )}
+
       {view && view.family.length > 0 && (
         <section className="mb-6">
           <h3 className="mb-2 text-sm font-medium">Family</h3>
@@ -165,12 +264,66 @@ export function AboutYouSection() {
         </section>
       )}
 
+      <section className="mb-6">
+        <h3 className="mb-2 text-sm font-medium">How you’d do it</h3>
+        <p className="mb-2 text-xs text-muted-foreground">
+          Put the profile above to work — paste a task and Companion suggests your approach. Suggest-only;
+          nothing is scheduled.
+        </p>
+        <Textarea
+          value={task}
+          onChange={(e) => setTask(e.target.value)}
+          rows={2}
+          disabled={composing}
+          aria-label="Task to personalize"
+          placeholder="e.g. Plan a calm dinner for friends this week…"
+          className="mb-2"
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            disabled={composing || task.trim().length === 0}
+            onClick={() => void handleCompose()}
+          >
+            {composing ? (
+              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" strokeWidth={1.5} />
+            ) : (
+              <Sparkles className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
+            )}
+            {composing ? 'Personalizing…' : 'How I’d do this'}
+          </Button>
+          {composed && (
+            <Button size="sm" variant="ghost" onClick={clear}>
+              Clear
+            </Button>
+          )}
+          {composeError && <span className="text-xs text-destructive">{composeError}</span>}
+        </div>
+
+        {composed && (
+          <HowYoudDoItCard
+            className="mt-4 max-w-none"
+            result={composed}
+            applying={applying}
+            applyNote={applyNote}
+            onApply={() => void handleApply()}
+            onFollowUp={handleFollowUp}
+          />
+        )}
+      </section>
+
       <section>
         <h3 className="mb-2 text-sm font-medium">Something wrong?</h3>
         <p className="mb-2 text-xs text-muted-foreground">
           Tell Companion what to correct. This becomes a first-person answer used in the next personalization.
         </p>
+        {answering && (
+          <p className="mb-2 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground">
+            Answering: {answering}
+          </p>
+        )}
         <Textarea
+          ref={correctionRef}
           value={correction}
           onChange={(e) => setCorrection(e.target.value)}
           rows={3}

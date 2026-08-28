@@ -15,7 +15,12 @@ interface CalendarOptions {
 
 /** One parsed VEVENT, with the same stable id as the importer would assign. */
 export interface ParsedIcsEvent {
-  /** items.id — UID when present, otherwise `ics:<basename>:<sig>`. */
+  /**
+   * items.id — the VEVENT's own UID when present, otherwise
+   * `ics:<basename>:<sig>`; suffixed `#<RECURRENCE-ID>` when the block is a
+   * modified instance of a series rather than its master (RFC 5545 §3.8.4.4,
+   * where UID alone does NOT identify such a block).
+   */
   id: string;
   summary: string;
   description: string;
@@ -89,7 +94,49 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
     // we can detect DTSTART's `VALUE=DATE` (all-day) — the value-only `map`
     // can't distinguish midnight-UTC from a date-only event after parsing.
     const paramsMap: Record<string, string> = {};
+    // RFC 5545 §3.6.1 nests sub-components INSIDE the VEVENT — today only
+    // VALARM (§3.6.6) is legal there — and every Apple/Google export emits the
+    // alarm AFTER the event's own properties. Folding the whole block into one
+    // flat last-wins map therefore handed the ALARM every property name it
+    // shares with its parent, and it always wins because it comes last:
+    //
+    //   DESCRIPTION  the alarm's `This is an event reminder` boilerplate
+    //                replaced the event's real body,
+    //   UID          the alarm's UID became the event's `items.id`, so the
+    //                event was stored under its reminder's identity (and an
+    //                event with two alarms took whichever came last),
+    //   SUMMARY /    legal on an ACTION:EMAIL alarm (§3.6.6) and equally
+    //   ATTENDEE /   clashing — not present in the reference corpus, but the
+    //   ATTACH       same bug waiting for a different exporter.
+    //
+    // On the reference Apple export — 1,143 VEVENTs, 1,136 carrying a VALARM —
+    // that destroyed 996 real event descriptions and re-keyed 1,136 events onto
+    // their reminder's UID.
+    //
+    // The depth counter is deliberately generic rather than a VALARM special
+    // case: it costs the same, and a sub-component this parser has never seen
+    // must not be able to reintroduce the bug. BEGIN/END lines themselves are
+    // dropped (they used to land in the map as `BEGIN`/`END`, unread by anyone).
+    let depth = 0;
     for (const ln of lines) {
+      if (/^BEGIN:/i.test(ln)) {
+        depth += 1;
+
+        continue;
+      }
+
+      if (/^END:/i.test(ln)) {
+        // Clamped: a truncated export missing a BEGIN must not push the depth
+        // negative and start folding the rest of the alarm into the event.
+        depth = Math.max(0, depth - 1);
+
+        continue;
+      }
+
+      if (depth > 0) {
+        continue;
+      }
+
       const m = ln.match(/^([^:;]+)(;[^:]*)?:(.*)$/);
       if (!m) {
         continue;
@@ -133,13 +180,43 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
     // sig hashes the RAW (still-escaped) summary/location/description (cid
     // markers included) so ids of rows imported before the cid extraction —
     // and before TEXT-unescaping — existed stay stable across re-imports.
+    // "Raw" means un-unescaped, NOT un-stripped: these now read the event's own
+    // properties, because `map` no longer carries its VALARM's. See the re-key
+    // note under the id below. Keeping the pre-strip values here — hashing the
+    // alarm boilerplate purely to preserve the old ids — was the alternative,
+    // and it would have kept a real collision alive: two UID-less events on the
+    // same DTSTART whose only difference WAS their description hash to the same
+    // sig once the identical boilerplate replaces both, and one is dropped.
     const sig = crypto
       .createHash('sha1')
       .update(
         [map['DTSTART'] || '', map['DTEND'] || '', rawSummary, rawLocation || '', rawDescription].join('\0'),
       )
       .digest('hex');
-    const id = uid && uid.trim() ? uid : `ics:${path.basename(fpath)}:${sig}`;
+    // Both halves of the id changed with the nested-component fix above, and
+    // both are RE-KEYS for any calendar already imported by the old parser:
+    //
+    //   `uid` is now the VEVENT's own UID rather than its last VALARM's, and
+    //   `sig` now hashes the event's own SUMMARY/LOCATION/DESCRIPTION rather
+    //   than the alarm boilerplate that overwrote them.
+    //
+    // Accepted deliberately. The old ids were the reminder's identity, not the
+    // event's: they change every time the calendar app regenerates an alarm,
+    // and two UID-less events whose real descriptions differed collapsed to one
+    // `sig` once the identical boilerplate replaced both. A re-import after
+    // this fix lands the events under their true ids; the pre-fix rows keep the
+    // alarm ids and are what migration
+    // 20260821024635_clear_ics_valarm_boilerplate_descriptions repairs.
+    const baseId = uid && uid.trim() ? uid : `ics:${path.basename(fpath)}:${sig}`;
+    // RFC 5545 §3.8.4.4: a modified instance of a recurring series REPEATS the
+    // master's UID and is distinguished only by RECURRENCE-ID. Keying on UID
+    // alone would collapse a series onto one row — 12 blocks across 2 series in
+    // the reference export, of which 10 would be lost to
+    // `events_source_triple_uniq`. The old parser hid this because each block
+    // was keyed on its own alarm's UID. The master keeps the bare UID, so a
+    // calendar that never had an override is not re-keyed a second time.
+    const recurrenceId = (map['RECURRENCE-ID'] || '').trim();
+    const id = recurrenceId ? `${baseId}#${recurrenceId}` : baseId;
     out.push({
       id,
       summary,

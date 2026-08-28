@@ -26,6 +26,7 @@ from ci.hbpe.model.checkpoints import (
     HMT_CALIBRATED,
     HMT_FP32_ONNX,
     HMT_INT8_ONNX,
+    int8_is_servable,
     model_exists,
     user_ckpt_dir,
 )
@@ -98,9 +99,12 @@ def build_histogram(
     served = (model_version or "").lower()
     # Occupancy baselines are a real forecast. The HTTP layer used to pass
     # COLD_START whenever no HMT checkpoint existed, which greyed a working B1
-    # strip. Keep pipeline-step strings (BOOTSTRAP:…) only when we are not
-    # already serving b0/b1.
-    if still_learning and served in {"b0", "b1"}:
+    # strip. Promote COLD_START → READY while serving b0/b1, but never clobber a
+    # live pipeline step (NIGHTLY:train / BOOTSTRAP:label) — those must stay
+    # visible for the Forecast ETA line.
+    if _is_pipeline_step(system_status):
+        pass
+    elif still_learning and served in {"b0", "b1"}:
         system_status = "READY"
     elif system_status is None:
         if still_learning:
@@ -113,7 +117,7 @@ def build_histogram(
     if user_id:
         _log_prediction(user_id, now, horizon_start, buckets, model_version)
 
-    return {
+    payload: dict = {
         "horizon": horizon,
         "generated_at": now.isoformat() + "Z",
         "system_status": system_status,
@@ -121,9 +125,28 @@ def build_histogram(
         "still_learning": still_learning,
         "buckets": buckets,
     }
+    progress = _pipeline_progress(user_id)
+    if progress:
+        payload["pipeline_eta_seconds"] = progress.get("eta_seconds")
+        payload["pipeline_detail"] = progress.get("detail")
+    return payload
 
 
 # ── Prediction logging ─────────────────────────────────────────────────────────
+
+
+def _is_pipeline_step(status: str | None) -> bool:
+    if not status:
+        return False
+    return status.startswith("NIGHTLY:") or status.startswith("BOOTSTRAP:")
+
+
+def _pipeline_progress(user_id: str | None) -> dict | None:
+    if not user_id:
+        return None
+    from ci.hbpe.functions import pipeline_progress
+
+    return pipeline_progress(user_id)
 
 
 def _log_prediction(
@@ -174,7 +197,10 @@ def _model_version(user_id: str | None = None) -> str:
     if not user_id:
         return "unknown"
     ckpt_dir = user_ckpt_dir(user_id)
-    for name in (HMT_INT8_ONNX, HMT_FP32_ONNX, HMT_CALIBRATED):
+    names = (HMT_INT8_ONNX, HMT_FP32_ONNX, HMT_CALIBRATED)
+    for name in names:
+        if name == HMT_INT8_ONNX and not int8_is_servable(user_id):
+            continue
         p = ckpt_dir / name
         if p.exists():
             return f"{name}@{int(p.stat().st_mtime)}"

@@ -29,8 +29,10 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from ci.hbpe.model.checkpoints import (
     HMT_CKPT,
     L0_MAE_CKPT,
+    architecture_fingerprint,
     l1_vocab_fingerprint,
     user_ckpt_dir,
+    write_architecture_stamp,
 )
 from ci.hbpe.model.dataset import TokenStreamDataset
 from ci.hbpe.model.transformer import HMTModel, L0MAEModel
@@ -54,6 +56,23 @@ WEIGHT_DECAY = 0.01
 
 # Tokens that are never masked (structural tokens)
 _NO_MASK = {SOD_IDX, EOD_IDX, PAD_IDX}
+
+
+def _note_train_progress(
+    user_id: str, phase: str, epoch: int, n_epochs: int
+) -> None:
+    """Surface epoch progress on the Forecast strip (train can take ~an hour)."""
+    try:
+        from ci.hbpe.functions import update_pipeline_progress
+
+        update_pipeline_progress(
+            user_id,
+            done=epoch,
+            total=n_epochs,
+            detail=f"{phase} epoch {epoch} of {n_epochs}",
+        )
+    except Exception:
+        pass
 
 
 def train_l0_mae(
@@ -92,6 +111,7 @@ def train_l0_mae(
     patience_counter = 0
 
     for epoch in range(1, N_EPOCHS + 1):
+        _note_train_progress(user_id, "pretrain", epoch, N_EPOCHS)
         train_loss = _run_epoch(
             model, train_ds, vocab, device, optimiser, training=True
         )
@@ -110,6 +130,7 @@ def train_l0_mae(
                     "model_state": model.state_dict(),
                     "vocab_size": len(vocab),
                     "val_loss": best_val_loss,
+                    "architecture": architecture_fingerprint(),
                 },
                 ckpt_path,
             )
@@ -306,6 +327,7 @@ def train_hmt_joint(
     patience_ctr = 0
 
     for epoch in range(1, N_EPOCHS + 1):
+        _note_train_progress(user_id, "train", epoch, N_EPOCHS)
         tr_loss = _run_joint_epoch(
             model, train_ds, l0_vocab, l1_vocab, device, optimiser, training=True
         )
@@ -324,10 +346,12 @@ def train_hmt_joint(
                     "l0_vocab_size": len(l0_vocab),
                     "l1_vocab_size": len(l1_vocab),
                     "l1_vocab_fingerprint": l1_fp,
+                    "architecture": architecture_fingerprint(),
                     "val_loss": best_val,
                 },
                 ckpt_path,
             )
+            write_architecture_stamp(user_id)
             log.info(
                 "Epoch %d/%d  train=%.4f  val=%.4f  ✓ saved",
                 epoch,

@@ -1,6 +1,7 @@
 import type { Point } from 'typeorm';
 import { z } from 'zod';
 
+import type { ObjectLifecycleState, Item } from './entities/ItemEntity';
 import type {
   ObservationBoundingBox,
   ObservationLabelSource,
@@ -8,6 +9,7 @@ import type {
   ObservationSourceKind,
 } from './entities/ObjectObservationEntity';
 import type { PlaceKind } from './entities/PlaceEntity';
+import type { ReceiptChannel, ReceiptExtractionState } from './entities/ReceiptEntity';
 import { type NormalizedFieldMap, type PropertiesBag } from './normalizedProperties';
 import type { AcquisitionMethod, UnitSystem } from './physicalProperties';
 
@@ -19,6 +21,7 @@ export const createContentSchema = z.object({
   mimetype: z.string().optional(),
   external_id: z.string().optional(),
   source_url: z.string().optional(),
+  connection_id: z.string().uuid().nullable().optional(),
   user_id: z.string().optional(),
   event_id: z.string().optional(),
 });
@@ -31,6 +34,7 @@ export const updateContentSchema = z.object({
   mimetype: z.string().optional(),
   external_id: z.string().optional(),
   source_url: z.string().optional(),
+  connection_id: z.string().uuid().nullable().optional(),
   user_id: z.string().optional(),
   event_id: z.string().optional(),
 });
@@ -43,6 +47,16 @@ export interface CreateEventDto {
   category?: string;
   start_time: Date;
   end_time?: Date;
+  /**
+   * Provenance for `start_time` — the `TIME_SOURCES` vocabulary declared in
+   * pipeline/stages/clean/TemporalRepairStage (`source` | `user` | `repaired` |
+   * `ingest`). A writer that stamps an instant it has no evidence for MUST send
+   * `'ingest'` here, so the row says so from the moment it exists rather than
+   * from whenever a sweep next visits it.
+   */
+  time_source?: string;
+  /** How much of `start_time` is meaningful — `TIME_PRECISIONS` (…|`unknown`). */
+  time_precision?: string;
   location_name?: string;
   location_entity_id?: string;
   location_coordinates?: Point;
@@ -51,6 +65,8 @@ export interface CreateEventDto {
   source_type?: string;
   source_system?: string;
   source_id?: string;
+  /** The connection whose sync produced this event; null for manual/imported/predicted. */
+  connection_id?: string | null;
   confidence_score?: number;
   is_recurring?: boolean;
   recurrence_pattern?: Record<string, unknown>;
@@ -98,6 +114,8 @@ export interface UpdateEventDto {
   source_type?: string;
   source_system?: string;
   source_id?: string;
+  /** The connection whose sync produced this event; null for manual/imported/predicted. */
+  connection_id?: string | null;
   confidence_score?: number;
   is_recurring?: boolean;
   recurrence_pattern?: Record<string, unknown>;
@@ -179,6 +197,8 @@ export interface CreateContentDto {
   source_type?: string;
   source_system?: string;
   source_id?: string;
+  /** The connection whose sync produced this row; null for uploads/imports. */
+  connection_id?: string | null;
   event?: {
     id: string;
   };
@@ -197,6 +217,15 @@ export interface UpdateContentDto {
   external_id_kind?: 'file' | 'external_uri';
   source_url?: string;
   source_data?: Record<string, unknown>;
+  // Provenance triple (see CreateContentDto). Updatable so a row written
+  // before its connector keyed on the triple can be claimed by it in place —
+  // the Facebook transforms migrate their pre-triple photo/video rows this way
+  // rather than minting a second row per object.
+  source_type?: string;
+  source_system?: string;
+  source_id?: string;
+  /** The connection whose sync produced this row; null for uploads/imports. */
+  connection_id?: string | null;
   event?: {
     id: string;
   };
@@ -334,7 +363,25 @@ export interface CreateItemDto extends PhysicalItemPropertiesDto {
   identityConfidence?: number;
   images?: string[];
   metadata?: Record<string, unknown>;
-  // Provenance triple for idempotent re-ingest (see inventory_source_triple_uniq).
+
+  // ---------------------------------------------------------------------------
+  // Object identity (migration 20260803223025). ALL OPTIONAL, and omitting every
+  // one of them must reproduce the pre-object-identity write byte for byte —
+  // the importer and every existing caller pass none of these.
+  // ---------------------------------------------------------------------------
+
+  /** The catalog model this unit is an instance of. */
+  productId?: string | null;
+  acquisitionReceiptId?: string | null;
+  /** The receipt line this unit was minted from. */
+  acquisitionLineItemId?: string | null;
+  /** Queryable ownership state; the schema defaults it to 'active'. */
+  lifecycleState?: ObjectLifecycleState;
+  /** Last confirmed sighting, denormalized from ci.object_observations. */
+  lastSeenAt?: Date | null;
+  lastSeenPlaceEntityId?: string | null;
+
+  // Provenance triple for idempotent re-ingest (see objects_source_triple_uniq).
   sourceType?: string;
   sourceSystem?: string;
   sourceId?: string;
@@ -355,6 +402,14 @@ export interface UpdateItemDto extends PhysicalItemPropertiesDto {
   quantity?: number;
   images?: string[];
   metadata?: Record<string, unknown> | undefined;
+
+  // Object identity — same optionality contract as CreateItemDto.
+  productId?: string | null;
+  acquisitionReceiptId?: string | null;
+  acquisitionLineItemId?: string | null;
+  lifecycleState?: ObjectLifecycleState;
+  lastSeenAt?: Date | null;
+  lastSeenPlaceEntityId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +517,200 @@ export interface FindObjectObservationsFilter {
   offset?: number;
 }
 
+// ---------------------------------------------------------------------------
+// Product models — the catalog half of the product/instance split
+// ---------------------------------------------------------------------------
+
+/**
+ * A catalog model as callers supply it.
+ *
+ * `identityConfidence` is deliberately not defaulted here: the column defaults
+ * to 1.0, which reads as ground truth to HBPE and RAG, so anything DERIVED (a
+ * receipt line, a vision guess) has to say so explicitly. See the constants on
+ * {@link ProductModelService}.
+ */
+export interface CreateProductModelDto {
+  id?: string;
+  title: string;
+  brand?: string | null;
+  manufacturer?: string | null;
+  modelNumber?: string | null;
+  category?: string | null;
+  subcategory?: string | null;
+  productType?: string | null;
+  description?: string | null;
+  /** Variant AXES only ({color, capacity, size}) — never descriptive specs. */
+  variantAttributes?: Record<string, unknown>;
+  spec?: Record<string, unknown>;
+  /** Integer MINOR units of `currency`. Never a float of dollars. */
+  msrpMinor?: number | null;
+  currency?: string | null;
+  imageContentId?: string | null;
+  manualContentIds?: string[] | null;
+  isDigital?: boolean;
+  identityConfidence?: number;
+  productEntityId?: string | null;
+  metadata?: Record<string, unknown>;
+  // Provenance triple for idempotent re-ingest (product_models_source_triple_uniq).
+  sourceType?: string | null;
+  sourceSystem?: string | null;
+  sourceId?: string | null;
+}
+
+/** A patch to a catalog model. Absent keys are left alone; explicit null clears. */
+export type UpdateProductModelDto = Partial<Omit<CreateProductModelDto, 'id'>>;
+
+/** Scoped read filter for {@link ProductModelService.find}. */
+export interface FindProductModelsFilter {
+  /** Case-insensitive exact match on the trimmed brand. */
+  brand?: string;
+  category?: string;
+  subcategory?: string;
+  productType?: string;
+  isDigital?: boolean;
+  /** Case-insensitive substring of the title. */
+  titleContains?: string;
+  limit?: number;
+  offset?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Receipts — purchase evidence and the line items minted from it
+// ---------------------------------------------------------------------------
+
+/** A receipt header as callers supply it. Money is integer minor units throughout. */
+export interface CreateReceiptDto {
+  id?: string;
+  merchantName?: string | null;
+  merchantEntityId?: string | null;
+  placeEntityId?: string | null;
+  purchasedAt?: Date | null;
+  currency?: string | null;
+  subtotalMinor?: number | null;
+  taxMinor?: number | null;
+  tipMinor?: number | null;
+  shippingMinor?: number | null;
+  discountMinor?: number | null;
+  totalMinor?: number | null;
+  paymentMethod?: string | null;
+  /** Last four digits ONLY. A full card number is never stored. */
+  paymentLast4?: string | null;
+  orderNumber?: string | null;
+  channel?: ReceiptChannel | null;
+  documentContentId?: string | null;
+  sourceFileId?: string | null;
+  sourceMessageId?: string | null;
+  extractionState?: ReceiptExtractionState;
+  extractionConfidence?: number | null;
+  extractionModel?: string | null;
+  extractionError?: string | null;
+  rawText?: string | null;
+  eventId?: string | null;
+  metadata?: Record<string, unknown>;
+  sourceType?: string | null;
+  sourceSystem?: string | null;
+  sourceId?: string | null;
+}
+
+/** A patch to a receipt header. */
+export type UpdateReceiptDto = Partial<Omit<CreateReceiptDto, 'id'>>;
+
+/**
+ * One line as callers supply it.
+ *
+ * `lineNumber` is 1-based and STABLE: it is half of the natural key
+ * `(receipt_id, line_number)`, so re-extracting the same document must produce
+ * the same numbering or lines fork instead of updating in place.
+ */
+export interface ReceiptLineItemInput {
+  lineNumber: number;
+  description: string;
+  quantity?: number;
+  unitPriceMinor?: number | null;
+  totalPriceMinor?: number | null;
+  currency?: string | null;
+  productId?: string | null;
+  brand?: string | null;
+  modelNumber?: string | null;
+  category?: string | null;
+  /** FALSE for ebooks, subscriptions and gift cards. Only physical lines mint units. */
+  isPhysical?: boolean;
+  /**
+   * Identifiers printed on (or attached to) the line — `{gtin: '0123…', asin: 'B0…'}`.
+   * Promoted into `ci.object_identifiers` by
+   * {@link ReceiptService.upsertFromExtraction}; never written verbatim.
+   */
+  identifierCodes?: Record<string, string | null | undefined>;
+  /** Distinct serial numbers supplied by the line. N serials mint N units. */
+  serials?: string[];
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * A whole extracted receipt: the header plus its lines, as one transactional
+ * unit. See {@link ReceiptService.upsertFromExtraction}.
+ */
+export interface ReceiptExtraction extends CreateReceiptDto {
+  lines: ReceiptLineItemInput[];
+  /**
+   * Where the claims came from. Decides the confidence written onto promoted
+   * identifiers: an OCR read of a crumpled receipt is not a retailer's own
+   * order feed.
+   */
+  extractionSource?: 'ocr' | 'structured';
+  /** Skip the minting step (import backfills that only want the evidence). */
+  skipMint?: boolean;
+}
+
+/** Scoped, keyset read filter for {@link ReceiptService.find}. */
+export interface FindReceiptsFilter {
+  merchantName?: string;
+  merchantEntityId?: string;
+  placeEntityId?: string;
+  extractionState?: ReceiptExtractionState;
+  purchasedFrom?: Date;
+  purchasedTo?: Date;
+  limit?: number;
+  /**
+   * Keyset cursor: the `(purchasedAt, id)` of the last row of the previous
+   * page. Strictly newer-than-exclusive, matching the DESC sort.
+   */
+  afterPurchasedAt?: Date | null;
+  afterId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Owned units — the keyset read the things list needs
+// ---------------------------------------------------------------------------
+
+/** Scoped filter for {@link ItemService.findPage}. */
+export interface FindItemsFilter {
+  category?: string;
+  subcategory?: string;
+  /** Case-insensitive exact match on the trimmed brand. */
+  brand?: string;
+  productId?: string;
+  lifecycleState?: ObjectLifecycleState;
+  isDigital?: boolean;
+  acquiredFrom?: Date;
+  acquiredTo?: Date;
+}
+
+/** Keyset cursor for {@link ItemService.findPage}: `(createdAt, id)` DESC. */
+export interface ItemKeyset {
+  limit?: number;
+  afterCreatedAt?: Date | null;
+  afterId?: string | null;
+}
+
+/** One page of owned units, newest first. */
+export interface ItemPage {
+  items: Item[];
+  hasMore: boolean;
+  /** Cursor to pass back as `afterCreatedAt`/`afterId`; null when the page is the last. */
+  nextCursor: { createdAt: Date; id: string } | null;
+}
+
 export interface CreatePersonDto {
   id?: string;
   name?: string;
@@ -469,7 +718,6 @@ export interface CreatePersonDto {
   searchContent?: string;
   linkedId?: string;
   linkedTable?: string;
-  lastAccessed?: Date;
   properties?: {
     email?: string;
     firstName?: string;
@@ -488,7 +736,6 @@ export interface UpdatePersonDto {
   searchContent?: string;
   linkedId?: string;
   linkedTable?: string;
-  lastAccessed?: Date;
   properties?: {
     email?: string;
     firstName?: string;
@@ -703,7 +950,6 @@ export interface CreateConceptDto {
   searchContent?: string;
   linkedId?: string | null;
   linkedTable?: string | null;
-  lastAccessed?: Date;
   properties?: Record<string, unknown>;
 }
 
@@ -713,7 +959,6 @@ export interface UpdateConceptDto {
   searchContent?: string;
   linkedId?: string | null;
   linkedTable?: string | null;
-  lastAccessed?: Date;
   properties?: Record<string, unknown>;
 }
 
@@ -746,6 +991,8 @@ export interface CreateCommunicationDto {
   from_entity_id?: string;
   to_entity_ids?: string[];
   participants_metadata?: Record<string, unknown>;
+  // Catch-all for whatever the parser set that has no dedicated column.
+  metadata?: Record<string, unknown>;
   subject?: string;
   content: string;
   attachments?: unknown[];
@@ -798,6 +1045,9 @@ export interface UpdateCommunicationDto {
   from_entity_id?: string;
   to_entity_ids?: string[];
   participants_metadata?: Record<string, unknown>;
+  // Replaces the whole document (no patch semantics), like content's
+  // source_data: a connector re-sync carries the complete set.
+  metadata?: Record<string, unknown>;
   subject?: string;
   content: string;
   attachments?: unknown[];
@@ -857,6 +1107,7 @@ const createEventSchemaRoot = z.object({
   source_type: z.string().optional(),
   source_system: z.string().optional(),
   source_id: z.string().optional(),
+  connection_id: z.string().uuid().nullable().optional(),
   confidence_score: z.number().optional(),
   is_recurring: z.boolean().optional(),
   recurrence_pattern: z.record(z.unknown()).optional(),
@@ -900,6 +1151,7 @@ export const updateEventSchema = z.object({
   source_type: z.string().optional(),
   source_system: z.string().optional(),
   source_id: z.string().optional(),
+  connection_id: z.string().uuid().nullable().optional(),
   confidence_score: z.number().optional(),
   is_recurring: z.boolean().optional(),
   recurrence_pattern: z.record(z.unknown()).optional(),

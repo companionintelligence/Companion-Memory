@@ -1,0 +1,1 @@
+export { ScanBarcodeModal } from './ScanBarcodeModal';

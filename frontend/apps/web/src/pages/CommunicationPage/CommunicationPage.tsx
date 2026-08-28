@@ -111,8 +111,8 @@ export function CommunicationPage() {
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <div className="md:col-span-2">
-            {/* The drawer's field set + metadata rows, so "Open full page" keeps
-                the subject/content editor and finally shows the timestamp. */}
+            {/* The drawer's field set + metadata rows, so reaching this route
+                directly keeps the subject/content editor and shows the timestamp. */}
             <EntityFieldsCard
               className="h-full"
               title="Message"

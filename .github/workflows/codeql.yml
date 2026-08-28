@@ -1,0 +1,49 @@
+name: CodeQL
+
+# Dispatch-only. This private repo does not have GitHub Code Security, so a
+# SARIF upload 403s (`Code Security must be enabled for this repository to use
+# code scanning`) and the job goes red. Push/PR/cron triggers were added in
+# #2261 and failed every run; do not restore them until Code Security is on
+# and `upload` below is flipped back to true.
+#
+#   gh workflow run codeql.yml --ref <branch>
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      packages: read
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-and-quality
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+          # Analysis still runs. Upload is what 403s without Code Security.
+          upload: false

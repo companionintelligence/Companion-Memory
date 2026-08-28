@@ -8,6 +8,15 @@ export abstract class Loader<V, K = string> {
 
   private readonly loaders = new WeakMap<UserServiceContext, DataLoader<K, V>>();
 
+  /**
+   * One value per key, IN KEY ORDER — DataLoader hands entry `i` to whoever
+   * asked for key `i`, so a result that is merely the set of matching rows
+   * pairs each caller with somebody else's. A `WHERE id IN (...)` lookup gives
+   * neither guarantee: rows arrive in the planner's order, and an id that is
+   * missing or invisible to this caller does not arrive at all. Most services
+   * here already re-key before returning; a subclass whose service does not
+   * must do it itself. Absent keys become `null`.
+   */
   protected abstract batchLoad(context: UserServiceContext, keys: readonly K[]): Promise<readonly V[]>;
 
   protected getLoader(context: UserServiceContext): DataLoader<K, V> {

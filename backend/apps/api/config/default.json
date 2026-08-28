@@ -49,11 +49,17 @@
       "github": {
         "id": "019d7a32-e4b0-7f01-b5c2-8a1d3e6f9c04"
       },
+      "reddit": {
+        "id": "019e2b55-a4c1-7f02-b8d4-0c3e5a8f6b07"
+      },
       "signal": {
         "id": "019e3d77-c6e3-8f14-da06-2b5f7c0e1d19"
       },
       "steam": {
         "id": "019d6470-f9e1-720f-a3ce-299842abaece"
+      },
+      "slack": {
+        "id": "019e3c66-b5d2-7f03-c9e5-1a4f6b9d0c08"
       }
     },
     "oauth": {
@@ -75,7 +81,8 @@
       "issuer": "https://hub.ci.computer",
       "jwksUri": "https://hub.ci.computer/api/auth/jwks",
       "audience": "ci-server,ci-hub,ci-import-tools,ci-browser-extension,ci-even,ci-applet",
-      "pushRelayUrl": ""
+      "pushRelayUrl": "",
+      "serviceClients": "hbpe-sidecar,summary-sidecar"
     },
     "hubForwardAuth": {
       "enabled": false,
@@ -141,16 +148,35 @@
   "queues": {
     "concurrency": 10,
     "fetchBatchSize": 10,
-    "perQueueConcurrency": 6
+    "perQueueConcurrency": 6,
+    "replayedDeadLetterRetentionDays": 30
   },
   "import": {
     "scratchDir": "/var/tmp/ci-import",
     "roots": [],
     "uploadsDir": "/var/lib/ci-import/uploads",
     "inboxDir": "/var/lib/ci-import/inbox",
+    "inboxHostDir": "",
     "maxArchiveEntries": 2000000,
     "maxArchiveBytes": 107374182400,
-    "databaseDataDir": ""
+    "databaseDataDir": "",
+    "retention": {
+      "enabled": true,
+      "stagingDays": 7,
+      "runHistoryDays": 90,
+      "maxRunsPerSweep": 200,
+      "deleteBatchSize": 5000
+    }
+  },
+  "accountDeletion": {
+    "graceDays": 30,
+    "purge": {
+      "enabled": true,
+      "batchSize": 500,
+      "maxAccountsPerRun": 5,
+      "retryBackoffMinutes": 60,
+      "excludedColumns": []
+    }
   },
   "enrichment": {
     "window": {
@@ -166,15 +192,36 @@
     }
   },
   "reflection": {
-    "minAnswerConfidence": 0.4
+    "minAnswerConfidence": 0.4,
+    "autoPromoteThresholdCautious": 1,
+    "autoPromoteThresholdBalanced": 0.55,
+    "autoPromoteThresholdHandsOff": 0.7,
+    "alwaysReviewBelowConfidence": 0.55
+  },
+  "agent": {
+    "memoryRetention": {
+      "enabled": true,
+      "processedDays": 365,
+      "stuckAfterDays": 7,
+      "stuckAlertRepeatDays": 7,
+      "deleteBatchSize": 500
+    }
+  },
+  "agentMemory": {
+    "turnFragments": {
+      "intervalMinutes": 10,
+      "lookbackMinutes": 120,
+      "settleMinutes": 3,
+      "maxTurnsPerUser": 25,
+      "minFragmentChars": 40,
+      "maxSideChars": 2000
+    }
   },
   "features": {
     "scheduled.answer.inferencing": true,
     "scheduled.connection.sync": true,
-    "scheduled.entity.promotion": true,
     "pinned.demo.models": false,
     "enable.system.prompt": true,
-    "enable.inventory.page": true,
     "advanced.theme.tab": false,
     "require.signup.codes": true,
     "files.page": true,
@@ -185,19 +232,24 @@
     "planning.enabled": true,
     "planning.page": true,
     "planning.emptyState": false,
+    "self.page": true,
     "stats.page": true,
     "schedule.page": true,
+    "forecast.page": false,
     "tags.page": true,
     "hbpe": true,
     "agent.memory.compaction": false,
+    "agent.memory.turnFragments": false,
     "shared.search": true,
     "onboarding.preference.steps": false,
     "actions": true,
     "smart.rotation": false,
-    "ask": false,
+    "ask": true,
     "grounded.prompts": true,
     "derivation.engines": true,
-    "ingest.selfHeal": true
+    "ingest.selfHeal": true,
+    "solid.protocol": false,
+    "tools.pendingActions": false
   },
   "environment": {
     "database.query.logging": false
@@ -207,11 +259,26 @@
     "apiKey": "",
     "deviceId": ""
   },
+  "unfurl": {
+    "enabled": true,
+    "ratePerSecond": 2,
+    "openGraph": true,
+    "cachePosters": true
+  },
   "geocoding": {
     "apiKey": "",
     "batchSize": 200,
     "rateLimitPerSecond": 10,
     "provider": "portal",
     "portalBaseUrl": "https://hub.ci.computer"
+  },
+  "peers": {
+    "directoryUrl": "",
+    "memoryEndpoint": "",
+    "handle": "",
+    "audience": "",
+    "timeoutMs": 10000,
+    "requireHttpSignature": false,
+    "signingKeyJwk": ""
   }
 }

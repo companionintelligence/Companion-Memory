@@ -83,6 +83,10 @@ from ci.hbpe.runner import router as _runner_router  # noqa: E402
 
 app.include_router(_runner_router)
 
+from ci.hbpe.forage.api import router as _forage_router  # noqa: E402
+
+app.include_router(_forage_router)
+
 
 def _active_pipeline_status(uid: str) -> str | None:
     """
@@ -99,14 +103,17 @@ async def _resolve_system_status(user_id: str) -> str:
     """
     Status string for the forecast response.
 
-    READY once a checkpoint exists; otherwise the live pipeline step
-    (e.g. ``BOOTSTRAP:train``) so the UI shows real progress instead of a
-    permanent "Waiting to initialize…", falling back to COLD_START when no
-    pipeline is currently running.
+    A live pipeline step (``NIGHTLY:train``, ``BOOTSTRAP:label``, …) always
+    wins so the UI can show progress and ETA even while a previous histogram
+    is still being served. Otherwise READY once a checkpoint exists, else
+    COLD_START.
     """
+    step = _active_pipeline_status(user_id)
+    if step:
+        return step
     if _model_exists(user_id):
         return "READY"
-    return _active_pipeline_status(user_id) or "COLD_START"
+    return "COLD_START"
 
 
 @app.get("/health")
@@ -207,7 +214,11 @@ async def forecast(
 
         return {
             "horizon": horizon,
-            "generated_at": now.isoformat() + "Z",
+            # `now` is timezone-aware (tz is always a real ZoneInfo/UTC), so
+            # isoformat() already appends the correct offset — a literal "Z"
+            # here would double up (e.g. `...+00:00Z`), which JS's Date()
+            # rejects as invalid.
+            "generated_at": now.isoformat(),
             "days": days,
         }
     except Exception as exc:

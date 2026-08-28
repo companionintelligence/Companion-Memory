@@ -99,6 +99,54 @@ describe('Lyft datasource', () => {
         await fs.promises.unlink(tmp).catch(() => {});
       }
     });
+
+    // Regression: findCsv used to apply its weak "any .csv whose header
+    // merely mentions pickup/dropoff" fallback at every recursion level, not
+    // just the directory the caller actually asked about — so a coincidental
+    // CSV two levels deep in an unrelated multi-GB export (a moving-house
+    // checklist, a shipping log — 'pickup'/'dropoff' are ordinary English
+    // words) claimed confidence for the WHOLE ancestor tree it was found
+    // under, which then wrongly disabled the generic importer for everything
+    // else in that tree (see ParseStage.dropGenericWhenSpecialised).
+    it('does not match a coincidental pickup/dropoff-shaped CSV deep in an unrelated tree', async () => {
+      const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-lyft-fp-'));
+      try {
+        const deep = path.join(tmpRoot, 'Drive', 'personal', 'moving-plans');
+        fs.mkdirSync(deep, { recursive: true });
+        fs.writeFileSync(
+          path.join(deep, 'checklist.csv'),
+          'item,pickup,dropoff\nsofa,2024-06-01,2024-06-02\n',
+        );
+
+        const rec = await new LyftFileImporter().recognize(
+          {},
+          { filename: path.basename(tmpRoot), fullPath: tmpRoot },
+        );
+        expect(rec.confidence).toBe(0);
+        expect(rec.dir_threshold).toBe(0.7);
+      } finally {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+      }
+    });
+
+    // The exact-filename search (double-validated by header) is specific
+    // enough to stay safe recursively, and must still work when nested.
+    it('still recognizes an exact ride filename nested a couple of levels deep', async () => {
+      const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ci-lyft-nested-'));
+      try {
+        const deep = path.join(tmpRoot, 'Takeout', 'Lyft');
+        fs.mkdirSync(deep, { recursive: true });
+        fs.writeFileSync(path.join(deep, 'passenger_rides.csv'), [CURRENT_HEADER, CURRENT_ROW].join('\n'));
+
+        const rec = await new LyftFileImporter().recognize(
+          {},
+          { filename: path.basename(tmpRoot), fullPath: tmpRoot },
+        );
+        expect(rec.confidence).toBe(0.95);
+      } finally {
+        fs.rmSync(tmpRoot, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('trip event shape', () => {

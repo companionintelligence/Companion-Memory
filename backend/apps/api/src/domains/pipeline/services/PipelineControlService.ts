@@ -5,7 +5,6 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
-import { Cron } from '@ci/common/schedule';
 
 import { SHARD_LEASE_SECONDS, STAGE_ID_LIST, STAGE_IDS, type StageId } from '../constants';
 import {
@@ -60,11 +59,19 @@ import { StageRegistry } from './StageRegistry';
  *     flag is exactly what stops working the day the worker process is split
  *     out, which is the Phase 5 change this file is written to survive.
  *
- * ── Why the cron is safe with two replicas ─────────────────────────────────
+ * ── Where the timer is, and why a double fire is a non-event ───────────────
+ *
+ * Not here. `PipelineTickCron` is the pipeline's only schedule: it takes the
+ * cluster lock and calls the `PIPELINE_TICK` target, which this service is bound
+ * to (`{ provide: PIPELINE_TICK, useExisting: PipelineControlService }`). This
+ * file carried a `@Cron` of its own until that listener landed, so that the
+ * pipeline was not left inert if it never did.
  *
  * `@Cron` is `@nestjs/schedule`: in-process, and it fires in EVERY replica. That
  * is the documented blocker on splitting the worker out, and it is answered here
- * rather than avoided. Two things make a double fire a non-event:
+ * rather than avoided, because the guards are what make a tick from ANY caller —
+ * that cron on any replica, an operator route, a replay — safe. Two things make
+ * a double fire a non-event:
  *
  *  - a session-level Postgres ADVISORY LOCK ({@link tick}) — the second tick
  *    takes no lock, does no probing, and returns. It is a real lock in a shared
@@ -79,12 +86,12 @@ import { StageRegistry } from './StageRegistry';
  *
  * ── Cost discipline is structural, not advisory ────────────────────────────
  *
- * `enrich.geocode` and `enrich.position_reverse` egress through Portal to a paid
- * provider: a runaway loop there is a bill, not just load. They used to be
- * excluded from {@link defaultStageSet} outright, which made "costs money" and
- * "unreachable by a timer" the same statement — so the only cadence available to
- * a metered stage was never, and the user's actual request (geocode SLOWER) had
- * no expressible answer.
+ * `enrich.geocode`, `enrich.event_reverse` and `enrich.position_reverse` egress
+ * through Portal to a paid provider: a runaway loop there is a bill, not just
+ * load. They used to be excluded from {@link defaultStageSet} outright, which
+ * made "costs money" and "unreachable by a timer" the same statement — so the
+ * only cadence available to a metered stage was never, and the user's actual
+ * request (geocode SLOWER) had no expressible answer.
  *
  * They are now timer-reachable, and three declared numbers bound them instead of
  * one exclusion — all three read from `STAGE_SCHEDULES` and none of them
@@ -126,41 +133,14 @@ import { StageRegistry } from './StageRegistry';
  */
 
 // ---------------------------------------------------------------------------
-// Cadence and bounds
+// Bounds
 // ---------------------------------------------------------------------------
 
-/**
- * Tick cadence.
- *
- * Every two minutes, at second 10 — deliberately off the top of the minute and
- * off the reaper's second 40. `SyncOrchestrator`, `AnswerInferenceCron` and
- * `McpController` all fire at second 0, and stacking a fourth scheduled job
- * there turns a quiet appliance into a periodic spike.
- *
- * Two minutes, not ten seconds: one tick costs one staleness probe per stage leg
- * (see {@link hasCandidates}), and on a converged corpus each of those is a full
- * anti-join over the source table — the measured worst case, because convergence
- * is the state an idempotent pipeline lives in permanently. Two minutes keeps
- * that under a percent of one core while still making pause and cancel feel
- * immediate at human scale.
- *
- * Declared here rather than in `constants.ts` only because that file belongs to
- * another change set; it belongs beside `DEAD_LETTER_REAP_CRON` and should move
- * there the next time that file is opened.
- *
- * ── If `PipelineTickCron` is wired, DELETE the `@Cron` on {@link tickOnSchedule} ─
- *
- * That listener is a timer whose only job is to take the cluster lock and call a
- * `PIPELINE_TICK` target, which this service is meant to be
- * (`{ provide: PIPELINE_TICK, useExisting: PipelineControlService }`). Both
- * timers driving the same body is not a correctness problem — every path goes
- * through this service's own advisory lock and then through the per-leg shard
- * lease — but it is two schedules for one loop, and the redundant one should be
- * this file's. `tick()` is the body; the timer is incidental to it, and it is
- * only here at all so that the pipeline is not left inert if that listener does
- * not land.
- */
-export const PIPELINE_CONTROL_TICK_CRON = '10 */2 * * * *';
+// No cadence is declared here, deliberately. `PIPELINE_TICK_CRON` in
+// `PipelineTickCron` is the pipeline's one schedule, and how often a tick is
+// worth paying for is argued there — one tick costs a staleness probe per stage
+// leg (`hasCandidates`), each a full anti-join over the source table on a
+// converged corpus. This file owns what a tick DOES.
 
 /** `kind` of the run the tick starts for itself when a user has stale work and no run. */
 export const CONTINUOUS_RUN_KIND = 'continuous';
@@ -329,6 +309,12 @@ const UNCLAIMABLE_SHARD_STATUSES: readonly string[] = [SHARD_STATUS.CANCELLED];
  *    column from a different source, so it too grows the promoter's candidate
  *    set. Transitive through geocode, and stated anyway: the graph is the
  *    documentation.
+ *  - `promote.place` ← `enrich.event_reverse`. The promoter needs BOTH a
+ *    coordinate and a non-blank name, and the reverse geocoder is the only
+ *    scheduled writer of the second one for an event that arrived with a
+ *    measurement and no label. Promoting first promotes the events an importer
+ *    happened to name and silently skips the rest until a version bump — the
+ *    same failure the two edges above exist to prevent, in the other column.
  *  - `enrich.person_link` / `enrich.event_person_link` ←
  *    `clean.identifier_normalize`. Person-linking joins
  *    `ci.entity_identifiers.value_normalized`; the cleaner is what makes that
@@ -358,11 +344,24 @@ const UNCLAIMABLE_SHARD_STATUSES: readonly string[] = [SHARD_STATUS.CANCELLED];
  */
 export const STAGE_DEPENDENCIES: Readonly<Partial<Record<StageId, readonly StageId[]>>> = {
   [STAGE_IDS.ENRICH_ESTIMATE_LOCATION]: [STAGE_IDS.ENRICH_GEOCODE],
-  [STAGE_IDS.PROMOTE_PLACE]: [STAGE_IDS.ENRICH_GEOCODE, STAGE_IDS.ENRICH_ESTIMATE_LOCATION],
+  [STAGE_IDS.PROMOTE_PLACE]: [
+    STAGE_IDS.ENRICH_GEOCODE,
+    STAGE_IDS.ENRICH_ESTIMATE_LOCATION,
+    STAGE_IDS.ENRICH_EVENT_REVERSE,
+  ],
   [STAGE_IDS.PROMOTE_PLACE_POSITION]: [STAGE_IDS.ENRICH_POSITION_REVERSE],
   [STAGE_IDS.ENRICH_PERSON_LINK]: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
   [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE],
-  [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: [STAGE_IDS.ENRICH_PERSON_LINK, STAGE_IDS.ENRICH_EVENT_PERSON_LINK],
+  [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: [
+    STAGE_IDS.ENRICH_PERSON_LINK,
+    STAGE_IDS.ENRICH_EVENT_PERSON_LINK,
+    STAGE_IDS.ENRICH_PERSON_SELF_CLAIM,
+  ],
+  // The owned-unit detector's whole candidate set is `ci.objects`, and
+  // `promote.object` is the only writer that table has. Proposing before the
+  // night's purchases have been promoted would examine a corpus its producer is
+  // about to widen, and every unit it missed would wait a full day.
+  [STAGE_IDS.CLEAN_OBJECT_DUPLICATE_DETECT]: [STAGE_IDS.PROMOTE_OBJECT],
   // The edge projections are pure consumers of the linkage columns their
   // producers fill: person-link writes communications' from/to columns; the
   // event leg additionally reads `location_entity_id`, which `promote.place`
@@ -376,7 +375,7 @@ export const STAGE_DEPENDENCIES: Readonly<Partial<Record<StageId, readonly Stage
   // than projecting a slice the producer is about to widen.
   [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: [STAGE_IDS.ENRICH_PERSON_LINK],
   [STAGE_IDS.PROMOTE_EDGE_EVENT]: [STAGE_IDS.ENRICH_EVENT_PERSON_LINK, STAGE_IDS.PROMOTE_PLACE],
-  [STAGE_IDS.PROMOTE_EDGE_INVENTORY]: [STAGE_IDS.PROMOTE_OBJECT],
+  [STAGE_IDS.PROMOTE_EDGE_OBJECT]: [STAGE_IDS.PROMOTE_OBJECT],
   // `promote.observation` reads `ci.events.location_entity_id` when it is set,
   // which is `promote.place`'s output. Today a `capture.scan` row never has one
   // — `/v1/events` writes no geo columns, so `promote.place`'s predicate never
@@ -398,8 +397,9 @@ export const STAGE_DEPENDENCIES: Readonly<Partial<Record<StageId, readonly Stage
 /**
  * Stages that spend money.
  *
- * Both egress through Portal to a paid, metered provider. `enrich.geocode`
- * forward-geocodes `ci.events.location_name`; `enrich.position_reverse` reverse-
+ * They egress through Portal to a paid, metered provider. `enrich.geocode`
+ * forward-geocodes `ci.events.location_name`; `enrich.event_reverse` runs the
+ * other direction over the same table; `enrich.position_reverse` reverse-
  * geocodes `ci.position`, the largest table on the appliance.
  *
  * Membership no longer decides REACHABILITY — see the cost note in this file's
@@ -432,9 +432,19 @@ export const isMeteredStage = scheduleIsMeteredStage;
  * timer may start is a property of the schedule, and `schedule.ts` is where it
  * is declared and boot-guarded.
  *
- * Declaration order is phase order (`STAGE_ID_LIST` is ordered `index` →
- * `enrich` → `clean` → `promote`), which is also a valid topological order, so
- * the tick's sort is stable and reads in pipeline order.
+ * The order it comes back in is `STAGE_ID_LIST` declaration order, and that is
+ * ALL it is — not phase order and not a topological order. `enrich.media_dimensions`
+ * is declared first and `index.embed` second; the `index.embed_*` / `index.vector_*`
+ * families are declared last on purpose (their note in `constants.ts` says why);
+ * and CONSUMERS ARE DECLARED AHEAD OF PRODUCERS THEY WAIT FOR — `enrich.person_link`
+ * and `enrich.event_person_link` are both declared before
+ * `clean.identifier_normalize`, one phase later.
+ *
+ * Nothing here needs it ordered: the tick dispatches through {@link orderStages},
+ * which is what puts producers first and which uses declaration order only as its
+ * TIE-BREAK — the reason those index families are declared last. Both halves are
+ * asserted in the spec, because an ordering claim nothing checks is one the next
+ * change silently breaks.
  */
 export function defaultStageSet(): StageId[] {
   return automaticStageIds();
@@ -713,35 +723,18 @@ export class PipelineControlService {
   // -------------------------------------------------------------------------
 
   /**
-   * The scheduled tick.
-   *
-   * Catches everything, exactly as `DeadLetterReaperListener.reapOnSchedule`
-   * does and for the same reason: nothing awaits a `@Cron` method, so a rejection
-   * here is an unhandled promise rejection, and `application.ts` answers those
-   * with `process.exit(1)`. On a two-minute timer that is a crash loop — the
-   * component whose job is to keep the pipeline moving taking down the API
-   * because one tick failed. The next tick retries in two minutes and nothing is
-   * lost, because every fact the tick relies on is a row rather than a variable.
-   */
-  @Cron(PIPELINE_CONTROL_TICK_CRON, { name: 'PipelineControlService.tickOnSchedule' })
-  async tickOnSchedule(): Promise<void> {
-    try {
-      await this.tick();
-    } catch (err: unknown) {
-      this.logger.error(
-        'Pipeline control tick failed; will retry on the next tick',
-        err instanceof Error ? err : new Error(String(err)),
-      );
-    }
-  }
-
-  /**
    * One pass of the control loop.
    *
    * Public and awaited, so an operator route, a test or a future worker process
-   * can drive a tick directly and read what it did. Unlike {@link tickOnSchedule}
-   * this one PROPAGATES: a caller that asked for a tick wants to hear that it
-   * failed.
+   * can drive a tick directly and read what it did. It PROPAGATES: a caller that
+   * asked for a tick wants to hear that it failed.
+   *
+   * The scheduled caller is `PipelineTickCron.runOnSchedule`, which swallows what
+   * this throws — nothing awaits a `@Cron` method, so a rejection there is an
+   * unhandled promise rejection and `application.ts` answers those with
+   * `process.exit(1)`. Containment belongs to the timer, not to the body: the
+   * next tick retries and nothing is lost, because every fact the tick relies on
+   * is a row rather than a variable.
    */
   async tick(): Promise<ControlTickReport> {
     const report = emptyReport();

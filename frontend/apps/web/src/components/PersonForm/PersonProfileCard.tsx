@@ -179,7 +179,8 @@ export function PersonProfileCard({ person, onEdit }: Props) {
           rows
         ) : (
           <p className="text-sm text-muted-foreground">
-            No details yet{onEdit ? ' — add an email, phone, or address.' : '.'}
+            No saved email, phone, or address
+            {onEdit ? ' — add one if you have it.' : '.'}
           </p>
         )}
       </Card.Content>

@@ -13,7 +13,7 @@ import {
   toCommunicationInput,
   toContentInput,
   toEventInput,
-  toInventoryInput,
+  toThingInput,
   toPositionInput,
 } from '../inputs';
 
@@ -50,7 +50,7 @@ function recordFor(overrides: Partial<StagedItem> = {}): CanonicalRecord {
 }
 
 describe('the provenance triple', () => {
-  it('rides snake_case on every destination but inventory', () => {
+  it('rides snake_case on every destination but things', () => {
     const record = recordFor({ classification: 'email' });
 
     expect(toCommunicationInput(record)).toMatchObject({
@@ -60,10 +60,10 @@ describe('the provenance triple', () => {
     });
   });
 
-  it('rides camelCase on inventory, which is the one camelCase ingest DTO', () => {
+  it('rides camelCase on things, which is the one camelCase ingest DTO', () => {
     const record = recordFor({ classification: 'purchase', metadata: { Product: 'Kettle' } });
 
-    expect(toInventoryInput(record)).toMatchObject({
+    expect(toThingInput(record)).toMatchObject({
       sourceType: 'ci-import-tools',
       sourceSystem: 'gmail',
       sourceId: 'hash-1',
@@ -310,6 +310,42 @@ describe('toCommunicationInput', () => {
     expect(toCommunicationInput(outbound).direction).toBe('outbound');
   });
 
+  // ci.communications had no metadata column at all, so a field a parser set
+  // that has no dedicated one was silently dropped at push — a tweet's
+  // permalink, likes, retweets, language and reply-parent, concretely.
+  it('carries fields with no dedicated column through metadata', () => {
+    const tweet = recordFor({
+      classification: 'social',
+      dataSource: 'twitter',
+      metadata: {
+        URL: 'https://x.com/user/status/123',
+        Retweets: 5,
+        Likes: 12,
+        Lang: 'en',
+        ReplyTo: '999',
+      },
+    });
+
+    expect(toCommunicationInput(tweet).metadata).toMatchObject({
+      URL: 'https://x.com/user/status/123',
+      Retweets: 5,
+      Likes: 12,
+      Lang: 'en',
+      ReplyTo: '999',
+    });
+  });
+
+  it('keeps a field ALSO promoted to a dedicated column inside metadata too', () => {
+    // Same round-trip-completeness reason toEventInput keeps Duration (minutes)
+    // in metadata even after promoting it to duration_seconds.
+    const call = recordFor({ classification: 'call', metadata: { Duration: 90, Subject: 'Weekly sync' } });
+    const input = toCommunicationInput(call);
+
+    expect(input.duration_seconds).toBe(90);
+    expect(input.subject).toBe('Weekly sync');
+    expect(input.metadata).toMatchObject({ Duration: 90, Subject: 'Weekly sync' });
+  });
+
   describe('Reddit posts and comments', () => {
     it('files an authored post as outbound, subject = title, thread = subreddit', () => {
       const post = recordFor({
@@ -504,9 +540,9 @@ describe('communicationTypeFor', () => {
   });
 });
 
-describe('toInventoryInput', () => {
+describe('toThingInput', () => {
   const purchase = (condition: string) =>
-    toInventoryInput(
+    toThingInput(
       recordFor({ classification: 'purchase', metadata: { Product: 'Kettle', Condition: condition } }),
     );
 
@@ -1004,6 +1040,55 @@ describe('toBrowserActivityInput', () => {
 
     expect(toBrowserActivityInput(search).url).toBeTruthy();
   });
+
+  // `duration_seconds` had a column, this DTO field, and a `screen_minutes`
+  // metric summing it, and no producer anywhere on the import path — the only
+  // other assignment of the column is a COMMUNICATION's call duration. Browser
+  // rows sat at 0 of 327,745.
+  it('carries dwell time through to duration_seconds', () => {
+    const view = recordFor({
+      classification: 'page_view',
+      metadata: { URL: 'https://example.com', DurationSeconds: 45 },
+    });
+
+    expect(toBrowserActivityInput(view).duration_seconds).toBe(45);
+  });
+
+  it('leaves duration_seconds unset when the parser recorded no dwell time', () => {
+    const view = recordFor({ classification: 'page_view', metadata: { URL: 'https://example.com' } });
+
+    expect(toBrowserActivityInput(view).duration_seconds).toBeUndefined();
+  });
+
+  it('does not pass through a zero or negative dwell time', () => {
+    // The parser already omits these; this is the mapper refusing to record a
+    // visit as having lasted no time at all rather than not knowing.
+    for (const DurationSeconds of [0, -1]) {
+      const view = recordFor({
+        classification: 'page_view',
+        metadata: { URL: 'https://example.com', DurationSeconds },
+      });
+
+      expect(toBrowserActivityInput(view).duration_seconds).toBeUndefined();
+    }
+  });
+
+  it('marks a download with action_type download, not visit', () => {
+    // ci.browser_activity has modelled this action_type all along and held 0
+    // rows, because nothing produced web.download.
+    const dl = recordFor({ classification: 'download', metadata: { URL: 'https://files.example/a.pdf' } });
+
+    expect(toBrowserActivityInput(dl).action_type).toBe('download');
+  });
+
+  it('does not pass through a non-numeric dwell time', () => {
+    const view = recordFor({
+      classification: 'page_view',
+      metadata: { URL: 'https://example.com', DurationSeconds: 'a while' },
+    });
+
+    expect(toBrowserActivityInput(view).duration_seconds).toBeUndefined();
+  });
 });
 
 describe('toEventInput', () => {
@@ -1136,5 +1221,52 @@ describe('the conversation key reaching thread_id', () => {
 
   it('leaves thread_id unset when the source names no conversation at all', () => {
     expect(toCommunicationInput(recordFor({ classification: 'message' })).thread_id).toBeUndefined();
+  });
+});
+
+describe('communication attachments reach the column', () => {
+  /**
+   * The read side of the lane, which was never dead — `attachmentsFor` has
+   * always built this column from `AttachmentFileIds`/`AttachmentContentIds`.
+   * It had no producer, so it ran on every communication in the corpus and
+   * produced `[]` 325,198 times. These assert the contract the media leg now
+   * writes against.
+   */
+  it('turns the stamped file ids into attachment references', () => {
+    const message = recordFor({
+      classification: 'message',
+      dataSource: 'twitter',
+      metadata: { Text: 'look', AttachmentFileIds: ['file-a', 'file-b'] },
+    });
+
+    expect(toCommunicationInput(message).attachments).toEqual([
+      { type: 'file', id: 'file-a' },
+      { type: 'file', id: 'file-b' },
+    ]);
+  });
+
+  it('carries the content rows alongside the files for a source that catalogues them', () => {
+    const message = recordFor({
+      classification: 'message',
+      dataSource: 'facebook',
+      metadata: {
+        Text: 'photo',
+        AttachmentFileIds: ['file-a'],
+        AttachmentContentIds: ['content-a'],
+      },
+    });
+
+    expect(toCommunicationInput(message).attachments).toEqual([
+      { type: 'file', id: 'file-a' },
+      { type: 'content', id: 'content-a' },
+    ]);
+  });
+
+  it('leaves the column unset for a message with no attachments', () => {
+    // The default the whole corpus sat at, and the correct answer for a message
+    // that genuinely carried nothing.
+    const message = recordFor({ classification: 'message', metadata: { Text: 'hi' } });
+
+    expect(toCommunicationInput(message).attachments).toBeUndefined();
   });
 });

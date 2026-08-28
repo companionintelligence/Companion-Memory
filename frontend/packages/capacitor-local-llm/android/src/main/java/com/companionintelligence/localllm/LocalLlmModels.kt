@@ -11,7 +11,7 @@ import java.io.File
  */
 data class LocalLlmModelInfo(
     val modelId: String,
-    /** File name written under {@link modelsDir}; also the LiteRT-LM `.task` file name. */
+    /** File name written under {@link modelsDir}; also the LiteRT-LM bundle file name. */
     val fileName: String,
     val sizeBytes: Long,
     /** Approximate peak RSS while loaded, per the model card — used by isAvailable()'s RAM floor. */
@@ -24,13 +24,24 @@ data class LocalLlmModelInfo(
 
 object LocalLlmModels {
     /**
-     * litert-community/Gemma3-1B-IT, `Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task`
-     * (2025-05-14 build). Only model offered today — smallest broadly-capable option.
+     * litert-community/Qwen3-0.6B, `Qwen3-0.6B_dynamic_wi4b32_afp32.litertlm`. Only model
+     * offered today — and, as of this catalog entry, the *same* model and file iOS ships
+     * (`LocalLLMModels.swift`), not the `gemma3-1b-it-int4` this used to point at.
+     *
+     * That older entry sat on `litert-community/Gemma3-1B-IT`, which Hugging Face now
+     * serves `gated: "auto"`: an anonymous in-app download got `401 GatedRepo` for every
+     * user who had not already fetched the file by hand — every new install, with no
+     * workaround short of hand-pushing the file. Qwen3-0.6B is ungated (re-verified before
+     * this change: `curl -s .../api/models/litert-community/Qwen3-0.6B` → `"gated": false`;
+     * a ranged download returns `206`/`accept-ranges: bytes`) and roughly a third the size.
+     * `.litertlm` is the engine's own bundle format, not a platform split from `.task` — the
+     * same repo publishes both for different models, and this loads via `Engine.load()`
+     * exactly like the `.task` file this used to list.
      */
-    val GEMMA3_1B_IT_INT4 = LocalLlmModelInfo(
-        modelId = "gemma3-1b-it-int4",
-        fileName = "Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task",
-        sizeBytes = 554_661_246L,
+    val QWEN3_0_6B_INT4 = LocalLlmModelInfo(
+        modelId = "qwen3-0.6b-int4",
+        fileName = "Qwen3-0.6B_dynamic_wi4b32_afp32.litertlm",
+        sizeBytes = 344_437_808L,
         estimatedPeakMemoryBytes = 2_147_483_648L,
         defaultMaxTokens = 1024,
         defaultTopK = 64,
@@ -38,13 +49,22 @@ object LocalLlmModels {
         defaultTemperature = 1.0,
     )
 
-    private val byId = listOf(GEMMA3_1B_IT_INT4).associateBy { it.modelId }
+    private val byId = listOf(QWEN3_0_6B_INT4).associateBy { it.modelId }
 
     fun find(modelId: String): LocalLlmModelInfo? = byId[modelId]
 }
 
-/** Minimum *total* device RAM to consider the on-device model runnable at all (~3 GiB). */
-const val MIN_TOTAL_MEMORY_BYTES = 3L * 1024 * 1024 * 1024
+/**
+ * Minimum *total* device RAM to consider the on-device model runnable at all (~4 GiB).
+ *
+ * Reconciled with iOS's floor (`LocalLLMPlugin.minimumPhysicalMemoryBytes`), which used to
+ * be 6 GiB against this file's 3 GiB for models with the same ~2 GiB estimated peak RSS —
+ * an unexplained 2x gap between platforms gating the identical workload. 4 GiB is that ~2 GiB
+ * footprint plus ~2 GiB of headroom for the OS, the WebView, and the rest of the app before
+ * jetsam/the low-memory killer takes the process rather than `isAvailable()` politely
+ * declining up front.
+ */
+const val MIN_TOTAL_MEMORY_BYTES = 4L * 1024 * 1024 * 1024
 
 /** Minimum free disk space required to start (or resume) a model download (~1 GiB). */
 const val MIN_FREE_DISK_BYTES = 1L * 1024 * 1024 * 1024

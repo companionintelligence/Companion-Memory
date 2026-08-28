@@ -87,13 +87,13 @@ SELECT
        AND b.url IS NOT NULL)
      AS br_distinct_domains,
 
-  (SELECT count(*) FROM ci.inventory i, params p
+  (SELECT count(*) FROM ci.objects i, params p
      WHERE i.user_id::uuid = p.user_id AND (i.acquired_at AT TIME ZONE p.tz)::date = p.d)
      AS inv_rows,
-  (SELECT count(i.purchase_price) FROM ci.inventory i, params p
+  (SELECT count(i.purchase_price) FROM ci.objects i, params p
      WHERE i.user_id::uuid = p.user_id AND (i.acquired_at AT TIME ZONE p.tz)::date = p.d)
      AS inv_rows_with_price,
-  (SELECT sum(i.purchase_price) FROM ci.inventory i, params p
+  (SELECT sum(i.purchase_price) FROM ci.objects i, params p
      WHERE i.user_id::uuid = p.user_id AND (i.acquired_at AT TIME ZONE p.tz)::date = p.d)
      AS inv_price_sum,
 

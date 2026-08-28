@@ -44,6 +44,14 @@ export class FileDocumentParseListener {
       return;
     }
 
+    if (file.parseStatus === ParseStatus.COMPLETED) {
+      this.logger.log('File already parsed, skipping', {
+        fileId: file.id,
+      });
+
+      return;
+    }
+
     if (!this.parserService.canParse(file.contentType, file.filename ?? file.id)) {
       this.logger.log('MIME type not parseable, skipping', {
         fileId: file.id,
@@ -115,6 +123,11 @@ export class FileDocumentParseListener {
       });
 
       await this.updateParseStatus(file.id, ParseStatus.FAILED, { parseError: message });
+
+      // Rethrow so the OnEvent wrapper's ack.fail() fires — swallowing here
+      // would ack.done() the job and lose pg-boss retry/dead-letter for what
+      // may be a transient failure (object storage, parser sidecar, DB write).
+      throw err;
     }
   }
 

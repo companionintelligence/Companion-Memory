@@ -53,17 +53,15 @@ export class ImageDescriptionPreferenceService {
     }
 
     const priorPlanner = (self.properties?.planner as Record<string, unknown> | undefined) ?? {};
+    // Only used to decide whether to kick off a backfill — never sent back as a
+    // write payload. Re-sending the whole `planner` sub-object would resurrect
+    // the stale `trust_mode` we read before another writer changed it.
     const wasEnabled = priorPlanner.image_description_enabled === true;
 
-    await this.personService.patch(context, self.id, {
-      propertiesPatch: {
-        planner: {
-          ...priorPlanner,
-          image_description_enabled: enabled,
-          source: 'settings',
-        },
-      },
-    });
+    await this.personService.patchPropertyLeaves(context, self.id, [
+      { path: ['planner', 'image_description_enabled'], value: enabled },
+      { path: ['planner', 'source'], value: 'settings' },
+    ]);
 
     this.invalidate(userId);
 

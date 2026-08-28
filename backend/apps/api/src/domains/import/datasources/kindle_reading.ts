@@ -29,6 +29,7 @@ import fs from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { kindleUrl } from './_amazon_urls';
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -350,6 +351,7 @@ export class KindleReadingFileImporter implements FileImporter {
           // still collapse, even though no title exists for them anywhere.
           URI: catalog ? `kindle:asin:${asin}` : asin ? `kindle:doc:${asin}` : undefined,
           ASIN: catalog ? asin : undefined,
+          URL: catalog ? kindleUrl(asin) : undefined,
           'Minutes Read': millis !== undefined ? Math.round(millis / 6000) / 10 : undefined,
           'Page Flips': flips,
           'Content Type': contentType || undefined,

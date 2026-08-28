@@ -34,6 +34,13 @@ services:
       CI_IMPORT_SCRATCH_DIR: ${CI_IMPORT_SCRATCH_DIR:-/var/lib/ci-import/scratch}
       # JSON array, not a colon list. /repo is the read-only mount above.
       CI_IMPORT_ROOTS: ${CI_IMPORT_ROOTS:-["/repo"]}
+      # Where inbox/ from the mount above lives on the HOST. The API only
+      # knows /var/lib/ci-import/inbox, a path inside this container, and that
+      # is what the import page and `ci-import inbox` would tell a person to
+      # drop files into. Display only — nothing resolves it. Defaults to the
+      # mount source; set it explicitly when CI_IMPORT_WORK_DIR is relative and
+      # you want the page to show an absolute path.
+      CI_IMPORT_INBOX_HOST_DIR: ${CI_IMPORT_INBOX_HOST_DIR:-${CI_IMPORT_WORK_DIR:-./import-work}/inbox}
       # OpenAI-compatible chat backend (Hub-injected on managed deploys). When
       # unset, the API falls back to native Ollama on OLLAMA_HOST.
       LLM_API_BASE: ${LLM_API_BASE:-}

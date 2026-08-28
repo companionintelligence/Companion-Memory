@@ -5,6 +5,7 @@ import { Accordion, Badge, Button, Card, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, RefreshCcw } from '@ci/shadcn/icons';
 
 import { PageContent } from '@/components/layout';
+import { PullToRefresh } from '@/components/PullToRefresh';
 
 import { describeCron } from './cronDescriptor';
 import { describeCronExpression } from './cronSchedule';
@@ -47,15 +48,14 @@ export function JobsPage() {
 
   const [filters, setFilters] = useState<JobFilters>(DEFAULT_JOB_FILTERS);
   const [windowHours, setWindowHours] = useState(24);
+  const [refreshing, setRefreshing] = useState(false);
 
   // Phone pages of 50 cards are unreadable; desktop stays at 50. The limit is
   // a server page size, so it has to live on the filters the list hook sends.
   useEffect(() => {
     const limit = phone ? MOBILE_JOB_PAGE_SIZE : DESKTOP_JOB_PAGE_SIZE;
 
-    setFilters((current) =>
-      current.limit === limit ? current : { ...current, limit, offset: 0 },
-    );
+    setFilters((current) => (current.limit === limit ? current : { ...current, limit, offset: 0 }));
   }, [phone]);
 
   const dashboard = useJobsDashboard();
@@ -68,12 +68,29 @@ export function JobsPage() {
     setFilters((current) => ({ ...current, ...next }));
   }, []);
 
+  /**
+   * Refetch every card, and RESOLVE when they have all answered.
+   *
+   * Returning the promise is what makes the swipe-down gesture legible:
+   * `PullToRefresh` holds its spinner until this settles, and a version that
+   * returned `void` would flash it away on the next frame — indistinguishable,
+   * on a phone, from the gesture not being wired at all.
+   *
+   * Depends on the four `refresh` callbacks rather than the hook results, which
+   * are fresh objects on every poll tick. A `refreshAll` that changed identity
+   * every few seconds would keep re-registering the gesture's touch listeners
+   * underneath the finger.
+   */
   const refreshAll = useCallback(() => {
-    void dashboard.refresh();
-    void list.refresh();
-    void history.refresh();
-    void deadLetters.refresh();
-  }, [dashboard, list, history, deadLetters]);
+    setRefreshing(true);
+
+    return Promise.all([
+      dashboard.refresh(),
+      list.refresh(),
+      history.refresh(),
+      deadLetters.refresh(),
+    ]).finally(() => setRefreshing(false));
+  }, [dashboard.refresh, list.refresh, history.refresh, deadLetters.refresh]);
 
   const jobsTable = (
     <JobsTable
@@ -97,11 +114,7 @@ export function JobsPage() {
     />
   );
   const schedules = (
-    <SchedulesCard
-      crons={dashboard.data?.crons ?? []}
-      loading={dashboard.loading}
-      jobTypes={jobTypes}
-    />
+    <SchedulesCard crons={dashboard.data?.crons ?? []} loading={dashboard.loading} jobTypes={jobTypes} />
   );
   const deadLettersCard = (
     <DeadLettersCard
@@ -114,8 +127,11 @@ export function JobsPage() {
   );
 
   return (
-    <>
-      <PageContent>
+    // Swipe-down refetches the whole page, the way People, Places and the
+    // Memory list already do. `overscroll-y-contain` keeps the drag inside this
+    // scroller so WKWebView bounces nothing behind it while the pull is held.
+    <PullToRefresh onRefresh={refreshAll}>
+      <PageContent className="overscroll-y-contain">
         <div className="flex flex-col gap-3">
           {/* Above Queue Activity, because it outranks it while it exists.
 
@@ -137,6 +153,7 @@ export function JobsPage() {
           <SummaryCard
             summary={dashboard.data?.summary}
             loading={dashboard.loading}
+            refreshing={refreshing || dashboard.refreshing}
             error={dashboard.error}
             staleSince={dashboard.staleSince}
             updatedAt={dashboard.updatedAt}
@@ -152,7 +169,7 @@ export function JobsPage() {
               {jobsTable}
               {historyCharts}
               {schedules}
-              {deadLettersCard}
+              <div className="order-last">{deadLettersCard}</div>
             </>
           ) : (
             <>
@@ -164,13 +181,15 @@ export function JobsPage() {
           )}
         </div>
       </PageContent>
-    </>
+    </PullToRefresh>
   );
 }
 
 type SummaryCardProps = {
   summary?: JobsDashboardResponse['summary'];
   loading: boolean;
+  /** A refetch is running over figures that are still on screen. */
+  refreshing: boolean;
   error: string | null;
   staleSince: Date | null;
   updatedAt: Date | null;
@@ -181,6 +200,7 @@ type SummaryCardProps = {
 function SummaryCard({
   summary,
   loading,
+  refreshing,
   error,
   staleSince,
   updatedAt,
@@ -208,7 +228,9 @@ function SummaryCard({
       <Card.Header
         className={cn(
           'flex gap-2',
-          phone ? 'flex-row items-center justify-between' : 'flex-col md:flex-row md:items-center md:justify-between',
+          phone
+            ? 'flex-row items-center justify-between'
+            : 'flex-col md:flex-row md:items-center md:justify-between',
           cardPad(phone),
         )}
       >
@@ -224,14 +246,26 @@ function SummaryCard({
               : 'Current job workload'}
           </Card.Description>
         </div>
+        {/* Spins in place. The figures below it stay exactly where they are —
+            a refresh that blanked the card is what sent an operator to a page
+            with nothing on it every time they asked it a question. */}
         <Button
           variant="outline"
           size="sm"
           onClick={onRefresh}
+          aria-busy={refreshing || undefined}
           className={phone ? 'shrink-0' : 'w-full md:w-auto'}
         >
-          <RefreshCcw className={phone ? 'h-4 w-4' : 'mr-2 h-4 w-4'} />
-          {phone ? <span className="sr-only">Refresh</span> : 'Refresh'}
+          <RefreshCcw
+            className={cn(phone ? 'h-4 w-4' : 'mr-2 h-4 w-4', refreshing && 'animate-spin')}
+          />
+          {phone ? (
+            <span className="sr-only">{refreshing ? 'Refreshing' : 'Refresh'}</span>
+          ) : refreshing ? (
+            'Refreshing'
+          ) : (
+            'Refresh'
+          )}
         </Button>
       </Card.Header>
       <Card.Content className={cn('space-y-3', cardPad(phone))}>
@@ -340,6 +374,81 @@ type ScheduleRow = {
   schedule: ReturnType<typeof describeCronExpression>;
 };
 
+/**
+ * A schedule whose registry key is a UUID the scheduler minted for it.
+ *
+ * `@nestjs/schedule` falls back to `crypto.randomUUID()` when a `@Cron` has no
+ * `name`, and re-mints it on every boot, so the durable side of the job — its
+ * `ci.cron_runs` history, its last-run cell, firing it by hand — is looking up a
+ * string that no longer exists. Only a backend change fixes that, so the row
+ * asks for one instead of quietly rendering a UUID as if it were a name.
+ */
+function UnnamedCronWarning() {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase text-amber-700 dark:text-amber-400"
+      title="The @Cron behind this schedule has no name, so the scheduler mints a new one every boot and its run history cannot be found. Give the decorator a { name }."
+    >
+      <AlertTriangle aria-hidden className="h-3 w-3" />
+      needs a name
+    </span>
+  );
+}
+
+/**
+ * What the schedule is doing, in the order of what an operator can act on.
+ *
+ * `running` is not health — the `@Cron` wrapper catches, logs and returns, so a
+ * schedule whose body throws on every tick stays started forever, and its "last
+ * run" stays two minutes old because that stamp lands before the body. The
+ * server's `overdue` (its own expression, evaluated against the last recorded
+ * attempt) is the only one of the three that can say something has gone wrong,
+ * so it takes the badge whenever it is set.
+ */
+function ScheduleStatus({ cron, className }: { cron: ScheduleRow['cron']; className?: string }) {
+  const badge = cn('text-[10px] uppercase', className);
+
+  if (!cron.running) {
+    return (
+      <Badge variant="secondary" className={badge}>
+        stopped
+      </Badge>
+    );
+  }
+
+  if (cron.overdue) {
+    return (
+      <Badge
+        variant="destructive"
+        className={badge}
+        title="The scheduler has this job started, but its expression asked for a fire that never got recorded."
+      >
+        <AlertTriangle aria-hidden className="h-3 w-3" />
+        overdue
+      </Badge>
+    );
+  }
+
+  return (
+    <Badge variant="outline" className={badge}>
+      scheduled
+    </Badge>
+  );
+}
+
+/**
+ * When this schedule last completed a tick — "never" rather than "—" once it has
+ * attempted one, because a cron that fires on time and fails every time is
+ * exactly the case both "scheduled" and "last run" report as healthy.
+ */
+function lastSucceeded(cron: ScheduleRow['cron']): string {
+  if (cron.lastSuccessAt) {
+    return new Date(cron.lastSuccessAt).toLocaleTimeString();
+  }
+
+  return cron.lastRunAt ? 'never' : '—';
+}
+
 function SchedulesTable({ rows }: { rows: readonly ScheduleRow[] }) {
   return (
     <div className="overflow-x-auto">
@@ -364,8 +473,11 @@ function SchedulesTable({ rows }: { rows: readonly ScheduleRow[] }) {
             <th scope="col" className="py-1.5 pr-3 text-right font-medium">
               Next run
             </th>
-            <th scope="col" className="py-1.5 text-right font-medium">
+            <th scope="col" className="py-1.5 pr-3 text-right font-medium">
               Last run
+            </th>
+            <th scope="col" className="py-1.5 text-right font-medium">
+              Last succeeded
             </th>
           </tr>
         </thead>
@@ -379,6 +491,7 @@ function SchedulesTable({ rows }: { rows: readonly ScheduleRow[] }) {
                     className={`h-2 w-2 shrink-0 rounded-full ${categoryDot(descriptor.category)}`}
                   />
                   <span className="truncate">{descriptor.label}</span>
+                  {descriptor.unnamed && <UnnamedCronWarning />}
                 </span>
               </td>
               <td className="py-1.5 pr-3 text-muted-foreground">{descriptor.categoryLabel}</td>
@@ -389,16 +502,15 @@ function SchedulesTable({ rows }: { rows: readonly ScheduleRow[] }) {
                 {schedule.when || '—'}
               </td>
               <td className="py-1.5 pr-3">
-                <Badge variant={cron.running ? 'outline' : 'secondary'} className="text-[10px] uppercase">
-                  {cron.running ? 'scheduled' : 'stopped'}
-                </Badge>
+                <ScheduleStatus cron={cron} />
               </td>
               <td className="py-1.5 pr-3 text-right tabular-nums text-muted-foreground">
                 {cron.nextRunAt ? new Date(cron.nextRunAt).toLocaleTimeString() : '—'}
               </td>
-              <td className="py-1.5 text-right tabular-nums text-muted-foreground">
+              <td className="py-1.5 pr-3 text-right tabular-nums text-muted-foreground">
                 {cron.lastRunAt ? new Date(cron.lastRunAt).toLocaleTimeString() : '—'}
               </td>
+              <td className="py-1.5 text-right tabular-nums text-muted-foreground">{lastSucceeded(cron)}</td>
             </tr>
           ))}
         </tbody>
@@ -443,21 +555,22 @@ function SchedulesPhoneList({ rows }: { rows: readonly ScheduleRow[] }) {
               {items.map(({ cron, descriptor, schedule }) => (
                 <li key={cron.name} className="border-t border-border/40 py-2">
                   <div className="flex items-start justify-between gap-2">
-                    <span className="min-w-0 font-medium" title={cron.name}>
-                      {descriptor.label}
-                    </span>
-                    <Badge
-                      variant={cron.running ? 'outline' : 'secondary'}
-                      className="shrink-0 text-[10px] uppercase"
+                    <span
+                      className="flex min-w-0 flex-wrap items-center gap-1.5 font-medium"
+                      title={cron.name}
                     >
-                      {cron.running ? 'scheduled' : 'stopped'}
-                    </Badge>
+                      {descriptor.label}
+                      {descriptor.unnamed && <UnnamedCronWarning />}
+                    </span>
+                    <ScheduleStatus cron={cron} className="shrink-0" />
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground" title={schedule.raw}>
                     {schedule.frequency}
                     {schedule.when ? ` · ${schedule.when}` : ''}
                     {' · next '}
                     {cron.nextRunAt ? new Date(cron.nextRunAt).toLocaleTimeString() : '—'}
+                    {' · succeeded '}
+                    {lastSucceeded(cron)}
                   </p>
                 </li>
               ))}

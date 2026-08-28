@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { Button, Dialog, IconButton, Label, useToast } from '@ci/shadcn';
-import { Check, ClipboardCopy, Facebook, Linkedin, Mail, MessageSquare } from '@ci/shadcn/icons';
+import { Check, ClipboardCopy, Mail, MessageSquare, QrCode as QrCodeIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { QrCode } from '@/components/QrCode';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { SavedSearchGridItemFragment } from './SavedSearch';
-import { iframeSnippet, shareUrl } from './shareLink';
+import { shareUrl } from './shareLink';
 
 interface Props {
   savedSearch: FragmentType<typeof SavedSearchGridItemFragment>;
@@ -39,7 +40,8 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
   const { t } = useTranslation();
   const { toast } = useToast();
 
-  const [copied, setCopied] = useState<'link' | 'embed' | null>(null);
+  const [copied, setCopied] = useState<'link' | null>(null);
+  const [showQr, setShowQr] = useState(false);
   const copyTimer = useRef<number | null>(null);
   // Local sharing state seeded from the (non-reactive) fragment and advanced by
   // the mutation result, so the link/embed appear the instant sharing is toggled.
@@ -95,30 +97,34 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
     }
   };
 
-  const copyToClipboard = async (text: string, which: 'link' | 'embed') => {
-    const what = which === 'link' ? 'Link' : 'Embed code';
-
+  const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopied(which);
+      setCopied('link');
       if (copyTimer.current) {
         window.clearTimeout(copyTimer.current);
       }
 
       copyTimer.current = window.setTimeout(
-        () => setCopied((current) => (current === which ? null : current)),
+        () => setCopied((current) => (current === 'link' ? null : current)),
         1500,
       );
-      toast.success(`${what} copied`);
+      toast.success('Link copied');
     } catch {
       // Clipboard can be blocked (insecure context / denied permission); the text
       // is selectable in the field as a fallback.
-      toast.error(`Couldn’t copy ${what.toLowerCase()} — select the text and copy manually.`);
+      toast.error('Couldn’t copy link — select the text and copy manually.');
     }
   };
 
   const url = token ? shareUrl(token) : '';
   const shareTitle = `${name} — shared from Companion Intelligence`;
+  // Facebook/LinkedIn dropped: `/shared/:token` is behind ProtectedRoute (see
+  // App.tsx), so it only ever resolves for someone already signed in to this
+  // appliance — a public-audience share button promises a link anyone can
+  // open, which this one cannot be. Email/SMS still make sense because both
+  // target one specific person, the same person the sender would separately
+  // be telling "you'll need to sign in to see this".
   const socialLinks = token
     ? [
         {
@@ -133,18 +139,6 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
           Icon: MessageSquare,
           href: `sms:?body=${encodeURIComponent(`${shareTitle} ${url}`)}`,
         },
-        {
-          key: 'facebook',
-          label: 'Facebook',
-          Icon: Facebook,
-          href: `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`,
-        },
-        {
-          key: 'linkedin',
-          label: 'LinkedIn',
-          Icon: Linkedin,
-          href: `https://www.linkedin.com/shareArticle?mini=true&url=${encodeURIComponent(url)}&title=${encodeURIComponent(shareTitle)}`,
-        },
       ]
     : [];
 
@@ -154,7 +148,8 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
         <Dialog.Header>
           <Dialog.Title>Share “{name}”</Dialog.Title>
           <Dialog.Description>
-            Anyone signed in to this server who has the link can view this search's results, run as you.
+            Anyone signed in to this Companion who has the link can view this search's results, run as you.
+            They'll need an account here first — this isn't a public link.
           </Dialog.Description>
         </Dialog.Header>
 
@@ -198,7 +193,7 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
                   <IconButton
                     variant="outline"
                     label={t('SAVED_SEARCH_COPY_LINK')}
-                    onClick={() => copyToClipboard(url, 'link')}
+                    onClick={() => copyToClipboard(url)}
                   >
                     {copied === 'link' ? (
                       <Check className="w-4 h-4" />
@@ -223,30 +218,40 @@ export function ShareSavedSearchModal({ savedSearch: savedSearchMask, onClose }:
                       </a>
                     </Button>
                   ))}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Embed</Label>
-                <div className="flex gap-2">
-                  <input
-                    readOnly
-                    value={iframeSnippet(token)}
-                    onFocus={(e) => e.currentTarget.select()}
-                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm font-mono"
-                  />
-                  <IconButton
-                    variant="outline"
-                    label={t('SAVED_SEARCH_COPY_EMBED')}
-                    onClick={() => copyToClipboard(iframeSnippet(token), 'embed')}
+                  {/*
+                    A tile, not a link: the QR is the same intra-household hand-off
+                    the mailto/sms tiles are, for the case where the other person is
+                    stood next to you with their phone out and typing the token is
+                    the only alternative.
+                  */}
+                  <Button
+                    variant={showQr ? 'default' : 'outline'}
+                    size="sm"
+                    aria-pressed={showQr}
+                    aria-label={showQr ? t('SAVED_SEARCH_HIDE_QR') : t('SAVED_SEARCH_SHOW_QR')}
+                    onClick={() => setShowQr((current) => !current)}
                   >
-                    {copied === 'embed' ? (
-                      <Check className="w-4 h-4" />
-                    ) : (
-                      <ClipboardCopy className="w-4 h-4" />
-                    )}
-                  </IconButton>
+                    <QrCodeIcon className="w-4 h-4" />
+                    <span className="ml-1">QR code</span>
+                  </Button>
                 </div>
+
+                {showQr && (
+                  <div className="pt-2">
+                    <QrCode value={url} fallback={url} caption="Scan to open on another device" mark />
+                    {/*
+                      Same caveat as the modal's own description, restated here
+                      because a QR invites being pointed at a stranger's phone:
+                      `/shared/:token` sits inside ProtectedRoute (App.tsx), so a
+                      scan by someone without an account on this appliance lands
+                      on the login wall, not the search.
+                    */}
+                    <p className="mt-2 text-center text-xs text-muted-foreground">
+                      Scanning still lands on the sign-in screen for anyone without an account on this
+                      Companion.
+                    </p>
+                  </div>
+                )}
               </div>
             </>
           )}

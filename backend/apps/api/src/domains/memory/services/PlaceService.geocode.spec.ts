@@ -39,6 +39,8 @@ function makeHarness(options: {
   raceWinnerRows?: Array<{ entity_id: string }>;
   /** Serve an existing unparented admin node for the adoption UPDATE. */
   adoptedAdminId?: string | null;
+  /** Same-name Location within the merge radius (step 1b). */
+  nearbySameNameRows?: Array<{ entity_id: string }>;
 }): Harness {
   const statements: Array<{ sql: string; params: unknown[] | undefined }> = [];
   let placeIdLookups = 0;
@@ -55,6 +57,10 @@ function makeHarness(options: {
       }
 
       return options.byPlaceIdRows ?? [];
+    }
+
+    if (sql.includes('ST_DWithin(location_point') && sql.includes('lower(btrim(name)) = lower($2)')) {
+      return options.nearbySameNameRows ?? [];
     }
 
     if (sql.includes('SET parent_place_id = $4') && sql.includes('parent_place_id IS NULL')) {
@@ -129,12 +135,73 @@ describe('PlaceService.findOrCreateForGeocode (place_id + hierarchy)', () => {
     // Enrich: point backfill runs with FULL precision coordinates.
     const enrich = statementsMatching(harness, 'COALESCE(location_point');
     expect(enrich).toHaveLength(1);
-    expect(enrich[0].params).toEqual([EXISTING, USER, -122.0841234, 37.4221234]);
+    // Trailing params are the boundary gate (false — this resolution carried no
+    // bounds) and its unused corners; boundary persistence is covered in
+    // PlaceService.boundary.spec.
+    expect(enrich[0].params?.slice(0, 4)).toEqual([EXISTING, USER, -122.0841234, 37.4221234]);
+    expect(enrich[0].params?.[4]).toBe(false);
     // Hierarchy: city, region, country nodes created/resolved (the keyed
     // read-back SELECT runs once per level; COALESCE(parent_place_id is unique
     // to it, unlike the adoption UPDATE which also filters on place_kind).
     expect(statementsMatching(harness, 'COALESCE(parent_place_id,')).toHaveLength(3);
     expect(harness.send).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Regression: two Lyft pickups at "61 Plantation, Irvine" 80 m apart fell
+   * either side of a 0.001° snap-cell edge, and with no provider place_id the
+   * cell index was the only dedupe — so the address got two Location rows.
+   */
+  it('reuses an identically named Location within 150 m instead of inserting a second one', async () => {
+    const harness = makeHarness({ nearbySameNameRows: [{ entity_id: EXISTING }] });
+
+    const result = await harness.service.findOrCreateForGeocode(CONTEXT, {
+      name: '  61 Plantation, Irvine, CA, United States ',
+      lat: 33.69452,
+      lng: -117.74853,
+      placeId: null,
+    });
+
+    expect(result).toEqual({ id: EXISTING, created: false });
+
+    const nearby = statementsMatching(harness, 'ST_DWithin(location_point');
+    expect(nearby).toHaveLength(1);
+    // Trimmed name, lng/lat order for ST_MakePoint, and the metre radius.
+    expect(nearby[0].params).toEqual([
+      USER,
+      '61 Plantation, Irvine, CA, United States',
+      -117.74853,
+      33.69452,
+      150,
+    ]);
+    // The proximity check only looks at live rows.
+    expect(nearby[0].sql).toContain('merged_into_entity_id IS NULL');
+
+    expect(
+      statementsMatching(
+        harness,
+        `INSERT INTO ci.entities (entity_id, entity_type, owner_user_id, name, properties, location_point`,
+      ),
+    ).toHaveLength(0);
+    expect(statementsMatching(harness, 'COALESCE(location_point')).toHaveLength(1);
+    expect(harness.send).not.toHaveBeenCalled();
+  });
+
+  it('still prefers a place_id hit over a same-name neighbour', async () => {
+    const harness = makeHarness({
+      byPlaceIdRows: [{ entity_id: EXISTING }],
+      nearbySameNameRows: [{ entity_id: 'should-not-be-used' }],
+    });
+
+    const result = await harness.service.findOrCreateForGeocode(CONTEXT, {
+      name: 'Googleplex',
+      lat: 37.4221234,
+      lng: -122.0841234,
+      placeId: 'ChIJj61dQgK6j4AR4GeTYWZsKWw',
+    });
+
+    expect(result).toEqual({ id: EXISTING, created: false });
+    expect(statementsMatching(harness, 'ST_DWithin(location_point')).toHaveLength(0);
   });
 
   it('creates a new place with full-precision point + place_id and emits PlaceCreatedEvent', async () => {

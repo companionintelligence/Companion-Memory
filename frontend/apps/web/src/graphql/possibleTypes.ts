@@ -26,8 +26,10 @@ export interface PossibleTypesResultData {
       "NoteConnection",
       "PersonConnection",
       "PlaceConnection",
+      "ProductModelConnection",
       "ProviderConnection",
       "QuestionConnection",
+      "ReceiptConnection",
       "RelationshipConnection",
       "SavedSearchConnection",
       "SummaryConnection",
@@ -51,8 +53,10 @@ export interface PossibleTypesResultData {
       "NoteEdge",
       "PersonEdge",
       "PlaceEdge",
+      "ProductModelEdge",
       "ProviderEdge",
       "QuestionEdge",
+      "ReceiptEdge",
       "RelationshipEdge",
       "SavedSearchEdge",
       "SummaryEdge",
@@ -76,11 +80,14 @@ export interface PossibleTypesResultData {
       "ItemType",
       "MessageType",
       "NoteType",
+      "ObjectObservationType",
       "PersonType",
       "PlaceType",
+      "ProductModelType",
       "ProviderKeyType",
       "ProviderType",
       "QuestionType",
+      "ReceiptType",
       "RelationshipType",
       "SavedSearchType",
       "SummaryType",
@@ -104,6 +111,8 @@ export interface PossibleTypesResultData {
       "NoteType",
       "PersonType",
       "PlaceType",
+      "ProductModelType",
+      "ReceiptType",
       "ThreadType"
     ],
     "Taggable": [
@@ -118,6 +127,8 @@ export interface PossibleTypesResultData {
       "NoteType",
       "PersonType",
       "PlaceType",
+      "ProductModelType",
+      "ReceiptType",
       "ThreadType"
     ],
     "TaggableEntityType": [
@@ -132,6 +143,8 @@ export interface PossibleTypesResultData {
       "NoteType",
       "PersonType",
       "PlaceType",
+      "ProductModelType",
+      "ReceiptType",
       "ThreadType"
     ]
   }

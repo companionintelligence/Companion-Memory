@@ -146,7 +146,7 @@ function validBbox(bbox: ObservationBoundingBox | null | undefined): Observation
  *
  * The migration describes the key as a digest of `(content_id, detector,
  * rounded bbox)`. That is exactly right for a detector that emits boxes, and it
- * is a data-loss bug for one that does not: `InventoryListener`'s Ollama vision
+ * is a data-loss bug for one that does not: `ThingVisionListener`'s Ollama vision
  * pass returns a LIST OF ITEMS WITH NO BOXES, so every object in the photo
  * would digest to the identical key and the whole image would collapse to one
  * observation — the same shape as the `hashItem` defect
@@ -227,7 +227,7 @@ export function detectionKeyFor(dto: CreateObjectObservationDto): string | null 
  * distinction the migration header states in prose: "a coffee mug is visible in
  * this photo" is not "I own this specific coffee mug".
  *
- * Nothing here writes `ci.inventory`. Minting an owned unit from a sighting is
+ * Nothing here writes `ci.objects`. Minting an owned unit from a sighting is
  * `ObjectResolutionService`'s job and it does not exist yet; until it does, a
  * sighting resolves to an object only when something else already created that
  * object and hands its id to {@link resolve}.
@@ -291,7 +291,7 @@ export class ObjectObservationService {
    *     and counted.
    *
    *  3. REFUSES TO OVERWRITE A HUMAN. `DO UPDATE … WHERE NOT o.confirmed_by_user`
-   *     is the same protection `ObjectPromoteStage` gives a promoted inventory
+   *     is the same protection `ObjectPromoteStage` gives a promoted object
    *     row, and stronger: that one compares timestamps and can be fooled by a
    *     writer that forgets `updated_at`, this one reads the flag whose entire
    *     purpose is to mean "a human said so". Once a sighting is confirmed, no
@@ -609,7 +609,7 @@ export class ObjectObservationService {
                 -- owner_user_id is NOT decorative: both unique indexes are
                 -- keyed on it, so leaving it NULL would make the whole
                 -- idempotency argument false (the same trap ObjectPromoteStage
-                -- documents for ci.inventory).
+                -- documents for ci.objects).
                 $1::uuid,
                 u.observed_at, u.source_kind,
                 u.content_id, u.file_id, u.event_id, u.place_entity_id,

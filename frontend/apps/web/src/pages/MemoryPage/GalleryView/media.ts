@@ -3,7 +3,21 @@ import { resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
 import { eventDisplayTitle } from '../Components/utils';
 import type { EntityItem } from '../useEntityService';
 
-export type EntityMediaKind = 'image' | 'video';
+export type EntityMediaKind = 'image' | 'video' | 'embed';
+
+/**
+ * A provider-hosted player (YouTube, Spotify, …) derived server-side from the
+ * content row's URL. The gallery never mounts it on its own: the tile shows
+ * `posterUrl` (or a provider badge) and the iframe loads only inside the
+ * lightbox, after an explicit click.
+ */
+export interface EmbedPlayer {
+  provider: string;
+  playerUrl: string;
+  posterUrl: string | null;
+  aspectRatio: number;
+  mediaKind: string;
+}
 
 /**
  * A resolved, renderable piece of media derived from an entity. Generalises
@@ -24,6 +38,13 @@ export interface EntityMedia {
   fullUrl: string;
   /** Human label for caption / alt text. */
   title: string;
+  /** Present only for `kind === 'embed'`; `fullUrl` is then the provider page. */
+  player?: EmbedPlayer;
+  /**
+   * The page the media stands for, when `fullUrl` is only a poster of it (a
+   * TMDB poster for a Netflix episode): the lightbox's "open original" target.
+   */
+  pageUrl?: string | null;
 }
 
 /**
@@ -91,9 +112,11 @@ export function pickThumbUrl(input: {
  * Mimetypes whose subtype names a *provider*, not a container or codec. The ETL
  * writes these alongside a watch-page URL rather than a media file, so treating
  * them as playable renders an `<img>`/`<video>` pointed at an HTML page — always
- * broken. They resolve to no media, which leaves the entity as a plain tile
- * until the embed player lands (see
- * `docs/prd/unified-content-identity-lifecycle-embeds.md` §6).
+ * broken. They resolve to no media here; rows whose URL the server can turn
+ * into a provider player arrive with `galleryPlayer` set and take the `embed`
+ * branch in {@link getEntityMedia} instead (tier 0 of
+ * `docs/prd/unified-content-identity-lifecycle-embeds.md` §6). Anything else
+ * stays a plain tile.
  */
 const PROVIDER_PSEUDO_MIMETYPES = new Set([
   'video/youtube',
@@ -195,9 +218,35 @@ export function getEntityMedia(entity: EntityItem): EntityMedia | null {
 
     case 'ContentType': {
       const contentType = entity.galleryMimetype;
-      const kind = mediaKind(contentType);
-      if (!kind || !contentType) {
-        return null;
+
+      // A resolved link preview, when the unfurl stage has visited the row.
+      // Only an `ok` one carries anything renderable.
+      const unfurl = entity.galleryUnfurl?.status === 'ok' ? entity.galleryUnfurl : null;
+      const unfurlPoster = resolveMediaUrl(unfurl?.thumbnailUrl);
+
+      // A provider player wins over whatever the mimetype says: the row for a
+      // Spotify track is `audio/spotify` (a provider, not a codec), and the
+      // only thing that can render it is the provider's own player.
+      const player = entity.galleryPlayer;
+      if (player) {
+        const page = entity.galleryContentUrl ?? entity.galleryContentSourceUrl ?? player.playerUrl;
+
+        return {
+          entityId: entity.id,
+          kind: 'embed',
+          contentType: contentType ?? `${player.mediaKind}/${player.provider}`,
+          // Tier-0 poster (YouTube) first; the unfurl's (Spotify album art) fills the gap.
+          thumbUrl: player.posterUrl ?? unfurlPoster ?? null,
+          fullUrl: page,
+          title: entity.galleryTitle ?? unfurl?.title ?? 'Untitled',
+          player: {
+            provider: player.provider,
+            playerUrl: player.playerUrl,
+            posterUrl: player.posterUrl ?? null,
+            aspectRatio: player.aspectRatio,
+            mediaKind: player.mediaKind,
+          },
+        };
       }
 
       // A media content row is a link, not a document: `url`/`sourceUrl` are
@@ -207,29 +256,47 @@ export function getEntityMedia(entity: EntityItem): EntityMedia | null {
       // only the first two is what left these tiles blank. Web content (a
       // bookmarked image, an oEmbed thumbnail) still arrives via url/sourceUrl,
       // so both sources are kept.
+      const kind = mediaKind(contentType);
       const preview = resolveMediaUrl(entity.galleryPreviewUrl);
       const url =
         resolveMediaUrl(entity.galleryFileUrl) ??
         resolveMediaUrl(entity.galleryContentUrl) ??
         resolveMediaUrl(entity.galleryContentSourceUrl) ??
         preview;
-      if (!url) {
-        return null;
+
+      if (kind && contentType && url) {
+        return {
+          entityId: entity.id,
+          kind,
+          contentType,
+          thumbUrl: pickThumbUrl({
+            kind,
+            previewUrl: preview,
+            fullUrl: url,
+            sizeBytes: entity.galleryMediaSize ?? null,
+          }),
+          fullUrl: url,
+          title: entity.galleryTitle ?? 'Untitled',
+        };
       }
 
-      return {
-        entityId: entity.id,
-        kind,
-        contentType,
-        thumbUrl: pickThumbUrl({
-          kind,
-          previewUrl: preview,
-          fullUrl: url,
-          sizeBytes: entity.galleryMediaSize ?? null,
-        }),
-        fullUrl: url,
-        title: entity.galleryTitle ?? 'Untitled',
-      };
+      // Nothing playable, but a poster was resolved — a Netflix episode
+      // (text/plain, no URL) or a Prime Video watch (video/mp4 with no file
+      // behind it) via Wikidata, a bookmarked article's og:image: an image
+      // tile that opens the poster, with "open original" pointing at the page.
+      if (unfurlPoster) {
+        return {
+          entityId: entity.id,
+          kind: 'image',
+          contentType: 'image/*',
+          thumbUrl: unfurlPoster,
+          fullUrl: unfurlPoster,
+          title: entity.galleryTitle ?? unfurl?.title ?? 'Untitled',
+          pageUrl: entity.galleryContentUrl ?? unfurl?.canonicalUrl ?? null,
+        };
+      }
+
+      return null;
     }
 
     default:

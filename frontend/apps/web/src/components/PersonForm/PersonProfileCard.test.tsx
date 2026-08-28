@@ -91,7 +91,7 @@ describe('PersonProfileCard', () => {
   it('prompts to add details when there are none', () => {
     render(<PersonProfileCard person={{ name: 'Nobody' }} onEdit={vi.fn()} />);
 
-    expect(screen.getByText(/No details yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No saved email, phone, or address/)).toBeInTheDocument();
   });
 
   it('shows the edit affordance only when editing is allowed', () => {

@@ -1,0 +1,242 @@
+name: Consent path gate
+
+# ═══════════════════════════════════════════════════════════════════════════
+# THE MERGE GATE FOR THE FEDERATED-ASK CONSENT PATH.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ── Why this exists ──────────────────────────────────────────────────────
+#
+# Nothing currently gates a merge on this repository. Verified 2026-08-21:
+#
+#   · All 7 workflows are `workflow_dispatch`-only. (`mobile-release.yml` also
+#     fires on `ios-v*` / `android-v*` / `mobile-release-v*` tag pushes, but on
+#     no pull_request.) Automatic triggers were restored in #1929 on 2026-08-10
+#     and re-gated by `834b9d5fc chore(ci): gate every workflow to manual
+#     dispatch` on 2026-08-17.
+#   · `main`'s branch protection has NO `required_status_checks` block at all,
+#     and `required_approving_review_count` is 0.
+#   · A red `App | BuildTestFlight` on a PR is Xcode Cloud (App Store Connect),
+#     not this repo. Disconnect it there; TestFlight is `mobile-release.yml`.
+#
+# So nine PRs of security-critical consent changes merged with zero automated
+# verification.
+#
+# ── Why "just turn ci.yml back on" would have made it worse ──────────────
+#
+# `ci.yml`'s backend job runs `yarn workspace @ci/be-api test` with NO database.
+# Every DB-backed suite is written `availability.available ? describe :
+# describe.skip`, so on that runner they SKIP — silently, and with a zero exit
+# code. Measured on this repo at fe5075a79:
+#
+#     $ jest src/domains/asks src/domains/peers      # no Postgres
+#     Test Suites: 2 skipped, 25 passed, 25 of 27 total
+#     Tests:       18 skipped, 367 passed, 385 total
+#     → exit 0, "success": true
+#
+# The suites that evaporate are precisely the ones a reviewer would rely on:
+# retroactive revocation, lapsed grants, the supersede chain, the jsonb
+# disclosure ceiling, atomic answer+audit rollback, correlation idempotency,
+# and immediate peer revocation. A green tick that skipped them manufactures
+# confidence, which is worse than no tick at all.
+#
+# This workflow therefore does two things ci.yml does not: it supplies a REAL
+# Postgres with the migrations applied, and it FAILS if any consent test skips.
+# See `.github/scripts/assert-consent-suites-ran.mjs`.
+#
+# ── Enabling it is the repository owner's call ───────────────────────────
+#
+# Every workflow here was deliberately gated to manual because CI "didn't work
+# and slowed things down". That decision is not one this workflow reverses. It
+# ships dispatch-only; the `pull_request` trigger below is written out and
+# commented, ready to uncomment. See the cost note on it.
+#
+# Run it by hand any time:
+#     gh workflow run "Consent path gate" --ref <branch>
+
+on:
+  workflow_dispatch:
+
+  # ── TO MAKE THIS A REAL MERGE GATE, UNCOMMENT THE BLOCK BELOW ──────────
+  #
+  # That alone makes it RUN on matching PRs; it does not make it BLOCK a merge.
+  # Blocking additionally requires adding the check named `consent-path` to
+  # main's branch protection (Settings → Branches → main → Require status
+  # checks), which is a repository-settings change, not a file change.
+  #
+  # COST, measured against the timings this job actually shows:
+  #   · ~4-7 min of ubuntu-latest time per triggered PR (cold ~7, warm ~4).
+  #     Roughly: yarn install 1-3 min, 304 migrations ~2 min, tests ~20 s.
+  #   · The path filter means an unrelated PR pays NOTHING — this repo's recent
+  #     PR traffic is largely import/UI/mobile work that touches none of these
+  #     paths, so the expected spend is a handful of runs a week, not per-PR.
+  #   · It cannot become a false green: if the database is missing the job
+  #     fails loudly rather than skipping quietly.
+  #
+  # pull_request:
+  #   branches: [main]
+  #   paths:
+  #     - 'backend/apps/api/src/domains/asks/**'
+  #     - 'backend/apps/api/src/domains/peers/**'
+  #     - 'backend/apps/api/src/domains/search-next/**'
+  #     - 'backend/apps/api/src/domains/graphql/resolvers/Ask*'
+  #     - 'backend/apps/api/src/domains/graphql/resolvers/PeerLink*'
+  #     - 'backend/apps/api/src/domains/graphql/resolvers/__tests__/Ask*'
+  #     - 'backend/apps/api/src/domains/graphql/resolvers/__tests__/PeerLink*'
+  #     - 'backend/apps/api/src/domains/graphql/types/Ask*'
+  #     - 'backend/apps/api/src/domains/graphql/types/PeerLink*'
+  #     - 'backend/apps/api/db/postgres/migrations/**'
+  #     - '.github/workflows/consent-path-gate.yml'
+  #     - '.github/scripts/assert-consent-suites-ran.mjs'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  consent-path:
+    name: consent-path
+    runs-on: ubuntu-latest
+    # Generous relative to the ~5 min this takes, tight enough that a hung
+    # migration or an unreachable service container fails the same day.
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      # `@companionintelligence`-scoped dependencies resolve through
+      # npm.pkg.github.com; yarn needs a token that can read them.
+      packages: read
+
+    services:
+      # The appliance's OWN Postgres image, not a stock one: the migrations
+      # need TimescaleDB, PostGIS and pgvector, and one of them
+      # (20260611030000_use_native_uuidv7) calls PG18's native `uuidv7()`. No
+      # public image carries that combination. This package is PUBLIC, so the
+      # pull needs no credentials.
+      #
+      # PINNED, not `:latest` — a floating tag would let an unrelated release
+      # change what this gate runs against, silently. Bump deliberately:
+      #   gh api orgs/companionintelligence/packages/container/companion%2Fdatabase/versions \
+      #     --jq '.[0].metadata.container.tags'
+      postgres:
+        image: ghcr.io/companionintelligence/companion/database:2026.8.20
+        env:
+          # Throwaway credentials for an ephemeral CI database that is destroyed
+          # with the job. Not a secret, and deliberately not the dev values.
+          PASSWORD: ci_gate_admin_pw
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    env:
+      # Both the migration runner and the test suites read this.
+      DATABASE_URL: postgres://companion:ci_gate_app_pw@localhost:5432/companion?sslmode=disable
+      # The suites' own override names, so they resolve the same database
+      # whatever `.env` would otherwise have said.
+      ASKS_TEST_DATABASE_URL: postgres://companion:ci_gate_app_pw@localhost:5432/companion?sslmode=disable
+      PEERS_TEST_DATABASE_URL: postgres://companion:ci_gate_app_pw@localhost:5432/companion?sslmode=disable
+      SEARCH_NEXT_TEST_DATABASE_URL: postgres://companion:ci_gate_app_pw@localhost:5432/companion?sslmode=disable
+      PGPASSWORD: ci_gate_admin_pw
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.15.1'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Cache Yarn artifacts
+        uses: actions/cache@v4
+        with:
+          # PnP install: there is no node_modules tree to cache.
+          path: |
+            .yarn/cache
+            .yarn/unplugged
+          key: ${{ runner.os }}-yarn-pnp-${{ hashFiles('yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-pnp-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # What `ci/setup-database` does in compose, reduced to the parts a test
+      # database needs: the least-privilege application role, its database, and
+      # the extensions the migrations assume are already present (none of them
+      # runs CREATE EXTENSION for these — see 20250528215624_enable_pgvector,
+      # which is a no-op documenting exactly that).
+      - name: Bootstrap role, database and extensions
+        run: |
+          set -euo pipefail
+          # Braces matter: `A || B && C` parses as `(A || B) && C`, which would
+          # run the install even when psql is already present.
+          if ! command -v psql >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends postgresql-client
+          fi
+          psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE companion WITH LOGIN PASSWORD 'ci_gate_app_pw';" \
+            -c "CREATE DATABASE companion OWNER companion;"
+          for ext in timescaledb postgis vector pg_stat_statements btree_gist; do
+            psql -h localhost -U postgres -d companion -v ON_ERROR_STOP=1 \
+              -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";"
+          done
+
+      # DATABASE_URL wins over .env inside bin/dbmate.js, so no .env is written.
+      # `migrate` also runs check-migration-versions.js, so a version collision
+      # fails here rather than inside the production image.
+      - name: Run migrations
+        run: yarn workspace @ci/be-api migrate
+
+      # Fail fast and legibly if the schema did not actually land — otherwise
+      # the first symptom is a confusing "relation does not exist" inside a test.
+      - name: Verify the consent-path schema exists
+        run: |
+          set -euo pipefail
+          for table in asks ask_grants ask_answers ask_audit peer_links peer_ask_correlations; do
+            psql -h localhost -U postgres -d companion -v ON_ERROR_STOP=1 -tAc \
+              "SELECT to_regclass('ci.$table') IS NOT NULL;" | grep -qx t \
+              || { echo "::error::ci.$table is missing — migrations did not apply"; exit 1; }
+          done
+          echo "consent-path tables present."
+
+      # Scoped to the consent path rather than the whole monorepo: this is a
+      # gate, and a gate nobody waits for is a gate nobody keeps.
+      #
+      # `|| true` is deliberate and is NOT a swallow: the guard below reads
+      # jest's JSON report and re-raises real failures with better output. It
+      # exists so a failing test still produces a report for the guard to read,
+      # instead of the step dying and the guard reporting "unreadable report".
+      - name: Run consent-path suites
+        run: |
+          set -uo pipefail
+          yarn workspace @ci/be-api test \
+            src/domains/asks \
+            src/domains/peers \
+            src/domains/graphql/resolvers/__tests__/Ask \
+            src/domains/graphql/resolvers/__tests__/PeerLinkResolver \
+            src/domains/graphql/resolvers/__tests__/QuestionResolver.accessScope \
+            src/domains/search-next/services/__tests__/SearchService.scoping.integration \
+            --ci --json --outputFile="$GITHUB_WORKSPACE/consent-path-report.json" || true
+          test -f "$GITHUB_WORKSPACE/consent-path-report.json"
+
+      # The point of the whole workflow: a skipped consent test is a FAILURE.
+      - name: Assert every consent suite RAN (no silent skips)
+        run: node .github/scripts/assert-consent-suites-ran.mjs "$GITHUB_WORKSPACE/consent-path-report.json"
+
+      - name: Upload jest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consent-path-report
+          path: consent-path-report.json
+          retention-days: 7
+          if-no-files-found: warn

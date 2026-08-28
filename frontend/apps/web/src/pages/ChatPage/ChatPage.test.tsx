@@ -1,10 +1,13 @@
+import type { ReactNode } from 'react';
+
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import ChatPage from './ChatPage';
-import type { Thread } from './types';
+import { STARTER_PROMPTS } from './starterPrompts';
+import type { Message, Thread } from './types';
 
 const navigate = vi.fn();
 
@@ -45,6 +48,15 @@ vi.mock('@ci/common', async (importOriginal) => {
   };
 });
 
+// ChatPage now renders inside MemoryHubShell (the shared Memory hub tab
+// strip) — MemoryHubNav reads useFeatures(), which renderWithProviders
+// deliberately does not supply (it fetches on mount).
+vi.mock('@/common/feature', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/common/feature')>();
+
+  return { ...actual, useFeatures: () => ({ isFeatureEnabled: () => true }) };
+});
+
 vi.mock('@/hooks', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/hooks')>();
 
@@ -68,13 +80,6 @@ vi.mock('@/api', async (importOriginal) => {
   };
 });
 
-vi.mock('@/api/usePersonaCompose', () => ({
-  usePersonaCompose: () => [
-    { loading: false, error: null, result: null },
-    { compose: vi.fn(), apply: vi.fn(), clear: vi.fn() },
-  ],
-}));
-
 vi.mock('./useThreadListService', () => ({
   useThreadListService: () => [
     { threads: h.threads, loading: false, error: null },
@@ -82,22 +87,47 @@ vi.mock('./useThreadListService', () => ({
   ],
 }));
 
-vi.mock('@/lib/agentChat', () => ({
-  readAgentChatContext: () => null,
-  clearAgentChatContext: vi.fn(),
-}));
+vi.mock('@/lib/agentChat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/agentChat')>();
 
+  return {
+    ...actual,
+    readAgentChatContext: () => null,
+    clearAgentChatContext: vi.fn(),
+  };
+});
+
+// Stands in for the real composer: renders whatever ChatPage passes as the
+// empty state and echoes `messages` so we can assert what a starter tap put
+// into the thread.
 vi.mock('@/components/Chat', () => ({
-  Chat: ({ onStop }: { onStop?: () => void }) => (
-    <button type="button" onClick={() => onStop?.()}>
-      Stop
-    </button>
+  Chat: ({
+    onStop,
+    emptyState,
+    messages,
+  }: {
+    onStop?: () => void;
+    emptyState?: ReactNode;
+    messages?: Message[];
+  }) => (
+    <>
+      <button type="button" onClick={() => onStop?.()}>
+        Stop
+      </button>
+      <ul data-testid="thread-messages">
+        {messages?.map((message) => (
+          <li key={message.id}>{`${message.role}: ${message.content}`}</li>
+        ))}
+      </ul>
+      {emptyState}
+    </>
   ),
 }));
 
 describe('ChatPage', () => {
   beforeEach(() => {
     navigate.mockClear();
+    h.submit.mockClear();
     h.stop.mockClear();
     h.detach.mockClear();
     h.attach.mockClear();
@@ -114,7 +144,7 @@ describe('ChatPage', () => {
   });
 
   it('detaches rather than stopping when selecting another thread', () => {
-    renderWithProviders(<ChatPage />, { route: '/chat/t1', path: '/chat/:id' });
+    renderWithProviders(<ChatPage />, { route: '/memory/chat/t1', path: '/memory/chat/:id' });
 
     fireEvent.click(screen.getByText('Second'));
 
@@ -150,13 +180,13 @@ describe('ChatPage', () => {
       ],
     } as unknown as Thread;
 
-    renderWithProviders(<ChatPage />, { route: '/chat/t2', path: '/chat/:id' });
+    renderWithProviders(<ChatPage />, { route: '/memory/chat/t2', path: '/memory/chat/:id' });
 
     await waitFor(() => expect(h.attach).toHaveBeenCalledWith('t2'));
   });
 
   it('Stop still cancels the in-flight job', () => {
-    renderWithProviders(<ChatPage />, { route: '/chat/t1', path: '/chat/:id' });
+    renderWithProviders(<ChatPage />, { route: '/memory/chat/t1', path: '/memory/chat/:id' });
 
     fireEvent.click(screen.getByText('Stop'));
 
@@ -164,7 +194,7 @@ describe('ChatPage', () => {
   });
 
   it('cancels generation when a thread is deleted', () => {
-    renderWithProviders(<ChatPage />, { route: '/chat/t1', path: '/chat/:id' });
+    renderWithProviders(<ChatPage />, { route: '/memory/chat/t1', path: '/memory/chat/:id' });
 
     fireEvent.click(screen.getAllByLabelText('Delete thread')[0]);
 
@@ -180,12 +210,12 @@ describe('ChatPage', () => {
    * matches the one currently open (t1, per the route below).
    */
   it('navigates back to the empty chat list when the currently-open thread is deleted', () => {
-    renderWithProviders(<ChatPage />, { route: '/chat/t1', path: '/chat/:id' });
+    renderWithProviders(<ChatPage />, { route: '/memory/chat/t1', path: '/memory/chat/:id' });
 
     fireEvent.click(screen.getAllByLabelText('Delete thread')[0]); // t1 — the open thread
 
     expect(h.deleteThread).toHaveBeenCalledWith('t1');
-    expect(navigate).toHaveBeenCalledWith('/chat');
+    expect(navigate).toHaveBeenCalledWith('/memory/chat');
   });
 
   /**
@@ -194,12 +224,68 @@ describe('ChatPage', () => {
    * the conversation they're reading — only the matching-id branch navigates.
    */
   it('does not navigate away when a different thread is deleted from the sidebar', () => {
-    renderWithProviders(<ChatPage />, { route: '/chat/t1', path: '/chat/:id' });
+    renderWithProviders(<ChatPage />, { route: '/memory/chat/t1', path: '/memory/chat/:id' });
 
     fireEvent.click(screen.getAllByLabelText('Delete thread')[1]); // t2 — not open
 
     expect(h.cancel).toHaveBeenCalledWith('t2');
     expect(h.deleteThread).toHaveBeenCalledWith('t2');
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The empty state only renders on `/memory/chat` — with an `:id` in the
+   * route ChatPage is showing a thread, not the starting screen.
+   */
+  describe('empty state', () => {
+    const renderEmpty = () => renderWithProviders(<ChatPage />, { route: '/memory/chat', path: '/memory/chat' });
+
+    /** Chat is the outer chat — it must not embed a second composer. */
+    it('no longer embeds the How you’d do it composer', () => {
+      renderEmpty();
+
+      expect(screen.queryByLabelText('Task to personalize')).toBeNull();
+      expect(screen.queryByText('How you’d do it')).toBeNull();
+      expect(screen.queryByText('How I’d do this')).toBeNull();
+    });
+
+    it('offers about ten starter asks', () => {
+      renderEmpty();
+
+      expect(STARTER_PROMPTS.length).toBeGreaterThanOrEqual(9);
+      expect(STARTER_PROMPTS.length).toBeLessThanOrEqual(12);
+
+      for (const prompt of STARTER_PROMPTS) {
+        expect(screen.getByRole('button', { name: prompt })).toBeInTheDocument();
+      }
+    });
+
+    /**
+     * Every starter is quoted verbatim from a backend intent's `phrases`, and
+     * those are only sendable when they carry no `$slot` placeholder.
+     */
+    it('only offers starters that can be sent as-is', () => {
+      for (const prompt of STARTER_PROMPTS) {
+        expect(prompt).not.toMatch(/\$/);
+      }
+    });
+
+    /** A tap has to send the ask, not just drop it in a box. */
+    it('submits the ask when a starter is tapped', () => {
+      renderEmpty();
+
+      fireEvent.click(screen.getByRole('button', { name: STARTER_PROMPTS[0] }));
+
+      expect(h.submit).toHaveBeenCalledWith({ message: STARTER_PROMPTS[0] });
+    });
+
+    /** …and the ask shows up as the user's turn, so the reply has context. */
+    it('echoes the tapped ask into the thread as a user message', () => {
+      renderEmpty();
+
+      fireEvent.click(screen.getByRole('button', { name: STARTER_PROMPTS[1] }));
+
+      expect(screen.getByText(`user: ${STARTER_PROMPTS[1]}`)).toBeInTheDocument();
+    });
   });
 });

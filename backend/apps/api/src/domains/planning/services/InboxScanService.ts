@@ -5,11 +5,12 @@ import { z } from 'zod';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm/services/OllamaService';
+import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
 import { CommunicationEntity } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
 import { PlannedBlockService } from './PlannedBlockService';
+import { ProposedTaskReconcileService } from './ProposedTaskReconcileService';
 import { TaskService } from './TaskService';
 
 const MAX_MESSAGES = 30;
@@ -63,14 +64,17 @@ export class InboxScanService {
     private readonly ollamaService: OllamaService,
     private readonly personalizationService: PersonalizationService,
     private readonly plannedBlockService: PlannedBlockService,
+    private readonly proposedReconcile: ProposedTaskReconcileService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(InboxScanService.name);
   }
 
-  async runForUser(userId: string): Promise<{ created: number; proposed: number; placed: number }> {
+  async runForUser(
+    userId: string,
+  ): Promise<{ created: number; proposed: number; placed: number; redated: number; archived: number }> {
     const context = { userId } as UserServiceContext;
-    const tallies = { created: 0, proposed: 0, placed: 0 };
+    const tallies = { created: 0, proposed: 0, placed: 0, redated: 0, archived: 0 };
     const since = new Date(Date.now() - LOOKBACK_MS);
 
     const messages = await this.communicationRepository
@@ -86,8 +90,9 @@ export class InboxScanService {
 
     if (messages.length === 0) {
       this.logger.debug('Inbox scan found no recent inbound messages', { userId });
+      const sweep = await this.sweepStale(context, []);
 
-      return tallies;
+      return { ...tallies, ...sweep };
     }
 
     const block = messages
@@ -97,6 +102,18 @@ export class InboxScanService {
 
     const surfaced = await this.surfaceItems(context, block);
 
+    if (surfaced == null) {
+      this.logger.log('Inbox scan finished', { userId, ...tallies, skippedReconcile: true });
+
+      return tallies;
+    }
+
+    const sweep = await this.sweepStale(context, surfaced);
+    tallies.redated = sweep.redated;
+    tallies.archived = sweep.archived;
+
+    const proposedWindow = await this.proposedReconcile.windowForToday(context);
+
     for (const item of surfaced.slice(0, MAX_SURFACED)) {
       const title = item.title.trim();
 
@@ -104,56 +121,67 @@ export class InboxScanService {
         continue;
       }
 
-      const confidence = clampConfidence(item.confidence);
-      const sourceRef = TaskService.memoryScanSourceRef(title, 'inbox');
-      const existing =
-        (await this.taskService.findBySourceRef(context, 'inbox', sourceRef)) ??
-        (await this.taskService.findByTitleMatch(context, title));
+      try {
+        const confidence = clampConfidence(item.confidence);
+        const sourceRef = TaskService.memoryScanSourceRef(title, 'inbox');
+        const existing =
+          (await this.taskService.findBySourceRef(context, 'inbox', sourceRef)) ??
+          (await this.taskService.findByTitleMatch(context, title));
 
-      if (existing) {
-        if (item.detail?.trim()) {
-          await this.taskService.appendNotes(context, existing.id, item.detail.trim());
+        if (existing) {
+          if (item.detail?.trim()) {
+            await this.taskService.appendNotes(context, existing.id, item.detail.trim());
+          }
+
+          continue;
         }
 
-        continue;
-      }
+        const decision = await this.personalizationService.decideAction(userId, {
+          kind: 'task_create',
+          confidence,
+          hasUserInput: false,
+        });
 
-      const decision = await this.personalizationService.decideAction(userId, {
-        kind: 'task_create',
-        confidence,
-        hasUserInput: false,
-      });
+        if (decision === 'skip') {
+          continue;
+        }
 
-      if (decision === 'skip') {
-        continue;
-      }
+        const status = decision === 'auto' ? 'open' : 'proposed';
+        const created = await this.taskService.create(context, {
+          title,
+          description: item.detail?.trim() || null,
+          status,
+          estimatedMinutes:
+            item.estimatedMinutes && item.estimatedMinutes > 0 ? Math.round(item.estimatedMinutes) : null,
+          sourceKind: 'inbox',
+          sourceRef,
+          metadata: { confidence, generator: 'planning.inbox_scan' },
+          ...(status === 'proposed' ? proposedWindow : {}),
+        });
 
-      const status = decision === 'auto' ? 'open' : 'proposed';
-      const created = await this.taskService.create(context, {
-        title,
-        description: item.detail?.trim() || null,
-        status,
-        estimatedMinutes:
-          item.estimatedMinutes && item.estimatedMinutes > 0 ? Math.round(item.estimatedMinutes) : null,
-        sourceKind: 'inbox',
-        sourceRef,
-        metadata: { confidence, generator: 'planning.inbox_scan' },
-      });
+        if (!created) {
+          continue;
+        }
 
-      if (!created) {
-        continue;
-      }
+        if (status === 'proposed') {
+          tallies.proposed += 1;
+          continue;
+        }
 
-      if (status === 'proposed') {
-        tallies.proposed += 1;
-        continue;
-      }
+        tallies.created += 1;
+        const placed = await this.plannedBlockService.tryPlaceAfterOpen(context, created, confidence);
 
-      tallies.created += 1;
-      const placed = await this.plannedBlockService.tryPlaceAfterOpen(context, created, confidence);
-
-      if (placed.status === 'placed') {
-        tallies.placed += 1;
+        if (placed.status === 'placed') {
+          tallies.placed += 1;
+        }
+      } catch (err) {
+        // Same reasoning as TodoScanService: don't let one item's failure
+        // force a full-batch redelivery that re-walks already-applied items.
+        this.logger.warn('Inbox scan item failed; continuing with remaining items', {
+          userId,
+          title,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 
@@ -162,10 +190,28 @@ export class InboxScanService {
     return tallies;
   }
 
+  private async sweepStale(
+    context: UserServiceContext,
+    surfaced: Array<{ title: string }>,
+  ): Promise<{ redated: number; archived: number }> {
+    return this.proposedReconcile.reconcileStaleProposed(context, {
+      sourceKind: 'inbox',
+      relevantTitles: surfaced.map((item) => item.title),
+      relevantSourceRefs: surfaced.map((item) =>
+        TaskService.memoryScanSourceRef(item.title.trim(), 'inbox'),
+      ),
+    });
+  }
+
+  /**
+   * `null` means the model failed — callers skip reconcile so a timeout does
+   * not mass-archive still-open proposals. An empty array is a real "nothing
+   * to surface" result and does sweep.
+   */
   private async surfaceItems(
     context: UserServiceContext,
     inboxBlock: string,
-  ): Promise<Array<z.infer<typeof itemSchema>>> {
+  ): Promise<Array<z.infer<typeof itemSchema>> | null> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
 
@@ -181,7 +227,7 @@ export class InboxScanService {
       ].join('\n');
 
       const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
-        model: PROMPT_MODEL,
+        model: UTILITY_MODEL,
         enableTools: false,
         format: RESPONSE_JSON_SCHEMA,
         signal: controller.signal,
@@ -190,7 +236,9 @@ export class InboxScanService {
       const parsed = responseSchema.safeParse(JSON.parse(response.message.content || '{}'));
 
       if (!parsed.success) {
-        return [];
+        this.logger.warn('Inbox scan LLM returned unparseable items; skipping reconcile');
+
+        return null;
       }
 
       const items: Array<z.infer<typeof itemSchema>> = [];
@@ -205,11 +253,11 @@ export class InboxScanService {
 
       return items;
     } catch (err) {
-      this.logger.warn('Inbox scan LLM failed; treating as empty', {
+      this.logger.warn('Inbox scan LLM failed; skipping reconcile', {
         error: err instanceof Error ? err.message : String(err),
       });
 
-      return [];
+      return null;
     } finally {
       clearTimeout(timer);
     }

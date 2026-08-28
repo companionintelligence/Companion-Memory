@@ -30,12 +30,27 @@ function makeQueryBuilderSpy(results: unknown[] = []) {
   qb.where = chain('where');
   qb.andWhere = chain('andWhere');
   qb.orderBy = chain('orderBy');
+  qb.addOrderBy = chain('addOrderBy');
+  qb.take = chain('take');
   qb.getMany = jest.fn(async () => results);
 
   return { qb, calls };
 }
 
-function makeService(overrides: { queryBuilderResults?: unknown[] } = {}) {
+/**
+ * The shape TypeORM's Postgres driver actually resolves `manager.query()` to
+ * for an UPDATE — the pair `[rows, rowCount]`, not the RETURNING rows (see
+ * `driver/postgres/PostgresQueryRunner.ts`, which special-cases UPDATE/DELETE).
+ * Every claim mock below goes through this rather than returning a bare array:
+ * a mock that hands back `[]` for "no row matched" is a shape production never
+ * produces, and it is precisely what let `rows.length > 0` — always true on the
+ * real two-element pair — ship as a green test.
+ */
+function updateResult(rows: Array<{ id: string }>): [Array<{ id: string }>, number] {
+  return [rows, rows.length];
+}
+
+function makeService(overrides: { queryBuilderResults?: unknown[]; managerQuery?: jest.Mock } = {}) {
   const { qb, calls } = makeQueryBuilderSpy(overrides.queryBuilderResults);
 
   const find = jest.fn<Promise<unknown[]>, [unknown]>(async () => []);
@@ -43,6 +58,8 @@ function makeService(overrides: { queryBuilderResults?: unknown[] } = {}) {
   const save = jest.fn(async (entity: unknown) => entity);
   const deleteFn = jest.fn(async () => ({ affected: 1 }));
   const create = jest.fn((partial: unknown) => partial);
+  const managerQuery =
+    overrides.managerQuery ?? jest.fn(async (_sql: string, _params?: unknown[]) => updateResult([]));
 
   const repository = {
     find,
@@ -51,13 +68,14 @@ function makeService(overrides: { queryBuilderResults?: unknown[] } = {}) {
     delete: deleteFn,
     create,
     createQueryBuilder: jest.fn(() => qb),
+    manager: { query: managerQuery },
   };
 
   const logger = { setContext() {}, log() {}, warn: jest.fn(), error() {} };
 
   const service = new ConnectionSyncJobService(repository as never, logger as never);
 
-  return { service, find, findOne, save, delete: deleteFn, queryBuilderCalls: calls, logger };
+  return { service, find, findOne, save, delete: deleteFn, managerQuery, queryBuilderCalls: calls, logger };
 }
 
 function whereFragments(calls: Array<{ method: string; args: unknown[] }>) {
@@ -149,6 +167,38 @@ describe('ConnectionSyncJobService.search — query construction', () => {
 
     const orderByCall = queryBuilderCalls.find((c) => c.method === 'orderBy');
     expect(orderByCall?.args).toEqual(['updated_at', 'DESC']);
+  });
+
+  it('appends the primary key to the sort, so a bounded search cannot straddle a tie', async () => {
+    const { service, queryBuilderCalls } = makeService();
+
+    await service.search(CONTEXT, { orderBy: 'updated_at:DESC', limit: 2 });
+
+    const tiebreak = queryBuilderCalls.find((c) => c.method === 'addOrderBy');
+    expect(tiebreak?.args).toEqual(['id', 'DESC']);
+  });
+
+  it('pushes a limit down to the query builder rather than trimming the result', async () => {
+    const { service, queryBuilderCalls } = makeService({
+      queryBuilderResults: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+    });
+
+    const rows = await service.search(CONTEXT, { orderBy: 'updated_at:DESC', limit: 2 });
+
+    const take = queryBuilderCalls.find((c) => c.method === 'take');
+    expect(take?.args).toEqual([2]);
+    // Deliberately NOT trimmed here: the bound is Postgres's to apply, and a
+    // service that also sliced would hide a missing LIMIT from this test.
+    expect(rows).toHaveLength(3);
+  });
+
+  it('orders a bounded search on the primary key when the caller passes no sort', async () => {
+    const { service, queryBuilderCalls } = makeService();
+
+    await service.search(CONTEXT, { limit: 1 });
+
+    const orderByCall = queryBuilderCalls.find((c) => c.method === 'orderBy');
+    expect(orderByCall?.args).toEqual(['id', 'ASC']);
   });
 
   it('warns and skips ordering on an invalid direction instead of passing it through to SQL', async () => {
@@ -243,5 +293,86 @@ describe('ConnectionSyncJobService.markAsCompleted', () => {
 
     const [saved] = save.mock.calls[0] as [{ error?: unknown }];
     expect('error' in saved).toBe(false);
+  });
+});
+
+describe('ConnectionSyncJobService.claimPending', () => {
+  it('issues a single atomic UPDATE gated on status = pending and reports whether it won', async () => {
+    const managerQuery = jest.fn(async (_sql: string, _params?: unknown[]) =>
+      updateResult([{ id: 'job-1' }]),
+    );
+    const { service } = makeService({ managerQuery });
+
+    const claimed = await service.claimPending(SYSTEM_CONTEXT, 'job-1');
+
+    expect(claimed).toBe(true);
+    const [sql, params] = managerQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain("SET status = 'in_progress'");
+    expect(sql).toContain("WHERE id = $1::uuid AND status = 'pending'");
+    expect(sql).toContain('RETURNING id');
+    expect(params).toEqual(['job-1']);
+  });
+
+  it("returns false when RETURNING comes back empty (the row was not 'pending')", async () => {
+    const { service } = makeService({ managerQuery: jest.fn(async () => updateResult([])) });
+
+    const claimed = await service.claimPending(SYSTEM_CONTEXT, 'job-1');
+
+    expect(claimed).toBe(false);
+  });
+
+  it('scopes the claim to the caller for a non-system context', async () => {
+    const managerQuery = jest.fn(async (_sql: string, _params?: unknown[]) =>
+      updateResult([{ id: 'job-1' }]),
+    );
+    const { service } = makeService({ managerQuery });
+
+    await service.claimPending(CONTEXT, 'job-1');
+
+    const [sql, params] = managerQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('AND user_id = $2::uuid');
+    expect(params).toEqual(['job-1', USER]);
+  });
+});
+
+describe('ConnectionSyncJobService.claimTransform', () => {
+  it('issues a single atomic UPDATE gated on an unset/stale claim and no completion, reporting whether it won', async () => {
+    const managerQuery = jest.fn(async (_sql: string, _params?: unknown[]) =>
+      updateResult([{ id: 'job-1' }]),
+    );
+    const { service } = makeService({ managerQuery });
+
+    const claimed = await service.claimTransform(SYSTEM_CONTEXT, 'job-1');
+
+    expect(claimed).toBe(true);
+    const [sql, params] = managerQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('SET transform_claimed_at = now()');
+    expect(sql).toContain('AND last_transformed IS NULL');
+    expect(sql).toContain(
+      "AND (transform_claimed_at IS NULL OR transform_claimed_at < now() - interval '1 hour')",
+    );
+    expect(sql).toContain('RETURNING id');
+    expect(params).toEqual(['job-1']);
+  });
+
+  it('returns false when RETURNING comes back empty (already claimed, or already transformed)', async () => {
+    const { service } = makeService({ managerQuery: jest.fn(async () => updateResult([])) });
+
+    const claimed = await service.claimTransform(SYSTEM_CONTEXT, 'job-1');
+
+    expect(claimed).toBe(false);
+  });
+
+  it('scopes the claim to the caller for a non-system context', async () => {
+    const managerQuery = jest.fn(async (_sql: string, _params?: unknown[]) =>
+      updateResult([{ id: 'job-1' }]),
+    );
+    const { service } = makeService({ managerQuery });
+
+    await service.claimTransform(CONTEXT, 'job-1');
+
+    const [sql, params] = managerQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql).toContain('AND user_id = $2::uuid');
+    expect(params).toEqual(['job-1', USER]);
   });
 });

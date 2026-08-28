@@ -17,7 +17,7 @@ import {
   type CommunicationLinkBackfillOptions,
   CommunicationLinkBackfillService,
 } from './CommunicationLinkBackfillService';
-import { DerivedRelationshipService } from './DerivedRelationshipService';
+import { type DerivedRelationshipOptions, DerivedRelationshipService } from './DerivedRelationshipService';
 import {
   type DeterministicEdgeBackfillOptions,
   DeterministicEdgeBackfillService,
@@ -28,16 +28,17 @@ import {
 } from './EventParticipantBackfillService';
 import { type GraphEnrichmentOptions, GraphEnrichmentService } from './GraphEnrichmentService';
 import { type HealSelfCollationOptions, HealSelfCollationService } from './HealSelfCollationService';
-import { InventoryReverseService } from './InventoryReverseService';
 import {
   DEFAULT_ESTIMATE_SOURCE_SYSTEMS,
   DEFAULT_MAX_GAP_HOURS,
   LocationEstimateService,
 } from './LocationEstimateService';
 import { NoteContentFoldService } from './NoteContentFoldService';
+import { ObjectReverseService } from './ObjectReverseService';
 import { type PersonStubBackfillOptions, PersonStubBackfillService } from './PersonStubBackfillService';
 import { RelationshipNormalizeService } from './RelationshipNormalizeService';
 import { type SearchIndexBackfillOptions, SearchIndexBackfillService } from './SearchIndexBackfillService';
+import { type SummaryBackfillOptions, SummaryBackfillService } from './SummaryBackfillService';
 
 /**
  * The canonical execution order of the orchestrated enrichment legs. A request
@@ -61,10 +62,11 @@ export const ORCHESTRATE_STAGES = [
   'geocode',
   'reverse_geocode',
   'reverse_position',
-  'reverse_inventory',
+  'reverse_object',
   'estimate_locations',
   'media_dimensions',
   'search_index',
+  'backfill_summaries',
 ] as const;
 
 export type OrchestrateStage = (typeof ORCHESTRATE_STAGES)[number];
@@ -76,6 +78,14 @@ export interface OrchestrateLegOptions {
   linkEvents?: Omit<EventParticipantBackfillOptions, 'onProgress'>;
   healSelfCollation?: HealSelfCollationOptions;
   materializeEdges?: Omit<DeterministicEdgeBackfillOptions, 'onProgress'>;
+  /**
+   * `derive_relationships` switches. The only one that matters to a caller is
+   * `reifyHouseholdGroups`: the aggregate legs project edges the user's data
+   * already asserts, the household leg mints a Group entity. A SCHEDULED caller
+   * must set it from `PersonalizationService.decideAction` rather than leave it
+   * defaulted — see `DerivationRunListener`.
+   */
+  deriveRelationships?: DerivedRelationshipOptions;
   extractGraph?: Omit<GraphEnrichmentOptions, 'onProgress'>;
   geocode?: { limit?: number; retryNull?: boolean };
   reverseGeocode?: { limit?: number; retryNull?: boolean };
@@ -87,6 +97,7 @@ export interface OrchestrateLegOptions {
   };
   mediaDimensions?: { limit?: number };
   searchIndex?: SearchIndexBackfillOptions;
+  backfillSummaries?: Omit<SummaryBackfillOptions, 'onProgress'>;
 }
 
 export interface OrchestrateBody {
@@ -196,7 +207,8 @@ export class MaintenanceOrchestratorService {
     private readonly graphEnrichmentService: GraphEnrichmentService,
     private readonly locationEstimateService: LocationEstimateService,
     private readonly searchIndexBackfillService: SearchIndexBackfillService,
-    private readonly inventoryReverseService: InventoryReverseService,
+    private readonly objectReverseService: ObjectReverseService,
+    private readonly summaryBackfillService: SummaryBackfillService,
   ) {
     this.logger.setContext(MaintenanceOrchestratorService.name);
   }
@@ -359,7 +371,7 @@ export class MaintenanceOrchestratorService {
         return this.relationshipNormalizeService.normalize(userId);
 
       case 'derive_relationships':
-        return this.derivedRelationshipService.derive(userId);
+        return this.derivedRelationshipService.derive(userId, options.deriveRelationships ?? {});
 
       case 'fold_notes':
         return this.noteContentFoldService.fold(userId);
@@ -379,8 +391,8 @@ export class MaintenanceOrchestratorService {
       case 'reverse_position':
         return this.runPositionReverseLeg(userId, options.reverseGeocode ?? {});
 
-      case 'reverse_inventory':
-        return this.inventoryReverseService.reverse(userId);
+      case 'reverse_object':
+        return this.objectReverseService.reverse(userId);
 
       case 'estimate_locations':
         return this.runEstimateLocationsLeg(userId, options.estimateLocations ?? {});
@@ -390,6 +402,12 @@ export class MaintenanceOrchestratorService {
 
       case 'search_index':
         return this.runSearchIndexLeg(body, progress);
+
+      case 'backfill_summaries':
+        return this.summaryBackfillService.backfill(userId, {
+          ...options.backfillSummaries,
+          onProgress: (partial) => progress({ ...partial }),
+        });
     }
   }
 

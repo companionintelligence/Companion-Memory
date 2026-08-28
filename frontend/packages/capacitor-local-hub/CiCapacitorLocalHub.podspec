@@ -5,7 +5,7 @@ package = JSON.parse(File.read(File.join(__dir__, 'package.json')))
 Pod::Spec.new do |s|
   # MUST be `Ci` + PascalCase of the unscoped package name, and the file MUST be named
   # `<s.name>.podspec`. `cap sync ios` REGENERATES the `def capacitor_pods` block of
-  # ../../apps/mobile/ios/App/Podfile from the installed plugins, deriving the pod name
+  # ../../apps/ios/ios/App/Podfile from the installed plugins, deriving the pod name
   # from package.json's `name` (`@ci/capacitor-local-hub` -> `CiCapacitorLocalHub`) and
   # the path from node_modules. A hand-written `pod 'CapacitorLocalHub', :path => ...`
   # line does not survive a sync, and CocoaPods then fails with
@@ -15,7 +15,7 @@ Pod::Spec.new do |s|
   s.version = package['version']
   s.summary = package['description']
   # This pod is private and never published to a spec repo -- it's consumed only via the
-  # generated `:path =>` entry in ../../apps/mobile/ios/App/Podfile (see capacitor_pods
+  # generated `:path =>` entry in ../../apps/ios/ios/App/Podfile (see capacitor_pods
   # there). license/homepage/author are filler for CocoaPods' benefit, not derived from
   # package.json (which has neither field), matching this repo's "Private &
   # Confidential" status.

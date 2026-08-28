@@ -66,7 +66,11 @@ import { PGBossEventService } from './services/PGBossEventService';
 })
 export class EventsModule {}
 
-export { EventService, LocalEventService };
+// PGBossEventService rides along because it owns the enqueue-side guard against
+// keyless sends to a de-duplicating queue, and the specs that assert a queue is
+// defended live in the domain that declares the queue (see
+// `domains/__tests__/support/queuePolicyGuardProbe.ts`).
+export { EventService, LocalEventService, PGBossEventService };
 export { OnEvent } from './decorators/OnEvent';
 export { Events, type EventPayloads } from './event-registry';
 export type { EventRegistry } from './registry';

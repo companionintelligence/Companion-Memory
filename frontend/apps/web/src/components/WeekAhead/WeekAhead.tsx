@@ -3,6 +3,7 @@ import { Fragment } from 'react';
 import { cn, Tooltip } from '@ci/shadcn';
 
 import type { DueForecast, DueItem, WeekForecast, WeekForecastCluster } from '@/api/useWeekAheadService';
+import { dueItemVisible, weekClusterVisible } from '@/lib/forecastDisplay';
 import { l0Background } from '@/components/ForecastStrip/ForecastStrip';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -58,7 +59,17 @@ function buildRows(week: WeekForecast): GridRow[] {
     }
   });
 
-  return [...rows.values()].sort((a, b) => Math.max(...b.probs) - Math.max(...a.probs)).slice(0, MAX_ROWS);
+  return [...rows.values()]
+    .filter((row) =>
+      weekClusterVisible({
+        name: row.name,
+        l0Class: row.l0Class,
+        pOccur: Math.max(...row.probs),
+        scheduled: row.scheduled.some(Boolean),
+      }),
+    )
+    .sort((a, b) => Math.max(...b.probs) - Math.max(...a.probs))
+    .slice(0, MAX_ROWS);
 }
 
 function daypartSummary(cluster: WeekForecastCluster | undefined): string | null {
@@ -203,8 +214,8 @@ export function WeekAhead({ week, due, className }: WeekAheadProps) {
     return null;
   }
 
-  const overdue = (due?.due ?? []).filter((d) => d.overdue);
-  const upcoming = (due?.due ?? []).filter((d) => !d.overdue).slice(0, MAX_DUE);
+  const overdue = (due?.due ?? []).filter((d) => d.overdue && dueItemVisible(d));
+  const upcoming = (due?.due ?? []).filter((d) => !d.overdue && dueItemVisible(d)).slice(0, MAX_DUE);
   const hasDue = overdue.length > 0 || upcoming.length > 0;
 
   return (

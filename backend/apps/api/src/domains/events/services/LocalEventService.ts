@@ -59,6 +59,11 @@ export class LocalEventService extends EventService implements BeforeApplication
   // `options.priority` is accepted for signature parity with the pg-boss
   // implementation and deliberately ignored: this service executes listeners
   // inline at the call site, so there is no pending queue to order.
+  //
+  // `options.startAfter` IS honoured (see delayFor()): silently running it
+  // immediately would mask timing-dependent bugs in dev/test that only the
+  // real pg-boss path — where the job genuinely isn't visible until then —
+  // would reproduce.
   async send<E extends string>(
     name: E,
     event: EventRegistry[keyof EventRegistry] | EventPayloads[keyof EventPayloads],
@@ -68,6 +73,10 @@ export class LocalEventService extends EventService implements BeforeApplication
     const userId = (event as { userId?: string }).userId;
 
     const executionPromise = ContextService.run({ traceId, userId }, async () => {
+      if (options?.startAfter !== undefined) {
+        await this.delayFor(options.startAfter);
+      }
+
       let targetQueues: Set<string>;
 
       if (options?.queue) {
@@ -125,12 +134,13 @@ export class LocalEventService extends EventService implements BeforeApplication
     return executionPromise;
   }
 
-  // The base class declares a third `options` parameter carrying `priority`.
-  // It is omitted here rather than accepted and discarded: inline execution has
-  // no queue to reorder, so there is nothing to honour.
+  // `priority` (also on the base class's `options`) is accepted for signature
+  // parity and deliberately ignored, same as in send(); `startAfter` is
+  // honoured via delayFor() below.
   async sendMany(
     queue: string,
     events: Array<{ name: string; data: Record<string, unknown> }>,
+    options?: Omit<EventSendOptions, 'queue'>,
   ): Promise<void> {
     if (events.length === 0) {
       return;
@@ -140,6 +150,10 @@ export class LocalEventService extends EventService implements BeforeApplication
       this.logger.warn(`Requested queue ${queue} does not exist. ${events.length} events will not be sent.`);
 
       return;
+    }
+
+    if (options?.startAfter !== undefined) {
+      await this.delayFor(options.startAfter);
     }
 
     // LocalEventService executes inline (no pg-boss), so there is no bulk-insert
@@ -167,6 +181,25 @@ export class LocalEventService extends EventService implements BeforeApplication
     this.logger.warn(
       `failJob(${queue}, ${jobId}) is a no-op for LocalEventService${output ? `: ${JSON.stringify(output)}` : ''}`,
     );
+  }
+
+  /**
+   * Block until `startAfter` elapses, mirroring pg-boss's own value handling
+   * (a Date/ISO string is an absolute time, a number is seconds from now).
+   * Single-process and inline, so a plain setTimeout is enough — no queue
+   * visibility semantics to reproduce.
+   */
+  private async delayFor(startAfter: Date | string | number): Promise<void> {
+    const delayMs =
+      typeof startAfter === 'number'
+        ? startAfter * 1000
+        : (startAfter instanceof Date ? startAfter : new Date(startAfter)).getTime() - Date.now();
+
+    if (delayMs <= 0) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
   private trackJob(promise: Promise<string[]>) {

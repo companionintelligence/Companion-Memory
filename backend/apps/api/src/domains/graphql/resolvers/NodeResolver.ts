@@ -14,9 +14,13 @@ import {
   ConceptService,
   ContentService,
   EventService,
+  GraphUtilityService,
   ItemService,
+  ObjectObservationService,
   PersonService,
   PlaceService,
+  ProductModelService,
+  ReceiptService,
 } from '@ci/domains/memory';
 import { NoteService } from '@ci/domains/notes';
 import { FileChunkService } from '@ci/domains/parsing';
@@ -39,9 +43,12 @@ import { ItemType } from '../types/ItemType';
 import { MessageType } from '../types/MessageType';
 import { Node } from '../types/Node';
 import { NoteType } from '../types/NoteType';
+import { ObjectObservationType } from '../types/ObjectObservationType';
 import { PersonType } from '../types/PersonType';
 import { PlaceType } from '../types/PlaceType';
+import { ProductModelType } from '../types/ProductModelType';
 import { QuestionType } from '../types/QuestionType';
+import { ReceiptType } from '../types/ReceiptType';
 import { TagType } from '../types/TagType';
 import { TaskType } from '../types/TaskType';
 import { ThreadType } from '../types/ThreadType';
@@ -61,12 +68,16 @@ export class NodeResolver {
     private readonly eventService: EventService,
     private readonly fileChunkService: FileChunkService,
     private readonly fileService: FileService,
+    private readonly graphUtilityService: GraphUtilityService,
     private readonly itemService: ItemService,
     private readonly messageService: MessageService,
     private readonly noteService: NoteService,
+    private readonly objectObservationService: ObjectObservationService,
     private readonly personService: PersonService,
     private readonly placeService: PlaceService,
+    private readonly productModelService: ProductModelService,
     private readonly questionService: QuestionService,
+    private readonly receiptService: ReceiptService,
     private readonly tagService: TagService,
     private readonly taskService: TaskService,
     private readonly threadService: ThreadService,
@@ -144,7 +155,17 @@ export class NodeResolver {
       }
 
       case 'file': {
-        const file = await this.fileService.findById(serviceContext, id);
+        // Two ids name a file. `ci.files.id` is what the file surfaces use;
+        // the GRAPH knows the file by its `ci.entities.entity_id`, which for
+        // files — alone among the memory types — is a different value, joined
+        // through `linked_table = 'files' / linked_id`. A relationship card
+        // (an ATTACHED_TO edge from a post to its video, say) carries the graph
+        // id, so a drawer opened from it asked `node(file:<entity_id>)`, found
+        // nothing, and showed the bare stub. Try the file id first, then the
+        // graph id.
+        const file =
+          (await this.fileService.findById(serviceContext, id)) ??
+          (await this.findFileByGraphEntityId(serviceContext, id));
 
         return file ? FileType.toType(file) : null;
       }
@@ -189,6 +210,24 @@ export class NodeResolver {
         return place ? PlaceType.toType(place) : null;
       }
 
+      case 'product': {
+        const product = await this.productModelService.findById(serviceContext, id);
+
+        return product ? ProductModelType.toType(product) : null;
+      }
+
+      case 'receipt': {
+        const receipt = await this.receiptService.findById(serviceContext, id);
+
+        return receipt ? ReceiptType.toType(receipt) : null;
+      }
+
+      case 'observation': {
+        const observation = await this.objectObservationService.findById(serviceContext, id);
+
+        return observation ? ObjectObservationType.toType(observation) : null;
+      }
+
       case 'question': {
         const question = await this.questionService.findById(serviceContext, id);
 
@@ -216,5 +255,30 @@ export class NodeResolver {
       default:
         return null;
     }
+  }
+
+  /**
+   * The `ci.files` row behind a File GRAPH node, or null.
+   *
+   * Only files carry two ids (see the `file` case above). The graph row is
+   * scoped to its owner, so a user-scoped context is required; the system
+   * context has no owner to look under and gets null, the same answer an
+   * unknown id gets.
+   */
+  private async findFileByGraphEntityId(
+    serviceContext: ReturnType<typeof toServiceContext>,
+    entityId: string,
+  ) {
+    if (typeof serviceContext.userId !== 'string') {
+      return null;
+    }
+
+    const [node] = await this.graphUtilityService.getNodesByIds([entityId], serviceContext.userId);
+
+    if (node?.linked_table !== 'files' || node.linked_id == null) {
+      return null;
+    }
+
+    return this.fileService.findById(serviceContext, node.linked_id);
   }
 }

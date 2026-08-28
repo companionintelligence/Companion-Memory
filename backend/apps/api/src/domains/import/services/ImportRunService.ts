@@ -133,18 +133,18 @@ const DEFAULT_STAGES: readonly ImportStageKindName[] = IMPORT_STAGE_KINDS;
 const STALE_STAGE_MINUTES = 10;
 
 /**
- * A run whose staged rows have never been pushed. `$1` = user id, `$2` =
- * optional uuid[] filter (NULL means every run). One constant shared VERBATIM
- * by {@link ImportRunService.listUnpushed} and
- * {@link ImportRunService.startPush}, so what the Sync card shows is exactly
- * what Sync acts on — two copies of this predicate would drift, and the drift
- * would be a card that lists a run the button then skips.
+ * "This run's staged payload is still PUSHABLE" — everything about the run
+ * itself that makes the Sync card offer it, with no user or id scoping.
+ *
+ * THREE callers, deliberately sharing one expression: {@link PUSH_ELIGIBLE_WHERE}
+ * (both Sync surfaces), and — negated — `ImportRetentionService`, whose history
+ * sweep must never destroy a payload this predicate is still offering to push.
+ * That pairing is the whole point of the extraction: the offer and the deletion
+ * are two halves of one decision, and a second copy of these clauses would drift
+ * into a Sync card that promises a push over rows retention already deleted.
+ * **Editing this changes what retention refuses to collect.**
  *
  * Why each clause:
- * - `finished_at IS NOT NULL` — nothing in flight. This excludes a run still
- *   parsing, and it is also what makes the reopen double as the concurrency
- *   guard: the loser of two racing Sync clicks re-evaluates this predicate
- *   against the winner's reopened row and finds `finished_at` NULL.
  * - `status <> 'cancelled'` — a cancelled run is a decision, not a backlog.
  *   `partial` runs stay ELIGIBLE: a partially-parsed archive still staged real
  *   rows, and pushing them is the point.
@@ -156,24 +156,73 @@ const STALE_STAGE_MINUTES = 10;
  * - pending rows in EITHER lane — PushStage pushes entities as well as items,
  *   and a parse that staged nothing would otherwise sit in the Sync card
  *   forever showing "0 items".
+ *
+ * @param runRef  Alias of the `import_runs` row in the outer query.
+ */
+export function pushableRunSql(runRef: string): string {
+  return `(
+      ${runRef}.status <> 'cancelled'
+  AND EXISTS (
+        SELECT 1 FROM ci_import.import_stages ps
+         WHERE ps.run_id = ${runRef}.id AND ps.kind = 'parse' AND ps.status = 'completed')
+  AND NOT EXISTS (
+        SELECT 1 FROM ci_import.import_stages xs
+         WHERE xs.run_id = ${runRef}.id AND xs.kind = 'push')
+  AND (EXISTS (
+        SELECT 1 FROM ci_import.staged_items i
+         WHERE i.run_id = ${runRef}.id AND i.push_status = 'pending')
+    OR EXISTS (
+        SELECT 1 FROM ci_import.staged_entities e
+         WHERE e.run_id = ${runRef}.id AND e.push_status = 'pending')))`;
+}
+
+/**
+ * A run whose staged rows have never been pushed. `$1` = user id, `$2` =
+ * optional uuid[] filter (NULL means every run). One constant shared VERBATIM
+ * by {@link ImportRunService.listUnpushed} and
+ * {@link ImportRunService.startPush}, so what the Sync card shows is exactly
+ * what Sync acts on — two copies of this predicate would drift, and the drift
+ * would be a card that lists a run the button then skips.
+ *
+ * The scoping half only. What makes a payload pushable lives in
+ * {@link pushableRunSql}, because retention needs the same answer.
+ *
+ * `finished_at IS NOT NULL` — nothing in flight. This excludes a run still
+ * parsing, and it is also what makes the reopen double as the concurrency
+ * guard: the loser of two racing Sync clicks re-evaluates this predicate
+ * against the winner's reopened row and finds `finished_at` NULL.
  */
 const PUSH_ELIGIBLE_WHERE = `
       r.user_id = $1::uuid
   AND r.finished_at IS NOT NULL
-  AND r.status <> 'cancelled'
   AND ($2::uuid[] IS NULL OR r.id = ANY($2::uuid[]))
-  AND EXISTS (
-        SELECT 1 FROM ci_import.import_stages ps
-         WHERE ps.run_id = r.id AND ps.kind = 'parse' AND ps.status = 'completed')
-  AND NOT EXISTS (
-        SELECT 1 FROM ci_import.import_stages xs
-         WHERE xs.run_id = r.id AND xs.kind = 'push')
-  AND (EXISTS (
-        SELECT 1 FROM ci_import.staged_items i
-         WHERE i.run_id = r.id AND i.push_status = 'pending')
-    OR EXISTS (
-        SELECT 1 FROM ci_import.staged_entities e
-         WHERE e.run_id = r.id AND e.push_status = 'pending'))`;
+  AND ${pushableRunSql('r')}`;
+
+/**
+ * "This run still holds staged media whose bytes nothing has stored."
+ *
+ * One predicate, two callers, deliberately shared VERBATIM: the reclaim-time
+ * check in {@link ImportRunService.hasUnstoredMedia}, and the retention sweep's
+ * candidate query, which has to exclude such runs BEFORE its `LIMIT` or one
+ * stuck run at the head of the queue eats the whole night's budget. Two copies
+ * of this would drift, and the drift would be a sweep that deletes the row
+ * proving a photo is only on disk.
+ *
+ * @param runRef  SQL expression for the run id — a bound parameter, or the
+ *                outer query's correlated column.
+ * @param classificationsParam  Bound parameter holding {@link FILE_CLASSIFICATIONS}.
+ */
+export function unstoredMediaExistsSql(runRef: string, classificationsParam: string): string {
+  return `EXISTS (
+            SELECT 1 FROM ci_import.staged_items
+             WHERE run_id = ${runRef}
+               AND (media_type ~ '^(image|video|audio)/'
+                    OR classification = ANY(${classificationsParam}::text[]))
+               AND COALESCE(intermediate_location, original_location) IS NOT NULL
+               AND metadata->>'FileId' IS NULL
+               AND metadata->>'FileMediaError' IS NULL
+          )`;
+}
 
 /**
  * The run/stage spine: what a person sees while their export imports.
@@ -1316,14 +1365,7 @@ export class ImportRunService {
    */
   async hasUnstoredMedia(runId: string): Promise<boolean> {
     const [row] = (await this.dataSource.query(
-      `SELECT EXISTS (
-                SELECT 1 FROM ci_import.staged_items
-                 WHERE run_id = $1::uuid
-                   AND (media_type ~ '^(image|video|audio)/' OR classification = ANY($2::text[]))
-                   AND COALESCE(intermediate_location, original_location) IS NOT NULL
-                   AND metadata->>'FileId' IS NULL
-                   AND metadata->>'FileMediaError' IS NULL
-              ) AS pending`,
+      `SELECT ${unstoredMediaExistsSql('$1::uuid', '$2')} AS pending`,
       [runId, [...FILE_CLASSIFICATIONS]],
     )) as Array<{ pending: boolean }>;
 

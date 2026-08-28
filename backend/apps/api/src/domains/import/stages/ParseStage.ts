@@ -6,7 +6,12 @@ import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 
-import { dataSourcesRecognize, type DataSourceRecognition, type DirEntry } from '../datasources/registry';
+import {
+  dataSourcesRecognize,
+  isPathWithinOrEqual,
+  type DataSourceRecognition,
+  type DirEntry,
+} from '../datasources/registry';
 import { COLLAPSED_DISTINCT_PATH, StagedWriter, type StagedCounts } from '../staging/StagedWriter';
 import { describeStageFailure, withStageContext } from '../telemetry/stageError';
 import { buildStageSummary, SUMMARY_KEY, type StageUnitInput } from '../telemetry/stageSummary';
@@ -54,7 +59,7 @@ export class ParseStage implements ImportStageRunner {
   async run(context: StageRunContext): Promise<StageOutcome> {
     await context.progress({ processed: 0, total: null, phase: 'recognizing' });
 
-    const recognized = await this.recognize(context.scratchDir);
+    const recognized = await this.recognize(context, context.scratchDir);
 
     if (recognized.length === 0) {
       // Not an error. A person can upload something this appliance has no parser
@@ -205,15 +210,46 @@ export class ParseStage implements ImportStageRunner {
    * `descend: true` because the tree is whatever the archive contained: a bare
    * `.gpx` sitting one level down is the single-file drag-and-drop case, and
    * without descent the containing folder matches nothing at all.
+   *
+   * Recognition ticks its progress per entry scanned. It is normally
+   * sub-second, but it is also thousands of tiny reads — and when the disk is
+   * busy (a neighbouring run's 350GB unpack) those crawl, and a real LinkedIn
+   * import sat at a bare "recognizing" for six minutes, indistinguishable from
+   * a hang. The stage writes nothing between "recognizing" and the first
+   * "parsing …", so this tick is the only thing that can show the difference.
    */
-  private async recognize(scratchDir: string): Promise<DataSourceRecognition[]> {
+  private async recognize(context: StageRunContext, scratchDir: string): Promise<DataSourceRecognition[]> {
     const entry: DirEntry = {
       filename: path.basename(scratchDir),
       fullPath: scratchDir,
       fsRoot: scratchDir,
     };
 
-    const matches = await dataSourcesRecognize(undefined, entry, {}, { descend: true });
+    // Locally throttled: the listener already caps writes at one per second,
+    // but every un-throttled call still costs a promise and a formatted string
+    // per directory entry. Fire-and-forget — recognition must not wait on its
+    // own progress line.
+    let lastTick = 0;
+    const matches = await dataSourcesRecognize(
+      undefined,
+      entry,
+      {},
+      {
+        descend: true,
+        onEntry: (scanned) => {
+          const now = Date.now();
+
+          if (now - lastTick < 1_000) {
+            return;
+          }
+
+          lastTick = now;
+          void context
+            .progress({ processed: 0, total: null, phase: `recognizing (${scanned} scanned)` })
+            .catch(() => undefined);
+        },
+      },
+    );
 
     return dropGenericWhenSpecialised(matches);
   }
@@ -270,6 +306,10 @@ export class ParseStage implements ImportStageRunner {
         // scratch service owns `scratchDir`. Pointing it at this run's scratch
         // puts those bytes under the reclaim that already runs when the run ends.
         mediaStoreDir: context.scratchDir,
+        // Set only on the surviving `generic` match by `dropGenericWhenSpecialised`
+        // — every other match's `excludePaths` is undefined, and every importer
+        // but `generic` ignores the field regardless.
+        excludePaths: match.excludePaths,
         log: (level, message, meta) => {
           if (level === 'error' || level === 'warn') {
             this.logger.warn(message, { runId: context.runId, dataSource: name, ...meta });
@@ -311,10 +351,18 @@ export class ParseStage implements ImportStageRunner {
  *  - `entitiesGrown` — a repeat sighting of a person or a dish merged into the
  *    row already staged. Also a record consumed that did not become a new row.
  *
- * `consumed` is left to be derived rather than measured: no parser reports how
- * many records it read, so `produced + dropped` is the honest floor and the
- * summary says as much by construction. Claiming a measured figure the parsers
- * do not supply would be worse than deriving one.
+ * `consumed` is derived (`produced + dropped`) unless the parser called
+ * `pipeline.consumed()` — `counts.recordsRead` is then a MEASURED figure
+ * (`consumedOverride`), and the reconciliation check in `stageSummary.ts` can
+ * actually fail for that unit instead of holding by construction. A parser
+ * that never calls it keeps the derived floor, which can never disagree with
+ * itself.
+ *
+ * `counts.keeps` is deliberately NOT folded in here. A keep is a record a gate
+ * would have discarded and the parser rescued — it IS in `produced`, so adding
+ * it to `drops` would count one row as both made and lost, and the run UI
+ * renders `drops` as the loss report. It rides on `detail.sources[].keeps`
+ * instead (ParseStage spreads `writer.totals` there).
  */
 function parseUnit(
   dataSource: string,
@@ -343,31 +391,125 @@ function parseUnit(
     // the QA corpus, and the answer is always "look at what it matched".
     path: where,
     ...(error != null ? { error } : {}),
+    ...(counts.recordsRead != null ? { consumedOverride: counts.recordsRead } : {}),
   };
 }
 
 /**
- * Drop the catch-all when a real parser claimed the tree.
+ * Keep the catch-all out of what a real parser already claimed — scoped to
+ * PATHS, not silenced for the whole run just because a real parser matched
+ * somewhere.
  *
  * `generic` returns `confidence: 1` unconditionally without inspecting
  * anything, so it matches every archive — and because this stage runs EVERY
- * recognized source, it then re-read everything the specialised parsers had
- * already read. On a real Google Takeout that produced 80,067 duplicate
- * staged rows next to 309,689 Google Voice ones, with 67,065 filenames
- * overlapping exactly. They push as contentless `ci.content` rows (no text,
- * no url, no file, no event), and since `ci.content` carries no time column
- * they sort ahead of every genuine memory — so the default Memory view became
- * 80k empty stubs, and per-source counts were inflated 17.5%.
+ * recognized source, an unscoped `generic` re-reads everything the specialised
+ * parsers had already read. On a real Google Takeout that produced 80,067
+ * duplicate staged rows next to 309,689 Google Voice ones, with 67,065
+ * filenames overlapping exactly. They push as contentless `ci.content` rows
+ * (no text, no url, no file, no event), and since `ci.content` carries no time
+ * column they sort ahead of every genuine memory — so the default Memory view
+ * became 80k empty stubs, and per-source counts were inflated 17.5%.
  *
- * Upstream made this selection in its drop zone
- * (`cands.filter(c => c.dataSource !== 'generic')`); the selection layer was
- * not ported, and no API can deselect an importer. Generic stays as the SOLE
- * match, which is what makes dragging a bare `.gpx` or a loose PDF still work.
+ * The FIRST fix here (upstream did this selection in its drop zone,
+ * `cands.filter(c => c.dataSource !== 'generic')`) dropped `generic` outright
+ * whenever ANY specialised source matched ANYWHERE in the tree — name-only,
+ * path-blind. That over-corrected: `facebook.ts` returns `confidence: 0.6` for
+ * ANY directory that merely contains a `messages/` entry, no further
+ * inspection, and that single weak signal anywhere in a drag-and-drop tree was
+ * enough to zero out `generic` for the WHOLE tree — including a loose file
+ * dropped somewhere facebook's recognizer never touched, which then silently
+ * never imported at all. This function now scopes the exclusion to the paths
+ * that actually got claimed instead.
+ *
+ * A directory-level match is treated as claiming its ENTIRE `matchedPath`
+ * subtree, not just the specific files its importer happens to read out of
+ * it — the same conservative reading a 0.6 `facebook` guess needs: excluding
+ * everything under that directory is what avoids re-staging files it already
+ * owns, without this function having to know exactly which files that were.
+ * `generic`'s own walker (`datasources/generic.ts`) is what actually prunes
+ * those subtrees at fileImport time, via the `excludePaths` this function
+ * attaches to the surviving `generic` match — see `ParseStage.parseOne` and
+ * `ImportParams.excludePaths`.
+ *
+ * `generic` stays as the SOLE match when nothing specialised matched at all —
+ * that's the bare `.gpx` / loose-PDF drag-and-drop case, and there is nothing
+ * to scope around, so it keeps running exactly as before.
+ *
+ * Path info is required to compute a scoped exclusion; where it is missing —
+ * every fixture in `genericExclusion.test.ts` included — there is nothing to
+ * decide "covered vs. not" with, so this falls back to the original
+ * all-or-nothing drop: the safe default when there is no exclusion mechanism
+ * to lean on, matching `isAncestorPath`'s own "unknown means nested" fallback
+ * in `registry.ts`.
  */
 export function dropGenericWhenSpecialised(matches: DataSourceRecognition[]): DataSourceRecognition[] {
   const specialised = matches.filter((match) => match.data_source.name !== GENERIC_DATA_SOURCE);
 
-  return specialised.length > 0 ? specialised : matches;
+  if (specialised.length === 0) {
+    // Sole survivor: no specialised claims to scope around.
+    return matches;
+  }
+
+  const generic = matches.find((match) => match.data_source.name === GENERIC_DATA_SOURCE);
+
+  if (!generic) {
+    return specialised;
+  }
+
+  const excludePaths: string[] = [];
+
+  for (const match of specialised) {
+    if (pathCoveredBy(generic.matchedPath, match.matchedPath)) {
+      // This one claim already spans everything `generic` would see — there is
+      // nothing left to scope around, so drop it entirely (today's behavior).
+      return specialised;
+    }
+
+    if (pathStrictlyContains(generic.matchedPath, match.matchedPath)) {
+      excludePaths.push(match.matchedPath as string);
+    }
+  }
+
+  if (excludePaths.length === 0) {
+    // No specialised claim sat inside `generic`'s own tree (including every
+    // case where path info was simply absent) — there is nothing to scope
+    // around, so fall back to dropping `generic` rather than risk it
+    // re-reading something a claim we couldn't place actually covers.
+    return specialised;
+  }
+
+  return [...specialised, { ...generic, excludePaths }];
+}
+
+/**
+ * Does `specialisedPath` fully cover `genericPath` — i.e. is there nothing
+ * left inside `genericPath` that isn't already claimed? True when either path
+ * is unknown (nothing to compute an exclusion from — see
+ * `dropGenericWhenSpecialised`'s doc comment) or when `specialisedPath` is
+ * `genericPath` itself or an ancestor of it.
+ */
+function pathCoveredBy(genericPath: string | undefined, specialisedPath: string | undefined): boolean {
+  if (genericPath == null || specialisedPath == null) {
+    return true;
+  }
+
+  return isPathWithinOrEqual(specialisedPath, genericPath);
+}
+
+/**
+ * Is `specialisedPath` a PROPER descendant of `genericPath` — a claim that
+ * sits somewhere inside `generic`'s own tree without being all of it? That is
+ * exactly the shape `dataSourcesRecognize`'s dedup produces in practice:
+ * `generic` collapses to the scratch tree's root, and every specialised match
+ * is either that same root (covered, handled above) or found by descending
+ * into it.
+ */
+function pathStrictlyContains(genericPath: string | undefined, specialisedPath: string | undefined): boolean {
+  if (genericPath == null || specialisedPath == null || genericPath === specialisedPath) {
+    return false;
+  }
+
+  return isPathWithinOrEqual(genericPath, specialisedPath);
 }
 
 /**

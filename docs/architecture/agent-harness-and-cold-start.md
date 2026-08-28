@@ -2,7 +2,12 @@
 
 > **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
-> Status: **implemented** on `feat/5-6-7`.
+> Status: **implemented and merged to `main`** (2026-08-17; `places.next` arrived
+> with [#2045](https://github.com/companionintelligence/CI-Server/pull/2045)).
+> Re-verified against `main` on 2026-08-19: `IntentsController` mounts
+> `['api/intents', 'api/agent/intents']` with `POST :name/execute`, `PlacesNextTool`
+> registers `places.next`, and `grounded.prompts` / `derivation.engines` both ship
+> `true` in `config/default.json`.
 > Tracker: leftovers from [CI-Engineering #59](https://github.com/companionintelligence/CI-Engineering/issues/59)
 > and [#63](https://github.com/companionintelligence/CI-Engineering/issues/63)
 > · epic [#49](https://github.com/companionintelligence/CI-Engineering/issues/49)

@@ -14,7 +14,7 @@
  * PKCE is persisted to localStorage before Safari opens because iOS often kills
  * the webview while the user is on the Portal, then cold-starts us from the callback.
  */
-import { addAppUrlOpenListener, closeBrowser, getLaunchUrl, openExternalUrl } from '@ci/common';
+import { addAppUrlOpenListener, apiFetch, closeBrowser, getLaunchUrl, openExternalUrl } from '@ci/common';
 
 import { DEFAULT_PORTAL_URL } from './portal-client';
 
@@ -32,13 +32,20 @@ export interface OidcTokens {
   expiresIn: number | null;
 }
 
-/** Read `email` from an OIDC id_token payload. Display-only — not a signature check. */
-export function emailFromIdToken(idToken: string | null | undefined): string | null {
-  if (!idToken) {
+export interface JwtClaims {
+  aud?: string | string[];
+  email?: string;
+  exp?: number;
+  iss?: string;
+}
+
+/** Decode a JWT payload without verifying the signature. Display / routing only. */
+export function decodeJwtPayload(token: string | null | undefined): JwtClaims | null {
+  if (!token) {
     return null;
   }
 
-  const payload = idToken.split('.')[1];
+  const payload = token.split('.')[1];
 
   if (!payload) {
     return null;
@@ -46,12 +53,63 @@ export function emailFromIdToken(idToken: string | null | undefined): string | n
 
   try {
     const padded = payload.replace(/-/g, '+').replace(/_/g, '/');
-    const json = JSON.parse(atob(padded)) as { email?: unknown };
 
-    return typeof json.email === 'string' && json.email.trim() ? json.email.trim() : null;
+    return JSON.parse(atob(padded)) as JwtClaims;
   } catch {
     return null;
   }
+}
+
+/** Read `email` from an OIDC id_token payload. Display-only — not a signature check. */
+export function emailFromIdToken(idToken: string | null | undefined): string | null {
+  const email = decodeJwtPayload(idToken)?.email;
+
+  return typeof email === 'string' && email.trim() ? email.trim() : null;
+}
+
+/**
+ * Audiences Memory's PortalTokenService accepts today (auth.portal.audience).
+ * better-auth access tokens default `aud` to the Portal issuer URL, which is
+ * not on that list — those 401 at POST /api/keys. Prefer a token whose aud is
+ * a first-party client id (the id_token), and skip expired JWTs.
+ */
+const MEMORY_PORTAL_AUDIENCES = new Set([
+  'ci-server',
+  'ci-hub',
+  'ci-import-tools',
+  'ci-browser-extension',
+  'ci-even',
+  'ci-applet',
+]);
+
+function audienceValues(aud: JwtClaims['aud']): string[] {
+  if (!aud) {
+    return [];
+  }
+
+  return (Array.isArray(aud) ? aud : [aud]).filter((value) => value.length > 0);
+}
+
+export function isJwtExpired(token: string, nowSeconds = Date.now() / 1000): boolean {
+  const exp = decodeJwtPayload(token)?.exp;
+
+  return typeof exp === 'number' && exp < nowSeconds - 30;
+}
+
+/** Portal bearers to try against Memory `/api/keys`, id_token first when it is still valid. */
+export function selectMemoryPortalBearers(tokens: Array<string | null | undefined>): string[] {
+  const unique = [...new Set(tokens.filter((value): value is string => Boolean(value)))];
+  const notExpired = unique.filter((token) => !isJwtExpired(token));
+  const liveJwts = notExpired.filter((token) => decodeJwtPayload(token));
+  const preferred = liveJwts.filter((token) =>
+    audienceValues(decodeJwtPayload(token)?.aud).some((aud) => MEMORY_PORTAL_AUDIENCES.has(aud)),
+  );
+
+  if (preferred.length > 0) {
+    return preferred;
+  }
+
+  return liveJwts.length > 0 ? liveJwts : notExpired;
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {
@@ -96,6 +154,10 @@ function persistPendingOidc(pending: PendingOidc): void {
   } catch {
     // Private mode / quota — warm-resume via the live listener may still work.
   }
+}
+
+export function hasPendingPortalOidc(): boolean {
+  return readPendingOidc() != null;
 }
 
 function readPendingOidc(): PendingOidc | null {
@@ -228,6 +290,7 @@ function awaitOidcCallback(
       unlisten?.();
       signal?.removeEventListener('abort', onAbort);
     };
+
     const onAbort = () => {
       cleanup();
       void closeBrowser();
@@ -289,44 +352,35 @@ function awaitOidcCallback(
   });
 }
 
-type CapacitorHttpPlugin = {
-  request: (opts: {
-    url: string;
-    method?: string;
-    headers?: Record<string, string>;
-    data?: unknown;
-    connectTimeout?: number;
-    readTimeout?: number;
-  }) => Promise<{ status: number; data: unknown; headers?: Record<string, string> }>;
-};
+function portalTokenErrorMessage(status: number, body: unknown): string {
+  if (body && typeof body === 'object') {
+    const rec = body as Record<string, unknown>;
+    const text = [rec.error_description, rec.error, rec.message].find(
+      (value): value is string => typeof value === 'string' && value.trim().length > 0,
+    );
 
-async function tokenFetch(url: string, body: URLSearchParams): Promise<Response> {
-  const cap =
-    typeof window !== 'undefined'
-      ? (
-          window as unknown as {
-            Capacitor?: { Plugins?: { CapacitorHttp?: CapacitorHttpPlugin } };
-          }
-        ).Capacitor?.Plugins?.CapacitorHttp
-      : undefined;
-
-  if (cap?.request) {
-    const result = await cap.request({
-      url,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      data: body.toString(),
-      connectTimeout: 15_000,
-      readTimeout: 15_000,
-    });
-    const raw = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? {});
-
-    return new Response(raw, { status: result.status, headers: result.headers });
+    if (text) {
+      return text;
+    }
   }
 
-  return fetch(url, {
+  if (status === 403) {
+    return 'Portal refused the token exchange (403). New accounts must verify the email Portal sent, then sign in again.';
+  }
+
+  return `Token exchange failed (${status})`;
+}
+
+async function tokenFetch(portal: string, body: URLSearchParams): Promise<Response> {
+  return apiFetch(`${portal}/api/auth/oauth2/token`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      // better-auth origin check + Cloudflare bot rules treat a missing/native
+      // Origin as a cross-site POST. Speak as the Portal itself.
+      Origin: portal,
+      Referer: `${portal}/`,
+    },
     body: body.toString(),
     signal: AbortSignal.timeout(15_000),
   });
@@ -342,19 +396,18 @@ async function exchangeCodeOnce(portal: string, code: string, codeVerifier: stri
     code,
     code_verifier: codeVerifier,
   });
-  const res = await tokenFetch(`${portal}/api/auth/oauth2/token`, body);
+  const res = await tokenFetch(portal, body);
 
   if (!res.ok) {
-    let message = `Token exchange failed (${res.status})`;
+    let parsed: unknown;
 
     try {
-      const err = (await res.json()) as { error_description?: string; error?: string };
-      message = err.error_description || err.error || message;
+      parsed = await res.json();
     } catch {
-      /* keep default */
+      parsed = undefined;
     }
 
-    throw new Error(message);
+    throw new Error(portalTokenErrorMessage(res.status, parsed));
   }
 
   const data = (await res.json()) as {

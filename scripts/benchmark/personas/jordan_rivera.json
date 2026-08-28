@@ -1,0 +1,166 @@
+{
+  "_comment": "Synthetic persona for memory system benchmarking. All facts are fictional.",
+  "persona_id": "jordan_rivera",
+  "name": "Jordan Rivera",
+  "description": "Senior software engineer, 34, Austin TX. Used to illustrate both flat recall and relational graph queries.",
+
+  "facts": [
+    { "id": "f001", "text": "Jordan Rivera lives in Austin, Texas", "category": "flat" },
+    { "id": "f002", "text": "Jordan is 34 years old and was born in Miami, Florida", "category": "flat" },
+    { "id": "f003", "text": "Jordan works as a Senior Software Engineer at a company called Meridian AI", "category": "flat" },
+    { "id": "f004", "text": "Jordan has a dog named Mochi, a rescue greyhound adopted one year ago", "category": "flat" },
+    { "id": "f005", "text": "Jordan's best friend is Maya Chen, a data scientist who lives in Denver and works at Palantir", "category": "relational" },
+    { "id": "f006", "text": "Jordan met Maya Chen at PyCon 2021 in Salt Lake City", "category": "relational" },
+    { "id": "f007", "text": "Jordan has a brother named Sam Rivera who is a product manager at Google and lives in Seattle", "category": "relational" },
+    { "id": "f008", "text": "Jordan's parents are named Elena and Carlos, and they live in Miami, Florida", "category": "relational" },
+    { "id": "f009", "text": "Jordan enjoys rock climbing at the Austin Bouldering Project", "category": "flat" },
+    { "id": "f010", "text": "Jordan plays acoustic guitar and has been playing for ten years", "category": "flat" },
+    { "id": "f011", "text": "Jordan's favorite author is Ted Chiang, and a favorite story is Story of Your Life", "category": "flat" },
+    { "id": "f012", "text": "Jordan owns a Specialized Diverge gravel bike", "category": "flat" },
+    { "id": "f013", "text": "Jordan uses Go for backend development and React for frontend", "category": "flat" },
+    { "id": "f014", "text": "Jordan switched from Python to Go for backend work about six months ago", "category": "temporal" },
+    { "id": "f015", "text": "Jordan moved to Austin from San Francisco three years ago", "category": "temporal" },
+    { "id": "f016", "text": "Jordan was recently promoted to Senior Software Engineer two months ago", "category": "temporal" },
+    { "id": "f017", "text": "Jordan is planning a trip to Japan in October", "category": "temporal" },
+    { "id": "f018", "text": "Jordan is currently reading Project Hail Mary by Andy Weir", "category": "flat" },
+    { "id": "f019", "text": "Jordan's favorite food is tacos al pastor", "category": "flat" },
+    { "id": "f020", "text": "Jordan is learning Spanish and is at an intermediate level", "category": "flat" }
+  ],
+
+  "sessions": [
+    {
+      "id": "sess_1",
+      "messages": [
+        { "role": "user", "content": "Quick intro since this is a fresh chat — I'm Jordan Rivera, a senior software engineer living in Austin, Texas." },
+        { "role": "assistant", "content": "Nice to meet you, Jordan. What's on your mind?" },
+        { "role": "user", "content": "I just got back from a great hike at Barton Creek near my house here in Austin." },
+        { "role": "assistant", "content": "Barton Creek is beautiful! How was the trail?" },
+        { "role": "user", "content": "Gorgeous. I grew up in Miami but I've been in Austin for about three years now—so much better for outdoor stuff." },
+        { "role": "assistant", "content": "Have you done much climbing here too?" },
+        { "role": "user", "content": "Yeah, I go to the Austin Bouldering Project pretty regularly. Mochi, my greyhound, waits in the car—I rescued her about a year ago." }
+      ]
+    },
+    {
+      "id": "sess_2",
+      "messages": [
+        { "role": "user", "content": "Had a long day at Meridian AI—we're in the middle of a big Go migration and it's a lot of work." },
+        { "role": "assistant", "content": "A Go migration sounds intense. Are you moving from another language?" },
+        { "role": "user", "content": "Yeah, we were a Python shop but switched to Go for the backend about six months ago. It's faster but the ecosystem is different." },
+        { "role": "assistant", "content": "How long have you been at Meridian AI?" },
+        { "role": "user", "content": "Two years. And actually I just got promoted to Senior Engineer a couple months ago, so that's exciting at least." }
+      ]
+    },
+    {
+      "id": "sess_3",
+      "messages": [
+        { "role": "user", "content": "My brother Sam is visiting from Seattle this weekend. He's a PM at Google." },
+        { "role": "assistant", "content": "That sounds fun! Are you planning anything special?" },
+        { "role": "user", "content": "Just showing him around. My parents are flying in from Miami too, so it'll be a full house—Elena and Carlos both love Austin." },
+        { "role": "assistant", "content": "Big family gathering!" },
+        { "role": "user", "content": "Yeah. I'm also trying to squeeze in a call with my best friend Maya—she's in Denver working at Palantir. We met at PyCon 2021 in Salt Lake City actually." }
+      ]
+    },
+    {
+      "id": "sess_4",
+      "messages": [
+        { "role": "user", "content": "I've been rewinding on Project Hail Mary while practicing guitar in the evenings." },
+        { "role": "assistant", "content": "Both at once? How long have you been playing?" },
+        { "role": "user", "content": "About ten years, acoustic. Andy Weir is great but Ted Chiang is still my favorite—Story of Your Life is incredible." },
+        { "role": "assistant", "content": "What else do you have going on?" },
+        { "role": "user", "content": "Trying to keep up my Spanish—I'm intermediate—and saving up for a Japan trip I'm planning for October." }
+      ]
+    },
+    {
+      "id": "sess_5",
+      "messages": [
+        { "role": "user", "content": "Tacos al pastor for lunch today—the place near the office is the best I've had outside of Mexico City." },
+        { "role": "assistant", "content": "Sounds like a good lunch spot." },
+        { "role": "user", "content": "Totally. Also finally bit the bullet and got a Specialized Diverge for gravel riding—Austin has some great routes." }
+      ]
+    }
+  ],
+
+  "eval_questions": [
+    {
+      "id": "q001", "question": "Where does Jordan live?",
+      "keywords": ["Austin", "Texas"], "category": "flat-recall"
+    },
+    {
+      "id": "q002", "question": "What company does Jordan work at?",
+      "keywords": ["Meridian"], "category": "flat-recall"
+    },
+    {
+      "id": "q003", "question": "What is Jordan's dog's name and breed?",
+      "keywords": ["Mochi", "greyhound"], "category": "flat-recall"
+    },
+    {
+      "id": "q004", "question": "What instrument does Jordan play?",
+      "keywords": ["guitar"], "category": "flat-recall"
+    },
+    {
+      "id": "q005", "question": "Who is Jordan's favorite author?",
+      "keywords": ["Ted Chiang", "Chiang"], "category": "flat-recall"
+    },
+    {
+      "id": "q006", "question": "What programming language does Jordan use for backend work?",
+      "keywords": ["Go"], "category": "flat-recall",
+      "_note": "Tests update: should NOT say Python"
+    },
+    {
+      "id": "q007", "question": "What food is Jordan's favorite?",
+      "keywords": ["tacos", "al pastor", "taco"], "category": "flat-recall"
+    },
+    {
+      "id": "q008", "question": "What book is Jordan currently reading?",
+      "keywords": ["Project Hail Mary", "Andy Weir", "Hail Mary"], "category": "flat-recall"
+    },
+    {
+      "id": "q009", "question": "What does Jordan's brother Sam do for work?",
+      "keywords": ["product manager", "PM", "Google"], "category": "relational"
+    },
+    {
+      "id": "q010", "question": "Where does Sam live?",
+      "keywords": ["Seattle"], "category": "relational"
+    },
+    {
+      "id": "q011", "question": "Where did Jordan meet their best friend Maya?",
+      "keywords": ["PyCon", "Salt Lake City", "Salt Lake", "2021"], "category": "relational"
+    },
+    {
+      "id": "q012", "question": "What company does Maya work at?",
+      "keywords": ["Palantir"], "category": "relational"
+    },
+    {
+      "id": "q013", "question": "What city does Maya live in?",
+      "keywords": ["Denver"], "category": "relational"
+    },
+    {
+      "id": "q014", "question": "What are Jordan's parents' names?",
+      "keywords": ["Elena", "Carlos"], "category": "relational"
+    },
+    {
+      "id": "q015", "question": "Where do Jordan's parents live?",
+      "keywords": ["Miami", "Florida"], "category": "relational"
+    },
+    {
+      "id": "q016", "question": "What language did Jordan use for backend work before switching?",
+      "keywords": ["Python"], "category": "temporal"
+    },
+    {
+      "id": "q017", "question": "Where did Jordan live before moving to Austin?",
+      "keywords": ["San Francisco"], "category": "temporal"
+    },
+    {
+      "id": "q018", "question": "What recent professional milestone did Jordan reach?",
+      "keywords": ["promoted", "Senior", "promotion"], "category": "temporal"
+    },
+    {
+      "id": "q019", "question": "What travel is Jordan planning?",
+      "keywords": ["Japan", "October"], "category": "temporal"
+    },
+    {
+      "id": "q020", "question": "What kind of bike does Jordan own?",
+      "keywords": ["Specialized", "Diverge", "gravel"], "category": "flat-recall"
+    }
+  ]
+}

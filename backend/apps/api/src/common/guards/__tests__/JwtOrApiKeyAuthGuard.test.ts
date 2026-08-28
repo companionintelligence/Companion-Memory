@@ -61,6 +61,7 @@ function makePortal(overrides: Partial<PortalTokenVerifier> = {}): PortalTokenVe
   return {
     enabled: false,
     verifyAndProvision: jest.fn().mockResolvedValue(null),
+    verifyClaims: jest.fn().mockResolvedValue(null),
     ...overrides,
   };
 }

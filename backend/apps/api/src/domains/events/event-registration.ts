@@ -36,14 +36,17 @@ export class EventListenerRegistry {
       );
     }
 
-    this.listeners.set(key, {
-      className,
-      methodName,
-      queue,
-    });
+    // Merge into a COPY, and commit nothing until the whole merge has passed.
+    // Merging into the stored object one key at a time meant a registrant that
+    // conflicted on its third option had already overwritten the first two, and
+    // the listener entry below was already committed — so a registration that
+    // THREW still left the queue half-reconfigured and an orphan listener behind
+    // (a boot the operator restarts sees a different registry than the one that
+    // failed). Registration is all-or-nothing.
+    let merged: QueueOptions | undefined;
 
     if (queueOptions) {
-      const current = this.queueOptions.get(queue) ?? {};
+      merged = { ...this.queueOptions.get(queue) };
 
       // Values are numbers OR strings now (`role`); the conflict check is
       // value-equality either way.
@@ -51,7 +54,7 @@ export class EventListenerRegistry {
         keyof QueueOptions,
         QueueOptions[keyof QueueOptions],
       ][]) {
-        const existingValue = current[option];
+        const existingValue = merged[option];
 
         if (existingValue !== undefined && existingValue !== value) {
           throw new Error(
@@ -60,10 +63,18 @@ export class EventListenerRegistry {
           );
         }
 
-        (current as Record<string, unknown>)[option] = value;
+        (merged as Record<string, unknown>)[option] = value;
       }
+    }
 
-      this.queueOptions.set(queue, current);
+    this.listeners.set(key, {
+      className,
+      methodName,
+      queue,
+    });
+
+    if (merged) {
+      this.queueOptions.set(queue, merged);
     }
 
     let queues = this.queuesByEvent.get(eventName);

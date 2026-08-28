@@ -1,4 +1,5 @@
 import { Field, ID, ObjectType } from '@nestjs/graphql';
+import GraphQLJSONObject from 'graphql-type-json';
 
 import { type Communication } from '@ci/domains/memory';
 
@@ -37,6 +38,36 @@ export class CommunicationType implements Node, Taggable {
   @Field(() => [EntityTagType])
   tags!: EntityTagType[];
 
+  // Groups a Communication into the conversation it belongs to (e.g. an
+  // iMessage/WhatsApp thread or an email thread). Correctly populated on the
+  // entity (701k rows backfilled) but never reachable through the API until
+  // now — a client had the data to group messages into threads and no field
+  // to read it from.
+  @Field(() => String, { nullable: true })
+  threadId!: string | null;
+
+  // The other participants on a group thread, as the parser recorded them
+  // (shape varies by source; kept as opaque JSON rather than a typed list
+  // since callers already treat participantsMetadata this way elsewhere).
+  @Field(() => GraphQLJSONObject)
+  participantsMetadata!: Record<string, unknown>;
+
+  // The connector's catch-all for what has no column of its own — for a
+  // Facebook post, its `permalink_url` (the post on facebook.com), the shared
+  // `link`, the post type. Opaque JSON for the same reason as
+  // participantsMetadata; the drawer reads the page URL out of it.
+  @Field(() => GraphQLJSONObject)
+  metadata!: Record<string, unknown>;
+
+  @Field(() => String, { nullable: true })
+  sourceType!: string | null;
+
+  @Field(() => String, { nullable: true })
+  sourceSystem!: string | null;
+
+  @Field(() => String, { nullable: true })
+  sourceId!: string | null;
+
   static toType(entity: Communication): CommunicationType {
     return {
       __typename: CommunicationType.name,
@@ -49,6 +80,12 @@ export class CommunicationType implements Node, Taggable {
       direction: entity.direction,
       time: entity.time,
       tags: [], // Hydrated by resolver
+      threadId: entity.threadId,
+      participantsMetadata: entity.participantsMetadata,
+      metadata: entity.metadata ?? {},
+      sourceType: entity.sourceType,
+      sourceSystem: entity.sourceSystem,
+      sourceId: entity.sourceId,
     };
   }
 }

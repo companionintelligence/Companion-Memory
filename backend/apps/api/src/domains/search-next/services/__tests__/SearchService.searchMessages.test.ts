@@ -2,6 +2,7 @@ import type { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import type { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { RETRIEVAL_POLICY_DEFAULTS, type RetrievalPolicyService } from '@ci/domains/retrieval-policy';
 
 import { SearchService } from '../SearchService';
 
@@ -21,7 +22,14 @@ function makeService() {
     generateEmbeddingString: jest.fn().mockResolvedValue('[0.1,0.2]'),
   } as unknown as EmbeddingGenerationService;
 
-  const service = new SearchService(dataSource, embeddingGenerationService);
+  const retrievalPolicy = {
+    get: jest.fn().mockResolvedValue(RETRIEVAL_POLICY_DEFAULTS),
+  } as unknown as RetrievalPolicyService;
+
+  const send = jest.fn().mockResolvedValue([]);
+  const service = new SearchService(dataSource, embeddingGenerationService, retrievalPolicy, {
+    send,
+  } as never);
 
   return { service, query, embeddingGenerationService };
 }

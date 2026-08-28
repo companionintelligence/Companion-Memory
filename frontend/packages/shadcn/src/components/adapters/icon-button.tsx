@@ -14,6 +14,12 @@ interface IconButtonProps extends Omit<React.ComponentProps<typeof Button>, 'ari
   label: string;
   /** Overrides the tooltip text when it needs to read differently from `aria-label`. */
   tooltip?: React.ReactNode;
+  /**
+   * Force the tooltip closed. Use when this button sits under a fullscreen
+   * overlay: Radix portals the bubble to `document.body`, so it otherwise
+   * paints on top of the page in front.
+   */
+  hideTooltip?: boolean;
   side?: React.ComponentProps<typeof TooltipContent>['side'];
   align?: React.ComponentProps<typeof TooltipContent>['align'];
   delayDuration?: number;
@@ -28,6 +34,7 @@ interface IconButtonProps extends Omit<React.ComponentProps<typeof Button>, 'ari
 function IconButton({
   label,
   tooltip,
+  hideTooltip = false,
   side,
   align,
   delayDuration = 600,
@@ -44,7 +51,7 @@ function IconButton({
   );
 
   return (
-    <Tooltip delayDuration={delayDuration}>
+    <Tooltip delayDuration={delayDuration} open={hideTooltip ? false : undefined}>
       <TooltipContent side={side} align={align}>
         {tooltip ?? label}
       </TooltipContent>

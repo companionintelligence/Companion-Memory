@@ -6,6 +6,7 @@ import { FileService } from '@ci/domains/files';
 import { ContentService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
+import { CloudFileIngestService } from '../../CloudFileIngestService';
 
 interface DriveFile {
   id?: string;
@@ -27,6 +28,7 @@ export class GoogleDriveTransformService {
     private readonly contentService: ContentService,
     private readonly fileService: FileService,
     private readonly connectionService: ConnectionService,
+    private readonly cloudFileIngestService: CloudFileIngestService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(GoogleDriveTransformService.name);
@@ -66,7 +68,7 @@ export class GoogleDriveTransformService {
           async (file) =>
             await this.processDriveFile({
               file,
-              connectionId: connection.id,
+              connection,
               userId,
             }),
         ),
@@ -119,12 +121,14 @@ export class GoogleDriveTransformService {
   private async processDriveFile({
     file,
     userId,
-    connectionId,
+    connection,
   }: {
     file: DriveFile;
     userId: string;
-    connectionId: string;
+    connection: Connection;
   }): Promise<void> {
+    const connectionId = connection.id;
+
     try {
       const fileId = file.id || 'unknown';
       const fileName = file.name || 'Untitled File';
@@ -149,43 +153,74 @@ export class GoogleDriveTransformService {
         mimeType,
       });
 
-      // Create file entity
-      await this.fileService.create(
-        { userId },
-        {
-          filename: fileName,
-          contentType: mimeType,
-          externalId: webViewLink,
-          size: file.size ? Number(file.size) : null,
-          externalUpdatedAt: file.modifiedTime ? new Date(file.modifiedTime) : null,
-        },
-      );
+      if (this.isDownloadableDocumentType(mimeType)) {
+        // A document whose bytes we can actually fetch (alt=media) rather
+        // than a native Google type that would need /export?mimeType= — see
+        // CloudFileIngestService's docstring for why that mapping isn't
+        // built yet. No pointer ci.files row is created here: a successful
+        // download hands real bytes to the import pipeline, which creates
+        // its OWN ci.files/ci.content from the actual content, and creating
+        // a pointer row alongside it would leave two rows for one Drive file.
+        const result = await this.cloudFileIngestService.ingestDriveDocument({
+          connection,
+          userId,
+          file: { id: fileId, name: fileName, mimeType, modifiedTime: file.modifiedTime ?? null },
+        });
 
-      // If it's a document type, also create a content entity
-      if (this.isDocumentType(mimeType)) {
-        await this.contentService.create(
-          { userId },
-          {
-            type: 'google_drive_document',
-            title: fileName,
-            text: `Google Drive document: ${fileName}`,
-            url: webViewLink ?? undefined,
-            mimetype: mimeType,
-            // Google Drive's OWN file id, not the ci.files row created just
-            // above (that one gets its own generated uuid) — joining this
-            // against ci.files would find nothing.
-            external_id: fileId,
-            external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-            user: {
-              id: userId,
-            },
-          },
-        );
+        if (result.outcome === 'failed') {
+          // Downloading failed even after retry. Fall back to today's
+          // pointer + placeholder behavior so the file is not simply
+          // invisible — degraded, but present — and log it clearly. The
+          // ledger's 'failed' row means the NEXT sync tick tries the real
+          // download again automatically.
+          this.logger.warn('Drive content download failed; recording a placeholder instead', {
+            fileId,
+            fileName,
+            reason: result.reason,
+          });
 
-        this.logger.log('Created content entity for Drive document', {
+          await this.createPointerFile({ userId, fileName, mimeType, webViewLink, file });
+          await this.createPlaceholderContent({
+            userId,
+            connectionId,
+            fileId,
+            fileName,
+            mimeType,
+            webViewLink,
+          });
+        } else if (result.outcome === 'downloaded') {
+          this.logger.log('Downloaded Drive document content and started an import run', {
+            fileId,
+            fileName,
+            dropId: result.dropId,
+            runId: result.importRunId,
+            byteSize: result.byteSize,
+          });
+        } else {
+          this.logger.debug('Drive document unchanged since last sync; skipped re-download', {
+            fileId,
+            fileName,
+            revision: result.revision,
+          });
+        }
+      } else if (this.isDocumentType(mimeType)) {
+        // A native Google Docs/Sheets/Slides/Forms/Drawing file. Content
+        // download for these needs /export?mimeType=<exportMime>, not
+        // alt=media — deliberately out of scope for this pass (see the
+        // audit's notDone). Keep today's pointer + placeholder behavior.
+        await this.createPointerFile({ userId, fileName, mimeType, webViewLink, file });
+        await this.createPlaceholderContent({
+          userId,
+          connectionId,
           fileId,
           fileName,
+          mimeType,
+          webViewLink,
         });
+      } else {
+        // Not a document at all (image, video, etc.) — there is no "content"
+        // to import, so the webViewLink-as-pointer design is correct as-is.
+        await this.createPointerFile({ userId, fileName, mimeType, webViewLink, file });
       }
 
       this.logger.log('Drive file saved successfully', {
@@ -205,6 +240,79 @@ export class GoogleDriveTransformService {
     }
   }
 
+  /** The pointer-only `ci.files` row: today's whole behavior for non-content files. */
+  private async createPointerFile({
+    userId,
+    fileName,
+    mimeType,
+    webViewLink,
+    file,
+  }: {
+    userId: string;
+    fileName: string;
+    mimeType: string;
+    webViewLink: string | null;
+    file: DriveFile;
+  }): Promise<void> {
+    await this.fileService.create(
+      { userId },
+      {
+        filename: fileName,
+        contentType: mimeType,
+        externalId: webViewLink,
+        size: file.size ? Number(file.size) : null,
+        externalUpdatedAt: file.modifiedTime ? new Date(file.modifiedTime) : null,
+      },
+    );
+  }
+
+  /** The `Google Drive document: <name>` placeholder content entity. */
+  private async createPlaceholderContent({
+    userId,
+    connectionId,
+    fileId,
+    fileName,
+    mimeType,
+    webViewLink,
+  }: {
+    userId: string;
+    connectionId: string;
+    fileId: string;
+    fileName: string;
+    mimeType: string;
+    webViewLink: string | null;
+  }): Promise<void> {
+    await this.contentService.create(
+      { userId },
+      {
+        connection_id: connectionId,
+        type: 'google_drive_document',
+        title: fileName,
+        text: `Google Drive document: ${fileName}`,
+        url: webViewLink ?? undefined,
+        mimetype: mimeType,
+        // Google Drive's OWN file id, not the ci.files row created just
+        // above (that one gets its own generated uuid) — joining this
+        // against ci.files would find nothing.
+        external_id: fileId,
+        external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+        user: {
+          id: userId,
+        },
+      },
+    );
+
+    this.logger.log('Created content entity for Drive document', {
+      fileId,
+      fileName,
+    });
+  }
+
+  /**
+   * Every mimeType that gets document-style handling at all — either a real
+   * content download (the downloadable subset below) or, for native Google
+   * types, today's placeholder.
+   */
   private isDocumentType(mimeType: string): boolean {
     const documentTypes = [
       'application/vnd.google-apps.document',
@@ -225,5 +333,29 @@ export class GoogleDriveTransformService {
     ];
 
     return documentTypes.includes(mimeType);
+  }
+
+  /**
+   * The five Google-native editor formats, whose bytes live behind
+   * `/export?mimeType=`, not `/files/{id}?alt=media` — Drive answers
+   * `alt=media` on these with a 403 ("Only files with binary content can be
+   * downloaded"). Not implemented this pass; see CloudFileIngestService's
+   * docstring.
+   */
+  private isNativeGoogleType(mimeType: string): boolean {
+    const nativeTypes = [
+      'application/vnd.google-apps.document',
+      'application/vnd.google-apps.spreadsheet',
+      'application/vnd.google-apps.presentation',
+      'application/vnd.google-apps.form',
+      'application/vnd.google-apps.drawing',
+    ];
+
+    return nativeTypes.includes(mimeType);
+  }
+
+  /** isDocumentType(mimeType) minus the native Google types alt=media can't read. */
+  private isDownloadableDocumentType(mimeType: string): boolean {
+    return this.isDocumentType(mimeType) && !this.isNativeGoogleType(mimeType);
   }
 }

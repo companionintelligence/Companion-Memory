@@ -34,6 +34,7 @@ import fs from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { amazonMusicAlbumUrl, amazonMusicTrackUrl } from './_amazon_urls';
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -457,6 +458,7 @@ export class AmazonMusicFileImporter implements FileImporter {
       ASIN: agg.asin,
       'Album ASIN': agg.albumAsin,
       'Artist ASIN': agg.artistAsin,
+      URL: amazonMusicTrackUrl(agg.asin, agg.albumAsin),
       Purchased: agg.purchased,
       Followed: agg.followed,
       Playlists: agg.playlists.length ? agg.playlists : undefined,
@@ -496,6 +498,7 @@ export class AmazonMusicFileImporter implements FileImporter {
           Artist: album.artist,
           Genre: album.genre,
           ASIN: album.asin,
+          URL: amazonMusicAlbumUrl(album.asin),
           Followed: true,
           URI: `amazonmusic:album:${album.asin}`,
           Source: 'Amazon Music',

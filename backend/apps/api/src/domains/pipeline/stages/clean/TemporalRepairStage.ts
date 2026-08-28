@@ -43,7 +43,7 @@ const ENTITY_TYPE = 'event';
  * `skipped: source_time_spec_missing`, and only `stage_version < $current`
  * re-opens a skip.
  */
-export const TEMPORAL_RULE_GENERATION = 1;
+export const TEMPORAL_RULE_GENERATION = 2;
 
 /**
  * The stage version.
@@ -331,6 +331,27 @@ export const SOURCE_TIME_SPECS: Readonly<Record<string, SourceTimeSpec>> = {
    *    today" and "the UI says date unknown".
    */
   google_maps_places: spec({ kindKey: 'Kind', undatedKinds: ['labeled_place'] }),
+
+  /**
+   * Reddit. Same shape as `google_maps_places`: dated and undated kinds share
+   * one source system, and the undated ones are AFFILIATIONS rather than
+   * events — `moderated_subreddit` / `subscribed_subreddit` say "I moderate
+   * r/bitscoop", a piece of current state that never happened at an instant.
+   * `RedditFileImporter.pushSubreddit` pushes them with `timestamp: undefined`
+   * (moderated_subreddits.csv is `subreddit` only — there is no date in the
+   * file to lose), and the push's affiliation branch keeps them on the timeline
+   * anyway, so `start_time` is the createdAt fallback: the import wall clock.
+   * Both rows on this appliance carry the identical 2026-08-21T00:43:50.949Z.
+   *
+   * Not repairable — nothing to recover — but markable, which is the whole
+   * difference between the timeline claiming a subreddit was moderated today
+   * and the UI saying the date is unknown.
+   *
+   * The dated kinds of the same source (`post`, `comment`, `message`,
+   * `purchase`, `announcement`) are untouched by this: reddit.ts parses real
+   * dates for all of them, and only the two kinds listed here are Class 1.
+   */
+  reddit: spec({ kindKey: 'Kind', undatedKinds: ['moderated_subreddit', 'subscribed_subreddit'] }),
 };
 
 /**

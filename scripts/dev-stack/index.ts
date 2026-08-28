@@ -224,13 +224,31 @@ const reverseProxy = (port: number, stream = false) => ({
  * /api/llm/generate. */
 const stripApi = { handler: 'rewrite', strip_path_prefix: '/api' };
 
+/** The provider players the gallery can mount in an iframe (derivePlayer in
+ * backend domains/embed). Without an explicit frame-src, `default-src 'self'`
+ * governs frames and Chrome shows "This content is blocked" the moment a play
+ * button is clicked. Mirror of the list in infrastructure/gateway/nginx.conf —
+ * a new provider goes in both places, plus derivePlayer.ts. */
+const PLAYER_FRAME_SRC = [
+  'https://www.youtube-nocookie.com',
+  'https://open.spotify.com',
+  'https://player.vimeo.com',
+  'https://w.soundcloud.com',
+  'https://www.dailymotion.com',
+].join(' ');
+
 function buildRoute(key: string, p: { apiPort: number; webPort: number; objPort: number }) {
   const host = `${key}.localhost`;
+  // script-src 'wasm-unsafe-eval': PowerSync's SQLite engine (wa-sqlite) is
+  // WebAssembly compiled inside the DB web worker, and CSP counts compiling wasm
+  // as eval — without it the worker's init throws and anything awaiting the local
+  // database (logout's disconnectAndClear()) hangs. Mirrors nginx.conf.
   const csp =
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' " +
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' " +
     "https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src * data: blob:; " +
     `media-src 'self' blob:; connect-src 'self' ws://${host} wss://${host}; worker-src 'self'; ` +
-    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none';";
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; " +
+    `frame-src ${PLAYER_FRAME_SRC};`;
 
   // Order matters: most specific first; the catch-all (web) is last.
   const routes = [
@@ -353,6 +371,67 @@ function composeStop(key: string): void {
   console.log('');
 }
 
+/**
+ * Record which stack owns this database, as a per-database Postgres setting.
+ *
+ * Every worktree gets its own compose project and its own `db-data` volume, but
+ * the Postgres HOST port is dynamic while `.env` hard-codes DATABASE_PORT=5432.
+ * Anything that resolves the port from `.env` rather than from the running
+ * stack — a bare `yarn workspace @ci/be-api migrate`, a seed script, jest —
+ * therefore lands on whichever worktree currently holds host 5432 and writes to
+ * ITS database. That is how a branch's migrations ended up applied to a
+ * different branch's stack, leaving dbmate with nothing to do and the app
+ * querying tables its own migrations never created.
+ *
+ * The stamp makes the mismatch detectable: `bin/dbmate.js` refuses to migrate a
+ * database another stack owns, and the api refuses to boot on one (see
+ * src/common/persistence/schemaIntegrity.ts). Kept here rather than in the
+ * `ci/setup-database` image because per-worktree isolation is a dev-stack
+ * concept — staging and production run one stack — and because a stamp added to
+ * that image would not reach the warm images an existing checkout reuses.
+ *
+ * ALTER DATABASE ... SET, not a table: it survives restarts, needs no
+ * migration, and stays out of the `pg_dump --schema-only` that dbmate writes to
+ * schema.sql, so it cannot show up as churn in a diff.
+ */
+function stampStackIdentity(key: string, env: NodeJS.ProcessEnv): void {
+  const admin = process.env.DATABASE_ADMIN_USERNAME ?? 'postgres';
+  const database = process.env.DATABASE_NAME ?? 'companion';
+
+  const res = spawnSync(
+    'docker',
+    [
+      'compose',
+      ...COMPOSE_FILES,
+      '--profile',
+      'local',
+      'exec',
+      '-T',
+      'database',
+      'psql',
+      '-U',
+      admin,
+      '-d',
+      'postgres',
+      '-v',
+      'ON_ERROR_STOP=1',
+      '-c',
+      // Both halves are quoted AND escaped: the key comes from a directory name
+      // and the database name from .env, neither of which is guaranteed to be
+      // free of a quote character.
+      `ALTER DATABASE "${database.replace(/"/g, '""')}" SET "ci.stack_key" = '${key.replace(/'/g, "''")}'`,
+    ],
+    { cwd: ROOT, env: { ...env, ...AMD_GROUP_ENV }, encoding: 'utf8' },
+  );
+
+  // Non-fatal: an un-stamped database only loses the ownership half of the
+  // guard (the migrations-vs-files comparison still runs), and refusing to
+  // start a stack over a failed bookkeeping write would be the worse trade.
+  if (res.status !== 0) {
+    note(`Could not stamp stack ownership on "${database}" — cross-worktree writes will not be caught`);
+  }
+}
+
 function migrate(dbPort: number, env: NodeJS.ProcessEnv): void {
   step('Running database migrations...\n');
 
@@ -441,6 +520,8 @@ async function up(key: string): Promise<void> {
     composeUp(composeEnv);
 
     composeStarted = true;
+
+    stampStackIdentity(key, composeEnv);
 
     migrate(dbPort, composeEnv);
 

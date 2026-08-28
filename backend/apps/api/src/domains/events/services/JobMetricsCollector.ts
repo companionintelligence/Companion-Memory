@@ -19,10 +19,16 @@ import { JobMetricEntity } from '../entities/JobMetricEntity';
  */
 const SAMPLE_INTERVAL_MINUTES = 5;
 
-const SAMPLE_CRON = `0 */${SAMPLE_INTERVAL_MINUTES} * * * *`;
+// Seconds 18 and 48, not 0. Both bodies are full-table scans of `pgboss.job`
+// / `ci.job_metrics`, and second 0 is where every schedule that never picked
+// one already fires. The offset does not change the sample window: successive
+// ticks stay SAMPLE_INTERVAL_MINUTES apart, which is what `sample()` subtracts
+// from its own fire time. See
+// common/schedule/__tests__/cronSecondOffsets.test.ts for who holds what.
+const SAMPLE_CRON = `18 */${SAMPLE_INTERVAL_MINUTES} * * * *`;
 
 /** Purge daily, off the top of the hour to avoid piling onto other crons. */
-const PURGE_CRON = '0 25 4 * * *';
+const PURGE_CRON = '48 25 4 * * *';
 
 /**
  * How much history to keep. Long enough to answer "is this worse than last
@@ -173,11 +179,24 @@ export class JobMetricsCollector {
   /**
    * Queue depth right now.
    *
-   * The dead-letter queue is counted against the queue each job CAME FROM
-   * (`dead_letter` is the DLQ name, so the origin is read from the job's own
-   * partition) rather than as a queue of its own — "how many of this queue's
-   * jobs gave up" is the useful framing, and it keeps dead rows out of
-   * `pending`, which is the bug this dashboard already had once.
+   * Attributing a dead-lettered job back to the queue it came from is NOT
+   * "read the origin off the job's own partition" — pg-boss's `dlq_jobs`
+   * insert (plans.js) writes a brand-new row into the `dead-letter` queue,
+   * and that row's `name` is the DLQ's own name, not the origin's. The
+   * origin is nowhere on it: no back-reference id, nothing in `data`. What
+   * DOES survive is the ORIGINAL job row: `failJobs` leaves it behind in
+   * this same table with `state = 'failed'`, still under its own queue's
+   * `name` — pg-boss just never deletes it. Every queue here is provisioned
+   * with `deadLetter: DEAD_LETTER_QUEUE` (`PGBossEventService.onModuleInit`'s
+   * queue-creation loop), so for this app specifically, `state = 'failed'`
+   * outside the DLQ's own partition IS "gave up and got dead-lettered" —
+   * that equivalence is an app-level invariant, not something pg-boss
+   * guarantees in general.
+   *
+   * The DLQ's own row keeps its old meaning (every job sitting in it,
+   * regardless of state) via `name = $1`, which is also why `pending`
+   * excludes it — counting it there is the bug this dashboard already had
+   * once.
    */
   private async readGauges(): Promise<
     Map<string, { pending: number; active: number; retry: number; deadLettered: number }>
@@ -185,10 +204,10 @@ export class JobMetricsCollector {
     const rows = (await this.metricRepository.manager.query(
       `
       SELECT name AS queue,
-             COUNT(*) FILTER (WHERE state = 'created' AND name <> $1)::int AS pending,
-             COUNT(*) FILTER (WHERE state = 'active')::int                 AS active,
-             COUNT(*) FILTER (WHERE state = 'retry')::int                  AS retry,
-             COUNT(*) FILTER (WHERE name = $1)::int                        AS dead_lettered
+             COUNT(*) FILTER (WHERE state = 'created' AND name <> $1)::int    AS pending,
+             COUNT(*) FILTER (WHERE state = 'active')::int                    AS active,
+             COUNT(*) FILTER (WHERE state = 'retry')::int                     AS retry,
+             COUNT(*) FILTER (WHERE name = $1 OR state = 'failed')::int       AS dead_lettered
         FROM pgboss.job
        GROUP BY name
       `,

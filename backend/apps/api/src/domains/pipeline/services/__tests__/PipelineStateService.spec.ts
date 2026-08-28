@@ -85,9 +85,16 @@ function makeHarness(options: HarnessOptions = {}) {
     if (/^update\s+ci\.pipeline_state/i.test(sql)) {
       releases.push({ sql, params: bound });
 
-      return Array.from({ length: options.released ?? 0 }, (_unused, index) => ({
+      // Emulate the REAL driver shape. TypeORM's Postgres driver special-cases
+      // UPDATE/DELETE and resolves `[rows, rowCount]`, never the bare rows
+      // array — returning a flat array here is a shape the driver cannot
+      // produce, and it is exactly what let `released` sit at a constant 2 in
+      // production while this spec stayed green.
+      const releasedRows = Array.from({ length: options.released ?? 0 }, (_unused, index) => ({
         entity_id: srcId(index + 1),
       }));
+
+      return [releasedRows, releasedRows.length];
     }
 
     // The retry probe: `SELECT entity_id FROM ci.pipeline_state WHERE ...

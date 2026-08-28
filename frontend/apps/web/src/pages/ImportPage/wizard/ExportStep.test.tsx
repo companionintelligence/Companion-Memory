@@ -25,12 +25,14 @@ const scanInbox = vi.fn(
     available: boolean;
     reason?: string;
     inboxDir: string;
+    displayDir: string;
     units: never[];
     skippedSymlinks: number;
     truncated: boolean;
   }> => ({
     available: true,
     inboxDir: '/var/lib/ci-import/inbox',
+    displayDir: '/var/lib/ci-import/inbox',
     units: [],
     skippedSymlinks: 0,
     truncated: false,
@@ -323,6 +325,7 @@ describe('ExportStep', () => {
       available: false,
       reason: 'The inbox directory is not readable: ENOENT',
       inboxDir: '/var/lib/ci-import/inbox',
+      displayDir: '/var/lib/ci-import/inbox',
       units: [],
       skippedSymlinks: 0,
       truncated: false,

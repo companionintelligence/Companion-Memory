@@ -306,6 +306,60 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
     expect(graphIngestService.ingest).not.toHaveBeenCalled();
   });
 
+  it('logs a warning when readSelfIdentity genuinely fails, and still links via the empty-identity fallback', async () => {
+    const comm: FakeCommunication = {
+      id: COMM_ID,
+      time: COMM_TIME,
+      userId: USER,
+      fromEntityId: null,
+      toEntityIds: null,
+      participantsMetadata: { from: 'sender@example.com' },
+    };
+
+    const communicationService = makeCommunicationService(comm);
+    const identifierService = makeIdentifierService({ 'email:sender@example.com': EXISTING_FROM });
+    const graphIngestService = makeIngestService(identifierService.indexedByComposite);
+    const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+
+    // The self-identity query is the only one carrying UNION ALL (see self.ts);
+    // every other query used by the listener (resolveSelfEntityId, the UPDATE)
+    // must keep succeeding so the failure is isolated to readSelfIdentity.
+    const dataSource = {
+      query: jest.fn(async (sql: string, _params: unknown[]) => {
+        if (sql.includes('UNION ALL')) {
+          throw new Error('connection terminated unexpectedly');
+        }
+
+        return [];
+      }),
+    };
+
+    const listener = new CommunicationParticipantLinkListener(
+      communicationService as never,
+      identifierService as never,
+      graphIngestService as never,
+      { getTrustMode: jest.fn(async () => 'balanced') } as never,
+      dataSource as never,
+      logger as never,
+    );
+
+    await listener.handleCreated({ communicationId: COMM_ID });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Self-identity lookup failed; participants will not be self-collated',
+      expect.objectContaining({
+        communicationId: COMM_ID,
+        userId: USER,
+        error: 'connection terminated unexpectedly',
+      }),
+    );
+
+    // The fallback (empty identity) must not stop the row from linking.
+    const updates = dataSource.query.mock.calls.filter(([sql]) => sql.includes('UPDATE ci.communications'));
+    expect(updates).toHaveLength(1);
+    expect(updates[0][1]).toEqual([USER, COMM_ID, EXISTING_FROM, null, COMM_TIME]);
+  });
+
   it('skips when the communication has no owner', async () => {
     const comm: FakeCommunication = {
       id: COMM_ID,

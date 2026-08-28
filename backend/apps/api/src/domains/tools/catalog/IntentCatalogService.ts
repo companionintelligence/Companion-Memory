@@ -42,7 +42,7 @@ export class IntentCatalogService {
   getManifest(options: { tier?: DispatchTier; capability?: ApiKeyCapability } = {}): IntentManifest {
     const { tier, capability } = options;
 
-    const intents: ManifestIntent[] = this.tools.getAvailableTools().map((schema) => ({
+    const intents: ManifestIntent[] = this.tools.getOutboundCatalogTools().map((schema) => ({
       name: schema.name,
       tool: intentToolName(schema.name),
       domain: schema.domain,

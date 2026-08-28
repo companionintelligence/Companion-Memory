@@ -27,8 +27,15 @@ export interface AttachmentDescriptor {
   path?: string;
   /** Original filename, for the content row's title. */
   filename?: string;
-  /** Content row type bucket ('file' for non-media attachments, e.g. a PDF). */
-  type: 'image' | 'video' | 'audio' | 'media' | 'file';
+  /**
+   * Content row type bucket ('file' for non-media attachments, e.g. a PDF).
+   *
+   * 'receipt_document' is the one non-MIME value: it is stamped when the PARENT
+   * was classified a receipt (see datasources/receipt_detect.ts), so a PDF
+   * invoice attached to an order confirmation is catalogued as the receipt
+   * document it is instead of an anonymous 'file'.
+   */
+  type: 'image' | 'video' | 'audio' | 'media' | 'file' | 'receipt_document';
   mimetype?: string;
   /** The media's URL on the source service, when the export records one. */
   url?: string;
@@ -50,6 +57,29 @@ export type MediaAttachment = AttachmentDescriptor & { path: string };
  */
 export type MetadataRecord = Record<string, string | number | boolean | null | undefined>;
 
+/**
+ * One object identifier as a datasource states it — a book's ISBN, a product's
+ * ASIN, a device's serial. Normalized (and possibly re-namespaced: an all-digit
+ * ASIN is an ISBN) by `push/canonical.ts` when the canonical record is built,
+ * against the SHARED rule in `@ci/domains/graph` `normalizeObjectIdentifier`.
+ */
+export interface ObjectIdentifierRef {
+  namespace: string;
+  value: string;
+  /** 0..1, when the source is guessing (OCR off a receipt) rather than stating. */
+  confidence?: number;
+}
+
+/**
+ * One line of a receipt as a datasource states it: the same primitive metadata
+ * a {@link MetadataRecord} holds, plus the line's own identifiers. Rides in
+ * `metadata.LineItems`; see `push/inputs.ts` toReceiptLineItemInputs.
+ */
+export type LineItemRecord = Record<
+  string,
+  string | number | boolean | null | undefined | ObjectIdentifierRef[]
+>;
+
 export type MetadataValue =
   | string
   | number
@@ -60,7 +90,9 @@ export type MetadataValue =
   | number[]
   | string[]
   | MetadataRecord[]
-  | AttachmentDescriptor[];
+  | AttachmentDescriptor[]
+  | ObjectIdentifierRef[]
+  | LineItemRecord[];
 export type Metadata = Record<string, MetadataValue>;
 
 export interface Location {
@@ -249,6 +281,31 @@ export interface ImportPipeline {
    * so existing importers keep working unchanged; calling it is purely additive.
    */
   drop?: (reason: string, detail?: string) => void;
+  /**
+   * Report a record the importer KEPT that some gate would otherwise have
+   * dropped, with a short stable `reason` slug (e.g. `receipt_kept_from_bulk`).
+   * The writer aggregates these into a per-source KEEP ledger, separate from the
+   * drop ledger, so a rescue is countable without being filed as a loss.
+   *
+   * Why not `drop()`: the drop ledger is DEFINED as "records that did not become
+   * a staged row" — `parseUnit` folds it into the stage summary and the run UI
+   * renders it as the loss report. Counting a kept record there inflates the
+   * loss figure with its own opposite, which is exactly what the first attempt
+   * at receipt discovery did. Optional, like `drop`.
+   */
+  keep?: (reason: string) => void;
+  /**
+   * Report N records this file/pass actually offered the parser — the floor
+   * `reconciled` checks against — independent of how many became rows or
+   * drops. Optional: a parser that never calls this keeps today's derived
+   * floor (`consumed = produced + dropped`), which is definitionally always
+   * reconciled and can never catch a record vanishing through a branch that
+   * forgot `drop()`. Cheap for the common array/CSV-shaped parser (one call
+   * per file with the array's own `.length`, not a per-row counter); only a
+   * genuinely streaming/line-based parser needs a real per-iteration
+   * increment.
+   */
+  consumed?: (n: number) => void;
 }
 export interface ImportParams {
   options?: unknown;
@@ -265,6 +322,19 @@ export interface ImportParams {
    * fall back to the OS temp dir.
    */
   mediaStoreDir?: string;
+  /**
+   * Subtrees a specialised recognizer already claimed inside this same run,
+   * absolute paths. Threaded through from the surviving `generic` match's
+   * `DataSourceRecognition.excludePaths` (see `registry.ts` and
+   * `ParseStage.dropGenericWhenSpecialised`) so `generic`'s own walker can skip
+   * them rather than re-stage what another importer already read.
+   *
+   * Every OTHER importer ignores this field — it only means something to a
+   * directory walk with no other notion of "already consumed," which today is
+   * `generic` alone. Unset for a run with no specialised claims to skip, and
+   * always unset for every non-generic importer's call.
+   */
+  excludePaths?: readonly string[];
 }
 
 export interface Timeframe {

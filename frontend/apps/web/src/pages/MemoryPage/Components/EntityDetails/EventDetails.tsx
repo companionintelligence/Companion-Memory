@@ -8,6 +8,8 @@ import { EVENT_FRAGMENT } from '../EntityCard/EventCard';
 import { eventDisplayTitle, formatBytes } from '../utils';
 
 import { EntityDetailScaffold, EntityMedia, resolveStaticUrl } from './EntityDetailScaffold';
+import { pickPageUrl } from './GenericDetails';
+import { hasRichMedia, RichMediaCard } from './RichMediaCard';
 
 const UPDATE_EVENT = gql(`
   mutation UpdateEventDetail($input: UpdateEventInput!) {
@@ -208,12 +210,23 @@ export function EventDetails({ entity }: Props) {
     ...extraLocationDetails(props),
   ].filter((item) => item.value);
 
-  // Photo/video events: thumbnail (PREVIEW) for images, full source for video so
-  // it plays inline. Resolved server-side via the linked file (data.previewUrl /
-  // data.mediaUrl); null for non-media events, which render no media block.
+  // Photo/video events: the ORIGINAL is what renders (a 300px PREVIEW upscaled
+  // into the sheet reads as blur on any large screen), with the preview passed
+  // alongside so EntityMedia can paint it during the original's download.
+  // Videos take the full source directly so they play inline. Resolved
+  // server-side via the linked file (data.previewUrl / data.mediaUrl); null
+  // for non-media events, which render no media block.
   const isVideo = data.mediaContentType?.startsWith('video/') ?? false;
-  const mediaSrc = resolveStaticUrl(isVideo ? data.mediaUrl : (data.previewUrl ?? data.mediaUrl));
+  const mediaSrc = resolveStaticUrl(data.mediaUrl ?? data.previewUrl);
+  const mediaPreviewSrc = isVideo ? undefined : resolveStaticUrl(data.previewUrl);
   const dimensions = data.mediaWidth && data.mediaHeight ? `${data.mediaWidth} × ${data.mediaHeight}` : null;
+
+  // A watch / listen / read event is ABOUT its content row: when that row has
+  // a resolved preview or a player, the drawer leads with it (poster, facts,
+  // click-to-play) rather than with a bare title and two timestamps.
+  const richContent = (data.contents?.edges ?? [])
+    .map((edge) => edge.node)
+    .find((node) => hasRichMedia(node));
 
   const title = eventDisplayTitle({
     title: data.title,
@@ -222,6 +235,13 @@ export function EventDetails({ entity }: Props) {
     mediaContentType: data.mediaContentType,
   });
 
+  // The thing the event is ABOUT, when it lives on another service: a
+  // connector stamps the source's own page URL into `metadata` (a liked
+  // Facebook Page's `page_url`, a post's `permalink_url`). The related
+  // entity's relationship card is the in-app way there; this is the way OUT,
+  // and it opens a new tab like every other off-appliance link in the drawer.
+  const pageUrl = pickPageUrl((data.metadata ?? {}) as Record<string, unknown>);
+
   return (
     <EntityDetailScaffold
       entity={entity}
@@ -229,7 +249,16 @@ export function EventDetails({ entity }: Props) {
       subtitle="Event"
       taggable
       media={
-        mediaSrc ? <EntityMedia src={mediaSrc} contentType={data.mediaContentType} alt={title} /> : undefined
+        mediaSrc ? (
+          <EntityMedia
+            src={mediaSrc}
+            previewSrc={mediaPreviewSrc}
+            contentType={data.mediaContentType}
+            alt={title}
+          />
+        ) : richContent ? (
+          <RichMediaCard content={richContent} title={richContent.title} url={richContent.contentUrl} />
+        ) : undefined
       }
       editFields={[
         { key: 'title', label: 'Title', value: data.title ?? '' },
@@ -248,6 +277,19 @@ export function EventDetails({ entity }: Props) {
         { label: 'Ends', value: formatDateTime(data.endTime) },
         { label: 'Duration', value: formatDuration(data.startTime, data.endTime) },
         { label: 'Type', value: formatTitleCase(eventFields.eventType) ?? 'Event' },
+        {
+          label: 'Link',
+          value: pageUrl ? (
+            <a
+              href={pageUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="break-all text-primary hover:underline"
+            >
+              {pageUrl}
+            </a>
+          ) : null,
+        },
         { label: 'Media type', value: data.mediaContentType },
         { label: 'Dimensions', value: dimensions },
         { label: 'Size', value: data.mediaSize != null ? formatBytes(data.mediaSize) : null },

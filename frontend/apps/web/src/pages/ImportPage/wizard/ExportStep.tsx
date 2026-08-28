@@ -330,7 +330,7 @@ export function ExportStep({
               {inboxScan?.available === true && (
                 <>
                   {' '}
-                  (<code className="rounded bg-muted px-1 py-0.5">{inboxScan.inboxDir}</code>)
+                  (<code className="rounded bg-muted px-1 py-0.5">{inboxScan.displayDir}</code>)
                 </>
               )}{' '}
               and import it from the Inbox panel as a single unit — no upload needed.

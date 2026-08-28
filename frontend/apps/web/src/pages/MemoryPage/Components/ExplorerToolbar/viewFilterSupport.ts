@@ -1,9 +1,9 @@
 /**
  * Which explorer filters each Memory view can actually honour.
  *
- * The explorer's contract is that the URL *is* the query: List, Gallery, Map
- * and Graph all run the same filter set, so one link means the same thing
- * wherever it opens. Two exceptions used to break that silently — the gallery
+ * The explorer's contract is that the URL *is* the query: List, Gallery, Map,
+ * Timeline and Graph all run the same filter set, so one link means the same
+ * thing wherever it opens. Two exceptions used to break that silently — the gallery
  * forced `includeFiles` on and the map forced `hasLocation` on, both derived
  * from `?view` rather than from anything the user set. Both are gone; the
  * remaining divergence is real and lives here.
@@ -15,12 +15,12 @@
  * toolbar renders them as "not applied here" with the reason below.
  */
 
-/** The four Memory views, as written to `?view=`. */
-export const MEMORY_VIEWS = ['list', 'gallery', 'map', 'graph'] as const;
+/** The Memory explorer views, as written to `?view=`. */
+export const MEMORY_VIEWS = ['list', 'gallery', 'map', 'graph', 'timeline'] as const;
 
 export type MemoryView = (typeof MEMORY_VIEWS)[number];
 
-/** `?view=` values that aren't one of the four fall back to the list default. */
+/** `?view=` values that aren't one of these fall back to the list default. */
 export function readMemoryView(value: string | null | undefined): MemoryView {
   return MEMORY_VIEWS.includes(value as MemoryView) ? (value as MemoryView) : 'list';
 }
@@ -51,6 +51,9 @@ const UNSUPPORTED: Record<MemoryView, Partial<Record<FilterDimension, string>>> 
   list: {},
   gallery: {},
   map: {},
+  timeline: {
+    sort: 'Timeline always plays chronologically, so sort has no effect here.',
+  },
   graph: {
     semantic: 'The graph ranks by connection, not by meaning, so semantic search has no effect here.',
     bbox: 'The graph has no map viewport, so a map area cannot narrow it.',

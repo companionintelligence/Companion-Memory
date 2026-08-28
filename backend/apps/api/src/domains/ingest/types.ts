@@ -15,10 +15,13 @@ import { createPositionSchemaRoot } from '@ci/domains/position';
  * hand the parsed records to the service with only type coercions (ISO string →
  * Date) and no field renaming:
  *
- *   - communications / contents / browser-activity / positions → snake_case
- *     (CreateCommunicationDto / CreateContentDto / CreateBrowserActivityDto /
- *     CreatePositionDto);
- *   - inventory → camelCase (CreateItemDto is the one camelCase ingest DTO).
+ *   - communications / contents / browser-activity / positions / receipts /
+ *     product-models / observations → snake_case (CreateCommunicationDto /
+ *     CreateContentDto / CreateBrowserActivityDto / CreatePositionDto /
+ *     CreateReceiptDto / CreateProductModelDto / CreateObjectObservationDto);
+ *   - things → camelCase (CreateItemDto is the one camelCase ingest DTO,
+ *     and stays the only one — the object tables added alongside it are
+ *     snake_case like every other kind).
  *
  * The per-request cap reuses {@link MAX_BULK_INPUT_SIZE} (10,000) — the same
  * ceiling MaxArraySizePipe enforces on the GraphQL bulk-create mutations. The
@@ -31,6 +34,32 @@ const bulkEnvelope = <T extends z.ZodTypeAny>(record: T) =>
   z.object({
     records: z.array(record).min(1).max(MAX_BULK_INPUT_SIZE),
   });
+
+/**
+ * A reference to a row identified by its PROVENANCE TRIPLE rather than by a
+ * server-assigned uuid.
+ *
+ * The bulk plane's one cross-kind referencing problem: an importer pushing a
+ * receipt and then the thing it produced does not know the uuid the server
+ * minted for either — it only knows its own `(source_type, source_system,
+ * source_id)` for each. All three parts are required: the partial unique
+ * indexes these resolve against are `WHERE source_id IS NOT NULL` and treat the
+ * triple as a whole, so a two-part reference cannot address a row.
+ *
+ * Resolution is BEST-EFFORT by contract — see the pre-pass in
+ * `BulkIngestController.flushThings`. A reference that misses (the receipt
+ * has not been pushed yet, or arrived in a later batch of the same load)
+ * resolves to NULL and the row is written without the link, never rejected:
+ * push order is the client's business, and a rejected row is data lost, while a
+ * missing link is data a later repair pass can still fill in.
+ */
+const provenanceRefSchema = z.object({
+  sourceType: z.string().min(1),
+  sourceSystem: z.string().min(1),
+  sourceId: z.string().min(1),
+});
+
+export type ProvenanceRef = z.infer<typeof provenanceRefSchema>;
 
 // ---------------------------------------------------------------------------
 // POST /v1/events → capture raw log + EventService.create
@@ -187,14 +216,22 @@ export type BulkNoteRecord = z.infer<typeof bulkNoteRecordSchema>;
 export type IngestNotesRequest = z.infer<typeof ingestNotesSchema>;
 
 // ---------------------------------------------------------------------------
-// POST /v1/inventory → ItemService.createMany
+// POST /v1/things → ItemService.createMany
 // ---------------------------------------------------------------------------
 
 // Field-for-field CreateItemDto — the one camelCase ingest DTO (the entity and
-// GraphQL CreateInventoryInput are camelCase too, so the whole inventory path
+// GraphQL CreateThingInput are camelCase too, so the whole things path
 // shares one vocabulary). `acquiredAt` arrives as an ISO string and is coerced
 // to Date in the controller.
-export const bulkInventoryRecordSchema = z.object({
+//
+// The object-identity fields at the bottom (`identifiers`, `productRef`,
+// `acquisitionLineItem`, `lifecycleState`) are STRICTLY ADDITIVE and every one
+// of them is optional: a payload from today's importer — which sends none of
+// them — must validate byte-identically and produce the same row it always
+// did. `Routes.e2e.test.ts` asserts exactly that against a recorded
+// today-shaped record, so the additions cannot quietly change the existing
+// contract.
+export const bulkThingRecordSchema = z.object({
   id: z.string().uuid().optional(),
   name: z.string().min(1),
   description: z.string().optional(),
@@ -243,16 +280,80 @@ export const bulkInventoryRecordSchema = z.object({
   manufacturedAt: z.string().datetime().nullable().optional(),
   expiresAt: z.string().datetime().nullable().optional(),
   isDigital: z.boolean().optional(),
-  // Provenance triple for idempotent re-ingest (inventory_source_triple_uniq).
+
+  // -------------------------------------------------------------------------
+  // Object identity (migration 20260803223025). ALL OPTIONAL — see the note on
+  // the schema above.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Identifiers printed on or attached to the unit — `[{namespace: 'serial',
+   * value: 'F2LX…'}]`. CI-Import-Tools has been sending these for a while and
+   * zod, which strips undeclared keys, was throwing them away BEFORE the
+   * capture raw log saw them: the claim was not merely unwritten, it was
+   * unrecoverable. Declaring the field keeps it in `ci.capture_events.payload`,
+   * so a later pass can promote it into `ci.object_identifiers` without asking
+   * the client to re-push.
+   *
+   * NOT yet written to `ci.object_identifiers` by this route — promotion is
+   * `ObjectIdentifierService`'s and needs a subject that exists, which is a
+   * post-materialize step this plane does not run yet.
+   */
+  identifiers: z
+    .array(
+      z.object({
+        namespace: z.enum([
+          'gtin',
+          'isbn',
+          'asin',
+          'mpn',
+          'sku',
+          'serial',
+          'imei',
+          'vin',
+          'order_id',
+          'rfid',
+          'qr',
+          'custom',
+        ]),
+        value: z.string().min(1),
+        confidence: z.number().min(0).max(1).optional(),
+      }),
+    )
+    .optional(),
+  /** The catalog model this unit instantiates, by the model's provenance triple. */
+  productRef: provenanceRefSchema.optional(),
+  /**
+   * The receipt line this unit was bought on: the RECEIPT's provenance triple
+   * plus the 1-based line number, which is the line's natural key
+   * (`receipt_line_items(receipt_id, line_number)`). Lines carry no triple of
+   * their own — they are identified through their receipt.
+   */
+  acquisitionLineItem: z
+    .object({
+      receipt: provenanceRefSchema,
+      lineNumber: z.number().int().positive(),
+    })
+    .optional(),
+  /**
+   * Queryable ownership state; the schema defaults it to 'active'. The
+   * vocabulary mirrors `ObjectLifecycleState`, which itself mirrors the
+   * `objects_lifecycle_state_check` constraint — all three move together.
+   */
+  lifecycleState: z
+    .enum(['active', 'stored', 'lent_out', 'lost', 'disposed', 'consumed', 'returned', 'archived'])
+    .optional(),
+
+  // Provenance triple for idempotent re-ingest (objects_source_triple_uniq).
   sourceType: z.string().optional(),
   sourceSystem: z.string().optional(),
   sourceId: z.string().optional(),
 });
 
-export const ingestInventorySchema = bulkEnvelope(bulkInventoryRecordSchema);
+export const ingestThingsSchema = bulkEnvelope(bulkThingRecordSchema);
 
-export type BulkInventoryRecord = z.infer<typeof bulkInventoryRecordSchema>;
-export type IngestInventoryRequest = z.infer<typeof ingestInventorySchema>;
+export type BulkThingRecord = z.infer<typeof bulkThingRecordSchema>;
+export type IngestThingsRequest = z.infer<typeof ingestThingsSchema>;
 
 // ---------------------------------------------------------------------------
 // POST /v1/browser-activity → BrowserActivityService.createMany
@@ -282,6 +383,204 @@ export const ingestPositionsSchema = bulkEnvelope(bulkPositionRecordSchema);
 
 export type BulkPositionRecord = z.infer<typeof bulkPositionRecordSchema>;
 export type IngestPositionsRequest = z.infer<typeof ingestPositionsSchema>;
+
+// ---------------------------------------------------------------------------
+// POST /v1/receipts → ReceiptService.createMany (+ replaceLineItems)
+// ---------------------------------------------------------------------------
+
+/**
+ * One line on a receipt — field-for-field `ReceiptLineItemInput`, snake_case.
+ *
+ * `line_number` is 1-based and STABLE: it is half of the natural key
+ * `(receipt_id, line_number)`, so re-pushing the same receipt updates each line
+ * IN PLACE. A source that renumbers its lines between pushes forks them.
+ */
+export const bulkReceiptLineItemRecordSchema = z.object({
+  line_number: z.number().int().positive(),
+  description: z.string().min(1),
+  /** NUMERIC(12,3) — fractional quantities are real (1.5 kg of coffee). */
+  quantity: z.number().optional(),
+  unit_price_minor: z.number().int().nullable().optional(),
+  total_price_minor: z.number().int().nullable().optional(),
+  currency: z.string().nullable().optional(),
+  product_id: z.string().uuid().nullable().optional(),
+  brand: z.string().nullable().optional(),
+  model_number: z.string().nullable().optional(),
+  category: z.string().nullable().optional(),
+  /** FALSE for ebooks, subscriptions and gift cards. Only physical lines mint units. */
+  is_physical: z.boolean().optional(),
+  /** `{gtin: '0123…', asin: 'B0…'}` — promoted into ci.object_identifiers, never stored verbatim. */
+  identifier_codes: z.record(z.string().nullable()).optional(),
+  /** Distinct serial numbers supplied by the line. N serials mint N units. */
+  serials: z.array(z.string()).optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+/**
+ * Field-for-field `CreateReceiptDto` (snake_case), plus the nested
+ * `line_items[]` — because a receipt without its lines is not a receipt, it is
+ * a total. The header and its lines are ONE record on the wire so the client
+ * cannot push half a purchase, and so lines need no provenance triple of their
+ * own (they are addressed through the header's, by `line_number`).
+ *
+ * Money is INTEGER MINOR UNITS throughout (`total_minor: 1299`, never
+ * `12.99`) — the entities store bigint minor units and a float of dollars is
+ * how a cent goes missing.
+ */
+export const bulkReceiptRecordSchema = z.object({
+  id: z.string().uuid().optional(),
+  merchant_name: z.string().nullable().optional(),
+  merchant_entity_id: z.string().uuid().nullable().optional(),
+  place_entity_id: z.string().uuid().nullable().optional(),
+  purchased_at: z.string().datetime().nullable().optional(),
+  currency: z.string().nullable().optional(),
+  subtotal_minor: z.number().int().nullable().optional(),
+  tax_minor: z.number().int().nullable().optional(),
+  tip_minor: z.number().int().nullable().optional(),
+  shipping_minor: z.number().int().nullable().optional(),
+  discount_minor: z.number().int().nullable().optional(),
+  total_minor: z.number().int().nullable().optional(),
+  payment_method: z.string().nullable().optional(),
+  /** Last four digits ONLY. A full card number is never accepted or stored. */
+  payment_last4: z.string().max(4).nullable().optional(),
+  order_number: z.string().nullable().optional(),
+  channel: z.enum(['online', 'in_store', 'app', 'phone', 'unknown']).nullable().optional(),
+  document_content_id: z.string().uuid().nullable().optional(),
+  source_file_id: z.string().uuid().nullable().optional(),
+  source_message_id: z.string().nullable().optional(),
+  extraction_state: z.enum(['pending', 'extracted', 'failed', 'manual', 'not_applicable']).optional(),
+  extraction_confidence: z.number().min(0).max(1).nullable().optional(),
+  extraction_model: z.string().nullable().optional(),
+  extraction_error: z.string().nullable().optional(),
+  raw_text: z.string().nullable().optional(),
+  event_id: z.string().uuid().nullable().optional(),
+  metadata: z.record(z.unknown()).optional(),
+  /** Absent and `[]` mean different things: absent leaves the stored lines alone. */
+  line_items: z.array(bulkReceiptLineItemRecordSchema).optional(),
+  // Provenance triple for idempotent re-ingest (receipts_source_triple_uniq).
+  source_type: z.string().optional(),
+  source_system: z.string().optional(),
+  source_id: z.string().optional(),
+});
+
+export const ingestReceiptsSchema = bulkEnvelope(bulkReceiptRecordSchema);
+
+export type BulkReceiptLineItemRecord = z.infer<typeof bulkReceiptLineItemRecordSchema>;
+export type BulkReceiptRecord = z.infer<typeof bulkReceiptRecordSchema>;
+export type IngestReceiptsRequest = z.infer<typeof ingestReceiptsSchema>;
+
+// ---------------------------------------------------------------------------
+// POST /v1/product-models → ProductModelService.createMany
+// ---------------------------------------------------------------------------
+
+/**
+ * Field-for-field `CreateProductModelDto` (snake_case).
+ *
+ * `identity_confidence` is deliberately NOT defaulted here. The column defaults
+ * to 1.0, which HBPE and RAG read as ground truth, so a feed that INFERRED the
+ * model (a receipt line, a vision guess) has to say so explicitly — see
+ * `FIND_OR_CREATE_IDENTITY_CONFIDENCE`. Defaulting it in the wire schema would
+ * silently promote every guess to a fact.
+ */
+export const bulkProductModelRecordSchema = z.object({
+  id: z.string().uuid().optional(),
+  title: z.string().min(1),
+  brand: z.string().nullable().optional(),
+  manufacturer: z.string().nullable().optional(),
+  model_number: z.string().nullable().optional(),
+  category: z.string().nullable().optional(),
+  subcategory: z.string().nullable().optional(),
+  product_type: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+  /** Variant AXES only ({color, capacity, size}) — never descriptive specs. */
+  variant_attributes: z.record(z.unknown()).optional(),
+  spec: z.record(z.unknown()).optional(),
+  /** Integer MINOR units of `currency`. Never a float of dollars. */
+  msrp_minor: z.number().int().nullable().optional(),
+  currency: z.string().nullable().optional(),
+  image_content_id: z.string().uuid().nullable().optional(),
+  manual_content_ids: z.array(z.string().uuid()).nullable().optional(),
+  is_digital: z.boolean().optional(),
+  /** CHECKed `> 0 AND <= 1` by the table; rejected here so it 400s, not 500s. */
+  identity_confidence: z.number().gt(0).max(1).optional(),
+  product_entity_id: z.string().uuid().nullable().optional(),
+  metadata: z.record(z.unknown()).optional(),
+  // Provenance triple for idempotent re-ingest (product_models_source_triple_uniq).
+  source_type: z.string().optional(),
+  source_system: z.string().optional(),
+  source_id: z.string().optional(),
+});
+
+export const ingestProductModelsSchema = bulkEnvelope(bulkProductModelRecordSchema);
+
+export type BulkProductModelRecord = z.infer<typeof bulkProductModelRecordSchema>;
+export type IngestProductModelsRequest = z.infer<typeof ingestProductModelsSchema>;
+
+// ---------------------------------------------------------------------------
+// POST /v1/observations → ObjectObservationService.createMany
+// ---------------------------------------------------------------------------
+
+/**
+ * Field-for-field `CreateObjectObservationDto` (snake_case) — a SIGHTING, and
+ * only a sighting.
+ *
+ * There is deliberately no way to assert `resolved_object_id`,
+ * `resolution_method` or `confirmed_by_user` over this route, exactly as there
+ * is none on the DTO: resolution is a separate, revisable decision, and a
+ * detector that could write it on the way in is the conflation
+ * `ci.object_observations` exists to prevent. `detection_key` is absent for the
+ * same reason — it is DERIVED by the service, and a caller-chosen idempotency
+ * key is how the same detector run lands twice.
+ */
+export const bulkObservationRecordSchema = z.object({
+  id: z.string().uuid().optional(),
+  /** When the PIXELS were captured — not when the detector ran. */
+  observed_at: z.string().datetime(),
+  source_kind: z.enum(['photo', 'video_frame', 'live_camera', 'screenshot', 'manual']).optional(),
+  /** What the detector said, verbatim. Required: a label-less sighting carries no information. */
+  label: z.string().min(1),
+  label_source: z.enum(['yolo', 'ollama_vision', 'clip', 'user', 'import']).nullable().optional(),
+  detector: z.string().nullable().optional(),
+  detector_version: z.string().nullable().optional(),
+  detection_confidence: z.number().min(0).max(1).nullable().optional(),
+  /** Normalized to 0..1 of the source image, origin top-left. */
+  bbox: z
+    .object({
+      x: z.number(),
+      y: z.number(),
+      w: z.number(),
+      h: z.number(),
+    })
+    .nullable()
+    .optional(),
+  content_id: z.string().uuid().nullable().optional(),
+  file_id: z.string().uuid().nullable().optional(),
+  event_id: z.string().uuid().nullable().optional(),
+  crop_content_id: z.string().uuid().nullable().optional(),
+  place_entity_id: z.string().uuid().nullable().optional(),
+  /** Named lat/lon rather than TypeORM's `{x, y}`: transposing them is the one bug here. */
+  coordinates: z
+    .object({
+      lat: z.number().min(-90).max(90),
+      lon: z.number().min(-180).max(180),
+    })
+    .nullable()
+    .optional(),
+  /** Observed STATE ({color, condition, count}) — not identity. */
+  attributes: z.record(z.unknown()).optional(),
+  metadata: z.record(z.unknown()).optional(),
+  // Provenance triple. When present the row is keyed on it and `detection_key`
+  // stays NULL; when absent the service derives a detection key instead. A row
+  // has one arbiter or the other, never both.
+  source_type: z.string().optional(),
+  source_system: z.string().optional(),
+  source_id: z.string().optional(),
+});
+
+export const ingestObservationsSchema = bulkEnvelope(bulkObservationRecordSchema);
+
+export type BulkObservationRecord = z.infer<typeof bulkObservationRecordSchema>;
+export type IngestObservationsRequest = z.infer<typeof ingestObservationsSchema>;
 
 // ---------------------------------------------------------------------------
 // Shared response

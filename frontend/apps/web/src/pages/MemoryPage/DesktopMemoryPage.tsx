@@ -1,10 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 
-import { useQuery } from '@apollo/client';
-import { GlobalUID, Portal } from '@ci/common';
-import { ENTITY_TYPE_REVERSE_MAP } from '@ci/common/src/constants';
+import { Portal } from '@ci/common';
 import { Button, Sheet, Tooltip } from '@ci/shadcn';
-import { ChartNetwork, Images, List, Map as MapIcon, Plus, type LucideIcon } from '@ci/shadcn/icons';
+import { ChartNetwork, GanttChart, Images, List, Map as MapIcon, Plus, type LucideIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 
@@ -12,51 +10,19 @@ import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
 import { AddEventModal } from '@/components/modals/AddItemModal';
 import { FileChunkModal } from '@/components/modals/FileChunkModal/FileChunkModal';
-import { excludedEntityTypesFor } from '@/components/SearchBox/useDropdown';
-import { gql } from '@/graphql';
 import { useModalControls } from '@/hooks';
 
 import { useEntityService } from '../MemoryPage/useEntityService';
 
 import { ActivityTimelineRail } from './ActivityTimelineRail';
 import { EntityDetails } from './Components/EntityDetails';
-import {
-  isRollingDatePreset,
-  resolveDatePreset,
-  type DatePreset,
-} from './Components/ExplorerToolbar/datePresets';
 import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { applyViewFilterDefaults, readMemoryView } from './Components/ExplorerToolbar/viewFilterSupport';
 import { GalleryView } from './GalleryView';
 import { GraphView } from './GraphView';
 import { ListView } from './ListView';
 import { DesktopMapView } from './MapView';
-
-const GET_SAVED_SEARCH = gql(`
-  query GetSavedSearch($id: ID!) {
-    savedSearch(id: $id) {
-      id
-      name
-      description
-      query
-      entityTypes
-      tags
-      filters {
-        eventTypes
-        startTime
-        endTime
-        datePreset
-        sortBy
-        sortOrder
-        connectors
-        people
-        places
-        hasLocation
-        semantic
-      }
-    }
-  }
-`);
+import { StoryTimelineView } from './StoryTimelineView';
 
 const VIEW_TABS: Array<{
   value: string;
@@ -66,6 +32,7 @@ const VIEW_TABS: Array<{
 }> = [
   { value: 'map', label: 'Map', titleKey: 'MEMORY_VIEW_MAP', Icon: MapIcon },
   { value: 'list', label: 'List', titleKey: 'MEMORY_VIEW_LIST', Icon: List },
+  { value: 'timeline', label: 'Timeline', titleKey: 'MEMORY_VIEW_TIMELINE', Icon: GanttChart },
   { value: 'gallery', label: 'Gallery', titleKey: 'MEMORY_VIEW_GALLERY', Icon: Images },
   { value: 'graph', label: 'Graph', titleKey: 'MEMORY_VIEW_GRAPH', Icon: ChartNetwork },
 ];
@@ -83,7 +50,6 @@ export default function DesktopMemoryPage() {
   const activeSheetEntity =
     activeEntity != null && activeEntity.__typename !== 'FileChunkType' ? activeEntity : null;
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [searchId, setSearchId] = useState<string | null>(null);
 
   // The active view lives in the URL (`?view=`) so a query is shareable and
   // restores in the same view; list is the desktop default since it always
@@ -117,117 +83,6 @@ export default function DesktopMemoryPage() {
       );
     }
   }, [searchParams, setSearchParams]);
-
-  const { data: savedSearchData } = useQuery(GET_SAVED_SEARCH, {
-    variables: { id: GlobalUID.encode('saved-search', searchId!) },
-    skip: !searchId,
-  });
-
-  useEffect(() => {
-    if (savedSearchData?.savedSearch) {
-      const currentParams = new URLSearchParams(searchParams);
-      const { entityTypes, query, tags, filters } = savedSearchData.savedSearch;
-
-      // Clear every param a saved search owns so a stale filter from the prior
-      // view can't survive the restore.
-      for (const key of [
-        'search',
-        'excludedEntityTypes',
-        'includedEntityTypes',
-        'saved_search',
-        'tags',
-        'eventTypes',
-        'from',
-        'to',
-        'when',
-        'sortBy',
-        'sortOrder',
-        'connectors',
-        'people',
-        'places',
-        'hasLocation',
-        'semantic',
-      ]) {
-        currentParams.delete(key);
-      }
-
-      if (query?.trim()) {
-        currentParams.set('search', query.trim());
-      }
-
-      if (entityTypes?.length && entityTypes.length > 0) {
-        const reverseMapped = entityTypes.map(
-          (type) => ENTITY_TYPE_REVERSE_MAP[type as keyof typeof ENTITY_TYPE_REVERSE_MAP],
-        );
-        // Same exclude-list the What pickers write, so a restored search hides
-        // answers too rather than mixing them in with the saved types.
-        const inverseEntityTypes = excludedEntityTypesFor(reverseMapped);
-
-        if (inverseEntityTypes.length > 0) {
-          currentParams.set('excludedEntityTypes', inverseEntityTypes.join(','));
-        }
-      }
-
-      //Updating included entities is handled in SearchBox.tsx
-
-      if (tags?.length && tags.length > 0) {
-        currentParams.set('tags', tags.join(','));
-      }
-
-      // Secondary dimensions (who / where / when / how / sort / semantic). The
-      // `filters` keys mirror the explorer URL params 1:1 except for the date
-      // range (startTime -> ?from, endTime -> ?to).
-      if (filters) {
-        const setCsv = (param: string, value?: readonly string[] | null) => {
-          if (value && value.length > 0) {
-            currentParams.set(param, value.join(','));
-          }
-        };
-
-        setCsv('eventTypes', filters.eventTypes);
-        setCsv('connectors', filters.connectors);
-        setCsv('people', filters.people);
-        setCsv('places', filters.places);
-
-        if (isRollingDatePreset(filters.datePreset)) {
-          currentParams.set('when', filters.datePreset);
-          const { from, to } = resolveDatePreset(filters.datePreset as DatePreset);
-          currentParams.set('from', from);
-          currentParams.set('to', to);
-        } else {
-          if (filters.startTime) {
-            currentParams.set('from', filters.startTime);
-          }
-
-          if (filters.endTime) {
-            currentParams.set('to', filters.endTime);
-          }
-
-          if (filters.startTime || filters.endTime) {
-            currentParams.set('when', 'custom');
-          }
-        }
-
-        if (filters.sortBy) {
-          currentParams.set('sortBy', filters.sortBy);
-        }
-
-        if (filters.sortOrder) {
-          currentParams.set('sortOrder', filters.sortOrder);
-        }
-
-        if (filters.hasLocation) {
-          currentParams.set('hasLocation', '1');
-        }
-
-        if (filters.semantic) {
-          currentParams.set('semantic', '1');
-        }
-      }
-
-      setSearchParams(currentParams);
-    }
-  }, [searchId, savedSearchData]);
 
   // Matches the Sheet's `data-[state=closed]:duration-300` close animation.
   const CLOSE_ANIMATION_MS = 300;
@@ -269,16 +124,9 @@ export default function DesktopMemoryPage() {
     }
   };
 
-  useEffect(() => {
-    const savedSearchId = searchParams.get('saved_search') || '';
-    if (savedSearchId?.length > 0) {
-      setSearchId(savedSearchId);
-    }
-  }, []);
-
   return (
     <>
-      {/* View tabs (list / map / gallery / graph) live in the header nav-views portal. */}
+      {/* View tabs (list / map / timeline / gallery / graph) live in the header nav-views portal. */}
       <Portal.Slot id="nav-views">
         <div className="flex flex-wrap items-center gap-1">
           {VIEW_TABS.map(({ value, label, titleKey, Icon }) => {
@@ -331,6 +179,7 @@ export default function DesktopMemoryPage() {
               </div>
             )}
             {activeTab === 'map' && <DesktopMapView />}
+            {activeTab === 'timeline' && <StoryTimelineView />}
             {activeTab === 'gallery' && <GalleryView />}
             {activeTab === 'graph' && <GraphView variant="desktop" />}
           </div>

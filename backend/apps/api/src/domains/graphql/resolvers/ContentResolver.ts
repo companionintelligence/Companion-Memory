@@ -3,6 +3,7 @@ import { Args, Float, ID, Parent, Query, Mutation, Resolver, ResolveField } from
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { derivePlayer, resolveTargetFor } from '@ci/domains/embed';
 import { CreateContentInput } from '@ci/domains/graphql/types/CreateContentInput';
 import { UpdateContentInput } from '@ci/domains/graphql/types/UpdateContentInput';
 import { ContentService, classifyExternalId } from '@ci/domains/memory';
@@ -10,15 +11,18 @@ import { ContentService, classifyExternalId } from '@ci/domains/memory';
 import { type ContentFileMedia, ContentFileLoader } from '../loaders/ContentFileLoader';
 import { EventLoader } from '../loaders/EventLoader';
 import { TagLoader } from '../loaders/TagLoader';
+import { UnfurlLoader } from '../loaders/UnfurlLoader';
 import { ContentConnection } from '../types/ContentConnection';
 import { ContentEdge } from '../types/ContentEdge';
 import { ContentType } from '../types/ContentType';
 import { DeleteByIdInput } from '../types/DeleteByIdInput';
 import { DeleteByIdPayload } from '../types/DeleteByIdPayload';
+import { EmbedPlayerType } from '../types/EmbedPlayerType';
 import { EntityTagType } from '../types/EntityTagType';
 import { EventType } from '../types/EventType';
 import { GlobalUID } from '../types/GlobalUID';
 import { PaginationArgs } from '../types/PaginationArgs';
+import { UnfurlType } from '../types/UnfurlType';
 import { entityOwnerScope } from '../utils/entityOwnerScope';
 
 /**
@@ -57,6 +61,7 @@ export class ContentResolver {
     private readonly tagLoader: TagLoader,
     private readonly eventLoader: EventLoader,
     private readonly contentFileLoader: ContentFileLoader,
+    private readonly unfurlLoader: UnfurlLoader,
   ) {}
 
   /**
@@ -322,6 +327,83 @@ export class ContentResolver {
   @ResolveField(() => Float, { nullable: true })
   async mediaSize(@Context() context: RequestContext, @Parent() parent: ContentType): Promise<number | null> {
     return (await this.resolveFileMedia(context, parent))?.size ?? null;
+  }
+
+  /** Filename of the linked ORIGINAL. */
+  @ResolveField(() => String, { nullable: true })
+  async mediaFilename(
+    @Context() context: RequestContext,
+    @Parent() parent: ContentType,
+  ): Promise<string | null> {
+    return (await this.resolveFileMedia(context, parent))?.filename ?? null;
+  }
+
+  /**
+   * Tier-0 embed: a pure function of the row's URL, so no loader and no I/O.
+   * `externalId` is tried first because import writes the provider's native
+   * handle there (`spotify:track:…`), which canonicalizes even when `url` is
+   * absent; `sourceUrl` covers ETL-written rows whose `url` is a media file.
+   */
+  @ResolveField(() => EmbedPlayerType, { nullable: true })
+  player(@Parent() parent: ContentType): EmbedPlayerType | null {
+    const { externalId, externalIdKind, url, sourceUrl } = parent.__source;
+    const kind = externalIdKind ?? classifyExternalId(externalId);
+    const candidates = [kind === 'external_uri' ? externalId : null, url, sourceUrl];
+
+    for (const candidate of candidates) {
+      const player = derivePlayer(candidate);
+      if (player) {
+        return EmbedPlayerType.toType(player);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Cached link preview for the row's resolve key. The key is recomputed here
+   * with the same pure function the stage used, so nothing links content to
+   * `ci.unfurls` but the derivation itself.
+   */
+  @ResolveField(() => UnfurlType, { nullable: true })
+  async unfurl(
+    @Context() context: RequestContext,
+    @Parent() parent: ContentType,
+  ): Promise<UnfurlType | null> {
+    const { sourceSystem, url, sourceUrl, externalId, externalIdKind, sourceData, userId } = parent.__source;
+    const target = resolveTargetFor({
+      sourceSystem,
+      url,
+      sourceUrl,
+      externalId,
+      externalIdKind,
+      sourceTitle: typeof sourceData?.Title === 'string' ? sourceData.Title : null,
+    });
+    if (!target) {
+      return null;
+    }
+
+    const view = await this.unfurlLoader.load(entityOwnerScope(context, userId), target.key);
+    if (!view) {
+      return null;
+    }
+
+    // The cache row is per WORK and shared by every episode; the episode
+    // coordinates are this row's own, parsed from its title.
+    const work = target.work;
+    if (!work || (work.season == null && work.episode == null && !work.episodeTitle)) {
+      return UnfurlType.toType(view);
+    }
+
+    return UnfurlType.toType({
+      ...view,
+      payload: {
+        ...view.payload,
+        season: work.season,
+        episode: work.episode,
+        episode_title: work.episodeTitle,
+      },
+    });
   }
 
   @ResolveField(() => [EntityTagType])

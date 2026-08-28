@@ -1,14 +1,18 @@
 import { randomUUID } from 'node:crypto';
 
+import { ScheduleModule, SchedulerRegistry } from '@nestjs/schedule';
+import { Test } from '@nestjs/testing';
 import { DataSource, type QueryRunner } from 'typeorm';
 
-import type { LoggerService } from '@ci/common/logging';
+import { LoggerService } from '@ci/common/logging';
 
 import { databaseAvailability, resolveConnection } from '../../__tests__/harness/pipelineHarness';
 import { SHARD_LEASE_SECONDS, STAGE_IDS, STAGE_ID_LIST, type StageId } from '../../constants';
+import { PIPELINE_TICK, PipelineTickCron } from '../../listeners/PipelineTickCron';
 import { automaticStageIds, stageDueness, stageSchedule } from '../../schedule';
 import type { Stage } from '../../types';
-import type { EnrichmentWindowService } from '../EnrichmentWindowService';
+import { BackpressureService } from '../BackpressureService';
+import { EnrichmentWindowService } from '../EnrichmentWindowService';
 import {
   CONTINUOUS_RUN_KIND,
   MAX_SWEEPS_PER_TICK,
@@ -23,10 +27,10 @@ import {
   type ControlTickReport,
   type StageLeg,
 } from '../PipelineControlService';
-import type { PipelineDispatchService } from '../PipelineDispatchService';
-import type { PipelineRunService } from '../PipelineRunService';
-import type { PipelineStateService } from '../PipelineStateService';
-import type { StageRegistry } from '../StageRegistry';
+import { PipelineDispatchService } from '../PipelineDispatchService';
+import { PipelineRunService } from '../PipelineRunService';
+import { PipelineStateService } from '../PipelineStateService';
+import { StageRegistry } from '../StageRegistry';
 
 /**
  * The control tick is the answer to a specific, measured absence: twelve stages
@@ -467,6 +471,49 @@ describe('PipelineControlService', () => {
       }
     });
 
+    it('is what makes the sequence dependency-safe — DECLARATION ORDER IS NOT', () => {
+      // `defaultStageSet()` hands back `STAGE_ID_LIST` declaration order, which
+      // groups by phase name and is NOT a topological order: the two person-link
+      // legs are declared a whole phase ahead of `clean.identifier_normalize`,
+      // which they consume. `defaultStageSet`'s docblock used to claim the
+      // opposite, where nothing could catch it; this is that claim, checked. The
+      // sort is the only thing standing between declaration order and a consumer
+      // swept ahead of its producer.
+      const violations = (order: readonly StageId[]): string[] =>
+        Object.entries(STAGE_DEPENDENCIES)
+          .flatMap(([consumer, producers]) =>
+            (producers ?? []).map((producer) => [consumer as StageId, producer] as const),
+          )
+          .filter(([consumer, producer]) => order.indexOf(producer) > order.indexOf(consumer))
+          .map(([consumer, producer]) => `${consumer} before ${producer}`);
+
+      expect(violations(STAGE_ID_LIST)).toEqual(
+        expect.arrayContaining([
+          `${STAGE_IDS.ENRICH_PERSON_LINK} before ${STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE}`,
+          `${STAGE_IDS.ENRICH_EVENT_PERSON_LINK} before ${STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE}`,
+        ]),
+      );
+      expect(violations(orderStages(defaultStageSet()))).toEqual([]);
+    });
+
+    it("breaks ties by declaration order, so one tick's sequence matches the last", () => {
+      // Most stages declare no dependency at all, so "producers first" alone
+      // pins almost nothing; the tie-break is what makes two ticks comparable,
+      // and what keeps the `index.embed_*` / `index.vector_*` families declared
+      // last in `constants.ts` from taking `MAX_SWEEPS_PER_TICK` slots off the
+      // enrichment legs above them.
+      const constrained = new Set<StageId>([
+        ...(Object.keys(STAGE_DEPENDENCIES) as StageId[]),
+        ...Object.values(STAGE_DEPENDENCIES).flatMap((producers) => [...(producers ?? [])]),
+      ]);
+      const untied = (order: readonly StageId[]): StageId[] =>
+        order.filter((stageId) => !constrained.has(stageId));
+
+      const ordered = orderStages(defaultStageSet());
+
+      expect(untied(ordered)).toEqual(untied(STAGE_ID_LIST));
+    });
+
     it('drops an edge to a producer that is not in the set being ordered', () => {
       // A run that names only some stages must still be orderable. An edge to a
       // stage the run does not include is not a dependency of that run.
@@ -495,8 +542,11 @@ describe('PipelineControlService', () => {
         expect(policy.trigger).not.toBe('onArrival');
         expect(policy.window).toBe('enrichment');
         // SECONDS, not milliseconds — schedule.ts's units, and it warns about
-        // exactly this confusion. 7 days = 604_800.
-        expect(policy.minInterval).toBeGreaterThanOrEqual(7 * 24 * 60 * 60);
+        // exactly this confusion. 7 days = 604_800. `enrich.unfurl` is the
+        // deliberate exception: daily, so a large existing corpus (tens of
+        // thousands of Spotify/YouTube keys) backfills in days, not months.
+        const minFloor = stageId === STAGE_IDS.ENRICH_UNFURL ? 24 * 60 * 60 : 7 * 24 * 60 * 60;
+        expect(policy.minInterval).toBeGreaterThanOrEqual(minFloor);
         expect(policy.perRunCap).toBeGreaterThan(0);
       }
 
@@ -914,7 +964,12 @@ describe('PipelineControlService', () => {
       // tonight instead of in a week — and the ONLY thing bounding that first
       // pass is `perRunCap`, which is the argument for the cap mattering more
       // than the interval.
-      const h = makeControl({ users: [runningRun()], stale: [...STAGE_ID_LIST] });
+      //
+      // Only the metered legs are stale here: a tick starts at most
+      // MAX_SWEEPS_PER_TICK sweeps in declaration order, so with EVERY stage
+      // stale the metered ones (declared last) would simply wait for the next
+      // tick — which is the cap working, not the policy failing.
+      const h = makeControl({ users: [runningRun()], stale: [...METERED_STAGES] });
 
       await h.service.tick();
 
@@ -955,11 +1010,20 @@ describe('PipelineControlService', () => {
       // tick — and the only difference is a row in `ci.pipeline_schedule` from
       // yesterday.
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      const anHourAgo = new Date(Date.now() - 60 * 60 * 1000);
 
       const h = makeControl({
         users: [runningRun()],
         stale: [...METERED_STAGES],
-        lastStartedAt: Object.fromEntries([...METERED_STAGES].map((stageId) => [stageId, yesterday])),
+        lastStartedAt: Object.fromEntries(
+          [...METERED_STAGES].map((stageId) => [
+            stageId,
+            // enrich.unfurl's own interval IS a day, so "yesterday" sits right
+            // at its boundary rather than safely inside it like every other
+            // metered stage's week.
+            stageId === STAGE_IDS.ENRICH_UNFURL ? anHourAgo : yesterday,
+          ]),
+        ),
       });
 
       const report = await h.service.tick();
@@ -1069,7 +1133,15 @@ describe('PipelineControlService', () => {
       // The run the tick creates still names no stages — the cadence lives in
       // the schedule now, not in what a run happens to be called.
       expect(input?.detail).not.toHaveProperty('stages');
-      expect(h.swept()).toContain(STAGE_IDS.ENRICH_GEOCODE);
+      // With every stage stale, which specific one wins the MAX_SWEEPS_PER_TICK
+      // race is an ordering detail of STAGE_ID_LIST, not this test's concern —
+      // pinning it to one stage id makes the test break every time a new stage
+      // is added ahead of it in the list. The point here is only that a metered
+      // stage was reached at all, from a run the tick itself just started.
+      expect(h.swept().length).toBeGreaterThan(0);
+      for (const stageId of h.swept()) {
+        expect(STAGE_ID_LIST).toContain(stageId);
+      }
     });
 
     it('holds a named run to the same interval as an unnamed one', async () => {
@@ -1489,22 +1561,15 @@ describe('PipelineControlService', () => {
   // -------------------------------------------------------------------------
 
   describe('when something goes wrong', () => {
-    it('never rejects out of the scheduled tick — an unhandled tick would exit the process', async () => {
-      // `@Cron` is @nestjs/schedule, which builds `CronJob.from({ onTick })`
-      // without `waitForCompletion`, so `fireOnTick` never awaits the callback.
-      // An async tick that rejects is an unhandled rejection, and
-      // `application.ts` answers those with `process.exit(1)`. On a two-minute
-      // timer that is a crash loop.
-      const h = makeControl({ users: [runningRun()], failOn: /from ci\.users/ });
-
-      await expect(h.service.tickOnSchedule()).resolves.toBeUndefined();
-      expect(h.logger.error).toHaveBeenCalled();
-    });
-
     it('propagates out of the awaited tick, so a caller that asked hears about it', async () => {
-      // The two entry points diverge deliberately. A cron must never reject; a
-      // caller that awaited a tick wants to be told it failed rather than getting
-      // a report of zeroes that reads like a quiet appliance.
+      // The body throws and the TIMER contains it: a cron must never reject —
+      // `@nestjs/schedule` builds `CronJob.from({ onTick })` without
+      // `waitForCompletion`, so nothing awaits it and `application.ts` answers
+      // an unhandled rejection with `process.exit(1)`. That containment is
+      // `PipelineTickCron.runOnSchedule`'s, and its own spec pins it. Here the
+      // property is the opposite one: a caller that awaited a tick wants to be
+      // told it failed rather than getting a report of zeroes that reads like a
+      // quiet appliance.
       const h = makeControl({ users: [runningRun()], failOn: /from ci\.users/ });
 
       await expect(h.service.tick()).rejects.toThrow('connection terminated');
@@ -1592,6 +1657,70 @@ describe('PipelineControlService', () => {
       expect(userQuery?.sql).toMatch(/deleted_at is null/);
       expect(userQuery?.sql).toMatch(/is_active/);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One tick body, one timer
+// ---------------------------------------------------------------------------
+
+/**
+ * `PipelineTickCron` owns the schedule; this service owns what a tick DOES.
+ *
+ * Both used to carry a `@Cron`, so two timers drove one `tick()` body. That was
+ * never a correctness problem — every path serialises on this service's advisory
+ * lock and then on the per-leg shard lease — but the faster schedule wins, so the
+ * appliance ticked every two minutes rather than the five `PIPELINE_TICK_CRON`
+ * argues for, and every extra tick costs a staleness anti-join per stage leg.
+ *
+ * Asserted against the LIVE registry rather than the decorator metadata on one
+ * named method: the registry is what fires timers and what the Jobs dashboard
+ * lists, so a second schedule reintroduced on ANY method of either class fails
+ * here.
+ */
+describe('the pipeline tick schedule', () => {
+  it('is registered once, by PipelineTickCron', async () => {
+    const stub = {};
+
+    const silent = {
+      setContext: () => undefined,
+      log: () => undefined,
+      debug: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+      verbose: () => undefined,
+    } as unknown as LoggerService;
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [ScheduleModule.forRoot()],
+      providers: [
+        PipelineControlService,
+        PipelineTickCron,
+        { provide: PIPELINE_TICK, useExisting: PipelineControlService },
+        // `@InjectDataSource()` resolves to the `DataSource` class token for the
+        // default connection; nothing here issues a statement.
+        { provide: DataSource, useValue: stub },
+        { provide: PipelineStateService, useValue: stub },
+        { provide: PipelineRunService, useValue: stub },
+        { provide: PipelineDispatchService, useValue: stub },
+        { provide: StageRegistry, useValue: stub },
+        { provide: EnrichmentWindowService, useValue: stub },
+        { provide: BackpressureService, useValue: stub },
+        { provide: LoggerService, useValue: silent },
+      ],
+    }).compile();
+
+    const app = moduleRef.createNestApplication();
+
+    try {
+      await app.init();
+
+      const registered = [...app.get(SchedulerRegistry).getCronJobs().keys()];
+
+      expect(registered).toEqual(['PipelineTickCron.runOnSchedule']);
+    } finally {
+      await app.close();
+    }
   });
 });
 

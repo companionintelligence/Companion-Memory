@@ -5,7 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import type { Request } from 'express';
 import parseDuration from 'parse-duration';
-import { MoreThan, Repository } from 'typeorm';
+import { MoreThan, Not, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import config from '@ci/configuration';
@@ -127,6 +127,23 @@ export class AuthService {
 
     await this.sessionRepository.delete({
       id: session.id,
+    });
+  }
+
+  /**
+   * Sign every OTHER browser/device out after a credential change. The
+   * session making this request stays alive — deliberately: the point is to
+   * force re-authentication elsewhere, not to log the person out of the flow
+   * they're mid-way through. `currentToken` is null for an API-key-authenticated
+   * request (native holds no session cookie at all), in which case there is no
+   * "current session" to spare and every session is invalidated.
+   */
+  async invalidateOtherSessions(userId: string, currentToken: string | null | undefined): Promise<void> {
+    const currentHashed = currentToken ? this.digest(currentToken) : null;
+
+    await this.sessionRepository.delete({
+      user: { id: userId },
+      ...(currentHashed ? { token: Not(currentHashed) } : {}),
     });
   }
 

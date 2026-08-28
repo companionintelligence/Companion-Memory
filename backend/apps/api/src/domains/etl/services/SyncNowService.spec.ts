@@ -1,3 +1,4 @@
+import type { FeatureService } from '@ci/common/feature';
 import type { LoggerService } from '@ci/common/logging';
 import type { ConnectionService } from '@ci/domains/connections';
 
@@ -10,6 +11,7 @@ describe('SyncNowService', () => {
   let service: SyncNowService;
   let connectionService: jest.Mocked<Pick<ConnectionService, 'findAll'>>;
   let connectionSyncJobService: jest.Mocked<Pick<ConnectionSyncJobService, 'search' | 'create'>>;
+  let featureService: jest.Mocked<Pick<FeatureService, 'isFeatureEnabled'>>;
 
   beforeEach(() => {
     connectionService = {
@@ -19,14 +21,33 @@ describe('SyncNowService', () => {
       search: jest.fn(),
       create: jest.fn(),
     };
+    featureService = {
+      isFeatureEnabled: jest.fn().mockResolvedValue(true),
+    };
 
     const logger = { setContext: jest.fn(), log: jest.fn() } as unknown as LoggerService;
 
     service = new SyncNowService(
       connectionService as unknown as ConnectionService,
       connectionSyncJobService as unknown as ConnectionSyncJobService,
+      featureService as unknown as FeatureService,
       logger,
     );
+  });
+
+  it('refuses rather than enqueuing work the gated executor can never drain', async () => {
+    featureService.isFeatureEnabled.mockResolvedValue(false);
+
+    const result = await service.enqueueForUser(context as never);
+
+    expect(result).toEqual({
+      jobIds: [],
+      enqueued: 0,
+      skipped: 0,
+      disabledReason: 'scheduled_sync_disabled',
+    });
+    expect(connectionService.findAll).not.toHaveBeenCalled();
+    expect(connectionSyncJobService.create).not.toHaveBeenCalled();
   });
 
   it('enqueues pending jobs for active connection endpoints', async () => {

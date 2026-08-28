@@ -17,6 +17,16 @@ import { type File, FileEntity } from '../entities/FileEntity';
 
 import { EntityService } from './EntityService';
 
+/** Where the graph-node write for an upload runs, off the shared default queue. */
+export const MEMORY_FILE_ENTITY_QUEUE = 'memory-file-entity';
+
+/**
+ * The queue this handler consumed on before the move to
+ * {@link MEMORY_FILE_ENTITY_QUEUE}. Spelled out rather than imported because
+ * `DEFAULT_QUEUE` is internal to the events domain (no-cross-domain-internals).
+ */
+export const LEGACY_FILE_ENTITY_QUEUE = 'default';
+
 @Injectable()
 export class FileService extends EntityService<FileEntity, File> {
   constructor(
@@ -44,8 +54,29 @@ export class FileService extends EntityService<FileEntity, File> {
     return { entity };
   }
 
-  @OnEvent(FileUploadedEvent)
+  @OnEvent(FileUploadedEvent, { queue: MEMORY_FILE_ENTITY_QUEUE })
   async handleFileUploaded(payload: FileUploadedPayload) {
+    await this.createEntityForUploadedFile(payload);
+  }
+
+  /**
+   * Drain for `file.uploaded` jobs enqueued before the handler moved to
+   * {@link MEMORY_FILE_ENTITY_QUEUE} — the same registration
+   * `ImportStageListener` keeps on its pre-split queue, for the same reason.
+   * `file.uploaded` is the appliance's highest-volume job, so a deploy always
+   * lands on some sitting in `created` on `default`; with nothing bound to
+   * `file.uploaded:default` the worker fetches each one, matches no listener
+   * and completes it, and that file never gets a graph File node — nothing
+   * else mints one. New sends fan out here as well, which costs one extra
+   * (idempotent) lookup per upload; delete this once a deployment has drained
+   * the queue.
+   */
+  @OnEvent(FileUploadedEvent, { queue: LEGACY_FILE_ENTITY_QUEUE })
+  async drainFileUploadedFromDefaultQueue(payload: FileUploadedPayload) {
+    await this.createEntityForUploadedFile(payload);
+  }
+
+  private async createEntityForUploadedFile(payload: FileUploadedPayload) {
     const file = await this.fileStorageService.findById({ userId: payload.userId }, payload.fileId);
 
     if (file == null) {
@@ -72,26 +103,42 @@ export class FileService extends EntityService<FileEntity, File> {
     fileId: string,
     name: string | null,
   ): Promise<FileEntity> {
-    const existing = await this.repository.findOne({
-      where: { linkedTable: 'files', linkedId: fileId },
-    });
+    const where = { linkedTable: 'files', linkedId: fileId };
+
+    const existing = await this.repository.findOne({ where });
 
     if (existing) {
       return existing;
     }
 
-    return this.repository.manager.transaction((manager) => {
-      const instance = this.repository.create({
-        id: uuidv7(),
-        name,
-        description: 'File',
-        linkedTable: 'files',
-        linkedId: fileId,
-        userId: context.userId,
-        properties: {},
-      });
+    try {
+      return await this.repository.manager.transaction((manager) => {
+        const instance = this.repository.create({
+          id: uuidv7(),
+          name,
+          description: 'File',
+          linkedTable: 'files',
+          linkedId: fileId,
+          userId: context.userId,
+          properties: {},
+        });
 
-      return this.persistCreate(manager, instance);
-    });
+        return this.persistCreate(manager, instance);
+      });
+    } catch (err) {
+      // Lost a race to a concurrent findOrCreateForFile for the same file id
+      // (entities_linked_uniq, 23505) — a re-fired FileUploadedEvent can land
+      // two handlers on this at once. Return the winner instead of throwing;
+      // the recovery query must run outside the failed transaction, which
+      // aborted on the violation (25P02 on any further query on that manager).
+      if ((err as { code?: string })?.code === '23505') {
+        const winner = await this.repository.findOne({ where });
+        if (winner) {
+          return winner;
+        }
+      }
+
+      throw err;
+    }
   }
 }

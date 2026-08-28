@@ -1,5 +1,6 @@
 import type { StagedItem } from '../../entities/StagedItemEntity';
 import {
+  communicationAttachmentsFrom,
   destinationsFor,
   discordAttachmentFilename,
   edgeProjectionSourcesFor,
@@ -8,6 +9,7 @@ import {
   isDiscordAttachmentOnly,
   isRedditComment,
   isRedditPost,
+  isSocialAffiliation,
   kindFor,
   redditMediaUrl,
   str,
@@ -114,6 +116,12 @@ describe('destinationsFor', () => {
     expect(destinationsFor(recordFor({ classification: 'search' }))).toEqual(['browser_activity']);
   });
 
+  it('sends a download to browser activity, not the timeline', () => {
+    // Without this rule a download falls through to the default 'events'
+    // bucket, the same way ~96k searches once did.
+    expect(destinationsFor(recordFor({ classification: 'download' }))).toEqual(['browser_activity']);
+  });
+
   it('keeps a raw GPS fix out of events entirely', () => {
     const track = recordFor({ classification: 'location', latitude: 1, longitude: 2 });
 
@@ -189,18 +197,36 @@ describe('destinationsFor', () => {
     expect(destinationsFor(tweet)).toEqual(['communications', 'position']);
   });
 
-  it('pushes a subscription fee nowhere at all', () => {
+  it('gives a subscription fee its receipt and nothing else', () => {
     // A Prime or Kindle Unlimited charge is a service, not a thing: neither
-    // content nor inventory. The order aggregate still carries it to events.
+    // content nor things. It is still a real purchase, so it keeps the
+    // receipt that carries the merchant and the money — before the commerce
+    // plane it pushed NOWHERE and the spend was invisible.
     const fee = recordFor({ classification: 'purchase', metadata: { Subscription: true } });
 
-    expect(destinationsFor(fee)).toEqual([]);
+    expect(destinationsFor(fee)).toEqual(['receipts']);
   });
 
-  it('sends a physical purchase to inventory and a digital one to content', () => {
+  it('leaves the receipt to the order aggregate for a rolled-up line', () => {
+    // amazon.ts stamps every line of a multi-item order with the aggregate's
+    // id. Without this branch a five-item order produces five single-line
+    // receipts on top of the itemised one.
+    const line = recordFor({
+      classification: 'purchase',
+      metadata: { ReceiptRollupId: 'amazon:order:111-2233445-6677889' },
+    });
+
+    expect(destinationsFor(line)).toEqual(['things']);
+  });
+
+  it('sends a physical purchase to things and a digital one to content, both with a receipt', () => {
     const physical = recordFor({ classification: 'purchase' });
 
-    expect(destinationsFor(physical)).toEqual(['inventory']);
+    expect(destinationsFor(physical)).toEqual(['receipts', 'things']);
+
+    const digital = recordFor({ classification: 'purchase', metadata: { Product: 'Kindle Edition' } });
+
+    expect(destinationsFor(digital)).toEqual(['receipts', 'content']);
   });
 
   it('sends a money movement to events alone', () => {
@@ -254,17 +280,167 @@ describe('destinationsFor', () => {
       expect(destinationsFor(comment)).toEqual(['communications', 'content']);
     });
 
-    it('does not treat an ordinary social vote/subreddit row as a post or comment', () => {
-      // Only Kind 'post'/'saved_post'/'comment'/'saved_comment' qualify — other
-      // reddit exports (subscribed subreddits) keep the generic social.* route.
-      const subscription = recordFor({
+    it('does not treat some other reddit social row as a post or comment', () => {
+      // Only Kind 'post'/'saved_post'/'comment'/'saved_comment' qualify. A
+      // reddit Kind that is neither an authored post/comment nor an affiliation
+      // keeps the generic social.* route — the boundary that stops either
+      // predicate from being widened to "any reddit social row".
+      const other = recordFor({
         classification: 'social',
         dataSource: 'reddit',
-        metadata: { Kind: 'subscribed', Subreddit: 'pics' },
+        metadata: { Kind: 'award', Subreddit: 'pics' },
       });
 
-      expect(destinationsFor(subscription)).toEqual(['events', 'content']);
+      expect(destinationsFor(other)).toEqual(['events', 'content']);
     });
+
+    it('sends an undated saved post to content alone, never wearing import time', () => {
+      // Reddit's saved_posts.csv is `id, permalink` — no date of any kind. A
+      // communications row would be forced to a NOT NULL time, i.e. the import
+      // moment presented as real (verified live: eight saved posts/comments
+      // all stamped the second they were parsed).
+      const saved = recordFor({
+        classification: 'social',
+        dataSource: 'reddit',
+        occurredAt: null,
+        metadata: { Title: 'English is weird', Kind: 'saved_post', Subreddit: 'Jokes' },
+      });
+
+      expect(destinationsFor(saved)).toEqual(['content']);
+    });
+
+    it('keeps a DATED saved post in communications', () => {
+      // The rule is about the missing date, not about being saved: a future
+      // export that dates its saved items gets the normal routing.
+      const dated = recordFor({
+        classification: 'social',
+        dataSource: 'reddit',
+        metadata: { Title: 'Dated after all', Kind: 'saved_post', Subreddit: 'space' },
+      });
+
+      expect(destinationsFor(dated)).toEqual(['communications']);
+    });
+  });
+
+  describe('undated social records', () => {
+    it('sends an undated authored social record to content alone', () => {
+      const undated = recordFor({
+        classification: 'social',
+        dataSource: 'mastodon',
+        occurredAt: null,
+        metadata: { Title: 'A post with no date', Kind: 'post' },
+      });
+
+      expect(destinationsFor(undated)).toEqual(['content']);
+    });
+
+    it('keeps an undated affiliation on its event home', () => {
+      // An affiliation models CURRENT state — its event title carries the whole
+      // fact, and its content row is the empty one isSocialAffiliation exists
+      // to prevent. Content-only would erase it entirely.
+      const membership = recordFor({
+        classification: 'social',
+        dataSource: 'reddit',
+        occurredAt: null,
+        metadata: { Kind: 'subscribed_subreddit', Subreddit: 'bitscoop' },
+      });
+
+      expect(destinationsFor(membership)).toEqual(['events']);
+    });
+  });
+
+  describe('social affiliations', () => {
+    // A connection and a subreddit membership are an edge and a membership, not
+    // authored content. They carry no Text/Body/URL, so toContentInput could
+    // only ever write a content row with a NULL text AND a NULL url — and
+    // ci.content has no title column, so nothing about it renders. A real
+    // clean-room import produced 1,977 of them (1,975 LinkedIn connections,
+    // 2 moderated subreddits): 100% of what those sources sent to content.
+
+    it('gives a LinkedIn connection its event but no content row', () => {
+      const connection = recordFor({
+        classification: 'social',
+        dataSource: 'linkedin',
+        metadata: {
+          Title: 'Connected with Morgan Spadone',
+          Name: 'Morgan Spadone',
+          Person: 'Morgan Spadone',
+          Kind: 'connection',
+          Source: 'LinkedIn',
+        },
+      });
+
+      expect(destinationsFor(connection)).toEqual(['events']);
+    });
+
+    it('gives a moderated subreddit its event but no content row', () => {
+      const subreddit = recordFor({
+        classification: 'social',
+        dataSource: 'reddit',
+        metadata: { Title: 'r/bitscoop', Subreddit: 'bitscoop', Kind: 'moderated_subreddit' },
+      });
+
+      expect(destinationsFor(subreddit)).toEqual(['events']);
+    });
+
+    it('still donates a geotagged affiliation’s fix to the position table', () => {
+      // Skipping `content` must not cost the position donation the social.*
+      // branch has always made — the two are independent decisions.
+      const connection = recordFor({
+        classification: 'social',
+        dataSource: 'linkedin',
+        metadata: { Kind: 'connection', Name: 'Morgan Spadone' },
+        latitude: 1,
+        longitude: 2,
+      });
+
+      expect(destinationsFor(connection)).toEqual(['events', 'position']);
+    });
+
+    it('leaves a real LinkedIn post — one with a body — both homes', () => {
+      // The predicate keys on Kind, not on the source: LinkedIn is not
+      // blanket-excluded from content, only its connection rows are.
+      const post = recordFor({
+        classification: 'social',
+        dataSource: 'linkedin',
+        metadata: { Kind: 'post', Text: 'Thoughts on the release' },
+      });
+
+      expect(destinationsFor(post)).toEqual(['events', 'content']);
+    });
+  });
+});
+
+describe('isSocialAffiliation', () => {
+  it('is true for the connection and subreddit-membership Kinds', () => {
+    expect(isSocialAffiliation(recordFor({ dataSource: 'linkedin', metadata: { Kind: 'connection' } }))).toBe(
+      true,
+    );
+    expect(
+      isSocialAffiliation(recordFor({ dataSource: 'reddit', metadata: { Kind: 'moderated_subreddit' } })),
+    ).toBe(true);
+    // Emitted by pushSubreddit for subscribed_subreddits.csv, which the reddit
+    // importer does not read today — covered so enabling that file cannot
+    // reintroduce the empty rows.
+    expect(
+      isSocialAffiliation(recordFor({ dataSource: 'reddit', metadata: { Kind: 'subscribed_subreddit' } })),
+    ).toBe(true);
+  });
+
+  it('is false for an authored row from the same source', () => {
+    expect(isSocialAffiliation(recordFor({ dataSource: 'reddit', metadata: { Kind: 'post' } }))).toBe(false);
+    expect(isSocialAffiliation(recordFor({ dataSource: 'linkedin', metadata: { Kind: 'message' } }))).toBe(
+      false,
+    );
+  });
+
+  it('is false for a matching Kind from another source', () => {
+    // The sourceSystem check comes first: another importer's 'connection' is
+    // not this shape, and must not lose its content row on the strength of a
+    // coincidental metadata value.
+    expect(
+      isSocialAffiliation(recordFor({ dataSource: 'some_other_source', metadata: { Kind: 'connection' } })),
+    ).toBe(false);
   });
 });
 
@@ -499,7 +675,7 @@ describe('edgeProjectionSourcesFor', () => {
     expect(edgeProjectionSourcesFor(['communications'])).toEqual(['communications']);
     expect(edgeProjectionSourcesFor(['events'])).toEqual(['events']);
     expect(edgeProjectionSourcesFor(['content'])).toEqual(['content']);
-    expect(edgeProjectionSourcesFor(['inventory'])).toEqual(['inventory']);
+    expect(edgeProjectionSourcesFor(['things'])).toEqual(['objects']);
     // The one that is NOT the destination's own name.
     expect(edgeProjectionSourcesFor(['position'])).toEqual(['positions']);
   });
@@ -521,5 +697,107 @@ describe('edgeProjectionSourcesFor', () => {
       'events',
       'content',
     ]);
+  });
+});
+
+describe('a contact card is a person, not a document', () => {
+  /**
+   * The other half of the shape #2152 fixed for LinkedIn connections. A vCard /
+   * Address Book / contact-list card has no `KIND_BY_CLASSIFICATION` entry, so
+   * it fell to the default and the undated-file rule filed it as
+   * `import.archive_item` -> a `ci.content` row with `type='file'` and a NULL
+   * url: a file pointing at no file.
+   *
+   * Measured on a fresh full-corpus import carrying every fix merged
+   * 2026-08-19: 4,870 such rows from vcard, 2,085 of them with no text and no
+   * url. The same parsers already emit each card correctly on the entity lane,
+   * so the content row was a second, empty copy.
+   */
+  const contactRecord = (overrides: Record<string, unknown> = {}) =>
+    ({
+      kind: kindFor('contact', null),
+      metadata: {},
+      sourceSystem: 'vcard',
+      title: 'Nadia Whitlock',
+      description: null,
+      coordinates: null,
+      time: null,
+      mediaType: null,
+      mediaPath: null,
+      ...overrides,
+    }) as never;
+
+  it('gives a contact classification its own kind', () => {
+    expect(kindFor('contact', null)).toBe('contact.card');
+  });
+
+  it('routes a contact card nowhere — the entity lane already has it', () => {
+    expect(destinationsFor(contactRecord())).toEqual([]);
+  });
+
+  it('still routes a plain file to content, so the file rule is untouched', () => {
+    expect(kindFor('file', null)).toBe('import.archive_item');
+    // Pinned to the destination, not merely to "somewhere". The record is
+    // undated so the result is deterministic, and `.length > 0` would have
+    // passed if the file rule regressed from ['content'] to ['events'] --
+    // exactly what this test's name claims to guard.
+    expect(destinationsFor(contactRecord({ kind: kindFor('file', null) }))).toEqual(['content']);
+  });
+});
+
+describe('communicationAttachmentsFrom', () => {
+  /**
+   * The union the media leg reads. Two parser generations wrote two different
+   * keys for the same idea and NEITHER was ever read — `MediaAttachments` by
+   * twitter, gmail, iMessage and the chat exports, `MediaFilePaths` by facebook
+   * and sms_backup_restore. Reading only one of them leaves half the sources
+   * dropping their attachments exactly as before.
+   */
+  it('reads the rich descriptor shape', () => {
+    const attachments = communicationAttachmentsFrom({
+      MediaAttachments: [
+        { path: '/scratch/a.jpg', filename: 'holiday.jpg', type: 'image', mimetype: 'image/jpeg' },
+      ],
+    });
+
+    expect(attachments).toEqual([
+      { path: '/scratch/a.jpg', filename: 'holiday.jpg', type: 'image', mimetype: 'image/jpeg' },
+    ]);
+  });
+
+  it('fills a bare path in from its own extension', () => {
+    // An MMS part is bytes and nothing else, so the filename and MIME have to
+    // come from the path or the file arrives called `d41d8cd98f…` and untyped.
+    expect(communicationAttachmentsFrom({ MediaFilePaths: ['/scratch/part-1.png'] })).toEqual([
+      { path: '/scratch/part-1.png', filename: 'part-1.png', type: 'media', mimetype: 'image/png' },
+    ]);
+  });
+
+  it('keeps a non-media attachment honest rather than calling it media', () => {
+    // An email's PDF is a file. Typing it 'media' would put it in a gallery.
+    expect(communicationAttachmentsFrom({ MediaFilePaths: ['/scratch/invoice.pdf'] })).toMatchObject([
+      { type: 'file', mimetype: 'application/pdf' },
+    ]);
+  });
+
+  it('drops a descriptor with no path, because there are no bytes to store', () => {
+    // Still counted as a gap by the caller — see MediaStage's attachment_no_path.
+    expect(communicationAttachmentsFrom({ MediaAttachments: [{ guid: 'abc', type: 'image' }] })).toEqual([]);
+  });
+
+  it('does not upload the same file twice when both keys name it', () => {
+    // A parser is allowed to write both; two entries for one photo would put
+    // the same file in `attachments` twice.
+    const attachments = communicationAttachmentsFrom({
+      MediaAttachments: [{ path: '/scratch/same.jpg', filename: 'same.jpg', type: 'image' }],
+      MediaFilePaths: ['/scratch/same.jpg', '/scratch/other.jpg'],
+    });
+
+    expect(attachments.map((a) => a.path)).toEqual(['/scratch/same.jpg', '/scratch/other.jpg']);
+  });
+
+  it('is empty for a message that carries nothing', () => {
+    expect(communicationAttachmentsFrom({ Text: 'hi' })).toEqual([]);
+    expect(communicationAttachmentsFrom(undefined)).toEqual([]);
   });
 });

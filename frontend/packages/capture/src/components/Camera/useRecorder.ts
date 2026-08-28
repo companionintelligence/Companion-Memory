@@ -4,6 +4,16 @@ import { useCallback, useRef, useState } from 'react';
 import { useStream } from './useStream';
 import type { RecordingMode } from './useRecordingMode';
 
+function pickVideoRecorderMimeType(): string | undefined {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
+    return undefined;
+  }
+
+  const candidates = ['video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+
+  return candidates.find((type) => MediaRecorder.isTypeSupported(type));
+}
+
 interface Props {
   onFrameCaptured?: (file: File, mode: RecordingMode) => void;
   onRecordingFinished?: (file: File, mode: RecordingMode) => void;
@@ -54,9 +64,10 @@ function useRecorder({ onFrameCaptured, onRecordingFinished }: Props): ReturnTyp
       if (!isRecording) {
         chunksRef.current = [];
 
-        const recorder = new MediaRecorder(mediaStreamRef.current, {
-          mimeType: 'video/webm;codecs=vp9',
-        });
+        const mimeType = pickVideoRecorderMimeType();
+        const recorder = mimeType
+          ? new MediaRecorder(mediaStreamRef.current, { mimeType })
+          : new MediaRecorder(mediaStreamRef.current);
 
         recorder.addEventListener('dataavailable', (event: BlobEvent) => {
           if (event.data.size > 0) {
@@ -65,9 +76,11 @@ function useRecorder({ onFrameCaptured, onRecordingFinished }: Props): ReturnTyp
         });
 
         recorder.addEventListener('stop', () => {
-          const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+          const type = recorder.mimeType || mimeType || 'video/webm';
+          const ext = type.includes('mp4') ? 'mp4' : 'webm';
+          const blob = new Blob(chunksRef.current, { type });
           const timestamp = Date.now().toString(36).toUpperCase();
-          const file = new File([blob], `VID_${timestamp}.webm`, { type: 'video/webm' });
+          const file = new File([blob], `VID_${timestamp}.${ext}`, { type });
 
           handleRecordingFinished?.(file, mode);
           recorderRef.current = null;

@@ -92,6 +92,17 @@ export class PersonType implements Node, Taggable {
   @Field(() => String, { nullable: true })
   avatarUrl!: string | null;
 
+  /**
+   * First real activity inside the active search date window (event as
+   * organizer/participant, or communication as from/to). Null when the browse
+   * has no date filter — the unique people list is not date-grouped — or when
+   * this person has no dated activity in the window. SearchResolver stamps this
+   * from the identifier's sortTime; do not add a ResolveField that overwrites
+   * it with first-ever, or in-window grouping is lost.
+   */
+  @Field(() => Date, { nullable: true })
+  appearedAt!: Date | null;
+
   @Field(() => [EntityTagType])
   tags!: EntityTagType[];
 
@@ -132,6 +143,7 @@ export class PersonType implements Node, Taggable {
       country: person.country,
       postalCode: person.postalCode,
       avatarUrl: (person.properties?.avatar_url as string) ?? null,
+      appearedAt: person.appearedAt ?? null,
       tags: [], // Resolved by PersonResolver
     };
   }

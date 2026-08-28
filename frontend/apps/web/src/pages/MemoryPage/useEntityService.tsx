@@ -58,6 +58,25 @@ const SEARCH_QUERY = gql(`
             galleryPreviewUrl: previewUrl
             galleryFileUrl: mediaUrl
             galleryMediaSize: mediaSize
+            # Provider-hosted player derived server-side from url/externalId
+            # (YouTube, Spotify, …). Null for anything without one. The tile
+            # shows the poster; the iframe mounts only when the lightbox opens.
+            galleryPlayer: player {
+              provider
+              playerUrl
+              posterUrl
+              aspectRatio
+              mediaKind
+            }
+            # Resolved link preview from the enrich.unfurl stage: the poster
+            # for a Spotify track (no predictable poster URL) or a Netflix
+            # episode (no URL at all), plus the provider's title.
+            galleryUnfurl: unfurl {
+              status
+              title
+              thumbnailUrl
+              canonicalUrl
+            }
           }
 
           ...AnswerGridItemData
@@ -72,6 +91,8 @@ const SEARCH_QUERY = gql(`
           ...ItemGridItemData
           ...PersonGridItemData
           ...PlaceGridItemData
+          ...ProductGridItemData
+          ...ReceiptGridItemData
           ...ThreadGridItemData
 
           ...TableAnswerRowData
@@ -85,6 +106,8 @@ const SEARCH_QUERY = gql(`
           ...TableNoteRowData
           ...TablePersonRowData
           ...TablePlaceRowData
+          ...TableProductRowData
+          ...TableReceiptRowData
           ...TableThreadRowData
           ...TableBrowserActivityRowData
 
@@ -105,6 +128,15 @@ const SEARCH_QUERY = gql(`
 
           ... on EventType {
             bucketStartTime: startTime
+            # time_source = 'ingest' means the export gave this record no
+            # time and startTime is only the import wall clock (a Google Maps
+            # saved place, a Reddit affiliation, …) — getEntityTimestamp reads
+            # this to keep such rows OUT of the dated timeline instead of
+            # sorting them by the moment they were imported. NOTE: no
+            # backtick characters in this comment — it lives inside a
+            # backtick-delimited JS template literal, and an unescaped one
+            # silently truncates the query string.
+            bucketTimeSource: timeSource
             # The event's kind (visited / messaged / traveled / …), unmasked so
             # the Events tab can group its timeline by activity without
             # unmasking the card fragment.
@@ -131,7 +163,12 @@ const SEARCH_QUERY = gql(`
             galleryLocationName: locationName
           }
 
+          ... on PersonType {
+            bucketAppearedAt: appearedAt
+          }
+
           ... on PlaceType {
+            bucketAppearedAt: appearedAt
             mapProperties: properties
           }
 
@@ -354,7 +391,12 @@ function useEntityService({
           },
         };
       },
-    }).finally(() => setLoadingMore(false));
+    })
+      .catch(() => {
+        // Apollo records the query error. Swallow so a failed page is not an
+        // unhandled rejection — callers decide whether to show ErrorState.
+      })
+      .finally(() => setLoadingMore(false));
   }, [fetchMore, hasNextPage, loadingMore, pageInfo?.endCursor]);
 
   const results = useMemo(() => (data?.search?.edges ?? []).map((edge) => edge.node), [data]);
@@ -387,6 +429,14 @@ function useEntityService({
   ];
 }
 
-const { Provider: EntityServiceProvider, useHookContext } = createHookContext(useEntityService);
+const {
+  Provider: EntityServiceProvider,
+  useHookContext,
+  useOptionalHookContext,
+} = createHookContext(useEntityService, 'useEntityService');
 
-export { EntityServiceProvider, useHookContext as useEntityService };
+export {
+  EntityServiceProvider,
+  useHookContext as useEntityService,
+  useOptionalHookContext as useOptionalEntityService,
+};

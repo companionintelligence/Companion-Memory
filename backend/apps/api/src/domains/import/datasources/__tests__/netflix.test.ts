@@ -72,6 +72,20 @@ describe('Netflix datasource', () => {
     expect(pipeline[1].item.metadata.Device).toBe('iPhone');
   });
 
+  it('keys the content row on the title, so every viewing of one title shares a row', async () => {
+    const pipeline = await runImport({ filename: 'ViewingActivity.csv', fullPath: CSV_FILE });
+    const crypto = await import('node:crypto');
+    const expected =
+      'netflix:title:' +
+      crypto.createHash('sha256').update('glass onion: a knives out mystery').digest('hex').slice(0, 16);
+    expect(pipeline[1].item.metadata.URI).toBe(expected);
+    // Item ids stay per viewing: the URI is the CONTENT identity, not the event's.
+    expect(pipeline[1].item.id).not.toBe(expected);
+    // Identical across case/whitespace, so a re-export that re-spaces a title converges.
+    const ids = new Set(pipeline.map((p) => p.item.metadata.URI));
+    expect(ids.size).toBeLessThanOrEqual(pipeline.length);
+  });
+
   it('computes timespanEnd as start time plus the hh:mm:ss Duration', async () => {
     const pipeline = await runImport({ filename: 'ViewingActivity.csv', fullPath: CSV_FILE });
     // 2021-01-01 20:15:00 + 00:48:12 = 21:03:12

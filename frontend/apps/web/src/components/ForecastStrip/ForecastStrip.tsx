@@ -164,7 +164,7 @@ function SlotTooltip({ bucket, localMin }: { bucket: ForecastBucket; localMin: n
         <p className="pt-1 border-t border-current/20 text-[10px] opacity-60">
           Top context:{' '}
           {isFeatureEnabled('insights.page') ? (
-            <Link to="/today" className="underline underline-offset-2 hover:opacity-100 transition-opacity">
+            <Link to="/calendar" className="underline underline-offset-2 hover:opacity-100 transition-opacity">
               {top1.name.slice(0, 24)}
             </Link>
           ) : (
@@ -193,6 +193,7 @@ function ForecastSlot({
   systemStatus: string;
 }) {
   const isReady = systemStatus === 'READY';
+  const showClasses = isReady || systemStatus.includes(':');
   const dominant = dominantL0(bucket.l0Probs);
 
   const isEmpty = bucket.l0Probs.length === 0;
@@ -204,20 +205,21 @@ function ForecastSlot({
         <div
           className={cn(
             'flex-1 h-8 cursor-default transition-all duration-100',
-            isReady && 'hover:scale-y-[1.3] hover:z-10 relative',
+            showClasses && 'hover:scale-y-[1.3] hover:z-10 relative',
             // Before the engine is READY there is no class to name, so the strip
             // stays on the theme colour rather than picking a hue at random.
-            !isReady && 'bg-primary/60',
+            // A live Predict/nightly run still has buckets — keep the colours.
+            !showClasses && 'bg-primary/60',
             isFirst && 'rounded-l-full',
             isLast && 'rounded-r-full',
           )}
           style={{
-            opacity: isReady ? targetOpacity : undefined,
-            backgroundColor: isReady ? l0Background(dominant) : undefined,
+            opacity: showClasses ? targetOpacity : undefined,
+            backgroundColor: showClasses ? l0Background(dominant) : undefined,
           }}
         />
       </Tooltip.Trigger>
-      {isReady && (
+      {showClasses && (
         <Tooltip.Content side="top" sideOffset={6} className="max-w-none p-3">
           <SlotTooltip bucket={bucket} localMin={localMin} />
         </Tooltip.Content>
@@ -253,6 +255,8 @@ interface ForecastStripProps {
   stalled?: boolean;
   stillLearning?: boolean;
   modelVersion?: string | null;
+  pipelineEtaSeconds?: number | null;
+  pipelineDetail?: string | null;
   className?: string;
 }
 
@@ -270,10 +274,28 @@ const STATUS_LABELS: Record<string, string> = {
   'NIGHTLY:label_summaries': 'Labeling recent activity...',
   'NIGHTLY:l1_sweep': 'Updating behavioral patterns...',
   'NIGHTLY:l2_sweep': 'Updating behavioral patterns...',
+  'NIGHTLY:bootstrap_check': 'Checking whether the model needs a retrain...',
+  'NIGHTLY:serialize': 'Preparing training data...',
+  'NIGHTLY:train': 'Training your prediction model...',
+  'NIGHTLY:export': 'Optimizing model for your device...',
   'NIGHTLY:lora': 'Fine-tuning your model...',
+  'NIGHTLY:backfill_actuals': 'Recording what actually happened...',
+  'NIGHTLY:recurrence': 'Updating weekly patterns...',
   'NIGHTLY:drift': 'Checking for behavior changes...',
   'NIGHTLY:cache': 'Refreshing predictions...',
 };
+
+export function formatEta(seconds: number): string {
+  if (seconds >= 3300) {
+    const hours = Math.round(seconds / 3600);
+    return hours <= 1 ? 'about an hour' : `about ${hours} hours`;
+  }
+  if (seconds >= 90) {
+    const minutes = Math.max(2, Math.round(seconds / 60));
+    return `about ${minutes} minutes`;
+  }
+  return 'less than a minute';
+}
 
 export function ForecastStrip({
   buckets,
@@ -282,11 +304,15 @@ export function ForecastStrip({
   stalled = false,
   stillLearning = false,
   modelVersion = null,
+  pipelineEtaSeconds = null,
+  pipelineDetail = null,
   className,
 }: ForecastStripProps) {
   const ordered = orderLocalDay(buckets);
 
   const isReady = systemStatus === 'READY';
+  const pipelineRunning = systemStatus.includes(':');
+  const showClasses = isReady || pipelineRunning;
   const baselineName =
     modelVersion && modelVersion !== 'hmt' && !modelVersion.startsWith('hmt') ? modelVersion : null;
   let statusLabel = isReady
@@ -294,6 +320,16 @@ export function ForecastStrip({
     : stalled
       ? 'Prediction model not built yet — open Add ▸ Predict to start'
       : (STATUS_LABELS[systemStatus] ?? 'Processing...');
+  if (!isReady && !stalled && pipelineRunning) {
+    const bits = [statusLabel];
+    if (pipelineDetail) bits.push(pipelineDetail);
+    if (pipelineEtaSeconds != null && pipelineEtaSeconds > 0) {
+      bits.push(`${formatEta(pipelineEtaSeconds)} remaining`);
+    } else if (systemStatus.endsWith(':train') || systemStatus.endsWith(':label')) {
+      bits.push('this can take about an hour');
+    }
+    statusLabel = bits.join(' · ');
+  }
   if (isReady && stillLearning) {
     statusLabel = baselineName
       ? `Still learning — ${baselineName} baseline · ${statusLabel}`
@@ -323,7 +359,11 @@ export function ForecastStrip({
         <span>{formatClock(ordered[0]?.localMin ?? 0)}</span>
         <span
           className={
-            !isReady && !stalled ? 'animate-pulse text-primary' : !isReady ? 'text-muted-foreground' : ''
+            pipelineRunning && !stalled
+              ? 'animate-pulse text-primary'
+              : !isReady
+                ? 'text-muted-foreground'
+                : ''
           }
         >
           {statusLabel}
@@ -333,7 +373,7 @@ export function ForecastStrip({
         </span>
       </div>
 
-      {isReady && <Legend />}
+      {showClasses && <Legend />}
     </div>
   );
 }

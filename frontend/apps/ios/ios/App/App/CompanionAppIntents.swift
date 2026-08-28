@@ -103,13 +103,175 @@ struct OpenCompanionIntent: AppIntent {
     }
 }
 
+/// Named days the Plan page's When selector offers — AppEnum so Siri phrases can
+/// interpolate them (`Move X to Tomorrow`).
+@available(iOS 16.0, *)
+enum PlanWhen: String, AppEnum {
+    case today
+    case tomorrow
+    case nextWeek
+
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "When")
+
+    static var caseDisplayRepresentations: [PlanWhen: DisplayRepresentation] = [
+        .today: "Today",
+        .tomorrow: "Tomorrow",
+        .nextWeek: "Next week",
+    ]
+
+    var localDate: String {
+        switch self {
+        case .today: return PlanDate.localDate(addingDays: 0)
+        case .tomorrow: return PlanDate.localDate(addingDays: 1)
+        case .nextWeek: return PlanDate.localDate(addingDays: 7)
+        }
+    }
+}
+
+@available(iOS 16.0, *)
+struct PlanTaskEntity: AppEntity {
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Plan task")
+    static var defaultQuery = PlanTaskQuery()
+
+    var id: String
+    var title: String
+    var isOverdue: Bool
+
+    init(snapshot: PlanTaskSnapshot) {
+        id = snapshot.id
+        title = snapshot.title
+        isOverdue = snapshot.isOverdue
+    }
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(
+            title: "\(title)",
+            subtitle: isOverdue ? "Overdue" : "On the plan"
+        )
+    }
+}
+
+@available(iOS 16.0, *)
+struct PlanTaskQuery: EntityStringQuery {
+    func entities(for identifiers: [PlanTaskEntity.ID]) async throws -> [PlanTaskEntity] {
+        let all = try await CompanionAPI.make().planTasks()
+        return all.filter { identifiers.contains($0.id) }.map(PlanTaskEntity.init(snapshot:))
+    }
+
+    func suggestedEntities() async throws -> [PlanTaskEntity] {
+        let all = try await CompanionAPI.make().planTasks().map(PlanTaskEntity.init(snapshot:))
+        let overdue = all.filter(\.isOverdue)
+        return overdue.isEmpty ? all : overdue
+    }
+
+    func entities(matching string: String) async throws -> [PlanTaskEntity] {
+        let needle = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let all = try await CompanionAPI.make().planTasks().map(PlanTaskEntity.init(snapshot:))
+        guard !needle.isEmpty else {
+            return all.filter(\.isOverdue)
+        }
+
+        let hits = all.filter { $0.title.lowercased().contains(needle) }
+        let overdueHits = hits.filter(\.isOverdue)
+        return overdueHits.isEmpty ? hits : overdueHits
+    }
+}
+
+@available(iOS 16.0, *)
+struct ListOverduePlanTasksIntent: AppIntent {
+    static var title: LocalizedStringResource = "What's Overdue"
+    static var description = IntentDescription(
+        "List overdue items on your Companion plan.",
+        categoryName: "Plan"
+    )
+    static var openAppWhenRun = false
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let api = try CompanionAPI.make()
+        let overdue = try await api.planTasks().filter(\.isOverdue)
+
+        let dialog: String
+        if overdue.isEmpty {
+            dialog = "Nothing is overdue on your plan."
+        } else if overdue.count == 1, let only = overdue.first {
+            dialog = "\(only.title) is overdue."
+        } else {
+            let names = overdue.prefix(5).map(\.title).joined(separator: ", ")
+            let extra = overdue.count > 5 ? " and \(overdue.count - 5) more" : ""
+            dialog = "\(overdue.count) overdue: \(names)\(extra)."
+        }
+
+        return .result(dialog: IntentDialog(stringLiteral: dialog))
+    }
+}
+
+@available(iOS 16.0, *)
+struct ReschedulePlanTaskIntent: AppIntent {
+    static var title: LocalizedStringResource = "Reschedule Plan Task"
+    static var description = IntentDescription(
+        "Move an overdue plan item to today, tomorrow, or next week.",
+        categoryName: "Plan"
+    )
+    static var openAppWhenRun = false
+
+    @Parameter(title: "Task", requestValueDialog: "Which plan item should I move?")
+    var task: PlanTaskEntity
+
+    @Parameter(title: "When", requestValueDialog: "Today, tomorrow, or next week?")
+    var when: PlanWhen
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Move \(\.$task) to \(\.$when)")
+    }
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let api = try CompanionAPI.make()
+        let title = try await api.reschedulePlanTask(id: task.id, date: when.localDate)
+        let whenLabel: String
+        switch when {
+        case .today: whenLabel = "today"
+        case .tomorrow: whenLabel = "tomorrow"
+        case .nextWeek: whenLabel = "next week"
+        }
+        return .result(dialog: "Moved “\(title)” to \(whenLabel).")
+    }
+}
+
+/// Same reschedule as the Plan page calendar input — `Date` is the selector Shortcuts
+/// and Siri use when Today / Tomorrow / Next week is not the day.
+@available(iOS 16.0, *)
+struct ReschedulePlanTaskOnDateIntent: AppIntent {
+    static var title: LocalizedStringResource = "Reschedule Plan Task to a Day"
+    static var description = IntentDescription(
+        "Move a plan item onto a specific calendar day.",
+        categoryName: "Plan"
+    )
+    static var openAppWhenRun = false
+
+    @Parameter(title: "Task", requestValueDialog: "Which plan item should I move?")
+    var task: PlanTaskEntity
+
+    @Parameter(title: "Day", requestValueDialog: "Which day?")
+    var day: Date
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Move \(\.$task) to \(\.$day)")
+    }
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let api = try CompanionAPI.make()
+        let date = PlanDate.localDate(from: day)
+        let title = try await api.reschedulePlanTask(id: task.id, date: date)
+        return .result(dialog: "Moved “\(title)” to \(date).")
+    }
+}
+
 @available(iOS 16.0, *)
 struct CompanionShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
-        // Note: Siri phrases can only interpolate `\(.applicationName)` (and
-        // AppEntity/AppEnum parameters) — a free-text String parameter can't appear in a
-        // phrase, so these stay parameter-free; Siri prompts for the question/query via
-        // each intent's `requestValueDialog` when invoked.
+        // Ask/Search/Remember stay parameter-free in phrases: Siri cannot interpolate a
+        // free-text String. Plan intents use AppEntity (`PlanTaskEntity`) and AppEnum
+        // (`PlanWhen`); each phrase may name only one of those besides applicationName.
         AppShortcut(
             intent: AskCompanionIntent(),
             phrases: [
@@ -142,6 +304,34 @@ struct CompanionShortcuts: AppShortcutsProvider {
             phrases: ["Open \(.applicationName)"],
             shortTitle: "Open Companion",
             systemImageName: "globe"
+        )
+        AppShortcut(
+            intent: ListOverduePlanTasksIntent(),
+            phrases: [
+                "What's overdue in \(.applicationName)",
+                "List overdue \(.applicationName) tasks",
+            ],
+            shortTitle: "What's Overdue",
+            systemImageName: "calendar.badge.exclamationmark"
+        )
+        AppShortcut(
+            intent: ReschedulePlanTaskIntent(),
+            phrases: [
+                // One interpolated token besides applicationName — Xcode 17
+                // rejects `$task` and `$when` in the same utterance.
+                "Reschedule \(\.$task) in \(.applicationName)",
+                "Reschedule a plan task \(\.$when) in \(.applicationName)",
+            ],
+            shortTitle: "Reschedule",
+            systemImageName: "calendar.badge.clock"
+        )
+        AppShortcut(
+            intent: ReschedulePlanTaskOnDateIntent(),
+            phrases: [
+                "Move \(\.$task) to a day in \(.applicationName)",
+            ],
+            shortTitle: "Reschedule to a day",
+            systemImageName: "calendar"
         )
     }
 }

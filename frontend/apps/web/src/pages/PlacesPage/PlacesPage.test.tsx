@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { gql } from '@/graphql';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
+import { GET_PLACE_DUPLICATES, PLACE_DUPLICATE_PAGE_SIZE } from './PlaceDuplicatesCard';
 import { PAGE_SIZE, PlacesPage } from './PlacesPage';
 
 const navigate = vi.fn();
@@ -44,6 +45,7 @@ const GET_PLACES = gql(`
             visitCount
             firstVisitAt
             lastVisitAt
+            status
           }
         }
       }
@@ -53,6 +55,7 @@ const GET_PLACES = gql(`
 
 const GET_KNOWN_PLACES = gql(`
   query GetKnownPlaces {
+    geocodingConfigured
     knownPlaces {
       id
       locationId
@@ -137,11 +140,36 @@ function emptyPlacesMock() {
   return placesMock({ totalCount: 0, edges: [] });
 }
 
-function knownPlacesMock(overrides: { knownPlaces?: unknown[]; knownPlaceCandidates?: unknown[] } = {}) {
+/** The duplicates card queries on mount; an empty page keeps it out of the way. */
+function noDuplicatesMock() {
+  return {
+    request: { query: GET_PLACE_DUPLICATES, variables: { limit: PLACE_DUPLICATE_PAGE_SIZE, offset: 0 } },
+    result: {
+      data: {
+        placeDuplicates: {
+          __typename: 'PlaceDuplicatesPayload' as const,
+          totalCount: 0,
+          hasMore: false,
+          groups: [],
+        },
+      },
+    },
+    maxUsageCount: 5,
+  };
+}
+
+function knownPlacesMock(
+  overrides: {
+    knownPlaces?: unknown[];
+    knownPlaceCandidates?: unknown[];
+    geocodingConfigured?: boolean;
+  } = {},
+) {
   return {
     request: { query: GET_KNOWN_PLACES },
     result: {
       data: {
+        geocodingConfigured: overrides.geocodingConfigured ?? true,
         knownPlaces: overrides.knownPlaces ?? [],
         knownPlaceCandidates: overrides.knownPlaceCandidates ?? [],
       },
@@ -154,7 +182,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
     __typename: 'KnownPlaceCandidateType' as const,
     locationId: 'loc-1',
     label: 'Corner Cafe',
-    kind: 'venue',
+    kind: 'other',
     lat: 37.7749,
     lng: -122.4194,
     eventCount: 12,
@@ -186,7 +214,11 @@ function knownPlace(overrides: Record<string, unknown> = {}) {
 const PLACE_UUID = '019fd7c0-641c-76dd-8ed7-a5053faff6fd';
 const PLACE_GLOBAL_ID = btoa(`place:${PLACE_UUID}`);
 
-function placeEdge({ id = PLACE_GLOBAL_ID, name = 'Bletchley Park' } = {}) {
+function placeEdge({
+  id = PLACE_GLOBAL_ID,
+  name = 'Bletchley Park',
+  visitStats,
+}: { id?: string; name?: string; visitStats?: Record<string, unknown> } = {}) {
   return {
     __typename: 'PlaceEdge' as const,
     cursor: id,
@@ -199,11 +231,12 @@ function placeEdge({ id = PLACE_GLOBAL_ID, name = 'Bletchley Park' } = {}) {
       latitude: null,
       longitude: null,
       parent: null,
-      visitStats: {
+      visitStats: visitStats ?? {
         __typename: 'PlaceVisitStatsType' as const,
         visitCount: 0,
         firstVisitAt: null,
         lastVisitAt: null,
+        status: 'confirmed' as const,
       },
     },
   };
@@ -238,17 +271,18 @@ function placesMock({
   };
 }
 
-const mocks = [placesMock(), knownPlacesMock()];
+const mocks = [placesMock(), knownPlacesMock(), noDuplicatesMock()];
 
 describe('PlacesPage', () => {
-  it('routes to the decoded uuid, not the global id, when a place row is opened', async () => {
+  it('opens the drawer route (decoded uuid, not the global id) when a place row is clicked, not the full page', async () => {
     navigate.mockClear();
     renderWithProviders(<PlacesPage />, { mocks });
 
     fireEvent.click(await screen.findByText('Bletchley Park'));
 
-    expect(navigate).toHaveBeenCalledWith(`/places/${PLACE_UUID}`);
-    expect(navigate).not.toHaveBeenCalledWith(`/places/${PLACE_GLOBAL_ID}`);
+    expect(navigate).toHaveBeenCalledWith(`/memory/places/${PLACE_UUID}`);
+    expect(navigate).not.toHaveBeenCalledWith(`/places/${PLACE_UUID}`);
+    expect(navigate).not.toHaveBeenCalledWith(expect.stringContaining(PLACE_GLOBAL_ID));
   });
 
   /**
@@ -258,13 +292,51 @@ describe('PlacesPage', () => {
    */
   it('says how many of the counted places are actually listed', async () => {
     renderWithProviders(<PlacesPage />, {
-      mocks: [placesMock({ totalCount: 1179, hasNextPage: true }), knownPlacesMock()],
+      mocks: [placesMock({ totalCount: 1179, hasNextPage: true }), knownPlacesMock(), noDuplicatesMock()],
     });
 
     expect(await screen.findByText('Bletchley Park')).toBeInTheDocument();
     expect(screen.getByText('1179 places')).toBeInTheDocument();
     // The header count no longer stands alone — the footer says what is loaded.
     expect(screen.getByText(/loaded/).textContent).toContain('1 of 1179 loaded');
+  });
+
+  /**
+   * A zero-visit place used to render identically to "0 visits" whether that
+   * was a genuine measurement or enrichment hadn't finished linking events to
+   * it yet. `status: 'pending_enrichment'` must read differently.
+   */
+  it('shows "Visits pending" instead of "0 visits" for a place not yet enriched', async () => {
+    renderWithProviders(<PlacesPage />, {
+      mocks: [
+        noDuplicatesMock(),
+        placesMock({
+          edges: [
+            placeEdge({
+              visitStats: {
+                __typename: 'PlaceVisitStatsType',
+                visitCount: 0,
+                firstVisitAt: null,
+                lastVisitAt: null,
+                status: 'pending_enrichment',
+              },
+            }),
+          ],
+        }),
+        knownPlacesMock(),
+      ],
+    });
+
+    expect(await screen.findByText('Bletchley Park')).toBeInTheDocument();
+    expect(screen.getByText('Visits pending')).toBeInTheDocument();
+    expect(screen.queryByText('0 visits')).not.toBeInTheDocument();
+  });
+
+  it('still shows "0 visits" for a confirmed zero — enrichment being caught up is not enough to hide it', async () => {
+    renderWithProviders(<PlacesPage />, { mocks });
+
+    expect(await screen.findByText('Bletchley Park')).toBeInTheDocument();
+    expect(screen.getByText('0 visits')).toBeInTheDocument();
   });
 
   it('appends the next page when the sentinel scrolls into view', async () => {
@@ -275,6 +347,7 @@ describe('PlacesPage', () => {
     try {
       renderWithProviders(<PlacesPage />, {
         mocks: [
+          noDuplicatesMock(),
           placesMock({ totalCount: 2, hasNextPage: true }),
           placesMock({
             totalCount: 2,
@@ -298,10 +371,74 @@ describe('PlacesPage', () => {
     }
   });
 
+  /**
+   * The error branch used to reuse the same confident EmptyState the genuine
+   * "No places found" branch renders — a fetch failure read identically to
+   * "you have none", with no way to retry. It must render the shared
+   * ErrorState instead, with a Try again button that actually refetches.
+   */
+  it('shows the shared ErrorState with a working retry when the query fails, not a silent empty state', async () => {
+    renderWithProviders(<PlacesPage />, {
+      mocks: [
+        {
+          request: { query: GET_PLACES, variables: { query: null, first: PAGE_SIZE } },
+          error: new Error('network down'),
+        },
+        // Consumed only after a successful retry remounts the rest of the page.
+        knownPlacesMock(),
+        noDuplicatesMock(),
+        placesMock(),
+      ],
+    });
+
+    expect(await screen.findByText('Could not load places')).toBeInTheDocument();
+    expect(
+      screen.getByText('Your places are still here — this device could not reach them just now.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn.t load places:/)).not.toBeInTheDocument();
+    expect(screen.queryByText('No places found')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('Bletchley Park')).toBeInTheDocument();
+  });
+
   describe('KnownPlacesCard', () => {
-    it('confirms a candidate and reflects the success by refetching it off the candidate list', async () => {
+    /**
+     * Every candidate defaults to "Unknown place", kind "other", when
+     * reverse-geocoding hasn't named it — which used to read as a fact about
+     * the places rather than as configuration work not yet done.
+     */
+    it('explains why candidates are unnamed when geocoding is not configured', async () => {
       renderWithProviders(<PlacesPage />, {
         mocks: [
+          noDuplicatesMock(),
+          emptyPlacesMock(),
+          knownPlacesMock({ knownPlaceCandidates: [candidate()], geocodingConfigured: false }),
+        ],
+      });
+
+      expect(await screen.findByDisplayValue('Corner Cafe')).toBeInTheDocument();
+      expect(screen.getByText(/Geocoding isn.t configured on this appliance/)).toBeInTheDocument();
+    });
+
+    it('says nothing about geocoding once it is configured', async () => {
+      renderWithProviders(<PlacesPage />, {
+        mocks: [
+          noDuplicatesMock(),
+          emptyPlacesMock(),
+          knownPlacesMock({ knownPlaceCandidates: [candidate()], geocodingConfigured: true }),
+        ],
+      });
+
+      expect(await screen.findByDisplayValue('Corner Cafe')).toBeInTheDocument();
+      expect(screen.queryByText(/Geocoding isn.t configured/)).not.toBeInTheDocument();
+    });
+
+    it("saves the edited name and kind, not the server's guess, and refetches the candidate off the list", async () => {
+      renderWithProviders(<PlacesPage />, {
+        mocks: [
+          noDuplicatesMock(),
           emptyPlacesMock(),
           knownPlacesMock({ knownPlaceCandidates: [candidate()] }),
           {
@@ -309,8 +446,8 @@ describe('PlacesPage', () => {
               query: CONFIRM_KNOWN_PLACE,
               variables: {
                 input: {
-                  label: 'Corner Cafe',
-                  kind: 'venue',
+                  label: 'Corner Cafe (Office)',
+                  kind: 'work',
                   locationId: 'loc-1',
                   coordinates: { lat: 37.7749, lng: -122.4194 },
                   confidence: 0.8,
@@ -323,8 +460,8 @@ describe('PlacesPage', () => {
                 updateKnownPlace: {
                   __typename: 'KnownPlaceType' as const,
                   id: 'kp-2',
-                  label: 'Corner Cafe',
-                  kind: 'venue',
+                  label: 'Corner Cafe (Office)',
+                  kind: 'work',
                 },
               },
             },
@@ -333,29 +470,102 @@ describe('PlacesPage', () => {
           // and the server no longer returns it as a candidate.
           knownPlacesMock({
             knownPlaces: [
-              knownPlace({ id: 'kp-2', locationId: 'loc-1', label: 'Corner Cafe', kind: 'venue' }),
+              knownPlace({ id: 'kp-2', locationId: 'loc-1', label: 'Corner Cafe (Office)', kind: 'work' }),
             ],
             knownPlaceCandidates: [],
           }),
         ],
       });
 
-      expect(await screen.findByText('Corner Cafe')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Confirm venue' })).toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole('button', { name: 'Confirm venue' }));
+      const nameInput = await screen.findByDisplayValue('Corner Cafe');
+      fireEvent.change(nameInput, { target: { value: 'Corner Cafe (Office)' } });
+      fireEvent.change(screen.getByRole('combobox', { name: 'Kind' }), { target: { value: 'work' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
       // The confirmed place appears as a badge and the candidate row is gone,
       // driven entirely by the refetch — no optimistic local removal to fake it.
-      expect(await screen.findByText('venue: Corner Cafe')).toBeInTheDocument();
+      expect(await screen.findByText('work: Corner Cafe (Office)')).toBeInTheDocument();
       await waitFor(() => {
-        expect(screen.queryByRole('button', { name: 'Confirm venue' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+      });
+    });
+
+    it('starts an "Unknown place" candidate with an empty name and will not save until one is typed', async () => {
+      renderWithProviders(<PlacesPage />, {
+        mocks: [
+          noDuplicatesMock(),
+          emptyPlacesMock(),
+          knownPlacesMock({
+            knownPlaceCandidates: [
+              candidate({
+                locationId: null,
+                label: 'Unknown place',
+                kind: 'other',
+                lat: 34.0769,
+                lng: -118.4744,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const nameInput = await screen.findByPlaceholderText('Name this place');
+      expect(nameInput).toHaveValue('');
+      // The coordinates are the only handle the user has on an unnamed cluster.
+      expect(screen.getByText(/near 34\.0769, -118\.4744/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+      fireEvent.change(nameInput, { target: { value: '   ' } });
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+      fireEvent.change(nameInput, { target: { value: 'Home' } });
+      expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    });
+
+    it('drops a labelled pin on the map when a candidate is located, and lifts it when toggled off', async () => {
+      renderWithProviders(<PlacesPage />, {
+        mocks: [
+          noDuplicatesMock(),
+          // No places with coordinates, so the map is absent until a pin asks for it.
+          emptyPlacesMock(),
+          knownPlacesMock({
+            knownPlaceCandidates: [
+              candidate({
+                locationId: null,
+                label: 'Unknown place',
+                kind: 'other',
+                lat: 34.0769,
+                lng: -118.4744,
+              }),
+            ],
+          }),
+        ],
+      });
+
+      const locate = await screen.findByRole('button', { name: 'Locate' });
+      expect(locate).toHaveAttribute('aria-pressed', 'false');
+      expect(document.querySelector('.leaflet-container')).toBeNull();
+
+      fireEvent.click(locate);
+
+      expect(screen.getByRole('button', { name: 'Located' })).toHaveAttribute('aria-pressed', 'true');
+      await waitFor(() => {
+        expect(document.querySelector('.leaflet-container')).not.toBeNull();
+      });
+      expect(await screen.findByText('Unknown place · 12 events')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Located' }));
+
+      expect(screen.getByRole('button', { name: 'Locate' })).toHaveAttribute('aria-pressed', 'false');
+      await waitFor(() => {
+        expect(screen.queryByText('Unknown place · 12 events')).not.toBeInTheDocument();
       });
     });
 
     it('shows a real error and keeps the candidate listed when the confirm mutation fails', async () => {
       renderWithProviders(<PlacesPage />, {
         mocks: [
+          noDuplicatesMock(),
           emptyPlacesMock(),
           knownPlacesMock({ knownPlaceCandidates: [candidate()] }),
           {
@@ -364,7 +574,7 @@ describe('PlacesPage', () => {
               variables: {
                 input: {
                   label: 'Corner Cafe',
-                  kind: 'venue',
+                  kind: 'other',
                   locationId: 'loc-1',
                   coordinates: { lat: 37.7749, lng: -122.4194 },
                   confidence: 0.8,
@@ -377,19 +587,20 @@ describe('PlacesPage', () => {
         ],
       });
 
-      expect(await screen.findByText('Corner Cafe')).toBeInTheDocument();
+      expect(await screen.findByDisplayValue('Corner Cafe')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Confirm venue' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
       expect(await screen.findByText('locationId already claimed')).toBeInTheDocument();
       // The failed candidate is still there to retry, not silently dropped.
-      expect(screen.getByText('Corner Cafe')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Confirm venue' })).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Corner Cafe')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
     });
 
     it('hides a candidate that duplicates an already-confirmed place by name or by nearby coordinates', async () => {
       renderWithProviders(<PlacesPage />, {
         mocks: [
+          noDuplicatesMock(),
           emptyPlacesMock(),
           knownPlacesMock({
             knownPlaces: [
@@ -416,9 +627,9 @@ describe('PlacesPage', () => {
         ],
       });
 
-      expect(await screen.findByText('New Bakery')).toBeInTheDocument();
-      expect(screen.queryByText('home')).not.toBeInTheDocument();
-      expect(screen.queryByText('Acme Corp Annex')).not.toBeInTheDocument();
+      expect(await screen.findByDisplayValue('New Bakery')).toBeInTheDocument();
+      expect(screen.queryByDisplayValue('home')).not.toBeInTheDocument();
+      expect(screen.queryByDisplayValue('Acme Corp Annex')).not.toBeInTheDocument();
     });
   });
 });

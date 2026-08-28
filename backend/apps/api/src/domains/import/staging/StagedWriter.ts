@@ -13,6 +13,7 @@ import {
   needsContentDigest,
   resolveEntityType,
 } from './identity';
+import { stripNulCharacters } from './stripNulCharacters';
 
 /**
  * The `drops` slug for an item swallowed by the within-run unique index whose
@@ -38,6 +39,21 @@ export interface StagedCounts {
   relationships: number;
   /** Records the parsers deliberately discarded, by their stable reason slug. */
   drops: Record<string, number>;
+  /**
+   * Records a gate would have discarded and the parser deliberately RESCUED, by
+   * reason slug (today only `receipt_kept_from_bulk`). The counterpart of
+   * {@link StagedCounts.drops}, and deliberately not merged into it: these rows
+   * landed, so counting them as drops would report a rescue as a loss.
+   */
+  keeps: Record<string, number>;
+  /**
+   * What a parser reported via {@link ImportPipeline.consumed} it actually
+   * read, summed across every call. `undefined` — not `0` — when no parser
+   * called it at all, so `ParseStage` can tell "never reported" apart from
+   * "reported zero" and fall back to the derived floor (`produced + dropped`)
+   * only in the first case.
+   */
+  recordsRead?: number;
 }
 
 /** Graphs buffered before a flush. Bounded so a 40GB parse is observable, not one commit at the end. */
@@ -75,6 +91,7 @@ export class StagedWriter implements ImportPipeline {
     entitiesGrown: 0,
     relationships: 0,
     drops: {},
+    keeps: {},
   };
 
   /**
@@ -135,7 +152,9 @@ export class StagedWriter implements ImportPipeline {
    * other, which is the trade this shape is making.
    */
   push(graph: Graph): void {
-    this.buffer.push(graph);
+    // U+0000 is legal in the exports but not in Postgres text/jsonb; one
+    // NUL-bearing record used to fail its batch and every batch after it.
+    this.buffer.push(stripNulCharacters(graph));
 
     if (this.buffer.length >= this.flushThreshold) {
       this.scheduleFlush();
@@ -193,6 +212,29 @@ export class StagedWriter implements ImportPipeline {
     this.counts.drops[reason] = (this.counts.drops[reason] ?? 0) + 1;
   }
 
+  /**
+   * Record a rescue: a record some gate would have discarded and the parser
+   * kept anyway. Reporting only — the row is staged through {@link push} like
+   * any other.
+   *
+   * A separate counter from {@link drop} on purpose. Gmail's receipt discovery
+   * keeps order confirmations the bulk filter rejects, and the first version of
+   * that change counted them as `bulk_filtered` drops — so the run report said
+   * a record was lost at the exact moment it was saved.
+   */
+  keep(reason: string): void {
+    this.counts.keeps[reason] = (this.counts.keeps[reason] ?? 0) + 1;
+  }
+
+  /**
+   * Record N records the parser actually read, summed across every call this
+   * attempt — see {@link ImportPipeline.consumed}. Purely additive: a parser
+   * that never calls this leaves {@link StagedCounts.recordsRead} `undefined`.
+   */
+  consumed(n: number): void {
+    this.counts.recordsRead = (this.counts.recordsRead ?? 0) + n;
+  }
+
   /** True when the buffer has reached the point where the runner should flush. */
   get shouldFlush(): boolean {
     return this.buffer.length >= this.flushThreshold;
@@ -204,7 +246,7 @@ export class StagedWriter implements ImportPipeline {
 
   /** A snapshot of what has been written so far. */
   get totals(): StagedCounts {
-    return { ...this.counts, drops: { ...this.counts.drops } };
+    return { ...this.counts, drops: { ...this.counts.drops }, keeps: { ...this.counts.keeps } };
   }
 
   /**

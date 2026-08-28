@@ -12,7 +12,29 @@ access. `--ref` matters - the workflow file is read from that branch, so a
 workflow that only exists on your feature branch must be dispatched against it.
 
 Full cross-repo runbook: `CI-Local-CICD/RUNBOOK.md` (regenerate with
-`ci-local docs`). This file is generated - do not hand-edit.
+`ci-local docs`). Everything above and below the two rules is generated - do not
+hand-edit it; the block between them is maintained by hand and a regeneration
+will drop it.
+
+`ci-local` is not on `PATH` by default. It is the script at
+`CI-Local-CICD/ci-local` in the sibling clone - invoke it by full path, or add
+that directory to `PATH`.
+
+---
+
+## Not covered by the generated list below (hand-maintained)
+
+The generated section lists five of this repo's **twelve** workflows. The
+other six:
+
+| Workflow | Trigger | Note |
+|---|---|---|
+| `codeql.yml` | `workflow_dispatch` | Gated. Added in [#2261](https://github.com/companionintelligence/CI-Server/pull/2261) as push/PR/cron; that failed every run because this private repo has no GitHub Code Security (`SARIF` upload 403). Dispatch with `gh workflow run codeql.yml --ref <branch>`. Restore PR/push only after Code Security is enabled. |
+| `mobile-release.yml` | **`push` on `ios-v*` / `android-v*` / `mobile-release-v*` tags**, plus dispatch | NOT gated for tags. Never runs on a PR. Signed TestFlight / Play internal lane. |
+| `desktop-release.yml` | **`push` on `desktop-v*` tags**, plus dispatch | NOT gated for tags. Signed macOS/Windows lanes skip (not fail) until their signing secrets are provisioned — see that workflow's header comment. |
+| `consent-path-gate.yml` | `workflow_dispatch` | The merge gate for the federated-ask consent path. `gh workflow run "Consent path gate" --ref <branch>`. Ships dispatch-only on purpose - see [`asks-system-guide.md` §7.3](asks-system-guide.md). |
+| `mobile-build.yml` | `workflow_dispatch` | Debug APK + iOS Simulator `.app`. |
+| `desktop-build.yml` | `workflow_dispatch` | Unsigned dmg/deb/rpm/AppImage/msi — the desktop local-orchestrator app (`frontend/apps/desktop`). |
 
 ---
 

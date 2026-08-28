@@ -198,4 +198,9 @@ export class PlaceEntity {
 
 export type Place = Readonly<Omit<PlaceEntity, 'user' | 'loadPropertiesFromJsonb'>> & {
   user?: User;
+  /**
+   * Browse-only: first real visit inside the active search date window.
+   * Absent on an unfiltered unique list so the frontend keeps places in "No date".
+   */
+  readonly appearedAt?: Date | null;
 };

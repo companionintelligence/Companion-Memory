@@ -8,10 +8,10 @@ import { CrossTableHydrationService } from '../CrossTableHydrationService';
 /**
  * CrossTableHydrationService's raw SQL, EXECUTED against the real schema.
  *
- * `hydrateInventory` read `SELECT i.item_id, i.name, i.description FROM ci.items`.
- * There is no `ci.items` — inventory lives in `ci.inventory`, and it has none of
+ * `hydrateThings` read `SELECT i.item_id, i.name, i.description FROM ci.items`.
+ * There is no `ci.items` — owned things live in `ci.objects`, and it has none of
  * those three columns. Every call threw `relation "ci.items" does not exist`, so
- * the inventory half of hydration had never once run; a live appliance
+ * the objects half of hydration had never once run; a live appliance
  * dead-lettered on exactly that message. The unit tests all passed, because they
  * mock the DataSource and a mock cannot know a table is missing.
  *
@@ -68,6 +68,7 @@ describeWithDatabase(
         dataSource,
         { ingest: async () => ({ entities: [], errors: [] }) } as never,
         { getProfile: async () => ({ trustMode: 'balanced' }) } as never,
+        { extract: async () => null } as never,
         {
           setContext: () => undefined,
           log: () => undefined,
@@ -84,8 +85,8 @@ describeWithDatabase(
       }
     });
 
-    it('hydrateInventory executes — ci.inventory and its columns all resolve', async () => {
-      const result = await service.hydrateInventory({ userId: randomUUID() } as never);
+    it('hydrateThings executes — ci.objects and its columns all resolve', async () => {
+      const result = await service.hydrateThings({ userId: randomUUID() } as never);
 
       expect(result.sampledRecords).toBe(0);
     });
@@ -102,12 +103,12 @@ describeWithDatabase(
     it('names a table that exists, and not the one that never did', async () => {
       // A direct guard on the specific drift. If `ci.items` is ever introduced as
       // a real table this test should be revisited, not deleted — the point is
-      // that inventory is read from wherever inventory actually lives.
-      const [{ inventory, items }] = (await dataSource.query(
-        `SELECT to_regclass('ci.inventory')::text AS inventory, to_regclass('ci.items')::text AS items`,
-      )) as { inventory: string | null; items: string | null }[];
+      // that things are read from wherever they actually live.
+      const [{ objects, items }] = (await dataSource.query(
+        `SELECT to_regclass('ci.objects')::text AS objects, to_regclass('ci.items')::text AS items`,
+      )) as { objects: string | null; items: string | null }[];
 
-      expect(inventory).toBe('ci.inventory');
+      expect(objects).toBe('ci.objects');
       expect(items).toBeNull();
     });
   },

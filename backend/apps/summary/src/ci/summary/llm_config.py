@@ -12,7 +12,7 @@ import httpx
 import structlog
 from pydantic_ai import Agent, PromptedOutput
 from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from .config import resolve_llm_model, settings
@@ -211,12 +211,19 @@ def create_llm_config() -> LLMConfig:
 
     # Create model pointing to self-hosted endpoint. The model name is the
     # configured (Hub-injected) one, else discovered from the endpoint.
+    # Qwen3.x thinks by default. A dossier/insights call with thinking on
+    # occupies vLLM's tiny `--max-num-seqs` budget for minutes and starves
+    # interactive chat. Accoutrements do not need a reasoning trace.
     model = OpenAIChatModel(
         resolve_llm_model(),
         provider=OpenAIProvider(
             base_url=settings.llm_api_base,
             api_key=settings.llm_api_key,
             http_client=http_client,
+        ),
+        settings=OpenAIChatModelSettings(
+            thinking=False,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
         ),
     )
 
@@ -277,6 +284,17 @@ def _is_structured_output_failure(exc: Exception) -> bool:
     return False
 
 
+NO_THINKING_EXTRA_BODY = {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def _with_no_thinking(model_settings: dict) -> dict:
+    extra = dict(model_settings.get("extra_body") or {})
+    kwargs = dict(extra.get("chat_template_kwargs") or {})
+    kwargs.setdefault("enable_thinking", False)
+    extra["chat_template_kwargs"] = kwargs
+    return {**model_settings, "thinking": False, "extra_body": extra}
+
+
 def run_agent_sync(
     llm_config: LLMConfig, agent_name: str, prompt: str, model_settings: dict
 ):
@@ -292,8 +310,10 @@ def run_agent_sync(
     if not agent:
         raise ValueError(f"No agent configured for '{agent_name}'")
 
+    settings_with_thinking_off = _with_no_thinking(model_settings)
+
     try:
-        return agent.run_sync(prompt, model_settings=model_settings)
+        return agent.run_sync(prompt, model_settings=settings_with_thinking_off)
     except Exception as exc:
         fallback = llm_config.prompted_agents.get(agent_name)
         if fallback is None or not _is_structured_output_failure(exc):
@@ -306,7 +326,7 @@ def run_agent_sync(
             error=str(exc),
             error_type=type(exc).__name__,
         )
-        return fallback.run_sync(prompt, model_settings=model_settings)
+        return fallback.run_sync(prompt, model_settings=settings_with_thinking_off)
 
 
 @lru_cache(maxsize=1)

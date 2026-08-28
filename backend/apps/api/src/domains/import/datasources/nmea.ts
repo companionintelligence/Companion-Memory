@@ -46,7 +46,8 @@ export class NMEAFileImporter implements FileImporter {
 
     const lines = fs.readFileSync(start, 'utf8').split(/\r?\n/);
     // Track last-seen RMC date so GPGGA sentences (which carry no date) can
-    // inherit it instead of falling back to today.
+    // inherit it. In a GGA-only file there is nothing to inherit and the fix
+    // stays undated — see parseDateTimeUTC for why that beats today's date.
     let lastRmcDate: string | undefined;
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -100,8 +101,8 @@ export class NMEAFileImporter implements FileImporter {
     }
 
     const timeUTC = p[1];
-    // Use the most recently seen RMC date; only fall back to today if no RMC
-    // was seen at all (pure GGA-only file).
+    // Use the most recently seen RMC date. A pure GGA-only file yields no date
+    // at all, and the fix is emitted undated rather than dated today.
     const ts = parseDateTimeUTC(rmcDate, timeUTC);
     const lat = parseLat(p[2], p[3]);
     const lon = parseLon(p[4], p[5]);
@@ -119,17 +120,28 @@ function parseDateTimeUTC(dateDDMMYY: string | undefined, timeHHMMSS: string): D
     return undefined;
   }
 
-  let year: number, month: number, day: number;
-  if (dateDDMMYY && dateDDMMYY.length === 6) {
-    day = parseInt(dateDDMMYY.slice(0, 2), 10);
-    month = parseInt(dateDDMMYY.slice(2, 4), 10) - 1;
-    year = 2000 + parseInt(dateDDMMYY.slice(4, 6), 10);
-  } else {
-    const now = new Date();
-    year = now.getUTCFullYear();
-    month = now.getUTCMonth();
-    day = now.getUTCDate();
+  // A GGA sentence carries a time of day and NO date; only RMC/ZDA carry one.
+  // This used to fill the gap with today's UTC date, which turns a log recorded
+  // on some past trip into a GPS fix asserting the user was at those
+  // coordinates TODAY — and a `location.fix` record's whole content is
+  // (lat, lon, time), so a fabricated time makes the whole row a fabrication.
+  // Worse than a wrong timeline entry: position rows are
+  // LocationEstimateService's primary donors, so the invented fix drags every
+  // neighbouring inference with it.
+  //
+  // Returning undefined is the honest answer. Downstream that is a record with
+  // `dated === false`, which `destinationsFor` routes away from `ci.position`
+  // entirely (push/canonical.ts withoutFabricatedPositionFix) — the fix is
+  // dropped and counted rather than invented. A dateless GGA in a file that
+  // ALSO has RMC/ZDA sentences is unaffected: the caller passes the date those
+  // carry.
+  if (!dateDDMMYY || dateDDMMYY.length !== 6) {
+    return undefined;
   }
+
+  const day = parseInt(dateDDMMYY.slice(0, 2), 10);
+  const month = parseInt(dateDDMMYY.slice(2, 4), 10) - 1;
+  const year = 2000 + parseInt(dateDDMMYY.slice(4, 6), 10);
 
   const hh = parseInt(timeHHMMSS.slice(0, 2), 10) || 0;
   const mm = parseInt(timeHHMMSS.slice(2, 4), 10) || 0;

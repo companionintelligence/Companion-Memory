@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { clearJobsSnapshots } from './jobsSnapshots';
 import {
   errorHeadline,
   groupDeadLetters,
@@ -19,15 +20,20 @@ import {
  * cannot turn a click into "re-emit everything".
  */
 
-const h = vi.hoisted(() => ({ authToken: 'jwt-abc' as string | null }));
+const h = vi.hoisted(() => ({ authToken: 'jwt-abc' as string | null, authenticated: true }));
 
+// Native has no JWT — its credential is a keystore API key `fetchJson` attaches
+// as `x-api-key` — so the gate is `authenticated`, not the bearer.
 vi.mock('@/hooks', () => ({
-  useAuth: () => [{ authToken: h.authToken }],
+  useAuth: () => [{ authToken: h.authToken, authenticated: h.authenticated }],
 }));
 
 const fetchJson = vi.hoisted(() => vi.fn());
 
-vi.mock('@ci/common', () => ({ fetchJson }));
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  fetchJson,
+}));
 
 function letter(overrides: Partial<DeadLetter> = {}): DeadLetter {
   return {
@@ -50,6 +56,8 @@ const EMPTY: DeadLettersResponse = { deadLetters: [] };
 
 beforeEach(() => {
   h.authToken = 'jwt-abc';
+  h.authenticated = true;
+  clearJobsSnapshots();
   fetchJson.mockReset();
   fetchJson.mockResolvedValue(EMPTY);
 });
@@ -134,14 +142,44 @@ describe('useDeadLetters', () => {
     expect(url).toContain('limit=200');
   });
 
-  it('does not fetch without a token', async () => {
+  it('does not fetch without a session', async () => {
     h.authToken = null;
+    h.authenticated = false;
 
     renderHook(() => useDeadLetters(0));
 
     await act(async () => {});
 
     expect(fetchJson).not.toHaveBeenCalled();
+  });
+
+  it('fetches on native, which authenticates with a keystore key rather than a JWT', async () => {
+    h.authToken = null;
+    h.authenticated = true;
+
+    renderHook(() => useDeadLetters(0));
+
+    await waitFor(() => expect(fetchJson).toHaveBeenCalled());
+
+    const [, init] = fetchJson.mock.calls[0] as [string, RequestInit];
+
+    expect(init.headers).toEqual({});
+  });
+
+  it('shows the last replay queue on the first frame of a revisit', async () => {
+    fetchJson.mockResolvedValue({ deadLetters: [letter()] });
+
+    const first = renderHook(() => useDeadLetters(0));
+
+    await waitFor(() => expect(first.result.current.groups).toHaveLength(1));
+    first.unmount();
+
+    const second = renderHook(() => useDeadLetters(0));
+
+    // Before any fetch resolves — the card is a work queue and re-reading it
+    // from zero every visit is what made the page feel like it had nothing.
+    expect(second.result.current.groups).toHaveLength(1);
+    expect(second.result.current.loading).toBe(false);
   });
 
   it('posts exactly the ids it was given to the bulk endpoint', async () => {

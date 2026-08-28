@@ -1,5 +1,6 @@
 /* Shared EXIF + container-metadata helpers for the photo/video importers. */
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
 import { promisify } from 'node:util';
 
 import exifr from 'exifr';
@@ -80,6 +81,15 @@ export function exifInstant(dt: Date, offsetTag?: unknown): Date {
 }
 
 /**
+ * Files at or under this size are read whole and handed to exifr as a Buffer;
+ * larger ones keep the path input. Every image — RAW included — fits with room
+ * to spare; only the video fallback (extractVideoMetadata's exifr leg) can see
+ * files past it, and buffering a multi-GB MP4 for its metadata would trade a
+ * broken read for a broken RSS.
+ */
+const MAX_BUFFERED_EXIF_BYTES = 256 * 1024 * 1024;
+
+/**
  * exifr.parse with a hard timeout. A malformed HEIC with a zero-length box spins
  * exifr's HEIF parse loop forever (no zero-length-box guard upstream); because an
  * infinite loop never throws, the importer's try/catch never fires and the
@@ -90,16 +100,40 @@ export function exifInstant(dt: Date, offsetTag?: unknown): Date {
  * Caveat: the race cannot cancel the spinning loop — one CPU keeps burning until
  * the process exits. The durable fix is patching/upgrading exifr; this just keeps
  * the import making progress.
+ *
+ * ## Why the bytes are read here instead of letting exifr open the path
+ *
+ * exifr's own file reader hands a DataView to `FileHandle.read`, which Yarn
+ * PnP's patched `fs` rejects (`TypeError: The "buffer" argument must be an
+ * instance of Buffer … Received an instance of ArrayBuffer`) — under PnP every
+ * path-based parse threw before reading a byte, the callers' best-effort
+ * catches ate it, and "no EXIF anywhere" looked like a property of the photos:
+ * on a real Takeout import, 517 sidecar-less camera JPGs all fell back to
+ * file-system time (the archive's own date) and lost their camera fields,
+ * while `DateTimeOriginal` sat intact in every one of them. A Buffer input
+ * skips exifr's reader entirely and behaves identically on every runtime.
+ * Bounded by MAX_BUFFERED_EXIF_BYTES; an over-size file keeps the path input,
+ * which works where the fs patch is absent and fails exactly as before where
+ * it is not.
  */
 export async function parseExifSafe(
   fpath: string,
   options?: Parameters<typeof exifr.parse>[1],
   timeoutMs = 5000,
 ): Promise<ReturnType<typeof exifr.parse>> {
+  let input: string | Buffer = fpath;
+  try {
+    if ((await fs.promises.stat(fpath)).size <= MAX_BUFFERED_EXIF_BYTES) {
+      input = await fs.promises.readFile(fpath);
+    }
+  } catch {
+    /* unstattable/unreadable — let exifr's own open report it */
+  }
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      exifr.parse(fpath, options),
+      exifr.parse(input, options),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error('exif-timeout')), timeoutMs);
       }),

@@ -138,4 +138,63 @@ describe('StatsPage', () => {
     fireEvent.click(screen.getByRole('radio', { name: '30 days' }));
     expect(screen.getByRole('radio', { name: '30 days' })).toBeChecked();
   });
+
+  it('opens on all time, so the charts and the all-time tiles share one clock', () => {
+    h.data = fullStats;
+    h.loading = false;
+    h.error = null;
+
+    renderWithProviders(<StatsPage />);
+
+    expect(screen.getByRole('radio', { name: 'All time' })).toBeChecked();
+    // Nothing is filtered out on the default view, so nothing is explained away.
+    expect(screen.queryByText(/No messages, payments, or posts/)).not.toBeInTheDocument();
+  });
+
+  it('says the window is empty rather than rendering three blank charts', () => {
+    h.data = emptyStats;
+    h.loading = false;
+    h.error = null;
+
+    renderWithProviders(<StatsPage />);
+
+    fireEvent.click(screen.getByRole('radio', { name: '30 days' }));
+
+    expect(screen.getByText(/No messages, payments, or posts in the last 30 days/)).toBeInTheDocument();
+    // …and names where the data actually is, so an empty window is legible as
+    // "wrong window", not "no data". Matched on the assembled sentence because
+    // the dates are wrapped in their own tabular-nums spans.
+    expect(
+      screen.getByText(
+        (_content, element) =>
+          element?.textContent ===
+          'Your memory runs 2026-01-01 → 2026-08-01. The tiles below stay all-time either way.',
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show all time' }));
+    expect(screen.getByRole('radio', { name: 'All time' })).toBeChecked();
+    expect(screen.queryByText(/No messages, payments, or posts/)).not.toBeInTheDocument();
+  });
+
+  it('keeps quiet when the window holds only future calendar entries', () => {
+    // `time` alone is not evidence the window has activity in it — a scheduled
+    // meeting is not something that happened — but a channel row is.
+    h.data = {
+      ...emptyStats,
+      time: {
+        mode: 'counts',
+        coverage: { timedEvents: 0, consideredEvents: 2 },
+        rows: [{ bucket: 'calendar', label: 'Calendar', minutes: 0, count: 2 }],
+      },
+      channels: { rows: [{ source: 'whatsapp', count: 16 }] },
+    };
+    h.loading = false;
+    h.error = null;
+
+    renderWithProviders(<StatsPage />);
+
+    fireEvent.click(screen.getByRole('radio', { name: '30 days' }));
+    expect(screen.queryByText(/No messages, payments, or posts/)).not.toBeInTheDocument();
+  });
 });

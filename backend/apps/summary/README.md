@@ -1,41 +1,57 @@
-# CI-Summary: Temporal Summarization Agent
+# CI-Summary: Temporal Summarization Service
 
 **Hierarchical temporal summarization system for CompInt personal intelligence platform**
 
+> "Temporal" here means *over time*. This service has nothing to do with
+> Temporal.io, which was removed from the appliance on 2026-08-08 and replaced by
+> pg-boss.
+
 ## Overview
 
-CI-Summary is an autonomous agent that creates intelligent, multi-layered summaries of user activity across all CompInt data sources. It operates on three temporal scales:
+CI-Summary is a Python sidecar that creates intelligent, multi-layered summaries of user activity across all CompInt data sources. It operates on four temporal scales:
 
 - **Hourly Summaries**: Detailed hour-by-hour activity digests
 - **Daily Summaries**: Day-level synthesis from hourly summaries
 - **Weekly Summaries**: Week-level insights from daily summaries
+- **Monthly Summaries**: Month-level rollups from the weekly layer
 
-All summaries are stored as entities in the knowledge graph with full vector embeddings for semantic search.
+The hourly user dossier, insights and feed actions run on the same machinery.
+All summaries are stored in `ci.summaries` with a vector embedding for semantic
+search.
 
 ## Architecture
 
+The NestJS API is the only scheduler. `PythonFunctionCrons` fans out one pg-boss
+job per user onto the `py-fn-summary` queue, a dispatch listener POSTs it to this
+service's `/functions/run`, and the runner completes the deferred pg-boss job
+through an authenticated callback webhook. **There is no worker process and no
+polling loop in this service** — the former Temporal workflows are now plain
+async functions in `functions.py`.
+
 ```
-CI-Server Backend → agent_messages table → CI-Summary Agent
-                                            ↓
+NestJS API (pg-boss crons) → py-fn-summary queue → POST /functions/run
+                                                    ↓
                     [Data Aggregation] → Measurements, Position, Communications,
-                                         Activities, Events, Messages, Files, API Logs
+                                         Activities, Events, Messages, Files,
+                                         API Logs, Browser Activity, Screen Captures
                                             ↓
                     [LLM Summarization] → Local OpenAI-compatible endpoint
                                             ↓
-                    [Graph Storage] → entities (HourlySummary, DailySummary, WeeklySummary)
-                                     → relationships (SUMMARIZED_BY)
+                    [Storage] → ci.summaries (period_type hourly|daily|weekly|monthly,
+                                content JSONB, summary_embedding vector(768))
+                                            ↓
+                    POST {API_URL}/function-runs/callback  → completes the pg-boss job
 ```
 
 ## Features
 
-- ✅ **Agent Registration**: Self-registers in CI-Server agents table
-- ✅ **Message Queue Listener**: Polls agent_messages for tasks
-- ✅ **Multi-Source Aggregation**: Queries 8+ data tables
+- ✅ **Function Runner**: `POST /functions/run` with a bounded worker pool and a signed completion callback
+- ✅ **Multi-Source Aggregation**: Queries 10 data tables, schema-introspected rather than hardcoded
 - ✅ **LLM Integration**: Uses local models via OpenAI-compatible API
 - ✅ **Vector Embeddings**: Generates semantic embeddings for all summaries
-- ✅ **Knowledge Graph Storage**: Stores summaries as graph entities
-- ✅ **Hierarchical Relationships**: Links hourly→daily→weekly
-- ✅ **Performance Metrics**: Tracks success rates and execution times
+- ✅ **Hierarchical Rollups**: hourly → daily → weekly → monthly
+- ✅ **Dossier, Insights, Actions**: the same runner serves `dossier_refresh`, `insights_generation` and `actions_generation`
+- ✅ **Document Parser**: a second FastAPI app (`parser.py`) backing CI-Server's `parsing` domain
 - ✅ **Docker Ready**: Containerized for easy deployment
 
 ## Quick Start
@@ -52,99 +68,125 @@ and the `LLM_*` settings. No separate `.env` file is required inside this app.
 Key environment variables:
 
 ```bash
-# Database (only needed if you run the worker outside docker-compose)
-DATABASE_URL=postgresql://user:pass@postgres:5432/compint
+# Database (assembled by entrypoint.sh from DATABASE_* when unset)
+DATABASE_URL=postgresql://user:pass@database:5432/companion
 
 # LLM (Ollama default)
-LLM_API_BASE=http://localhost:11434/v1
-LLM_MODEL=qwen2.5:32b  # Or llama3.1:70b, mistral, etc.
-EMBEDDING_MODEL=nomic-embed-text
+LLM_API_BASE=http://host.docker.internal:11434/v1
+# The chat model is normally injected by CI Hub as LLM_DEFAULT_CHAT_MODEL.
+# SUMMARY_LLM_MODEL overrides it; LLM_MODEL is the legacy spelling. There is
+# deliberately NO hardcoded fallback — when all three are unset the model is
+# discovered from the endpoint at startup.
+SUMMARY_LLM_MODEL=
+EMBEDDING_MODEL=nomic-embed-text   # or LLM_DEFAULT_EMBEDDING_MODEL
 
-# Agent
-AGENT_CHECK_INTERVAL_SECONDS=30  # Configurable via root .env if needed
+# Function runner
+FUNCTION_RUNNER_CONCURRENCY=2
+API_URL=http://api:3030            # where run-completion callbacks POST
+API_JWT_SECRET=                    # entrypoint.sh reads AUTH_TOKEN_SECRET
 ```
 
 ### 3. Run with Docker Compose
 
-```bash
-# Build and start the service
-docker-compose build summary-service
-docker-compose up summary-service
+From the repo root, `make dev` brings the whole stack up; the summary service is
+in the `local`, `staging` and `production` profiles. To drive it directly:
 
-# Or with full profile
-docker-compose --profile infra up
+```bash
+docker compose build summary-service
+docker compose --profile local up summary-service
 ```
 
-The service now runs both the worker (PgBoss listener) and the FastAPI server (port 8000) simultaneously. See [DOCKER_ACCESS_GUIDE.md](DOCKER_ACCESS_GUIDE.md) for details on accessing the API from outside the container.
+`entrypoint.sh` starts **two** uvicorn apps in one container:
+
+| App | Container port | Host port (local) |
+| --- | --- | --- |
+| `ci.summary.api` — manual triggers + `/functions/run` | 8001 | `SUMMARY_HOST_PORT`, default **8001** |
+| `ci.summary.parser` — document parser | 8002 | `PARSER_HOST_PORT`, default **8003** |
 
 ### 4. Run Locally (Development)
 
+Python dependencies resolve through the single `uv.lock` at the repo root; this
+app is a `[tool.uv.workspace]` member and has no lockfile or `requirements.txt`
+of its own.
+
 ```bash
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python -m src.main
+uv sync --all-packages                    # from the repo root
+uv run uvicorn ci.summary.api:app --reload --port 8001
 ```
 
 ## Usage
 
 ### Scheduled Tasks from CI-Server
 
-The CI-Server API now enqueues PgBoss jobs onto the `memory-summaries` queue. Each
-payload contains the owner, time window, and cadence:
+`PythonFunctionCrons` in the NestJS API enqueues one pg-boss job per onboarded
+user onto the `py-fn-summary` queue, deduplicated by the singleton key
+`fn:<function>:<userId>:<windowKey>`. `PythonFunctionDispatchListener` POSTs each
+job here:
 
-```json
+```jsonc
+// POST /functions/run  → 202 { run_id, status, function }
 {
-  "userId": "<uuid>",
-  "periodType": "hourly|daily|weekly",
-  "periodStart": "2025-11-03T10:00:00Z",
-  "periodEnd": "2025-11-03T11:00:00Z",
-  "timezone": "UTC"
+  "function": "hourly_summary",
+  "args": { "user_id": "<uuid>" },
+  "job_id": "<pg-boss job id>",   // completion is reported back for it
+  "queue": "py-fn-summary"
 }
 ```
 
-The summary service polls this queue, runs the corresponding aggregation + LLM
-routine, stores the results, and acknowledges the job. Monthly / seasonal / yearly
-cadences are scheduled but currently stubbed until their aggregation pipeline is in
-place.
+The runner accepts the run into a bounded worker pool
+(`FUNCTION_RUNNER_CONCURRENCY`, default 2), returns immediately, and POSTs the
+outcome to `{API_URL}/function-runs/callback` with a self-signed service JWT.
+If the runner dies mid-run, the queue's `expireInSeconds` (30 minutes for
+summary) elapses and pg-boss retries — that is the durability story.
+
+`GET /functions` lists the registry; `GET /runs/{run_id}` reports one run.
+
+The registry (`FUNCTIONS` in `functions.py`) must stay in sync with
+`PYTHON_FUNCTIONS.summary` in the NestJS `python-functions` domain:
+
+| Function | Cron (UTC) |
+| --- | --- |
+| `hourly_summary` | `0 5 * * * *` |
+| `daily_summary` | `0 10 0 * * *` |
+| `weekly_summary` | `0 15 0 * * 1` |
+| `monthly_summary` | `0 20 0 1 * *` |
+| `dossier_refresh` | `0 12 * * * *` |
+| `insights_generation` | `0 30 */3 * * *` |
+| `actions_generation` | `0 45 * * * *` |
 
 ### Checking Results
 
-Query the `entities` table to retrieve summaries:
+Summaries land in `ci.summaries`, not in the entity graph:
 
 ```sql
-SELECT 
-    entity_id, 
-    entity_type,
-    name,
-    properties->>'summary_text' as summary,
-    properties->>'activity_counts' as counts
-FROM entities
-WHERE entity_type IN ('HourlySummary', 'DailySummary', 'WeeklySummary')
-  AND owner_user_id = '<user_uuid>'
+SELECT
+    summary_id,
+    period_type,
+    period_start,
+    period_end,
+    content->>'summary_text' AS summary,
+    content->'activity_counts' AS counts
+FROM ci.summaries
+WHERE user_id = '<user_uuid>'
 ORDER BY created_at DESC;
 ```
 
 ### Manual Summary Trigger (Testing & Debugging)
 
-For testing and debugging, you can manually trigger summary generation without going through the PgBoss queue:
-
-#### REST API Endpoint
+For testing and debugging, you can run a function inline — no pg-boss job, no
+callback — through the API's own endpoints. All of them are on port **8001**.
 
 ```bash
-# Start the API server
-uvicorn ci.summary.api:app --reload
-
-# Trigger a summary (defaults to last hour)
-curl -X POST http://localhost:8000/summary/manual-trigger \
+# Trigger a summary (defaults to the last hour)
+curl -X POST http://localhost:8001/summary/manual-trigger \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "<user-uuid>",
     "period_type": "hourly"
   }'
 
-# Trigger with custom time range
-curl -X POST http://localhost:8000/summary/manual-trigger \
+# Trigger with a custom time range
+curl -X POST http://localhost:8001/summary/manual-trigger \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "<user-uuid>",
@@ -155,101 +197,47 @@ curl -X POST http://localhost:8000/summary/manual-trigger \
   }'
 ```
 
-#### Test Scripts
+The full inline surface:
 
-Two convenience scripts are provided:
+| Route | Does |
+| --- | --- |
+| `POST /summary/manual-trigger` | `hourly` / `daily` / `weekly` / `monthly` / `dossier` |
+| `POST /dossier/refresh` · `POST /dossier/get` | Rebuild or read the dossier |
+| `POST /insights/generate` · `POST /insights/force-generate` | Insight generation, with and without the new-data gate |
+| `POST /actions/generate` | Feed actions |
+| `GET /summary/aggregate` | The aggregation step alone, no LLM |
 
-**Bash Script:**
-```bash
-# Default (last hour)
-USER_ID="<your-user-uuid>" ./test_manual_summary.sh
-
-# Custom period type
-USER_ID="<your-user-uuid>" PERIOD_TYPE="daily" ./test_manual_summary.sh
-
-# Custom API endpoint
-API_BASE="http://localhost:8080" USER_ID="<uuid>" ./test_manual_summary.sh
-```
-
-**Python Script:**
-```bash
-# Default (last hour)
-python test_manual_summary.py --user-id "<your-user-uuid>"
-
-# Daily summary
-python test_manual_summary.py --user-id "<uuid>" --period-type daily
-
-# Custom time range
-python test_manual_summary.py \
-  --user-id "<uuid>" \
-  --period-type hourly \
-  --start-time "2025-11-12T10:00:00Z" \
-  --end-time "2025-11-12T11:00:00Z"
-```
-
-The manual trigger endpoint bypasses the queue system and executes the same summary generation logic that the worker uses, making it perfect for:
-- Testing summary generation without scheduling
-- Debugging issues with specific time ranges
-- Backfilling summaries for specific periods
-- Development and local testing
+These bypass the queue and execute the same code the runner does, which makes
+them useful for debugging a specific window, backfilling a period, or working
+offline from the scheduler.
 
 ### Hourly User Dossier Refresh
 
-The memory worker now produces a compact **user dossier** every hour. A scheduler job in the API enqueues a `memory.dossier.refresh` event shortly after the top of the hour, and the worker consumes it from the standard `memory-summaries` queue.
+`dossier_refresh` produces a compact **user dossier** every hour
+(`PythonFunctionCrons.dossierRefresh`, `0 12 * * * *`), and the cron narrows its
+audience to users who actually have daily summaries to fold in.
 
 - Configure refresh behavior with:
-  - `DOSSIER_LOOKBACK_DAYS` (default `7`)
-  - `DOSSIER_MAX_CHARS` (default `4000`)
-- The dossier is derived from the latest daily summaries plus the previously persisted dossier so that updates remain incremental. The result is stored in the `entities.dossier` JSONB column.
+  - `SUMMARY_DOSSIER_LOOKBACK_DAYS` (default `30`)
+  - `SUMMARY_DOSSIER_MAX_CHARS` (default `4000`)
+- The dossier is derived from the latest daily summaries plus the previously
+  persisted dossier so that updates remain incremental. The result is stored in
+  the `entities.dossier` JSONB column of the user's `Person` entity.
 - If no daily summaries exist for the window, the refresh is skipped.
 
 Manual trigger example:
 
 ```bash
-curl -X POST http://localhost:8000/summary/manual-trigger \
+curl -X POST http://localhost:8001/dossier/refresh \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": "<user-uuid>",
-    "period_type": "dossier",
-    "start_time": "2025-11-10T00:00:00Z",
-    "end_time": "2025-11-11T00:00:00Z",
     "timezone": "UTC"
   }'
 ```
 
-The response includes the persisted entity ID and the dossier payload so you can inspect what was written.
-
-### Manual Browser History Processing
-
-You can also summarize ad-hoc browser history exports without going through the queue/listener.
-
-#### CLI
-
-```bash
-# Generate hourly and daily summaries from data/history.csv
-python -m src.history_cli --input data/history.csv --output data/history_summaries.csv
-
-# Skip LLM inference if you're offline
-python -m src.history_cli --input data/history.csv --disable-llm
-```
-
-The CLI emits a combined CSV containing all hourly rows followed by daily rows, along with the computed stats and LLM-written summary for each bucket. Use `--disable-llm` when you just want the deterministic fallback text.
-
-#### Browser History API Endpoints
-
-```bash
-# Upload an export directly
-curl -X POST \
-  -F "file=@data/history.csv" \
-  http://localhost:8000/history/process-file
-
-# Or send the data you already have in JSON form
-curl -X POST http://localhost:8000/history/process-entries \
-  -H "Content-Type: application/json" \
-  -d '{"entries": [{"date": "11/9/2025", "time": "12:46:29", "title": "Example", "url": "https://example.com", "visitCount": 1, "transition": "typed"}]}'
-```
-
-Both endpoints return the generated hourly/daily summary objects plus the path to the CSV that was written under `data/` (or whatever output path you specify via `output_filename`).
+`POST /dossier/get` returns the persisted entity ID and dossier payload so you
+can inspect what was written.
 
 Each `summary_text` is produced by the same OpenAI-compatible model that powers the rest of CI Memory, so you get intent-level insights ("researching GPU shortages", "planning travel", etc.) rather than raw counters.
 
@@ -261,10 +249,16 @@ CI-Summary aggregates data from:
 2. **position** - GPS/location tracking
 3. **communications** - Emails, SMS, calls
 4. **activities** - Tracked life activities
-5. **events** - Calendar events
+5. **events** - Calendar events (title/description join back from `ci.entities` since the CTI conversion)
 6. **messages** - Chat conversations
 7. **files** - File activity (created, modified)
 8. **api_logs** - API interactions
+9. **browser_activity** - Page views
+10. **screen_captures** - Screen capture rows (capped at 50 per window)
+
+The table list lives in `TABLES` in `data_aggregator.py`. Columns are
+introspected per table rather than hardcoded, and noisy ones (embeddings, blobs,
+OCR text, screenshots) are excluded by pattern.
 
 ## Output Format
 
@@ -272,8 +266,8 @@ Each summary includes:
 
 ```json
 {
-  "summary_entity_id": "uuid",
-  "summary_type": "hourly|daily|weekly",
+  "summary_id": "uuid",
+  "summary_type": "hourly|daily|weekly|monthly",
   "summary_text": "Natural language summary...",
   "key_insights": ["insight 1", "insight 2"],
   "activity_counts": {
@@ -285,131 +279,146 @@ Each summary includes:
     "messages": 10,
     "files": 4,
     "api_logs": 20,
-    "total": 254
-  }
+    "browser_activity": 31,
+    "screen_captures": 0,
+    "total": 285
+  },
+  "tokens_used": 1842
 }
 ```
 
-## Graph Storage Schema
+## Storage Schema
 
-### Entity Structure
+Summaries are rows in `ci.summaries`, not graph entities — there is no
+`HourlySummary` entity type and no `SUMMARIZED_BY` edge. `store_summary_activity`
+writes:
+
 ```
-entity_type: HourlySummary | DailySummary | WeeklySummary
-name: "Hourly Summary: 2024-01-01 10:00"
-properties: {
-  start_time, end_time, summary_text, 
-  activity_counts, key_insights, etc.
-}
-embedding: vector(768)
+summary_id        uuid
+user_id           uuid
+period_start      timestamptz
+period_end        timestamptz
+period_type       hourly | daily | weekly | monthly
+timezone          text
+source_types      text[]      -- the activity_counts keys with a nonzero count
+title             text        -- "Hourly Summary"
+content           jsonb       -- summary_text, key_insights, activity_counts,
+                              --   tokens_used, structured_data
+summary_embedding vector(768)
+seen              boolean
 ```
 
-### Relationships
-```
-HourlySummary --[SUMMARIZED_BY]--> DailySummary
-DailySummary --[SUMMARIZED_BY]--> WeeklySummary
-```
+The hierarchy is expressed by the rollups reading their children back out of the
+same table (`fetch_child_summaries_activity`), not by a stored relationship.
 
 ## Scheduled Execution
 
-For automated execution, use pg_cron or external scheduler:
-
-```sql
--- Example: Hourly cron job
-SELECT cron.schedule('hourly-summary', '0 * * * *', $$
-  INSERT INTO agent_messages (user_id, agent_id, input_payload, status)
-  SELECT 
-    id,
-    (SELECT agent_id FROM agents WHERE agent_name = 'memory-summarization-agent'),
-    jsonb_build_object(
-      'task_type', 'hourly_summary',
-      'user_id', id::text,
-      'start_time', (NOW() - INTERVAL '1 hour')::text,
-      'end_time', NOW()::text
-    ),
-    'queued'
-  FROM users WHERE is_active = true;
-$$);
-```
+Scheduling is owned by the NestJS API. Do **not** add a pg_cron job or an
+external scheduler for this service: see the cron table under
+[Scheduled Tasks from CI-Server](#scheduled-tasks-from-ci-server), and
+`backend/apps/api/src/domains/python-functions/cron/PythonFunctionCrons.ts`.
 
 ## Development
 
 ### Project Structure
 
 ```
-CI-Summary/
+backend/apps/summary/
 ├── src/ci/summary/
 │   ├── api.py                  # FastAPI app (manual triggers + function runner)
 │   ├── runner.py               # /functions/run worker pool + pg-boss callbacks
 │   ├── functions.py            # Named background functions (summaries, insights, ...)
 │   ├── activities.py           # Step functions the named functions compose
+│   ├── summary_functions.py    # Window resolution + rollup helpers
 │   ├── config.py               # Configuration management
-│   ├── database.py             # Database connections
+│   ├── database.py             # Database connections (search_path=ci,public)
 │   ├── data_aggregator.py      # Multi-table data aggregation
+│   ├── insight_aggregator.py   # Context for insight generation
+│   ├── action_aggregator.py    # Context for feed-action generation
+│   ├── dossier_builder.py      # Incremental user dossier
 │   ├── summarizer.py           # LLM-based summarization
-│   └── parser.py               # Document-parser FastAPI app
+│   ├── llm_config.py           # Model resolution / OpenAI-compatible client
+│   ├── llm_endpoint_env.py     # LLM_* env plumbing shared with the API
+│   ├── timezone_utils.py
+│   └── parser.py               # Document-parser FastAPI app (port 8002)
+├── entrypoint.sh
 ├── Dockerfile
-├── pyproject.toml
+├── pyproject.toml              # workspace member; no lockfile of its own
 └── README.md
 ```
+
+> No `src/ci/__init__.py` — `ci` is a PEP 420 namespace shared with `ci.hbpe`
+> and the packages under `backend/packages/`. Adding one makes every other
+> `ci.*` package unimportable. Enforced by `scripts/check-ci-namespace.sh`.
 
 ### Running Tests
 
 ```bash
-pytest tests/ -v --cov=src
+uv run pytest backend/apps/summary/tests -v   # from the repo root
+make test                                     # everything, JS and Python
 ```
 
 ## Monitoring
 
-Check agent status:
+> The `agents` and `agent_messages` tables were dropped
+> (migration `20260808065716_drop_agents_and_agent_messages.sql`). There is no
+> agent registration and no message table to poll — everything below reads
+> pg-boss and `ci.summaries`.
 
-```sql
-SELECT 
-    agent_name,
-    version,
-    is_active,
-    usage_count,
-    success_rate,
-    avg_execution_time_ms
-FROM agents
-WHERE agent_name = 'memory-summarization-agent';
+What the runner currently holds:
+
+```bash
+curl http://localhost:8001/functions            # registry + concurrency
+curl http://localhost:8001/runs/<run_id>        # one run's status/result/error
 ```
 
-Check recent executions:
+Queue depth and recent runs, from the API side:
 
 ```sql
-SELECT 
-    message_id,
-    status,
-    priority,
-    started_at,
-    completed_at,
-    EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000 as execution_ms
-FROM agent_messages
-WHERE agent_id = (SELECT agent_id FROM agents WHERE agent_name = 'memory-summarization-agent')
-ORDER BY created_at DESC
-LIMIT 10;
+SELECT state, count(*)
+  FROM pgboss.job
+ WHERE name = 'py-fn-summary'
+ GROUP BY state;
 ```
+
+Recent summaries actually written:
+
+```sql
+SELECT period_type, count(*), max(created_at)
+  FROM ci.summaries
+ WHERE user_id = '<user_uuid>'
+ GROUP BY period_type;
+```
+
+The web Jobs page (`/jobs`) shows the same queue with its dead letters.
 
 ## Troubleshooting
 
-### Agent Not Processing Messages
+### Functions Not Running
 
-1. Check agent is registered and active:
-   ```sql
-   SELECT * FROM agents WHERE agent_name = 'memory-summarization-agent';
+1. Check the registry the service will accept:
+   ```bash
+   curl http://localhost:8001/functions
    ```
+   A name missing here is a name `PYTHON_FUNCTIONS.summary` in the NestJS
+   `python-functions` domain must not dispatch.
 
-2. Check for queued messages:
+2. Check whether anything was enqueued at all (the crons only fan out to
+   onboarded users):
    ```sql
-   SELECT * FROM agent_messages 
-   WHERE status = 'queued' 
-   AND agent_id = (SELECT agent_id FROM agents WHERE agent_name = 'memory-summarization-agent');
+   SELECT name, state, count(*) FROM pgboss.job
+    WHERE name = 'py-fn-summary' GROUP BY name, state;
    ```
 
 3. Check logs:
    ```bash
-   docker logs ci-memory-summarizer
+   docker compose logs -f summary-service
    ```
+
+4. If runs start but never complete on the API side, the callback is failing —
+   confirm `API_URL` is reachable from the container and `API_JWT_SECRET` matches
+   the API's `AUTH_TOKEN_SECRET`. pg-boss recovers on its own after
+   `expireInSeconds` (30 minutes).
 
 ### LLM Connection Issues
 
@@ -440,7 +449,8 @@ LIMIT 10;
 
 - **Token Usage**: Adjust `LLM_MAX_TOKENS` based on summary detail needs
 - **Temperature**: Lower for more factual, higher for more creative
-- **Check Interval**: Adjust `AGENT_CHECK_INTERVAL_SECONDS` for responsiveness
+- **Concurrency**: `FUNCTION_RUNNER_CONCURRENCY` (default 2) bounds how many runs
+  execute at once — this replaced the old per-priority task queues
 - **Batch Size**: Modify `MAX_ITEMS_PER_CATEGORY` to control context size
 
 ## License

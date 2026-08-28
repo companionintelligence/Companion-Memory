@@ -52,6 +52,7 @@ const scanInbox = vi.fn(
   async (): Promise<import('./useImportApi').InboxScan> => ({
     available: true,
     inboxDir: '/var/lib/ci-import/inbox',
+    displayDir: '/var/lib/ci-import/inbox',
     units: UNITS,
     skippedSymlinks: 0,
     truncated: false,
@@ -160,6 +161,7 @@ describe('InboxPanel', () => {
     release({
       available: true,
       inboxDir: '/inbox/u',
+      displayDir: '/inbox/u',
       units: [],
       skippedSymlinks: 0,
       truncated: false,
@@ -169,11 +171,34 @@ describe('InboxPanel', () => {
     expect(await screen.findByRole('button', { name: /rescan/i })).toBeInTheDocument();
   });
 
+  it('names the folder as the person reaches it, not as the container does', async () => {
+    // On a managed appliance the API's own path is inside a container; the
+    // server sends the host-side spelling alongside it and THAT is the one a
+    // person can open.
+    scanInbox.mockResolvedValueOnce({
+      available: true,
+      inboxDir: '/var/lib/ci-import/inbox/kyle_lifescope.io',
+      displayDir: '/home/kyle/companion-hub/import-work/inbox/kyle_lifescope.io',
+      units: [],
+      skippedSymlinks: 0,
+      truncated: false,
+      recognitionPartial: false,
+    });
+
+    render(<InboxPanel />);
+
+    expect(
+      await screen.findByText('/home/kyle/companion-hub/import-work/inbox/kyle_lifescope.io'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('/var/lib/ci-import/inbox/kyle_lifescope.io')).not.toBeInTheDocument();
+  });
+
   it('reports an unavailable inbox rather than an empty one', async () => {
     scanInbox.mockResolvedValueOnce({
       available: false,
       reason: 'The inbox directory is not readable: EACCES',
       inboxDir: '/var/lib/ci-import/inbox',
+      displayDir: '/var/lib/ci-import/inbox',
       units: [],
       skippedSymlinks: 0,
       truncated: false,

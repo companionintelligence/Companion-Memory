@@ -29,8 +29,10 @@ the narration audio, and the screenshots under `assets/shots/`.
 > basemap with no credit on it and the product no longer does.
 >
 > The old note here said the map was empty because `ci.entities.location_point` is NULL on a fresh
-> seed. That is true and it is not the reason. `/memory?view=map` is events-only and plots
-> `ci.events.location_coordinates`; the seed never writes that column either. Hazard 13 in
+> seed. That is true and it is not the reason. The map view is events-only and plots
+> `ci.events.location_coordinates` (`mapPins` in `SearchResolver`); the seed never writes that
+> column either. Its address is now `/memory/events?view=map` — `/memory` is a redirect that
+> preserves the query string, so the old `/memory?view=map` still lands. Hazard 13 in
 > [`capture.config.mjs`](capture.config.mjs) has the corrected diagnosis and the seed diff that
 > would let the stock stage film this scene.
 
@@ -44,7 +46,7 @@ the narration audio, and the screenshots under `assets/shots/`.
 ```
 
 `make.sh` sources [`stage.sh`](stage.sh), which stands the whole appliance up — Postgres 18 with
-TimescaleDB/PostGIS/pgvector, 188 migrations, the seed, the API and Vite — runs the three capture
+TimescaleDB/PostGIS/pgvector, 281 migrations, the seed, the API and Vite — runs the three capture
 passes, and tears it all down again on the way out, including on failure. It picks free ports in
 the 3191+ band and uses its own compose project, so it will not collide with a dev stack someone
 else is running. See "The stage" below for what it does and why.
@@ -110,7 +112,7 @@ make distribute-license
 docker build -f infrastructure/database/Dockerfile       -t ci/database:latest       infrastructure/database
 docker build -f infrastructure/setup-database/Dockerfile -t ci/setup-database:latest infrastructure/setup-database
 docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local up -d database setup-database
-yarn workspace @ci/be-api migrate                            # 188 dbmate migrations
+yarn workspace @ci/be-api migrate                            # 281 dbmate migrations
 cd backend/apps/api && yarn run exec -- scripts/seed-database/main.ts
 cd ../../.. && yarn workspace @ci/be-api dev &               # :3030
 WEB_PORT=5173 API_PROXY_TARGET=http://localhost:3030 yarn workspace @ci/fe-web dev &   # :5173
@@ -398,7 +400,7 @@ and does not have to re-derive it.
 |---|---|
 | *"the whole store narrows in place. Nothing is uploaded"* | `backend/apps/api/src/domains/search-next` and `…/memory` contain no outbound HTTP; the query is GraphQL to the local API against Postgres |
 | *"one MCP server that answers only to you"* | `domains/mcp/services/McpServerService.ts` registers a server named **`companion-memory`** — the chip's value verbatim — with `GraphQLToolAdapter` turning the GraphQL surface into its tools |
-| *"Hourly, daily, weekly"* | `backend/apps/summary/src/system_schedules.py`: `5 * * * *`, `10 0 * * *`, `15 0 * * MON` |
+| *"Hourly, daily, weekly"* | `backend/apps/api/src/domains/python-functions/cron/PythonFunctionCrons.ts`: `0 5 * * * *`, `0 10 0 * * *`, `0 15 0 * * 1` (NestJS six-field crons — seconds first). Scheduling moved out of the summary sidecar when Temporal was replaced by pg-boss, so the old `backend/apps/summary/src/system_schedules.py` no longer exists |
 | *"on a model you host"* | `summary-service` is a container in this repo's own `docker-compose.yml`, pointed at the endpoint from Settings → Model, which defaults to Ollama on the host gateway |
 | *"Postgres + pgvector"* | `infrastructure/database/Dockerfile` installs `postgresql-18-pgvector` |
 | *"your mail, your calendar and your photos"* | **on screen** — the framing keeps the provider cards' own caption lines, and Google's reads "Gmail, Calendar, Drive, Photos, and YouTube" |
@@ -490,7 +492,7 @@ retired "every `location_point` is NULL" diagnosis. Replace that entry with:
   "repo": "CI-Server",
   "capture": "video/make.sh",
   "captureRealCorpus": "video/stage.real-corpus.sh",
-  "comment": "The storyboard references 9 shots (18 files), all committed — seven captured, two committed graphic plates from ci.computer/memory that capture cannot produce and make.sh's GRAPHIC_SHOTS list excludes from its pass check, and both cuts render; `check` passes with no --allow-slates. video/make.sh stands up Postgres+PostGIS+pgvector, 188 migrations, the seed, API and Vite in the 3191+ band under its own compose project, then captures THREE passes under two identities (authenticated, VIDEO_FRESH_USER x2) with ENABLE_REQUIRE_SIGNUP_CODES=false, and refuses to shoot at all if its pass lists and storyboard.json disagree in either direction. SIXTEEN further PNGs are committed and referenced by no scene — they cannot be re-captured while unreferenced and are frozen at 2026-08-07's product; memory-map-view is already stale against CI-Server #1891. A SECOND STAGE, video/stage.real-corpus.sh, is what produced the map pair, loading the owner's real 826,478-item archive over the importer's GraphQL lane (the default /v1 lane silently drops event geo); it is not needed by the current film. AGGREGATE VIEWS ONLY against that stage — no individual may be identifiable in any frame; read the header of that script before adding a shot id to it."
+  "comment": "The storyboard references 9 shots (18 files), all committed — seven captured, two committed graphic plates from ci.computer/memory that capture cannot produce and make.sh's GRAPHIC_SHOTS list excludes from its pass check, and both cuts render; `check` passes with no --allow-slates. video/make.sh stands up Postgres+PostGIS+pgvector, 281 migrations, the seed, API and Vite in the 3191+ band under its own compose project, then captures THREE passes under two identities (authenticated, VIDEO_FRESH_USER x2) with ENABLE_REQUIRE_SIGNUP_CODES=false, and refuses to shoot at all if its pass lists and storyboard.json disagree in either direction. SIXTEEN further PNGs are committed and referenced by no scene — they cannot be re-captured while unreferenced and are frozen at 2026-08-07's product; memory-map-view is already stale against CI-Server #1891. A SECOND STAGE, video/stage.real-corpus.sh, is what produced the map pair, loading the owner's real 826,478-item archive over the importer's GraphQL lane (the default /v1 lane silently drops event geo); it is not needed by the current film. AGGREGATE VIEWS ONLY against that stage — no individual may be identifiable in any frame; read the header of that script before adding a shot id to it."
 }
 ```
 

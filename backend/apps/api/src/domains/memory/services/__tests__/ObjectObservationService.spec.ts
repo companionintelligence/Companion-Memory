@@ -133,7 +133,7 @@ describe('detectionKeyFor — the scheme is chosen by what the detector supplied
   });
 
   it('KEEPS TWO BOXLESS ITEMS IN ONE PHOTO APART', () => {
-    // The defect this scheme exists for. `InventoryListener`'s vision pass
+    // The defect this scheme exists for. `ThingVisionListener`'s vision pass
     // returns a list of items with no boxes; keying on (content, detector)
     // alone would digest every one of them identically and the whole photo
     // would collapse to a single observation — the `hashItem` failure
@@ -311,7 +311,7 @@ describe('ObjectObservationService.createMany — every row has an arbiter or it
     await service.createMany(ctx(), [sighting()]);
 
     // Leaving it NULL would make the whole idempotency argument false — the
-    // trap ObjectPromoteStage documents for ci.inventory.
+    // trap ObjectPromoteStage documents for ci.objects.
     expect(inserts()[0].sql).toContain('owner_user_id');
     expect(inserts()[0].params[0]).toBe(USER);
   });
@@ -437,7 +437,7 @@ describe('ObjectObservationService — a re-detection never rewrites a decision'
     // Nothing here mints an owned unit. That is ObjectResolutionService's job,
     // above an auto-mint confidence that does not exist yet.
     expect(sql).toContain('INSERT INTO ci.object_observations');
-    expect(sql).not.toContain('ci.inventory');
+    expect(sql).not.toContain('ci.objects');
     expect(sql).not.toContain('ci.entities');
     expect(sql).not.toContain('ci.relationships');
   });

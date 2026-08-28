@@ -1,3 +1,5 @@
+import { apiFetch } from '@ci/common';
+
 /**
  * Portal client for the native `/device-connect` flow. Signs into CI-Portal, then
  * lists Companion Memory (`ci-memory`) apps the user owns so the phone can point
@@ -40,6 +42,8 @@ export interface PortalAuth {
   token: string | null;
   cookie: string | null;
   kind?: 'session' | 'oauth';
+  /** Portal OIDC id_token — preferred when minting a Memory API key. */
+  idToken?: string | null;
 }
 
 export interface MemoryServerDevice {
@@ -55,56 +59,29 @@ export function normalizePortalUrl(url: string): string {
   return url.trim().replace(/\/+$/, '') || DEFAULT_PORTAL_URL;
 }
 
-type CapacitorHttpPlugin = {
-  request: (opts: {
-    url: string;
-    method?: string;
-    headers?: Record<string, string>;
-    data?: unknown;
-    connectTimeout?: number;
-    readTimeout?: number;
-  }) => Promise<{ status: number; data: unknown; headers?: Record<string, string> }>;
-};
+/**
+ * Reachability probe for a Memory Server origin. Uses the same native HTTP
+ * bridge as Portal calls — WKWebView `fetch` is CORS-bound and fails with
+ * TypeError "Load failed" against a Hub-published appliance.
+ */
+export async function probeMemoryOrigin(origin: string): Promise<void> {
+  const url = `${origin.replace(/\/+$/, '')}/api/health`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8_000);
+
+  try {
+    const res = await apiFetch(url, { method: 'GET', signal: controller.signal });
+
+    if (!res.ok) {
+      throw new Error(`Memory Server responded with ${res.status}`);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 async function portalFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const cap = (
-    window as unknown as {
-      Capacitor?: { Plugins?: { CapacitorHttp?: CapacitorHttpPlugin } };
-    }
-  ).Capacitor?.Plugins?.CapacitorHttp;
-
-  if (cap?.request) {
-    const headers: Record<string, string> = {};
-    if (init.headers) {
-      const raw = init.headers;
-      if (raw instanceof Headers) {
-        raw.forEach((value, key) => {
-          headers[key] = value;
-        });
-      } else if (Array.isArray(raw)) {
-        for (const [key, value] of raw) {
-          headers[key] = value;
-        }
-      } else {
-        Object.assign(headers, raw);
-      }
-    }
-
-    const result = await cap.request({
-      url,
-      method: (init.method ?? 'GET').toUpperCase(),
-      headers,
-      data: init.body ? JSON.parse(String(init.body)) : undefined,
-      connectTimeout: 15_000,
-      readTimeout: 15_000,
-    });
-
-    const body = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? {});
-
-    return new Response(body, { status: result.status, headers: result.headers });
-  }
-
-  return fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(15_000) });
+  return apiFetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(15_000) });
 }
 
 function extractSessionCookie(setCookie: string | null): string | null {

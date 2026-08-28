@@ -104,7 +104,7 @@ export class SmartRotationService {
       case 'graph_enrich':
       case 'context_prompt':
       case 'hydrate_answers':
-      case 'hydrate_inventory':
+      case 'hydrate_things':
         return 5;
       case 'schedule_sync':
       case 'summaries':

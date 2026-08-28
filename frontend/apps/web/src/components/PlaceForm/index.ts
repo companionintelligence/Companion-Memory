@@ -2,7 +2,9 @@ export { PlaceForm } from './PlaceForm';
 export {
   PLACE_KINDS,
   PLACE_KIND_LABELS,
+  applyCurrentLocation,
   emptyPlaceDraft,
+  formatExactCoordinate,
   parseCoordinates,
   placeDraftToInput,
   validatePlaceDraft,

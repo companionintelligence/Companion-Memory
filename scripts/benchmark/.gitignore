@@ -1,0 +1,9 @@
+.pytest_cache/
+__pycache__/
+*.pyc
+report*.md
+report*.json
+
+# Ad-hoc run outputs live under reports/. Baselines (committed) live under
+# baselines/ and are not matched by the report* patterns above.
+reports/

@@ -2,6 +2,19 @@
 
 # CI-Server schema cleanup plan
 
+> **Status: proposal, partly overtaken by events.** This plan was never executed as a
+> workstream of its own. A **different** workstream —
+> [schema-consolidation.md](./schema-consolidation.md), waves A–E — has since landed
+> several of the same changes, so before executing any item below, check whether the
+> migrations already did it. Verified against `main` on 2026-08-19: **Wave 1 item 1.1 is
+> already done** (see the amended C1), and the two `ci.pipeline_state`-era subsystems the
+> plan predates ([adr-pipeline-ledger.md](./adr-pipeline-ledger.md)) and the CTI conversion
+> of `ci.events` / `ci.communications` / `ci.content` / `ci.objects` both changed the
+> schema this plan measured. Treat the 63 tables / 968 columns / 281 indexes baseline as a
+> 2026-08 snapshot, not as current.
+>
+> Nothing else in the body has been re-audited item by item.
+
 Companion to [`schema-comparison-lifescope.html`](./schema-comparison-lifescope.html).
 
 Produced by a 41-agent audit: 5 agents scoped the work, 35 independently tried to break each
@@ -15,6 +28,15 @@ Three defects were found in the generated plan after it was produced. They are c
 **not** rewritten throughout the body below, so where the two disagree, this section wins.
 
 ### C1. Item 1.1 is not "zero-risk" and should be split
+
+> **[2026-08-19] Moot — item 1.1 has already shipped, and the risk it flagged evaporated.**
+> `20260808150100_schema_consolidation.sql` (Wave A of the *other* workstream) drops both
+> `ci.agent_messages` and `ci.agents` in its first two statements. The reason `ci.agents`
+> was "live" is also gone: `backend/apps/summary/src/agent_registration.py` no longer
+> exists — it was deleted along with Temporal in `c984f5613`, which removed the summary
+> service's worker, workflows and schedules entirely. There is no product decision left to
+> take. **Do not run the SQL in 1.1.** The analysis below is kept as the record of why the
+> split was called for at the time.
 
 Wave 1 is titled *zero-risk deletions*, and item 1.1 drops **two** tables. Only one of them is
 zero-risk:
@@ -85,7 +107,7 @@ that used the shared probe after it drifted are not independently confirmed.
 | `ci.messages` | 18 | LLM cost accounting, edit history, moderation |
 | `ci.threads` | 14 | per-thread LLM config, counters, forking, sharing |
 | `ci.events` | 11 | analytics block |
-| `ci.inventory` | 3 | `tags`, `images`, `manuals` |
+| `ci.objects` | 3 | `tags`, `images`, `manuals` |
 | `ci.browser_activity` | 1 | generated `domain` |
 | **Total** | **97 gross** | net 52 after the 45 columns re-added nowhere (agent_messages is a table drop, not a column drop, in the 968→916 count) |
 
@@ -95,7 +117,7 @@ that used the shared probe after it drifted are not independently confirmed.
 
 1. **Cross-tenant event loss.** `events_source_triple_uniq` is global `(source_type, source_system, source_id)` while `ci.events.user_id` is NOT NULL. User B re-ingesting user A's triple hits `ON CONFLICT DO NOTHING`, B's row is never persisted, `bulkUpsert.ts:453` echoes the un-inserted entity back as stored, and `ci.capture_events.materialized_id` is stamped with a uuid that exists in no row. **Fixed in Wave 2**, with the paired `capture_events` cleanup that makes already-lost events re-ingestible.
 2. **Orphanable `ci.content.event_id`.** The FK was destroyed by `20250925145800_replace_events_table.sql:12` (`DROP TABLE IF EXISTS events CASCADE`). Restored in Wave 2, with client-supplied `event_id` validation added first.
-3. **Nullable-column tenancy on `ci.inventory`.** `inventory_source_triple_uniq` keys on the nullable `owner_user_id`; NULLS DISTINCT means two NULL-owner rows with the same triple both insert, and reassigning owner moves a row into a different uniqueness bucket. Re-keyed onto the NOT NULL `user_id` in Wave 5.
+3. **Nullable-column tenancy on `ci.objects`.** `objects_source_triple_uniq` keys on the nullable `owner_user_id`; NULLS DISTINCT means two NULL-owner rows with the same triple both insert, and reassigning owner moves a row into a different uniqueness bucket. Re-keyed onto the NOT NULL `user_id` in Wave 5.
 4. **`ThingEntity` raises Postgres 42703 on any read** — declares `user_id`/`event_id` join columns that `ci.entities` has never had. Deleted in Wave 3 (proven: `getRepository(ThingEntity).find()` fails with `column ThingEntity.user_id does not exist`).
 5. **Two `FileEntity` classes claim the same Nest DI token** and the same TypeORM metadata name over two different tables. Renamed in Wave 3.
 6. **Duplicate `EmbeddingEntity`/`VectorEntity`** in `search-next` (byte-identical to `search-ingress`) removed in Wave 3.
@@ -112,7 +134,7 @@ These are hard constraints, not preferences. Violating any of them produces a br
 Every dropped column on `ci.events`, `ci.messages`, `ci.threads`, `ci.users` is either `@Column`-mapped or referenced in raw SQL. TypeORM emits explicit column lists, so a migration that lands against a still-running old image 42703s every read of that table. Ship the application image first, then run `make migrate`. The reverse order is an outage.
 
 **R2 — ON CONFLICT arbiters and their indexes ship in the same commit.**
-A mismatch raises `42P10: there is no unique or exclusion constraint matching the ON CONFLICT specification` and 500s every bulk ingest on that entity. This binds three pairs: `EventService.ts:222` ↔ `events_source_triple_uniq`, `ItemService.ts:110` ↔ `inventory_source_triple_uniq`, and (already correct) `ContentService`/`BrowserActivityService`.
+A mismatch raises `42P10: there is no unique or exclusion constraint matching the ON CONFLICT specification` and 500s every bulk ingest on that entity. This binds three pairs: `EventService.ts:222` ↔ `events_source_triple_uniq`, `ItemService.ts:110` ↔ `objects_source_triple_uniq`, and (already correct) `ContentService`/`BrowserActivityService`.
 
 **R3 — Backfill before uniqueness change before column drop.**
 Wave 2's events fix must run its `capture_events` cleanup in the same migration as the index swap, or every event the old global index swallowed stays permanently un-materializable (the capture-log dedup key short-circuits before `materialize()` is ever called).
@@ -149,11 +171,20 @@ Nothing reads any of these. Every item was executed against `ci-schema-probe` an
 
 ---
 
-### 1.1 `drop_dead_agent_tables`
+### 1.1 `drop_dead_agent_tables` — **already done, do not run**
 
 **Blast radius:** one table, 34 columns, 8 indexes, 5 FKs, 4 CHECKs, 2 enum types, plus deletion of one Python module in the summary sidecar.
 
-> **See correction C1 above — split this item.** Dropping `ci.agent_messages` is zero-risk.
+> **[2026-08-19] Superseded — both drops shipped elsewhere.**
+> `20260808150100_schema_consolidation.sql` opens with
+> `DROP TABLE IF EXISTS ci.agent_messages;` / `DROP TABLE IF EXISTS ci.agents;`, and
+> `backend/apps/summary/src/ci/summary/agent_registration.py` was deleted by `c984f5613`
+> (the Temporal removal) along with the summary service's `worker.py`, `workflows.py` and
+> `system_workflows.py`. Running the SQL below now is a no-op at best. Kept for the
+> reasoning and for the `-- migrate:down` body.
+>
+> The original split guidance follows. **See correction C1 above — split this item.**
+> Dropping `ci.agent_messages` is zero-risk.
 > Dropping `ci.agents` additionally deletes `backend/apps/summary/src/agent_registration.py`,
 > which is a feature removal and needs sign-off. The SQL below does both; run only the
 > `agent_messages` half unless you have decided about the registration module.
@@ -295,11 +326,19 @@ ALTER TABLE ONLY ci.agents ADD CONSTRAINT agents_last_modified_by_fkey FOREIGN K
 
 **Code changes — ship these FIRST, in their own release (R1):**
 
+> **[2026-08-19] The first two rows are already done, and the third's remedy is wrong now.**
+> `agent_registration.py` and `worker.py` were both deleted from the summary service by
+> `c984f5613` — there is no Temporal worker any more, and no `src/workflows.py` or
+> `src/schedules.py` to point a diagram line at. Scheduling is owned by the NestJS API's
+> pg-boss crons, which dispatch to `POST /functions/run`; the summary service's entry points
+> are `ci/summary/functions.py` and `ci/summary/runner.py`. The README was rewritten to
+> describe exactly that. Only the HTML row is still outstanding.
+
 | File | Change |
 |---|---|
-| `backend/apps/summary/src/agent_registration.py` | **DELETE the file.** It contains `SELECT agent_id, is_active FROM agents` (:31), `UPDATE agents` (:44, :162, :177), `INSERT INTO agents` (:127). `database.py:30` pins `search_path=ci,public`, so unqualified `agents` binds to `ci.agents`. |
-| `backend/apps/summary/src/worker.py` | Remove the import at :22, the `register()` block at :244-250, the `deregister()` call at :111. |
-| `backend/apps/summary/README.md` | Cut the `agent_messages` queue protocol at :18, :32, :319-322, :373, :387-388, :399, :404-406. **Do not delete wholesale** — :31 ("Self-registers in CI-Server agents table") is about to become false too, and the SQL examples interleave dead `agent_messages` with live `agents`. Replace :18's diagram line with the Temporal trigger path (`src/workflows.py`, `src/schedules.py`, `src/worker.py`). |
+| ~~`backend/apps/summary/src/agent_registration.py`~~ | **Done** — file deleted by `c984f5613`. (Was: **DELETE the file.** It contains `SELECT agent_id, is_active FROM agents` (:31), `UPDATE agents` (:44, :162, :177), `INSERT INTO agents` (:127). `database.py:30` pins `search_path=ci,public`, so unqualified `agents` binds to `ci.agents`.) |
+| ~~`backend/apps/summary/src/worker.py`~~ | **Done** — the whole worker was deleted by `c984f5613`; there is nothing left to edit. |
+| ~~`backend/apps/summary/README.md`~~ | **Done** — its Architecture section now describes the pg-boss path and its Monitoring section states both tables were dropped. One nit remains: that note cites migration `20260808065716_drop_agents_and_agent_messages.sql`, which does not exist; the drops are in `20260808150100_schema_consolidation.sql`. |
 | `docs/architecture/schema-comparison-lifescope.html` | :809, :1041-1042, :1229, :1579, :1689 — currently asserts both tables are dead and recommends dropping both; that is now correct, but the surrounding column counts change. |
 
 **Why code-first is strictly safer here:** if the migration lands against an old summary image, the worker does not crash (`worker.py:248` catches) but `database.py:47` calls `logger.error`, which routes through structlog's stdlib `LoggerFactory` into sentry_sdk's default ERROR-level `LoggingIntegration`. With `restart: unless-stopped`, that is one Sentry event per boot, forever.
@@ -448,11 +487,11 @@ SELECT indexname FROM pg_indexes
 
 ### 1.4 `drop_dead_inventory_jsonb_bags`
 
-**Blast radius:** three columns on `ci.inventory` (53 → 50). Zero indexes, zero constraints, zero cascade.
+**Blast radius:** three columns on `ci.objects` (53 → 50). Zero indexes, zero constraints, zero cascade.
 
 ```sql
 -- migrate:up
--- Three unmapped jsonb bags on ci.inventory. ItemEntity maps only 3 of the 6 jsonb
+-- Three unmapped jsonb bags on ci.objects. ItemEntity maps only 3 of the 6 jsonb
 -- columns (identifier_codes, maintenance_notes, metadata); tags/images/manuals
 -- appear nowhere in it.
 --   tags    -- superseded by ci_search.tags + ci_search.entity_tag; ItemType's
@@ -469,14 +508,14 @@ SELECT indexname FROM pg_indexes
 --
 -- Verified: no index, FK, CHECK, NOT NULL, generated column, view, matview,
 -- trigger or pg_proc body references any of the three. The only raw SQL against
--- ci.inventory anywhere is `SELECT count(*)` at IngestStatusService.ts:71 and
+-- ci.objects anywhere is `SELECT count(*)` at IngestStatusService.ts:71 and
 -- MaintenanceController.ts:1061. INGEST_REFRESH_COLUMNS.item is [], so no
 -- ON CONFLICT DO UPDATE SET list can name them.
 --
 -- ALTER TABLE DROP COLUMN is metadata-only but takes ACCESS EXCLUSIVE.
 -- Storage reclaimed: zero (see rule R6). The win is three fewer never-written
 -- fields in the widest table in the schema.
-ALTER TABLE ci.inventory
+ALTER TABLE ci.objects
   DROP COLUMN tags,
   DROP COLUMN images,
   DROP COLUMN manuals;
@@ -486,10 +525,10 @@ ALTER TABLE ci.inventory
 -- migrate:down
 -- Structural restore only. Columns come back at the END of the table (ordinals
 -- 51-53 rather than 33-35) and hold no data. Safe because nothing does SELECT *,
--- positional INSERT or COPY against ci.inventory, and every live value was the
+-- positional INSERT or COPY against ci.objects, and every live value was the
 -- '{}' default anyway. Defaults match current-schema.sql:1180-1182 exactly --
 -- '{}' not '[]'.
-ALTER TABLE ci.inventory
+ALTER TABLE ci.objects
   ADD COLUMN tags jsonb DEFAULT '{}'::jsonb,
   ADD COLUMN images jsonb DEFAULT '{}'::jsonb,
   ADD COLUMN manuals jsonb DEFAULT '{}'::jsonb;
@@ -517,7 +556,7 @@ SELECT count(*) AS inventory_cols
 
 ## 4-wave note on `ci.users`, `ci.messages`, `ci.threads`
 
-These three column drops are grouped into **Wave 4** rather than Wave 1, despite having no readers, because they are the largest column removals and each is data-lossy in a way `ci.inventory`'s empty bags are not. They are listed there.
+These three column drops are grouped into **Wave 4** rather than Wave 1, despite having no readers, because they are the largest column removals and each is data-lossy in a way `ci.objects`'s empty bags are not. They are listed there.
 
 ---
 
@@ -764,7 +803,7 @@ Tests:
 2. **Idempotency preserved.** Alice calls create twice with the same triple; assert exactly one row and that the second call returns the first's `event_id`.
 3. **Single-row path.** Same as 1 but non-array (`createOne`, `EventService.ts:121`), with a fresh `source_id`. Today Bob gets an opaque 500 because the user-scoped `findOne` retry at :158-163 cannot find the cross-tenant winner.
 
-**Not included:** the ItemService variant. `ItemService.ts:109-110` already scopes and arbitrates on the *same* column (`ownerUserId`/`owner_user_id`), so alice and bob each get their own row today — that test would be green before and after and prove nothing. Add it as part of Wave 5's `scope_inventory_source_triple_uniq_to_user`, where the scope actually changes.
+**Not included:** the ItemService variant. `ItemService.ts:109-110` already scopes and arbitrates on the *same* column (`ownerUserId`/`owner_user_id`), so alice and bob each get their own row today — that test would be green before and after and prove nothing. Add it as part of Wave 5's `scope_objects_source_triple_uniq_to_user`, where the scope actually changes.
 
 **CI is a prerequisite, not a nice-to-have.** `.github/workflows/ci.yml:47-74` is the whole backend test job: `container: image: node:22`, no `services:` block, and a bare `yarn workspace @ci/be-api test`. `PLANNING_TEST_DATABASE_URL` appears nowhere in `.github`, meaning the existing planning tenancy test has **never run in CI**. Add a `services: postgres` block, a migrate step, and the env var, or this file is documentation.
 
@@ -1227,8 +1266,12 @@ ALTER TABLE ci.events
   DROP COLUMN related_event_ids,
   DROP COLUMN supersedes_event_id,
   DROP COLUMN salience,
-  DROP COLUMN access_count,
-  DROP COLUMN last_accessed;
+  DROP COLUMN access_count;
+-- Δ 2026-08-26: `salience` and `access_count` had already moved to
+-- ci.event_analytics (20260808150100), and `last_accessed` was dropped from both
+-- ci.events and ci.entities by 20260826202418. All three are gone from this
+-- block; the migrate:down below still restores them, which is harmless but no
+-- longer symmetric with an up that no longer drops them.
 
 COMMENT ON COLUMN ci.events.is_inferred IS
   'TRUE when the row was completed by inference rather than captured. Sole writer: LocationEstimateService.estimateBatch (backfills location_coordinates). Deliberately kept INLINE rather than in a 1:1 side table: measured at 300k rows, a side table for is_inferred + inference_sources is a 24.7% net size regression once its own PK index and tuple overhead are charged.';
@@ -1360,23 +1403,23 @@ Wide mechanical sweeps. Ship after Waves 1–4 are green. Each item is independe
 
 ---
 
-### 5.1 `scope_inventory_source_triple_uniq_to_user`
+### 5.1 `scope_objects_source_triple_uniq_to_user`
 
-**Blast radius:** one unique index, one arbiter + scope pair. Writes to `ci.inventory` block for the index build.
+**Blast radius:** one unique index, one arbiter + scope pair. Writes to `ci.objects` block for the index build.
 
-`inventory_source_triple_uniq` keys on the **nullable** `owner_user_id`. Two holes: NULLS DISTINCT means two NULL-owner rows with the same triple both insert; and reassigning `owner_user_id` moves a row into a different uniqueness bucket, so the next re-ingest mints a duplicate.
+`objects_source_triple_uniq` keys on the **nullable** `owner_user_id`. Two holes: NULLS DISTINCT means two NULL-owner rows with the same triple both insert; and reassigning `owner_user_id` moves a row into a different uniqueness bucket, so the next re-ingest mints a duplicate.
 
 **Ordering:** this must land **after** Wave 2's `scope_events_source_triple_uniq_to_user`, or the migration comment below is false.
 
 ```sql
 -- migrate:up
--- inventory_source_triple_uniq was keyed on owner_user_id (nullable, the
+-- objects_source_triple_uniq was keyed on owner_user_id (nullable, the
 -- auto-detected owner) per 20260623120000_add_inventory_provenance.sql:15-17.
 -- Two problems: NULLS DISTINCT means two NULL-owner rows with the same triple
 -- both insert, and reassigning owner_user_id moves a row into a different
 -- uniqueness bucket so a re-ingest duplicates it.
 --
--- Re-key on ci.inventory.user_id -- NOT NULL, the creating tenant, and already
+-- Re-key on ci.objects.user_id -- NOT NULL, the creating tenant, and already
 -- set to the same value as owner_user_id by the ONLY writer (ItemService.ts:32-33
 -- and :79-80 both assign `context.userId` to both columns; both assignments and
 -- this index arrived together in d5136a77, so no legacy row can carry a source
@@ -1398,7 +1441,7 @@ Wide mechanical sweeps. Ship after Waves 1–4 are green. Each item is independe
 -- CreateInventoryInput.ts:56-62 makes sourceType/sourceSystem optional and
 -- ItemResolver.ts:116 createInventoryItems bypasses ci.capture_events.
 --   SELECT count(*) FROM (
---     SELECT user_id, source_type, source_system, source_id FROM ci.inventory
+--     SELECT user_id, source_type, source_system, source_id FROM ci.objects
 --     WHERE source_id     IS NOT NULL
 --       AND source_type   IS NOT NULL
 --       AND source_system IS NOT NULL
@@ -1410,11 +1453,11 @@ Wide mechanical sweeps. Ship after Waves 1–4 are green. Each item is independe
 --
 -- LOCKING: DROP INDEX takes ACCESS EXCLUSIVE and the (non-concurrent, because
 -- dbmate wraps this in a transaction) CREATE UNIQUE INDEX takes SHARE on
--- ci.inventory. Writes to ci.inventory block for the build.
-DROP INDEX IF EXISTS ci.inventory_source_triple_uniq;
+-- ci.objects. Writes to ci.objects block for the build.
+DROP INDEX IF EXISTS ci.objects_source_triple_uniq;
 
-CREATE UNIQUE INDEX inventory_source_triple_uniq
-  ON ci.inventory (user_id, source_type, source_system, source_id)
+CREATE UNIQUE INDEX objects_source_triple_uniq
+  ON ci.objects (user_id, source_type, source_system, source_id)
   WHERE source_id IS NOT NULL;
 ```
 
@@ -1426,7 +1469,7 @@ CREATE UNIQUE INDEX inventory_source_triple_uniq
 -- while ItemService is the only writer, but check before rolling back:
 --   SELECT count(*) FROM (
 --     SELECT owner_user_id, source_type, source_system, source_id
---     FROM ci.inventory
+--     FROM ci.objects
 --     WHERE source_id      IS NOT NULL
 --       AND owner_user_id  IS NOT NULL
 --       AND source_type    IS NOT NULL
@@ -1435,10 +1478,10 @@ CREATE UNIQUE INDEX inventory_source_triple_uniq
 -- AND REVERT THE CODE WITH IT: ItemService still emitting
 -- `ON CONFLICT (user_id, ...)` against an owner_user_id index fails 42P10 on
 -- every bulk inventory ingest (verified).
-DROP INDEX IF EXISTS ci.inventory_source_triple_uniq;
+DROP INDEX IF EXISTS ci.objects_source_triple_uniq;
 
-CREATE UNIQUE INDEX inventory_source_triple_uniq
-  ON ci.inventory (owner_user_id, source_type, source_system, source_id)
+CREATE UNIQUE INDEX objects_source_triple_uniq
+  ON ci.objects (owner_user_id, source_type, source_system, source_id)
   WHERE source_id IS NOT NULL;
 ```
 
@@ -1450,30 +1493,30 @@ CREATE UNIQUE INDEX inventory_source_triple_uniq
 | `memory/services/ItemService.ts:110` | `conflictTarget: '(owner_user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL'` → `'(user_id, ...)'`. **Both must change together** — arbiter must match the index (else 42P10) and scope must match the arbiter (else the pre-check and hydration SELECTs disagree with the ON CONFLICT). |
 | `memory/services/ItemService.ts:63` | Doc comment "scoped to owner_user_id" → "scoped to the creating user (user_id)". |
 | `graphql/resolvers/ItemResolver.ts:110` | "the provenance triple (owner, sourceType, sourceSystem, sourceId)" → "(creating user, ...)". |
-| `docs/architecture/Database.md:125` | The row still documents `inventory_source_triple_uniq (owner_user_id, + triple)`. This table is the canonical statement of the idempotency arbiters; update it. |
+| `docs/architecture/Database.md:125` | The row still documents `objects_source_triple_uniq (owner_user_id, + triple)`. This table is the canonical statement of the idempotency arbiters; update it. |
 
 `ItemEntity.ts` declares no `@Index`, so no entity change is needed.
 
-**Add to `EventService.tenancy.integration.test.ts`'s sibling (or a new `ItemService.tenancy.integration.test.ts`):** the NULL-owner case. Two `createMany` calls with the same triple where `owner_user_id` is nulled between them (by explicit raw `UPDATE ci.inventory SET owner_user_id = NULL` — no code path produces a NULL owner, so the test must manufacture the state) must yield exactly one row. **Note `ItemService`'s constructor order is `(itemRepository, logger, eventService)` — logger SECOND — and `:24` calls `this.logger.setContext(...)`, so a stub lacking `setContext` throws at construction.**
+**Add to `EventService.tenancy.integration.test.ts`'s sibling (or a new `ItemService.tenancy.integration.test.ts`):** the NULL-owner case. Two `createMany` calls with the same triple where `owner_user_id` is nulled between them (by explicit raw `UPDATE ci.objects SET owner_user_id = NULL` — no code path produces a NULL owner, so the test must manufacture the state) must yield exactly one row. **Note `ItemService`'s constructor order is `(itemRepository, logger, eventService)` — logger SECOND — and `:24` calls `this.logger.setContext(...)`, so a stub lacking `setContext` throws at construction.**
 
 **Verify:**
 
 ```sql
 -- a) shape
 SELECT indexdef FROM pg_indexes
- WHERE schemaname='ci' AND indexname='inventory_source_triple_uniq';
+ WHERE schemaname='ci' AND indexname='objects_source_triple_uniq';
 -- expect: ... btree (user_id, source_type, source_system, source_id) WHERE (source_id IS NOT NULL)
 
 -- b) the arbiter is inferable (plan-time only)
-EXPLAIN (COSTS OFF) INSERT INTO ci.inventory
+EXPLAIN (COSTS OFF) INSERT INTO ci.objects
   (object_id, user_id, owner_user_id, name, source_type, source_system, source_id)
 VALUES (ci.gen_uuid_v7(), (SELECT id FROM ci.users LIMIT 1), NULL, '__verify__','__v__','__v__','__v__')
 ON CONFLICT (user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL DO NOTHING;
--- expect `Conflict Arbiter Indexes: inventory_source_triple_uniq`
+-- expect `Conflict Arbiter Indexes: objects_source_triple_uniq`
 
 -- c) no duplicate triples survive (same NULL guards as the pre-flight)
 SELECT count(*) FROM (
-  SELECT user_id, source_type, source_system, source_id FROM ci.inventory
+  SELECT user_id, source_type, source_system, source_id FROM ci.objects
    WHERE source_id IS NOT NULL AND source_type IS NOT NULL AND source_system IS NOT NULL
    GROUP BY 1,2,3,4 HAVING count(*) > 1) d;   -- expect 0
 ```
@@ -1482,7 +1525,7 @@ SELECT count(*) FROM (
 
 ### 5.2 `migrate_legacy_tag_columns_to_entity_tag` — **two phases, two releases**
 
-**Blast radius:** three columns dropped across `ci.events`, `ci.communications`, `ci.inventory`; a backfill into `ci_search.tags` + `ci_search.entity_tag`.
+**Blast radius:** three columns dropped across `ci.events`, `ci.communications`, `ci.objects`; a backfill into `ci_search.tags` + `ci_search.entity_tag`.
 
 **This must be expand/contract.** `EventEntity.ts:114-115` and `CommunicationEntity.ts:102-103` declare `@Column('text', { array: true })`, so TypeORM names the column in every read. `docker-compose.production.yml:105-111` runs `migrate-database` from the new image while the old `api` container is still serving (`api` only restarts on `migrate-database: service_completed_successfully` at :27-31). Proven: `ERROR: column EventEntity.tags does not exist`.
 
@@ -1492,18 +1535,18 @@ Ships in release N **alongside** removal of the `@Column` mappings. **No DROPs.*
 
 ```sql
 -- migrate:up
--- Guard: ci.inventory.tags has no writer today, but the appliance has been
+-- Guard: ci.objects.tags has no writer today, but the appliance has been
 -- written to by importers that no longer exist (the retired external
 -- CI-Import-Tools among them), so historical rows may still hold values.
 -- Assert the column is at its '{}' default rather than assuming it, since the
 -- phase-2 drop is irreversible for its contents.
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM ci.inventory
+  IF EXISTS (SELECT 1 FROM ci.objects
               WHERE tags IS NOT NULL AND tags <> '{}'::jsonb) THEN
     RAISE EXCEPTION
-      'ci.inventory.tags holds non-default data (% rows); backfill it before the phase-2 drop',
-      (SELECT count(*) FROM ci.inventory WHERE tags IS NOT NULL AND tags <> '{}'::jsonb);
+      'ci.objects.tags holds non-default data (% rows); backfill it before the phase-2 drop',
+      (SELECT count(*) FROM ci.objects WHERE tags IS NOT NULL AND tags <> '{}'::jsonb);
   END IF;
 END $$;
 
@@ -1567,15 +1610,15 @@ Ships one release **after** phase 1, once no running API build maps the columns.
 -- migrate:up
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM ci.inventory
+  IF EXISTS (SELECT 1 FROM ci.objects
               WHERE tags IS NOT NULL AND tags <> '{}'::jsonb) THEN
-    RAISE EXCEPTION 'ci.inventory.tags holds non-default data; refusing to drop';
+    RAISE EXCEPTION 'ci.objects.tags holds non-default data; refusing to drop';
   END IF;
 END $$;
 
 ALTER TABLE ci.events         DROP COLUMN tags;
 ALTER TABLE ci.communications DROP COLUMN tags;  -- hypertable; verified across 2 chunks
-ALTER TABLE ci.inventory      DROP COLUMN tags;
+ALTER TABLE ci.objects      DROP COLUMN tags;
 ```
 
 ```sql
@@ -1584,7 +1627,7 @@ ALTER TABLE ci.events         ADD COLUMN tags text[];
 ALTER TABLE ci.communications ADD COLUMN tags text[];
 -- DEFAULT restored: the original carried it
 -- (20250925154200_create_inventory_table.sql:57).
-ALTER TABLE ci.inventory      ADD COLUMN tags jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE ci.objects      ADD COLUMN tags jsonb DEFAULT '{}'::jsonb;
 
 -- t.user_id = e.user_id is REQUIRED: ci_search.entity_tag has no user column and
 -- no FK to the entity table, so an unscoped join can write another tenant's label
@@ -1699,7 +1742,7 @@ ALTER TABLE ci_search.embeddings  DROP CONSTRAINT embeddings_entity_type_check;
 
 **Next candidates, deliberately not in this migration** (each needs a `SELECT DISTINCT` on a real appliance first — unlike the four above, they have no TS list to transcribe): `ci.content.type`, `ci.capture_events.kind`, `ci.capture_events.destination`, `ci.events.event_type`, `ci.files.parse_status`, `ci.tasks.source_kind`.
 
-**Not proposed:** touching the 53-column bare-TEXT set wholesale. Most (`ci.inventory.category`, `ci.receipts.payment_method`, `ci.product_models.category`) are open-world descriptive labels where a CHECK is a liability.
+**Not proposed:** touching the 53-column bare-TEXT set wholesale. Most (`ci.objects.category`, `ci.receipts.payment_method`, `ci.product_models.category`) are open-world descriptive labels where a CHECK is a liability.
 
 **Verify:**
 
@@ -1721,21 +1764,21 @@ SELECT conrelid::regclass AS tbl, conname, convalidated
 
 Four reader-less tables (`ci.product_models` 27 cols, `ci.receipts` 33, `ci.receipt_line_items` 19, `ci.object_observations` 31 = 110 columns, 33 indexes, 16 CHECKs, 20 FKs) all **already carry** a `COMMENT ON TABLE` that describes the design accurately and says nothing about nothing reading them — which is exactly why the fiction persists. Four column comments describe a running pipeline that does not exist.
 
-**The verdict is comment, not branch or land.** Branching buys −4 tables / −110 cols / −33 indexes — the largest number in this plan — and is still wrong today, for concrete reasons: `ci.inventory.product_id`, `.acquisition_receipt_id` and `.acquisition_line_item_id` are FK-bound to three of the four, are mapped on `ItemEntity` and returned by `ItemEntity.toEgressType`, so branching is a **public API removal**. And `ci.object_identifiers.subject_id` points at `ci.product_models.product_id` whenever `subject_type='product_model'` (allowed by `object_identifiers_subject_type_check`) with **no FK by design**, so a drop silently orphans live `ObjectIdentifierService` rows with no error at any layer.
+**The verdict is comment, not branch or land.** Branching buys −4 tables / −110 cols / −33 indexes — the largest number in this plan — and is still wrong today, for concrete reasons: `ci.objects.product_id`, `.acquisition_receipt_id` and `.acquisition_line_item_id` are FK-bound to three of the four, are mapped on `ItemEntity` and returned by `ItemEntity.toEgressType`, so branching is a **public API removal**. And `ci.object_identifiers.subject_id` points at `ci.product_models.product_id` whenever `subject_type='product_model'` (allowed by `object_identifiers_subject_type_check`) with **no FK by design**, so a drop silently orphans live `ObjectIdentifierService` rows with no error at any layer.
 
 ```sql
 -- migrate:up
 COMMENT ON TABLE ci.product_models IS
-  'Catalog product models — the thing a GTIN names. ci.inventory holds the owned UNITS that are instances of these. NO READER AS OF 2026-08: zero InjectRepository(ProductModelEntity), no GraphQL type, no REST route. ProductCatalogService and ObjectGraphLinkService, named in the present tense by migration 20260803223013, DO NOT EXIST. Kept for two hard couplings: (a) ci.inventory.product_id is FK-bound here, is mapped on ItemEntity and is returned by ItemEntity.toEgressType, so dropping this table is a public API removal, not just a schema drop; (b) ci.object_identifiers.subject_id points here whenever subject_type = ''product_model'' (allowed by object_identifiers_subject_type_check) with NO FK by design, so a drop silently orphans live ObjectIdentifierService rows with no error at any layer. Re-evaluate at #1823 close.';
+  'Catalog product models — the thing a GTIN names. ci.objects holds the owned UNITS that are instances of these. NO READER AS OF 2026-08: zero InjectRepository(ProductModelEntity), no GraphQL type, no REST route. ProductCatalogService and ObjectGraphLinkService, named in the present tense by migration 20260803223013, DO NOT EXIST. Kept for two hard couplings: (a) ci.objects.product_id is FK-bound here, is mapped on ItemEntity and is returned by ItemEntity.toEgressType, so dropping this table is a public API removal, not just a schema drop; (b) ci.object_identifiers.subject_id points here whenever subject_type = ''product_model'' (allowed by object_identifiers_subject_type_check) with NO FK by design, so a drop silently orphans live ObjectIdentifierService rows with no error at any layer. Re-evaluate at #1823 close.';
 
 COMMENT ON TABLE ci.receipts IS
-  'Purchase evidence. ci.receipt_line_items holds the per-product claims. NO READER AND NO WRITER AS OF 2026-08: zero InjectRepository(ReceiptEntity), no GraphQL type, no REST route. ReceiptExtractionService and POST /api/maintenance/receipts/extract, named in the present tense by migration 20260803223019, DO NOT EXIST. Kept because ci.inventory.acquisition_receipt_id is FK-bound here, is mapped on ItemEntity and is returned by ItemEntity.toEgressType. Re-evaluate at #1823 close.';
+  'Purchase evidence. ci.receipt_line_items holds the per-product claims. NO READER AND NO WRITER AS OF 2026-08: zero InjectRepository(ReceiptEntity), no GraphQL type, no REST route. ReceiptExtractionService and POST /api/maintenance/receipts/extract, named in the present tense by migration 20260803223019, DO NOT EXIST. Kept because ci.objects.acquisition_receipt_id is FK-bound here, is mapped on ItemEntity and is returned by ItemEntity.toEgressType. Re-evaluate at #1823 close.';
 
 COMMENT ON TABLE ci.receipt_line_items IS
-  'One product claim on a receipt; the intended unit of object minting. NO READER AND NO WRITER AS OF 2026-08: zero InjectRepository(ReceiptLineItemEntity), no GraphQL type, no REST route, and no code path mints anything. Kept because ci.inventory.acquisition_line_item_id is FK-bound here, is mapped on ItemEntity and is returned by ItemEntity.toEgressType. Re-evaluate at #1823 close.';
+  'One product claim on a receipt; the intended unit of object minting. NO READER AND NO WRITER AS OF 2026-08: zero InjectRepository(ReceiptLineItemEntity), no GraphQL type, no REST route, and no code path mints anything. Kept because ci.objects.acquisition_line_item_id is FK-bound here, is mapped on ItemEntity and is returned by ItemEntity.toEgressType. Re-evaluate at #1823 close.';
 
 COMMENT ON TABLE ci.object_observations IS
-  'A sighting of a physical thing in an image — the weak claim, kept out of ci.inventory so vision guesses never pollute the owned-things table. NO READER AND NO WRITER AS OF 2026-08: zero InjectRepository(ObjectObservationEntity), no GraphQL type, no REST route. ObjectResolutionService and ObjectObservationService, named in the present tense by migration 20260803223022, DO NOT EXIST. It is the only one of the four with zero inbound FKs (31 cols, 11 indexes, 5 CHECKs, 6 outbound FKs) and therefore the cheapest to branch — but BEFORE branching, note that ci.inventory.last_seen_at and .last_seen_place_entity_id are documented as denormalized FROM this table and are both mapped and returned by ItemEntity.toEgressType, so a drop leaves two live public fields with no stated source. Re-evaluate at #1823 close.';
+  'A sighting of a physical thing in an image — the weak claim, kept out of ci.objects so vision guesses never pollute the owned-things table. NO READER AND NO WRITER AS OF 2026-08: zero InjectRepository(ObjectObservationEntity), no GraphQL type, no REST route. ObjectResolutionService and ObjectObservationService, named in the present tense by migration 20260803223022, DO NOT EXIST. It is the only one of the four with zero inbound FKs (31 cols, 11 indexes, 5 CHECKs, 6 outbound FKs) and therefore the cheapest to branch — but BEFORE branching, note that ci.objects.last_seen_at and .last_seen_place_entity_id are documented as denormalized FROM this table and are both mapped and returned by ItemEntity.toEgressType, so a drop leaves two live public fields with no stated source. Re-evaluate at #1823 close.';
 
 -- The column comments below asserted the same fiction in the present tense and
 -- must move with the table comments, or a reader gets NO READER on the table and
@@ -1744,10 +1787,10 @@ COMMENT ON COLUMN ci.receipts.place_entity_id IS
   'Graph Location where the purchase happened. Intended to feed the place_prior step of image-based object resolution; that step DOES NOT EXIST as of 2026-08 — place_prior appears only as a string literal in ObjectObservationEntity''s type union.';
 
 COMMENT ON COLUMN ci.receipt_line_items.is_physical IS
-  'FALSE for digital goods (ebooks, subscriptions, gift cards). Intended rule: only physical lines mint ci.inventory rows. NOTHING MINTS AS OF 2026-08 — this column has no writer and no reader.';
+  'FALSE for digital goods (ebooks, subscriptions, gift cards). Intended rule: only physical lines mint ci.objects rows. NOTHING MINTS AS OF 2026-08 — this column has no writer and no reader.';
 
 COMMENT ON COLUMN ci.receipt_line_items.minted_object_id IS
-  'The owned unit minted from this line — the forward half of the provenance chain; ci.inventory.acquisition_line_item_id is the back-pointer. NO CODE WRITES EITHER HALF AS OF 2026-08.';
+  'The owned unit minted from this line — the forward half of the provenance chain; ci.objects.acquisition_line_item_id is the back-pointer. NO CODE WRITES EITHER HALF AS OF 2026-08.';
 
 COMMENT ON COLUMN ci.object_observations.place_entity_id IS
   'Graph Location the sighting happened at. Intended to let a place_prior resolution step scope candidate objects to things known to be at this place; that step DOES NOT EXIST as of 2026-08.';
@@ -1755,13 +1798,13 @@ COMMENT ON COLUMN ci.object_observations.place_entity_id IS
 
 ```sql
 -- migrate:down
-COMMENT ON TABLE ci.product_models IS 'Catalog product models — the thing a GTIN names. ci.inventory holds the owned UNITS that are instances of these.';
-COMMENT ON TABLE ci.receipts IS 'Purchase evidence. ci.receipt_line_items holds the per-product claims; ci.inventory.acquisition_line_item_id points back at the line an owned unit was minted from.';
-COMMENT ON TABLE ci.receipt_line_items IS 'One product claim on a receipt. The unit of object minting: a four-item order produces four lines and up to four ci.inventory rows, instead of the single order-named row the importer writes today.';
-COMMENT ON TABLE ci.object_observations IS 'A sighting of a physical thing in an image. The weak claim ("seen"), kept separate from the strong one ("owned", ci.inventory) so vision guesses never pollute the owned-things table.';
+COMMENT ON TABLE ci.product_models IS 'Catalog product models — the thing a GTIN names. ci.objects holds the owned UNITS that are instances of these.';
+COMMENT ON TABLE ci.receipts IS 'Purchase evidence. ci.receipt_line_items holds the per-product claims; ci.objects.acquisition_line_item_id points back at the line an owned unit was minted from.';
+COMMENT ON TABLE ci.receipt_line_items IS 'One product claim on a receipt. The unit of object minting: a four-item order produces four lines and up to four ci.objects rows, instead of the single order-named row the importer writes today.';
+COMMENT ON TABLE ci.object_observations IS 'A sighting of a physical thing in an image. The weak claim ("seen"), kept separate from the strong one ("owned", ci.objects) so vision guesses never pollute the owned-things table.';
 COMMENT ON COLUMN ci.receipts.place_entity_id IS 'Graph Location where the purchase happened. Feeds the place_prior step of image-based object resolution.';
-COMMENT ON COLUMN ci.receipt_line_items.is_physical IS 'FALSE for digital goods (ebooks, subscriptions, gift cards). Only physical lines mint ci.inventory rows.';
-COMMENT ON COLUMN ci.receipt_line_items.minted_object_id IS 'The owned unit minted from this line. The forward half of the provenance chain; ci.inventory.acquisition_line_item_id is the back-pointer.';
+COMMENT ON COLUMN ci.receipt_line_items.is_physical IS 'FALSE for digital goods (ebooks, subscriptions, gift cards). Only physical lines mint ci.objects rows.';
+COMMENT ON COLUMN ci.receipt_line_items.minted_object_id IS 'The owned unit minted from this line. The forward half of the provenance chain; ci.objects.acquisition_line_item_id is the back-pointer.';
 COMMENT ON COLUMN ci.object_observations.place_entity_id IS 'Graph Location the sighting happened at. The place_prior resolution step scopes candidate objects to things known to be at this place.';
 ```
 
@@ -1791,7 +1834,7 @@ Each of these was investigated, measured or executed, and rejected. **This secti
 
 **Do NOT split the `ci.events` analytics block into a 1:1 side table** (this is what `docs/architecture/schema-comparison-lifescope.html:1723-1726` currently recommends — correct it as part of 4.4). Measured at 300k rows: 46 live cols 341.3 B/row; drop-only 323.0 B/row (−5.4%); side-table split 311.2 B/row (−8.8%) — but the side table itself, populated 1:1, is 27,549,696 B (heap + PK index). Split total 120,963,072 B vs 96,968,704 B inline = **+24.7%**. Even a 10%-sparse side table nets 1.06%, and only by giving up the 1:1 guarantee, which forces a LEFT JOIN + COALESCE on every read. Structurally: 11 of the 13 columns are NULL on essentially every row and a NULL column costs one bit in the tuple's null bitmap, not a byte. It also breaks three CHECKs and turns `LocationEstimateService`'s single set-based UPDATE into an upsert whose predicate is shared by two SELECTs.
 
-**Do NOT split `ci.inventory`** along identity / economics-lifecycle / placement seams. The seams are real; the split makes the DB **+45.5% larger** (measured, 20k rows: 6,717,440 B single table vs 9,773,056 B across three shards), adds two tables, and — proven by execution — makes three indexes physically unbuildable: `inventory_live_keyset_idx` (42703 on `merged_into_object_id`), `inventory_lifecycle_idx` (`lifecycle_state`), `inventory_last_seen_idx` (`last_seen_at`). It also crosses two self-FKs across the seam and would silently break `OrphanCleanupService`, which addresses `ci.inventory` by interpolated table name via `entitySourceMap.ts:87` — the orphan reaper's existence probe would find nothing and DELETE every `item` row from `ci_search.embeddings`/`vectors`, with TypeScript compiling clean. *The real cost driver is `ItemResolver.ts:36-63` → `ItemService.findAll`, which loads every inventory row for the user with all 48 mapped columns and paginates in JavaScript. Push ORDER BY / LIMIT / `merged_into_object_id IS NULL` into SQL instead.*
+**Do NOT split `ci.objects`** along identity / economics-lifecycle / placement seams. The seams are real; the split makes the DB **+45.5% larger** (measured, 20k rows: 6,717,440 B single table vs 9,773,056 B across three shards), adds two tables, and — proven by execution — makes three indexes physically unbuildable: `objects_live_keyset_idx` (42703 on `merged_into_object_id`), `objects_lifecycle_idx` (`lifecycle_state`), `objects_last_seen_idx` (`last_seen_at`). It also crosses two self-FKs across the seam and would silently break `OrphanCleanupService`, which addresses `ci.objects` by interpolated table name via `entitySourceMap.ts:87` — the orphan reaper's existence probe would find nothing and DELETE every `item` row from `ci_search.embeddings`/`vectors`, with TypeScript compiling clean. *The real cost driver is `ItemResolver.ts:36-63` → `ItemService.findAll`, which loads every inventory row for the user with all 48 mapped columns and paginates in JavaScript. Push ORDER BY / LIMIT / `merged_into_object_id IS NULL` into SQL instead.*
 
 **Do NOT drop `item_relationships_to_idx`.** `(user_id, to_source_type, to_source_system, to_source_id)` is the reverse direction and is **not** a prefix of `edge_uniq`. Dropping `from_idx` (1.3) is a structural identity; dropping `to_idx` would be a bet on the future.
 
@@ -1805,7 +1848,7 @@ Each of these was investigated, measured or executed, and rejected. **This secti
 
 **Do NOT drop `ci.saved_searches.tags` or `ci.summaries.tags`.** The first is search criteria, not entity tagging. The second is live Python-written data with the only GIN index on any of the five tag columns.
 
-**Do NOT drop `ci.inventory.related_object_ids` or `parent_object_id`.** They carry `inventory_parent_object_id_fkey` and `inventory_parent_idx` and encode a real containment model.
+**Do NOT drop `ci.objects.related_object_ids` or `parent_object_id`.** They carry `objects_parent_object_id_fkey` and `objects_parent_idx` and encode a real containment model.
 
 **Do NOT flip `graph/entities/NodeEntity.ts:20-21` (`userId!: string`) to nullable.** `ci.entities.owner_user_id` is `uuid NOT NULL` with `entities_owner_user_id_fkey ... ON DELETE CASCADE` — verified on the probe, contradicting a widely-repeated "uuid NULL for both" note. `NodeEntity` is the **only** declaration in the repo that matches SQL; flipping it replaces the one truthful contract with a false one and silently widens `Node.userId` for every consumer with zero compiler pushback. *(The four that ARE wrong — `GraphNodeEntity.ts:38-39`, `BaseEntity.ts:35`, `PersonEntity.ts:40`, `ConceptEntity.ts:40` — declare `nullable: true` over a NOT NULL column. Fixing those is a separate, small item; do not use them as the reference pattern.)*
 
@@ -1813,9 +1856,9 @@ Each of these was investigated, measured or executed, and rejected. **This secti
 
 **Do NOT change `PlaceService.spec.ts:56`'s `columns: { length: 8 }` to 9.** Measured against a live TypeORM 0.3.26 DataSource: `PlaceEntity.metadata.columns.length` is **12** before and **12** after adding an explicit `@Column` on `owner_user_id` — TypeORM *merges* an explicit `@Column` and a `ManyToOne` `@JoinColumn` naming the same database column into one `ColumnMetadata`. The 8 was already wrong (as is `PersonService.spec.ts:16`'s 13, real value 14), and `computeChunkSize` returns 1000 for 8, 9 and 12 alike. Changing it makes a wrong constant wrong in a new way.
 
-**Do NOT set `ItemService.ts:33`/`:78`'s `ownerUserId` to `null`.** It is not required by 5.1's index swap and it destroys the only ownership signal that exists — nothing else writes `ci.inventory.owner_user_id`, no owner-detection service has been written, and `inventory_owner_idx` (`WHERE owner_user_id IS NOT NULL`) becomes permanently empty. Revisit in the PR that actually adds owner detection.
+**Do NOT set `ItemService.ts:33`/`:78`'s `ownerUserId` to `null`.** It is not required by 5.1's index swap and it destroys the only ownership signal that exists — nothing else writes `ci.objects.owner_user_id`, no owner-detection service has been written, and `objects_owner_idx` (`WHERE owner_user_id IS NOT NULL`) becomes permanently empty. Revisit in the PR that actually adds owner detection.
 
-**Do NOT add `Organization: 'person'` / `Product: 'item'` to `GRAPH_TYPE_ALIASES`** (`embeddable.ts:205-217`). `entitySourceMap.ts:87-90` declares person's source with `discriminator: { column: 'entity_type', value: 'Person' }`, and `OrphanCleanupService.ts:186-222` DELETEs any embedding whose `EXISTS` clause misses that discriminator. An Organization node embedded as 'person' is reaped on every maintenance run; `Product: 'item'` is worse, since item's source is `ci.inventory` keyed on `object_id` — reaped 100% of the time. Net: write churn, zero searchability.
+**Do NOT add `Organization: 'person'` / `Product: 'item'` to `GRAPH_TYPE_ALIASES`** (`embeddable.ts:205-217`). `entitySourceMap.ts:87-90` declares person's source with `discriminator: { column: 'entity_type', value: 'Person' }`, and `OrphanCleanupService.ts:186-222` DELETEs any embedding whose `EXISTS` clause misses that discriminator. An Organization node embedded as 'person' is reaped on every maintenance run; `Product: 'item'` is worse, since item's source is `ci.objects` keyed on `object_id` — reaped 100% of the time. Net: write churn, zero searchability.
 
 ### Rejected — the guard is more dangerous than the thing it guards
 
@@ -1842,16 +1885,16 @@ mutation. See `ZARCHIVED-CI-Import-Tools` for the retired external caller's code
 
 **`entity-tag-provenance`** (add `source`/`removed_at` to `ci_search.entity_tag`). Blocked on a prerequisite that invalidates the premise: `TransformGmail.ts:142` calls `communicationService.create` with no id and no source triple, and `CommunicationService.ts:56` does `data.id ?? uuidv7()` — the provenance dedup lives only in `createMany`. **Every Gmail re-sync mints a brand-new `ci.communications` uuid**, so a tombstone keyed on `(entity_type, entity_id, tag_id)` for the old uuid is never consulted. Separately, keeping `ON CONFLICT DO NOTHING` as specified means a user can **never re-apply** a removed tag (proven: `INSERT 0 0`, mutation still returns success to eight frontend call sites), and four read paths were missed — including `TagService.ts:344-358` (the `TagLoader`, highest traffic) and `:92`/`:110`, which use TypeORM `relations: ['entities']` and **cannot** take a predicate at all.
 
-**`place-coordinates-one-representation`** (collapse three coordinate representations to `location_point`, swap the reverse-geocode dedup index to `ST_SnapToGrid`). Blocked on two load-bearing corrections. First, the rewritten read-back at `PlaceService.ts:139-149` **cannot use the new index** without also carrying `AND btrim(name) <> ''` — that clause is in the partial index's predicate and Postgres cannot derive it from `lower(btrim(name)) = $3`; without it the hot path of every reverse-geocode batch item degrades to a per-row PostGIS scan (verified: disabled Seq Scan vs clean Index Cond). Second, the proposed STEP 2 is not a merge — it sets `merged_into_entity_id` and repoints nothing, stranding `ci.events.location_entity_id`, `ci.position.*`, `ci.receipts.place_entity_id`, `ci.object_observations.place_entity_id`, `ci.inventory.last_seen_place_entity_id` and child `parent_place_id`, and never reaps the loser's search doc (`OrphanCleanupService.ts:182-195` keys on row existence and ignores the `merged_into_entity_id` backfillPredicate). Also: the geolocation backfill drops the `abs()`/`NOT (0,0)` guards present in `20260803213950:105-111`, and PostGIS **coerces** out-of-range coordinates with a NOTICE, not an error — `[200.5, 95.5]` becomes a real point in the Arctic Ocean that `placesNear` returns.
+**`place-coordinates-one-representation`** (collapse three coordinate representations to `location_point`, swap the reverse-geocode dedup index to `ST_SnapToGrid`). Blocked on two load-bearing corrections. First, the rewritten read-back at `PlaceService.ts:139-149` **cannot use the new index** without also carrying `AND btrim(name) <> ''` — that clause is in the partial index's predicate and Postgres cannot derive it from `lower(btrim(name)) = $3`; without it the hot path of every reverse-geocode batch item degrades to a per-row PostGIS scan (verified: disabled Seq Scan vs clean Index Cond). Second, the proposed STEP 2 is not a merge — it sets `merged_into_entity_id` and repoints nothing, stranding `ci.events.location_entity_id`, `ci.position.*`, `ci.receipts.place_entity_id`, `ci.object_observations.place_entity_id`, `ci.objects.last_seen_place_entity_id` and child `parent_place_id`, and never reaps the loser's search doc (`OrphanCleanupService.ts:182-195` keys on row existence and ignores the `merged_into_entity_id` backfillPredicate). Also: the geolocation backfill drops the `abs()`/`NOT (0,0)` guards present in `20260803213950:105-111`, and PostGIS **coerces** out-of-range coordinates with a NOTICE, not an error — `[200.5, 95.5]` becomes a real point in the Arctic Ocean that `placesNear` returns.
 
 ### Looks wrong but isn't — do not "fix" these
 
 - **`ci.agents` is not dead.** Only `ci.agent_messages` is. Any doc saying otherwise (`schema-comparison-lifescope.html:1042`, `:1579`, `:1689`) is half wrong and is corrected in 1.1.
 - **`ci.item_relationships_to_idx` is not redundant** — see above.
-- **`ItemService.ts:110`'s arbiter is not mismatched today.** It emits `(owner_user_id, source_type, source_system, source_id)`, which exactly matches `inventory_source_triple_uniq` as created by `20260623120000:15-17`. 5.1 changes both together.
-- **`entitySourceMap.ts:86`'s `item` entry has no `backfillPredicate`**, so the three services that build raw SQL from it only ever reference `idColumn` — the dropped `ci.inventory` bags in 1.4 are safe.
+- **`ItemService.ts:110`'s arbiter is not mismatched today.** It emits `(owner_user_id, source_type, source_system, source_id)`, which exactly matches `objects_source_triple_uniq` as created by `20260623120000:15-17`. 5.1 changes both together.
+- **`entitySourceMap.ts:86`'s `item` entry has no `backfillPredicate`**, so the three services that build raw SQL from it only ever reference `idColumn` — the dropped `ci.objects` bags in 1.4 are safe.
 - **`ItemSearchIndexListener.ts:138-166,192-198`** builds embed text and keyword vectors from `name/description/brand/model/category/subcategory/maintenanceNotes` only. Dropping `tags`/`images`/`manuals` changes not a single embedding.
-- **`InventoryListener.ts:121`'s `images: [base64Image]`** is an Ollama vision payload, not a `CreateItemDto`.
+- **`ThingVisionListener.ts:121`'s `images: [base64Image]`** is an Ollama vision payload, not a `CreateItemDto`.
 - **`memory/types.ts:518`/`:567`'s `tags: z.array(z.string())`** are event schemas (`ci.events.tags TEXT[]`), not inventory.
 - **`ItemType`'s `tags: [EntityTagType!]!`** genuinely resolves through `ci_search.entity_tag` (`item` is in `TAGGABLE_ENTITIES`, `search-next/types.ts:31`) — the canonical tagging path covers inventory in full.
 - **`hbpe/src/ci/pipeline/ingester.py:36`'s `CHANNELS=('ci_events','ci_browser_activity','ci_communications')` is already dead.** There is no trigger on `ci.browser_activity` (`pg_trigger` returns 0 non-internal rows) and `pg_notify` appears in zero of the 188 migrations. The only two triggers in the schema are `communications_source_dedup_after_delete` and `entities_search_vector_trigger`. Do not cite it as a cost of anything.
@@ -2042,13 +2085,13 @@ git checkout -b schema/wave-5-coherence
 # 5.1 — pre-flight FIRST (with the NULL guards; see §3.5.1)
 make dbshell <<'SQL'
 SELECT count(*) FROM (
-  SELECT user_id, source_type, source_system, source_id FROM ci.inventory
+  SELECT user_id, source_type, source_system, source_id FROM ci.objects
    WHERE source_id IS NOT NULL AND source_type IS NOT NULL AND source_system IS NOT NULL
    GROUP BY 1,2,3,4 HAVING count(*) > 1) d;
 SQL
 # MUST be 0. Non-zero = merge by hand first.
 
-yarn workspace @ci/be-api migrate:make scope_inventory_source_triple_uniq_to_user
+yarn workspace @ci/be-api migrate:make scope_objects_source_triple_uniq_to_user
 # Code SAME commit: ItemService.ts:109, :110, :63; ItemResolver.ts:110; Database.md:125.
 
 # 5.2 — TWO releases, do not combine

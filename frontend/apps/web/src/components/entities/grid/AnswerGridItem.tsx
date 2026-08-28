@@ -13,6 +13,7 @@ export const ANSWER_FRAGMENT = gql(`
     answerSource
     answerConfidence
     answerRationale
+    answerEvidence
     question {
       id
       text
@@ -49,10 +50,23 @@ export function AnswerGridItem({ answer, onClick }: Props) {
 
       <EntityGridItem.Footer className="self-end flex items-center gap-2">
         <div className="text-sm text-muted-foreground">Reflection</div>
+        {/* The badge opens the provenance drawer and stops the click from
+            reaching the card, which navigates. No `onEdit`: this grid tile has
+            no answer-edit path of its own, and the drawer must not invent one.
+            `record` is the fragment data, and `answerEvidence` is selected above
+            so a tile shows the SAME citations the Self page does for the same
+            answer — without it the drawer would tell a reader no source records
+            were kept for an answer that has them, which is the one claim this
+            panel exists to make impossible. */}
         <AnswerProvenance
           source={data.answerSource}
           confidence={data.answerConfidence}
           rationale={data.answerRationale}
+          details={{
+            question: data.question.text,
+            answerText: data.answer,
+            record: data,
+          }}
         />
       </EntityGridItem.Footer>
     </EntityGridItem>

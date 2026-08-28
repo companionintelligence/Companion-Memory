@@ -9,9 +9,9 @@ export type ReceiptChannel = 'online' | 'in_store' | 'app' | 'phone' | 'unknown'
  * Purchase evidence. Mirrors migration
  * 20260803223019_create_receipts_and_line_items.
  *
- * The chain is receipt (evidence) -> line item (claim) -> ci.inventory (owned
+ * The chain is receipt (evidence) -> line item (claim) -> ci.objects (owned
  * unit). Before this table the importer flattened a whole purchase into ONE
- * inventory row named after the order, so a four-item Amazon order became one
+ * object row named after the order, so a four-item Amazon order became one
  * "thing", tax and shipping were lost, and nothing could answer "where did this
  * come from?".
  *

@@ -87,4 +87,19 @@ export class UserResolver {
 
     return person ? PersonType.toType(person) : null;
   }
+
+  /**
+   * The caller's own avatar. Deliberately looked up via `findSelf` (the
+   * `is_self` Person), not `entity()` above (the `users.entity_id` pointer) —
+   * see `PersonService.findSelf` for why the two can diverge. Never throws:
+   * no `is_self` Person, or one with no avatar, both read as null.
+   */
+  @ResolveField(() => String, { nullable: true })
+  async avatarUrl(@Context() context: RequestContext): Promise<string | null> {
+    const serviceContext = toServiceContext(context);
+
+    const self = await this.personService.findSelf(serviceContext);
+
+    return (self?.properties?.avatar_url as string) ?? null;
+  }
 }

@@ -45,7 +45,7 @@ describe('BodyParserMiddleware limits', () => {
       '/v1/events',
       '/v1/communications',
       '/v1/contents',
-      '/v1/inventory',
+      '/v1/things',
       '/v1/browser-activity',
       '/v1/positions',
       '/v1/ingest/finish',
@@ -180,7 +180,7 @@ describe('BodyParserMiddleware NDJSON streaming bypass', () => {
     for (const url of [
       '/v1/communications',
       '/v1/contents',
-      '/v1/inventory',
+      '/v1/things',
       '/v1/browser-activity',
       '/v1/positions',
     ]) {

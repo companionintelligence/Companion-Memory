@@ -52,7 +52,7 @@ export const METRIC_SOURCES: Record<MetricKey, readonly string[]> = {
   km_traveled: ['ci.position'],
   screen_minutes: ['ci.browser_activity'],
   n_domains: ['ci.browser_activity'],
-  spend_total: ['ci.inventory'],
+  spend_total: ['ci.objects'],
   meeting_minutes: ['ci.events'],
   sleep_minutes: ['ci.events'],
   time_at_home: ['ci.position', 'ci.relationships'],

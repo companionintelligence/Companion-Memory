@@ -27,6 +27,7 @@ function makeResolver(enabled: boolean) {
     decline: jest.fn(),
     findById: jest.fn(),
     complete: jest.fn(),
+    completeWithAnswer: jest.fn(),
     listInbox: jest.fn().mockResolvedValue([fakeAsk()]),
     listOutbox: jest.fn().mockResolvedValue([]),
   };
@@ -34,8 +35,10 @@ function makeResolver(enabled: boolean) {
     create: jest.fn(),
     revoke: jest.fn(),
     listForOwner: jest.fn().mockResolvedValue([]),
+    // No matching grant → review, and therefore no grant-imposed ceiling.
+    evaluate: jest.fn().mockResolvedValue({ decision: 'review' }),
   };
-  const auditService = { listForResponder: jest.fn().mockResolvedValue([]) };
+  const auditService = { listForResponder: jest.fn().mockResolvedValue({ rows: [], truncated: false }) };
   const rateLimitService = { consume: jest.fn() };
   const executorService = { execute: jest.fn().mockResolvedValue([{ id: 'e1', type: 'file' }]) };
   const answerService = {
@@ -51,6 +54,24 @@ function makeResolver(enabled: boolean) {
     ),
     findByAskId: jest.fn(),
   };
+  // Mirror the real service: `completeWithAnswer` persists the answer and
+  // finalizes the ask in one transaction. Delegating to the two underlying
+  // mocks keeps every assertion below pointed at the half it is about.
+  askService.completeWithAnswer = jest.fn(
+    async (
+      ctx: unknown,
+      id: string,
+      disclosure: { answer: unknown; disclosedEntityIds: string[]; backingEntityIds: string[] },
+    ) => ({
+      ask: await askService.complete(ctx, id, disclosure.disclosedEntityIds, {
+        backingEntityIds: disclosure.backingEntityIds,
+      }),
+      answer: await answerService.create({ askId: id, answer: disclosure.answer }),
+    }),
+  );
+
+  const peerLinkService = { findById: jest.fn().mockResolvedValue(null) };
+  const outboundAskService = { send: jest.fn() };
   const featureService = { isFeatureEnabled: jest.fn().mockResolvedValue(enabled) };
 
   const resolver = new AskResolver(
@@ -60,6 +81,23 @@ function makeResolver(enabled: boolean) {
     rateLimitService as never,
     executorService as never,
     answerService as never,
+    peerLinkService as never,
+    outboundAskService as never,
+    {
+      // The household-tier service. `resolveTier` consults it for a LOCAL
+      // asker; undefined member means the default (`household`) still applies.
+      tierFor: jest.fn().mockResolvedValue('household'),
+      listForOwner: jest.fn().mockResolvedValue([]),
+      setTier: jest.fn(),
+    } as never,
+    {
+      // The broadcast service. `createAskBroadcast` / `myAskBroadcasts` are the
+      // only callers; every other operation here never touches it.
+      create: jest.fn(),
+      listForAsker: jest.fn().mockResolvedValue([]),
+      asksForBroadcasts: jest.fn().mockResolvedValue(new Map()),
+      findForAsker: jest.fn(),
+    } as never,
     featureService as never,
   );
 
@@ -70,6 +108,8 @@ function makeResolver(enabled: boolean) {
     rateLimitService,
     executorService,
     answerService,
+    peerLinkService,
+    outboundAskService,
     featureService,
   };
 }
@@ -94,12 +134,15 @@ describe('AskResolver — feature-flag gating', () => {
 });
 
 describe('AskResolver — enabled', () => {
-  it('createAsk rate-limits, decodes the responder id, submits, and surfaces the decision', async () => {
+  it('createAsk rate-limits, decodes the responder id, submits, and acknowledges', async () => {
     const { resolver, askService, rateLimitService } = makeResolver(true);
 
     const result = await resolver.createAsk(CTX, {
       responderId: GlobalUID.encode('user', 'responder-1'),
-      query: { queryType: 'photos', dataClass: 'beach', prompt: 'beach photos?' },
+      // `queryType` is the ARCHETYPE, not the data class — `photos` was never
+      // one, and since `parseAskQueryType` closed the vocabulary it is refused.
+      // The class it was standing in for still travels, in `dataClass`.
+      query: { queryType: 'content', dataClass: 'beach', prompt: 'beach photos?' },
     });
 
     expect(rateLimitService.consume).toHaveBeenCalledWith('user-1');
@@ -107,12 +150,16 @@ describe('AskResolver — enabled', () => {
       { userId: 'user-1' },
       {
         responderUserId: 'responder-1',
-        query: { queryType: 'photos', dataClass: 'beach', prompt: 'beach photos?' },
+        query: { queryType: 'content', dataClass: 'beach', prompt: 'beach photos?' },
       },
     );
     expect(result.success).toBe(true);
-    expect(result.decision).toBe('review');
-    expect(result.ask?.status).toBe('under_review');
+    // The responder's grant posture is NOT the asker's to read: `auto`,
+    // `review` and `deny` all come back as the same acknowledgement.
+    expect(result.decision).toBe('accepted');
+    // …and neither is the ask's raw STATUS, which carried the same three-way
+    // signal one field along (`declined` / `delivered` / `under_review`).
+    expect(result.ask?.status).toBe('delivered');
   });
 
   it('askInbox maps the responder inbox to GraphQL types', async () => {
@@ -141,8 +188,18 @@ describe('AskResolver — enabled', () => {
         answer: expect.objectContaining({ form: 'retrieval', disclosedCount: 1, withheldCount: 0 }),
       }),
     );
-    // the audit records the backing entity ids (post-redaction)
-    expect(askService.complete).toHaveBeenCalledWith({ userId: 'user-1' }, 'ask-1', ['e1']);
+    // The audit records what the asker RECEIVED, plus the backing set under its
+    // own name. Here they coincide (household tier, retrieval form, nothing
+    // clamped); the disclosureIntegrity suite covers the case where they differ.
+    expect(askService.completeWithAnswer).toHaveBeenCalledWith({ userId: 'user-1' }, 'ask-1', {
+      answer: expect.objectContaining({ form: 'retrieval' }),
+      disclosedEntityIds: ['e1'],
+      backingEntityIds: ['e1'],
+      // A LOCAL ask, so there is no peer to attribute it to. The federated case
+      // — where this carries the handle into the audit row — is in
+      // AskResolver.peerAttribution.test.ts.
+      peerHandle: null,
+    });
     expect(result.success).toBe(true);
     expect(result.disclosedCount).toBe(1);
     expect(result.answer?.form).toBe('retrieval');
@@ -168,8 +225,12 @@ describe('AskResolver — enabled', () => {
         answer: expect.objectContaining({ disclosedCount: 1, withheldCount: 2 }),
       }),
     );
-    // only the kept (non-redacted) entity is audited as backing the disclosure
-    expect(askService.complete).toHaveBeenCalledWith({ userId: 'user-1' }, 'ask-1', ['e1']);
+    // only the kept (non-redacted) entity is audited, as backing AND as disclosed
+    expect(askService.completeWithAnswer).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      'ask-1',
+      expect.objectContaining({ disclosedEntityIds: ['e1'], backingEntityIds: ['e1'] }),
+    );
     expect(result.disclosedCount).toBe(1);
     expect(result.withheldCount).toBe(2);
   });

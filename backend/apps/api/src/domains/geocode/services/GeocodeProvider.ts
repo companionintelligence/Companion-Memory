@@ -7,6 +7,21 @@
  * provider-agnostic and lets tests stub the network.
  */
 
+/**
+ * Provider bounding box for a result, in WGS84 degrees. Google supplies two:
+ * `geometry.bounds` (the feature's true footprint — returned only for things
+ * that HAVE an extent: cities, neighbourhoods, parks) and `geometry.viewport`
+ * (a display box, always returned). Providers should prefer bounds and fall
+ * back to viewport, and must not emit a box that crosses the antimeridian
+ * (east < west) — the consumer builds a planar envelope from it.
+ */
+export interface GeocodeBounds {
+  north: number;
+  south: number;
+  east: number;
+  west: number;
+}
+
 /** Injection token for the active geocode provider. */
 export const GEOCODE_PROVIDER = Symbol('GEOCODE_PROVIDER');
 
@@ -34,6 +49,8 @@ export interface GeocodeProviderResult {
   partialMatch?: boolean;
   /** Raw address-component payload, stored for later enrichment. */
   components?: Record<string, unknown>;
+  /** Bounding box of the result, when the provider returned one. */
+  bounds?: GeocodeBounds;
   /** Provider error message, when present (e.g. for REQUEST_DENIED). */
   errorMessage?: string;
 }

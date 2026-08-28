@@ -1,3 +1,5 @@
+import { ModelTierRouter } from '@ci/domains/model-routing';
+
 import { OllamaService } from '../OllamaService';
 
 function makeLogger() {
@@ -10,7 +12,7 @@ function makeLogger() {
   };
 }
 
-function buildService(served: string[]) {
+function buildService(served: string[], { pinnedDemoModels = false } = {}) {
   const driver = {
     listModels: jest.fn(async () => served),
     chat: jest.fn(),
@@ -19,7 +21,8 @@ function buildService(served: string[]) {
     { getOpenAiDriver: () => driver } as never,
     { getAgentFacingTools: () => [] } as never,
     makeLogger() as never,
-    { isFeatureEnabled: jest.fn(async () => false) } as never,
+    { isFeatureEnabled: jest.fn(async () => pinnedDemoModels) } as never,
+    new ModelTierRouter(),
   );
 
   return { service, driver };
@@ -32,6 +35,7 @@ function buildNativeService(served: string[], visionIds: readonly string[]) {
     { getAgentFacingTools: () => [] } as never,
     makeLogger() as never,
     { isFeatureEnabled: jest.fn(async () => false) } as never,
+    new ModelTierRouter(),
   );
 
   const spies = service as unknown as {
@@ -111,5 +115,45 @@ describe('OllamaService.resolveModel uses the loaded backend model', () => {
     });
 
     expect(resolved.model).toBe('llava:13b');
+  });
+});
+
+/**
+ * Baseline pin for the `pinned.demo.models` branch of `resolveModel`. These
+ * assertions describe the behaviour that existed BEFORE tier routing was added
+ * and must survive it unchanged — the demo pin is a hard override that outranks
+ * every other selection input.
+ */
+describe('OllamaService.resolveModel honours the pinned demo models', () => {
+  it('pins the demo vision model (tools + thinking off) when the turn carries images', async () => {
+    const { service } = buildService(['gemma3:27b', 'qwen3:14b'], { pinnedDemoModels: true });
+
+    const resolved = await service.resolveModel(ctx, {
+      requestedModel: 'Qwen3-8B',
+      enableThinking: true,
+      enableTools: true,
+      messages: [{ role: 'user', content: 'describe', images: ['abc'] as never }],
+    });
+
+    expect(resolved).toStrictEqual({
+      model: 'gemma3:27b',
+      enableThinking: false,
+      enableTools: false,
+    });
+  });
+
+  it('pins the demo text model (tools + thinking on) for a text-only turn', async () => {
+    const { service } = buildService(['gemma3:27b', 'qwen3:14b'], { pinnedDemoModels: true });
+
+    const resolved = await service.resolveModel(ctx, {
+      requestedModel: 'Qwen3-8B',
+      messages: [{ role: 'user', content: 'hello' }],
+    });
+
+    expect(resolved).toStrictEqual({
+      model: 'qwen3:14b',
+      enableThinking: true,
+      enableTools: true,
+    });
   });
 });

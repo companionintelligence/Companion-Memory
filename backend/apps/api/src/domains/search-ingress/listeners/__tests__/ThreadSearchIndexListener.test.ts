@@ -178,17 +178,20 @@ describe('ThreadSearchIndexListener — re-indexing on message edit / delete', (
   });
 
   it('re-indexes the thread when a message is DELETED, rebuilding from what survives', async () => {
-    // The deleted message itself no longer resolves via findById in a real
-    // system — but the surviving thread messages are what matters here: the
+    // MessageService.findById filters canceled: false, so it returns null for
+    // a deleted message in a real system — the mock leaves it null here too,
+    // matching that behavior, to prove the delete path does NOT depend on it
+    // resolving. Only the surviving thread messages are what matters here: the
     // stale content from the deleted message must NOT still appear.
-    const { listener, threadService, vectorService } = makeListener({
+    const { listener, threadService, messageService, vectorService } = makeListener({
       thread: SUBSTANTIVE_THREAD,
-      message: { id: 'msg-1', threadId: 'thread-1' },
+      message: null,
       messages: [{ content: 'Only the surviving message remains.' }],
     });
 
-    await listener.updateThreadOnMessageDeleted({ messageId: 'msg-1' } as never);
+    await listener.updateThreadOnMessageDeleted({ messageId: 'msg-1', threadId: 'thread-1' } as never);
 
+    expect(messageService.findById).not.toHaveBeenCalled();
     expect(threadService.findById).toHaveBeenCalledWith({ userId: SYSTEM_USER }, 'thread-1');
     const [, dto] = vectorService.upsert.mock.calls[0];
     const texts = (dto.searchableText as { text: string }[]).map((t) => t.text);
@@ -196,11 +199,11 @@ describe('ThreadSearchIndexListener — re-indexing on message edit / delete', (
     expect(texts.join(' ')).not.toContain('deleted');
   });
 
-  it('a message that no longer resolves (fully deleted) is a no-op, not an error', async () => {
-    const { listener, threadService, logger } = makeListener({ message: null });
+  it('a message deleted with no associated thread is a no-op, not an error', async () => {
+    const { listener, threadService, logger } = makeListener();
 
     await expect(
-      listener.updateThreadOnMessageDeleted({ messageId: 'msg-gone' } as never),
+      listener.updateThreadOnMessageDeleted({ messageId: 'msg-gone', threadId: null } as never),
     ).resolves.toBeUndefined();
 
     expect(threadService.findById).not.toHaveBeenCalled();

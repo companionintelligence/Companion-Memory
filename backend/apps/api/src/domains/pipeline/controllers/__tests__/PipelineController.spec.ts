@@ -169,12 +169,12 @@ describe('PipelineController', () => {
   });
 
   // -------------------------------------------------------------------------
-  // GET /api/pipeline/state
+  // GET /pipeline/state
   // -------------------------------------------------------------------------
 
-  describe('GET /api/pipeline/state', () => {
+  describe('GET /pipeline/state', () => {
     it('answers "is my import finished?" per stage, scoped to the caller', async () => {
-      const response = await request(app.getHttpServer()).get('/api/pipeline/state').expect(200);
+      const response = await request(app.getHttpServer()).get('/pipeline/state').expect(200);
 
       expect(response.body.stages).toHaveLength(1);
       expect(response.body.stages[0]).toMatchObject({
@@ -191,12 +191,12 @@ describe('PipelineController', () => {
   });
 
   // -------------------------------------------------------------------------
-  // GET /api/pipeline/runs
+  // GET /pipeline/runs
   // -------------------------------------------------------------------------
 
-  describe('GET /api/pipeline/runs', () => {
+  describe('GET /pipeline/runs', () => {
     it('passes limit and offset through', async () => {
-      await request(app.getHttpServer()).get('/api/pipeline/runs?limit=5&offset=10').expect(200);
+      await request(app.getHttpServer()).get('/pipeline/runs?limit=5&offset=10').expect(200);
 
       expect(service.listRuns).toHaveBeenCalledWith(
         { userId: USER },
@@ -209,7 +209,7 @@ describe('PipelineController', () => {
       // and `Boolean('false')` is `true` — so the naive schema would filter to
       // active runs only when asked for the opposite. This is the assertion that
       // stops somebody "simplifying" it back.
-      await request(app.getHttpServer()).get('/api/pipeline/runs?activeOnly=false').expect(200);
+      await request(app.getHttpServer()).get('/pipeline/runs?activeOnly=false').expect(200);
 
       expect(service.listRuns).toHaveBeenCalledWith(
         { userId: USER },
@@ -218,7 +218,7 @@ describe('PipelineController', () => {
     });
 
     it('reads ?activeOnly=true as TRUE', async () => {
-      await request(app.getHttpServer()).get('/api/pipeline/runs?activeOnly=true').expect(200);
+      await request(app.getHttpServer()).get('/pipeline/runs?activeOnly=true').expect(200);
 
       expect(service.listRuns).toHaveBeenCalledWith(
         { userId: USER },
@@ -227,24 +227,24 @@ describe('PipelineController', () => {
     });
 
     it('400s a limit outside the accepted range instead of clamping silently', async () => {
-      await request(app.getHttpServer()).get('/api/pipeline/runs?limit=0').expect(400);
-      await request(app.getHttpServer()).get('/api/pipeline/runs?limit=100000').expect(400);
+      await request(app.getHttpServer()).get('/pipeline/runs?limit=0').expect(400);
+      await request(app.getHttpServer()).get('/pipeline/runs?limit=100000').expect(400);
 
       expect(service.listRuns).not.toHaveBeenCalled();
     });
 
     it('400s a boolean it cannot read rather than guessing', async () => {
-      await request(app.getHttpServer()).get('/api/pipeline/runs?activeOnly=yes').expect(400);
+      await request(app.getHttpServer()).get('/pipeline/runs?activeOnly=yes').expect(400);
     });
   });
 
   // -------------------------------------------------------------------------
-  // GET /api/pipeline/runs/:id
+  // GET /pipeline/runs/:id
   // -------------------------------------------------------------------------
 
-  describe('GET /api/pipeline/runs/:id', () => {
+  describe('GET /pipeline/runs/:id', () => {
     it('returns the run with its shard progress', async () => {
-      const response = await request(app.getHttpServer()).get(`/api/pipeline/runs/${RUN_ID}`).expect(200);
+      const response = await request(app.getHttpServer()).get(`/pipeline/runs/${RUN_ID}`).expect(200);
 
       expect(response.body).toMatchObject({ id: RUN_ID, active: true, shardCount: 1 });
       expect(service.getRun).toHaveBeenCalledWith({ userId: USER }, RUN_ID);
@@ -253,7 +253,7 @@ describe('PipelineController', () => {
     it('404s a malformed id before it reaches a ::uuid cast', async () => {
       // IdFormatGuard is a global APP_GUARD, which is why this controller does
       // not validate `:id` itself.
-      await request(app.getHttpServer()).get('/api/pipeline/runs/not-a-uuid').expect(404);
+      await request(app.getHttpServer()).get('/pipeline/runs/not-a-uuid').expect(404);
 
       expect(service.getRun).not.toHaveBeenCalled();
     });
@@ -261,7 +261,7 @@ describe('PipelineController', () => {
     it('surfaces the service 404 as a 404', async () => {
       service.getRun.mockRejectedValueOnce(new NotFoundException('nope'));
 
-      await request(app.getHttpServer()).get(`/api/pipeline/runs/${RUN_ID}`).expect(404);
+      await request(app.getHttpServer()).get(`/pipeline/runs/${RUN_ID}`).expect(404);
     });
   });
 
@@ -277,7 +277,7 @@ describe('PipelineController', () => {
     ])('POST /runs/:id/%s writes desired_state %s', async (action, desired) => {
       // 200, not 201: these create nothing. They record an intent a worker
       // reconciles toward between batches.
-      await request(app.getHttpServer()).post(`/api/pipeline/runs/${RUN_ID}/${action}`).expect(200);
+      await request(app.getHttpServer()).post(`/pipeline/runs/${RUN_ID}/${action}`).expect(200);
 
       expect(service.setDesiredState).toHaveBeenCalledWith({ userId: USER }, RUN_ID, desired);
     });
@@ -285,13 +285,13 @@ describe('PipelineController', () => {
     it('409s when the run can no longer accept control changes', async () => {
       service.setDesiredState.mockRejectedValueOnce(new ConflictException('already finished'));
 
-      await request(app.getHttpServer()).post(`/api/pipeline/runs/${RUN_ID}/pause`).expect(409);
+      await request(app.getHttpServer()).post(`/pipeline/runs/${RUN_ID}/pause`).expect(409);
     });
 
     it('404s an unknown run', async () => {
       service.setDesiredState.mockRejectedValueOnce(new NotFoundException('nope'));
 
-      await request(app.getHttpServer()).post(`/api/pipeline/runs/${RUN_ID}/cancel`).expect(404);
+      await request(app.getHttpServer()).post(`/pipeline/runs/${RUN_ID}/cancel`).expect(404);
     });
   });
 
@@ -299,10 +299,10 @@ describe('PipelineController', () => {
   // Dead letters
   // -------------------------------------------------------------------------
 
-  describe('GET /api/pipeline/dead-letters', () => {
+  describe('GET /pipeline/dead-letters', () => {
     it('passes the queue, stage and replayed filters through', async () => {
       await request(app.getHttpServer())
-        .get('/api/pipeline/dead-letters?queue=pipeline-embed&stage=index.embed&replayed=false&limit=10')
+        .get('/pipeline/dead-letters?queue=pipeline-embed&stage=index.embed&replayed=false&limit=10')
         .expect(200);
 
       expect(service.listDeadLetters).toHaveBeenCalledWith(
@@ -312,7 +312,7 @@ describe('PipelineController', () => {
     });
 
     it('defaults every filter to absent', async () => {
-      await request(app.getHttpServer()).get('/api/pipeline/dead-letters').expect(200);
+      await request(app.getHttpServer()).get('/pipeline/dead-letters').expect(200);
 
       expect(service.listDeadLetters).toHaveBeenCalledWith(
         { userId: USER },
@@ -323,14 +323,14 @@ describe('PipelineController', () => {
     it('400s a page larger than the ceiling', async () => {
       // Small on purpose: every row carries its payload verbatim and its full
       // error with stack.
-      await request(app.getHttpServer()).get('/api/pipeline/dead-letters?limit=201').expect(400);
+      await request(app.getHttpServer()).get('/pipeline/dead-letters?limit=201').expect(400);
     });
   });
 
-  describe('POST /api/pipeline/dead-letters/:id/replay', () => {
+  describe('POST /pipeline/dead-letters/:id/replay', () => {
     it('reports what was re-emitted', async () => {
       const response = await request(app.getHttpServer())
-        .post(`/api/pipeline/dead-letters/${LETTER_ID}/replay`)
+        .post(`/pipeline/dead-letters/${LETTER_ID}/replay`)
         .expect(200);
 
       expect(response.body).toMatchObject({
@@ -345,22 +345,22 @@ describe('PipelineController', () => {
     it('409s a letter that was already replayed', async () => {
       service.replayDeadLetter.mockRejectedValueOnce(new ConflictException('already replayed'));
 
-      await request(app.getHttpServer()).post(`/api/pipeline/dead-letters/${LETTER_ID}/replay`).expect(409);
+      await request(app.getHttpServer()).post(`/pipeline/dead-letters/${LETTER_ID}/replay`).expect(409);
     });
 
     it('404s a malformed letter id', async () => {
-      await request(app.getHttpServer()).post('/api/pipeline/dead-letters/nope/replay').expect(404);
+      await request(app.getHttpServer()).post('/pipeline/dead-letters/nope/replay').expect(404);
 
       expect(service.replayDeadLetter).not.toHaveBeenCalled();
     });
   });
 
-  describe('POST /api/pipeline/dead-letters/replay', () => {
+  describe('POST /pipeline/dead-letters/replay', () => {
     const LETTER_2 = '00000000-0000-7000-8000-0000000000d2';
 
     it('passes an explicit id batch through', async () => {
       const response = await request(app.getHttpServer())
-        .post('/api/pipeline/dead-letters/replay')
+        .post('/pipeline/dead-letters/replay')
         .send({ ids: [LETTER_ID, LETTER_2] })
         .expect(200);
 
@@ -373,7 +373,7 @@ describe('PipelineController', () => {
 
     it('passes the failure-class selector through, with failedAfter parsed as a date', async () => {
       await request(app.getHttpServer())
-        .post('/api/pipeline/dead-letters/replay')
+        .post('/pipeline/dead-letters/replay')
         .send({ eventName: 'infer.question.answer', failedAfter: '2026-08-18T00:00:00.000Z', limit: 25 })
         .expect(200);
 
@@ -391,7 +391,7 @@ describe('PipelineController', () => {
     it('400s an empty selector rather than replaying everything', async () => {
       // The safety property of the whole endpoint: most of a real backlog is one
       // config error, and blind replay re-runs it against the same broken config.
-      await request(app.getHttpServer()).post('/api/pipeline/dead-letters/replay').send({}).expect(400);
+      await request(app.getHttpServer()).post('/pipeline/dead-letters/replay').send({}).expect(400);
 
       expect(service.replayDeadLetters).not.toHaveBeenCalled();
     });
@@ -400,7 +400,7 @@ describe('PipelineController', () => {
       // `z.coerce.date()` alone yields an Invalid Date here, which would bind as
       // NULL — i.e. no filter at all.
       await request(app.getHttpServer())
-        .post('/api/pipeline/dead-letters/replay')
+        .post('/pipeline/dead-letters/replay')
         .send({ failedAfter: 'not-a-date' })
         .expect(400);
 
@@ -411,7 +411,7 @@ describe('PipelineController', () => {
       // The single-id route gets this from IdFormatGuard; a body array is the
       // schema's job.
       await request(app.getHttpServer())
-        .post('/api/pipeline/dead-letters/replay')
+        .post('/pipeline/dead-letters/replay')
         .send({ ids: [LETTER_ID, 'not-a-uuid'] })
         .expect(400);
 
@@ -424,7 +424,7 @@ describe('PipelineController', () => {
         (_, i) => `00000000-0000-7000-8000-${String(i).padStart(12, '0')}`,
       );
 
-      await request(app.getHttpServer()).post('/api/pipeline/dead-letters/replay').send({ ids }).expect(400);
+      await request(app.getHttpServer()).post('/pipeline/dead-letters/replay').send({ ids }).expect(400);
     });
 
     it('reports partial failure as 200 with a body, not as a 500', async () => {
@@ -449,7 +449,7 @@ describe('PipelineController', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .post('/api/pipeline/dead-letters/replay')
+        .post('/pipeline/dead-letters/replay')
         .send({ ids: [LETTER_ID, LETTER_2] })
         .expect(200);
 
@@ -471,7 +471,7 @@ describe('PipelineController', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .post('/api/pipeline/dead-letters/replay')
+        .post('/pipeline/dead-letters/replay')
         .send({ ids: [LETTER_ID, LETTER_2] })
         .expect(200);
 
@@ -480,16 +480,16 @@ describe('PipelineController', () => {
   });
 
   // -------------------------------------------------------------------------
-  // POST /api/pipeline/quarantine/release
+  // POST /pipeline/quarantine/release
   // -------------------------------------------------------------------------
 
-  describe('POST /api/pipeline/quarantine/release', () => {
+  describe('POST /pipeline/quarantine/release', () => {
     it('releases the declared transient reasons when the body names none', async () => {
       // The default is the whole point of the route being usable at all: an
       // operator who has just read "12,237 quarantined: provider_unavailable"
       // should not have to know the token to undo it.
       const response = await request(app.getHttpServer())
-        .post('/api/pipeline/quarantine/release')
+        .post('/pipeline/quarantine/release')
         .send({})
         .expect(200);
 
@@ -506,7 +506,7 @@ describe('PipelineController', () => {
 
     it('passes an explicit reason and stage selector through', async () => {
       await request(app.getHttpServer())
-        .post('/api/pipeline/quarantine/release')
+        .post('/pipeline/quarantine/release')
         .send({ reasons: ['provider_status_unrecognized'], stage: 'enrich.position_reverse' })
         .expect(200);
 
@@ -521,7 +521,7 @@ describe('PipelineController', () => {
       // caller tried to name reasons and named none, which is a different
       // mistake and must not silently widen to every quarantined row.
       await request(app.getHttpServer())
-        .post('/api/pipeline/quarantine/release')
+        .post('/pipeline/quarantine/release')
         .send({ reasons: [] })
         .expect(400);
 
@@ -530,7 +530,7 @@ describe('PipelineController', () => {
 
     it('is scoped to the caller, never to a user id in the body', async () => {
       await request(app.getHttpServer())
-        .post('/api/pipeline/quarantine/release')
+        .post('/pipeline/quarantine/release')
         .send({ userId: '00000000-0000-4000-8000-0000000000bb' })
         .expect(200);
 

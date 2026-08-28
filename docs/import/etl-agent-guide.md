@@ -15,6 +15,21 @@ re-measure rather than trust this file. Where something could not be verified it
 says so out loud — a confident wrong sentence here is worse than a missing one,
 because the next agent will act on it.
 
+> **Code re-verified against `ead9fb425` later on 2026-08-19** (tree only — the
+> measured counts below are still the earlier readings and are labelled as
+> such). What moved: the doctor registry is **21** checks, not nineteen, and
+> `comms-missing-thread-id` is now `medium`; every check that named a backfill
+> migration was repointed off it — to the guard it copies where one exists, to
+> `null` where none does (five of the ten `mirrors` values `75ecc6c7a` touched
+> went to `null`, and `events-timestamped-at-import` still names a migration);
+> `DESTINATION_ORDER` puts **events before content**, which this file previously
+> stated backwards;
+> `destinationsFor` gained a route-nowhere branch for `contact.card` and a
+> content-skipping branch for social affiliations; `isNotAPlaceName` grew a
+> fourth arm; every stage now writes a structured `detail.summary` under a closed
+> drop vocabulary; and `push`'s `partial` no longer keys off
+> `entities.unresolved`.
+
 > **This file has already been wrong once, in the worst direction.** The revision
 > written against `5f29d3fdb` told you that `ci-import doctor` did not exist and
 > not to cite it. It had merged as [#2105](https://github.com/companionintelligence/CI-Server/pull/2105)
@@ -44,12 +59,12 @@ this document.
 
 | Question | Answer lives in | Get it with |
 |---|---|---|
-| **Is the data it wrote sound?** | 19 checks over `ci.*`, `ci_search.*`, `ci.pipeline_*` | `ci-import doctor` — see [§6](#6-what-to-measure--ci-import-doctor). Ask this first; the four below are the drill-downs |
+| **Is the data it wrote sound?** | 21 checks over `ci.*`, `ci_search.*`, `ci.pipeline_*` | `ci-import doctor` — see [§6](#6-what-to-measure--ci-import-doctor). Ask this first; the four below are the drill-downs |
 | What ran? | `ci_import.import_runs.data_sources`, `ci_import.import_stages.kind` | `select label, status, percent, data_sources from ci_import.import_runs order by started_at;` |
 | How long? | `import_stages.duration_ms`, `.items_per_sec`, `.started_at/.finished_at` | `select kind, processed, total, round(duration_ms/1000.0,1) secs, items_per_sec from ci_import.import_stages where run_id = '…' order by seq;` |
 | What did it produce? | `import_stages.detail` (per stage), then the `ci.*` tables | `select jsonb_pretty(detail) from ci_import.import_stages where kind='push' and run_id='…';` |
-| **What did it drop?** | `detail->'sources'->N->'drops'` (parse), `detail->'rejected'` (unpack), `staged_items.push_status='failed'` + `.push_error` (push) | `ci-import doctor`, then the drop-ledger query in [§6.2](#62-what-did-it-drop--the-single-most-useful-query-here) |
-| Why? | `import_stages.error`, `staged_items.push_error`, `staged_entities.push_error`, then `ci.pipeline_dead_letters` for the enrichment half | `select kind, status, error from ci_import.import_stages where error is not null;` |
+| **What did it drop?** | `detail->'summary'` on **every** stage (`consumed`/`produced`/`dropped`, `dropsByReason`, `gaps`); the older per-stage keys are still there — `detail->'sources'->N->'drops'` (parse), `detail->'rejected'` (unpack), `staged_items.push_status='failed'` + `.push_error` (push) | `ci-import doctor`, then the drop-ledger queries in [§6.2](#62-what-did-it-drop--the-single-most-useful-query-here) |
+| Why? | `import_stages.error` **and `detail->'summary'->'failure'`** (the same facts as fields: `dataSource`, `file`, `destination`, `phase`), `staged_items.push_error`, `staged_entities.push_error`, then `ci.pipeline_dead_letters` for the enrichment half | `select kind, status, error, detail->'summary'->'failure' from ci_import.import_stages where error is not null;` |
 
 If the answer to any of those is "the table does not say", that is itself the
 bug worth fixing — this system's whole design premise is that a half-worked
@@ -101,13 +116,17 @@ way round.
 | The one event | `.../import/events.ts` (`import.stage`) |
 | Payload + `StageRunner` / `StageOutcome` contracts | `.../import/types.ts` |
 | **The worker** (claim, heartbeat, progress throttle, failure recording) | `.../import/listeners/ImportStageListener.ts` |
-| Run/stage spine (start, advance, resume, cancel, retry, rollup) | `.../import/services/ImportRunService.ts` (1,506 lines) |
+| Run/stage spine (start, advance, resume, cancel, retry, rollup) | `.../import/services/ImportRunService.ts` (1,525 lines) |
 | Stage runners | `.../import/stages/{UnpackStage,ParseStage,MediaStage,PushStage}.ts` |
 | Archive extraction, zip-slip and cap enforcement | `.../import/archive/{extract,unpack,repairEntryNames,systemExtract}.ts` |
 | Recognition + the 71 parsers | `.../import/datasources/` (`registry.ts`, `index.ts`, one file per source) |
+| Staging writer, within-run dedupe, drop **and keep** ledgers | `.../import/staging/{StagedWriter,identity,contentDigest}.ts` |
 | Staging writer, within-run dedupe, drop ledger | `.../import/staging/{StagedWriter,identity,contentDigest}.ts` |
+| **Per-stage telemetry**: the closed drop vocabulary, the `consumed = produced + dropped` summary, the failure context | `.../import/telemetry/{dropReasons,stageSummary,stageError}.ts` |
 | **Routing**: one staged row → which destinations | `.../import/push/canonical.ts` (`destinationsFor`) |
 | **Mapping**: canonical record → each destination's DTO | `.../import/push/inputs.ts` (`toXInput`) |
+| **Commerce vocabulary**: which metadata key means what, and every spelling a reader tolerates | `.../import/push/commerceKeys.ts` |
+| Receipt discovery in mail archives (`isLikelyReceipt`, field extraction) | `.../import/datasources/receipt_detect.ts` |
 | Graph entities + the "is this actually a name" guard | `.../import/push/entities.ts`, `.../graph/utils/participantSanity.ts` |
 | Owner/self resolution (message direction) | `.../import/push/self.ts` |
 | Inbox scan/claim | `.../import/services/ImportInboxService.ts` |
@@ -125,9 +144,18 @@ way round.
 | Stage | Weight | Does | Loses, if anything, at |
 |---|---|---|---|
 | `unpack` | 20 | Acquires the source **by rename**, expands through the guarded extractor (zip-slip, entry/byte caps), recursively expands nested archives, flattens the `Takeout/` wrapper, strips symlinks | `detail.rejected[]`, `detail.extractionLoss`, `detail.symlinksRemoved` |
-| `parse` | 35 | Recognises data sources under the tree, then runs one parser per match into `StagedWriter` | `detail.failures[]` (a parser that threw), `detail.sources[N].drops` (records a parser deliberately discarded), `detail.sources[N].itemsDeduped` |
+| `parse` | 35 | Recognises data sources under the tree, then runs one parser per match into `StagedWriter` | `detail.failures[]` (a parser that threw), `detail.sources[N].drops` (records a parser deliberately discarded), `detail.sources[N].itemsDeduped`. Its opposite, `detail.sources[N].keeps`, counts records a gate would have discarded and the parser rescued — deliberately NOT folded into `drops` |
 | `media` | 30 | Uploads every staged row's bytes to the object store and stamps `metadata.FileId` | `detail.failed`; a row whose bytes could not be read gets `metadata.FileMediaError` and is skipped by the resume query |
 | `push` | 15 | Fans each staged row through `destinationsFor` into the in-process `ci.*` services | `staged_items.push_status='failed'` + `.push_error`; `detail.entities.unresolved` |
+
+Those per-stage keys are the originals and still mean what they meant. **Every
+stage now also writes a structured `detail.summary`** (`SUMMARY_KEY`,
+`telemetry/stageSummary.ts`) that answers the same questions uniformly —
+`consumed` / `produced` / `dropped`, a `drops` slug ledger, the same drops folded
+into the closed `dropsByReason` vocabulary, the `gaps` subset, and per-unit rows
+(a parse's units are data sources, an unpack's are archives, and a push's are
+data sources too — `unitKind: 'data_source'`, plus one synthetic `(entities)`
+unit — **not** the `ci.*` tables it wrote into). See [§6.2](#62-what-did-it-drop--the-single-most-useful-query-here).
 
 Weights are wall-clock proportions from real imports, not equal quarters
 (`IMPORT_STAGE_WEIGHTS` in `constants.ts`). `media` is weighted 30 because on a
@@ -302,8 +330,25 @@ Every staged row becomes a `CanonicalRecord` (`toCanonical` in
 2. **`toXInput(rec)`** in `push/inputs.ts` — *what shape* each destination gets.
 
 `PushStage` groups a 500-row batch by destination and calls the in-process
-service once per destination per batch (`DESTINATION_ORDER` fixes the order so a
-row's `content` row still lands before its `events` row).
+service once per destination per batch. `DESTINATION_ORDER` fixes that order and
+it is **load-bearing**, in the opposite direction an earlier revision of this
+document claimed:
+
+```ts
+// PushStage.ts
+export const DESTINATION_ORDER: readonly Destination[] = [
+  'communications', 'events', 'content', 'inventory', 'browser_activity', 'position',
+];
+```
+
+**Events before content.** `ContentService.createManyDetailed` resolves
+`ci.content.event_id` from the provenance triple (`resolveEventIdsByTriple`) *at
+INSERT time*, so writing content first asks for an event row that does not exist
+yet and leaves the column NULL — and `findMediaFilesByEventIds`, the query behind
+every gallery, list and drawer thumbnail, filters on `content.event_id`. Measured
+on a 1,393,402-record corpus imported with content ahead of events: **0 of
+41,851** content rows carried an `event_id`, while 2,916 shared a triple with an
+event and should have. Fixed in commit `a02540179`.
 
 ### 2.2 The routing table, as the code has it today
 
@@ -313,10 +358,13 @@ row's `content` row still lands before its `events` row).
 
 | Condition | Destinations |
 |---|---|
+| any record whose `identifiers` include a **globally-unique** one (ISBN/ASIN/GTIN/IMEI/VIN) | `product_models`, **prepended** to whatever the kind gives it |
 | `isRedditPost` / `isRedditComment` | `communications`, plus `content` when `redditMediaUrl` finds media |
-| `commerce.purchase` with `metadata.Subscription === true` | **nothing** (a subscription fee is a service, not a thing) |
-| `commerce.purchase` otherwise | `content` if `isDigitalGood`, else `inventory` |
-| any other `commerce.*` | `events` |
+| `commerce.purchase` with `metadata.Subscription === true` | `receipts` (a subscription fee is a service, so no `inventory`/`content` row — but it is a real purchase and the money must be visible) |
+| `commerce.purchase` otherwise | `receipts` + (`content` if `isDigitalGood`, else `inventory`), plus `observations` when a physical good carries a globally-unique identifier |
+| …any `commerce.purchase` carrying `metadata.ReceiptRollupId` | the `receipts` half is dropped — the per-order aggregate already itemises this line (`amazon.ts` stamps the marker) |
+| `commerce.receipt` (a detected order-confirmation email) | `receipts`, plus `communications` when `metadata.HumanCorrespondence === true` |
+| any other `commerce.*` | `events`, plus `receipts` when the record carries `metadata.LineItems` |
 | `communication.*` | `communications`, plus `position` if geotagged |
 | `web.bookmark` | `content` |
 | `web.page_view`, `web.search` | `browser_activity`, plus `position` if geotagged |
@@ -324,14 +372,16 @@ row's `content` row still lands before its `events` row).
 | `media.play` / `.watch` / `.listen` / `.read` | `events` + `content` |
 | `media.saved` | `content` (a library artifact has no occurrence) |
 | `note`, `reading.annotation` | `content` |
-| `social.*` | `events` + `content`, plus `position` if geotagged |
+| **`contact.card`** | **nothing** (the parser already emits the card as a `Person` on the entity lane, and being undated it is not an occurrence either) |
+| `social.*` where `isSocialAffiliation` matches | `events` alone, plus `position` if geotagged |
+| any other `social.*` | `events` + `content`, plus `position` if geotagged |
 | `travel.trip` | `events` |
 | `location.fix` | `events` + `position` when `eventType === 'place'`; otherwise `position` **alone** |
 | **undated** `capture.*` or `import.archive_item` | `content` alone |
 | dated `capture.*` | `events` + `content`, plus `position` if geotagged |
 | anything else | `events` |
 
-Two of those branches are scar tissue worth internalising, because they are the
+Three of those branches are scar tissue worth internalising, because they are the
 shape of every future routing bug:
 
 - **`location.fix` without `eventType='place'` leaves `events` entirely.**
@@ -342,10 +392,149 @@ shape of every future routing bug:
   `['events']` never creates that row, so the join finds nothing. Measured on a
   real import: 2,098 photo/video events, **0** with a linked content row — every
   gallery tile blank.
+- **A row with no body does not get a `content` row.** Affiliation-shaped
+  `social.*` — a LinkedIn connection, a moderated subreddit — keeps its `events`
+  home and skips `content` (`336a71951`, PR #2152), and `contact.card` routes
+  **nowhere at all** (`01cd5e776`); both 2026-08-19. `ci.content` has no title
+  column, so a row with a NULL `text` and a NULL `url` renders as nothing in
+  every Content view. Measured on a fresh full-corpus import carrying every fix
+  merged that day: **4,870** `ci.content` rows typed `'file'` from `vcard`,
+  **2,085** of them with neither text nor url — a "file" pointing at no file.
+  The facts are not lost either way: the connection is a `ci.entities` Person
+  carrying the profile URL plus a dated social event, the subreddit is an event
+  titled `r/<sub>`, and the contact card was already emitted as a `Person` on the
+  entity lane by `vcard.ts` / `contactlist.ts` / `applecontacts.ts`.
 
-The lesson generalises: **`destinationsFor` returning too few destinations is
-invisible.** Nothing errors. You get an empty gallery, an empty map, or a
-missing search hit, weeks later.
+The lesson generalises in both directions. **`destinationsFor` returning too few
+destinations is invisible**: nothing errors, and you get an empty gallery, an
+empty map, or a missing search hit, weeks later. **Returning too many is equally
+invisible**, and produces body-less rows that occupy a view and say nothing. Ask
+of each destination "what does this row *render* as there?" — and note that a
+routed-nowhere row is now recorded rather than hidden: `PushStage` marks it
+skipped with `NO_DESTINATION_REASON` and the stage summary counts it under the
+`no_destination` drop reason, which is classified a **gap**, not an expected
+outcome.
+
+**A purchase ALWAYS produces a receipt**, and that is the third scar. The
+receipt is what carries the merchant, the money and the moment; an
+`ci.objects` row alone cannot answer "where did I buy this?" and has no
+timeline presence at all. Before the commerce plane, a subscription fee routed
+NOWHERE and its spend was invisible.
+
+### 2.2.1 The commerce plane, and the order it is written in
+
+Three destinations, three questions, three tables:
+
+| Destination | Table | Answers | Written by |
+|---|---|---|---|
+| `product_models` | `ci.product_models` | WHAT the thing is, independent of this purchase | `ProductModelService.createManyDetailed` + `ObjectIdentifierService.upsertForSubjects` |
+| `receipts` | `ci.receipts` + `ci.receipt_line_items` | WHEN and WHERE money changed hands, and for WHAT | `ReceiptService.upsertFromExtraction` |
+| `observations` | `ci.object_observations` | THAT an identified object was somewhere at some moment | `ObjectObservationService.createMany` |
+
+Four things about this that are easy to get wrong:
+
+- **`product_models` is written FIRST** (`DESTINATION_ORDER`, and
+  `destinationsFor` prepends it so the two agree).
+  `ReceiptService.upsertFromExtraction` resolves each line's product by looking
+  up its identifier claim and only falls back to find-or-create by brand+model
+  when nothing resolves. Written second, an ISBN the same batch is about to
+  catalogue mints a *second*, guessed product row — and
+  `ci.object_identifiers` is **first-writer-wins**, so the guess keeps the
+  barcode forever.
+- **The catalogue row is keyed on the IDENTITY, not on the record.** Its
+  provenance triple is `(ci-import-tools, object_identity, '<namespace>:<value>')`,
+  so the same ISBN arriving from Goodreads and from an Amazon order is ONE row.
+  The parser that minted it is in `metadata.mintedFrom`.
+- **The receipt extraction sets `skipMint: true`.** The importer already owns
+  the `ci.objects` row for a purchase (`toInventoryInput`); letting
+  `ObjectMintService` create a unit from the same line is a duplicate
+  possession with no way to tell which is real.
+- **Money is integer MINOR units** on `ci.receipts` / `ci.receipt_line_items`.
+  The parsers speak major units, so `toReceiptInput` converts through the
+  currency's own exponent (`minorUnitExponent`) — dividing yen by 100 turns
+  ¥1,200 into ¥12.
+
+`line_number` is 1-based and **stable**: `(receipt_id, line_number)` is the
+natural key `replaceLineItems` upserts on, and it folds within-batch repeats
+last-write-wins — so two lines sharing a number does not fail, it silently
+DELETES one.
+
+**A negative amount is refused, not written.** The canonical TOTAL chain reaches
+`Amount` / `Net` / `Gross` / `Total Owed`, which are SIGNED ledger columns:
+PayPal books a refund as a negative `Amount`, and `amazon.ts` writes `Total`
+verbatim from a CSV that does the same. Neither `ci.receipts.total_minor` nor
+`ci.receipt_line_items.total_price_minor` has a CHECK, so `-19.99` landed
+silently as `-1999` and every "what did I spend" read summed a credit as a cost.
+`toCostMinorUnits` refuses it — on the line's unit price and total, and on the
+receipt's total, subtotal and tax — and a refused receipt total does **not** fall
+back to the sum of the lines, which would report whatever positive line survived
+the same guard. It is refused rather than *modelled* because `ci.receipts` has no
+status column to say "this is a credit" with: the lifecycle it carries
+(`extraction_state`) is about the READ of the document, not about the purchase.
+Modelling refunds honestly needs that column and a migration. The amount is not
+dropped on the floor — it stays on the row as `metadata.NegativeTotalRefused`.
+
+**WHERE the purchase happened** is `ci.receipts.place_entity_id`, the `place_prior`
+rung `ObjectResolutionService` leans on and the only thing that puts an imported
+purchase on a map. It was populated by no import path at all. `PushStage.receiptPlacesFor`
+resolves it two ways, in order: a staged edge naming a place entity (relations
+`place`/`location`/`venue`/`address`, read back through `ci_import.entity_mappings`
+— the same join a message's from/to uses), then the record's own `locationName`
+(the allow-listed `Location`/`Place`/`Venue`/`Address` metadata keys), ingested
+through `GraphIngestService` under the SAME natural key a staged `place` entity
+takes (`place:<lowercased name>`), so the two can never become two nodes for one
+location. **Today this rarely fires**: no commerce parser states an address yet,
+so the honest reading is that the wiring is in place and waiting on a source that
+does. `merchant_entity_id` is still null by choice — resolving every merchant
+string into a graph Organization is a node-volume decision that belongs with the
+merchant-resolution work, and `merchant_name` already carries the name as printed.
+
+**A rollup marker is computed in a PRE-PASS, never patched on after the push.**
+`amazon.ts` emits one item per order LINE and one aggregate per ORDER, and each
+line carries `metadata.ReceiptRollupId` naming its aggregate so `destinationsFor`
+suppresses the line's own single-line receipt. The aggregate can only be built
+after the last file (an order id legitimately spans two CSVs), so the marker used
+to be written onto the line items afterwards — safe, the reasoning went, because
+`StagedWriter` buffers the graph by reference. It buffers by reference AND
+splices the batch out at `DEFAULT_FLUSH_THRESHOLD`, then reads `item.metadata`
+inside the write, many awaits later. On a 10-file × 100-line export that left
+half the lines marker-less and duplicated their orders. **Anything that is part
+of a record's identity must be set before `pipeline.push`.**
+
+### 2.2.2 Receipt discovery in the mail importers
+
+`gmail.ts` runs `isLikelyReceipt` **before** its bulk gate and overrides it,
+because `isHumanCorrespondence` rejects Category Promotions/Updates,
+`List-Unsubscribe` and `no-reply@` senders — a precise description of how a
+merchant sends a receipt.
+
+- Flagged by `CI_IMPORT_RECEIPTS` (default **on**; `0`/`false`/`no`/`off` turns
+  it off and restores the old behaviour exactly).
+- The override is only as safe as its false-positive rate, so the weak paths
+  (a marketing-shaped subject, a shop-shaped sender) require **body evidence** —
+  a currency amount AND a receipt structure word. Only an unambiguous subject
+  ("Your receipt from …", "Invoice #4417") skips the body.
+- A rescued message is counted in the **keep** ledger
+  (`detail.sources[N].keeps.receipt_kept_from_bulk`), never in `drops`. The drop
+  ledger is the run's loss report; counting a save there reports it as a loss.
+- HTML-only bodies are flattened by `email_mime.htmlToText` before the body
+  signal reads them, and the body cap rises from 4k to 32k for a receipt (an
+  itemised order confirmation IS its body).
+- The message ID is **not** affected by that flattening. A message with no
+  `Message-ID` falls back to a sha1 of its headers plus its body, and that hash
+  is taken over the body as `parseMime` returns it — raw markup for an HTML-only
+  message — precisely because it predates `readableBody`. Hashing the flattened
+  text would give every such message a new id and fork it from the row a
+  previous import already staged, with no migration behind it. **An id must
+  outlive a change to how a body is READ.**
+- A non-media attachment on a receipt is stamped `receipt_document` instead of
+  `file` on the staged `metadata.MediaAttachments` descriptor (`gmail.ts`,
+  `email.ts`, and `canonical.communicationMediaAttachments` passes the value
+  through). **Nothing consumes it yet.**
+  `communicationMediaAttachments` has no callers anywhere in the repo — that is
+  pre-existing, not something this work removed — so no `ci.content` row is
+  catalogued from it today and no attachment is currently filed as a receipt
+  document. The descriptor is written and correct; the reader is missing.
 
 ### 2.3 The provenance triple
 
@@ -353,10 +542,15 @@ Every input carries `(source_type, source_system, source_id)`:
 
 - `source_type` is the constant `SOURCE_TYPE = 'ci-import-tools'`
   (`push/canonical.ts`). Deliberately unchanged from the retired standalone
-  importer — a row this appliance imports must carry the same value the old one
-  wrote historically, or every previously-imported record duplicates on the first
-  re-import.
-- `source_system` is the parser's name (`staged_items.data_source`).
+  importer (the repo is now `ZARCHIVED-CI-Import-Tools`) — a row this appliance
+  imports must carry the same value the old one wrote historically, or every
+  previously-imported record duplicates on the first re-import. **Distinguish the
+  retired repo from this still-live constant:** renaming the repo does not rename
+  the value, and nothing should.
+- `source_system` is the parser's name (`staged_items.data_source`) — the
+  *registered* name, which for three importers is not the filename:
+  `applecontacts.ts` → `apple_contacts`, `contactlist.ts` → `contact_list`,
+  `googlevoice.ts` → `google_voice`.
 - `source_id` is **`staged_items.content_hash`**, *not* `staged_items.id`. The
   staging id is a fresh uuid per run; using it would make an identical re-import
   a brand new record instead of the no-op the triple exists to produce.
@@ -381,7 +575,7 @@ appliance the unfiltered query returns one
 | `ci.communications` | `communications_source_triple_uniq` | yes |
 | `ci.content` | `content_source_triple_uniq` | yes |
 | `ci.events` | `events_source_triple_uniq` | yes |
-| `ci.inventory` | `inventory_source_triple_uniq` | yes |
+| `ci.objects` | `objects_source_triple_uniq` | yes |
 | `ci.object_observations` | `object_observations_source_triple_uniq` | yes |
 | `ci.product_models` | `product_models_source_triple_uniq` | yes |
 | `ci.receipts` | `receipts_source_triple_uniq` | yes |
@@ -403,7 +597,8 @@ already at that instant. Consequences, all verified in
 - The triple *is* persisted (`toPositionInput` spreads `sourceTriple(rec)`;
   `PositionEntity.sourceType/sourceSystem/sourceId` exist), so the two comments
   in `PushStage.ts` (the batch path and the single-row path) saying "positions
-  carry no provenance triple" are **out of date** — still, as of `93fc6d8a9`.
+  carry no provenance triple" are **out of date** — still, as of `ead9fb425`
+  (lines 1726-1727 and 1824-1825).
   The operative fact — no upsert-by-triple, no per-row upsert report — is
   unchanged.
 
@@ -429,13 +624,17 @@ An **empty list means `DO NOTHING`** — find-or-return. The existing row is lef
 exactly as it is.
 
 The five keys map onto the destinations as: `communication` → `ci.communications`,
-`event` → `ci.events`, `item` → `ci.inventory` (the `ItemEntity` table),
+`event` → `ci.events`, `item` → `ci.objects` (the `ItemEntity` table),
 `content` → `ci.content`, `browser_activity` → `ci.browser_activity`. So:
 
-**for `ci.events`, `ci.inventory`, `ci.content` and `ci.browser_activity`, a
+**for `ci.events`, `ci.objects`, `ci.content` and `ci.browser_activity`, a
 re-import repairs nothing** — four of the five kinds in that list.
 `ci.communications` self-heals only those five named columns. `ci.position` is
-not in the list at all and does not self-heal (§2.3). This has bitten several
+not in the list at all and does not self-heal (§2.3), and neither is
+`ci.product_models` — but `ci.receipts` is the exception that does: its header
+is a PATCH of the fields an extraction actually supplied
+(`ReceiptService.upsertHeader`), and its lines re-upsert on
+`(receipt_id, line_number)`, so a re-import genuinely corrects them. This has bitten several
 fixes in a row, in both directions:
 
 1. **A code fix alone does not fix the corpus.** "Fixed forward" means *new*
@@ -484,16 +683,23 @@ value that is provably not a place keeps landing in them, and a fake name is
 strictly worse than no name: a NULL name is what makes a row a reverse-geocode
 candidate, so a fake one guarantees the row is never offered a real one.
 
-Three separate variants, three separate fixes, all in August 2026:
+Four separate variants, four separate fixes, all in August 2026:
 
 | Variant | Evidence | Fix |
 |---|---|---|
 | A meeting-join URL (`https://…zoom.us/j/…`, `altspace://…`) in `events.location_name` | 79 calendar rows | `isUriLocation` (`domains/geocode/util/virtualLocations.ts`), gated in `toEventInput` **and** the Google/Outlook calendar transform services; migration `20260818215813` nulls 78 of them (the 79th pairs a Zoom link with a real room designation and is deliberately excluded). Commit `b53f8d52f`, PR #2078 |
 | A bare coordinate pair, then a **labelled** one (`Location 33.51469, -117.72169`) | three registered datasources minted the labelled form | `isCoordinateText` widened to tolerate one generic geo noun; `google_location.ts` / `kmlgx.ts` / `nmea.ts` stopped minting the pseudo-name at all; migrations `20260818212254` then `20260818235752`. Commit `3099044e6`, PR #2087 |
 | A media filename (`IMG_0139.JPG`, `A20CEAAC-…_3.mov`) | **2,085 rows** on a real appliance | `isMediaFilename` (media extension, or a bare UUID stem with Apple's `_N` burst suffix). Same PR |
+| The record's **title** — a clipped tweet body, an Uber ride narration | **44 of 203** named positions, and 7 of 118 `Location` entities | `isTitleText`: a trailing clip ellipsis (U+2026 is `clip`'s truncation mark, so the value is a *prefix* of longer text), a `!` or `?` (a name neither exclaims nor asks), or more than `MAX_PLACE_NAME_WORDS = 14` words. Commit `5e1de45b5` |
 
-The three are now one rule, `isNotAPlaceName(value)` in `push/inputs.ts`:
-`isCoordinateText(value) || isUriLocation(value) || isMediaFilename(value)`.
+The four are now one rule, `isNotAPlaceName(value)` in `push/inputs.ts`:
+`isCoordinateText(value) || isUriLocation(value) || isMediaFilename(value) || isTitleText(value)`.
+It has **three** SQL mirrors that must stay in step — `NOT_A_PLACE_NAME_SQL` in
+`pipeline/stages/promote/PositionPlacePromoteStage.ts`, the
+`position-not-a-place-name` doctor check, and the backfill migration. Adding the
+title arm to the guard and not to the check left the check reporting a clean bill
+of health for exactly the class the arm exists to reject; commit `44b43d750`
+closed that gap. Widen a predicate, widen all three mirrors in the same commit.
 
 **Why it recurs:** the name slot is filled by a fallback chain, and the fallbacks
 are individually reasonable. `titleFor` gives a `capture.*` item its filename as
@@ -642,7 +848,7 @@ that no longer exists:
 | `MAX_UNITS` | 500 | units a scan will report | `truncated: true` on the scan |
 | `MAX_UNIT_SIZING_ENTRIES` | 50,000 | **per-unit sizing** (`aggregate`) | `sizeApproximate` on that unit |
 | `FILE_PROBE_DEPTH` / `PROBE_ENTRY_BUDGET` | 4 / 5,000 | the has-any-file probe that hides empty drop folders | that folder is not offered; nothing is flagged |
-| `SCAN_RECOGNITION_TIMING` | 10,000 ms total, 3,000 ms per call | recognition, the scan's only unbounded cost | `truncated: true`; the cache resumes next scan |
+| `SCAN_RECOGNITION_TIMING` | 10,000 ms total, 3,000 ms per call | recognition, the scan's only unbounded cost | `recognitionPartial: true` — **never** `truncated`; a timed-out recognition is never cached, so the next scan retries it |
 | `MAX_INBOX_BATCH_UNITS` | 100 | units one batch may start | the request is **rejected**, not truncated |
 
 `SCAN_RECOGNITION_TIMING` exists because many recognizers read files
@@ -652,6 +858,14 @@ the process pending. `SCAN_RECOGNITION_CACHE` carries two TTLs for the same
 reason: a positive directory verdict only gets stronger as more of the archive
 lands (10 min), but an *empty* verdict cached mid-copy must age out fast (60 s),
 because a directory's mtime does not move when files land deep inside it.
+
+The two flags are **not** interchangeable, and the CLI reports them separately
+(`cli/commands/inbox.ts`). `truncated` means UNITS are missing — only the walk
+ceilings set it. `recognitionPartial` means only CHIPS are missing: every unit is
+listed and importable, some just carry fewer (or no) recognitions than a rescan
+would show. That is the milder failure but not a harmless one, because a unit
+listed with **no** parsers matches no `--only <source>` and the run then reports
+success over a smaller corpus than was asked for (§5.4).
 
 **What to do:** when a budget is exhausted, degrade the *thing being measured*,
 never the enumeration. And make the degradation visible on the item, not as a
@@ -875,6 +1089,7 @@ in `config/default.json`:
 | Variable | Default | What |
 |---|---|---|
 | `CI_IMPORT_INBOX_DIR` | `/var/lib/ci-import/inbox` | The **root** of the inbox. `ImportInboxService` scans only `<root>/<user>/` — see §5.3. Importer-owned; readable without any root configured |
+| `CI_IMPORT_INBOX_HOST_DIR` | *(empty)* | Where `CI_IMPORT_INBOX_DIR` lives **on the host** when the API is a container and the inbox is a bind mount. The scan returns it re-rooted per user as `displayDir`, which the import page and `ci-import inbox` show instead of the in-container `inboxDir`. A label only — never resolved, never handed to the resolvers. Empty on bare metal |
 | `CI_IMPORT_UPLOADS_DIR` | `/var/lib/ci-import/uploads` | Where `POST /import/uploads` lands multipart bytes |
 | `CI_IMPORT_SCRATCH_DIR` | `/var/tmp/ci-import` | Per-run working tree. **Not `/tmp`** — `/tmp` is tmpfs on a stock appliance, so a large export would consume RAM until the machine died |
 | `CI_IMPORT_ROOTS` | `[]` | Host paths an API caller may name. **Parsed as JSON** (`"__format": "json"`), so it must be a JSON array literal: `CI_IMPORT_ROOTS=["/path/one","/path/two"]`. A bare path silently yields nothing |
@@ -985,11 +1200,11 @@ yarn workspace @ci/be-api ci-import <command>
 | `datasources [--catalog]` | The 71 registered importers, or the authored services list |
 | `recognize <path>` | Asks every parser what it makes of a path, importing nothing. Confined to `CI_IMPORT_ROOTS` + the caller's inbox subtree |
 | `import <path…> [--stages] [--wait]` | Uploads archives and runs `unpack → parse → media → push` |
-| `inbox [--start] [--only] [--skip] [--units]` | Scans the caller's inbox subtree; `--start` imports it, smallest unit first |
+| `inbox [--start] [--only] [--skip] [--units]` | Scans the caller's inbox subtree; `--start` imports it, smallest unit first. `~3.0GB` / `49788+` mark a size the walk stopped measuring, and a unit listed with **no parsers** ran out of recognition budget — it will not match `--only` |
 | `runs [runId] [--wait]` | Runs and their stage bars |
 | `push [--run <id>] [--dry-run]` | Appends a `push` stage to every run whose rows are staged and uncommitted |
 | `stats` | `ci.*` row counts, search-index coverage, queue depth, run rollup |
-| **`doctor [--list] [--check <id>] [--failures-only] [--timeout <ms>] [--json]`** | **The nineteen data-quality checks over what the import actually wrote. See [§6](#6-what-to-measure--ci-import-doctor)** |
+| **`doctor [--list] [--check <id>] [--failures-only] [--timeout <ms>] [--json]`** | **The twenty-one data-quality checks over what the import actually wrote. See [§6](#6-what-to-measure--ci-import-doctor)** |
 | `backfill [stages…] [--list]` | The post-import enrichment chain via `POST /api/maintenance/orchestrate` (NDJSON-streamed, because a `search_index` backfill outlives undici's 300s headers timeout) |
 
 Exit codes: **0** success, **2** a failure you can fix (bad path, missing key,
@@ -1042,10 +1257,12 @@ select n.nspname, t.typname from pg_type t
 
 **Start here. Do not hand-type a baseline.**
 [#2105](https://github.com/companionintelligence/CI-Server/pull/2105) shipped the
-audit that used to live in a scratch `psql` buffer as a nineteen-check suite. Each
-check is a regression detector for a defect that really shipped (the ones in §3,
-mostly), and each one **mirrors** the guard or migration it is watching, so the
-two are maintained together.
+audit that used to live in a scratch `psql` buffer as a nineteen-check suite; the
+registry holds **21** today. Each check is a regression detector for a defect
+that really shipped (the ones in §3, mostly), and where a live predicate exists
+the check **mirrors** it, so the two are maintained together. `ci-import doctor
+--list` is the authoritative count — do not trust the number in this file, or in
+any other, over the registry.
 
 ```bash
 yarn workspace @ci/be-api ci-import doctor                 # the table
@@ -1082,12 +1299,19 @@ gate.
 **Severity** is not annoyance, it is actionability: `high` means "provably wrong,
 with a known fix", `medium` means "look, but it may be legitimate" —
 future-dated events are the canonical `medium`, because a calendar is a list of
-things that have not happened yet.
+things that have not happened yet. A check is also `medium` when its floor is not
+zero on *correct* data: `comms-missing-thread-id` was downgraded from `high` in
+commit `75ecc6c7a` because Apple's own `chat.db` holds genuinely unthreadable
+messages (37,181 of 432,173 on the reference corpus), and a `high` check that can
+never read zero would fail the gate forever.
 
 **`--json`** is `DoctorReport` (`doctor/ImportDoctorService.ts`), and stdout stays
 a single parseable document even when the gate trips — the gate message goes to
 stderr. Shape below, with the totals and the one finding filled in from the
-2026-08-19 measurement in [§6.0.1](#601-what-the-checks-cover):
+2026-08-19 measurement in [§6.0.1](#601-what-the-checks-cover). Read the numbers
+as that reading, not as a target: the registry held nineteen checks when it was
+taken and holds 21 now, and `comms-missing-thread-id` — one of the four
+`highFindings` below — has since been downgraded to `medium`.
 
 ```jsonc
 {
@@ -1096,7 +1320,7 @@ stderr. Shape below, with the totals and the one finding filled in from the
   "durationMs": 631,                 // whole suite; 631 ms is the figure checks.ts measured
   "statementTimeoutMs": 15000,       // the cap in force, so a TIMEOUT is interpretable
   "totals": { "checks": 19, "clean": 11, "found": 8, "timeout": 0, "error": 0,
-              "highFindings": 4, "highUnresolved": 0 },
+              "highFindings": 4, "highUnresolved": 0 },   // the 2026-08-19 reading; 21 checks today
   "findings": [{
     "id": "capture-events-without-content",
     "severity": "high",
@@ -1126,33 +1350,38 @@ second call.
 would otherwise mean "no timeout at all" to Postgres, which is the opposite of
 what anyone types it for. The service pins one `QueryRunner` for the whole suite
 (because `statement_timeout` is a session setting) and runs the checks
-**sequentially** — nineteen concurrent sequential scans over the same few large
+**sequentially** — twenty-one concurrent sequential scans over the same few large
 tables would contend for the same buffers and finish later. One slow check
 therefore costs one check, not the audit.
 
 ### 6.0.1 What the checks cover
 
-Nineteen, in pipeline order — communications, then the people and places pulled
+Twenty-one, in pipeline order — communications, then the people and places pulled
 out of them, then events and content, then the enrichment control plane, then the
-search index. Run against the live appliance mid-import on 2026-08-19 (15,456
-communications, 123,194 events, 41,440 content, 2,006 inventory, 2,952
-browser_activity, 3,284 `Person` entities), twelve of thirteen sources pushed:
+search index. The counts below are from the live appliance mid-import on
+2026-08-19 (15,456 communications, 123,194 events, 41,440 content, 2,006
+inventory, 2,952 browser_activity, 3,284 `Person` entities), twelve of thirteen
+sources pushed. **`sev` and `mirrors` are read off `doctor/checks.ts` at
+`ead9fb425`; the counts are the older measurement**, so the last two checks — both
+added later the same day — have no numbers here.
 
 | check | sev | mirrors | mid-import | complete + enriched |
 |---|---|---|---:|---:|
-| `comms-missing-thread-id` | high | `20260819000746` backfill | 19 | 19 |
-| `comms-missing-participants` | high | `20260819000959` backfill | 5,396 | 406 |
-| `comms-placeholder-content` | high | `20260819000154` backfill | 0 | 0 |
-| `position-not-a-place-name` | high | `push/inputs.ts isNotAPlaceName` | 0 | 0 |
-| `person-name-garbage` | high | `20260819002002` backfill | 0 | 0 |
-| `person-bare-phone-name` | medium | `20260818220833` merge candidates | 0 | 3,250 |
+| `comms-missing-thread-id` | medium | `push/inputs.ts toCommunicationInput` | 19 | 19 |
+| `comms-missing-participants` | high | — | 5,396 | 406 |
+| `comms-placeholder-content` | high | `push/canonical.ts isAttachmentPlaceholderOnly` | 0 | 0 |
+| `position-not-a-place-name` | high | `push/inputs.ts isNotAPlaceName` (+ geocode `isUriLocation`) | 0 | 0 |
+| `person-name-garbage` | high | — | 0 | 0 |
+| `person-bare-phone-name` | medium | — | 0 | 3,250 |
+| **`contact-cards-typed-as-concept`** | **high** | — | — | — |
 | `person-duplicate-names` | medium | — | 768 | 2,595 |
-| `events-location-without-name` | medium | `20260818215813` (its exclusion) | 0 | 0 |
-| `capture-events-without-content` | high | `20260818174213` backfill | 182 | 182 |
-| `content-media-mimetype-mismatch` | medium | `20260818224249` backfill | 14 | 14 |
+| `events-location-without-name` | medium | `geocode/util/virtualLocations.ts isUriLocation` (the exclusion) | 0 | 0 |
+| `capture-events-without-content` | high | `push/canonical.ts destinationsFor` | 182 | 182 |
+| **`blank-social-affiliation-content`** | **high** | `push/canonical.ts isSocialAffiliation` | — | — |
+| `content-media-mimetype-mismatch` | medium | — | 14 | 14 |
 | `events-dated-before-1990` | high | — | 0 | 0 |
 | `events-dated-in-future` | medium | — | 3 | 3 |
-| `events-timestamped-at-import` | high | `time_source` vocabulary | 0 | 0 |
+| `events-timestamped-at-import` | high | `20260809184710_clean_stage_support.sql` (`time_source` vocabulary) | 0 | 0 |
 | `pipeline-overdue-retries` | high | — | 801 | 806 |
 | `pipeline-quarantined` | high | — | 0 | 0 |
 | `pipeline-dead-letters` | high | — | 0 | 1 |
@@ -1160,7 +1389,28 @@ browser_activity, 3,284 `Person` entities), twelve of thirteen sources pushed:
 | `events-missing-search-vector` | medium | — | 53,145 | 0 |
 | `communications-missing-search-vector` | medium | — | 0 | 1 |
 
-The second column is the same nineteen checks on the FINISHED run (1,393,402
+Only one of the two additions watches a §2.2 routing branch:
+`blank-social-affiliation-content` mirrors `isSocialAffiliation` in
+`push/canonical.ts` and catches a `ci.content` row for a connection or a
+subreddit membership, which has no text and no url and therefore renders as
+nothing. The other, `contact-cards-typed-as-concept`, is about entity **typing**,
+not routing: it scopes to `ci.entities`, selects contact-shaped rows sitting at
+`entity_type = 'Concept'` (`resolveEntityType` → `hasContactIdentity` →
+`entityTypeFor` → `DEFAULT_ENTITY_TYPE`), and has `mirrors: null` because the fix
+was made in the parsers (`f24110960`), not in a guard. It is deliberately
+shape-scoped rather than source-scoped, so it fires on the *next* importer that
+types the ITEM and not the ENTITY beside it.
+
+**`mirrors` moved off the migrations** in commit `75ecc6c7a` — to the guard where
+one exists, to `null` where none does (five of the ten values it touched became
+`null`). The backfills those checks used to name still exist, but they are
+one-time corrections that a future migration squash will delete; the guard is
+what stays, so that is what the check is now kept in lockstep with. `null` means
+no twin exists — which is the majority: six of the 21 checks name a guard, one
+(`events-timestamped-at-import`) still names a migration, and the remaining
+fourteen watch a shape or a control plane with nothing to stay in step with.
+
+The second column is the same checks on the FINISHED run (1,393,402
 records: 325,145 communications, 325,849 browser_activity, 127,700 events,
 63,044 position, 507,495 entities) after the enrichment chain ran. Read the two
 together — §6.0.2 is why.
@@ -1176,6 +1426,20 @@ mirror a guard that is actively refusing bad values on the write path (§3); the
 last two assert a date range no export legitimately produces. Any of the five
 going non-zero means something stopped holding, and that is a defect, not a
 backlog.
+
+`pipeline-orphan-shards` **was narrowed after this measurement, and the `10` in
+the second column is why**. Every one of those rows — and all twelve on the
+appliance the next day — sat under a run the control tick had finalised with
+`finalizedReason: 'not_due'`, which is the state `PipelineControlService` creates
+*on purpose*: a leg that still has candidates but is not due keeps its shard
+rather than being marked `done`, because saying `done` about it would put a
+falsehood in the run progress view. The check now excludes those runs. A shard is
+a run-scoped lease marker with a NULL cursor — the work itself lives in
+`ci.pipeline_state` and THE ONE RULE re-derives the remainder every tick — so a
+non-zero count here has never meant lost data, and the check no longer says it
+does. What it means now is that a run stamped `drained` or `cancelled` while one
+of its own legs never reported: a contradiction inside the run's own bookkeeping,
+worth reading `ci.pipeline_runs.detail` over, not worth re-running a stage for.
 
 Three rules the registry enforces on itself, worth knowing before you add a check
 (`doctor/checks.ts`, `doctor/__tests__/checks.test.ts`):
@@ -1292,6 +1556,71 @@ poll while an import runs and the one to curl when an import looks wrong.
 
 ### 6.2 What did it drop? — the single most useful query here
 
+**Ask `detail->'summary'` first.** Every stage writes one
+(`telemetry/stageSummary.ts`, `STAGE_SUMMARY_VERSION = 1`, under the reserved key
+`summary`), and it is the only place that answers the question uniformly across
+all four kinds and tells apart the outcomes `deduped` used to merge:
+
+```sql
+select kind,
+       detail->'summary'->>'consumed'  as consumed,
+       detail->'summary'->>'produced'  as produced,
+       detail->'summary'->>'dropped'   as dropped,
+       detail->'summary'->>'reconciled' as reconciled,
+       detail->'summary'->'gaps'       as gaps,
+       detail->'summary'->'dropsByReason' as by_reason
+  from ci_import.import_stages
+ where run_id = '…' order by seq;
+```
+
+The contract is **`consumed = produced + dropped`**, per unit and in the roll-up.
+`buildStageSummary` computes `consumed` *from* the other two rather than taking a
+stage's word for it; a stage that measured its input independently passes
+`consumedOverride`, and a disagreement sets `reconciled: false` rather than
+being hidden. `reconciled: false` is a defect in the stage's accounting, not in
+the import — it is recorded and never thrown, because a telemetry disagreement
+must not fail a 40GB import that otherwise worked.
+
+`units` is per data source (parse **and** push — `unitKind: 'data_source'`, which
+`PushStage.summarize` passes, with one extra synthetic `(entities)` unit), per
+archive (unpack), or the single object store (media), with `passes` when
+recognition matched one source at several paths, and `path` so a false-positive
+match can be traced. Do not expect `events` / `content` / `inventory` under a
+push's `units`: one Takeout push writes thirteen sources into six tables and the
+summary is grouped by the row's own `data_source`, so what you get back is
+`google_photos`, `linkedin`, … plus `(entities)`. The `StageUnitKind` doc comment
+in `telemetry/stageSummary.ts` still says a push's units are the `ci.*` tables it
+wrote into — that comment is stale; the `unitKind` the stage passes is not.
+
+A unit that produced nothing carries an `emptyReason` from a closed list —
+`no_input`, `recognized_not_read`, `all_dropped`, `all_already_present`,
+`nothing_pending`, `failed` — which is what finally distinguishes "matched and
+found nothing inside" from "never tried". Before this, nine of the Google
+Takeout's 56 parse entries read `0/0/{}` and the two were indistinguishable.
+
+**The drop vocabulary is closed and two-level** (`telemetry/dropReasons.ts`). The
+parsers' own slugs are kept verbatim as the human-facing detail — a few dozen of
+them across the datasource pack — and every slug is *also* classified through
+`DROP_SLUG_REASONS` into one of the **21** `DROP_REASONS` codes, which is what
+you group and compare by. Four parsers
+spell "the archive references bytes it does not contain" four different ways
+(`media_asset_missing`, `media_file_missing`, `missing_media`,
+`whatsapp_attachment_missing`); all four classify as `media_missing`. A slug the
+registry does not know lands in `unclassified` rather than vanishing, and a test
+walks `datasources/` for `drop?.('…')` literals and fails on one this table has
+not classified.
+
+Each reason is `expected` or a `gap` (`DROP_SEVERITY`). `cancelled`, `filtered`,
+`duplicate_in_run`, `already_present` and `entity_excluded` are expected; every
+other reason means the appliance was handed something it could not turn into a
+memory. `summary.gaps` is that subset, precomputed and sorted, and it is the one
+list to read first: a run that dropped 40,000 records under `filtered` worked, and
+a run that dropped 12 under `collapsed_ambiguous` lost twelve things nobody can
+name.
+
+The older per-stage keys are still written and still mean what they meant. The
+parse-stage drop ledger:
+
 ```sql
 select src->>'dataSource' as data_source, src->'drops' as drops
   from ci_import.import_stages st
@@ -1315,10 +1644,13 @@ comparable set of stable slugs rather than growing with the import. If a parser
 you are touching discards a record and does **not** call `drop()`, that is a bug
 in its own right: it is the difference between a decided record and silent loss.
 
-`COLLAPSED_DISTINCT_PATH` is the one slug you should never ignore: it means two
-records hashed alike from different paths with nothing to confirm they are the
-same thing — as opposed to `itemsDeduped`, which is the honest expected collapse
-of one photo replicated across three albums.
+`COLLAPSED_DISTINCT_PATH` (the slug `collapsed-distinct-path`) is the one you
+should never ignore: it means two records hashed alike from different paths with
+nothing to confirm they are the same thing — as opposed to `itemsDeduped`, which
+is the honest expected collapse of one photo replicated across three albums. The
+vocabulary keeps the two apart on purpose: it classifies as
+`collapsed_ambiguous`, a **gap**, while the honest collapse is
+`duplicate_in_run`, **expected**.
 
 Also check the other two loss channels:
 
@@ -1353,13 +1685,29 @@ A real one from the live run:
 
 Read it like this: `destinations` is where the rows went (compare against the
 §2.2 table for the kinds you expect); `deduped` is a real outcome, not a loss —
-the record is in `ci.*`, it just arrived earlier; `partial: true` here is caused
-solely by `entities.unresolved: 1`. Note that `entities.skipped` deliberately
-does **not** make a run partial: it also counts bookkeeping-type exclusions
-(`isGraphExcluded` — an `email_thread` per thread on every ordinary gmail import),
-which is the stage working as designed. `entities.unresolved` is the subset that
-is a real gap: a row with no handle and no name, which will not resolve on a
-retry either.
+the record is in `ci.*`, it just arrived earlier.
+
+> **Two things in that sample have since changed.** It was taken before commit
+> `a07f29903`, when `partial` was `failed > 0 || entities.unresolved > 0`. Today
+> **`partial: failed > 0`, full stop** — an unresolvable entity is a reportable
+> loss, not a partial run, because a row with no handle and no name will not
+> resolve on a retry *or* on the next import of the same archive, and a status
+> that is permanently on stops being read. The loss is not hidden: `entities.unresolved`
+> is still counted, `detail.entities.unresolvedDetail` names the reason, the data
+> sources and example records, and the stage logs a warning. The `content: 4870`
+> figure is also pre-`01cd5e776`: those were vCard contact cards, which now route
+> nowhere at all (§2.2).
+
+`entities.skipped` never made a run partial: it also counts bookkeeping-type
+exclusions (`isGraphExcluded` — an `email_thread` per thread on every ordinary
+gmail import), which is the stage working as designed.
+
+`detail.summary` (§6.2) is the additive part of this JSON, and the only place
+`deduped`'s three constituent outcomes are told apart — already present in the
+destination, routed nowhere at all, or quarantined. It is read back out of
+`ci_import.staged_items` with two grouped queries rather than from in-process
+counters, so it survives a resume and is keyed per data source rather than per
+destination table.
 
 ### 6.4 Did enrichment run?
 
@@ -1430,20 +1778,28 @@ queries below only when you have a psql prompt and no api key, or when you are
 writing a *new* predicate and need to sanity-check it before it becomes a check.
 
 Hand-mirrored from the TypeScript predicates — `isCoordinateText` /
-`isMediaFilename` / `isUriLocation` in `push/inputs.ts`, and
+`isMediaFilename` / `isUriLocation` / `isTitleText` in `push/inputs.ts`, and
 `nonNameParticipantReason` in `graph/utils/participantSanity.ts`. All three
 returned **0** on `93fc6d8a9` against the live corpus (3,284 `Person` rows) on
-2026-08-19, which is the number to preserve.
+2026-08-19, which is the number to preserve. The title arm below was added to
+the guard afterwards (`5e1de45b5`) and is included here for parity with the
+doctor check; it was not part of that measurement.
 
 ```sql
 -- isNotAPlaceName: a coordinate pair, a whole-string URI, a media filename,
--- or a bare UUID stem is never the name of a place.
+-- a bare UUID stem, or a TITLE is never the name of a place.
 select count(*) as bad_position_names
   from ci.position
  where btrim(name) ~* '^\s*(?:(?:location|position|coordinates?|coords?|point|waypoint|fix|gps)\s*[-:]?\s*)?[-+]?\d{1,3}(?:\.\d+)?\s*,\s*[-+]?\d{1,3}(?:\.\d+)?\s*$'
     or btrim(name) ~* '^[a-z][a-z0-9+.-]*://\S+$'
     or btrim(name) ~* '\.(?:jpe?g|png|heic|heif|gif|mov|mp4|m4v|avi|webp|dng|tiff?)$'
-    or btrim(name) ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:[_-]\d+)?$';
+    or btrim(name) ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:[_-]\d+)?$'
+    -- isTitleText. `.` and `@` stay OUT of the punctuation arm: 'A.G. Bartlett
+    -- Building' and 'On Jane Stanford Way @ Gilbert Biological Sciences' are
+    -- real names, and each is a live ci.position.name.
+    or btrim(name) ~ '…$'
+    or btrim(name) ~ '[!?]'
+    or array_length(regexp_split_to_array(btrim(name), '\s+'), 1) > 14;
 
 -- isUriLocation: the value must be NOTHING BUT the URI, which is why the one
 -- row pairing a Zoom link with a real room designation is deliberately exempt.
@@ -1539,11 +1895,16 @@ Listed so the next agent does not mistake silence for confidence.
 
 If you read nothing else:
 
-- **Run `ci-import doctor` before you believe an import.** Nineteen checks, each
-  mirroring a guard or a migration; exit 1 on any `high` finding **or** any
-  `high` check that could not answer. `--json` for a loop.
+- **Run `ci-import doctor` before you believe an import.** Twenty-one checks, six
+  of them mirroring a live guard (one more mirrors a migration; the other
+  fourteen have no twin); exit 1 on any `high` finding **or** any `high`
+  check that could not answer. `--json` for a loop. `--list` is the
+  authoritative count — this file's number goes stale, the registry does not.
 - **Stage rows are truth; the run row is a cache.** Query
-  `ci_import.import_stages`.
+  `ci_import.import_stages`. Every stage's `detail->'summary'` accounts for
+  itself as `consumed = produced + dropped`, with a closed drop vocabulary and a
+  precomputed `gaps` list; `reconciled: false` means the stage reported a number
+  it could not account for.
 - **One queue per stage kind**, slots `unpack 1 / parse 1 / media 2 / push 1`.
   Parse is still serial and still dominates, so parse time is still a sum.
   Queued for an hour is normal; `GET /import/runs/active` tells `waiting` from
@@ -1553,8 +1914,11 @@ If you read nothing else:
   variable.
 - **A full reset drops the DATABASE**, never a hand-typed schema list; a missed
   schema surfaces as `type "…" already exists` on the next migrate.
-- **`destinationsFor` returning too few destinations is invisible** — no error,
-  just an empty gallery or map weeks later.
+- **`destinationsFor` getting the destination list wrong is invisible in both
+  directions** — too few is no error and an empty gallery or map weeks later;
+  too many is no error and thousands of body-less rows occupying a view. And the
+  order matters: **events before content**, or every `ci.content.event_id` is
+  NULL.
 - **A re-import does NOT repair `events`, `inventory`, `content` or
   `browser_activity`.** `INGEST_REFRESH_COLUMNS` is empty for all four. Answer
   "what happens to the rows already there?" in every PR.
@@ -1577,6 +1941,25 @@ every number re-measured against a live appliance. The corrections that pass
 were: `ci-import doctor` exists (§6, §7.3); the stage queue is per kind, not one
 appliance-wide slot (§1.1, §1.4, §6.1); the inbox is per user with per-service
 folders (§5.2, §5.3); the inbox budget table lost a constant that no longer
-exists (§3.5); `ImportRunService.ts` is 1,506 lines. If you find a sentence here
-that is no longer true, correcting it is part of your change — the next agent
-will act on whatever this file says._
+exists (§3.5)._
+
+_**Third pass, 2026-08-19, against `ead9fb425` — code only, no re-measurement.**
+Re-checked against the tree and corrected: the doctor registry (21 checks, the
+two new ones, `comms-missing-thread-id` at `medium`, every `mirrors` value)
+in §0/§5.4/§6/§6.0.1/§8; `DESTINATION_ORDER` in §2.1 and §8, which said content
+landed before events and has been exactly backwards since commit `a02540179`;
+the `contact.card` and `isSocialAffiliation` branches in §2.2; `push`'s `partial`
+rule in §6.3; the `telemetry/` module in §1.2, §1.3 and §6.2. Also corrected on a
+later read of the same tree: a push's summary `units` are DATA SOURCES, not the
+`ci.*` destination tables (§1.2, §6.2 — the `unitKind` the stage passes, not the
+stale `StageUnitKind` comment); how many checks actually mirror a guard (six of
+21, §6.0.1 and §8); `contact-cards-typed-as-concept` watches entity typing, not a
+§2.2 routing branch (§6.0.1); and `SCAN_RECOGNITION_TIMING` exhaustion sets
+`recognitionPartial`, never `truncated` (§3.5). Re-confirmed unchanged: the four
+stage kinds, weights and slot counts (`constants.ts`), the recovery constants and
+`policy: 'short'` (§1.5), the nine provenance-triple indexes (§2.3),
+`INGEST_REFRESH_COLUMNS` (§2.4), the six inbox budget CONSTANTS and the 54
+service folders (§3.5, §5.3), every `CI_IMPORT_*` default (§5.2), and the
+still-stale `PushStage.ts` position comments (§7.2). `ImportRunService.ts` is now
+1,525 lines. If you find a sentence here that is no longer true, correcting it is
+part of your change — the next agent will act on whatever this file says._

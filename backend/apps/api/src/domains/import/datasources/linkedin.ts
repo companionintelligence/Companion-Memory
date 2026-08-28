@@ -330,14 +330,22 @@ export class LinkedInFileImporter implements FileImporter {
       raw = await fs.promises.readFile(fpath, 'utf8');
     } catch (e) {
       params.log?.('error', 'Failed to read LinkedIn Connections.csv', { error: (e as Error).message });
+      params.pipeline.drop?.('unreadable_file', path.basename(fpath));
 
       return;
     }
 
     const rows = parseConnections(raw);
+    // The base, entity-level unit per row — every named row also offers a
+    // SECOND thing (the connection event below), which is always attempted
+    // when the row has a name, so it reports its own extra consumed() unit
+    // right where it's attempted, additive to this one.
+    params.pipeline.consumed?.(rows.length);
     for (const row of rows) {
       const name = ((row['First Name'] ?? '') + ' ' + (row['Last Name'] ?? '')).trim();
       if (!name) {
+        params.pipeline.drop?.('unnamed_connection');
+
         continue;
       }
 
@@ -364,9 +372,13 @@ export class LinkedInFileImporter implements FileImporter {
         },
       });
 
-      // Connection event item.
+      // Connection event item — a second thing this row offers beyond the
+      // entity above, so it gets its own consumed() unit here.
+      params.pipeline.consumed?.(1);
       const ts = parseDDMonYYYY(row['Connected On'] ?? '');
       if (!timeframeContains(params.timeframe, ts)) {
+        params.pipeline.drop?.('outside_timeframe');
+
         continue;
       }
 
@@ -399,20 +411,26 @@ export class LinkedInFileImporter implements FileImporter {
       raw = await fs.promises.readFile(fpath, 'utf8');
     } catch (e) {
       params.log?.('error', 'Failed to read LinkedIn messages.csv', { error: (e as Error).message });
+      params.pipeline.drop?.('unreadable_file', path.basename(fpath));
 
       return;
     }
 
     const rows = parseCSV(raw, NO_TRIM);
+    params.pipeline.consumed?.(rows.length);
     const owner = ownerHint ?? inferOwnerFromMessages(rows);
     for (const row of rows) {
       const content = row.CONTENT ?? '';
       if (!content) {
+        params.pipeline.drop?.('empty_after_parse');
+
         continue;
       }
 
       const ts = parseLinkedInMessageDate(row.DATE ?? '');
       if (!timeframeContains(params.timeframe, ts)) {
+        params.pipeline.drop?.('outside_timeframe');
+
         continue;
       }
 

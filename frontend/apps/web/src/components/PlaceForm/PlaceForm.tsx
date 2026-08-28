@@ -1,7 +1,9 @@
 import { type ReactNode, useId } from 'react';
 
+import { useDeviceLayout } from '@ci/common';
 import { Input, Label, Select, Textarea } from '@ci/shadcn';
 
+import { CurrentLocationField } from './CurrentLocationField';
 import { PLACE_KINDS, PLACE_KIND_LABELS, type PlaceDraft, type PlaceDraftProblem } from './placeDraft';
 
 /** Sentinel for "no kind" — Select.Item rejects an empty string value. */
@@ -78,12 +80,12 @@ interface Props {
  * The place editor — name, kind, where it is — shared by the add flow and any
  * later edit flow so the two can't drift apart.
  *
- * Coordinates are typed rather than picked on a map: the places map and every
- * "near here" read go through the typed `location_point` column, so a place
- * created without them exists but is unplaceable.
+ * Coordinates can come from this device's GPS or be typed. Either path writes
+ * the typed `location_point` column so the place shows on the map.
  */
 export function PlaceForm({ value, onChange, problem, disabled }: Props) {
   const uid = useId();
+  const { isMobile } = useDeviceLayout();
 
   const set = <K extends keyof PlaceDraft>(key: K, next: PlaceDraft[K]) => {
     onChange({ ...value, [key]: next });
@@ -97,7 +99,7 @@ export function PlaceForm({ value, onChange, problem, disabled }: Props) {
           <Input
             id={`${uid}-name`}
             value={value.name}
-            autoFocus
+            autoFocus={!isMobile}
             placeholder="Blue Bottle on Mint Plaza"
             onChange={(event) => set('name', event.target.value)}
           />
@@ -127,7 +129,12 @@ export function PlaceForm({ value, onChange, problem, disabled }: Props) {
         </div>
       </Section>
 
-      <Section title="Where" description="Coordinates are optional — they put the place on the map.">
+      <Section
+        title="Where"
+        description="Drop a pin from where you are, or type an address. Coordinates put the place on the map."
+      >
+        <CurrentLocationField value={value} onChange={onChange} disabled={disabled} />
+
         <Field
           id={`${uid}-address`}
           label="Address"

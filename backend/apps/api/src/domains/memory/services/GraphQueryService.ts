@@ -24,8 +24,12 @@ export class GraphQueryService {
     private readonly graphUtility: GraphUtilityService,
   ) {}
 
-  getNode(ownerId: string, entityId: string): Promise<GraphNodeEntity | null> {
-    return this.graphUtility.getNodeById(entityId, ownerId);
+  getNode(
+    ownerId: string,
+    entityId: string,
+    options: { includeInactive?: boolean } = {},
+  ): Promise<GraphNodeEntity | null> {
+    return this.graphUtility.getNodeById(entityId, ownerId, options);
   }
 
   getNodes(ownerId: string, options: GraphNodeQueryOptions = {}): Promise<GraphNodeEntity[]> {

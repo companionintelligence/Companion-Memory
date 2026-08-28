@@ -20,7 +20,14 @@ const R1 = '33333333-3333-3333-3333-333333333333';
 const R_MISSING = '44444444-4444-4444-4444-444444444444';
 const FROM = '55555555-5555-5555-5555-555555555555';
 const TO = '66666666-6666-6666-6666-666666666666';
+const E_FORGOTTEN = '77777777-7777-7777-7777-777777777777';
+const R_FORGOTTEN = '88888888-8888-8888-8888-888888888888';
 
+// `is_active` is required on both, mirroring the NOT NULL DEFAULT true columns
+// on ci.entities/ci.relationships. An optional flag let fixtures produce rows
+// with is_active === undefined — a shape no row read back from Postgres can
+// have, and the one under which a resurrection guard silently reads as "this
+// is already forgotten".
 interface FakeNode {
   entity_id: string;
   entity_type: string;
@@ -30,6 +37,7 @@ interface FakeNode {
   search_content: string | null;
   linked_table: string | null;
   linked_id: string | null;
+  is_active: boolean;
 }
 
 interface FakeRelationship {
@@ -40,6 +48,7 @@ interface FakeRelationship {
   properties: Record<string, unknown>;
   strength: number;
   is_bidirectional: boolean;
+  is_active: boolean;
 }
 
 function node(overrides: Partial<FakeNode> & { entity_id: string; entity_type: string }): FakeNode {
@@ -50,6 +59,7 @@ function node(overrides: Partial<FakeNode> & { entity_id: string; entity_type: s
     search_content: null,
     linked_table: null,
     linked_id: null,
+    is_active: true,
     ...overrides,
   };
 }
@@ -79,10 +89,16 @@ function makeGraph(seedNodes: FakeNode[] = [], seedRelationships: FakeRelationsh
       nodes.set(
         entityId,
         node({
+          ...nodes.get(entityId),
           entity_id: entityId,
           entity_type: input.entityType,
           name: input.name ?? null,
           properties: input.properties ?? {},
+          // GraphUtilityService.createOrUpdateNode sets is_active = true on
+          // BOTH branches, so an id-reuse write revives a forgotten row. A
+          // double that left the flag alone could not show the resurrection
+          // the guards under test exist to stop.
+          is_active: true,
         }),
       );
 
@@ -112,6 +128,9 @@ function makeGraph(seedNodes: FakeNode[] = [], seedRelationships: FakeRelationsh
         properties: input.properties ?? {},
         strength: input.strength ?? 1,
         is_bidirectional: input.isBidirectional ?? false,
+        // See upsertNode above: createOrUpdateRelationship ends both branches
+        // with is_active = true.
+        is_active: true,
       });
 
       return { relationshipId };
@@ -121,16 +140,25 @@ function makeGraph(seedNodes: FakeNode[] = [], seedRelationships: FakeRelationsh
   const graphEvents = { upsertNode, upsertRelationship };
 
   const graphQuery = {
-    getNode: jest.fn(async (_owner: string, id: string) => nodes.get(id) ?? null),
+    getNode: jest.fn(async (_owner: string, id: string, options: { includeInactive?: boolean } = {}) => {
+      const found = nodes.get(id) ?? null;
+      if (found && !found.is_active && !options.includeInactive) {
+        return null;
+      }
+
+      return found;
+    }),
     getNodes: jest.fn(async () => [] as FakeNode[]),
     getNodesByIds: jest.fn(async (_owner: string, ids: string[]) =>
       ids.map((id) => nodes.get(id)).filter((n): n is FakeNode => Boolean(n)),
     ),
     searchNodesByPrefix: jest.fn(async () => [] as FakeNode[]),
-    getRelationships: jest.fn(async (_owner: string, options: { relationshipIds?: string[] }) =>
-      (options.relationshipIds ?? [])
-        .map((id) => relationships.get(id))
-        .filter((r): r is FakeRelationship => Boolean(r)),
+    getRelationships: jest.fn(
+      async (_owner: string, options: { relationshipIds?: string[]; includeInactive?: boolean }) =>
+        (options.relationshipIds ?? [])
+          .map((id) => relationships.get(id))
+          .filter((r): r is FakeRelationship => Boolean(r))
+          .filter((r) => options.includeInactive || r.is_active),
     ),
   };
 
@@ -281,6 +309,7 @@ describe('WriteKnowledgeTool relationship.update', () => {
           properties: { since: '2020' },
           strength: 0.6,
           is_bidirectional: false,
+          is_active: true,
         },
       ],
     );
@@ -317,6 +346,7 @@ describe('WriteKnowledgeTool relationship.update', () => {
           properties: {},
           strength: 1,
           is_bidirectional: false,
+          is_active: true,
         },
       ],
     );
@@ -381,6 +411,108 @@ describe('WriteKnowledgeTool per-operation failure aggregation', () => {
 
     expect(result.data).toMatchObject({ createdRelationships: 0, failures: 1 });
     expect(result.data?.results[0].message).toContain('must exist and be owned');
+  });
+});
+
+describe('WriteKnowledgeTool soft-delete resurrection guard', () => {
+  it('fails entity.create instead of resurrecting a soft-deleted node by id reuse', async () => {
+    const graph = makeGraph([
+      node({ entity_id: E_FORGOTTEN, entity_type: 'Concept', name: 'Old fact', is_active: false }),
+    ]);
+    const tool = makeTool(graph);
+
+    const result = await tool.execute(OWNER, {
+      operations: [{ kind: 'entity.create', entityId: E_FORGOTTEN, entityType: 'Concept', name: 'New fact' }],
+    });
+
+    expect(result.data).toMatchObject({ createdNodes: 0, failures: 1 });
+    expect(result.data?.results[0]).toMatchObject({ status: 'failed' });
+    expect(result.data?.results[0].message).toContain('forgotten');
+    expect(graph.graphEvents.upsertNode).not.toHaveBeenCalled();
+  });
+
+  it('still allows entity.create with a fresh id that has never existed', async () => {
+    const graph = makeGraph();
+    const tool = makeTool(graph);
+
+    const result = await tool.execute(OWNER, {
+      operations: [{ kind: 'entity.create', entityType: 'Concept', name: 'Pilates' }],
+    });
+
+    expect(result.data).toMatchObject({ createdNodes: 1, failures: 0 });
+    expect(graph.graphEvents.upsertNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails relationship.create instead of resurrecting a soft-deleted relationship by id reuse', async () => {
+    const graph = makeGraph(
+      [
+        node({ entity_id: FROM, entity_type: 'Person', name: 'Alex' }),
+        node({ entity_id: TO, entity_type: 'Person', name: 'Sam' }),
+      ],
+      [
+        {
+          relationship_id: R_FORGOTTEN,
+          from_entity_id: FROM,
+          to_entity_id: TO,
+          relationship_type: 'KNOWS',
+          properties: {},
+          strength: 1,
+          is_bidirectional: false,
+          is_active: false,
+        },
+      ],
+    );
+    const tool = makeTool(graph);
+
+    const result = await tool.execute(OWNER, {
+      operations: [
+        {
+          kind: 'relationship.create',
+          relationshipId: R_FORGOTTEN,
+          fromEntityId: FROM,
+          toEntityId: TO,
+          relationshipType: 'KNOWS',
+        },
+      ],
+    });
+
+    expect(result.data).toMatchObject({ createdRelationships: 0, failures: 1 });
+    expect(result.data?.results[0]).toMatchObject({ status: 'failed' });
+    expect(result.data?.results[0].message).toContain('forgotten');
+    expect(graph.graphEvents.upsertRelationship).not.toHaveBeenCalled();
+  });
+
+  it('fails relationship.update instead of reactivating a soft-deleted relationship', async () => {
+    // relationship.update reads with includeInactive: true (it needs the row to
+    // merge properties onto), so a forgotten relationship IS found here and,
+    // unguarded, walks straight into the same reactivating upsert that
+    // relationship.create is stopped from reaching.
+    const graph = makeGraph(
+      [],
+      [
+        {
+          relationship_id: R_FORGOTTEN,
+          from_entity_id: FROM,
+          to_entity_id: TO,
+          relationship_type: 'KNOWS',
+          properties: {},
+          strength: 1,
+          is_bidirectional: false,
+          is_active: false,
+        },
+      ],
+    );
+    const tool = makeTool(graph);
+
+    const result = await tool.execute(OWNER, {
+      operations: [{ kind: 'relationship.update', relationshipId: R_FORGOTTEN, strength: 0.5 }],
+    });
+
+    expect(result.data).toMatchObject({ updatedRelationships: 0, failures: 1 });
+    expect(result.data?.results[0]).toMatchObject({ status: 'failed' });
+    expect(result.data?.results[0].message).toContain('forgotten');
+    expect(graph.graphEvents.upsertRelationship).not.toHaveBeenCalled();
+    expect(graph.relationships.get(R_FORGOTTEN)?.is_active).toBe(false);
   });
 });
 

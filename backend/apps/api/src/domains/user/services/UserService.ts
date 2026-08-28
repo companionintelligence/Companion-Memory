@@ -17,10 +17,10 @@ import { CreateUserDto, UpdateUserDto } from '../types';
  * Stamped onto the row when deletion is requested, so changing this value never moves
  * a deadline already promised to someone who has left.
  *
- * TODO: move to config once the background purge job exists — until something is
- * actually reading `purgeAfter` to delete rows, this is a promise, not a schedule.
+ * Now a real schedule rather than a promise: `AccountPurgeService` reads `purgeAfter`
+ * and destroys the data once it passes.
  */
-const PURGE_GRACE_DAYS = 30;
+const purgeGraceDays = () => config.accountDeletion.graceDays;
 
 @Injectable()
 export class UserService {
@@ -55,6 +55,19 @@ export class UserService {
 
   async findAll(): Promise<User[]> {
     const result = await this.userRepository.find();
+
+    return result.map((entity) => UserEntity.toEgressType(entity));
+  }
+
+  /**
+   * The audience for recurring per-user background work — the same population
+   * `PythonFunctionCrons` selects with `SELECT id FROM ci.users WHERE onboarded
+   * = true`. An account that never finished FTUE has no connections, no corpus
+   * and no timezone the user chose, so every job fanned out to it can only
+   * no-op; `findAll()` includes those rows and is the wrong list to fan out on.
+   */
+  async findAllOnboarded(): Promise<User[]> {
+    const result = await this.userRepository.find({ where: { onboarded: true } });
 
     return result.map((entity) => UserEntity.toEgressType(entity));
   }
@@ -95,9 +108,9 @@ export class UserService {
    * revocation: `@DeleteDateColumn` makes every read on this repository skip the row,
    * so login, JWT, API-key and OIDC resolution all start failing on the next request
    * without any of them knowing this feature exists. The rows themselves are removed
-   * afterwards by the background purge, no earlier than `purgeAfter` — a hard delete
-   * here would raise a foreign-key violation anyway (33 tables reference users(id)
-   * with no ON DELETE action; see the migration).
+   * afterwards by `AccountPurgeService`, no earlier than `purgeAfter` — a hard delete
+   * here would raise a foreign-key violation anyway (eighteen constraints reference
+   * users(id) with no ON DELETE action; see the migration).
    *
    * Idempotent: a second request finds nothing (the first one hid the row) and
    * returns false rather than throwing.
@@ -113,7 +126,7 @@ export class UserService {
       return false;
     }
 
-    const purgeAfter = new Date(Date.now() + PURGE_GRACE_DAYS * 24 * 60 * 60 * 1000);
+    const purgeAfter = new Date(Date.now() + purgeGraceDays() * 24 * 60 * 60 * 1000);
 
     // One write, not `softDelete()` then `update()`: the access gate (`deletedAt`) and
     // the promise about when the data goes (`purgeAfter`) must never exist apart.
@@ -129,10 +142,11 @@ export class UserService {
   /**
    * Hard-delete a user row.
    *
-   * ⚠️ This is not the account-deletion path — use {@link requestDeletion}. It cannot
-   * succeed for any account that has stored anything: 33 tables reference users(id)
-   * with no ON DELETE action, so Postgres raises a foreign-key violation. It survives
-   * only because nothing calls it; the background purge will supersede it.
+   * ⚠️ This is not the account-deletion path — use {@link requestDeletion}, and see
+   * `AccountPurgeService` for the hard delete. It cannot succeed for any account that
+   * has stored anything: eighteen constraints reference users(id) with no ON DELETE
+   * action, so Postgres raises a foreign-key violation. It survives only because
+   * nothing calls it.
    */
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     if (context.userId !== SYSTEM_USER && context.userId !== id) {
@@ -175,6 +189,44 @@ export class UserService {
     }
 
     return UserEntity.toEgressType(result);
+  }
+
+  /**
+   * Change the authenticated user's own email. Callers must have already
+   * verified `checkEmailAvailability` and, for non-federated accounts,
+   * re-authenticated with the current password — this method just writes.
+   */
+  async changeEmail(context: ServiceContext, id: string, newEmail: string): Promise<User | null> {
+    if (context.userId !== SYSTEM_USER && context.userId !== id) {
+      throw new UnauthorizedException();
+    }
+
+    await this.userRepository.update(id, { email: newEmail });
+
+    await this.eventService.send(UserUpdatedEvent, {
+      userId: id,
+    });
+
+    return this.findById(context, id);
+  }
+
+  /**
+   * Change the authenticated user's own password. Unlike {@link update}, this
+   * hashes the plaintext before writing — `update()` persists `password`
+   * verbatim, so passing a raw password through it would store it unhashed.
+   */
+  async changePassword(context: ServiceContext, id: string, newPassword: string): Promise<void> {
+    if (context.userId !== SYSTEM_USER && context.userId !== id) {
+      throw new UnauthorizedException();
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, config.auth.local.saltRounds);
+
+    await this.userRepository.update(id, { password: hashedPassword });
+
+    await this.eventService.send(UserUpdatedEvent, {
+      userId: id,
+    });
   }
 
   async checkEmailAvailability(email: string): Promise<boolean> {

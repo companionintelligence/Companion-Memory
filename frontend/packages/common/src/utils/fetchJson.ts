@@ -179,6 +179,7 @@ type CapacitorHttpPlugin = {
     data?: unknown;
     connectTimeout?: number;
     readTimeout?: number;
+    responseType?: 'arraybuffer' | 'blob' | 'json' | 'text';
   }) => Promise<{ status: number; data: unknown; headers?: Record<string, string> }>;
 };
 
@@ -187,11 +188,32 @@ function capacitorHttp(): CapacitorHttpPlugin | undefined {
     return undefined;
   }
 
-  return (
+  const cap = (
     window as unknown as {
-      Capacitor?: { Plugins?: { CapacitorHttp?: CapacitorHttpPlugin } };
+      Capacitor?: {
+        Plugins?: { CapacitorHttp?: CapacitorHttpPlugin };
+        registerPlugin?: (name: string) => CapacitorHttpPlugin;
+      };
     }
-  ).Capacitor?.Plugins?.CapacitorHttp;
+  ).Capacitor;
+
+  const existing = cap?.Plugins?.CapacitorHttp;
+
+  if (existing?.request) {
+    return existing;
+  }
+
+  try {
+    const registered = cap?.registerPlugin?.('CapacitorHttp');
+
+    if (registered?.request) {
+      return registered;
+    }
+  } catch {
+    /* native binary does not expose the plugin */
+  }
+
+  return undefined;
 }
 
 function flattenHeaders(headers?: HeadersInit): Record<string, string> {
@@ -232,6 +254,31 @@ function requestData(body: BodyInit | null | undefined): unknown {
 }
 
 /**
+ * CapacitorHttp.request JSON-serializes `data`. Multipart (and other binary
+ * bodies) must keep the webview/patched `fetch` path so the boundary and bytes
+ * survive — otherwise `POST /api/files/upload` lands as `{}`.
+ */
+function isBinaryBody(body: BodyInit | null | undefined): boolean {
+  if (body == null || typeof body === 'string') {
+    return false;
+  }
+
+  if (typeof FormData !== 'undefined' && body instanceof FormData) {
+    return true;
+  }
+
+  if (typeof Blob !== 'undefined' && body instanceof Blob) {
+    return true;
+  }
+
+  if (typeof ArrayBuffer !== 'undefined' && body instanceof ArrayBuffer) {
+    return true;
+  }
+
+  return typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(body);
+}
+
+/**
  * Native webview `fetch` is CORS-bound and has no Hub cookie. CapacitorHttp
  * goes out as a real origin-less request so Traefik/Memory see the call.
  * Web and tests without the plugin keep `window.fetch`.
@@ -239,20 +286,173 @@ function requestData(body: BodyInit | null | undefined): unknown {
 async function nativeAwareFetch(input: RequestInfo, init: RequestInit, timeout?: number): Promise<Response> {
   const cap = typeof input === 'string' ? capacitorHttp() : undefined;
 
-  if (!cap?.request || typeof input !== 'string') {
+  if (!cap?.request || typeof input !== 'string' || isBinaryBody(init.body)) {
     return fetch(input, init);
   }
 
-  const result = await cap.request({
-    url: input,
-    method: (init.method ?? 'GET').toUpperCase(),
-    headers: flattenHeaders(init.headers),
-    data: requestData(init.body),
-    ...(timeout != null ? { connectTimeout: timeout, readTimeout: timeout } : {}),
-  });
+  // URLSession rejects relative paths (`/api/...`) and non-http(s) schemes
+  // (`capacitor://…`) as "unsupported URL". Never hand those to CapacitorHttp.
+  if (!/^https?:\/\//i.test(input)) {
+    throw new Error(
+      `Native HTTP needs an absolute http(s) URL (got "${input}"). Pick a Memory Server again.`,
+    );
+  }
+
+  let result: { status: number; data?: unknown; headers?: HeadersInit };
+
+  try {
+    result = await cap.request({
+      url: input,
+      method: (init.method ?? 'GET').toUpperCase(),
+      headers: flattenHeaders(init.headers),
+      data: requestData(init.body),
+      ...(timeout != null ? { connectTimeout: timeout, readTimeout: timeout } : {}),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    if (/unsupported url/i.test(message)) {
+      throw new Error(`Could not request ${input} (${message})`);
+    }
+
+    throw err;
+  }
+
   const body = typeof result.data === 'string' ? result.data : JSON.stringify(result.data ?? {});
 
   return new Response(body, { status: result.status, headers: result.headers });
+}
+
+/**
+ * `fetch` that uses CapacitorHttp on native (no CORS) and resolves string
+ * paths against the current Memory origin. Apollo and other callers that need
+ * a Response — not parsed JSON — should use this instead of `window.fetch`.
+ */
+export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  if (typeof input === 'string') {
+    return nativeAwareFetch(buildApiUrl(input), init ?? {});
+  }
+
+  if (input instanceof URL) {
+    return nativeAwareFetch(input.toString(), init ?? {});
+  }
+
+  return nativeAwareFetch(input, init ?? {});
+}
+
+/**
+ * Fetch a streaming / binary API response (chat generate, thread attach).
+ *
+ * CapacitorHttp patches `window.fetch` and buffers the body as UTF-8 text.
+ * Chat tokens are length-prefixed binary frames — a payload ≥ 128 bytes
+ * puts a non-UTF-8 byte in the length field and the patched path corrupts
+ * the stream. Nest already CORS-allows `capacitor://localhost`, so the
+ * unpatched webview fetch can stream bytes with `x-api-key`. If that
+ * preflight fails, fall back to a buffered but binary-safe CapacitorHttp
+ * `arraybuffer` (the reply lands all at once after generation finishes).
+ *
+ * On-device LocalLLM is a later opt-in. Do not route this helper through
+ * `generateOffline` — `isAvailable()` is a RAM floor, not a loaded model.
+ */
+export async function streamingFetch(input: string, init?: RequestInit): Promise<Response> {
+  const url = buildApiUrl(input);
+  const headers = {
+    ...apiKeyHeaders(),
+    ...flattenHeaders(init?.headers),
+  };
+  const next = { ...init, headers };
+
+  if (!isNativePlatform()) {
+    return fetch(url, next);
+  }
+
+  try {
+    return await unpatchedWebFetch()(url, next);
+  } catch {
+    return nativeBinaryFetch(url, next);
+  }
+}
+
+function unpatchedWebFetch(): typeof fetch {
+  const w = window as Window & { __ciUnpatchedFetch?: typeof fetch };
+
+  if (w.__ciUnpatchedFetch) {
+    return w.__ciUnpatchedFetch;
+  }
+
+  if (typeof document === 'undefined') {
+    return fetch.bind(window);
+  }
+
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('aria-hidden', 'true');
+  iframe.style.cssText = 'display:none;width:0;height:0;border:0';
+  document.documentElement.appendChild(iframe);
+
+  const childFetch = iframe.contentWindow?.fetch;
+
+  if (typeof childFetch === 'function' && iframe.contentWindow) {
+    w.__ciUnpatchedFetch = childFetch.bind(iframe.contentWindow);
+
+    return w.__ciUnpatchedFetch;
+  }
+
+  return fetch.bind(window);
+}
+
+function decodeCapacitorBinaryBody(data: unknown): BodyInit {
+  if (data instanceof ArrayBuffer) {
+    return data;
+  }
+
+  if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(data)) {
+    return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  }
+
+  if (typeof data === 'string') {
+    // Capacitor's arraybuffer responseType is a base64 string. A UTF-8 text
+    // fallback (plugin ignored responseType) still round-trips through atob
+    // only when the payload is actually base64 — otherwise keep the string.
+    if (/^[A-Za-z0-9+/]+=*$/.test(data) && data.length % 4 === 0) {
+      const binary = atob(data);
+      const bytes = new Uint8Array(binary.length);
+
+      for (let i = 0; i < binary.length; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+
+      return bytes;
+    }
+
+    return data;
+  }
+
+  return JSON.stringify(data ?? {});
+}
+
+async function nativeBinaryFetch(url: string, init: RequestInit): Promise<Response> {
+  const cap = capacitorHttp();
+
+  if (!cap?.request) {
+    return fetch(url, init);
+  }
+
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error(`Native HTTP needs an absolute http(s) URL (got "${url}"). Pick a Memory Server again.`);
+  }
+
+  const result = await cap.request({
+    url,
+    method: (init.method ?? 'GET').toUpperCase(),
+    headers: flattenHeaders(init.headers),
+    data: requestData(init.body),
+    responseType: 'arraybuffer',
+  });
+
+  return new Response(decodeCapacitorBinaryBody(result.data), {
+    status: result.status,
+    headers: result.headers,
+  });
 }
 
 export async function fetchJson<T>(input: RequestInfo, init?: Opts): Promise<T | undefined> {

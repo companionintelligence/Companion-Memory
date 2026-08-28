@@ -1,6 +1,7 @@
 import { Field, Float, ID, InputType } from '@nestjs/graphql';
 import GraphQLJSONObject from 'graphql-type-json';
 
+import { ItemLifecycleState } from './ItemFilters';
 import { ItemCondition } from './ItemType';
 import { PhysicalItemPropertiesInput } from './PhysicalItemProperties';
 
@@ -45,6 +46,21 @@ export class UpdateItemInput extends PhysicalItemPropertiesInput {
 
   @Field(() => ItemCondition, { nullable: true })
   condition?: ItemCondition;
+
+  /**
+   * Ownership state — lent out, lost, disposed, and the rest.
+   *
+   * The UI surfaced this read-only for as long as the API refused it, which
+   * made the one field a person most wants to change about a thing they own the
+   * one field they could not. `ItemService.update` has always applied it
+   * (`objectIdentityPatch`); only the input type was missing.
+   *
+   * NOT nullable-as-clear like the rest of this patch: `objects.lifecycle_state`
+   * is NOT NULL with a CHECK, so "no state" is not a state a thing can be in.
+   * Omit the field to leave it alone.
+   */
+  @Field(() => ItemLifecycleState, { nullable: true })
+  lifecycleState?: ItemLifecycleState;
 
   @Field(() => GraphQLJSONObject, { nullable: true })
   metadata?: Record<string, unknown>;

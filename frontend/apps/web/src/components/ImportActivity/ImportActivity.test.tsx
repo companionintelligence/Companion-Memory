@@ -25,7 +25,13 @@ import { ImportActivity, ImportActivityCard } from './ImportActivity';
  *  - a stage error was behind a status word.
  */
 
-vi.mock('@/hooks', () => ({ useAuth: () => [{ authToken: 'test-token' }] }));
+// `authenticated` as well as `authToken`: the real `useAuth` reports
+// `Boolean(accessToken) || Boolean(nativeApiKey)`, and the import API now gates
+// on that rather than on the web JWT — the JWT is null inside the Capacitor
+// app, whose credential is a keystore key `fetchJson` attaches itself, so
+// gating on the token made the whole import surface inert on a phone. A mock
+// that omits it is a session the real hook could never produce.
+vi.mock('@/hooks', () => ({ useAuth: () => [{ authToken: 'test-token', authenticated: true }] }));
 
 function stage(overrides: Partial<ActiveImportStage> = {}): ActiveImportStage {
   return {

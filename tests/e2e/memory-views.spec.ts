@@ -1,12 +1,12 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures/authenticated';
 
 // Authenticated (chromium project reuses the storageState from global-setup).
 //
 // DesktopMemoryPage.tsx does NOT have a breadcrumb-dropdown view switcher —
-// it renders four always-visible tab buttons in the `nav-views` header portal
-// (List / Map / Gallery / Graph), each with an `aria-label` from the
-// MEMORY_VIEW_* i18n strings ("List view", "Map view", "Gallery view",
-// "Graph view") and `aria-pressed` reflecting whether it is the active tab.
+// it renders always-visible tab buttons in the `nav-views` header portal
+// (List / Map / Timeline / Gallery / Graph), each with an `aria-label` from the
+// MEMORY_VIEW_* i18n strings ("List view", "Map view", "Timeline view",
+// "Gallery view", "Graph view") and `aria-pressed` reflecting whether it is the active tab.
 // The active view lives in the `?view=` param.
 
 test('defaults to the list view with seeded results', async ({ page }) => {
@@ -20,6 +20,7 @@ test('defaults to the list view with seeded results', async ({ page }) => {
 
 const VIEWS = [
   { label: 'Map', view: 'map' },
+  { label: 'Timeline', view: 'timeline' },
   { label: 'Gallery', view: 'gallery' },
   { label: 'Graph', view: 'graph' },
 ] as const;

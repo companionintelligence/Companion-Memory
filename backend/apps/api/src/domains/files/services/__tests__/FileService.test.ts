@@ -150,6 +150,30 @@ describe('FileService.create — hash dedup', () => {
     expect(result.id).toBe(savedRow.id);
   });
 
+  it('does NOT dedup a PREVIEW variant against another parent’s identical preview', async () => {
+    // Two videos that are re-uploads of the same footage render byte-identical
+    // 300px frames. Deduping the second preview onto the first left the second
+    // parent with no PREVIEW row at all — the explorer then drew nothing (or
+    // the raw .mp4) for it. A derived variant belongs to its parent; identical
+    // bytes across parents are two rows.
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue({ id: 'other-parents-preview', userId: 'owner-1', hash: 'same-frame' });
+    const { service, s3Send } = makeService(repo);
+
+    const result = await service.create(ownerCtx, {
+      buffer: Buffer.from('identical preview bytes'),
+      contentType: 'image/jpeg',
+      variant: FileVariant.PREVIEW,
+      parentId: 'parent-2',
+    });
+
+    expect(repo.findOne).not.toHaveBeenCalled();
+    expect(repo.save).toHaveBeenCalledTimes(1);
+    expect(s3Send).toHaveBeenCalledTimes(1);
+    expect(result.id).not.toBe('other-parents-preview');
+    expect((repo.save.mock.calls[0][0] as Record<string, unknown>).parentId).toBe('parent-2');
+  });
+
   it('dedups by externalId before ever computing a hash', async () => {
     const repo = makeRepo();
     const existing = {
@@ -188,12 +212,12 @@ describe('FileService.uploadWithDedupInfo', () => {
     expect(result).toEqual({ file: expect.objectContaining({ id: 'existing-id' }), deduped: true });
     expect(repo.save).not.toHaveBeenCalled();
     expect(s3Send).not.toHaveBeenCalled();
-    // Not an inventory capture, so the dedup hit is silent — no event fan-out
+    // Not a thing capture, so the dedup hit is silent — no event fan-out
     // for content the pipeline has already processed once.
     expect(eventService.send).not.toHaveBeenCalled();
   });
 
-  it('still notifies on a dedup hit when inventoryCapture is set', async () => {
+  it('still notifies on a dedup hit when thingCapture is set', async () => {
     const repo = makeRepo();
     const existing = { id: 'existing-id', userId: 'owner-1', hash: 'dupe-hash', bucket: null, key: null };
     repo.findOne.mockResolvedValue(existing);
@@ -202,13 +226,13 @@ describe('FileService.uploadWithDedupInfo', () => {
     await service.uploadWithDedupInfo(ownerCtx, {
       buffer: Buffer.from('duplicate bytes'),
       filename: 'dup.txt',
-      inventoryCapture: true,
+      thingCapture: true,
     });
 
     expect(eventService.send).toHaveBeenCalledWith(FileUploadedEvent, {
       fileId: 'existing-id',
       userId: 'owner-1',
-      inventoryCapture: true,
+      thingCapture: true,
       skipDescription: false,
       model: undefined,
     });
@@ -222,7 +246,7 @@ describe('FileService.uploadWithDedupInfo', () => {
     const result = await service.uploadWithDedupInfo(ownerCtx, {
       buffer: Buffer.from('brand new bytes'),
       filename: 'new.txt',
-      inventoryCapture: false,
+      thingCapture: false,
       skipDescription: true,
     });
 
@@ -232,7 +256,7 @@ describe('FileService.uploadWithDedupInfo', () => {
     expect(eventService.send).toHaveBeenCalledWith(FileUploadedEvent, {
       fileId: result.file.id,
       userId: 'owner-1',
-      inventoryCapture: false,
+      thingCapture: false,
       skipDescription: true,
       model: undefined,
     });

@@ -2,9 +2,8 @@ import {
   Body,
   ConflictException,
   Controller,
-  Delete,
-  ForbiddenException,
   Get,
+  ForbiddenException,
   HttpCode,
   InternalServerErrorException,
   NotFoundException,
@@ -166,14 +165,11 @@ export class ConnectionsController {
     return returnedConnection;
   }
 
-  @UseGuards(JwtOrApiKeyAuthGuard)
-  @Delete(':id')
-  @HttpCode(204)
-  async delete(@Context() context: RequestContext, @Param('id') id: string) {
-    const serviceContext = toServiceContext(context);
-
-    await this.connectionService.remove(serviceContext, id);
-  }
+  // NOTE: DELETE /connections/:id is intentionally NOT defined here. Disconnect
+  // is a destructive, CASA/ASVS-V8 operation (revoke the OAuth grant + purge the
+  // connection's derived data), so it lives in the privacy domain's
+  // ConnectionPrivacyController (which owns the DataDeletionService) to keep the
+  // connections domain free of a dependency cycle on privacy.
 
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Get(':id/connect')

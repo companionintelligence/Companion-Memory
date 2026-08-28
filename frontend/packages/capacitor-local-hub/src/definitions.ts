@@ -89,4 +89,19 @@ export interface LocalHubPlugin {
    * Used for Portal PKCE so the custom-scheme redirect can bounce back into the app.
    */
   openUrl(options: { url: string }): Promise<void>;
+
+  /**
+   * iOS only. One high-accuracy fix for placing a pin — does not write the
+   * tracking outbox. Rejects when permission is denied or a fix times out.
+   */
+  getCurrentLocation(): Promise<NativeCurrentLocation>;
+
+  openAppSettings(): Promise<void>;
+}
+
+export interface NativeCurrentLocation {
+  latitude: number;
+  longitude: number;
+  /** Horizontal accuracy in meters, when Core Location reports one. */
+  accuracy?: number;
 }

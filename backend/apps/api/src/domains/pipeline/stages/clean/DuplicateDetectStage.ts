@@ -4,6 +4,12 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import {
+  compareTokenizedNames,
+  indexableTokens,
+  tokenizePersonName,
+  type TokenizedPersonName,
+} from '@ci/domains/memory';
 
 import { PIPELINE_QUEUES } from '../../constants';
 import type { Stage, StageResult, StageSource } from '../../types';
@@ -40,8 +46,14 @@ const CANDIDATE_ENTITY_TYPE = 'Person';
  * the floor is left behind (see {@link DuplicateDetectStage} on why nothing is
  * withdrawn). It does NOT resurrect a pair a human rejected — that decision is
  * sticky by design.
+ *
+ * 2 — phone evidence is adjudicated against `value_e164` instead of being
+ * discounted wholesale. See {@link PHONE_MATCH_SCORES}.
+ * 3 — name evidence is no longer exact-string only. Token-subset overlap
+ * ("mr broza" ⊂ "william d broza") is scored and proposed; a last-name
+ * conflict is not. See {@link buildNameOverlapCandidates}.
  */
-export const DUPLICATE_SCORING_GENERATION = 1;
+export const DUPLICATE_SCORING_GENERATION = 3;
 
 /**
  * Generation of the CANDIDATE SET — which subjects are compared, i.e. the
@@ -52,8 +64,14 @@ export const DUPLICATE_SCORING_GENERATION = 1;
  * widening the comparison to `product_model` subjects should not rescore every
  * person pair, and re-weighting phone evidence should not re-sweep entities that
  * were never eligible.
+ *
+ * 2 — `enrich.person_self_claim` started writing `role = 'self'` claims for
+ * every Person's own emails/phones/name, so a contact-card/vCard/Apple
+ * Contacts Person that never resolved from a communication or event now has
+ * evidence too (loadEvidence groups on `entity_id` regardless of
+ * `subject_type`, so no query here changed — only the claim producers did).
  */
-export const DUPLICATE_CANDIDATE_GENERATION = 1;
+export const DUPLICATE_CANDIDATE_GENERATION = 2;
 
 /**
  * The stage version, derived so that improving EITHER re-runs history.
@@ -152,11 +170,12 @@ export const DUPLICATE_DETECT_SOURCE: StageSource = {
  *  - **email 0.95** — a mailbox is close to globally unique to a person. Not
  *    1.0: shared household and role addresses exist, which is what
  *    {@link MAX_GROUP_MEMBERS} bounds.
- *  - **phone 0.85** — strong, but the repo's normalizer keeps only the last ten
- *    digits (`domains/graph/utils/normalizeIdentifier.ts`), which collapses a
- *    UK +44 20 7946 0958 onto a US 207-946-0958. Until
- *    `clean.identifier_normalize` gives every claim an E.164 form, a phone match
- *    is genuinely weaker than an email one.
+ *  - **phone 0.85** — the number a phone match is worth when nothing better is
+ *    known about it. It is no longer the number most phone matches get:
+ *    `value_e164` now exists on the claim and {@link PHONE_MATCH_SCORES}
+ *    adjudicates against it. This entry survives as the middle tier there and
+ *    as the answer for a phone claim reaching {@link claimScore} without the
+ *    E.164 columns — see that table for the whole argument.
  *  - **name 0.5** — display names are not unique and this is the number that
  *    keeps them below any plausible auto-merge floor. Two people called "John
  *    Smith" are a QUESTION, not an answer.
@@ -181,6 +200,58 @@ export const IDENTIFIER_KIND_SCORES: Readonly<Record<string, number>> = {
 };
 
 /**
+ * What a shared phone is worth once `value_e164` is consulted.
+ *
+ * ── Why this table exists at all ───────────────────────────────────────────
+ *
+ * `value_normalized` is the LAST TEN DIGITS — the cross-repo join key, and
+ * lossy in a way that manufactures identities: UK `+44 20 7946 0958` and US
+ * `(207) 946-0958` both normalise to `2079460958`. A flat 0.85 for every phone
+ * match was the honest price of not being able to tell those apart. That is no
+ * longer the situation. `clean.identifier_normalize` writes `value_e164`
+ * beside the key (`20260809183010_identifier_claims`), and both claim
+ * producers — `enrich.person_link` and `enrich.person_self_claim` — carry it
+ * through, so most phone claims in a real corpus now STATE their country. The
+ * discount was provisional on exactly that, and holding it after the condition
+ * was met means paying for a collision the evidence already excludes.
+ *
+ * ── The four answers, and why each is that number ──────────────────────────
+ *
+ *  - **`e164Exact` 0.95** — both sides state a country and the full
+ *    international numbers are EQUAL. Nothing is inferred; the match is on the
+ *    whole of the number, which is what an email match is. `enrich.person_link`
+ *    has already made this call — `MATCH_CONFIDENCE.phone_e164` equals
+ *    `MATCH_CONFIDENCE.email_exact` there — so this is that grading carried
+ *    into this table's scale, not a new opinion. Not 1.0, for the same reason
+ *    `email` is not: a household landline is shared, which
+ *    {@link MAX_GROUP_MEMBERS} bounds.
+ *  - **`e164Partial` 0.85** — one side states a country, the other does not.
+ *    We matched ten digits and cannot confirm the country. Deliberately the
+ *    unchanged {@link IDENTIFIER_KIND_SCORES}.phone, and deliberately written
+ *    as a reference to it: this tier IS the old behaviour, kept for the case
+ *    the widening does not reach.
+ *  - **`last10Only` 0.75** — NEITHER side states a country. The only tier where
+ *    nothing in the evidence excludes the UK/US collision the discount was
+ *    invented for, so it sorts below every tier that does. Below `handle` (0.8)
+ *    because a handle is unique in its namespace at any instant and a
+ *    country-less ten-digit key is not unique across namespaces at all; far
+ *    above `name` (0.5) because ten digits do not agree by chance.
+ *  - **a country CONFLICT is not evidence** — both sides state a country and
+ *    they DISAGREE. The migration says it outright: two claims agreeing on
+ *    `value_normalized` and disagreeing on `value_e164` are provably different
+ *    numbers. `enrich.person_link` refuses that match outright
+ *    (`phone_country_conflict`); refusing it here too is the same rule, and it
+ *    is the one case where reading the column REMOVES a proposal rather than
+ *    reordering one. {@link claimScore} returns null, exactly as it does for an
+ *    uncalibrated kind.
+ */
+export const PHONE_MATCH_SCORES = {
+  e164Exact: 0.95,
+  e164Partial: IDENTIFIER_KIND_SCORES.phone,
+  last10Only: 0.75,
+} as const;
+
+/**
  * How many subjects may share one normalized value before it stops being
  * evidence.
  *
@@ -195,6 +266,16 @@ export const IDENTIFIER_KIND_SCORES: Readonly<Record<string, number>> = {
  * person was examined and deliberately not proposed for.
  */
 export const MAX_GROUP_MEMBERS = 6;
+
+/**
+ * How many people a bare given name may fit before it stops being a question
+ * and becomes noise ("william" against forty email Williams).
+ *
+ * Higher than {@link MAX_GROUP_MEMBERS} because the UI groups these into one
+ * picker rather than N pairwise cards. Above the cap the given-name match is
+ * dropped; family-token matches for the same person still stand.
+ */
+export const MAX_NAME_CLUSTER = 8;
 
 /**
  * Minimum score worth writing a row for.
@@ -217,6 +298,15 @@ export interface SharedClaim {
   other_id: string;
   kind: string;
   value_normalized: string;
+  /**
+   * The swept subject's E.164 form of this value, when its claims state a
+   * country and agree on which. NULL for every non-phone kind, and for a phone
+   * the subject holds under two different countries — which is not a country,
+   * it is an unresolved disagreement, and it is scored as one.
+   */
+  subject_e164: string | null;
+  /** The same, for the other subject. */
+  other_e164: string | null;
   /** Distinct subjects across the whole corpus holding this (kind, value). */
   group_size: number;
 }
@@ -235,6 +325,35 @@ export interface MergeCandidate {
   entityIdB: string;
   score: number;
   evidence: CandidateEvidence[];
+}
+
+/**
+ * What one shared identifier is worth, or null when it is not evidence.
+ *
+ * Null has two causes and they are the same answer: a kind nobody has
+ * calibrated (defaulting a weight for it is the fabricated confidence
+ * `types.ts` forbids), and a phone whose two sides state different countries
+ * (they are not the same number, so nothing about the pair has been evidenced).
+ *
+ * A phone claim that arrives with neither E.164 side reads as `last10Only`,
+ * which is what it is: ten digits and no country.
+ */
+export function claimScore(claim: SharedClaim): number | null {
+  if (claim.kind !== 'phone') {
+    return IDENTIFIER_KIND_SCORES[claim.kind] ?? null;
+  }
+
+  const { subject_e164: subject, other_e164: other } = claim;
+
+  if (subject != null && other != null) {
+    return subject === other ? PHONE_MATCH_SCORES.e164Exact : null;
+  }
+
+  if (subject != null || other != null) {
+    return PHONE_MATCH_SCORES.e164Partial;
+  }
+
+  return PHONE_MATCH_SCORES.last10Only;
 }
 
 /**
@@ -265,12 +384,11 @@ export function scorePair(claims: readonly SharedClaim[]): MergeCandidate | null
   const evidence: CandidateEvidence[] = [];
 
   for (const claim of claims) {
-    const score = IDENTIFIER_KIND_SCORES[claim.kind];
+    const score = claimScore(claim);
 
     if (score == null) {
-      // A claim kind nobody has calibrated. Ignored rather than defaulted:
-      // inventing a weight for an unknown kind is exactly the fabricated
-      // confidence `types.ts` forbids.
+      // An uncalibrated kind, or a phone the two sides state different
+      // countries for. Neither is evidence; see {@link claimScore}.
       continue;
     }
 
@@ -346,6 +464,194 @@ export function buildCandidates(claims: readonly SharedClaim[]): {
     if (candidate != null) {
       candidates.push(candidate);
     }
+  }
+
+  return { candidates, suppressed };
+}
+
+/** One live person name, as the name-overlap pass reads it. */
+export interface PersonNameRow {
+  entity_id: string;
+  name: string | null;
+}
+
+/**
+ * Fold two candidate lists for the same pair into one row.
+ *
+ * Exact-identifier evidence and name-overlap evidence are different facts
+ * about the same two people. The score stays the MAX (an email is not made
+ * stronger by also sharing a last name); every piece of evidence is kept.
+ */
+export function mergeCandidateLists(
+  left: readonly MergeCandidate[],
+  right: readonly MergeCandidate[],
+): MergeCandidate[] {
+  const byPair = new Map<string, MergeCandidate>();
+
+  for (const candidate of [...left, ...right]) {
+    const key = `${candidate.entityIdA}|${candidate.entityIdB}`;
+    const existing = byPair.get(key);
+
+    if (existing == null) {
+      byPair.set(key, {
+        ...candidate,
+        evidence: candidate.evidence.map((item) => ({ ...item })),
+      });
+      continue;
+    }
+
+    const seen = new Set(existing.evidence.map((item) => `${item.kind}|${item.value}`));
+
+    for (const item of candidate.evidence) {
+      const evidenceKey = `${item.kind}|${item.value}`;
+      if (seen.has(evidenceKey)) {
+        continue;
+      }
+
+      seen.add(evidenceKey);
+      existing.evidence.push(item);
+    }
+
+    existing.evidence.sort((a, b) => b.score - a.score || a.kind.localeCompare(b.kind));
+    existing.score = existing.evidence[0]?.score ?? existing.score;
+  }
+
+  return [...byPair.values()];
+}
+
+/**
+ * Propose pairs whose display names overlap by token subset.
+ *
+ * Exact name claims ("william broza" = "william broza") are already handled
+ * by {@link buildCandidates}. This pass is the one that notices "mr broza"
+ * and "william d broza" are a question, and that Discord "william" might be
+ * one of several email Williams.
+ *
+ * Only pairs that include at least one swept subject are returned — this
+ * stage examines a slice, not the whole corpus, and proposing a pair that
+ * touches nobody in the slice would write a row nobody asked this sweep
+ * for.
+ */
+export function buildNameOverlapCandidates(
+  rows: readonly PersonNameRow[],
+  sliceIds: ReadonlySet<string>,
+): { candidates: MergeCandidate[]; suppressed: Set<string> } {
+  const tokenized = new Map<string, TokenizedPersonName>();
+
+  for (const row of rows) {
+    const parsed = tokenizePersonName(row.name);
+    if (parsed == null || parsed.isRelational) {
+      continue;
+    }
+
+    tokenized.set(row.entity_id, parsed);
+  }
+
+  const holders = new Map<string, string[]>();
+  for (const [entityId, name] of tokenized) {
+    for (const token of indexableTokens(name)) {
+      const bucket = holders.get(token);
+      if (bucket == null) {
+        holders.set(token, [entityId]);
+      } else {
+        bucket.push(entityId);
+      }
+    }
+  }
+
+  const pairEvidence = new Map<string, MergeCandidate>();
+  const givenFits = new Map<string, Set<string>>();
+  const suppressed = new Set<string>();
+
+  for (const subjectId of sliceIds) {
+    const subject = tokenized.get(subjectId);
+    if (subject == null) {
+      continue;
+    }
+
+    const others = new Set<string>();
+    for (const token of indexableTokens(subject)) {
+      for (const otherId of holders.get(token) ?? []) {
+        if (otherId !== subjectId) {
+          others.add(otherId);
+        }
+      }
+    }
+
+    for (const otherId of others) {
+      const other = tokenized.get(otherId);
+      if (other == null) {
+        continue;
+      }
+
+      const overlap = compareTokenizedNames(subject, other);
+      if (overlap == null) {
+        continue;
+      }
+
+      if (overlap.kind === 'family') {
+        const family = subject.family ?? other.family;
+        if (family != null && (holders.get(family)?.length ?? 0) > MAX_GROUP_MEMBERS) {
+          suppressed.add(subjectId);
+          continue;
+        }
+      }
+
+      if (overlap.kind === 'given') {
+        const key = subject.set.size <= other.set.size ? subjectId : otherId;
+        const fits = givenFits.get(key) ?? new Set<string>();
+        fits.add(subjectId === key ? otherId : subjectId);
+        givenFits.set(key, fits);
+      }
+
+      const [entityIdA, entityIdB] = subjectId < otherId ? [subjectId, otherId] : [otherId, subjectId];
+      const pairKey = `${entityIdA}|${entityIdB}`;
+      const kind = overlap.kind === 'given' ? 'name_cluster' : 'name_overlap';
+      const value = overlap.shared[overlap.shared.length - 1] ?? overlap.shared[0] ?? '';
+      const existing = pairEvidence.get(pairKey);
+
+      if (existing == null) {
+        pairEvidence.set(pairKey, {
+          entityIdA,
+          entityIdB,
+          score: overlap.score,
+          evidence: [{ kind, value, score: overlap.score }],
+        });
+        continue;
+      }
+
+      if (overlap.score > existing.score) {
+        existing.score = overlap.score;
+      }
+
+      if (!existing.evidence.some((item) => item.kind === kind && item.value === value)) {
+        existing.evidence.push({ kind, value, score: overlap.score });
+        existing.evidence.sort((a, b) => b.score - a.score || a.kind.localeCompare(b.kind));
+      }
+    }
+  }
+
+  const candidates: MergeCandidate[] = [];
+
+  for (const candidate of pairEvidence.values()) {
+    const cluster = candidate.evidence.find((item) => item.kind === 'name_cluster');
+    if (cluster != null) {
+      const leftFits = givenFits.get(candidate.entityIdA)?.size ?? 0;
+      const rightFits = givenFits.get(candidate.entityIdB)?.size ?? 0;
+      const fits = Math.max(leftFits, rightFits);
+
+      if (fits > MAX_NAME_CLUSTER) {
+        suppressed.add(candidate.entityIdA);
+        suppressed.add(candidate.entityIdB);
+        continue;
+      }
+    }
+
+    if (candidate.score < MIN_CANDIDATE_SCORE) {
+      continue;
+    }
+
+    candidates.push(candidate);
   }
 
   return { candidates, suppressed };
@@ -473,7 +779,18 @@ export class DuplicateDetectStage implements Stage {
     }
 
     const claims = await this.loadEvidence(ctx.userId, examined);
-    const { candidates, suppressed } = buildCandidates(claims);
+    const { candidates: exactCandidates, suppressed } = buildCandidates(claims);
+    const names = await this.loadPersonNames(ctx.userId);
+    const { candidates: nameCandidates, suppressed: nameSuppressed } = buildNameOverlapCandidates(
+      names,
+      new Set(examined),
+    );
+
+    for (const id of nameSuppressed) {
+      suppressed.add(id);
+    }
+
+    const candidates = mergeCandidateLists(exactCandidates, nameCandidates);
 
     /** How many surviving pairs each swept subject appears in. */
     const proposedFor = new Map<string, number>();
@@ -594,6 +911,31 @@ export class DuplicateDetectStage implements Stage {
   }
 
   /**
+   * Live Person display names for the owner — the input to
+   * {@link buildNameOverlapCandidates}.
+   *
+   * Loaded corpus-wide rather than regex-matched against the slice's tokens
+   * because display names keep diacritics ("José") while tokens are NFKD-
+   * folded ("jose"), so a word-boundary lookup on the raw column would miss
+   * the people the pass exists to find. A user's person list fits in one
+   * result set; the nightly slice cost is the price of comparing names that
+   * are not exact identifier matches.
+   */
+  private loadPersonNames(userId: string): Promise<PersonNameRow[]> {
+    return this.dataSource.query<PersonNameRow[]>(
+      `SELECT e.entity_id, e.name
+         FROM ci.entities e
+        WHERE e.owner_user_id = $1::uuid
+          AND e.entity_type = '${CANDIDATE_ENTITY_TYPE}'
+          AND COALESCE(e.is_active, true) = true
+          AND e.merged_into_entity_id IS NULL
+          AND e.name IS NOT NULL
+          AND btrim(e.name) <> ''`,
+      [userId],
+    );
+  }
+
+  /**
    * Every identifier the slice's people share with another person.
    *
    * ── Grouped on `entity_id`, NOT on `subject_id` ───────────────────────────
@@ -649,6 +991,29 @@ export class DuplicateDetectStage implements Stage {
    * side by the slice's ids, so the plan is an index lookup per claim rather
    * than a corpus cross-product.
    *
+   * ── Why the E.164 form is AGGREGATED, not selected ────────────────────────
+   *
+   * `value_e164` lives on the CLAIM, and one subject routinely holds several
+   * claims for one normalized value — the same number seen in a mail header, a
+   * calendar invite and a contact card — of which some may state a country and
+   * some may not. Selecting the column raw would multiply those into two rows
+   * differing only in a nullable column, and the pair would then be scored
+   * twice under two different tiers.
+   *
+   * So both sides collapse to ONE answer per (subject, kind, value):
+   * `count(DISTINCT value_e164) = 1` means every claim that stated a country
+   * stated the same one, and `min()` is then that country's form. Zero claims
+   * stating a country, or two disagreeing, both yield NULL — "this subject does
+   * not have a settled international form", which {@link claimScore} reads as
+   * exactly that rather than picking a winner.
+   *
+   * The other side is a correlated aggregate rather than a fourth CTE for the
+   * reason `group_size` is: it rides `identifier_claims_lookup_idx` per row
+   * instead of materialising the corpus. It is gated on `s.kind = 'phone'`
+   * because no other kind ever sets the column, and the majority of any real
+   * corpus's claims are emails — paying an index lookup each to learn NULL is
+   * the whole cost of the widening and it is avoidable.
+   *
    * ── Why the block check probes ONE order, not two ─────────────────────────
    *
    * `ci.entity_merge_blocks` carries `CHECK (entity_id_a < entity_id_b)`
@@ -666,16 +1031,22 @@ export class DuplicateDetectStage implements Stage {
   private loadEvidence(userId: string, ids: string[]): Promise<SharedClaim[]> {
     return this.dataSource.query<SharedClaim[]>(
       `WITH mine AS (
-         SELECT DISTINCT c.entity_id AS subject_id, c.kind, c.value_normalized
+         SELECT c.entity_id AS subject_id,
+                c.kind,
+                c.value_normalized,
+                CASE WHEN count(DISTINCT c.value_e164) = 1
+                     THEN min(c.value_e164) END AS subject_e164
            FROM ci.identifier_claims c
           WHERE c.owner_user_id = $2::uuid
             AND c.entity_id = ANY($1::uuid[])
             AND c.disposition IS DISTINCT FROM 'rejected'
+          GROUP BY c.entity_id, c.kind, c.value_normalized
        ),
        sized AS (
          SELECT m.subject_id,
                 m.kind,
                 m.value_normalized,
+                m.subject_e164,
                 (SELECT count(DISTINCT o.entity_id)
                    FROM ci.identifier_claims o
                   WHERE o.owner_user_id = $2::uuid
@@ -690,6 +1061,17 @@ export class DuplicateDetectStage implements Stage {
               o.entity_id AS other_id,
               s.kind,
               s.value_normalized,
+              s.subject_e164,
+              CASE WHEN s.kind = 'phone' THEN
+                (SELECT CASE WHEN count(DISTINCT x.value_e164) = 1
+                             THEN min(x.value_e164) END
+                   FROM ci.identifier_claims x
+                  WHERE x.owner_user_id = $2::uuid
+                    AND x.entity_id = o.entity_id
+                    AND x.kind = s.kind
+                    AND x.value_normalized = s.value_normalized
+                    AND x.disposition IS DISTINCT FROM 'rejected')
+              END AS other_e164,
               s.group_size::int AS group_size
          FROM sized s
          JOIN ci.identifier_claims o

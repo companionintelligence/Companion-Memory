@@ -2,18 +2,6 @@ import { gql, useQuery } from '@apollo/client';
 
 const GET_FORECAST_EXTRAS = gql`
   query GetForecastExtras {
-    metricForecast(days: 3) {
-      metric
-      status
-      coverage
-      horizonDays
-      points {
-        date
-        q10
-        q50
-        q90
-      }
-    }
     placeForecast(k: 5) {
       lat
       lng
@@ -26,10 +14,7 @@ const GET_FORECAST_EXTRAS = gql`
     predictionCalibration(limit: 14) {
       basis
       latest {
-        l0Top1Acc
-        ece
         driftFlag
-        modelVersion
       }
     }
     forecastHistory(days: 5) {
@@ -51,7 +36,6 @@ export function useForecastExtras() {
 
   return {
     loading,
-    metrics: data?.metricForecast ?? [],
     places: data?.placeForecast ?? [],
     calibration: data?.predictionCalibration ?? null,
     historyDays: data?.forecastHistory ?? [],

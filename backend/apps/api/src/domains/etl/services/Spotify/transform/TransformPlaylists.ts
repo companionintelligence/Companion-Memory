@@ -94,6 +94,7 @@ export class SpotifyPlaylistsTransformService {
 
               // Create new content entry for the track
               await this.contentService.create(context, {
+                connection_id: connection.id,
                 title: track.name,
                 type: 'Music',
                 url: track.external_urls?.spotify || '',
@@ -131,6 +132,7 @@ export class SpotifyPlaylistsTransformService {
 
           // Create new content entry for the playlist
           await this.contentService.create(context, {
+            connection_id: connection.id,
             type: 'Playlist',
             title: playlist.name,
             text: playlist.description || '',

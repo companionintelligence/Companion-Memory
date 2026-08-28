@@ -1,21 +1,19 @@
 /**
  * Drag payload keys for the schedule surface.
  *
- * They live here rather than beside either component because the drags run in
- * BOTH directions: HorizonGrid accepts candidates from TaskSlate, and TaskSlate
- * accepts committed events back from HorizonGrid. Declaring each key on the
- * component that emits it would make the two import each other.
+ * They live here rather than beside either component because HorizonGrid and
+ * VerticalCalendar both accept the same payload from TaskSlate. Declaring the
+ * key on the emitter would make the grids import the rail, or the rail import
+ * the grids.
  *
- * KNOWN GAP — this protocol is native HTML5 drag-and-drop, which has no keyboard
- * affordance in any browser and does not fire on touch at all. Chips and cards
- * are focusable and carry their full detail as an accessible name, so the week
- * can be READ without a pointer; committing or rescheduling time still cannot be
- * DONE without one. Closing it needs an interaction model this module does not
- * have — a "move to…" command, or arrow-key nudging with a live region — not a
- * new payload key. Until then the schedule surface is pointer-only for writes.
+ * Mouse placement uses native HTML5 drag-and-drop. Touch has no HTML5 drag
+ * events, so Possibilities cards use a hold-then-drop pointer protocol
+ * (`schedulePointerDrag.ts`) that lands on the same Calendar and Horizon
+ * targets. There is still no keyboard write path — chips and cards are
+ * focusable so the week can be READ without a pointer.
  */
 
-/** A suggestion being dragged out of Possibilities. Payload: the candidate id. */
+/** A Plan backlog task being dragged out of Possibilities. Payload: the task id. */
 export const CANDIDATE_DRAG_TYPE = 'application/x-ci-candidate';
 
 /** A committed event being dragged. Payload: {@link EventDragPayload} as JSON. */

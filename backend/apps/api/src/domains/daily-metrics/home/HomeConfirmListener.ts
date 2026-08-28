@@ -62,6 +62,8 @@ export class HomeConfirmListener {
         answerId: payload.answerId,
         error: error instanceof Error ? error.message : String(error),
       });
+
+      throw error;
     }
   }
 }

@@ -13,7 +13,17 @@ import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next'
 import { type Person, PersonEntity } from '../entities/PersonEntity';
 import { CreatePersonDto, NORMALIZED_PERSON_FIELDS, UpdatePersonDto } from '../types';
 
+import {
+  appearanceParams,
+  appearanceWindowParams,
+  hasDateWindow,
+  mapAppearanceRows,
+  ownerUserId,
+  personAppearanceCountSql,
+  personAppearanceListSql,
+} from './appearanceBrowse';
 import { EntityService } from './EntityService';
+import { type JsonbLeafPatch, buildJsonbLeafPatchSql } from './jsonbLeafPatch';
 
 /** Map properties JSONB identity keys onto the typed Person columns. */
 function typedColumnsFromProperties(properties: Record<string, unknown> = {}): {
@@ -153,7 +163,6 @@ export class PersonService extends EntityService<PersonEntity, Person> {
           linkedTable: data.linkedTable,
           linkedId: data.linkedId,
           searchContent: data.searchContent,
-          lastAccessed: data.lastAccessed,
           userId: context.userId,
           properties,
           ...typedColumnsFromProperties(properties),
@@ -183,7 +192,7 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     }
 
     // Reload so @AfterLoad projects the normalized fields and DB-side defaults
-    // (e.g. last_accessed) are present. `save` runs neither, and egress strips
+    // (e.g. created_at) are present. `save` runs neither, and egress strips
     // the normalized keys out of `properties`, so the saved instance alone
     // would expose them in neither place.
     const created = await this.repository.findOne({ where: { id: entity.id } });
@@ -224,7 +233,6 @@ export class PersonService extends EntityService<PersonEntity, Person> {
         linkedTable: item.linkedTable,
         linkedId: item.linkedId,
         searchContent: item.searchContent,
-        lastAccessed: item.lastAccessed,
         userId: context.userId,
         properties,
         ...typedColumnsFromProperties(properties),
@@ -377,8 +385,39 @@ export class PersonService extends EntityService<PersonEntity, Person> {
   }
 
   /**
+   * The calling owner's own Person entity — the single row per owner where
+   * `is_self` is true (set at onboarding; see
+   * `OnboardingService.createPersonForUser`). This is a fresh lookup on
+   * `is_self` rather than a cached pointer such as `users.entity_id`, because
+   * a merge can move `is_self` onto a different row (`PersonMergeService`)
+   * without anything updating that pointer to follow it.
+   *
+   * Excludes merge tombstones the same way `findAll` does. Returns null —
+   * never throws — when the owner has no `is_self` Person yet.
+   */
+  async findSelf(context: ServiceContext): Promise<Person | null> {
+    let qb = this.repository
+      .createQueryBuilder('person')
+      .where('person.is_self IS TRUE')
+      .andWhere('person.merged_into_entity_id IS NULL');
+
+    if (context.userId !== SYSTEM_USER) {
+      qb = qb.andWhere('person.owner_user_id = :userId', { userId: context.userId });
+    }
+
+    const entity = await qb.getOne();
+
+    return entity ? PersonEntity.toEgressType(entity) : null;
+  }
+
+  /**
    * Lightweight identifiers for the most-recent people, for the unified
    * search/explorer feed. Full entities are batch-resolved downstream.
+   *
+   * With no date window this is the unique people list, ordered by row-write
+   * time (the frontend puts undated people in "No date"). With a date window
+   * the list is people who actually appeared in that window, ordered by first
+   * real activity in it — not `created_at`, which is usually the import day.
    */
   async getEntitiesForPeople(
     context: ServiceContext,
@@ -391,6 +430,10 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       order?: 'ASC' | 'DESC';
     } = {},
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    if (hasDateWindow(options)) {
+      return this.listPeopleByAppearance(context, options);
+    }
+
     let query = this.repository
       .createQueryBuilder('person')
       .select('person.id', 'id')
@@ -398,14 +441,6 @@ export class PersonService extends EntityService<PersonEntity, Person> {
       .where('person.owner_user_id = :userId', { userId: context.userId })
       .andWhere('person.is_active IS DISTINCT FROM FALSE')
       .andWhere('person.merged_into_entity_id IS NULL');
-
-    if (options.startTime) {
-      query = query.andWhere('person.created_at >= :startTime', { startTime: options.startTime });
-    }
-
-    if (options.endTime) {
-      query = query.andWhere('person.created_at <= :endTime', { endTime: options.endTime });
-    }
 
     // Composite keyset: page strictly past (afterTime, afterId) in
     // (created_at DESC, entity_id DESC) — see ContentService.getEntitiesForContents.
@@ -431,6 +466,36 @@ export class PersonService extends EntityService<PersonEntity, Person> {
   }
 
   /**
+   * Date-windowed People browse: one row per person, timestamped at MIN(real
+   * activity in the window) — events as organizer/participant (excluding ingest
+   * wall-clock times) and communications as from/to. People with no activity in
+   * the window drop out. See appearanceBrowse.ts.
+   */
+  private async listPeopleByAppearance(
+    context: ServiceContext,
+    options: {
+      limit?: number;
+      startTime?: Date;
+      endTime?: Date;
+      afterTime?: Date;
+      afterId?: string;
+      order?: 'ASC' | 'DESC';
+    },
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    const userId = ownerUserId(context.userId);
+    if (userId == null) {
+      return [];
+    }
+
+    const rows = await this.repository.manager.query<Array<{ id: string; appearedAt: Date | string }>>(
+      personAppearanceListSql(options.order ?? 'DESC'),
+      appearanceParams(userId, options),
+    );
+
+    return mapAppearanceRows(rows, 'person');
+  }
+
+  /**
    * True total of people matching the same filters {@link getEntitiesForPeople} applies (minus
    * the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`, not the
    * length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
@@ -439,6 +504,20 @@ export class PersonService extends EntityService<PersonEntity, Person> {
     context: ServiceContext,
     options: { startTime?: Date; endTime?: Date },
   ): Promise<number> {
+    if (hasDateWindow(options)) {
+      const userId = ownerUserId(context.userId);
+      if (userId == null) {
+        return 0;
+      }
+
+      const rows = await this.repository.manager.query<Array<{ n: number }>>(
+        personAppearanceCountSql(),
+        appearanceWindowParams(userId, options),
+      );
+
+      return Number(rows[0]?.n ?? 0);
+    }
+
     let query = this.repository
       .createQueryBuilder('person')
       .where('person.owner_user_id = :userId', { userId: context.userId })
@@ -589,6 +668,62 @@ export class PersonService extends EntityService<PersonEntity, Person> {
 
     if (set.properties) {
       qb = qb.setParameter('propertiesPatch', JSON.stringify(data.propertiesPatch));
+    }
+
+    const result = await qb.execute();
+
+    if ((result.affected ?? 0) === 0) {
+      return null;
+    }
+
+    await this.eventService.send(PersonUpdatedEvent, {
+      personId: id,
+    });
+
+    return this.findById(context, id);
+  }
+
+  /**
+   * Patch individual *leaves* of the properties JSONB.
+   *
+   * `patch()` merges at the top level only (`properties || patch`), so a caller
+   * that wants to change one key inside a sub-object has to read the whole
+   * sub-object, spread it, and send it back — a read-modify-write that loses the
+   * other writer's update whenever two of them touch different leaves of the
+   * same sub-object (e.g. `planner.trust_mode` vs
+   * `planner.image_description_enabled`).
+   *
+   * This writes each leaf with `jsonb_set(..., '{a,b}', value, true)` in a single
+   * statement, reading nothing in the application, so concurrent writers to
+   * different leaves cannot clobber each other.
+   *
+   * Paths must be at least two segments deep — top-level keys go through
+   * `patch()`, which also keeps the typed identity columns in sync.
+   */
+  async patchPropertyLeaves(
+    context: ServiceContext,
+    id: string,
+    leaves: JsonbLeafPatch[],
+  ): Promise<Person | null> {
+    if (leaves.length === 0) {
+      return this.findById(context, id);
+    }
+
+    const { expression, parameters } = buildJsonbLeafPatchSql('properties', leaves);
+
+    let qb = this.repository
+      .createQueryBuilder()
+      .update()
+      .set({ properties: () => expression })
+      .where('entity_id = :id', { id })
+      .andWhere(`entity_type = 'Person'`);
+
+    if (context.userId !== SYSTEM_USER) {
+      qb = qb.andWhere('owner_user_id = :userId', { userId: context.userId });
+    }
+
+    for (const [name, value] of Object.entries(parameters)) {
+      qb = qb.setParameter(name, value);
     }
 
     const result = await qb.execute();

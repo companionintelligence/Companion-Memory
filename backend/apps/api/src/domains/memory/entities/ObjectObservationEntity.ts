@@ -24,18 +24,18 @@ export interface ObservationBoundingBox {
  *
  * This exists to keep two very different claims apart: "a coffee mug is visible
  * in this photo" and "I own this specific coffee mug". Conflating them is what
- * the old InventoryListener did — it wrote speculative ci.inventory rows
+ * the retired inventory listener did — it wrote speculative ci.objects rows
  * straight from a vision guess, polluting the owned-things table with every
  * object that ever appeared in frame.
  *
  * An observation is the weak claim. Resolution to an owned unit
  * (`resolvedObjectId`) or a catalog product (`resolvedProductId`) is a separate,
  * revisable decision with its own method and confidence. Nothing here writes
- * ci.inventory directly.
+ * ci.objects directly.
  *
  * The `embedding` column (vector(768)) is deliberately NOT mapped: pgvector
  * columns are read and written through raw SQL in this codebase — the same
- * convention as `ci.inventory.object_embedding`, which ItemEntity also omits —
+ * convention as `ci.objects.object_embedding`, which ItemEntity also omits —
  * so that ordinary reads do not drag 768 floats per row.
  */
 @Entity({ schema: 'ci', name: 'object_observations' })

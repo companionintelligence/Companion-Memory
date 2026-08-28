@@ -10,8 +10,8 @@ Architecture:
   • TransformerEncoder shared backbone (n_layers, n_heads, d_ff)
   • L0 + L1 flat linear output heads (nn.Linear)
 
-Kept intentionally small (d_model=64, n_layers=2) because the seed corpus
-is ~62 training days — a larger model would overfit immediately.
+Sized for hundreds of days of history (d_model=256, n_layers=6), not the
+~90-day toy corpus the first seed used. Still small versus a 24 GB GPU.
 
 Implements T2.2 (CI-Server-apo) and T2.3 (CI-Server-8ms).
 """
@@ -24,11 +24,11 @@ import torch.nn as nn
 from ci.hbpe.buckets import BUCKETS_PER_DAY as MAX_BUCKETS
 from ci.hbpe.model.vocab import PAD_IDX
 
-# Default hyperparameters — small by design for a 90-day corpus
-D_MODEL = 64
-N_HEADS = 4
-N_LAYERS = 2
-D_FF = 128
+# Default hyperparameters — hundreds of training days, not a 90-day toy
+D_MODEL = 256
+N_HEADS = 8
+N_LAYERS = 6
+D_FF = 1024
 DROPOUT = 0.1
 
 

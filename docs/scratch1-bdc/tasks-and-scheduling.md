@@ -1,10 +1,52 @@
 # Tasks & Scheduling
 
-> **Status:** Proposal — for team review &nbsp;•&nbsp; **Authored:** 2026-08-09
+> **Status:** Proposal — for team review &nbsp;•&nbsp; **Authored:** 2026-08-09 &nbsp;•&nbsp; **§1 re-checked:** 2026-08-19
 >
 > The to-do layer (`ci.tasks`) and the scheduler (`ci.event_candidates`): what they are today, why they are disconnected, and how they become one coherent planning surface grounded in HBPE's behavioral vocabulary.
 >
 > **Companion designs:** [HBPE redesign](hbpe-data-rich-redesign.md) · [Completion Detection](completion-detection.md) · [System map](ci-prediction-doc-map.md)
+
+> **§1 "Current State" has moved on — re-verified 2026-08-19.** The proposal (§3-§7) is
+> still unbuilt, but several of the "collected but never read" findings have since gained a
+> consumer, and one flag flipped:
+>
+> - **`/plan` is no longer flag-gated off.** `planning.page` ships `true` in
+>   `backend/apps/api/config/default.json`.
+> - **`PlanningTimeService` has its first consumer** — `PlannedBlockService` injects it. Note
+>   also that the shared zoned-time helpers moved from `domains/planning/time/zoned.ts` to
+>   `@ci/common/time/zoned`; planning re-exports them.
+> - **`source_kind` / `source_ref` are reachable** — not through `CreateTaskInput` (still
+>   absent there, so §8 Q5 stands for the API), but `InboxScanService` writes
+>   `sourceKind: 'inbox'` and `TodoScanService` writes `'memory_scan'`, both deduping through
+>   `TaskService.findBySourceRef`, so `ux_tasks_source` is live.
+> - **`actual_minutes` has a write path** — `completeTask(id, actualMinutes)` and
+>   `updateTask` both accept it (`TaskResolver.ts:142-152`, `:111`). Still no timer, so in
+>   practice it stays 0.
+> - **There is now a planning cron** — `PlanningJobsCron` fans out five per-user jobs
+>   (`todoScan` 06:00 daily, `todoProcess` every 6h, `inboxScan` every 30m, `eventNow`
+>   hourly at :15, `verifyDone` hourly at :45). **None of them is roll-forward**: §4's
+>   `TaskRollForwardCron` is still unbuilt and "overdue" is still a client-side bucket.
+> - **A trust-dial triage inbox landed** that this document does not describe: `proposed`
+>   tasks plus `ci.task_pending_changes` (`20260818185920`, `20260819010000`), with
+>   `acceptProposedTask` / `declineProposedTask` on the Plan page.
+> - **`ci.events` gained a `task_id`** (`20260818185920:38-46`) — the planned-block → event
+>   link. This is *not* §5.2's `ci.event_candidates.task_id`, which still does not exist,
+>   and `ci.actions.task_id` still has no reader.
+> - **`ci.events.status = 'completed'` now has exactly one writer**, contradicting §1.3 and
+>   the "nothing revisits an accepted candidate" claim. `VerifyDoneService.runForUser`
+>   (`TodoProcessService.ts:304-380`, driven by the `verifyDone` cron leg) picks up planned
+>   blocks whose `task_id` is set and whose end time has passed within 36 hours, searches
+>   memory for completion evidence, and — when `PersonalizationService.decideAction`
+>   returns `auto` on a positive signal — calls `TaskService.complete` and saves the event
+>   with `status = 'completed'`. Anything short of that becomes a `task_pending_change` for
+>   the user to confirm, which is the same "system proposes, user confirms" principle
+>   [Completion Detection](completion-detection.md) §2 argues for. It is narrower than that
+>   design: it only reaches events that came from a planned block, and it records no time or
+>   emotional outcome.
+>
+> Unchanged and still true: `ci.tasks` has no `l0_class` / `l1_cluster_id`; `task_time`,
+> `defer_count`, `ci.task_dependencies`, `ci.rhythms`, `fit_score` and `fit_curve` have no
+> readers; and `time_flex` is only ever written `'week'`.
 
 ---
 

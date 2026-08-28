@@ -42,4 +42,12 @@ describe('PersonGridItem', () => {
 
     expect(screen.getByRole('img')).toHaveAttribute('src', '/static/avatars/jd.png');
   });
+
+  it('renders initials instead of a broken image when there is no avatar URL', () => {
+    renderWithProviders(<PersonGridItem person={makePerson({ avatarUrl: null })} />);
+
+    const avatar = screen.getByRole('img', { name: 'John Doe' });
+    expect(avatar.tagName).not.toBe('IMG');
+    expect(avatar).toHaveTextContent('JD');
+  });
 });

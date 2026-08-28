@@ -54,8 +54,22 @@ export async function inboxCommand(ctx: CliContext, options: InboxOptions = {}):
         [
           { header: 'unit', value: (unit) => unit.path },
           { header: 'kind', value: (unit) => unit.kind },
-          { header: 'size', value: (unit) => bytes(unit.sizeBytes), align: 'right' },
-          { header: 'files', value: (unit) => String(unit.fileCount), align: 'right' },
+          // `~` marks a unit whose walk stopped at MAX_UNIT_SIZING_ENTRIES: the
+          // service already knows the figure is a floor (`sizeApproximate`) and
+          // printing it bare states a measurement it did not make. Measured on a
+          // 79,623-file Google Takeout, the bare numbers read 49,788 files and
+          // 3.0GB against an actual 4.3GB — 37% and 30% short, with nothing to
+          // say so.
+          {
+            header: 'size',
+            value: (unit) => `${unit.sizeApproximate ? '~' : ''}${bytes(unit.sizeBytes)}`,
+            align: 'right',
+          },
+          {
+            header: 'files',
+            value: (unit) => `${unit.fileCount}${unit.sizeApproximate ? '+' : ''}`,
+            align: 'right',
+          },
           {
             header: 'recognized',
             value: (unit) =>
@@ -66,14 +80,14 @@ export async function inboxCommand(ctx: CliContext, options: InboxOptions = {}):
           },
           { header: 'status', value: (unit) => (unit.claimed ? 'importing' : 'ready') },
         ],
-        `Nothing in ${scan.inboxDir}.`,
+        `Nothing in ${scan.displayDir}.`,
       ),
     );
 
     const ready = selected.filter((unit) => !unit.claimed).length;
 
     if (selected.length > 0) {
-      ctx.term.out(`\n${selected.length} unit(s) in ${scan.inboxDir}, ${ready} ready.`);
+      ctx.term.out(`\n${selected.length} unit(s) in ${scan.displayDir}, ${ready} ready.`);
     }
 
     if (scan.skippedSymlinks > 0) {
@@ -84,6 +98,32 @@ export async function inboxCommand(ctx: CliContext, options: InboxOptions = {}):
 
     if (scan.truncated) {
       ctx.term.out('The scan hit its walk limits; some units are not listed.');
+    }
+
+    if (scan.recognitionPartial) {
+      // The failure this prevents is silent and specific: recognition runs
+      // under one scan-wide deadline, so the biggest unit can exhaust it and
+      // come back with an EMPTY `recognized` list. That unit then matches no
+      // `--only <source>`, and the run reports success over a smaller corpus
+      // than the operator asked for. A unit listed with no parsers at all is
+      // the tell.
+      const unnamed = selected.filter((unit) => unit.recognized.length === 0);
+
+      ctx.term.out(
+        `Recognition ran out of budget${
+          unnamed.length > 0 ? ` — no parsers listed for: ${unnamed.map((u) => u.path).join(', ')}` : ''
+        }. Those units will NOT match \`--only\`; re-run to let recognition finish, or pass their paths explicitly.`,
+      );
+    }
+
+    const approximate = selected.filter((unit) => unit.sizeApproximate);
+
+    if (approximate.length > 0) {
+      ctx.term.out(
+        `~ and + mark floors, not measurements: sizing stopped early for ${approximate
+          .map((u) => u.path)
+          .join(', ')}.`,
+      );
     }
 
     if (ready > 0) {
@@ -98,7 +138,7 @@ export async function inboxCommand(ctx: CliContext, options: InboxOptions = {}):
   if (startable.length === 0) {
     throw new CliError(
       selected.length === 0
-        ? `Nothing to import in ${scan.inboxDir}.`
+        ? `Nothing to import in ${scan.displayDir}.`
         : `All ${selected.length} matching unit(s) are already being imported.`,
     );
   }

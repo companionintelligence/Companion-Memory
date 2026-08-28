@@ -15,7 +15,5 @@ import { ImportActivity } from '@/components/ImportActivity';
 export function JobsImportActivity() {
   const { isMobile } = useDeviceLayout();
 
-  return (
-    <ImportActivity className={isMobile === true ? 'max-h-[36vh] overflow-y-auto' : undefined} />
-  );
+  return <ImportActivity className={isMobile === true ? 'max-h-[36vh] overflow-y-auto' : undefined} />;
 }

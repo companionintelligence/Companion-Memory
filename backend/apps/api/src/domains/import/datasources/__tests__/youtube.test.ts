@@ -315,4 +315,41 @@ describe('YouTube datasource', () => {
       expect(ids.every((id: string) => id.startsWith('youtube:sub:'))).toBe(true);
     });
   });
+
+  describe('HTML entry extraction survives a nested div', () => {
+    // Same cell shape and history as google_my_activity.ts: a non-greedy
+    // `[\s\S]*?<\/div>` stops at the FIRST `</div>`, which here would close a
+    // thumbnail wrapper and drop the real link/timestamp that follow it.
+    const NESTED_DIV_HTML =
+      '<html><body>' +
+      '<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">' +
+      '<div class="thumbnail"><img src="thumb.png"></div>' +
+      'Watched <a href="https://www.youtube.com/watch?v=abc123">How to Code in Python</a><br>' +
+      'Jan 1, 2021, 8:00:00 PM UTC<br></div>' +
+      '</body></html>';
+
+    it('reads the link and timestamp AFTER a nested div, not just up to its close', async () => {
+      const fs = await import('node:fs');
+      const os = await import('node:os');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'youtube-nested-div-'));
+      fs.writeFileSync(path.join(dir, 'watch-history.html'), NESTED_DIV_HTML);
+      try {
+        const fi = new YouTubeFileImporter();
+        const pipeline: EmittedGraph[] = [];
+        await fi.fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+          pipeline,
+          timeframe: {},
+          log: () => {},
+        } as unknown as ImportParams);
+
+        // Truncated-at-the-nested-close would have no anchor to read the
+        // video URL/title from, and the whole entry would be dropped.
+        expect(pipeline).toHaveLength(1);
+        expect(pipeline[0].item.classification).toBe('watch');
+        expect(pipeline[0].item.metadata.URL).toContain('abc123');
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  });
 });

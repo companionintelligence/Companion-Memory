@@ -41,6 +41,10 @@ export class AnswerService {
    *   bulk-loaded rows are instead swept by the post-load search-index backfill.
    *   The feed-queue cleanup is always applied (it's a plain DELETE, not a pgboss
    *   fan-out) so an answered question leaves the feed regardless of path.
+   *
+   * The question's `times_answered` is bumped on every path for the same reason:
+   * it is one relative UPDATE, and a counter that skipped the import path would
+   * report a number nobody could interpret.
    */
   async create(
     context: UserServiceContext,
@@ -62,10 +66,21 @@ export class AnswerService {
       ...(data.answerSource !== undefined ? { answerSource: data.answerSource } : {}),
       ...(data.answerConfidence !== undefined ? { answerConfidence: data.answerConfidence } : {}),
       ...(data.answerRationale !== undefined ? { answerRationale: data.answerRationale } : {}),
+      ...(data.answerEvidence !== undefined ? { answerEvidence: data.answerEvidence } : {}),
       ...(data.sessionContext !== undefined ? { sessionContext: data.sessionContext } : {}),
     });
 
     const entity = await this.answerRepository.save(instance);
+
+    // Count the answer against its question. Every path that records a NEW
+    // answer funnels through here or through createMany, so these two calls are
+    // the whole writer for ci.questions.times_answered — REST POST /answers, the
+    // createAnswer(s) GraphQL mutations, the onboarding context prompts, and the
+    // smart-rotation inference listener all land on one of them. Editing an
+    // existing answer (AnswerService.update, which is how the inference listener
+    // overwrites an answer the user already gave) deliberately does not count:
+    // it is the same answer rewritten, not a second one.
+    await this.questionService.recordQuestionAnswered(data.question.id);
 
     await this.questionService.removeFromFeedQueue(context.userId, data.question.id);
 
@@ -125,6 +140,11 @@ export class AnswerService {
         .values(entities.slice(offset, offset + chunkSize))
         .execute();
     }
+
+    // Batched times_answered bump: one UPDATE for the whole batch. Deliberately
+    // NOT de-duplicated the way the feed-queue cleanup below is — two answers to
+    // the same question are two answers, and must count twice.
+    await this.questionService.recordManyQuestionsAnswered(data.map((item) => item.question.id));
 
     // Batched feed-queue cleanup: drop every answered question from the feed in
     // one DELETE instead of N per-row removeFromFeedQueue calls.
@@ -219,6 +239,10 @@ export class AnswerService {
       updateData.answerRationale = data.answerRationale;
     }
 
+    if (data.answerEvidence !== undefined) {
+      updateData.answerEvidence = data.answerEvidence;
+    }
+
     if (data.answerSource !== undefined) {
       updateData.answerSource = data.answerSource;
     }
@@ -286,6 +310,15 @@ export class AnswerService {
 
       if (data.answerRationale === undefined) {
         updateData.answerRationale = null;
+      }
+
+      // Same reasoning as the rationale, one step further: the citations point at
+      // rows that grounded a sentence the user has just replaced. Left behind,
+      // the drawer would offer messages and events as the provenance of words
+      // they never supported — a stronger lie than a stale score, because it
+      // names real records to back it up.
+      if (data.answerEvidence === undefined) {
+        updateData.answerEvidence = null;
       }
     }
 

@@ -1,15 +1,21 @@
 jest.mock('@ci/configuration', () => {
-  const actual = jest.requireActual('@ci/configuration').default;
+  const actualModule = jest.requireActual('@ci/configuration');
+  const actual = actualModule.default;
+  const mocked = {
+    ...actual,
+    // Trailing slash on purpose: the provider must normalize it away rather
+    // than build https://portal.test//api/geocode.
+    geocoding: { ...actual.geocoding, provider: 'portal', portalBaseUrl: 'https://portal.test/' },
+    ciPortal: { ...actual.ciPortal, apiKey: 'device-key-123' },
+  };
 
   return {
     __esModule: true,
-    default: {
-      ...actual,
-      // Trailing slash on purpose: the provider must normalize it away rather
-      // than build https://portal.test//api/geocode.
-      geocoding: { ...actual.geocoding, provider: 'portal', portalBaseUrl: 'https://portal.test/' },
-      ciPortal: { ...actual.ciPortal, apiKey: 'device-key-123' },
-    },
+    default: mocked,
+    // Delegates to the real implementation over `mocked` (not `actual`), so a
+    // test mutating `config.geocoding.portalBaseUrl` (below) is seen by this
+    // too — they are the same object.
+    isGeocodingConfigured: () => actualModule.isGeocodingConfigured(mocked),
   };
 });
 

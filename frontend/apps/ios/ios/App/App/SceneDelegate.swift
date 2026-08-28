@@ -13,15 +13,18 @@ import Capacitor
 // `applicationDidEnterBackground(_:)` and friends — the scene equivalents below are
 // called instead. Capacitor has no scene support of its own (`ApplicationDelegateProxy`
 // is a plain `UIApplicationDelegate`), so anything the AppDelegate used to forward has to
-// be forwarded from here or it is simply dropped. That cost two live features before this
-// file forwarded them:
+// be forwarded from here or it is simply dropped. That cost a live feature before this
+// file forwarded it:
 //
 //   • The OIDC callback. "Sign in with CI Portal" returns through the `companion://`
 //     custom scheme; with no `scene(_:openURLContexts:)` the URL never reached
 //     `ApplicationDelegateProxy`, so `@capacitor/app` never raised `appUrlOpen`, so
 //     `useAuth`'s listener never fired and sign-in could never complete.
-//   • `KeychainHardening`'s background sweep, which `AppDelegate` calls from
-//     `applicationDidEnterBackground` — a method UIKit no longer invokes.
+//
+// (A second one, `KeychainHardening`'s background sweep, was forwarded from
+// `sceneDidEnterBackground` until credential writes moved to `CompanionSecureStore` and
+// made the sweep's target write correct at the source; it is now a launch-only migration
+// called from `AppDelegate`.)
 //
 // Routing through `ApplicationDelegateProxy.shared` (rather than posting the
 // notifications directly) is deliberate: it also sets `lastURL`, which is what
@@ -66,13 +69,6 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// Universal Links.
     func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
         handle(userActivity)
-    }
-
-    func sceneDidEnterBackground(_ scene: UIScene) {
-        // The scene-lifecycle counterpart of AppDelegate.applicationDidEnterBackground,
-        // which UIKit does not call once scenes are adopted. Seals any credential the web
-        // layer stored during this session before the app goes idle — see KeychainHardening.
-        KeychainHardening.hardenStoredCredentials()
     }
 
     // MARK: - Forwarding

@@ -1,6 +1,15 @@
 import type { RequestContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
+import type { EventService } from '@ci/domains/events';
 import type { GraphNodeEntity, GraphUtilityService, RelationshipEntity } from '@ci/domains/memory';
+import {
+  ConceptRemovedEvent,
+  PersonRemovedEvent,
+  PlaceRemovedEvent,
+  type ConceptDeletedPayload,
+  type PersonDeletedPayload,
+  type PlaceDeletedPayload,
+} from '@ci/domains/memory/events';
 
 import { ForgetKnowledgeTool } from '../ForgetKnowledgeTool';
 
@@ -26,8 +35,43 @@ function logger(): LoggerService {
   } as unknown as LoggerService;
 }
 
-function fakeNode(entityId: string): GraphNodeEntity {
-  return { entity_id: entityId } as GraphNodeEntity;
+function fakeNode(entityId: string, entityType = 'Concept'): GraphNodeEntity {
+  return { entity_id: entityId, entity_type: entityType } as GraphNodeEntity;
+}
+
+/**
+ * Stand-in for `ci_search`, keyed the way the real tables are: (search type,
+ * id). Rows are dropped by dispatching on the SAME `*RemovedEvent` constants
+ * the real `*SearchIndexListener.unindex*` handlers subscribe to and by the
+ * same payload id they read, so a tool that emits a different event, or the
+ * right event carrying a different id, leaves the row answering searches here
+ * exactly as it would in production.
+ */
+function makeSearchIndex(seeded: string[] = []) {
+  const rows = new Set(seeded);
+
+  const send = jest.fn(async (name: string, payload: Record<string, unknown>) => {
+    switch (name) {
+      case PersonRemovedEvent:
+        rows.delete(`person:${(payload as PersonDeletedPayload).personId}`);
+        break;
+      case PlaceRemovedEvent:
+        rows.delete(`place:${(payload as PlaceDeletedPayload).placeId}`);
+        break;
+      case ConceptRemovedEvent:
+        rows.delete(`concept:${(payload as ConceptDeletedPayload).conceptId}`);
+        break;
+    }
+
+    return [];
+  });
+
+  return {
+    send,
+    eventService: { send } as unknown as EventService,
+    /** What a search would find: the index row for this type/id, or nothing. */
+    lookup: (searchType: string, entityId: string) => rows.has(`${searchType}:${entityId}`),
+  };
 }
 
 function fakeRel(relationshipId: string): RelationshipEntity {
@@ -37,7 +81,7 @@ function fakeRel(relationshipId: string): RelationshipEntity {
 /** Builds a jest-mock GraphUtilityService double with a controllable node/relationship table. */
 function makeGraphUtility(
   options: {
-    nodes?: Record<string, { relationships?: RelationshipEntity[] }>;
+    nodes?: Record<string, { relationships?: RelationshipEntity[]; entityType?: string }>;
     relationshipsById?: Record<string, RelationshipEntity>;
   } = {},
 ) {
@@ -50,7 +94,10 @@ function makeGraphUtility(
       return { node: null, relationships: [] };
     }
 
-    return { node: fakeNode(entityId), relationships: entry.relationships ?? [] };
+    return {
+      node: fakeNode(entityId, entry.entityType),
+      relationships: entry.relationships ?? [],
+    };
   });
 
   const getRelationships = jest.fn(async (_ownerId: string, opts: { relationshipIds?: string[] }) =>
@@ -65,8 +112,15 @@ function makeGraphUtility(
   return { collectEntitySnapshot, getRelationships, deactivateEntities, deactivateRelationships };
 }
 
-function makeTool(graphUtility: ReturnType<typeof makeGraphUtility>) {
-  return new ForgetKnowledgeTool(graphUtility as unknown as GraphUtilityService, logger());
+function makeTool(
+  graphUtility: ReturnType<typeof makeGraphUtility>,
+  search: ReturnType<typeof makeSearchIndex> = makeSearchIndex(),
+) {
+  return new ForgetKnowledgeTool(
+    graphUtility as unknown as GraphUtilityService,
+    search.eventService,
+    logger(),
+  );
 }
 
 describe('ForgetKnowledgeTool', () => {
@@ -176,5 +230,61 @@ describe('ForgetKnowledgeTool', () => {
 
     expect(result.success).toBe(false);
     expect(graphUtility.collectEntitySnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe('ForgetKnowledgeTool search index removal', () => {
+  it.each([
+    ['Concept', 'concept'],
+    ['Person', 'person'],
+    // Graph spellings the search vocabulary aliases onto the same type.
+    ['Contact', 'person'],
+    ['Location', 'place'],
+  ])('a forgotten %s is no longer findable in the search index', async (entityType, searchType) => {
+    const search = makeSearchIndex([`${searchType}:${E1}`]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType } } });
+    const tool = makeTool(graphUtility, search);
+
+    expect(search.lookup(searchType, E1)).toBe(true);
+
+    const result = await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
+
+    expect(result.success).toBe(true);
+    expect(search.lookup(searchType, E1)).toBe(false);
+  });
+
+  it('removes the index rows in archive_and_delete mode too', async () => {
+    const search = makeSearchIndex([`concept:${E1}`]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Concept' } } });
+    const tool = makeTool(graphUtility, search);
+
+    await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive_and_delete' });
+
+    expect(search.lookup('concept', E1)).toBe(false);
+  });
+
+  it('leaves an entity that was never found alone', async () => {
+    const search = makeSearchIndex([`concept:${E_MISSING_ONLY}`]);
+    const graphUtility = makeGraphUtility();
+    const tool = makeTool(graphUtility, search);
+
+    await tool.execute(CONTEXT, { entityIds: [E_MISSING_ONLY], mode: 'archive' });
+
+    expect(search.send).not.toHaveBeenCalled();
+    expect(search.lookup('concept', E_MISSING_ONLY)).toBe(true);
+  });
+
+  it('announces no deletion for a type whose record this tool did not remove', async () => {
+    // An `Event` graph node is the `ci.entities` half of a pair whose `ci.events`
+    // detail row forget never touches. Emitting `event.deleted` for a record that
+    // still exists would be false to every consumer of that event, so the tool
+    // must stay quiet rather than unindex a live record.
+    const search = makeSearchIndex([`event:${E1}`]);
+    const graphUtility = makeGraphUtility({ nodes: { [E1]: { entityType: 'Event' } } });
+    const tool = makeTool(graphUtility, search);
+
+    await tool.execute(CONTEXT, { entityIds: [E1], mode: 'archive' });
+
+    expect(search.send).not.toHaveBeenCalled();
   });
 });

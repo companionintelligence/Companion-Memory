@@ -7,7 +7,15 @@ import type { DataSource } from 'typeorm';
 import type { RequestContext } from '@ci/common/context';
 import { ValidationPipe } from '@ci/common/pipes';
 import type { BrowserActivityService } from '@ci/domains/browser-activity';
-import type { CommunicationService, ContentService, EventService, ItemService } from '@ci/domains/memory';
+import type {
+  CommunicationService,
+  ContentService,
+  EventService,
+  ItemService,
+  ObjectObservationService,
+  ProductModelService,
+  ReceiptService,
+} from '@ci/domains/memory';
 import type { NoteService } from '@ci/domains/notes';
 import type { PositionService } from '@ci/domains/position';
 
@@ -15,7 +23,7 @@ import {
   ingestBrowserActivitySchema,
   ingestCommunicationsSchema,
   ingestContentsSchema,
-  ingestInventorySchema,
+  ingestThingsSchema,
   ingestNotesSchema,
   ingestPositionsSchema,
 } from '../../types';
@@ -109,6 +117,44 @@ function makeController(opts: { captureInserted?: boolean[]; noteConflicts?: str
     })),
   } as unknown as NoteService;
 
+  // The object plane. Receipts echo their triple so the materialize->link step
+  // has something to stamp; observations report a write RESULT rather than an
+  // array, which is the one shape difference among the bulk services.
+  const receiptService = {
+    createMany: jest.fn(async (_context: unknown, data: Array<Record<string, unknown>>) =>
+      data.map((dto, i) => ({
+        id: `receipt-${i}`,
+        sourceType: dto.sourceType,
+        sourceSystem: dto.sourceSystem,
+        sourceId: dto.sourceId,
+      })),
+    ),
+    replaceLineItems: jest.fn(async () => []),
+  } as unknown as ReceiptService;
+  const productModelService = {
+    createMany: jest.fn(async (_context: unknown, data: Array<Record<string, unknown>>) =>
+      data.map((dto, i) => ({
+        id: `product-${i}`,
+        sourceType: dto.sourceType,
+        sourceSystem: dto.sourceSystem,
+        sourceId: dto.sourceId,
+      })),
+    ),
+  } as unknown as ProductModelService;
+  const objectObservationService = {
+    createMany: jest.fn(async (_context: unknown, data: Array<Record<string, unknown>>) => ({
+      written: data.map((dto, i) => ({
+        id: `observation-${i}`,
+        sourceType: dto.sourceType,
+        sourceSystem: dto.sourceSystem,
+        sourceId: dto.sourceId,
+      })),
+      protectedByConfirmation: 0,
+      duplicatesInBatch: 0,
+      rejectedUnarbitered: 0,
+    })),
+  } as unknown as ObjectObservationService;
+
   const controller = new BulkIngestController(
     communicationService,
     contentService,
@@ -117,6 +163,9 @@ function makeController(opts: { captureInserted?: boolean[]; noteConflicts?: str
     positionService,
     eventService,
     noteService,
+    receiptService,
+    productModelService,
+    objectObservationService,
     dataSource,
     { schedule: jest.fn(async () => undefined) } as never,
   );
@@ -130,6 +179,9 @@ function makeController(opts: { captureInserted?: boolean[]; noteConflicts?: str
     positionService,
     eventService,
     noteService,
+    receiptService,
+    productModelService,
+    objectObservationService,
     dataSource,
   };
 }
@@ -348,11 +400,11 @@ describe('BulkIngestController', () => {
     });
   });
 
-  describe('POST /v1/inventory', () => {
+  describe('POST /v1/things', () => {
     it('hands the batch to ItemService.createMany, coercing acquiredAt to Date', async () => {
       const { controller, itemService } = makeController();
 
-      const res = await controller.ingestInventory(ctx, jsonReq(), {
+      const res = await controller.ingestThings(ctx, jsonReq(), {
         records: [
           {
             name: 'Laptop',
@@ -369,6 +421,21 @@ describe('BulkIngestController', () => {
       const dtos = (itemService.createMany as jest.Mock).mock.calls[0][1];
       expect(dtos[0].acquiredAt).toEqual(new Date('2025-05-01T12:00:00.000Z'));
       expect(dtos[1].acquiredAt).toBeUndefined();
+    });
+
+    // The retired inventory feature shipped `/v1/inventory`, and capture
+    // clients live in other repos. The alias is one delegating call, so what
+    // needs pinning is that it delegates at all — a 404 here is an outbox that
+    // retries forever.
+    it('still answers on the deprecated /v1/inventory path, through the same handler', async () => {
+      const { controller, itemService } = makeController();
+
+      const res = await controller.ingestThingsLegacyAlias(ctx, jsonReq(), {
+        records: [{ name: 'Laptop' }],
+      });
+
+      expect(res).toEqual({ ingested: 1, duplicate: 0, rejected: [] });
+      expect((itemService.createMany as jest.Mock).mock.calls[0][1]).toHaveLength(1);
     });
   });
 
@@ -613,7 +680,7 @@ describe('BulkIngestController', () => {
         JSON.stringify({ name: 'Desk' }),
       ].join('\n');
 
-      const res = await controller.ingestInventory(ctx, ndjsonReq(body), undefined);
+      const res = await controller.ingestThings(ctx, ndjsonReq(body), undefined);
 
       expect(res.ingested).toBe(2);
       expect(res.rejected).toEqual([
@@ -650,7 +717,7 @@ describe('bulk envelope validation (the shapes the route ValidationPipes enforce
   const schemas = [
     ['communications', ingestCommunicationsSchema, communicationRecord('a')],
     ['contents', ingestContentsSchema, { type: 'note', text: 'x' }],
-    ['inventory', ingestInventorySchema, { name: 'Lamp' }],
+    ['things', ingestThingsSchema, { name: 'Lamp' }],
     [
       'browser-activity',
       ingestBrowserActivitySchema,

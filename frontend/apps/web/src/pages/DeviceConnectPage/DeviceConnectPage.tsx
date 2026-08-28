@@ -1,13 +1,22 @@
 import { type FormEvent, useEffect, useState } from 'react';
 
-import { persistApiBaseUrl } from '@ci/common';
+import { persistApiBaseUrl, resolveHttpOrigin } from '@ci/common';
 import { Button, Card, Input, LoadingButton, PasswordInput } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
-import { loginWithPortalOidc, OidcCancelledError, resumePendingOidcLogin } from './oidc';
+import { useAuth, useCurrentUser } from '@/hooks';
+
+import {
+  emailFromIdToken,
+  loginWithPortalOidc,
+  OidcCancelledError,
+  resumePendingOidcLogin,
+  selectMemoryPortalBearers,
+} from './oidc';
 import {
   DEFAULT_PORTAL_URL,
   listMemoryServers,
+  probeMemoryOrigin,
   signInToPortal,
   type MemoryServerDevice,
   type PortalAuth,
@@ -16,19 +25,33 @@ import {
 type Step = 'sign-in' | 'pick';
 
 const TOUCH = 'min-h-[44px]';
+const PORTAL_AUTH_KEY = 'ci.deviceConnect.portalAuth';
 
-async function healthCheckOrigin(origin: string): Promise<void> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-
+function writePortalAuth(auth: PortalAuth): void {
   try {
-    const response = await fetch(`${origin}/api/health`, { signal: controller.signal });
+    sessionStorage.setItem(PORTAL_AUTH_KEY, JSON.stringify(auth));
+  } catch {
+    /* ignore */
+  }
+}
 
-    if (!response.ok) {
-      throw new Error(`Memory Server responded with ${response.status}`);
+function readStoredPortalAuth(): PortalAuth | null {
+  try {
+    const raw = sessionStorage.getItem(PORTAL_AUTH_KEY);
+
+    if (!raw) {
+      return null;
     }
-  } finally {
-    clearTimeout(timeout);
+
+    const parsed = JSON.parse(raw) as PortalAuth;
+
+    if (parsed.kind === 'oauth' && (parsed.token || parsed.idToken)) {
+      return parsed;
+    }
+
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -39,6 +62,13 @@ async function healthCheckOrigin(origin: string): Promise<void> {
  */
 export function DeviceConnectPage() {
   const navigate = useNavigate();
+  const [{ authenticated, initializing }, { completePortalMemoryConnect, completeMemoryPasswordConnect }] =
+    useAuth();
+  const { user, loading: userLoading, error: userError } = useCurrentUser();
+
+  // Do not leave this page until Memory has accepted the minted key and `me`
+  // resolved. Navigating to `/` earlier makes RedirectKnownUser treat a missing
+  // profile as "logged out" and bounce straight back here.
   const [step, setStep] = useState<Step>('sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -50,6 +80,30 @@ export function DeviceConnectPage() {
   const [oidcController, setOidcController] = useState<AbortController | null>(null);
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [signInError, setSignInError] = useState<string | null>(null);
+  const [memoryLoginOrigin, setMemoryLoginOrigin] = useState<string | null>(null);
+  const [memoryEmail, setMemoryEmail] = useState('');
+  const [memoryPassword, setMemoryPassword] = useState('');
+  const [awaitingProfile, setAwaitingProfile] = useState(false);
+
+  useEffect(() => {
+    if (!initializing && authenticated && user) {
+      navigate('/', { replace: true });
+    }
+  }, [authenticated, initializing, navigate, user]);
+
+  useEffect(() => {
+    if (!awaitingProfile || connectingId == null || initializing || userLoading || !authenticated || user) {
+      return;
+    }
+
+    setSignInError(
+      userError instanceof Error
+        ? userError.message
+        : 'Signed in but could not load your profile from this Memory Server.',
+    );
+    setConnectingId(null);
+    setAwaitingProfile(false);
+  }, [authenticated, awaitingProfile, connectingId, initializing, user, userError, userLoading]);
 
   // Safari → "Open with Companion" often cold-starts the app. PKCE state lives in
   // localStorage; Capacitor stashed the callback URL. Finish the exchange on mount
@@ -66,14 +120,23 @@ export function DeviceConnectPage() {
 
       try {
         const tokens = await resumePendingOidcLogin();
+        const stored = tokens ? null : readStoredPortalAuth();
 
-        if (cancelled || !tokens) {
+        if (cancelled || (!tokens && !stored)) {
           return;
         }
 
         setBusy(true);
         setSignInError(null);
-        const portalAuth: PortalAuth = { token: tokens.accessToken, cookie: null, kind: 'oauth' };
+        const portalAuth: PortalAuth = tokens
+          ? {
+              token: tokens.accessToken,
+              idToken: tokens.idToken,
+              cookie: null,
+              kind: 'oauth',
+            }
+          : stored!;
+        writePortalAuth(portalAuth);
         setAuth(portalAuth);
         const servers = await listMemoryServers(portalAuth, portalUrl);
 
@@ -108,6 +171,7 @@ export function DeviceConnectPage() {
         void finish();
       }
     };
+
     document.addEventListener('visibilitychange', onVisible);
 
     return () => {
@@ -117,6 +181,7 @@ export function DeviceConnectPage() {
   }, [portalUrl]);
 
   const loadDevices = async (portalAuth: PortalAuth) => {
+    writePortalAuth(portalAuth);
     setAuth(portalAuth);
     const servers = await listMemoryServers(portalAuth, portalUrl);
     setDevices(servers);
@@ -150,7 +215,12 @@ export function DeviceConnectPage() {
 
     try {
       const tokens = await loginWithPortalOidc(portalUrl, { signal: controller.signal });
-      await loadDevices({ token: tokens.accessToken, cookie: null, kind: 'oauth' });
+      await loadDevices({
+        token: tokens.accessToken,
+        idToken: tokens.idToken,
+        cookie: null,
+        kind: 'oauth',
+      });
     } catch (err) {
       if (!(err instanceof OidcCancelledError)) {
         setSignInError(err instanceof Error ? err.message : 'Sign-in failed');
@@ -185,19 +255,103 @@ export function DeviceConnectPage() {
 
     setConnectingId(device.id);
     setSignInError(null);
+    setMemoryLoginOrigin(null);
 
     try {
-      const origin = new URL(device.memoryUrl).origin;
-      await healthCheckOrigin(origin);
-      persistApiBaseUrl(origin);
-      navigate('/login', { replace: true });
+      const origin = resolveHttpOrigin(device.memoryUrl);
+      await probeMemoryOrigin(origin);
+
+      const rawBearers =
+        auth?.kind === 'oauth'
+          ? [auth.idToken, auth.token].filter((value): value is string => Boolean(value))
+          : [];
+      const bearers = selectMemoryPortalBearers(rawBearers);
+
+      if (rawBearers.length === 0) {
+        setSignInError('Sign in with Companion Intelligence first, then pick this server again.');
+        setConnectingId(null);
+
+        return;
+      }
+
+      if (bearers.length === 0) {
+        setSignInError(
+          'Your Companion Intelligence sign-in expired. Sign in again, or use the Memory email and password from the browser.',
+        );
+        setMemoryLoginOrigin(origin);
+        setMemoryEmail(emailFromIdToken(auth?.idToken) ?? '');
+        setConnectingId(null);
+
+        return;
+      }
+
+      // Mint against the picked Memory origin. Apply it in memory first so
+      // CapacitorHttp never sees a relative `/api/graphql`. Persist on success
+      // only — a leftover origin with no key used to skip cloud-connect.
+      let lastError: unknown;
+
+      for (const bearer of bearers) {
+        try {
+          await completePortalMemoryConnect(bearer, origin);
+          persistApiBaseUrl(origin);
+          setAwaitingProfile(true);
+
+          return;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      throw lastError instanceof Error
+        ? lastError
+        : new Error('Could not sign in to this Memory Server with your Portal account.');
     } catch (err) {
+      const origin = (() => {
+        try {
+          return resolveHttpOrigin(device.memoryUrl);
+        } catch {
+          return null;
+        }
+      })();
+      const unauthorized = /unauthorized/i.test(err instanceof Error ? err.message : '');
+
       setSignInError(
         err instanceof Error && err.name === 'AbortError'
           ? 'Could not reach your Companion Memory (timed out).'
-          : `Could not reach your Companion Memory. ${err instanceof Error ? err.message : ''}`.trim(),
+          : /load failed|failed to fetch/i.test(err instanceof Error ? err.message : '')
+            ? 'Could not reach this Memory Server from the phone (webview blocked the request). Retry after the app reloads native HTTP.'
+            : unauthorized
+              ? 'This Memory Server is online, but it did not accept your Companion Intelligence token. Sign in with the email and password you use in the browser.'
+              : `Could not sign in to ${device.memoryUrl}. ${err instanceof Error ? err.message : ''}`.trim(),
       );
+      if (unauthorized && origin) {
+        setMemoryLoginOrigin(origin);
+        setMemoryEmail(emailFromIdToken(auth?.idToken) ?? '');
+      }
+
       setConnectingId(null);
+    }
+  };
+
+  const handleMemoryPassword = async (event: FormEvent) => {
+    event.preventDefault();
+
+    if (!memoryLoginOrigin || !memoryEmail || !memoryPassword) {
+      return;
+    }
+
+    setBusy(true);
+    setSignInError(null);
+
+    try {
+      await completeMemoryPasswordConnect(memoryEmail, memoryPassword, memoryLoginOrigin);
+      setAwaitingProfile(true);
+    } catch (err) {
+      setSignInError(
+        err instanceof Error ? err.message : 'Could not sign in to this Memory Server with that password.',
+      );
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -234,7 +388,7 @@ export function DeviceConnectPage() {
 
               {oidcController ? (
                 <div className="bg-muted/40 flex flex-col items-center gap-2 rounded-md p-3 text-center text-xs text-muted-foreground">
-                  <span>Finish signing in in your browser, then come back to the app.</span>
+                  <span>Finish signing in in your browser, then return to this app.</span>
                   <Button
                     type="button"
                     variant="ghost"
@@ -353,7 +507,46 @@ export function DeviceConnectPage() {
                   );
                 })
               )}
-              {signInError ? <p className="text-destructive text-sm">{signInError}</p> : null}
+              {signInError ? (
+                <p className="text-destructive text-sm" data-testid="connect-signin-error" role="alert">
+                  {signInError}
+                </p>
+              ) : null}
+              {memoryLoginOrigin ? (
+                <form onSubmit={(event) => void handleMemoryPassword(event)} className="flex flex-col gap-3">
+                  <Input
+                    type="email"
+                    className={TOUCH}
+                    aria-label="Memory email"
+                    placeholder="Memory email"
+                    autoComplete="username"
+                    inputMode="email"
+                    value={memoryEmail}
+                    onChange={(e) => setMemoryEmail(e.target.value)}
+                    required
+                    data-testid="memory-email"
+                  />
+                  <PasswordInput
+                    className={TOUCH}
+                    aria-label="Memory password"
+                    placeholder="Memory password"
+                    autoComplete="current-password"
+                    value={memoryPassword}
+                    onChange={(e) => setMemoryPassword(e.target.value)}
+                    required
+                    data-testid="memory-password"
+                  />
+                  <LoadingButton
+                    type="submit"
+                    className={TOUCH}
+                    loading={busy}
+                    disabled={busy || !memoryEmail || !memoryPassword}
+                    data-testid="memory-password-submit"
+                  >
+                    Sign in to this Memory Server
+                  </LoadingButton>
+                </form>
+              ) : null}
               <div className="mt-2 flex items-center justify-between">
                 <Button
                   variant="ghost"

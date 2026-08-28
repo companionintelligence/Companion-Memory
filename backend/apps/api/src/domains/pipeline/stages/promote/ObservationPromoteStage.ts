@@ -11,7 +11,7 @@ import { LoggerService } from '@ci/common/logging';
 // `ci.object_observations` and owns both idempotency arbiters; `PlaceService`
 // owns the PostGIS nearest-place read. Re-implementing either here would give
 // the sighting table a second writer with its own opinion about identity, which
-// is the thing that made `ci.inventory` hard.
+// is the thing that made `ci.objects` hard.
 import { ObjectObservationService, PlaceService, type CreateObjectObservationDto } from '@ci/domains/memory';
 
 import { PIPELINE_QUEUES } from '../../constants';
@@ -111,7 +111,7 @@ const UNKNOWN_SOURCE_SYSTEM = 'unknown';
  * triple `object_observations_source_triple_uniq` is keyed on, so re-promoting
  * a scan updates its sightings rather than minting a second set. Naming it
  * after the stage also isolates these rows from any other writer's, exactly as
- * `promote.object` does for `ci.inventory`.
+ * `promote.object` does for `ci.objects`.
  */
 const PROMOTED_SOURCE_TYPE = PROMOTE_OBSERVATION_STAGE_ID;
 
@@ -323,7 +323,7 @@ function sha256Hex(input: string): string {
  * place and coordinates, and the scan-local position in `attributes`. Nothing
  * else, because nothing else arrives (see {@link extractScanObjects}).
  *
- * It writes NO `ci.inventory` row and sets NO resolution column. A scan says a
+ * It writes NO `ci.objects` row and sets NO resolution column. A scan says a
  * chair-shaped thing was at a point in a room; it does not say whose chair, or
  * that it is the same chair as last week's. Minting from a sighting is
  * `ObjectResolutionService`'s job, above an auto-mint confidence that does not

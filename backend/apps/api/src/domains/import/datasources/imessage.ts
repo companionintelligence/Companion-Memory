@@ -7,6 +7,8 @@ import path from 'path';
 
 import Database from 'better-sqlite3';
 
+import { isShortCode } from '../staging/identity';
+
 import { attachmentMediaKind } from './attachment_extract';
 import { decodeAttributedBody } from './attributed_body';
 import type { FileImporter, Recognition, DirEntry } from './registry';
@@ -587,12 +589,52 @@ class iMessageFileImporter implements FileImporter {
  *
  * Mirrors the identical pattern `googlevoice.ts` already uses correctly
  * (`attributes: [{ name: 'phone', value: p.phone, identity: true }]`).
+ *
+ * ## Why the type is not always 'contact'
+ *
+ * It was, unconditionally, and `push/entities.ts entityTypeFor` maps 'contact'
+ * to `Person` — so every SMS SHORT CODE the owner has ever been texted by
+ * landed in the address book as a person. On the QA corpus that was 269 rows:
+ * "888222", "72524", "9119", "457", "1112" — 2FA senders, alert services,
+ * directory assistance. Nothing downstream objects, by design:
+ * `isNonNameParticipant` (`domains/graph/utils/participantSanity.ts`)
+ * deliberately lets a bare number through ("a short handle, a bare phone
+ * number, a single token — all still pass"), so a `Person` named "411" reaches
+ * the person search index and `DUPLICATE_DETECT_SOURCE`'s candidate set
+ * unchallenged.
+ *
+ * chat.db has no field that says which a handle is, and no more evidence is
+ * needed than the number itself: a short code is too short to be a line a
+ * person can be reached on, which is the same fact `normalizeHandle` already
+ * uses to refuse to key on it. `isShortCode` is that one threshold, shared with
+ * `googlevoice.ts`, whose participants have exactly this problem and whose
+ * `participantType` is the same rule under a different parser.
+ *
+ * `short_code` is unmapped in `ENTITY_TYPES`, so it falls to
+ * `DEFAULT_ENTITY_TYPE` — `Concept` — which is what that default is documented
+ * to mean: a thing worth a node that is neither a person nor a place. The
+ * attribute is still staged, and still `identity: true`, because it is an
+ * honest record of what chat.db held; `identityHandles` filters it out on its
+ * own (`normalizeHandle` returns '' below seven digits), so the entity keys on
+ * its name either way and `properties.phones` stays empty — the same shape the
+ * Google Voice short codes already have.
+ *
+ * Short codes are staged rather than dropped because they are real
+ * correspondents: 2,622 communications on the QA corpus have one as their
+ * `from_entity_id`.
+ *
+ * Repairing the rows that already landed is
+ * `20260819150902_retype_imessage_short_code_people_as_concepts.sql`, which
+ * must move `linked_id` as well as `entity_type` — `naturalKeyFor` folds the
+ * staged type into the key, so this change moves the coordinate these entities
+ * resolve at.
  */
 function contactEntity(handle: string): Entity {
   const isEmail = handle.includes('@');
 
   return {
-    type: 'contact',
+    // `contact` maps to `Person`, and "888222" is a service. See above.
+    type: isShortCode(handle) ? 'short_code' : 'contact',
     name: handle,
     attributes: [{ name: isEmail ? 'email' : 'phone', value: handle, identity: true }],
   };

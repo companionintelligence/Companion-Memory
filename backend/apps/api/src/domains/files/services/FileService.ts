@@ -7,6 +7,7 @@ import {
   S3Client,
   HeadBucketCommand,
   CreateBucketCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   PutObjectCommand,
 } from '@aws-sdk/client-s3';
@@ -122,7 +123,16 @@ export class FileService implements OnModuleInit {
 
     const hash = await this.getFileHash(file);
 
-    if (hash) {
+    // Hash dedup is for ORIGINALS only. A PREVIEW/THUMBNAIL row belongs to
+    // its parent; two parents whose derived bytes happen to match are two
+    // rows. Deduping them was how previews went missing: the 300px frame of
+    // one video is byte-identical to the 300px frame of a re-upload of the
+    // same footage, so the SECOND parent's preview resolved to the first's
+    // and no row was written for it — the listener then reported success
+    // and the file had no thumbnail, permanently. Concurrent preview jobs
+    // raced past the check (the ledger showed 20 previews over 14 hashes on
+    // one connector alone), which is what made the loss look random.
+    if (hash && (file.variant ?? FileVariant.ORIGINAL) === FileVariant.ORIGINAL) {
       const existing = await this.findByHash(context, hash);
 
       if (existing) {
@@ -157,13 +167,21 @@ export class FileService implements OnModuleInit {
       externalUpdatedAt: file.externalUpdatedAt,
     });
 
-    const result = await this.fileRepository.save(entity);
-
-    if (file.externalId == null) {
+    // Bytes BEFORE the row. This used to save first and upload second, so a
+    // store refusal (a full disk: "minimum free drive threshold") threw AFTER
+    // the row committed — leaving a `ci.files` row that claims bytes nobody
+    // holds. A real import leaked 5,258 of them: every consumer 404s on the
+    // signed URL, and worse, the row carries the content HASH, so the dedup
+    // above then "deduplicates" any future upload of the same bytes against an
+    // object that does not exist — a phantom that poisons its own repair.
+    // This order fails the other way: a save that dies after a successful PUT
+    // strands an unreferenced object in the store, which wastes bytes but
+    // breaks nothing and lies to nobody.
+    if (file.externalId == null && bucket != null && key != null) {
       const putOptions = {
-        Bucket: result.bucket!,
-        Key: result.key!,
-        ContentType: result.contentType,
+        Bucket: bucket,
+        Key: key,
+        ContentType: entity.contentType,
       };
 
       if (file.buffer) {
@@ -183,6 +201,8 @@ export class FileService implements OnModuleInit {
       }
     }
 
+    const result = await this.fileRepository.save(entity);
+
     return this.signFile(result);
   }
 
@@ -200,6 +220,71 @@ export class FileService implements OnModuleInit {
     });
 
     return this.signFiles(result);
+  }
+
+  /**
+   * One newest-first page of ORIGINAL files, paginated IN SQL.
+   *
+   * The files browse used to go through {@link findAll}: every page request
+   * loaded the whole library and pre-signed a URL for every row before the
+   * resolver sliced its 50 — on a real 19,747-file library that is ~20k
+   * SigV4 signatures of CPU work on the event loop PER PAGE, which froze the
+   * entire API for seconds while it ran (every other request queued behind
+   * it) and repeated on every scroll. Here the database returns one page and
+   * only that page is signed.
+   *
+   * Keyset cursor on (created_at, id) rather than OFFSET, so a page stays
+   * O(page) however deep the scroll goes and rows created mid-scroll cannot
+   * shift the window. The id tiebreak makes the order total — created_at
+   * alone left equal-timestamp rows (bulk imports produce many) in an order
+   * the planner was free to change between pages, repeating or dropping rows
+   * at page seams. An unknown `afterId` reads as "from the start", matching
+   * what the in-memory paginator did with a stale cursor.
+   */
+  async findPage(
+    context: ServiceContext,
+    page: { limit: number; afterId?: string | null },
+  ): Promise<{ files: SignedFile[]; totalCount: number; hasNextPage: boolean }> {
+    const scope = {
+      variant: FileVariant.ORIGINAL,
+      ...(context.userId !== SYSTEM_USER && {
+        userId: context.userId,
+      }),
+    };
+
+    const totalCount = await this.fileRepository.count({ where: scope });
+
+    const query = this.fileRepository
+      .createQueryBuilder('file')
+      .where('file.variant = :variant', { variant: scope.variant })
+      .orderBy('file.created_at', 'DESC')
+      .addOrderBy('file.id', 'DESC')
+      // One extra row answers hasNextPage without a second count.
+      .take(page.limit + 1);
+
+    if (scope.userId != null) {
+      query.andWhere('file.user_id = :userId', { userId: scope.userId });
+    }
+
+    if (page.afterId) {
+      const anchor = await this.fileRepository.findOne({ where: { ...scope, id: page.afterId } });
+
+      if (anchor?.createdAt != null) {
+        query.andWhere('(file.created_at, file.id) < (:anchorCreatedAt, :anchorId)', {
+          anchorCreatedAt: anchor.createdAt,
+          anchorId: anchor.id,
+        });
+      }
+    }
+
+    const rows = await query.getMany();
+    const hasNextPage = rows.length > page.limit;
+
+    return {
+      files: await this.signFiles(rows.slice(0, page.limit)),
+      totalCount,
+      hasNextPage,
+    };
   }
 
   async findById(context: ServiceContext, id: string): Promise<SignedFile | null> {
@@ -409,7 +494,7 @@ export class FileService implements OnModuleInit {
     context: UserServiceContext,
     file: UploadFileDto,
   ): Promise<{ file: SignedFile; deduped: boolean }> {
-    const { inventoryCapture = false, skipDescription = false, model, ...uploadData } = file;
+    const { thingCapture = false, skipDescription = false, model, ...uploadData } = file;
     const hash = await this.getFileHash(uploadData);
 
     if (hash) {
@@ -420,11 +505,11 @@ export class FileService implements OnModuleInit {
           existingFileId: existing.id,
         });
 
-        if (inventoryCapture) {
+        if (thingCapture) {
           await this.eventService.send(FileUploadedEvent, {
             fileId: existing.id,
             userId: context.userId,
-            inventoryCapture: true,
+            thingCapture: true,
             skipDescription,
             model,
           });
@@ -442,7 +527,7 @@ export class FileService implements OnModuleInit {
     await this.eventService.send(FileUploadedEvent, {
       fileId: created.id,
       userId: context.userId,
-      inventoryCapture,
+      thingCapture,
       skipDescription,
       model,
     });
@@ -458,6 +543,44 @@ export class FileService implements OnModuleInit {
         Body: body,
       }),
     );
+  }
+
+  /**
+   * Delete objects from a bucket.
+   *
+   * Written for the account purge: until it existed nothing in this repository
+   * ever deleted an object, so every file an account uploaded outlived the row
+   * that pointed at it. S3's batch delete is idempotent for missing keys, which
+   * is what lets the purge re-run a page it already processed.
+   *
+   * `Quiet: true` suppresses the per-key success list; genuine failures still
+   * come back in `Errors`, and one of those means the bytes are still there, so
+   * it is raised rather than logged.
+   */
+  async deleteObjects(bucket: string, keys: string[]): Promise<void> {
+    if (keys.length === 0) {
+      return;
+    }
+
+    // The API caps one DeleteObjects call at 1000 keys.
+    for (let offset = 0; offset < keys.length; offset += 1000) {
+      const page = keys.slice(offset, offset + 1000);
+
+      const response = await this.s3.send(
+        new DeleteObjectsCommand({
+          Bucket: bucket,
+          Delete: { Objects: page.map((Key) => ({ Key })), Quiet: true },
+        }),
+      );
+
+      if (response.Errors && response.Errors.length > 0) {
+        const [first] = response.Errors;
+
+        throw new Error(
+          `Failed to delete ${response.Errors.length} object(s) from ${bucket}: ${first.Key} — ${first.Message}`,
+        );
+      }
+    }
   }
 
   async getFileContent(context: ServiceContext, key: string): Promise<Uint8Array> {

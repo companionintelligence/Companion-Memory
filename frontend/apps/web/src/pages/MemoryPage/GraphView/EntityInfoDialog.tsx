@@ -2,7 +2,9 @@ import { Badge, Button, cn } from '@ci/shadcn';
 import { Crosshair, Loader2, PanelRight, X } from '@ci/shadcn/icons';
 
 import type { GraphLink, GraphNode } from '@/api/useGraphOverview';
+import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import { colorForRawType } from '@/components/entities/entityVisuals';
+import { graphNodeChatContext } from '@/lib/agentChat';
 import { formatEnumLabel } from '@/lib/utils';
 
 import { useThrowableCard } from './useThrowableCard';
@@ -74,16 +76,19 @@ export function EntityInfoDialog({
             {node.event_type && <Badge variant="secondary">{formatEnumLabel(node.event_type)}</Badge>}
           </div>
         </div>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          className="h-7 w-7 flex-shrink-0"
-          onClick={onClose}
-          aria-label="Close entity dialog"
-        >
-          <X className="h-4 w-4" />
-        </Button>
+        <div className="flex shrink-0 items-start gap-1">
+          <ChatWithAgentMenu context={graphNodeChatContext(node)} className="h-7 w-7" />
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7 flex-shrink-0"
+            onClick={onClose}
+            aria-label="Close entity dialog"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 text-sm">

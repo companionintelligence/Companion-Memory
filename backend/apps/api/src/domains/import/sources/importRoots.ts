@@ -53,7 +53,50 @@ export function inboxRoot(): string {
  * `kyle_lifescope.io`).
  */
 export function userInboxDir(email: string): string {
-  return path.join(inboxRoot(), sanitizeFilename(email.trim().toLowerCase()));
+  return path.join(inboxRoot(), inboxFolderName(email));
+}
+
+/** The folder name one account's inbox subtree gets — see {@link userInboxDir}. */
+export function inboxFolderName(email: string): string {
+  return sanitizeFilename(email.trim().toLowerCase());
+}
+
+/**
+ * The inbox root as spelled on the HOST, or `null` when the operator has not
+ * said (bare metal, or a container whose inbox is not bind-mounted).
+ *
+ * Deliberately NOT `path.resolve`d: this is a path on a different filesystem
+ * namespace from the one the API runs in. Resolving it here would glue the
+ * container's cwd onto a relative value and produce a path that exists
+ * nowhere. A trailing separator is dropped so joining is predictable.
+ */
+export function inboxHostRoot(): string | null {
+  const configured = config.import.inboxHostDir.trim().replace(/[\\/]+$/, '');
+
+  return configured.length > 0 ? configured : null;
+}
+
+/**
+ * {@link userInboxDir} as a PERSON reaches it.
+ *
+ * The scan tells the UI and the CLI where to drop files. When the API is a
+ * container, `userInboxDir()` names a directory inside it —
+ * `/var/lib/ci-import/inbox/<user>` — which is unreachable from the desktop
+ * that owns the files, while the same bytes sit behind a bind mount at a
+ * host path only the operator knows (`CI_IMPORT_INBOX_HOST_DIR`). This
+ * returns that spelling when it is configured and the server's own otherwise.
+ *
+ * Display only. Everything that touches the filesystem keeps using
+ * {@link userInboxDir} / {@link realUserInboxDir}; a host path must never be
+ * handed to a resolver, because it does not exist where the resolver runs.
+ * Joined with `/` rather than `path.join`: the host is not necessarily the
+ * platform the API runs on, and a bind-mount source is always written with
+ * forward slashes in compose.
+ */
+export function userInboxDisplayDir(email: string): string {
+  const host = inboxHostRoot();
+
+  return host == null ? userInboxDir(email) : `${host}/${inboxFolderName(email)}`;
 }
 
 /**

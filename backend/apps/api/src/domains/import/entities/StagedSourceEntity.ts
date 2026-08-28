@@ -81,7 +81,11 @@ export class StagedSourceEntity {
    * The run consuming this source, or NULL.
    *
    * `ON DELETE SET NULL` in the database, not CASCADE: deleting a run must not
-   * silently orphan staged bytes by taking their registry row with it.
+   * silently orphan staged bytes by taking their registry row with it. Retiring
+   * a run settles its rows in the same transaction rather than relying on that
+   * — a claimed upload is re-staged, a claimed inbox claim is deleted — and
+   * `StagedSourceService.purgeExpired` re-stages any claimed upload that lost
+   * its run another way. See `ImportRetentionService.retireRun`.
    */
   @Column({ type: 'uuid', name: 'run_id', nullable: true })
   runId!: string | null;

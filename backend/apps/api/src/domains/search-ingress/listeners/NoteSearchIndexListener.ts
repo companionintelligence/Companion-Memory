@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
-import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EmbeddingGenerationService, shouldEmbedType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 import { type Note, NoteService } from '@ci/domains/notes';
@@ -87,7 +87,9 @@ export class NoteSearchIndexListener {
 
     const searchDocument = this.getSearchDocument(note);
 
-    if (searchDocument == null) {
+    if (!shouldEmbedType('note')) {
+      this.logger.log('Note type not in embed allowlist, skipping embedding');
+    } else if (searchDocument == null) {
       this.logger.log('Note has no search document, skipping embedding');
     } else {
       const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);

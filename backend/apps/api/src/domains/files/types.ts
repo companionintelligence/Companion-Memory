@@ -25,7 +25,11 @@ export type UploadFileDto = Omit<
   CreateFileDto,
   'variant' | 'title' | 'description' | 'externalId' | 'parentId' | 'externalCreatedAt' | 'externalUpdatedAt'
 > & {
-  inventoryCapture?: boolean;
+  /**
+   * The user asserted, on THIS upload, that the photo is of their own
+   * belongings — the camera's "thing" mode. Gates {@link ThingVisionListener}.
+   */
+  thingCapture?: boolean;
   /**
    * When true, the capture source produced its own title/description (and writes
    * them via PATCH /files/:id), so the server skips the Ollama description pass.

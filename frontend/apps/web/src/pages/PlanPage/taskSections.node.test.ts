@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addLocalDays,
   compareTasks,
+  dueAtFromLocalDate,
   groupIntoSections,
+  isOverdue,
   localDateOf,
   openCount,
   sectionFor,
+  withAllColumns,
   type SectionedTask,
 } from './taskSections';
 
@@ -53,69 +57,122 @@ describe('localDateOf', () => {
 describe('sectionFor', () => {
   it('files finished work under done regardless of dates', () => {
     for (const status of ['done', 'skipped', 'archived']) {
-      expect(sectionFor(task({ status, dueAt: '2020-01-01T00:00:00Z' }), TODAY, 'UTC')).toBe('done');
+      expect(sectionFor(task({ status, dueAt: '2020-01-01T00:00:00Z' }), TODAY, 'UTC')).toEqual({
+        column: 'done',
+        lane: 'inbox',
+      });
     }
   });
 
-  it('files proposed tasks under proposed before date buckets', () => {
-    expect(sectionFor(task({ status: 'proposed', dueAt: '2026-01-14T12:00:00Z' }), TODAY, 'UTC')).toBe(
-      'proposed',
-    );
+  it('files proposed tasks under proposed inbox before date buckets', () => {
+    expect(sectionFor(task({ status: 'proposed', dueAt: '2026-01-14T12:00:00Z' }), TODAY, 'UTC')).toEqual({
+      column: 'proposed',
+      lane: 'inbox',
+    });
   });
 
-  it('files tasks with pending confirmation ahead of date buckets', () => {
-    expect(sectionFor(task({ dueAt: '2026-01-15T12:00:00Z', hasPendingChange: true }), TODAY, 'UTC')).toBe(
-      'needs_confirmation',
-    );
+  it('files tasks with pending confirmation in the proposed inbox', () => {
+    expect(
+      sectionFor(task({ dueAt: '2026-01-15T12:00:00Z', hasPendingChange: true }), TODAY, 'UTC'),
+    ).toEqual({ column: 'proposed', lane: 'inbox' });
   });
 
-  it('files a past deadline as overdue', () => {
-    expect(sectionFor(task({ dueAt: '2026-01-14T12:00:00Z' }), TODAY, 'UTC')).toBe('overdue');
+  it('files a past deadline without a calendar block as unscheduled overdue', () => {
+    expect(sectionFor(task({ dueAt: '2026-01-14T12:00:00Z' }), TODAY, 'UTC')).toEqual({
+      column: 'unscheduled',
+      lane: 'overdue',
+    });
   });
 
-  it("files today's deadline as today", () => {
-    expect(sectionFor(task({ dueAt: '2026-01-15T12:00:00Z' }), TODAY, 'UTC')).toBe('today');
+  it("files today's deadline without a calendar block as unscheduled upcoming", () => {
+    expect(sectionFor(task({ dueAt: '2026-01-15T12:00:00Z' }), TODAY, 'UTC')).toEqual({
+      column: 'unscheduled',
+      lane: 'upcoming',
+    });
   });
 
-  it('files a future deadline as upcoming', () => {
-    expect(sectionFor(task({ dueAt: '2026-01-16T12:00:00Z' }), TODAY, 'UTC')).toBe('upcoming');
+  it('files a future deadline without a calendar block as unscheduled upcoming', () => {
+    expect(sectionFor(task({ dueAt: '2026-01-16T12:00:00Z' }), TODAY, 'UTC')).toEqual({
+      column: 'unscheduled',
+      lane: 'upcoming',
+    });
   });
 
-  it('files an undated task as someday', () => {
-    expect(sectionFor(task(), TODAY, 'UTC')).toBe('someday');
+  it('files an undated task as proposed upcoming', () => {
+    expect(sectionFor(task(), TODAY, 'UTC')).toEqual({
+      column: 'proposed',
+      lane: 'proposed_upcoming',
+    });
   });
 
-  it('uses scheduledFor when there is no deadline', () => {
-    expect(sectionFor(task({ scheduledFor: '2026-01-15' }), TODAY, 'UTC')).toBe('today');
+  it('files a calendar-dated task under scheduled, using that date when there is no deadline', () => {
+    expect(sectionFor(task({ scheduledFor: '2026-01-15' }), TODAY, 'UTC')).toEqual({
+      column: 'scheduled',
+      lane: 'upcoming',
+    });
   });
 
-  it('uses whichever of deadline and scheduled date comes first', () => {
+  it('uses whichever of deadline and scheduled date comes first, still on the calendar column', () => {
     expect(
       sectionFor(task({ dueAt: '2026-01-20T12:00:00Z', scheduledFor: '2026-01-15' }), TODAY, 'UTC'),
-    ).toBe('today');
+    ).toEqual({ column: 'scheduled', lane: 'upcoming' });
+  });
+
+  it('files a missed calendar block as scheduled overdue', () => {
+    expect(sectionFor(task({ scheduledFor: '2026-01-14' }), TODAY, 'UTC')).toEqual({
+      column: 'scheduled',
+      lane: 'overdue',
+    });
   });
 
   it('hides a deferred task even when it is overdue', () => {
     // Deferring is the user saying "not yet"; nagging them anyway is the bug
     // the defer feature exists to prevent.
-    expect(sectionFor(task({ dueAt: '2026-01-01T12:00:00Z', deferUntil: '2026-02-01' }), TODAY, 'UTC')).toBe(
-      'someday',
-    );
+    expect(
+      sectionFor(task({ dueAt: '2026-01-01T12:00:00Z', deferUntil: '2026-02-01' }), TODAY, 'UTC'),
+    ).toEqual({ column: 'proposed', lane: 'proposed_upcoming' });
   });
 
   it('stops hiding a deferred task once its date arrives', () => {
-    expect(sectionFor(task({ dueAt: '2026-01-01T12:00:00Z', deferUntil: TODAY }), TODAY, 'UTC')).toBe(
-      'overdue',
-    );
+    expect(sectionFor(task({ dueAt: '2026-01-01T12:00:00Z', deferUntil: TODAY }), TODAY, 'UTC')).toEqual({
+      column: 'unscheduled',
+      lane: 'overdue',
+    });
   });
 
   it('respects the viewing timezone at the day boundary', () => {
     // 2026-01-15T02:00Z is the 14th in LA (overdue against a 15th "today")
-    // and the 15th in Sydney (due today).
+    // and the 15th in Sydney (due today → upcoming).
     const dueAt = '2026-01-15T02:00:00.000Z';
 
-    expect(sectionFor(task({ dueAt }), TODAY, LA)).toBe('overdue');
-    expect(sectionFor(task({ dueAt }), TODAY, SYDNEY)).toBe('today');
+    expect(sectionFor(task({ dueAt }), TODAY, LA)).toEqual({ column: 'unscheduled', lane: 'overdue' });
+    expect(sectionFor(task({ dueAt }), TODAY, SYDNEY)).toEqual({
+      column: 'unscheduled',
+      lane: 'upcoming',
+    });
+  });
+});
+
+describe('isOverdue', () => {
+  it('matches the overdue lane and ignores deferred work', () => {
+    expect(isOverdue(task({ dueAt: '2026-01-14T12:00:00Z' }), TODAY, 'UTC')).toBe(true);
+    expect(isOverdue(task({ dueAt: '2026-01-16T12:00:00Z' }), TODAY, 'UTC')).toBe(false);
+    expect(
+      isOverdue(task({ dueAt: '2026-01-01T12:00:00Z', deferUntil: '2026-02-01' }), TODAY, 'UTC'),
+    ).toBe(false);
+  });
+});
+
+describe('addLocalDays / dueAtFromLocalDate', () => {
+  it('shifts a calendar date without UTC drift', () => {
+    expect(addLocalDays('2026-01-15', 1)).toBe('2026-01-16');
+    expect(addLocalDays('2026-01-31', 1)).toBe('2026-02-01');
+  });
+
+  it('places dueAt at local noon so the date survives the timezone', () => {
+    const due = dueAtFromLocalDate('2026-01-15');
+
+    expect(localDateOf(new Date(due))).toBe('2026-01-15');
   });
 });
 
@@ -150,7 +207,7 @@ describe('compareTasks', () => {
 });
 
 describe('groupIntoSections', () => {
-  it('orders sections proposed → needs confirmation → overdue → today → upcoming → someday → done', () => {
+  it('orders columns proposed → unscheduled → scheduled → done, with lanes at the bottom of each', () => {
     const sections = groupIntoSections(
       [
         task({ id: '1', status: 'done' }),
@@ -160,20 +217,24 @@ describe('groupIntoSections', () => {
         task({ id: '5', dueAt: '2026-01-14T12:00:00Z' }),
         task({ id: '6', status: 'proposed' }),
         task({ id: '7', dueAt: '2026-01-15T12:00:00Z', hasPendingChange: true }),
+        task({ id: '8', scheduledFor: '2026-01-16' }),
+        task({ id: '9', scheduledFor: '2026-01-14' }),
       ],
       TODAY,
       'UTC',
     );
 
-    expect(sections.map((s) => s.key)).toEqual([
-      'proposed',
-      'needs_confirmation',
-      'overdue',
-      'today',
-      'upcoming',
-      'someday',
-      'done',
-    ]);
+    expect(sections.map((s) => s.key)).toEqual(['proposed', 'unscheduled', 'scheduled', 'done']);
+    expect(sections[0].lanes.map((l) => l.key)).toEqual(['inbox', 'proposed_upcoming']);
+    expect(sections[0].lanes[0].tasks.map((t) => t.id)).toEqual(['7', '6']);
+    expect(sections[0].lanes[1].tasks.map((t) => t.id)).toEqual(['2']);
+    expect(sections[1].lanes.map((l) => l.key)).toEqual(['upcoming', 'overdue']);
+    expect(sections[1].lanes[0].tasks.map((t) => t.id)).toEqual(['4', '3']);
+    expect(sections[1].lanes[1].tasks.map((t) => t.id)).toEqual(['5']);
+    expect(sections[2].lanes.map((l) => l.key)).toEqual(['upcoming', 'overdue']);
+    expect(sections[2].lanes[0].tasks.map((t) => t.id)).toEqual(['8']);
+    expect(sections[2].lanes[1].tasks.map((t) => t.id)).toEqual(['9']);
+    expect(sections[3].tasks.map((t) => t.id)).toEqual(['1']);
   });
 
   it('nests children under roots rather than as their own section rows', () => {
@@ -187,22 +248,35 @@ describe('groupIntoSections', () => {
     );
 
     expect(sections).toHaveLength(1);
-    expect(sections[0].key).toBe('today');
+    expect(sections[0].key).toBe('unscheduled');
+    expect(sections[0].lanes[0].key).toBe('upcoming');
     expect(sections[0].tasks.map((t) => t.id)).toEqual(['root']);
   });
 
-  it('omits empty sections rather than rendering a bare heading', () => {
+  it('omits empty columns rather than rendering a bare heading', () => {
     const sections = groupIntoSections([task({ dueAt: '2026-01-15T12:00:00Z' })], TODAY, 'UTC');
 
     expect(sections).toHaveLength(1);
-    expect(sections[0].key).toBe('today');
+    expect(sections[0].key).toBe('unscheduled');
+    expect(sections[0].lanes.map((l) => l.key)).toEqual(['upcoming']);
+  });
+
+  it('fills missing Plan columns so empty category tabs still render', () => {
+    const sections = withAllColumns(groupIntoSections([task({ dueAt: '2026-01-15T12:00:00Z' })], TODAY, 'UTC'));
+
+    expect(sections.map((section) => [section.key, section.tasks.length])).toEqual([
+      ['proposed', 0],
+      ['unscheduled', 1],
+      ['scheduled', 0],
+      ['done', 0],
+    ]);
   });
 
   it('returns nothing for an empty list', () => {
     expect(groupIntoSections([], TODAY, 'UTC')).toEqual([]);
   });
 
-  it('sorts within each section', () => {
+  it('sorts within each lane', () => {
     const [section] = groupIntoSections(
       [
         task({ id: 'later', dueAt: '2026-01-15T18:00:00Z' }),

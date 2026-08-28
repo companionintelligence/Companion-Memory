@@ -1,3 +1,5 @@
+import { ModelTierRouter } from '@ci/domains/model-routing';
+
 import { OllamaService } from '../OllamaService';
 
 /**
@@ -30,6 +32,7 @@ function buildServiceWithOpenAiDriver(servedModelIds: string[]) {
     { getAgentFacingTools: () => [] } as never,
     makeLogger() as never,
     { isFeatureEnabled: jest.fn(async () => false) } as never,
+    new ModelTierRouter(),
   );
 
   return { service, driver };

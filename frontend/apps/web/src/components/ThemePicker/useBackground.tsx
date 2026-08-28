@@ -35,15 +35,41 @@ type BackgroundProviderProps = {
   children: React.ReactNode;
   defaultTextureId?: string;
   defaultTextureOpacity?: number;
+  defaultGlowEnabled?: boolean;
   textureStorageKey?: string;
   textureOpacityStorageKey?: string;
+  glowStorageKey?: string;
 };
 
 type BackgroundProviderState = {
   backgroundState: BackgroundState;
   setTexture: (textureId: string) => void;
   setTextureOpacity: (opacity: number) => void;
+  /** Desktop pointer glow. Ignored on mobile — that layout never mounts it. */
+  glowEnabled: boolean;
+  setGlowEnabled: (enabled: boolean) => void;
 };
+
+export const DEFAULT_GLOW_ENABLED = true;
+export const GLOW_STORAGE_KEY = 'ci-ui-glow';
+
+function readStoredGlow(key: string, fallback: boolean): boolean {
+  const raw = localStorage.getItem(key);
+
+  if (raw == null) {
+    return fallback;
+  }
+
+  if (raw === '0' || raw === 'false') {
+    return false;
+  }
+
+  if (raw === '1' || raw === 'true') {
+    return true;
+  }
+
+  return fallback;
+}
 
 export const DEFAULT_TEXTURE_ID = 'none';
 
@@ -505,6 +531,8 @@ const initialState: BackgroundProviderState = {
   },
   setTexture: () => null,
   setTextureOpacity: () => null,
+  glowEnabled: DEFAULT_GLOW_ENABLED,
+  setGlowEnabled: () => null,
 };
 
 const BackgroundProviderContext = createContext<BackgroundProviderState>(initialState);
@@ -513,8 +541,10 @@ export function BackgroundProvider({
   children,
   defaultTextureId = DEFAULT_TEXTURE_ID,
   defaultTextureOpacity = 0.35,
+  defaultGlowEnabled = DEFAULT_GLOW_ENABLED,
   textureStorageKey = 'ci-ui-texture',
   textureOpacityStorageKey = 'ci-ui-texture-opacity',
+  glowStorageKey = GLOW_STORAGE_KEY,
 }: BackgroundProviderProps) {
   const [backgroundState, setBackgroundState] = useState<BackgroundState>(() => {
     const storedTexture = localStorage.getItem(textureStorageKey);
@@ -536,6 +566,7 @@ export function BackgroundProvider({
       textureOpacity: resolvedOpacity,
     };
   });
+  const [glowEnabled, setGlowEnabledState] = useState(() => readStoredGlow(glowStorageKey, defaultGlowEnabled));
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -554,10 +585,17 @@ export function BackgroundProvider({
     setBackgroundState((prev) => ({ ...prev, textureOpacity: normalized }));
   };
 
+  const setGlowEnabled = (enabled: boolean) => {
+    localStorage.setItem(glowStorageKey, enabled ? 'true' : 'false');
+    setGlowEnabledState(enabled);
+  };
+
   const value = {
     backgroundState,
     setTexture,
     setTextureOpacity,
+    glowEnabled,
+    setGlowEnabled,
   };
 
   return <BackgroundProviderContext.Provider value={value}>{children}</BackgroundProviderContext.Provider>;

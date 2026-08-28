@@ -22,6 +22,30 @@
   --color-input-fill: var(--input-fill);
 }
 
+@theme {
+  /*
+   * The one width at which the app switches between phone and desktop chrome.
+   * Gives the `device:` / `max-device:` variants, and it MUST stay equal to
+   * MOBILE_BREAKPOINT in packages/common/src/hooks/useDeviceLayout.ts and
+   * packages/shadcn/src/hooks/use-mobile.ts — those hooks decide the same thing
+   * in JS. `frontend/apps/web/src/test/deviceBreakpoint.node.test.ts` fails if
+   * the three ever diverge.
+   *
+   * Reach for `device:` whenever the choice is "phone chrome or desktop
+   * chrome"; keep `sm:`/`md:`/`lg:` for ordinary reflow (column counts, wrap
+   * points), which has nothing to do with which chrome is mounted.
+   *
+   * px, not rem: the hooks match on `(max-width: 895px)`, and a media-query rem
+   * follows the browser's default font size, so a reader who bumped that would
+   * put CSS and JS on different sides of the switch. Tailwind's own breakpoints
+   * are rem and it cannot order px against rem, so it emits this block ahead of
+   * all of them: on one element, `sm:`/`md:`/`lg:` beat `device:` for the same
+   * property regardless of width. Never set one property from both scales —
+   * which the chrome/reflow split above already rules out.
+   */
+  --breakpoint-device: 896px;
+}
+
 :root {
   /* Browser-drawn control chrome follows color-scheme, not our tokens. */
   color-scheme: light;
@@ -29,6 +53,9 @@
   --input-fill: var(--input);
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  /* Keyboard overlap. `usePreventOverscroll` updates these from visualViewport. */
+  --keyboard-inset: 0px;
+  --vv-height: 100dvh;
 
   /* Activity palette — categorical identity for the schedule surface. Seven
      hues in a fixed, validated order (see HorizonGrid/activityPalette.ts);
@@ -147,6 +174,15 @@
 html.ci-native {
   --safe-area-top: max(env(safe-area-inset-top, 0px), 59px);
   --safe-area-bottom: max(env(safe-area-inset-bottom, 0px), 34px);
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+html.ci-native,
+html.ci-native body,
+html.ci-native #root {
+  height: 100%;
+  max-height: 100%;
 }
 
 .ci-primary-surface {

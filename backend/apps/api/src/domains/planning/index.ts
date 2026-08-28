@@ -40,6 +40,7 @@ import { PlanningJobsListener } from './listeners/PlanningJobsListener';
 import { InboxScanService } from './services/InboxScanService';
 import { PlannedBlockService } from './services/PlannedBlockService';
 import { PlanningTimeService } from './services/PlanningTimeService';
+import { ProposedTaskReconcileService } from './services/ProposedTaskReconcileService';
 import { TaskService } from './services/TaskService';
 import { EventNowService, TodoProcessService, VerifyDoneService } from './services/TodoProcessService';
 import { TodoScanService } from './services/TodoScanService';
@@ -70,6 +71,7 @@ import { TodoScanService } from './services/TodoScanService';
     TaskService,
     PlanningTimeService,
     PlannedBlockService,
+    ProposedTaskReconcileService,
     TodoScanService,
     TodoProcessService,
     InboxScanService,

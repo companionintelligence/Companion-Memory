@@ -77,8 +77,8 @@ tags; all runtime config continues to flow from Hub's env files.
 
 | Script | Purpose |
 |--------|---------|
-| [`scripts/dev/hub-pr-test-deploy.sh`](../scripts/dev/hub-pr-test-deploy.sh) | Build (optional), tag, migrate, swap `api` + `gateway` + `hbpe-service` + `summary-service` |
-| [`scripts/dev/hub-pr-test-rollback.sh`](../scripts/dev/hub-pr-test-rollback.sh) | Remove override, restore Hub-pinned images |
+| [`scripts/dev/hub-pr-test-deploy.sh`](../../scripts/dev/hub-pr-test-deploy.sh) | Build (optional), tag, migrate, swap `api` + `gateway` + `hbpe-service` + `summary-service` |
+| [`scripts/dev/hub-pr-test-rollback.sh`](../../scripts/dev/hub-pr-test-rollback.sh) | Remove override, restore Hub-pinned images |
 
 ### Deploy
 
@@ -93,9 +93,15 @@ cd CI-Server
 
 # Re-swap images without re-running migrations
 ./scripts/dev/hub-pr-test-deploy.sh --skip-build --skip-migrate
+
+# Chrome/CSS/JS-only change: rebuild just the web UI + gateway image, recreate
+# gateway alone, skip migrate (implied by the flag)
+./scripts/dev/hub-pr-test-deploy.sh --frontend
 ```
 
-Environment overrides:
+Environment overrides — `PR_TAG` (default `pr-onboarding-test`), `GPU` (default
+`cpu`), `ROOT_FOLDER_HOST` (default `~/.local/share/companion-hub`) and
+`HUB_CONTAINER` (default `ci-os-hub`):
 
 ```bash
 PR_TAG=my-feature-test ROOT_FOLDER_HOST=~/.local/share/companion-hub ./scripts/dev/hub-pr-test-deploy.sh --skip-build

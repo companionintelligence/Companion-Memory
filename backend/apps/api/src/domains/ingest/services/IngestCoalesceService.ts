@@ -36,7 +36,11 @@ export class IngestCoalesceService {
 
   @OnEvent(IngestCoalesceEvent, {
     queue: INGEST_COALESCE_QUEUE,
-    queueOptions: { expireInSeconds: 3600, retryLimit: 3, retryDelay: 60 },
+    // `policy: 'short'` is what makes the singletonKey `enqueue()` sends
+    // (keyed by userId) actually refuse a duplicate — pg-boss's default
+    // `standard` policy stores a singletonKey but never enforces it. Every
+    // send on this queue carries a userId key, so `short` is safe queue-wide.
+    queueOptions: { policy: 'short', expireInSeconds: 3600, retryLimit: 3, retryDelay: 60 },
   })
   async run(payload: IngestCoalescePayload): Promise<void> {
     const { userId } = payload;

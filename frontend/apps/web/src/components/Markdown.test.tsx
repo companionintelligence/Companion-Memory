@@ -31,4 +31,29 @@ describe('Markdown', () => {
 
     expect(container).toBeEmptyDOMElement();
   });
+
+  describe('inline', () => {
+    // Verbatim from a feed Summary card, which rendered the asterisks literally
+    // before these slots were routed through this component.
+    const BULLET = '**High Communication Volume:** Three items were logged under Communications.';
+
+    it('still renders emphasis', () => {
+      render(<Markdown inline>{BULLET}</Markdown>);
+
+      expect(screen.getByText('High Communication Volume:').tagName).toBe('STRONG');
+      expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
+    });
+
+    it('omits the paragraph wrapper so it can live inside an li', () => {
+      const { container } = render(<Markdown inline>{BULLET}</Markdown>);
+
+      expect(container.querySelector('p')).toBeNull();
+    });
+
+    it('keeps the paragraph wrapper when not inline', () => {
+      const { container } = render(<Markdown>{BULLET}</Markdown>);
+
+      expect(container.querySelector('p')).not.toBeNull();
+    });
+  });
 });

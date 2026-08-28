@@ -10,7 +10,7 @@ export const MOCK_PLACES = [
     __typename: 'PlaceType' as const,
     id: 'place-1',
     name: 'Warehouse A',
-    description: 'Primary storage facility for inventory.',
+    description: 'Primary storage facility for stored things.',
     properties: { latitude: 37.7849, longitude: -122.4094 },
   },
   {

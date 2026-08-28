@@ -1,45 +1,6 @@
 [
   {
     "type": "cycle",
-    "from": "src/domains/graphql/types/FileType.ts",
-    "to": "src/domains/graphql/types/ItemConnection.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-circular"
-    },
-    "cycle": [
-      {
-        "name": "src/domains/graphql/types/ItemConnection.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
-        ]
-      },
-      {
-        "name": "src/domains/graphql/types/ItemEdge.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
-        ]
-      },
-      {
-        "name": "src/domains/graphql/types/ItemType.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
-        ]
-      },
-      {
-        "name": "src/domains/graphql/types/FileType.ts",
-        "dependencyTypes": [
-          "local",
-          "import"
-        ]
-      }
-    ]
-  },
-  {
-    "type": "cycle",
     "from": "src/domains/search-next/entities/EntityTagEntity.ts",
     "to": "src/domains/search-next/entities/TagEntity.ts",
     "rule": {
@@ -65,6 +26,195 @@
   },
   {
     "type": "dependency",
+    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.bounds.integration.spec.ts",
+    "to": "src/domains/connections/entities/ConnectionEntity.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.bounds.integration.spec.ts",
+    "to": "src/domains/connections/entities/ProviderEntity.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.bounds.integration.spec.ts",
+    "to": "src/domains/user/entities/UserEntity.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.indexes.integration.spec.ts",
+    "to": "src/domains/connections/entities/ConnectionEntity.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.indexes.integration.spec.ts",
+    "to": "src/domains/connections/entities/ProviderEntity.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/etl/services/__tests__/ConnectionSyncJobService.indexes.integration.spec.ts",
+    "to": "src/domains/user/entities/UserEntity.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/graphql/resolvers/__tests__/ForecastResolver.triggerHbpe.test.ts",
+    "to": "src/domains/python-functions/types.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/llm/listeners/__tests__/llmQueuePolicy.test.ts",
+    "to": "src/domains/smart-rotation/listeners/AnswerInferenceListener.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/llm/listeners/__tests__/visionQueuePolicy.test.ts",
+    "to": "src/domains/files/listeners/FilePreviewGenerationListener.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/llm/listeners/__tests__/visionQueuePolicy.test.ts",
+    "to": "src/domains/files/services/FileService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/memory/index.ts",
+    "to": "src/domains/graph/entities/ObjectIdentifierEntity.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/memory/index.ts",
+    "to": "src/domains/graph/services/ObjectIdentifierService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/memory/services/KnownPlacesService.ts",
+    "to": "src/domains/daily-metrics/places/transitionMath.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/memory/services/ObjectMergeService.ts",
+    "to": "src/domains/graph/services/ObjectIdentifierService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/memory/services/ObjectResolutionService.ts",
+    "to": "src/domains/graph/services/ObjectIdentifierService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/memory/services/ObjectResolutionService.ts",
+    "to": "src/domains/graph/utils/normalizeObjectIdentifier.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/memory/services/ProductModelService.ts",
+    "to": "src/domains/graph/services/ObjectIdentifierService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/memory/services/ProductModelService.ts",
+    "to": "src/domains/graph/utils/normalizeObjectIdentifier.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/memory/services/ReceiptService.ts",
+    "to": "src/domains/graph/services/ObjectIdentifierService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/memory/services/ReceiptService.ts",
+    "to": "src/domains/graph/utils/normalizeObjectIdentifier.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/personalization/controllers/PersonalizationController.ts",
+    "to": "src/domains/llm/image-description-preference.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
     "from": "src/domains/personalization/index.ts",
     "to": "src/domains/llm/core.module.ts",
     "rule": {
@@ -83,8 +233,8 @@
   },
   {
     "type": "dependency",
-    "from": "src/domains/personalization/controllers/PersonalizationController.ts",
-    "to": "src/domains/llm/image-description-preference.module.ts",
+    "from": "src/domains/personalization/services/ConceptExtractionService.ts",
+    "to": "src/domains/llm/services/OllamaService.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -119,6 +269,42 @@
   },
   {
     "type": "dependency",
+    "from": "src/domains/planning/services/__tests__/InboxScanService.test.ts",
+    "to": "src/domains/llm/services/OllamaService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/planning/services/__tests__/TodoProcessService.test.ts",
+    "to": "src/domains/llm/services/OllamaService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/planning/services/__tests__/TodoScanService.test.ts",
+    "to": "src/domains/llm/services/OllamaService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/planning/services/InboxScanService.ts",
+    "to": "src/domains/llm/services/OllamaService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
     "from": "src/domains/planning/services/TodoProcessService.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
     "rule": {
@@ -137,8 +323,53 @@
   },
   {
     "type": "dependency",
-    "from": "src/domains/planning/services/InboxScanService.ts",
-    "to": "src/domains/llm/services/OllamaService.ts",
+    "from": "src/domains/tools/index.ts",
+    "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/policy/__tests__/toolGate.test.ts",
+    "to": "src/domains/personalization/types.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/policy/toolGate.ts",
+    "to": "src/domains/personalization/types.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/services/__tests__/PendingActionService.test.ts",
+    "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/services/__tests__/PendingActionService.test.ts",
+    "to": "src/domains/personalization/types.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/services/PendingActionService.ts",
+    "to": "src/domains/personalization/services/PersonalizationService.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"

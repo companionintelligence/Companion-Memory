@@ -344,6 +344,52 @@ describe('TaskService', () => {
     });
   });
 
+  describe('appendNotes', () => {
+    it('appends a new fragment onto existing notes', async () => {
+      await setup([makeTask({ notes: 'first note' })]);
+
+      const result = await service.appendNotes(ALICE, 'task-1', 'second note');
+
+      expect(result?.notes).toBe('first note\n\nsecond note');
+      expect(signalling.send).toHaveBeenCalledWith(TaskUpdatedEvent, { taskId: 'task-1' });
+    });
+
+    it('is idempotent — redelivering the same fragment does not duplicate it', async () => {
+      // A pg-boss job that appends for items 1-4 of a batch and then throws on
+      // item 5 gets the WHOLE job redelivered under the queue's retry policy.
+      // Without this check, re-running the same append on retry would
+      // string-concatenate the fragment a second time onto notes that already
+      // have it.
+      await setup([makeTask({ notes: 'first note' })]);
+
+      const first = await service.appendNotes(ALICE, 'task-1', 'first note');
+
+      expect(first?.notes).toBe('first note');
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(signalling.send).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent even when the fragment was the very first note (no separator to search past)', async () => {
+      await setup([makeTask({ notes: null })]);
+
+      const first = await service.appendNotes(ALICE, 'task-1', 'only note');
+
+      expect(first?.notes).toBe('only note');
+
+      await setup([makeTask({ notes: 'only note' })]);
+      const retried = await service.appendNotes(ALICE, 'task-1', 'only note');
+
+      expect(retried?.notes).toBe('only note');
+      expect(repository.save).not.toHaveBeenCalled();
+    });
+
+    it('returns null for a task the caller does not own', async () => {
+      await setup([]);
+
+      expect(await service.appendNotes(BOB, 'task-1', 'note')).toBeNull();
+    });
+  });
+
   describe('remove', () => {
     it('emits TaskRemovedEvent when a row was deleted', async () => {
       await service.remove(ALICE, 'task-1');

@@ -26,6 +26,7 @@ export type {
   DueResponse,
   ForecastBucket,
   ForecastResponse,
+  ForageTrialResponse,
   WeekForecastCluster,
   WeekForecastDay,
   WeekForecastResponse,

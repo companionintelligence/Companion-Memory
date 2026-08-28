@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   PLACE_KINDS,
   PLACE_KIND_LABELS,
+  applyCurrentLocation,
   emptyPlaceDraft,
+  formatExactCoordinate,
   parseCoordinates,
   placeDraftToInput,
   validatePlaceDraft,
@@ -50,6 +52,61 @@ describe('validatePlaceDraft', () => {
 
   it('rejects half a coordinate pair rather than dropping it silently', () => {
     expect(validatePlaceDraft(draft({ latitude: '37.7823' }))).toBe('coordinates');
+  });
+});
+
+describe('formatExactCoordinate', () => {
+  it('keeps seven decimals so a GPS pin is not rounded away', () => {
+    expect(formatExactCoordinate(37.78234567)).toBe('37.7823457');
+    expect(formatExactCoordinate(-122.40761234)).toBe('-122.4076123');
+  });
+});
+
+describe('applyCurrentLocation', () => {
+  it('writes exact coordinates and fills a blank name from the address', () => {
+    expect(
+      applyCurrentLocation(emptyPlaceDraft(), {
+        latitude: 37.7823,
+        longitude: -122.4076,
+        address: '66 Mint St, San Francisco',
+      }),
+    ).toMatchObject({
+      name: '66 Mint St, San Francisco',
+      address: '66 Mint St, San Francisco',
+      placeKind: 'address',
+      latitude: '37.7823000',
+      longitude: '-122.4076000',
+    });
+  });
+
+  it('does not overwrite a name or kind the user already chose', () => {
+    expect(
+      applyCurrentLocation(draft({ name: 'Blue Bottle', placeKind: 'venue', address: 'hand typed' }), {
+        latitude: 37.78,
+        longitude: -122.4,
+        address: '66 Mint St',
+      }),
+    ).toMatchObject({
+      name: 'Blue Bottle',
+      placeKind: 'venue',
+      address: '66 Mint St',
+    });
+  });
+
+  it('names an unnamed pin Current location when reverse geocode is empty', () => {
+    expect(applyCurrentLocation(emptyPlaceDraft(), { latitude: 1, longitude: 2 }).name).toBe(
+      'Current location',
+    );
+  });
+
+  it('replaces a Current location placeholder once an address arrives', () => {
+    expect(
+      applyCurrentLocation(draft({ name: 'Current location' }), {
+        latitude: 1,
+        longitude: 2,
+        address: '66 Mint St',
+      }).name,
+    ).toBe('66 Mint St');
   });
 });
 

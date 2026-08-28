@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { useMutation } from '@apollo/client';
-import { Button, Dialog } from '@ci/shadcn';
+import { Button } from '@ci/shadcn';
 
 import {
   PlaceForm,
@@ -10,6 +10,7 @@ import {
   validatePlaceDraft,
   type PlaceDraftProblem,
 } from '@/components/PlaceForm';
+import { ResponsiveDialog } from '@/components/ResponsiveDialog';
 import { gql } from '@/graphql';
 
 const CREATE_PLACE = gql(`
@@ -78,11 +79,14 @@ export function AddPlaceModal({ open, onClose, onCreated }: Props) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <Dialog.Content className="max-h-[85vh] overflow-hidden sm:max-w-2xl">
-        <Dialog.Header>
-          <Dialog.Title>Add Place</Dialog.Title>
-        </Dialog.Header>
+    <ResponsiveDialog open={open} onOpenChange={onClose}>
+      <ResponsiveDialog.Content className="max-h-[85vh] overflow-hidden sm:max-w-2xl">
+        <ResponsiveDialog.Header>
+          <ResponsiveDialog.Title>Add Place</ResponsiveDialog.Title>
+          <ResponsiveDialog.Description>
+            Save a spot from where you are, or type an address.
+          </ResponsiveDialog.Description>
+        </ResponsiveDialog.Header>
 
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-col gap-4">
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -95,16 +99,16 @@ export function AddPlaceModal({ open, onClose, onCreated }: Props) {
             </p>
           )}
 
-          <Dialog.Footer className="flex gap-2 justify-end">
+          <ResponsiveDialog.Footer className="flex gap-2 justify-end">
             <Button type="button" variant="outline" onClick={handleCancel} disabled={loading}>
               Cancel
             </Button>
             <Button type="submit" disabled={loading}>
               {loading ? 'Adding…' : 'Add'}
             </Button>
-          </Dialog.Footer>
+          </ResponsiveDialog.Footer>
         </form>
-      </Dialog.Content>
-    </Dialog>
+      </ResponsiveDialog.Content>
+    </ResponsiveDialog>
   );
 }

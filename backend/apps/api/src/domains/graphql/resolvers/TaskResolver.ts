@@ -289,14 +289,35 @@ export class TaskResolver {
     @Args('id', { type: () => ID }) gid: string,
     @Args('estimatedMinutes', { type: () => Int, nullable: true }) estimatedMinutes?: number,
     @Args('date', { nullable: true, description: 'Owner-local YYYY-MM-DD to prefer.' }) date?: string,
+    @Args('startTime', {
+      type: () => Date,
+      nullable: true,
+      description:
+        'An exact instant to place at — a calendar drop, not a "put this somewhere" click. ' +
+        'When given, the gap solver is bypassed entirely and `date` is ignored.',
+    })
+    startTime?: Date,
+    @Args('endTime', {
+      type: () => Date,
+      nullable: true,
+      description:
+        'Paired with `startTime`. Omit to keep the task’s own estimate (or the existing block’s duration, if moving one).',
+    })
+    endTime?: Date,
   ): Promise<ScheduleTaskPayload> {
     await this.assertPlanningEnabled();
     const serviceContext = toServiceContext(context);
-    const outcome = await this.plannedBlockService.scheduleTask(
-      serviceContext,
-      GlobalUID.parse('task', gid),
-      { estimatedMinutes, date },
-    );
+    const taskId = GlobalUID.parse('task', gid);
+
+    const outcome = startTime
+      ? await this.plannedBlockService.scheduleTaskAt(
+          serviceContext,
+          taskId,
+          startTime,
+          endTime,
+          estimatedMinutes,
+        )
+      : await this.plannedBlockService.scheduleTask(serviceContext, taskId, { estimatedMinutes, date });
 
     return {
       success: outcome.status === 'placed' || outcome.status === 'already_placed',

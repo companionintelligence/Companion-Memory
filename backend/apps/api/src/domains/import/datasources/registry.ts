@@ -46,6 +46,18 @@ export interface DataSourceRecognition {
    * staging folder still imports from the folder that really contains it).
    */
   matchedPath?: string;
+  /**
+   * Subtrees a specialised match has already claimed, set by
+   * `ParseStage.dropGenericWhenSpecialised` on the SURVIVING `generic` match
+   * only (see that function). Every other match's `excludePaths` stays unset —
+   * a specialised parser only ever reads what it recognized at `matchedPath`,
+   * so it has nothing else to be told to skip. `generic`'s walker (see
+   * `datasources/generic.ts`) prunes any entry nested under, or equal to, one
+   * of these before it stages anything — that is what lets a bare loose file
+   * elsewhere in the same drop still reach `generic` without re-staging what a
+   * specialised parser already consumed.
+   */
+  excludePaths?: readonly string[];
 }
 
 // Parameters for recognition (reserved for future use)
@@ -159,6 +171,14 @@ export interface RecognizeRunOptions {
    * (the inbox root, uploads, the CLI/MCP path tools).
    */
   only?: ReadonlySet<string>;
+  /**
+   * Called after each directory entry the descent finishes recognizing, with
+   * the running count. Recognition is thousands of tiny reads and can crawl
+   * when the disk is busy (a concurrent 350GB unpack) — a caller with a
+   * progress surface uses this to show the crawl as movement instead of a
+   * frozen label. Fire-and-forget: the walk never waits on it.
+   */
+  onEntry?: (scanned: number) => void;
 }
 
 /** Run every importer's `recognize` against a single entry; keep the hits. */
@@ -254,7 +274,13 @@ export async function dataSourcesRecognize(
   if (runOpts.descend && entry.fullPath && (await isDirectorySafe(entry.fullPath))) {
     const maxDepth = runOpts.maxDepth ?? 4;
     const maxEntries = runOpts.maxEntriesPerDir ?? 200;
-    await descendRecognize(ctx, entry.fullPath, opts, consider, maxDepth, maxEntries, 1, runOpts.only);
+    // The count is cumulative across the whole descent, not per directory —
+    // it feeds a progress line, and a number that resets at every subfolder
+    // reads as the scan starting over.
+    let totalScanned = 0;
+    const tick = runOpts.onEntry == null ? undefined : () => runOpts.onEntry?.((totalScanned += 1));
+
+    await descendRecognize(ctx, entry.fullPath, opts, consider, maxDepth, maxEntries, 1, runOpts.only, tick);
   }
 
   const results = [...best.values()].flat();
@@ -288,6 +314,26 @@ async function isDirectorySafe(p: string): Promise<boolean> {
 }
 
 /**
+ * Is `child` equal to `parent`, or nested somewhere inside it? Pure
+ * containment in ONE direction, with no "missing path means nested" fallback
+ * — that conservative default belongs to callers that need it (see
+ * {@link isAncestorPath} below), not to this primitive.
+ *
+ * Exported for `ParseStage.dropGenericWhenSpecialised` and `generic.ts`'s file
+ * walker, which both need the same "is this path inside a claimed subtree"
+ * check this module already proved out here.
+ */
+export function isPathWithinOrEqual(parent: string, child: string): boolean {
+  if (parent === child) {
+    return true;
+  }
+
+  const rel = path.relative(parent, child);
+
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
+/**
  * Is `a` an ancestor of `b`, `b` an ancestor of `a`, or the same path — i.e.
  * are the two "nested" relative to each other, in either direction? Two
  * SIBLINGS (`.../Bookmarks` and `.../History`, both direct children of the
@@ -301,17 +347,11 @@ async function isDirectorySafe(p: string): Promise<boolean> {
  * before this distinction existed.
  */
 function isAncestorPath(a: string | undefined, b: string | undefined): boolean {
-  if (a == null || b == null || a === b) {
+  if (a == null || b == null) {
     return true;
   }
 
-  const isInside = (parent: string, child: string): boolean => {
-    const rel = path.relative(parent, child);
-
-    return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
-  };
-
-  return isInside(a, b) || isInside(b, a);
+  return isPathWithinOrEqual(a, b) || isPathWithinOrEqual(b, a);
 }
 
 /**
@@ -330,6 +370,7 @@ async function descendRecognize(
   maxEntries: number,
   depth: number,
   only?: ReadonlySet<string>,
+  tick?: () => void,
 ): Promise<void> {
   if (depth > maxDepth) {
     return;
@@ -359,8 +400,10 @@ async function descendRecognize(
     }
 
     if (e.isDirectory()) {
-      await descendRecognize(ctx, childPath, opts, consider, maxDepth, maxEntries, depth + 1, only);
+      await descendRecognize(ctx, childPath, opts, consider, maxDepth, maxEntries, depth + 1, only, tick);
     }
+
+    tick?.();
   }
 }
 

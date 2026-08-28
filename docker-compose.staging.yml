@@ -13,6 +13,7 @@ services:
       DATABASE_HOST: database
       CI_IMPORT_SCRATCH_DIR: ${CI_IMPORT_SCRATCH_DIR:-/var/lib/ci-import/scratch}
       CI_IMPORT_ROOTS: ${CI_IMPORT_ROOTS:-["/repo"]}
+      CI_IMPORT_INBOX_HOST_DIR: ${CI_IMPORT_INBOX_HOST_DIR:-${CI_IMPORT_WORK_DIR:-./import-work}/inbox}
       OBJECT_STORE_URL: http://object-store:9000
       OLLAMA_HOST: http://host.docker.internal:11434
       # OpenAI-compatible chat backend (Hub-injected on managed deploys). When
@@ -98,10 +99,15 @@ services:
     profiles: [ "staging" ]
 
   hbpe-service:
+    extra_hosts:
+      - host.docker.internal:host-gateway
     environment:
       DATABASE_PASSWORD: ${DATABASE_PASSWORD}
       API_URL: http://api:3030
       API_JWT_SECRET: ${AUTH_TOKEN_SECRET}
+      LLM_API_BASE: ${LLM_API_BASE:-http://host.docker.internal:11434/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-ollama}
+      LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
     devices:
       - /dev/kfd
       - /dev/dri

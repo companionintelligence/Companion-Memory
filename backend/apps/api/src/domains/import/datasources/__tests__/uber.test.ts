@@ -496,6 +496,44 @@ describe('Uber datasource', () => {
     expect(ids.every((id) => id!.startsWith('ubereats|'))).toBe(true);
   });
 
+  describe('Uber Eats states a place', () => {
+    // ci.receipts.place_entity_id is what ObjectResolutionService's place_prior
+    // rung reads, and before this Uber Eats was the only commerce source that
+    // reliably names a real location — so this is the test that keeps the
+    // receipt->place path REACHABLE rather than merely implemented.
+    it('names the restaurant as a canonical Place so the receipt can be located', async () => {
+      const { items } = await importFromDir([
+        {
+          rel: 'Uber Data/Eats/user_orders-0.csv',
+          content: [
+            EATS_HEADER,
+            'OC,Shwack Grill,2024-01-24T12:44:35.000Z,2024-01-24T13:20:26.000Z,completed,Fish Tacos,1,"",,"",13.25,83.13,USD',
+          ].join('\n'),
+        },
+      ]);
+      const order = items.find((p) => p.item.metadata!.Restaurant === 'Shwack Grill')!;
+
+      // `Place` (not `Restaurant`) is the key push/canonical.ts locationNameFor
+      // reads; qualified by city so two same-named branches stay distinct.
+      expect(order.item.metadata!.Place).toBe('Shwack Grill, OC');
+    });
+
+    it('falls back to the bare restaurant name when the export states no city', async () => {
+      const { items } = await importFromDir([
+        {
+          rel: 'Uber Data/Eats/user_orders-0.csv',
+          content: [
+            EATS_HEADER,
+            ',Shwack Grill,2024-01-24T12:44:35.000Z,2024-01-24T13:20:26.000Z,completed,Fish Tacos,1,"",,"",13.25,83.13,USD',
+          ].join('\n'),
+        },
+      ]);
+      const order = items.find((p) => p.item.metadata!.Restaurant === 'Shwack Grill')!;
+
+      expect(order.item.metadata!.Place).toBe('Shwack Grill');
+    });
+  });
+
   describe('Uber Eats food entities', () => {
     // One entity per line item, `includes`-linked to its order.
     const foodEntities = (graph: Graph) =>

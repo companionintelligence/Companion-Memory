@@ -13,26 +13,30 @@ Personal database, REST/LLM API, RAG, and HBPE behavioral-prediction engine. The
 
 ## Stack
 
-- NestJS 10 (backend)
-- React/Vite (frontend)
+- NestJS 11 (backend)
+- React 19 / Vite (frontend)
+- Capacitor iOS + Android shells (`frontend/apps/ios`, `frontend/apps/android`)
 - PostgreSQL 18 + pgvector + TimescaleDB + PostGIS
 - Ollama (local LLM / embeddings)
-- Python/FastAPI sidecar (HBPE — ONNX INT8)
-- PGBoss (background jobs)
+- Two Python/FastAPI sidecars via uv: HBPE (ONNX INT8 + llama.cpp labeler, :8002) and Summary (:8001, parser on host :8003)
+- PGBoss (background jobs; the only scheduler)
 - Minio (object storage)
 - Docker Compose
 
 ## Commands
 
 ```bash
-yarn install
-docker compose up -d && yarn dev
-yarn test
+make install   # yarn install + uv sync --all-packages
+make dev       # full per-worktree stack: compose + migrations + Caddy + overmind
+make lint      # both stacks (eslint/prettier + ruff/mypy/uv lock --check)
+make test      # both stacks (yarn workspaces test + pytest)
 ```
 
 ## Rules
 
-- Package manager: do not switch or mix.
+- Package manager: yarn for JS/TS, uv for Python. Do not switch or mix.
+- `frontend/apps/{ios,android}` are outside the Yarn workspaces on purpose — install from inside each directory.
+- CI is `workflow_dispatch`-only: an absent check means nobody ran it. `gh workflow run <file> --ref <ref>`.
 - Destructive git operations (`reset --hard`, `clean -f`) require explicit user confirmation.
 - Commits reference CI-Engineering issues.
 - All content is **private and confidential** — Property of Lifescope Inc.

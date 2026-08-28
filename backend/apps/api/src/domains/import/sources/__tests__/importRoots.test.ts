@@ -11,6 +11,7 @@ import {
   resolveWithinRoots,
   resolveWithinUserInbox,
   userInboxDir,
+  userInboxDisplayDir,
 } from '../importRoots';
 
 /**
@@ -185,12 +186,77 @@ describe('resolveWithinImportRoots', () => {
   });
 });
 
+async function withInboxHostDir<T>(dir: string, run: () => Promise<T>): Promise<T> {
+  const previous = config.import.inboxHostDir;
+
+  (config.import as { inboxHostDir: string }).inboxHostDir = dir;
+
+  try {
+    return await run();
+  } finally {
+    (config.import as { inboxHostDir: string }).inboxHostDir = previous;
+  }
+}
+
 describe('resolveWithinUserInbox', () => {
   it('derives the user folder from the email, lowercased and sanitized', async () => {
     const inbox = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-'));
 
     await withInbox(inbox, async () => {
       expect(userInboxDir('Kyle@Lifescope.IO')).toBe(path.join(inbox, 'kyle_lifescope.io'));
+    });
+  });
+});
+
+describe('userInboxDisplayDir', () => {
+  /**
+   * What the scan SHOWS. The API's own path is inside the container; the
+   * person dropping files is on the host, where the same folder is the bind
+   * mount's source. The operator names that source and the display follows
+   * it — same per-user folder, different root.
+   */
+  it('is the server path when no host dir is configured', async () => {
+    const inbox = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-'));
+
+    await withInbox(inbox, async () => {
+      await withInboxHostDir('', async () => {
+        expect(userInboxDisplayDir('kyle@lifescope.io')).toBe(userInboxDir('kyle@lifescope.io'));
+      });
+      // Whitespace is "not configured", not a folder named ' '.
+      await withInboxHostDir('   ', async () => {
+        expect(userInboxDisplayDir('kyle@lifescope.io')).toBe(userInboxDir('kyle@lifescope.io'));
+      });
+    });
+  });
+
+  it('re-roots the same user folder under the host dir when one is configured', async () => {
+    const inbox = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-'));
+
+    await withInbox(inbox, async () => {
+      await withInboxHostDir(
+        '/home/kyle/.local/share/companion-hub/app-data/ci-memory/data/import-work/inbox',
+        async () => {
+          expect(userInboxDisplayDir('Kyle@Lifescope.IO')).toBe(
+            '/home/kyle/.local/share/companion-hub/app-data/ci-memory/data/import-work/inbox/kyle_lifescope.io',
+          );
+          // The server path is untouched: the resolvers keep working where the
+          // API actually runs.
+          expect(userInboxDir('Kyle@Lifescope.IO')).toBe(path.join(inbox, 'kyle_lifescope.io'));
+        },
+      );
+    });
+  });
+
+  it('is not resolved against the container and tolerates a trailing slash', async () => {
+    const inbox = await mkdtemp(path.join(os.tmpdir(), 'ci-inbox-'));
+
+    await withInbox(inbox, async () => {
+      // A host path is a label from another filesystem namespace — resolving
+      // it here would glue the API's cwd onto it and name a folder that
+      // exists nowhere.
+      await withInboxHostDir('import-work/inbox/', async () => {
+        expect(userInboxDisplayDir('kyle@lifescope.io')).toBe('import-work/inbox/kyle_lifescope.io');
+      });
     });
   });
 

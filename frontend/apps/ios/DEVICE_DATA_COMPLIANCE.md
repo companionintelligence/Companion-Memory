@@ -71,7 +71,7 @@ Severity + owner tags follow `DELIVERY.md`:
 | 7 | **Location — foreground / precise** | ⚠️ / ✅ | `ACCESS_FINE_LOCATION` (+`COARSE`) → **Permissions Declaration Form (location)**; from Android 17 the **location button** becomes the recommended minimum scope | `CLLocationManager` → `NSLocationWhenInUseUsageDescription` | Precise location | 🟠 implies who you were with | **2** |
 | 8 | **Health & fitness** | ⚠️ / ⚠️ | Health Connect `android.permission.health.READ_*` → **Health apps declaration form** (+`READ_HEALTH_DATA_HISTORY` for >30 days) | HealthKit → `com.apple.developer.healthkit` entitlement + `NSHealthShareUsageDescription` (+`NSHealthUpdateUsageDescription` if writing) | Health info · Health | ✅ none | **3** |
 | 9 | **Contacts** | ⚠️ / ⚠️ | `READ_CONTACTS` → **contacts declaration form from Sept 2026, mandatory 2027-01-27** for targetSdk 37+; **Contact Picker** is the minimum-scope alternative | `CNContactPickerViewController` (**no string**) vs `CNContactStore` (`NSContactsUsageDescription`) | Contacts · Contacts | 🔴🔴 **entire address book of non-consenting people** | **3 (picker only)** |
-| 10 | **Location — background** | ⚠️ / ⚠️ | `ACCESS_BACKGROUND_LOCATION` + FGS `location` → **background-location declaration + video demo** + FGS-type declaration | `NSLocationAlwaysAndWhenInUseUsageDescription` + `UIBackgroundModes:location` + always-on blue indicator | Precise location | 🟠 | **4** |
+| 10 | **Location — background** | ⚠️ / ⚠️ | `ACCESS_BACKGROUND_LOCATION` + FGS `location` → **background-location declaration + video demo** + FGS-type declaration | `NSLocationAlwaysAndWhenInUseUsageDescription` + `UIBackgroundModes:location` + always-on blue indicator | Precise location | 🟠 | **shipped 2026-08-21, ahead of plan — §3.4** |
 | 11 | **Photos & videos — full library read** | ⚠️ / ⚠️ | `READ_MEDIA_IMAGES` / `READ_MEDIA_VIDEO` → **Photo & Video Permissions declaration**; broad access is for *"gallery apps"* | `PHPhotoLibrary` full auth → `NSPhotoLibraryUsageDescription`; Apple 5.1.1(iii) says *use the picker* | Photos and videos | 🟠 | **4 (only if 1+2 provably insufficient)** |
 | 12 | **App usage / screen time** | ⚠️ / ⛔ | `PACKAGE_USAGE_STATS` (Settings special access, **no runtime prompt, no Play form found**) but *"inventory of other apps on the device"* is named personal & sensitive data | **No path.** `FamilyControls` entitlement is special-request; `DeviceActivityReport` data is sandboxed in-extension and cannot reach your app | App interactions · Installed apps | ✅ none | **4 — Android only** |
 | 13 | **Installed-apps list** | ⛔ / ⛔ | `QUERY_ALL_PACKAGES` → form; permitted uses are *"device search, antivirus apps, file managers, and browsers"* only | No public API; 5.1.2(iv) bans it outright | Installed apps | ✅ | **never** |
@@ -118,7 +118,8 @@ inferences to anyone else is not.
 
 **iOS.** `com.apple.developer.healthkit` entitlement, `NSHealthShareUsageDescription`,
 plus `NSHealthUpdateUsageDescription` if you ever write back. HealthKit is available on
-iPad, but confirm before shipping universal (see `DELIVERY.md` §1a iPad decision).
+iPad, but the app ships **iPhone-only** (`TARGETED_DEVICE_FAMILY = 1`, decided 2026-08-19
+— see `DELIVERY.md` §1a), so iPad is out of scope unless that is reversed.
 
 > 🔴 **The non-obvious rule everyone gets wrong.** Guideline **5.1.3(ii)**:
 > *"Apps must not write false or inaccurate data into HealthKit … and **may not store
@@ -236,8 +237,34 @@ Background is a different animal:
 > user-facing purpose. The framing that has a chance is a **named, visible feature** —
 > e.g. "Place Timeline: automatically attaches the place to each memory you capture, and
 > shows a map of your day" — with a UI the video can actually show. **Budget two rejection
-> cycles.** Ship foreground-only first (Phase 2) so a background rejection cannot block the
-> rest of the release.
+> cycles.**
+
+> 🔴 **[code] Update 2026-08-21: background location now ships on BOTH platforms, ahead of
+> the phased plan below.** The client standardized on
+> `@capacitor-community/background-geolocation` for iOS *and* Android rather than the
+> iOS-only significant-change tracker this section originally described (that tracker,
+> `LocationTracker.swift`, has been removed). That trades away the significant-change /
+> home-geofence design — lower battery cost, no continuous stream — for one cross-platform
+> continuous watcher, gated only by `distanceFilter` (150 m) rather than by "wake only on
+> meaningful movement." **This is a deliberate product decision, not an oversight** — but
+> it means the Phase 4 compliance work below is no longer optional or deferrable to a later
+> release: `ACCESS_BACKGROUND_LOCATION` and the foreground-service `location` type are in
+> the Android manifest *today*, so the background-location declaration + video AND the
+> foreground-service-type declaration must be filed and approved **before this build
+> reaches any Play track, including internal testing** — not merely before a dedicated
+> Phase 4 release. Budget the "two rejection cycles" above into the critical path for the
+> *next* Play upload, whatever it is.
+
+**Always mode (both platforms).** Settings → Location is Off / While using / Always.
+Always requests `NSLocationAlwaysAndWhenInUseUsageDescription` (iOS) /
+`ACCESS_BACKGROUND_LOCATION` (Android) after When-In-Use/foreground is already granted, and
+starts a continuous watcher that keeps sampling once the app is backgrounded — filtered by
+`distanceFilter` rather than by significant-change. Android shows a persistent "Recording
+location" notification while this is on (the OS's price of admission for a background
+location session); iOS shows the blue status-bar indicator. In-app copy frames this as
+remembering *places for your memory* and writes `ci.position` only — Places still come from
+existing server enrichment. There is no home geofence in this design; the old tracker's
+burst-on-geofence-exit behavior has no equivalent in the community plugin.
 
 Apple: `NSLocationWhenInUseUsageDescription` → `NSLocationAlwaysAndWhenInUseUsageDescription`
 + `UIBackgroundModes: location`. No declaration form, but 5.1.5 requires location be
@@ -269,9 +296,9 @@ guarantee that your app has access to unredacted EXIF metadata."*
 > privacy story. Note also: `READ_MEDIA_VISUAL_USER_SELECTED` (Android 14 partial access) is
 > a middle tier if you later need repeat access to a user-chosen subset.
 
-> ⚠️ Current iOS state: only `NSPhotoLibraryAddUsageDescription` exists in `Info.plist`. The
-> picker path needs **no** new key. If you ever add full read, you need
-> `NSPhotoLibraryUsageDescription` **and** a re-filed nutrition label.
+> `NSPhotoLibraryUsageDescription` is present because Capacitor Camera / Photos APIs
+> are linked even when the product path is picker-style. Apple rejects the upload
+> without the key. Re-file the nutrition label if the app ever does a full-library read.
 
 ---
 
@@ -487,9 +514,14 @@ nothing else you care about**, so a health rejection doesn't hold hostage anythi
 in Phases 1–2.
 
 ### Phase 4 — "Ambient background". Expect rejections; that's the plan.
-Background location (declaration + video + FGS-type declaration) · background health reads ·
-Android app-usage · full-library photo read **only if** Phase 1 provably fell short.
-Each of these gets **its own release**. Never bundle two video-demo declarations.
+Background health reads · Android app-usage · full-library photo read **only if** Phase 1
+provably fell short. Each of these gets **its own release**. Never bundle two video-demo
+declarations.
+
+> 🔴 **Background location shipped ahead of this phase (2026-08-21)** — see §3.4. The
+> declaration + video + FGS-type-declaration prerequisites this phase originally paired it
+> with did **not** move earlier along with the code; they still gate the *next* Play upload
+> of any kind, not a dedicated later release.
 
 ### Never
 SMS · call log · notification listener · accessibility capture · `QUERY_ALL_PACKAGES` ·
@@ -564,9 +596,11 @@ onboarding wall is a rejection.
   on whether a Lifescope-hosted demo or managed instance makes Lifescope a processor for
   third-party personal data.
 
-- 🟢 **[code] iPad + HealthKit.** `DELIVERY.md` decided universal. Confirm HealthKit
-  availability and behaviour on iPad before declaring the entitlement, and do not add
-  HealthKit to `UIRequiredDeviceCapabilities` (it would silently drop iPad).
+- 🟢 **[code] iPad + HealthKit.** Moot for now: `DELIVERY.md` §1a settled on
+  **iPhone-only** (`TARGETED_DEVICE_FAMILY = 1`) on 2026-08-19, reversing the earlier
+  "ship universal" call. If universal is ever restored, confirm HealthKit availability
+  and behaviour on iPad before declaring the entitlement, and do not add HealthKit to
+  `UIRequiredDeviceCapabilities` (it would silently drop iPad).
 
 ---
 

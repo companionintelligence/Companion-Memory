@@ -237,7 +237,15 @@ describe('Reddit datasource', () => {
     expect(pipeline.length).toBe(1);
     expect(pipeline[0].item.classification).toBe('purchase');
     expect(pipeline[0].item.metadata.Product).toBe('500 Reddit Coins');
-    expect(pipeline[0].item.metadata.Cost).toBe('1.99');
+    // The canonical TOTAL key, not `Cost`: no price chain ever read `Cost`, so
+    // every Reddit purchase used to reach ci.* priceless.
+    expect(pipeline[0].item.metadata.Total).toBe('1.99');
+    expect(pipeline[0].item.metadata.Cost).toBeUndefined();
+    // Reddit sells Coins, Awards and Premium — never a physical good.
+    expect(pipeline[0].item.metadata.IsDigital).toBe(true);
+    expect(pipeline[0].item.metadata.Merchant).toBe('Reddit');
+    // The PAYMENT processor stays out of the merchant chain.
+    expect(pipeline[0].item.metadata.Processor).toBe('stripe');
     expect(pipeline[0].item.timestamp).toBeDefined();
   });
 });

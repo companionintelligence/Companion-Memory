@@ -50,6 +50,39 @@ export class EventEntity {
   @Column({ type: 'timestamptz', nullable: true, name: 'end_time' })
   endTime!: Date | null;
 
+  /**
+   * WHERE the instant in `startTime` came from — the vocabulary is declared in
+   * `TIME_SOURCES` (pipeline/stages/clean/TemporalRepairStage): `source` (the
+   * export said so), `user` (a human typed it), `repaired` (the clean stage
+   * moved it, `start_time_original` holds what was there before) and `ingest`
+   * (**nothing** said so — the transform stamped a wall clock because the column
+   * is NOT NULL).
+   *
+   * Declared on the entity, and not only in the clean stage's raw UPDATE,
+   * because the honest place to say "this instant is not evidence" is the write
+   * that MINTS it. A marker only a later sweep can apply is a marker that is
+   * absent for every row between the import and the sweep — which is exactly
+   * how five Google Maps saved places ("Home", "Work", "Gym") came to sit at the
+   * top of the timeline dated the moment of the import with nothing anywhere
+   * saying they were undated. The importer now stamps `ingest` at insert
+   * (import/push/inputs.ts `toEventInput`); the clean stage still owns
+   * `repaired` and the `*_original` pair.
+   *
+   * Nullable: rows written before this existed, and every writer that genuinely
+   * has nothing to assert, leave it NULL. NULL means "unexamined", not "source".
+   */
+  @Column({ type: 'text', nullable: true, name: 'time_source' })
+  timeSource!: string | null;
+
+  /**
+   * HOW MUCH of `startTime` is meaningful — `TIME_PRECISIONS` in the same file:
+   * `second` / `minute` / `day` / `ambiguous` / `unknown`. `unknown` is the one
+   * that pairs with `timeSource = 'ingest'`: there was no source timestamp at
+   * all, so not one field of the stored instant carries information.
+   */
+  @Column({ type: 'text', nullable: true, name: 'time_precision' })
+  timePrecision!: string | null;
+
   @Column({ type: 'integer', nullable: true, insert: false, update: false, name: 'duration_minutes' })
   durationMinutes!: number | null;
 
@@ -82,6 +115,14 @@ export class EventEntity {
 
   @Column({ type: 'text', nullable: true, name: 'source_id' })
   sourceId!: string | null;
+
+  /**
+   * The ci.connections row whose sync produced this event, so disconnecting
+   * that service can purge exactly its events. Null for events that did not
+   * come from a connection (manual, imported archives, predicted).
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'connection_id' })
+  connectionId!: string | null;
 
   @Column({ type: 'double precision', default: 1.0, name: 'confidence_score' })
   confidenceScore!: number;
@@ -124,11 +165,6 @@ export class EventEntity {
 
   @Column({ type: 'text', default: 'confirmed' })
   status!: string;
-
-  // last_accessed stays on the hot table (read-path touch). salience /
-  // access_count / other unused analytics live in ci.event_analytics.
-  @Column({ type: 'timestamptz', nullable: true, name: 'last_accessed' })
-  lastAccessed!: Date | null;
 
   // Consent / sharing scope (mirrors ci.answers.sharing_level). Stored raw at
   // ingest; redaction happens at read based on the consumer's scope (G2).
@@ -184,6 +220,8 @@ export class EventEntity {
       category: entity.category,
       startTime: entity.startTime,
       endTime: entity.endTime,
+      timeSource: entity.timeSource,
+      timePrecision: entity.timePrecision,
       durationMinutes: entity.durationMinutes,
       locationName: entity.locationName,
       locationCoordinates: entity.locationCoordinates,
@@ -193,6 +231,7 @@ export class EventEntity {
       sourceType: entity.sourceType,
       sourceSystem: entity.sourceSystem,
       sourceId: entity.sourceId,
+      connectionId: entity.connectionId,
       confidenceScore: entity.confidenceScore,
       isRecurring: entity.isRecurring,
       recurrencePattern: entity.recurrencePattern,
@@ -212,7 +251,6 @@ export class EventEntity {
       parentEventId: entity.parentEventId,
       taskId: entity.taskId,
       plannedMinutes: entity.plannedMinutes,
-      lastAccessed: entity.lastAccessed,
       sharingLevel: entity.sharingLevel,
       createdBy: entity.createdBy,
       userId: entity.userId,

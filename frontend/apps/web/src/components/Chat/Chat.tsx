@@ -369,6 +369,7 @@ export function Chat({
         <div
           ref={setScrollRef}
           onScroll={onScroll}
+          data-list-scroll=""
           className={cn(
             'flex flex-col gap-4 flex-1 min-h-0 overflow-y-scroll',
             contentPadding,

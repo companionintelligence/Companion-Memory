@@ -34,6 +34,7 @@ interface RawRow {
   lat: number;
   lng: number;
   start_time: string;
+  timezone?: string | null;
 }
 
 function row(overrides: Partial<RawRow> = {}): RawRow {
@@ -184,6 +185,69 @@ describe('KnownPlacesService.buildKnownPlaces', () => {
 
     expect(byId.get('loc-home')).toBe('home');
     expect(byId.get('loc-work')).toBe('work');
+  });
+
+  it("buckets night/work hours on the user's wall clock, not UTC", async () => {
+    // 05:00 UTC on a Wednesday is 22:00 Tuesday in Los Angeles: a night event
+    // locally, but neither night nor work-hours in UTC. 17:00 UTC Wednesday is
+    // 10:00 local: work hours locally, outside 9-17 in UTC.
+    const LA_NIGHT = '2026-08-19T05:00:00.000Z';
+    const LA_WORK = '2026-08-19T17:00:00.000Z';
+    const { service } = makeService([
+      row({
+        location_entity_id: 'loc-home',
+        lat: 34.07,
+        lng: -118.47,
+        start_time: LA_NIGHT,
+        timezone: 'America/Los_Angeles',
+      }),
+      row({
+        location_entity_id: 'loc-home',
+        lat: 34.07,
+        lng: -118.47,
+        start_time: LA_NIGHT,
+        timezone: 'America/Los_Angeles',
+      }),
+      row({
+        location_entity_id: 'loc-work',
+        lat: 33.68,
+        lng: -117.82,
+        start_time: LA_WORK,
+        timezone: 'America/Los_Angeles',
+      }),
+      row({
+        location_entity_id: 'loc-work',
+        lat: 33.68,
+        lng: -117.82,
+        start_time: LA_WORK,
+        timezone: 'America/Los_Angeles',
+      }),
+    ]);
+
+    const candidates = await service.buildKnownPlaces(CONTEXT);
+    const byId = new Map(candidates.map((c) => [c.locationId, c.kind]));
+
+    expect(byId.get('loc-home')).toBe('home');
+    expect(byId.get('loc-work')).toBe('work');
+  });
+
+  it('falls back to UTC when the stored timezone is missing or unknown', async () => {
+    const { service } = makeService([
+      row({ location_entity_id: 'loc-a', start_time: WEEKDAY_NIGHT_HOUR, timezone: 'Not/AZone' }),
+      row({
+        location_entity_id: 'loc-b',
+        lat: 1,
+        lng: 1,
+        start_time: WEEKDAY_WORK_HOUR,
+        timezone: 'Not/AZone',
+      }),
+    ]);
+
+    const candidates = await service.buildKnownPlaces(CONTEXT);
+    const byId = new Map(candidates.map((c) => [c.locationId, c.kind]));
+
+    expect(byId.get('loc-a')).toBe('home');
+    expect(byId.get('loc-b')).toBe('work');
   });
 
   it('leaves a cluster with neither signal as "other"', async () => {

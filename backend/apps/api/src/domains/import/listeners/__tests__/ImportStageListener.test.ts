@@ -45,6 +45,7 @@ function makeListener(
     failStage: jest.fn(async () => undefined),
     advance: jest.fn(async () => overrides.next ?? null),
     recordProgress: jest.fn(async () => undefined),
+    resumeInterrupted: jest.fn(async () => undefined),
   };
 
   const scratch = {
@@ -93,6 +94,7 @@ function makeListener(
     runs,
     scratch,
     unpackStage,
+    logger,
   };
 }
 
@@ -262,5 +264,43 @@ describe('ImportStageListener failure', () => {
     await expect(listener.runStage(payload)).rejects.toThrow('boom');
 
     expect(scratch.reclaim).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `LoggerService.resolveArgs` reads arg1 as the pino `msg`. Passing the Error
+   * there puts its raw text in `msg` and pushes the human sentence down into
+   * `data.message`, so these lines grep differently from every sibling's — the
+   * same defect `StagedUploadPurgeCron` and `ImportRetentionCron` were moved
+   * off. The Error still has to reach the call under `err`, which the logger
+   * hoists so pino serializes the stack rather than writing `{}`.
+   */
+  it('logs the failure with the sentence as the message and the error beside the context', async () => {
+    const failure = new Error('unzip: cannot find central directory');
+    const { listener, logger } = makeListener({
+      run: jest.fn(async () => {
+        throw failure;
+      }),
+    });
+
+    await expect(listener.runStage(payload)).rejects.toThrow(failure);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Import stage failed',
+      expect.objectContaining({ err: failure, runId: payload.runId, kind: 'unpack' }),
+    );
+  });
+});
+
+describe('ImportStageListener recovery', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('swallows a failing resume and logs it in the same shape as everything else', async () => {
+    const failure = new Error('database is down');
+    const { listener, runs, logger } = makeListener();
+
+    runs.resumeInterrupted.mockRejectedValueOnce(failure);
+
+    await expect(listener.sweepOnSchedule()).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith('Could not resume interrupted import runs', failure);
   });
 });

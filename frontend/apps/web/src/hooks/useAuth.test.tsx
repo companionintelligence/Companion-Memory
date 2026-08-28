@@ -1,9 +1,12 @@
 import { type ReactNode } from 'react';
 
+import { setApiBaseUrl } from '@ci/common';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { jwtDecode } from 'jwt-decode';
 import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { bindPowerSyncDatabase } from '@/api/powersync/session';
 
 import { AuthProvider, useAuth } from './useAuth';
 
@@ -50,6 +53,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   document.cookie = 'csrfToken=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+  sessionStorage.clear();
+  localStorage.removeItem('ci.apiBaseUrl');
+  setApiBaseUrl('');
   // Drop the native runtime stub so the web-path tests aren't seen as native.
   delete (window as unknown as { Capacitor?: unknown }).Capacitor;
 });
@@ -178,6 +184,153 @@ describe('useAuth', () => {
     expect(secureStore.get('ci.apiKey')).toBe('stored-api-key');
   });
 
+  it('completePortalMemoryConnect mints a Memory API key from a portal bearer', async () => {
+    const secureStore = new Map<string, string>();
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: {
+        SecureStoragePlugin: {
+          get: vi.fn(async ({ key }: { key: string }) => {
+            if (!secureStore.has(key)) {
+              throw new Error('not found');
+            }
+
+            return { value: secureStore.get(key) };
+          }),
+          set: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+            secureStore.set(key, value);
+
+            return { value: true };
+          }),
+          remove: vi.fn(async () => ({ value: true })),
+        },
+      },
+    };
+
+    const fetchMock = setFetch((url) => {
+      if (url.endsWith('/api/keys')) {
+        return jsonResponse({ id: 'key-portal', key: 'portal-minted-key' });
+      }
+
+      return emptyResponse();
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current[1].completePortalMemoryConnect(
+        'portal-id-token',
+        'https://memory.example.com',
+      );
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://memory.example.com/api/keys',
+      expect.objectContaining({ method: 'POST' }),
+    );
+
+    expect(ok).toBe(true);
+    expect(result.current[0].authenticated).toBe(true);
+    expect(secureStore.get('ci.apiKey')).toBe('portal-minted-key');
+    expect(localStorage.getItem('ci.apiBaseUrl')).toBe('https://memory.example.com');
+  });
+
+  it('completePortalMemoryConnect does not persist a Memory origin when minting fails', async () => {
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: {
+        SecureStoragePlugin: {
+          get: vi.fn(async () => {
+            throw new Error('not found');
+          }),
+          set: vi.fn(async () => ({ value: true })),
+          remove: vi.fn(async () => ({ value: true })),
+        },
+      },
+    };
+
+    setFetch(() => emptyResponse(false, 401));
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+
+    await act(async () => {
+      await expect(
+        result.current[1].completePortalMemoryConnect('portal-id-token', 'https://memory.example.com'),
+      ).rejects.toThrow();
+    });
+
+    expect(localStorage.getItem('ci.apiBaseUrl')).toBeNull();
+    expect(result.current[0].authenticated).toBe(false);
+  });
+
+  it('completeMemoryPasswordConnect signs in to the picked Memory origin and mints a key', async () => {
+    const secureStore = new Map<string, string>();
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: {
+        SecureStoragePlugin: {
+          get: vi.fn(async ({ key }: { key: string }) => {
+            if (!secureStore.has(key)) {
+              throw new Error('not found');
+            }
+
+            return { value: secureStore.get(key) };
+          }),
+          set: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+            secureStore.set(key, value);
+
+            return { value: true };
+          }),
+          remove: vi.fn(async () => ({ value: true })),
+        },
+      },
+    };
+
+    const fetchMock = setFetch((url) => {
+      if (url.endsWith('/api/authenticate/csrf')) {
+        return jsonBodyResponse({ csrfToken: 'native-csrf' });
+      }
+
+      if (url.endsWith('/api/authenticate')) {
+        return jsonResponse({ accessToken: 'memory-jwt' });
+      }
+
+      if (url.endsWith('/api/keys')) {
+        return jsonResponse({ id: 'key-pw', key: 'password-minted-key' });
+      }
+
+      return emptyResponse();
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current[1].completeMemoryPasswordConnect(
+        'me@example.com',
+        'memory-secret',
+        'https://memory.example.com',
+      );
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://memory.example.com/api/authenticate',
+      expect.objectContaining({ method: 'POST', credentials: 'omit' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://memory.example.com/api/keys',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(ok).toBe(true);
+    expect(result.current[0].authenticated).toBe(true);
+    expect(secureStore.get('ci.apiKey')).toBe('password-minted-key');
+    expect(localStorage.getItem('ci.apiBaseUrl')).toBe('https://memory.example.com');
+  });
+
   it('captures the error when login fails', async () => {
     setFetch((url) => {
       if (url.endsWith('/api/authenticate/refresh')) {
@@ -269,6 +422,40 @@ describe('useAuth', () => {
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/authenticate/logout'))).toBe(
       true,
     );
+  });
+
+  it('still logs out when dropping the local PowerSync replica fails', async () => {
+    // Both the clear and its disconnect fallback reject; logout must not be
+    // sequenced behind a teardown that cannot complete.
+    bindPowerSyncDatabase({
+      disconnectAndClear: vi.fn().mockRejectedValue(new Error('worker never came up')),
+      disconnect: vi.fn().mockRejectedValue(new Error('worker never came up')),
+    } as never);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const fetchMock = setFetch((url) => {
+      if (url.endsWith('/api/authenticate/refresh')) {
+        return jsonResponse({ accessToken: 'live' });
+      }
+
+      return emptyResponse();
+    });
+
+    try {
+      const { result } = renderHook(() => useAuth(), { wrapper });
+      await waitFor(() => expect(result.current[0].authToken).toBe('live'));
+
+      await act(async () => {
+        await result.current[1].logout();
+      });
+
+      expect(result.current[0].authToken).toBeNull();
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/authenticate/logout'))).toBe(
+        true,
+      );
+    } finally {
+      bindPowerSyncDatabase(null);
+    }
   });
 
   it('re-primes and retries logout once on a 403 so the server session is torn down', async () => {
@@ -500,6 +687,58 @@ describe('useAuth', () => {
       ),
     ).toBe(true);
     expect(secureStore.get('ci.apiKey')).toBe('stored-api-key');
+  });
+
+  it('iOS: does not replay a consumed Memory OIDC code after remount', async () => {
+    const getLaunchUrl = vi.fn(async () => ({ url: 'companion://oidc/callback?code=otc-replay' }));
+    const addListener = vi.fn(async () => ({ remove: async () => undefined }));
+    const secureStore = new Map<string, string>();
+
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+      getPlatform: () => 'ios',
+      Plugins: {
+        App: { getLaunchUrl, addListener },
+        SecureStoragePlugin: {
+          get: vi.fn(async ({ key }: { key: string }) => {
+            if (!secureStore.has(key)) {
+              throw new Error('not found');
+            }
+
+            return { value: secureStore.get(key) };
+          }),
+          set: vi.fn(async ({ key, value }: { key: string; value: string }) => {
+            secureStore.set(key, value);
+
+            return { value: true };
+          }),
+          remove: vi.fn(async () => ({ value: true })),
+        },
+      },
+    };
+
+    let exchanges = 0;
+    setFetch((url) => {
+      if (url.endsWith('/api/authenticate/oidc/native/exchange')) {
+        exchanges += 1;
+
+        return jsonResponse({ accessToken: 'native-jwt' });
+      }
+
+      if (url.endsWith('/api/keys')) {
+        return jsonResponse({ id: 'key-1', key: 'stored-api-key' });
+      }
+
+      return emptyResponse();
+    });
+
+    const first = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(first.result.current[0].authenticated).toBe(true));
+    first.unmount();
+
+    const second = renderHook(() => useAuth(), { wrapper });
+    await waitFor(() => expect(second.result.current[0].authenticated).toBe(true));
+    expect(exchanges).toBe(1);
   });
 
   it('Android: does not consume getLaunchUrl for Memory OIDC', async () => {

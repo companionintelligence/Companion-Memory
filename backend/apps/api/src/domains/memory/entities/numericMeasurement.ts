@@ -1,7 +1,7 @@
 import type { ValueTransformer } from 'typeorm';
 
 /**
- * Transformer for the `NUMERIC` measurement columns on `ci.inventory`
+ * Transformer for the `NUMERIC` measurement columns on `ci.objects`
  * (`length_mm`, `mass_g`, `volume_ml`, …).
  *
  * node-postgres hands `numeric` back as a JavaScript STRING and TypeORM adds no

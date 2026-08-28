@@ -1,12 +1,13 @@
-import { type ReactNode, useCallback, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 
+import { useApolloClient } from '@apollo/client';
 import { GlobalUID } from '@ci/common';
 import { Button, Card, IconButton, Label, Sheet, cn, useToast } from '@ci/shadcn';
-import { Loader2, Pencil, Trash2 } from '@ci/shadcn/icons';
+import { ImageOff, Loader2, Pencil, Trash2 } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
 
 import { useTagEntityService } from '@/api';
+import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import {
   EntityFields,
   EntityMetaList,
@@ -16,17 +17,18 @@ import {
 } from '@/components/EntityFields';
 import {
   EntityRelationshipCards,
-  getEntityDetailPath,
   toGlobalResourceType,
   type RelatedEntityOpenTarget,
 } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
 import { TagInput } from '@/components/TagInput';
+import { entityToAgentChatContext } from '@/lib/entityToAgentChatContext';
 
-import type { MemoryEntity } from '../../../MemoryPage/useEntityService';
-import { useEntityService } from '../../../MemoryPage/useEntityService';
+import type { GenericEntity, MemoryEntity } from '../../../MemoryPage/useEntityService';
 
 import { DeleteEntityDialog } from './DeleteEntityDialog';
 import { DELETE_TARGETS } from './deleteTargets';
+import { useEntityDrawerHost } from './drawerHost';
+import { GET_DRAWER_NODE, genericEntityGlobalId, isDetailNode } from './drawerNode';
 import { useReadOnly } from './readOnly';
 
 // The field/meta contract now lives with the shared editor so the full-page
@@ -145,36 +147,141 @@ export function resolveStaticUrl(value?: string | null): string | undefined {
 }
 
 /**
+ * Show the low-res preview only until the full-size bytes are here.
+ *
+ * The detail pane used to render the PREVIEW variant outright — a 300px grid
+ * thumbnail upscaled to a ~576px sheet, visibly soft on a 4K screen — while
+ * the original (which can be a 35MB, 200-megapixel camera file) was one click
+ * away. Progressive instead: the preview paints instantly, the original loads
+ * off-DOM, and the swap happens only on its onload — so the pane is never
+ * blank and never permanently blurry. Falls back to whichever URL exists when
+ * the other is missing.
+ */
+function useProgressiveSrc(src?: string | null, previewSrc?: string | null): string | null | undefined {
+  const progressive = Boolean(src && previewSrc && src !== previewSrc);
+  const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!progressive || !src) {
+      return undefined;
+    }
+
+    setLoadedSrc(null);
+    const probe = new Image();
+
+    probe.onload = () => setLoadedSrc(src);
+    probe.src = src;
+
+    // The entity changed under the open sheet: a stale probe must not swap the
+    // NEW preview for the OLD original.
+    return () => {
+      probe.onload = null;
+    };
+  }, [progressive, src]);
+
+  if (!progressive) {
+    return src ?? previewSrc;
+  }
+
+  return loadedSrc === src ? src : previewSrc;
+}
+
+/**
  * Render image/video media for a media-bearing entity. `src` should already be
  * resolved to a loadable URL (callers add the `/static` prefix where needed).
  * Falls back to treating an unknown content type as an image.
+ *
+ * For images, pass `previewSrc` alongside the full-size `src` to paint the
+ * preview while the original downloads (see {@link useProgressiveSrc}).
+ * Videos ignore `previewSrc` — they stream and paint their own poster frame.
  */
 export function EntityMedia({
   src,
+  previewSrc,
   contentType,
   alt,
+  fallbackHref,
 }: {
   src?: string | null;
+  previewSrc?: string | null;
   contentType?: string | null;
   alt?: string;
+  /**
+   * Where to send the user when the media can't be shown inline — typically
+   * the row's own `url`. Rendered as an external link in the unavailable state.
+   */
+  fallbackHref?: string | null;
 }) {
-  if (!src) {
-    return null;
-  }
-
   const isVideo = contentType?.startsWith('video/') ?? false;
   const isImage = contentType ? contentType.startsWith('image/') : true;
+  const imageSrc = useProgressiveSrc(src, isVideo ? null : previewSrc);
+  // A `url` that is really a web page (photos.google.com/photo/…) fails to
+  // load as an image — the browser blocks the non-image response — and would
+  // otherwise leave a broken-image glyph. Remember which source failed so the
+  // block degrades to a link instead; keyed by src so a new entity retries.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const shownSrc = isVideo ? src : imageSrc;
+
+  if (!shownSrc) {
+    return null;
+  }
 
   if (!isVideo && !isImage) {
     return null;
   }
 
+  if (failedSrc === shownSrc) {
+    return (
+      <div
+        role="status"
+        className="flex shrink-0 flex-col items-center justify-center gap-2 rounded-md border bg-muted/40 p-6 text-sm text-muted-foreground"
+      >
+        <ImageOff className="size-8" aria-hidden />
+        <span>Media couldn&apos;t be loaded</span>
+        {fallbackHref && (
+          <a
+            href={fallbackHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="break-all text-primary hover:underline"
+          >
+            Open original <span aria-hidden>↗</span>
+          </a>
+        )}
+      </div>
+    );
+  }
+
+  // Two guards keep a short viewport from erasing the media:
+  //
+  // `shrink-0` — the scaffold renders this inside a `min-h-0 flex-1 flex-col
+  // overflow-y-auto` body, and this wrapper's own `overflow-hidden` zeroes its
+  // automatic minimum size, which made it the ONE flex item the column could
+  // crush to nothing before scrolling. It must keep its size and let the
+  // column scroll; without this it collapsed to a zero-height strip of border
+  // whenever the sheet's content outgrew the window.
+  //
+  // The max() floor — the 45vh cap keeps a tall portrait from consuming the
+  // whole sidebar, but a bare vh bound scales with the viewport and marches
+  // toward zero on a short window (dev tools open, a small laptop). Floored
+  // at 16rem, so the media stays readable at any window height while tall
+  // screens keep the exact old behaviour.
   return (
-    <div className="flex items-center justify-center overflow-hidden rounded-md border bg-muted/40">
+    <div className="flex shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted/40">
       {isVideo ? (
-        <video src={src} controls className="max-h-[45vh] w-full object-contain" />
+        <video
+          src={shownSrc}
+          controls
+          className="max-h-[max(45vh,16rem)] w-full object-contain"
+          onError={() => setFailedSrc(shownSrc)}
+        />
       ) : (
-        <img src={src} alt={alt ?? ''} className="max-h-[45vh] w-full object-contain" />
+        <img
+          src={shownSrc}
+          alt={alt ?? ''}
+          className="max-h-[max(45vh,16rem)] w-full object-contain"
+          onError={() => setFailedSrc(shownSrc)}
+        />
       )}
     </div>
   );
@@ -207,6 +314,9 @@ function RawDataDetails({ data }: { data: unknown }) {
   );
 }
 
+/** How long a related-card click waits for the typed node before showing the stub. */
+const RELATED_RESOLVE_BUDGET_MS = 1_500;
+
 export function EntityDetailScaffold({
   entity,
   title,
@@ -225,24 +335,66 @@ export function EntityDetailScaffold({
   const ref = useMemo(() => resolveEntityRef(entity), [entity]);
   const currentTags = useMemo(() => readTags(entity), [entity]);
   const { tagEntities, untagEntities } = useTagEntityService();
-  const [{ refetch }, { setActiveEntity }] = useEntityService();
+  const { refetch, setActiveEntity } = useEntityDrawerHost();
+  const apolloClient = useApolloClient();
   const { toast } = useToast();
   // Shared-search viewer: the drawer is display-only. Suppress every mutation /
   // navigation affordance (the writes are owner-scoped and would silently fail).
   const readOnly = useReadOnly();
 
+  // Resolve the typed node BEFORE switching the drawer to it. Switching to the
+  // stub first and upgrading in place (ResolvedGenericDetails) mounted two
+  // different detail bodies in a row, and each body owns its Sheet.Content, so
+  // the sheet replayed its slide-in twice — a visible double flash on every
+  // card click. With the node in hand the drawer transitions exactly once.
+  // The stub is still the fallback: a slow or failed lookup must not make the
+  // click feel dead, and the in-drawer upgrade still happens from there.
   const handleOpenRelatedEntity = useCallback(
     (target: RelatedEntityOpenTarget) => {
-      setActiveEntity({
+      const stub: GenericEntity = {
         __typename: 'GenericEntity',
         id: target.id,
         name: target.name,
         entityType: target.entityType,
         description: target.description,
         properties: target.properties,
-      });
+      };
+      const globalId = genericEntityGlobalId(stub);
+      if (!globalId) {
+        setActiveEntity(stub);
+
+        return;
+      }
+
+      let settled = false;
+      const fallback = window.setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          setActiveEntity(stub);
+        }
+      }, RELATED_RESOLVE_BUDGET_MS);
+
+      apolloClient
+        .query({ query: GET_DRAWER_NODE, variables: { id: globalId }, fetchPolicy: 'cache-first' })
+        .then(({ data }) => {
+          const node = data?.node ?? null;
+          if (settled) {
+            return;
+          }
+
+          settled = true;
+          window.clearTimeout(fallback);
+          setActiveEntity(node && isDetailNode(node) ? node : stub);
+        })
+        .catch(() => {
+          if (!settled) {
+            settled = true;
+            window.clearTimeout(fallback);
+            setActiveEntity(stub);
+          }
+        });
     },
-    [setActiveEntity],
+    [apolloClient, setActiveEntity],
   );
 
   // Deleting is offered for every type the server can actually remove, keyed off
@@ -294,18 +446,24 @@ export function EntityDetailScaffold({
     setEditing(false);
   };
 
-  const detailPath = ref.resourceType && ref.rawId ? getEntityDetailPath(ref.resourceType, ref.rawId) : null;
+  const chatContext = useMemo(() => entityToAgentChatContext(entity), [entity]);
 
   const visibleMeta = (metaItems ?? []).filter(
     (item) => item.value !== null && item.value !== undefined && item.value !== '',
   );
 
   return (
-    <Sheet.Content className="z-[1000] w-full gap-0 overflow-hidden border-l border-white/10 bg-background/75 p-0 shadow-2xl backdrop-blur-2xl supports-[backdrop-filter]:bg-background/65 sm:max-w-xl">
+    <Sheet.Content
+      data-testid="entity-detail-sheet"
+      className="z-[1000] w-full gap-0 overflow-hidden border-l border-white/10 bg-background/75 p-0 shadow-2xl backdrop-blur-2xl supports-[backdrop-filter]:bg-background/65 sm:max-w-xl pt-[var(--safe-area-top)] pb-[var(--safe-area-bottom)] [&>button]:top-[calc(var(--safe-area-top)+1rem)]"
+    >
       <Sheet.Header className="gap-2 border-b border-border/60 bg-background/45 p-5 pr-12 backdrop-blur-xl">
         <div className="flex items-start justify-between gap-2">
           <Sheet.Title className="text-xl leading-tight tracking-tight">{title}</Sheet.Title>
           <div className="flex shrink-0 items-center gap-1">
+            {!readOnly && (
+              <ChatWithAgentMenu context={chatContext} className="-mt-1 size-8 shrink-0" />
+            )}
             {canEnterEditMode && !editing && (
               <IconButton
                 variant="ghost"
@@ -397,9 +555,9 @@ export function EntityDetailScaffold({
           </div>
         )}
 
-        {/* Relationship cards + the "Open full page" link both navigate to the
-            owner's per-entity routes (which resolve under the VIEWER's scope and
-            fall outside the shared search). Hide both in read-only mode. */}
+        {/* Relationship cards navigate to the owner's per-entity routes (which
+            resolve under the VIEWER's scope and fall outside the shared
+            search), so they stay hidden in read-only mode. */}
         {!readOnly && ref.rawId && (
           <EntityRelationshipCards
             key={ref.rawId}
@@ -410,14 +568,12 @@ export function EntityDetailScaffold({
 
         {rawData != null && <RawDataDetails data={rawData} />}
 
-        {!readOnly && detailPath && (
-          <Link
-            to={detailPath}
-            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
-          >
-            Open full page <span aria-hidden>↗</span>
-          </Link>
-        )}
+        {/* There is deliberately no "Open full page" escape hatch here. The
+            drawer IS the object: it carries the media, the editable fields, the
+            metadata, the tags and the relationships. The old control was a
+            `target="_blank"` Link, which on the Capacitor build (WKWebView)
+            left the app for the system browser instead of routing in-app —
+            see issue #2311. Anything the user needs belongs in this body. */}
       </div>
 
       {editing && (

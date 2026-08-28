@@ -110,7 +110,12 @@ export class ImportStageListener implements OnApplicationBootstrap {
     try {
       await this.runs.resumeInterrupted();
     } catch (err) {
-      this.logger.error(err as Error, { message: 'Could not resume interrupted import runs' });
+      // Sentence first, error second. `LoggerService.resolveArgs` takes a
+      // leading Error as the message and pushes the second argument under
+      // `data`, so the reversed shape logs the raw error text as `msg` and
+      // buries the sentence in `data.message` — which is a recovery failure
+      // that greps differently from every other failure in this domain.
+      this.logger.error('Could not resume interrupted import runs', err as Error);
     }
   }
 
@@ -321,8 +326,13 @@ export class ImportStageListener implements OnApplicationBootstrap {
 
       await this.runs.failStage(stage.id, error, failure);
 
-      this.logger.error(err as Error, {
-        message: 'Import stage failed',
+      // Sentence first, error under `err` beside the context it is about —
+      // `LoggerService` hoists that key so pino still serializes the stack.
+      // Passing the Error first instead would put its raw text in `msg` and the
+      // sentence in `data.message`, which is the shape every sibling cron was
+      // just moved off.
+      this.logger.error('Import stage failed', {
+        err,
         runId: payload.runId,
         stageId: stage.id,
         kind: stage.kind,

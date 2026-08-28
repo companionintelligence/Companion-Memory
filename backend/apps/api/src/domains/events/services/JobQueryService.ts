@@ -107,12 +107,14 @@ export class JobQueryService {
       throw new UnauthorizedException('A user context is required.');
     }
 
+    const userId = context.userId;
+
     const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
     const offset = Math.max(query.offset ?? 0, 0);
 
     const builder = this.jobRepository.createQueryBuilder('job');
 
-    this.applyFilters(builder, query);
+    this.applyFilters(builder, query, userId);
 
     // `created_on DESC, id` — id breaks ties so paging cannot repeat or skip a
     // row when several jobs share a timestamp, which they routinely do during a
@@ -124,7 +126,7 @@ export class JobQueryService {
       .take(limit)
       .getManyAndCount();
 
-    const [queues, stateCounts] = await Promise.all([this.distinctQueues(), this.stateCounts(query)]);
+    const [queues, stateCounts] = await Promise.all([this.distinctQueues(), this.stateCounts(query, userId)]);
 
     return {
       items: rows.map((row) => this.toListItem(row)),
@@ -233,6 +235,7 @@ export class JobQueryService {
   private applyFilters(
     builder: ReturnType<Repository<PgBossJobEntity>['createQueryBuilder']>,
     query: JobQuery,
+    userId: string,
     options: { skipState?: boolean } = {},
   ): void {
     if (query.state && !options.skipState) {
@@ -273,12 +276,20 @@ export class JobQueryService {
       // Event name, queue name and the failure message — the three things an
       // operator actually types. NOT the payload: that is user content, and the
       // whole point of the projection is that it never leaves the server.
+      //
+      // Event/queue names are taxonomy values, the same for every user, so they
+      // stay unscoped. The failure message is a different user's job output —
+      // this is a multi-user appliance with no admin role, so matching it is
+      // restricted to jobs `data->>'userId'` says the caller owns.
       builder.andWhere(
         new Brackets((where) => {
           where
             .where(`job.data->>'name' ILIKE :term`, { term })
             .orWhere('job.name ILIKE :term', { term })
-            .orWhere(`job.output->>'message' ILIKE :term`, { term });
+            .orWhere(`job.output->>'message' ILIKE :term AND job.data->>'userId' = :userId`, {
+              term,
+              userId,
+            });
         }),
       );
     }
@@ -289,7 +300,7 @@ export class JobQueryService {
    * — so the tabs show what selecting each one would yield, rather than
    * collapsing to the tab you already picked.
    */
-  private async stateCounts(query: JobQuery): Promise<Record<string, number>> {
+  private async stateCounts(query: JobQuery, userId: string): Promise<Record<string, number>> {
     const builder = this.jobRepository
       .createQueryBuilder('job')
       // `job.state::text` is load-bearing. Postgres unifies a CASE's branches to
@@ -302,7 +313,7 @@ export class JobQueryService {
       .setParameter('deadLetter', DEAD_LETTER_QUEUE)
       .groupBy('1');
 
-    this.applyFilters(builder, query, { skipState: true });
+    this.applyFilters(builder, query, userId, { skipState: true });
 
     const rows = await builder.getRawMany<{ bucket: string; count: number }>();
 
@@ -323,7 +334,9 @@ export class JobQueryService {
     const data = job.data ?? {};
     const event = typeof data['name'] === 'string' ? data['name'] : null;
     const workType = typeof data['workType'] === 'string' ? data['workType'] : null;
-    const descriptor = describeJob(event, workType);
+    // job.name is the pg-boss QUEUE (see PgBossJobEntity), not the event —
+    // it's what disambiguates an event two unrelated listeners share.
+    const descriptor = describeJob(event, workType, job.name);
 
     const durationMs =
       job.startedOn && job.completedOn

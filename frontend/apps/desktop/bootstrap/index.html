@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Companion Memory</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #0b1720;
+        color: #e7f1f7;
+        font-family:
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          Roboto,
+          sans-serif;
+      }
+
+      .panel {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+        max-width: 420px;
+        padding: 32px;
+        text-align: center;
+      }
+
+      .spinner {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        border: 3px solid rgba(62, 201, 224, 0.25);
+        border-top-color: #3ec9e0;
+        animation: spin 0.9s linear infinite;
+      }
+
+      .spinner.hidden {
+        display: none;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      #status {
+        font-size: 15px;
+        line-height: 1.5;
+        color: #b9cbd6;
+      }
+
+      #status.error {
+        color: #f2a3a3;
+      }
+
+      .actions {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: 100%;
+      }
+
+      .actions.hidden {
+        display: none;
+      }
+
+      button {
+        appearance: none;
+        border: 1px solid rgba(231, 241, 247, 0.18);
+        background: rgba(231, 241, 247, 0.06);
+        color: #e7f1f7;
+        border-radius: 8px;
+        padding: 10px 16px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: rgba(231, 241, 247, 0.12);
+      }
+
+      button.primary {
+        background: #3ec9e0;
+        border-color: #3ec9e0;
+        color: #04222b;
+        font-weight: 600;
+      }
+
+      button.primary:hover {
+        background: #63d5e6;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="panel">
+      <div id="spinner" class="spinner"></div>
+      <div id="status">Starting Companion Memory…</div>
+      <div id="actions" class="actions hidden"></div>
+    </div>
+    <script src="bootstrap.js"></script>
+  </body>
+</html>

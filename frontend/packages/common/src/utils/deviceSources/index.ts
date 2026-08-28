@@ -13,7 +13,7 @@
  *      so a capture taken offline is not a capture lost.
  *
  * The appliance side of MOST sources already exists: `/v1/{events,communications,contents,
- * inventory,browser-activity,positions}`, so a new source is usually a client-side record
+ * things,browser-activity,positions}`, so a new source is usually a client-side record
  * mapping and a routing-table entry in `outboxFlush.ts`, and nothing else.
  *
  * `note.ts` is the exception, and it is worth knowing why before assuming the pattern
@@ -43,11 +43,13 @@ export {
   captureLocationFix,
   createLocationSampler,
   deviceSourceKey,
+  fixFromBackgroundGeolocationLocation,
   fixFromGeolocationPosition,
   haversineMeters,
   positionSourceId,
 } from './location';
 export type {
+  BackgroundGeolocationLocation,
   CaptureLocationOptions,
   DeviceLocationFix,
   LocationCaptureOutcome,
@@ -57,3 +59,19 @@ export type {
   PositionRecord,
   PositionRecordOptions,
 } from './location';
+export {
+  BACKGROUND_MAX_ACCURACY_METERS,
+  BACKGROUND_MIN_DISTANCE_METERS,
+  BACKGROUND_MIN_INTERVAL_MS,
+  HOME_GEOFENCE_RADIUS_METERS,
+  LOCATION_ENABLED_STORAGE_KEY,
+  LOCATION_MODE_CHANGE_EVENT,
+  LOCATION_MODE_STORAGE_KEY,
+  LOCATION_TRACKING_MODES,
+  isLocationTrackingEnabled,
+  isLocationTrackingMode,
+  publishLocationTrackingMode,
+  readLocationTrackingMode,
+  writeLocationTrackingMode,
+} from './locationMode';
+export type { LocationTrackingMode } from './locationMode';

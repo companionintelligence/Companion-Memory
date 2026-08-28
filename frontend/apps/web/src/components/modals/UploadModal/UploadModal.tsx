@@ -1,9 +1,11 @@
 import { useCallback, useState, type FormEvent } from 'react';
 
-import { Badge, Button, Dialog, IconButton, Spinner } from '@ci/shadcn';
+import { Badge, Button, IconButton, Spinner } from '@ci/shadcn';
 import { FilePlus, Scan, X } from '@ci/shadcn/icons';
 import { useDropzone } from 'react-dropzone';
 import { useTranslation } from 'react-i18next';
+
+import { ResponsiveDialog } from '@/components/ResponsiveDialog';
 
 interface Props {
   open?: boolean;
@@ -72,18 +74,20 @@ export function UploadModal({ open, onClose, onSubmit }: Props) {
   );
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <Dialog.Content className="p-0 flex flex-col gap-0" showCloseButton={false}>
-        <Dialog.Header className="flex flex-row items-center justify-between border-b bg-stone-50 dark:bg-secondary rounded-t-lg gap-2 p-2 pl-4">
-          <Dialog.Title>Upload files</Dialog.Title>
-          <Dialog.Description className="hidden">Upload files to your Companion Memory.</Dialog.Description>
+    <ResponsiveDialog open={open} onOpenChange={onClose}>
+      <ResponsiveDialog.Content className="p-0 flex flex-col gap-0" showCloseButton={false}>
+        <ResponsiveDialog.Header className="flex flex-row items-center justify-between border-b bg-stone-50 dark:bg-secondary rounded-t-lg gap-2 p-2 pl-4">
+          <ResponsiveDialog.Title>Upload files</ResponsiveDialog.Title>
+          <ResponsiveDialog.Description className="hidden">
+            Upload files to your Companion Memory.
+          </ResponsiveDialog.Description>
 
           <div className="flex items-center justify-end">
             <IconButton label={t('COMMON_CLOSE')} variant="ghost" size="icon" onClick={handleClose}>
               <X />
             </IconButton>
           </div>
-        </Dialog.Header>
+        </ResponsiveDialog.Header>
 
         <form onSubmit={handleUpload} encType="multipart/form-data" className="flex flex-col gap-4 p-4">
           <div
@@ -122,7 +126,7 @@ export function UploadModal({ open, onClose, onSubmit }: Props) {
             </div>
           )}
 
-          <Dialog.Footer>
+          <ResponsiveDialog.Footer>
             <Button type="button" variant="secondary" onClick={handleClose}>
               Close
             </Button>
@@ -130,9 +134,9 @@ export function UploadModal({ open, onClose, onSubmit }: Props) {
               {loading ? <Spinner variant="circle" /> : null}
               Upload
             </Button>
-          </Dialog.Footer>
+          </ResponsiveDialog.Footer>
         </form>
-      </Dialog.Content>
-    </Dialog>
+      </ResponsiveDialog.Content>
+    </ResponsiveDialog>
   );
 }

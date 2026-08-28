@@ -12,7 +12,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { CronExpression } from '@nestjs/schedule';
 import type { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -20,6 +20,7 @@ import { Context, type RequestContext } from '@ci/common/context';
 import { MCP_SCOPE, READ_CAPABILITY, RequireCapability, RequireScopes } from '@ci/common/decorators';
 import { type ApiKeyScopedRequest, apiKeyCapabilityOf, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
+import { Cron } from '@ci/common/schedule';
 
 import { McpServerService } from '../services/McpServerService';
 

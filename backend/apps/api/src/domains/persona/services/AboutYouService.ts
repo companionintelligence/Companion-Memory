@@ -38,6 +38,10 @@ export interface AboutYouView {
     answer: string;
     answeredAt: Date;
   }>;
+  /** Wake/sleep/work hours captured during onboarding, when set. */
+  schedule: Record<string, unknown> | null;
+  /** The autonomy dial ('cautious' | 'balanced' | 'hands_off') from onboarding. */
+  trustMode: string | null;
   hasSignal: boolean;
 }
 
@@ -59,6 +63,7 @@ export class AboutYouService {
 
   async getAboutYou(context: UserServiceContext): Promise<AboutYouView> {
     const userContext = await this.userContextService.getUserContextForLLM(context.userId);
+    const planner = await this.userContextService.getSelfPlannerContext(context.userId);
     const answers = await this.answerService.findAll(context);
     const recentAnswers = [...answers]
       .sort((a, b) => new Date(b.answeredAt).getTime() - new Date(a.answeredAt).getTime())
@@ -79,6 +84,8 @@ export class AboutYouService {
       preferences,
       family: userContext?.familyMembers ?? [],
       recentAnswers,
+      schedule: planner?.schedule ?? null,
+      trustMode: planner?.trustMode ?? null,
       hasSignal: Boolean(dossier?.summary) || preferences.length > 0 || recentAnswers.length > 0,
     };
   }

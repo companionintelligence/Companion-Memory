@@ -25,7 +25,7 @@ import torch.nn as nn
 
 from ci.hbpe.buckets import MAX_BUCKET_INDEX
 from ci.hbpe.model.calibration import _build_full_batch
-from ci.hbpe.model.checkpoints import HMT_FP32_ONNX, HMT_INT8_ONNX, user_ckpt_dir
+from ci.hbpe.model.checkpoints import HMT_FP32_ONNX, HMT_INT8_ONNX, user_ckpt_dir, write_architecture_stamp
 from ci.hbpe.model.dataset import TokenStreamDataset
 from ci.hbpe.model.evaluator import _load_calibrated
 from ci.hbpe.model.lora import load_adapter, merge_adapter
@@ -317,6 +317,7 @@ def export_and_quantize(
 
     out = ckpt_dir / "onnx_export_report.json"
     out.write_text(json.dumps(report, indent=2))
+    write_architecture_stamp(user_id)
     log.info("ONNX export report → %s", out)
 
     return report

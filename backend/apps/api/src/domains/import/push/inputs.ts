@@ -17,12 +17,17 @@
  */
 import type { CreateBrowserActivityDto } from '@ci/domains/browser-activity';
 import { isUriLocation } from '@ci/domains/geocode';
-import { CommunicationType } from '@ci/domains/memory';
+import { isGloballyUniqueNamespace, type ObjectIdentifierNamespace } from '@ci/domains/graph';
+import { CommunicationType, minorUnitExponent } from '@ci/domains/memory';
 import type {
   CreateCommunicationDto,
   CreateContentDto,
   CreateEventDto,
   CreateItemDto,
+  CreateObjectObservationDto,
+  CreateProductModelDto,
+  ReceiptExtraction,
+  ReceiptLineItemInput,
 } from '@ci/domains/memory';
 import type { CreatePositionDto } from '@ci/domains/position';
 
@@ -30,24 +35,53 @@ import { mimeForFile } from '../datasources/timeline';
 
 import {
   clip,
+  commerceLineItems,
   discordAttachmentFilename,
   discordAttachmentUrls,
+  identifiersFrom,
+  isDigitalGood,
   isMediaType,
   contentFileRef,
   isAttachmentPlaceholderOnly,
   isDiscordAttachmentOnly,
   isRedditComment,
   isRedditPost,
+  mintsProductModel,
   num,
   redditMediaUrl,
   str,
+  type CanonicalIdentifier,
   type CanonicalRecord,
 } from './canonical';
+import { readCommerceField } from './commerceKeys';
+
+/**
+ * `ci.events.time_source` for a row whose source gave it NO time — the instant
+ * in `start_time` was synthesized by the transform and is not evidence of
+ * anything.
+ *
+ * Mirrors `TIME_SOURCES.INGEST` in
+ * `domains/pipeline/stages/clean/TemporalRepairStage`, which is where the
+ * vocabulary is defined and documented. Mirrored rather than imported because
+ * the import domain has no other dependency on the pipeline domain, and pulling
+ * that barrel in for one string literal would couple a hot per-row transform to
+ * a Nest module full of injectable stages. `__tests__/undatedRecords.test.ts`
+ * imports these two constants directly (exported for that reason alone — the
+ * production coupling this docblock warns against is to the pipeline
+ * module's DI graph, not to a plain string a test file reads) and asserts
+ * them against the real TIME_SOURCES/TIME_PRECISIONS, so the copy cannot
+ * drift without a red test — the "second reader that drifted" failure this
+ * file's own header warns about.
+ */
+export const UNDATED_TIME_SOURCE = 'ingest';
+
+/** `ci.events.time_precision` for the same rows — mirrors `TIME_PRECISIONS.UNKNOWN`. */
+export const UNDATED_TIME_PRECISION = 'unknown';
 
 /** The full source triple every per-destination input carries. */
 /**
  * The provenance triple, snake_case — the spelling every ingest DTO uses except
- * inventory. It is what makes a re-import a no-op: each destination has a
+ * things. It is what makes a re-import a no-op: each destination has a
  * `*_source_triple_uniq` index over it.
  */
 function sourceTriple(
@@ -64,6 +98,23 @@ function sourceTriple(
 function sourceTripleCamel(
   rec: CanonicalRecord,
 ): Pick<CreateItemDto, 'sourceType' | 'sourceSystem' | 'sourceId'> {
+  return { sourceType: rec.sourceType, sourceSystem: rec.sourceSystem, sourceId: rec.sourceId };
+}
+
+/**
+ * The camelCase triple again, for the object-plane DTOs whose fields are
+ * `string | null` rather than `string | undefined`.
+ *
+ * A third spelling of one idea is not an accident of style: the two shapes are
+ * not assignable to each other, and widening either DTO to accept the other's
+ * would let an absent provenance through as a legal value on a table whose
+ * idempotency depends on it.
+ */
+function sourceTripleCamelNullable(rec: CanonicalRecord): {
+  sourceType: string | null;
+  sourceSystem: string | null;
+  sourceId: string | null;
+} {
   return { sourceType: rec.sourceType, sourceSystem: rec.sourceSystem, sourceId: rec.sourceId };
 }
 
@@ -89,6 +140,16 @@ function contentTypeFor(kind: string, mediaType: string | null): string {
   }
 
   if (kind === 'web.bookmark') {
+    return 'bookmark';
+  }
+
+  // A browsing action that reached the content lane instead of
+  // ci.browser_activity is an UNDATED one (destinationsFor). What survives is
+  // the page itself — its URL and title — not the visit, because the visit is
+  // precisely the part with no time. 'bookmark' is what that is: a URL the user
+  // is on record as having had, with no moment attached. Without this branch
+  // the prefix rule types it 'web', a bucket nothing renders.
+  if (kind === 'web.page_view' || kind === 'web.search' || kind === 'web.download') {
     return 'bookmark';
   }
 
@@ -214,7 +275,10 @@ export function toContentInput(rec: CanonicalRecord): CreateContentDto {
     input.text = text;
   }
 
-  const url = str(m.URL) || str(m.Url) || str(m.url);
+  // Permalink last: reddit saved posts/comments carry ONLY a permalink (no
+  // URL field), and since undated ones now land content-alone, the permalink
+  // is the row's single way back to the thing it describes.
+  const url = str(m.URL) || str(m.Url) || str(m.url) || str(m.Permalink);
   if (url) {
     input.url = url;
   }
@@ -259,7 +323,7 @@ export function toContentInput(rec: CanonicalRecord): CreateContentDto {
   return input;
 }
 
-// Inventory condition vocabulary -> the DTO's condition enum. Amazon records
+// Object condition vocabulary -> the DTO's condition enum. Amazon records
 // "New" / "Used - Like New" etc.; normalise to the closed set the column takes.
 //
 // Upstream returned the GraphQL enum's UPPERCASE spellings and the transport
@@ -347,17 +411,22 @@ function splitCategory(raw: string): { category: string; subcategory?: string } 
  * `name` is required) so a malformed row is still ingestable.
  *
  * `category`/`subcategory` are derived from a real source taxonomy (Amazon's
- * `Category` product type, or any source `Category`/`Type`/`Product Type`
- * field) when present, instead of collapsing every row into the generic
- * `commerce` bucket; `rec.category` (the kind prefix) is the fallback.
+ * `Category` product type, or any source `Category`/`Product Category`/
+ * `Product Type` field) when present, instead of collapsing every row into the
+ * generic `commerce` bucket; `rec.category` (the kind prefix) is the fallback.
+ * A payment processor's `Type` is deliberately NOT one of them — see the
+ * CATEGORY chain in push/commerceKeys.ts.
  */
-export function toInventoryInput(rec: CanonicalRecord): CreateItemDto {
+export function toThingInput(rec: CanonicalRecord): CreateItemDto {
   const m = rec.metadata;
-  const orderId = str(m['Order ID']);
+  const orderId = str(readCommerceField(m, 'ORDER_ID'));
   const input: CreateItemDto = {
-    name: str(m.Product) || rec.title || 'Item',
+    // Precedence preserved: `Product` then the record's own title. The canonical
+    // chain's extra spellings ('Item Name', 'Product Name') only fill a name
+    // that would otherwise be the 'Item' placeholder.
+    name: str(m.Product) || rec.title || str(readCommerceField(m, 'PRODUCT')) || 'Item',
     // Pass the full parsed metadata through — Amazon rows previously had
-    // inventory.metadata = '{}' because the column extractor only kept a
+    // objects.metadata = '{}' because the column extractor only kept a
     // curated subset; the bag carries Source, raw Total, and any future
     // CSV fields that don't have a first-class column yet.
     metadata: m,
@@ -368,7 +437,8 @@ export function toInventoryInput(rec: CanonicalRecord): CreateItemDto {
   }
 
   // Prefer a real source taxonomy over the constant `commerce` kind-prefix.
-  const rawCategory = str(m.Category) || str(m['Product Category']) || str(m['Product Type']) || str(m.Type);
+  // The canonical CATEGORY chain IS this list, in this order — see commerceKeys.
+  const rawCategory = str(readCommerceField(m, 'CATEGORY'));
   const split = rawCategory ? splitCategory(rawCategory) : null;
   if (split) {
     input.category = split.category;
@@ -379,28 +449,73 @@ export function toInventoryInput(rec: CanonicalRecord): CreateItemDto {
     input.category = rec.category;
   }
 
-  const brand = str(m.Brand) || str(m.Manufacturer) || str(m.Seller);
+  // Brand keeps its OWN precedence, which is NOT the merchant chain's.
+  //
+  // A canonical chain FILLS a field that resolved to nothing; it must never
+  // re-rank one that already resolved. `Brand → Manufacturer → Seller` is what
+  // this field has always meant (an explicit brand outranks the shop, and the
+  // shop that actually sold it outranks the marketplace it was listed on), so
+  // those three come first, verbatim. The merchant chain then fills the gap —
+  // which is how a Google purchase finally gets a brand at all: it writes
+  // `Merchant`, and the old chain never read that key.
+  //
+  // `Processor` is deliberately absent from the MERCHANT chain: it is the
+  // PAYMENT processor (reddit.ts writes Stripe/PayPal), and a payment processor
+  // is not the brand of the thing bought.
+  const brand = str(m.Brand) || str(m.Manufacturer) || str(m.Seller) || str(readCommerceField(m, 'MERCHANT'));
   if (brand) {
     input.brand = brand;
   }
 
-  const condition = conditionFor(str(m.Condition) || str(m['Product Condition']));
+  // `ci.objects.model` — the manufacturer designation ("MX Master 3S",
+  // "A2338"), the one string that tells two otherwise identical rows apart. The
+  // column, the DTO field and the search tsvector have all existed since the
+  // object-identity migration; nothing was ever writing it from an import.
+  const model = str(m.Model) || str(m['Model Number']) || str(m.ModelNumber);
+  if (model) {
+    input.model = model;
+  }
+
+  const condition = conditionFor(str(readCommerceField(m, 'CONDITION')));
   if (condition) {
     input.condition = condition;
   }
 
-  const price = num(m['Unit Price']) ?? num(m.Total);
-  if (price != null) {
+  // Same rule as brand: the field's own precedence FIRST ('Unit Price' then
+  // 'Total' — what this field has always meant), the canonical chains only to
+  // fill a price that resolved to nothing (reddit's `Cost`, PayPal's `Net`).
+  // Without the split, `Price` — a UNIT_PRICE alias — jumps ahead of a stated
+  // `Total` and halves the recorded spend on every row carrying both.
+  //
+  // A NEGATIVE price is refused outright. The TOTAL chain reaches PayPal/Venmo
+  // ledger columns (`Amount`, `Net`, `Gross`) which are SIGNED: a refund or an
+  // outgoing payment is negative there, and "this item cost -42.50" is not a
+  // fact about a purchase.
+  const price =
+    num(m['Unit Price']) ??
+    num(m.Total) ??
+    num(readCommerceField(m, 'UNIT_PRICE')) ??
+    num(readCommerceField(m, 'TOTAL'));
+  if (price != null && price >= 0) {
     input.purchasePrice = price;
   }
 
-  const currency = str(m.Currency);
+  const currency = str(readCommerceField(m, 'CURRENCY'));
   if (currency) {
     input.currency = currency;
   }
 
   if (rec.startTime) {
     input.acquiredAt = new Date(rec.startTime);
+  }
+
+  const qty = num(readCommerceField(m, 'QUANTITY'));
+
+  // Whole and positive, per the column's contract. A fractional "quantity" is a
+  // weight ("0.75 kg of apples"), which this column cannot express — better no
+  // claim than a rounded one.
+  if (qty != null && Number.isInteger(qty) && qty > 0) {
+    input.quantity = qty;
   }
 
   // Identifier codes: keep the order id (and quantity, when present) as a small
@@ -411,7 +526,6 @@ export function toInventoryInput(rec: CanonicalRecord): CreateItemDto {
     identifierCodes.order_id = orderId;
   }
 
-  const qty = num(m.Quantity);
   if (qty != null) {
     identifierCodes.quantity = qty;
   }
@@ -421,8 +535,742 @@ export function toInventoryInput(rec: CanonicalRecord): CreateItemDto {
     identifierCodes.asin = asin;
   }
 
+  // The normalized identifiers the record states, under the namespace keys
+  // `ObjectIdentifierService` reads (see ReceiptService.CODE_KEY_NAMESPACES).
+  // Written ALONGSIDE the raw `asin` above rather than instead of it: the flat
+  // key is what existing readers of the bag look at, and an ISBN-10 filed as an
+  // ASIN normalizes to `isbn` here, so the two are not the same string.
+  Object.assign(identifierCodes, identifierCodesFor(rec.identifiers));
+
   if (Object.keys(identifierCodes).length) {
     input.identifierCodes = identifierCodes;
+  }
+
+  return input;
+}
+
+/* -------------------------------------------------------------------------- *
+ * Commerce plane: receipts, product models, observations.
+ *
+ * A purchase is three different facts, and CI-Server keeps them in three tables
+ * because they answer three different questions:
+ *
+ *   receipt        WHEN and WHERE money changed hands, and for WHAT — the
+ *                  merchant, the total, and the itemisation. This is the row
+ *                  that gives a purchase a place on the timeline and a map.
+ *   product model  WHAT the thing IS, independent of this purchase — the
+ *                  catalogue entry an ISBN/ASIN/GTIN identifies, shared by
+ *                  everyone who ever buys it.
+ *   observation    THAT an identified object was somewhere at some moment. A
+ *                  receipt is the most reliable producer of these: it is dated,
+ *                  placed, and identifier-bearing.
+ *
+ * ── Money is MINOR UNITS here ──────────────────────────────────────────────
+ *
+ * `ci.receipts` and `ci.receipt_line_items` are integer minor units end to end
+ * (see memory/entities/minorUnits). The parsers speak major units, so every
+ * amount crosses through {@link toMinorUnits}, which uses the currency's own
+ * exponent — dividing yen by 100 turns ¥1,200 into ¥12.
+ * -------------------------------------------------------------------------- */
+
+/**
+ * A major-unit amount as integer minor units of `currency`, or undefined.
+ *
+ * `Math.round` and not truncation: 19.99 in float is 19.989999999999998, and
+ * truncating it books the purchase a cent light.
+ */
+function toMinorUnits(
+  amount: number | null | undefined,
+  currency: string | null | undefined,
+): number | undefined {
+  if (amount == null || !Number.isFinite(amount)) {
+    return undefined;
+  }
+
+  return Math.round(amount * 10 ** minorUnitExponent(currency));
+}
+
+/**
+ * The same, for a column that means WHAT THIS PURCHASE COST — refusing a
+ * negative amount rather than writing one.
+ *
+ * The TOTAL chain (push/commerceKeys.ts) reaches `Amount` / `Net` / `Gross` /
+ * `Total Owed`, which are SIGNED ledger columns: PayPal books a refund as a
+ * negative `Amount`, Amazon writes `Total` verbatim from a CSV that does the
+ * same, and neither parser clamps. Left alone, `-19.99` reached
+ * `ci.receipts.total_minor` and `ci.receipt_line_items.total_price_minor` as
+ * `-1999`. Neither column has a CHECK, so it landed silently and every "what
+ * did I spend" read summed a credit as a cost.
+ *
+ * REFUSED, NOT MODELLED, and the choice is forced rather than preferred: a
+ * refund is a real receipt shape, but `ci.receipts` has no status column to
+ * say so (see migration 20260803223019 — the lifecycle it carries is
+ * `extraction_state`, about the READ of the document, not about the purchase).
+ * Modelling credits honestly needs that column, and inventing the meaning by
+ * leaving a negative in a cost column is not a substitute. The refused amount
+ * is not lost: it stays in `ci.receipts.metadata`, under the key the parser
+ * wrote it as, and {@link toReceiptInput} names it explicitly.
+ *
+ * The things lane already refused negatives for exactly this reason; this is
+ * that rule reaching the lane that was added next to it.
+ */
+function toCostMinorUnits(
+  amount: number | null | undefined,
+  currency: string | null | undefined,
+): number | undefined {
+  if (amount == null || !Number.isFinite(amount) || amount < 0) {
+    return undefined;
+  }
+
+  return toMinorUnits(amount, currency);
+}
+
+/**
+ * Which `identifierCodes` key each namespace is written under.
+ *
+ * The keys are `ReceiptService.CODE_KEY_NAMESPACES`' own, so a code written
+ * here is one that service will read back. `order_id` is deliberately ABSENT
+ * for the reason that map gives: the claim index is first-writer-wins on
+ * `(owner, namespace, value, qualifier)`, and an order id belongs to the ORDER,
+ * not to any one thing in it — claiming it for a single line would silently
+ * swallow every other line on the same order.
+ */
+const IDENTIFIER_CODE_KEYS: Partial<Record<ObjectIdentifierNamespace, string>> = {
+  gtin: 'gtin',
+  isbn: 'isbn',
+  asin: 'asin',
+  mpn: 'mpn',
+  sku: 'sku',
+  serial: 'serial',
+  imei: 'imei',
+  vin: 'vin',
+};
+
+/**
+ * Canonical identifiers as the flat `identifierCodes` bag the services read.
+ *
+ * The bag holds ONE value per namespace, so a record stating two ASINs keeps
+ * the first — deterministic, because `identifiersFrom` preserves the source's
+ * own order.
+ */
+function identifierCodesFor(
+  identifiers: CanonicalIdentifier[] | undefined,
+): Record<string, string> | undefined {
+  if (!identifiers?.length) {
+    return undefined;
+  }
+
+  const codes: Record<string, string> = {};
+
+  for (const identifier of identifiers) {
+    const key = IDENTIFIER_CODE_KEYS[identifier.namespace];
+
+    if (key && codes[key] == null) {
+      codes[key] = identifier.value;
+    }
+  }
+
+  return Object.keys(codes).length ? codes : undefined;
+}
+
+/** Sum of a line-item field across the lines, or undefined when none had it. */
+function sumLines(
+  lines: ReceiptLineItemInput[],
+  pick: (l: ReceiptLineItemInput) => number | null | undefined,
+): number | undefined {
+  let total: number | undefined;
+
+  for (const line of lines) {
+    const v = pick(line);
+
+    if (v == null) {
+      continue;
+    }
+
+    total = (total ?? 0) + v;
+  }
+
+  return total;
+}
+
+/**
+ * A collision-free line number per entry, in emit order.
+ *
+ * Stated numbers are claimed FIRST (a parser that states one always keeps it,
+ * wherever it sits in the array), then every remaining line takes its position
+ * `i + 1` — the obvious behaviour — falling back to the lowest unclaimed
+ * positive integer when that position is already spoken for. So
+ * `[{LineNumber: 7}, {}]` is `[7, 2]`, while `[{LineNumber: 2}, {}]` is
+ * `[2, 1]` instead of `[2, 2]`: two lines of one receipt can never share a
+ * number, which matters because `(receipt_id, line_number)` is the natural key
+ * `ReceiptService.replaceLineItems` upserts on — and that method folds
+ * within-batch repeats last-write-wins, so a collision would silently DELETE a
+ * line rather than fail.
+ */
+function assignLineNumbers(entries: Array<Record<string, unknown>>): number[] {
+  const stated = entries.map((e) => {
+    const n = num(e.LineNumber) ?? num(e.line_number);
+
+    return n != null && n > 0 ? Math.trunc(n) : null;
+  });
+  const out = Array.from<number | undefined>({ length: entries.length });
+  const claimed = new Set<number>();
+
+  // Pass 1: every stated number that nothing else claimed already.
+  stated.forEach((n, i) => {
+    if (n == null || claimed.has(n)) {
+      return;
+    }
+
+    claimed.add(n);
+    out[i] = n;
+  });
+
+  // Pass 2: positional, then the lowest free number for the leftovers
+  // (unstated lines, and duplicate statements after the first).
+  let next = 1;
+
+  for (let i = 0; i < entries.length; i++) {
+    if (out[i] != null) {
+      continue;
+    }
+
+    let n = i + 1;
+
+    if (claimed.has(n)) {
+      while (claimed.has(next)) {
+        next += 1;
+      }
+
+      n = next;
+    }
+
+    claimed.add(n);
+    out[i] = n;
+  }
+
+  return out as number[];
+}
+
+/**
+ * A synthetic CanonicalRecord for one line entry, so {@link isDigitalGood} sees
+ * the LINE's fields first and the parent's only as a fallback. Nothing else
+ * consumes it — it exists purely so the digital/physical rule has one
+ * implementation rather than two.
+ */
+function lineAsRecord(
+  rec: CanonicalRecord,
+  entry: Record<string, unknown>,
+  description: string,
+): CanonicalRecord {
+  return { ...rec, title: description, metadata: { ...rec.metadata, ...entry } };
+}
+
+/** One receipt line, from a metadata bag that describes exactly one thing. */
+function lineFrom(
+  rec: CanonicalRecord,
+  source: Record<string, unknown>,
+  lineNumber: number,
+  identifiers: CanonicalIdentifier[],
+  description: string,
+): ReceiptLineItemInput {
+  const quantity = num(readCommerceField(source, 'QUANTITY'));
+  const currency =
+    str(readCommerceField(source, 'CURRENCY')) ?? str(readCommerceField(rec.metadata, 'CURRENCY'));
+  const unitPrice = num(readCommerceField(source, 'UNIT_PRICE'));
+  // `total_price_minor` is the LINE's own total, and that is a PRE-TAX number:
+  // the header carries tax, shipping and discount in their own columns, and
+  // `subtotal + tax + shipping − discount = total` only closes if the lines
+  // sum to the subtotal. So a stated `Subtotal` — the line's extended price —
+  // wins over a stated `Total`, which on a per-line export is what that line
+  // was CHARGED with its share of tax already in it.
+  //
+  // Amazon is where this bit: every one of its lines stated `Total` = the row's
+  // `Total Amount`, so a 71.85 item with 5.57 of tax was stored as a line total
+  // of 77.42, and single-line orders "reconciled" 630/630 purely because the
+  // line had been handed the order's own total. The fallback to `Total`
+  // survives for the sources that state only that (Uber Eats, a receipt email),
+  // and unit × quantity for the ones that state neither.
+  const total =
+    num(readCommerceField(source, 'SUBTOTAL')) ??
+    num(readCommerceField(source, 'TOTAL')) ??
+    (unitPrice != null ? unitPrice * (quantity ?? 1) : undefined);
+
+  const line: ReceiptLineItemInput = {
+    lineNumber,
+    description,
+    // Physical object vs digital good, DECIDED HERE and recorded on the row,
+    // rather than re-derived from the product name on every push. See
+    // isDigitalGood for the evidence order; writing it down is what makes the
+    // decision auditable (and correctable) instead of a heuristic that silently
+    // changes meaning when the regex changes.
+    isPhysical: !isDigitalGood(lineAsRecord(rec, source, description)),
+  };
+
+  if (quantity != null && quantity > 0) {
+    line.quantity = quantity;
+  }
+
+  if (currency) {
+    line.currency = currency;
+  }
+
+  // Cost columns, so a negative is refused rather than written — see
+  // toCostMinorUnits. A PayPal refund line reached here as `unitPriceMinor:
+  // -4250, totalPriceMinor: -4250`.
+  const unitMinor = toCostMinorUnits(unitPrice, currency);
+  if (unitMinor != null) {
+    line.unitPriceMinor = unitMinor;
+  }
+
+  const totalMinor = toCostMinorUnits(total, currency);
+  if (totalMinor != null) {
+    line.totalPriceMinor = totalMinor;
+  }
+
+  const category = str(readCommerceField(source, 'CATEGORY'));
+  if (category) {
+    line.category = category;
+  }
+
+  const brand = str(source.Brand) ?? str(source.Manufacturer);
+  if (brand) {
+    line.brand = brand;
+  }
+
+  const modelNumber = str(source.Model) ?? str(source['Model Number']) ?? str(source.ModelNumber);
+  if (modelNumber) {
+    line.modelNumber = modelNumber;
+  }
+
+  // `identifierCodes` is what `ReceiptService.upsertFromExtraction` resolves the
+  // line's product from and promotes into `ci.object_identifiers` — the reason
+  // a book bought on Amazon and the same book scanned off its barcode land on
+  // one catalogue row.
+  const codes = identifierCodesFor(identifiers);
+  if (codes) {
+    line.identifierCodes = codes;
+  }
+
+  return line;
+}
+
+/**
+ * Map a record to its receipt lines.
+ *
+ * Two shapes reach here:
+ *   - a record with `metadata.LineItems` (an Amazon order aggregate, an Uber
+ *     Eats order, a detected receipt email): one line per entry, IN THE ORDER
+ *     THE PARSER EMITTED THEM.
+ *   - a bare purchase line (one Amazon order line, one Google purchase, one
+ *     Reddit coin bundle): the record IS the single line.
+ *
+ * LINE NUMBER STABILITY. `(receipt_id, line_number)` is the natural key, so a
+ * re-import that renumbers is a re-import that forks its lines. A parser may
+ * state the number (`LineNumber` on the entry) and that wins; an unstated one
+ * takes the array index, which is stable because every emitter builds the array
+ * in a deterministic pass over its export. See {@link assignLineNumbers} for
+ * the mixed case.
+ */
+export function toReceiptLineItemInputs(rec: CanonicalRecord): ReceiptLineItemInput[] {
+  const raw = commerceLineItems(rec);
+
+  if (raw.length === 0) {
+    const description = str(readCommerceField(rec.metadata, 'PRODUCT')) ?? rec.title;
+
+    // A record that names nothing has no line worth writing. The receipt header
+    // still stands — merchant, money and moment are the point of it.
+    return description ? [lineFrom(rec, rec.metadata, 1, rec.identifiers ?? [], description)] : [];
+  }
+
+  const numbers = assignLineNumbers(raw);
+
+  return raw.map((entry, i) => {
+    const description = str(readCommerceField(entry, 'PRODUCT')) ?? str(entry.Description) ?? 'Item';
+
+    // A line is judged on its OWN fields, falling back to the parent record's —
+    // a digital item inside an otherwise physical order is a real case (a gift
+    // card on a grocery run).
+    return lineFrom(rec, entry, numbers[i], identifiersFrom(entry), description);
+  });
+}
+
+/** A receipt's money breakdown disagreeing with its total, or null when it adds up. */
+export interface ReceiptTotalsMismatch {
+  /** subtotal + tax + shipping − discount, in minor units. */
+  expectedMinor: number;
+  /** What the receipt says it came to, in minor units. */
+  statedMinor: number;
+  /** expected − stated. Positive: the parts overshoot what was charged. */
+  deltaMinor: number;
+}
+
+/**
+ * Does this breakdown add up to this total?
+ *
+ * Returns the disagreement, or null when it reconciles OR when there is not
+ * enough to check — a receipt that states no subtotal, or no total, is silent
+ * rather than wrong, and a silence must not be reported as a violation.
+ *
+ * A missing tax/shipping/discount counts as ZERO here, deliberately: a source
+ * that states a subtotal and a total but no tax is claiming there was none, and
+ * that claim is exactly what this invariant is for.
+ *
+ * TOLERANCE is one minor unit. The components are rounded into minor units
+ * independently (a per-unit tax times a quantity of three rounds where the
+ * source's own per-line figure did not), and a cent of rounding is not a
+ * disagreement about what was charged.
+ */
+function reconciliationMismatch(
+  subtotal: number | undefined,
+  tax: number | undefined,
+  shipping: number | undefined,
+  discount: number | undefined,
+  total: number | null | undefined,
+): ReceiptTotalsMismatch | null {
+  if (subtotal == null || total == null) {
+    return null;
+  }
+
+  const expectedMinor = subtotal + (tax ?? 0) + (shipping ?? 0) - (discount ?? 0);
+  const deltaMinor = expectedMinor - total;
+
+  return Math.abs(deltaMinor) <= 1 ? null : { expectedMinor, statedMinor: total, deltaMinor };
+}
+
+/**
+ * Graph nodes the PUSH resolved for a receipt, because this mapper cannot: they
+ * are `ci.entities` ids, and only the stage has the entity mappings and the
+ * graph service. See `PushStage.receiptPlacesFor`.
+ */
+export interface ReceiptEntityLinks {
+  /** `ci.receipts.place_entity_id` — the graph Location the purchase happened at. */
+  placeEntityId?: string;
+}
+
+/**
+ * Map a `commerce.*` record to its receipt header.
+ *
+ * `total` prefers what the source SAID the receipt came to, and only falls back
+ * to the sum of the lines — a stated total includes tax and shipping, which the
+ * lines do not, so summing first would quietly understate every order.
+ */
+export function toReceiptInput(
+  rec: CanonicalRecord,
+  lines: ReceiptLineItemInput[],
+  links: ReceiptEntityLinks = {},
+): ReceiptExtraction {
+  const m = rec.metadata;
+  const currency = str(readCommerceField(m, 'CURRENCY'));
+  const extraction: ReceiptExtraction = {
+    purchasedAt: new Date(rec.startTime),
+    metadata: m,
+    lines,
+    // The source's own structured export, not an OCR read of a crumpled
+    // thermal receipt: that distinction is what `ReceiptService` writes onto
+    // every identifier claim it promotes as `identity_confidence`.
+    extractionSource: 'structured',
+    // The importer OWNS the `ci.objects` row for a purchase — it has the full
+    // metadata bag and the provenance triple, and `toThingInput` already
+    // wrote it. Letting the mint create a second unit from the same line is a
+    // duplicate possession with no way to tell which is real. `skipMint` exists
+    // for exactly this ("import backfills that only want the evidence").
+    skipMint: true,
+    // An itemised source has said everything it is going to say; a bare receipt
+    // email has a body a real extraction could still do better with, so it stays
+    // `pending` rather than claiming a finished read.
+    extractionState: lines.length > 0 && commerceLineItems(rec).length > 0 ? 'extracted' : 'pending',
+    ...sourceTripleCamelNullable(rec),
+  };
+
+  const merchant = str(readCommerceField(m, 'MERCHANT'));
+  if (merchant) {
+    extraction.merchantName = merchant;
+  }
+
+  // WHERE the purchase happened. This is the difference between a receipt and
+  // a bare object row: `ci.receipts.place_entity_id` is the "known place"
+  // rung of `ObjectResolutionService` (`place_prior`), and it is what puts an
+  // imported purchase on the map at all — no import path populated it before.
+  //
+  // `merchant_entity_id` is deliberately still null. Resolving the merchant
+  // STRING into a graph Organization would mint one node per distinct merchant
+  // in a mailbox, which is a graph-volume decision that belongs with the
+  // merchant-resolution work rather than being smuggled in here;
+  // `merchant_name` above already carries the name as printed.
+  if (links.placeEntityId) {
+    extraction.placeEntityId = links.placeEntityId;
+  }
+
+  if (currency) {
+    extraction.currency = currency;
+  }
+
+  // A NEGATIVE stated total is a refund or a credit, not a cost, and it is
+  // refused outright — including the line-sum fallback below, which would
+  // otherwise answer with whatever positive lines survived the same guard and
+  // report a credit as a purchase. See toCostMinorUnits for why this lane
+  // refuses rather than models.
+  const stated = num(readCommerceField(m, 'TOTAL'));
+  const refusedTotal = stated != null && Number.isFinite(stated) && stated < 0;
+  const total = refusedTotal
+    ? undefined
+    : (toCostMinorUnits(stated, currency) ?? sumLines(lines, (l) => l.totalPriceMinor));
+  if (total != null) {
+    extraction.totalMinor = total;
+  }
+
+  if (refusedTotal) {
+    // Refused, not lost. The amount stays legible on the receipt — a later
+    // pass that grows a real credit/refund model has the number it needs, and
+    // nobody reading the row has to guess why the total is empty.
+    extraction.metadata = { ...m, NegativeTotalRefused: stated };
+  }
+
+  // The money BREAKDOWN. All four are COST columns, so a negative is refused
+  // rather than written (see toCostMinorUnits) — including `Discount`, which is
+  // the positive MAGNITUDE taken off the order, not a signed adjustment. A
+  // source whose export states discounts negatively normalises the sign in its
+  // own parser, where that convention is a verified fact about the export.
+  const subtotal = toCostMinorUnits(num(readCommerceField(m, 'SUBTOTAL')), currency);
+  if (subtotal != null) {
+    extraction.subtotalMinor = subtotal;
+  }
+
+  const tax = toCostMinorUnits(num(readCommerceField(m, 'TAX')), currency);
+  if (tax != null) {
+    extraction.taxMinor = tax;
+  }
+
+  const shipping = toCostMinorUnits(num(readCommerceField(m, 'SHIPPING')), currency);
+  if (shipping != null) {
+    extraction.shippingMinor = shipping;
+  }
+
+  const discount = toCostMinorUnits(num(readCommerceField(m, 'DISCOUNT')), currency);
+  if (discount != null) {
+    extraction.discountMinor = discount;
+  }
+
+  // THE RECONCILIATION INVARIANT: subtotal + tax + shipping − discount = total.
+  //
+  // A breakdown is four numbers that only mean anything together, and a wrong
+  // one is invisible on its own — the row still shows four plausible amounts
+  // and a total. This identity is the only thing that can catch it, so it runs
+  // on every receipt that states enough to be checked, whatever wrote it.
+  //
+  // The components are still WRITTEN when they disagree: they are the source's
+  // own numbers and dropping them loses more than it protects. What is not
+  // allowed is storing a wrong breakdown SILENTLY, so the disagreement is
+  // stamped on the receipt where a reader of the row will find it.
+  const mismatch = reconciliationMismatch(subtotal, tax, shipping, discount, extraction.totalMinor);
+  if (mismatch) {
+    extraction.metadata = { ...extraction.metadata, TotalsMismatch: mismatch };
+  }
+
+  const orderId = str(readCommerceField(m, 'ORDER_ID'));
+  if (orderId) {
+    extraction.orderNumber = orderId;
+  }
+
+  // The receipt body / order note. `rawText` is the column a later, better
+  // extraction re-reads, which is the whole reason a receipt email raises its
+  // body cap to 32k (see gmail.ts).
+  const notes = rec.description ?? str(m.Text) ?? str(m.Notes) ?? str(m.Note);
+  if (notes) {
+    extraction.rawText = notes;
+  }
+
+  return extraction;
+}
+
+/**
+ * The identity a catalogue row is keyed on: the first globally-unique
+ * identifier the record states, in the source's own order.
+ *
+ * `ci.product_models` is a CATALOGUE — the same ISBN bought on Amazon, shelved
+ * on Goodreads and scanned off a barcode is ONE product — so the provenance
+ * triple that makes the write idempotent is keyed on the IDENTITY rather than
+ * on the record that happened to mention it. Keying it on the record's own
+ * `sourceId` instead would mint a second catalogue row per source, and the
+ * first-writer-wins claim index would leave the later ones permanently
+ * unreachable by barcode.
+ */
+function productIdentity(rec: CanonicalRecord): CanonicalIdentifier | null {
+  return (rec.identifiers ?? []).find((i) => isGloballyUniqueNamespace(i.namespace)) ?? null;
+}
+
+/**
+ * The `source_system` every importer-minted catalogue row carries.
+ *
+ * A constant, not the parser's name, because the row is keyed on the PRODUCT's
+ * identity and not on who mentioned it — see {@link productIdentity}. The
+ * parser that minted it is recorded in `metadata.mintedFrom`.
+ */
+export const PRODUCT_MODEL_SOURCE_SYSTEM = 'object_identity';
+
+/** Product attributes worth carrying into the catalogue entry, when stated. */
+const PRODUCT_SPEC_KEYS = [
+  'Publisher',
+  'Binding',
+  'NumberOfPages',
+  'Number of Pages',
+  'YearPublished',
+  'Year Published',
+  'Author',
+  'Edition',
+  'Format',
+  'Color',
+  'Size',
+] as const;
+
+/**
+ * Map a record to the catalogue entry its identifiers mint, or null when it
+ * mints none (no globally-unique identifier, or nothing to name it).
+ *
+ * Only globally-unique identifiers qualify: a SKU is unique inside one
+ * retailer, and a catalogue keyed on one would collide across shops.
+ *
+ * `identityConfidence` is left at the column default (1.0). An
+ * identifier-keyed catalogue row is not a guess — the ISBN IS the product —
+ * which is precisely the distinction `ProductModelService.findOrCreateByBrandModel`
+ * lowers its own confidence to make.
+ */
+export function toProductModelInput(rec: CanonicalRecord): CreateProductModelDto | null {
+  const identity = productIdentity(rec);
+
+  if (identity == null) {
+    return null;
+  }
+
+  const m = rec.metadata;
+  const title = str(readCommerceField(m, 'PRODUCT')) ?? rec.title;
+
+  if (!title) {
+    return null;
+  }
+
+  const input: CreateProductModelDto = {
+    title,
+    isDigital: isDigitalGood(rec),
+    metadata: {
+      // Which record minted the row, since the triple below no longer says.
+      mintedFrom: { sourceSystem: rec.sourceSystem, sourceId: rec.sourceId },
+      identifiers: rec.identifiers ?? [],
+    },
+    sourceType: rec.sourceType,
+    sourceSystem: PRODUCT_MODEL_SOURCE_SYSTEM,
+    sourceId: `${identity.namespace}:${identity.value}`,
+  };
+
+  const brand = str(m.Brand) ?? str(readCommerceField(m, 'MERCHANT'));
+  if (brand) {
+    input.brand = brand;
+  }
+
+  const manufacturer = str(m.Manufacturer) ?? str(m.Publisher);
+  if (manufacturer) {
+    input.manufacturer = manufacturer;
+  }
+
+  const modelNumber = str(m.Model) ?? str(m['Model Number']) ?? str(m.ModelNumber);
+  if (modelNumber) {
+    input.modelNumber = modelNumber;
+  }
+
+  const rawCategory = str(readCommerceField(m, 'CATEGORY'));
+  const split = rawCategory ? splitCategory(rawCategory) : null;
+  if (split) {
+    input.category = split.category;
+    if (split.subcategory) {
+      input.subcategory = split.subcategory;
+    }
+  }
+
+  if (rec.description) {
+    input.description = rec.description;
+  }
+
+  const spec: Record<string, unknown> = {};
+  for (const key of PRODUCT_SPEC_KEYS) {
+    const v = m[key];
+
+    if (v !== undefined && v !== null && v !== '') {
+      spec[key] = v;
+    }
+  }
+
+  if (Object.keys(spec).length) {
+    input.spec = spec;
+  }
+
+  return input;
+}
+
+/**
+ * The identifier claims a catalogue row asserts, for
+ * `ObjectIdentifierService.upsertForSubjects`.
+ *
+ * Only the globally-unique ones: a SKU claimed at product level would be a
+ * barcode nobody else can match, and the claim index is first-writer-wins, so a
+ * wrong claim is permanent.
+ */
+export function productModelIdentifiers(rec: CanonicalRecord): CanonicalIdentifier[] {
+  return (rec.identifiers ?? []).filter((i) => isGloballyUniqueNamespace(i.namespace));
+}
+
+/**
+ * Map a record to the observation its purchase constitutes, or null when the
+ * record identifies no object.
+ *
+ * A dated receipt for an identified physical object is evidence the object was
+ * with the user at that moment — the (object, time, place) triple
+ * `ci.object_observations` exists to hold. Undated records produce nothing: an
+ * observation with no time is not an observation.
+ *
+ * `sourceKind: 'manual'` is a compromise the schema forces. The column's CHECK
+ * constraint allows only photo/video_frame/live_camera/screenshot/manual, all
+ * of which describe PIXELS — there is no 'receipt' kind, and adding one is a
+ * migration. `manual` is the closest honest reading ("asserted by a record, not
+ * seen by a detector"); `detector` says what really produced it.
+ */
+export function toObservationInput(rec: CanonicalRecord): CreateObjectObservationDto | null {
+  if (!rec.dated || !mintsProductModel(rec)) {
+    return null;
+  }
+
+  const m = rec.metadata;
+  // Required: a label-less sighting is refused by the service, and the product
+  // name is the only label a receipt has.
+  const label = str(readCommerceField(m, 'PRODUCT')) ?? rec.title;
+
+  if (!label) {
+    return null;
+  }
+
+  const input: CreateObjectObservationDto = {
+    observedAt: new Date(rec.startTime),
+    sourceKind: 'manual',
+    label,
+    labelSource: 'import',
+    detector: 'import:receipt',
+    attributes: {
+      identifiers: productModelIdentifiers(rec),
+      ...(str(readCommerceField(m, 'MERCHANT')) ? { merchant: str(readCommerceField(m, 'MERCHANT')) } : {}),
+      ...(rec.locationName ? { locationName: rec.locationName } : {}),
+    },
+    sourceType: rec.sourceType,
+    sourceSystem: rec.sourceSystem,
+    sourceId: rec.sourceId,
+  };
+
+  const quantity = num(readCommerceField(m, 'QUANTITY'));
+  if (quantity != null && Number.isInteger(quantity) && quantity > 0) {
+    input.attributes = { ...input.attributes, quantity };
+  }
+
+  if (rec.coordinates) {
+    input.coordinates = { lat: rec.coordinates.lat, lon: rec.coordinates.lon };
   }
 
   return input;
@@ -495,6 +1343,13 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
     // as sent would misattribute authorship. The branches below overwrite this
     // wherever the source actually says.
     direction: 'inbound',
+    // The full metadata bag, same as toEventInput: fields with no dedicated
+    // column (a tweet's URL/Retweets/Likes/Lang/ReplyTo, for example) have
+    // nowhere else to land and were silently dropped without this. Fields
+    // ALSO promoted to a dedicated column below (Duration, Subject, ...)
+    // stay here too, for the same round-trip-completeness reason
+    // toEventInput keeps them.
+    metadata: { ...m },
     ...sourceTriple(rec),
   };
   // Pass call duration through so the server stores it on the Communication entity.
@@ -827,7 +1682,14 @@ export function toBrowserActivityInput(rec: CanonicalRecord): CreateBrowserActiv
       (rec.kind === 'web.search' ? str(m.Search) || str(m.Query) || str(m.query) : '') ||
       rec.title ||
       '',
-    action_type: rec.kind === 'web.bookmark' ? 'bookmark' : rec.kind === 'web.search' ? 'search' : 'visit',
+    action_type:
+      rec.kind === 'web.bookmark'
+        ? 'bookmark'
+        : rec.kind === 'web.search'
+          ? 'search'
+          : rec.kind === 'web.download'
+            ? 'download'
+            : 'visit',
     properties: m,
     ...sourceTriple(rec),
   };
@@ -839,6 +1701,18 @@ export function toBrowserActivityInput(rec: CanonicalRecord): CreateBrowserActiv
   const summary = rec.description || str(m.Description);
   if (summary) {
     input.page_summary = summary;
+  }
+
+  // Dwell time. `ci.browser_activity.duration_seconds`, this DTO field and the
+  // `screen_minutes` daily metric that sums it were all in place with no
+  // producer on any import path — the only other assignment of this column
+  // (above) is a COMMUNICATION's call duration, so browser rows never carried
+  // one. The parser decides what counts as a usable duration and omits the
+  // field otherwise (see chromium.ts dwellSeconds); this only passes through a
+  // positive finite number.
+  const dwell = Number(m.DurationSeconds);
+  if (Number.isFinite(dwell) && dwell > 0) {
+    input.duration_seconds = dwell;
   }
 
   return input;
@@ -1223,6 +2097,42 @@ export function toEventInput(rec: CanonicalRecord): CreateEventDto {
     metadata.mediaType = rec.mediaType;
   }
 
+  // ── The record's source gave it no time ──────────────────────────────────
+  //
+  // `ci.events.start_time` is NOT NULL, so `toCanonical` fell back to the
+  // staged row's own created_at — the import wall clock. There is no date to
+  // recover and no way to store "none", so the only honest thing left is to say
+  // so ON the row, at the moment it is minted.
+  //
+  // Two channels, deliberately, because they have different readers:
+  //
+  //  - `time_source` / `time_precision` are the FIRST-CLASS columns, and their
+  //    vocabulary is not ours: it is declared once in
+  //    pipeline/stages/clean/TemporalRepairStage (TIME_SOURCES /
+  //    TIME_PRECISIONS) and mirrored here rather than imported, because the
+  //    import domain has no other dependency on the pipeline domain and one
+  //    string pair is not worth minting one. `undatedRecords.test.ts` asserts
+  //    the two literals still equal the constants, so the mirror cannot drift
+  //    silently.
+  //  - `metadata.undated` is the same fact on a field the read path ALREADY
+  //    exposed (`EventType.metadata` is a GraphQLJSONObject) before
+  //    `EventType.timeSource` existed as its own field. `timeSource` is now
+  //    exposed too (domains/graphql/types/EventType.ts) and is what the web
+  //    client actually reads (Components/utils.tsx getEntityTimestamp) — this
+  //    key is kept for any consumer still reading it, not as the only way in.
+  //
+  // Why stamp it here rather than let TemporalRepairStage discover it: that
+  // stage can only label a source it has a declared SourceTimeSpec for, and
+  // only after a sweep has visited the row. Between the import and the sweep —
+  // and forever, for any source with no spec — the row is indistinguishable
+  // from one whose export really did say "now". The transform is the only place
+  // that KNOWS, because it is the thing doing the substituting. The stage stays
+  // the owner of `repaired` and the `*_original` pair; this is only the
+  // negative assertion it would otherwise have to re-derive.
+  if (!rec.dated) {
+    metadata.undated = true;
+  }
+
   if (rec.contentHash) {
     metadata.contentHash = rec.contentHash;
   }
@@ -1241,6 +2151,22 @@ export function toEventInput(rec: CanonicalRecord): CreateEventDto {
     // kind — an honest "a photo happened" beats an empty title on the timeline.
     title: rec.title ?? rec.kind,
     start_time: new Date(rec.startTime),
+    // See the `!rec.dated` block above. ONLY the negative assertion is stamped;
+    // a dated row is left NULL rather than claimed as `source`.
+    //
+    // That asymmetry is deliberate and it is the safer half of this change.
+    // `dated` means only "the parser produced a non-null instant", which is a
+    // weaker claim than TIME_SOURCES.SOURCE ("the source supplied this instant
+    // and it survived ingest intact") — a parser that FABRICATES an instant
+    // (nmea.ts used to fill a dateless GGA sentence in with today's date)
+    // satisfies the first and violates the second. Stamping `source` on the
+    // strength of non-nullness would launder exactly that bug into a provenance
+    // claim, and it would switch off the structural arm of the
+    // `events-timestamped-at-import` doctor check for every imported row, since
+    // that check excludes `time_source = 'source'` as its legitimate-shape
+    // escape hatch. NULL keeps meaning "unexamined", which is what
+    // TemporalRepairStage and the doctor both already assume.
+    ...(rec.dated ? {} : { time_source: UNDATED_TIME_SOURCE, time_precision: UNDATED_TIME_PRECISION }),
     metadata,
     ...sourceTriple(rec),
   };

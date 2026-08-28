@@ -37,6 +37,37 @@ describe('Fitbit datasource', () => {
     expect(rec.dir_threshold).toBe(0.7);
   });
 
+  // Regression: findSleepFiles used to recurse into every subdirectory of
+  // whatever root it was given, unbounded by folder name, looking for
+  // sleep-*.json anywhere below it — so one coincidentally-named/shaped file
+  // deep inside an unrelated multi-GB export (e.g. a personal Drive dump
+  // nested nowhere near a `Fitbit/` folder) claimed high confidence for the
+  // WHOLE ancestor tree, which then wrongly disabled the generic importer for
+  // everything else in that tree (see ParseStage.dropGenericWhenSpecialised).
+  it('does not recognize a coincidental sleep-shaped file deep in an unrelated tree', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ci-fitbit-fp-'));
+    try {
+      const deep = path.join(tmpRoot, 'Drive', 'personal', 'health-notes');
+      await fs.promises.mkdir(deep, { recursive: true });
+      // Matches the filename pattern AND the content shape, but sits nowhere
+      // near a `Fitbit/` folder — an unrelated personal export could contain
+      // this coincidentally.
+      await fs.promises.writeFile(
+        path.join(deep, 'sleep-2023-01-15.json'),
+        JSON.stringify([{ dateOfSleep: '2023-01-15', minutesAsleep: 400 }]),
+      );
+
+      const fi = new FitbitFileImporter();
+      const rec = await fi.recognize({}, { filename: path.basename(tmpRoot), fullPath: tmpRoot });
+      expect(rec.confidence).toBeLessThan(0.8);
+      expect(rec.dir_threshold).toBe(0.7);
+    } finally {
+      await fs.promises.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it('imports sleep records into sleep items, ignoring non-sleep json', async () => {
     const root = path.join(FIXTURES_DIR, 'fitbit-export');
     const fi = new FitbitFileImporter();

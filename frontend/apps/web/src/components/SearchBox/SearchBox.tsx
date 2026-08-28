@@ -872,8 +872,8 @@ function SearchBox(
                       resize-none
                       leading-none
                     `,
-                      // Compact matches the collapsed header button (h-9, text-sm).
-                      variant === 'compact' ? 'text-sm md:text-sm' : 'text-base md:text-base',
+                      // 16px on a phone so iOS does not zoom the page on focus.
+                      variant === 'compact' ? 'text-base md:text-sm' : 'text-base',
                     )}
                   />
                 )}

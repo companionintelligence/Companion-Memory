@@ -53,9 +53,10 @@ export class StagedUploadPurgeCron {
     try {
       await this.purgeOnce();
     } catch (err: unknown) {
-      this.logger.error(err instanceof Error ? err : new Error(String(err)), {
-        message: 'Staged upload purge failed; will retry on the next sweep',
-      });
+      this.logger.error(
+        'Staged upload purge failed; will retry on the next sweep',
+        err instanceof Error ? err : new Error(String(err)),
+      );
     }
   }
 

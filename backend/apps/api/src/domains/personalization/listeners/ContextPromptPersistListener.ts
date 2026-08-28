@@ -19,7 +19,15 @@ export class ContextPromptPersistListener {
     this.logger.setContext(ContextPromptPersistListener.name);
   }
 
-  @OnEvent(ContextPromptPersistEvent, { queue: CONTEXT_PROMPT_PERSIST_QUEUE })
+  @OnEvent(ContextPromptPersistEvent, {
+    queue: CONTEXT_PROMPT_PERSIST_QUEUE,
+    // `policy: 'short'` is what makes the singletonKey ContextPromptService's
+    // `respond()` send (`context-prompt-persist:${saved.id}`) actually refuse
+    // a duplicate — pg-boss's default `standard` policy stores a singletonKey
+    // but never enforces it. Every send on this queue carries that key, so
+    // `short` is safe queue-wide.
+    queueOptions: { policy: 'short' },
+  })
   async handle(payload: ContextPromptPersistPayload): Promise<void> {
     this.logger.log('Persisting context prompt', payload);
     await this.persistService.persist(payload.userId, payload.promptId);

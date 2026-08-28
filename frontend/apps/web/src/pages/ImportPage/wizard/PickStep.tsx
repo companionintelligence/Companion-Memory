@@ -3,9 +3,11 @@ import { useMemo, useState } from 'react';
 import { Badge, Button, cn, Input } from '@ci/shadcn';
 import { Check, Search } from '@ci/shadcn/icons';
 
+import { compactNumber } from '../runFormat';
 import type { CatalogSource } from '../useImportApi';
 
 import { ECOSYSTEM_ICONS, pickableSections } from './sources';
+import { countFor, useObjectCounts } from './useObjectCounts';
 import { unambiguousImporters, useSourceUsage } from './useSourceUsage';
 
 export interface PickStepProps {
@@ -13,6 +15,8 @@ export interface PickStepProps {
   picked: ReadonlySet<string>;
   onToggle: (key: string) => void;
   onContinue: () => void;
+  /** When true (default), Continue stays pinned and only the catalog scrolls. */
+  pinContinue?: boolean;
 }
 
 /**
@@ -24,10 +28,11 @@ export interface PickStepProps {
  * "we know this service and haven't finished it" is a materially different
  * answer from silence, which reads as unsupported.
  */
-export function PickStep({ catalog, picked, onToggle, onContinue }: PickStepProps) {
+export function PickStep({ catalog, picked, onToggle, onContinue, pinContinue = true }: PickStepProps) {
   const [logoFailed, setLogoFailed] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState('');
   const lastImportedAt = useSourceUsage();
+  const objectCounts = useObjectCounts(catalog);
   const ownedImporters = useMemo(() => unambiguousImporters(catalog), [catalog]);
 
   const sections = useMemo(() => pickableSections(catalog), [catalog]);
@@ -54,11 +59,10 @@ export function PickStep({ catalog, picked, onToggle, onContinue }: PickStepProp
   }, [sections, query]);
 
   return (
-    // The search box stays pinned with the stepper above; only the service
-    // grid scrolls. The filter is what CAUSES the content swaps, so it must
-    // not live in the region whose scrollbar those swaps toggle — and losing
-    // it off the top of a 100-service list would be no better.
-    <div className="flex h-full min-h-0 flex-col gap-5">
+    // Contained hosts pin Continue and scroll only the catalog. The sources
+    // page is not one of those: its host column scrolls the header, steps,
+    // search and catalog together, so pinContinue is false there.
+    <div className={cn('flex flex-col gap-5', pinContinue && 'h-full min-h-0')}>
       <div className="relative">
         <Search
           aria-hidden
@@ -73,7 +77,10 @@ export function PickStep({ catalog, picked, onToggle, onContinue }: PickStepProp
         />
       </div>
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto">
+      <div
+        data-testid="pick-catalog"
+        className={cn('space-y-5', pinContinue && 'min-h-0 flex-1 overflow-y-auto')}
+      >
         {visible.length === 0 && (
           <p className="text-sm text-muted-foreground">
             No services match “{query.trim()}”. Anything can still be imported from the Upload tab —
@@ -176,15 +183,28 @@ export function PickStep({ catalog, picked, onToggle, onContinue }: PickStepProp
                                 }
                           }
                         >
-                          {item.objects.map((object) => (
-                            <span
-                              key={object.label}
-                              className="flex items-center gap-2 text-xs text-muted-foreground"
-                            >
-                              <object.icon aria-hidden className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />
-                              <span className="truncate">{object.label}</span>
-                            </span>
-                          ))}
+                          {item.objects.map((object) => {
+                            // A bundle sums its members' real counts; a single
+                            // service reads its own. `undefined` — never `0` —
+                            // for a kind nobody has imported yet, or one this
+                            // feature cannot honestly count (see
+                            // ObjectCountService's disclosed gaps): a never-
+                            // imported tile showing "0 Mail" next to every
+                            // object it carries would be noise, not signal.
+                            const count = countFor(objectCounts, item.importers, object.label);
+
+                            return (
+                              <span
+                                key={object.label}
+                                className="flex items-center gap-2 text-xs text-muted-foreground"
+                              >
+                                <object.icon aria-hidden className="h-3.5 w-3.5 shrink-0" strokeWidth={1.5} />
+                                <span className="truncate">
+                                  {count != null ? `${compactNumber(count)} ${object.label}` : object.label}
+                                </span>
+                              </span>
+                            );
+                          })}
                         </span>
                       )}
 

@@ -27,9 +27,29 @@ function readBuildDefault(): string {
 
 let apiBaseUrl = normalize(readBuildDefault());
 
+type ApiBaseListener = () => void;
+const apiBaseListeners = new Set<ApiBaseListener>();
+
 function normalize(url: string | null | undefined): string {
   // Drop trailing slashes so `buildApiUrl('/api/x')` never produces a `//`.
   return (url ?? '').replace(/\/+$/, '');
+}
+
+/**
+ * Subscribe to Memory origin changes. Native GraphQL/feature fetches must not
+ * start until this is an absolute http(s) origin — CapacitorHttp rejects
+ * relative `/api/...` paths.
+ */
+export function subscribeApiBaseUrl(listener: ApiBaseListener): () => void {
+  apiBaseListeners.add(listener);
+
+  return () => {
+    apiBaseListeners.delete(listener);
+  };
+}
+
+function notifyApiBaseListeners(): void {
+  apiBaseListeners.forEach((listener) => listener());
 }
 
 /**
@@ -38,7 +58,14 @@ function normalize(url: string | null | undefined): string {
  * user changes it. Passing an empty value resets to same-origin (web behavior).
  */
 export function setApiBaseUrl(url: string | null | undefined): void {
-  apiBaseUrl = normalize(url);
+  const next = normalize(url);
+
+  if (next === apiBaseUrl) {
+    return;
+  }
+
+  apiBaseUrl = next;
+  notifyApiBaseListeners();
 }
 
 /** The current API origin: `''` on web (same-origin), a full origin on native. */
@@ -56,6 +83,40 @@ export function buildApiUrl(path: string): string {
   }
 
   return `${apiBaseUrl}${path}`;
+}
+
+/**
+ * Parse a Hub/user-supplied Memory address into a clean `http:`/`https:` origin.
+ * Hostnames without a scheme get `https://` so a Portal row like
+ * `ci-memory-core7.example.com` does not become a relative URL against the
+ * Capacitor live-reload origin (which iOS URLSession reports as "unsupported URL").
+ */
+export function resolveHttpOrigin(value: string): string {
+  const trimmed = value.trim();
+
+  if (!trimmed) {
+    throw new Error('This Memory Server has no address.');
+  }
+
+  const withScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+
+  let parsed: URL;
+
+  try {
+    parsed = new URL(withScheme);
+  } catch {
+    throw new Error(`Not a valid Memory Server URL (${trimmed}).`);
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`Memory Server URL must be http or https (${trimmed}).`);
+  }
+
+  if (!parsed.hostname) {
+    throw new Error(`Memory Server URL is missing a host (${trimmed}).`);
+  }
+
+  return parsed.origin;
 }
 
 const STORAGE_KEY = 'ci.apiBaseUrl';
@@ -87,6 +148,51 @@ export function isIosPlatform(): boolean {
   const cap = (window as unknown as { Capacitor?: { getPlatform?: () => string } }).Capacitor;
 
   return cap?.getPlatform?.() === 'ios';
+}
+
+/**
+ * Loopback / .localhost / .local appliance URLs. iOS must not treat these as a
+ * finished pairing — the phone always goes through Portal cloud-connect.
+ */
+export function isLocalApplianceOrigin(url: string): boolean {
+  if (!url) {
+    return true;
+  }
+
+  try {
+    const { hostname } = new URL(url);
+
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '0.0.0.0' ||
+      hostname === '::1' ||
+      hostname.endsWith('.localhost') ||
+      hostname.endsWith('.local')
+    );
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Whether the native shell should send the user through `/device-connect`.
+ *
+ * iOS always uses that Portal cloud-connect flow. A leftover docker / LAN origin
+ * does not skip it. Android still only pairs when no origin is set yet.
+ */
+export function needsNativeCloudConnect(): boolean {
+  if (!isNativePlatform()) {
+    return false;
+  }
+
+  const origin = getApiBaseUrl();
+
+  if (!origin) {
+    return true;
+  }
+
+  return isIosPlatform() && isLocalApplianceOrigin(origin);
 }
 
 /**

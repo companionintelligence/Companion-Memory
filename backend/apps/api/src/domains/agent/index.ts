@@ -23,49 +23,91 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { MessageEntity } from '@ci/domains/conversations';
 import { EntityResolutionModule } from '@ci/domains/entity-resolution';
 import { EventsModule } from '@ci/domains/events';
 import { GraphModule } from '@ci/domains/graph';
+import { IntelligenceModule } from '@ci/domains/intelligence';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
 import { PredictionsModule } from '@ci/domains/predictions';
+import { RetrievalPolicyModule } from '@ci/domains/retrieval-policy';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { ToolsModule } from '@ci/domains/tools';
+import { UserModule } from '@ci/domains/user';
 
 import { IntentsController } from './controllers/IntentsController';
 import { MemoryController } from './controllers/MemoryController';
+import { AgentMemoryRetentionCron } from './cron/AgentMemoryRetentionCron';
 import { MemoryCompactionCron } from './cron/MemoryCompactionCron';
+import { TurnFragmentCron } from './cron/TurnFragmentCron';
 import { AgentMemoryEntity } from './entities/AgentMemoryEntity';
+import { TurnFragmentListener } from './listeners/TurnFragmentListener';
+import { AgentMemoryRetentionService } from './services/AgentMemoryRetentionService';
 import { AgentMemoryService } from './services/AgentMemoryService';
+import { BranchialForecastService } from './services/BranchialForecastService';
+import { ForageCorpusService } from './services/ForageCorpusService';
 import { ForecastContextService } from './services/ForecastContextService';
 import { MemoryCompactionService } from './services/MemoryCompactionService';
 import { RecallService } from './services/RecallService';
 import { SerializerService } from './services/SerializerService';
+import { TurnFragmentService } from './services/TurnFragmentService';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([AgentMemoryEntity]),
+    // MessageEntity comes in as a repository rather than by importing
+    // ConversationModule: TurnFragmentService only reads chat rows, and the
+    // agent domain already depends on LLMModule, which depends on
+    // conversations — a module import here would close that circle.
+    TypeOrmModule.forFeature([AgentMemoryEntity, MessageEntity]),
     EntityResolutionModule,
     EventsModule,
     GraphModule,
+    // ActionService, for the retention sweep's stuck-pipeline card. IntelligenceModule
+    // imports only TypeOrmModule + EventsModule, so this adds no cycle back here.
+    IntelligenceModule,
     LLMModule,
     MemoryModule,
     PredictionsModule,
+    // RecallService's five retrieval knobs come from ci.retrieval_policy.
+    RetrievalPolicyModule,
     SearchNextModule,
     // Provides IntentCatalogService, which the IntentsController publishes.
     ToolsModule,
+    UserModule,
   ],
-  exports: [SerializerService, ForecastContextService, RecallService],
+  exports: [
+    SerializerService,
+    ForecastContextService,
+    RecallService,
+    BranchialForecastService,
+    ForageCorpusService,
+  ],
   providers: [
+    AgentMemoryRetentionCron,
+    AgentMemoryRetentionService,
     AgentMemoryService,
+    BranchialForecastService,
+    ForageCorpusService,
     ForecastContextService,
     MemoryCompactionCron,
     MemoryCompactionService,
     RecallService,
     SerializerService,
+    TurnFragmentCron,
+    TurnFragmentListener,
+    TurnFragmentService,
   ],
   controllers: [IntentsController, MemoryController],
 })
 export class AgentModule {}
 
-export { ForecastContextService, RecallService };
+export { BranchialForecastService, ForageCorpusService, ForecastContextService, RecallService };
+export type { RecallOptions } from './services/RecallService';
+export type { EvidenceVoice, RecallLine, RecallObjectRef, RecallObjectType, RecallResult } from './types';
+export type {
+  BranchialBranch,
+  BranchialPermutation,
+  BranchialStep,
+  BranchialTree,
+} from './services/branchialOccupancy';

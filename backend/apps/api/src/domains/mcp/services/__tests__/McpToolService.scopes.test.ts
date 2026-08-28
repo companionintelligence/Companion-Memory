@@ -55,8 +55,15 @@ describe('McpToolService — scope-limited callers', () => {
 
     const registry = {
       getAgentFacingTools: () => [nativeIntent, nativeWriteIntent],
+      // registerNativeTools() reads the outbound-catalog list (excludes MCP-client-sourced
+      // tools); both native intents here belong to the always-included `native` provider, so the
+      // fixture is the same list either way.
+      getOutboundCatalogTools: () => [nativeIntent, nativeWriteIntent],
       getRegisteredToolNames: () => [nativeIntent.name, nativeWriteIntent.name],
       executeTool: jest.fn().mockResolvedValue({ success: true, data: { ok: true } }),
+      // The GraphQL branch now records its own tool.invoked through the registry (it never
+      // reaches executeTool), so the fixture has to offer it.
+      recordInvocation: jest.fn().mockResolvedValue(undefined),
     };
 
     const executor = {

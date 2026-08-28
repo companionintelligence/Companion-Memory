@@ -6,7 +6,15 @@ import { PlaceService, type PlaceVisitStats } from '@ci/domains/memory';
 
 import { Loader } from './Loader';
 
-const EMPTY: PlaceVisitStats = { visitCount: 0, firstVisitAt: null, lastVisitAt: null };
+const EMPTY: PlaceVisitStats = {
+  visitCount: 0,
+  firstVisitAt: null,
+  lastVisitAt: null,
+  // Defensive fallback only (getVisitStats always populates every requested
+  // id) — never claim `confirmed` for a place this loader knows nothing
+  // about.
+  status: 'pending_enrichment',
+};
 
 /** Batches PlaceType.visitStats reads into one grouped events query. */
 @Injectable()

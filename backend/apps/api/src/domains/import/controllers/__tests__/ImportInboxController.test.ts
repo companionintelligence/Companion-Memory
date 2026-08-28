@@ -14,7 +14,12 @@ import { ImportInboxController } from '../ImportInboxController';
 const ctx = { userId: 'user-1' } as RequestContext;
 
 function build() {
-  const scan = jest.fn(async () => ({ available: true, inboxDir: '/inbox', units: [] }));
+  const scan = jest.fn(async () => ({
+    available: true,
+    inboxDir: '/inbox',
+    displayDir: '/inbox',
+    units: [],
+  }));
   const startBatch = jest.fn(async () => ({ results: [{ unit: 'a.zip', runId: 'run-1' }] }));
   const controller = new ImportInboxController({ scan, startBatch } as never);
 

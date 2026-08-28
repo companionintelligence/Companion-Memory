@@ -64,6 +64,10 @@ export interface AboutYouView {
     answer: string;
     answeredAt: string;
   }>;
+  /** Wake/sleep/work hours captured during onboarding, when set. */
+  schedule: Record<string, unknown> | null;
+  /** The autonomy dial ('cautious' | 'balanced' | 'hands_off') from onboarding. */
+  trustMode: string | null;
   hasSignal: boolean;
 }
 
@@ -113,16 +117,36 @@ export async function applyHowYoudDoIt(
   return response;
 }
 
+/**
+ * `fetchJson` casts the parsed body to its type parameter without validating it, so
+ * `AboutYouView` is a claim about the wire, not a guarantee. `AboutYouSection` reads
+ * `preferences`/`family`/`recentAnswers` as plain arrays; anything that answers 200 with
+ * a body that isn't the agreed shape (version skew, a proxy error page, a test double)
+ * would otherwise take the whole page down with `Cannot read properties of undefined`.
+ * So parse it here, once, and hand callers the shape the type promises.
+ */
 export async function fetchAboutYou(authToken: string | null | undefined): Promise<AboutYouView> {
-  const result = await fetchJson<AboutYouView>('/api/v1/intelligence/about-you', {
+  const result = await fetchJson<Partial<AboutYouView>>('/api/v1/intelligence/about-you', {
     headers: authHeaders(authToken),
   });
 
-  if (!result) {
+  // A body that is not a JSON object at all is a broken response, not an empty
+  // profile — surface it as an error the section can offer to retry, rather than
+  // quietly rendering "Still thin" and implying Companion knows nothing about you.
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
     throw new Error('About-you request returned no data');
   }
 
-  return result;
+  return {
+    name: result.name ?? null,
+    dossier: result.dossier ?? null,
+    preferences: result.preferences ?? [],
+    family: result.family ?? [],
+    recentAnswers: result.recentAnswers ?? [],
+    schedule: result.schedule ?? null,
+    trustMode: result.trustMode ?? null,
+    hasSignal: result.hasSignal ?? false,
+  };
 }
 
 export async function submitAboutYouCorrection(

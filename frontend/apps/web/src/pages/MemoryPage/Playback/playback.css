@@ -1,0 +1,49 @@
+/* ── Life playback ──────────────────────────────────────────────────────────
+   The trace layers are Leaflet SVG paths, so their colours are set here rather
+   than in the layer options: Leaflet writes `stroke`/`fill` as SVG presentation
+   ATTRIBUTES, and a `var(--primary)` in an attribute does not resolve. As CSS
+   properties on a class they do, which keeps the fly-through on the same
+   tokens as the rest of the map in both themes. */
+
+/* The whole loaded window: where the playhead is going. */
+.memory-playback-route {
+  fill: none;
+  stroke: var(--primary);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.28;
+}
+
+/* The revealed tail: where it has just been. */
+.memory-playback-trail {
+  fill: none;
+  stroke: #58ebbf;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 6px rgb(88 235 191 / 60%));
+}
+
+/* The playhead itself. */
+.memory-playback-head {
+  fill: #82ffe1;
+  stroke: var(--background);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 8px rgb(130 255 225 / 80%));
+}
+
+/* Scrubber. A native range input (see PlaybackBar) styled to sit with the
+   shadcn controls around it; `accent-color` does the track/thumb in one
+   property everywhere it is supported. */
+.memory-playback-scrub {
+  width: 100%;
+  height: 1.25rem;
+  cursor: pointer;
+  accent-color: var(--primary);
+  background: transparent;
+}
+
+.memory-playback-scrub:focus-visible {
+  border-radius: var(--radius-md);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}

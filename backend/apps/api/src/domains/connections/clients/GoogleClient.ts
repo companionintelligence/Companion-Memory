@@ -20,6 +20,11 @@ export class GoogleClient extends BaseOAuth2Client {
 
   protected readonly tokenEndpoint = 'https://oauth2.googleapis.com/token';
 
+  // Google's OAuth 2.0 revocation endpoint (RFC 7009). POSTing the token here
+  // invalidates the grant on Google's side, which Google's restricted-scope
+  // policy requires when the user disconnects or deletes their account.
+  protected readonly revocationEndpoint = 'https://oauth2.googleapis.com/revoke';
+
   protected readonly endpointScopeMap = {
     Calendar: ['calendar.readonly'],
     Gmail: ['gmail.readonly'],

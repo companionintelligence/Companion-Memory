@@ -80,10 +80,20 @@ function ReflectionRow({
               </Badge>
             ) : null}
             {entry.answer ? (
+              // No `onEdit`: this row's Edit button rewrites the QUESTION
+              // (EditReflectionDialog), not the answer, and there is no
+              // answer-edit path on this surface. The drawer hides the
+              // affordance rather than offering a second way to write.
               <AnswerProvenance
                 source={entry.answer.source}
                 confidence={entry.answer.confidence}
                 rationale={entry.answer.rationale}
+                details={{
+                  question: entry.text,
+                  answerText: entry.answer.text,
+                  answeredAt: entry.answer.answeredAt,
+                  record: entry.answer,
+                }}
               />
             ) : (
               <Badge variant="outline" className="text-xs text-muted-foreground">
@@ -162,8 +172,10 @@ export function ReflectionCatalogue() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="relative flex-1 lg:max-w-sm">
+      {/* Same switch as the Answers tab's toolbar — on `lg:` the two tabs of this
+          one page reflowed at different widths. */}
+      <div className="flex flex-col gap-3 device:flex-row device:items-center device:justify-between">
+        <div className="relative flex-1 device:max-w-sm">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={searchInput}
@@ -174,12 +186,18 @@ export function ReflectionCatalogue() {
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        {/* A two-up grid on a phone, the same wrapping row from `sm` up. The
+            four triggers below carry hard pixel widths (190/150/170/180) that
+            never collapsed: on a 390px screen they wrapped into four ragged
+            rows of mismatched pills, and on a 360px one the widest overflowed
+            the content column. The widths stay for `sm`+, where they line the
+            filters up; below that each trigger just fills its cell. */}
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
           <Select
             value={filters.category ?? ALL}
             onValueChange={(value) => actions.setCategory(value === ALL ? null : value)}
           >
-            <Select.Trigger className="w-[190px]" aria-label="Filter by category">
+            <Select.Trigger className="w-full sm:w-[190px]" aria-label="Filter by category">
               <Select.Value />
             </Select.Trigger>
             <Select.Content>
@@ -198,7 +216,7 @@ export function ReflectionCatalogue() {
             value={filters.answerTier ?? ALL}
             onValueChange={(value) => actions.setAnswerTier(value === ALL ? null : (value as AnswerTier))}
           >
-            <Select.Trigger className="w-[150px]" aria-label="Filter by answer type">
+            <Select.Trigger className="w-full sm:w-[150px]" aria-label="Filter by answer type">
               <Select.Value />
             </Select.Trigger>
             <Select.Content>
@@ -215,7 +233,7 @@ export function ReflectionCatalogue() {
             value={filters.answered}
             onValueChange={(value) => actions.setAnswered(value as CatalogueAnswered)}
           >
-            <Select.Trigger className="w-[170px]" aria-label="Filter by answered state">
+            <Select.Trigger className="w-full sm:w-[170px]" aria-label="Filter by answered state">
               <Select.Value />
             </Select.Trigger>
             <Select.Content>
@@ -231,7 +249,7 @@ export function ReflectionCatalogue() {
             value={filters.status}
             onValueChange={(value) => actions.setStatus(value as CatalogueStatus)}
           >
-            <Select.Trigger className="w-[180px]" aria-label="Filter by status">
+            <Select.Trigger className="w-full sm:w-[180px]" aria-label="Filter by status">
               <Select.Value />
             </Select.Trigger>
             <Select.Content>
@@ -243,7 +261,7 @@ export function ReflectionCatalogue() {
             </Select.Content>
           </Select>
 
-          <Button onClick={openCreate}>
+          <Button onClick={openCreate} className="col-span-2 w-full sm:w-auto">
             <Plus className="h-4 w-4" />
             New reflection
           </Button>

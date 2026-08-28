@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { type RequestContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { RecallService } from '@ci/domains/agent';
-import { OllamaService, PROMPT_MODEL } from '@ci/domains/llm';
+import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm';
 import { UserContextService } from '@ci/domains/memory';
 import { estimateActivityDurationMinutes, PlacementService } from '@ci/domains/personalization';
 
@@ -82,7 +82,7 @@ const responseSchema = z.object({
  * grammar.
  *
  * `format: 'json'` alone only guarantees the output PARSES — the model stays
- * free to invent key names, and a small `PROMPT_MODEL` reliably does. Measured
+ * free to invent key names, and a small `UTILITY_MODEL` reliably does. Measured
  * against gemma3:1b, then the default, "I want to make lunch" came back as
  * `{"tasks:**[": "  "}` and `{"tasks": {"2:": "Make lunch"}}` in 3 of 8 runs.
  * Both are valid JSON and neither survives validation, so the user saw
@@ -296,7 +296,7 @@ export class TaskBreakdownService {
         // No tools: this is a pure text transform and a tool call here would only
         // be the model wandering off. The schema (not the bare 'json' string) is
         // what makes the output usable — see RESPONSE_JSON_SCHEMA.
-        { model: PROMPT_MODEL, enableTools: false, format: RESPONSE_JSON_SCHEMA, signal },
+        { model: UTILITY_MODEL, enableTools: false, format: RESPONSE_JSON_SCHEMA, signal },
       );
 
       content = response.message.content;

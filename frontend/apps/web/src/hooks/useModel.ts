@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createHookContext, fetchJson } from '@ci/common';
 
-import { useAuth } from './useAuth';
+import { useSessionAuth } from './useSessionAuth';
 
 const ACTIVE_MODEL_KEY = 'activeModel';
 const ACTIVE_VISION_MODEL_KEY = 'activeVisionModel';
@@ -40,7 +40,7 @@ type Value = [
 ];
 
 function useModel(): Value {
-  const [{ authToken, expired }] = useAuth();
+  const { ready, headers } = useSessionAuth();
 
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [selectedVisionModel, setSelectedVisionModel] = useState<string | null>(null);
@@ -98,7 +98,7 @@ function useModel(): Value {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
+          ...headers,
         },
       });
 
@@ -137,11 +137,11 @@ function useModel(): Value {
     } finally {
       setLoading(false);
     }
-  }, [authToken]);
+  }, [headers]);
 
   useEffect(() => {
     (async () => {
-      if (authToken == null || expired) {
+      if (!ready) {
         return;
       }
 
@@ -153,7 +153,7 @@ function useModel(): Value {
 
       initialRequestRef.current = true;
     })();
-  }, [authToken, fetchModels, expired]);
+  }, [ready, fetchModels]);
 
   const thinkingSupported = useMemo(
     () => activeModels.find((model) => model.model === selectedModel)?.thinking ?? false,

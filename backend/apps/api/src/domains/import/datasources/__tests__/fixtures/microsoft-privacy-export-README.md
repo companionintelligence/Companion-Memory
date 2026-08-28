@@ -58,10 +58,16 @@ double-quoted `MM/DD/YYYY HH:mm:ss +00:00` (24-hour UTC) — the 2021 Scribd-era
 | `LocationActivity.json` | INFERRED | fields mirror the VERIFIED union-header location columns |
 | `VoiceActivity.json` | INFERRED — least-verified file | INFERRED; dates deliberately pre-2020-10-30, after which voice clips are de-identified and never reach the dashboard |
 
-## `microsoft-copilot-export/` (separate dashboard export, NOT in the ZIP)
+## Copilot activity (separate dashboard export, NOT in the ZIP) — RESEARCH ONLY
+
+> **No `microsoft-copilot-export/` directory exists here, and `microsoft_account.ts`
+> has no Copilot branch** — a repo-wide grep for "copilot" under `datasources/`
+> returns nothing (checked 2026-08-19). The table below is retained research, not
+> a description of a fixture: it is what to build against if someone implements
+> the Copilot export.
 
 Privacy dashboard → Copilot → "Export all activity history" downloads a CSV (path + CSV format
-VERIFIED from MS support 2acfee74). File names are undocumented (ours are invented).
+VERIFIED from MS support 2acfee74). File names are undocumented (the ones below are invented).
 
 | File | Columns |
 | --- | --- |

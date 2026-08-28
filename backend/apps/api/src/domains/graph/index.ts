@@ -123,6 +123,7 @@ export type {
 } from './services/ItemRelationshipService';
 export { RelationshipMap, RelationshipType } from './types';
 export {
+  SINGLE_VALUED_RELATIONSHIP_TYPES,
   SYMMETRIC_RELATIONSHIP_TYPES,
   isSymmetric,
   normalizeRelationship,
@@ -147,6 +148,12 @@ export {
   stripCallLogHeading,
 } from './utils/participantSanity';
 export {
+  type PlaceholderPersonNameReason,
+  isPlaceholderPersonName,
+  placeholderPersonNameReason,
+  resetPlaceholderPersonNameLog,
+} from './utils/placeholderPersonName';
+export {
   type NormalizedObjectIdentifier,
   type ObjectIdentifierNamespace,
   computeQualifier,
@@ -154,3 +161,4 @@ export {
   isGloballyUniqueNamespace,
   normalizeObjectIdentifier,
 } from './utils/normalizeObjectIdentifier';
+export { type TruthValue, c2w, expectation, revise, w2c } from './evidence/truth';

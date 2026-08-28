@@ -1,4 +1,4 @@
-import type { ObjectLiteral, Repository } from 'typeorm';
+import type { ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
 
 /**
  * Keyset (seek) pagination pushed into SQL — replaces the load-the-whole-table
@@ -47,6 +47,12 @@ interface KeysetOptions {
    * name the property 'user_id' (matching the column), so it is overridable.
    */
   userIdProp?: string;
+  /**
+   * Extra filtering applied to BOTH the count and the page query, so `totalCount`
+   * agrees with what the pages actually yield (e.g. hiding rows whose parent was
+   * soft-deleted). Must only add joins/where clauses — never ordering or limits.
+   */
+  scope?: <T extends ObjectLiteral>(qb: SelectQueryBuilder<T>) => SelectQueryBuilder<T>;
 }
 
 /**
@@ -68,12 +74,12 @@ export async function keysetPaginate<E extends ObjectLiteral>(
 ): Promise<KeysetPage<E>> {
   const { alias, timeProp, userId } = options;
   const userIdProp = options.userIdProp ?? 'userId';
+  const scope = options.scope ?? ((qb) => qb);
   const { limit, isBackward } = resolvePageShape(args);
 
-  const totalCount = await repo
-    .createQueryBuilder(alias)
-    .where(`${alias}.${userIdProp} = :userId`, { userId })
-    .getCount();
+  const totalCount = await scope(
+    repo.createQueryBuilder(alias).where(`${alias}.${userIdProp} = :userId`, { userId }),
+  ).getCount();
 
   const cursorId = isBackward ? args.beforeId : args.afterId;
   let cursor: { time: unknown; id: string } | null = null;
@@ -96,9 +102,7 @@ export async function keysetPaginate<E extends ObjectLiteral>(
   const direction = isBackward ? 'ASC' : 'DESC';
   const seekOp = isBackward ? '>' : '<';
 
-  const qb = repo
-    .createQueryBuilder(alias)
-    .where(`${alias}.${userIdProp} = :userId`, { userId })
+  const qb = scope(repo.createQueryBuilder(alias).where(`${alias}.${userIdProp} = :userId`, { userId }))
     .orderBy(`${alias}.${timeProp}`, direction)
     .addOrderBy(`${alias}.id`, direction)
     .limit(limit + 1);

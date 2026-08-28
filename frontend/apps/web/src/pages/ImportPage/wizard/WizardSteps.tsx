@@ -55,6 +55,7 @@ export function WizardSteps({ step, canExport, onStep, className }: WizardStepsP
           <li key={entry.step}>
             <button
               type="button"
+              disabled={!reachable}
               onClick={() => {
                 if (reachable) {
                   onStep(entry.step);
@@ -63,7 +64,11 @@ export function WizardSteps({ step, canExport, onStep, className }: WizardStepsP
               aria-current={state === 'active' ? 'step' : undefined}
               className={cn(
                 'flex w-full items-center gap-3 rounded-md border p-3 text-left transition-colors',
-                state === 'active' ? 'border-primary bg-primary/5' : 'hover:bg-muted/50',
+                state === 'active'
+                  ? 'border-primary bg-primary/5'
+                  : reachable
+                    ? 'hover:bg-muted/50'
+                    : 'cursor-not-allowed opacity-50',
               )}
             >
               <span

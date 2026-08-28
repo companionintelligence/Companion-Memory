@@ -24,15 +24,20 @@ import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
 import { GraphModule } from '@ci/domains/graph';
+import { ImportModule } from '@ci/domains/import';
 import { MemoryModule } from '@ci/domains/memory';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { UserModule } from '@ci/domains/user';
 
 import { SyncNowController } from './controllers/SyncNowController';
+import { CloudFileIngestEntity } from './entities/CloudFileIngestEntity';
 import { ConnectionSyncJobEntity } from './entities/ConnectionSyncJobEntity';
 import { SyncOrchestrator } from './listeners/SyncOrchestrator';
+import { CloudFileIngestLedgerService } from './services/CloudFileIngestLedgerService';
+import { CloudFileIngestService } from './services/CloudFileIngestService';
 import { ConnectionSyncJobService } from './services/ConnectionSyncJobService';
 import { EndpointServiceMap } from './services/EndpointServiceMap';
+import { FacebookMediaService } from './services/Facebook/FacebookMediaService';
 import { FacebookFriendsTransformService } from './services/Facebook/transform/TransformFacebookFriends';
 import { FacebookLikesTransformService } from './services/Facebook/transform/TransformFacebookLikes';
 import { FacebookPhotosTransformService } from './services/Facebook/transform/TransformFacebookPhotos';
@@ -52,8 +57,13 @@ import { OneDriveTransformService } from './services/Microsoft/transform/Transfo
 import { OutlookCalendarTransformService } from './services/Microsoft/transform/TransformOutlookCalendar';
 import { OutlookMailTransformService } from './services/Microsoft/transform/TransformOutlookMail';
 import { PromoteService } from './services/PromoteService';
+import { RedditCommentsTransformService } from './services/Reddit/transform/TransformComments';
+import { RedditPostsTransformService } from './services/Reddit/transform/TransformPosts';
+import { RedditSavedTransformService } from './services/Reddit/transform/TransformSaved';
 import { SignalContactsTransformService } from './services/Signal/transform/TransformContacts';
 import { SignalMessagesTransformService } from './services/Signal/transform/TransformMessages';
+import { SlackChannelsTransformService } from './services/Slack/transform/TransformChannels';
+import { SlackMessagesTransformService } from './services/Slack/transform/TransformMessages';
 import { SpotifyPlaylistsTransformService } from './services/Spotify/transform/TransformPlaylists';
 import { SpotifyRecentlyPlayedTransformService } from './services/Spotify/transform/TransformRecentlyPlayed';
 import { SpotifySavedAudiobooksTransformService } from './services/Spotify/transform/TransformSavedAudiobooks';
@@ -71,12 +81,16 @@ import { SyncNowService } from './services/SyncNowService';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ConnectionEntity, ConnectionSyncJobEntity]),
+    TypeOrmModule.forFeature([ConnectionEntity, ConnectionSyncJobEntity, CloudFileIngestEntity]),
     ConnectionsModule,
     EventsModule,
     FilesModule,
     GeocodeModule,
     GraphModule,
+    // For CloudFileIngestService: StagedSourceService.registerUpload +
+    // ImportRunService.startRun are the "hand bytes to the existing
+    // pipeline" contract ImportPathTool.ts already uses.
+    ImportModule,
     MemoryModule,
     SearchNextModule,
     UserModule,
@@ -87,6 +101,9 @@ import { SyncNowService } from './services/SyncNowService';
     EndpointServiceMap,
     PromoteService,
     SyncOrchestrator,
+    CloudFileIngestLedgerService,
+    CloudFileIngestService,
+    FacebookMediaService,
     FacebookFriendsTransformService,
     FacebookLikesTransformService,
     FacebookPhotosTransformService,
@@ -112,8 +129,13 @@ import { SyncNowService } from './services/SyncNowService';
     SpotifySavedTracksTransformService,
     SpotifyTopArtistsTransformService,
     GitHubEventsTransformService,
+    RedditPostsTransformService,
+    RedditCommentsTransformService,
+    RedditSavedTransformService,
     SignalMessagesTransformService,
     SignalContactsTransformService,
+    SlackMessagesTransformService,
+    SlackChannelsTransformService,
     SteamOwnedGamesTransformService,
     SteamAchievementsTransformService,
     SteamFriendsTransformService,
@@ -124,10 +146,13 @@ import { SyncNowService } from './services/SyncNowService';
 export class EtlModule {}
 
 // Entities
-export { ConnectionSyncJobEntity };
+export { ConnectionSyncJobEntity, CloudFileIngestEntity };
+export type { CloudFileIngest, CloudFileIngestStatus } from './entities/CloudFileIngestEntity';
 
 // Services
-export { ConnectionSyncJobService };
+export { ConnectionSyncJobService, CloudFileIngestService, CloudFileIngestLedgerService };
+export { GOOGLE_DRIVE_PROVIDER, MAX_DOWNLOAD_ATTEMPTS } from './services/CloudFileIngestService';
+export type { CloudFileIngestOutcome, DriveDocumentToIngest } from './services/CloudFileIngestService';
 
 // Types
 export type { ConnectionSyncJob, JobStatus } from './types';

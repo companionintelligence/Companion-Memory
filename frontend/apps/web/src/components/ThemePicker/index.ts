@@ -16,6 +16,8 @@ export {
   TEXTURE_PATTERNS,
   DEFAULT_TEXTURE_ID,
   DEFAULT_TEXTURE_PALETTE,
+  DEFAULT_GLOW_ENABLED,
+  GLOW_STORAGE_KEY,
   buildTextureBackground,
   readTexturePalette,
 } from './useBackground';

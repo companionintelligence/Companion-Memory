@@ -18,7 +18,10 @@ vi.mock('@/hooks', () => ({
 
 const fetchJson = vi.hoisted(() => vi.fn());
 
-vi.mock('@ci/common', () => ({ fetchJson }));
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  fetchJson,
+}));
 
 /** Mirrors how `OnboardingPage` actually wires the form: `useForm()` at the top,
  *  its methods spread onto `<Form>` (react-hook-form's `FormProvider`), which is

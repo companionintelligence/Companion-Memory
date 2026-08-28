@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Companion</string>
+	<string>Memory</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -45,82 +45,19 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Companion uses the camera to capture photos and videos for your memory.</string>
+	<string>Companion uses the camera to capture photos and videos for your memory, and to scan a QR code to connect to your Companion Memory server.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Companion connects to your Companion appliance on your local network, so your notes, photos and events stay on hardware you control.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Companion records your location in the background, including while your phone is locked, so your memory can attach where you were to notes, photos and events, even after you leave the app. Locations are sent only to your own Companion server. iOS shows a blue status bar indicator whenever this is active.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Companion records where you are while you use it, so your memory can place your notes, photos and events on a map. Locations are sent only to your own Companion server.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Companion uses the microphone to record audio and video for your memory.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Companion saves captured media to your photo library when you choose to.</string>
-	<!--
-	  Location — WHEN-IN-USE ONLY, deliberately. Adding
-	  NSLocationAlwaysAndWhenInUseUsageDescription (plus UIBackgroundModes: location)
-	  is a separate product decision: see DEVICE_DATA_COMPLIANCE.md §3.4 and §7
-	  Phase 4. Guideline 5.1.5 requires location be directly relevant to a feature
-	  the user can see, so the string names the feature rather than the data.
-	-->
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Companion records where you are while you use it, so your memory can place your notes, photos and events on a map. Locations are sent only to your own Companion server.</string>
-	<key>CFBundleShortVersionString</key>
-	<string>$(MARKETING_VERSION)</string>
-	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<key>LSRequiresIPhoneOS</key>
-	<true/>
-	<key>UILaunchStoryboardName</key>
-	<string>LaunchScreen</string>
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<!-- 64-bit only. `armv7` (the stale Capacitor-template default) is a 32-bit
-		     slice no iOS-15 device runs; arm64 is the correct required capability. -->
-		<string>arm64</string>
-	</array>
-	<!-- Export compliance. THE STATED BASIS FOR THIS CHANGED AND IS NOT YET CONFIRMED
-	     BY COUNSEL - see DELIVERY.md section 1a.
-
-	     The previous basis was "only exempt standard cryptography (HTTPS/TLS via the
-	     OS, Keychain)", i.e. no cryptography of the app's own at all. That is no longer
-	     true: the app now bundles SQLCipher (AES-256 via CommonCrypto) to encrypt the
-	     Local Hub capture outbox at rest, which is app-level crypto rather than an OS
-	     service.
-
-	     The likely outcome is still exempt - mass-market software using a standard,
-	     published, open-source implementation of a standard algorithm, applied to the
-	     app's own data at rest - but "probably exempt on a different basis" is not the
-	     claim the old comment made, and `false` here suppresses the App Store Connect
-	     encryption questionnaire on every upload. Confirm the determination (and whether
-	     an annual self-classification report is owed) before the next submission; set
-	     this to `true` if counsel wants the questionnaire answered per-upload instead. -->
-	<key>ITSAppUsesNonExemptEncryption</key>
-	<false/>
-	<key>UISupportedInterfaceOrientations</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>UIViewControllerBasedStatusBarAppearance</key>
-	<true/>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<!--
-		  CI-Server appliances are frequently reached over plain HTTP on a LAN or
-		  tailnet (the user's own self-hosted server). Allow cleartext loads so the
-		  app can connect to an http:// server entered on the /server screen — the
-		  target is always a user-specified, first-party appliance.
-
-		  Scoped to WKWebView content (where all our network requests originate) via
-		  NSAllowsArbitraryLoadsInWebContent rather than the app-wide
-		  NSAllowsArbitraryLoads, which is the App-Store-preferred, narrower exception.
-		-->
-		<key>NSAllowsArbitraryLoadsInWebContent</key>
-		<true/>
-	</dict>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Companion reads photos you choose so you can save them to your memory.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Companion turns your speech into text on this device so you can dictate notes and talk to your memory.</string>
 	<key>UIApplicationSceneManifest</key>
@@ -140,6 +77,10 @@
 			</array>
 		</dict>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIRequiredDeviceCapabilities</key>
@@ -148,16 +89,9 @@
 	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
-		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>

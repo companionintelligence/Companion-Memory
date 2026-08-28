@@ -2,7 +2,12 @@
 
 > **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
-> Status: **implemented** on `feat/3-and-4` with [post-ingest-enrichment.md](post-ingest-enrichment.md).
+> Status: **implemented and merged to `main`** — `feat/3-and-4` landed on
+> 2026-08-17 as [#2032](https://github.com/companionintelligence/CI-Server/pull/2032),
+> with [post-ingest-enrichment.md](post-ingest-enrichment.md). Re-verified
+> 2026-08-19: `METRIC_KEYS` is 13 keys, ending in `meeting_minutes`,
+> `sleep_minutes`, `time_at_home`; migration
+> `20260817220000_thicker_daily_metrics_and_home_question.sql` is in the tree.
 > Tracker: leftovers from [CI-Engineering #53](https://github.com/companionintelligence/CI-Engineering/issues/53)
 > · epic [#49](https://github.com/companionintelligence/CI-Engineering/issues/49)
 >
@@ -48,7 +53,14 @@ Three ask surfaces, one writer:
    `knownPlaceCandidates` is non-empty. Options are Location entity ids.
    Persist via `write_known_place`.
 2. **Q&A** — seeded `ci.questions` row "Which of these places is home?"
-   Answering it calls the same writer.
+   Answering it calls the same writer. (The *product surface* was renamed to
+   **Reflections** on 2026-08-18, and moved again into the Self hub on
+   2026-08-23 — it now lives at `/self/reflections`, with `/memory/reflections`
+   and `/prompts` kept as redirects; the
+   table, the service and the REST routes are still `questions`. That release's
+   catalogue migration retires abstract questions by setting `is_active = false`
+   on `created_by_llm AND NOT is_seed_question` rows only, so this seeded row
+   survives — its category is folded from `Home` to `Home & Daily Life`.)
 3. **Action** — at most one undismissed `ci.actions` row
    (`metadata.key = 'confirm_home'`). Completing still goes through
    `updateKnownPlace`. Dismiss without confirm leaves the metric NULL.

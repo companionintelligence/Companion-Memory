@@ -1,4 +1,6 @@
 .yarn
+.local/
+tools/
 node_modules
 .pnp.*
 .claude/worktrees/

@@ -6,7 +6,7 @@ import { Button, Dialog } from '@ci/shadcn';
 import { gql } from '@/graphql';
 
 interface Props {
-  taskId: string;
+  taskIds: string[];
   onClose: () => void;
 }
 
@@ -19,7 +19,7 @@ const DELETE_TASK = gql(`
   }
 `);
 
-export function DeleteTaskModal({ taskId, onClose }: Props) {
+export function DeleteTaskModal({ taskIds, onClose }: Props) {
   const [deleteTask, { loading: deleting }] = useMutation(DELETE_TASK, {
     // There are no subscriptions in this app, so the cache is updated by hand
     // rather than waiting for a push. Same shape as DeleteNoteModal.
@@ -55,17 +55,53 @@ export function DeleteTaskModal({ taskId, onClose }: Props) {
   });
 
   const [error, setError] = useState<string | null>(null);
+  const many = taskIds.length > 1;
 
   const handleDelete = async () => {
     setError(null);
 
     try {
-      await deleteTask({ variables: { input: { id: taskId } } });
+      // ═══ A REFUSED DELETE DOES NOT THROW ═══
+      //
+      // `TaskResolver.deleteTask` returns `{ success: false }` — no error —
+      // when the row is missing or not the caller's, and the cache `update`
+      // above bails on the absent `deletedId`. So the old loop awaited each
+      // mutation, ignored every payload, and called `onClose()` regardless:
+      // the dialog shut as though the work were done, the task reappeared on
+      // the next refetch, and in a bulk delete a partial failure was invisible.
+      // `NewTaskForm` and `EditTaskModal` both check this payload; this one did
+      // not.
+      const failed: string[] = [];
+
+      for (const id of taskIds) {
+        const { data } = await deleteTask({ variables: { input: { id } } });
+
+        if (!data?.deleteTask?.success) {
+          failed.push(id);
+        }
+      }
+
+      if (failed.length > 0) {
+        // Named counts, because a partial failure is the case the user cannot
+        // otherwise see: some rows left the list and some did not.
+        setError(
+          failed.length === taskIds.length
+            ? many
+              ? 'Could not delete these tasks. Please try again.'
+              : 'Could not delete this task. Please try again.'
+            : `Deleted ${taskIds.length - failed.length} of ${taskIds.length}. The rest could not be deleted — please try again.`,
+        );
+
+        return;
+      }
+
       onClose();
     } catch {
       // Leave the dialog open on failure — closing it here would read as a
       // successful delete even though the task is still there.
-      setError('Could not delete this task. Please try again.');
+      setError(
+        many ? 'Could not delete these tasks. Please try again.' : 'Could not delete this task. Please try again.',
+      );
     }
   };
 
@@ -73,9 +109,11 @@ export function DeleteTaskModal({ taskId, onClose }: Props) {
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <Dialog.Content className="sm:max-w-[425px]">
         <Dialog.Header>
-          <Dialog.Title>Delete task</Dialog.Title>
+          <Dialog.Title>{many ? `Delete ${taskIds.length} tasks` : 'Delete task'}</Dialog.Title>
           <Dialog.Description>
-            Are you sure you want to delete this task? This action cannot be undone.
+            {many
+              ? `Are you sure you want to delete ${taskIds.length} tasks? This action cannot be undone.`
+              : 'Are you sure you want to delete this task? This action cannot be undone.'}
           </Dialog.Description>
         </Dialog.Header>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}

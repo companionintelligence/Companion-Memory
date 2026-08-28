@@ -70,13 +70,16 @@ import { StagedEntityEntity } from './entities/StagedEntityEntity';
 import { StagedItemEntity } from './entities/StagedItemEntity';
 import { StagedRelationshipEntity } from './entities/StagedRelationshipEntity';
 import { StagedSourceEntity } from './entities/StagedSourceEntity';
+import { ImportRetentionCron } from './listeners/ImportRetentionCron';
 import { ImportStageListener } from './listeners/ImportStageListener';
 import { InboxProvisionListener } from './listeners/InboxProvisionListener';
 import { StagedUploadPurgeCron } from './listeners/StagedUploadPurgeCron';
 import { DataSourceCatalogService } from './services/DataSourceCatalogService';
 import { ImportInboxService } from './services/ImportInboxService';
+import { ImportRetentionService } from './services/ImportRetentionService';
 import { ImportRunService } from './services/ImportRunService';
 import { ImportScratchService } from './services/ImportScratchService';
+import { ObjectCountService } from './services/ObjectCountService';
 import { StagedSourceService } from './services/StagedSourceService';
 import { MediaStage } from './stages/MediaStage';
 import { ParseStage } from './stages/ParseStage';
@@ -113,8 +116,10 @@ import { UnpackStage } from './stages/UnpackStage';
     DataSourceCatalogService,
     ImportDoctorService,
     ImportInboxService,
+    ImportRetentionService,
     ImportRunService,
     ImportScratchService,
+    ObjectCountService,
     StagedSourceService,
     UnpackStage,
     ParseStage,
@@ -123,21 +128,31 @@ import { UnpackStage } from './stages/UnpackStage';
     ImportStageListener,
     InboxProvisionListener,
     StagedUploadPurgeCron,
+    ImportRetentionCron,
   ],
   controllers: [ImportUploadsController, ImportRunsController, ImportInboxController, ImportDoctorController],
   exports: [
     DataSourceCatalogService,
     ImportDoctorService,
     ImportInboxService,
+    ImportRetentionService,
     ImportRunService,
     ImportScratchService,
     StagedSourceService,
+    // Exported so a small, non-archive API sync (BlueBubblesSyncService) can
+    // drive the same push machinery in-process, without the full pg-boss
+    // claim/heartbeat stage graph archive imports use. See
+    // domains/bluebubbles/services/BlueBubblesSyncService.ts.
+    PushStage,
   ],
 })
 export class ImportModule {}
 
 export { StagedSourceService, UPLOAD_TTL_MS } from './services/StagedSourceService';
 export { StagedUploadPurgeCron, STAGED_UPLOAD_PURGE_CRON } from './listeners/StagedUploadPurgeCron';
+export { ImportRetentionCron, IMPORT_RETENTION_CRON } from './listeners/ImportRetentionCron';
+export { ImportRetentionService } from './services/ImportRetentionService';
+export type { DiscardedRun, RetentionSweepResult } from './services/ImportRetentionService';
 export type { RegisterUploadInput } from './services/StagedSourceService';
 
 export { ImportInboxService, MAX_INBOX_BATCH_UNITS } from './services/ImportInboxService';
@@ -166,6 +181,7 @@ export {
   configuredImportRoots,
   resolveWithinImportRoots,
   uploadsRoot,
+  userInboxDisplayDir,
   PathOutsideImportRootsError,
 } from './sources/importRoots';
 // Re-exported for the import tools, which live in the tools domain (that is
@@ -175,6 +191,26 @@ export { dataSourcesRecognize } from './datasources/registry';
 export type { DirEntry, DataSourceRecognition } from './datasources/registry';
 export { recognizePathWithinRoots } from './datasources/recognizePath';
 export type { PathRecognition, PathRecognitionMatch } from './datasources/recognizePath';
+// Re-exported for the bluebubbles domain, whose DI-friendly sync service/webhook
+// controller drive this framework-free importer's mapping logic and must reach it
+// through this barrel rather than into its internals.
+export {
+  BlueBubblesAPIImporter,
+  downloadAttachments,
+  mapBlueBubblesMessageToGraph,
+} from './datasources/bluebubbles';
+export {
+  BlueBubblesApiClient,
+  BLUEBUBBLES_PAGE_LIMIT,
+  redactUrl,
+} from './datasources/bluebubblesApiClient';
+export type {
+  BlueBubblesClientConfig,
+  BlueBubblesHandle,
+  BlueBubblesChat,
+  BlueBubblesAttachment,
+  BlueBubblesMessage,
+} from './datasources/bluebubblesApiClient';
 
 export { ParseStage } from './stages/ParseStage';
 export { PushStage } from './stages/PushStage';
@@ -185,14 +221,19 @@ export type { ImportStagePayload, ImportStageRunner, StageOutcome, StageRunConte
 export { StagedWriter, DEFAULT_FLUSH_THRESHOLD } from './staging/StagedWriter';
 export type { StagedCounts } from './staging/StagedWriter';
 export {
+  CONTACT_STAGED_TYPE,
+  SHORT_CODE_STAGED_TYPE,
   entityIdentityKey,
   entityKey,
   hasContactIdentity,
   hashItem,
+  isShortCode,
   mergeAccumulatedMetadata,
   normalizeHandle,
   resolveEntityType,
+  stagedNaturalKey,
 } from './staging/identity';
+export { entityTypeFor, naturalKeyFor } from './push/entities';
 
 export { ImportDoctorController } from './controllers/ImportDoctorController';
 export type { DoctorCheckSummary } from './controllers/ImportDoctorController';
@@ -213,6 +254,8 @@ export type {
 } from './controllers/ImportRunsController';
 export { DataSourceCatalogService } from './services/DataSourceCatalogService';
 export type { DataSourceSummary, SourceCatalogEntry } from './services/DataSourceCatalogService';
+export { ObjectCountService, assembleObjectCounts } from './services/ObjectCountService';
+export type { ObjectCountEntry, RawObjectCountData } from './services/ObjectCountService';
 export { ImportUploadsController } from './controllers/ImportUploadsController';
 export type { DropSummary } from './controllers/ImportUploadsController';
 

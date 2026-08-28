@@ -14,6 +14,7 @@
  * the actual gate rather than a mock of it, and every one of them would have passed the destructive
  * call straight through against the pre-fix code.
  */
+import { ModelTierRouter } from '@ci/domains/model-routing';
 import { ToolRegistry } from '@ci/domains/tools';
 
 import { OllamaService, type ChatRequestContext } from '../OllamaService';
@@ -95,16 +96,38 @@ function driverCalling(toolName: string) {
   };
 }
 
+/**
+ * A minimal, always-execute {@link PendingActionService} double, inlined rather than imported
+ * from `@ci/domains/tools/registry/__tests__/gateDouble` — that file is `tools`-domain internal,
+ * and reaching into another domain's `__tests__` dir crosses the same "public barrel only"
+ * boundary `no-cross-domain-internals` enforces on production code. This file's own concern is
+ * tool-calling dispatch, not the pending-action gate, so the double only needs to always say yes.
+ */
+function alwaysExecuteGate() {
+  return {
+    evaluate: jest.fn().mockResolvedValue({ decision: 'execute', reason: 'allowed', explanation: 'open' }),
+    propose: jest.fn(),
+  } as any;
+}
+
 async function setup(toolName: string, privacy: Record<string, unknown>) {
   const tool = fakeTool(toolName.replace(/_/g, '.'), privacy);
-  const registry = new ToolRegistry(makeLogger(), { send: jest.fn().mockResolvedValue([]) } as any);
+  const registry = new ToolRegistry(
+    makeLogger(),
+    { send: jest.fn().mockResolvedValue([]) } as any,
+    alwaysExecuteGate(),
+  );
   await registry.registerProvider(fakeProvider([tool]));
 
   const driver = driverCalling(toolName);
   const llmEndpointService = { getOpenAiDriver: () => driver } as any;
-  const service = new OllamaService(llmEndpointService, registry, makeLogger(), {
-    isFeatureEnabled: jest.fn(async () => false),
-  } as any);
+  const service = new OllamaService(
+    llmEndpointService,
+    registry,
+    makeLogger(),
+    { isFeatureEnabled: jest.fn(async () => false) } as any,
+    new ModelTierRouter(),
+  );
 
   return { service, tool, driver };
 }
@@ -241,6 +264,7 @@ describe('OllamaService tool dispatch is gated by the caller’s capability', ()
       {
         isFeatureEnabled: jest.fn(async () => false),
       } as any,
+      new ModelTierRouter(),
     );
 
     await service.chat(context('read'), [{ role: 'user', content: 'forget everything' }], {

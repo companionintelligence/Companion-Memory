@@ -1,5 +1,5 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
@@ -22,6 +22,7 @@ import type { JobListItem, JobListResponse } from './useJobsList';
 const dashboardState = {
   data: null as JobsDashboardResponse | null,
   loading: false,
+  refreshing: false,
   error: null as string | null,
   staleSince: null as Date | null,
   updatedAt: null as Date | null,
@@ -214,6 +215,7 @@ function render(
   Object.assign(dashboardState, {
     data: options.dashboard ?? dashboard(),
     loading: false,
+    refreshing: false,
     error: options.error ?? null,
     staleSince: options.staleSince ?? null,
     updatedAt: new Date('2026-08-17T00:05:00.000Z'),
@@ -274,15 +276,15 @@ describe('JobsPage table', () => {
   it('renders the taxonomy label and the raw event name for each job', () => {
     render({
       list: list({
-        items: [job({ label: 'Embed for semantic search', event: 'search.embed.entity' })],
+        items: [job({ label: 'Generate chat reply', event: 'chat.generate' })],
         total: 1,
       }),
     });
 
-    // "Embed for semantic search" is the point: `search.embed.entity` on
-    // `search-index` says nothing about what the appliance is doing.
-    expect(screen.getByText('Embed for semantic search')).toBeInTheDocument();
-    expect(screen.getByText('search.embed.entity')).toBeInTheDocument();
+    // "Generate chat reply" is the point: the raw `chat.generate`, and the queue
+    // it happens to run on, say nothing about what the appliance is doing.
+    expect(screen.getByText('Generate chat reply')).toBeInTheDocument();
+    expect(screen.getByText('chat.generate')).toBeInTheDocument();
   });
 
   it('shows a failure message inline and its stack when the row is expanded', () => {
@@ -384,6 +386,8 @@ describe('JobsPage schedules', () => {
             running: true,
             nextRunAt: '2026-08-17T01:00:00.000Z',
             lastRunAt: null,
+            lastSuccessAt: null,
+            overdue: false,
           },
         ],
       }),
@@ -418,6 +422,8 @@ describe('JobsPage schedules', () => {
             running: true,
             nextRunAt: null,
             lastRunAt: null,
+            lastSuccessAt: null,
+            overdue: false,
           },
         ],
       }),
@@ -427,6 +433,151 @@ describe('JobsPage schedules', () => {
     // Scoped to the schedule entry: the label also appears as an <option> in the
     // job-type filter, which is the point — both read from one taxonomy.
     expect(screen.getByTitle('file.uploaded')).toHaveTextContent('File uploaded');
+  });
+
+  /** The schedule row a registration key identifies, label and category included. */
+  function scheduleRow(name: string): HTMLElement {
+    const row = screen.getByTitle(name).closest('tr');
+
+    if (!row) {
+      throw new Error(`No schedule row for "${name}"`);
+    }
+
+    return row;
+  }
+
+  function cron(
+    name: string,
+    overrides: Partial<JobsDashboardResponse['crons'][number]> = {},
+  ): JobsDashboardResponse['crons'][number] {
+    return {
+      name,
+      cron: '0 0 * * * *',
+      timezone: null,
+      running: true,
+      nextRunAt: null,
+      lastRunAt: null,
+      lastSuccessAt: null,
+      overdue: false,
+      ...overrides,
+    };
+  }
+
+  it('files the planning schedules under Planning, not Maintenance', () => {
+    render({
+      dashboard: dashboard({
+        crons: [cron('PlanningJobsCron.todoScan'), cron('PlanningJobsCron.verifyDone')],
+      }),
+    });
+
+    // Plan automation used to render as "Maintenance" — the category an operator
+    // scrolls past — because no rule matched and the default swallowed it.
+    expect(scheduleRow('PlanningJobsCron.todoScan')).toHaveTextContent('Planning');
+    expect(scheduleRow('PlanningJobsCron.verifyDone')).toHaveTextContent('Planning');
+  });
+
+  it('reads two schedules on one collector as that collector doing two things', () => {
+    render({
+      dashboard: dashboard({
+        crons: [cron('JobMetricsCollector.sampleOnSchedule'), cron('JobMetricsCollector.purgeOnSchedule')],
+      }),
+    });
+
+    // "Job metrics" beside "Purge on schedule" looked like two unrelated jobs,
+    // and the purge never said what it purges.
+    expect(scheduleRow('JobMetricsCollector.sampleOnSchedule')).toHaveTextContent('Job metrics sample');
+    expect(scheduleRow('JobMetricsCollector.purgeOnSchedule')).toHaveTextContent('Job metrics purge');
+  });
+
+  it('marks a scheduler-minted name as the backend bug it is', () => {
+    const uuid = '007c9ac0-fb23-4203-809b-c2d100b373e4';
+
+    render({ dashboard: dashboard({ crons: [cron(uuid)] }) });
+
+    // A UUID here means the @Cron has no `name`, so the key changes on every
+    // boot and nothing durable can find the job. The page used to render the
+    // UUID as a name under an invented category and say nothing.
+    const row = scheduleRow(uuid);
+
+    expect(within(row).getByText('needs a name')).toBeInTheDocument();
+    expect(row).toHaveTextContent('Unclassified');
+    expect(row).toHaveTextContent(uuid);
+  });
+
+  it('leaves a named schedule unmarked', () => {
+    render({ dashboard: dashboard({ crons: [cron('PipelineTickCron.runOnSchedule')] }) });
+
+    expect(screen.queryByText('needs a name')).not.toBeInTheDocument();
+  });
+
+  it('calls a schedule overdue instead of reporting it as scheduled', () => {
+    render({
+      dashboard: dashboard({
+        crons: [
+          cron('DerivationCron.deriveNightly', {
+            lastRunAt: '2026-08-14T00:00:00.000Z',
+            lastSuccessAt: '2026-08-14T00:00:00.000Z',
+            overdue: true,
+          }),
+          cron('PipelineTickCron.runOnSchedule'),
+        ],
+      }),
+    });
+
+    // `running` is what this column used to read, and it stays true for a
+    // schedule that has missed every fire for days — the @Cron wrapper catches
+    // and returns — so "scheduled" was the one thing it could never stop saying.
+    const late = scheduleRow('DerivationCron.deriveNightly');
+
+    expect(within(late).getByText('overdue')).toBeInTheDocument();
+    expect(within(late).queryByText('scheduled')).not.toBeInTheDocument();
+
+    const healthy = scheduleRow('PipelineTickCron.runOnSchedule');
+
+    expect(within(healthy).getByText('scheduled')).toBeInTheDocument();
+    expect(within(healthy).queryByText('overdue')).not.toBeInTheDocument();
+  });
+
+  it('shows when a schedule last succeeded, not only when it last fired', () => {
+    const attemptedAt = new Date('2026-08-17T00:04:00.000Z');
+    const succeededAt = new Date('2026-08-16T02:00:00.000Z');
+
+    render({
+      dashboard: dashboard({
+        crons: [
+          cron('OrphanCleanupCron.sweepOnSchedule', {
+            lastRunAt: attemptedAt.toISOString(),
+            lastSuccessAt: succeededAt.toISOString(),
+          }),
+        ],
+      }),
+    });
+
+    // The attempt stamp lands BEFORE the body, so "last run four minutes ago" is
+    // equally true of a job that has completed nothing since yesterday. Only the
+    // second cell separates the two.
+    const row = scheduleRow('OrphanCleanupCron.sweepOnSchedule');
+
+    expect(within(row).getByText(attemptedAt.toLocaleTimeString())).toBeInTheDocument();
+    expect(within(row).getByText(succeededAt.toLocaleTimeString())).toBeInTheDocument();
+  });
+
+  it('separates a schedule that has never completed a tick from one that never ran', () => {
+    render({
+      dashboard: dashboard({
+        crons: [
+          cron('FeedQueueCron.topUpFeedQueue', { lastRunAt: '2026-08-17T00:04:00.000Z' }),
+          cron('AskExpiryCron.expireOverdueAsks'),
+        ],
+      }),
+    });
+
+    // Firing on time and failing every time is the state both "scheduled" and
+    // "last run" report as healthy, so it gets a word rather than a dash.
+    expect(within(scheduleRow('FeedQueueCron.topUpFeedQueue')).getByText('never')).toBeInTheDocument();
+    expect(
+      within(scheduleRow('AskExpiryCron.expireOverdueAsks')).queryByText('never'),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -485,6 +636,134 @@ describe('JobsPage dead letters', () => {
     fireEvent.click(screen.getByRole('button', { name: /Refresh/ }));
 
     expect(deadLetterState.refresh).toHaveBeenCalled();
+  });
+});
+
+/**
+ * Refreshing, by gesture and by button.
+ *
+ * The page had no swipe-down at all while People, Places and the Memory list
+ * all had one, and its Refresh button gave back nothing to look at — on a
+ * dashboard whose slowest card is the whole reason someone reached for it.
+ */
+describe('JobsPage refresh', () => {
+  beforeEach(() => {
+    for (const state of [dashboardState, listState, historyState, deadLetterState]) {
+      state.refresh.mockReset();
+    }
+  });
+
+  afterEach(() => {
+    setViewport(false);
+    Object.assign(dashboardState, { refreshing: false });
+  });
+
+  it('refreshes every card on a swipe down', async () => {
+    setViewport(true);
+    render();
+
+    await screen.findByTestId('pull-to-refresh');
+
+    const scroller = document.querySelector('[data-page-scroll]');
+
+    if (!(scroller instanceof HTMLElement)) {
+      throw new Error('Jobs has no page scroller for the gesture to hang off');
+    }
+
+    fireEvent.touchStart(scroller, { touches: [{ identifier: 0, clientY: 10 }] });
+    fireEvent.touchMove(scroller, { touches: [{ identifier: 0, clientY: 160 }] });
+    fireEvent.touchEnd(scroller);
+
+    await waitFor(() => expect(dashboardState.refresh).toHaveBeenCalled());
+    expect(listState.refresh).toHaveBeenCalled();
+    expect(historyState.refresh).toHaveBeenCalled();
+    expect(deadLetterState.refresh).toHaveBeenCalled();
+  });
+
+  it('holds the gesture spinner until every card has answered', async () => {
+    setViewport(true);
+
+    let settle = () => {};
+
+    dashboardState.refresh.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settle = resolve;
+        }),
+    );
+
+    render();
+
+    await screen.findByTestId('pull-to-refresh');
+
+    const scroller = document.querySelector('[data-page-scroll]') as HTMLElement;
+
+    fireEvent.touchStart(scroller, { touches: [{ identifier: 0, clientY: 10 }] });
+    fireEvent.touchMove(scroller, { touches: [{ identifier: 0, clientY: 160 }] });
+    fireEvent.touchEnd(scroller);
+
+    // A `refreshAll` that returned void — which is what it did — flashed this
+    // away on the next frame, which on a phone is indistinguishable from a
+    // gesture that was never wired up.
+    await waitFor(() => expect(screen.getByTestId('pull-to-refresh')).toHaveAttribute('aria-busy', 'true'));
+
+    await act(async () => {
+      settle();
+    });
+
+    await waitFor(() => expect(screen.getByTestId('pull-to-refresh')).not.toHaveAttribute('aria-busy'));
+  });
+
+  it('spins the button while a refresh runs and leaves the figures up', async () => {
+    let settle = () => {};
+
+    dashboardState.refresh.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          settle = resolve;
+        }),
+    );
+
+    render();
+
+    fireEvent.click(screen.getByRole('button', { name: /Refresh/ }));
+
+    const button = screen.getByRole('button', { name: /Refresh/ });
+
+    expect(button).toHaveAttribute('aria-busy', 'true');
+    // The whole point of #2320: the previous snapshot never leaves the screen.
+    expect(screen.getAllByText('12,716').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    await act(async () => {
+      settle();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Refresh/ })).not.toHaveAttribute('aria-busy'),
+    );
+  });
+
+  it('reports the mount refetch behind a restored snapshot as a spinner, not a skeleton', () => {
+    // What a revisit looks like: cached figures already on screen, and a fetch
+    // in flight underneath them. `loading` — which draws the skeleton — is
+    // false precisely because there is something to show.
+    Object.assign(dashboardState, {
+      data: dashboard(),
+      loading: false,
+      refreshing: true,
+      error: null,
+      staleSince: null,
+      updatedAt: new Date('2026-08-17T00:05:00.000Z'),
+    });
+    Object.assign(listState, { data: list(), loading: false, error: null });
+    Object.assign(historyState, { data: null, loading: false, error: null });
+    Object.assign(deadLetterState, { groups: [], total: 0, loading: false, error: null });
+
+    renderWithProviders(<JobsPage />);
+
+    expect(screen.getByRole('button', { name: /Refresh/ })).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getAllByText('12,716').length).toBeGreaterThan(0);
   });
 });
 
@@ -549,7 +828,7 @@ describe('JobsPage phone layout', () => {
     setViewport(true);
     render({
       list: list({
-        items: [job({ label: 'Embed for semantic search', event: 'search.embed.entity' })],
+        items: [job({ label: 'Generate chat reply', event: 'chat.generate' })],
         total: 1,
       }),
     });
@@ -558,8 +837,8 @@ describe('JobsPage phone layout', () => {
       expect(screen.queryByRole('columnheader', { name: 'Duration' })).not.toBeInTheDocument();
     });
 
-    expect(screen.getByText('Embed for semantic search')).toBeInTheDocument();
-    expect(screen.getByText(/search\.embed\.entity/)).toBeInTheDocument();
+    expect(screen.getByText('Generate chat reply')).toBeInTheDocument();
+    expect(screen.getByText(/chat\.generate/)).toBeInTheDocument();
   });
 
   it('asks the server for a shorter page so a phone is a scan, not a novel', async () => {
@@ -613,5 +892,67 @@ describe('JobsPage phone layout', () => {
     await waitFor(() => {
       expect(screen.getByText('import activity').className).toContain('max-h-[36vh]');
     });
+  });
+
+  it('carries the unnamed-cron warning into the phone list', async () => {
+    setViewport(true);
+    render({
+      dashboard: dashboard({
+        crons: [
+          {
+            name: '007c9ac0-fb23-4203-809b-c2d100b373e4',
+            cron: '0 0 * * * *',
+            timezone: null,
+            running: true,
+            nextRunAt: null,
+            lastRunAt: null,
+            lastSuccessAt: null,
+            overdue: false,
+          },
+        ],
+      }),
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('columnheader', { name: 'Duration' })).not.toBeInTheDocument();
+    });
+
+    // The phone list is a separate renderer from the table, so it gets the same
+    // assertion rather than being assumed to have kept up.
+    fireEvent.click(screen.getByRole('button', { name: /Schedules/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Unclassified/ }));
+
+    expect(screen.getByText('needs a name')).toBeInTheDocument();
+  });
+
+  it('carries overdue and last-succeeded into the phone list', async () => {
+    setViewport(true);
+    render({
+      dashboard: dashboard({
+        crons: [
+          {
+            name: 'FeedQueueCron.topUpFeedQueue',
+            cron: '0 0 * * * *',
+            timezone: null,
+            running: true,
+            nextRunAt: null,
+            lastRunAt: '2026-08-14T00:00:00.000Z',
+            lastSuccessAt: null,
+            overdue: true,
+          },
+        ],
+      }),
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('columnheader', { name: 'Duration' })).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Schedules/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Maintenance/ }));
+
+    expect(screen.getByText('overdue')).toBeInTheDocument();
+    expect(screen.queryByText('scheduled')).not.toBeInTheDocument();
+    expect(screen.getByText(/succeeded never/)).toBeInTheDocument();
   });
 });

@@ -2,8 +2,16 @@ import { useState, useEffect } from 'react';
 
 import { createHookContext } from '../utils/createHookContext';
 
-// Define the breakpoint for mobile devices
-const MOBILE_BREAKPOINT = 896; // Slightly above Tailwind md (768) — mobile layout through tablet widths
+/**
+ * The width at which the app switches between phone and desktop chrome.
+ * Slightly above Tailwind md (768) — mobile layout through tablet widths.
+ *
+ * The CSS half of this switch is the `device:` variant
+ * (`--breakpoint-device` in frontend/apps/web/src/styles/index.css). Gate
+ * chrome in markup with `device:`, never with `lg:`/`md:`, or the two halves
+ * disagree at tablet widths.
+ */
+export const MOBILE_BREAKPOINT = 896;
 
 /**
  * A comprehensive React hook to determine device state, including

@@ -49,6 +49,7 @@ export const Default: Story = {
       id: 'mock-id-1',
       title: args.title,
       text: args.text,
+      createdAt: '2026-01-01T00:00:00.000Z',
     };
 
     const maskedContent = makeFragmentData(content, CONTENT_FRAGMENT);

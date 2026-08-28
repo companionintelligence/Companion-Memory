@@ -6,7 +6,6 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { CronExpression } from '@nestjs/schedule';
 
 import { toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
@@ -21,6 +20,11 @@ export const INITIAL_ACTIONS_DELAY_MS = 24 * 60 * 60 * 1000;
 
 const USERS_PER_TICK = 25;
 
+// The hourly cadence of `CronExpression.EVERY_HOUR`, moved off HH:00:00 — the
+// second every schedule that never picked one already fires at. See
+// common/schedule/__tests__/cronSecondOffsets.test.ts for who holds what.
+export const INITIAL_ACTIONS_CRON = '35 0 * * * *';
+
 @Injectable()
 export class InitialActionsCron {
   constructor(
@@ -32,7 +36,7 @@ export class InitialActionsCron {
     this.logger.setContext(InitialActionsCron.name);
   }
 
-  @Cron(CronExpression.EVERY_HOUR, { name: 'InitialActionsCron.initializeEligibleUsers' })
+  @Cron(INITIAL_ACTIONS_CRON, { name: 'InitialActionsCron.initializeEligibleUsers' })
   async initializeEligibleUsers(): Promise<void> {
     if (!(await this.featureService.isFeatureEnabled('actions'))) {
       return;

@@ -131,6 +131,44 @@ describe('ImportInboxService.scan', () => {
     });
   });
 
+  it('names the folder as the host sees it when the operator says where the mount is', async () => {
+    // The API runs in a container; the person dropping files does not. The
+    // scan keeps `inboxDir` (what the resolvers use) and adds the host-side
+    // spelling for the UI/CLI to show — the same per-user folder, re-rooted.
+    const inbox = await freshInbox();
+    const { service } = build();
+    const previous = config.import.inboxHostDir;
+
+    (config.import as { inboxHostDir: string }).inboxHostDir = '/srv/companion/import-work/inbox';
+
+    try {
+      await withInbox(inbox, async () => {
+        const scan = await service.scan(ctx);
+
+        expect(scan.inboxDir).toBe(inbox);
+        expect(scan.displayDir).toBe(`/srv/companion/import-work/inbox/${USER_FOLDER}`);
+      });
+
+      // Reported on the unavailable branch too: "not readable" is exactly when
+      // someone will go looking for the folder.
+      await withInbox(path.join(inbox, 'not-creatable-\0', USER_FOLDER), async () => {
+        const scan = await service.scan(ctx);
+
+        expect(scan.available).toBe(false);
+        expect(scan.displayDir).toBe(`/srv/companion/import-work/inbox/${USER_FOLDER}`);
+      });
+    } finally {
+      (config.import as { inboxHostDir: string }).inboxHostDir = previous;
+    }
+
+    // Without one, the display IS the server path — bare metal has no mount to translate.
+    await withInbox(inbox, async () => {
+      const scan = await service.scan(ctx);
+
+      expect(scan.displayDir).toBe(scan.inboxDir);
+    });
+  });
+
   it('creates a missing user subtree world-writable with the sticky bit, like /tmp', async () => {
     // The api container runs as root: without the chmod the folder lands on
     // the host root-owned 755 and the desktop user cannot move archives in —

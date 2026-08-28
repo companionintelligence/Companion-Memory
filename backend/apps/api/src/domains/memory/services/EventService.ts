@@ -18,6 +18,7 @@ import { EventService as SignallingEventService } from '@ci/domains/events';
 import { EventCreatedEvent, EventUpdatedEvent, EventRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
+import { BaseEntity } from '../entities/BaseEntity';
 import { EventBaseEntity } from '../entities/EventBaseEntity';
 import { EventEntity, Event } from '../entities/EventEntity';
 import { CreateEventDto, UpdateEventDto, SearchEventDto } from '../types';
@@ -84,6 +85,14 @@ export interface MapPin {
   locationName: string | null;
   latitude: number;
   longitude: number;
+  /**
+   * `EventEntity.timeSource` — `'ingest'` means `startTime` is only the import
+   * wall clock (a Google Maps saved place, an undated Reddit affiliation, …),
+   * not evidence of anything. The client needs this to caption a pin "Date
+   * unknown" instead of the fabricated moment it was parsed, the same rule
+   * {@link getEntityTimestamp} already applies on the timeline/explorer side.
+   */
+  timeSource: string | null;
 }
 
 /**
@@ -217,6 +226,20 @@ export class EventService {
       toCreate.endTime = item.end_time;
     }
 
+    // Timestamp provenance. Renamed here for the reason spelled out below the
+    // is_predicted block: `repository.create()` matches on propertyName, so a
+    // snake_case key that is not translated is silently DROPPED — and a dropped
+    // `time_source: 'ingest'` is the worst possible failure for this pair,
+    // because the row still gets its fabricated instant and loses the only
+    // thing that said the instant was fabricated.
+    if (item.time_source) {
+      toCreate.timeSource = item.time_source;
+    }
+
+    if (item.time_precision) {
+      toCreate.timePrecision = item.time_precision;
+    }
+
     if (item.source_system) {
       toCreate.sourceSystem = item.source_system;
     }
@@ -251,6 +274,10 @@ export class EventService {
 
     if (item.source_id) {
       toCreate.sourceId = item.source_id;
+    }
+
+    if (item.connection_id) {
+      toCreate.connectionId = item.connection_id;
     }
 
     if (item.sharing_level) {
@@ -758,6 +785,10 @@ export class EventService {
       updateData.organizerEntityId = data.organizer_entity_id;
     }
 
+    if (data.connection_id !== undefined) {
+      updateData.connectionId = data.connection_id;
+    }
+
     if (data.source_type) {
       updateData.sourceType = data.source_type;
     }
@@ -968,7 +999,7 @@ export class EventService {
     // columns are hydrated in the SAME query — no second composition fetch.
     let qb = this.eventRepository
       .createQueryBuilder('event')
-      .innerJoin('ci.entities', 'base', 'base.entity_id = event.event_id')
+      .innerJoin(BaseEntity, 'base', 'base.entity_id = event.event_id')
       .addSelect('base.name', 'base_name')
       .addSelect('base.description', 'base_description')
       .where('event.is_deleted = false');
@@ -1200,13 +1231,14 @@ export class EventService {
     let query = this.dataSource
       .getRepository(EventEntity)
       .createQueryBuilder('event')
-      .innerJoin('ci.entities', 'base', 'base.entity_id = event.event_id')
+      .innerJoin(BaseEntity, 'base', 'base.entity_id = event.event_id')
       .select('event.event_id', 'event_id')
       .addSelect('base.name', 'title')
       .addSelect('event.start_time', 'start_time')
       .addSelect('event.end_time', 'end_time')
       .addSelect('event.event_type', 'event_type')
       .addSelect('event.location_name', 'location_name')
+      .addSelect('event.time_source', 'time_source')
       .addSelect('ST_Y(event.location_coordinates::geometry)', 'latitude')
       .addSelect('ST_X(event.location_coordinates::geometry)', 'longitude')
       .where('event.user_id = :userId', { userId: context.userId })
@@ -1223,6 +1255,7 @@ export class EventService {
       end_time: Date | null;
       event_type: string | null;
       location_name: string | null;
+      time_source: string | null;
       latitude: number | string | null;
       longitude: number | string | null;
     }>();
@@ -1236,6 +1269,7 @@ export class EventService {
           endTime: row.end_time,
           eventType: row.event_type,
           locationName: row.location_name,
+          timeSource: row.time_source,
           // `Number(null)` is 0, not NaN — a null coordinate would otherwise
           // become a pin in the Gulf of Guinea instead of being dropped below.
           latitude: row.latitude == null ? Number.NaN : Number(row.latitude),

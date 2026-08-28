@@ -113,6 +113,34 @@ describe('classifyParticipant', () => {
     expect(classifyParticipant('862265')).toEqual({ kind: 'name', valueNormalized: '862265' });
   });
 
+  it('classifies a namespaced platform account id as name, not phone', () => {
+    // The contract `datasources/twitter.ts` relies on. A DM partner the archive
+    // cannot name used to ride out as the BARE account id, and this function
+    // has no upper digit bound -- E.164 stops at 15, a Twitter snowflake is
+    // 18-19 -- so it typed as a phone and `normalizePhone` kept the last ten
+    // digits: a Person named after an account id, holding a phone number that
+    // belongs to nobody and matchable to a real contact at 0.85 confidence.
+    // 213 such identifiers existed on one full-corpus import.
+    //
+    // Both id shapes are pinned, because the 7-15 digit ones of early accounts
+    // are the dangerous half: a fabricated number in that range is
+    // indistinguishable from a real one.
+    expect(classifyParticipant('twitter:id:1657380978392702976')).toEqual({
+      kind: 'name',
+      valueNormalized: 'twitter:id:1657380978392702976',
+    });
+    expect(classifyParticipant('twitter:id:6245902')).toEqual({
+      kind: 'name',
+      valueNormalized: 'twitter:id:6245902',
+    });
+    // And the bare form this replaced, so the reason the namespace exists stays
+    // visible: it is the phone branch that swallowed it.
+    expect(classifyParticipant('1657380978392702976')).toEqual({
+      kind: 'phone',
+      valueNormalized: '8392702976',
+    });
+  });
+
   it('classifies a display-name-only string as name (Messenger participants)', () => {
     expect(classifyParticipant('Brian Paul')).toEqual({
       kind: 'name',

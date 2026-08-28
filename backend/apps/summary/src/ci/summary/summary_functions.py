@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 
-from .config import settings
+from .config import resolve_embedding_api_base, resolve_embedding_api_key, settings
 from .llm_config import LLMConfig, run_agent_sync
 
 
@@ -630,12 +630,12 @@ def generate_embedding(llm_config: LLMConfig, text: str) -> list[float]:
     try:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(
-                f"{settings.llm_api_base}/embeddings",
+                f"{resolve_embedding_api_base(settings.llm_api_base)}/embeddings",
                 json={
                     "model": settings.embedding_model,
                     "input": text[:8000],  # Limit input size
                 },
-                headers={"Authorization": f"Bearer {settings.llm_api_key}"},
+                headers={"Authorization": f"Bearer {resolve_embedding_api_key()}"},
             )
             response.raise_for_status()
             data = response.json()

@@ -7,6 +7,10 @@
 | **Author(s)** | Jobs / data-processing rebuild |
 | **Reviewers** | TBD                            |
 
+> The decision below is recorded as accepted and is **not** rewritten as the
+> implementation advances. See [Status since acceptance](#status-since-acceptance-2026-08-19)
+> at the end for what has changed on the ground.
+
 ## Context
 
 Every enrichment leg in CI-Server encoded "has this run?" as a nullability
@@ -59,7 +63,8 @@ integer alongside `status`, `reason`, `attempts` and `next_attempt_at`
 (`db/postgres/migrations/20260809032723_create_pipeline_control_plane.sql`).
 
 Candidate selection everywhere becomes one query — THE ONE RULE
-(`domains/pipeline/services/PipelineStateService.ts:178-220`):
+(`domains/pipeline/services/PipelineStateService.ts:174-220`, doc block through
+`selectStale`):
 
 ```sql
 SELECT s."<idCol>" AS id
@@ -87,8 +92,8 @@ Three rules follow from that shape and are the substance of the decision:
   trigger, and the only one needed.** No backfill script, no `DELETE FROM`, no
   truncate, no `retryNull`, no `forced`. Versions only ever go up, and start at
   1 — a version of 0 would make rows stranded in `status='running'` by a killed
-  worker permanently invisible, which is enforced at module load
-  (`versions.ts:84-92`).
+  worker permanently invisible (`versions.ts:81-86`), which
+  `resolveDeclaredVersion` enforces at module load (`versions.ts:313-325`).
 - **A version may be *derived* rather than hand-chosen where a config value
   already determines the answer.** `EmbedStage` computes its version from
   `(model, dimension)` via an append-only `EMBED_MODEL_GENERATIONS` map, so
@@ -251,7 +256,7 @@ the same transactional store as the data — which is what this ADR adopts.
   sidecar and HBPE's Qwen. Nothing admits or prioritises against it. The
   mitigations that exist today are partial: a dedicated `pipeline-embed` queue,
   a global ceiling of 10 in-flight jobs with 6 per queue
-  (`config/default.json:140-144`), and `MAX_SLICES_PER_SWEEP` = 5 self-pacing
+  (`config/default.json:147-150`), and `MAX_SLICES_PER_SWEEP` = 5 self-pacing
   backpressure. A real admission controller is Phase 5 and does not exist yet.
   Until then, **dry-run before you bump**: get the candidate count before you get
   the bill.
@@ -313,6 +318,62 @@ row of personal data existed. `send()` now routes through
 `EventListenerRegistry.getQueuesFor(eventName)`. This is not the ledger decision,
 but it is the reason the pipeline can declare three queues by resource class
 (`PIPELINE_QUEUES`) and expect them to mean something.
+
+## Status since acceptance (2026-08-19)
+
+The decision above stands unchanged; this records what has been built against it
+since 2026-08-09, so nothing in the body is read as a current-state description.
+
+- **Two converted legs became 37 registered stages** — 14 `index.*`, 6 `enrich.*`,
+  3 `clean.*`, 14 `promote.*` (count from `STAGE_IDS` in `constants.ts`). The
+  `get.*` namespace is still empty; that is Phase 6.
+- **The control plane grew two more tables** beyond the five in migration
+  `20260809032723`: `ci.pipeline_turns` (`20260809194756`, fair-rotation pointer
+  and nightly budget ledger) and `ci.pipeline_schedule` (`20260810050759`,
+  durable per-leg `last_started_at`). On the jobs side, `ci.job_metrics`
+  (`20260817030000`) and `ci.cron_runs` (`20260818130100`) are new.
+- **The ledger is seeded and swept.** `20260817210353_prefill_index_pipeline_ledger.sql`
+  is the seeding migration this ADR's "sharpest edge" bullet demands, for the
+  index stages. `PipelineTickCron` drives the loop on `20 */5 * * * *` (five
+  minutes — deliberately not the 30 s its own header first proposed, because a
+  perpetual tick makes enrichment a permanent tenant of the shared Ollama);
+  `PipelineControlService` is the run/shard runner, with pause / resume / cancel
+  and a lease reaper. It declares no cadence of its own: `PipelineTickCron` is the
+  single timer, bound to it through `{ provide: PIPELINE_TICK, useExisting:
+  PipelineControlService }`. The second `@Cron('10 */2 * * * *')` this note used to
+  describe was deleted once the listener landed, so the loop is no longer driven at
+  two different cadences.
+- **There is an HTTP control plane.** `PipelineController` is declared
+  `@Controller('api/pipeline')` and exposes `GET state`, `GET runs`,
+  `GET runs/:id`, `POST runs/:id/{pause,resume,cancel}`, `GET dead-letters`,
+  `POST dead-letters/replay`, `POST dead-letters/:id/replay` and
+  `POST quarantine/release`.
+- **A queue-depth admission gate exists.** `BackpressureService` caps *ready*
+  (`state < 'active'`) depth per resource class — `pipeline-index` 500,
+  `pipeline-enrich` 100 — so the "real admission controller… does not exist yet"
+  bullet under *What it costs* is now half-answered. It gates commitment depth;
+  it is still not an Ollama admission pool, and it cannot change pg-boss's
+  execution concurrency.
+- **Metered stages are no longer excluded from the automatic set.**
+  `defaultStageSet()` returns `automaticStageIds()` — every stage whose trigger
+  is not `manual`. Cost discipline is now `minInterval` (7 days), `window:
+  'enrichment'` and `perRunCap` (1,000 for `enrich.geocode`, 2,000 for
+  `enrich.position_reverse`), asserted at module load by `assertStageSchedules`.
+  A stage is therefore declared by **five** things, not four: id, version,
+  registry token, provider, and a `STAGE_SCHEDULES` entry.
+- **The seven legacy legs are superseded, not removed.** Phase 9 (demolition)
+  has not started: `SearchIndexBackfillService`, `GeocodeBatchListener`,
+  `LocationEstimateService`, `MediaDimensionsBackfillListener`,
+  `CommunicationLinkBackfillService`, `PersonStubBackfillService` and
+  `EventParticipantBackfillService` all still exist and are still wired.
+  `MediaDimensionsBackfillListener` is now only a shim that converts its request
+  event into a sweep of `enrich.media_dimensions`, and the consumer of
+  `maintenance.search-index-backfill-request` moved into this domain as
+  `listeners/SearchIndexSweepRequestListener.ts` — the event id and the
+  `search-index-backfill` queue are unchanged.
+- **Still open, as written:** `ci.record_rejections` has a table and an entity
+  but **no writer**; `ci.derived_facts` does not exist; and the reaper owed for
+  `ci.pipeline_dead_letters` and NULL-`user_id` rows has not been written.
 
 ## References
 

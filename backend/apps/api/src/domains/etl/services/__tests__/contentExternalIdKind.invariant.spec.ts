@@ -24,6 +24,9 @@ import * as ts from 'typescript';
  */
 const ETL_ROOT = join(__dirname, '..');
 
+/** A file that persists a content row, directly or through the Spotify helper. */
+const CONTENT_WRITER = /contentService\.(create|createMany|update)\(|upsertContentForEvent\(/;
+
 function collectSourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
@@ -80,8 +83,10 @@ function findUnstampedContentLiterals(): Offender[] {
     // Only files that actually persist a content row are in scope. A Person's
     // `properties` bag also carries an `external_id` key (see
     // Steam/transform/TransformFriends.ts) and has nothing to do with this
-    // column.
-    if (!/contentService\.(create|createMany|update)\(/.test(text)) {
+    // column. The Spotify transforms write through `upsertContentForEvent`
+    // (Spotify/transform/linkContentToEvent.ts) rather than calling
+    // `contentService.create` themselves, so that counts as writing too.
+    if (!CONTENT_WRITER.test(text)) {
       continue;
     }
 
@@ -117,14 +122,19 @@ describe('ETL content writers stamp external_id_kind', () => {
     // Sanity check on the scanner itself: the files it is meant to cover must
     // be reachable from ETL_ROOT and must contain the stamp.
     const covered = collectSourceFiles(ETL_ROOT).filter((file) =>
-      /contentService\.(create|createMany|update)\(/.test(readFileSync(file, 'utf8')),
+      CONTENT_WRITER.test(readFileSync(file, 'utf8')),
     );
 
     expect(covered.length).toBeGreaterThanOrEqual(15);
 
-    const stamping = covered.filter((file) =>
+    // The Spotify helper forwards a DTO its caller built and never names
+    // `external_id` itself, so it has nothing to stamp.
+    const writesExternalId = covered.filter((file) => readFileSync(file, 'utf8').includes('external_id'));
+    expect(writesExternalId.length).toBeGreaterThanOrEqual(15);
+
+    const stamping = writesExternalId.filter((file) =>
       readFileSync(file, 'utf8').includes('SOURCE_NATIVE_EXTERNAL_ID_KIND'),
     );
-    expect(stamping.length).toBe(covered.length);
+    expect(stamping.length).toBe(writesExternalId.length);
   });
 });

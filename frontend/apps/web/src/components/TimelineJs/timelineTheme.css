@@ -1,0 +1,636 @@
+/**
+ * TimelineJS theme — light & dark with ≥4:1 contrast on text and chrome.
+ *
+ * Knight Lab ships inverted nav (white type) and timegroup labels at #e0e0e0 on
+ * #f2f2f2. We override those hard. Scoped under `.ci-timeline-js`.
+ */
+
+.ci-timeline-js {
+  /* Surfaces */
+  --tl-bg: var(--card);
+  --tl-panel: var(--background);
+  --tl-elevated: color-mix(in oklab, var(--foreground) 8%, var(--card));
+  --tl-border: color-mix(in oklab, var(--foreground) 22%, var(--card));
+
+  /* Type — muted stays ≥ ~4:1 on card (not the faint muted-foreground token). */
+  --tl-fg: var(--foreground);
+  --tl-muted: color-mix(in oklab, var(--foreground) 72%, var(--card));
+  --tl-accent: var(--primary);
+
+  /* Markers: solid chips with opposite ink */
+  --tl-marker-bg: color-mix(in oklab, var(--foreground) 86%, var(--card));
+  --tl-marker-fg: var(--background);
+  --tl-marker-active-bg: var(--foreground);
+  --tl-marker-active-fg: var(--background);
+
+  /*
+   * Axis / marker stems — solid ink (not color-mix). TimelineJS paints these as
+   * 1px border-left in #d9d9d9 / #33333380, which disappears on our surfaces.
+   */
+  --tl-line: #5a6e74;
+  --tl-line-strong: #1a2a2e;
+  --tl-line-dot: #1a2a2e;
+  --tl-axis-fg: #1a2a2e;
+
+  --tl-menubar: color-mix(in oklab, var(--foreground) 10%, var(--card));
+  --tl-nav-bg: color-mix(in oklab, var(--card) 92%, var(--foreground));
+
+  /*
+   * Do not use content-visibility / contain-intrinsic-size here. This host is
+   * the Memory Timeline tab (full pane, often a phone). Those properties let
+   * Safari treat the box as off-screen and skip paint — a blank card after
+   * "Loading timeline…".
+   */
+}
+
+.dark .ci-timeline-js {
+  --tl-elevated: color-mix(in oklab, var(--foreground) 14%, var(--card));
+  --tl-border: color-mix(in oklab, var(--foreground) 45%, var(--card));
+  --tl-muted: color-mix(in oklab, var(--foreground) 82%, var(--card));
+  --tl-marker-bg: color-mix(in oklab, var(--foreground) 22%, var(--card));
+  --tl-marker-fg: var(--foreground);
+  --tl-marker-active-bg: color-mix(in oklab, var(--primary) 45%, var(--card));
+  --tl-marker-active-fg: var(--foreground);
+  --tl-line: #9aadb3;
+  --tl-line-strong: #e8f2ef;
+  --tl-line-dot: #f3faf7;
+  --tl-axis-fg: #e8f2ef;
+  --tl-menubar: color-mix(in oklab, var(--foreground) 16%, var(--card));
+  --tl-nav-bg: color-mix(in oklab, var(--card) 88%, var(--foreground));
+}
+
+/* ── Shell ─────────────────────────────────────────────────────────────────── */
+
+.ci-timeline-js .tl-timeline,
+.ci-timeline-js .tl-storyslider,
+.ci-timeline-js .tl-storyslider-container,
+.ci-timeline-js .tl-slider-container,
+.ci-timeline-js .tl-slider-item-container,
+.ci-timeline-js .tl-slide,
+.ci-timeline-js .tl-slide-content-container,
+.ci-timeline-js .tl-slide-scrollable-container,
+.ci-timeline-js .tl-slide-content,
+.ci-timeline-js .tl-text,
+.ci-timeline-js .tl-media {
+  background-color: var(--tl-bg) !important;
+  color: var(--tl-fg) !important;
+  font-family: inherit !important;
+  text-shadow: none !important;
+}
+
+.ci-timeline-js .tl-headline,
+.ci-timeline-js .tl-headline-title,
+.ci-timeline-js .tl-text h2.tl-headline,
+.ci-timeline-js .tl-text-content-container,
+.ci-timeline-js .tl-text-headline-container {
+  color: var(--tl-fg) !important;
+  text-shadow: none !important;
+}
+
+.ci-timeline-js .tl-text p,
+.ci-timeline-js .tl-caption,
+.ci-timeline-js .tl-credit,
+.ci-timeline-js .tl-text .tl-headline + p {
+  color: var(--tl-muted) !important;
+  text-shadow: none !important;
+}
+
+.ci-timeline-js a {
+  color: var(--tl-accent) !important;
+}
+
+/* ── Slide prev/next peek cards ───────────────────────────────────────────── */
+
+.ci-timeline-js .tl-slidenav-next,
+.ci-timeline-js .tl-slidenav-previous {
+  top: 42% !important;
+  transform: translateY(-50%);
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  color: var(--tl-fg) !important;
+}
+
+.ci-timeline-js .tl-slidenav-previous {
+  left: 10px !important;
+  right: auto !important;
+  text-align: left !important;
+}
+
+.ci-timeline-js .tl-slidenav-next {
+  right: 10px !important;
+  left: auto !important;
+  text-align: right !important;
+}
+
+.ci-timeline-js .tl-slidenav-next .tl-slidenav-content-container,
+.ci-timeline-js .tl-slidenav-previous .tl-slidenav-content-container,
+.ci-timeline-js .tl-slidenav-next .tl-slidenav-content-container.tl-slidenav-inverted,
+.ci-timeline-js
+  .tl-slidenav-previous
+  .tl-slidenav-content-container.tl-slidenav-inverted {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+  width: 11.5rem !important;
+  max-width: min(11.5rem, 28vw) !important;
+  padding: 0.55rem 0.7rem 0.65rem !important;
+  box-sizing: border-box !important;
+  background-color: color-mix(in oklab, var(--tl-bg) 92%, var(--tl-fg)) !important;
+  border: 1px solid var(--tl-border) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--tl-fg) 12%, transparent) !important;
+  color: var(--tl-fg) !important;
+}
+
+.ci-timeline-js .tl-slidenav-previous .tl-slidenav-content-container {
+  align-items: flex-start !important;
+}
+
+.ci-timeline-js .tl-slidenav-next .tl-slidenav-content-container {
+  align-items: flex-end !important;
+}
+
+.ci-timeline-js .tl-slidenav-next:hover .tl-slidenav-content-container,
+.ci-timeline-js .tl-slidenav-previous:hover .tl-slidenav-content-container,
+.ci-timeline-js .tl-slidenav-next:focus-visible .tl-slidenav-content-container,
+.ci-timeline-js .tl-slidenav-previous:focus-visible .tl-slidenav-content-container {
+  border-color: var(--tl-accent) !important;
+  background-color: var(--tl-bg) !important;
+  box-shadow: 0 2px 10px color-mix(in oklab, var(--tl-fg) 16%, transparent) !important;
+}
+
+/* Icon as a small chevron chip, not the 32px float TL defaults to. */
+.ci-timeline-js .tl-slidenav-next .tl-slidenav-icon,
+.ci-timeline-js .tl-slidenav-previous .tl-slidenav-icon,
+.ci-timeline-js
+  .tl-slidenav-next
+  .tl-slidenav-content-container.tl-slidenav-inverted
+  .tl-slidenav-icon,
+.ci-timeline-js
+  .tl-slidenav-previous
+  .tl-slidenav-content-container.tl-slidenav-inverted
+  .tl-slidenav-icon {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 1.5rem !important;
+  height: 1.5rem !important;
+  margin: 0 0 0.15rem !important;
+  font-size: 14px !important;
+  line-height: 1 !important;
+  color: var(--tl-accent) !important;
+  background: color-mix(in oklab, var(--tl-accent) 16%, transparent) !important;
+  border-radius: 999px !important;
+  text-shadow: none !important;
+  opacity: 1 !important;
+}
+
+.ci-timeline-js .tl-slidenav-next .tl-slidenav-title,
+.ci-timeline-js .tl-slidenav-previous .tl-slidenav-title,
+.ci-timeline-js
+  .tl-slidenav-next
+  .tl-slidenav-content-container.tl-slidenav-inverted
+  .tl-slidenav-title,
+.ci-timeline-js
+  .tl-slidenav-previous
+  .tl-slidenav-content-container.tl-slidenav-inverted
+  .tl-slidenav-title {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1.25 !important;
+  color: var(--tl-fg) !important;
+  text-shadow: none !important;
+  opacity: 1 !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 2 !important;
+  line-clamp: 2 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+}
+
+.ci-timeline-js .tl-slidenav-next .tl-slidenav-description,
+.ci-timeline-js .tl-slidenav-previous .tl-slidenav-description,
+.ci-timeline-js
+  .tl-slidenav-next
+  .tl-slidenav-content-container.tl-slidenav-inverted
+  .tl-slidenav-description,
+.ci-timeline-js
+  .tl-slidenav-previous
+  .tl-slidenav-content-container.tl-slidenav-inverted
+  .tl-slidenav-description {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  font-size: 10px !important;
+  font-weight: 500 !important;
+  line-height: 1.3 !important;
+  letter-spacing: 0.01em !important;
+  color: var(--tl-muted) !important;
+  text-shadow: none !important;
+  opacity: 1 !important;
+  display: -webkit-box !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 2 !important;
+  line-clamp: 2 !important;
+  overflow: hidden !important;
+  white-space: normal !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.ci-timeline-js .tl-slidenav-next .tl-slidenav-title small,
+.ci-timeline-js .tl-slidenav-previous .tl-slidenav-title small,
+.ci-timeline-js .tl-slidenav-next .tl-slidenav-description small,
+.ci-timeline-js .tl-slidenav-previous .tl-slidenav-description small {
+  display: inline !important;
+  font-size: inherit !important;
+  color: inherit !important;
+}
+
+/* ── Time nav (bottom strip) ───────────────────────────────────────────────── */
+
+/*
+ * Paint only the timenav shell + axis. Do NOT fill
+ * .tl-timenav-slider-background — it is a z-index:6 drag hit-layer that sits
+ * above every marker stem. An opaque fill there hides all the line work.
+ */
+.ci-timeline-js .tl-timenav {
+  background-color: var(--tl-panel) !important;
+  color: var(--tl-fg) !important;
+  border-top: 1px solid var(--tl-border) !important;
+}
+
+.ci-timeline-js .tl-timenav-slider,
+.ci-timeline-js .tl-timenav-slider-background,
+.ci-timeline-js .tl-timenav-container,
+.ci-timeline-js .tl-timenav-container-mask,
+.ci-timeline-js .tl-timenav-item-container {
+  background-color: transparent !important;
+  background: none !important;
+}
+
+/* Axis strip — must match the dark/light panel (upstream is #FFF). */
+.ci-timeline-js .tl-timeaxis,
+.ci-timeline-js .tl-timeaxis-background,
+.ci-timeline-js .tl-timeaxis-content-container {
+  background-color: var(--tl-panel) !important;
+  color: var(--tl-axis-fg) !important;
+  border-color: var(--tl-border) !important;
+}
+
+/*
+ * Eras only exist to widen earliest/latest for the tick ladder. Hide the
+ * coloured band so the pad is invisible.
+ */
+.ci-timeline-js .tl-timeera {
+  display: none !important;
+}
+
+.ci-timeline-js .tl-timeaxis-background {
+  border-top: 1px solid var(--tl-line) !important;
+}
+
+/* Upstream paints major with #FFF — that was the bright bar under the ticks. */
+.ci-timeline-js .tl-timeaxis .tl-timeaxis-content-container .tl-timeaxis-major,
+.ci-timeline-js .tl-timeaxis .tl-timeaxis-content-container .tl-timeaxis-minor {
+  background-color: transparent !important;
+  opacity: 1 !important;
+}
+
+.ci-timeline-js .tl-timenav-line,
+.ci-timeline-js .tl-timeaxis-line {
+  background-color: var(--tl-line-strong) !important;
+}
+
+/* Lane labels — default is #e0e0e0 on #f2f2f2 (fails contrast). */
+.ci-timeline-js .tl-timegroup,
+.ci-timeline-js .tl-timegroup.tl-timegroup-alternate {
+  background-color: var(--tl-elevated) !important;
+}
+
+.ci-timeline-js .tl-timegroup .tl-timegroup-message,
+.ci-timeline-js .tl-timegroup.tl-timegroup-alternate .tl-timegroup-message {
+  color: var(--tl-fg) !important;
+  text-shadow: none !important;
+  opacity: 1 !important;
+  font-weight: 600;
+}
+
+/* Major ticks (hours when zoomed in, days when zoomed out). */
+.ci-timeline-js .tl-timeaxis .tl-timeaxis-content-container .tl-timeaxis-major .tl-timeaxis-tick,
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-major
+  .tl-timeaxis-tick:not(.tl-timeaxis-tick-hidden)
+  .tl-timeaxis-tick-text {
+  color: var(--tl-axis-fg) !important;
+  text-shadow: none !important;
+  opacity: 1 !important;
+}
+
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-major
+  .tl-timeaxis-tick:before {
+  border-left: 1px solid var(--tl-line-strong) !important;
+  border-color: var(--tl-line-strong) !important;
+  color: transparent !important;
+  opacity: 1 !important;
+  /* Tall ruler edge */
+  font-size: 16px !important;
+  line-height: 16px !important;
+}
+
+/*
+ * Minor ticks are the fine ruler scale (hours zoomed out, minutes at max zoom).
+ * Densified ones keep short marks; only labels drop when crowded.
+ */
+.ci-timeline-js .tl-timeaxis .tl-timeaxis-content-container .tl-timeaxis-minor .tl-timeaxis-tick {
+  color: var(--tl-axis-fg) !important;
+  text-shadow: none !important;
+}
+
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-minor
+  .tl-timeaxis-tick:not(.tl-timeaxis-tick-hidden)
+  .tl-timeaxis-tick-text {
+  color: var(--tl-axis-fg) !important;
+  text-shadow: none !important;
+  opacity: 1 !important;
+}
+
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-minor
+  .tl-timeaxis-tick
+  .tl-timeaxis-tick-text {
+  font-size: 10px !important;
+}
+
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-minor
+  .tl-timeaxis-tick:before {
+  border-left: 1px solid var(--tl-line) !important;
+  border-color: var(--tl-line) !important;
+  color: transparent !important;
+  opacity: 0.65 !important;
+  /* Medium ruler division */
+  font-size: 9px !important;
+  line-height: 9px !important;
+}
+
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-tick:not(.tl-timeaxis-tick-hidden)
+  .tl-timeaxis-tick-text
+  small,
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-major
+  .tl-timeaxis-tick:not(.tl-timeaxis-tick-hidden)
+  .tl-timeaxis-tick-text
+  span,
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-minor
+  .tl-timeaxis-tick:not(.tl-timeaxis-tick-hidden)
+  .tl-timeaxis-tick-text
+  span,
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-tick:not(.tl-timeaxis-tick-hidden)
+  .tl-timeaxis-tick-text
+  .tl-timeaxis-timesuffix {
+  /* Knight Lab puts AM/PM in .tl-timeaxis-timesuffix; on minor ticks it is #e6e6e6. */
+  color: var(--tl-axis-fg) !important;
+  opacity: 1 !important;
+  font-weight: 600;
+  display: inline !important;
+  font-size: inherit !important;
+  line-height: inherit !important;
+  margin-top: 0 !important;
+}
+
+/*
+ * Major and minor ticks CSS-transition `left` independently (1s). That is why
+ * the two axes appear to zoom at different paces. Instant, same transform.
+ */
+.ci-timeline-js .tl-timeaxis-major,
+.ci-timeline-js .tl-timeaxis-minor,
+.ci-timeline-js .tl-timeaxis-tick {
+  transition: none !important;
+  animation: none !important;
+}
+
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-minor
+  .tl-timeaxis-tick
+  .tl-timeaxis-tick-text {
+  white-space: nowrap !important;
+}
+
+/*
+ * Ruler densify: TimelineJS marks overflow ticks as .tl-timeaxis-tick-hidden.
+ * Keep the mark (short / faint); drop only the label. Zoomed-out crowding
+ * still removes label detail via densify + our collision pass.
+ */
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-tick.tl-timeaxis-tick-hidden
+  .tl-timeaxis-tick-text {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-major
+  .tl-timeaxis-tick.tl-timeaxis-tick-hidden:before {
+  opacity: 0.55 !important;
+  font-size: 10px !important;
+  line-height: 10px !important;
+}
+
+.ci-timeline-js
+  .tl-timeaxis
+  .tl-timeaxis-content-container
+  .tl-timeaxis-minor
+  .tl-timeaxis-tick.tl-timeaxis-tick-hidden:before {
+  opacity: 0.4 !important;
+  font-size: 5px !important;
+  line-height: 5px !important;
+}
+
+/* ── Markers ───────────────────────────────────────────────────────────────── */
+
+.ci-timeline-js .tl-timemarker .tl-timemarker-content-container,
+.ci-timeline-js .tl-timemarker .tl-timemarker-content-container-small,
+.ci-timeline-js .tl-timemarker .tl-timemarker-content-container-long {
+  background-color: var(--tl-marker-bg) !important;
+  border: 1px solid var(--tl-line) !important;
+  color: var(--tl-marker-fg) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.ci-timeline-js .tl-timemarker .tl-timemarker-content,
+.ci-timeline-js .tl-timemarker .tl-timemarker-text,
+.ci-timeline-js .tl-timemarker .tl-timemarker-text h2,
+.ci-timeline-js .tl-timemarker .tl-timemarker-content h2,
+.ci-timeline-js .tl-timemarker .tl-headline,
+.ci-timeline-js .tl-timemarker .tl-timemarker-media-container {
+  color: var(--tl-marker-fg) !important;
+  text-shadow: none !important;
+}
+
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-content-container {
+  background-color: var(--tl-marker-active-bg) !important;
+  border-color: var(--tl-accent) !important;
+  color: var(--tl-marker-active-fg) !important;
+}
+
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-text,
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-text h2,
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-headline {
+  color: var(--tl-marker-active-fg) !important;
+}
+
+/*
+ * Marker stems live under .tl-timemarker-timespan; upstream also recolors them
+ * on :hover / .tl-timemarker-active with #33333380 — beat every path.
+ */
+.ci-timeline-js .tl-timemarker .tl-timemarker-line-left,
+.ci-timeline-js .tl-timemarker .tl-timemarker-line-right,
+.ci-timeline-js .tl-timemarker .tl-timemarker-timespan .tl-timemarker-line-left,
+.ci-timeline-js .tl-timemarker .tl-timemarker-timespan .tl-timemarker-line-right,
+.ci-timeline-js .tl-timemarker:hover .tl-timemarker-timespan .tl-timemarker-line-left,
+.ci-timeline-js .tl-timemarker:hover .tl-timemarker-timespan .tl-timemarker-line-right,
+.ci-timeline-js .tl-timemarker:focus .tl-timemarker-timespan .tl-timemarker-line-left,
+.ci-timeline-js .tl-timemarker:focus .tl-timemarker-timespan .tl-timemarker-line-right,
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-line-left,
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-line-right,
+.ci-timeline-js
+  .tl-timemarker.tl-timemarker-active
+  .tl-timemarker-timespan
+  .tl-timemarker-line-left,
+.ci-timeline-js
+  .tl-timemarker.tl-timemarker-active
+  .tl-timemarker-timespan
+  .tl-timemarker-line-right,
+.ci-timeline-js
+  .tl-timemarker:hover.tl-timemarker-active
+  .tl-timemarker-line-left,
+.ci-timeline-js
+  .tl-timemarker:hover.tl-timemarker-active
+  .tl-timemarker-line-right {
+  background-color: transparent !important;
+  border-left: 1px solid var(--tl-line-strong) !important;
+  border-color: var(--tl-line-strong) !important;
+  box-shadow: none !important;
+  width: 1px !important;
+}
+
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-line-left,
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-line-right,
+.ci-timeline-js
+  .tl-timemarker.tl-timemarker-active
+  .tl-timemarker-timespan
+  .tl-timemarker-line-left,
+.ci-timeline-js
+  .tl-timemarker.tl-timemarker-active
+  .tl-timemarker-timespan
+  .tl-timemarker-line-right {
+  border-left-color: var(--tl-accent) !important;
+  border-color: var(--tl-accent) !important;
+}
+
+.ci-timeline-js .tl-timemarker .tl-timemarker-line-left:after,
+.ci-timeline-js .tl-timemarker .tl-timemarker-line-right:after,
+.ci-timeline-js .tl-timemarker .tl-timemarker-timespan .tl-timemarker-line-left:after,
+.ci-timeline-js .tl-timemarker .tl-timemarker-timespan .tl-timemarker-line-right:after,
+.ci-timeline-js .tl-timemarker:hover .tl-timemarker-timespan .tl-timemarker-line-left:after,
+.ci-timeline-js .tl-timemarker:hover .tl-timemarker-timespan .tl-timemarker-line-right:after,
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-line-left:after,
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-line-right:after {
+  background-color: var(--tl-line-dot) !important;
+  box-shadow: none !important;
+  width: 8px !important;
+  height: 8px !important;
+  left: -3px !important;
+}
+
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-line-left:after,
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-line-right:after {
+  background-color: var(--tl-accent) !important;
+}
+
+.ci-timeline-js .tl-timemarker .tl-timemarker-timespan {
+  background-color: color-mix(in oklab, var(--tl-line-strong) 12%, transparent) !important;
+}
+
+.ci-timeline-js .tl-timemarker.tl-timemarker-active .tl-timemarker-timespan {
+  background-color: color-mix(in oklab, var(--tl-accent) 18%, transparent) !important;
+}
+
+/* ── Menubar ───────────────────────────────────────────────────────────────── */
+
+.ci-timeline-js .tl-menubar {
+  background-color: transparent !important;
+  color: var(--tl-fg) !important;
+}
+
+.ci-timeline-js .tl-menubar-button {
+  background-color: var(--tl-menubar) !important;
+  color: var(--tl-fg) !important;
+  border: 1px solid var(--tl-border) !important;
+  opacity: 1 !important;
+}
+
+.ci-timeline-js .tl-menubar-button:hover {
+  background-color: color-mix(in oklab, var(--tl-accent) 28%, var(--tl-menubar)) !important;
+  color: var(--tl-fg) !important;
+}
+
+/* Attribution lives in Hub OSS credits. */
+.ci-timeline-js .tl-attribution,
+.ci-timeline-js .tl-attribution * {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ci-timeline-js * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

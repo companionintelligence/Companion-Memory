@@ -4,7 +4,6 @@ import { type SignedFile } from '@ci/domains/files';
 
 import { EntityTagType } from './EntityTagType';
 import { GlobalUID } from './GlobalUID';
-import { ItemConnection } from './ItemConnection';
 import { Node } from './Node';
 import { Taggable } from './Taggable';
 
@@ -39,8 +38,16 @@ export class FileType implements Node, Taggable {
   @Field(() => String, { nullable: true })
   sourceUrl!: string | null;
 
-  @Field(() => ItemConnection, { nullable: true, complexity: 5 })
-  items?: ItemConnection | null;
+  // `items` is declared by FileResolver's @ResolveField, not here. It used to be
+  // declared in both places, and the duplicate closed a module cycle —
+  // FileType -> ItemConnection -> ItemEdge -> ItemType -> FileType — that
+  // `emitDecoratorMetadata` makes EAGER: whichever of the two modules is
+  // required first wins, and entering the ring at ItemType throws
+  // "Cannot access 'ItemType' before initialization". In the running app
+  // FileResolver happened to load first, so it only ever bit a test importing
+  // ItemResolver on its own. The resolver's declaration carries the paging args
+  // this one never had, so it was always the real one; dropping it here changes
+  // no schema and breaks the ring.
 
   @Field(() => [EntityTagType])
   tags!: EntityTagType[];

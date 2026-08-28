@@ -30,10 +30,12 @@ const STAGE_HELP: Record<OrchestrateStage, string> = {
   geocode: 'Forward-geocode events that name a place but have no coordinates',
   reverse_geocode: 'Name the places of events that have coordinates but no label',
   reverse_position: 'Reverse-geocode GPS points on ci.position into address fields',
-  reverse_inventory: 'Reverse-geocode inventory coordinates onto last_seen_place_entity_id',
+  reverse_object: 'Reverse-geocode object coordinates onto last_seen_place_entity_id',
   estimate_locations: 'Estimate coordinates for events from surrounding located ones',
   media_dimensions: 'Backfill width, height and duration for stored media',
   search_index: 'Embed everything the search index has not embedded yet',
+  backfill_summaries:
+    'Generate hourly/daily/weekly/monthly summaries for historical (bulk-imported) activity',
 };
 
 export const BACKFILL_STAGES = Object.keys(STAGE_HELP) as OrchestrateStage[];

@@ -46,6 +46,7 @@ from ci.hbpe.model.checkpoints import (
     HMT_FP32_ONNX,
     HMT_INT8_ONNX,
     MODEL_ARTIFACTS,
+    int8_is_servable,
     user_ckpt_dir,
 )
 from ci.hbpe.model.vocab import (
@@ -95,8 +96,8 @@ N_SPECIAL = 4
 _SPECIAL_IDX = {PAD_IDX, SOD_IDX, EOD_IDX}
 
 
-def _onnx_pos_emb_rows(path: Path) -> int | None:
-    """Return the first dim of ``pos_emb.weight`` in an ONNX graph, if present."""
+def _onnx_pos_emb_dims(path: Path) -> tuple[int, int] | None:
+    """Return (rows, width) of ``pos_emb.weight`` in an ONNX graph, if present."""
     try:
         import onnx
     except ImportError:
@@ -104,9 +105,17 @@ def _onnx_pos_emb_rows(path: Path) -> int | None:
     model = onnx.load(str(path), load_external_data=False)
     for init in model.graph.initializer:
         if init.name == "pos_emb.weight" or init.name.endswith("/pos_emb.weight"):
+            if init.dims and len(init.dims) >= 2:
+                return int(init.dims[0]), int(init.dims[1])
             if init.dims:
-                return int(init.dims[0])
+                return int(init.dims[0]), -1
     return None
+
+
+def _onnx_pos_emb_rows(path: Path) -> int | None:
+    """Return the first dim of ``pos_emb.weight`` in an ONNX graph, if present."""
+    dims = _onnx_pos_emb_dims(path)
+    return None if dims is None else dims[0]
 
 
 def _assert_checkpoint_bucket_resolution(path: Path) -> None:
@@ -118,13 +127,21 @@ def _assert_checkpoint_bucket_resolution(path: Path) -> None:
     (30-min) runtime and silently maps morning slots onto the wrong wall-clock
     hours.
     """
-    rows = _onnx_pos_emb_rows(path)
-    if rows is None:
+    dims = _onnx_pos_emb_dims(path)
+    if dims is None:
         return
+    rows, width = dims
     if rows != N_BUCKETS:
         raise ValueError(
             f"{path.name} pos_emb has {rows} rows; expected {N_BUCKETS} "
             f"for {BUCKET_MINUTES}-minute buckets — re-export after retrain"
+        )
+    from ci.hbpe.model.transformer import D_MODEL
+
+    if width > 0 and width != D_MODEL:
+        raise ValueError(
+            f"{path.name} pos_emb width {width} != D_MODEL {D_MODEL} — "
+            "retrain; refusing to serve a mismatched architecture"
         )
 
 
@@ -249,11 +266,26 @@ class InferenceEngine:
     # ── Session loading ────────────────────────────────────────────────────────
 
     def _load_session(self):
-        """Load INT8 ONNX → FP32 ONNX → PyTorch model (in preference order)."""
+        """Load INT8 ONNX → FP32 ONNX → PyTorch model (in preference order).
+
+        INT8 is skipped unless the last export report has ``delta_passed: true``.
+        ONNX graphs whose embedding width doesn't match the running D_MODEL are
+        refused so a 64-d toy checkpoint cannot keep serving after a 256-d bump.
+        """
         ckpt_dir = user_ckpt_dir(self.user_id)
         int8_path = ckpt_dir / HMT_INT8_ONNX
         fp32_path = ckpt_dir / HMT_FP32_ONNX
-        for path in (int8_path, fp32_path):
+        onnx_candidates: list = []
+        if int8_path.exists() and int8_is_servable(self.user_id):
+            onnx_candidates.append(int8_path)
+        elif int8_path.exists():
+            log.warning(
+                "Skipping INT8 ONNX for %s: export delta did not pass",
+                self.user_id[:8],
+            )
+        if fp32_path.exists():
+            onnx_candidates.append(fp32_path)
+        for path in onnx_candidates:
             if path.exists():
                 try:
                     import onnxruntime as ort

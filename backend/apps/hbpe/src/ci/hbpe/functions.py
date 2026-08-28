@@ -14,6 +14,7 @@ API's forecast status endpoint reads it to show real progress (e.g.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable
 from typing import Any
 
@@ -21,6 +22,83 @@ log = logging.getLogger(__name__)
 
 # user_id → "NIGHTLY:<step>" | "BOOTSTRAP:<step>" while a pipeline runs.
 CURRENT_STEPS: dict[str, str] = {}
+# user_id → {step, eta_seconds, detail, started_at, ...} while a pipeline runs.
+CURRENT_PROGRESS: dict[str, dict[str, Any]] = {}
+
+# Conservative wall-clock guesses. Labeling hundreds of items through the 8B
+# chat endpoint, then training a 256-d HMT on CPU, is why Predict can take ~an
+# hour. The Forecast strip refines these from item/epoch rate once work starts.
+STEP_ETA_SECONDS: dict[str, int] = {
+    "queued": 30,
+    "label": 3600,
+    "label_summaries": 180,
+    "l1_sweep": 45,
+    "l2_sweep": 45,
+    "bootstrap_check": 20,
+    "serialize": 180,
+    "train": 2700,
+    "export": 300,
+    "lora": 240,
+    "backfill_actuals": 90,
+    "recurrence": 90,
+    "drift": 45,
+    "cache": 20,
+}
+
+
+def set_pipeline_step(user_id: str, qualified: str) -> None:
+    """Record the live step (e.g. ``NIGHTLY:train``) and a conservative ETA."""
+    CURRENT_STEPS[user_id] = qualified
+    name = qualified.split(":", 1)[-1]
+    now = time.time()
+    CURRENT_PROGRESS[user_id] = {
+        "step": qualified,
+        "started_at": now,
+        "updated_at": now,
+        "eta_seconds": STEP_ETA_SECONDS.get(name, 120),
+        "detail": None,
+        "done": None,
+        "total": None,
+    }
+
+
+def update_pipeline_progress(
+    user_id: str,
+    *,
+    done: int,
+    total: int,
+    detail: str | None = None,
+) -> None:
+    """Refine ETA from observed rate. Safe to call from a worker thread."""
+    meta = CURRENT_PROGRESS.get(user_id)
+    if not meta:
+        return
+    now = time.time()
+    elapsed = max(now - float(meta.get("started_at") or now), 1e-6)
+    remaining = max(int(total) - int(done), 0)
+    if done > 0:
+        rate = done / elapsed
+        eta = int(remaining / rate) if rate > 0 else int(meta.get("eta_seconds") or 120)
+        eta = min(max(eta, 5), 7200)
+    else:
+        eta = int(meta.get("eta_seconds") or 120)
+    meta["done"] = int(done)
+    meta["total"] = int(total)
+    meta["eta_seconds"] = 5 if remaining == 0 else eta
+    meta["updated_at"] = now
+    meta["detail"] = detail or (f"{done} of {total}" if total else None)
+
+
+def clear_pipeline(user_id: str) -> None:
+    CURRENT_STEPS.pop(user_id, None)
+    CURRENT_PROGRESS.pop(user_id, None)
+
+
+def pipeline_progress(user_id: str | None) -> dict[str, Any] | None:
+    if not user_id:
+        return None
+    meta = CURRENT_PROGRESS.get(user_id)
+    return dict(meta) if meta else None
 
 
 async def _safe(coro: Awaitable, step_name: str) -> dict:
@@ -30,12 +108,6 @@ async def _safe(coro: Awaitable, step_name: str) -> dict:
     except Exception as exc:
         log.exception("Pipeline step %s failed", step_name)
         return {"status": "error", "error": str(exc)}
-
-
-def _model_exists(user_id: str) -> bool:
-    from ci.hbpe.model.checkpoints import model_exists
-
-    return model_exists(user_id)
 
 
 async def nightly(user_id: str, **_: Any) -> dict:
@@ -65,7 +137,7 @@ async def nightly(user_id: str, **_: Any) -> dict:
     results: dict = {"user_id": user_id, "steps": {}, "workflow": "nightly"}
 
     def step(name: str) -> None:
-        CURRENT_STEPS[user_id] = f"NIGHTLY:{name}"
+        set_pipeline_step(user_id, f"NIGHTLY:{name}")
 
     try:
         step("label")
@@ -135,7 +207,7 @@ async def nightly(user_id: str, **_: Any) -> dict:
             cache_invalidation(user_id), "step6_cache"
         )
     finally:
-        CURRENT_STEPS.pop(user_id, None)
+        clear_pipeline(user_id)
 
     return results
 
@@ -160,7 +232,7 @@ async def bootstrap(user_id: str, **_: Any) -> dict:
     results: dict = {"user_id": user_id, "steps": {}, "workflow": "bootstrap"}
 
     def step(name: str) -> None:
-        CURRENT_STEPS[user_id] = f"BOOTSTRAP:{name}"
+        set_pipeline_step(user_id, f"BOOTSTRAP:{name}")
 
     try:
         step("label")
@@ -202,21 +274,34 @@ async def bootstrap(user_id: str, **_: Any) -> dict:
         step("lora")
         results["steps"]["lora"] = await _safe(lora_fine_tune(user_id), "lora")
     finally:
-        CURRENT_STEPS.pop(user_id, None)
+        clear_pipeline(user_id)
 
     return results
 
 
 async def ensure_bootstrap(user_id: str, **_: Any) -> dict:
     """
-    Run bootstrap only when the user has no HMT checkpoint yet. The daily
-    scheduler sweep calls this for every user, so the warm-path must be cheap.
+    Run bootstrap only when the user has no matching HMT checkpoint.
+
+    The daily scheduler sweep calls this for every user, so the warm-path must
+    stay cheap: an architecture.json stamp matching this binary is enough to
+    skip. A leftover 64-d toy checkpoint (no stamp, or a mismatched stamp)
+    retrains via nightly so Predict/Hub restart actually picks up the new HMT.
     """
-    if _model_exists(user_id):
-        return {"skipped": True, "reason": "checkpoint_exists", "user_id": user_id}
+    from ci.hbpe.model.checkpoints import architecture_matches, model_exists
 
     if user_id in CURRENT_STEPS:
         return {"skipped": True, "reason": "pipeline_running", "user_id": user_id}
+
+    if model_exists(user_id) and architecture_matches(user_id):
+        return {"skipped": True, "reason": "checkpoint_exists", "user_id": user_id}
+
+    if model_exists(user_id):
+        log.info(
+            "ensure_bootstrap: architecture mismatch for %s — running nightly retrain",
+            user_id[:8],
+        )
+        return await nightly(user_id)
 
     return await bootstrap(user_id)
 
@@ -229,4 +314,15 @@ FUNCTIONS = {
     "ensure_bootstrap": ensure_bootstrap,
 }
 
-__all__ = ["CURRENT_STEPS", "FUNCTIONS", "bootstrap", "ensure_bootstrap", "nightly"]
+__all__ = [
+    "CURRENT_PROGRESS",
+    "CURRENT_STEPS",
+    "FUNCTIONS",
+    "bootstrap",
+    "clear_pipeline",
+    "ensure_bootstrap",
+    "nightly",
+    "pipeline_progress",
+    "set_pipeline_step",
+    "update_pipeline_progress",
+]

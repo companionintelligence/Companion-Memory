@@ -11,6 +11,8 @@ export { ItemIcon } from './ItemIcon';
 export { NoteIcon } from './NoteIcon';
 export { PersonIcon } from './PersonIcon';
 export { PlaceIcon } from './PlaceIcon';
+export { ProductIcon } from './ProductIcon';
+export { ReceiptIcon } from './ReceiptIcon';
 export { TagIcon } from './TagIcon';
 export { ThreadIcon } from './ThreadIcon';
 export { SavedSearchIcon } from './SavedSearchIcon';

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams } from './timeline';
+import type { ImportParams, LineItemRecord } from './timeline';
 import { timeframeContains } from './timeline';
 
 // The PayPal CSV has a BOM and may have metadata rows before the real header.
@@ -258,6 +258,31 @@ export class PayPalFileImporter implements FileImporter {
       classification = 'payment';
     }
 
+    // A SPEND row (money left the account) is a purchase with exactly one
+    // unnamed line: PayPal records who was paid and how much, never what for.
+    // That one line is still worth emitting — it is what turns the row into a
+    // receipt with a merchant and a total (push/canonical.ts destinationsFor
+    // routes a commerce.* record carrying LineItems to `receipts` as well as
+    // `events`). Money COMING IN (a credit, a withdrawal to the bank) is not a
+    // purchase and gets no line, so no receipt is minted for it.
+    const isSpend = classification === 'payment' || (classification === 'transaction' && amount < 0);
+    const lineTotal = Number.isFinite(amount) ? Math.abs(amount) : undefined;
+    const lineItems: LineItemRecord[] | undefined = isSpend
+      ? [
+          {
+            LineNumber: 1,
+            Product: row['Name'] || row['Type'] || 'PayPal payment',
+            Quantity: 1,
+            Total: lineTotal,
+            Currency: row['Currency'] || undefined,
+            // PayPal describes a payment, never a product: nothing here says an
+            // object changed hands, so the line cannot claim one did and the
+            // digital/physical rule falls back to its own evidence.
+            IsDigital: undefined,
+          },
+        ]
+      : undefined;
+
     params.pipeline.push({
       item: {
         id: row['Transaction ID']
@@ -275,6 +300,13 @@ export class PayPalFileImporter implements FileImporter {
           Net: net || undefined,
           Currency: row['Currency'] || undefined,
           'Transaction ID': row['Transaction ID'] || undefined,
+          // CANONICAL commerce keys (push/commerceKeys.ts). PayPal has no order
+          // id of its own — the transaction id IS the order reference — and the
+          // counterparty is the merchant.
+          'Order ID': row['Transaction ID'] || undefined,
+          Merchant: isSpend ? row['Name'] || undefined : undefined,
+          Total: lineTotal,
+          LineItems: lineItems,
           Source: 'PayPal',
         },
       },

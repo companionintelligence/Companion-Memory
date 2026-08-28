@@ -33,6 +33,14 @@ export class UserType implements Node {
   @Field(() => PersonType, { nullable: true })
   entity?: PersonType | null;
 
+  /**
+   * The owner's own avatar — read off their `is_self` Person entity.
+   * Resolved by `UserResolver.avatarUrl`, not set in `toType`; null when
+   * there is no `is_self` Person yet, or it has no avatar set.
+   */
+  @Field(() => String, { nullable: true })
+  avatarUrl?: string | null;
+
   static toType(user: User): UserType {
     return {
       __typename: UserType.name,

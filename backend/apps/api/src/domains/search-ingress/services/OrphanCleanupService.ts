@@ -55,6 +55,11 @@ export interface OrphanCleanupOptions {
    * Count orphans without deleting them. Useful to size a cleanup before running.
    */
   dryRun?: boolean;
+  /**
+   * Per-statement ceiling, applied to the connection this sweep pins. Default
+   * {@link DEFAULT_ORPHAN_STATEMENT_TIMEOUT_MS}.
+   */
+  statementTimeoutMs?: number;
 }
 
 export interface TruncateSearchIndexResult {
@@ -62,6 +67,22 @@ export interface TruncateSearchIndexResult {
 }
 
 const DEFAULT_BATCH_SIZE = 5000;
+
+/**
+ * Per-statement ceiling for the sweep, matching the one
+ * `EmbedCoverageTelemetryService` puts on its nightly counts.
+ *
+ * The sweep issues up to 54 statements (3 index tables x 18 indexable types)
+ * per pass, each an anti-join between an index table and a source table, and it
+ * runs unattended at 02:50. Without a ceiling one pathological plan pins a
+ * connection out of a 25-connection pool for as long as it likes. A statement
+ * that exceeds this throws, which surfaces as a failed tick in `ci.cron_runs` —
+ * the honest signal — rather than a sweep nobody can see is stuck.
+ */
+export const DEFAULT_ORPHAN_STATEMENT_TIMEOUT_MS = 120_000;
+
+/** Runs one statement on the connection the sweep has pinned. */
+type Executor = (sql: string, params?: unknown[]) => Promise<unknown>;
 
 /**
  * Maintenance routine that keeps `ci_search.embeddings` / `ci_search.vectors` /
@@ -99,11 +120,17 @@ export class OrphanCleanupService {
    * marker is dead weight, and reaping it means a re-created entity with the same
    * id is re-examined rather than silently treated as skipped.
    * Idempotent and re-runnable: a clean index deletes nothing.
+   *
+   * Every statement runs on ONE pinned connection under a
+   * {@link DEFAULT_ORPHAN_STATEMENT_TIMEOUT_MS} ceiling, rather than taking a
+   * fresh connection out of the pool 54 times with no bound on how long each
+   * holds it.
    */
   async cleanOrphans(options: OrphanCleanupOptions = {}): Promise<OrphanCleanupResult> {
     const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
     const entityTypes = options.entityTypes ?? [...INDEXABLE_ENTITIES];
     const dryRun = options.dryRun ?? false;
+    const timeoutMs = options.statementTimeoutMs ?? DEFAULT_ORPHAN_STATEMENT_TIMEOUT_MS;
 
     if (batchSize <= 0) {
       throw new Error(`batchSize must be a positive integer, got ${batchSize}`);
@@ -111,34 +138,51 @@ export class OrphanCleanupService {
 
     const results: OrphanTypeResult[] = [];
 
-    for (const searchTable of SEARCH_TABLES) {
-      for (const entityType of entityTypes) {
-        const source = ENTITY_SOURCE_MAP[entityType];
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
 
-        if (source == null) {
-          // Defensive: the compile-time guard in entitySourceMap already prevents
-          // this, but never silently skip a type we were asked to clean.
-          throw new Error(`No source mapping for entity type "${entityType}"`);
-        }
+    const execute: Executor = (sql, params) => runner.query(sql, params);
 
-        const deleted = dryRun
-          ? await this.countOrphans(searchTable, entityType, source)
-          : await this.deleteOrphans(searchTable, entityType, source, batchSize);
+    try {
+      // Session-scoped, not SET LOCAL: the runner owns this connection until
+      // release, and the batched delete deliberately runs each batch as its own
+      // transaction, so there is no enclosing one to scope the GUC to.
+      await execute(`SET statement_timeout = ${Math.max(1, Math.floor(timeoutMs))}`);
 
-        if (deleted > 0) {
-          this.logger.log(dryRun ? 'Counted orphan index rows' : 'Deleted orphan index rows', {
+      for (const searchTable of SEARCH_TABLES) {
+        for (const entityType of entityTypes) {
+          const source = ENTITY_SOURCE_MAP[entityType];
+
+          if (source == null) {
+            // Defensive: the compile-time guard in entitySourceMap already prevents
+            // this, but never silently skip a type we were asked to clean.
+            throw new Error(`No source mapping for entity type "${entityType}"`);
+          }
+
+          const deleted = dryRun
+            ? await this.countOrphans(searchTable, entityType, source, execute)
+            : await this.deleteOrphans(searchTable, entityType, source, batchSize, execute);
+
+          if (deleted > 0) {
+            this.logger.log(dryRun ? 'Counted orphan index rows' : 'Deleted orphan index rows', {
+              searchTable: `${searchTable.schema}.${searchTable.table}`,
+              entityType,
+              deleted,
+            });
+          }
+
+          results.push({
             searchTable: `${searchTable.schema}.${searchTable.table}`,
             entityType,
             deleted,
           });
         }
-
-        results.push({
-          searchTable: `${searchTable.schema}.${searchTable.table}`,
-          entityType,
-          deleted,
-        });
       }
+    } finally {
+      // RESET before release so the pooled connection goes back unmodified even
+      // when a statement threw.
+      await execute('RESET statement_timeout').catch(() => undefined);
+      await runner.release();
     }
 
     const totalDeleted = results.reduce((sum, r) => sum + r.deleted, 0);
@@ -175,13 +219,23 @@ export class OrphanCleanupService {
    * `$1` is bound to `entity_type`; the source-existence subquery correlates on
    * the index row's `entity_id`, plus the discriminator value (bound as `$2`)
    * when the source table is multi-type.
+   *
+   * The correlation is uuid = uuid, UNCAST, and that is the whole performance
+   * story. `ci_search.{embeddings,vectors,index_skips}.entity_id` is `uuid` and
+   * every `ENTITY_SOURCE_MAP` id column is the uuid primary key of its table, so
+   * `::text` on both sides was gratuitous — and fatal: casting the source side
+   * makes the PK index unusable, and the planner falls back to hashing the ENTIRE
+   * source table to anti-join against a couple of hundred index rows (measured:
+   * 400k-row seq scan + 1.3k temp blocks, vs an index-only probe per index row).
+   * A source column that is ever NOT uuid needs its own branch here; it must not
+   * bring the symmetric cast back.
    */
   private buildSourceExistsClause(
     searchAlias: string,
     source: EntitySource,
   ): { clause: string; discriminatorParam: string | null } {
     const sourceRef = `"${source.schema}"."${source.table}"`;
-    const idMatch = `src."${source.idColumn}"::text = ${searchAlias}.entity_id::text`;
+    const idMatch = `src."${source.idColumn}" = ${searchAlias}.entity_id`;
 
     if (source.discriminator) {
       return {
@@ -201,6 +255,7 @@ export class OrphanCleanupService {
     entityType: IndexableEntity,
     source: EntitySource,
     batchSize: number,
+    execute: Executor,
   ): Promise<number> {
     const searchRef = `"${searchTable.schema}"."${searchTable.table}"`;
     const { clause, discriminatorParam } = this.buildSourceExistsClause('s', source);
@@ -231,7 +286,7 @@ export class OrphanCleanupService {
     let total = 0;
 
     for (;;) {
-      const result = await this.dataSource.query(sql, params);
+      const result = await execute(sql, params);
       // node-postgres DELETE returns [[], affectedRowCount]; normalise both shapes.
       const affected = Array.isArray(result) ? (result[1] ?? 0) : 0;
 
@@ -249,6 +304,7 @@ export class OrphanCleanupService {
     searchTable: SearchTable,
     entityType: IndexableEntity,
     source: EntitySource,
+    execute: Executor,
   ): Promise<number> {
     const searchRef = `"${searchTable.schema}"."${searchTable.table}"`;
     const { clause, discriminatorParam } = this.buildSourceExistsClause('s', source);
@@ -266,7 +322,7 @@ export class OrphanCleanupService {
       params.push(discriminatorParam);
     }
 
-    const rows = await this.dataSource.query(sql, params);
+    const rows = (await execute(sql, params)) as Array<{ count: number }>;
 
     return rows[0]?.count ?? 0;
   }

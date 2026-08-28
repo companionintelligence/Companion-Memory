@@ -32,6 +32,33 @@ import { z } from 'zod';
  */
 export const DEFAULT_CHAT_MODEL = 'gemma4:e4b';
 
+/**
+ * Model for BACKGROUND inference — extraction, classification, JSON shaping —
+ * as opposed to the model a person is talking to.
+ *
+ * These are two different jobs and they want opposite things. An operator picks
+ * `LLM_DEFAULT_CHAT_MODEL` for conversational quality and will happily set a
+ * 31B model for it. Background jobs want a model that returns grammar-
+ * constrained JSON quickly, and are ruined by a large one: measured on a real
+ * appliance, an identical ~1170-token extraction prompt took over 170 seconds
+ * on `gemma4:31b` (never returned inside the job's timeout) and 3.6 seconds on
+ * a 1B model — INCLUDING its cold load — with correct, schema-valid output.
+ * The cost is dominated by prompt evaluation, so no output cap or longer
+ * timeout can rescue it; only a smaller model can.
+ *
+ * Before this existed both jobs read `llm.chatModel`, so raising the chat model
+ * for quality silently broke every background job on the appliance. The
+ * planning scans failed that way indefinitely, logging a generic LLM timeout
+ * that named neither the model nor the real cause. Several of those services
+ * were even written ASSUMING this was small — see `TaskBreakdownService`'s
+ * "a small `PROMPT_MODEL` reliably [invents key names]".
+ *
+ * Defaults to {@link DEFAULT_CHAT_MODEL} so a deployment that never sets it
+ * behaves exactly as it did before, rather than suddenly pulling a model the
+ * box has not got.
+ */
+export const DEFAULT_UTILITY_MODEL = DEFAULT_CHAT_MODEL;
+
 const booleanStringSchema = z.preprocess((val) => {
   if (val === 'true') {
     return true;
@@ -104,6 +131,13 @@ export const ConfigSchema = z.object({
        * are forwarded here. Empty = local notifications only.
        */
       pushRelayUrl: z.string().default(''),
+      // Comma-separated OAuth client ids allow-listed as service accounts (e.g.
+      // "hbpe-sidecar,summary-sidecar"). A Portal-signed token presenting one of
+      // these client ids is treated as a Portal-brokered service credential: it
+      // acts on behalf of the user named in its `sub` claim instead of being
+      // JIT-provisioned as a human login. Replaces the shared HS256 secret the
+      // sidecars used to self-sign with. See unified-identity-plan.md · B5.
+      serviceClients: z.string().default(''),
     }),
     // Traefik forward-auth identity header signed by CI-Hub. When enabled, the
     // server verifies the HMAC-SHA256 signature on X-CI-Hub-User before trusting
@@ -146,6 +180,9 @@ export const ConfigSchema = z.object({
       github: z.object({
         id: z.string(),
       }),
+      reddit: z.object({
+        id: z.string(),
+      }),
       spotify: z.object({
         id: z.string(),
       }),
@@ -153,6 +190,9 @@ export const ConfigSchema = z.object({
         id: z.string(),
       }),
       signal: z.object({
+        id: z.string(),
+      }),
+      slack: z.object({
         id: z.string(),
       }),
     }),
@@ -219,6 +259,40 @@ export const ConfigSchema = z.object({
       apiBase: z.string().optional(),
       apiKey: z.string().default('ollama'),
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
+      /** Background extraction/classification model. See {@link DEFAULT_UTILITY_MODEL}. */
+      utilityModel: z.string().default(DEFAULT_UTILITY_MODEL),
+      /**
+       * Model-tier routing (`domains/model-routing`, `ModelTierRouter`) applied to
+       * chat model selection in `OllamaService.resolveModel`.
+       *
+       * OFF by default and deliberately so: the router's on-device context window
+       * (8K) is an estimate mirroring Apple's on-device/PCC split, not a measured
+       * property of whatever the appliance is serving. With `enabled: false`
+       * `resolveModel` behaves exactly as it did before routing existed.
+       */
+      tierRouting: z
+        .object({
+          /** Consult `ModelTierRouter` when choosing the chat model. */
+          enabled: z.boolean().default(false),
+          /**
+           * Model id to use for the `on_device` tier. Empty = keep the model the
+           * existing served-model resolution picked.
+           */
+          onDeviceModel: z.string().default(''),
+          /**
+           * Model id to use for the escalated `private_cloud` tier. Empty means the
+           * escalated tier has no target, so the router is told the cloud tier is
+           * unavailable and every task stays on-device.
+           */
+          escalatedModel: z.string().default(''),
+          /**
+           * Real usable context window of `onDeviceModel`, in tokens. Overrides the
+           * router's estimated 8K so the escalation threshold is a deployment fact
+           * rather than a guess. 0 = fall back to the router's own profile.
+           */
+          onDeviceContextTokens: z.number().int().nonnegative().default(0),
+        })
+        .default({}),
     })
     .default({}),
   // Local-first sync (PowerSync). The server issues short-lived client tokens via
@@ -309,6 +383,30 @@ export const ConfigSchema = z.object({
     concurrency: z.coerce.number().int().positive().default(32),
     fetchBatchSize: z.coerce.number().int().positive().default(20),
     perQueueConcurrency: z.coerce.number().int().positive().default(6),
+    /**
+     * Days a REPLAYED dead letter is kept in `ci.pipeline_dead_letters` before
+     * `DeadLetterReaperListener.purgeReplayed` reclaims it.
+     *
+     * Scope, exactly: a row whose `replayed_at` is non-NULL — meaning an
+     * operator asked for it back and `EventService.send` accepted the job (the
+     * claim is released on every failure path, so the stamp is proof of a
+     * successful re-emit, not of an attempt). An UNREPLAYED letter has no TTL
+     * and is never touched by any sweep; that promise is the reason the table
+     * exists, and no value here weakens it.
+     *
+     * 30 days matches `JobMetricsCollector`'s retention, which is the other
+     * operational history on this appliance: long enough to answer "did we
+     * already replay this, and when?" during and after an incident, short
+     * enough that the replayed half of the table cannot grow without bound
+     * behind a writer that can insert 360k rows a day.
+     *
+     * Raise it (CI_REPLAYED_DEAD_LETTER_RETENTION_DAYS=3650) to effectively
+     * suspend the purge — during an incident when the replay audit trail is
+     * still being read, or on a deployment that wants it kept forever. Positive
+     * integer only: zero or negative would mean "delete letters replayed just
+     * now", and the purge refuses such a window rather than obeying it.
+     */
+    replayedDeadLetterRetentionDays: z.coerce.number().int().positive().default(30),
   }),
   // The archive importer's working directory. A run downloads its uploaded
   // archive here, extracts it, and parses the resulting tree; the whole
@@ -340,6 +438,16 @@ export const ConfigSchema = z.object({
       // because the folder only holds what a user deliberately put there, and
       // compose ships the mount; an absent directory just scans as unavailable.
       inboxDir: z.string().default('/var/lib/ci-import/inbox'),
+      // Where `inboxDir` lives on the HOST, when the API runs in a container
+      // and the inbox is a bind mount. The scan reports the folder a person
+      // should drop files into, and `/var/lib/ci-import/inbox/<user>` is a
+      // path inside the container that no desktop can reach — Hub, and the
+      // production compose, bind it from somewhere on the appliance's own
+      // disk, and THAT is the spelling to show. A label only: nothing on the
+      // server resolves it, so it is not `path.resolve`d, not required to
+      // exist, and not part of the nesting check below. Empty (the default,
+      // and the right value for a bare-metal dev stack) shows `inboxDir`.
+      inboxHostDir: z.string().default(''),
       // Zip-bomb guards on extraction. These are a ceiling on what an archive
       // may expand to, NOT a statement about what this appliance imports: the
       // uploads controller accepts 50GiB precisely because "Google Takeout
@@ -363,8 +471,59 @@ export const ConfigSchema = z.object({
       // Unreadable or unset simply means the push reports "cannot say" and
       // relies on catching the disk-full error instead of predicting it.
       databaseDataDir: z.string().default(''),
+      // How long staging survives its run. Two windows, because two different
+      // things are stored here and only one of them is scratch.
+      //
+      // MEASURED, not guessed. On a dev appliance that imported one real
+      // Google Takeout three times, `ci_import` held 1678 MB against ci.*'s
+      // 1274 MB — staging was LARGER than the durable records it produced, and
+      // 56% of a 3010 MB database. `staged_items` alone was 1578 MB over
+      // 1.94M rows: 852 bytes per parsed record including indexes, so one
+      // 780,946-item run costs ~640 MB forever. `import_runs` +
+      // `import_stages` for the same 24 runs came to 240 kB — about 10 kB a
+      // run, which is why the two are given very different windows.
+      retention: z.object({
+        enabled: booleanStringSchema.default(true),
+        // The scratchpad window. Long enough to cover the deferred-push gap
+        // the Sync card is built around (parse today, push when you get to
+        // it) and any realistic re-push, and far longer than the longest
+        // observed run wall-time (~1 day for a 780k-item Takeout). Nothing
+        // resumable is ever taken regardless of this number — the sweep skips
+        // any run still holding `pending` or `failed` staged rows — so this is
+        // the disk dial, not the safety mechanism. 0 means "as soon as the run
+        // is terminal and drained", which is a defensible setting on an
+        // appliance short of disk.
+        stagingDays: z.coerce.number().int().nonnegative().default(7),
+        // The audit window. `import_runs` / `import_stages` are what the
+        // import UI renders — the run list, the stage bar, `detail->>'pushed'`
+        // for "3,412 records", and `declared_sources` for the picker's
+        // "imported ✓". None of that reads a `staged_*` row, which is what
+        // makes the split possible: history survives the payload it describes.
+        // Deleting the run row cascades everything, so this is also the
+        // backstop for a run whose payload the staging sweep declined to take.
+        runHistoryDays: z.coerce.number().int().positive().default(90),
+        // Sweep bounds. The cron is nightly and reclamation must never be the
+        // reason the disk is busy, so a sweep takes a bounded number of runs
+        // and deletes each run's rows in bounded batches rather than opening
+        // one transaction over 780k rows.
+        maxRunsPerSweep: z.coerce.number().int().positive().default(200),
+        deleteBatchSize: z.coerce.number().int().positive().default(5000),
+      }),
     })
     .superRefine((value, context) => {
+      // History must outlive the payload it describes. Inverted, the run purge
+      // would delete the audit trail while the scratchpad it points at was
+      // still being kept — which is the opposite of what the split is for.
+      if (value.retention.runHistoryDays < value.retention.stagingDays) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            `import.retention.runHistoryDays (${value.retention.runHistoryDays}) must be >= ` +
+            `import.retention.stagingDays (${value.retention.stagingDays}): run history is the audit ` +
+            'trail for staging that has already been reclaimed, so it cannot expire first.',
+        });
+      }
+
       // The three areas have different owners and different sweeps: the inbox
       // is world-writable and user-facing, uploads are root-only and TTL'd,
       // scratch belongs to runs. Nesting any inside another crosses those
@@ -393,6 +552,57 @@ export const ConfigSchema = z.object({
         }
       }
     }),
+  // In-app account deletion (App Store Guideline 5.1.1(v), Google Play Data
+  // Deletion). `DELETE /account` revokes access immediately; the purge job
+  // destroys the data afterwards. See docs/architecture/account-deletion.md.
+  accountDeletion: z.object({
+    /**
+     * Days between "delete my account" and the irreversible purge — the window
+     * in which a mistaken deletion can still be undone by an operator.
+     *
+     * Changing this only affects deletions requested *afterwards*: the deadline
+     * is stamped onto the row at request time, precisely so editing a config
+     * value cannot extend a promise already made to someone who has left.
+     */
+    graceDays: z.coerce.number().int().nonnegative().default(30),
+    purge: z.object({
+      /**
+       * Off leaves `purge_after` unenforced — deletion revokes access and keeps
+       * the data. Any deployment that tells its users their data is deleted must
+       * leave this on; it exists so an operator mid-incident can stop an
+       * irreversible job without editing code.
+       */
+      enabled: booleanStringSchema.default(true),
+      /**
+       * Rows per statement. Small enough that no single delete holds a lock long
+       * enough to matter on an appliance, large enough that a million-row table
+       * is thousands of statements rather than millions.
+       */
+      batchSize: z.coerce.number().int().positive().max(100_000).default(500),
+      /** Accounts per run; a backlog is drained across ticks, not in one. */
+      maxAccountsPerRun: z.coerce.number().int().positive().default(5),
+      /** How long a failed account waits before the next attempt. */
+      retryBackoffMinutes: z.coerce.number().int().positive().default(60),
+      /**
+       * `schema.table.column` entries to leave alone.
+       *
+       * The purge finds user-scoped columns by convention as well as by foreign
+       * key, so a `uuid user_id` that does *not* mean "this row belongs to this
+       * account" would be purged wrongly. Empty today; an entry here needs a
+       * comment saying why the column is not account data.
+       */
+      excludedColumns: z.preprocess((val) => {
+        if (typeof val === 'string') {
+          return val
+            .split(',')
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0);
+        }
+
+        return val;
+      }, z.array(z.string()).default([])),
+    }),
+  }),
   // WHEN the appliance is willing to spend on enrichment, and HOW MUCH. The
   // pipeline's twelve stages share ONE Ollama process with interactive chat,
   // HBPE and the summary sidecar, and two of them egress to a metered geocoding
@@ -475,15 +685,159 @@ export const ConfigSchema = z.object({
        * fabricated one costs the user's trust in every other answer on the page.
        */
       minAnswerConfidence: z.coerce.number().min(0).max(1).default(0.4),
+      /**
+       * Confidence at/above which an inference writes to `ci.answers` (or
+       * applies a graph/planning action) without a review step, per trust
+       * mode (see `PersonalizationService.profileForTrustMode`). Below it the
+       * action is held for review — see `PersonalizationService.decide`.
+       *
+       * Defaults match this repo's original hardcoded values. Set any of
+       * these to 0 to auto-apply everything that clears `minAnswerConfidence`
+       * above, which is useful for local testing but not recommended on a
+       * real appliance for the same reason `minAnswerConfidence` warns against
+       * 0: nothing then distinguishes a well-evidenced inference from a guess.
+       */
+      autoPromoteThresholdCautious: z.coerce.number().min(0).max(1).default(1),
+      autoPromoteThresholdBalanced: z.coerce.number().min(0).max(1).default(0.55),
+      autoPromoteThresholdHandsOff: z.coerce.number().min(0).max(1).default(0.7),
+      /**
+       * Below this, `PersonalizationService.decide` always returns 'review'
+       * regardless of trust mode or action kind — the floor beneath every
+       * `autoPromoteThreshold*` above.
+       *
+       * It has to move WITH `autoPromoteThresholdBalanced`, not independently:
+       * `decide` tests this floor FIRST and returns 'review' before any
+       * promote threshold is consulted, so a promote threshold set below this
+       * floor is dead config. Lowering only one of the pair changes nothing.
+       */
+      alwaysReviewBelowConfidence: z.coerce.number().min(0).max(1).default(0.55),
+    })
+    .default({}),
+  agent: z
+    .object({
+      // Retention for `ci.agent_memories` — the raw fragments the agent writes
+      // through `POST /memory/write`, which `MemoryCompactionService` promotes
+      // into the knowledge graph and `RecallService` re-reads verbatim as its
+      // naive-RAG channel. See AgentMemoryRetentionService for why the two
+      // lifecycle halves are given very different treatment.
+      memoryRetention: z
+        .object({
+          /**
+           * Off keeps every fragment forever, which is the behaviour that
+           * shipped before this sweep existed. It exists so an operator can
+           * stop an irreversible job without editing code, not because keeping
+           * everything is a defensible steady state.
+           */
+          enabled: booleanStringSchema.default(true),
+          /**
+           * Days a PROCESSED fragment is kept after `processed_at` is stamped.
+           *
+           * The house convention (365) rather than something shorter, because
+           * on this table the raw text is not dead weight after compaction:
+           * `RecallService`'s message channel vector-searches these fragments
+           * and unions their text in precisely because the graph
+           * serialisation the compactor produces is lossy ("Priya Sharma —
+           * lives in Phoenix" versus the sentence that also said she moved
+           * from Eugene last spring). Shortening this trades recall detail for
+           * disk, and the disk is not the constraint: a fragment is a few
+           * hundred bytes of text plus one dense embedding, so even a chatty
+           * producer costs low hundreds of MB a year.
+           *
+           * Shorten it on an appliance whose owner would rather the raw
+           * conversational text not outlive its distillation — that is the
+           * reason to move this number, not space.
+           */
+          processedDays: z.coerce.number().int().positive().default(365),
+          /**
+           * Age at which an UNPROCESSED fragment is reported as a stuck
+           * pipeline. Never a deletion trigger: an unprocessed fragment is the
+           * only copy of text nothing has promoted anywhere, so age alone can
+           * never be grounds for destroying it. A week is long enough that a
+           * paused compaction cron or an Ollama outage has visibly failed to
+           * clear rather than merely fallen behind — the compactor takes 100
+           * fragments every five minutes when it is healthy.
+           */
+          stuckAfterDays: z.coerce.number().int().positive().default(7),
+          /** Days a raised stuck-pipeline card suppresses its own repeat. */
+          stuckAlertRepeatDays: z.coerce.number().int().positive().default(7),
+          /**
+           * Fragments deleted per nightly sweep.
+           *
+           * Deliberately small. Each deletion goes through
+           * `AgentMemoryService.remove`, which also emits the event that reaps
+           * the fragment's `ci_search.embeddings` row — correctness the sweep
+           * cannot get from a bulk `DELETE` — so this bounds a per-row path,
+           * not one statement. A backlog drains across nights and is logged
+           * while it lasts.
+           */
+          deleteBatchSize: z.coerce.number().int().positive().default(500),
+        })
+        .default({}),
+    })
+    .default({}),
+  // The chat-turn memory producer. `ci.agent_memories` was written by exactly
+  // one caller (POST /memory/write, ApiKeyGuard-only), so on an appliance whose
+  // owner talks to their own web chat the table stayed empty and everything
+  // downstream of it — compaction, the fragment embedding, the recall message
+  // channel — had nothing to read. `TurnFragmentCron` is the missing producer.
+  // Consumed by `domains/agent/cron/TurnFragmentCron.ts` and
+  // `domains/agent/services/TurnFragmentService.ts`.
+  agentMemory: z
+    .object({
+      turnFragments: z
+        .object({
+          /**
+           * Minutes between fan-out ticks. Bounded 5..15 on purpose: below 5
+           * the cron re-scans the same settling turns for no gain, above 15 a
+           * fragment written now is not recallable for a quarter of an hour,
+           * which is long enough that the next question in the same session
+           * misses it.
+           */
+          intervalMinutes: z.coerce.number().int().min(5).max(15).default(10),
+          /**
+           * How far back a tick looks. Must comfortably exceed
+           * `intervalMinutes` so a skipped tick (restart, a long-running
+           * previous tick) still gets picked up by the next one.
+           */
+          lookbackMinutes: z.coerce
+            .number()
+            .int()
+            .positive()
+            .max(24 * 60)
+            .default(120),
+          /**
+           * Turns younger than this are left alone. A tool-calling turn writes
+           * several assistant rows against one prompt, and the fragment id is
+           * keyed on the prompt (not the text) so the FIRST write wins — a
+           * settle delay is what stops a half-finished chain becoming the
+           * permanent fragment.
+           */
+          settleMinutes: z.coerce.number().int().nonnegative().default(3),
+          /** Turns distilled per user per tick. Bounds one user's backlog. */
+          maxTurnsPerUser: z.coerce.number().int().positive().default(25),
+          /**
+           * Below this many characters (prompt + reply, after `<think>` is
+           * stripped) the turn is not worth a fragment — "hi"/"thanks" pairs
+           * would otherwise dominate the recall channel.
+           */
+          minFragmentChars: z.coerce.number().int().nonnegative().default(40),
+          /** Per-side cap. A 40k-token reply is not a memory fragment. */
+          maxSideChars: z.coerce.number().int().positive().default(2000),
+        })
+        .default({}),
     })
     .default({}),
   features: z.object({
     'scheduled.answer.inferencing': booleanStringSchema,
+    /**
+     * The three `SyncOrchestrator` crons — job creation, provider fetch and
+     * transform. Off is the kill switch for all outbound provider polling,
+     * including the jobs POST /connections/sync-now enqueues; queued work
+     * resumes untouched when it is turned back on.
+     */
     'scheduled.connection.sync': booleanStringSchema,
-    'scheduled.entity.promotion': booleanStringSchema,
     'pinned.demo.models': booleanStringSchema,
     'enable.system.prompt': booleanStringSchema,
-    'enable.inventory.page': booleanStringSchema,
     'advanced.theme.tab': booleanStringSchema,
     'require.signup.codes': booleanStringSchema,
     'files.page': booleanStringSchema,
@@ -510,13 +864,28 @@ export const ConfigSchema = z.object({
     'planning.page': booleanStringSchema,
     /** Shows the "Nothing planned yet" empty state on the Plan page when there are no tasks. */
     'planning.emptyState': booleanStringSchema,
-    /** Enables the memory stats page (`/stats`): timeline totals plus entity
-     * breakdowns by data source and by tag. */
+    /**
+     * Wholesale gate for the Self surface (`/self/*` + the Power Rail user
+     * tile): identity, life details, account, Stats and Reflections.
+     *
+     * Its own flag because the tile is the ONLY mount point for the account
+     * menu — Settings, Theme and Log out. It used to ride `stats.page`, so
+     * turning off a flag named for a statistics page removed every way to open
+     * Settings or sign out.
+     */
+    'self.page': booleanStringSchema,
+    /** Enables the memory stats page (now the Stats tab inside Self): timeline
+     * totals plus entity breakdowns by data source and by tag. */
     'stats.page': booleanStringSchema,
     /** Wholesale gate for the Schedule surface (`/schedule` + nav entry point):
      * committed events, the HBPE rhythm layer, and proposed candidates. On by
      * default. */
     'schedule.page': booleanStringSchema,
+    /**
+     * Wholesale gate for the Forecast page (`/forecast` + rail entry). Off by
+     * default. Calendar's HBPE rhythm layer is `schedule.page` and is independent.
+     */
+    'forecast.page': booleanStringSchema,
     /** The standalone all-tags browse page (`/tags`). Restored — on by default —
      * after #1512 removed it and left no way to see every tag in the system.
      * Chips open the explorer filtered by the tag (`/memory?tags=<label>`). */
@@ -524,6 +893,13 @@ export const ConfigSchema = z.object({
     hbpe: booleanStringSchema,
     /** Enables the memory compaction cron that promotes note fragments into graph entities. */
     'agent.memory.compaction': booleanStringSchema,
+    /**
+     * Enables `TurnFragmentCron`: the appliance's own chat turns become raw
+     * `ci.agent_memories` fragments. OFF by default — turning it on starts
+     * writing conversation text into the recall channel, and (with
+     * `agent.memory.compaction` also on) into the knowledge graph.
+     */
+    'agent.memory.turnFragments': booleanStringSchema,
     /**
      * Enables saved-search sharing: the `/shared/<token>` capability-link path
      * (resolving a shared saved search and running it as its owner) and the
@@ -549,9 +925,16 @@ export const ConfigSchema = z.object({
     'smart.rotation': booleanStringSchema,
     /**
      * Interpersonal "ask" feature (epic #1712): questions directed at another
-     * user's memory, gated by consent. Off by default while the surface and the
-     * disclosure filter are built; the whole ask GraphQL surface stays dark
-     * (mutations report failure, queries return empty) until enabled.
+     * user's memory, gated by consent.
+     *
+     * ON by default now that the consent gate, disclosure filter, tier ceilings
+     * and per-item redaction are all in place — the reason it shipped dark
+     * ("while the surface is being built") no longer holds.
+     *
+     * Enabling this does NOT open federation: an inbound peer ask additionally
+     * requires `peers.audience` to be configured, and the peer route refuses
+     * every request until it is. What this flag turns on is the LOCAL ask
+     * surface, where every ask still defaults to owner review.
      */
     ask: booleanStringSchema,
     /**
@@ -572,6 +955,26 @@ export const ConfigSchema = z.object({
      * the previous default (hope the client remembers) was the #51 hole.
      */
     'ingest.selfHeal': booleanStringSchema,
+    /**
+     * Master gate for the Solid Protocol facade (`/solid/*`): WebID profile
+     * documents and, as later slices land, LDP resources and WAC. Off by
+     * default — the surface stays dark (routes 404) until explicitly enabled.
+     */
+    'solid.protocol': booleanStringSchema,
+    /**
+     * The dispatch gate: `ToolRegistry.executeTool` consults `resolveToolGate`
+     * and parks a destructive/external/not-locally-permitted intent in
+     * `ci.pending_actions` instead of running it, returning `TOOL_QUEUED`.
+     *
+     * OFF by default, and off is byte-identical to the pre-gate behaviour —
+     * `PendingActionService.evaluate` pins the tier to `appliance` and skips the
+     * trust dial, so the only ruling it can produce is the `execute` every call
+     * already got. Turn it on with ENABLE_PENDING_ACTIONS=true; what changes
+     * then is `cautious` trust mode (destructive/external intents ask first) and
+     * `?tier=local` execute calls (queued rather than run). `hands_off` and
+     * `balanced` behave exactly as they do today either way.
+     */
+    'tools.pendingActions': booleanStringSchema,
   }),
   environment: z.object({
     'database.query.logging': booleanStringSchema,
@@ -581,11 +984,74 @@ export const ConfigSchema = z.object({
     deviceId: z.string().optional(),
     apiKey: z.string().optional(),
   }),
+  // Peer federation (CI-Server #1711 Phase 3). `directoryUrl` is CI-Portal's
+  // peer-discovery API base (handle → Companion endpoint + issuer); empty
+  // disables discovery, and with it any outbound ask. Inbound peer asks are
+  // additionally gated by the `ask` feature flag.
+  peers: z.object({
+    directoryUrl: z.string().optional(),
+    /** This box's own Companion endpoint, published to the directory. */
+    memoryEndpoint: z.string().optional(),
+    /** This box's Portal handle. */
+    handle: z.string().optional(),
+    /**
+     * The audience value CI-Portal mints into tokens addressed to THIS box.
+     * Required for the inbound peer surface: without it a token issued for any
+     * first-party client would be accepted here, so a token minted for another
+     * Companion could be replayed against this one.
+     */
+    audience: z.string().optional(),
+    /** Bound on every outbound call to a peer or the directory. */
+    timeoutMs: z.coerce.number().int().positive().default(10_000),
+    /**
+     * REQUIRE a valid RFC 9421 message signature on the inbound peer surface.
+     *
+     * Off by default, and deliberately a separate knob from having a key: a box
+     * that starts signing must not immediately stop talking to peers that have
+     * not yet upgraded. The rollout is (1) both sides configure a key and sign,
+     * (2) both sides turn this on. Turning it on with peers that do not sign
+     * refuses them -- which is the point, but it is the operator's call and not
+     * a side effect of setting a key.
+     */
+    requireHttpSignature: z.coerce.boolean().default(false),
+    /**
+     * This box's Ed25519 signing key, as a PRIVATE JWK (JSON string or object).
+     *
+     * Absent means this box does not sign; outbound asks go unsigned and a peer
+     * with `requireHttpSignature` on will refuse them. An unusable value
+     * degrades to the same thing rather than failing startup -- see
+     * `PeerSignatureService.signingKey`.
+     *
+     * Generate one with:
+     *   node -e "const {generateKeyPairSync}=require('node:crypto');
+     *     console.log(JSON.stringify(generateKeyPairSync('ed25519').privateKey.export({format:'jwk'})))"
+     */
+    signingKeyJwk: z.string().optional(),
+  }),
   // Geocoding, both directions (address <-> coordinates). Egress normally goes
   // through CI-Portal, which holds the provider key and fronts a cache shared by
   // every appliance; `google` is the direct-key fallback and is the only mode
   // that reads `apiKey` (GEOCODING_API_KEY, falling back to the legacy
   // GOOGLE_MAPS_KEY — see custom-environment-variables.json + the transform below).
+  /**
+   * Link previews ("unfurls") — what `enrich.unfurl` may fetch on the user's
+   * behalf. Every call is a server-side request to a host the content chose,
+   * through the SSRF chokepoint in domains/embed/services/UnfurlFetcher.ts.
+   */
+  unfurl: z.object({
+    /** Master switch; off records every candidate as skipped: disabled. */
+    enabled: z.coerce.boolean().default(true),
+    /** Per-host request ceiling. Provider oEmbed endpoints and Wikimedia's APIs are generous at this rate. */
+    ratePerSecond: z.coerce.number().positive().default(2),
+    /**
+     * Follow arbitrary http(s) content URLs for OpenGraph metadata. Provider
+     * oEmbed and Wikimedia are fixed hosts; this one is the long tail and the only
+     * setting that makes the appliance fetch a page it has never heard of.
+     */
+    openGraph: z.coerce.boolean().default(true),
+    /** Copy posters into object storage so a dead provider link does not blank the tile. */
+    cachePosters: z.coerce.boolean().default(true),
+  }),
   geocoding: z.object({
     apiKey: z.string().optional(),
     batchSize: z.coerce.number().int().positive().default(200),
@@ -630,6 +1096,14 @@ if (!parsed.llm.chatModel) {
   parsed.llm.chatModel = DEFAULT_CHAT_MODEL;
 }
 
+// An empty LLM_UTILITY_MODEL means "not configured", not "use the empty
+// string" — same normalization chatModel gets just above. Falling back to the
+// small compiled-in default rather than to `chatModel` is deliberate: inheriting
+// the operator's chat model is exactly the coupling this setting exists to break.
+if (!parsed.llm.utilityModel) {
+  parsed.llm.utilityModel = DEFAULT_UTILITY_MODEL;
+}
+
 // GEOCODING_API_KEY takes precedence; fall back to the legacy GOOGLE_MAPS_KEY so
 // existing deployments keep working until the billed key is supplied. (config's
 // custom-environment-variables.json maps one env var per field, not a fallback
@@ -655,6 +1129,34 @@ parsed.geocoding.portalBaseUrl = resolveGeocodingPortalBaseUrl(
   parsed.ciPortal.url,
 );
 
+/**
+ * Whether the SELECTED geocoding provider actually has what it needs to make a
+ * request, mirroring exactly what each provider's own postBatch/geocode check
+ * already gates on (PortalGeocodeProvider's `!this.baseUrl || !this.deviceKey`,
+ * GoogleGeocodeProvider's `!this.apiKey`) — kept as ONE function, here rather
+ * than in the geocode domain, so a domain that cannot depend on geocode (the
+ * geocode domain itself depends on MemoryModule, so PlaceService importing
+ * back from geocode would be circular) can still ask the same question a
+ * boot-time warning and a GraphQL status query also ask, and none of the three
+ * can quietly disagree about what "configured" means.
+ *
+ * Portal is the default provider, so a bare `GEOCODING_PORTAL_BASE_URL` with no
+ * `HUB_API_KEY` reads as unconfigured — before this, that exact combination
+ * produced zero warnings anywhere, so ENRICH_GEOCODE silently never ran and
+ * every place downstream showed "0 visits" indistinguishable from a genuinely
+ * quiet place.
+ */
+export function isGeocodingConfigured(
+  cfg: {
+    geocoding: { provider: string; apiKey?: string; portalBaseUrl?: string };
+    ciPortal: { apiKey?: string };
+  } = parsed,
+): boolean {
+  return cfg.geocoding.provider === 'google'
+    ? Boolean(cfg.geocoding.apiKey)
+    : Boolean(cfg.geocoding.portalBaseUrl) && Boolean(cfg.ciPortal.apiKey);
+}
+
 // Warn (don't throw) on a geocoding misconfiguration: the server must still
 // boot, and the backfill simply reports a transient/denied status until it is
 // fixed. Each provider has its own requirement, so only warn about the one in use.
@@ -670,6 +1172,18 @@ if (parsed.geocoding.provider === 'portal' && !parsed.geocoding.portalBaseUrl) {
     '[configuration] geocoding.provider is "portal" but no base URL is configured ' +
       '(GEOCODING_PORTAL_BASE_URL / CI_CLOUD_URL). Geocode backfills will report a transient ' +
       'failure until one is set.',
+  );
+}
+
+// A base URL with no device key is just as unconfigured as no base URL at
+// all (PortalGeocodeProvider.postBatch gates on both), but only the missing
+// URL used to warn here — a box with GEOCODING_PORTAL_BASE_URL set and no
+// HUB_API_KEY produced zero warnings anywhere except a private, latched,
+// log-only line inside PortalGeocodeProvider itself.
+if (parsed.geocoding.provider === 'portal' && parsed.geocoding.portalBaseUrl && !parsed.ciPortal.apiKey) {
+  console.warn(
+    '[configuration] geocoding.provider is "portal" but no device key is configured ' +
+      '(HUB_API_KEY). Geocode backfills will report a transient failure until one is set.',
   );
 }
 

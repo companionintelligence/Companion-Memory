@@ -1,13 +1,18 @@
 import { Field, ID, Int, ObjectType, Float, registerEnumType } from '@nestjs/graphql';
 import GraphQLJSONObject from 'graphql-type-json';
 
-import { type Item } from '@ci/domains/memory';
+import { type ObjectLifecycleState, type Item } from '@ci/domains/memory';
 
 import { EntityTagType } from './EntityTagType';
 import { FileType } from './FileType';
 import { GlobalUID } from './GlobalUID';
+import { ItemLifecycleState } from './ItemFilters';
 import { Node } from './Node';
+import { ObjectIdentifierType } from './ObjectIdentifierType';
+import { ObjectObservationType } from './ObjectObservationType';
 import { ItemAcquisitionMethod, ItemUnitSystem } from './PhysicalItemProperties';
+import { ProductModelType } from './ProductModelType';
+import { ReceiptLineItemType } from './ReceiptLineItemType';
 import { Taggable } from './Taggable';
 
 export enum ItemCondition {
@@ -123,6 +128,60 @@ export class ItemType implements Node, Taggable {
   @Field(() => Boolean)
   isDigital!: boolean;
 
+  // --- Object identity -----------------------------------------------------
+  // What this thing IS, how sure we are, and where that belief came from. The
+  // product/instance split lives here: `product` is the kind of thing (every
+  // unit shares its GTIN), this row is the one you own (its serial is its own).
+
+  @Field(() => ItemLifecycleState, {
+    description: 'Ownership state. A disposed thing keeps its row — it still happened.',
+  })
+  lifecycleState!: ObjectLifecycleState;
+
+  @Field(() => Float, {
+    description:
+      'How sure we are this row is one real, distinct thing. 1.0 = a human said so or a barcode was scanned; lower = minted from a receipt line or guessed from a photo.',
+  })
+  identityConfidence!: number;
+
+  @Field(() => Date, {
+    nullable: true,
+    description: 'When this thing was last SEEN — by a confirmed sighting, not by being edited.',
+  })
+  lastSeenAt!: Date | null;
+
+  /** Identifiers claimed by this UNIT (serial, imei, vin). Hydrated by the resolver. */
+  @Field(() => [ObjectIdentifierType], { complexity: 5 })
+  identifiers!: ObjectIdentifierType[];
+
+  /** The catalog model this unit is an INSTANCE_OF. Hydrated by the resolver. */
+  @Field(() => ProductModelType, { nullable: true, complexity: 5 })
+  product?: ProductModelType | null;
+
+  /** Sightings resolved to this unit, most recent first. Hydrated by the resolver. */
+  @Field(() => [ObjectObservationType], { complexity: 5 })
+  observations!: ObjectObservationType[];
+
+  /**
+   * The receipt line this unit was minted from — the purchase that proves it
+   * exists. Hydrated by the resolver.
+   */
+  @Field(() => ReceiptLineItemType, { nullable: true, complexity: 5 })
+  acquisition?: ReceiptLineItemType | null;
+
+  // --- Provenance triple ---------------------------------------------------
+  // (sourceType, sourceSystem, sourceId) is the idempotency key a re-sync
+  // dedupes on, and the only honest answer to "where did this row come from".
+
+  @Field(() => String, { nullable: true })
+  sourceType!: string | null;
+
+  @Field(() => String, { nullable: true })
+  sourceSystem!: string | null;
+
+  @Field(() => String, { nullable: true })
+  sourceId!: string | null;
+
   @Field(() => GraphQLJSONObject, { nullable: true })
   metadata?: Record<string, unknown> | null;
 
@@ -172,6 +231,18 @@ export class ItemType implements Node, Taggable {
       manufacturedAt: item.manufacturedAt,
       expiresAt: item.expiresAt,
       isDigital: item.isDigital,
+
+      lifecycleState: item.lifecycleState,
+      identityConfidence: item.identityConfidence,
+      lastSeenAt: item.lastSeenAt,
+      sourceType: item.sourceType,
+      sourceSystem: item.sourceSystem,
+      sourceId: item.sourceId,
+
+      identifiers: [], // Hydrated by resolver
+      product: null, // Hydrated by resolver
+      observations: [], // Hydrated by resolver
+      acquisition: null, // Hydrated by resolver
 
       tags: [], // Hydrated by resolver
       createdAt: item.createdAt,

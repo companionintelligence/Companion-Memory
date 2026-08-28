@@ -21,6 +21,7 @@ function typedstream(text: string, opts: { mutable?: boolean; refTag?: number } 
           (() => {
             const b = Buffer.alloc(2);
             b.writeUInt16LE(body.length);
+
             return b;
           })(),
         ]);

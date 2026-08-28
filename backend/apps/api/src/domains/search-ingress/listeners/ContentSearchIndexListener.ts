@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
-import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EmbeddingGenerationService, embedSkipReason, shouldEmbedType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 import { type Content, ContentService } from '@ci/domains/memory';
@@ -15,6 +15,7 @@ import {
 } from '@ci/domains/memory/events';
 import { contentSearchDocument, contentWeightedTexts } from '@ci/domains/search-ingress/searchTexts';
 import { EmbeddingService } from '@ci/domains/search-ingress/services/EmbeddingService';
+import { IndexSkipService } from '@ci/domains/search-ingress/services/IndexSkipService';
 import { VectorService } from '@ci/domains/search-ingress/services/VectorService';
 import { type WeightedText } from '@ci/domains/search-ingress/types';
 
@@ -24,6 +25,7 @@ export class ContentSearchIndexListener {
     private readonly contentService: ContentService,
     private readonly embeddingGenerationService: EmbeddingGenerationService,
     private readonly embeddingService: EmbeddingService,
+    private readonly indexSkipService: IndexSkipService,
     private readonly vectorService: VectorService,
     private readonly logger: LoggerService,
   ) {
@@ -71,6 +73,11 @@ export class ContentSearchIndexListener {
     });
 
     this.logger.log('Removed tsvector for content');
+
+    await this.indexSkipService.clearSkip({
+      entityType: 'content',
+      entityId: payload.contentId,
+    });
   }
 
   private async upsertContent(payload: ContentCreatedPayload | ContentUpdatedPayload) {
@@ -99,11 +106,26 @@ export class ContentSearchIndexListener {
     }
 
     const searchDocument = this.getSearchDocument(content);
+    const skipReason = searchDocument == null ? 'empty' : embedSkipReason(searchDocument);
 
-    if (searchDocument == null) {
-      this.logger.log('Content has no search document, skipping embedding');
+    if (!shouldEmbedType('content')) {
+      this.logger.log('Content type not in embed allowlist, skipping embedding');
+    } else if (skipReason != null) {
+      this.logger.log('Skipping low-value content embedding', {
+        contentId: content.id,
+        skipReason,
+      });
+
+      // Persist the skip so the backfill sweep (LEFT JOIN on ci_search.embeddings)
+      // stops re-finding this row on every run — without a marker the sweep never
+      // converges and its no-op jobs starve the other entity types.
+      await this.indexSkipService.recordSkip({
+        entityType: 'content',
+        entityId: content.id,
+        reason: skipReason,
+      });
     } else {
-      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);
+      const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument!);
 
       await this.embeddingService.upsert(
         {
@@ -115,6 +137,12 @@ export class ContentSearchIndexListener {
           embedding,
         },
       );
+
+      // An updated content row that became embeddable is no longer skipped.
+      await this.indexSkipService.clearSkip({
+        entityType: 'content',
+        entityId: content.id,
+      });
 
       this.logger.log('Generated embedding for content');
     }

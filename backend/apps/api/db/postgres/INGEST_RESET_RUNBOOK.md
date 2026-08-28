@@ -2,8 +2,8 @@
 
 How to wipe all bulk-ingested data and re-import from scratch (e.g. to re-test
 an importer change against a clean database). Companion to the
-[bulk load runbook](BULK_LOAD_RUNBOOK.md); the dedup-table mechanics referenced
-below are explained in
+[bulk load runbook](BULK_LOAD_RUNBOOK.md); the provenance-triple idempotency
+referenced below is explained in
 [docs/architecture/Database.md](../../../../../docs/architecture/Database.md#idempotency--dedup-design),
 and the full `/api/maintenance/*` surface in
 [docs/api/rest.md](../../../../../docs/api/rest.md#maintenance--enrichment--apimaintenance--domainsmaintenancecontrollersmaintenancecontrollerts374).
@@ -24,17 +24,42 @@ Content-Type: application/json         # /api/maintenance/* endpoints
 Any other body — missing, `true`, a different string — is a `400` before the
 handler runs.
 
-In a single transaction it:
+That path is literal **against the API host**. `main.ts` sets no global prefix
+and the edge proxy strips a browser's `/api`, but `MaintenanceController` bakes
+`api/` into its own path (`@Controller('api/maintenance')`), so pointing `curl`
+at the proxy host would strip the prefix you just typed. Use the API's own
+host:port.
+
+Before it truncates anything the service runs one `EXISTS` probe per
+user-scoped table (`assertNobodyElsesData` in `IngestResetService`). If any of
+them still holds a row belonging to a different account, the call is refused
+with a `403` naming the tables — the route sits behind ordinary user auth, the
+appliance has no admin role, and a `TRUNCATE` cannot take just your rows. On a
+box with other accounts' data, do the reset directly against the database
+instead.
+
+In a single transaction it then:
 
 | What | Why |
 |------|-----|
-| `TRUNCATE ci.events, ci.communications, ci.content, ci.inventory, ci.browser_activity RESTART IDENTITY CASCADE` | the bulk-ingest destination tables |
-| `TRUNCATE ci.communications_source_dedup` (same statement) | **required in lockstep** — `TRUNCATE` does not fire the per-row `AFTER DELETE` trigger that normally keeps the dedup table consistent with the hypertable. If the dedup rows survive, every provenance triple in the next re-import "dedupes" against a pointer to a deleted row and the re-import lands **0 communications** (this incident has happened). `CommunicationService.createMany` + migration `20260628120000_communications_source_dedup_table.sql` are the mechanism. |
+| `TRUNCATE ci.events, ci.communications, ci.content, ci.browser_activity, ci.object_observations, ci.receipt_line_items, ci.receipts, ci.objects, ci.product_models RESTART IDENTITY CASCADE` | the bulk-ingest destination tables (`INGEST_TABLES` in `IngestResetService`). One statement, not a delete loop: `ci.objects` and `ci.receipt_line_items` reference *each other* (`acquisition_line_item_id` / `minted_object_id`), so no per-table ordering satisfies both. |
+| `DELETE FROM ci.entities WHERE entity_type IN ('Item','Event','Communication') AND linked_table IN ('objects','events','communications')` | the CTI base rows that share a uuid with the truncated detail rows. `TRUNCATE` only follows FKs *pointing at* the truncated tables, so these survive it and would be left as orphan base entities. The `linked_table` predicate is what spares real graph entities, whose `linked_table` is `import:<source>`. |
 | `TRUNCATE ci_search.embeddings, ci_search.vectors, ci_search.index_skips` | otherwise the search index is fully orphaned (it points at deleted rows) and skip markers wrongly suppress re-indexing of re-imported rows. The list is shared with `OrphanCleanupService` (`SEARCH_TABLES`) so it cannot drift. |
 | `DELETE FROM pgboss.job WHERE name = 'search-index' AND state IN ('created','active','retry')` | queued index jobs reference rows that no longer exist; they would drain as pure entity-not-found noise |
 
-Response: `countsBefore` (rows per table at the moment of the reset),
-`truncated` (table list), `searchIndexJobsDeleted`.
+There is no longer a communications dedup companion table to clear in
+lockstep. `ci.communications` stopped being a hypertable in
+`20260807072321_dehypertable_communications.sql`, which dropped
+`ci.communications_source_dedup`, its `AFTER DELETE` trigger and the bespoke
+claim logic in `CommunicationService.createMany`, and put the real key back in
+the database as the partial unique index `communications_source_triple_uniq`
+on `(user_id, source_type, source_system, source_id)`. A truncate takes that
+index with the rows, so the old "0 communications on re-import" failure mode is
+gone with it.
+
+Response: `countsBefore` (rows per table — the ingest tables and the three
+`ci_search` tables — at the moment of the reset), `truncated` (table list),
+`searchIndexJobsDeleted`.
 
 ## 2. Importer-side watermark reset (legacy CI-Import-Tools only)
 

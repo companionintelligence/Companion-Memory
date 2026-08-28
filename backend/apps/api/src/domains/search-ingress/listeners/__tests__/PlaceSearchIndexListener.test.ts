@@ -1,4 +1,5 @@
 import { SYSTEM_USER } from '@ci/common/context';
+import config from '@ci/configuration';
 
 import { PlaceSearchIndexListener } from '../PlaceSearchIndexListener';
 
@@ -121,5 +122,29 @@ describe('PlaceSearchIndexListener.indexPlace / updatePlace', () => {
 
     expect(embeddingService.upsert).not.toHaveBeenCalled();
     expect(vectorService.upsert).not.toHaveBeenCalled();
+  });
+
+  describe('CI_EMBED_TYPES allowlist', () => {
+    const originalTypes = config.embedding.types;
+
+    afterEach(() => {
+      config.embedding.types = originalTypes;
+    });
+
+    it('skips embedding (but still vectorizes) a place when "place" is excluded from the allowlist', async () => {
+      config.embedding.types = ['event'];
+
+      const { listener, embeddingService, vectorService } = makeListener({
+        id: 'place-4',
+        user: { id: 'user-1' },
+        name: 'Blue Bottle',
+        description: 'Our usual coffee spot',
+      });
+
+      await listener.indexPlace({ placeId: 'place-4' } as never);
+
+      expect(embeddingService.upsert).not.toHaveBeenCalled();
+      expect(vectorService.upsert).toHaveBeenCalled();
+    });
   });
 });

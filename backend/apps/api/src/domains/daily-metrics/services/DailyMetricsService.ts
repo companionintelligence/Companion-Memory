@@ -138,11 +138,12 @@ export class DailyMetricsService {
   }
 
   /**
-   * Recompute a trailing window for every user in their profile timezone.
-   * Used by the cron. Failures for one user do not abort the rest of the run.
+   * Recompute a trailing window for every onboarded user in their profile
+   * timezone. Used by the cron. Failures for one user do not abort the rest of
+   * the run.
    */
   async refreshAll(windowDays = DEFAULT_REFRESH_WINDOW_DAYS): Promise<void> {
-    const users = await this.userService.findAll();
+    const users = await this.userService.findAllOnboarded();
     this.logger.log('Refreshing daily metrics', { users: users.length, windowDays });
 
     for (const user of users) {

@@ -2,7 +2,7 @@ import { cn } from '@ci/shadcn';
 
 import type { ScheduleEvent } from '@/api/useScheduleService';
 
-import { addDays, formatClock, pickNowNext, sameLocalDay, startOfLocalDay } from './todayNowNext';
+import { addDays, formatClock, pickNowNext, sameLocalDay, startOfLocalDay } from './nowNext';
 
 interface TodayNowNextProps {
   events: readonly ScheduleEvent[];

@@ -6,7 +6,11 @@ import { Cron } from '@ci/common/schedule';
 
 import { ActivityRollupService } from '../services/ActivityRollupService';
 
-const ACTIVITY_ROLLUP_CRON = '0 */15 * * * *';
+// Second 25, not 0. `refreshAll()` is eight full-table aggregates and second 0
+// is where every unoffset schedule on the appliance already lands; 10, 20, 30
+// and 40 are the seconds other crons deliberately took. See
+// common/schedule/__tests__/cronSecondOffsets.test.ts for who holds what.
+export const ACTIVITY_ROLLUP_CRON = '25 */15 * * * *';
 
 @Injectable()
 export class ActivityRollupCron implements OnApplicationBootstrap {

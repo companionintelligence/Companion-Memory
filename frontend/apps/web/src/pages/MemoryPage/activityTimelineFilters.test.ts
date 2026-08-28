@@ -7,6 +7,17 @@ describe('activityTimelineFiltersFromSearchParams', () => {
     expect(activityTimelineFiltersFromSearchParams(new URLSearchParams())).toBeUndefined();
   });
 
+  it('maps entity-type exclude lists to includeTypes, matching the explorer search', () => {
+    const params = new URLSearchParams({
+      excludedEntityTypes:
+        'Browser,Communication,Content,Event,File,Note,Place,Product,Receipt,Thing,Answer,Concept',
+    });
+
+    expect(activityTimelineFiltersFromSearchParams(params)).toEqual({
+      includeTypes: ['person'],
+    });
+  });
+
   it('maps entity-type include lists to indexable types', () => {
     const params = new URLSearchParams({ includedEntityTypes: 'Note,Event' });
 

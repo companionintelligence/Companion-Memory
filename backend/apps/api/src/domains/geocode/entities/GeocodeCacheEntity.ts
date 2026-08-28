@@ -34,6 +34,10 @@ export class GeocodeCacheEntity {
   @Column({ type: 'jsonb', default: '{}' })
   components!: Record<string, unknown>;
 
+  /** Result bounding box ({north, south, east, west}), when the provider gave one. */
+  @Column({ type: 'jsonb', nullable: true })
+  bounds!: Record<string, number> | null;
+
   /**
    * Google's JSON `status` field, verbatim — OK | ZERO_RESULTS | REQUEST_DENIED |
    * INVALID_REQUEST | OVER_QUERY_LIMIT | UNKNOWN_ERROR — plus the synthetic

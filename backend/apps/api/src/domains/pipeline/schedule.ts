@@ -102,12 +102,15 @@ const DAYS = 24 * HOURS;
  *    column is not a slow graph, it is an empty one; see the block above
  *    `PROMOTE_EDGE_COMMUNICATION`.
  *  - **NIGHTLY, windowed** (the rest of the local work: the media probe, both
- *    person-link legs, all three `clean.*`, `promote.place` / `promote.object` /
+ *    person-link legs, all four `clean.*`, `promote.place` / `promote.object` /
  *    `promote.observation`, and `enrich.estimate_location`). None of it is
  *    user-visible within a day and none of it costs money, so it goes where it
  *    disturbs nobody.
- *  - **WEEKLY, windowed, CAPPED** (`enrich.geocode`, `enrich.position_reverse`).
- *    The two that egress to a paid provider.
+ *  - **WEEKLY, windowed, CAPPED** (`enrich.position_reverse`, `enrich.geocode`,
+ *    `enrich.event_reverse`, `enrich.unfurl`). Everything that egresses to a
+ *    metered provider. This list is prose and {@link meteredStageIds} is the
+ *    executable form; `schedule.spec.ts` asserts the weekly tier and the metered
+ *    set are the SAME set, so a fifth arrives in both or in neither.
  *
  * ── Batch affinity: why nightly beats continuous for the linkers ───────────
  *
@@ -291,6 +294,43 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
   },
 
   /**
+   * Same shape as media_dimensions, and for the same reasons: local CPU
+   * (sharp / ffmpeg) plus an object-storage read per file, and the upload
+   * path already covers the common case — this sweep is the net under it.
+   * An on-demand run is available through `POST /api/maintenance/file-preview-sweep`.
+   */
+  [STAGE_IDS.ENRICH_FILE_PREVIEW]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  /**
+   * Every key is a request to someone else's server, so this is metered even
+   * though nobody bills for it: provider oEmbed endpoints and Wikimedia both
+   * rate-limit, and a full-corpus first pass (tens of thousands of YouTube and
+   * Spotify keys) is hours of polite 2/s traffic. Every OTHER metered stage
+   * stays weekly; this one runs daily so a large existing corpus (a personal
+   * library is tens of thousands of plays) backfills over days rather than
+   * months at the same per-run cap — 7x the weekly throughput, still metered,
+   * still `perRunCap`-bounded per run. The per-run cap is sized to what 2/s
+   * fits in one enrichment window (rows, not requests — rows sharing a key
+   * cost one request). The cache row's expiry, not the schedule, decides when
+   * a key is asked again. A first pass over a large corpus is still faster
+   * started by hand: `POST /pipeline/sweeps { stage: 'enrich.unfurl' }`.
+   */
+  [STAGE_IDS.ENRICH_UNFURL]: {
+    trigger: 'scheduled',
+    cost: 'metered',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 30 * DAYS,
+    perRunCap: 20_000,
+  },
+
+  /**
    * NIGHTLY. Four Postgres statements per slice; no provider.
    *
    * Nightly for BATCH AFFINITY, not merely for politeness — see the note on
@@ -307,6 +347,19 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
 
   /** NIGHTLY. Same algorithm over `ci.events`, same reasoning, same numbers. */
   [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  /**
+   * NIGHTLY. A PRODUCER of `clean.duplicate_detect` alongside both person-link
+   * legs (`STAGE_DEPENDENCIES`), same tier and same night for the same
+   * producer/consumer reason as `clean.identifier_normalize` below.
+   */
+  [STAGE_IDS.ENRICH_PERSON_SELF_CLAIM]: {
     trigger: 'scheduled',
     cost: 'local',
     window: 'enrichment',
@@ -350,6 +403,33 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
   },
 
   /**
+   * NIGHTLY. Counts contradictory single-valued edges; changes none of them.
+   *
+   * Same tier as its `clean.*` siblings, and the reasoning is the same one
+   * `clean.object_duplicate_detect` gives: the output is a REPORT nobody can
+   * act on until they look at it, so an hour of freshness buys nothing, and
+   * arrival-triggering a corpus-wide group-by at import rate is exactly the
+   * shape this file exists to refuse.
+   *
+   * `cost: 'local'` is exact — one SELECT per slice over
+   * `relationships_from_idx`, no provider and no Ollama. Not `metered`, so no
+   * `perRunCap`: there is no bill for a cap to bound, and capping a stage whose
+   * entire deliverable is a COUNT would make that count a sample of itself.
+   *
+   * No `STAGE_DEPENDENCIES` ordering. It reads `ci.relationships`, which the
+   * `promote.edge_*` legs write, but it is a detector: running before them
+   * counts fewer edges rather than wrong ones, and the next night's pass sees
+   * whatever landed. A gate would buy precision this stage does not claim.
+   */
+  [STAGE_IDS.CLEAN_SINGLE_VALUED_EDGE_AUDIT]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  /**
    * NIGHTLY. Proposes merge candidates; a human disposes.
    *
    * Consumes `ci.identifier_claims`, which both person-link legs write, so it
@@ -358,6 +438,30 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
    * faster than the people who read it.
    */
   [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: {
+    trigger: 'scheduled',
+    cost: 'local',
+    window: 'enrichment',
+    minInterval: 1 * DAYS,
+    maxStaleness: 3 * DAYS,
+  },
+
+  /**
+   * NIGHTLY. The same proposal over owned units; a human disposes.
+   *
+   * Consumes `ci.objects`, which `promote.object` writes, so it sits on the
+   * same nightly tier for the same producer/consumer reason as its sibling —
+   * and it is genuinely cheaper to run late: the detector groups on
+   * identifiers, catalogue product and brand+model+day, and every unit an
+   * import has landed since the last pass is one more member a group can
+   * collapse onto.
+   *
+   * `cost: 'local'` is exact: one grouping query per page plus one upsert per
+   * slice, no provider and no Ollama. Not `onArrival` — a proposal nobody can
+   * act on until they open the review queue buys nothing by being an hour
+   * fresher, and arrival-triggering a corpus-wide group-by at import rate is
+   * the shape `STAGE_SCHEDULES` exists to refuse.
+   */
+  [STAGE_IDS.CLEAN_OBJECT_DUPLICATE_DETECT]: {
     trigger: 'scheduled',
     cost: 'local',
     window: 'enrichment',
@@ -432,7 +536,7 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
     maxStaleness: 3 * DAYS,
   },
 
-  /** NIGHTLY. Purchases into `ci.inventory`. Reads nothing another stage produces. */
+  /** NIGHTLY. Purchases into `ci.objects`. Reads nothing another stage produces. */
   [STAGE_IDS.PROMOTE_OBJECT]: {
     trigger: 'scheduled',
     cost: 'local',
@@ -537,7 +641,7 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
     maxStaleness: 6 * HOURS,
   },
 
-  [STAGE_IDS.PROMOTE_EDGE_INVENTORY]: {
+  [STAGE_IDS.PROMOTE_EDGE_OBJECT]: {
     trigger: 'scheduled',
     cost: 'local',
     window: 'any',
@@ -617,6 +721,40 @@ export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
    * that IS awake at night resolves this at ~7 days and never reaches 30.
    */
   [STAGE_IDS.ENRICH_GEOCODE]: {
+    trigger: 'scheduled',
+    cost: 'metered',
+    window: 'enrichment',
+    minInterval: 7 * DAYS,
+    maxStaleness: 30 * DAYS,
+    perRunCap: 1_000,
+  },
+
+  /**
+   * WEEKLY, WINDOWED, CAPPED. The other direction over the same table:
+   * reverse-geocodes `ci.events.location_coordinates` into `location_name`.
+   *
+   * Same tier, cadence and cap as `enrich.geocode` deliberately — it is the same
+   * table, the same provider and the same order of magnitude. The two candidate
+   * sets are disjoint by construction (a row with a name is one this stage
+   * refuses, and a row without one the forward stage never selects), so a shared
+   * cap is a bound on each rather than a budget they compete for.
+   *
+   * The measurement behind the number: on the appliance this was written
+   * against, 91 events carried coordinates and 79 of them had no name — every
+   * one of them stranded, because nothing scheduled could give them one. That
+   * backlog is not a bill; it is 76 distinct cache cells. What makes the cap
+   * worth having is the shape of the corpus it is waiting for — a photo library
+   * arrives with EXIF GPS on every frame, so one Takeout import can land tens of
+   * thousands of coordinate-bearing events overnight. Cache cells hold the
+   * BILLED count far below the candidate count (an afternoon of photos in one
+   * room is one lookup), but the cap is what makes the worst case a known weekly
+   * quantity rather than an invoice.
+   *
+   * `maxStaleness: 30 * DAYS` for the reason its sibling gives: the escape hatch
+   * for an appliance that is never awake while the window is open, not a second
+   * cadence.
+   */
+  [STAGE_IDS.ENRICH_EVENT_REVERSE]: {
     trigger: 'scheduled',
     cost: 'metered',
     window: 'enrichment',

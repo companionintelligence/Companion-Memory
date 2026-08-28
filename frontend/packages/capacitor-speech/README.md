@@ -162,8 +162,8 @@ ios/
 ```
 
 Consumed by `frontend/apps/ios` and `frontend/apps/android` via
-`"@ci/capacitor-speech": "file:../../packages/capacitor-speech"`, picked up by `npx cap sync`
-on the Android side.
+`"@ci/capacitor-speech": "portal:../../packages/capacitor-speech"`, picked up by
+`npx cap sync` on each side.
 
 > **The podspec filename is not free — it is derived.** `cap sync ios` **regenerates** the
 > Podfile and derives each pod name from the *package* name, stripping the scope and
@@ -180,15 +180,23 @@ on the Android side.
 > name is the fix; do not rename it back, and do not hand-edit the Podfile, because
 > `cap sync` will overwrite it.
 
-### Yarn `file:` dependencies are copies, not symlinks
+### `portal:` vs `file:` — whether your edit reaches the build
 
-On the Windows dev setup used here, `frontend/apps/android/node_modules/@ci/capacitor-*` are
-real **copies**, not symlinks. Editing a source file in this package does **not** reach the
-Gradle build until `yarn install` is re-run inside `frontend/apps/android` — and Gradle will
-still happily report `BUILD SUCCESSFUL` against the stale copy. After every edit here:
+The apps now declare these plugins with Yarn's **`portal:`** protocol, which materializes
+`node_modules/@ci/capacitor-*` as a **symlink** into this directory. On iOS that means
+CocoaPods compiles the working-tree Swift with no reinstall between a source edit and a
+build (the generated Podfile lines point straight at `../../../../packages/<name>`).
+
+Under the older `file:` protocol — and on any setup where Yarn falls back to copying
+(historically the Windows dev setup) — those entries are real **copies**. Editing a source
+file here then does **not** reach the Gradle build until `yarn install` is re-run inside the
+app, and Gradle will still happily report `BUILD SUCCESSFUL` against the stale copy. If you
+are unsure which you have, the safe sequence after an edit is:
 
 ```bash
 cd frontend/apps/android && yarn install && npx cap sync android
+# or, for iOS
+cd frontend/apps/ios && yarn install && npx cap sync ios
 ```
 
 ## Test coverage — what is and is not proven

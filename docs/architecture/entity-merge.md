@@ -3,6 +3,8 @@
 > **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 
 Status: **survey + design for the unbuilt parts** · Scope: `ci.entities` Person / Location / Object / Concept
+· Re-verified against `main` on **2026-08-19** (after PR [#2176](https://github.com/companionintelligence/CI-Server/pull/2176),
+merge `ead9fb425`), which shipped the Thing half this document previously listed as unbuilt.
 
 This file reconciles two versions that were concatenated by an unresolved `git stash pop` in
 c81768074 ("Fix/cleanup (#1955)"): the post-#1810 survey, and the pre-#1810 design draft that the
@@ -41,18 +43,20 @@ the hypertable re-point lifts `timescaledb.max_tuples_decompressed_per_dml_trans
 transaction; tombstones are removed from *both* search stores (`ci_search.embeddings` and
 `ci_search.vectors`).
 
-### 1.2 Object identity — schema only (`20260803223013`–`20260803223025`)
+### 1.2 Object identity — schema (`20260803223013`–`20260803223025`), services since #2176
 
 - `ci.product_models` — the catalog half of the product/instance split.
 - `ci.object_identifiers` — GTIN/serial index, deliberately *separate* from
   `ci.entity_identifiers` rather than widening its CHECK, so people-resolution and
   thing-resolution do not share one unique index.
 - `ci.object_observations` — a sighting ("a mug is visible in this photo") as a distinct, weaker
-  claim than ownership ("I own this mug"), which is what `InventoryListener` was conflating.
-- `ci.inventory` gained `merged_into_object_id`, a model link, a lifecycle and a confidence.
+  claim than ownership ("I own this mug"), which is what the retired inventory listener was conflating.
+- `ci.objects` gained `merged_into_object_id`, a model link, a lifecycle and a confidence.
 
 `ObjectMergeService` and `ObjectDuplicateService` are named in those migrations' comments as the
-owners of re-pointing and duplicate surfacing. Neither exists yet — see §3.2.
+owners of re-pointing and duplicate surfacing. **Both shipped on 2026-08-19 in
+[#2176](https://github.com/companionintelligence/CI-Server/pull/2176)** — see §3.2 for what they
+encode and what is still open.
 
 ### 1.3 What landed after the survey was written
 
@@ -81,9 +85,11 @@ as open:
 
   `DuplicateDetectStage` currently covers `entity_type = 'Person'` only.
 
-### 1.4 The five promotion paths
+### 1.4 The promotion paths
 
-Every path that mints an entity, and how it dedupes today:
+Every path that mints an entity, and how it dedupes today. The first five are the original set;
+the ledger-backed pipeline (`domains/pipeline`, §1.3) added four more after this section was
+written, plus one service outside it.
 
 | # | Path | Entry point | Provenance stamp |
 |---|------|-------------|------------------|
@@ -92,10 +98,19 @@ Every path that mints an entity, and how it dedupes today:
 | 3 | Reverse geocode | `PlaceService.findOrCreateForGeocode` | `properties.source = 'reverse_geocode'` |
 | 4 | Communications participant sweep | `PersonStubBackfillService` | `import:communications:participant` |
 | 5 | LLM / CV inference | `GraphEnrichmentService`, `WriteKnowledgeTool`, `CvDetectionsListener` | varies; often none |
+| 6 | `promote.place` — Locations from forward-geocoded event locations | `PlacePromoteStage` → `PlaceService.findOrCreateForGeocode` + `ensureHierarchy` | provider `place_id` first, then the 0.001° snap cell |
+| 7 | `promote.place_position` — Locations from reverse-geocoded position fixes | `PositionPlacePromoteStage`, composing the same two `PlaceService` methods | as #6 — deliberately one implementation, so the admin-place fold cannot fork |
+| 8 | `promote.object` — `ci.objects` units from receipts and identified objects | `ObjectPromoteStage` | `ci.objects.source_type` + the provenance triple |
+| 9 | `promote.observation` — sightings from `capture.scan` | `ObservationPromoteStage` → `ObjectObservationService` | the observation table's own idempotency arbiters |
+| 10 | Receipt lines → owned units | `ObjectMintService` | `source_type = 'receipt-line'`, triple `(receipt-line, <receipt source_system>, …)` |
+
+Paths 6–10 are ledger-gated rather than nullability-gated: re-processing is a version bump in
+`versions.ts`, not a backfill (see [adr-pipeline-ledger.md](adr-pipeline-ledger.md)).
 
 Each dedupes **only against itself**, via `(owner_user_id, entity_type, linked_table, linked_id)`
-(index `entities_linked_uniq`). Re-running a path never duplicates. Two paths describing the same
-person still always duplicate — that is what §2.1(b) is for.
+(index `entities_linked_uniq`) or, for #6–#10, its own natural key. Re-running a path never
+duplicates. Two paths describing the same person still always duplicate — that is what §2.1(b) is
+for.
 
 ### 1.5 A related design landed in the same window
 
@@ -104,6 +119,14 @@ person still always duplicate — that is what §2.1(b) is for.
 `ci.entity_identifiers`' `.orIgnore()` as the thing that forced `PersonDuplicateService` to
 re-derive normalization in SQL. **Anything built here should adopt that ladder's vocabulary rather
 than inventing a third one.**
+
+Two caveats on that document, as of 2026-08-19: `backend/apps/api/src/domains/identity` implements
+the ladder but **nothing imports it** — the identity rules actually in force are
+`ci.entity_identifiers` (people, normalized by `graph/utils/normalizeIdentifier.ts`),
+`ci.object_identifiers` (things, `graph/utils/normalizeObjectIdentifier.ts`) and the
+`(owner_user_id, entity_type, linked_table, linked_id)` upsert coordinate. And
+`ci.object_merge_candidates` was never created; the Thing duplicate queue that shipped is
+`ObjectDuplicateService` computing groups on read (§3.2), not a persisted candidate table.
 
 ---
 
@@ -207,18 +230,27 @@ Route path 1 through the identifier index so all five paths share one resolution
 
 | | promotion | duplicate detection | merge service | survives re-sync | unmerge | rejection is sticky |
 |---|---|---|---|---|---|---|
-| **Person** | ✅ 5 paths | ✅ `PersonDuplicateService` + `DuplicateDetectStage` | ✅ `PersonMergeService` | ⚠️ §2.1(a) only | ❌ | ✅ `ci.entity_merge_blocks` |
-| **Place** | ✅ geocode + import | ❌ none | ❌ none | — | ❌ | ⚠️ table is type-agnostic, nothing writes it |
-| **Thing** | ✅ + observations | ⚠️ schema only | ❌ column only | ⚠️ §2.1(a) only | ❌ | ⚠️ as Place |
+| **Person** | ✅ 5 paths | ✅ `PersonDuplicateService` + `DuplicateDetectStage` | ✅ `PersonMergeService` | ⚠️ §2.1(a) only | ❌ | ✅ `ci.entity_merge_blocks`, written by `PersonResolver` |
+| **Place** | ✅ geocode + import + `promote.place` / `promote.place_position` | ❌ none | ❌ none | — | ❌ | ⚠️ table is type-agnostic, nothing writes it |
+| **Thing** | ✅ + observations + `promote.object` / `ObjectMintService` | ✅ `ObjectDuplicateService` | ✅ `ObjectMergeService` (units *and* models) | ⚠️ §2.1(a) only | ❌ | ⚠️ `ObjectDuplicateService` *reads* blocks; nothing writes one for a Thing pair |
 | **Concept** | ✅ enrichment | ❌ none | ❌ none | — | ❌ | ⚠️ as Place |
 
-### 3.1 Place is the untouched one
+### 3.1 Place is the untouched one *for merge*
 
-`PlaceService.findOrCreateForGeocode` dedupes within *its own path* on
+`PlaceService.findOrCreateForGeocode` dedupes within *its own path*: the provider `place_id` claim
+in `properties` is the primary identity when the geocoder supplied one, and the fallback is
 `(owner, lower(btrim(name)), round(lat,3), round(lng,3))` — ~110 m. Nothing dedupes across paths,
-and `PlaceService.createMany` has **no dedup key at all**, so a bulk import re-inserts every place
-on every run. That is a provenance-layer fix (§2.2), not something the merger should clean up
-afterwards.
+and `PlaceService.createMany` still has **no dedup key at all** (the comment saying so is still in
+the file), so a bulk import re-inserts every place on every run. That is a provenance-layer fix
+(§2.2), not something the merger should clean up afterwards.
+
+**What did land for places since this was written** (#1811/#1813/#2161) is geography and hierarchy,
+not merge: typed PostGIS `location_point` / `location_boundary` geography columns on `ci.entities`
+plus `place_kind` and `parent_place_id` (`20260803213950_add_place_geography_and_hierarchy.sql`),
+an `ensureHierarchy` fold that mints shared city → region → country admin nodes deduped per parent
+via `entities_admin_place_uniq`, and two spatial reads — `placesNear` (ST_DWithin) and
+`placesContaining` (ST_Covers, smallest footprint first). There is still **no** `PlaceMergeService`
+and no `PlaceDuplicateService`; the rule below is still a design, not code.
 
 Place matching needs a rule of its own, because distance alone is wrong in both directions: two
 Starbucks 50 m apart are two places; the same Starbucks geocoded twice 200 m apart is one. The rule
@@ -240,21 +272,40 @@ order of magnitude, the answer is a `CONTAINED_BY` relationship, never a merge. 
 explicit guard, not a threshold — it is the most likely route to a catastrophic bad merge (folding
 a city into a café).
 
-### 3.2 Thing has the schema but no service
+### 3.2 Thing — shipped in #2176, and the instance/model rule it encodes
 
-The product/instance split is right and already modelled. What is missing is the service that uses
-it, and the rule it must encode — these are two different questions and conflating them is the
-classic failure:
+The product/instance split was right and already modelled; the services that use it landed on
+2026-08-19. The distinction this section asked for is honoured in the shipped shape — `ci.entity_merges`
+rows are written under `entity_type` `'ObjectInstance'` for owned units and `'ProductModel'` for
+catalog models, so the two are separate audit lineages rather than one blurred one:
 
-- **Model** ("Sony WH-1000XM5" as a product class): merges on GTIN/MPN/normalized name. Reasonable
-  to auto-merge.
-- **Instance** (my specific pair): **two of the same product are two objects.** Merge only on a
-  shared serial/asset tag, or on evidence of being the same physical unit observed twice.
+- **Model** ("Sony WH-1000XM5" as a product class): merges on GTIN/MPN/normalized name.
+  `ObjectMergeService.mergeProductModels` re-points identifiers, receipt line items,
+  `ci.objects.product_id` and observations.
+- **Instance** (my specific pair): **two of the same product are two objects.**
+  `ObjectMergeService` folds units, moving identifiers, observations, inventory parent/related
+  links, receipt line items, tag links, and deleting the source's search rows.
 
-This matters most for `CvDetectionsListener`, which mints an entity per detection. A detection
-carries a class label, not identity, so a naive "same label ⇒ same thing" merger folds every chair
-in the house into one chair and every unrecognised face into one person. **CV output should default
-to instance semantics and never auto-merge** — a candidate *source*, never a merge *decision*.
+**Nothing auto-merges.** `ObjectDuplicateService` is candidate generation only — three rungs,
+strongest first: `identifier` (unnesting `ci.objects.identifier_codes` and unioning the
+`ci.object_identifiers` claim index, because that index is first-writer-wins and therefore hides
+the duplicate by construction), then `product_name`, then `brand_model`. Groups are capped at six
+members and carry `totalItems` so the UI can say "showing 6 of 900" for the junk-SKU groups a bad
+import creates; identifiers shorter than six characters are not grouped on at all, because "1" and
+"N/A" appear in identifier bags far more often as placeholders than as identity. The merge itself
+is `mergeItems` / `mergeProductModels`, a user decision.
+
+`ObjectDuplicateService` also *reads* `ci.entity_merge_blocks` (`blockedPairsAmong`) and greedily
+drops members until no rejected pair remains in a group — because the review UI merges a group
+whole, so one rejected pair inside a bigger group would re-propose that rejection. What is still
+missing on the Thing side is the **writer**: there is no reject mutation for an item pair, so
+nothing puts a block row there in the first place (§3.4).
+
+The instance rule matters most for `CvDetectionsListener`, which mints an entity per detection. A
+detection carries a class label, not identity, so a naive "same label ⇒ same thing" merger folds
+every chair in the house into one chair and every unrecognised face into one person. **CV output
+should default to instance semantics and never auto-merge** — a candidate *source*, never a merge
+*decision*.
 
 ### 3.3 Concept
 
@@ -270,9 +321,11 @@ because concept names carry their meaning. Do not merge across `properties.type`
 `rejected` status that a rescoring bump will not overwrite. For Person that closes the loop: a user
 who declines a suggested pair is not shown it again.
 
-Nothing writes a block row for Place, Thing or Concept, because nothing proposes those pairs yet.
-The table is ready for them; the detectors are not written. What remains genuinely absent is the
-**unmerge** side — see §5.4.
+Nothing writes a block row for Place, Thing or Concept. For Place and Concept that is because
+nothing proposes those pairs yet — the table is ready for them; the detectors are not written. For
+Thing the detector now exists and *consumes* blocks (§3.2), so the only missing piece there is the
+"don't ask again" mutation on the Things review UI; `PersonResolver.blockAllPairs` is the shape to
+copy. What remains genuinely absent for every type is the **unmerge** side — see §5.4.
 
 ---
 
@@ -391,7 +444,7 @@ adds an entity reference then fails CI instead of failing silently years later. 
 cheapest item in this document and it has no dependencies.**
 
 The list above is a starting point, not a survey — it must be derived, which is the whole point.
-An earlier draft of it carried `ci.inventory.object_entity_id`, which
+An earlier draft of it carried `ci.objects.object_entity_id`, which
 `20260811061402_convert_inventory_to_cti.sql` had already dropped as "a dead precursor of this link
 (no writer anywhere, all NULL)". A hand-maintained registry rots in both directions.
 
@@ -453,7 +506,7 @@ Never compare all pairs. Candidates come only from a blocking key:
 |------|-------------|
 | Person | normalized email / phone / name — `ci.identifier_claims` *is* the block |
 | Location | PostGIS `ST_DWithin` on a geohash-bucketed grid |
-| Object/Item | `properties.type` + trigram bucket on name; GTIN/serial via `ci.object_identifiers` |
+| Object/Item | *Shipped* (§3.2): identifier rung over `ci.objects.identifier_codes` ∪ `ci.object_identifiers`, then product name, then brand+model |
 | Concept | `properties.type` + kNN over `ci_search.embeddings` (top-k, not all-pairs) |
 
 For Person this is already the shape `DuplicateDetectStage` implements; extending it means widening
@@ -484,13 +537,13 @@ resurrecting rejected pairs.
 | 3 | Unmerge from the `ci.entity_merges` ledger (§5.4) | Needs the `details`/`reverted_at` widening first; blocks already exist |
 | 4 | Canonical view + function (P2) | HBPE reads SQL directly; also the precondition for an async sweep |
 | 5 | Place: dedupe key for `createMany`, then duplicate detection and merge with the containment guard (§3.1) | The untouched type |
-| 6 | Thing: `ObjectMergeService` / `ObjectDuplicateService` at the model and unit levels (§3.2) | Schema and migration comments are already waiting for them |
+| 6 | ~~Thing: `ObjectMergeService` / `ObjectDuplicateService` at the model and unit levels (§3.2)~~ | **Done — #2176, 2026-08-19.** Its leftover is the reject-pair mutation (§3.4) |
 
 Items 1 and 3 are independently shippable and neither changes a matching rule. 2 is the structural
-one. 5–6 extend to the remaining types once the primitives are settled.
+one. 5 extends to the remaining types once the primitives are settled.
 
-Completed since this ordering was first written: tombstone-aware resolve (§2.1a) and
-`ci.entity_merge_blocks` wired into duplicate detection (§3.4).
+Completed since this ordering was first written: tombstone-aware resolve (§2.1a),
+`ci.entity_merge_blocks` wired into duplicate detection (§3.4), and item 6 (§3.2).
 
 ---
 

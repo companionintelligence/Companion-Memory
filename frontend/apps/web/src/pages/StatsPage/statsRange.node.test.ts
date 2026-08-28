@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { rangeToBounds } from './statsRange';
+import { DEFAULT_STATS_RANGE, rangeToBounds } from './statsRange';
+
+describe('DEFAULT_STATS_RANGE', () => {
+  it('is unbounded, matching the all-time tiles on the same page', () => {
+    expect(DEFAULT_STATS_RANGE).toBe('all');
+    expect(rangeToBounds(DEFAULT_STATS_RANGE)).toEqual({});
+  });
+});
 
 describe('rangeToBounds', () => {
   const now = new Date('2026-08-16T12:00:00.000Z');

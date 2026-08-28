@@ -46,9 +46,14 @@ function makeListener(communication: Record<string, unknown> | null = null) {
 // with the same id is re-examined.
 describe('CommunicationSearchIndexListener.indexRemove', () => {
   it('removes the embedding, the vector, and any skip marker keyed by (communication, id)', async () => {
-    const { listener, embeddingService, vectorService, indexSkipService } = makeListener();
+    const { listener, embeddingService, vectorService, indexSkipService, logger } = makeListener();
 
     await listener.indexRemove({ communicationId: 'comm-123' } as never);
+
+    expect(logger.log).toHaveBeenCalledWith(
+      'Removing communication in search index',
+      expect.objectContaining({ communicationId: 'comm-123' }),
+    );
 
     expect(embeddingService.remove).toHaveBeenCalledTimes(1);
     expect(embeddingService.remove).toHaveBeenCalledWith(

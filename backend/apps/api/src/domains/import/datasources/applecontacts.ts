@@ -14,6 +14,42 @@ type AppleContactsOptions = Record<string, never>;
 const ADDRESS_BOOK_DB = 'AddressBook-v22.abcddb';
 
 /**
+ * A synced macOS profile keeps ONE database per connected account (iCloud,
+ * Exchange, a Google/CardDAV account, ...) under `Sources/<account-id>/`,
+ * alongside a top-level `AddressBook-v22.abcddb` that in practice holds only
+ * whatever wasn't assigned to a synced account — 3 contacts in a profile
+ * whose real 37,797 contacts sit entirely under `Sources/`. Neither
+ * recognize() nor fileImport() looked past the top-level file, so every
+ * synced contact was invisible to this importer.
+ */
+const SOURCES_DIR = 'Sources';
+
+/** `Sources/<account-id>/AddressBook-v22.abcddb` paths under `root`, if any. */
+function findSourceDbs(root: string): string[] {
+  const sourcesDir = path.join(root, SOURCES_DIR);
+  let accountDirs: fs.Dirent[];
+  try {
+    accountDirs = fs.readdirSync(sourcesDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const out: string[] = [];
+  for (const entry of accountDirs) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const dbPath = path.join(sourcesDir, entry.name, ADDRESS_BOOK_DB);
+    if (fs.existsSync(dbPath)) {
+      out.push(dbPath);
+    }
+  }
+
+  return out;
+}
+
+/**
  * The AddressBook columns this importer reads. Every field is optional: the
  * SELECT list is assembled from PRAGMA table_info at runtime, because the
  * schema differs across macOS releases, and the phone/email/url columns come
@@ -76,7 +112,12 @@ export class AppleContactsFileImporter implements FileImporter {
 
         return { confidence: 0.9, dir_threshold: 0.5 };
       } catch {
-        /* no AddressBook db */
+        /* no top-level AddressBook db - a synced profile may still have one
+         * per account under Sources/, checked below. */
+      }
+
+      if (findSourceDbs(full).length > 0) {
+        return { confidence: 0.9, dir_threshold: 0.5 };
       }
     }
 
@@ -94,6 +135,13 @@ export class AppleContactsFileImporter implements FileImporter {
       const dbPath = path.join(start, ADDRESS_BOOK_DB);
       if (fs.existsSync(dbPath)) {
         await this.processDB(dbPath, params);
+      }
+
+      // Each per-account database is independent: one account's corrupt or
+      // unreadable db must not stop the others (processDB isolates its own
+      // errors per call already).
+      for (const sourceDb of findSourceDbs(start)) {
+        await this.processDB(sourceDb, params);
       }
 
       return;
@@ -152,7 +200,7 @@ export class AppleContactsFileImporter implements FileImporter {
       let current: ContactAccumulator = { phones: [], emails: [], urls: [], nameParts: [] };
       for (const row of db.prepare(query).iterate() as IterableIterator<ContactRow>) {
         if (row.Z_PK !== currentId) {
-          this.flushEntity(currentId, current, params);
+          this.flushEntity(currentId, current, params, dbPath);
           currentId = row.Z_PK;
           current = {
             id: row.Z_PK,
@@ -179,7 +227,7 @@ export class AppleContactsFileImporter implements FileImporter {
         }
       }
 
-      this.flushEntity(currentId, current, params);
+      this.flushEntity(currentId, current, params, dbPath);
     } catch (e) {
       params.log?.('error', 'contacts query failed', { error: (e as Error).message });
     } finally {
@@ -191,7 +239,7 @@ export class AppleContactsFileImporter implements FileImporter {
     }
   }
 
-  private flushEntity(id: number | undefined, c: ContactAccumulator, params: ImportParams) {
+  private flushEntity(id: number | undefined, c: ContactAccumulator, params: ImportParams, dbPath: string) {
     if (!id) {
       return;
     }
@@ -223,6 +271,15 @@ export class AppleContactsFileImporter implements FileImporter {
       return;
     }
 
+    // Which database this contact came from — the top-level AddressBook, or
+    // one synced account's own copy under Sources/<account-id>/ — since a
+    // profile can hold several and DB used to always report the same
+    // constant string regardless of which one was actually read.
+    const accountId =
+      path.basename(path.dirname(path.dirname(dbPath))) === SOURCES_DIR
+        ? path.basename(path.dirname(dbPath))
+        : undefined;
+
     params.pipeline.push({
       // See vcard.ts: an Address Book card is a contact regardless of which
       // optional fields it happens to fill.
@@ -230,7 +287,11 @@ export class AppleContactsFileImporter implements FileImporter {
         name,
         type: 'contact',
         attributes,
-        metadata: { Source: 'AppleContacts', DB: path.basename(ADDRESS_BOOK_DB) },
+        metadata: {
+          Source: 'AppleContacts',
+          DB: path.basename(dbPath),
+          ...(accountId ? { AccountID: accountId } : {}),
+        },
       },
     });
   }

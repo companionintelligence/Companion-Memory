@@ -11,6 +11,8 @@ interface Props {
   ref?: Ref<HTMLDivElement>;
 }
 
+/** `data-page-scroll` marks this as the page scroller so overlays can reset it, and so a status-bar tap can find it. */
+
 export function PageContent({ children, className, relativeBoundary = true, ref }: Props) {
   const { isMobile } = useDeviceLayout();
 
@@ -19,6 +21,7 @@ export function PageContent({ children, className, relativeBoundary = true, ref 
   return (
     <div
       ref={ref}
+      data-page-scroll=""
       className={cn(
         spacing,
         'flex flex-col texture-surface',

@@ -1,19 +1,29 @@
 import type { BaseSyntheticEvent } from 'react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Alert, Button, Card, Separator } from '@ci/shadcn';
 import { AlertCircleIcon } from '@ci/shadcn/icons';
-import { Link, useLocation, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { OidcButton } from '@/components/OidcButton';
 import { useAuth } from '@/hooks';
+import { hasPendingPortalOidc } from '@/pages/DeviceConnectPage/oidc';
 
 import { LoginForm, type LoginFormData } from './LoginForm';
 
 export function LoginPage() {
   const [{ error }, { login }] = useAuth();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const location = useLocation();
+
+  // Safari often reopens `/` → we used to dump that on this page, dropping the
+  // Portal PKCE resume that only DeviceConnectPage runs.
+  useEffect(() => {
+    if (hasPendingPortalOidc()) {
+      navigate('/device-connect', { replace: true });
+    }
+  }, [navigate]);
   const oidcError = searchParams.get('error');
 
   // Where ProtectedRoute sent us from (e.g. a /shared/<token> deep link). The

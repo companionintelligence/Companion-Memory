@@ -121,4 +121,33 @@ describe('NMEA datasource', () => {
     // Correct: 2025-11-02 (from RMC) at 14:00:00 (GGA's own time) UTC.
     expect(gga.item.timestamp!.toISOString()).toBe('2025-11-02T14:00:00.000Z');
   });
+
+  it('emits a dateless $GPGGA undated rather than dating it today', async () => {
+    // A GGA sentence carries a time of day and no date. With no RMC/ZDA
+    // anywhere in the file there is nothing to inherit, and this used to fill
+    // the gap with TODAY's UTC date — turning a log from some past trip into a
+    // GPS fix asserting the user was at those coordinates today. A
+    // `location.fix` record's entire content is (lat, lon, time), so a
+    // fabricated time makes the whole row a fabrication, and position rows are
+    // LocationEstimateService's primary donors, so it drags every neighbouring
+    // inference with it.
+    //
+    // `timestamp: undefined` is the honest answer; push/canonical.ts then
+    // routes the undated fix away from ci.position entirely.
+    const lines = ['$GPGGA,130305.000,3745.1234,N,12225.6789,W,1,08,0.9,15.0,M,,M,,*47'];
+    const f = makeNMEAFile('gga-only-undated', lines);
+    const fi = new NMEAFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: path.basename(f), fullPath: f }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const items = pipeline.filter((p) => p.item);
+    expect(items.length).toBe(1);
+    expect(items[0].item.timestamp).toBeUndefined();
+    // The fix itself is still parsed — only the invented date is gone.
+    expect(items[0].item.location!.latitude).toBeCloseTo(37 + 45.1234 / 60, 6);
+  });
 });

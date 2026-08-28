@@ -70,7 +70,11 @@ export function JobsTable({ data, loading, error, filters, categories, jobTypes,
 
   const stateTabs = (
     <div
-      className={phone ? 'flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5' : 'flex flex-wrap gap-1'}
+      className={
+        phone
+          ? 'scrollbar-none flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5'
+          : 'flex flex-wrap gap-1'
+      }
       role="tablist"
       aria-label="Job state"
     >
@@ -195,7 +199,10 @@ export function JobsTable({ data, loading, error, filters, categories, jobTypes,
                     ) : null}
                   </span>
                   <ChevronDown
-                    className={cn('h-4 w-4 text-muted-foreground transition-transform', filtersOpen && 'rotate-180')}
+                    className={cn(
+                      'h-4 w-4 text-muted-foreground transition-transform',
+                      filtersOpen && 'rotate-180',
+                    )}
                   />
                 </Button>
               </Collapsible.Trigger>
@@ -449,7 +456,9 @@ function JobDetails({ job }: { job: JobListItem }) {
         <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/5 p-2">
           <p className="text-xs font-medium text-destructive">{job.failure.message}</p>
           {job.failure.failedAt ? (
-            <p className="mt-0.5 text-xs text-muted-foreground">Failed {formatTimestamp(job.failure.failedAt)}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Failed {formatTimestamp(job.failure.failedAt)}
+            </p>
           ) : null}
           {job.failure.stack ? (
             <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/60 p-2 text-[11px] leading-snug text-muted-foreground">

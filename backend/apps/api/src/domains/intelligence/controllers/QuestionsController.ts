@@ -30,11 +30,13 @@ import {
   type UpdateQuestionDto,
   createQuestionSchema,
   questionCatalogueQuerySchema,
+  skipFeedQuestionSchema,
   updateQuestionSchema,
 } from '../types';
 
 type CreateQuestionInput = z.infer<typeof createQuestionSchema>;
 type UpdateQuestionInput = z.infer<typeof updateQuestionSchema>;
+type SkipFeedQuestionInput = z.infer<typeof skipFeedQuestionSchema>;
 
 @Controller('questions')
 export class QuestionsController {
@@ -102,6 +104,25 @@ export class QuestionsController {
     }
 
     return res.status(HttpStatus.OK).json(question);
+  }
+
+  /**
+   * "Skip" on the reflection prompt. `findOneUnanswered` deterministically
+   * returns the same front-of-queue row every time, so a client that only
+   * refetches after Skip gets the identical question back — this moves it to
+   * the back first. `presentationId` is the `feed_queue_id` the earlier
+   * `unanswered` response carried.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @Post('unanswered/skip')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async skipUnanswered(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(skipFeedQuestionSchema)) body: SkipFeedQuestionInput,
+  ): Promise<void> {
+    const serviceContext = toServiceContext(context);
+
+    await this.questionService.skipFrontFeedQuestion(serviceContext.userId, body.presentationId);
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)

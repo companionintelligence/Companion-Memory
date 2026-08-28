@@ -5,9 +5,21 @@ import { ItemSearchIndexListener } from '../ItemSearchIndexListener';
 function makeListener(
   item: Record<string, unknown> | null = null,
   place: Record<string, unknown> | null = null,
+  extras: {
+    product?: Record<string, unknown> | null;
+    identifiers?: Array<{ valueNormalized: string; valueRaw: string | null }>;
+  } = {},
 ) {
   const itemService = { findById: jest.fn().mockResolvedValue(item) };
   const placeService = { findById: jest.fn().mockResolvedValue(place) };
+  const productModelService = { findById: jest.fn().mockResolvedValue(extras.product ?? null) };
+  const objectIdentifierService = {
+    listForSubjects: jest
+      .fn()
+      .mockImplementation(async (_owner: string, _type: string, ids: string[]) =>
+        extras.identifiers ? new Map([[ids[0], extras.identifiers]]) : new Map(),
+      ),
+  };
   const embeddingGenerationService = { generateEmbedding: jest.fn().mockResolvedValue([0.1, 0.2]) };
   const embeddingService = {
     upsert: jest.fn().mockResolvedValue(null),
@@ -22,6 +34,8 @@ function makeListener(
   const listener = new ItemSearchIndexListener(
     itemService as never,
     placeService as never,
+    productModelService as never,
+    objectIdentifierService as never,
     embeddingGenerationService as never,
     embeddingService as never,
     vectorService as never,
@@ -32,6 +46,8 @@ function makeListener(
     listener,
     itemService,
     placeService,
+    productModelService,
+    objectIdentifierService,
     embeddingGenerationService,
     embeddingService,
     vectorService,
@@ -105,6 +121,126 @@ describe('ItemSearchIndexListener — resolving the last-seen place name', () =>
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'item', entityId: 'item-1' }),
     );
+  });
+});
+
+describe('ItemSearchIndexListener — identifiers and the catalog model', () => {
+  it('folds BOTH forms of every identifier claim into the document and the tsvector', async () => {
+    const { listener, objectIdentifierService, embeddingGenerationService, vectorService } = makeListener(
+      { id: 'item-1', userId: 'user-1', ownerUserId: 'owner-1', name: 'Headphones' },
+      null,
+      {
+        identifiers: [{ valueNormalized: 'SN12345678', valueRaw: 'SN 1234-5678' }],
+      },
+    );
+
+    await listener.indexItem({ itemId: 'item-1' } as never);
+
+    expect(objectIdentifierService.listForSubjects).toHaveBeenCalledWith('owner-1', 'object_instance', [
+      'item-1',
+    ]);
+    expect(embeddingGenerationService.generateEmbedding).toHaveBeenCalledWith(
+      'Headphones SN12345678 SN 1234-5678',
+    );
+    // Weight 8 — the 'A' band, above every descriptive field.
+    expect(vectorService.upsert.mock.calls[0][1].searchableText).toContainEqual({
+      text: 'SN12345678 SN 1234-5678',
+      weight: 8,
+    });
+  });
+
+  it('falls back to user_id when the unit carries no owner_user_id', async () => {
+    const { listener, objectIdentifierService } = makeListener({
+      id: 'item-1',
+      userId: 'user-1',
+      ownerUserId: null,
+      name: 'Headphones',
+    });
+
+    await listener.indexItem({ itemId: 'item-1' } as never);
+
+    expect(objectIdentifierService.listForSubjects).toHaveBeenCalledWith('user-1', 'object_instance', [
+      'item-1',
+    ]);
+  });
+
+  it("indexes the catalog model's text so a query for the brand finds the owned unit", async () => {
+    const { listener, productModelService, embeddingGenerationService, vectorService } = makeListener(
+      { id: 'item-1', userId: 'user-1', name: 'Headphones', productId: 'product-1' },
+      null,
+      {
+        product: {
+          id: 'product-1',
+          title: 'Bose QuietComfort 45',
+          brand: 'Bose',
+          modelNumber: 'QC45',
+          category: 'Audio',
+          subcategory: 'Headphones',
+        },
+      },
+    );
+
+    await listener.indexItem({ itemId: 'item-1' } as never);
+
+    expect(productModelService.findById).toHaveBeenCalledWith({ userId: SYSTEM_USER }, 'product-1');
+    expect(embeddingGenerationService.generateEmbedding).toHaveBeenCalledWith(
+      'Headphones Bose QuietComfort 45 Bose QC45 Audio',
+    );
+
+    const texts = vectorService.upsert.mock.calls[0][1].searchableText;
+    expect(texts).toContainEqual({ text: 'Bose QuietComfort 45', weight: 5 });
+    expect(texts).toContainEqual({ text: 'QC45', weight: 5 });
+    expect(texts).toContainEqual({ text: 'Audio', weight: 3 });
+  });
+
+  it('skips the product lookup entirely when the unit is not linked to a model', async () => {
+    const { listener, productModelService } = makeListener({
+      id: 'item-1',
+      userId: 'user-1',
+      name: 'Headphones',
+      productId: null,
+    });
+
+    await listener.indexItem({ itemId: 'item-1' } as never);
+
+    expect(productModelService.findById).not.toHaveBeenCalled();
+  });
+
+  it('still indexes the unit when its product_id dangles', async () => {
+    const { listener, embeddingGenerationService } = makeListener(
+      { id: 'item-1', userId: 'user-1', name: 'Headphones', productId: 'gone' },
+      null,
+      { product: null },
+    );
+
+    await listener.indexItem({ itemId: 'item-1' } as never);
+
+    expect(embeddingGenerationService.generateEmbedding).toHaveBeenCalledWith('Headphones');
+  });
+});
+
+describe('ItemSearchIndexListener — merge tombstones', () => {
+  it('removes a tombstoned unit from BOTH stores instead of re-indexing it', async () => {
+    const { listener, embeddingService, vectorService, embeddingGenerationService } = makeListener({
+      id: 'loser',
+      userId: 'user-1',
+      name: 'Cordless drill',
+      mergedIntoObjectId: 'winner',
+    });
+
+    await listener.updateItem({ itemId: 'loser' } as never);
+
+    expect(embeddingService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'item', entityId: 'loser' },
+    );
+    expect(vectorService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'item', entityId: 'loser' },
+    );
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).not.toHaveBeenCalled();
+    expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
   });
 });
 

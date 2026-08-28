@@ -67,6 +67,10 @@ export class BulkFilesController {
   async upload(
     @Context() context: RequestContext,
     @UploadedFiles() files: Express.Multer.File[],
+    @Body('thingCapture') thingCapture?: string | boolean,
+    // DEPRECATED form field, kept for capture clients built against the retired
+    // inventory feature. Remove once every shipped client posts `thingCapture`
+    // (earliest: the release after this one).
     @Body('inventoryCapture') inventoryCapture?: string | boolean,
     @Body('skipDescription') skipDescription?: string | boolean,
     @Body('model') model?: string,
@@ -76,7 +80,11 @@ export class BulkFilesController {
     }
 
     // Same form-field coercions as POST /files/upload.
-    const shouldCaptureInventory = inventoryCapture === true || inventoryCapture === 'true';
+    const shouldCaptureThing =
+      thingCapture === true ||
+      thingCapture === 'true' ||
+      inventoryCapture === true ||
+      inventoryCapture === 'true';
     const shouldSkipDescription = skipDescription === true || skipDescription === 'true';
     const selectedModel = typeof model === 'string' && model.trim().length > 0 ? model.trim() : undefined;
 
@@ -116,7 +124,7 @@ export class BulkFilesController {
           size: file.size,
           buffer: file.buffer,
           path: file.path,
-          inventoryCapture: shouldCaptureInventory,
+          thingCapture: shouldCaptureThing,
           skipDescription: shouldSkipDescription,
           model: selectedModel,
         });

@@ -8,10 +8,15 @@
 > For bulk imports see the [bulk load runbook](../../backend/apps/api/db/postgres/BULK_LOAD_RUNBOOK.md);
 > to wipe and start over, the [ingest reset runbook](../../backend/apps/api/db/postgres/INGEST_RESET_RUNBOOK.md).
 
-**There is no operator UI and no `/api/pipeline/*` endpoint yet** (Phase 2 adds
-the endpoints, Phase 5 the page). Everything below is `psql` and `curl`. Source
-comments that mention `GET /api/pipeline/state` are describing work that has not
-landed — do not go looking for it. See [§10](#10-what-does-not-exist-yet).
+**The pipeline endpoints exist** (`PipelineController`, registered in
+`PipelineModule`): `state`, `runs`, `runs/:id`, `runs/:id/{pause,resume,cancel}`,
+`dead-letters` and both replay routes, plus `quarantine/release`. A **browser**
+reaches them at `/api/pipeline/*`; the **API server** mounts them at
+`/pipeline/*` — see the prefix note in [§4b](#4b-replay-a-dead-letter). There is still
+no dedicated pipeline page — the operator surface is the Jobs page (`/jobs`).
+Most of this runbook stays on `psql`, because it answers questions the endpoints
+do not. See [§10](#10-what-does-not-exist-yet) for what genuinely is still
+missing.
 
 ```bash
 make dbshell        # psql on this worktree's database
@@ -23,15 +28,30 @@ make dburl          # connection URL, for DataGrip / a second psql
 ## 0. The one thing to know before you touch anything
 
 **Work is DERIVED, never stored.** No queue holds the backlog. A stage sweeps
-its source table `LEFT JOIN ci.pipeline_state` and takes whatever is missing,
-out of date, or due for retry:
+its source table against `ci.pipeline_state` and takes whatever is missing, out
+of date, or due for retry:
 
 ```sql
 --- THE ONE RULE (PipelineStateService.selectStale)
-  AND ( p.entity_id IS NULL                                    -- never processed
-     OR p.stage_version < $current                             -- enricher improved
-     OR (p.status = 'failed' AND p.next_attempt_at <= now()) ) -- retry is due
+  AND NOT EXISTS (                                  -- keep the row UNLESS the ledger
+        SELECT 1 FROM ci.pipeline_state p           -- holds one that is current AND
+         WHERE p.entity_type = $1                   -- not a due retry
+           AND p.entity_id   = s."<id column>"
+           AND p.stage       = $2
+           AND p.stage_version >= $current
+           AND NOT (p.status = 'failed' AND p.next_attempt_at <= now()))
 ```
+
+The three arms are unchanged — never processed, enricher improved, retry due —
+but they are spelled as the negation above rather than as
+`LEFT JOIN … WHERE (p.entity_id IS NULL OR …)`. **That is not cosmetic.** The
+`OR` chain read columns from the NULL-extended side, so the planner could not
+push it down, the `LIMIT` never reached the scan, and the keyset cursor was
+demoted from an `Index Cond` to a `Filter` — a full sweep degraded to
+O(corpus²/slice). The anti-join keeps the source's primary key. Queries further
+down this page that still show the `LEFT JOIN` shape are hand-written
+diagnostics: they return the same rows, and at diagnostic scale the plan does
+not matter. `selectStale` is the one that had to change.
 
 Three consequences that decide almost every call you will make at 2am:
 
@@ -47,9 +67,9 @@ Three consequences that decide almost every call you will make at 2am:
 |-------|-------|-----------|
 | `ci.pipeline_state` | one row per `(entity_type, entity_id, stage)` — the ledger | `PipelineStateService` only |
 | `ci.pipeline_dead_letters` | terminal job failures **with the payload**, replayable | `PipelineSliceListener` (per throw) + `DeadLetterReaperListener` (from `pgboss.job`) |
-| `ci.pipeline_runs` | one invocation per user; `desired_state` is operator intent | **nothing yet** — Phase 2 |
-| `ci.pipeline_shards` | resumable cursor + lease per `(run, stage, shard)` | **nothing yet** — Phase 2 |
-| `ci.record_rejections` | records refused at the door (THEIR bug, not ours) | **nothing yet** — Phase 2 |
+| `ci.pipeline_runs` | one invocation per user; `desired_state` is operator intent | `PipelineRunService` (opened by the control tick, paused/resumed/cancelled via `PipelineController`) |
+| `ci.pipeline_shards` | resumable cursor + lease per `(run, stage, shard)` | `PipelineControlService` — one shard per stage leg it claims |
+| `ci.record_rejections` | records refused at the door (THEIR bug, not ours) | **nothing yet** — table and entity exist, no writer |
 
 | `status` | Meaning | Swept again? |
 |----------|---------|--------------|
@@ -102,11 +122,14 @@ SELECT sh.stage, sh.shard_key, sh.status, sh.cursor, sh.lease_owner,
  ORDER BY sh.stage, sh.shard_key;
 ```
 
-> **Both return zero rows today, always.** The tables are migrated but nothing
-> writes them — the runner that materializes runs and shards is Phase 2. Slices
-> currently carry `runId: null, shardId: null`
-> (`PipelineDispatchService.runSweepHop`). An empty result here is **not**
-> evidence that the pipeline is idle. Use 1b and 1c.
+> **Both are written now** — the control tick opens a `kind='continuous'` run per
+> user with stale rows and claims one shard per stage leg. Zero rows means no run
+> is currently active, which on a converged appliance is the normal state.
+>
+> One thing has NOT changed: the slices themselves still carry
+> `runId: null, shardId: null` (`PipelineDispatchService.runSweepHop`), so you
+> cannot join a queued slice back to the run that caused it. An empty result here
+> is therefore still not proof the pipeline is idle — use 1b and 1c.
 
 ### 1b. What is actually in flight — the ledger
 
@@ -250,8 +273,8 @@ Read the answer off this table:
 |--------------|------------------------|-----|
 | no rows at all | never offered to any stage — it fails the *applicability* predicate, has a NULL `user_id`, or no sweep has run | step 2 |
 | `done` / `skipped` at the current version | working as designed. That is what "processed" means | bump the version ([§5](#5-re-enrich-after-improving-an-enricher)) |
-| `failed`, `next_attempt_at` in the future | the retry gate has not opened. Backoff is `60s × 2^(attempts-1)`, capped at 6 h | wait, or see [§6c](#6c-revive-quarantined-rows) |
-| `quarantined` | spent its 5 attempts. **No sweep will ever reclaim it** | [§6c](#6c-revive-quarantined-rows) or a version bump |
+| `failed`, `next_attempt_at` in the future | the retry gate has not opened. Backoff is `60s × 2^(attempts-1)`, capped at 6 h — **except** for a reason in `TRANSIENT_FAILURE_REASONS`, which backs off on the separate 15-minute-base schedule against `transient_attempts` | wait, or see [§6c](#6c-revive-quarantined-rows) |
+| `quarantined` | spent its 5 attempts on PERMANENT failures. **No sweep will ever reclaim it** | [§6c](#6c-revive-quarantined-rows) or a version bump |
 | `running`, `updated_at` older than 15 min | crashed worker. Already eligible again | [§7](#7-a-worker-died-mid-slice) |
 | `stage_version` **greater** than the current version | someone rolled a version back. The row is invisible to every future sweep | bump the version past the abandoned high-water mark. Never revert |
 
@@ -321,8 +344,9 @@ SELECT source_kind, reason, count(*) AS rows, max(rejected_at) AS last_seen
  LIMIT 30;
 ```
 
-> `ci.record_rejections` is empty today — nothing writes it yet (Phase 2). An
-> empty result means "no writer", not "no rejections".
+> `ci.record_rejections` is empty today — the table and its entity exist, but
+> nothing writes it (re-checked 2026-08-19; it is the last unwritten table of the
+> control plane). An empty result means "no writer", not "no rejections".
 
 ### 4b. Every failure for one record
 
@@ -361,17 +385,38 @@ SELECT jsonb_pretty(payload), error FROM ci.pipeline_dead_letters WHERE id = '<l
 > exposes it as a card that groups the un-replayed letters by cause:
 >
 > ```bash
-> # One letter.
+> # One letter. $API is the API host:port DIRECTLY — no /api — see the note below.
 > curl -XPOST -H "Authorization: Bearer $TOKEN" \
->   ci-server.localhost/api/pipeline/dead-letters/<letter-id>/replay
+>   $API/pipeline/dead-letters/<letter-id>/replay
 >
 > # A whole failure class. A selector is REQUIRED — there is no "replay
 > # everything", because most of a backlog is one config error and re-emitting
 > # it just re-fails and writes a fresh letter per attempt.
 > curl -XPOST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
 >   -d '{"eventName":"file.uploaded","failedAfter":"2026-08-18T00:00:00Z"}' \
->   ci-server.localhost/api/pipeline/dead-letters/replay
+>   $API/pipeline/dead-letters/replay
 > ```
+>
+> **The `/api` prefix, once, because it bites here.** `main.ts` sets no global
+> prefix, so a `@Controller('x')` mounts at `/x` and the edge proxy (Caddy in
+> dev, nginx in staging/production) is what strips a browser's `/api`.
+>
+> **Δ 2026-08-23 — the pipeline half of this note was wrong and the curl commands
+> above were 404ing.** This used to say `@Controller('api/pipeline')`, so the
+> replay examples were written as `$API/api/pipeline/...` against the API host
+> directly. `243b15945 refactor(pipeline): update API routes to remove '/api'
+> prefix` changed it to `@Controller('pipeline')`
+> (`domains/pipeline/controllers/PipelineController.ts:186`, verified on
+> `origin/main` at `b82014a1b`).
+>
+> So **`/pipeline/*` is now the ordinary case**, like `/jobs/*`: browser
+> `https://<host>/api/pipeline/...` through the proxy, `curl $API/pipeline/...`
+> straight at the API host (`$API`, e.g. `http://localhost:3030` or this
+> worktree's assigned port). `@Controller('api/maintenance')` is unchanged and
+> is still one of the four that bake the prefix in — for those, and only those,
+> `curl $API/api/maintenance/...` is literal and the proxy path is
+> `/api/api/maintenance/...`. The current list is in
+> [`docs/api/rest.md` § Global routing](../api/rest.md#global-routing--prefix-behavior).
 >
 > Both claim `replayed_at` BEFORE emitting, with `replayed_at IS NULL` in the
 > predicate, so a double submit re-emits nothing. The bulk form returns 200 with
@@ -479,13 +524,25 @@ run one sweep, then read the `Processed pipeline slice` log lines (they carry
 
 ### 5d. Start the sweep
 
-Nothing starts automatically after a restart — no cron sweeps a stage. The only
-sweep trigger reachable over HTTP today:
+**Usually nothing to do.** `PipelineTickCron` (`20 */5 * * * *`) is the primary
+trigger: within five minutes of the restart the tick finds the stale rows, opens
+a run and sweeps. Watch §5e and only intervene if `still_stale` is not falling.
+
+The HTTP trigger below still exists, and is what you reach for when you want the
+sweep NOW rather than at the next tick:
 
 ```bash
-curl -sS -X POST https://<host>/api/maintenance/backfill-media-dimensions \
+# $API is the API host directly (see the prefix note in §4b) — MaintenanceController
+# mounts at /api/maintenance/* on the server, so a proxy host would strip it.
+curl -sS -X POST $API/api/maintenance/backfill-media-dimensions \
   -H 'x-api-key: <key>' -H 'content-type: application/json' -d '{}'
 ```
+
+> It is a deprecated shim: `MediaDimensionsBackfillListener` no longer probes
+> anything itself, it just emits `pipeline.sweep` for
+> `enrich.media_dimensions` on `pipeline-enrich` and returns. "The response came
+> back" therefore says nothing about whether the files are done — read the
+> ledger.
 
 > **This endpoint has a stale precondition.** It counts candidates with the OLD
 > `width IS NULL` predicate and returns `{"status":"noop"}` **without emitting
@@ -557,8 +614,9 @@ docker stats --no-stream                                 # saturated?
 Ranked by how much you disturb.
 
 1. **Do nothing.** Backoff is already exponential in the ledger —
-   `60s × 2^(attempts-1)`, capped at 6 h — and it survives a restart because it
-   is a column, not a timer. A brief outage self-heals.
+   `60s × 2^(attempts-1)`, capped at 6 h (and for `ollama_unreachable`, the
+   transient schedule: 15 minutes doubling, no attempt ceiling) — and it survives
+   a restart because it is a column, not a timer. A brief outage self-heals.
 
 2. **Drop the queued embed work** (see [§9](#9-emergency-stop)). Blunt, safe,
    reversible: the ledger has no rows for un-dispatched ids, so a later sweep
@@ -573,17 +631,48 @@ Ranked by how much you disturb.
    discarded ids, so a re-run after unsuppressing re-derives them — but the
    sweep will report "drained" having done nothing. Unset it and sweep again.
 
-> **A long outage quarantines the corpus.** Five attempts (`MAX_ATTEMPTS_BEFORE_QUARANTINE`)
-> and a row goes `quarantined`, which **no sweep ever reclaims**. With the
-> backoff schedule that is roughly a working day of a dead Ollama. If the outage
-> will be long, stop the sweep (option 2 or 3) instead of letting it burn the
-> attempt budget.
+> **A long outage no longer quarantines the corpus.** `ollama_unreachable` and
+> `provider_unavailable` are declared in `TRANSIENT_FAILURE_REASONS`: `claim()`
+> still charges the attempt, and the ledger **refunds** it when the outcome
+> carries one of those reasons, backing the row off on a separate schedule
+> (`TRANSIENT_RETRY_BACKOFF_BASE_SECONDS`, 15 minutes, doubling against
+> `transient_attempts`, which has no ceiling). "The provider is still down" is
+> not a verdict about the row.
+>
+> That set exists because the old policy did real damage: a brief
+> reverse-geocode outage left 12,237 `ci.position` rows — 19 % of that corpus —
+> `quarantined` with `reason = 'provider_unavailable'`, permanently invisible to
+> every later sweep. Any OTHER failure reason still spends the five-attempt
+> budget (`MAX_ATTEMPTS_BEFORE_QUARANTINE`) and quarantines, which for a poison
+> record is about 15 minutes after its first failure — by design.
 
 ### 6c. Revive quarantined rows
 
-Quarantine is not a tombstone, but it needs an explicit act. Either bump the
-stage version (re-selects quarantined rows along with everything else), or reset
-the ledger directly — the supported DB operation until the control plane lands:
+Quarantine is not a tombstone, but it needs an explicit act. Three ways, in
+order of preference.
+
+**1. The release endpoint.** `POST /api/pipeline/quarantine/release` moves rows
+from `quarantined` back to `failed`, due immediately. It defaults to exactly the
+reasons that can no longer quarantine at all — i.e. "undo what the old policy
+did" — and optionally narrows to one stage. It returns 200 with a count;
+`released: 0` is a legitimate answer, not a 404.
+
+```bash
+# Everything an older build parked for a transient reason.
+curl -sS -XPOST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{}' ci-server.localhost/api/pipeline/quarantine/release
+
+# Narrower: one stage, one reason.
+curl -sS -XPOST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"stage":"index.embed","reasons":["ollama_unreachable"]}' \
+  ci-server.localhost/api/pipeline/quarantine/release
+```
+
+**2. Bump the stage version** — re-selects quarantined rows along with
+everything else. The right answer when the enricher itself was the problem.
+
+**3. Reset the ledger directly**, for a reason the endpoint's default does not
+cover:
 
 ```sql
 -- Dry run: what would come back?
@@ -600,11 +689,14 @@ UPDATE ci.pipeline_state
        updated_at      = now()
  WHERE stage  = 'index.embed'
    AND status = 'quarantined'
-   AND reason = 'ollama_unreachable';   -- scope it: do NOT revive poison records
+   AND reason = '<the one reason you decided is safe>';  -- scope it
 ```
 
 > Keep the `reason` filter. Reviving `probe_failed`-style rows that quarantined
-> for a real reason just spends the same attempts again on the same bytes.
+> for a real reason just spends the same attempts again on the same bytes — and
+> if the reason IS transient (`ollama_unreachable`, `provider_unavailable`) use
+> option 1 instead: the endpoint's default targets exactly those and needs no
+> hand-written `UPDATE`.
 
 ---
 
@@ -712,8 +804,12 @@ busy interactive queues is expected, not a fault.
 There is also a read-only HTTP view (whole box, not pipeline-specific):
 
 ```bash
-curl -sS https://<host>/jobs/dashboard -H 'x-api-key: <key>'          # JobsController
-curl -sS https://<host>/api/maintenance/ingest-status -H 'x-api-key: <key>'
+# JobsController — ordinary controller, so through the proxy it takes the /api
+# prefix the proxy strips.
+curl -sS https://<host>/api/jobs/dashboard -H 'x-api-key: <key>'
+
+# MaintenanceController bakes `api/` into its own path: hit the API directly.
+curl -sS $API/api/maintenance/ingest-status -H 'x-api-key: <key>'
 ```
 
 ---
@@ -764,11 +860,16 @@ UPDATE pgboss.job
   the API process. One slice is ~200 entities, seconds to a couple of minutes.
   To stop those you must restart the API; their ledger rows then expire out of
   `running` after 15 minutes ([§7](#7-a-worker-died-mid-slice)).
-- **Whatever started the sweep will start it again.** Today that is only a human
-  calling `/api/maintenance/backfill-media-dimensions` or
-  `/api/maintenance/orchestrate` — there is no cron that sweeps a stage. The one
-  pipeline cron is the dead-letter reaper (`40 */2 * * * *`), which only copies
-  rows and never enqueues work.
+- **Whatever started the sweep will start it again — and one of those is a
+  cron.** `PipelineTickCron` (`20 */5 * * * *`) re-plans within five minutes, so
+  deleting jobs is a pause of minutes unless you also pause the run
+  (`UPDATE ci.pipeline_runs SET desired_state = 'paused'`, or
+  `POST /api/pipeline/runs/:id/pause` — the tick reads intent before it counts a
+  single candidate). The other triggers are a human calling
+  `/api/maintenance/backfill-media-dimensions` or `/api/maintenance/orchestrate`,
+  and `StageArrivalListener`, which dispatches newly arrived rows without waiting
+  for a tick. The dead-letter reaper (`40 */2 * * * *`) only copies rows and never
+  enqueues work.
 - **Nothing rolls back.** Entities already processed keep their ledger rows.
   Restarting the sweep resumes from the remainder, not from the beginning.
 
@@ -822,15 +923,19 @@ VALUES ('pipeline-index',
 
 Verified against the tree; do not go looking for these.
 
+Re-verified against the tree 2026-08-19. Most of what this section used to list
+has since landed; what is struck through is kept so a stale reference elsewhere
+can be recognised as stale.
+
 | Missing | Reality today |
 |---------|---------------|
-| ~~`GET /api/pipeline/state`, `/dead-letters`~~ | **These exist.** `PipelineController` serves `state`, `runs`, `runs/:id`, pause/resume/cancel, `dead-letters` and both replay routes |
-| Operator UI / pipeline page | The Jobs page (`/jobs`). `"jobs.page"` is `true` in `config/default.json` |
-| Pause / resume / cancel | `ci.pipeline_runs.desired_state` is the intended channel and nothing reads or writes it. Today pausing is [§9](#9-emergency-stop) and reviving is [§6c](#6c-revive-quarantined-rows) — DB operations |
-| Runs and shards | `ci.pipeline_runs` / `ci.pipeline_shards` are migrated and permanently empty; no code writes them. Sweeps are ad-hoc (`runId: null, shardId: null`) |
-| Record rejections | `ci.record_rejections` is migrated and empty; no writer yet |
+| ~~`GET /api/pipeline/state`, `/dead-letters`~~ | **These exist.** `PipelineController` serves `state`, `runs`, `runs/:id`, pause/resume/cancel, `dead-letters`, both replay routes and `quarantine/release` |
+| Operator UI / pipeline page | Still no dedicated page. The operator surface is the Jobs page (`/jobs`); `"jobs.page"` is `true` in `config/default.json` |
+| ~~Pause / resume / cancel~~ | **Exist.** `ci.pipeline_runs.desired_state` is written by `PipelineRunService` and read by the control tick before it counts a candidate. `POST /api/pipeline/runs/:id/{pause,resume,cancel}`, or the `UPDATE` in [`pipeline-enrichment-loop.md` §5](./pipeline-enrichment-loop.md) |
+| ~~Runs and shards~~ | **Written.** The control tick opens one `ci.pipeline_runs` row per user with stale rows and claims a `ci.pipeline_shards` row per stage leg. The slice PAYLOADS are still ad-hoc (`runId: null, shardId: null`), so a queued slice cannot be joined back to its run |
+| Record rejections | `ci.record_rejections` is migrated and empty; entity, no writer |
 | ~~Dead-letter replay~~ | **Exists.** `POST /api/pipeline/dead-letters/:id/replay` and the bulk `POST /api/pipeline/dead-letters/replay`, plus the Jobs page card. See [§4b](#4b-every-failure-for-one-record) |
-| Bound stage implementations | **Check before trusting a sweep.** `stageProviders` in `backend/apps/api/src/domains/pipeline/index.ts` is an empty array at the time of writing, so `enrich.media_dimensions` is declared but **unbound** — every slice fails with `no provider is bound to token "PipelineStage:enrich.media_dimensions"`. `EmbedStage` exists but its id `index.embed` is absent from `STAGE_IDS` / `STAGE_VERSIONS` / `STAGE_REGISTRY`, so `index.embed` is not sweepable at all. Confirm with the grep below before diagnosing anything else |
+| ~~Bound stage implementations~~ | **All 37 bind.** `stageProviders` is populated and `STAGE_REGISTRY` maps every id in `STAGE_IDS` to a provider token; a boot guard rejects drift between `STAGE_IDS`, `STAGE_VERSIONS` and the registry. `index.embed` is registered, and its version is derived from `(model, dimension)`. The grep below is still the check to run against an unfamiliar checkout |
 
 ```bash
 # Which stages can actually run right now?

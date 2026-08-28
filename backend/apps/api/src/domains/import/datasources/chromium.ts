@@ -135,6 +135,51 @@ async function readBookmarksFile(fpath: string): Promise<FlatBookmark[] | undefi
   return out;
 }
 
+/**
+ * Chromium's per-visit dwell time, in seconds, or undefined when it is not
+ * usable as a measure of attention.
+ *
+ * `visits.visit_duration` is microseconds and is populated on the large
+ * majority of visits — 43,010 of 46,791 (91.9%) in the reference profile — so
+ * dropping it discarded the only record of how long anything was actually
+ * looked at. `ci.browser_activity.duration_seconds`, its DTO field, and the
+ * `screen_minutes` daily metric that sums it were all already built and had
+ * simply never had a producer.
+ *
+ * ## Why an upper bound is required rather than nice to have
+ *
+ * Chrome accrues this while a tab merely STAYS OPEN, not while anyone is
+ * looking at it. The distribution says so plainly: the median visit is 6.9
+ * seconds, but p99 is 33 hours, 572 visits exceed a day, and the longest is
+ * 114 hours. Summed raw, the reference profile reports 51,119 hours of screen
+ * time — 5.8 years, out of a few years of history. Feeding that to
+ * `screen_minutes` would not produce a slightly-high number, it would produce
+ * a meaningless one.
+ *
+ * So a visit longer than MAX_PLAUSIBLE_DWELL_S is treated as UNKNOWN and the
+ * field is omitted, rather than clamped to the bound. Clamping would fabricate
+ * a specific large number for every one of them — the 2,361 visits over four
+ * hours would contribute 9,444 hours of screen time nobody spent. Omitting
+ * says the only honest thing: a tab was open, and how long it held attention
+ * is not something this source knows. That keeps 40,649 visits (94.5% of those
+ * carrying a duration) totalling 6,240 hours.
+ *
+ * Four hours is the bound because it is where "a long sitting" stops being the
+ * likelier reading than "a tab left open" — p90 is already 84 minutes, so the
+ * bound sits well above ordinary use while excluding 5.5% of durations.
+ */
+const MAX_PLAUSIBLE_DWELL_S = 4 * 60 * 60;
+
+function dwellSeconds(microseconds: number | null | undefined): number | undefined {
+  if (typeof microseconds !== 'number' || !Number.isFinite(microseconds) || microseconds <= 0) {
+    return undefined;
+  }
+
+  const seconds = Math.round(microseconds / 1_000_000);
+
+  return seconds > 0 && seconds <= MAX_PLAUSIBLE_DWELL_S ? seconds : undefined;
+}
+
 class ChromiumFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const full = entry.fullPath || entry.fsRoot || entry.filename;
@@ -208,6 +253,108 @@ class ChromiumFileImporter implements FileImporter {
    * Folder / Added Date - so every browser lands on CI-Server's `web.bookmark`
    * the same way.
    */
+  /**
+   * Chrome's `downloads` table — every file the browser fetched.
+   *
+   * Not imported at all before this: the string "download" did not occur in
+   * chromium.ts, firefox.ts or google_chrome.ts, while `ci.browser_activity`
+   * has modelled `action_type='download'` in its DTO union the whole time and
+   * held 0 such rows.
+   *
+   * This is not recoverable from history by any other route. A download's own
+   * URL is usually never a page visit: for 255 of 278 downloads in the
+   * reference profile the final URL of the download chain appears nowhere in
+   * `urls`, so without this table there is no record the file was ever fetched
+   * — not the filename, not the size, not where it came from.
+   *
+   * The download's identity is its `guid`, which Chrome already generates and
+   * keeps stable, so re-importing the same profile dedups on the provenance
+   * triple exactly as visits do.
+   */
+  private importDownloads(db: Database.Database, dbPath: string, params: ImportParams): void {
+    // `downloads` postdates `urls`/`visits` and a stripped or very old profile
+    // may not carry it. Probing keeps its absence from failing the whole file,
+    // which the caller's catch would turn into zero imported VISITS too.
+    const hasDownloads = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'downloads'")
+        .all() as Array<{
+        name: string;
+      }>
+    ).length;
+    if (!hasDownloads) {
+      return;
+    }
+
+    // The chain's last hop is the URL the bytes actually came from, after any
+    // redirects; `tab_url` is the page the user was on, which is a different
+    // and also useful fact, so both are kept.
+    const stmt = db.prepare(`SELECT d.guid AS guid, d.target_path AS target_path, d.start_time AS start_time,
+             d.received_bytes AS received_bytes, d.total_bytes AS total_bytes, d.state AS state,
+             d.mime_type AS mime_type, d.referrer AS referrer, d.tab_url AS tab_url,
+             (SELECT c.url FROM downloads_url_chains c WHERE c.id = d.id
+               ORDER BY c.chain_index DESC LIMIT 1) AS source_url
+      FROM downloads d
+      ORDER BY d.start_time ASC`);
+
+    for (const row of stmt.iterate() as Iterable<{
+      guid: string | null;
+      target_path: string | null;
+      start_time: number;
+      received_bytes: number | null;
+      total_bytes: number | null;
+      state: number | null;
+      mime_type: string | null;
+      referrer: string | null;
+      tab_url: string | null;
+      source_url: string | null;
+    }>) {
+      const ts = chromeTimeToDate(row.start_time);
+      if (!timeframeContains(params.timeframe, ts)) {
+        continue;
+      }
+
+      const url = row.source_url || row.tab_url || '';
+      if (!url) {
+        // Nothing to file it under. A browser_activity row is keyed by url.
+        params.pipeline.drop?.('download_no_url');
+        continue;
+      }
+
+      const filename = row.target_path ? path.basename(row.target_path) : undefined;
+      params.pipeline.push({
+        item: {
+          id:
+            'chromium:download:' +
+            (row.guid || crypto.createHash('sha1').update(`${url} ${row.start_time}`).digest('hex')),
+          classification: 'download',
+          timestamp: ts,
+          intermediateLocation: dbPath,
+          content: { filename: 'download.txt', data: async () => Buffer.from(url) },
+          metadata: {
+            Source: 'Chromium',
+            URL: url,
+            Title: filename,
+            Filename: filename,
+            MimeType: row.mime_type || undefined,
+            // `total_bytes` is what the server promised, `received_bytes` what
+            // arrived; they differ for an interrupted download, and the second
+            // is the only one that describes the file on disk.
+            SizeBytes: row.received_bytes || undefined,
+            ExpectedBytes: row.total_bytes || undefined,
+            // Chrome's DownloadState: 1 is complete. Anything else was
+            // interrupted or cancelled, and saying so is the point — an
+            // interrupted download is a different fact, not a missing one.
+            Completed: row.state === 1,
+            Referrer: row.referrer || undefined,
+            TabURL: row.tab_url || undefined,
+            'Visit Date': ts?.toISOString(),
+          },
+        },
+      } as Graph);
+    }
+  }
+
   private async importBookmarks(fpath: string, params: ImportParams): Promise<void> {
     const bookmarks = await readBookmarksFile(fpath);
     if (!bookmarks) {
@@ -272,8 +419,18 @@ class ChromiumFileImporter implements FileImporter {
     }
 
     try {
+      // `visits.visit_duration` has been present for many Chromium releases but
+      // is not guaranteed across every profile this importer may be handed, and
+      // the catch below turns a bad SELECT into ZERO imported visits rather than
+      // a loud failure. Probe for the column and leave it out when absent, the
+      // same way imessage.ts guards chat.db's varying schema.
+      const hasDuration = (db.prepare('PRAGMA table_info(visits)').all() as Array<{ name: string }>).some(
+        (c) => c.name === 'visit_duration',
+      );
+
       // Chromium's visits.url column is a foreign key onto urls.id.
       const stmt = db.prepare(`SELECT u.url AS url, u.title AS title, v.visit_time AS visit_time
+               ${hasDuration ? ', v.visit_duration AS visit_duration' : ''}
         FROM visits v
         INNER JOIN urls u ON u.id = v.url
         ORDER BY v.visit_time ASC`);
@@ -282,6 +439,7 @@ class ChromiumFileImporter implements FileImporter {
         url: string;
         title: string | null;
         visit_time: number;
+        visit_duration: number | null;
       }>) {
         const ts = chromeTimeToDate(row.visit_time);
         if (!timeframeContains(params.timeframe, ts)) {
@@ -304,10 +462,13 @@ class ChromiumFileImporter implements FileImporter {
             URL: url,
             Title: row.title || undefined,
             'Visit Date': ts?.toISOString(),
+            DurationSeconds: dwellSeconds(row.visit_duration),
           },
         };
         params.pipeline.push({ item } as Graph);
       }
+
+      this.importDownloads(db, dbPath, params);
     } catch (e) {
       params.log?.('error', 'chromium query failed', { error: (e as Error).message });
     } finally {

@@ -14,6 +14,8 @@ import {
   NoteIcon,
   PersonIcon,
   PlaceIcon,
+  ProductIcon,
+  ReceiptIcon,
   ThreadIcon,
 } from '@/components/icons';
 
@@ -35,6 +37,8 @@ export type EntityKind =
   | 'concept'
   | 'browser-activity'
   | 'item'
+  | 'product'
+  | 'receipt'
   | 'note'
   | 'communication'
   | 'answer'
@@ -55,7 +59,12 @@ export const ENTITY_VISUALS: Record<EntityKind, EntityVisual> = {
   file: { color: '#FF9933', Icon: FileIcon, label: 'File' },
   concept: { color: '#A232CB', Icon: ConceptIcon, label: 'Concept' },
   'browser-activity': { color: '#00C2E0', Icon: BrowserActivityIcon, label: 'Browser activity' },
-  item: { color: '#618685', Icon: ItemIcon, label: 'Item' },
+  // 'Thing' — not 'Item'. ENTITY_TYPE_REVERSE_MAP has said Thing since the
+  // What picker was written; the two vocabularies disagreed, and this is the
+  // one that was wrong.
+  item: { color: '#618685', Icon: ItemIcon, label: 'Thing' },
+  product: { color: '#C98A2B', Icon: ProductIcon, label: 'Product' },
+  receipt: { color: '#5B8C3E', Icon: ReceiptIcon, label: 'Receipt' },
   note: { color: '#E6A817', Icon: NoteIcon, label: 'Note' },
   communication: { color: '#D64161', Icon: CommunicationIcon, label: 'Communication' },
   answer: { color: '#7A5C8E', Icon: AnswerIcon, label: 'Answer' },
@@ -66,7 +75,7 @@ export const ENTITY_VISUALS: Record<EntityKind, EntityVisual> = {
 export const DEFAULT_ENTITY_VISUAL: EntityVisual = {
   color: '#64748B',
   Icon: Squircle,
-  label: 'Item',
+  label: 'Entity',
 };
 
 // GraphQL union member name -> kind, e.g. "PlaceType" -> "place".
@@ -79,6 +88,8 @@ const TYPENAME_TO_KIND: Record<string, EntityKind> = {
   ConceptType: 'concept',
   BrowserActivityType: 'browser-activity',
   ItemType: 'item',
+  ProductModelType: 'product',
+  ReceiptType: 'receipt',
   NoteType: 'note',
   CommunicationType: 'communication',
   AnswerType: 'answer',
@@ -92,6 +103,11 @@ const RAW_TYPE_ALIASES: Record<string, EntityKind> = {
   location: 'place',
   object: 'item',
   thing: 'item',
+  'object-instance': 'item',
+  object_instance: 'item',
+  'product-model': 'product',
+  product_model: 'product',
+  purchase: 'receipt',
   contact: 'person',
   message: 'communication',
   communications: 'communication',

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import config from '@ci/configuration';
+
 import type { GeocodeCacheEntity } from '../../entities/GeocodeCacheEntity';
 import type { GeocodeProvider, GeocodeProviderResult } from '../GeocodeProvider';
 import {
@@ -7,6 +9,7 @@ import {
   GeocodeService,
   LOW_CONFIDENCE_THRESHOLD,
   NON_RETRYABLE_STATUSES,
+  RateLimiter,
   RETRYABLE_STATUSES,
   VIRTUAL_STATUS,
 } from '../GeocodeService';
@@ -347,5 +350,98 @@ describe('GeocodeService.reverseGeocode', () => {
     ]);
 
     expect(hashes.size).toBe(4);
+  });
+});
+
+describe('RateLimiter (QPS throttle)', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('lets the first acquire through immediately, then spaces the rest by 1000/qps ms', async () => {
+    const limiter = new RateLimiter(10); // 100ms min interval
+
+    await limiter.acquire(); // first is immediate
+
+    let secondResolved = false;
+    const second = limiter.acquire().then(() => {
+      secondResolved = true;
+    });
+
+    // Not yet — must wait ~100ms.
+    await Promise.resolve();
+    expect(secondResolved).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(100);
+    await second;
+    expect(secondResolved).toBe(true);
+  });
+
+  it('is a no-op when qps is non-positive (unthrottled)', async () => {
+    const limiter = new RateLimiter(0);
+    // Resolves without any timer advance.
+    await expect(limiter.acquire()).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * The bug this whole cluster fixes: `GeocodeBatchListener` and `GeocodeStage`
+ * each used to construct their OWN throttle, so the appliance-wide rate seen
+ * by the provider was the SUM of both, not the configured budget. The fix
+ * moves the one `RateLimiter` instance onto `GeocodeService` itself — a Nest
+ * singleton both callers inject — so every `geocode`/`reverseGeocode` call,
+ * from whichever caller, waits on the same clock.
+ *
+ * This does not mock GeocodeService or its rate limiter: it drives two
+ * independent "callers" (standing in for the listener's forward sweep and the
+ * stage's reverse sweep) concurrently against ONE real service instance, the
+ * way NestJS DI actually hands the same singleton to both, and asserts on the
+ * real spacing between real provider calls.
+ */
+describe('GeocodeService rate limiter — shared across independent callers', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('never lets the combined call rate from two concurrent callers exceed rateLimitPerSecond', async () => {
+    const minIntervalMs = 1000 / config.geocoding.rateLimitPerSecond;
+
+    const callTimestamps: number[] = [];
+    const provider: jest.Mocked<GeocodeProvider> = {
+      geocode: jest.fn<Promise<GeocodeProviderResult>, [string]>(async () => {
+        callTimestamps.push(Date.now());
+
+        return ROOFTOP_OK;
+      }),
+      reverseGeocode: jest.fn<Promise<GeocodeProviderResult>, [number, number]>(async () => {
+        callTimestamps.push(Date.now());
+
+        return ROOFTOP_OK;
+      }),
+    };
+
+    // ONE service instance, exactly as the Nest DI container would hand out a
+    // singleton to both GeocodeBatchListener and GeocodeStage.
+    const service = makeService(makeCacheRepo(), provider);
+
+    // Caller A: distinct addresses, so every call is a cache miss that reaches
+    // the provider — stands in for GeocodeBatchListener's forward sweep.
+    const callerA = Promise.all(Array.from({ length: 4 }, (_unused, i) => service.geocode(`Address ${i}`)));
+    // Caller B: distinct coordinates, running AT THE SAME TIME — stands in for
+    // GeocodeStage's reverse sweep, or a second concurrent slice.
+    const callerB = Promise.all(Array.from({ length: 4 }, (_unused, i) => service.reverseGeocode(i, i)));
+
+    await jest.runAllTimersAsync();
+    await Promise.all([callerA, callerB]);
+
+    // All 8 calls (4 from each caller) landed on the provider.
+    expect(callTimestamps).toHaveLength(8);
+
+    // The property under test: no two provider calls, from EITHER caller, ever
+    // land closer together than the shared budget allows. Without the fix each
+    // caller's own throttle only spaces out ITS OWN calls, so this fails —
+    // caller A and caller B's first calls both land at t=0.
+    const sorted = [...callTimestamps].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i] - sorted[i - 1]).toBeGreaterThanOrEqual(minIntervalMs);
+    }
   });
 });

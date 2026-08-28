@@ -10,6 +10,8 @@ import {
 
 import { UserEntity, type User } from '@ci/domains/user';
 
+import { type AnswerEvidence } from '../types';
+
 import { QuestionEntity, type Question } from './QuestionEntity';
 
 @Entity({ schema: 'ci', name: 'answers' })
@@ -36,6 +38,18 @@ export class AnswerEntity {
    */
   @Column({ type: 'text', nullable: true, name: 'answer_rationale' })
   answerRationale!: string | null;
+
+  /**
+   * The database rows the model actually cited AND the ones it read and did not
+   * use, so `answerRationale` can be checked rather than believed and the
+   * retrieval itself can be audited. NULL means no inference ever recorded
+   * evidence for this row (a typed answer, an import, or a row written before
+   * the column existed) — never "cited nothing", which the speaker gate
+   * discards. Written only by AnswerInferenceListener; the REST edit schemas do
+   * not accept it.
+   */
+  @Column({ type: 'jsonb', nullable: true, name: 'answer_evidence' })
+  answerEvidence!: AnswerEvidence | null;
 
   @Column({ default: 'user_input', name: 'answer_source' })
   answerSource!: string;
@@ -90,6 +104,7 @@ export class AnswerEntity {
       answer: entity.answer,
       answerConfidence: entity.answerConfidence,
       answerRationale: entity.answerRationale,
+      answerEvidence: entity.answerEvidence,
       answerSource: entity.answerSource,
       answerMethod: entity.answerMethod,
       answeredAt: entity.answeredAt,

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 
-import { useAuth } from '@/hooks';
+import { readJobsSnapshot, writeJobsSnapshot } from './jobsSnapshots';
+import { useJobsAuth } from './useJobsAuth';
 
 export interface JobListItem {
   readonly id: string;
@@ -99,13 +100,19 @@ function toQueryString(filters: JobFilters): string {
  * The search term is debounced because it fires per keystroke against a
  * partitioned table.
  */
+/** The request a set of filters makes, which is also what its snapshot is keyed on. */
+function listUrl(query: string): string {
+  return `/api/jobs?${query}`;
+}
+
 export function useJobsList(filters: JobFilters, refreshIntervalMs = 15000) {
-  const [data, setData] = useState<JobListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [restored] = useState(() => readJobsSnapshot<JobListResponse>(listUrl(toQueryString(filters))));
+
+  const [data, setData] = useState<JobListResponse | null>(restored?.value ?? null);
+  const [loading, setLoading] = useState(restored == null);
   const [error, setError] = useState<string | null>(null);
 
-  const [{ authToken }] = useAuth();
-  const isInitialLoad = useRef(true);
+  const { ready, headers } = useJobsAuth();
 
   const [debouncedSearch, setDebouncedSearch] = useState(filters.search);
 
@@ -120,28 +127,42 @@ export function useJobsList(filters: JobFilters, refreshIntervalMs = 15000) {
     [filters, debouncedSearch],
   );
 
+  // A page this session has already fetched renders at once when the filters
+  // swing back to it — including the phone's page-size switch, which changes
+  // the query on the very first commit and would otherwise blank the table
+  // every time Jobs is opened on a phone.
+  useEffect(() => {
+    const snapshot = readJobsSnapshot<JobListResponse>(listUrl(query));
+
+    if (snapshot) {
+      setData(snapshot.value);
+      setLoading(false);
+    }
+  }, [query]);
+
   const load = useCallback(async () => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
     try {
-      const response = await fetchJson<JobListResponse>(`/api/jobs?${query}`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
+      const response = await fetchJson<JobListResponse>(listUrl(query), { headers });
 
       setData(response ?? null);
       setError(null);
+
+      if (response) {
+        writeJobsSnapshot(listUrl(query), response);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
-      isInitialLoad.current = false;
     }
-  }, [authToken, query]);
+  }, [ready, headers, query]);
 
   useEffect(() => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
@@ -162,7 +183,7 @@ export function useJobsList(filters: JobFilters, refreshIntervalMs = 15000) {
     }, refreshIntervalMs);
 
     return () => window.clearInterval(handle);
-  }, [authToken, load, refreshIntervalMs]);
+  }, [ready, load, refreshIntervalMs]);
 
   return { data, loading, error, refresh: load } as const;
 }

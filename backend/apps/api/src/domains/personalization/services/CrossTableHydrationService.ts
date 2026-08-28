@@ -12,6 +12,7 @@ import {
 
 import { shouldSkipHydrationCandidate } from '../utils/hydrationCandidateFilter';
 
+import { ConceptExtractionService } from './ConceptExtractionService';
 import { PersonalizationService } from './PersonalizationService';
 
 export interface HydrationResult {
@@ -32,6 +33,7 @@ export class CrossTableHydrationService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly graphIngestService: GraphIngestService,
     private readonly personalizationService: PersonalizationService,
+    private readonly conceptExtractionService: ConceptExtractionService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(CrossTableHydrationService.name);
@@ -61,12 +63,12 @@ export class CrossTableHydrationService {
   }
 
   /**
-   * Inventory lives in `ci.inventory`, and has no `name` or `description`.
+   * Objects live in `ci.objects`, and has no `name` or `description`.
    *
    * This read was written against a `ci.items` table with those two columns.
    * No such table exists — `to_regclass('ci.items')` is null on a migrated
    * database — so every call threw `relation "ci.items" does not exist` and the
-   * inventory half of hydration had never run. A physical thing is identified
+   * objects half of hydration had never run. A physical thing is identified
    * here by brand/model over category/subcategory instead, which is what the
    * columns actually carry.
    *
@@ -74,14 +76,14 @@ export class CrossTableHydrationService {
    * definition, and hydrating both sides teaches the profile the same thing
    * twice.
    */
-  async hydrateInventory(context: UserServiceContext, limit = 50): Promise<HydrationResult> {
+  async hydrateThings(context: UserServiceContext, limit = 50): Promise<HydrationResult> {
     type Row = { object_id: string; name: string | null; description: string | null };
     const rows = (await this.dataSource.query(
       `
       SELECT i.object_id,
              NULLIF(TRIM(CONCAT_WS(' ', i.brand, i.model)), '')          AS name,
              NULLIF(TRIM(CONCAT_WS(', ', i.category, i.subcategory)), '') AS description
-      FROM ci.inventory i
+      FROM ci.objects i
       WHERE i.user_id = $1
         AND i.merged_into_object_id IS NULL
       ORDER BY i.created_at DESC
@@ -97,7 +99,7 @@ export class CrossTableHydrationService {
       }))
       .filter((row) => row.text.length > 0);
 
-    return this.hydrateFromTexts(context, texts, 'hydrate_inventory');
+    return this.hydrateFromTexts(context, texts, 'hydrate_things');
   }
 
   private async hydrateFromTexts(
@@ -124,22 +126,50 @@ export class CrossTableHydrationService {
         continue;
       }
 
+      // The concept is NAMED by a model that reads both the question and the
+      // answer, never taken from the answer text. An answer is evidence about a
+      // concept, not its name — "Tacos" only looks like a label because that
+      // question happened to be phrased so its answer was already a noun.
+      //
+      // Null means "no promotable preference here", which is the common and
+      // correct outcome for traits, schedules and facts. It is also what an LLM
+      // failure returns; there is deliberately no fall back to the raw text,
+      // since that fallback is precisely what wrote sentence fragments into the
+      // graph as concepts.
+      const concept = await this.conceptExtractionService.extract(context, {
+        questionText: row.questionText,
+        answerText: text,
+      });
+
+      if (!concept) {
+        result.skipped += 1;
+        continue;
+      }
+
+      // Keyed on the concept NAME, not the answer, so two phrasings of the same
+      // preference converge on one node — and on the same node onboarding
+      // already wrote, rather than minting a second "Tacos".
+      const conceptKey = `concept:${concept.name.toLowerCase()}`;
+
       const entities: GraphEntityInputDto[] = [
         {
-          key: `${sourceJob}:concept:${text.slice(0, 64).toLowerCase()}`,
+          key: conceptKey,
           entityType: 'Concept',
-          name: text.slice(0, 120),
+          name: concept.name,
           sourceSystem: sourceJob,
-          properties: { type: 'activity', source: sourceJob },
+          properties: { source: sourceJob, category: concept.category },
         },
       ];
 
+      // PREFERS/DISLIKES, matching onboarding and the pair ReadKnowledgeTool
+      // queries for "What do I like?". The previous INTERESTED_IN was read by
+      // nothing, so everything this path promoted was invisible to the agent.
       const relationships: GraphRelationshipInputDto[] = [
         {
           fromKey: 'self',
-          toKey: entities[0]!.key,
-          type: 'INTERESTED_IN',
-          properties: { strength: 0.6 },
+          toKey: conceptKey,
+          type: concept.relationshipType,
+          properties: { strength: concept.strength, source: sourceJob, category: concept.category },
         },
       ];
 

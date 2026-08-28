@@ -14,7 +14,12 @@ import {
 
 import { Question, QuestionEntity } from '../entities/QuestionEntity';
 import { excludeForkedOriginsSql } from '../questionScope';
-import type { CreateQuestionDto, QuestionCatalogueQueryDto, UpdateQuestionDto } from '../types';
+import type {
+  AnswerEvidence,
+  CreateQuestionDto,
+  QuestionCatalogueQueryDto,
+  UpdateQuestionDto,
+} from '../types';
 
 const FEED_QUESTION_QUEUE_LIMIT = 3;
 /** Unanswered front-of-queue questions rotate after this long on the feed. */
@@ -100,6 +105,7 @@ const CATALOGUE_ANSWER_LATERAL_SQL = `
       a.answer_source,
       a.answer_confidence,
       a.answer_rationale,
+      a.answer_evidence,
       a.answered_at
     FROM ci.answers a
     WHERE a.question_id = q.question_id
@@ -138,11 +144,36 @@ export interface QuestionCatalogueAnswer {
   source: string | null;
   confidence: number | null;
   rationale: string | null;
+  /**
+   * The database rows an inferred answer was actually read out of — both the
+   * ones the model cited and the ones it was shown and passed over. See
+   * `ci.answers.answer_evidence`. Null for every answer the user typed, and for
+   * inferred rows written before the column existed.
+   *
+   * Inlined on the browse payload rather than fetched per-answer because the
+   * drawer opens off a row that is already on screen: a second round trip to
+   * show the provenance of something already rendered is a spinner for no
+   * reason. Kept affordable at the write end instead — AnswerInferenceListener
+   * caps both arrays and both snippet lengths before the row is stored, which is
+   * what makes the browse payload a function of the caps and not of how
+   * connected the retrieval happened to be.
+   *
+   * Passed through as the whole jsonb wrapper (`row.answer_evidence`), so a
+   * field added at the write end reaches the drawer without a change here.
+   */
+  evidence: AnswerEvidence | null;
   answeredAt: Date;
 }
 
 export interface QuestionCatalogueEntry {
   id: string;
+  /**
+   * `ci.questions.question_key` — the stable slug a curated question is known
+   * by, or null for the ~1.3k rows nobody addresses by name. Callers that
+   * asked with `keys` key their results off this, not off `id`: the id is
+   * minted per appliance and means nothing to them.
+   */
+  key: string | null;
   text: string;
   category: string | null;
   answerTier: string | null;
@@ -194,6 +225,7 @@ function escapeLikeTerm(term: string): string {
 
 type CatalogueRow = {
   id: string;
+  question_key: string | null;
   text: string;
   category: string | null;
   answer_tier: string | null;
@@ -213,6 +245,7 @@ type CatalogueRow = {
   answer_source: string | null;
   answer_confidence: number | null;
   answer_rationale: string | null;
+  answer_evidence: AnswerEvidence | null;
   answered_at: Date | null;
   total_count: number;
 };
@@ -450,7 +483,7 @@ export class QuestionService {
 
     // Positions are shared between the page query and the facet query, so the
     // two predicates stay in lockstep. $4..$6 are page-only.
-    const params = [
+    const params: unknown[] = [
       userId,
       status,
       search,
@@ -461,10 +494,46 @@ export class QuestionService {
       offset,
     ];
 
+    // The allow-list stays out of CATALOGUE_FULL_WHERE_SQL because that
+    // constant is shared by three queries that bind different numbers of
+    // params, and node-postgres rejects a query text referencing a param index
+    // the caller did not pass.
+    //
+    // But it has to reach ALL THREE, not just the page query. It previously
+    // reached only that one, so an `ids`-filtered request reported a
+    // `totalCount` and facet buckets for the entire catalogue — the pager
+    // offering pages that cannot exist, and the facet counts describing a set
+    // the caller did not ask for.
+    //
+    // Positioned per query, since each binds a different prefix of `params`.
+    // `ids` and `keys` are ANDed and take positions in the order they are
+    // pushed, so neither has to know whether the other was sent.
+    const allowListFor = (base: number): { sql: string; values: unknown[] } => {
+      const clauses: string[] = [];
+      const values: unknown[] = [];
+
+      if (query.ids?.length) {
+        values.push(query.ids);
+        clauses.push(`AND q.question_id = ANY($${base + values.length}::uuid[])`);
+      }
+
+      if (query.keys?.length) {
+        values.push(query.keys);
+        clauses.push(`AND q.question_key = ANY($${base + values.length}::text[])`);
+      }
+
+      return { sql: clauses.join('\n      '), values };
+    };
+
+    const pageAllowList = allowListFor(params.length);
+    params.push(...pageAllowList.values);
+    const pageAllowListSql = pageAllowList.sql;
+
     const rows = (await this.dataSource.query(
       `
       SELECT
         q.question_id AS id,
+        q.question_key,
         q.question_text AS text,
         q.question_category AS category,
         q.answer_tier,
@@ -484,11 +553,13 @@ export class QuestionService {
         a.answer_source,
         a.answer_confidence,
         a.answer_rationale,
+        a.answer_evidence,
         a.answered_at,
         COUNT(*) OVER ()::int AS total_count
       FROM ci.questions q
       ${CATALOGUE_ANSWER_LATERAL_SQL}
       WHERE ${CATALOGUE_FULL_WHERE_SQL}
+      ${pageAllowListSql}
       ORDER BY
         q.question_category ASC NULLS LAST,
         ${TIER_RANK_SQL} ASC,
@@ -501,7 +572,9 @@ export class QuestionService {
 
     // The facet query ignores $4..$6 but is handed the same array: node-postgres
     // tolerates unreferenced trailing params only when they are not passed, so
-    // slice down to what the statement actually uses.
+    // slice down to what the statement actually uses — then re-append the
+    // allow-list at the position this shorter statement gives it.
+    const facetAllowList = allowListFor(3);
     const facetRows = (await this.dataSource.query(
       `
       SELECT
@@ -512,9 +585,10 @@ export class QuestionService {
       FROM ci.questions q
       ${CATALOGUE_ANSWER_LATERAL_SQL}
       WHERE ${CATALOGUE_BASE_WHERE_SQL}
+      ${facetAllowList.sql}
       GROUP BY 1, 2;
       `,
-      params.slice(0, 3),
+      [...params.slice(0, 3), ...facetAllowList.values],
     )) satisfies Array<CatalogueFacetRow>;
 
     const categories = new Map<string | null, number>();
@@ -532,6 +606,8 @@ export class QuestionService {
       unansweredCount += count - answeredInBucket;
     }
 
+    const countAllowList = allowListFor(6);
+
     // The window count rides on the rows, so an empty page carries none. That is
     // usually because nothing matched — but it is also what a page past the end
     // looks like (deactivate the last row on the last page and you are there),
@@ -548,9 +624,10 @@ export class QuestionService {
                   SELECT COUNT(*)::int AS total_count
                   FROM ci.questions q
                   ${CATALOGUE_ANSWER_LATERAL_SQL}
-                  WHERE ${CATALOGUE_FULL_WHERE_SQL};
+                  WHERE ${CATALOGUE_FULL_WHERE_SQL}
+                  ${countAllowList.sql};
                   `,
-                  params.slice(0, 6),
+                  [...params.slice(0, 6), ...countAllowList.values],
                 )) satisfies Array<{ total_count: number }>
               )[0]?.total_count ?? 0,
             );
@@ -567,6 +644,7 @@ export class QuestionService {
     return {
       data: rows.map((row) => ({
         id: row.id,
+        key: row.question_key,
         text: row.text,
         category: row.category,
         answerTier: row.answer_tier,
@@ -589,6 +667,7 @@ export class QuestionService {
                 source: row.answer_source,
                 confidence: row.answer_confidence,
                 rationale: row.answer_rationale,
+                evidence: row.answer_evidence,
                 answeredAt: row.answered_at as Date,
               }
             : null,
@@ -789,6 +868,13 @@ export class QuestionService {
     const fork = this.questionRepository.create({
       id: uuidv7(),
       text: origin.text,
+      // The key comes across deliberately. A curated surface asks for its
+      // questions by key, and the origin is hidden from whoever forked it — so
+      // a keyless copy would blank that question for the one user who cared
+      // enough to edit it. questions_question_key_owner_uniq is scoped to
+      // (question_key, is_private_to), which is what lets the copy hold the
+      // same key as the shared row it replaces.
+      key: origin.key ?? null,
       category: origin.category,
       answerTier: origin.answerTier ?? null,
       contextTags: origin.contextTags,
@@ -916,6 +1002,12 @@ export class QuestionService {
         FROM ci.questions q
         CROSS JOIN (SELECT DISTINCT id AS user_id FROM ci.users WHERE id IS NOT NULL) u
         WHERE q.is_active = TRUE
+          -- Never spend an inference slot on a question the corpus cannot
+          -- ground (body measurements, medical facts, the make of the boiler).
+          -- The model would return a refusal, and because the NOT EXISTS below
+          -- counts any non-empty answer as answered, that refusal would then
+          -- occupy the slot for good. See 20260825074747_add_question_evidence_class.
+          AND q.evidence_class <> 'hand_entry'
           AND (q.is_private_to IS NULL OR q.is_private_to = u.user_id)
           ${excludeForkedOriginsSql('q', 'u.user_id')}
           AND NOT EXISTS (
@@ -1044,6 +1136,14 @@ export class QuestionService {
       return false;
     }
 
+    await this.rotateFeedQueueRow(front.feed_queue_id);
+    await this.enqueueNextFeedQueueQuestion(userId, FEED_QUESTION_QUEUE_LIMIT);
+
+    return true;
+  }
+
+  /** Push one feed-queue row to the back of the FIFO. Shared by staleness rotation and an explicit user skip. */
+  private async rotateFeedQueueRow(feedQueueId: string): Promise<void> {
     await this.dataSource.query(
       `
       UPDATE ci.feed_queue
@@ -1052,9 +1152,40 @@ export class QuestionService {
         metadata = (COALESCE(metadata, '{}'::jsonb) - 'lastPresentedAt') || jsonb_build_object('rotatedAt', to_jsonb(NOW()::text))
       WHERE feed_queue_id = $1;
       `,
-      [front.feed_queue_id],
+      [feedQueueId],
     );
+  }
 
+  /**
+   * Move the front-of-queue question to the back on the owner's own say-so —
+   * "Skip" on the reflection prompt.
+   *
+   * `findOneUnanswered` always returns the SAME front-of-queue row
+   * deterministically (`ORDER BY enqueued_at ASC ... LIMIT 1`), and only
+   * `rotateStaleFeedQuestions` ever moves it — gated on 30 minutes of
+   * inactivity. Calling `findOneUnanswered` again right after a user-pressed
+   * Skip therefore returned the identical question: the frontend's "Skip"
+   * used to hide the card locally instead, which meant the same question
+   * reappeared on the next reload with no memory of having been skipped.
+   * An explicit skip is a stronger, more deliberate signal than mere
+   * staleness, so it bypasses the 30-minute gate entirely — reusing the exact
+   * rotation `rotateStaleFeedQuestions` performs rather than a second copy of
+   * the "move to back" SQL.
+   *
+   * A no-op (not an error) when the front row has moved on since the caller
+   * fetched it, or the queue is empty — either way there is nothing to skip.
+   */
+  async skipFrontFeedQuestion(userId: string, presentationId: string): Promise<boolean> {
+    const rows = (await this.dataSource.query(
+      `SELECT feed_queue_id FROM ci.feed_queue WHERE feed_queue_id = $1 AND user_id = $2;`,
+      [presentationId, userId],
+    )) satisfies Array<{ feed_queue_id: string }>;
+
+    if (rows.length === 0) {
+      return false;
+    }
+
+    await this.rotateFeedQueueRow(presentationId);
     await this.enqueueNextFeedQueueQuestion(userId, FEED_QUESTION_QUEUE_LIMIT);
 
     return true;
@@ -1086,6 +1217,65 @@ export class QuestionService {
       WHERE question_id = $1;
       `,
       [questionId],
+    );
+  }
+
+  /**
+   * Bump `times_answered` on the question a newly recorded answer belongs to —
+   * the counterpart of the `times_asked` bump in
+   * {@link recordFeedQuestionPresentation}, and the only writer of that column.
+   *
+   * Counts ANSWERS RECORDED, not distinct questions answered and not distinct
+   * people: `ci.questions` is an appliance-wide catalogue (a row is shared until
+   * somebody's edit forks it — see `forkedFromQuestionId`), so this is the same
+   * appliance-wide usage statistic `times_asked` already is. Editing an existing
+   * answer does not bump it; only a new `ci.answers` row does.
+   *
+   * The UPDATE is relative (`times_answered + 1`) rather than a read of the
+   * current value followed by a write of value+1, so two answers landing
+   * concurrently cannot lose one another's increment.
+   */
+  async recordQuestionAnswered(questionId: string): Promise<void> {
+    await this.dataSource.query(
+      `
+      UPDATE ci.questions
+      SET times_answered = times_answered + 1
+      WHERE question_id = $1;
+      `,
+      [questionId],
+    );
+  }
+
+  /**
+   * Batched {@link recordQuestionAnswered}: bump `times_answered` for a whole
+   * ingest batch in one UPDATE instead of N.
+   *
+   * Takes the question id of every answer in the batch, duplicates included —
+   * answering the same question twice in one batch must count twice, exactly as
+   * two separate `recordQuestionAnswered` calls would. The ids are folded into
+   * (id, count) pairs here so the statement touches each row once, and the
+   * addition stays relative for the same lost-update reason as the single path.
+   */
+  async recordManyQuestionsAnswered(questionIds: string[]): Promise<void> {
+    if (questionIds.length === 0) {
+      return;
+    }
+
+    const counts = new Map<string, number>();
+    for (const questionId of questionIds) {
+      counts.set(questionId, (counts.get(questionId) ?? 0) + 1);
+    }
+
+    await this.dataSource.query(
+      `
+      UPDATE ci.questions q
+      SET times_answered = q.times_answered + c.n
+      FROM (
+        SELECT unnest($1::uuid[]) AS question_id, unnest($2::int[]) AS n
+      ) AS c
+      WHERE q.question_id = c.question_id;
+      `,
+      [[...counts.keys()], [...counts.values()]],
     );
   }
 

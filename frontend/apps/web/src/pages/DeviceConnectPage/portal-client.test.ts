@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { listMemoryServers, signInToPortal } from './portal-client';
+import { listMemoryServers, probeMemoryOrigin, signInToPortal } from './portal-client';
 
 describe('device-connect portal-client', () => {
   afterEach(() => {
@@ -85,5 +85,22 @@ describe('device-connect portal-client', () => {
 
     expect(fetch).toHaveBeenCalledWith('https://hub.example.com/api/devices', expect.anything());
     expect(devices[0]?.memoryUrl).toBe('https://memory.example.com');
+  });
+
+  it('probes /api/health on the Memory origin (native HTTP, not webview fetch)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+
+    await probeMemoryOrigin('https://memory.example.com/');
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://memory.example.com/api/health',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('rejects an unhealthy Memory origin', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503 })));
+
+    await expect(probeMemoryOrigin('https://memory.example.com')).rejects.toThrow(/503/);
   });
 });

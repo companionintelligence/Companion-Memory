@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, IsNull, MoreThan, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, UserServiceContext } from '@ci/common/context';
@@ -17,6 +17,19 @@ const TAG_REGEX = /#([\w-]+)/g;
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Whether `entity`'s name, description or tags contain the lowercased `query`. */
+function matchesSavedSearchQuery(entity: SavedSearchEntity, query: string): boolean {
+  if (entity.name?.toLowerCase().includes(query)) {
+    return true;
+  }
+
+  if (entity.description?.toLowerCase().includes(query)) {
+    return true;
+  }
+
+  return (entity.tags ?? []).some((tag) => tag.toLowerCase().includes(query));
 }
 
 @Injectable()
@@ -77,6 +90,7 @@ export class SavedSearchService {
       entity.tags = this.assembleTags({ query: seed.query, tags: seed.tags });
       entity.filters = seed.filters ?? null;
       entity.userId = context.userId;
+      entity.isSeed = true;
 
       return entity;
     });
@@ -86,16 +100,26 @@ export class SavedSearchService {
     return true;
   }
 
-  async findAll(context: ServiceContext): Promise<SavedSearch[]> {
+  async findAll(
+    context: ServiceContext,
+    options?: { query?: string; isSeed?: boolean },
+  ): Promise<SavedSearch[]> {
     const results = await this.savedSearchRepository.find({
       where: {
         ...(context.userId !== SYSTEM_USER && {
           userId: context.userId,
         }),
+        ...(options?.isSeed !== undefined && { isSeed: options.isSeed }),
       },
     });
 
-    return results.map((entity) => SavedSearchEntity.toEgressType(entity));
+    // In-memory rather than a query-builder ILIKE: a user's saved-search table
+    // tops out in the low hundreds (the starter library plus their own), so
+    // there's no scale reason to reach for SQL here.
+    const trimmed = options?.query?.trim().toLowerCase();
+    const filtered = trimmed ? results.filter((entity) => matchesSavedSearchQuery(entity, trimmed)) : results;
+
+    return filtered.map((entity) => SavedSearchEntity.toEgressType(entity));
   }
 
   async findByIds(context: ServiceContext, ids: string[]): Promise<(SavedSearch | null)[]> {
@@ -125,6 +149,17 @@ export class SavedSearchService {
   }
 
   async update(context: ServiceContext, id: string, data: UpdateSavedSearchDto): Promise<SavedSearch | null> {
+    // ═══ AN ABSENT `tags` MEANS "LEAVE IT ALONE", NOT "CLEAR IT" ═══
+    //
+    // `assembleTags` was called unconditionally with `data.tags || []`, so a
+    // caller that updates only `name` — the edit dialog's own request, before
+    // it selected `tags` at all — silently wrote `[]` (or whatever hashtags
+    // happened to be in `data.query`, if that was also part of the payload)
+    // over the row's actual tags. Renaming a search deleted its tag filter.
+    // `UpdateSavedSearchInput` makes every field optional at the schema level,
+    // so this protects every current and future caller, not just the one that
+    // exposed it — `assembleTags` is only reached, and the column only
+    // touched, when the caller actually named `tags` on this request.
     const result = await this.savedSearchRepository.update(
       {
         id,
@@ -134,7 +169,7 @@ export class SavedSearchService {
       },
       {
         ...data,
-        tags: this.assembleTags(data),
+        ...(data.tags !== undefined && { tags: this.assembleTags(data) }),
       },
     );
 
@@ -215,8 +250,25 @@ export class SavedSearchService {
    * mints a fresh unguessable capability token (128 bits of entropy); disabling
    * clears it, which revokes any outstanding share links. Re-enabling always
    * rotates the token, so a previously shared link cannot be resurrected.
+   *
+   * The token is now the INVITATION only. What a reader may actually receive is
+   * decided by the `ci.ask_grants` row `SharedSearchConsentService` mints for
+   * them on first use, stamped with `posture.maxDisclosure` and
+   * `posture.expiresAt` from here.
+   *
+   * TURNING SHARING OFF CLEARS THE POSTURE TOO. Leaving a stale ceiling behind
+   * would mean a later re-share silently inherited a restriction the owner set
+   * for a different link and a different audience — and, worse, the reverse:
+   * an owner who had shared at `count` and re-shares expecting the default
+   * would get their old cap or lose it depending on which field the mutation
+   * happened to send. The posture belongs to the link, and the link is gone.
    */
-  async setSharing(context: UserServiceContext, id: string, isPublic: boolean): Promise<SavedSearch | null> {
+  async setSharing(
+    context: UserServiceContext,
+    id: string,
+    isPublic: boolean,
+    posture: { maxDisclosure?: string | null; expiresAt?: Date | null } = {},
+  ): Promise<SavedSearch | null> {
     const result = await this.savedSearchRepository.update(
       {
         id,
@@ -225,6 +277,8 @@ export class SavedSearchService {
       {
         isPublic,
         shareToken: isPublic ? crypto.randomBytes(16).toString('hex') : null,
+        shareMaxDisclosure: isPublic ? (posture.maxDisclosure ?? null) : null,
+        shareExpiresAt: isPublic ? (posture.expiresAt ?? null) : null,
       },
     );
 
@@ -241,16 +295,21 @@ export class SavedSearchService {
    * run as the owner (see SearchResolver). Only public searches with a token
    * match, so clearing `isPublic` immediately stops resolution.
    */
-  async findByShareToken(token: string): Promise<SavedSearch | null> {
+  async findByShareToken(token: string, now: Date = new Date()): Promise<SavedSearch | null> {
     if (!token) {
       return null;
     }
 
+    // A LAPSED LINK RESOLVES TO NOTHING, exactly like an unknown or revoked
+    // one. The two-element `where` is an OR: no expiry, or an expiry still in
+    // the future. Filtering in SQL rather than after the read is what keeps
+    // "expired" and "never existed" indistinguishable to the caller — there is
+    // no branch above that could accidentally report which it was.
     return this.savedSearchRepository.findOne({
-      where: {
-        shareToken: token,
-        isPublic: true,
-      },
+      where: [
+        { shareToken: token, isPublic: true, shareExpiresAt: IsNull() },
+        { shareToken: token, isPublic: true, shareExpiresAt: MoreThan(now) },
+      ],
     });
   }
 

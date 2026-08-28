@@ -1,10 +1,11 @@
 import { useState } from 'react';
 
 import { Tooltip, cn } from '@ci/shadcn';
-import { Play } from '@ci/shadcn/icons';
+import { Music, Play } from '@ci/shadcn/icons';
 
 import { FileIcon } from '@/components/icons';
 
+import { providerLabel } from './EmbedPlayer';
 import type { EntityMedia } from './media';
 
 interface Props {
@@ -25,6 +26,7 @@ interface Props {
 export function MediaTile({ media, onClick }: Props) {
   const [broken, setBroken] = useState(false);
   const showThumb = media.thumbUrl != null && !broken;
+  const embed = media.kind === 'embed' ? media.player : undefined;
 
   return (
     <Tooltip delayDuration={600}>
@@ -55,6 +57,17 @@ export function MediaTile({ media, onClick }: Props) {
               onError={() => setBroken(true)}
               className="h-full w-full object-cover"
             />
+          ) : embed ? (
+            // Poster-less provider (Spotify publishes none at a predictable
+            // address): a provider-badged placeholder, so the tile still reads
+            // as "playable" rather than as a document.
+            <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4">
+              <Music className="h-10 w-10 text-muted-foreground" />
+              <span className="line-clamp-2 text-center text-xs text-muted-foreground">{media.title}</span>
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground/80">
+                {providerLabel(embed.provider)}
+              </span>
+            </div>
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4">
               <FileIcon className="h-10 w-10 text-muted-foreground" />
@@ -62,7 +75,7 @@ export function MediaTile({ media, onClick }: Props) {
             </div>
           )}
 
-          {media.kind === 'video' && (
+          {(media.kind === 'video' || embed) && (
             <span className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-sm">
               <Play className="h-4 w-4 fill-current" />
             </span>

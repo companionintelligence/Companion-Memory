@@ -25,7 +25,7 @@ private const val CONNECT_TIMEOUT_MS = 30_000
 private const val READ_TIMEOUT_MS = 30_000
 
 /**
- * Resumable, foreground download of a model's `.task` file. A plain single `fetch`/OkHttp
+ * Resumable, foreground download of a model's file. A plain single `fetch`/OkHttp
  * call would die on backgrounding or a network change for a file this size (~530 MiB) —
  * this worker persists partial progress to a `.part` file and resumes via HTTP `Range` on
  * retry (WorkManager itself retries transient failures per its backoff policy, and a

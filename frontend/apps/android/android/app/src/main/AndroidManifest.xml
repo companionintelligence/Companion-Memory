@@ -8,6 +8,13 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
+
+        <!-- @capacitor-mlkit/barcode-scanning: required so Play Services can resolve the
+             on-demand ML Kit barcode model at scan time (the `scan()` entry point used by
+             the QR-to-connect flow launches Google's own scanner UI/module, not a bundled
+             model, so this only advertises which ML Kit dependency to fetch). -->
+        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="barcode_ui" />
+
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
             android:name=".MainActivity"
@@ -54,28 +61,29 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
-      Location — FOREGROUND ONLY. Both are declared because the runtime prompt for
-      FINE offers the user a "coarse only" choice; without COARSE declared, that
-      choice yields no permission at all rather than a degraded one.
+      Location — foreground + background. Both COARSE and FINE are declared because
+      the runtime prompt for FINE offers the user a "coarse only" choice; without
+      COARSE declared, that choice yields no permission at all rather than a
+      degraded one.
 
-      *** DO NOT ADD ACCESS_BACKGROUND_LOCATION HERE. ***
-      Per DEVICE_DATA_COMPLIANCE.md §3.4 it pulls in Play's separate
-      background-location declaration form plus a video review, AND a
-      foreground-service `location` type declaration with its own description and
-      video. The doc is blunt about the framing risk: a "passive timeline of
-      everywhere I go" reads to a reviewer as untargeted tracking, and the budget
-      is two rejection cycles. Foreground-only ships now and cannot block the rest
-      of the release; background is its own phase (§7 Phase 4) with a named,
-      demonstrable feature behind it.
+      ACCESS_BACKGROUND_LOCATION powers the "Always" mode (@capacitor-community/
+      background-geolocation), which now ships on Android as well as iOS. Per
+      DEVICE_DATA_COMPLIANCE.md §3.4/§7, this is no longer deferrable to a later
+      phase: it requires Play's background-location declaration form + demo video,
+      AND a foreground-service `location` type declaration with its own
+      description/video, BEFORE this build can go to any Play track (including
+      internal testing). Do not upload to Play until both are filed.
 
-      What foreground location commits us to (§8): an in-app prominent-disclosure
-      screen shown immediately before the runtime prompt — not in the store
-      listing, not in the privacy policy — with an affirmative "Agree" button, a
-      working decline path, and graceful degradation. Plus a Play location
-      Permissions Declaration and `Location -> Precise location` in Data Safety.
+      What location commits us to (§8): an in-app prominent-disclosure screen
+      shown immediately before each runtime prompt — not in the store listing, not
+      in the privacy policy — with an affirmative "Agree" button, a working
+      decline path, and graceful degradation. Plus a Play location Permissions
+      Declaration and `Location -> Precise location` in Data Safety.
     -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <!-- Location hardware is optional: the app is fully usable with tracking off. -->
     <uses-feature android:name="android.hardware.location" android:required="false" />

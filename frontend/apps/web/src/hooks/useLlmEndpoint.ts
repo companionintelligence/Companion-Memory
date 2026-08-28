@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 
-import { useAuth } from './useAuth';
+import { useSessionAuth } from './useSessionAuth';
 
 export type LlmBackendKind = 'ollama' | 'openai_compatible';
 
@@ -15,14 +15,14 @@ export interface LlmEndpointConfig {
 }
 
 export function useLlmEndpoint() {
-  const [{ authToken, expired }] = useAuth();
+  const { ready, headers } = useSessionAuth();
   const [config, setConfig] = useState<LlmEndpointConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchEndpoint = useCallback(async () => {
-    if (authToken == null || expired) {
+    if (!ready) {
       return null;
     }
 
@@ -34,7 +34,7 @@ export function useLlmEndpoint() {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${authToken}`,
+          ...headers,
         },
       });
 
@@ -50,11 +50,11 @@ export function useLlmEndpoint() {
     } finally {
       setLoading(false);
     }
-  }, [authToken, expired]);
+  }, [ready, headers]);
 
   const saveEndpoint = useCallback(
     async (next: Pick<LlmEndpointConfig, 'backend' | 'port' | 'apiKey'>) => {
-      if (authToken == null || expired) {
+      if (!ready) {
         return null;
       }
 
@@ -66,7 +66,7 @@ export function useLlmEndpoint() {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${authToken}`,
+            ...headers,
           },
           body: JSON.stringify(next),
         });
@@ -84,7 +84,7 @@ export function useLlmEndpoint() {
         setSaving(false);
       }
     },
-    [authToken, expired],
+    [ready, headers],
   );
 
   useEffect(() => {

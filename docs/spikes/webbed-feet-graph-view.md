@@ -2,7 +2,7 @@
 
 Branch: `spike/webbed-feet-graph-view`
 
-Replaces the `/memory?view=graph` presentation with a full-bleed SVG graph modelled on the
+Replaces the `/memory/events?view=graph` presentation with a full-bleed SVG graph modelled on the
 Webbed Feet explore page: an animated force layout the viewer manipulates directly, floating
 dialogs over the canvas instead of panels below it, camera flights on selection, an explicit
 focus mode per entity, and selectable connection threads. The PostgreSQL graph read APIs are
@@ -53,7 +53,9 @@ label collision layout (billboarded labels have no stable 2D geometry to separat
 
 ## Retained from the old graph view
 
-- Route and view slot (`/memory?view=graph`, the `graph` tab in Memory hub, desktop + mobile).
+- Route and view slot (`/memory/events?view=graph` — `/memory?view=graph` and
+  `/memory/knowledge` both redirect there — the `graph` tab in the Memory hub, desktop +
+  mobile).
 - Explorer URL filter integration: entity types, tags, event-scoped dimensions, date range and
   search all still scope the graph, shared with List/Gallery/Map.
 - `ForceGraph` as the single SVG layout/render layer. Its motion model is now a direct port of
@@ -70,7 +72,8 @@ label collision layout (billboarded labels have no stable 2D geometry to separat
 ## Removed in this spike (deliberate)
 
 - **The old 3D view** (`ForceGraph3D` on react-force-graph-3d). Replaced by the r3f-forcegraph
-  `GraphCanvas3D` behind the new 2D/3D toggle; the old component still exists for other callers.
+  `GraphCanvas3D` behind the new 2D/3D toggle; the old component still exists and is still
+  exported from `components/ForceGraph`, but nothing in the app calls it any more.
 - **Neighbors spawn-limit input** — superseded by fixed bounds: the overview shows the bounded
   `/data` payload capped to the 150 busiest nodes, and focus mode uses a 60-node / 3-hop budget
   (1 hop at full weight + a 2-hop context ring).

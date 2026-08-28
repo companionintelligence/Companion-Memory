@@ -36,7 +36,7 @@ describe('ItemService CTI create', () => {
       name: 'Camera',
       description: 'DSLR',
       userId: USER,
-      linkedTable: 'inventory',
+      linkedTable: 'objects',
       linkedId: 'i1',
     });
 
@@ -169,7 +169,7 @@ describe('ItemService CTI createMany', () => {
     expect(baseInsert.values?.[0]).toMatchObject({
       id: 'i1',
       name: 'Camera',
-      linkedTable: 'inventory',
+      linkedTable: 'objects',
       linkedId: 'i1',
     });
     expect(baseInsert.conflict).toBe('(entity_id) DO NOTHING');

@@ -40,6 +40,7 @@ export function ModelSelector({
       toolsSupported,
       toolsEnabled,
       activeModels,
+      loading,
       error,
     },
     { selectModel, selectVisionModel, toggleThinking, toggleTools },
@@ -83,32 +84,41 @@ export function ModelSelector({
     [selectedModelConfig?.thinking, toast, toggleThinking],
   );
 
-  if (error) {
-    return null;
-  }
-
   const isComposer = variant === 'composer';
   const resolvedTriggerClassName =
     triggerClassName ??
-    (isComposer ? 'h-8 w-[148px] border-0 bg-transparent shadow-none px-2 text-xs' : 'w-[150px]');
+    (isComposer
+      ? 'h-8 min-w-0 flex-1 border-0 bg-transparent shadow-none px-2 text-xs'
+      : 'w-[150px]');
+
+  // Radix Select.Value clones ItemText into the trigger. Nested flex/div
+  // children (capability icons) come through empty on iOS WKWebView, so Chat
+  // and Settings both showed the placeholder instead of the served model id.
+  // Render the id ourselves whenever one is selected.
+  const triggerLabel = currentModel
+    ? currentModel
+    : loading
+      ? 'Loading models…'
+      : error
+        ? "Couldn't load models"
+        : 'No models loaded';
 
   const selector = (
-    <Select value={currentModel ?? undefined} onValueChange={handleSelectModel}>
-      <Select.Trigger className={cn(resolvedTriggerClassName)}>
-        <Select.Value placeholder="Active model" />
+    <Select value={currentModel ?? undefined} onValueChange={handleSelectModel} disabled={models.length === 0}>
+      <Select.Trigger className={cn('min-w-0', resolvedTriggerClassName)} aria-label="Active model">
+        <Select.Value placeholder={triggerLabel}>
+          <span className="min-w-0 truncate">{triggerLabel}</span>
+        </Select.Value>
       </Select.Trigger>
       <Select.Content>
         {models.map((model) => (
-          <Select.Item key={model.model} value={model.model}>
-            <div className="flex w-full items-center justify-between gap-2">
-              <span className="truncate">{model.model}</span>
-
-              <span className="ml-3 flex items-center gap-1 text-muted-foreground">
-                {model.thinking === true && <Brain className="size-3.5" aria-label="Supports thinking" />}
-                {model.tools === true && <Wrench className="size-3.5" aria-label="Supports tools" />}
-                {model.vision === true && <Eye className="size-3.5" aria-label="Supports vision" />}
-              </span>
-            </div>
+          <Select.Item key={model.model} value={model.model} textValue={model.model}>
+            <span className="min-w-0 truncate">{model.model}</span>
+            <span className="ml-3 flex shrink-0 items-center gap-1 text-muted-foreground">
+              {model.thinking === true && <Brain className="size-3.5" aria-label="Supports thinking" />}
+              {model.tools === true && <Wrench className="size-3.5" aria-label="Supports tools" />}
+              {model.vision === true && <Eye className="size-3.5" aria-label="Supports vision" />}
+            </span>
           </Select.Item>
         ))}
       </Select.Content>
@@ -120,8 +130,8 @@ export function ModelSelector({
   }
 
   return (
-    <div className={cn('flex flex-row items-center', isComposer ? 'gap-1 min-w-0' : '')}>
-      <div className={cn('flex flex-row items-center gap-1', !isComposer && 'mr-2')}>
+    <div className={cn('flex min-w-0 flex-row items-center', isComposer ? 'flex-1 gap-1' : '')}>
+      <div className={cn('flex shrink-0 flex-row items-center gap-1', !isComposer && 'mr-2')}>
         <Tooltip delayDuration={600}>
           <Tooltip.Content>{toolsTooltip}</Tooltip.Content>
           {/* A disabled Toggle gets `pointer-events: none`, which would swallow the

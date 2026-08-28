@@ -1,7 +1,7 @@
 /**
- * useUploadFile: the file-attach mutation behind Chat uploads and inventory
+ * useUploadFile: the file-attach mutation behind Chat uploads and thing
  * capture. Covers the request it builds (multipart body, optional
- * inventoryCapture/model fields, bearer token), the success/error/loading
+ * thingCapture/model fields, bearer token), the success/error/loading
  * state machine, and that a fresh upload clears a previous run's leftovers.
  */
 import { fetchJson } from '@ci/common';
@@ -15,7 +15,8 @@ vi.mock('@/hooks', () => ({
   useAuth: () => [{ authToken: 'test-token' }],
 }));
 
-vi.mock('@ci/common', () => ({
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
   fetchJson: vi.fn(),
 }));
 
@@ -59,23 +60,23 @@ describe('useUploadFile — request shape', () => {
     const body = uploadCallBody();
     expect(body.getAll('files')).toEqual([a, b]);
     // Neither optional field was requested, so neither is sent.
-    expect(body.has('inventoryCapture')).toBe(false);
+    expect(body.has('thingCapture')).toBe(false);
     expect(body.has('model')).toBe(false);
   });
 
-  it('includes inventoryCapture and model only when passed', async () => {
+  it('includes thingCapture and model only when passed', async () => {
     mockedFetchJson.mockResolvedValue([]);
     const { result } = renderHook(() => useUploadFile());
 
     await act(async () => {
       await result.current[1].upload([new File(['a'], 'a.jpg')], {
-        inventoryCapture: true,
+        thingCapture: true,
         model: 'gpt-vision',
       });
     });
 
     const body = uploadCallBody();
-    expect(body.get('inventoryCapture')).toBe('true');
+    expect(body.get('thingCapture')).toBe('true');
     expect(body.get('model')).toBe('gpt-vision');
   });
 });

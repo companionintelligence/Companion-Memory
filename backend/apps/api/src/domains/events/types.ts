@@ -89,8 +89,8 @@ export type EventSendOptions = {
 
   /**
    * Delay before the job becomes visible. pg-boss accepts a Date, an ISO
-   * string, or an integer number of seconds from now. Ignored by LocalEventService
-   * (jobs run inline).
+   * string, or an integer number of seconds from now. LocalEventService honours
+   * it too, via a plain setTimeout before running listeners inline.
    */
   startAfter?: Date | string | number;
 };

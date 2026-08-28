@@ -1,4 +1,4 @@
-import { LoadingPage } from '@ci/common';
+import { isNativePlatform, LoadingPage } from '@ci/common';
 import { Navigate } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
@@ -10,7 +10,7 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
   // signup POST is in flight, and swapping in LoadingPage then unmounts the
   // very form awaiting the response — wiping the user's input and the local
   // state needed to attach the server's field errors.
-  const [{ expired, authToken, initializing }] = useAuth();
+  const [{ expired, authToken, authenticated, initializing }] = useAuth();
   const { user, loading: userLoading } = useCurrentUser();
   const { isFeatureEnabled, loading: featuresLoading } = useFeatures();
 
@@ -18,14 +18,14 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
     return <LoadingPage />;
   }
 
-  if (expired) {
+  if (expired && !authenticated) {
     return children;
   }
 
   // A valid token with no resolved user means the profile query failed or the
   // account no longer exists — do not spin forever (see ProtectedRoute).
-  if (authToken && !user) {
-    return <Navigate to="/login" replace />;
+  if ((authToken || authenticated) && !user) {
+    return <Navigate to={isNativePlatform() ? '/device-connect' : '/login'} replace />;
   }
 
   if (user) {

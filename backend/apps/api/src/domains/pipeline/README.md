@@ -12,18 +12,44 @@ the data model, the migration and backfill plan — is
 | --- | --- |
 | `constants.ts` | Queues, stage ids, slice sizes, leases, retry policy. Everything DECLARED, nothing discovered. |
 | `versions.ts` | `STAGE_VERSIONS` — the re-run watermark. The point of the whole rebuild. |
-| `types.ts` | The `Stage` contract, `StageResult`, `StageSource`, and the three event payload schemas. |
-| `events.ts` | The pipeline's entire event surface: `pipeline.slice`, `pipeline.sweep`, `pipeline.dead_letter.reap`. |
+| `schedule.ts` | `STAGE_SCHEDULES` — per-stage `trigger` / `cost` / `window` / `minInterval` / `maxStaleness` / `perRunCap`, plus `stageDueness()` and the boot guard `assertStageSchedules()`. |
+| `types.ts` | The `Stage` contract, `StageResult`, `StageSource`, `StageSchedule`, and the event payload schemas. |
+| `events.ts` | The pipeline's event surface: `pipeline.slice`, `pipeline.sweep`, `pipeline.dead_letter.reap`. |
 | `services/PipelineStateService.ts` | The ledger. The only writer of `ci.pipeline_state` and the home of THE ONE RULE. |
 | `services/StageRegistry.ts` | `STAGE_REGISTRY` (id → DI token) plus every boot-time guard that keeps the declarations honest. |
 | `services/PipelineDispatchService.ts` | The keyset sweep, as a durable chain of self-requeuing jobs. |
+| `services/PipelineControlService.ts` | The control tick and the run/shard runner: what to start for whom, `STAGE_DEPENDENCIES`, pause/resume/cancel, the lease reaper. |
+| `services/PipelineRunService.ts` | `ci.pipeline_runs` / `ci.pipeline_shards` persistence behind the runner. |
+| `services/EnrichmentWindowService.ts` | Whether the nightly enrichment window is open, from a zoned wall clock + `ci.pipeline_turns`. |
+| `services/BackpressureService.ts` | `QUEUE_READY_CAPS` — the admission gate that stops the pipeline committing more work to a queue than it can re-decide. |
+| `controllers/PipelineController.ts` | The operator HTTP surface (state, runs, pause/resume/cancel, dead letters + replay, quarantine release). |
 | `listeners/PipelineSliceListener.ts` | THE generic worker. One class serves every stage that will ever exist. |
-| `listeners/DeadLetterReaperListener.ts` | Copies pg-boss's dead-letter queue into `ci.pipeline_dead_letters`, which nothing had ever read. |
+| `listeners/PipelineTickCron.ts` | The five-minute control tick (`20 */5 * * * *`), advisory-locked, calling whatever is bound to `PIPELINE_TICK`. |
+| `listeners/StageArrivalListener.ts` | `ARRIVAL_SIGNALS` — turns domain create/update events into sweeps for `onArrival` stages. |
+| `listeners/SearchIndexSweepRequestListener.ts` | Consumes `maintenance.search-index-backfill-request` (emitted by the importer's push stage) and starts the matching `index.*` sweeps. |
+| `listeners/GraphEdgeSweepRequestListener.ts` | The same shape for the `promote.edge_*` matrix. |
+| `listeners/DeadLetterReaperListener.ts` | Copies pg-boss's dead-letter queue into `ci.pipeline_dead_letters`, which nothing had ever read — and, on the same tick, reclaims the letters that have already been replayed. |
 | `stages/<phase>/*.ts` | The stages themselves. Pure processing: ids in, decisions out. |
-| `entities/*.ts` | TypeORM mirrors of the five control-plane tables. The SQL migration is the source of truth. |
+| `entities/*.ts` | TypeORM mirrors of the control-plane tables. The SQL migrations are the source of truth. |
 | `__tests__/harness/README.md` | The integration harness — a real stage, a real Postgres, a fake queue. |
 
-Schema: `backend/apps/api/db/postgres/migrations/20260809032723_create_pipeline_control_plane.sql`.
+Schema: `20260809032723_create_pipeline_control_plane.sql` is the original five tables;
+`20260809183010_identifier_claims.sql`, `20260809194756_create_pipeline_turns.sql`,
+`20260810050759_create_pipeline_schedule.sql` and
+`20260817210353_prefill_index_pipeline_ledger.sql` are the rest, all under
+`backend/apps/api/db/postgres/migrations/`.
+
+> ⚠️ **The controller's prefix is unusual — check it before you write a client.**
+> `PipelineController` is declared `@Controller('api/pipeline')`, so Nest serves these
+> routes at `/api/pipeline/...`. Both ingress paths strip a leading `/api` before
+> proxying (`infrastructure/gateway/nginx.conf:132`, `scripts/dev-stack/index.ts:225`),
+> and every other domain therefore declares the bare name (`@Controller('import')`,
+> `@Controller('files')`, `@Controller('jobs')`) and is reached from a browser as
+> `/api/import`, `/api/files`, `/api/jobs`. On the same reasoning a browser request to
+> `/api/pipeline/...` arrives here as `/pipeline/...`. `MaintenanceController` has the
+> same shape and is only ever called with curl inside the container, where the prefix is
+> right. **Read from the decorators and the proxy config, not runtime-tested** — verify
+> against a running stack before documenting a public path or filing a fix.
 
 ---
 
@@ -35,13 +61,13 @@ in the repo today:
 
 | Leg | Candidate predicate |
 | --- | --- |
-| `domains/maintenance/services/SearchIndexBackfillService.ts:394` (and `:414`) | `LEFT JOIN ci_search.embeddings e … LEFT JOIN ci_search.index_skips k … WHERE e.entity_id IS NULL AND k.entity_id IS NULL` |
-| `domains/geocode/listeners/GeocodeBatchListener.ts:402` | `query.andWhere('event.location_coordinates IS NULL')` |
+| `domains/maintenance/services/SearchIndexBackfillService.ts:458` (and `:479`) | `LEFT JOIN ci_search.embeddings e … LEFT JOIN ci_search.index_skips k … WHERE e.entity_id IS NULL AND k.entity_id IS NULL` |
+| `domains/geocode/listeners/GeocodeBatchListener.ts:404` | `query.andWhere('event.location_coordinates IS NULL')` |
 | `domains/maintenance/services/LocationEstimateService.ts:124` | `e.location_coordinates IS NULL` |
 | `domains/files/listeners/MediaDimensionsBackfillListener.ts` (pre-conversion) | `file.variant = 'ORIGINAL' AND file.key IS NOT NULL AND file.width IS NULL` |
 | `domains/maintenance/services/CommunicationLinkBackfillService.ts:210`, `:259` | `(from_entity_id IS NULL OR to_entity_ids IS NULL OR cardinality(to_entity_ids) = 0)` |
-| `domains/maintenance/services/PersonStubBackfillService.ts:216`, `:270` | `(from_entity_id IS NULL OR to_entity_ids IS NULL OR cardinality(to_entity_ids) = 0)` |
-| `domains/maintenance/services/EventParticipantBackfillService.ts:126-128` | `organizer_entity_id IS NULL OR participant_entity_ids IS NULL OR cardinality(participant_entity_ids) = 0` |
+| `domains/maintenance/services/PersonStubBackfillService.ts:242`, `:299` | `(from_entity_id IS NULL OR to_entity_ids IS NULL OR cardinality(to_entity_ids) = 0)` |
+| `domains/maintenance/services/EventParticipantBackfillService.ts:126-129` | `organizer_entity_id IS NULL OR participant_entity_ids IS NULL OR cardinality(participant_entity_ids) = 0` |
 
 Four predicate shapes, seven legs, one defect: **the predicate that FINDS work
 is the predicate that DECLARES it done.** Three consequences follow, and none of
@@ -155,13 +181,16 @@ A stage id is `<phase>.<name>`. The prefix is a naming convention, not something
 the code enforces — it makes a stage's position in the flow legible from its id
 alone and makes coverage groupable.
 
+**38 stages are registered today.** `constants.ts` `STAGE_IDS` is the authoritative
+list; the counts below are what it holds.
+
 | Namespace | Responsibility | In this repo today |
 | --- | --- | --- |
-| `get.*` | Land every source record as one addressable, replayable row before anything interprets it (`get.fetch`, `get.capture`, `get.materialize`). | Nothing. Phase 6. |
-| `index.*` | Make a record addressable and findable: materialize raw → typed, register identity, build keyword and vector representations (`index.identity`, `index.embed`, `index.vector`). | `stages/index/EmbedStage.ts` exists but is **not registered** — see below. |
-| `enrich.*` | Derive facts the source did not supply (`enrich.geocode`, `enrich.person_link`, `enrich.media_dimensions`, `enrich.graph_extract`, …). | `enrich.media_dimensions` — declared in `STAGE_IDS`, `STAGE_VERSIONS` and `STAGE_REGISTRY`, implemented at `stages/enrich/MediaDimensionsStage.ts`. |
-| `clean.*` | Reconcile competing assertions and repair normalization (`clean.identifier_normalize`, `clean.temporal_repair`, `clean.duplicate_detect`, …). | Nothing. Phase 7. |
-| `promote.*` | Project winning facts into the rich graph and object model (`promote.place`, `promote.person`, `promote.graph_delta`, …). | Nothing. Phase 8. |
+| `get.*` | Land every source record as one addressable, replayable row before anything interprets it (`get.fetch`, `get.capture`, `get.materialize`). | Nothing. Phase 6, still not started. |
+| `index.*` | Make a record addressable and findable: materialize raw → typed, register identity, build keyword and vector representations. | **14** — seven dense-embed legs (`index.embed` for content plus `index.embed_{communication,event,item,person,file,browser_activity}`) and the seven matching `index.vector*` tsvector legs. Both families share the text recipes in `search-ingress/searchTexts.ts` with the live listeners. |
+| `enrich.*` | Derive facts the source did not supply. | **8** — `enrich.media_dimensions`, `enrich.geocode`, `enrich.event_reverse` (the coordinate → name direction over `ci.events`, which had no scheduled producer at all — see below), `enrich.position_reverse`, `enrich.estimate_location`, `enrich.person_link`, `enrich.event_person_link`, `enrich.unfurl` (link previews: oEmbed / Wikidata / OpenGraph into `ci.unfurls`). |
+| `clean.*` | Reconcile competing assertions and repair normalization. | **3** — `clean.temporal_repair`, `clean.duplicate_detect`, `clean.identifier_normalize`. |
+| `promote.*` | Project winning facts into the rich graph and object model. | **14** — `promote.place`, `promote.place_position`, `promote.object`, `promote.observation`, and the ten `promote.edge_*` legs of the deterministic edge matrix (one per source table). |
 
 `STAGE_IDS` grows by **one entry per conversion**, deliberately. Declaring the
 planned roadmap up front would make the status endpoint report a dozen stages at
@@ -190,10 +219,10 @@ classes buys nothing but scheduling noise.
 
 ## How to add a stage
 
-A stage is **declared in four places** — `STAGE_IDS`, `STAGE_VERSIONS`,
-`STAGE_REGISTRY` and a module's `providers` — and **implemented in one class**.
-Every omission has a guard; the table at the end of this section says which one
-fires for which mistake.
+A stage is **declared in five places** — `STAGE_IDS`, `STAGE_VERSIONS`,
+`STAGE_SCHEDULES`, `STAGE_REGISTRY` and a module's `providers` — and
+**implemented in one class**. Every omission has a guard; the table at the end of
+this section says which one fires for which mistake.
 
 ### 1. Declare the id — `constants.ts`
 
@@ -218,7 +247,37 @@ export const STAGE_VERSIONS: Record<StageId, number> = {
 Start at 1, never 0. A module-load guard enforces it; the reason is in
 [crash recovery](#idempotency-and-crash-recovery).
 
-### 3. Declare the token — `services/StageRegistry.ts`
+### 3. Declare the schedule — `schedule.ts`
+
+```ts
+export const STAGE_SCHEDULES: Record<StageId, StageSchedule> = {
+  [STAGE_IDS.INDEX_VECTOR]: {
+    trigger: 'scheduled', // 'onArrival' | 'scheduled' | 'manual'
+    cost: 'cheap', //        'cheap' | 'contended' | 'metered'
+    window: 'any', //        'any' | 'enrichment'
+    minInterval: 1 * HOURS, // floor: do not re-sweep this leg sooner
+    maxStaleness: 6 * HOURS, // ceiling: once overdue, the window stops applying
+    // perRunCap: 1_000,     // REQUIRED for cost: 'metered'
+  },
+};
+```
+
+`assertStageSchedules()` throws at module load for a registered stage with no
+schedule, a schedule for an unknown id, a `maxStaleness` below `minInterval`, or
+a metered stage with no `perRunCap`. The control tick will only ever start a
+stage whose `trigger` is not `manual` (`automaticStageIds()`); metered stages are
+**not** excluded from that set — cost discipline is `minInterval` +
+`window: 'enrichment'` + `perRunCap`, enforced by the guard rather than by
+unreachability.
+
+Two optional declarations sit alongside it, each with its own module-load guard:
+`STAGE_DEPENDENCIES` (`services/PipelineControlService.ts`), which orders
+producers before consumers inside a run, and `ARRIVAL_SIGNALS`
+(`listeners/StageArrivalListener.ts`), which is what actually makes
+`trigger: 'onArrival'` true — declaring `onArrival` with no signal promises a
+fast path that does not exist.
+
+### 4. Declare the token — `services/StageRegistry.ts`
 
 ```ts
 export const STAGE_REGISTRY: Record<StageId, string> = {
@@ -230,7 +289,7 @@ export const STAGE_REGISTRY: Record<StageId, string> = {
 Tokens, not classes, so this file imports nothing from `../stages/` and cannot
 acquire a module cycle.
 
-### 4. Implement the stage — `stages/<phase>/<Name>Stage.ts`
+### 5. Implement the stage — `stages/<phase>/<Name>Stage.ts`
 
 ```ts
 import { Injectable } from '@nestjs/common';
@@ -357,7 +416,7 @@ Rules the contract enforces:
   reporting 0.9 because it felt right teaches promotion to prefer it over a
   genuinely-measured 0.8.
 
-### 5. Bind the implementation — `index.ts`
+### 6. Bind the implementation — `index.ts`
 
 ```ts
 const stageProviders: Provider[] = [
@@ -371,7 +430,7 @@ that needs services that module already wires. Watch for cycles: a stage that
 imports another domain's barrel cannot be bound from `PipelineModule` if that
 domain imports the pipeline's.
 
-### 6. Write the spec
+### 7. Write the spec
 
 Unit-test `run()` against fakes (`stages/__tests__/*.spec.ts`), then use the
 integration harness for anything about the ledger — see
@@ -379,7 +438,7 @@ integration harness for anything about the ledger — see
 registers a synthetic stage into the real maps at runtime and runs it against a
 real Postgres with a fake queue.
 
-### 7. Start a sweep
+### 8. Start a sweep
 
 ```ts
 await pipelineDispatchService.startSweep({
@@ -394,8 +453,11 @@ await pipelineDispatchService.startSweep({
 point of making it durable. A sweep is a chain of jobs: each hop enqueues up to
 `MAX_SLICES_PER_SWEEP` (5) slices of `DEFAULT_SLICE_SIZE` (200) ids, then
 re-enqueues itself **behind them on the same queue at the same priority**, so it
-paces itself to the workers' real throughput. That is the entire backpressure
-mechanism in Phase 1 — no token bucket, no queue-depth poll, just FIFO ordering.
+paces itself to the workers' real throughput. FIFO ordering is still the base
+mechanism; on top of it `BackpressureService` measures each queue's *ready* depth
+against `QUEUE_READY_CAPS` (`pipeline-index` 500, `pipeline-enrich` 100,
+`pipeline-embed` 25) and refuses admission above the cap, so the pipeline never
+commits more work than it can re-decide on the next tick.
 
 ### What tells you when you forget a step
 
@@ -404,6 +466,7 @@ mechanism in Phase 1 — no token bucket, no queue-depth poll, just FIFO orderin
 | Id in `STAGE_REGISTRY` but not `STAGE_VERSIONS` (or vice versa) | `assertStageRegistryComplete()` throws **at module load**, naming the symmetric difference in both directions. |
 | Id not in `STAGE_IDS` | Typecheck: `STAGE_REGISTRY` and `STAGE_VERSIONS` are `Record<StageId, …>`. |
 | Version 0, or fractional | `versions.ts` throws at module load. (0 strands crashed workers; `1.5` truncates to 1 in Postgres, so the bump is a no-op.) |
+| Id in `STAGE_IDS` but not `STAGE_SCHEDULES` (or vice versa) | `assertStageSchedules()` throws **at module load**, naming both directions. It also refuses `maxStaleness < minInterval`, a metered stage with no `perRunCap` or outside the enrichment window, and `onArrival` with a non-`any` window. |
 | Declared but no provider bound | `StageRegistry.get()` throws at the first sweep or slice, with the exact `{ provide: …, useClass: … }` line to add. |
 | `readonly version = 1` hardcoded | `assertConsistent` throws on first resolve — a hardcoded version makes bumping the constant silently do nothing. |
 | `stage.id` ≠ registry key | Throws: the id is part of the ledger's primary key. |
@@ -444,7 +507,9 @@ That is the feature. It is also a real load event on a single appliance.
   Hours of contended GPU time. The `pipeline-embed` queue exists precisely so
   this cannot take every global worker slot, but it will still be felt.
 - On any stage with an external provider: a bump is a bill. `enrich.geocode`
-  re-geocodes rows whose coordinates were never going to be re-billed.
+  re-geocodes rows whose coordinates were never going to be re-billed, and
+  `enrich.event_reverse` / `enrich.position_reverse` re-name every coordinate
+  the provider ever answered for.
 
 **Get the candidate count before you get the bill.** Every ledger row currently
 at or above the version you are replacing is what the bump re-opens:
@@ -569,6 +634,31 @@ no `stage` or `entityType` to record, so it goes straight to pg-boss's
 dead-letter queue and `DeadLetterReaperListener` copies it into the same table
 with the raw payload — the only version worth keeping for a parse failure.
 
+### An unreplayed letter never expires; a replayed one does
+
+`ci.pipeline_dead_letters` is written by a scheduled, batched producer —
+`DEAD_LETTER_REAP_BATCH` (500) rows every two minutes, a 360k/day ceiling — and
+it had no cap of any kind. `DeadLetterReaperListener.purgeReplayed` runs on the
+reaper's own tick and deletes rows whose `replayed_at` is older than
+`queues.replayedDeadLetterRetentionDays` (30 days;
+`CI_REPLAYED_DEAD_LETTER_RETENTION_DAYS`), oldest first, bounded to
+`DEAD_LETTER_PURGE_BATCH` (500) per tick — the same rate the harvest can fill, so
+a backlog cannot outrun reclamation. `pipeline_dead_letters_replayed_idx` (partial,
+`WHERE replayed_at IS NOT NULL`) is what keeps a tick that finds nothing free.
+
+The scope is exactly `replayed_at IS NOT NULL`, and that is the whole design:
+
+- a **replayed** letter has already been handed back to the bus. `replayed_at` is
+  stamped only on a successful re-emit (`PipelineRunService.emitClaimedLetter`
+  releases the claim on every failure path), and if the replayed job died again,
+  pg-boss dead-lettered it again and the reaper harvested a NEW row. What ages
+  out is the record that a replay happened, not the record itself;
+- an **unreplayed** letter is never touched, at any age. Its payload is
+  frequently the only surviving copy of a record the source will not re-send —
+  the reason the table exists. Whether those should ever expire (a long TTL, or a
+  per-`(queue, stage)` cap) is a product decision about acceptable data loss and
+  is deliberately not made in code.
+
 Retry policy lives in `constants.ts`: `RETRY_BACKOFF_BASE_SECONDS` (60), doubling
 per attempt, capped at `RETRY_BACKOFF_MAX_SECONDS` (6 h), quarantine after
 `MAX_ATTEMPTS_BEFORE_QUARANTINE` (5) attempts. The gate is a column, not a timer,
@@ -612,60 +702,46 @@ Semantics are proven against a real database in `pipeline.integration.spec.ts`;
 
 ## What is NOT built yet
 
-The ledger, the sweep, the generic worker and the dead-letter reaper are Phase 1
-and part of Phase 2. Nothing else in the plan is here. Do not assume a stage
-exists because the plan names it.
+> **Re-verified against the tree on 2026-08-19.** Everything this section used to
+> say — empty `stageProviders`, an unregistered `EmbedStage`, no controller, no
+> tick, no runner, no `BackpressureService`, no seeding migration — has since
+> landed. What follows is what is still genuinely absent. Do not assume a stage
+> exists because the plan names it, and do not assume one is missing because an
+> older revision of this file said so.
 
-**Within the phases that have landed:**
+**Still absent:**
 
-- **`stages/index/EmbedStage.ts` is not registered.** It declares its id locally
-  (`INDEX_EMBED_STAGE_ID`) because `constants.ts` has no `INDEX_EMBED` entry yet,
-  and its version comes from `EMBED_MODEL_GENERATIONS` rather than
-  `STAGE_VERSIONS`. It is not in `STAGE_REGISTRY` and no sweep can reach it.
-  `SearchIndexBackfillService` is still the live embedding path.
-- **`stageProviders` in `index.ts` is empty**, so `enrich.media_dimensions` is
-  declared but unbound: a sweep for it resolves nothing and fails with
-  `StageRegistry`'s "no provider is bound to token" error. Binding it is step 5
-  above.
-- **Nothing in this domain schedules a sweep.** `startSweep()` is called by
-  whoever wants one. Today that is `MediaDimensionsBackfillListener`, which
-  survives as a deprecated shim: it turns `MediaDimensionsBackfillRequestEvent`
-  (from `MaintenanceController` and `MaintenanceOrchestratorService`'s nightly
-  leg) into a `PipelineSweepEvent` and returns immediately, so the old "the
-  response came back, so the files are done" reading no longer holds.
-- **No HTTP surface.** There is no controller in this domain.
-  `GET /api/pipeline/state` and `/api/pipeline/dead-letters` are referenced
-  throughout the comments as the thing coverage feeds; they are Phase 2 and do
-  not exist. Read `PipelineStateService.coverage()` from code, or query
-  `ci.pipeline_state` directly.
-- **`ci.pipeline_runs` and `ci.pipeline_shards` have tables and entities but no
-  runner.** No run lifecycle, no `desired_state` reconciliation, so no pause or
-  cancel; no shard materialization, no lease claiming, no lease reaper.
-  `SHARD_LEASE_SECONDS` is declared and unused.
+- **`get.*` is empty.** Phase 6 (GET consolidation, `ci.source_records`) has not
+  started, so nothing lands a raw source record before interpretation.
 - **`ci.record_rejections` has a table and an entity but no writer.** GET-phase
-  validation is what fills it.
+  validation is what fills it, so it stays empty until Phase 6.
 - **`ci.derived_facts` does not exist.** `StageResult.confidence` and `.detail`
   are validated but **not persisted** — a stage may return them and they are
-  simply dropped.
-- **No `BackpressureService`, no Ollama admission pool.** Backpressure today is
-  the FIFO ordering described above and nothing else.
-- **No ledger seeding migration** (plan §12.1). Existing rows have no
-  `ci.pipeline_state` entry, so the first sweep of any converted stage treats the
-  whole corpus as never-processed.
-- **`DEAD_LETTER_QUEUE` is duplicated** from `PGBossEventService`'s private
-  constant. They must stay identical or the reaper silently harvests nothing.
+  simply dropped (`PipelineStateService.complete()` says so in place).
+- **`DEAD_LETTER_QUEUE` is duplicated** between `domains/events/constants.ts` and
+  this domain's `constants.ts`. They must stay identical or the reaper silently
+  harvests nothing.
+- **Phase 9 (demolition) has not started.** All seven legacy enrichment legs in
+  the ratchet table above are still on disk and still wired, as is
+  `LocalEventService`. `MediaDimensionsBackfillListener` has been reduced to a
+  shim that converts `MediaDimensionsBackfillRequestEvent` into a pipeline sweep
+  and returns immediately — so "the response came back, so the files are done"
+  no longer holds — and the consumer of
+  `maintenance.search-index-backfill-request` moved into this domain, but the
+  services themselves are **superseded, not removed**.
 
-**Phases 3-9, none of which are started:**
+**Phase status:**
 
-| Phase | Scope |
-| --- | --- |
-| 3 | `enrich.geocode`, `enrich.position_reverse`, `enrich.estimate_location`; a local Nominatim provider defaulting on; `ci.derived_facts`. |
-| 4 | `enrich.person_link` and `ci.identifier_claims`, replacing three byte-duplicated participant backfills. |
-| 5 | Operator UI (`PipelinePage`, SSE, pause/resume/cancel), `ClusteredCron`, and the worker process split. |
-| 6 | GET consolidation: `ci.capture_events` → `ci.source_records`, per-provider mappers, ~30 `Transform*` services deleted. |
-| 7 | CLEAN: normalization, temporal repair, duplicate detection, tombstone repair, orphan and object reaping. |
-| 8 | PROMOTE: the rich graph and object model, with a read path shipped in the same PR as every write path. |
-| 9 | Demolition — the old orchestrator, the four backfill services, `LocalEventService` — plus index hygiene. |
+| Phase | Scope | State |
+| --- | --- | --- |
+| 1–2 | Ledger, sweep, generic worker, dead-letter reaper, HTTP control plane. | Landed. `PipelineController` serves state, runs, pause/resume/cancel, dead letters + replay and quarantine release. |
+| 3 | `enrich.geocode`, `enrich.position_reverse`, `enrich.estimate_location`; `ci.derived_facts`. | Stages landed; `ci.derived_facts` did not. `enrich.event_reverse` was added afterwards — the phase converted `GeocodeBatchListener`'s FORWARD sweep and left its reverse leg on the listener, where nothing scheduled ever ran it, so an event with a measured coordinate and no label never became a place. |
+| 4 | `enrich.person_link` and `ci.identifier_claims`, replacing three byte-duplicated participant backfills. | Landed as `enrich.person_link` + `enrich.event_person_link`; the backfills they replace are not deleted (Phase 9). |
+| 5 | Operator UI, pause/resume/cancel, the worker process split. | Runner + pause/resume/cancel landed in `PipelineControlService`; the worker split is `CI_ROLE` (`common/roles.ts`). There is no `PipelinePage` — dead letters surface on the Jobs page (`JobsPage/DeadLettersCard.tsx`). |
+| 6 | GET consolidation: `ci.capture_events` → `ci.source_records`, per-provider mappers, ~30 `Transform*` services deleted. | Not started. |
+| 7 | CLEAN: normalization, temporal repair, duplicate detection, tombstone repair, orphan and object reaping. | Three stages landed (`clean.temporal_repair`, `clean.duplicate_detect`, `clean.identifier_normalize`); tombstone repair and reaping did not. |
+| 8 | PROMOTE: the rich graph and object model. | Landed — `promote.place`, `promote.place_position`, `promote.object`, `promote.observation` and the ten `promote.edge_*` legs. |
+| 9 | Demolition — the old backfill services, `LocalEventService` — plus index hygiene. | Not started. |
 
 ---
 

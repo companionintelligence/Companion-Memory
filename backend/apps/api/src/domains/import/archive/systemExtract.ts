@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -147,6 +147,62 @@ export function systemExtractAvailable(): boolean {
   return systemUnzipAvailable() || dittoAvailable();
 }
 
+let politeProbe: string[] | undefined;
+
+/**
+ * `nice`/`ionice` prefix for the extraction children, so a 350GB Takeout
+ * inflating for an hour yields CPU and disk to its neighbours instead of
+ * competing head-on: a sibling run's recognition is thousands of tiny reads,
+ * and every one of them queuing behind the big extract is how a 200ms
+ * recognition was measured taking six minutes. `ionice -c3` (idle class) only
+ * exists on Linux; each half is probed once and used only where it works, so
+ * macOS still gets `nice` and a system with neither runs the extractor bare.
+ */
+function politePrefix(): string[] {
+  if (politeProbe === undefined) {
+    politeProbe = [];
+    for (const candidate of [
+      ['nice', '-n', '10'],
+      ['ionice', '-c3'],
+    ]) {
+      try {
+        if (spawnSync(candidate[0], [...candidate.slice(1), 'true'], { stdio: 'ignore' }).status === 0) {
+          politeProbe.push(...candidate);
+        }
+      } catch {
+        /* not available — skip */
+      }
+    }
+  }
+
+  return politeProbe;
+}
+
+/**
+ * Run one extractor to completion WITHOUT holding the event loop.
+ *
+ * The extraction used to be `spawnSync`, which blocks the whole Node process
+ * until the child exits — and the import worker is one process running every
+ * stage of every run, so each zip of a 136-part Takeout froze every
+ * neighbouring run's stage (plus progress writes, queue polling and cron) for
+ * the length of that zip. An async `spawn` does the same work in the same
+ * child; the worker just stays alive around it.
+ *
+ * `status: null` covers both a spawn failure (binary vanished between probe
+ * and use) and a signal-terminated child — either way "not a success", which
+ * is all the callers ask.
+ */
+function runExtractor(cmd: string, args: string[]): Promise<{ status: number | null }> {
+  const [head, ...rest] = [...politePrefix(), cmd, ...args];
+
+  return new Promise((resolve) => {
+    const child = spawn(head, rest, { stdio: 'ignore' });
+
+    child.on('error', () => resolve({ status: null }));
+    child.on('close', (code) => resolve({ status: code }));
+  });
+}
+
 /**
  * Extract `archive` into `destDir`, trying `unzip` then `ditto`.
  *
@@ -205,16 +261,16 @@ function withNameRepair(
   return { ...result, nameRepair: repair };
 }
 
-export function systemExtract(
+export async function systemExtract(
   archive: string,
   destDir: string,
   options: SystemExtractOptions = {},
-): SystemExtractResult {
+): Promise<SystemExtractResult> {
   const repair: NameRepairOptions = { sweep: options.exclusiveDest ?? false };
   let detail = '';
 
   if (systemUnzipAvailable()) {
-    const r = spawnSync('unzip', unzipExtractArgs(archive, destDir), { stdio: 'ignore' });
+    const r = await runExtractor('unzip', unzipExtractArgs(archive, destDir));
 
     if (r.status === 0 || r.status === 1) {
       return withNameRepair({ ok: true, tool: 'unzip', detail: '' }, archive, destDir, repair);
@@ -229,7 +285,7 @@ export function systemExtract(
   }
 
   if (dittoAvailable()) {
-    const d = spawnSync('ditto', ['-x', '-k', archive, destDir], { stdio: 'ignore' });
+    const d = await runExtractor('ditto', ['-x', '-k', archive, destDir]);
 
     if (d.status === 0) {
       return withNameRepair({ ok: true, tool: 'ditto', detail: '' }, archive, destDir, repair);

@@ -6,7 +6,11 @@ import { Cron } from '@ci/common/schedule';
 
 import { QuestionService } from '../services/QuestionService';
 
-const FEED_QUEUE_CRON = '0 */20 * * * *';
+// Second 28, not 0 — the per-user fan-out below is two awaited queries per
+// user, and second 0 is where every schedule that never picked one already
+// fires. See common/schedule/__tests__/cronSecondOffsets.test.ts for who holds
+// what.
+const FEED_QUEUE_CRON = '28 */20 * * * *';
 const FEED_QUEUE_LIMIT = 3;
 
 @Injectable()

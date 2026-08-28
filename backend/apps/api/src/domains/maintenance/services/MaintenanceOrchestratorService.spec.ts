@@ -151,11 +151,28 @@ function makeService() {
       return { notesFolded: 0 };
     }),
   };
-  const inventoryReverse = {
+  const objectReverse = {
     reverse: jest.fn(async () => {
-      callOrder.push('reverse_inventory');
+      callOrder.push('reverse_object');
 
       return { examined: 0, placed: 0, skipped: 0, status: 'noop' };
+    }),
+  };
+  const summaryBackfill = {
+    backfill: jest.fn(async () => {
+      callOrder.push('backfill_summaries');
+
+      return {
+        range: null,
+        daysWithActivity: 0,
+        daysAlreadySummarized: 0,
+        daysWithoutLandedHourly: [],
+        truncated: false,
+        hourly: { enqueued: 0, deduped: 0, landed: 0, expected: 0, drained: true },
+        daily: { enqueued: 0, deduped: 0, landed: 0, expected: 0, drained: true },
+        weekly: { enqueued: 0, deduped: 0, landed: 0, expected: 0, drained: true },
+        monthly: { enqueued: 0, deduped: 0, landed: 0, expected: 0, drained: true },
+      };
     }),
   };
 
@@ -174,7 +191,8 @@ function makeService() {
     graphEnrich as never,
     locationEstimate as never,
     searchIndex as never,
-    inventoryReverse as never,
+    objectReverse as never,
+    summaryBackfill as never,
   );
 
   // Kill the progress throttle by default so forwarding tests see every line;
@@ -195,6 +213,7 @@ function makeService() {
     graphEnrich,
     locationEstimate,
     searchIndex,
+    summaryBackfill,
   };
 }
 

@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'path';
 
-import { entityTypeFor } from '../../push/entities';
-import { resolveEntityType } from '../../staging/identity';
+import { entityTypeFor, naturalKeyFor } from '../../push/entities';
+import { entityIdentityKey, resolveEntityType } from '../../staging/identity';
 import type { EntityAttribute, ImportParams } from '../timeline';
 import {
   VCardFileImporter,
@@ -577,5 +577,210 @@ describe('a card with no phone or email is still a contact', () => {
     )!;
 
     expect(stagedEntityType(built.entity)).toBe('Person');
+  });
+
+  /**
+   * The other half of declaring the type, and the half a repair migration depends
+   * on: `naturalKeyFor` folds the staged type INTO the natural key, and
+   * `GraphIngestService` derives `linked_id = uuidv5(key)` from it. So fixing the
+   * type MOVES the row's upsert coordinate — which is why the cards written before
+   * the fix are not healed by re-importing, and why
+   * `20260819092314_retype_contact_sourced_concepts_as_people.sql` has to re-key as
+   * well as re-type.
+   *
+   * These two pin both key spaces because that migration hard-codes both strings,
+   * as does `20260819145716_propose_contact_card_person_name_merge_candidates.sql`
+   * when it selects the rows the re-type moved. If either derivation drifted, those
+   * migrations would silently stop matching the importer -- re-keying rows onto a
+   * coordinate nothing computes, and proposing nothing at all.
+   */
+  const stagedNaturalKey = (entity: Parameters<typeof resolveEntityType>[0]): string | null =>
+    naturalKeyFor({
+      type: resolveEntityType(entity),
+      identityKey: entityIdentityKey(entity),
+      name: entity.name,
+    } as never);
+
+  it('keys a handle-less card as contact:<lowercased name>', () => {
+    const built = buildContact(
+      contentLines('BEGIN:VCARD\nFN:Nadia Whitlock\nURL:https://example.invalid/in/nadia\nEND:VCARD\n'),
+      'contacts.vcf',
+    )!;
+
+    // Before the type was declared this same card keyed as
+    // `entity:nadia whitlock` — the `entity:` prefix being `type ?? 'entity'`
+    // with a NULL type, which is the coordinate the migration reads FROM.
+    expect(stagedNaturalKey(built.entity)).toBe('contact:nadia whitlock');
+  });
+
+  it('keys a handle-bearing card on its handle, not its name', () => {
+    const built = buildContact(
+      contentLines('BEGIN:VCARD\nFN:Bob Reachable\nTEL:+15551110000\nEND:VCARD\n'),
+      'contacts.vcf',
+    )!;
+
+    // Why the migration cannot collide: a correctly-typed card has always keyed on
+    // its handle, so re-keying the handle-less rows onto `contact:<name>` lands in
+    // a disjoint key space. Verified as 0 collisions on the live corpus too.
+    expect(stagedNaturalKey(built.entity)).toBe('contact:5551110000');
+  });
+});
+
+describe('avatar_url from PHOTO', () => {
+  // A real, minimal, decodable PNG (a 1x1 transparent pixel) — not a real
+  // contact's face, but real image bytes, so the base64-join/decode path is
+  // exercised against something an <img> would actually render, not an opaque
+  // string. Folded across two lines to also exercise unfoldContentLines'
+  // continuation handling for the general (non-PHOTO) case this suite already
+  // covers, and extractCardPhotos' matching fold for PHOTO specifically.
+  const PNG_B64_LINE1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk';
+  const PNG_B64_LINE2 = '+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const PNG_B64 = PNG_B64_LINE1 + PNG_B64_LINE2;
+
+  it('decodes a folded base64 PHOTO into a data: URI on properties.avatar_url', async () => {
+    const raw =
+      'BEGIN:VCARD\n' +
+      'FN:Priya Kapoor\n' +
+      'TEL:+15559990000\n' +
+      `PHOTO;ENCODING=b;TYPE=JPEG:${PNG_B64_LINE1}\n` +
+      ` ${PNG_B64_LINE2}\n` +
+      'END:VCARD\n';
+
+    const { pipeline } = await importRaw(raw);
+    const [entity] = contactEntities(pipeline);
+
+    expect(entity!.metadata?.avatar_url).toBe(`data:image/jpeg;base64,${PNG_B64}`);
+  });
+
+  it('maps TYPE=PNG to image/png rather than defaulting to jpeg', async () => {
+    const raw = `BEGIN:VCARD\nFN:Owen Cho\nTEL:+15559990001\nPHOTO;ENCODING=b;TYPE=PNG:${PNG_B64}\nEND:VCARD\n`;
+
+    const { pipeline } = await importRaw(raw);
+    const [entity] = contactEntities(pipeline);
+
+    expect(entity!.metadata?.avatar_url).toBe(`data:image/png;base64,${PNG_B64}`);
+  });
+
+  it('defaults to image/jpeg when PHOTO carries no TYPE param', async () => {
+    const raw = `BEGIN:VCARD\nFN:Dana Fitch\nTEL:+15559990002\nPHOTO;ENCODING=b:${PNG_B64}\nEND:VCARD\n`;
+
+    const { pipeline } = await importRaw(raw);
+    const [entity] = contactEntities(pipeline);
+
+    expect(entity!.metadata?.avatar_url).toBe(`data:image/jpeg;base64,${PNG_B64}`);
+  });
+
+  it('keeps a PHOTO;VALUE=URI as a plain URL, never inventing a data: URI for it', async () => {
+    const raw =
+      'BEGIN:VCARD\nFN:Marco Ruiz\nTEL:+15559990003\nPHOTO;VALUE=URI:https://example.invalid/marco.jpg\nEND:VCARD\n';
+
+    const { pipeline } = await importRaw(raw);
+    const [entity] = contactEntities(pipeline);
+
+    expect(entity!.metadata?.avatar_url).toBe('https://example.invalid/marco.jpg');
+  });
+
+  it('a card with no PHOTO carries no avatar_url, and does not crash', async () => {
+    const raw = 'BEGIN:VCARD\nFN:No Photo Here\nTEL:+15559990004\nEND:VCARD\n';
+
+    const { pipeline } = await importRaw(raw);
+    const [entity] = contactEntities(pipeline);
+
+    expect(entity!.metadata?.avatar_url).toBeUndefined();
+  });
+
+  it('drops a photo larger than the size cap rather than storing a huge data: URI', async () => {
+    // Past MAX_PHOTO_BASE64_CHARS (2,000,000) — one absurdly long folded value.
+    const hugeB64 = 'A'.repeat(2_000_100);
+    const foldedLines = hugeB64.match(/.{1,72}/g)!.map((chunk) => ` ${chunk}`);
+    const raw = `BEGIN:VCARD\nFN:Huge Photo\nTEL:+15559990005\nPHOTO;ENCODING=b:\n${foldedLines.join('\n')}\nEND:VCARD\n`;
+
+    const { pipeline } = await importRaw(raw);
+    const [entity] = contactEntities(pipeline);
+
+    expect(entity!.metadata?.avatar_url).toBeUndefined();
+  });
+
+  it('drops a photo past the tsvector-safe cap even when it is well under MAX_PHOTO_BASE64_CHARS', async () => {
+    // ci.entities maintains a functional index over to_tsvector('english', ...
+    // || properties::text) (20251203202414_update_search_vector_logic.sql),
+    // and Postgres's tsvector representation has a hard 1,048,575-BYTE ceiling
+    // — independent of MAX_PHOTO_BASE64_CHARS, which only bounds the
+    // accumulator this parser uses while READING a PHOTO property. A photo
+    // comfortably under 2,000,000 chars (so it reads and accumulates fine)
+    // can still exceed 1,048,575 once embedded as a data: URI, and previously
+    // sailed straight through into avatar_url — confirmed against a real
+    // 9,911-contact export, where the resulting oversized row failed its
+    // INSERT/UPDATE outright with "string is too long for tsvector", taking
+    // the rest of that upsert BATCH down with it (a shared error attributed
+    // to every entity in the batch, not just the one with the bad photo), and
+    // degraded push throughput roughly 10x while other batches kept retrying.
+    //
+    // 900,000 chars sits between the two thresholds: past the 700,000-char
+    // embed cap, comfortably under the 2,000,000-char accumulator cap — the
+    // exact gap the old code left uncovered.
+    const bigB64 = 'A'.repeat(900_000);
+    const foldedLines = bigB64.match(/.{1,72}/g)!.map((chunk) => ` ${chunk}`);
+    const raw = `BEGIN:VCARD\nFN:Big Photo\nTEL:+15559990006\nPHOTO;ENCODING=b:\n${foldedLines.join('\n')}\nEND:VCARD\n`;
+
+    const { pipeline } = await importRaw(raw);
+    const [entity] = contactEntities(pipeline);
+
+    expect(entity!.metadata?.avatar_url).toBeUndefined();
+    // The rest of the card still imports — a dropped photo degrades to the
+    // same "no avatar" shape as a card that never had one, not a lost contact.
+    expect(entity!.name).toBe('Big Photo');
+  });
+
+  it('keeps a photo right at the safe cap, and drops one character past it', async () => {
+    const atCapB64 = 'A'.repeat(700_000 - 'data:image/jpeg;base64,'.length);
+    const overCapB64 = atCapB64 + 'A';
+
+    const cardWith = (name: string, b64: string) => {
+      const folded = b64.match(/.{1,72}/g)!.map((chunk) => ` ${chunk}`);
+
+      return `BEGIN:VCARD\nFN:${name}\nPHOTO;ENCODING=b:\n${folded.join('\n')}\nEND:VCARD\n`;
+    };
+
+    const { pipeline } = await importRaw(cardWith('At Cap', atCapB64) + cardWith('Over Cap', overCapB64));
+    const entities = contactEntities(pipeline);
+    const byName = new Map(entities.map((e) => [e!.name, e]));
+
+    expect(byName.get('At Cap')?.metadata?.avatar_url).toBe(`data:image/jpeg;base64,${atCapB64}`);
+    expect(byName.get('Over Cap')?.metadata?.avatar_url).toBeUndefined();
+  });
+
+  it('aligns each card to its OWN photo across a multi-card file, not an off-by-one neighbor', async () => {
+    // The regression this guards: extractCardPhotos and the main BEGIN/END loop
+    // walk the file independently and must agree on where card N starts and
+    // ends, including for a card with no PHOTO at all in between two that have
+    // one — the exact shape that would surface an index drifting by one.
+    const raw =
+      `BEGIN:VCARD\nFN:First Card\nTEL:+15551000001\nPHOTO;ENCODING=b:${PNG_B64}\nEND:VCARD\n` +
+      'BEGIN:VCARD\nFN:Second Card No Photo\nTEL:+15551000002\nEND:VCARD\n' +
+      `BEGIN:VCARD\nFN:Third Card\nTEL:+15551000003\nPHOTO;ENCODING=b;TYPE=PNG:${PNG_B64}\nEND:VCARD\n`;
+
+    const { pipeline } = await importRaw(raw);
+    const entities = contactEntities(pipeline);
+    const byName = new Map(entities.map((e) => [e!.name, e]));
+
+    expect(byName.get('First Card')?.metadata?.avatar_url).toBe(`data:image/jpeg;base64,${PNG_B64}`);
+    expect(byName.get('Second Card No Photo')?.metadata?.avatar_url).toBeUndefined();
+    expect(byName.get('Third Card')?.metadata?.avatar_url).toBe(`data:image/png;base64,${PNG_B64}`);
+  });
+
+  it('a truncated card (second BEGIN before an END) does not shift a later photo onto the wrong card', async () => {
+    const raw =
+      // Truncated: BEGIN with no END before the next BEGIN.
+      'BEGIN:VCARD\nFN:Truncated Card\nTEL:+15551000004\n' +
+      `BEGIN:VCARD\nFN:Real Card\nTEL:+15551000005\nPHOTO;ENCODING=b:${PNG_B64}\nEND:VCARD\n`;
+
+    const { pipeline, drops } = await importRaw(raw);
+    const entities = contactEntities(pipeline);
+
+    expect(drops.no_end_marker).toBe(1);
+    expect(entities).toHaveLength(1);
+    expect(entities[0]!.name).toBe('Real Card');
+    expect(entities[0]!.metadata?.avatar_url).toBe(`data:image/jpeg;base64,${PNG_B64}`);
   });
 });

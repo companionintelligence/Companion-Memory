@@ -16,6 +16,8 @@ import {
 } from '@ci/domains/memory';
 import { type Note } from '@ci/domains/notes';
 
+import { type RecallObjectRef } from '../types';
+
 /**
  * Serialises resolved domain entities into compact, human-readable lines for
  * LLM context injection.  Keeping token counts low is the primary goal.
@@ -42,6 +44,28 @@ function join(label: string, ...details: (string | null | undefined)[]): string 
     .join(', ');
 
   return tail ? `${label} — ${tail}` : label;
+}
+
+/**
+ * A record's own moment as ISO-8601, or null.
+ *
+ * Deliberately tolerant of the value being a string already: several of these
+ * columns are `timestamptz` read back through a raw query rather than the
+ * repository, and an unparseable one should cost the timestamp, not the whole
+ * citation.
+ */
+function isoTime(value: unknown): string | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = new Date(value);
+
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,6 +104,58 @@ export class SerializerService {
         return this.serializeAnswer(resolved.entity);
       case 'thread':
         return this.serializeThread(resolved.entity);
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * The same entity as a citable POINTER, alongside the line {@link serialize}
+   * renders from it.
+   *
+   * Two methods rather than one returning both, because `serialize` is a public
+   * contract of AgentModule (the MCP domain calls it) and its return type is
+   * load-bearing for the prompt blocks built out of it. The reference is
+   * additive: callers that only want prose keep the method they have.
+   *
+   * `type` and `id` are passed through from {@link ResolvedEntity} untouched, so
+   * the pair is exactly what `EntityResolutionService.resolve` accepts — which is
+   * what makes a stored citation resolvable back to a real row rather than a
+   * label somebody has to go looking for.
+   */
+  reference(resolved: ResolvedEntity): RecallObjectRef {
+    return { type: resolved.type, id: resolved.id, at: this.timeOf(resolved) };
+  }
+
+  /**
+   * When the record HAPPENED, not when it was imported.
+   *
+   * `createdAt` is the fallback rather than the rule: for a message or an event
+   * it is the moment the importer wrote the row, which on a bulk Takeout load is
+   * the same afternoon for a decade of history and tells the reader nothing. The
+   * types with no moment of their own — a person, a place, a concept — get null
+   * rather than a misleading import stamp.
+   */
+  private timeOf(resolved: ResolvedEntity): string | null {
+    switch (resolved.type) {
+      case 'communication':
+      case 'browser-activity':
+        return isoTime(resolved.entity.time);
+      case 'event':
+        return isoTime(resolved.entity.startTime);
+      case 'item':
+        return isoTime(resolved.entity.acquiredAt);
+      case 'answer':
+        return isoTime(resolved.entity.answeredAt);
+      case 'receipt':
+        return isoTime(resolved.entity.purchasedAt);
+      case 'content':
+      case 'note':
+      case 'file':
+      case 'thread':
+        return isoTime(resolved.entity.createdAt);
+      case 'file-chunk':
+        return isoTime(resolved.entity.file?.createdAt);
       default:
         return null;
     }
@@ -148,6 +224,15 @@ export class SerializerService {
     return join(`[Content] ${entity.title ?? 'Untitled'}`, detail);
   }
 
+  /**
+   * `inbound`/`outbound` is transport jargon, and a model reading it as EVIDENCE
+   * has no reason to map it onto "somebody else was speaking". Measured on the
+   * reference corpus: eight of thirteen inferred profile answers quoted INBOUND
+   * lines back as the owner's own words — "I am definitely a cat person" off
+   * three other people's messages, "I always wanted a tree house" off someone
+   * else's childhood — with the direction label sitting right there in the
+   * rationale each time. So the line says who spoke in plain words.
+   */
   private serializeCommunication(entity: Communication) {
     const date = new Date(entity.time).toLocaleDateString('en-US', {
       month: 'short',
@@ -155,8 +240,14 @@ export class SerializerService {
       year: 'numeric',
     });
     const snippet = (entity.summary ?? entity.content).slice(0, 200);
+    const speaker =
+      entity.direction === 'outbound'
+        ? 'I wrote'
+        : entity.direction === 'inbound'
+          ? 'someone else wrote to me'
+          : entity.direction;
 
-    return `[${entity.direction}, ${date}] "${snippet}"`;
+    return `[${speaker}, ${date}] "${snippet}"`;
   }
 
   private serializeNote(entity: Note) {

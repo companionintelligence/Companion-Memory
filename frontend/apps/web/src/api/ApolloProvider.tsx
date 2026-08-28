@@ -7,7 +7,7 @@ import {
   createHttpLink,
 } from '@apollo/client';
 import { setContext } from '@apollo/client/link/context';
-import { apiKeyHeaders, buildApiUrl } from '@ci/common';
+import { apiFetch, apiKeyHeaders, buildApiUrl } from '@ci/common';
 
 import introspectionResult from '@/graphql/possibleTypes';
 import { useAuth } from '@/hooks';
@@ -20,8 +20,12 @@ export function ApolloProvider({ children }: { children: ReactNode }) {
   tokenRef.current = authToken;
 
   const client = useMemo(() => {
+    // Resolve the Memory origin per request. Pairing writes the origin after
+    // this client is created; a baked-in URI would keep hitting Vite / leftover
+    // localhost. Native `fetch` is also CORS-bound — apiFetch uses CapacitorHttp.
     const httpLink = createHttpLink({
-      uri: buildApiUrl('/api/graphql'),
+      uri: () => buildApiUrl('/api/graphql'),
+      fetch: apiFetch,
     });
 
     const authLink = setContext((_, { headers }) => {

@@ -26,9 +26,16 @@ delivery branch / PR that exercised the full stack is
 | **When** | Event, Communication | Timed occurrences and social atoms |
 | **Why / about** | Concept edges (`ABOUT`, `PREFERS`, `PURSUES`, …) | Motives, interests, topics |
 
-## The ten CTI entity types
+## The eleven CTI entity types
 
-`Person · Pet · Group · Place · Item · Event · Content · Communication · Concept · File`
+`Person · Pet · Group · Place · Item · Event · Content · Communication · Concept · File · Product`
+
+`Product` was added on 2026-08-19 (PR
+[#2176](https://github.com/companionintelligence/CI-Server/pull/2176)): the catalog **model** that
+N `Item` units are instances of — one `Product` node, N `Item` nodes. It is a lazily-written graph
+mirror of `ci.product_models`, never written on bulk ingest. Note that the module docstring on
+`graph.types.ts` still recites the older ten-type list; `ENTITY_TYPES` in the same file is the
+authority.
 
 Folds of legacy vocabulary:
 
@@ -75,6 +82,17 @@ The allowlist lives in code as `RelationshipType` + `RelationshipMap` in
 `RelationshipService.resolveType()` / `normalizeRelationship()` is the single
 enforcement seam (#1946). An empty cell is a decision; populating one is a
 reviewed change.
+
+> **One allowlist, two lists — and they have drifted.** `domains/memory/graph.types.ts` carries a
+> `RELATIONSHIP_TYPES` mirror used only as the explorer's filter vocabulary. It is **not** the
+> allowlist. As of 2026-08-19 the mirror carries four object-identity names —
+> `INSTANCE_OF`, `PURCHASED_AT`, `PURCHASED_FROM`, `SEEN_AT` — that the graph domain's
+> `RelationshipType` does not, so `normalizeRelationship` returns `null` for them,
+> `RelationshipService` cannot write them, and no rule in `deterministicEdgeMatrix.ts` emits them.
+> The product/instance link is today the plain `ci.objects.product_id` column surfaced through
+> GraphQL, not an edge. The drift runs the other way too: the mirror omits `SKILLED_IN`, `AVOIDS`,
+> `PRACTICES`, `WANTS` and `EMPLOYS`, among others. Do not cite the mirror as the writable
+> vocabulary.
 
 Governing rules (from #1945):
 
@@ -162,7 +180,11 @@ Rough order of the work:
 | `POST /api/maintenance/normalize-relationships` | #1947 A |
 | `POST /api/maintenance/derive-relationships` | #1947 C–D |
 | `POST /api/maintenance/fold-notes` | Note→Content |
-| Orchestrator legs | `materialize_edges`, `normalize_relationships`, `derive_relationships`, `fold_notes` |
+| `POST /api/maintenance/orchestrate` legs | `materialize_edges`, `normalize_relationships`, `derive_relationships`, `fold_notes` (of ten legs total) |
+
+> "Orchestrator" here means `MaintenanceOrchestratorService` — the one-shot in-process chain behind
+> `POST /api/maintenance/orchestrate`. It is unrelated to the Temporal orchestrator service, which
+> was removed from the appliance on 2026-08-08 (pg-boss is now the only scheduler).
 
 ## WS6 — UI demos (non-blocking)
 

@@ -13,6 +13,7 @@ import {
 import { ApiKeyGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
 import { ValidationPipe } from '@ci/common/pipes';
+import { untrustedBlock } from '@ci/common/prompt/untrustedBlock';
 import { CommunicationService, CommunicationType, UserContextService } from '@ci/domains/memory';
 
 import { AgentMemoryService } from '../services/AgentMemoryService';
@@ -71,6 +72,12 @@ export class MemoryController {
    * Returns a pre-formatted markdown block summarising the user's knowledge
    * graph: name, relationships, preferences, and dossier. Intended to be
    * called once per session (system_prompt_block), not per turn.
+   *
+   * Because harnesses cache this block for the length of a session, nothing
+   * that moves with the wall clock or with ingest volume belongs in it:
+   * `## Quick Stats` (graph totals) is suppressed, and the forecast block is
+   * asked for in its `stable` form (no `Generated:` line, no "still ahead of
+   * now" filter). Anything genuinely per-turn goes through `POST /memory/recall`.
    */
   @UseGuards(ApiKeyGuard)
   @RequireScopes(MEMORY_SCOPE)
@@ -84,15 +91,23 @@ export class MemoryController {
       const blocks: string[] = [];
 
       if (userCtx) {
-        blocks.push(this.userContextService.formatContextForSystemPrompt(userCtx));
+        blocks.push(
+          this.userContextService.formatContextForSystemPrompt(userCtx, { includeQuickStats: false }),
+        );
       }
 
-      const forecastBlock = await this.forecastContextService.getRestOfDayBlock(serviceContext);
+      const forecastBlock = await this.forecastContextService.getRestOfDayBlock(serviceContext, new Date(), {
+        stable: true,
+      });
       if (forecastBlock) {
         blocks.push(forecastBlock);
       }
 
-      return { block: blocks.join('\n\n') };
+      // The guard is emitted HERE, server-side, not left to the harness. The
+      // caller of this route is an out-of-process agent holding an API key that
+      // also carries WRITE capability, and a harness author who never read the
+      // docs is exactly the threat model — the boundary cannot be opt-in.
+      return { block: untrustedBlock(blocks.join('\n\n')) };
     } catch (err) {
       this.logger.warn(`L0 context failed for user ${context.userId}: ${err}`);
 
@@ -113,10 +128,12 @@ export class MemoryController {
   @RequireCapability(READ_CAPABILITY)
   @Post('recall')
   async recall(@Context() context: RequestContext, @Body(new ValidationPipe(recallSchema)) input: RecallDto) {
-    return this.recallService.recall(toServiceContext(context), {
+    const { block, resultCount } = await this.recallService.recall(toServiceContext(context), {
       query: input.query,
       maxResults: input.maxResults,
     });
+
+    return { block, resultCount };
   }
 
   /**

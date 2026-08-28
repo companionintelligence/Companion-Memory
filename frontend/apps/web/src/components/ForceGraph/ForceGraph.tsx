@@ -76,6 +76,8 @@ interface ForceGraphProps {
   height?: number;
   selectedNodeId?: string | null;
   onNodeSelect?: (nodeId: string) => void;
+  /** Right-click / long-press equivalent on a node (chat-about, etc.). */
+  onNodeContextMenu?: (nodeId: string) => void;
   /**
    * Fires (debounced) when the camera settles over a new viewport in dots/LOD mode: the node ids
    * currently inside the frame, and whether the zoom is past the label threshold. The graph
@@ -420,6 +422,7 @@ function ForceGraphBase({
   centerNodeId,
   selectedNodeId,
   onNodeSelect,
+  onNodeContextMenu,
   selectedLinkId,
   onLinkSelect,
   onBackgroundClick,
@@ -1667,6 +1670,11 @@ function ForceGraphBase({
                     }
 
                     onNodeSelect?.(node.id);
+                  }}
+                  onContextMenu={(menuEvent) => {
+                    menuEvent.preventDefault();
+                    menuEvent.stopPropagation();
+                    onNodeContextMenu?.(node.id);
                   }}
                 >
                   <title>

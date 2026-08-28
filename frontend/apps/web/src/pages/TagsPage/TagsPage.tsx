@@ -4,10 +4,12 @@ import { useQuery } from '@apollo/client';
 import { EmptyState, usePageTitle } from '@ci/common';
 import { IconButton, Input } from '@ci/shadcn';
 import { Pencil, Trash } from '@ci/shadcn/icons';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 
+import { ErrorState } from '@/components/ErrorState';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
+import { PullToRefresh } from '@/components/PullToRefresh';
 import { Tag } from '@/components/Tag';
 import { gql } from '@/graphql';
 
@@ -32,10 +34,31 @@ const GET_TAGS_WITH_USAGE = gql(`
   }
 `);
 
+export { GET_TAGS_WITH_USAGE };
+
 export function TagsPage() {
   usePageTitle('Tags - Companion Intelligence');
 
-  const [searchQuery, setSearchQuery] = useState('');
+  // Search text lives in the URL (`?q=`), like every other Memory hub page,
+  // so it survives navigation/reload instead of resetting on remount. The
+  // query itself takes no search variable — this is a pure client-side
+  // filter over the already-fetched list.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const searchQuery = searchParams.get('q') ?? '';
+  const setSearchQuery = (value: string) => {
+    setSearchParams((params) => {
+      const next = new URLSearchParams(params);
+
+      if (value) {
+        next.set('q', value);
+      } else {
+        next.delete('q');
+      }
+
+      return next;
+    });
+  };
+
   const [tagToEdit, setTagToEdit] = useState<TagListItem | null>(null);
   const [tagToDelete, setTagToDelete] = useState<TagListItem | null>(null);
   const { data, loading, error, refetch } = useQuery(GET_TAGS_WITH_USAGE);
@@ -53,9 +76,10 @@ export function TagsPage() {
 
   return (
     <>
+      <PullToRefresh onRefresh={refetch}>
       <PageContent className="gap-4 p-0">
         <MemoryHubShell>
-          <div className="flex flex-col gap-4 px-4 pb-4">
+          <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
             <Input
               placeholder="Filter tags..."
               value={searchQuery}
@@ -65,7 +89,11 @@ export function TagsPage() {
             {loading ? (
               <p className="text-sm text-muted-foreground">Loading tags…</p>
             ) : error ? (
-              <EmptyState message={`Couldn't load tags: ${error.message}`} />
+              <ErrorState
+                title="Could not load tags"
+                description="Your tags are still here — this device could not reach them just now."
+                onRetry={() => void refetch()}
+              />
             ) : sortedTags.length === 0 ? (
               <EmptyState message="No tags yet. Tags appear as you organize events and other memory." />
             ) : filteredTags.length === 0 ? (
@@ -106,6 +134,7 @@ export function TagsPage() {
           </div>
         </MemoryHubShell>
       </PageContent>
+      </PullToRefresh>
 
       {tagToEdit ? (
         <RenameTagModal

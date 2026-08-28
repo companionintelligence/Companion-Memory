@@ -73,6 +73,9 @@ const URL_VALUED_HEADERS = ['referer', 'referrer', 'location'];
  */
 const DROPPED_BREADCRUMB_DATA_KEYS = ['http.query', 'http.fragment'];
 
+/** Breadcrumb `data` keys whose value is a URL. Matches the browser twin. */
+const URL_VALUED_BREADCRUMB_KEYS = ['url', 'from', 'to'];
+
 const MAX_STRING_LENGTH = 8000;
 
 /**
@@ -227,6 +230,18 @@ export function scrubEvent(event: ErrorEvent): ErrorEvent | null {
 
         for (const key of DROPPED_BREADCRUMB_DATA_KEYS) {
           delete data[key];
+        }
+
+        // The SDK's own fetch crumbs arrive with `data.url` already sanitised —
+        // it splits the query into `http.query`, which we drop above. Manually
+        // added crumbs get no such treatment, so strip the query here too rather
+        // than rely on every future caller remembering. Mirrors the browser twin.
+        for (const key of URL_VALUED_BREADCRUMB_KEYS) {
+          const value = data[key];
+
+          if (typeof value === 'string') {
+            data[key] = scrubUrl(value);
+          }
         }
 
         breadcrumb.data = data;

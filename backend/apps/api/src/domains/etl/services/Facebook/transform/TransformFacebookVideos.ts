@@ -1,23 +1,24 @@
 import { Injectable } from '@nestjs/common';
-import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
-import { type Connection } from '@ci/domains/connections';
-import { ContentService, type CreateContentDto, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import { type Connection, type FacebookVideo } from '@ci/domains/connections';
 
 import { ConnectionSyncJob } from '../../../types';
-interface FacebookVideo {
-  id: string;
-  title?: string;
-  description?: string;
-  created_time: string;
-  source?: string;
-  permalink_url?: string;
-}
+import { FacebookMediaService, facebookUrl } from '../FacebookMediaService';
+
+/**
+ * `/me/videos?type=uploaded` → one `ci.content` row per video, with the MP4
+ * in the object store. See FacebookMediaService for the row shape and why
+ * the bytes are copied.
+ *
+ * Graph returns a video's `permalink_url` host-relative
+ * (`/<user-id>/videos/<video-id>`); it is made absolute here. The create
+ * path used to store it verbatim, so every video's link was a bare path.
+ */
 @Injectable()
 export class FacebookVideosTransformService {
   constructor(
-    private readonly contentService: ContentService,
+    private readonly facebookMediaService: FacebookMediaService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(FacebookVideosTransformService.name);
@@ -43,69 +44,34 @@ export class FacebookVideosTransformService {
         return;
       }
 
+      let stored = 0;
+
       for (const video of videos) {
         try {
-          // Search for existing content by external_id
-          const existingContent = await this.contentService.search({ userId }, { external_id: video.id });
-          if (existingContent.length > 0) {
-            // Update existing content
-            const existingItem = existingContent[0];
-            await this.contentService.update({ userId }, existingItem.id, {
-              type: 'Content',
-              title: video.title || `Video ${video.id}`,
-              text: video.description || '',
-              url: video.permalink_url
-                ? `https://facebook.com${video.permalink_url}`
-                : video.source
-                  ? video.source
-                  : undefined,
+          const { fileId } = await this.facebookMediaService.upsertMedia({
+            userId,
+            connectionId: connection.id,
+            media: {
+              kind: 'video',
+              id: video.id,
+              title: video.title?.trim() || video.description?.trim() || `Video ${video.id}`,
+              text: video.description ?? '',
+              pageUrl: facebookUrl(video.permalink_url),
+              cdnUrl: video.source,
               mimetype: 'video/mp4',
-              external_id: video.id,
-              external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-              source_url: video.source || undefined,
-              source_data: {
-                facebook_video_id: video.id,
+              createdTime: video.created_time,
+              sourceData: {
                 title: video.title,
                 description: video.description,
-                created_time: video.created_time,
-                source_url: video.source,
+                length_seconds: video.length,
                 permalink_url: video.permalink_url,
-                connection_id: connection.id,
-                contentType: 'facebook_video',
+                thumbnail_url: video.thumbnails?.data?.[0]?.uri,
               },
-            });
-            this.logger.log('Updated existing Facebook video content', {
-              videoId: video.id,
-              contentId: existingItem.id,
-            });
-          } else {
-            // Create new content
-            const contentDto = {
-              id: uuidv7(),
-              type: 'Content',
-              title: video.title || `Video ${video.id}`,
-              text: video.description || '',
-              url: video.permalink_url || video.source || undefined,
-              mimetype: 'video/mp4',
-              external_id: video.id,
-              external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-              source_url: video.source || undefined,
-              source_data: {
-                facebook_video_id: video.id,
-                title: video.title,
-                description: video.description,
-                created_time: video.created_time,
-                source_url: video.source,
-                permalink_url: video.permalink_url,
-                connection_id: connection.id,
-                contentType: 'facebook_video',
-              },
-              user: { id: userId },
-            };
-            await this.contentService.create({ userId }, contentDto as unknown as CreateContentDto);
-            this.logger.log('Created new Facebook video content', {
-              videoId: video.id,
-            });
+            },
+          });
+
+          if (fileId) {
+            stored += 1;
           }
         } catch (error) {
           this.logger.error('Error processing Facebook video', {
@@ -119,6 +85,7 @@ export class FacebookVideosTransformService {
         userId,
         connectionId: connection.id,
         processedCount: videos.length,
+        storedCount: stored,
       });
     } catch (error) {
       this.logger.error('Error transforming Facebook videos', {

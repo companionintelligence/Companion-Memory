@@ -9,13 +9,36 @@ import { SEARCH_TABLES } from '@ci/domains/search-ingress';
 /** The pgboss queue the *SearchIndexListeners consume (see SearchIndexBackfillService). */
 const SEARCH_INDEX_QUEUE = 'search-index';
 
-/** Bulk-ingest destination tables cleared by a reset. */
+/**
+ * Bulk-ingest destination tables cleared by a reset, DEPENDENTS FIRST.
+ *
+ * They go out in one `TRUNCATE ... CASCADE`, which is order-insensitive, so the
+ * ordering is documentation rather than mechanism — but it is the ordering a
+ * per-table delete would need, and getting it wrong here is how someone later
+ * splits the statement and discovers the FK graph the hard way. The object
+ * plane's edges:
+ *
+ *   ci.object_observations  -> ci.objects, ci.product_models
+ *   ci.receipt_line_items   -> ci.receipts (CASCADE), ci.objects, ci.product_models
+ *   ci.receipts             -> ci.events
+ *   ci.objects            -> ci.product_models, ci.receipts, ci.receipt_line_items
+ *   ci.product_models       -> (nothing in this set)
+ *
+ * `ci.objects` and `ci.receipt_line_items` reference EACH OTHER
+ * (acquisition_line_item_id / minted_object_id), so no order satisfies both —
+ * which is the concrete reason this has to be one CASCADE statement and cannot
+ * become a delete loop.
+ */
 const INGEST_TABLES = [
   { schema: 'ci', table: 'events' },
   { schema: 'ci', table: 'communications' },
   { schema: 'ci', table: 'content' },
-  { schema: 'ci', table: 'inventory' },
   { schema: 'ci', table: 'browser_activity' },
+  { schema: 'ci', table: 'object_observations' },
+  { schema: 'ci', table: 'receipt_line_items' },
+  { schema: 'ci', table: 'receipts' },
+  { schema: 'ci', table: 'objects' },
+  { schema: 'ci', table: 'product_models' },
 ] as const;
 
 /**
@@ -99,7 +122,7 @@ export class IngestResetService {
       const ingestRefs = INGEST_TABLES.map(({ schema, table }) => `"${schema}"."${table}"`);
       await manager.query(`TRUNCATE TABLE ${ingestRefs.join(', ')} RESTART IDENTITY CASCADE`);
 
-      // Inventory/events/communications rows are CTI aggregates: each detail
+      // Object/event/communication rows are CTI aggregates: each detail
       // row has a discriminated base row in ci.entities sharing its uuid.
       // TRUNCATE only follows FKs POINTING AT the truncated tables, so the
       // base rows survive it — delete them explicitly or the reset strands
@@ -115,7 +138,7 @@ export class IngestResetService {
       await manager.query(
         `DELETE FROM ci.entities
          WHERE entity_type IN ('Item', 'Event', 'Communication')
-           AND linked_table IN ('inventory', 'events', 'communications')`,
+           AND linked_table IN ('objects', 'events', 'communications')`,
       );
 
       // The ci_search index tables carry no FK edges — plain truncates, same as

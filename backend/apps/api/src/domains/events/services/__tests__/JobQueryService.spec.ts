@@ -67,6 +67,8 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
   // in the same shared `pgboss.job` table.
   const marker = uuidv7().slice(0, 8);
   const searchTerm = `zzsearch-${marker}`;
+  const otherUserId = uuidv7();
+  const otherUserTerm = `zzowner-${marker}`;
 
   beforeAll(async () => {
     const connection = resolveConnection({ urlEnvVar: 'EVENTS_TEST_DATABASE_URL' });
@@ -105,6 +107,10 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
     // pgboss.job is partitioned by (name); 'default' and 'dead-letter' are both
     // pre-created partitions on a migrated database, so these are safe to use
     // without creating a new partition.
+    // `userId` defaults to CTX's own id so every pre-existing seed (and the
+    // assertions written against it) stays owned by the caller the other tests
+    // already search as; pass an explicit id (or `null`) to seed a job owned by
+    // someone else, or by no one.
     async function seedJob(overrides: {
       id?: string;
       queue?: string;
@@ -114,7 +120,15 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
       startedOn?: Date | null;
       completedOn?: Date | null;
       output?: Record<string, unknown> | null;
+      userId?: string | null;
     }) {
+      const ownerId = overrides.userId === undefined ? CTX.userId : overrides.userId;
+      const data: Record<string, unknown> = { name: overrides.eventName ?? `${marker}.plain` };
+
+      if (ownerId != null) {
+        data.userId = ownerId;
+      }
+
       await dataSource.query(
         `INSERT INTO pgboss.job
            (id, name, data, state, retry_limit, retry_count, created_on, started_on, completed_on, output)
@@ -122,7 +136,7 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
         [
           overrides.id ?? uuidv7(),
           overrides.queue ?? 'default',
-          JSON.stringify({ name: overrides.eventName ?? `${marker}.plain` }),
+          JSON.stringify(data),
           overrides.state ?? 'completed',
           overrides.createdOn,
           overrides.startedOn ?? null,
@@ -159,6 +173,16 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
       eventName: `${marker}.silent`,
       createdOn: new Date(base.getTime() + 7000),
       output: { message: `boom ${searchTerm} exploded` },
+    });
+
+    // Owned by a DIFFERENT user, seeded before every other row (so it never
+    // shifts the pagination test's ordering) — proves message search is
+    // owner-scoped rather than a leak across the whole appliance.
+    await seedJob({
+      eventName: `${marker}.other-user-failure`,
+      createdOn: new Date(base.getTime() - 1000),
+      output: { message: `boom ${otherUserTerm} exploded` },
+      userId: otherUserId,
     });
   });
 
@@ -221,6 +245,17 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
 
     const byOutputMessage = await service.list(CTX, { search: searchTerm });
     expect(byOutputMessage.items.map((i) => i.event)).toContain(`${marker}.silent`);
+  });
+
+  it("search cannot surface another user's failure message (owner-scoped)", async () => {
+    const otherCtx: RequestContext = { userId: otherUserId } as RequestContext;
+
+    const asOwner = await service.list(otherCtx, { search: otherUserTerm });
+    expect(asOwner.items.map((i) => i.event)).toContain(`${marker}.other-user-failure`);
+
+    const asStranger = await service.list(CTX, { search: otherUserTerm });
+    expect(asStranger.items.map((i) => i.event)).not.toContain(`${marker}.other-user-failure`);
+    expect(asStranger.items).toHaveLength(0);
   });
 
   it('exact type filter narrows to one event, unlike the broader search', async () => {

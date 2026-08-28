@@ -46,7 +46,8 @@
       "issuer": "PORTAL_OIDC_ISSUER",
       "jwksUri": "PORTAL_OIDC_JWKS_URI",
       "audience": "PORTAL_OIDC_AUDIENCE",
-      "pushRelayUrl": "PORTAL_PUSH_RELAY_URL"
+      "pushRelayUrl": "PORTAL_PUSH_RELAY_URL",
+      "serviceClients": "PORTAL_OIDC_SERVICE_CLIENTS"
     },
     "hubForwardAuth": {
       "enabled": {
@@ -73,7 +74,20 @@
   "llm": {
     "apiBase": "LLM_API_BASE",
     "apiKey": "LLM_API_KEY",
-    "chatModel": "LLM_DEFAULT_CHAT_MODEL"
+    "chatModel": "LLM_DEFAULT_CHAT_MODEL",
+    "utilityModel": "LLM_UTILITY_MODEL",
+    "tierRouting": {
+      "enabled": {
+        "__name": "LLM_TIER_ROUTING_ENABLED",
+        "__format": "boolean"
+      },
+      "onDeviceModel": "LLM_TIER_ROUTING_ON_DEVICE_MODEL",
+      "escalatedModel": "LLM_TIER_ROUTING_ESCALATED_MODEL",
+      "onDeviceContextTokens": {
+        "__name": "LLM_TIER_ROUTING_ON_DEVICE_CONTEXT_TOKENS",
+        "__format": "json"
+      }
+    }
   },
   "services": {
     "ollama": {
@@ -122,6 +136,10 @@
     "perQueueConcurrency": {
       "__name": "CI_QUEUE_PER_QUEUE_CONCURRENCY",
       "__format": "json"
+    },
+    "replayedDeadLetterRetentionDays": {
+      "__name": "CI_REPLAYED_DEAD_LETTER_RETENTION_DAYS",
+      "__format": "json"
     }
   },
   "import": {
@@ -132,9 +150,51 @@
     },
     "uploadsDir": "CI_IMPORT_UPLOADS_DIR",
     "inboxDir": "CI_IMPORT_INBOX_DIR",
+    "inboxHostDir": "CI_IMPORT_INBOX_HOST_DIR",
     "maxArchiveEntries": "CI_IMPORT_MAX_ARCHIVE_ENTRIES",
     "maxArchiveBytes": "CI_IMPORT_MAX_ARCHIVE_BYTES",
-    "databaseDataDir": "CI_IMPORT_DB_DATA_DIR"
+    "databaseDataDir": "CI_IMPORT_DB_DATA_DIR",
+    "retention": {
+      "enabled": "CI_IMPORT_RETENTION_ENABLED",
+      "stagingDays": {
+        "__name": "CI_IMPORT_STAGING_RETENTION_DAYS",
+        "__format": "json"
+      },
+      "runHistoryDays": {
+        "__name": "CI_IMPORT_RUN_RETENTION_DAYS",
+        "__format": "json"
+      },
+      "maxRunsPerSweep": {
+        "__name": "CI_IMPORT_RETENTION_MAX_RUNS",
+        "__format": "json"
+      },
+      "deleteBatchSize": {
+        "__name": "CI_IMPORT_RETENTION_BATCH_SIZE",
+        "__format": "json"
+      }
+    }
+  },
+  "accountDeletion": {
+    "graceDays": {
+      "__name": "CI_ACCOUNT_PURGE_GRACE_DAYS",
+      "__format": "json"
+    },
+    "purge": {
+      "enabled": "CI_ACCOUNT_PURGE_ENABLED",
+      "batchSize": {
+        "__name": "CI_ACCOUNT_PURGE_BATCH_SIZE",
+        "__format": "json"
+      },
+      "maxAccountsPerRun": {
+        "__name": "CI_ACCOUNT_PURGE_MAX_ACCOUNTS",
+        "__format": "json"
+      },
+      "retryBackoffMinutes": {
+        "__name": "CI_ACCOUNT_PURGE_RETRY_MINUTES",
+        "__format": "json"
+      },
+      "excludedColumns": "CI_ACCOUNT_PURGE_EXCLUDED_COLUMNS"
+    }
   },
   "enrichment": {
     "window": {
@@ -165,15 +225,57 @@
     "minAnswerConfidence": {
       "__name": "CI_REFLECTION_MIN_ANSWER_CONFIDENCE",
       "__format": "json"
+    },
+    "autoPromoteThresholdCautious": {
+      "__name": "CI_REFLECTION_AUTO_PROMOTE_THRESHOLD_CAUTIOUS",
+      "__format": "json"
+    },
+    "autoPromoteThresholdBalanced": {
+      "__name": "CI_REFLECTION_AUTO_PROMOTE_THRESHOLD_BALANCED",
+      "__format": "json"
+    },
+    "autoPromoteThresholdHandsOff": {
+      "__name": "CI_REFLECTION_AUTO_PROMOTE_THRESHOLD_HANDS_OFF",
+      "__format": "json"
+    },
+    "alwaysReviewBelowConfidence": {
+      "__name": "CI_REFLECTION_ALWAYS_REVIEW_BELOW_CONFIDENCE",
+      "__format": "json"
+    }
+  },
+  "agentMemory": {
+    "turnFragments": {
+      "intervalMinutes": {
+        "__name": "CI_TURN_FRAGMENTS_INTERVAL_MINUTES",
+        "__format": "json"
+      },
+      "lookbackMinutes": {
+        "__name": "CI_TURN_FRAGMENTS_LOOKBACK_MINUTES",
+        "__format": "json"
+      },
+      "settleMinutes": {
+        "__name": "CI_TURN_FRAGMENTS_SETTLE_MINUTES",
+        "__format": "json"
+      },
+      "maxTurnsPerUser": {
+        "__name": "CI_TURN_FRAGMENTS_MAX_TURNS_PER_USER",
+        "__format": "json"
+      },
+      "minFragmentChars": {
+        "__name": "CI_TURN_FRAGMENTS_MIN_CHARS",
+        "__format": "json"
+      },
+      "maxSideChars": {
+        "__name": "CI_TURN_FRAGMENTS_MAX_SIDE_CHARS",
+        "__format": "json"
+      }
     }
   },
   "features": {
     "scheduled.answer.inferencing": "ENABLE_SCHEDULED_ANSWER_INFERENCING",
     "scheduled.connection.sync": "ENABLE_SCHEDULED_CONNECTION_SYNC",
-    "scheduled.entity.promotion": "ENABLE_SCHEDULED_ENTITY_PROMOTION",
     "pinned.demo.models": "ENABLE_PINNED_DEMO_MODELS",
     "enable.system.prompt": "ENABLE_SYSTEM_PROMPT",
-    "enable.inventory.page": "ENABLE_INVENTORY_PAGE",
     "advanced.theme.tab": "ENABLE_ADVANCED_THEME_TAB",
     "require.signup.codes": "ENABLE_REQUIRE_SIGNUP_CODES",
     "files.page": "ENABLE_FILES_PAGE",
@@ -184,19 +286,24 @@
     "planning.enabled": "ENABLE_PLANNING",
     "planning.page": "ENABLE_PLANNING_PAGE",
     "planning.emptyState": "ENABLE_PLANNING_EMPTY_STATE",
+    "self.page": "ENABLE_SELF_PAGE",
     "stats.page": "ENABLE_STATS_PAGE",
     "schedule.page": "ENABLE_SCHEDULE_PAGE",
+    "forecast.page": "ENABLE_FORECAST_PAGE",
     "tags.page": "ENABLE_TAGS_PAGE",
     "hbpe": "ENABLE_HBPE",
     "agent.memory.compaction": "ENABLE_AGENT_MEMORY_COMPACTION",
+    "agent.memory.turnFragments": "ENABLE_AGENT_MEMORY_TURN_FRAGMENTS",
     "shared.search": "ENABLE_SHARED_SEARCH",
     "onboarding.preference.steps": "ENABLE_ONBOARDING_PREFERENCE_STEPS",
     "actions": "ENABLE_ACTIONS",
     "smart.rotation": "ENABLE_SMART_ROTATION",
     "ask": "ENABLE_ASK",
+    "tools.pendingActions": "ENABLE_PENDING_ACTIONS",
     "grounded.prompts": "ENABLE_GROUNDED_PROMPTS",
     "derivation.engines": "ENABLE_DERIVATION_ENGINES",
-    "ingest.selfHeal": "ENABLE_INGEST_SELF_HEAL"
+    "ingest.selfHeal": "ENABLE_INGEST_SELF_HEAL",
+    "solid.protocol": "ENABLE_SOLID_PROTOCOL"
   },
   "environment": {
     "database.query.logging": "DATABASE_QUERY_LOGGING"
@@ -205,6 +312,24 @@
     "url": "CI_CLOUD_URL",
     "deviceId": "HUB_DEVICE_ID",
     "apiKey": "HUB_API_KEY"
+  },
+  "unfurl": {
+    "enabled": {
+      "__name": "UNFURL_ENABLED",
+      "__format": "json"
+    },
+    "ratePerSecond": {
+      "__name": "UNFURL_RATE_PER_SECOND",
+      "__format": "json"
+    },
+    "openGraph": {
+      "__name": "UNFURL_OPEN_GRAPH",
+      "__format": "json"
+    },
+    "cachePosters": {
+      "__name": "UNFURL_CACHE_POSTERS",
+      "__format": "json"
+    }
   },
   "geocoding": {
     "apiKey": "GEOCODING_API_KEY",
@@ -218,5 +343,12 @@
     },
     "provider": "GEOCODING_PROVIDER",
     "portalBaseUrl": "GEOCODING_PORTAL_BASE_URL"
+  },
+  "peers": {
+    "directoryUrl": "CI_PEER_DIRECTORY_URL",
+    "memoryEndpoint": "CI_PEER_MEMORY_ENDPOINT",
+    "handle": "CI_PEER_HANDLE",
+    "audience": "CI_PEER_AUDIENCE",
+    "timeoutMs": "CI_PEER_TIMEOUT_MS"
   }
 }

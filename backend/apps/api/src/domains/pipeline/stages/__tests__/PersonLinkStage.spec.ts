@@ -227,6 +227,27 @@ describe('classifyIdentifier — the two widenings', () => {
     expect(classifyIdentifier('42')?.kind).toBe('name');
   });
 
+  it('keeps a namespaced platform account id out of BOTH the phone and handle namespaces', () => {
+    // `datasources/twitter.ts` writes an unresolvable DM partner as
+    // `twitter:id:<id>`. It must not be a phone -- that is the whole point of
+    // the namespace -- and it must not be a HANDLE either: `readHandle` strips
+    // an optional `@`, so a one-colon `twitter:6245902` would key identically
+    // to a real `@6245902` on the same platform, which is the same class of
+    // mistake as the phone one. The second colon fails `QUALIFIED_HANDLE`,
+    // whose value part is `[A-Za-z0-9._-]`.
+    expect(classifyIdentifier('twitter:id:1657380978392702976', 'twitter')).toMatchObject({
+      kind: 'name',
+      valueNormalized: 'twitter:id:1657380978392702976',
+    });
+    expect(classifyIdentifier('twitter:id:6245902', 'twitter')?.kind).toBe('name');
+    // The one-colon form, to show what the `id:` segment is buying.
+    expect(classifyIdentifier('twitter:6245902', 'twitter')).toMatchObject({
+      kind: 'handle',
+      valueNormalized: 'twitter:@6245902',
+    });
+    expect(classifyIdentifier('@6245902', 'twitter')?.valueNormalized).toBe('twitter:@6245902');
+  });
+
   it('returns null for anything unusable, so the caller can COUNT it', () => {
     expect(classifyIdentifier(null)).toBeNull();
     expect(classifyIdentifier('   ')).toBeNull();

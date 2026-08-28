@@ -37,7 +37,7 @@ export const DESTINATION_LABELS: ReadonlyArray<readonly [string, string]> = [
   ['events', 'events'],
   ['communications', 'messages'],
   ['content', 'documents'],
-  ['inventory', 'things'],
+  ['things', 'things'],
   ['browser_activity', 'browsing'],
   ['position', 'locations'],
 ];

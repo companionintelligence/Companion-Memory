@@ -28,7 +28,6 @@ import type { Graph, ImportParams } from './timeline';
 import { timeframeContains } from './timeline';
 
 const SLEEP_FILE_RE = /^sleep-\d{4}-\d{2}-\d{2}\.json$/i;
-const MAX_DEPTH = 3; // recurse a few levels for Fitbit/Global Export Data/ nesting
 // Confidence for an export holding only the Google Fit half. Deliberately below
 // GoogleFitFileImporter's own 0.95 so the dedicated Google Fit source still
 // ranks first in drag-and-drop suggestions — this claim exists to stop a silent
@@ -82,27 +81,66 @@ function isSleepExport(parsed: unknown): boolean {
   return 'minutesAsleep' in rec || 'dateOfSleep' in rec;
 }
 
-// Find sleep-*.json files by name within a directory tree (bounded depth).
-async function findSleepFiles(dir: string, depth: number, out: string[]): Promise<void> {
-  if (depth > MAX_DEPTH) {
-    return;
-  }
-
+async function filesMatching(dir: string, re: RegExp): Promise<string[]> {
   let entries: fs.Dirent[];
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
-    return;
+    return [];
   }
 
-  for (const e of entries) {
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) {
-      await findSleepFiles(full, depth + 1, out);
-    } else if (e.isFile() && SLEEP_FILE_RE.test(e.name)) {
-      out.push(full);
-    }
+  return entries.filter((e) => e.isFile() && re.test(e.name)).map((e) => path.join(dir, e.name));
+}
+
+async function childDir(dir: string, lowerName: string): Promise<string | undefined> {
+  let entries: fs.Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return undefined;
   }
+
+  const match = entries.find((e) => e.isDirectory() && e.name.toLowerCase() === lowerName);
+
+  return match ? path.join(dir, match.name) : undefined;
+}
+
+// Sleep files directly in a Fitbit/ folder, or its Global Export Data/ child.
+async function sleepFilesUnderFitbitDir(fitbitDir: string): Promise<string[]> {
+  const out = await filesMatching(fitbitDir, SLEEP_FILE_RE);
+  const nested = await childDir(fitbitDir, 'global export data');
+  if (nested) {
+    out.push(...(await filesMatching(nested, SLEEP_FILE_RE)));
+  }
+
+  return out;
+}
+
+/**
+ * Find sleep-*.json files following Takeout's known layout: directly in
+ * `dir`, in a `Fitbit/` child of it, or in `Fitbit/Global Export Data/` two
+ * levels down — never by recursing into arbitrary sibling folders (`Drive/`,
+ * `Photos/`, …) looking for the filename pattern anywhere below `dir`. A
+ * prior version did exactly that unbounded walk, so one coincidentally-named
+ * `sleep-YYYY-MM-DD.json` anywhere inside an unrelated multi-GB export (e.g.
+ * a personal file dump under `Drive/`) was enough to claim confidence for
+ * the entire tree above it, at the path `dir` itself — exactly the
+ * false-positive shape `dropGenericWhenSpecialised` relies on `matchedPath`
+ * NOT being for a claim wider than what was actually found.
+ */
+async function findSleepFiles(dir: string): Promise<string[]> {
+  const out = await filesMatching(dir, SLEEP_FILE_RE);
+
+  if (path.basename(dir).toLowerCase() === 'fitbit') {
+    out.push(...(await sleepFilesUnderFitbitDir(dir)));
+  }
+
+  const fitbitChild = await childDir(dir, 'fitbit');
+  if (fitbitChild) {
+    out.push(...(await sleepFilesUnderFitbitDir(fitbitChild)));
+  }
+
+  return out;
 }
 
 /**
@@ -162,8 +200,7 @@ export class FitbitFileImporter implements FileImporter {
     }
 
     if (st.isDirectory()) {
-      const found: string[] = [];
-      await findSleepFiles(root, 0, found);
+      const found = await findSleepFiles(root);
       for (const f of found) {
         if (isSleepExport(await readJson(f))) {
           return { confidence: 0.9 };
@@ -197,13 +234,13 @@ export class FitbitFileImporter implements FileImporter {
       return;
     }
 
-    const files: string[] = [];
+    let files: string[] = [];
     if (stat.isFile()) {
       if (SLEEP_FILE_RE.test(path.basename(root))) {
         files.push(root);
       }
     } else if (stat.isDirectory()) {
-      await findSleepFiles(root, 0, files);
+      files = await findSleepFiles(root);
     }
 
     for (const fpath of files) {

@@ -146,17 +146,31 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
   // ───────────────────────────────────────────────────────────────────────────
   {
     id: 'comms-missing-thread-id',
-    severity: 'high',
+    // MEDIUM, not high: Apple's own chat.db holds messages with no
+    // chat_message_join row and no 1:1 correspondent evidence (~37k of 432k on
+    // the reference corpus). Those rows are honestly unthreadable, so this
+    // count never reaches zero on a real iMessage corpus — and a high check
+    // that can never reach zero would fail the doctor's gate forever on data
+    // that is correct.
+    severity: 'medium',
     title: 'Communications with no thread_id — the message exists but no conversation contains it',
     scope: 'ci.communications',
     remedy:
       'A message with no thread is unreachable from the thread view: it can only be found by search. ' +
-      'Two backfills recover them — 20260819000746 re-derives the thread from the import staging rows ' +
-      'the parse stage still holds, and 20260819000941 pairs up one-to-one iMessage rows by ' +
-      'correspondent. If the breakdown names a source neither covers, the parser for that source is ' +
-      'not emitting a thread key at all, which is a parser fix, not a backfill.',
-    mirrors:
-      'db/postgres/migrations/20260819000746_backfill_communications_thread_id_from_import_staging.sql',
+      'The parsers now emit a thread key wherever the source provides one (imessage.ts and ' +
+      'googlevoice.ts stamp ThreadId; `Conversation` joins the fallback chain in inputs.ts), and ' +
+      'imessage.ts additionally threads a chat-less message onto its correspondent when that handle ' +
+      'is a 1:1 chat identifier in the same database. Rows here predate those fixes, and importantly ' +
+      'a re-import will NOT correct one: `thread_id` is not in INGEST_REFRESH_COLUMNS.communication, ' +
+      'so re-ingesting a provenance triple that already exists leaves the stored value alone (that ' +
+      'exclusion is deliberate — see the note there). Migrations 20260819000746 (from staged ChatId) ' +
+      'and 20260819000941 (from 1:1 correspondent evidence) are the only repair for a row already in ' +
+      'the database, and both read ci_import.staged_items, so they fill nothing once staging for that ' +
+      'run is purged. The honest residue is iMessage rows with no chat_message_join entry AND no 1:1 ' +
+      'correspondent evidence (37,181 of 432,173 on the reference corpus): they have no conversation ' +
+      'to recover and stay NULL. If the breakdown names another source still writing NEW rows like ' +
+      'this, its parser is not emitting a thread key at all, which is a parser fix.',
+    mirrors: 'src/domains/import/push/inputs.ts toCommunicationInput (the thread-key chain)',
     sql: String.raw`
       WITH bad AS (
         SELECT id, time, source_system, communication_type
@@ -176,11 +190,21 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     scope: 'ci.communications',
     remedy:
       'These rows cannot be attributed to a person, so they are invisible to every people-centric view ' +
-      'and contribute nothing to entity resolution. 20260819000959 recovers the google_voice class by ' +
-      'reading the counterpart back out of the staged filename; other sources need the participant ' +
-      'edges filled by the `extract_people` / `link_communications` enrichment legs — run ' +
-      '`ci-import backfill extract_people link_communications` before concluding the parser is at fault.',
-    mirrors: 'db/postgres/migrations/20260819000959_recover_orphan_communication_participants.sql',
+      'and contribute nothing to entity resolution. The participant edges are filled by the ' +
+      '`extract_people` / `link_communications` enrichment legs — run ' +
+      '`ci-import backfill extract_people link_communications` before concluding the parser is at fault. ' +
+      'That backfill resolves handles out of `participants_metadata`, so it can only help a row that ' +
+      'HAS one: a row whose participants_metadata is empty names nobody to resolve, and no leg will ' +
+      'ever fill it. On the reference corpus that is 16,325 outbound iMessages whose chat.db row has ' +
+      'neither recipients nor a partner handle (see migration 20260819000941) — the counterpart is ' +
+      'genuinely unrecorded, and a name invented from a filename is the defect migration ' +
+      '20260818220731 exists to undo. Note also what a re-import does NOT do here: from_entity_id and ' +
+      'to_entity_ids are absent from INGEST_REFRESH_COLUMNS.communication (deliberately — they are ' +
+      'resolved server-side), so re-ingesting an existing triple leaves them as they are. The parser ' +
+      'fixes that stage participant edges (imessage.ts outbound fan-out, googlevoice.ts ' +
+      'counterpartEdges) apply to rows written for the first time; migration 20260819000959 is the ' +
+      'repair for rows already stored, and it too reads ci_import.staged_items.',
+    mirrors: null,
     sql: String.raw`
       WITH bad AS (
         SELECT id, time, source_system, direction
@@ -203,11 +227,11 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'macOS stores an attachment-only iMessage as a single U+FFFC OBJECT REPLACEMENT CHARACTER, and a ' +
       'mis-decoded byte run comes out as U+FFFD. Both used to be copied through verbatim, producing a ' +
       'row whose entire text is one invisible control glyph — 22,321 of them on a real appliance. ' +
-      '`sanitizeText`/`isAttachmentPlaceholderOnly` in push/canonical.ts now strip it on the way in; ' +
-      '20260819000154 blanks the rows already written (and the ci.entities mirror label with them). ' +
-      'A non-zero count here means rows were written by a build predating that fix.',
-    mirrors: 'db/postgres/migrations/20260819000154_blank_placeholder_only_communication_content.sql',
-    // Anchored (`^…$`), exactly as the migration is: a captioned attachment
+      '`sanitizeText`/`isAttachmentPlaceholderOnly` in push/canonical.ts now strip it on the way in, ' +
+      'so a non-zero count here means rows were written by a build predating that fix — re-import to ' +
+      'heal them.',
+    mirrors: 'src/domains/import/push/canonical.ts isAttachmentPlaceholderOnly',
+    // Anchored (`^…$`), exactly as the write-time guard is: a captioned attachment
     // ("U+FFFC Merry Christmas") is a real message the user wrote and is NOT a
     // finding. The second predicate requires at least one actual glyph, so a
     // legitimately whitespace-only body is not counted either.
@@ -231,14 +255,15 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
   {
     id: 'position-not-a-place-name',
     severity: 'high',
-    title: 'ci.position.name holding a coordinate pair, a media filename, a bare UUID stem, or a URI',
+    title:
+      'ci.position.name holding a coordinate pair, a media filename, a bare UUID stem, a URI, or a title',
     scope: 'ci.position',
     remedy:
       'A fake place name is strictly worse than no place name: it renders in the Places view as though ' +
       'the place were already known, so nothing ever offers it a real one. NULL is the correct value — ' +
       'that is what makes the row a reverse-geocode candidate. `isNotAPlaceName` in push/inputs.ts ' +
-      'blocks all four shapes at write time; 20260818212254 and 20260818235752 cleared the 64,917 rows ' +
-      'written before it existed.',
+      'blocks all four shapes at write time; rows written before the guard existed (64,917 of them on ' +
+      'one real appliance) need a re-import.',
     mirrors: 'src/domains/import/push/inputs.ts isNotAPlaceName (+ geocode isUriLocation)',
     // All four arms of isNotAPlaceName, in its order: coordinate text (with the
     // optional generic geo-label prefix, so the bare and labelled forms are one
@@ -255,7 +280,22 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
            AND (   btrim(name) ~* '\.(jpe?g|png|heic|heif|gif|mov|mp4|m4v|avi|webp|dng|tiff?)$'
                 OR btrim(name) ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}([-_][0-9]+)?$'
                 OR btrim(name) ~* '^[a-z][a-z0-9+.-]*://\S+$'
-                OR btrim(name) ~* '^[[:space:]]*((location|position|coordinates?|coords?|point|waypoint|fix|gps)[[:space:]]*[-:]?[[:space:]]*)?[-+]?[0-9]{1,3}(\.[0-9]+)?[[:space:]]*,[[:space:]]*[-+]?[0-9]{1,3}(\.[0-9]+)?[[:space:]]*$')
+                OR btrim(name) ~* '^[[:space:]]*((location|position|coordinates?|coords?|point|waypoint|fix|gps)[[:space:]]*[-:]?[[:space:]]*)?[-+]?[0-9]{1,3}(\.[0-9]+)?[[:space:]]*,[[:space:]]*[-+]?[0-9]{1,3}(\.[0-9]+)?[[:space:]]*$'
+                -- A TITLE: prose, not a name. The fourth arm isNotAPlaceName
+                -- grew (isTitleText) and this check did not, so it reported a
+                -- clean bill of health for exactly the class that arm exists to
+                -- reject — an Uber trip sentence, a clipped tweet body. Copied
+                -- verbatim from NOT_A_PLACE_NAME_SQL in
+                -- PositionPlacePromoteStage so the three mirrors read alike:
+                -- U+2026 means the value is a PREFIX of longer text, !/?
+                -- mean it is a sentence, and more than MAX_PLACE_NAME_WORDS (14)
+                -- words is longer than any place name on this corpus. . and
+                -- @ stay out of the punctuation arm: 'A.G. Bartlett Building'
+                -- and 'On Jane Stanford Way @ Gilbert Biological Sciences' are
+                -- real names, and each is a live ci.position.name.
+                OR btrim(name) ~ '…$'
+                OR btrim(name) ~ '[!?]'
+                OR array_length(regexp_split_to_array(btrim(name), '\s+'), 1) > 14)
       )
       SELECT count(*)::bigint AS count,
              ${breakdownBy('source_system')} AS breakdown,
@@ -271,12 +311,12 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     remedy:
       'These are not people. "Missed call from", "Group Conversation - 2019-…Z.html" and a name ' +
       "containing a literal newline are all the export's own chrome, promoted to a Person row because " +
-      'the parser read a heading where a contact should have been. 20260819002002 repairs the ' +
-      "recoverable ones (strip the heading, keep the contact behind it) and falls back to the row's own " +
-      'phone/email identifier for the rest; 20260818220731 deletes the filename rows outright, along ' +
-      'with their identifiers, pipeline state and search index entries.',
-    mirrors: 'db/postgres/migrations/20260819002002_repair_call_log_heading_person_entities.sql',
-    // The three arms of that migration's `bad` CTE, verbatim. `\y` is Postgres's
+      'the parser read a heading where a contact should have been. The current parsers write none of ' +
+      'the three shapes, so rows here were written by a build predating those fixes — re-import from ' +
+      'source to heal them.',
+    mirrors: null,
+    // Three arms: call-log headings, export filenames (plus "Group Conversation"
+    // titles), and embedded newlines. `\y` is Postgres's
     // word boundary — POSIX ARE, not PCRE, so the JS `\b` spelling would match a
     // literal backspace and silently find nothing. Merged rows are excluded
     // because a merged-away row keeps its old name by design and is no longer
@@ -305,13 +345,11 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     scope: 'ci.entities',
     remedy:
       'MEDIUM on purpose, and the one check here that is not evidence of a bug. When an export names ' +
-      'nobody, the handle IS the honest display name — 20260819002002 deliberately WRITES this shape as ' +
-      'its fallback. What a non-zero count means is that these contacts have never been resolved to a ' +
-      'named person, which is a merge opportunity: 20260818220833 proposes exactly these as merge ' +
-      'candidates by matching the last 10 digits against the `phones` property of named Person rows. ' +
-      'Treat a rising number as "the address book was never imported", not as corruption.',
-    mirrors:
-      'db/postgres/migrations/20260818220833_propose_phone_matched_person_merge_candidates.sql (bare_phone CTE)',
+      'nobody, the handle IS the honest display name, and that is what gets written. What a non-zero ' +
+      'count means is that these contacts have never been resolved to a named person, which is a merge ' +
+      'opportunity: the last 10 digits of the name will often match the `phones` property of a named ' +
+      'Person row. Treat a rising number as "the address book was never imported", not as corruption.',
+    mirrors: null,
     sql: String.raw`
       WITH bad AS (
         SELECT entity_id, name, owner_user_id
@@ -322,6 +360,72 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
            AND name ~ '^\+?[0-9()\-.\s]{7,}$'
       )
       SELECT count(*)::bigint AS count,
+             ${SAMPLE} AS sample
+        FROM bad
+    `,
+  },
+  {
+    id: 'contact-cards-typed-as-concept',
+    severity: 'high',
+    title: 'Contact cards filed as Concept instead of Person — a human sitting in the graph as a thing',
+    scope: 'ci.entities',
+    remedy:
+      'A contact card whose subject is not a Person. The cause is always the same: the parser typed the ' +
+      'ITEM it emitted but not the ENTITY beside it, so `resolveEntityType` had only ' +
+      '`hasContactIdentity` left to classify it — and a card carrying just a NAME has no phone or email ' +
+      'for that to find, so it fell through to `type = null` and `entityTypeFor` mapped null to ' +
+      "DEFAULT_ENTITY_TYPE = 'Concept'. Whether a card lists a phone number is not what decides whether " +
+      'its subject is a human. Every known source is fixed forward — linkedin.ts, then vcard.ts, ' +
+      'contactlist.ts and applecontacts.ts in f24110960 — but rows already written need a wipe and ' +
+      're-import: the staged type is folded into `naturalKeyFor`, so the fixed parser keys the same ' +
+      'card differently and a re-import over the old rows would mint a fresh Person beside the stale ' +
+      'Concept rather than updating it. A NON-ZERO count on a source not named there means a FURTHER ' +
+      "contact-shaped datasource is omitting `type` on its entity — set it to 'contact' at the parser. " +
+      'The `breakdown` names the importer to go and look at.',
+    mirrors: null,
+    // Deliberately NOT scoped to the sources already fixed: this check watches
+    // for the NEXT source to make the same mistake, so it recognises the SHAPE —
+    // a handle-less contact card filed as a Concept by an importer — rather than
+    // keying on a source list. A vcard-scoped check could not have caught vcard,
+    // and could not have caught contactlist.ts or applecontacts.ts either.
+    //
+    // Recognising a contact card from its properties alone is the whole
+    // difficulty, and it must be done WITHOUT a source list. What does NOT work
+    // is `properties ? 'Source'`: every parser stamps it, so that predicate also
+    // flags 20 Uber Eats dishes ("Seared Ahi Tuna Salad", "Horchata") which are
+    // entirely legitimate Concepts. A HIGH check that can never reach zero is
+    // worse than no check, so the discriminator is the contact-card metadata
+    // vocabulary instead — keys only a parser reading a person's card emits.
+    // Verified on the live corpus: this predicate returns 2,247 (every mis-typed
+    // vCard row, nothing else) on the pre-fix data and 0 on a clean import.
+    //
+    // Handle-absence is the other half, and on the reference corpus it is exact:
+    // 0 of the 2,249 mis-typed rows carried properties->'email' or ->'phone', and
+    // 0 of the 1,335 correctly-typed cards lacked one. A Concept WITH a handle is
+    // a different (and so far hypothetical) bug, left out rather than folded in.
+    //
+    // KNOWN BLIND SPOT, stated because a silent one is the failure mode this file
+    // exists to prevent: the 2 mis-typed `contact_list` rows are invisible here.
+    // Their parser stamps only {Source, File}, so nothing in the row's own data
+    // says "contact" — only a source-scoped sweep could catch them, and this
+    // check cannot. A datasource whose contact entities carry no contact metadata at all
+    // is only reachable by a source list, which is exactly what this check is
+    // built to avoid needing.
+    sql: String.raw`
+      WITH bad AS (
+        SELECT entity_id, name, linked_table, owner_user_id
+          FROM ci.entities
+         WHERE entity_type = 'Concept'
+           AND linked_table LIKE 'import:%'
+           AND merged_into_entity_id IS NULL
+           AND properties ?| array['Names', 'Emails', 'Phones', 'Organizations',
+                                   'JobTitles', 'Nicknames', 'SocialProfiles', 'Birthday']
+           AND NOT (properties ? 'email' OR properties ? 'phone')
+           AND name IS NOT NULL
+           AND btrim(name) <> ''
+      )
+      SELECT count(*)::bigint AS count,
+             ${breakdownBy('linked_table')} AS breakdown,
              ${SAMPLE} AS sample
         FROM bad
     `,
@@ -372,15 +476,15 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'shows as placeless in the timeline and the map. Usually a mapping gap in the parser for the ' +
       'source named in the breakdown. Fix the mapping, then re-import — or run ' +
       '`ci-import backfill geocode` if the name is present but the coordinates are what is missing.',
-    mirrors: 'db/postgres/migrations/20260818215813_null_calendar_location_name_urls.sql (the exclusion)',
+    mirrors: 'src/domains/geocode/util/virtualLocations.ts isUriLocation (the exclusion)',
     // Two exclusions, and neither is incidental — both stop this check firing
     // on rows that are CORRECT.
     //
-    // The URI arm: 20260818215813 deliberately NULLs location_name when the
-    // calendar's location field held a meeting-join link, because a URL is not
-    // a place. Those rows KEEP the URL in metadata.Location, so without this
-    // arm every repaired calendar row would be reported as a defect by the
-    // check watching for the opposite defect. Same grammar as isUriLocation
+    // The URI arm: a calendar row whose location field held a meeting-join
+    // link gets a NULL location_name on purpose, because a URL is not a place.
+    // Those rows KEEP the URL in metadata.Location, so without this arm every
+    // such calendar row would be reported as a defect by the check watching
+    // for the opposite defect. Same grammar as isUriLocation
     // (geocode/util/virtualLocations.ts).
     //
     // The `[^[:space:]]` arm: `btrim(x)` strips SPACES ONLY, not tabs or
@@ -413,10 +517,10 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'A photo or video event links to its binary ONLY through ci.content (type=media, external_id = ' +
       'the ci.files id); there is no FK. No content row means no thumbnail anywhere in the UI, which is ' +
       'how this was found — 2,098 blank tiles in the gallery. `destinationsFor` was omitting the ' +
-      "'content' destination for dated capture.* events (fixed in 8abfb5de5); 20260818174213 backfills " +
-      'the rows already written, joining through metadata.FileId.',
-    mirrors: 'db/postgres/migrations/20260818174213_backfill_capture_content_rows.sql',
-    // Requires metadata.FileId, exactly as the backfill does: a capture event
+      "'content' destination for dated capture.* events (fixed in 8abfb5de5); rows written before that " +
+      'fix need a re-import.',
+    mirrors: 'src/domains/import/push/canonical.ts destinationsFor',
+    // Requires metadata.FileId: a capture event
     // with no file reference has no binary to point at, so it is not a defect —
     // counting it would make this check fire forever on a corpus that has none.
     sql: String.raw`
@@ -434,17 +538,62 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
     `,
   },
   {
+    id: 'blank-social-affiliation-content',
+    severity: 'high',
+    title: 'ci.content rows for a connection or a subreddit membership — an entry with no body at all',
+    scope: 'ci.content',
+    remedy:
+      'A LinkedIn connection and a moderated subreddit carry no Text, no Body and no URL, so the ' +
+      'content row toContentInput built for them has a NULL text AND a NULL url — and ci.content has ' +
+      'no title column, so nothing about the row renders in any Content view. `destinationsFor` was ' +
+      "sending every social.* record to 'content' as well as 'events' (fixed by isSocialAffiliation in " +
+      'push/canonical.ts); rows already written are safe to delete. The facts are not lost ' +
+      'either way: the connection is a ci.entities Person carrying the profile URL plus a dated ' +
+      'social event, and the subreddit is an event titled r/<sub>.',
+    mirrors: 'src/domains/import/push/canonical.ts isSocialAffiliation',
+    // Provenance-scoped: this watches the ONE
+    // shape the router now withholds, not blank content rows in general. Other
+    // sources produce blank rows for their own reasons (vcard contact cards
+    // with no note, Amazon app purchases) and folding them in here would make
+    // this check permanently non-zero for causes it says nothing about.
+    //
+    // Emptiness is `!~ '[^[:space:]]'` and not `btrim(x) = ''` for the reason
+    // the events-location-without-name check documents: btrim strips SPACES
+    // ONLY, so the btrim form reads a body of two newlines as present.
+    sql: String.raw`
+      WITH bad AS (
+        SELECT id, source_system, source_id, source_data ->> 'Kind' AS kind
+          FROM ci.content
+         WHERE source_type = 'ci-import-tools'
+           AND (
+                (source_system = 'linkedin' AND source_data ->> 'Kind' = 'connection')
+             OR (
+                  source_system = 'reddit'
+                  AND source_data ->> 'Kind' IN ('moderated_subreddit', 'subscribed_subreddit')
+                )
+               )
+           AND external_id IS NULL
+           AND coalesce(text, '') !~ '[^[:space:]]'
+           AND coalesce(url, '') !~ '[^[:space:]]'
+      )
+      SELECT count(*)::bigint AS count,
+             ${breakdownBy('source_system')} AS breakdown,
+             ${SAMPLE} AS sample
+        FROM bad
+    `,
+  },
+  {
     id: 'content-media-mimetype-mismatch',
     severity: 'medium',
     title: "ci.content typed 'media' whose mimetype is not an image, video or audio type",
     scope: 'ci.content',
     remedy:
       "The type discriminator drives rendering: a row typed 'media' gets a player or a thumbnail, so an " +
-      'ebook or an APK stamped media renders as a broken tile. 20260818224249 re-typed the Amazon ' +
-      "Appstore rows ('application/vnd.android.package-archive') to 'app'. Each new mimetype in the " +
-      'breakdown is a mapping the pushing parser got wrong — fix it at the source, then re-type the ' +
-      'existing rows with a narrow backfill.',
-    mirrors: 'db/postgres/migrations/20260818224249_backfill_amazon_appstore_content_type.sql',
+      'ebook or an APK stamped media renders as a broken tile — Amazon Appstore rows ' +
+      "('application/vnd.android.package-archive') belong typed 'app', not 'media'. Each mimetype in " +
+      'the breakdown is a mapping the pushing parser got wrong — fix it at the source, then re-type ' +
+      'the existing rows.',
+    mirrors: null,
     // NULL mimetype is excluded deliberately: "media with no declared type" is a
     // weaker and much more common smell (most importers never set one), and
     // folding it in here would bury the actual mismatches under it.
@@ -515,32 +664,76 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
   {
     id: 'events-timestamped-at-import',
     severity: 'high',
-    title: 'Events whose date is the moment they were imported, not the moment they happened',
+    title: 'Events wearing the import wall clock with no marker saying so',
     scope: 'ci.events',
     remedy:
-      "An undated record stamped with the import run's wall clock — which is why a handful of Google " +
-      'Maps saved places sit at the TOP of the timeline dated the day of the import, above everything ' +
-      "that actually happened that week. `ci.events.time_source = 'ingest'` is the declared marker " +
-      '(TemporalRepairStage sets it, and the column comment defines it as "stamped at import, i.e. not ' +
-      'a real date"); the second arm is the structural backstop for the far more common case where ' +
-      'nothing declared anything. Fix is in the parser: emit no date rather than `now()`, and let the ' +
-      'UI say "no date".',
+      'A row whose start_time lands within two seconds of created_at — the shape of an import-wall-' +
+      "clock fabrication — but carries no `time_source` saying so. `ci.events.time_source = 'ingest'` " +
+      'is the declared marker every undated record is supposed to leave (push/inputs.ts toEventInput, ' +
+      "from CanonicalRecord.dated; the column comment defines 'ingest' as \"stamped at import, i.e. not " +
+      'a real date"). A row this suspiciously-timed and still unmarked means one of two things: a row ' +
+      'imported BEFORE the fabricated-timestamp fix (repair it with 20260821084711, which marks on an ' +
+      'exact join to ci_import.staged_items.occurred_at IS NULL), or a NEW producer that fabricates a ' +
+      "date without going through toEventInput's guard — the real regression this check exists to catch. " +
+      'Fix the parser, emit no date, and let the routing and the UI say "no date" instead of stamping one.',
     mirrors: 'db/postgres/migrations/20260809184710_clean_stage_support.sql (time_source vocabulary)',
-    // The one legitimate shape this can match is a LIVE capture ingested within
-    // two seconds of the moment it records — genuinely "happened now, stored
-    // now". That is what `time_source = 'source'` is excluded for (the export
-    // said so, and it agreed), and why the breakdown is by source_system: a
-    // `google_maps` row here is the bug, a live `capture` row is not. Two
-    // seconds rather than one because a batch push writes created_at at commit
-    // time, a beat after the row was built.
+    // `time_source = 'ingest'` is EXCLUDED here, not included: as of the
+    // fabricated-timestamp fix that marker is the guard firing correctly, not
+    // the guard being skipped — a handful of Google Maps saved places and
+    // Reddit affiliations are *supposed* to carry it forever, and flagging
+    // every one of them "high" every run is exactly the standing-defect-on-
+    // correct-data failure this check used to have. What is still provably
+    // wrong is the OTHER shape: no marker at all on a timestamp that looks
+    // exactly like the import clock. `events-ingest-stamped-outside-known-
+    // shapes` below is the companion check that watches the marked population
+    // instead, at `medium`, because which shapes are legitimately undated is a
+    // judgement call and this one is not. `time_source = 'source'` stays
+    // excluded for the live-capture case: a capture genuinely ingested within
+    // two seconds of the moment it records is legitimate, and the export said
+    // so. Two seconds rather than one because a batch push writes created_at at
+    // commit time, a beat after the row was built.
     sql: String.raw`
       WITH bad AS (
         SELECT event_id, start_time, created_at, source_system, time_source
           FROM ci.events
          WHERE created_at IS NOT NULL
            AND time_source IS DISTINCT FROM 'source'
-           AND ( time_source = 'ingest'
-              OR start_time BETWEEN created_at - INTERVAL '2 seconds' AND created_at + INTERVAL '2 seconds' )
+           AND time_source IS DISTINCT FROM 'ingest'
+           AND start_time BETWEEN created_at - INTERVAL '2 seconds' AND created_at + INTERVAL '2 seconds'
+      )
+      SELECT count(*)::bigint AS count,
+             ${breakdownBy('source_system')} AS breakdown,
+             ${SAMPLE} AS sample
+        FROM bad
+    `,
+  },
+  {
+    id: 'events-ingest-stamped-outside-known-shapes',
+    severity: 'medium',
+    title: "Events marked time_source='ingest' for a (source, kind) nobody has declared undated",
+    scope: 'ci.events',
+    remedy:
+      "Not a defect by itself — `time_source = 'ingest'` is the CORRECT mark for a record whose source " +
+      'gave it no time (push/inputs.ts toEventInput). This check exists for the shapes nobody has looked ' +
+      "at yet: it excludes the (source_system, metadata->>'Kind') pairs SOURCE_TIME_SPECS " +
+      '(pipeline/stages/clean/TemporalRepairStage.ts) already declares as undatedKinds — ' +
+      'google_maps_places/labeled_place and reddit/moderated_subreddit|subscribed_subreddit — so a hit ' +
+      'is either a NEW legitimately-undated shape that belongs in that allowlist (add it, and this check ' +
+      'goes quiet for it), or a regression: a kind that is supposed to carry a real source date ' +
+      '(reddit/post, google_maps_places/place_review, …) losing it and falling back to the ingest clock. ' +
+      'The breakdown is by source_system so "which importer did this?" is the first thing a reader sees; ' +
+      "check the sample's `kind` against SOURCE_TIME_SPECS before deciding which of the two it is.",
+    mirrors: 'src/domains/pipeline/stages/clean/TemporalRepairStage.ts (SOURCE_TIME_SPECS undatedKinds)',
+    sql: String.raw`
+      WITH bad AS (
+        SELECT event_id, start_time, created_at, source_system, time_source,
+               metadata ->> 'Kind' AS kind
+          FROM ci.events
+         WHERE time_source = 'ingest'
+           AND NOT (
+             (source_system = 'google_maps_places' AND metadata ->> 'Kind' = 'labeled_place')
+             OR (source_system = 'reddit' AND metadata ->> 'Kind' IN ('moderated_subreddit', 'subscribed_subreddit'))
+           )
       )
       SELECT count(*)::bigint AS count,
              ${breakdownBy('source_system')} AS breakdown,
@@ -640,25 +833,52 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
   {
     id: 'pipeline-orphan-shards',
     severity: 'medium',
-    title: 'Shards still pending or running under a pipeline run that has already finished',
+    title: 'Shards left mid-flight under a run that finalised claiming it had nothing left to do',
     scope: 'ci.pipeline_shards, ci.pipeline_runs',
     remedy:
-      'The run reported done and part of its work never did. Nothing will pick these shards up — the ' +
-      'run that owned them is finished — so whatever slice of the corpus they covered is simply ' +
-      'missing from that stage. Re-run the stage for the affected keys, or delete the shards and start ' +
-      'a fresh run for that leg.',
+      'A bookkeeping contradiction, NOT lost data — and the difference is the point. A shard is a ' +
+      'run-scoped lease and progress marker with a NULL cursor: the work itself lives in ' +
+      '`ci.pipeline_state`, and the control tick re-derives the remainder from THE ONE RULE on every ' +
+      'pass, so nothing here is unreachable and re-running the stage recovers nothing that was not ' +
+      'already going to be swept. What a non-zero count means is that the run stamped `drained` ' +
+      '("there is no work left") or `cancelled` while one of its own legs never reported, so the run ' +
+      'progress view — the one place an operator looks to answer "is my import finished?" — disagrees ' +
+      'with itself. Read `ci.pipeline_runs.detail` for the run named in the sample: a leg that left ' +
+      '`detail.stages` mid-flight is the usual cause. Deleting the shards is safe and loses nothing.',
     mirrors: null,
-    // Keyed on `finished_at IS NOT NULL` rather than a status list, following
-    // 20260809032723's own reasoning for its unique index: the status vocabulary
-    // belongs to the runner and will grow, while "finished" is structural.
+    // Runs finalised `not_due` are EXCLUDED, and that exclusion is most of what
+    // this check is. `PipelineControlService` finalises a run the moment nothing
+    // is DUE even while legs still hold candidates — it has to, because
+    // `pipeline_runs_active_uniq` allows one unfinished run per user and holding
+    // one open for the six days until a weekly stage comes round would lock the
+    // user out of ever pressing "reprocess" — and it deliberately leaves those
+    // legs' shards untouched rather than saying `done` about them
+    // (`markShardDrained` is skipped, `legsNotDue` is counted, the run is stamped
+    // `finalizedReason: 'not_due'`). A pending shard under a `not_due` run is
+    // therefore the control plane's INTENDED record of "this leg has work and it
+    // is not its turn", which is why the un-narrowed predicate reported all
+    // twelve legs of a healthy appliance as a defect. Same reasoning as
+    // `events-missing-search-vector` excluding `index_skips`: a check reporting a
+    // number that can never reach zero stops being read, and takes the checks
+    // either side of it with it.
+    //
+    // Still keyed on `finished_at IS NOT NULL` rather than a run-status list,
+    // following 20260809032723's own reasoning for its unique index: the status
+    // vocabulary belongs to the runner and will grow, while "finished" is
+    // structural. `finalizedReason` is read out of `detail` for the same reason —
+    // it is what the finaliser writes — and compared with `IS DISTINCT FROM` so a
+    // run finalised before that field existed, which has none, stays VISIBLE
+    // instead of being silently exempted by a NULL.
     sql: String.raw`
       WITH bad AS (
         SELECT s.id, s.run_id, s.stage, s.shard_key, s.status, r.kind AS run_kind,
-               r.status AS run_status, r.finished_at AS run_finished_at
+               r.status AS run_status, r.finished_at AS run_finished_at,
+               r.detail->>'finalizedReason' AS finalized_reason
           FROM ci.pipeline_shards s
           JOIN ci.pipeline_runs r ON r.id = s.run_id
          WHERE s.status IN ('pending', 'running')
            AND r.finished_at IS NOT NULL
+           AND r.detail->>'finalizedReason' IS DISTINCT FROM 'not_due'
       )
       SELECT count(*)::bigint AS count,
              ${breakdownBy('stage')} AS breakdown,

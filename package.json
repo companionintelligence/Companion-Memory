@@ -8,6 +8,7 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,mjs}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,mjs}\"",
     "e2e": "playwright test --config playwright.e2e.config.ts",
+    "fed": "yarn workspace @ci/be-api run exec -- scripts/federation-harness/index.ts",
     "e2e:ui": "playwright test --config playwright.e2e.config.ts --ui",
     "e2e:headed": "playwright test --config playwright.e2e.config.ts --headed",
     "e2e:report": "playwright show-report",
@@ -19,7 +20,8 @@
     "frontend/apps/*",
     "frontend/packages/*",
     "!frontend/apps/ios",
-    "!frontend/apps/android"
+    "!frontend/apps/android",
+    "!frontend/apps/desktop"
   ],
   "resolutions": {
     "@protobufjs/utf8": "^1.1.1",

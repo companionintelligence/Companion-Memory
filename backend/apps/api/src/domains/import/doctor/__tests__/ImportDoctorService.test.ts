@@ -78,14 +78,15 @@ describe('ImportDoctorService', () => {
   });
 
   it('carries the count, breakdown and sample through for a check that found rows', async () => {
+    // A HIGH check on purpose — the gate assertions below depend on it.
     const { dataSource } = fakeDataSource({
-      'comms-missing-thread-id': [
+      'comms-missing-participants': [
         { count: '4', breakdown: { claude: 4 }, sample: { id: 'abc', source_system: 'claude' } },
       ],
     });
 
     const report = await new ImportDoctorService(dataSource, logger).run();
-    const finding = report.findings.find((f) => f.id === 'comms-missing-thread-id');
+    const finding = report.findings.find((f) => f.id === 'comms-missing-participants');
 
     expect(finding).toMatchObject({
       status: 'found',

@@ -47,6 +47,30 @@ export function narrowedEntityTypes(params: URLSearchParams): string[] | null {
   return selected.length < total ? selected : null;
 }
 
+/**
+ * Type filters for the explorer `search` query.
+ *
+ * The What picker writes an *exclude* list (`?excludedEntityTypes=`). The timed
+ * browse only fetches opt-in types (Person, Place, Thing, Product, Receipt)
+ * when they appear in `includeTypes`, so forwarding that exclude list made a
+ * People-only (or Places-only, …) browse return an empty page — the heatmap
+ * already converted the same URL to includes via {@link narrowedEntityTypes}.
+ * When the picker has narrowed the set, send the remaining types as includes
+ * and drop the exclude list so both sides of the page agree.
+ */
+export function explorerSearchTypeFilters(params: URLSearchParams): {
+  includeTypes?: string[];
+  excludeTypes?: string[];
+} {
+  const narrowed = narrowedEntityTypes(params);
+
+  if (narrowed) {
+    return { includeTypes: narrowed };
+  }
+
+  return {};
+}
+
 export function normalizeFilterValue(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }

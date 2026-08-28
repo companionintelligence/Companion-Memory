@@ -333,20 +333,19 @@ const PERMANENT_STATUS_REASONS: Readonly<Record<string, string>> = {
 const VIRTUAL_STATUS = 'virtual';
 
 /**
- * Provider calls in flight per slice.
+ * Provider calls in flight per slice — a concurrency ceiling only, bounding how
+ * many of THIS stage's calls sit in flight at once (sockets/memory).
  *
- * Bounded by the same two numbers `GeocodeBatchListener` respects — a hard
- * ceiling and the configured QPS — so a slice of cache misses cannot burst past
- * the provider's rate limit and turn into `OVER_QUERY_LIMIT` for everything else
- * on the appliance.
- *
- * NOTE: this is a per-slice bound, and `pipeline-enrich` can work several slices
- * at once, so the appliance-wide rate is not enforced here. It cannot be: the QPS
- * throttle lives in `GeocodeBatchListener` (a private `RateLimiter` in another
- * domain's listener), where no second caller can share it. Moving that throttle
- * into `GeocodeService`, next to the cache it already shares — or into the
- * cross-process `BackpressureService` the plan describes — is the correct fix and
- * belongs with the change that owns that file.
+ * The QPS throttle itself is NOT here and does not need to be: it lives in
+ * `GeocodeService.geocode`/`reverseGeocode` (a private `RateLimiter` field on
+ * that Nest singleton), applied to every call regardless of caller. Since
+ * `GeocodeBatchListener` and this stage both inject the same `GeocodeService`
+ * instance, they draw from the one appliance-wide budget — `pipeline-enrich`
+ * working several slices at once, and the listener sweeping concurrently, still
+ * cannot collectively exceed config.geocoding.rateLimitPerSecond. A per-slice
+ * concurrency bound like this one remains useful on top of that: it keeps a
+ * single slice from opening MAX_PROVIDER_CONCURRENCY sockets that then mostly
+ * sit queued on the shared throttle.
  */
 const MAX_PROVIDER_CONCURRENCY = 4;
 

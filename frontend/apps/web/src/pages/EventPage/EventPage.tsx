@@ -6,6 +6,7 @@ import { Card, Label } from '@ci/shadcn';
 import { User } from '@ci/shadcn/icons';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 
+import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import { EntityEvolutionPanel } from '@/components/EntityEvolution/EntityEvolutionPanel';
 import { EntityFieldsCard, formatEntityLabel, formatEntityTimestamp } from '@/components/EntityFields';
 import { EntityEditToggle, EntityTagsDescriptionCard } from '@/components/EntityTagsDescriptionCard';
@@ -14,6 +15,13 @@ import { PageContent } from '@/components/layout';
 import { Map } from '@/components/Map';
 import { Tag } from '@/components/Tag';
 import { gql } from '@/graphql';
+import { namedChatContext } from '@/lib/agentChat';
+import {
+  EntityMedia,
+  resolveStaticUrl,
+} from '@/pages/MemoryPage/Components/EntityDetails/EntityDetailScaffold';
+
+import { EventContentGrid } from './EventContentGrid';
 
 const GET_EVENT = gql(`
   query GetEvent($id: ID!) {
@@ -28,6 +36,20 @@ const GET_EVENT = gql(`
       endTime
       eventType
       sourceSystem
+
+      # A photo/video event's own binary, resolved server-side from its linked
+      # file (null for non-media events), plus the content rows attached to it.
+      mediaContentType
+      mediaUrl
+      previewUrl
+      contents(first: 60) {
+        edges {
+          node {
+            id
+            ...EventContentTile
+          }
+        }
+      }
 
       tags {
         id
@@ -104,13 +126,23 @@ export function EventPage() {
             <EventIcon />
             <h1 className="text-2xl font-bold">{event.title}</h1>
           </div>
-          <EntityEditToggle pressed={editMode} onPressedChange={setEditMode} />
+          <div className="flex items-center gap-2">
+            <ChatWithAgentMenu
+              context={namedChatContext({
+                title: event.title,
+                body: [event.description, event.eventType, event.sourceSystem].filter(Boolean).join(' · ') || null,
+                sourceKind: 'EventType',
+                sourceId: event.id,
+              })}
+            />
+            <EntityEditToggle pressed={editMode} onPressedChange={setEditMode} />
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <div className="flex flex-col gap-4 md:col-span-2">
-            {/* The drawer's own field set + metadata rows, so "Open full page"
-                does not silently drop the title editor or the timestamps. */}
+            {/* The drawer's own field set + metadata rows, so reaching this route
+                directly does not silently drop the title editor or the timestamps. */}
             <EntityFieldsCard
               title="Event"
               resetKey={event.id}
@@ -133,7 +165,16 @@ export function EventPage() {
                   throw new Error('Update was rejected');
                 }
               }}
-            />
+            >
+              <EntityMedia
+                src={resolveStaticUrl(event.mediaUrl ?? event.previewUrl)}
+                previewSrc={resolveStaticUrl(event.previewUrl)}
+                contentType={event.mediaContentType}
+                alt={event.title ?? ''}
+              />
+            </EntityFieldsCard>
+
+            <EventContentGrid contents={event.contents.edges.map((edge) => edge.node)} />
 
             <EntityTagsDescriptionCard
               entityType="event"

@@ -74,6 +74,26 @@ export interface CatalogSource {
   readonly importerReady: boolean;
 }
 
+/**
+ * How many rows one importer has actually put in `ci.*`, for one object kind
+ * — the picker tile's "24K Mail" line. From `GET
+ * /import/sources/object-counts`, read from the live destination tables
+ * rather than import run history (see `useObjectCounts.ts`'s docblock for
+ * why, mirroring `useSourceUsage.ts`'s for the parallel "imported ✓" case).
+ *
+ * `importer` is the same string {@link CatalogSource.importer} carries, so a
+ * shared/ambiguous importer (`calendar`, `vcard`, `email`, `generic`) can
+ * appear here too — the server does not filter it out, because refusing to
+ * attribute a shared bucket to one tile is `unambiguousImporters`' job, not
+ * this endpoint's. `label` is one of `sources.tsx`'s `OBJECTS_BY_CATEGORY`
+ * labels ('Mail', 'Posts', 'Watch history', …).
+ */
+export interface ObjectCount {
+  readonly importer: string;
+  readonly label: string;
+  readonly count: number;
+}
+
 export interface ImportStage {
   readonly id: string;
   readonly seq: number;
@@ -217,6 +237,28 @@ export interface UnpushedRun extends ImportRun {
   readonly pendingEntities: number;
 }
 
+/**
+ * What a discard took, itemised — see `DELETE /import/runs/:runId`.
+ *
+ * The last three fields are the halves that were NOT taken, and they are why
+ * this is a shape rather than a boolean. `uploadsRestaged`: an archive the
+ * appliance still holds goes back to the uploads list instead of being
+ * destroyed with the parse. `mediaFilesKept` / `attachmentContentsKept`: the
+ * photos and attachments the media stage had already stored stay in the user's
+ * memory, because after the fact nothing can prove this run is the only import
+ * that put them there. Only the server knows which of these happened, so only
+ * the server can say — the UI must not guess.
+ */
+export interface DiscardedRun {
+  readonly runId: string;
+  readonly label: string | null;
+  readonly stagedRowsDeleted: number;
+  readonly sourceRowsDeleted: number;
+  readonly uploadsRestaged: number;
+  readonly mediaFilesKept: number;
+  readonly attachmentContentsKept: number;
+}
+
 /** One importable thing the inbox scan found — a file, or a whole recognized directory. */
 export interface InboxUnit {
   /** Path relative to the inbox folder — the handle importInbox takes. */
@@ -240,7 +282,13 @@ export interface InboxUnit {
 export interface InboxScan {
   readonly available: boolean;
   readonly reason?: string;
+  /** The folder as the API sees it — inside the container on a managed appliance. */
   readonly inboxDir: string;
+  /**
+   * The folder as a PERSON reaches it: the host-side path of the bind mount
+   * when the appliance knows it, otherwise `inboxDir`. Show this one.
+   */
+  readonly displayDir: string;
   readonly units: readonly InboxUnit[];
   readonly skippedSymlinks: number;
   readonly truncated: boolean;
@@ -269,7 +317,7 @@ export function isRunFinished(run: Pick<ImportRun, 'status'> | null | undefined)
  * generate itself.
  */
 export function useImportApi() {
-  const [{ authToken }] = useAuth();
+  const [{ authToken, authenticated }] = useAuth();
 
   /**
    * The CURRENT token, readable from long-lived closures.
@@ -289,7 +337,27 @@ export function useImportApi() {
     tokenRef.current = authToken;
   }, [authToken]);
 
-  const authHeaders = useCallback(() => ({ Authorization: `Bearer ${tokenRef.current ?? ''}` }), []);
+  /**
+   * The bearer, ONLY when there is one.
+   *
+   * This used to send `Bearer ` with an empty string on native, where
+   * `authToken` is null — the phone's durable credential is a keystore API key
+   * that `fetchJson` attaches as `x-api-key` by itself. An empty bearer is not
+   * merely useless: it is a malformed Authorization header on a request that
+   * would otherwise have authenticated fine. Built rather than ternaried for
+   * the reason `useJobsAuth` documents — the conditional form infers
+   * `{ Authorization?: undefined }`, which `exactOptionalPropertyTypes` refuses
+   * to widen.
+   */
+  const authHeaders = useCallback((): Record<string, string> => {
+    const headers: Record<string, string> = {};
+
+    if (tokenRef.current) {
+      headers.Authorization = `Bearer ${tokenRef.current}`;
+    }
+
+    return headers;
+  }, []);
 
   const listSources = useCallback(
     async (): Promise<ImportSource[]> =>
@@ -300,6 +368,12 @@ export function useImportApi() {
   const listCatalog = useCallback(
     async (): Promise<CatalogSource[]> =>
       (await fetchJson<CatalogSource[]>('/api/import/sources/catalog', { headers: authHeaders() })) ?? [],
+    [authHeaders],
+  );
+
+  const getObjectCounts = useCallback(
+    async (): Promise<ObjectCount[]> =>
+      (await fetchJson<ObjectCount[]>('/api/import/sources/object-counts', { headers: authHeaders() })) ?? [],
     [authHeaders],
   );
 
@@ -492,6 +566,20 @@ export function useImportApi() {
     [authHeaders],
   );
 
+  /**
+   * The opposite of Sync: throw the parse away instead of saving it.
+   *
+   * `confirm=discard` is the server's own gate and is spelled out here rather
+   * than defaulted, so the one call in this file that destroys data reads as
+   * destructive at the call site. There is no undo — the appliance keeps a
+   * parsed-but-unpushed run forever precisely because those staged rows are the
+   * only copy left of it.
+   */
+  const discardRun = useCallback(
+    async (runId: string) => del<DiscardedRun>(`/api/import/runs/${runId}?confirm=discard`, authHeaders()),
+    [authHeaders],
+  );
+
   /** What is waiting in the appliance's inbox folder. */
   const scanInbox = useCallback(
     async (): Promise<InboxScan | null> =>
@@ -543,9 +631,19 @@ export function useImportApi() {
   // responses came back.
   return useMemo(
     () => ({
-      ready: Boolean(authToken),
+      // `authenticated`, NOT `authToken`. `authToken` is the web JWT and is
+      // null inside the Capacitor app, so every import request returned before
+      // it was made: /sources/import showed "Loading services…" forever, the
+      // drop zone stayed disabled, Inbox never scanned, History was empty and
+      // the live-import card never appeared — on a phone that was otherwise
+      // signed in. `ImportController` guards with `JwtOrApiKeyAuthGuard`, so
+      // the keystore key is a credential the server already accepts. This is
+      // the same bug `useJobsAuth` documents as fixed for Jobs; the fix was
+      // never ported here.
+      ready: Boolean(authenticated),
       listSources,
       listCatalog,
+      getObjectCounts,
       listRuns,
       listUnpushed,
       getRun,
@@ -555,15 +653,20 @@ export function useImportApi() {
       startRun,
       startPush,
       cancelRun,
+      discardRun,
       retryStage,
       retryFailedPush,
       scanInbox,
       importInbox,
     }),
     [
-      authToken,
+      // `ready` is derived from `authenticated` now, so that is what this memo
+      // has to track — keeping `authToken` here would leave `ready` stale on
+      // native, where the token never changes because there never is one.
+      authenticated,
       listSources,
       listCatalog,
+      getObjectCounts,
       listRuns,
       listUnpushed,
       getRun,
@@ -573,6 +676,7 @@ export function useImportApi() {
       startRun,
       startPush,
       cancelRun,
+      discardRun,
       retryStage,
       retryFailedPush,
       scanInbox,
@@ -852,6 +956,16 @@ export function useActiveImports(
   const refresh = useCallback(() => kick.current(), []);
 
   return { snapshot, error, refresh };
+}
+
+async function del<T>(url: string, headers: Record<string, string>): Promise<T> {
+  const response = await fetch(url, { method: 'DELETE', headers });
+
+  if (!response.ok) {
+    throw new Error(await describeFailure(response, 'Request failed'));
+  }
+
+  return (await response.json()) as T;
 }
 
 async function post<T>(url: string, headers: Record<string, string>, body: unknown): Promise<T> {

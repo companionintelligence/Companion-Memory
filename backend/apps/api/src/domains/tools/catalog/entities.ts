@@ -54,7 +54,7 @@ export const CI_ENTITIES: readonly CiEntityDescriptor[] = [
   {
     type: 'item',
     title: 'Item',
-    description: 'A generic thing — product, book, game, or inventory entry.',
+    description: 'A generic thing — product, book, game, or owned thing.',
     idKind: 'global-uid',
   },
   {

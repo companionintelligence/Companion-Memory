@@ -1,8 +1,8 @@
 /**
- * The physical half of an inventory item: how big it is, what it weighs, what
+ * The physical half of an thing: how big it is, what it weighs, what
  * colour it is, and what it is made of.
  *
- * `ci.inventory` stores one unit per measurement — millimetres, grams,
+ * `ci.objects` stores one unit per measurement — millimetres, grams,
  * millilitres — and the database refuses anything else (see migration
  * `20260818020839_expand_inventory_physical_properties`). Units therefore have
  * to be resolved BEFORE a write, and exactly once, or the same column ends up
@@ -20,14 +20,14 @@
  *
  * | here                        | schema                                  |
  * |-----------------------------|-----------------------------------------|
- * | `MAX_DIMENSION_MM` etc.     | `inventory_*_positive_check`            |
- * | `normalizeColors`           | `inventory_colors_check`                |
- * | `normalizeMaterials`        | `inventory_materials_check`             |
- * | `normalizeColorHex`         | `inventory_color_hex_check`             |
+ * | `MAX_DIMENSION_MM` etc.     | `objects_*_positive_check`            |
+ * | `normalizeColors`           | `objects_colors_check`                |
+ * | `normalizeMaterials`        | `objects_materials_check`             |
+ * | `normalizeColorHex`         | `objects_color_hex_check`             |
  * | `normalizeComposition`      | `ci.is_normalized_composition`          |
- * | `UNIT_SYSTEMS`              | `inventory_unit_system_check`           |
- * | `ACQUISITION_METHODS`       | `inventory_acquisition_method_check`    |
- * | digital-item rule           | `inventory_digital_is_incorporeal_check`|
+ * | `UNIT_SYSTEMS`              | `objects_unit_system_check`           |
+ * | `ACQUISITION_METHODS`       | `objects_acquisition_method_check`    |
+ * | digital-item rule           | `objects_digital_is_incorporeal_check`|
  *
  * One rule has no twin in SQL, and cannot: a measurement that is merely WRONG
  * is indistinguishable from a right one to a CHECK constraint. The bounds catch

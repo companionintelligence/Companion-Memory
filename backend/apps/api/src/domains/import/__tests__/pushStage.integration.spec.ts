@@ -112,6 +112,29 @@ describeWithDatabase(`the push stage (${importDatabase.target})`, () => {
 
     const communications = { createManyDetailed: overrides.communicationCreate ?? record('communications') };
     const positions = { create: record('position') };
+    const receipts = {
+      upsertFromExtraction: jest.fn(async (_ctx: unknown, input: Record<string, unknown>) => {
+        sent.push({ destination: 'receipts', input });
+
+        return {
+          receipt: { id: 'receipt-row' },
+          lines: [],
+          productsResolved: 0,
+          identifiersPromoted: 0,
+          mints: [],
+        };
+      }),
+    };
+    const observations = {
+      createMany: jest.fn(async (_ctx: unknown, inputs: Array<Record<string, unknown>>) => {
+        for (const input of inputs) {
+          sent.push({ destination: 'observations', input });
+        }
+
+        return { written: [], protectedByConfirmation: 0, duplicatesInBatch: 0, rejectedUnarbitered: 0 };
+      }),
+    };
+    const objectIdentifiers = { upsertForSubjects: jest.fn(async () => 0) };
 
     // The post-push kicks ride pg-boss to the maintenance domain's sweeps,
     // tested in their own specs; here they only need to record what was
@@ -127,7 +150,14 @@ describeWithDatabase(`the push stage (${importDatabase.target})`, () => {
       communications as never,
       { createManyDetailed: overrides.contentCreate ?? record('content') } as never,
       { createDetailed: record('events') } as never,
-      { createManyDetailed: record('inventory') } as never,
+      { createManyDetailed: record('things') } as never,
+      // The commerce plane. `upsertFromExtraction` is one call per receipt and
+      // `createMany` reports batch totals, so neither returns the per-input
+      // result shape `record()` builds — they get their own doubles.
+      receipts as never,
+      { createManyDetailed: record('product_models') } as never,
+      observations as never,
+      objectIdentifiers as never,
       // Positions carry no provenance triple, so this one never reports.
       positions as never,
       { createManyDetailed: record('browser_activity') } as never,
@@ -136,7 +166,17 @@ describeWithDatabase(`the push stage (${importDatabase.target})`, () => {
       logger as never,
     );
 
-    return { stage, sent, graph, communications, positions, signals };
+    return {
+      stage,
+      sent,
+      graph,
+      communications,
+      positions,
+      receipts,
+      observations,
+      objectIdentifiers,
+      signals,
+    };
   }
 
   /**

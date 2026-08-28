@@ -16,7 +16,7 @@ export type ObjectIdentifierSubjectType = 'product_model' | 'object_instance';
  *
  * SUBJECT-POLYMORPHIC. A GTIN identifies a product MODEL (every unit shares
  * it); a serial identifies one owned INSTANCE. `subjectId` therefore has no FK
- * — it points at `ci.product_models.product_id` or `ci.inventory.object_id`
+ * — it points at `ci.product_models.product_id` or `ci.objects.object_id`
  * depending on `subjectType`, and keeping the referential integrity is
  * ObjectMergeService's job, not the database's.
  *

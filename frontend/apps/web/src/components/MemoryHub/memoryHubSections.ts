@@ -1,14 +1,17 @@
 import type { ComponentType } from 'react';
 
 import {
-  AnswerIcon,
   ContentIcon,
   EventIcon,
   ItemIcon,
+  NoteIcon,
   PersonIcon,
   PlaceIcon,
+  ReceiptIcon,
   TagIcon,
+  ThreadIcon,
 } from '@/components/icons';
+import { CHAT_BASE } from '@/pages/ChatPage/chatPaths';
 
 export type MemoryHubIcon = ComponentType<{ className?: string; colorized?: boolean }>;
 
@@ -28,7 +31,7 @@ export const MEMORY_HUB_SECTIONS: MemoryHubSection[] = [
   {
     to: '/memory/events',
     label: 'Events',
-    match: (p) => p === '/memory/events' || p === '/memory',
+    match: (p) => p === '/memory/events',
     icon: EventIcon,
   },
   {
@@ -46,9 +49,16 @@ export const MEMORY_HUB_SECTIONS: MemoryHubSection[] = [
   {
     to: '/memory/things',
     label: 'Things',
-    match: (p) => p === '/memory/things' || p.startsWith('/inventory'),
-    flag: 'enable.inventory.page',
+    // `/items/:id` is the Thing detail page, so it has to keep this tab lit —
+    // the old matcher only covered the retired `/inventory` alias.
+    match: (p) => p === '/memory/things' || p.startsWith('/inventory') || p.startsWith('/items/'),
     icon: ItemIcon,
+  },
+  {
+    to: '/memory/receipts',
+    label: 'Receipts',
+    match: (p) => p === '/memory/receipts' || p.startsWith('/receipts'),
+    icon: ReceiptIcon,
   },
   {
     to: '/memory/content',
@@ -67,14 +77,22 @@ export const MEMORY_HUB_SECTIONS: MemoryHubSection[] = [
     icon: TagIcon,
   },
   {
-    to: '/memory/reflections',
-    // Renamed from "Questions" — `/memory/questions` still resolves here via a
-    // redirect in App.tsx, so it stays in the matcher for any link still in
-    // flight when the redirect runs.
-    label: 'Reflections',
-    match: (p) => p === '/memory/reflections' || p === '/memory/questions',
-    flag: 'insights.page',
-    icon: AnswerIcon,
+    to: '/memory/notes',
+    label: 'Notes',
+    // /notes/:id? is the create/edit page and stays at its own top-level
+    // path (same as /people/:id, /receipts/:id) — it still has to keep this
+    // tab lit.
+    match: (p) => p === '/memory/notes' || p.startsWith('/notes/'),
+    icon: NoteIcon,
+  },
+  {
+    to: CHAT_BASE,
+    label: 'Chat',
+    // A thread deep-link (`/memory/chat/:id`) has to keep this tab lit, same
+    // as Content's `/memory/content/:fileId`.
+    match: (p) => p === CHAT_BASE || p.startsWith(`${CHAT_BASE}/`),
+    flag: 'chat.page',
+    icon: ThreadIcon,
   },
 ];
 

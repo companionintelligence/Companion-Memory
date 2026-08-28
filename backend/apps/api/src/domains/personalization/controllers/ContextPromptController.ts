@@ -7,6 +7,12 @@ import { SmartRotationWorkEvent } from '@ci/domains/smart-rotation/events';
 
 import { ContextPromptService } from '../services/ContextPromptService';
 
+// Mirrors SmartRotationService.workTypePriority('context_prompt') — kept as a
+// literal here rather than imported since that method is private to the cron
+// path; a drift between the two just means interactive requests stop cutting
+// ahead of background rotation work, not a broken send.
+const CONTEXT_PROMPT_WORK_PRIORITY = 5;
+
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Controller('context-prompts')
 export class ContextPromptController {
@@ -61,7 +67,15 @@ export class ContextPromptController {
     await this.eventService.send(
       SmartRotationWorkEvent,
       { userId, workType: 'context_prompt' },
-      { queue: 'smart-rotation', singletonKey: `smart-rotation:${userId}:context_prompt` },
+      {
+        queue: 'smart-rotation',
+        singletonKey: `smart-rotation:${userId}:context_prompt`,
+        // Matches SmartRotationService.workTypePriority('context_prompt'). Without
+        // this a human waiting here gets DEFAULT_JOB_PRIORITY (0) and sinks below
+        // the cron-driven rotation work already queued at priority 5 on this
+        // shared queue.
+        priority: CONTEXT_PROMPT_WORK_PRIORITY,
+      },
     );
   }
 }

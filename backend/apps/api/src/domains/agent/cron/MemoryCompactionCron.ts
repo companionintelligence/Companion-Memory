@@ -12,7 +12,6 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { CronExpression } from '@nestjs/schedule';
 
 import { SYSTEM_USER, type ServiceContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
@@ -25,6 +24,12 @@ import { MemoryCompactionService } from '../services/MemoryCompactionService';
 
 const FRAGMENTS_PER_TICK = 100;
 
+// The five-minute cadence of `CronExpression.EVERY_5_MINUTES`, moved off second
+// 0: a 100-fragment LLM batch sharing Ollama with interactive chat should not
+// land with everything else that never picked a second. See
+// common/schedule/__tests__/cronSecondOffsets.test.ts for who holds what.
+export const MEMORY_COMPACTION_CRON = '45 */5 * * * *';
+
 @Injectable()
 export class MemoryCompactionCron {
   constructor(
@@ -36,7 +41,7 @@ export class MemoryCompactionCron {
     this.logger.setContext(MemoryCompactionCron.name);
   }
 
-  @Cron(CronExpression.EVERY_5_MINUTES, { name: 'MemoryCompactionCron.cronCompactMemories' })
+  @Cron(MEMORY_COMPACTION_CRON, { name: 'MemoryCompactionCron.cronCompactMemories' })
   async cronCompactMemories(): Promise<void> {
     const featureEnabled = await this.featureService.isFeatureEnabled('agent.memory.compaction');
 

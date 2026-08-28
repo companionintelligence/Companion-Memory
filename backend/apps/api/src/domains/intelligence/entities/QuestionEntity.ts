@@ -20,6 +20,20 @@ export class QuestionEntity {
   @Column({ name: 'question_text' })
   text!: string;
 
+  /**
+   * Stable, database-independent name for a curated question — the thing
+   * outside code points at instead of `question_id`, which `gen_uuid_v7()`
+   * mints fresh on every appliance. NULL for the vast majority of catalogue
+   * rows: a key is for questions some surface depends on by name (the Self
+   * page's "Life details" grid), not a second id for everything.
+   *
+   * Written by seed migrations only. No API accepts one, so an ordinary edit
+   * cannot rename or steal a key; a fork inherits its origin's key, which is
+   * what keeps a curated surface working for whoever edited the question.
+   */
+  @Column({ type: 'text', nullable: true, name: 'question_key' })
+  key?: string | null;
+
   @Column({ type: 'text', array: true, nullable: true, name: 'context_tags' })
   contextTags!: string[];
 
@@ -65,6 +79,7 @@ export class QuestionEntity {
   static toEgressType(entity: QuestionEntity) {
     return {
       id: entity.id,
+      key: entity.key ?? null,
       category: entity.category,
       answerTier: entity.answerTier ?? null,
       text: entity.text,

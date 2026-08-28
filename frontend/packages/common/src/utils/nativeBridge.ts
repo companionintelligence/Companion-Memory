@@ -10,8 +10,9 @@
  * falls back to `localStorage`, and external links fall back to a normal navigation.
  */
 
-import { apiKeyHeaders } from './apiAuth';
-import { buildApiUrl, isNativePlatform } from './apiBase';
+import { isIosPlatform, isNativePlatform } from './apiBase';
+import { streamingFetch } from './fetchJson';
+import type { BackgroundGeolocationLocation } from './deviceSources/location';
 
 /**
  * `capacitor-secure-storage-plugin`. **Legacy — read-only, for migration.** It used to hold
@@ -46,6 +47,67 @@ interface LocalHubPlugin {
   secureSet(options: { key: string; value: string }): Promise<void>;
   secureRemove(options: { key: string }): Promise<void>;
   openUrl(options: { url: string }): Promise<void>;
+  /**
+   * iOS only. One high-accuracy fix for placing a pin — does not write the
+   * tracking outbox. Rejects when permission is denied or a fix times out.
+   */
+  getCurrentLocation?(): Promise<NativeCurrentLocation>;
+  openAppSettings?(): Promise<void>;
+}
+
+export interface BackgroundGeolocationError {
+  code: string;
+  message: string;
+}
+
+/**
+ * `@capacitor-community/background-geolocation`. Declared locally, not imported from the
+ * plugin package, for the same reason every other plugin interface here is: it keeps the
+ * web bundle free of `@capacitor/*` native deps. One writer only — a second `addWatcher`
+ * call replaces rather than adds a session on both platforms, so callers must
+ * `removeWatcher` their previous id before starting a new one.
+ */
+interface BackgroundGeolocationPlugin {
+  addWatcher(
+    options: {
+      /** Set to keep sampling once the app leaves the foreground; omit for foreground-only. */
+      backgroundMessage?: string;
+      backgroundTitle?: string;
+      requestPermissions?: boolean;
+      stale?: boolean;
+      distanceFilter?: number;
+    },
+    callback: (
+      location: BackgroundGeolocationLocation | undefined,
+      error?: BackgroundGeolocationError,
+    ) => void,
+  ): Promise<string>;
+  removeWatcher(options: { id: string }): Promise<void>;
+  openSettings(): Promise<void>;
+}
+
+/** One-shot fix from {@link getCurrentDeviceLocation} — placing a pin, not tracking. */
+export interface NativeCurrentLocation {
+  latitude: number;
+  longitude: number;
+  accuracy?: number;
+}
+
+export type DeviceLocationErrorCode = 'denied' | 'unavailable' | 'timeout';
+
+/** One-shot GPS failure from {@link getCurrentDeviceLocation}. */
+export class DeviceLocationError extends Error {
+  readonly code: DeviceLocationErrorCode;
+
+  constructor(message: string, code: DeviceLocationErrorCode) {
+    super(message);
+    this.name = 'DeviceLocationError';
+    this.code = code;
+  }
+}
+
+export function isDeviceLocationError(error: unknown): error is DeviceLocationError {
+  return error instanceof Error && error.name === 'DeviceLocationError' && 'code' in error;
 }
 
 interface BrowserPlugin {
@@ -106,15 +168,59 @@ interface LocalLlmPlugin {
   ): Promise<PluginListenerHandle>;
 }
 
+/**
+ * `@capacitor/camera`. Stills only — video goes through the system camera via a
+ * file input `capture` attribute. `getPhoto` with `source: CAMERA` uses the OS
+ * camera UI and does not need PhotoKit / `NSPhotoLibraryUsageDescription`.
+ * Do not call `pickImages` / photos permission from here (picker-first library
+ * ingest stays on `<input type="file">` / PHPicker).
+ */
+interface CameraPlugin {
+  getPhoto(options: {
+    quality?: number;
+    allowEditing?: boolean;
+    resultType: 'uri' | 'base64' | 'dataUrl';
+    source?: 'PROMPT' | 'CAMERA' | 'PHOTOS';
+    saveToGallery?: boolean;
+  }): Promise<{
+    dataUrl?: string;
+    webPath?: string;
+    format?: string;
+  }>;
+  requestPermissions?(options?: { permissions?: Array<'camera' | 'photos'> }): Promise<unknown>;
+}
+
+type BarcodeScannerPermissionState = 'prompt' | 'prompt-with-rationale' | 'granted' | 'denied' | 'limited';
+
+/**
+ * `@capacitor-mlkit/barcode-scanning`. Declared locally, not imported from the plugin
+ * package, for the same reason every other plugin interface here is: it keeps the web
+ * bundle free of `@capacitor/*`-family native deps.
+ *
+ * Only the ready-to-use `scan()` surface is used — a full-screen native scanner UI, not
+ * the WebView-overlaid `startScan()`/`stopScan()` pair (which needs its own camera-preview
+ * layout work this app doesn't have). On Android, `scan()` launches Google Play Services'
+ * own scanner activity and resolves the on-demand ML Kit barcode model itself; it does not
+ * consult `checkPermissions`/`requestPermissions` the way iOS does.
+ */
+interface BarcodeScannerPlugin {
+  checkPermissions(): Promise<{ camera: BarcodeScannerPermissionState }>;
+  requestPermissions(): Promise<{ camera: BarcodeScannerPermissionState }>;
+  scan(options?: { formats?: string[] }): Promise<{ barcodes: Array<{ rawValue: string }> }>;
+}
+
 interface CapacitorPlugins {
   SecureStoragePlugin?: SecureStoragePlugin;
   LocalHub?: LocalHubPlugin;
+  BackgroundGeolocation?: BackgroundGeolocationPlugin;
   Browser?: BrowserPlugin;
   App?: AppPlugin;
   SplashScreen?: SplashScreenPlugin;
   StatusBar?: StatusBarPlugin;
   LocalNotifications?: LocalNotificationsPlugin;
   LocalLLM?: LocalLlmPlugin;
+  Camera?: CameraPlugin;
+  BarcodeScanner?: BarcodeScannerPlugin;
 }
 
 export interface LocalNotification {
@@ -338,6 +444,183 @@ export async function openExternalUrl(url: string): Promise<void> {
   }
 }
 
+/**
+ * Starts a `@capacitor-community/background-geolocation` watcher — the one writer for
+ * both iOS and Android native location. No-op (`null`) on web, which keeps using
+ * `navigator.geolocation` instead.
+ *
+ * `options.background`, when true, keeps sampling after the app leaves the foreground
+ * (Android shows a persistent notification while this is active; iOS shows the blue
+ * status-bar indicator). When false, updates are only guaranteed in the foreground on
+ * both platforms. Returns the watcher id `removeBackgroundLocationWatcher` needs, or
+ * `null` if no watcher was started.
+ */
+export async function addBackgroundLocationWatcher(
+  options: { background: boolean; distanceFilter?: number },
+  onLocation: (location: BackgroundGeolocationLocation) => void,
+  onError: (error: BackgroundGeolocationError) => void,
+): Promise<string | null> {
+  const plugin = plugins()?.BackgroundGeolocation;
+
+  if (!isNativePlatform() || !plugin) {
+    return null;
+  }
+
+  return plugin.addWatcher(
+    {
+      requestPermissions: true,
+      distanceFilter: options.distanceFilter,
+      ...(options.background
+        ? {
+            backgroundTitle: 'Recording location',
+            backgroundMessage: 'Companion is recording your location so it can place memories on the map.',
+          }
+        : {}),
+    },
+    (location, error) => {
+      if (error) {
+        onError(error);
+
+        return;
+      }
+
+      if (location) {
+        onLocation(location);
+      }
+    },
+  );
+}
+
+/** Stops a watcher started by {@link addBackgroundLocationWatcher}. No-op on web. */
+export async function removeBackgroundLocationWatcher(id: string): Promise<void> {
+  const plugin = plugins()?.BackgroundGeolocation;
+
+  if (!isNativePlatform() || !plugin) {
+    return;
+  }
+
+  try {
+    await plugin.removeWatcher({ id });
+  } catch {
+    // Already removed, or the plugin is mid-teardown — nothing further to recover.
+  }
+}
+
+/**
+ * Opens the OS location settings screen for the continuous background-tracking
+ * permission (Settings → Location, via the background-geolocation plugin). No-op on web.
+ * For the one-shot "use my location" denied case, see {@link openNativeAppSettings} instead.
+ */
+export async function openNativeLocationSettings(): Promise<void> {
+  const plugin = plugins()?.BackgroundGeolocation;
+
+  if (!isNativePlatform() || !plugin) {
+    return;
+  }
+
+  try {
+    await plugin.openSettings();
+  } catch {
+    // Best-effort — nothing to recover into if the OS refuses.
+  }
+}
+
+/**
+ * iOS-only one-shot high-accuracy fix — e.g. "use my current location" when placing a
+ * pin. Does not enqueue a tracking outbox record. `null` on other platforms/web, where
+ * {@link getCurrentDeviceLocation} falls back to the browser Geolocation API instead.
+ */
+export async function getNativeCurrentLocation(): Promise<NativeCurrentLocation | null> {
+  const hub = plugins()?.LocalHub;
+
+  if (!isIosPlatform() || !hub?.getCurrentLocation) {
+    return null;
+  }
+
+  return hub.getCurrentLocation();
+}
+
+/**
+ * Best available device fix: iOS Core Location when the native plugin is
+ * present, otherwise the browser Geolocation API (Android / web).
+ */
+export async function getCurrentDeviceLocation(): Promise<NativeCurrentLocation> {
+  if (isIosPlatform()) {
+    try {
+      const native = await getNativeCurrentLocation();
+
+      if (native) {
+        return native;
+      }
+    } catch (error) {
+      throw toDeviceLocationError(error);
+    }
+  }
+
+  return webCurrentLocation();
+}
+
+function toDeviceLocationError(error: unknown): DeviceLocationError {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (/denied|restricted/i.test(message)) {
+    return new DeviceLocationError(message, 'denied');
+  }
+
+  if (/timed? ?out/i.test(message)) {
+    return new DeviceLocationError(message, 'timeout');
+  }
+
+  return new DeviceLocationError(message || 'Location is unavailable', 'unavailable');
+}
+
+function webCurrentLocation(): Promise<NativeCurrentLocation> {
+  if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    return Promise.reject(new DeviceLocationError('Geolocation is unavailable', 'unavailable'));
+  }
+
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        });
+      },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          reject(new DeviceLocationError(error.message || 'Location permission was denied', 'denied'));
+
+          return;
+        }
+
+        if (error.code === error.TIMEOUT) {
+          reject(new DeviceLocationError(error.message || 'Timed out waiting for a location fix', 'timeout'));
+
+          return;
+        }
+
+        reject(new DeviceLocationError(error.message || 'Location is unavailable', 'unavailable'));
+      },
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 5_000 },
+    );
+  });
+}
+
+/**
+ * Opens the OS settings screen for the one-shot "use my current location" permission
+ * (`CurrentLocationField`). iOS-only — Android/web show an inline message instead. For
+ * the continuous background-tracking permission, see {@link openNativeLocationSettings}.
+ */
+export async function openNativeAppSettings(): Promise<void> {
+  const hub = plugins()?.LocalHub;
+
+  if (isIosPlatform() && hub?.openAppSettings) {
+    await hub.openAppSettings();
+  }
+}
+
 /** Dismiss the in-app browser after an OIDC redirect. No-op on web or if already closed. */
 export async function closeBrowser(): Promise<void> {
   const browser = plugins()?.Browser;
@@ -555,6 +838,170 @@ export async function scheduleLocalNotification(
   }
 }
 
+/**
+ * Open the system camera for a still. Returns a `File` ready to POST to
+ * `/api/files/upload`, or `null` when the plugin is missing or the user cancels.
+ * Web callers should fall through to a capture file input.
+ */
+export async function takeNativePhoto(): Promise<File | null> {
+  const camera = plugins()?.Camera;
+
+  if (!isNativePlatform() || !camera?.getPhoto) {
+    return null;
+  }
+
+  try {
+    await camera.requestPermissions?.({ permissions: ['camera'] });
+  } catch {
+    // Permission prompt is best-effort; getPhoto will fail clearly if denied.
+  }
+
+  try {
+    const photo = await camera.getPhoto({
+      quality: 90,
+      allowEditing: false,
+      resultType: 'uri',
+      source: 'CAMERA',
+      saveToGallery: false,
+    });
+
+    return nativePhotoToFile(photo);
+  } catch {
+    return null;
+  }
+}
+
+async function nativePhotoToFile(photo: {
+  dataUrl?: string;
+  webPath?: string;
+  format?: string;
+}): Promise<File | null> {
+  const format = (photo.format || 'jpeg').replace(/^jpg$/i, 'jpeg');
+  const ext = format === 'jpeg' ? 'jpg' : format;
+  const name = `IMG_${Date.now()}.${ext}`;
+
+  if (photo.webPath) {
+    try {
+      const response = await fetch(photo.webPath);
+      const blob = await response.blob();
+      const type = blob.type || `image/${format}`;
+
+      return new File([blob], name, { type });
+    } catch {
+      // Fall through to dataUrl if the capacitor file URL could not be read.
+    }
+  }
+
+  if (photo.dataUrl) {
+    return fileFromDataUrl(photo.dataUrl, name, `image/${format}`);
+  }
+
+  return null;
+}
+
+function fileFromDataUrl(dataUrl: string, name: string, fallbackType: string): File | null {
+  const comma = dataUrl.indexOf(',');
+
+  if (comma < 0) {
+    return null;
+  }
+
+  const header = dataUrl.slice(0, comma);
+  const payload = dataUrl.slice(comma + 1);
+  const mime = /data:([^;]+)/.exec(header)?.[1] ?? fallbackType;
+
+  try {
+    const binary = atob(payload);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    return new File([bytes], name, { type: mime });
+  } catch {
+    return null;
+  }
+}
+
+export type BarcodeScanErrorCode = 'denied' | 'unavailable';
+
+/**
+ * Camera-permission refusal or scanner failure from {@link scanQrCode}. The user simply
+ * closing the scanner is not an error — that resolves to `null` instead, matching how
+ * {@link takeNativePhoto} treats a cancelled camera.
+ */
+export class BarcodeScanError extends Error {
+  readonly code: BarcodeScanErrorCode;
+
+  constructor(message: string, code: BarcodeScanErrorCode) {
+    super(message);
+    this.name = 'BarcodeScanError';
+    this.code = code;
+  }
+}
+
+export function isBarcodeScanError(error: unknown): error is BarcodeScanError {
+  return error instanceof Error && error.name === 'BarcodeScanError' && 'code' in error;
+}
+
+/**
+ * Opens the native QR scanner (`@capacitor-mlkit/barcode-scanning`'s ready-to-use `scan()`
+ * — a full-screen native camera UI, not a WebView overlay) and returns the raw decoded
+ * string of the first barcode found. Restricted to the QR format: this is used to read a
+ * Memory Server URL, not a general-purpose barcode reader.
+ *
+ * Returns `null` on web, when the plugin is missing, or when the user backs out of the
+ * scanner without scanning anything — none of those are errors the caller should surface.
+ * Throws {@link BarcodeScanError} with code `'denied'` when camera permission is refused,
+ * and `'unavailable'` for any other scan failure (e.g. no Google Play Services on
+ * Android), so the caller can show a message distinct from a plain cancel.
+ */
+export async function scanQrCode(): Promise<string | null> {
+  const scanner = plugins()?.BarcodeScanner;
+
+  if (!isNativePlatform() || !scanner) {
+    return null;
+  }
+
+  // iOS gates scan() on the OS camera permission; Android's scan() opens Google Play
+  // Services' own scanner activity and manages permission itself, so a 'denied' result
+  // here is only ever meaningful on iOS. Best-effort: if checkPermissions/requestPermissions
+  // itself throws (e.g. an older plugin build), fall through and let scan() fail clearly.
+  try {
+    const current = await scanner.checkPermissions();
+    const needsPrompt = current.camera === 'prompt' || current.camera === 'prompt-with-rationale';
+    const status = needsPrompt ? (await scanner.requestPermissions()).camera : current.camera;
+
+    if (status === 'denied') {
+      throw new BarcodeScanError('Camera access is needed to scan a QR code.', 'denied');
+    }
+  } catch (error) {
+    if (isBarcodeScanError(error)) {
+      throw error;
+    }
+  }
+
+  try {
+    const { barcodes } = await scanner.scan({ formats: ['QR_CODE'] });
+
+    return barcodes[0]?.rawValue ?? null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (/denied|permission/i.test(message)) {
+      throw new BarcodeScanError('Camera access is needed to scan a QR code.', 'denied');
+    }
+
+    if (/cancel/i.test(message)) {
+      // The user backed out of the scanner — not an error.
+      return null;
+    }
+
+    throw new BarcodeScanError('Could not open the scanner.', 'unavailable');
+  }
+}
+
 /** Small deterministic string hash (djb2) for deriving stable notification ids. */
 function hashString(value: string): number {
   let hash = 5381;
@@ -684,11 +1131,10 @@ async function generateLocalStreaming(
  * than importing the web app's decoder: `@ci/common` must not depend on `@ci/fe-web`.
  */
 async function generateRemote(prompt: string, options: GenerateOfflineOptions): Promise<string> {
-  const res = await fetch(buildApiUrl('/api/llm/generate'), {
+  const res = await streamingFetch('/api/llm/generate', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...apiKeyHeaders(),
       ...(options.authToken ? { Authorization: `Bearer ${options.authToken}` } : {}),
     },
     body: JSON.stringify({

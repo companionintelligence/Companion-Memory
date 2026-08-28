@@ -5,6 +5,7 @@ import type {
   LocalHubSecureGetResult,
   LocalHubStartResult,
   LocalHubStatusResult,
+  NativeCurrentLocation,
 } from './definitions';
 
 /**
@@ -48,5 +49,13 @@ export class LocalHubWeb extends WebPlugin implements LocalHubPlugin {
 
   async openUrl(): Promise<void> {
     throw this.unavailable('LocalHub openUrl is only available in the native app.');
+  }
+
+  async getCurrentLocation(): Promise<NativeCurrentLocation> {
+    throw this.unavailable('Current location is only available in the iOS app.');
+  }
+
+  async openAppSettings(): Promise<void> {
+    throw this.unavailable('App Settings is only available in the native app.');
   }
 }

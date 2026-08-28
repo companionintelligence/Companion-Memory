@@ -53,7 +53,7 @@ interface CtiAggregateOptions<TDetail extends ObjectLiteral & { id: string }, TB
    * aggregates whose egress does not compose from the base row.
    */
   baseRepository?: Repository<TBase>;
-  /** `ci.entities.linked_table` provenance value ('inventory', 'events', ...). */
+  /** `ci.entities.linked_table` provenance value ('objects', 'events', ...). */
   linkedTable: string;
   /** Builds the user-scoped detail `where` that authorizes id-addressed operations. */
   scopedWhere: (context: ServiceContext, id: string) => FindOptionsWhere<TDetail>;

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
-import { createHookContext, fetchJson } from '@ci/common';
+import { createHookContext, fetchJson, getApiBaseUrl, isNativePlatform, subscribeApiBaseUrl } from '@ci/common';
 
 import { useAuth } from '@/hooks';
 
@@ -20,6 +20,8 @@ type ReturnValue = {
 
 function useFeatures(): ReturnValue {
   const [{ authToken, initializing, subject }] = useAuth();
+  const origin = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+  const nativeOriginReady = !isNativePlatform() || Boolean(origin);
 
   const [features, setFeatures] = useState<Features>({});
   const [globalFeatures, setGlobalFeatures] = useState<Features>({});
@@ -41,6 +43,10 @@ function useFeatures(): ReturnValue {
   const fetchFeatures = useCallback(
     async (force = false) => {
       if (!authToken) {
+        return;
+      }
+
+      if (!nativeOriginReady) {
         return;
       }
 
@@ -78,27 +84,34 @@ function useFeatures(): ReturnValue {
         }
       }
     },
-    [authToken, subject],
+    [authToken, nativeOriginReady, subject],
   );
 
-  const fetchGlobalFeatures = useCallback(async (force = false) => {
-    if (hasFetchedGlobal.current && !force) {
-      return;
-    }
-
-    try {
-      const data = await fetchJson<Features>('/api/_internal/features/global');
-
-      if (data) {
-        setGlobalFeatures(data);
-        hasFetchedGlobal.current = true;
+  const fetchGlobalFeatures = useCallback(
+    async (force = false) => {
+      if (!nativeOriginReady) {
+        return;
       }
-    } catch (err) {
-      console.error('Failed to fetch features', err);
-    } finally {
-      setGlobalSettled(true);
-    }
-  }, []);
+
+      if (hasFetchedGlobal.current && !force) {
+        return;
+      }
+
+      try {
+        const data = await fetchJson<Features>('/api/_internal/features/global');
+
+        if (data) {
+          setGlobalFeatures(data);
+          hasFetchedGlobal.current = true;
+        }
+      } catch (err) {
+        console.error('Failed to fetch features', err);
+      } finally {
+        setGlobalSettled(true);
+      }
+    },
+    [nativeOriginReady],
+  );
 
   // Per-user flags belong to the session that fetched them, and this provider
   // outlives any one session — it sits above the router, so logging out and back

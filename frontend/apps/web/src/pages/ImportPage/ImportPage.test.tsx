@@ -9,7 +9,11 @@ import { ImportSurface } from './ImportPage';
 vi.mock('@/components/ImportActivity', () => ({
   ImportActivity: ({ className }: { className?: string }) => <div className={className}>import activity</div>,
 }));
-vi.mock('./wizard/ImportWizard', () => ({ ImportWizard: () => <div>wizard surface</div> }));
+vi.mock('./wizard/ImportWizard', () => ({
+  ImportWizard: ({ scroll }: { scroll?: string }) => (
+    <div>wizard surface scroll:{scroll ?? 'contained'}</div>
+  ),
+}));
 vi.mock('./InboxPanel', () => ({ InboxPanel: () => <div>inbox surface</div> }));
 vi.mock('./HistoryTab', () => ({ HistoryTab: () => <div>history surface</div> }));
 
@@ -25,16 +29,26 @@ vi.mock('./HistoryTab', () => ({ HistoryTab: () => <div>history surface</div> })
 describe('ImportSurface', () => {
   // The defect the pinned region exists for: /sources/import opens on Pick — a
   // service picker — and a 13-source import could run for an hour behind it
-  // with nothing on screen saying so. It has to be above the navigation row and
-  // present on EVERY surface, not just the one that happened to start the run.
-  it('pins live import progress above everything, on every surface', () => {
-    render(<ImportSurface />);
+  // with nothing on screen saying so. It has to be present on EVERY surface,
+  // not just the one that happened to start the run.
+  it('pins live import progress outside every panel, on every surface', () => {
+    const { container } = render(<ImportSurface />);
 
+    const surface = container.firstElementChild;
     const activity = screen.getByText('import activity');
 
     expect(activity).toBeInTheDocument();
-    // First child of the surface — above the step row, not tucked under a tab.
-    expect(activity.parentElement?.firstElementChild).toBe(activity);
+    // A direct child of the surface, not of a panel. #2182 moved it from the
+    // very top to below the navigation row, which changes nothing that matters;
+    // moving it INSIDE the wizard/Inbox/History panel would, because it would
+    // then vanish the moment you left the surface that started the run — which
+    // is the entire defect this region exists for.
+    expect(activity.parentElement).toBe(surface);
+    // And ahead of the wizard in the column, so it shares the screen with the
+    // step you are on instead of sitting below it.
+    expect(
+      activity.compareDocumentPosition(screen.getByText(/wizard surface/)) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /history/i }));
     expect(screen.getByText('import activity')).toBeInTheDocument();
@@ -53,29 +67,65 @@ describe('ImportSurface', () => {
    * here rather than inside the component because it is a fact about this
    * host — the Jobs page, whose own page scrolls, deliberately passes none.
    */
-  it('caps the region so the wizard keeps the space it needs', () => {
+  it('does not cap live progress — the path column under the tiles scrolls', () => {
     render(<ImportSurface />);
 
     const activity = screen.getByText('import activity');
 
-    // A MEASURED ceiling, and the number is the assertion. At 1280x800 this
-    // column is 440px: at the old 50% the region took 220px and the picker's
-    // service grid — the default step's entire content — measured ZERO. The cap
-    // is fixed rather than proportional because the thing that must survive is
-    // a grid of fixed-height rows. Raising it re-breaks the picker, so the test
-    // names the value.
-    expect(activity.className).toContain('sm:max-h-[8.5rem]');
-    // And no cap on a phone, where this column is ~200px and half of it is
-    // less than the region's own summary — that clipped it mid-sentence.
+    // The 8.5rem / 50% ceilings existed because this column did not scroll and
+    // a tall region ate the catalog. The tiles stay put; everything under them
+    // shares one scroller, so a long run list just pushes the picker down.
     expect(activity.className).toContain('max-h-none');
+    expect(activity.className).not.toContain('sm:max-h-[8.5rem]');
+    expect(activity.className).not.toContain('sm:max-h-[50%]');
+  });
+
+  it('lets the host column be the only scroller', () => {
+    render(<ImportSurface />);
+
+    const wizard = screen.getByText(/wizard surface/);
+    expect(wizard).toHaveTextContent('scroll:page');
+    expect(wizard.parentElement?.className).not.toMatch(/overflow-hidden/);
+  });
+
+  it('lets the onboarding host be the only scroller', () => {
+    render(<ImportSurface variant="onboarding" />);
+
+    const wizard = screen.getByText(/wizard surface/);
+    expect(wizard).toHaveTextContent('scroll:page');
+    expect(wizard.parentElement?.className).not.toMatch(/overflow-hidden/);
+    expect(screen.queryByRole('heading', { name: 'Import' })).not.toBeInTheDocument();
   });
 
   it('opens on the wizard', () => {
     render(<ImportSurface />);
 
-    expect(screen.getByText('wizard surface')).toBeInTheDocument();
+    expect(screen.getByText(/wizard surface/)).toBeInTheDocument();
     expect(screen.queryByText('inbox surface')).not.toBeInTheDocument();
     expect(screen.queryByText('history surface')).not.toBeInTheDocument();
+  });
+
+  // The surface renders its own path header, because the Inbox and History
+  // controls sit on it and they belong to this component's state.
+  it('introduces the path above its content', () => {
+    render(<ImportSurface />);
+
+    expect(screen.getByRole('heading', { name: 'Import' })).toBeInTheDocument();
+    expect(screen.getByText('Effort')).toBeInTheDocument();
+    expect(screen.getByText(/wait hours or days/i)).toBeInTheDocument();
+  });
+
+  // Level with the name of the path they belong to, not at the end of the step
+  // row — where they read as a fourth and fifth step of a sequence they are no
+  // part of.
+  it('puts Inbox and History on the heading, not in the step row', () => {
+    render(<ImportSurface />);
+
+    const views = screen.getByRole('group', { name: /other import views/i });
+
+    expect(views).toBeInTheDocument();
+    expect(views.closest('header')).not.toBeNull();
+    expect(views.closest('ol')).toBeNull();
   });
 
   it('switches to the Inbox', () => {
@@ -92,7 +142,7 @@ describe('ImportSurface', () => {
     expect(screen.getByText('history surface')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Pick/ }));
-    expect(screen.getByText('wizard surface')).toBeInTheDocument();
+    expect(screen.getByText(/wizard surface/)).toBeInTheDocument();
   });
 
   it('pressing the surface you are on returns to the wizard', () => {
@@ -136,7 +186,7 @@ describe('ImportSurface', () => {
   it('keeps the wizard mounted across a trip to History', () => {
     render(<ImportSurface />);
 
-    const wizard = screen.getByText('wizard surface');
+    const wizard = screen.getByText(/wizard surface/);
 
     fireEvent.click(screen.getByRole('button', { name: /history/i }));
 
@@ -145,6 +195,6 @@ describe('ImportSurface', () => {
     expect(wizard.closest('[hidden], .hidden')).not.toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /Pick/ }));
-    expect(screen.getByText('wizard surface')).toBe(wizard);
+    expect(screen.getByText(/wizard surface/)).toBe(wizard);
   });
 });

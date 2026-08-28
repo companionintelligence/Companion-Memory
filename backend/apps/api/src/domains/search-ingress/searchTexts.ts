@@ -57,6 +57,74 @@ function joinParts(parts: Set<string>): string | null {
   return result.length > 0 ? result : null;
 }
 
+/**
+ * Human-readable values out of a shallow jsonb bag: the primitives, plus the
+ * primitives inside one level of array. Keys are deliberately DROPPED — a
+ * product's `{color: "Blue Titanium", capacity: "256GB"}` should index as
+ * "Blue Titanium 256GB", not as the schema words "color" and "capacity", which
+ * nobody searches for and which would pollute every product's vector with the
+ * same handful of tokens.
+ *
+ * Shallow on purpose: a spec sheet nests arbitrarily deep, and flattening the
+ * whole tree turns one product into a wall of text that drowns its own title.
+ */
+function jsonTextValues(bag: Record<string, unknown> | null | undefined): string[] {
+  const values: string[] = [];
+
+  const push = (value: unknown) => {
+    if (typeof value === 'string') {
+      const normalized = value.trim();
+
+      if (normalized.length > 0) {
+        values.push(normalized);
+      }
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      values.push(String(value));
+    }
+  };
+
+  for (const value of Object.values(bag ?? {})) {
+    if (Array.isArray(value)) {
+      for (const element of value) {
+        push(element);
+      }
+    } else {
+      push(value);
+    }
+  }
+
+  return values;
+}
+
+/**
+ * Both forms of every identifier claim, de-duplicated and order-stable.
+ *
+ * The NORMALIZED value is what resolution matches on; the RAW value is what is
+ * PRINTED on the thing, and a user searching for a serial types what they can
+ * see ("SN 1234-5678"), not the normalizer's output. Indexing only one of the
+ * two loses half the queries — so index both, unless they are the same string.
+ *
+ * Shared by the item and product index paths: a claim reads the same whether
+ * its subject is an owned unit or a catalog model.
+ */
+export function identifierSearchValues(
+  claims: ReadonlyArray<{ valueNormalized: string; valueRaw?: string | null }>,
+): string[] {
+  const values = new Set<string>();
+
+  for (const claim of claims) {
+    for (const value of [claim.valueNormalized, claim.valueRaw]) {
+      const normalized = typeof value === 'string' ? value.trim() : '';
+
+      if (normalized.length > 0) {
+        values.add(normalized);
+      }
+    }
+  }
+
+  return Array.from(values);
+}
+
 // ---------------------------------------------------------------------------
 // content
 // ---------------------------------------------------------------------------
@@ -499,6 +567,28 @@ export interface ItemSearchFields {
    */
   colors?: string[] | null;
   materials?: string[] | null;
+  /**
+   * Identifier values this unit claims (`ci.object_identifiers`, subject_type
+   * `object_instance`) — serials, its own barcodes, an IMEI. Both the
+   * normalized and the raw form, because a user retypes what is PRINTED on the
+   * thing ("SN: 1234-5678"), not what the normalizer stored.
+   *
+   * The strongest possible query: a serial matches exactly one thing in the
+   * whole corpus, so it outweighs everything except the name.
+   */
+  identifierValues?: string[] | null;
+  /**
+   * Text from the CATALOG model this unit is an instance of
+   * (`ci.objects.product_id` → `ci.product_models`). Denormalized into the
+   * unit's own index entry so "where are my Bose QC45" finds the unit even
+   * though its own row says only "headphones" — the brand words live on the
+   * model, and the search index has no join back to it.
+   */
+  productTitle?: string | null;
+  productBrand?: string | null;
+  productModelNumber?: string | null;
+  productCategory?: string | null;
+  productSubcategory?: string | null;
 }
 
 export function itemSearchDocument(item: ItemSearchFields): string | null {
@@ -514,6 +604,18 @@ export function itemSearchDocument(item: ItemSearchFields): string | null {
   pushPart(parts, item.lastSeenPlaceName ?? null);
   pushPart(parts, item.colors?.join(' ') ?? null);
   pushPart(parts, item.materials?.join(' ') ?? null);
+
+  // Identifiers and the catalog model. `parts` is a Set, so a model whose title
+  // repeats the unit's own brand/name contributes nothing twice.
+  for (const value of item.identifierValues ?? []) {
+    pushPart(parts, value);
+  }
+
+  pushPart(parts, item.productTitle ?? null);
+  pushPart(parts, item.productBrand ?? null);
+  pushPart(parts, item.productModelNumber ?? null);
+  pushPart(parts, item.productCategory ?? null);
+  pushPart(parts, item.productSubcategory ?? null);
 
   return joinParts(parts);
 }
@@ -560,6 +662,36 @@ export function itemWeightedTexts(item: ItemSearchFields): WeightedText[] {
     parts.push({ text: item.materials.join(' '), weight: 3 });
   }
 
+  // Weight 8 ('A' band, alongside the last-seen place): a serial or a barcode
+  // is the most selective query a user can type — it names exactly one thing —
+  // so it must outrank every descriptive field. Only the unit's own name, which
+  // is what the user CALLS it, ranks higher.
+  if (item.identifierValues?.length) {
+    parts.push({ text: item.identifierValues.join(' '), weight: 8 });
+  }
+
+  // Catalog-model text at the same weight as the unit's own brand/model: it IS
+  // the unit's brand/model, just stored once on the shared model row.
+  if (item.productTitle) {
+    parts.push({ text: item.productTitle, weight: 5 });
+  }
+
+  if (item.productBrand) {
+    parts.push({ text: item.productBrand, weight: 5 });
+  }
+
+  if (item.productModelNumber) {
+    parts.push({ text: item.productModelNumber, weight: 5 });
+  }
+
+  if (item.productCategory) {
+    parts.push({ text: item.productCategory, weight: 3 });
+  }
+
+  if (item.productSubcategory) {
+    parts.push({ text: item.productSubcategory, weight: 3 });
+  }
+
   if (item.maintenanceNotes) {
     const maintenanceNotes =
       typeof item.maintenanceNotes === 'string'
@@ -568,6 +700,214 @@ export function itemWeightedTexts(item: ItemSearchFields): WeightedText[] {
     if (maintenanceNotes.length > 0) {
       parts.push({ text: maintenanceNotes, weight: 1 });
     }
+  }
+
+  return parts;
+}
+
+// ---------------------------------------------------------------------------
+// product
+// ---------------------------------------------------------------------------
+
+export interface ProductSearchFields {
+  title?: string | null;
+  brand?: string | null;
+  manufacturer?: string | null;
+  modelNumber?: string | null;
+  category?: string | null;
+  subcategory?: string | null;
+  productType?: string | null;
+  description?: string | null;
+  /**
+   * Identifier values claimed by the MODEL (`ci.object_identifiers`,
+   * subject_type `product_model`) — GTIN/UPC/EAN, ASIN, ISBN. Normalized and
+   * raw, for the same reason items carry both: a user types the digits printed
+   * on the box, hyphens and all.
+   */
+  identifierValues?: string[] | null;
+  /** Variant AXES ({color, capacity, size}) — "256GB Blue Titanium". */
+  variantAttributes?: Record<string, unknown> | null;
+  /** Descriptive specs. Indexed at the lowest weight; a spec sheet is bulk. */
+  spec?: Record<string, unknown> | null;
+}
+
+export function productSearchDocument(product: ProductSearchFields): string | null {
+  const parts = new Set<string>();
+
+  pushPart(parts, product.title ?? null);
+  pushPart(parts, product.brand ?? null);
+  pushPart(parts, product.manufacturer ?? null);
+  pushPart(parts, product.modelNumber ?? null);
+  pushPart(parts, product.description ?? null);
+  pushPart(parts, product.category ?? null);
+  pushPart(parts, product.subcategory ?? null);
+  pushPart(parts, product.productType ?? null);
+
+  for (const value of product.identifierValues ?? []) {
+    pushPart(parts, value);
+  }
+
+  // Variant axes only. `spec` is deliberately absent from the DOCUMENT: it is
+  // the longest field on the row and the least likely to be searched in
+  // natural language, so it would dominate the embedding while adding nothing.
+  // It still reaches the keyword index below, at the lowest weight.
+  for (const value of jsonTextValues(product.variantAttributes)) {
+    pushPart(parts, value);
+  }
+
+  return joinParts(parts);
+}
+
+export function productWeightedTexts(product: ProductSearchFields): WeightedText[] {
+  const parts: WeightedText[] = [];
+
+  if (product.title) {
+    parts.push({ text: product.title, weight: 10 });
+  }
+
+  // A GTIN identifies the model exactly — same reasoning as an item's serial.
+  if (product.identifierValues?.length) {
+    parts.push({ text: product.identifierValues.join(' '), weight: 8 });
+  }
+
+  if (product.brand) {
+    parts.push({ text: product.brand, weight: 5 });
+  }
+
+  if (product.manufacturer) {
+    parts.push({ text: product.manufacturer, weight: 5 });
+  }
+
+  if (product.modelNumber) {
+    parts.push({ text: product.modelNumber, weight: 5 });
+  }
+
+  if (product.description) {
+    parts.push({ text: product.description, weight: 5 });
+  }
+
+  if (product.category) {
+    parts.push({ text: product.category, weight: 3 });
+  }
+
+  if (product.subcategory) {
+    parts.push({ text: product.subcategory, weight: 3 });
+  }
+
+  if (product.productType) {
+    parts.push({ text: product.productType, weight: 3 });
+  }
+
+  const variantValues = jsonTextValues(product.variantAttributes);
+
+  if (variantValues.length > 0) {
+    parts.push({ text: variantValues.join(' '), weight: 3 });
+  }
+
+  const specValues = jsonTextValues(product.spec);
+
+  if (specValues.length > 0) {
+    parts.push({ text: specValues.join(' '), weight: 1 });
+  }
+
+  return parts;
+}
+
+// ---------------------------------------------------------------------------
+// receipt
+// ---------------------------------------------------------------------------
+
+export interface ReceiptSearchFields {
+  merchantName?: string | null;
+  orderNumber?: string | null;
+  paymentMethod?: string | null;
+  paymentLast4?: string | null;
+  channel?: string | null;
+  purchasedAt?: Date | string | null;
+  /** OCR / text layer. The bulk of a receipt's words, and the least precise. */
+  rawText?: string | null;
+  /** Line-item descriptions, in line order — what was actually bought. */
+  lineDescriptions?: string[] | null;
+  /** Brands and model numbers named by the lines. */
+  lineBrands?: string[] | null;
+}
+
+export function receiptSearchDocument(receipt: ReceiptSearchFields): string | null {
+  const parts = new Set<string>();
+
+  pushPart(parts, receipt.merchantName ?? null);
+
+  for (const description of receipt.lineDescriptions ?? []) {
+    pushPart(parts, description);
+  }
+
+  for (const brand of receipt.lineBrands ?? []) {
+    pushPart(parts, brand);
+  }
+
+  pushPart(parts, receipt.orderNumber ?? null);
+
+  // "the Home Depot receipt from March" — the raw timestamp does not tokenize
+  // into anything a user types, so the same calendar tokens events carry.
+  for (const token of captureDateTokens(receipt.purchasedAt)) {
+    pushPart(parts, token);
+  }
+
+  pushPart(parts, receipt.channel ?? null);
+  pushPart(parts, receipt.paymentMethod ?? null);
+  pushPart(parts, receipt.rawText ?? null);
+
+  return joinParts(parts);
+}
+
+export function receiptWeightedTexts(receipt: ReceiptSearchFields): WeightedText[] {
+  const parts: WeightedText[] = [];
+
+  // The merchant is what a receipt is CALLED — the title slot of this type.
+  if (receipt.merchantName) {
+    parts.push({ text: receipt.merchantName, weight: 10 });
+  }
+
+  // An order number is looked up verbatim, off a confirmation email.
+  if (receipt.orderNumber) {
+    parts.push({ text: receipt.orderNumber, weight: 8 });
+  }
+
+  const lineDescriptions = (receipt.lineDescriptions ?? []).filter((text) => text.trim().length > 0);
+
+  if (lineDescriptions.length > 0) {
+    parts.push({ text: lineDescriptions.join(' '), weight: 5 });
+  }
+
+  const lineBrands = (receipt.lineBrands ?? []).filter((text) => text.trim().length > 0);
+
+  if (lineBrands.length > 0) {
+    parts.push({ text: lineBrands.join(' '), weight: 5 });
+  }
+
+  const dateTokens = captureDateTokens(receipt.purchasedAt);
+
+  if (dateTokens.length > 0) {
+    parts.push({ text: dateTokens.join(' '), weight: 3 });
+  }
+
+  if (receipt.channel) {
+    parts.push({ text: receipt.channel, weight: 1 });
+  }
+
+  if (receipt.paymentMethod) {
+    parts.push({ text: receipt.paymentMethod, weight: 1 });
+  }
+
+  if (receipt.paymentLast4) {
+    parts.push({ text: receipt.paymentLast4, weight: 1 });
+  }
+
+  // Lowest band: the OCR dump is where the merchant/total/line words came from
+  // in the first place, so it mostly repeats higher-weighted parts — but it is
+  // the only place an un-extracted receipt's words live at all.
+  if (receipt.rawText) {
+    parts.push({ text: receipt.rawText, weight: 1 });
   }
 
   return parts;

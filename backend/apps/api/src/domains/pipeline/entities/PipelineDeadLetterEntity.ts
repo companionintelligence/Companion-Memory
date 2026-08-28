@@ -66,6 +66,15 @@ export class PipelineDeadLetterEntity {
    * Stamped once the letter has been re-emitted. Non-NULL rows are excluded
    * from the replay queue (`pipeline_dead_letters_unreplayed_idx`), so "replay
    * all" is safe to run twice.
+   *
+   * It is also the retention horizon. `DeadLetterReaperListener.purgeReplayed`
+   * deletes rows whose stamp is older than
+   * `queues.replayedDeadLetterRetentionDays`, walking them oldest-first through
+   * the mirror-image partial index `pipeline_dead_letters_replayed_idx ... WHERE
+   * replayed_at IS NOT NULL` (migration 20260821072457). A NULL here is
+   * permanent: an unreplayed letter has no TTL, which is the promise the table
+   * was created with and the reason the purge's predicate is exactly this
+   * column being non-NULL.
    */
   @Column({ type: 'timestamptz', name: 'replayed_at', nullable: true })
   replayedAt!: Date | null;

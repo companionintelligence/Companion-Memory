@@ -3,6 +3,23 @@ import type { RequestContext } from '@ci/common/context';
 import type { ApiKeyCapability } from '@ci/common/decorators';
 
 /**
+ * Where an intent is being dispatched from.
+ *
+ * Canonical home for this type: `core/types.ts` is foundational to every `policy/*` module
+ * (dispatchPolicy and capabilityPolicy both import intent types from here), so defining it here
+ * — rather than in `policy/dispatchPolicy.ts`, which then re-exports it — keeps that dependency
+ * one-directional. The reverse used to be a type-only import, which avoids a RUNTIME cycle but
+ * not the module-graph one `no-circular` checks.
+ *
+ * - `appliance` — the CI-Server itself: full corpus, network, and the user's own authority.
+ * - `local` — the on-device tier (the mobile Local Hub sidecar / on-device model), running against
+ *   a partial mirror, possibly offline, and with no way to ask the appliance anything right now.
+ */
+export const DISPATCH_TIERS = ['appliance', 'local'] as const;
+
+export type DispatchTier = (typeof DISPATCH_TIERS)[number];
+
+/**
  * JSON Schema definition for tool parameters
  */
 export interface JSONSchema {
@@ -55,7 +72,9 @@ export type IntentDomainKey =
   | 'brief'
   | 'insights'
   | 'anomalies'
-  | 'suggestions';
+  | 'suggestions'
+  | 'messaging'
+  | 'mcp';
 
 /** What an intent does to the user's data. Drives confirmation/guardrails. */
 export type IntentAccess = 'read' | 'write' | 'delete';
@@ -141,6 +160,21 @@ export interface IntentDefinition {
    * it is {@link resolveDispatch}'s answer, which also refuses destructive/external intents.
    */
   localCapable: boolean;
+  /**
+   * The user this tool belongs to, when it is not a capability of the appliance itself.
+   *
+   * Absent on every native intent — `memory.recall` is the same tool for everyone, and the tool
+   * scopes its own reads by the caller's `context.userId`. Set only by a provider whose tools are
+   * materialized from ONE user's stored configuration and carry that user's credentials: today
+   * exactly the MCP-client provider, where a tool is a bound call into a server that a specific
+   * user configured, authenticated with the secrets that user saved.
+   *
+   * The {@link ToolRegistry} is a process-global map keyed by tool name, so without this field a
+   * tool built from one user's config is listed to — and executable by — every other account on
+   * the appliance. `getAvailableTools` hides an owned tool from anyone but its owner, and
+   * `executeTool` refuses it, so ownership is enforced rather than merely advertised.
+   */
+  ownerUserId?: string;
   /** Entity types this tool reads. */
   consumes?: CiEntityType[];
   /** Entity types this tool returns. */
@@ -227,4 +261,25 @@ export interface ToolExecutionContext extends RequestContext {
  */
 export interface ToolInvocationContext extends RequestContext {
   capability: ApiKeyCapability;
+  /**
+   * Which tier this call is being dispatched from. Defaults to `'appliance'` —
+   * the server acting as itself, which is every in-process dispatcher.
+   *
+   * A caller that names `'local'` is telling the appliance the request
+   * originated on the on-device tier, which is what makes `resolveDispatch`'s
+   * three `queue` reasons reachable at this chokepoint: the device may be able
+   * to REACH the appliance and still be the wrong place to have confirmed a
+   * deletion or an outbound message. `IntentsController` accepts it as
+   * `?tier=local` on the execute route, the same vocabulary the manifest route
+   * already publishes rulings under.
+   */
+  tier?: DispatchTier;
+  /**
+   * The `ci.pending_actions` row this call is the confirmed replay of.
+   *
+   * NOT a bearer token: the gate re-reads the row and honours it only if it
+   * exists, belongs to `userId`, and is `approved`. It never affects the
+   * capability check, which runs first and unconditionally.
+   */
+  pendingActionId?: string;
 }

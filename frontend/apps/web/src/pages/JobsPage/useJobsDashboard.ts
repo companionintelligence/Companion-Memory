@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 
-import { useAuth } from '@/hooks';
+import { readJobsSnapshot, writeJobsSnapshot } from './jobsSnapshots';
+import { useJobsAuth } from './useJobsAuth';
 
 /** Why a job failed, lifted server-side out of `pgboss.job.output`. */
 export interface JobFailure {
@@ -83,9 +84,25 @@ export interface CronSchedule {
   readonly name: string;
   readonly cron: string;
   readonly timezone?: string | null;
+  /**
+   * Whether the scheduler has this job started — not whether it works. The
+   * `@Cron` wrapper catches, logs and returns, so a schedule whose body throws
+   * on every tick stays started forever. Read with `lastSuccessAt` and
+   * `overdue`, never alone.
+   */
   readonly running: boolean;
   readonly nextRunAt: string | null;
+  /** Last *attempt*: stamped before the body, so a tick that threw still counts. */
   readonly lastRunAt: string | null;
+  /** Last tick whose body returned without throwing. Null until one does. */
+  readonly lastSuccessAt: string | null;
+  /**
+   * The schedule's own expression says it should have fired by now and no
+   * attempt was recorded for that fire. Computed server-side, where the cron
+   * expression can actually be evaluated; false while nothing has ever run, so
+   * a fresh appliance does not light up every row.
+   */
+  readonly overdue: boolean;
 }
 
 export interface JobsDashboardResponse {
@@ -110,63 +127,85 @@ export interface JobsDashboardResponse {
   readonly queues: readonly JobQueue[];
 }
 
+/** Cache key for the one payload this hook reads. */
+const DASHBOARD_SNAPSHOT = '/api/jobs/dashboard';
+
 export function useJobsDashboard(refreshIntervalMs = 15000) {
-  const [data, setData] = useState<JobsDashboardResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  // Read once, at mount. Coming back to Jobs paints the previous snapshot on
+  // the first frame instead of a skeleton, and the fetch below lands under it.
+  const [restored] = useState(() => readJobsSnapshot<JobsDashboardResponse>(DASHBOARD_SNAPSHOT));
+
+  const [data, setData] = useState<JobsDashboardResponse | null>(restored?.value ?? null);
+  const [loading, setLoading] = useState<boolean>(restored == null);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [staleSince, setStaleSince] = useState<Date | null>(null);
-  const [updatedAt, setUpdatedAt] = useState<Date | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<Date | null>(restored ? new Date(restored.at) : null);
 
-  const [{ authToken }] = useAuth();
-  const isInitialLoad = useRef(true);
+  const { ready, headers } = useJobsAuth();
 
-  const load = useCallback(async () => {
-    if (!authToken) {
-      return;
-    }
+  // A restored snapshot means this mount is not a first load: a failure here
+  // belongs in the stale banner over data that is already on screen, not in a
+  // full-page error that throws that data away.
+  const isInitialLoad = useRef(restored == null);
 
-    if (isInitialLoad.current) {
-      setLoading(true);
-      setError(null);
-    }
-
-    try {
-      const response = await fetchJson<JobsDashboardResponse>('/api/jobs/dashboard', {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-        },
-      });
-
-      setData(response ?? null);
-      setLoading(false);
-      setError(null);
-      setStaleSince(null);
-      setUpdatedAt(new Date());
-      isInitialLoad.current = false;
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-
-      if (isInitialLoad.current) {
-        setError(message);
-        setLoading(false);
-
+  const load = useCallback(
+    async ({ background = false }: { background?: boolean } = {}) => {
+      if (!ready) {
         return;
       }
 
-      // A refresh that fails after the first success used to be swallowed
-      // entirely, leaving a page that looks live — auto-refreshing, timestamps
-      // ticking — while showing numbers frozen at whenever the API last
-      // answered. On a queue dashboard that is the worst possible failure: an
-      // operator watching a backlog drain cannot tell "nothing changed" from
-      // "nothing is being reported". Keep showing the last good data, but say
-      // out loud that it is the last good data.
-      setStaleSince((current) => current ?? new Date());
-      setError(message);
-    }
-  }, [authToken]);
+      if (isInitialLoad.current) {
+        setLoading(true);
+        setError(null);
+      }
+
+      // Interval ticks pass `background`. Spinning the header every fifteen
+      // seconds would make the indicator meaningless — it is there to answer
+      // "did my pull/click do anything", which a poll never asks.
+      if (!background) {
+        setRefreshing(true);
+      }
+
+      try {
+        const response = await fetchJson<JobsDashboardResponse>('/api/jobs/dashboard', { headers });
+
+        setData(response ?? null);
+        setLoading(false);
+        setError(null);
+        setStaleSince(null);
+        setUpdatedAt(new Date(response ? writeJobsSnapshot(DASHBOARD_SNAPSHOT, response).at : Date.now()));
+        isInitialLoad.current = false;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+
+        if (isInitialLoad.current) {
+          setError(message);
+          setLoading(false);
+
+          return;
+        }
+
+        // A refresh that fails after the first success used to be swallowed
+        // entirely, leaving a page that looks live — auto-refreshing, timestamps
+        // ticking — while showing numbers frozen at whenever the API last
+        // answered. On a queue dashboard that is the worst possible failure: an
+        // operator watching a backlog drain cannot tell "nothing changed" from
+        // "nothing is being reported". Keep showing the last good data, but say
+        // out loud that it is the last good data.
+        setStaleSince((current) => current ?? new Date());
+        setError(message);
+      } finally {
+        if (!background) {
+          setRefreshing(false);
+        }
+      }
+    },
+    [ready, headers],
+  );
 
   useEffect(() => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
@@ -184,15 +223,22 @@ export function useJobsDashboard(refreshIntervalMs = 15000) {
         return;
       }
 
-      void load();
+      void load({ background: true });
     }, refreshIntervalMs);
 
     return () => window.clearInterval(handle);
-  }, [authToken, load, refreshIntervalMs]);
+  }, [ready, load, refreshIntervalMs]);
 
   return {
     data,
+    /** No payload to render yet. A restored snapshot means this is never true. */
     loading,
+    /**
+     * A fetch is in flight over data that is already on screen — the mount
+     * refetch behind a restored snapshot, or an explicit refresh. Drives a
+     * spinner; never a skeleton, because nothing is being replaced.
+     */
+    refreshing,
     error,
     /** Set when refreshes are failing but stale data is still on screen. */
     staleSince,

@@ -289,6 +289,7 @@ class LocalLlmPlugin : Plugin() {
         }
 
         pluginScope.launch {
+            LocalLlmGenerationService.start(context)
             try {
                 val text = engine.generate(prompt)
                 val ret = JSObject()
@@ -296,8 +297,12 @@ class LocalLlmPlugin : Plugin() {
                 call.resolve(ret)
             } catch (e: CancellationException) {
                 call.reject("Generation was cancelled")
+            } catch (e: LocalLlmEngine.ThermallyThrottledException) {
+                call.reject(e.message)
             } catch (e: Exception) {
                 call.reject("Generation failed: ${e.message}", e)
+            } finally {
+                LocalLlmGenerationService.stop(context)
             }
         }
     }
@@ -315,6 +320,7 @@ class LocalLlmPlugin : Plugin() {
         }
 
         pluginScope.launch {
+            LocalLlmGenerationService.start(context)
             try {
                 engine.generateStreaming(prompt) { partial, done ->
                     val event = JSObject()
@@ -329,8 +335,12 @@ class LocalLlmPlugin : Plugin() {
                 event.put("done", true)
                 notifyListeners(EVENT_TOKEN, event)
                 call.resolve()
+            } catch (e: LocalLlmEngine.ThermallyThrottledException) {
+                call.reject(e.message)
             } catch (e: Exception) {
                 call.reject("Generation failed: ${e.message}", e)
+            } finally {
+                LocalLlmGenerationService.stop(context)
             }
         }
     }

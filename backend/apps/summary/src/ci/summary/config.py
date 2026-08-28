@@ -5,6 +5,7 @@ Configuration management for CI-Summary Service.
 import logging
 import os
 from functools import lru_cache
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import Field, field_validator
@@ -22,6 +23,63 @@ def _require_env(name: str) -> str:
     if not value:
         raise ValueError(f"Missing required environment variable: {name}")
     return value
+
+
+def openai_v1_base(host: str) -> str:
+    """Normalize an Ollama/OpenAI host to a `/v1` base URL."""
+    base = host.strip().rstrip("/")
+    if not base:
+        return ""
+    return base if base.endswith("/v1") else f"{base}/v1"
+
+
+def resolve_embedding_api_base(llm_api_base: str) -> str:
+    """
+    Embeddings stay on Ollama even when chat is pointed at vLLM.
+
+    The API already splits this (`OLLAMA_EMBED_HOST` vs `LLM_API_BASE`). Summary
+    used to POST `/v1/embeddings` at the chat backend, which 404s on a chat-only
+    vLLM and silently stores zero vectors.
+    """
+    explicit = os.getenv("EMBEDDING_API_BASE", "").strip()
+    if explicit:
+        return openai_v1_base(explicit)
+
+    ollama_host = (
+        os.getenv("OLLAMA_EMBED_HOST")
+        or os.getenv("CI_OLLAMA_EMBED_HOST")
+        or os.getenv("OLLAMA_HOST")
+        or ""
+    ).strip()
+    if ollama_host:
+        return openai_v1_base(ollama_host)
+
+    return openai_v1_base(llm_api_base)
+
+
+def resolve_embedding_api_key() -> str:
+    return os.getenv("EMBEDDING_API_KEY", "").strip() or "ollama"
+
+
+def _default_output_mode() -> str:
+    explicit = os.getenv("SUMMARY_OUTPUT_MODE")
+    if explicit:
+        return explicit.lower()
+
+    # Native json_schema is an Ollama feature. vLLM typically rejects it (or
+    # accepts it and then thinks for minutes); either way the first attempt
+    # occupies the GPU before we fall back to prompted. Skip that when chat
+    # is not Ollama.
+    try:
+        port = urlparse(os.getenv("LLM_API_BASE", "")).port
+    except ValueError:
+        port = None
+
+    if port == 11434:
+        return "native"
+    if port:
+        return "prompted"
+    return "native"
 
 
 def _llm_model_from_env() -> str:
@@ -66,9 +124,7 @@ class Settings(BaseSettings):
     #   native   — Ollama json_schema response_format (server-enforced; default)
     #   prompted — schema in the prompt, parse the text reply (model-agnostic)
     #   tool     — original tool-calling behaviour
-    output_mode: str = Field(
-        default_factory=lambda: os.getenv("SUMMARY_OUTPUT_MODE", "native").lower()
-    )
+    output_mode: str = Field(default_factory=_default_output_mode)
     # How many times pydantic-ai re-asks the model when its output fails schema
     # validation, before the activity gives up.
     output_retries: int = Field(

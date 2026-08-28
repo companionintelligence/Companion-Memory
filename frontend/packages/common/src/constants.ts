@@ -10,6 +10,8 @@ export const ENTITY_TYPE_REVERSE_MAP = {
   person: 'Person',
   place: 'Place',
   item: 'Thing',
+  product: 'Product',
+  receipt: 'Receipt',
 };
 
 export const ENTITY_TYPE_MAP = {
@@ -26,6 +28,11 @@ export const ENTITY_TYPE_MAP = {
   Person: 'person',
   Place: 'place',
   Thing: 'item',
+  // The catalog model an owned Thing is an instance of, and the purchase
+  // document that minted it. Both are search-union members server-side
+  // (SearchResultType), so they are selectable in the What picker.
+  Product: 'product',
+  Receipt: 'receipt',
 };
 
 /**

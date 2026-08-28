@@ -3,10 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
+import { GraphIngestService } from '@ci/domains/graph';
 import { ContentService, EventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
+import { upsertContentForEvent } from './linkContentToEvent';
 import type { SpotifyShow } from './types';
 
 @Injectable()
@@ -14,6 +16,7 @@ export class SpotifySavedShowsTransformService {
   constructor(
     private readonly contentService: ContentService,
     private readonly eventService: EventService,
+    private readonly graph: GraphIngestService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(SpotifySavedShowsTransformService.name);
@@ -66,22 +69,42 @@ export class SpotifySavedShowsTransformService {
           //Audiobooks are technically stored as shows in the Spotify API, so they show
           //up in both Saved Shows and Saved Audiobooks. But in Saved Shows, they are
           //listed as type 'show', while the audiobooks endpoint returns them as type 'audiobook.
-          //If the audiobook has already been imported from the audiobooks endpoint, then we
-          //will skip it.
+          //If the audiobook has already been imported from the audiobooks endpoint, then
+          //the save is linked to that row instead of creating a duplicate 'Show'.
           const existingShowIsAudiobook = await this.contentService.search(context, {
             type: 'Audiobook',
             external_id: show.id,
           });
 
-          if (existingShow.length > 0 || existingShowIsAudiobook.length > 0) {
-            this.logger.debug('Show already exists, skipping', {
-              showId: show.id,
-              showName: show.name,
-            });
-            skippedCount++;
-          } else {
-            // Create new content entry for the show
-            await this.contentService.create(context, {
+          // The save is the event; the show is content shared with every other
+          // save of it. Event first so the content row can point at it.
+          const [event] = showItem.added_at
+            ? await this.eventService.create(context, {
+                connection_id: connection.id,
+                title: `Saved ${existingShowIsAudiobook.length > 0 ? 'audiobook' : 'show'} ${show.name}`,
+                description: `Saved ${show.name} on Spotify at ${showItem.added_at}`,
+                event_type: 'favorite',
+                start_time: new Date(showItem.added_at),
+                duration_minutes: 0,
+                metadata: {
+                  show_id: show.id,
+                  total_episodes: show.total_episodes,
+                  media_type: show.media_type,
+                  explicit: show.explicit,
+                  uri: show.uri,
+                },
+              })
+            : [];
+
+          const { created } = await upsertContentForEvent({
+            context,
+            contentService: this.contentService,
+            graph: this.graph,
+            logger: this.logger,
+            existing: [...existingShowIsAudiobook, ...existingShow],
+            eventId: event?.id,
+            input: {
+              connection_id: connection.id,
               title: show.name,
               type: 'Show',
               url: show.external_urls?.spotify || '',
@@ -103,27 +126,17 @@ export class SpotifySavedShowsTransformService {
                 total_episodes: show.total_episodes,
                 added_at: showItem.added_at,
               },
-            });
+            },
+          });
 
+          if (created) {
             createdCount++;
-          }
-
-          // Create event for saving the show
-          if (showItem.added_at) {
-            await this.eventService.create(context, {
-              title: `Saved ${existingShowIsAudiobook.length > 0 ? 'audiobook' : 'show'} ${show.name}`,
-              description: `Saved ${show.name} on Spotify at ${showItem.added_at}`,
-              event_type: 'favorite',
-              start_time: new Date(showItem.added_at),
-              duration_minutes: 0,
-              metadata: {
-                show_id: show.id,
-                total_episodes: show.total_episodes,
-                media_type: show.media_type,
-                explicit: show.explicit,
-                uri: show.uri,
-              },
+          } else {
+            this.logger.debug('Show already exists, linked save to it', {
+              showId: show.id,
+              showName: show.name,
             });
+            skippedCount++;
           }
 
           this.logger.debug('Show transformed and stored', {

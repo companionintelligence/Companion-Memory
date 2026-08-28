@@ -24,6 +24,14 @@ const editorState = vi.hoisted(() => ({
   onUpdate: undefined as ((content: string) => void) | undefined,
 }));
 
+// Same reason as ReceiptPage/PlaceSheet/ContentSheet: `ChatWithAgentMenu`
+// reaches for the agent-harness hook context this page's providers do not
+// supply, so it threw during render and took the page down before the offline
+// path under test could run.
+vi.mock('@/components/ChatWithAgent', () => ({
+  ChatWithAgentMenu: () => null,
+}));
+
 vi.mock('@ci/editor', () => {
   function MockEditor({
     children,

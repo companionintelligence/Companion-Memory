@@ -13,6 +13,12 @@ enum CompanionSecureStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .keychainFailed(key, status):
+            // Unsigned / linker-signed simulator builds (`CODE_SIGNING_ALLOWED=NO`) have
+            // no `application-identifier`, so every Keychain write returns -34018. That
+            // is a local-run configuration error, not a Memory Server or Portal failure.
+            if status == errSecMissingEntitlement {
+                return "Keychain operation for '\(key)' failed: this iOS build is unsigned, so it cannot store the Memory API key. Rebuild with code signing (omit CODE_SIGNING_ALLOWED=NO)."
+            }
             let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
             return "Keychain operation for '\(key)' failed: \(message)"
         case let .corruptValue(key):
@@ -83,6 +89,11 @@ final class CompanionSecureStore {
     /// Decrypted value, or `nil` when nothing is stored under `key`. Throws when the Keychain
     /// itself refuses -- never silently reports "no value" for an error.
     func get(_ key: String) throws -> String? {
+        #if targetEnvironment(simulator)
+        // Ad-hoc simulator signing has no `application-identifier`, so SecItem* returns
+        // `errSecMissingEntitlement` (-34018). Device/store builds never take this path.
+        return try simulatorFileGet(key)
+        #else
         var query = baseQuery(for: key)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -100,6 +111,7 @@ final class CompanionSecureStore {
             throw CompanionSecureStoreError.corruptValue(key)
         }
         return value
+        #endif
     }
 
     /// Stores `value`, replacing any existing item under `key`.
@@ -113,6 +125,10 @@ final class CompanionSecureStore {
             throw CompanionSecureStoreError.corruptValue(key)
         }
 
+        #if targetEnvironment(simulator)
+        try simulatorFileSet(key, data: data)
+        return
+        #else
         let attributes = addAttributes(for: key, data: data)
         let addStatus = SecItemAdd(attributes as CFDictionary, nil)
         if addStatus == errSecSuccess {
@@ -141,43 +157,47 @@ final class CompanionSecureStore {
         guard retryStatus == errSecSuccess else {
             throw CompanionSecureStoreError.keychainFailed(key, retryStatus)
         }
+        #endif
     }
 
     /// Removes one value. Succeeds silently when it was already absent.
     func remove(_ key: String) throws {
+        #if targetEnvironment(simulator)
+        try simulatorFileRemove(key)
+        return
+        #else
         let status = SecItemDelete(baseQuery(for: key) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw CompanionSecureStoreError.keychainFailed(key, status)
         }
+        #endif
     }
 
     /// Removes every item in this namespace -- the crypto-shred primitive for the outbox
     /// namespace, and the sign-out primitive for the credential one. Not wired to a caller yet;
     /// it is what the remote-wipe slice will invoke.
     func destroyAll() throws {
+        #if targetEnvironment(simulator)
+        try simulatorFileDestroyAll()
+        return
+        #else
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service
         ]
-        #if !targetEnvironment(simulator)
         query[kSecUseDataProtectionKeychain as String] = true
-        #endif
 
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw CompanionSecureStoreError.keychainFailed("*", status)
         }
+        #endif
     }
 
+    #if !targetEnvironment(simulator)
     /// Device builds seal the item to this hardware and exclude it from backups.
-    /// The simulator has no device UID for `ThisDeviceOnly`, so SecItemAdd fails and
-    /// login cannot persist `ci.apiKey`.
     private static var accessible: CFString {
-        #if targetEnvironment(simulator)
-        kSecAttrAccessibleAfterFirstUnlock
-        #else
         kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        #endif
     }
 
     private func addAttributes(for key: String, data: Data) -> [String: Any] {
@@ -188,19 +208,73 @@ final class CompanionSecureStore {
     }
 
     private func baseQuery(for key: String) -> [String: Any] {
-        var query: [String: Any] = [
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key
+            kSecAttrAccount as String: key,
+            // Scopes the lookup to the modern data-protection keychain, matching how the item
+            // was written. Omitting it here while setting it on write is a classic way to make
+            // reads mysteriously miss.
+            kSecUseDataProtectionKeychain as String: true
         ]
-        #if !targetEnvironment(simulator)
-        // Scopes the lookup to the modern data-protection keychain, matching how the item
-        // was written. Omitting it here while setting it on write is a classic way to make
-        // reads mysteriously miss. The simulator's keychain rejects this flag.
-        query[kSecUseDataProtectionKeychain as String] = true
-        #endif
-        return query
     }
+    #endif
+
+    #if targetEnvironment(simulator)
+    /// Ad-hoc simulator signatures (`Sign to Run Locally` / `CODE_SIGNING_ALLOWED=NO`) have no
+    /// `application-identifier`, so every Keychain write returns -34018 and cloud-connect dies
+    /// after a successful Memory `/api/keys` mint. This store is compiled out of device builds.
+    private func simulatorDirectory() throws -> URL {
+        let root = try FileManager.default.url(
+            for: .libraryDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        .appendingPathComponent("CompanionSecureStore", isDirectory: true)
+        .appendingPathComponent(service, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        return root
+    }
+
+    private func simulatorFileURL(for key: String) throws -> URL {
+        try simulatorDirectory().appendingPathComponent(key, isDirectory: false)
+    }
+
+    private func simulatorFileGet(_ key: String) throws -> String? {
+        let url = try simulatorFileURL(for: key)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        let data = try Data(contentsOf: url)
+        guard let value = String(data: data, encoding: .utf8) else {
+            throw CompanionSecureStoreError.corruptValue(key)
+        }
+        return value
+    }
+
+    private func simulatorFileSet(_ key: String, data: Data) throws {
+        try data.write(
+            to: simulatorFileURL(for: key),
+            options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+        )
+    }
+
+    private func simulatorFileRemove(_ key: String) throws {
+        let url = try simulatorFileURL(for: key)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return
+        }
+        try FileManager.default.removeItem(at: url)
+    }
+
+    private func simulatorFileDestroyAll() throws {
+        let root = try simulatorDirectory()
+        if FileManager.default.fileExists(atPath: root.path) {
+            try FileManager.default.removeItem(at: root)
+        }
+    }
+    #endif
 }
 
 /// Supplies the raw 32-byte key the outbox database is encrypted with, held in the Keychain by

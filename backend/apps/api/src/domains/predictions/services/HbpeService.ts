@@ -4,7 +4,14 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 
-import type { DueResponse, ForecastResponse, WeekForecastResponse } from '../types';
+import type {
+  DueResponse,
+  ForecastResponse,
+  ForageTrialResponse,
+  WeekForecastResponse,
+} from '../types';
+
+type ForageLakeSpec = Record<string, unknown>;
 
 @Injectable()
 export class HbpeService {
@@ -40,13 +47,76 @@ export class HbpeService {
     return this.get<DueResponse>(`/forecast/due?user_id=${context.userId}`);
   }
 
+  async getForage(context: UserServiceContext, autoload = true): Promise<ForageTrialResponse | null> {
+    const flag = autoload ? 'true' : 'false';
+
+    try {
+      return await this.request<ForageTrialResponse>(
+        `/forage?user_id=${context.userId}&autoload=${flag}`,
+        { method: 'GET' },
+        { allowNotFound: true },
+      );
+    } catch (err) {
+      this.logger.warn('Forage get failed', { err: err instanceof Error ? err.message : String(err) });
+
+      return null;
+    }
+  }
+
+  async askForage(context: UserServiceContext, spec: ForageLakeSpec): Promise<ForageTrialResponse> {
+    return this.request<ForageTrialResponse>(
+      `/forage/ask?user_id=${context.userId}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(spec),
+      },
+      { timeoutMs: 15_000 },
+    );
+  }
+
+  async ingestForage(context: UserServiceContext, items: unknown[]): Promise<ForageTrialResponse> {
+    return this.request<ForageTrialResponse>(
+      `/forage/ingest?user_id=${context.userId}`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ items }),
+      },
+      { timeoutMs: 15_000 },
+    );
+  }
+
+  async forageSample(context: UserServiceContext): Promise<ForageTrialResponse> {
+    return this.request<ForageTrialResponse>(`/forage/sample?user_id=${context.userId}`, { method: 'POST' });
+  }
+
+  async foragePin(context: UserServiceContext, branch: string): Promise<ForageTrialResponse> {
+    return this.request<ForageTrialResponse>(
+      `/forage/pin/${encodeURIComponent(branch)}?user_id=${context.userId}`,
+      { method: 'POST' },
+    );
+  }
+
+  async forageReset(context: UserServiceContext): Promise<ForageTrialResponse> {
+    return this.request<ForageTrialResponse>(`/forage/ask?user_id=${context.userId}`, { method: 'POST' });
+  }
+
   private async get<T>(path: string): Promise<T> {
+    return this.request<T>(path, { method: 'GET' });
+  }
+
+  private async request<T>(
+    path: string,
+    init: RequestInit,
+    options: { allowNotFound?: boolean; timeoutMs?: number } = {},
+  ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
 
     let response: Response;
 
     try {
-      response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      response = await fetch(url, { ...init, signal: AbortSignal.timeout(options.timeoutMs ?? 10_000) });
     } catch (err) {
       this.logger.warn('HBPE service unreachable', { url, err });
       throw new ServiceUnavailableException('Forecast service unavailable');
@@ -54,6 +124,10 @@ export class HbpeService {
 
     if (response.status === 401) {
       throw new UnauthorizedException('Missing or invalid user context');
+    }
+
+    if (options.allowNotFound && response.status === 404) {
+      return null as T;
     }
 
     if (!response.ok) {

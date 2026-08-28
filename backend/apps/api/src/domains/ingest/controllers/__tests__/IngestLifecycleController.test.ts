@@ -13,7 +13,7 @@ const ctx = { userId: 'user-1' } as RequestContext;
 const orchestrateSummary = { ok: true, legs: [], totalDurationMs: 5 };
 const backfillResult = { enqueued: 3, perType: {}, embedded: 0, embeddedPerType: {} };
 const statusSnapshot = {
-  tables: { communications: 1, events: 2, content: 3, inventory: 4, browser_activity: 5, position: 6 },
+  tables: { communications: 1, events: 2, content: 3, objects: 4, browser_activity: 5, position: 6 },
   searchIndex: { embeddingsByType: {}, skipsByType: {}, queue: { created: 0, active: 0, failed: 0 } },
   at: '2026-01-01T00:00:00.000Z',
 };

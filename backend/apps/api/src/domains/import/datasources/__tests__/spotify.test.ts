@@ -3,7 +3,7 @@ import path from 'path';
 import { SpotifyFileImporter } from '../spotify';
 import type { ImportParams } from '../timeline';
 
-import type { EmittedGraph } from './support/emitted';
+import type { EmittedGraph, TestPipeline } from './support/emitted';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 
@@ -127,12 +127,17 @@ describe('Spotify datasource', () => {
     const fs = await import('node:fs');
     await fs.promises.writeFile(tmpFile, JSON.stringify(data));
     try {
+      const testPipeline: TestPipeline = Object.assign(pipeline, { drop: jest.fn() });
       await fi.fileImport({}, { filename: 'endsong_1.json', fullPath: tmpFile }, {
-        pipeline,
+        pipeline: testPipeline,
         timeframe: {},
         log: () => {},
       } as unknown as ImportParams);
       expect(pipeline.length).toBe(2);
+      // The anonymous stub (no track/episode/audiobook identity) is reported,
+      // not silently swallowed.
+      expect(testPipeline.drop).toHaveBeenCalledWith('unresolvable_playback_stub');
+      expect(testPipeline.drop).toHaveBeenCalledTimes(1);
 
       const podcast = pipeline[0].item;
       expect(podcast.classification).toBe('listen');
@@ -159,7 +164,7 @@ describe('Spotify datasource', () => {
     }
   });
 
-  it('drops plays under one second in both formats', async () => {
+  it('drops plays under one second in both formats, and reports them', async () => {
     const fi = new SpotifyFileImporter();
     const fs = await import('node:fs');
     // Extended format: 999 ms dropped, exactly 1000 ms kept.
@@ -187,7 +192,10 @@ describe('Spotify datasource', () => {
     const compactFile = path.join(FIXTURES_DIR, 'spotify-export', 'StreamingHistory7.json');
     await fs.promises.writeFile(compactFile, JSON.stringify(compact));
     try {
-      const pipeline: EmittedGraph[] = [];
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
       await fi.fileImport({}, { filename: 'endsong_2.json', fullPath: endsongFile }, {
         pipeline,
         timeframe: {},
@@ -199,6 +207,12 @@ describe('Spotify datasource', () => {
         log: () => {},
       } as unknown as ImportParams);
       expect(pipeline.map((g) => g.item.metadata.Track)).toEqual(['Kept Song', 'Real Play']);
+      expect(pipeline.drop).toHaveBeenCalledTimes(2);
+      expect(pipeline.drop).toHaveBeenCalledWith('sub_second_play');
+      // One call per file, each with the file's own record count — not a
+      // per-row counter, since the array's own `.length` is cheap and exact.
+      expect(pipeline.consumed).toHaveBeenCalledWith(2);
+      expect(pipeline.consumed).toHaveBeenCalledTimes(2);
     } finally {
       await fs.promises.unlink(endsongFile).catch(() => {});
       await fs.promises.unlink(compactFile).catch(() => {});
@@ -313,5 +327,99 @@ describe('Spotify datasource', () => {
     expect(pipeline[0].item.metadata.Track).toBe('Weird Fishes');
     expect(pipeline[0].item.metadata.Artist).toBe('Radiohead');
     expect(pipeline[0].item.metadata.Album).toBe('In Rainbows');
+  });
+
+  it('drops plays outside the requested timeframe, in both formats', async () => {
+    const fi = new SpotifyFileImporter();
+    const fs = await import('node:fs');
+    const endsong = [
+      {
+        ts: '2019-06-15T14:30:00Z',
+        master_metadata_track_name: 'Too Early',
+        master_metadata_album_artist_name: 'X',
+        ms_played: 200000,
+      },
+    ];
+    const endsongFile = path.join(FIXTURES_DIR, 'spotify-export', 'endsong_3.json');
+    await fs.promises.writeFile(endsongFile, JSON.stringify(endsong));
+    const compact = [
+      { endTime: '2019-01-01 12:00', artistName: 'X', trackName: 'Too Early', msPlayed: 200000 },
+    ];
+    const compactFile = path.join(FIXTURES_DIR, 'spotify-export', 'StreamingHistory10.json');
+    await fs.promises.writeFile(compactFile, JSON.stringify(compact));
+    try {
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], { drop: jest.fn() });
+      const timeframe = { since: new Date('2021-01-01T00:00:00Z') };
+      await fi.fileImport({}, { filename: 'endsong_3.json', fullPath: endsongFile }, {
+        pipeline,
+        timeframe,
+        log: () => {},
+      } as unknown as ImportParams);
+      await fi.fileImport({}, { filename: 'StreamingHistory10.json', fullPath: compactFile }, {
+        pipeline,
+        timeframe,
+        log: () => {},
+      } as unknown as ImportParams);
+      expect(pipeline.length).toBe(0);
+      expect(pipeline.drop).toHaveBeenCalledTimes(2);
+      expect(pipeline.drop).toHaveBeenCalledWith('outside_timeframe');
+    } finally {
+      await fs.promises.unlink(endsongFile).catch(() => {});
+      await fs.promises.unlink(compactFile).catch(() => {});
+    }
+  });
+
+  it('reports an unreadable file once rather than silently reading nothing', async () => {
+    const fi = new SpotifyFileImporter();
+    const fs = await import('node:fs');
+    const malformedFile = path.join(FIXTURES_DIR, 'spotify-export', 'endsong_4.json');
+    await fs.promises.writeFile(malformedFile, '{not valid json');
+    const nonArrayFile = path.join(FIXTURES_DIR, 'spotify-export', 'endsong_5.json');
+    await fs.promises.writeFile(nonArrayFile, JSON.stringify({ not: 'an array' }));
+    try {
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], { drop: jest.fn() });
+      await fi.fileImport({}, { filename: 'endsong_4.json', fullPath: malformedFile }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+      await fi.fileImport({}, { filename: 'endsong_5.json', fullPath: nonArrayFile }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+      expect(pipeline.length).toBe(0);
+      expect(pipeline.drop).toHaveBeenCalledTimes(2);
+      expect(pipeline.drop).toHaveBeenCalledWith('unreadable_file', 'endsong_4.json');
+      expect(pipeline.drop).toHaveBeenCalledWith('unreadable_file', 'endsong_5.json');
+    } finally {
+      await fs.promises.unlink(malformedFile).catch(() => {});
+      await fs.promises.unlink(nonArrayFile).catch(() => {});
+    }
+  });
+
+  it('reports how many records a file offered the parser, via consumed()', async () => {
+    const fi = new SpotifyFileImporter();
+    const fs = await import('node:fs');
+    const data = [
+      { endTime: '2021-01-01 12:00', artistName: 'X', trackName: 'One', msPlayed: 200000 },
+      { endTime: '2021-01-01 12:05', artistName: 'X', trackName: 'Two', msPlayed: 200000 },
+      { endTime: '2021-01-01 12:10', artistName: 'X', trackName: 'Three', msPlayed: 200000 },
+    ];
+    const tmpFile = path.join(FIXTURES_DIR, 'spotify-export', 'StreamingHistory11.json');
+    await fs.promises.writeFile(tmpFile, JSON.stringify(data));
+    try {
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], { consumed: jest.fn() });
+      await fi.fileImport({}, { filename: 'StreamingHistory11.json', fullPath: tmpFile }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+      expect(pipeline.length).toBe(3);
+      expect(pipeline.consumed).toHaveBeenCalledTimes(1);
+      expect(pipeline.consumed).toHaveBeenCalledWith(3);
+    } finally {
+      await fs.promises.unlink(tmpFile).catch(() => {});
+    }
   });
 });

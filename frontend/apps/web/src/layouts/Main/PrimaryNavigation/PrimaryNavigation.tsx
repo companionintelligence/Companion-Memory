@@ -46,8 +46,10 @@ export function PrimaryNavigation() {
 
   return (
     <header className="flex flex-row items-center gap-2 p-2 px-4">
-      {/* Memory explorer: search left (no breadcrumb); view tabs after search.
-          Other pages: breadcrumb + nav-views, then search fills remaining width. */}
+      {/* Memory explorer: search left, view tabs after it.
+          Other pages: nav-views, then search fills the remaining width.
+          There are no breadcrumbs anywhere — the Power Rail is the only
+          location indicator. */}
       <div className="relative flex min-w-0 flex-1 flex-col gap-2 md:flex-row md:items-center md:gap-3">
         {isMemoryExplorer ? (
           <>

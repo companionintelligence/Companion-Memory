@@ -1,8 +1,11 @@
 import { Global, Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { PORTAL_TOKEN_VERIFIER } from '@ci/common/guards/PortalTokenVerifier';
 import { UserModule } from '@ci/domains/user';
 
+import { FederatedIdentityEntity } from './entities/FederatedIdentityEntity';
+import { FederatedIdentityService } from './services/FederatedIdentityService';
 import { PortalTokenService } from './services/PortalTokenService';
 
 /**
@@ -12,8 +15,12 @@ import { PortalTokenService } from './services/PortalTokenService';
  */
 @Global()
 @Module({
-  imports: [UserModule],
-  providers: [PortalTokenService, { provide: PORTAL_TOKEN_VERIFIER, useExisting: PortalTokenService }],
-  exports: [PORTAL_TOKEN_VERIFIER],
+  imports: [UserModule, TypeOrmModule.forFeature([FederatedIdentityEntity])],
+  providers: [
+    FederatedIdentityService,
+    PortalTokenService,
+    { provide: PORTAL_TOKEN_VERIFIER, useExisting: PortalTokenService },
+  ],
+  exports: [PORTAL_TOKEN_VERIFIER, FederatedIdentityService],
 })
 export class PortalAuthModule {}

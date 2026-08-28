@@ -102,7 +102,7 @@ const ORDER_EVENT_TYPE = 'order';
  *
  * ── READ THIS BEFORE NARROWING IT TO "not yet promoted" ────────────────────
  *
- * The natural predicate to reach for is an anti-join against `ci.inventory` —
+ * The natural predicate to reach for is an anti-join against `ci.objects` —
  * "events that have not produced an object yet". It is the same ratchet as
  * `LEFT JOIN ci_search.embeddings … WHERE e.entity_id IS NULL`, and the pipeline
  * README names that shape specifically: **never anti-join the stage's own output
@@ -141,19 +141,19 @@ export const PROMOTE_OBJECT_SOURCE: StageSource = {
 const PROMOTE_PROVENANCE_KEY = 'promote';
 
 /**
- * `ci.inventory.source_type` for every row this stage writes.
+ * `ci.objects.source_type` for every row this stage writes.
  *
  * The row's source triple is `(promote.object, <the event's source_system>,
  * <the event id>)`, which does three jobs at once:
  *
- *  1. **Idempotency.** `inventory_source_triple_uniq` is UNIQUE on
+ *  1. **Idempotency.** `objects_source_triple_uniq` is UNIQUE on
  *     `(owner_user_id, source_type, source_system, source_id)`, so re-promoting
  *     an event updates its object instead of minting a second one. The stage
  *     needs no anti-join and no "have I done this?" query — see
  *     {@link PROMOTE_OBJECT_SOURCE}.
  *  2. **Provenance.** `source_id` IS the `ci.events.event_id`, so every object
  *     points at the exact record that produced it.
- *  3. **Isolation.** An importer writing `ci.inventory` directly uses its own
+ *  3. **Isolation.** An importer writing `ci.objects` directly uses its own
  *     `source_type` (`ci-import-tools`), so a promoted row can never collide
  *     with — or be mistaken for — an imported one. Withdrawal is then a single
  *     safe predicate rather than a diff.
@@ -161,7 +161,7 @@ const PROMOTE_PROVENANCE_KEY = 'promote';
 const PROMOTED_SOURCE_TYPE = PROMOTE_OBJECT_STAGE_ID;
 
 /**
- * `ci.inventory.lifecycle_state` for a promoted purchase.
+ * `ci.objects.lifecycle_state` for a promoted purchase.
  *
  * Always `active`, for a physical purchase and a digital one alike. A receipt
  * records an ACQUISITION and says nothing about what became of the thing:
@@ -172,7 +172,7 @@ const PROMOTED_SOURCE_TYPE = PROMOTE_OBJECT_STAGE_ID;
  */
 const PROMOTED_LIFECYCLE_STATE = 'active';
 
-/** `ci.inventory.identity_method`; constrained by `inventory_identity_method_check`. */
+/** `ci.objects.identity_method`; constrained by `objects_identity_method_check`. */
 const PROMOTED_IDENTITY_METHOD = 'receipt';
 
 /**
@@ -183,7 +183,7 @@ const PROMOTED_IDENTITY_METHOD = 'receipt';
  * matters: `StageResult.confidence` is what an ENRICHER measured about its own
  * answer (`GeocodeStage` reports the provider's precision class there, which is
  * real), and `types.ts` is explicit that fabricating one teaches a promoter to
- * prefer a worse answer over a better one. `ci.inventory.identity_confidence` is
+ * prefer a worse answer over a better one. `ci.objects.identity_confidence` is
  * a different question — "how sure are we this row is the thing it says it is?" —
  * and the rebuild plan (§8.2) requires a number for it, because `>= 0.5` is the
  * gate on minting a `ci.product_models` entry from it.
@@ -234,7 +234,7 @@ const IDENTIFIER_SOURCES: ReadonlyArray<{ key: string; namespace: ObjectIdentifi
 const PRODUCT_IDENTIFIER_NAMESPACES: ReadonlySet<string> = new Set(['asin', 'isbn', 'gtin', 'mpn']);
 
 /**
- * Source condition strings -> the `inventory_condition_check` vocabulary.
+ * Source condition strings -> the `objects_condition_check` vocabulary.
  *
  * Matched case-insensitively against a normalized form, and anything unmatched
  * becomes NULL rather than `'n/a'`. `'n/a'` is an assertion ("this thing has no
@@ -285,11 +285,11 @@ export interface PromotedObject {
 }
 
 /**
- * Promotes purchases into inventory.
+ * Promotes purchases into ci.objects.
  *
  * ── What it writes, and where it is read ───────────────────────────────────
  *
- * `ci.inventory`, and nothing else. READ by `ItemService.findAll` / `findById` /
+ * `ci.objects`, and nothing else. READ by `ItemService.findAll` / `findById` /
  * `findByIds` / `search`, every one of which maps through
  * `ItemEntity.toEgressType` — which returns all eleven identity columns — and is
  * called by `ItemResolver` (`items`, `item`), `FileItemsLoader`,
@@ -297,7 +297,7 @@ export interface PromotedObject {
  * `MemoryCompactionService`. `ItemSearchIndexListener` indexes the rows, and
  * `MaintenanceController` / `IngestStatusService` count them.
  *
- * Of the eleven `ci.inventory` identity columns the Phase 8 audit found
+ * Of the eleven `ci.objects` identity columns the Phase 8 audit found
  * unwritten, this fills four — `lifecycle_state`, `quantity`,
  * `identity_confidence`, `identity_method` — plus the ordinary object columns
  * (`name`, `identifier_codes`, `purchase_price`, `currency`, `acquired_at`,
@@ -313,7 +313,7 @@ export interface PromotedObject {
  *  - `ci.product_models` — no service, no resolver, no operator endpoint reads
  *    it. The entity class exists and is registered in `MemoryModule.forFeature`,
  *    and that is the whole of it. Writing it would fill a table nothing consults,
- *    so `ci.inventory.product_id` stays NULL. **Unblocking it is small and
+ *    so `ci.objects.product_id` stays NULL. **Unblocking it is small and
  *    specific**: a `ProductService` in `domains/memory` with `findByIds`,
  *    exported from that barrel, plus a `product` `ResolveField` on `ItemType` —
  *    then the writer belongs in this stage's next version.
@@ -331,7 +331,7 @@ export interface PromotedObject {
  *    permanently own the ASIN and every later purchase of the same product would
  *    have its claim silently dropped. That is not a gap to fill later; it is a
  *    wrong row that could never be found again. The identifiers go into
- *    `ci.inventory.identifier_codes` instead, normalized by the same shared
+ *    `ci.objects.identifier_codes` instead, normalized by the same shared
  *    function, where `Item.identifierCodes` already reads them.
  *  - `ci.object_observations` — nothing in this corpus observes an object; that
  *    table is fed by vision, and by a stage that does not exist.
@@ -344,7 +344,7 @@ export interface PromotedObject {
  *
  * Every row carries `source_type = 'promote.object'`, `source_id = <event id>`
  * and a `metadata.promote` envelope with the version. Withdrawal is
- * `DELETE FROM ci.inventory WHERE user_id = $1 AND source_type = 'promote.object'`
+ * `DELETE FROM ci.objects WHERE user_id = $1 AND source_type = 'promote.object'`
  * followed by `DELETE FROM ci.pipeline_state WHERE stage = 'promote.object'`;
  * the exact statements are in migration `20260809181915_promote_support.sql`.
  * Nothing here mutates or deletes a source row, so a full re-promote after a bad
@@ -439,13 +439,13 @@ export class ObjectPromoteStage implements Stage {
       for (const object of promotable) {
         results.set(object.eventId, {
           outcome: 'failed',
-          reason: 'inventory_write_failed',
+          reason: 'object_write_failed',
           detail: { message },
         });
       }
 
       this.logger.error(
-        `Inventory promote failed for ${promotable.length} events`,
+        `Object promote failed for ${promotable.length} events`,
         err instanceof Error ? err : new Error(message),
       );
 
@@ -491,7 +491,7 @@ export class ObjectPromoteStage implements Stage {
    * User-scoped even though the sweep already was: a slice can arrive from a dead
    * letter replayed weeks later, and re-scoping is the difference between "this
    * id is not yours" and putting someone else's purchases in this user's
-   * inventory.
+   * ci.objects.
    */
   private loadRows(userId: string, ids: string[]): Promise<CandidateRow[]> {
     return this.dataSource.query<CandidateRow[]>(
@@ -517,7 +517,7 @@ export class ObjectPromoteStage implements Stage {
    * Write every promotable object in ONE statement, and report which ones landed.
    *
    * `unnest()` over parallel arrays into a single INSERT, upserted on
-   * `inventory_source_triple_uniq`. Both `user_id` and `owner_user_id` are set:
+   * `objects_source_triple_uniq`. Both `user_id` and `owner_user_id` are set:
    * the unique index is keyed on `owner_user_id`, so leaving it NULL would make
    * the whole idempotency argument false.
    *
@@ -526,12 +526,12 @@ export class ObjectPromoteStage implements Stage {
    * The `DO UPDATE … WHERE` is the ownership rule, and it has two halves:
    *
    *  1. `metadata->'promote'->>'stage' = <this stage>` — never touch a row this
-   *     stage did not write. An importer's inventory row uses its own
+   *     stage did not write. An importer's object row uses its own
    *     `source_type` and cannot collide with these anyway, but a stale row from
    *     some future writer sharing the triple would, and re-pointing it is not
    *     this stage's business.
    *  2. `updated_at <= (metadata->'promote'->>'at') + 1s` — never overwrite a row
-   *     a HUMAN has edited since it was promoted. `ci.inventory.updated_at` is
+   *     a HUMAN has edited since it was promoted. `ci.objects.updated_at` is
    *     maintained by `ItemEntity`'s `@UpdateDateColumn`, so any edit through
    *     `ItemService.update` moves it past the promotion stamp and the row is
    *     left alone. Both timestamps come from `now()`, which is the transaction
@@ -541,7 +541,7 @@ export class ObjectPromoteStage implements Stage {
    * The second is an approximation of what §8.3 of the rebuild plan describes as
    * a per-column property fold against `ci.derived_facts` — and it is honestly
    * weaker: it is per-ROW, and it only works for writers that maintain
-   * `updated_at`. A raw `UPDATE ci.inventory` elsewhere that forgets the column
+   * `updated_at`. A raw `UPDATE ci.objects` elsewhere that forgets the column
    * would be invisible to it. That is the argument for `ci.derived_facts`, not
    * for dropping the guard: without it, the first version bump after a user
    * renamed a promoted item silently reverts the rename.
@@ -550,17 +550,17 @@ export class ObjectPromoteStage implements Stage {
    * how {@link explainUnwritten} knows to go and ask why.
    */
   private async writeObjects(userId: string, objects: PromotedObject[]): Promise<Map<string, string>> {
-    // An item is a CTI aggregate: the `ci.inventory` detail row below plus an
+    // An item is a CTI aggregate: the `ci.objects` detail row below plus an
     // `Item`-discriminated base row in `ci.entities` sharing its uuid, which is
     // the sole owner of the name. Both halves are written in ONE transaction,
     // detail first, which is legal only because
-    // `inventory_object_id_entities_fk` is DEFERRABLE INITIALLY DEFERRED: the
+    // `objects_object_id_entities_fk` is DEFERRABLE INITIALLY DEFERRED: the
     // object ids come back from RETURNING, so the base rows cannot be written
     // until the detail rows exist. Splitting these across two transactions
     // would commit detail rows with no base row and fail the constraint.
     return this.dataSource.transaction(async (manager) => {
       const rows = await manager.query<Array<{ object_id: string; source_id: string }>>(
-        `INSERT INTO ci.inventory AS inv (
+        `INSERT INTO ci.objects AS inv (
          user_id, owner_user_id, brand, model, identifier_codes,
          purchase_price, currency, acquired_at, is_digital, condition,
          quantity, lifecycle_state, identity_confidence, identity_method,
@@ -645,7 +645,7 @@ export class ObjectPromoteStage implements Stage {
           `WITH upserted AS (
              INSERT INTO ci.entities
                (entity_id, entity_type, name, properties, owner_user_id, linked_table, linked_id)
-             SELECT u.object_id, 'Item', u.name, '{}'::jsonb, $1::uuid, 'inventory', u.object_id
+             SELECT u.object_id, 'Item', u.name, '{}'::jsonb, $1::uuid, 'objects', u.object_id
                FROM unnest($2::uuid[], $3::text[]) AS u(object_id, name)
              ON CONFLICT (entity_id) DO UPDATE SET name = excluded.name, updated_at = now()
              RETURNING entity_id, entity_type, name, description, properties, owner_user_id,
@@ -693,7 +693,7 @@ export class ObjectPromoteStage implements Stage {
    * worth a conversation, which is a version bump).
    *
    * A failure to classify is not fatal: the ids fall through to
-   * `inventory_row_not_written`, which is still a reason and still countable.
+   * `object_row_not_written`, which is still a reason and still countable.
    */
   private async explainUnwritten(
     userId: string,
@@ -703,7 +703,7 @@ export class ObjectPromoteStage implements Stage {
     const eventIds = unwritten.map((object) => object.eventId);
 
     for (const eventId of eventIds) {
-      results.set(eventId, { outcome: 'skipped', reason: 'inventory_row_not_written' });
+      results.set(eventId, { outcome: 'skipped', reason: 'object_row_not_written' });
     }
 
     try {
@@ -715,7 +715,7 @@ export class ObjectPromoteStage implements Stage {
                 (inv.updated_at >
                    COALESCE((inv.metadata->'${PROMOTE_PROVENANCE_KEY}'->>'at')::timestamptz,
                             inv.updated_at) + interval '1 second') AS modified
-           FROM ci.inventory inv
+           FROM ci.objects inv
           WHERE inv.owner_user_id = $1::uuid
             AND inv.source_type = $3::text
             AND inv.source_id = ANY($2::text[])`,
@@ -727,14 +727,14 @@ export class ObjectPromoteStage implements Stage {
           outcome: 'skipped',
           reason:
             row.owned === false
-              ? 'inventory_row_not_owned'
+              ? 'object_row_not_owned'
               : row.modified === true
-                ? 'inventory_row_user_modified'
-                : 'inventory_row_not_written',
+                ? 'object_row_user_modified'
+                : 'object_row_not_written',
         });
       }
     } catch (err: unknown) {
-      this.logger.warn('Could not classify unwritten inventory rows', {
+      this.logger.warn('Could not classify unwritten object rows', {
         message: err instanceof Error ? err.message : String(err),
         count: unwritten.length,
       });
@@ -789,7 +789,7 @@ export function extractPurchase(row: CandidateRow): { object: PromotedObject } |
   const name = firstText(metadata, ['Product', 'Item', 'Title']) ?? textOrNull(row.title);
 
   if (name == null) {
-    // `ci.inventory.name` is NOT NULL, and an object with no name is not an
+    // `ci.objects.name` is NOT NULL, and an object with no name is not an
     // object anybody could find again.
     return { reason: 'no_product_name' };
   }
@@ -935,7 +935,7 @@ export function parseCurrency(raw: string | null): string | null {
 /**
  * Units on the line, floored at 1.
  *
- * `inventory_quantity_check` is `quantity > 0`, so a source that says 0 (or
+ * `objects_quantity_check` is `quantity > 0`, so a source that says 0 (or
  * something unparseable) becomes 1 rather than failing the slice: the receipt
  * line exists, so at least one thing was bought.
  */
@@ -949,7 +949,7 @@ export function parseQuantity(raw: unknown): number {
   return Math.max(1, Math.floor(value));
 }
 
-/** The `inventory_condition_check` vocabulary, or null for anything unrecognised. */
+/** The `objects_condition_check` vocabulary, or null for anything unrecognised. */
 export function parseCondition(raw: string | null): string | null {
   if (raw == null) {
     return null;

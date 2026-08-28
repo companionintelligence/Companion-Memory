@@ -5,7 +5,7 @@ import path from 'path';
 import { LinkedInFileImporter } from '../linkedin';
 import type { EntityAttribute, ImportParams } from '../timeline';
 
-import type { EmittedGraph } from './support/emitted';
+import type { EmittedGraph, TestPipeline } from './support/emitted';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 
@@ -267,5 +267,153 @@ describe('LinkedIn datasource', () => {
     } as unknown as ImportParams);
     expect(pipeline.length).toBe(0);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  describe('parser loss reporting (reconciliation)', () => {
+    it('reports Connections.csv: 1 base unit per row + 1 extra for the always-attempted event', async () => {
+      const fpath = path.join(FIXTURES_DIR, 'linkedin-export', 'Connections.csv');
+      const fi = new LinkedInFileImporter();
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+      await fi.fileImport({}, { filename: 'Connections.csv', fullPath: fpath }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      const consumedSum = (pipeline.consumed as jest.Mock).mock.calls.reduce(
+        (sum: number, [n]: [number]) => sum + n,
+        0,
+      );
+      const producedCount = pipeline.length; // 2 entities + 2 events
+      const droppedCount = (pipeline.drop as jest.Mock).mock.calls.length;
+
+      expect(producedCount).toBe(4);
+      expect(droppedCount).toBe(0);
+      expect(consumedSum).toBe(producedCount + droppedCount);
+      expect(consumedSum).toBe(4); // 2 base rows + 2 extra (one event per named row)
+    });
+
+    it('drops an unnamed connection row instead of silently skipping it', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'linkedin-unnamed-'));
+      const csv = [
+        'First Name,Last Name,Email Address,Company,Position,Connected On',
+        ',,noone@example.com,Acme,Eng,15 Mar 2021',
+      ].join('\n');
+      fs.writeFileSync(path.join(dir, 'Connections.csv'), csv);
+      const fi = new LinkedInFileImporter();
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+
+      await fi.fileImport({}, { filename: 'Connections.csv', fullPath: path.join(dir, 'Connections.csv') }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      expect(pipeline.length).toBe(0);
+      expect(pipeline.drop).toHaveBeenCalledWith('unnamed_connection');
+      expect(pipeline.consumed).toHaveBeenCalledWith(1);
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('drops a timeframe-excluded connection event instead of silently skipping it', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'linkedin-tf-'));
+      const csv = [
+        'First Name,Last Name,Email Address,Company,Position,Connected On',
+        'Ada,Lovelace,ada@example.com,Acme,Eng,15 Mar 2021',
+      ].join('\n');
+      fs.writeFileSync(path.join(dir, 'Connections.csv'), csv);
+      const fi = new LinkedInFileImporter();
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+
+      await fi.fileImport({}, { filename: 'Connections.csv', fullPath: path.join(dir, 'Connections.csv') }, {
+        pipeline,
+        timeframe: { since: new Date('2027-01-01T00:00:00Z') },
+        log: () => {},
+      } as unknown as ImportParams);
+
+      // The entity still pushes (unconditional); only the event is excluded.
+      expect(pipeline.filter((p) => p.entity).length).toBe(1);
+      expect(pipeline.filter((p) => p.item).length).toBe(0);
+      expect(pipeline.drop).toHaveBeenCalledWith('outside_timeframe');
+      const consumedSum = (pipeline.consumed as jest.Mock).mock.calls.reduce(
+        (sum: number, [n]: [number]) => sum + n,
+        0,
+      );
+      expect(consumedSum).toBe(2); // 1 base + 1 extra for the (dropped) event
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('reports messages.csv via consumed(), one per row', async () => {
+      const fpath = path.join(FIXTURES_DIR, 'linkedin-export', 'messages.csv');
+      const fi = new LinkedInFileImporter();
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], { consumed: jest.fn() });
+      await fi.fileImport({}, { filename: 'messages.csv', fullPath: fpath }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      expect(pipeline.consumed).toHaveBeenCalledTimes(1);
+      expect(pipeline.consumed).toHaveBeenCalledWith(2);
+    });
+
+    it('drops a message with empty content instead of silently skipping it', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'linkedin-empty-msg-'));
+      const csv = [
+        'CONVERSATION ID,CONVERSATION TITLE,FROM,SENDER PROFILE URL,TO,RECIPIENT PROFILE URLS,DATE,SUBJECT,CONTENT,FOLDER',
+        'conv-1,Chat A,Ada Lovelace,https://www.linkedin.com/in/ada,Liam Broza,https://www.linkedin.com/in/liam,2024-01-01 12:00:00 UTC,,,INBOX',
+      ].join('\n');
+      fs.writeFileSync(path.join(dir, 'messages.csv'), csv);
+      const fi = new LinkedInFileImporter();
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+
+      await fi.fileImport({}, { filename: 'messages.csv', fullPath: path.join(dir, 'messages.csv') }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      expect(pipeline.length).toBe(0);
+      expect(pipeline.drop).toHaveBeenCalledWith('empty_after_parse');
+      expect(pipeline.consumed).toHaveBeenCalledWith(1);
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('drops a timeframe-excluded message instead of silently skipping it', async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'linkedin-tf-msg-'));
+      const csv = [
+        'CONVERSATION ID,CONVERSATION TITLE,FROM,SENDER PROFILE URL,TO,RECIPIENT PROFILE URLS,DATE,SUBJECT,CONTENT,FOLDER',
+        'conv-1,Chat A,Ada Lovelace,https://www.linkedin.com/in/ada,Liam Broza,https://www.linkedin.com/in/liam,2024-01-01 12:00:00 UTC,,hello,INBOX',
+      ].join('\n');
+      fs.writeFileSync(path.join(dir, 'messages.csv'), csv);
+      const fi = new LinkedInFileImporter();
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+
+      await fi.fileImport({}, { filename: 'messages.csv', fullPath: path.join(dir, 'messages.csv') }, {
+        pipeline,
+        timeframe: { since: new Date('2027-01-01T00:00:00Z') },
+        log: () => {},
+      } as unknown as ImportParams);
+
+      expect(pipeline.length).toBe(0);
+      expect(pipeline.drop).toHaveBeenCalledWith('outside_timeframe');
+      expect(pipeline.consumed).toHaveBeenCalledWith(1);
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
   });
 });

@@ -268,7 +268,7 @@ describe('ItemEmbedStage', () => {
     return { stage, ...h };
   }
 
-  it('loads ci.inventory, scoped to the user, and embeds name + brand + last-seen place', async () => {
+  it('loads ci.objects, scoped to the user, and embeds name + brand + last-seen place', async () => {
     const h = makeStage([
       {
         id: 'item-1',
@@ -287,7 +287,7 @@ describe('ItemEmbedStage', () => {
 
     const results = await h.stage.run(ctx, ['item-1']);
 
-    expect(h.loads[0].sql).toContain('ci.inventory');
+    expect(h.loads[0].sql).toContain('ci.objects');
     expect(h.loads[0].params).toEqual([['item-1'], USER]);
 
     const doc = h.generateEmbeddings.mock.calls[0][0][0] as string;
@@ -351,8 +351,8 @@ describe('ItemEmbedStage', () => {
     expect(h.generateEmbeddings).not.toHaveBeenCalled();
   });
 
-  it('declares the inventory source', () => {
-    expect(INDEX_EMBED_ITEM_SOURCE.table).toBe('inventory');
+  it('declares the objects source', () => {
+    expect(INDEX_EMBED_ITEM_SOURCE.table).toBe('objects');
   });
 });
 

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 
-import { useAuth } from '@/hooks';
+import { readJobsSnapshot, writeJobsSnapshot } from './jobsSnapshots';
+import { useJobsAuth } from './useJobsAuth';
 
 /** One row of `ci.pipeline_dead_letters`, as `GET /api/pipeline/dead-letters` reports it. */
 export interface DeadLetter {
@@ -146,32 +147,38 @@ export const DEAD_LETTER_PAGE = 200;
  * Only un-replayed letters are fetched: this card is a work queue, and a replayed
  * letter is done. The API's `replayed=false` does that filtering in SQL.
  */
+/** The replay queue's request, which is also its snapshot key. */
+const DEAD_LETTERS_URL = `/api/pipeline/dead-letters?replayed=false&limit=${DEAD_LETTER_PAGE}`;
+
 export function useDeadLetters(refreshIntervalMs = 30000) {
-  const [data, setData] = useState<DeadLettersResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [restored] = useState(() => readJobsSnapshot<DeadLettersResponse>(DEAD_LETTERS_URL));
+
+  const [data, setData] = useState<DeadLettersResponse | null>(restored?.value ?? null);
+  const [loading, setLoading] = useState(restored == null);
   const [error, setError] = useState<string | null>(null);
 
-  const [{ authToken }] = useAuth();
+  const { ready, headers } = useJobsAuth();
 
   const load = useCallback(async () => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
     try {
-      const response = await fetchJson<DeadLettersResponse>(
-        `/api/pipeline/dead-letters?replayed=false&limit=${DEAD_LETTER_PAGE}`,
-        { headers: { Authorization: `Bearer ${authToken}` } },
-      );
+      const response = await fetchJson<DeadLettersResponse>(DEAD_LETTERS_URL, { headers });
 
       setData(response ?? null);
       setError(null);
+
+      if (response) {
+        writeJobsSnapshot(DEAD_LETTERS_URL, response);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [authToken]);
+  }, [ready, headers]);
 
   /**
    * Replay a named set of letters.
@@ -187,13 +194,13 @@ export function useDeadLetters(refreshIntervalMs = 30000) {
    */
   const replay = useCallback(
     async (ids: readonly string[]): Promise<DeadLetterReplayResponse | null> => {
-      if (!authToken || ids.length === 0) {
+      if (!ready || ids.length === 0) {
         return null;
       }
 
       const response = await fetchJson<DeadLetterReplayResponse>('/api/pipeline/dead-letters/replay', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+        headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: [...ids] }),
       });
 
@@ -201,11 +208,11 @@ export function useDeadLetters(refreshIntervalMs = 30000) {
 
       return response ?? null;
     },
-    [authToken, load],
+    [ready, headers, load],
   );
 
   useEffect(() => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
@@ -224,7 +231,7 @@ export function useDeadLetters(refreshIntervalMs = 30000) {
     }, refreshIntervalMs);
 
     return () => window.clearInterval(handle);
-  }, [authToken, load, refreshIntervalMs]);
+  }, [ready, load, refreshIntervalMs]);
 
   const groups = useMemo(() => groupDeadLetters(data?.deadLetters ?? []), [data]);
 

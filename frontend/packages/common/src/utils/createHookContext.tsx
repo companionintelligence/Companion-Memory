@@ -25,8 +25,14 @@ export function createHookContext<HookArgs extends any[], HookResult>(
     return ctx;
   }
 
+  /** Like useHookContext, but yields `undefined` outside the Provider instead of throwing. */
+  function useOptionalHookContext() {
+    return useContext(Context);
+  }
+
   return {
     Provider,
     useHookContext,
+    useOptionalHookContext,
   };
 }

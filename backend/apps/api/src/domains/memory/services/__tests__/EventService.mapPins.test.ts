@@ -54,6 +54,7 @@ describe('EventService.findMapPins', () => {
     end_time: null,
     event_type: 'visited',
     location_name: 'San Francisco',
+    time_source: 'source',
     latitude: 37.77,
     longitude: -122.42,
     ...overrides,
@@ -96,10 +97,24 @@ describe('EventService.findMapPins', () => {
         endTime: null,
         eventType: 'visited',
         locationName: 'San Francisco',
+        timeSource: 'source',
         latitude: 37.77,
         longitude: -122.42,
       },
     ]);
+  });
+
+  it('carries an ingest-fabricated time source through to the pin', async () => {
+    // A Google Maps saved place ("Home", "Work", "Gym") has no real visit time —
+    // its `start_time` is only the import wall clock, stamped because the column
+    // is NOT NULL. The map has to know that to caption the pin "Date unknown"
+    // instead of a fabricated moment; dropping this field is what let the map
+    // show "Yesterday 9:56 PM" for a saved place imported today.
+    await setup([row({ time_source: 'ingest' })]);
+
+    const [pin] = await service.findMapPins(ctx, { limit: 100 });
+
+    expect(pin.timeSource).toBe('ingest');
   });
 
   it('forces located-only, whatever the caller passed', async () => {

@@ -7,12 +7,13 @@
  */
 
 import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { ConversationModule } from '@ci/domains/conversations';
 import { FilesModule } from '@ci/domains/files';
 import { IntelligenceModule } from '@ci/domains/intelligence';
-import { MemoryModule } from '@ci/domains/memory';
+import { MemoryModule, ReceiptEntity } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
 import { ParsingModule } from '@ci/domains/parsing';
 
@@ -20,6 +21,9 @@ import { EntityResolutionService } from './services/EntityResolutionService';
 
 @Module({
   imports: [
+    // Owned by the memory domain; registered here so the resolver can batch-read
+    // receipts by id — see the note on the injected repository.
+    TypeOrmModule.forFeature([ReceiptEntity]),
     BrowserActivityModule,
     ConversationModule,
     FilesModule,

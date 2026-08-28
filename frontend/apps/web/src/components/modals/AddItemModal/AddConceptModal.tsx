@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from 'react';
 
 import { useMutation } from '@apollo/client';
-import { Button, Dialog, Input, Textarea, Label } from '@ci/shadcn';
+import { Button, Input, Textarea, Label } from '@ci/shadcn';
 
+import { ResponsiveDialog } from '@/components/ResponsiveDialog';
 import { gql } from '@/graphql';
 
 const CREATE_CONCEPT = gql(`
@@ -70,11 +71,11 @@ export function AddConceptModal({ open, onClose }: Props) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <Dialog.Content className="sm:max-w-md">
-        <Dialog.Header>
-          <Dialog.Title>Add Concept</Dialog.Title>
-        </Dialog.Header>
+    <ResponsiveDialog open={open} onOpenChange={onClose}>
+      <ResponsiveDialog.Content className="sm:max-w-md">
+        <ResponsiveDialog.Header>
+          <ResponsiveDialog.Title>Add Concept</ResponsiveDialog.Title>
+        </ResponsiveDialog.Header>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
@@ -103,16 +104,16 @@ export function AddConceptModal({ open, onClose }: Props) {
             />
           </div>
 
-          <Dialog.Footer className="flex gap-2 justify-end">
+          <ResponsiveDialog.Footer className="flex gap-2 justify-end">
             <Button type="button" variant="destructive" onClick={handleCancel} disabled={loading}>
               Cancel
             </Button>
             <Button type="submit" className="bg-green-600 hover:bg-green-700" disabled={loading}>
               Add
             </Button>
-          </Dialog.Footer>
+          </ResponsiveDialog.Footer>
         </form>
-      </Dialog.Content>
-    </Dialog>
+      </ResponsiveDialog.Content>
+    </ResponsiveDialog>
   );
 }

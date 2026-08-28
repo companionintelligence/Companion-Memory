@@ -8,10 +8,13 @@ import { EventService as SignallingEventService } from '@ci/domains/events';
 import { FileCreatedEvent } from '@ci/domains/files/events';
 import {
   CommunicationCreatedEvent,
+  ConceptCreatedEvent,
   ContentCreatedEvent,
   EventCreatedEvent,
   ItemCreatedEvent,
   PersonCreatedEvent,
+  ProductCreatedEvent,
+  ReceiptCreatedEvent,
 } from '@ci/domains/memory/events';
 import { PositionCreatedEvent } from '@ci/domains/position/events';
 import { ENTITY_SOURCE_MAP } from '@ci/domains/search-ingress';
@@ -27,9 +30,10 @@ const SEARCH_INDEX_QUEUE = 'search-index';
 /**
  * Entity types this backfill re-indexes — the bulk-ingest tables whose
  * createMany() no longer emits a per-row `*CreatedEvent` (the per-row pgboss
- * fan-out was the dominant cost at import volume), plus `person`: the
- * extract_people leg creates stub Person entities through GraphIngestService
- * raw upserts, which likewise emit nothing — so people extracted from
+ * fan-out was the dominant cost at import volume), plus `person` and
+ * `concept`: both are stub `ci.entities` rows GraphIngestService's set-based
+ * bulk path raw-upserts directly — the same no-per-row-event path
+ * `extract_people` uses for Person — so people AND concepts extracted from
  * communications were never searchable until this sweep picked them up.
  * Search indexing for all of these rows is recovered here, as a post-load sweep.
  */
@@ -41,7 +45,13 @@ export const BACKFILLABLE_ENTITIES = [
   'browser-activity',
   'file',
   'person',
+  'concept',
   'position',
+  // The object tables. Both are written by bulk paths that emit nothing per row
+  // (`ProductModelService.createMany`, `ReceiptService.upsertFromExtraction`),
+  // so like `person` they are only ever indexed by this sweep.
+  'product',
+  'receipt',
 ] as const;
 
 export type BackfillableEntity = (typeof BACKFILLABLE_ENTITIES)[number];
@@ -88,17 +98,23 @@ export const PIPELINE_COVERED_STAGES: Partial<Record<BackfillableEntity, string>
 };
 
 /**
- * Wave D dual-writes `/v1/browser-activity` into `ci.events` (`view`) +
- * `ci.content` (`web-page`). Importers that only ask to backfill
- * `browser-activity` would otherwise leave the timeline rows unindexed.
- * Expand scoped requests so search matches what the dual-write wrote.
+ * Canonicalise a scoped request: dedupe it and order it by
+ * {@link BACKFILLABLE_ENTITIES}, so the sweep runs the same types in the same
+ * order however the caller happened to list them. The zod schemas on the REST
+ * surfaces validate membership but not uniqueness, and a repeated type would
+ * sweep — and re-enqueue — the same rows twice.
+ *
+ * It deliberately does NOT widen the scope. It used to: Wave D dual-wrote
+ * `/v1/browser-activity` into `ci.events` (`view`) + `ci.content` (`web-page`),
+ * so a `browser-activity`-scoped request had to index those mirrors too. That
+ * fold was reverted (`20260812144811_revert_browser_activity_event_fold`) and
+ * `BrowserActivityService` no longer dual-writes, which left the widening
+ * meaning only that a caller asking to reindex browsing rows silently swept the
+ * entire events and content corpora. A scoped request is now honoured as
+ * scoped — the same rule `SearchIndexSweepRequestListener` follows.
  */
-export function expandBackfillEntityTypes(types: readonly BackfillableEntity[]): BackfillableEntity[] {
+export function normalizeBackfillEntityTypes(types: readonly BackfillableEntity[]): BackfillableEntity[] {
   const set = new Set<BackfillableEntity>(types);
-  if (set.has('browser-activity')) {
-    set.add('event');
-    set.add('content');
-  }
 
   return BACKFILLABLE_ENTITIES.filter((t) => set.has(t));
 }
@@ -116,7 +132,10 @@ const EVENT_BY_TYPE: Record<BackfillableEntity, { event: string; idField: string
   'browser-activity': { event: BrowserActivityCreatedEvent, idField: 'browserActivityId' },
   file: { event: FileCreatedEvent, idField: 'fileId' },
   person: { event: PersonCreatedEvent, idField: 'personId' },
+  concept: { event: ConceptCreatedEvent, idField: 'conceptId' },
   position: { event: PositionCreatedEvent, idField: 'positionId' },
+  product: { event: ProductCreatedEvent, idField: 'productId' },
+  receipt: { event: ReceiptCreatedEvent, idField: 'receiptId' },
 };
 
 /**
@@ -230,7 +249,7 @@ export class SearchIndexBackfillService {
 
   async backfill(options: SearchIndexBackfillOptions = {}): Promise<SearchIndexBackfillResult> {
     const types = options.entityTypes
-      ? expandBackfillEntityTypes(options.entityTypes)
+      ? normalizeBackfillEntityTypes(options.entityTypes)
       : [...BACKFILLABLE_ENTITIES];
 
     if (this.running) {

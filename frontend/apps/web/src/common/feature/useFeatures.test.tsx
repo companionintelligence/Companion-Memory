@@ -21,7 +21,7 @@ vi.mock('@/hooks', () => ({
 
 /** Per-user flags keyed by subject, so a session change is observable. */
 const USER_FLAGS: Record<string, Record<string, boolean>> = {
-  'user-a': { 'enable.inventory.page': true },
+  'user-a': { 'insights.page': true },
   'user-b': { 'stats.page': true },
 };
 
@@ -90,7 +90,7 @@ describe('useFeatures', () => {
     setFetch();
     const { result } = renderHook(() => useFeatures(), { wrapper });
 
-    await waitFor(() => expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(true));
+    await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(true));
   });
 
   it('reports a global feature as enabled', async () => {
@@ -104,7 +104,7 @@ describe('useFeatures', () => {
     setFetch();
     const { result } = renderHook(() => useFeatures(), { wrapper });
 
-    await waitFor(() => expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(true));
+    await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(true));
     expect(result.current.isFeatureEnabled('does.not.exist')).toBe(false);
   });
 
@@ -115,7 +115,7 @@ describe('useFeatures', () => {
     expect(result.current.loading).toBe(true);
 
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(true);
+    expect(result.current.isFeatureEnabled('insights.page')).toBe(true);
   });
 
   it('stops loading once a failed fetch has answered', async () => {
@@ -128,7 +128,7 @@ describe('useFeatures', () => {
     const { result } = renderHook(() => useFeatures(), { wrapper });
 
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(false);
+    expect(result.current.isFeatureEnabled('insights.page')).toBe(false);
   });
 
   it('stays loading while the session handshake is still in flight', async () => {
@@ -158,25 +158,25 @@ describe('useFeatures', () => {
     setFetch();
     const { result, rerender } = renderHook(() => useFeatures(), { wrapper });
 
-    await waitFor(() => expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(true));
+    await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(true));
 
     h.auth = { authToken: 'token-b', subject: 'user-b', initializing: false };
     rerender();
 
     await waitFor(() => expect(result.current.isFeatureEnabled('stats.page')).toBe(true));
-    expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(false);
+    expect(result.current.isFeatureEnabled('insights.page')).toBe(false);
   });
 
   it('forgets per-user flags on sign-out', async () => {
     setFetch();
     const { result, rerender } = renderHook(() => useFeatures(), { wrapper });
 
-    await waitFor(() => expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(true));
+    await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(true));
 
     h.auth = { authToken: null, subject: null, initializing: false };
     rerender();
 
-    await waitFor(() => expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(false));
+    await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(false));
     // Global flags are not per-session, and there is nothing left to wait for.
     expect(result.current.isFeatureEnabled('files.page')).toBe(true);
     expect(result.current.loading).toBe(false);
@@ -189,13 +189,13 @@ describe('useFeatures', () => {
     const fetchMock = setFetch();
     const { result, rerender } = renderHook(() => useFeatures(), { wrapper });
 
-    await waitFor(() => expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(true));
+    await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(true));
     const before = countUserFetches(fetchMock);
 
     h.auth = { authToken: 'test-token-rotated', subject: 'user-a', initializing: false };
     rerender();
 
-    expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(true);
+    expect(result.current.isFeatureEnabled('insights.page')).toBe(true);
     expect(result.current.loading).toBe(false);
     expect(countUserFetches(fetchMock)).toBe(before);
   });
@@ -216,7 +216,7 @@ describe('useFeatures', () => {
 
     await land('user-a');
 
-    expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(false);
+    expect(result.current.isFeatureEnabled('insights.page')).toBe(false);
     // And it must not count as an answer either: user-b's flags are still unknown.
     expect(result.current.loading).toBe(true);
 
@@ -229,7 +229,7 @@ describe('useFeatures', () => {
   it('refresh forces a refetch', async () => {
     const fetchMock = setFetch();
     const { result } = renderHook(() => useFeatures(), { wrapper });
-    await waitFor(() => expect(result.current.isFeatureEnabled('enable.inventory.page')).toBe(true));
+    await waitFor(() => expect(result.current.isFeatureEnabled('insights.page')).toBe(true));
 
     const featureCallsBefore = fetchMock.mock.calls.filter(([u]) =>
       String(u).endsWith('/api/_internal/features'),

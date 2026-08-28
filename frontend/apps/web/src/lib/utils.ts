@@ -22,6 +22,29 @@ export function formatEnumLabel(value: string): string {
     .join(' ');
 }
 
+/**
+ * Sentence-case a backend enum for display: `LENT_OUT` -> `Lent out`.
+ *
+ * Distinct from `formatEnumLabel` above, which Title Cases (`Lent Out`) because
+ * the relationship chips have always rendered that way. This is the casing the
+ * physical-things surface uses for a lifecycle state, a condition, an
+ * acquisition method or an extraction state, and it lives here because five
+ * separate copies of it had already been written — one per call site — which is
+ * exactly how the graph filter row drifted before `formatEnumLabel` existed.
+ *
+ * Null-tolerant so a nullable enum field can be passed straight through: the
+ * result is `null`, which renders as nothing in JSX.
+ */
+export function humanizeEnum(value?: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const words = value.toLowerCase().replace(/_/g, ' ');
+
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 // Utility function to get media type from mimetype
 export function getMediaType(mimetype: string | undefined | null): 'video' | 'image' | 'audio' | null {
   if (!mimetype) {

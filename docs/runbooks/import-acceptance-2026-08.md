@@ -5,11 +5,25 @@
 > against a live stack, with the real archives and the real output.
 >
 > Companion docs: the CLI in [`docs/cli/ci-import.md`](../cli/ci-import.md), the
-> enrichment half in [`pipeline-operations.md`](pipeline-operations.md).
+> enrichment half in [`pipeline-operations.md`](pipeline-operations.md), and the
+> ETL as a whole in [`docs/import/etl-agent-guide.md`](../import/etl-agent-guide.md).
+
+> **Answered (2026-08-19): yes.** The repo was retired — renamed
+> **`ZARCHIVED-CI-Import-Tools`** on GitHub (the prefix is the retirement signal;
+> `isArchived` is still `false`). One live caller survives and is a known
+> follow-up, not an oversight: `video/stage.real-corpus.sh` still shells out to a
+> standalone checkout at `$CI_IMPORT_TOOLS` for its GraphQL-lane bulk push, and
+> says so at lines 55-62. Nothing else in the tree depends on it — the remaining
+> occurrences are the historical provenance constant
+> `source_type = 'ci-import-tools'` (one third of the dedup triple; changing it
+> would duplicate every previously imported record) and the `ci-import-tools`
+> entry in the Portal audience allowlist.
 
 Everything below was run on `main` at `d7cc6e102`, against a per-worktree dev
 stack (`make dev`), fresh database, all migrations applied. Numbers are what
-came back, not what should have come back.
+came back, not what should have come back. **This is a dated record, not a
+current-state document** — where a figure has since moved it carries a dated
+correction note rather than being silently overwritten.
 
 ---
 
@@ -17,7 +31,7 @@ came back, not what should have come back.
 
 | Surface | How | Result |
 |---|---|---|
-| `ci-import datasources` | CLI → live API | 80 importers listed |
+| `ci-import datasources` | CLI → live API | **71** importers listed (see the note under the table) |
 | `ci-import recognize <path>` | CLI → `POST /import/recognize` | works; needs `CI_IMPORT_ROOTS` |
 | `ci-import import <file> --wait` | 425KB zip, then 2.7GB Takeout | upload → unpack → parse → media → push |
 | `ci-import inbox` / `--start` | two units (601MB + 425KB) | scanned, started, consumed by rename |
@@ -25,6 +39,14 @@ came back, not what should have come back.
 | Post-ingest enrichment | automatic, after push | embeddings, vectors, person links, places |
 | Domain test suites | jest, incl. integration vs live DB | 2,641 unit + 97 import integration pass |
 | WhatsApp mappers (#2037) | 601MB export through the inbox | 681 outbound correctly identified, 100% thread-grouped |
+
+> **Correction, 2026-08-19.** That row originally read "80 importers listed",
+> which is not a number the command can print. `ci-import datasources` reports
+> `allDataSources().length` — one row per `registerDataSource` call reached
+> through `datasources/index.ts` — which was **71** at `d7cc6e102` and is still
+> 71 at `ead9fb425`. The other list, `--catalog` (authored *services*, including
+> ones whose importer is not written yet), was **104** at both commits. Checked
+> against the tree, not by re-running the pass.
 
 ## The 2.7GB archive
 

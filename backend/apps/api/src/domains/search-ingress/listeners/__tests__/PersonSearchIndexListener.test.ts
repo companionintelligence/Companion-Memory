@@ -1,3 +1,5 @@
+import { SYSTEM_USER } from '@ci/common/context';
+import config from '@ci/configuration';
 import { type Person } from '@ci/domains/memory';
 
 import { PersonSearchIndexListener } from '../PersonSearchIndexListener';
@@ -37,7 +39,7 @@ function makeListener(person: Partial<Person> | null) {
     logger as any,
   );
 
-  return { listener, embeddingService, indexSkipService };
+  return { listener, embeddingGenerationService, embeddingService, indexSkipService, vectorService, logger };
 }
 
 describe('PersonSearchIndexListener skip markers', () => {
@@ -86,5 +88,120 @@ describe('PersonSearchIndexListener skip markers', () => {
 
     expect(embeddingService.upsert).not.toHaveBeenCalled();
     expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
+  });
+});
+
+describe('PersonSearchIndexListener.unindexPerson', () => {
+  it('removes the embedding and the vector for (person, id), under the system context', async () => {
+    const { listener, embeddingService, vectorService } = makeListener(null);
+
+    await listener.unindexPerson({ personId: 'person-1' });
+
+    expect(embeddingService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'person', entityId: 'person-1' },
+    );
+    expect(vectorService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'person', entityId: 'person-1' },
+    );
+  });
+});
+
+describe('PersonSearchIndexListener.updatePerson', () => {
+  it('re-embeds and re-vectorizes an updated person the same way indexPerson does', async () => {
+    const { listener, embeddingService, vectorService } = makeListener({
+      id: 'p3',
+      userId: 'u1',
+      name: 'Josh Updated',
+      description: 'now has a bio',
+      properties: undefined,
+    });
+
+    await listener.updatePerson({ personId: 'p3' });
+
+    expect(embeddingService.upsert).toHaveBeenCalledWith(
+      { userId: 'u1' },
+      expect.objectContaining({ entityType: 'person', entityId: 'p3' }),
+    );
+    expect(vectorService.upsert).toHaveBeenCalledWith(
+      { userId: 'u1' },
+      expect.objectContaining({ entityType: 'person', entityId: 'p3' }),
+    );
+  });
+});
+
+describe('PersonSearchIndexListener merge tombstones', () => {
+  it('removes a merged person from the search index instead of (re-)indexing it', async () => {
+    const { listener, embeddingGenerationService, embeddingService, indexSkipService, vectorService } =
+      makeListener({
+        id: 'p4',
+        userId: 'u1',
+        name: 'Duplicate Josh',
+        description: null,
+        properties: undefined,
+        mergedIntoEntityId: 'p1',
+      });
+
+    await listener.updatePerson({ personId: 'p4' });
+
+    expect(embeddingGenerationService.generateEmbedding).not.toHaveBeenCalled();
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).not.toHaveBeenCalled();
+    expect(embeddingService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'person', entityId: 'p4' },
+    );
+    expect(vectorService.remove).toHaveBeenCalledWith(
+      { userId: SYSTEM_USER },
+      { entityType: 'person', entityId: 'p4' },
+    );
+    // A merge tombstone's absence is permanent, not content-dependent — it must
+    // not go through the skip-marker bookkeeping used for a genuinely blank row.
+    expect(indexSkipService.recordSkip).not.toHaveBeenCalled();
+    expect(indexSkipService.clearSkip).not.toHaveBeenCalled();
+  });
+});
+
+describe('PersonSearchIndexListener userId guard', () => {
+  it('refuses to index a person with no associated user', async () => {
+    const { listener, embeddingService, vectorService, logger } = makeListener({
+      id: 'p5',
+      userId: null,
+      name: 'No Owner',
+      description: null,
+      properties: undefined,
+    });
+
+    await listener.indexPerson({ personId: 'p5' });
+
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no associated user'));
+  });
+});
+
+describe('PersonSearchIndexListener CI_EMBED_TYPES allowlist', () => {
+  const originalTypes = config.embedding.types;
+
+  afterEach(() => {
+    config.embedding.types = originalTypes;
+  });
+
+  it('skips embedding (but still vectorizes) a person when "person" is excluded from the allowlist', async () => {
+    config.embedding.types = ['event'];
+
+    const { listener, embeddingService, vectorService } = makeListener({
+      id: 'p6',
+      userId: 'u1',
+      name: 'Josh',
+      description: 'has a bio',
+      properties: undefined,
+    });
+
+    await listener.indexPerson({ personId: 'p6' });
+
+    expect(embeddingService.upsert).not.toHaveBeenCalled();
+    expect(vectorService.upsert).toHaveBeenCalled();
   });
 });

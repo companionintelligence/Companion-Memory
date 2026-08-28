@@ -3,10 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
+import { GraphIngestService } from '@ci/domains/graph';
 import { ContentService, EventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
+import { upsertContentForEvent } from './linkContentToEvent';
 import type { SpotifyPlaylistTrackItem } from './types';
 
 @Injectable()
@@ -14,6 +16,7 @@ export class SpotifyRecentlyPlayedTransformService {
   constructor(
     private readonly contentService: ContentService,
     private readonly eventService: EventService,
+    private readonly graph: GraphIngestService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(SpotifyRecentlyPlayedTransformService.name);
@@ -57,43 +60,11 @@ export class SpotifyRecentlyPlayedTransformService {
         const track = trackItem.track;
 
         try {
-          // Search for existing track with same type and external_id
-          const existingTrack = await this.contentService.search(context, {
-            type: 'Music',
-            external_id: track.id,
-          });
-
-          if (existingTrack.length > 0) {
-            this.logger.debug('Track already exists, skipping', {
-              trackId: track.id,
-              trackName: track.name,
-            });
-            skippedCount++;
-          } else {
-            // Create new content entry for the track
-            await this.contentService.create(context, {
-              title: track.name,
-              type: 'Music',
-              url: track.external_urls?.spotify || '',
-              external_id: track.id,
-              external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-              source_url: track.external_urls?.spotify || '',
-              source_data: {
-                album: track.album,
-                artists: track.artists,
-                duration_ms: track.duration_ms,
-                explicit: track.explicit,
-                popularity: track.popularity,
-                preview_url: track.preview_url,
-                uri: track.uri,
-                played_at: trackItem.played_at,
-                context: trackItem.context,
-              },
-            });
-          }
-
+          // The play is the event; the track is content shared by every play of it.
+          // Event first so the content row can point at it — see upsertContentForEvent.
           const playedAt = trackItem.played_at!;
-          await this.eventService.create(context, {
+          const [event] = await this.eventService.create(context, {
+            connection_id: connection.id,
             title: `Played ${track.name}`,
             description: `Played ${track.name} by ${track.artists!.map((artist) => artist.name).join(', ')} on Spotify at ${trackItem.played_at}`,
             event_type: 'played_music',
@@ -111,6 +82,48 @@ export class SpotifyRecentlyPlayedTransformService {
               uri: track.uri,
             },
           });
+
+          const existingTrack = await this.contentService.search(context, {
+            type: 'Music',
+            external_id: track.id,
+          });
+
+          const { created } = await upsertContentForEvent({
+            context,
+            contentService: this.contentService,
+            graph: this.graph,
+            logger: this.logger,
+            existing: existingTrack,
+            eventId: event?.id,
+            input: {
+              connection_id: connection.id,
+              title: track.name,
+              type: 'Music',
+              url: track.external_urls?.spotify || '',
+              external_id: track.id,
+              external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+              source_url: track.external_urls?.spotify || '',
+              source_data: {
+                album: track.album,
+                artists: track.artists,
+                duration_ms: track.duration_ms,
+                explicit: track.explicit,
+                popularity: track.popularity,
+                preview_url: track.preview_url,
+                uri: track.uri,
+                played_at: trackItem.played_at,
+                context: trackItem.context,
+              },
+            },
+          });
+
+          if (!created) {
+            this.logger.debug('Track already exists, linked play to it', {
+              trackId: track.id,
+              trackName: track.name,
+            });
+            skippedCount++;
+          }
 
           createdCount++;
 

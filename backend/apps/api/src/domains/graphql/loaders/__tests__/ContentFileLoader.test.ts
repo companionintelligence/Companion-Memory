@@ -54,6 +54,7 @@ describe('ContentFileLoader', () => {
         signedFile({
           id: 'file-1',
           url: '/files/IMGP0463.JPG',
+          filename: 'IMGP0463.JPG',
           contentType: 'image/jpeg',
           size: 4_194_304 as unknown as number,
         }),
@@ -72,6 +73,7 @@ describe('ContentFileLoader', () => {
       previewUrl: '/files/IMGP0463-thumb.jpg',
       mediaUrl: '/files/IMGP0463.JPG',
       contentType: 'image/jpeg',
+      filename: 'IMGP0463.JPG',
       size: 4_194_304,
     });
   });

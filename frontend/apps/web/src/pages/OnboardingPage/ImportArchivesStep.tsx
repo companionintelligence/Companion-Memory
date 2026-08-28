@@ -65,13 +65,10 @@ export function ImportArchivesStep() {
           question — it is wrong for an application surface, where it centred
           the export guide's numbered instructions, the service cards and the
           form controls inside them.
-          Bounded height: the wizard pins its Continue and scrolls only the list
-          above it, which needs a real ceiling to scroll against. Sized so the
-          WHOLE step — heading, surface and the line below it — fits the
-          viewport without the step itself scrolling: an outer scrollbar here
-          hides the surface's own controls (the drop zone, Back, the bundle
-          pager) below the fold, and nothing tells you they are there. */}
-      <div className="flex h-[58vh] min-h-[22rem] flex-col overflow-hidden rounded-lg border text-left">
+          No nested scroller: the onboarding page is the only overflow-y-auto,
+          so Capture-style source lists and this catalog share one scrollbar,
+          with Next after the content. */}
+      <div className="w-full text-left">
         <ImportSurface variant="onboarding" onStageChange={handleStage} />
       </div>
 

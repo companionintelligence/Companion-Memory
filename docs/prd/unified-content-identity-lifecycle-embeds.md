@@ -9,6 +9,45 @@
 > The cross-repo mentions below describe the design as proposed against the
 > two-repo world that existed when this document was written — read
 > "CI-Import-Tools" throughout as the now-retired repo, not a live consumer.
+> This also moots **P3** ("Importer re-key") as written: there is no second repo
+> and no SQLite mirror to re-key.
+
+> **2026-08-19 — what of this has actually shipped.** This is still a *proposal*;
+> most of §8 is unbuilt. Verified against the tree:
+>
+> - **P0 · shipped.** `TransformYouTubeLikes` now goes through
+>   `contentService.createMany` with a comment naming the 23505 this avoids, keeps
+>   `snippet.thumbnails` and `contentDetails.duration` (as `durationIso` /
+>   `durationSeconds`), and the `console.log`s are gone. On the frontend,
+>   `GalleryView/media.ts` has a `PROVIDER_PSEUDO_MIMETYPES` set — `video/youtube`,
+>   `video/vimeo`, `audio/spotify`, `audio/soundcloud` — that `mediaKind()` resolves
+>   to `null`, so these no longer render as broken `<img>`/`<video>`.
+> - **P0.5 · shipped.** `ContentService.update` maps `source_data` (the branch is at
+>   `ContentService.ts:799-801`, with a comment naming this PRD's finding).
+> - **P1 · shipped, in a different place, and NOT consumed.** The identity ladder
+>   landed as the dependency-free domain
+>   [`backend/apps/api/src/domains/identity/`](../../backend/apps/api/src/domains/identity)
+>   (`canonicalizeUrl`, `buildNaturalKey`, `resolveIdentities`, `providers`, `tracking`,
+>   `fixtures/`) rather than as a `backend/packages/object-identity` yarn workspace. Its
+>   own module header says "Nothing consumes it yet; wiring it into the ingest write paths
+>   is design P2", and that is still true — the only references to it anywhere else in the
+>   tree are two comments, one of which (`pipeline/stages/enrich/PersonLinkStage.ts:125`)
+>   records that it was read and judged **not** fit for person linking. **Do not cite the
+>   `src > url > sha256 > txt > nat` ladder as the identity mechanism in force.**
+> - **P2 · not shipped.** There is no `ci.content_objects`, no `ci.content_acts`, no
+>   `ci.object_merge_candidates`, no `ObjectIdentityService`. A table called
+>   `ci.object_identifiers` **does** exist (`20260803223016`), but it is a *different*
+>   design solving a different problem: the barcode/serial index for physical things,
+>   discriminated `subject_type IN ('product_model','object_instance')` and normalized by
+>   `domains/graph/utils/normalizeObjectIdentifier.ts`. Do not read its existence as this
+>   PRD's identity index.
+> - **P4–P8 · not started.** No act table, no verb map, no embed cache, no merge/unmerge.
+>
+> The identity rules actually in force today are: `ci.entity_identifiers`
+> (email/phone/name, normalized by `domains/graph/utils/normalizeIdentifier.ts`) for
+> people, `ci.object_identifiers` for things, and the
+> `(owner_user_id, entity_type, linked_table, linked_id)` upsert coordinate for
+> import-created entities.
 
 > **Provenance.** Produced by a 14-agent survey-and-critique pass (7 surveyors → 3 design tracks
 > → 3 adversarial critics → synthesis) over CI-Server, CI-Import-Tools, and the archived
@@ -27,7 +66,28 @@
 
 ## 1. What's actually broken today
 
-Six defects, all verified against the current tree. Everything below exists to fix these.
+Six defects, all verified against the tree **as it stood when this was written**. Everything
+below exists to fix these.
+
+> **Re-checked 2026-08-19.** Two of the six have since been closed and one has moved:
+>
+> - **1.1 is FIXED.** `20260808150100_schema_consolidation.sql:7-10` dropped and recreated
+>   `events_source_triple_uniq` as `(user_id, source_type, source_system, source_id) WHERE
+>   source_id IS NOT NULL`, so the arbiter and the hydration SELECT now agree on scope. The
+>   sibling `objects_source_triple_uniq` and `product_models_source_triple_uniq` are
+>   owner-scoped in the same migration.
+> - **1.3 has moved, not closed.** `INGEST_REFRESH_COLUMNS` now lives at
+>   `backend/apps/api/src/common/persistence/ingestRefreshColumns.ts`, carries an
+>   `INGEST_SCHEMA_VERSION` and four populated lists (`communication`, `product_model`,
+>   `receipt`, `receipt_line_item` — the last three declarative until their services pass
+>   `conflictUpdateColumns`). `event`, `content` and `browser_activity` are still `[]`;
+>   `item` is now empty **on purpose**, because `ci.objects` is the one ingest table a
+>   user edits directly.
+> - **1.5 is FIXED** — see the P0 note in the header.
+>
+> 1.2, 1.4 and 1.6 still hold: `hasFullTriple` still requires all three legs
+> (`BulkIngestController.ts:93`, checked at `:360` and `:454`), there is still no index on
+> `ci.content.url`, and `ci.events.event_type` still carries no CHECK.
 
 **1.1 — `ci.events` idempotency returns a phantom row.** `events_source_triple_uniq` is `(source_type, source_system, source_id) WHERE source_id IS NOT NULL` — no `user_id` (`20260620213807_add_events_source_idempotency.sql:8`). But `EventService.createManyBatched` passes `scope: { userId }` for both the existence pre-check and the hydration SELECT (`EventService.ts:212-227`, whose own comment flags the mismatch). On a multi-user appliance, user B ingesting a triple owned by user A: the global arbiter skips the INSERT → the user-scoped hydration finds nothing → `bulkUpsert.ts:454` returns `hydratedByKey.get(key) ?? entity`, i.e. **an unsaved in-memory entity with an id that is in no row**. Every other triple index in the schema is user- or owner-scoped.
 

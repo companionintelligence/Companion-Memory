@@ -1,10 +1,10 @@
 import { Button, DropdownMenu, IconButton } from '@ci/shadcn';
 import { ExternalLink, MessagesSquare } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 
-import { useAgentHarnesses, type AgentHarnessStatus } from '@/api/useAgentHarnesses';
-import { type AgentChatContext, openAgentHarness, openInAppChat } from '@/lib/agentChat';
+import { type AgentChatContext, openAgentHarness } from '@/lib/agentChat';
+
+import { useChatAboutActions } from './useChatAboutActions';
 
 interface Props {
   context: AgentChatContext;
@@ -12,66 +12,43 @@ interface Props {
   className?: string;
 }
 
-function RunningHarnessButtons({
-  harnesses,
-  context,
-  className,
-}: {
-  harnesses: AgentHarnessStatus[];
-  context: AgentChatContext;
-  className?: string;
-}) {
-  return (
-    <>
-      {harnesses.map((harness) => (
-        <Button
-          key={harness.id}
-          variant="outline"
-          size="sm"
-          className={className}
-          onClick={() => openAgentHarness(harness.openUrl!, context)}
-        >
-          <ExternalLink className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
-          {harness.name}
-        </Button>
-      ))}
-    </>
-  );
-}
-
 export function ChatWithAgentMenu({ context, size = 'icon', className }: Props) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
-  const { runningHarnesses, loading } = useAgentHarnesses();
+  const { chatableHarnesses, loading, chatHere } = useChatAboutActions(context);
 
   if (size === 'sm') {
     return (
       <div className="flex items-center gap-1">
-        <Button
-          variant="outline"
-          size="sm"
-          className={className}
-          onClick={() => openInAppChat(navigate, context)}
-        >
+        <Button variant="outline" size="sm" className={className} onClick={chatHere}>
           <MessagesSquare className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
-          Chat here
+          {t('CHAT_WITH_AGENT_HERE')}
         </Button>
-        {!loading && runningHarnesses.length > 0 ? (
-          <RunningHarnessButtons harnesses={runningHarnesses} context={context} className={className} />
-        ) : null}
+        {!loading &&
+          chatableHarnesses.map((harness) => (
+            <Button
+              key={harness.id}
+              variant="outline"
+              size="sm"
+              className={className}
+              onClick={() => openAgentHarness(harness.openUrl!, context)}
+            >
+              <ExternalLink className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
+              {harness.name}
+            </Button>
+          ))}
       </div>
     );
   }
 
-  const hasRunningHarnesses = !loading && runningHarnesses.length > 0;
+  const hasHarnesses = !loading && chatableHarnesses.length > 0;
 
-  if (!hasRunningHarnesses) {
+  if (!hasHarnesses) {
     return (
       <IconButton
         variant="ghost"
         className={className}
         label={t('CHAT_WITH_AGENT_ABOUT', { title: context.title })}
-        onClick={() => openInAppChat(navigate, context)}
+        onClick={chatHere}
       >
         <MessagesSquare className="h-3.5 w-3.5" strokeWidth={1.5} />
       </IconButton>
@@ -90,11 +67,11 @@ export function ChatWithAgentMenu({ context, size = 'icon', className }: Props) 
           <MessagesSquare className="h-3.5 w-3.5" strokeWidth={1.5} />
         </IconButton>
       </DropdownMenu.Trigger>
-      <DropdownMenu.Content align="end">
-        <DropdownMenu.Item onClick={() => openInAppChat(navigate, context)}>Chat here</DropdownMenu.Item>
-        {runningHarnesses.map((harness) => (
+      <DropdownMenu.Content align="end" className="z-[1100]">
+        <DropdownMenu.Item onClick={chatHere}>{t('CHAT_WITH_AGENT_HERE')}</DropdownMenu.Item>
+        {chatableHarnesses.map((harness) => (
           <DropdownMenu.Item key={harness.id} onClick={() => openAgentHarness(harness.openUrl!, context)}>
-            Open in {harness.name}
+            {t('CHAT_WITH_AGENT_OPEN_IN', { name: harness.name })}
           </DropdownMenu.Item>
         ))}
       </DropdownMenu.Content>

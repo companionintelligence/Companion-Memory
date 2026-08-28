@@ -2,7 +2,7 @@ import { useState } from 'react';
 
 import { usePageTitle } from '@ci/common';
 import { Button, Card, Skeleton, ToggleGroup } from '@ci/shadcn';
-import { AlertTriangle, RefreshCcw } from '@ci/shadcn/icons';
+import { AlertTriangle, CalendarOff, RefreshCcw } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
@@ -114,6 +114,10 @@ function StatsBody({
         </ToggleGroup>
       </div>
 
+      {isRangeEmpty(stats) && range !== 'all' && (
+        <EmptyRangeNotice stats={stats} range={range} onShowAllTime={() => onRangeChange('all')} />
+      )}
+
       <InsightCards insights={stats.insights} />
       <DailySeries {...rangeToBounds(range)} />
 
@@ -185,6 +189,71 @@ function StatsBody({
         }))}
       />
     </div>
+  );
+}
+
+/**
+ * True when nothing HAPPENED in the selected window — no message on any
+ * channel, no payment, no post or like.
+ *
+ * Deliberately not "every series is empty". `time` counts calendar entries,
+ * which are routinely in the FUTURE (this corpus holds events out to
+ * 2026-10-15), so a window with nothing but two scheduled meetings in it would
+ * never qualify — and that is exactly the window that looks broken. `channels`
+ * rather than `conversations` is the message test: it counts every
+ * communication, including those whose participants never resolved to a Person,
+ * so `channels` empty implies `conversations` empty but not the reverse.
+ *
+ * The individual charts each say "none in this range", but three of those side
+ * by side read as a broken page rather than an empty window — so an empty
+ * window says so once, up front, with the way out.
+ */
+function isRangeEmpty(stats: MemoryStats): boolean {
+  return stats.channels.rows.length === 0 && stats.spend.rows.length === 0 && stats.social.rows.length === 0;
+}
+
+function EmptyRangeNotice({
+  stats,
+  range,
+  onShowAllTime,
+}: {
+  stats: MemoryStats;
+  range: StatsRange;
+  onShowAllTime: () => void;
+}) {
+  const bounds = rangeToBounds(range);
+  const from = formatDay(bounds.from ?? null);
+  const to = formatDay(bounds.to ?? null);
+  const earliest = formatDay(stats.dateRange.earliest);
+  const latest = formatDay(stats.dateRange.latest);
+
+  return (
+    <Card>
+      <Card.Content className="flex flex-col gap-3 py-6 text-sm sm:flex-row sm:items-center">
+        <CalendarOff className="h-5 w-5 shrink-0 text-muted-foreground" />
+        <div className="flex flex-col gap-0.5">
+          <span>
+            No messages, payments, or posts in the last {STATS_RANGE_LABELS[range].toLowerCase()}
+            {from && to ? (
+              <>
+                {' '}
+                (<span className="tabular-nums">{from}</span> → <span className="tabular-nums">{to}</span>)
+              </>
+            ) : null}
+            .
+          </span>
+          {earliest && latest && (
+            <span className="text-muted-foreground">
+              Your memory runs <span className="tabular-nums">{earliest}</span> →{' '}
+              <span className="tabular-nums">{latest}</span>. The tiles below stay all-time either way.
+            </span>
+          )}
+        </div>
+        <Button variant="outline" size="sm" className="sm:ml-auto" onClick={onShowAllTime}>
+          Show all time
+        </Button>
+      </Card.Content>
+    </Card>
   );
 }
 

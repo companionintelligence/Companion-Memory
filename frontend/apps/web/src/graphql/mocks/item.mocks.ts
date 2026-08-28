@@ -1,5 +1,18 @@
+/**
+ * Fields the grid/row fragments select that are NON-NULL in the schema, so
+ * every mock has to carry them or `makeFragmentData` stops typechecking. Spread
+ * first, so any entry that cares can override them.
+ */
+const ITEM_DEFAULTS = {
+  quantity: 1,
+  currency: 'USD',
+  lifecycleState: 'ACTIVE' as const,
+  identifiers: [],
+};
+
 export const MOCK_ITEMS = [
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-0',
     name: 'Laptop Pro X',
@@ -10,6 +23,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-1',
     name: 'Ergonomic Chair',
@@ -20,6 +34,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-2',
     name: 'Wireless Mouse',
@@ -30,6 +45,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-3',
     name: 'Mechanical Keyboard',
@@ -40,6 +56,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-4',
     name: '27-inch Monitor',
@@ -50,6 +67,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-5',
     name: 'Noise Cancelling Headphones',
@@ -60,6 +78,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-6',
     name: 'Smartphone Stand',
@@ -70,6 +89,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-7',
     name: 'USB-C Hub',
@@ -80,6 +100,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-8',
     name: 'External SSD',
@@ -90,6 +111,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-9',
     name: 'Webcam',
@@ -100,6 +122,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-10',
     name: 'Desk Lamp',
@@ -110,6 +133,7 @@ export const MOCK_ITEMS = [
     },
   },
   {
+    ...ITEM_DEFAULTS,
     __typename: 'ItemType' as const,
     id: 'item-11',
     name: 'Notebook',

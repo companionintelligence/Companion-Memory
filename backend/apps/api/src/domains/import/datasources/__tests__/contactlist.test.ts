@@ -160,4 +160,48 @@ describe('Contact List datasource', () => {
     const names = collected.map((c) => c.entity?.name);
     expect(names).toEqual(['Grace Green', 'Ivy Iverson']);
   });
+
+  /**
+   * The `Photo` column (Google Contacts' own export header) was recognized by
+   * the header-canonicalization table (CANON.PICTURE) but its value was never
+   * read anywhere — a genuine avatar URL, sitting parsed and then discarded.
+   * `properties.avatar_url` is the exact key `PersonType.avatarUrl` reads
+   * (backend/.../graphql/types/PersonType.ts) and `push/entities.ts` spreads
+   * `entity.metadata` straight into `ci.entities.properties`, so this is the
+   * whole path from CSV cell to what the People page renders.
+   */
+  it('carries the Photo column through as properties.avatar_url', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-contactlist-photo-'));
+    const file = path.join(dir, 'contacts.csv');
+    fs.writeFileSync(
+      file,
+      'Name,E-mail 1 - Value,Phone 1 - Value,Photo\n' +
+        'Jill Jones,jill@example.com,555-6666,https://contacts.google.com/photo/jill.jpg',
+    );
+    const { params, collected } = makeParams();
+    await new ContactListFileImporter().fileImport(
+      undefined,
+      { fullPath: file } as DirEntry,
+      params as unknown as ImportParams,
+    );
+
+    expect(collected[0].entity?.metadata?.avatar_url).toBe('https://contacts.google.com/photo/jill.jpg');
+  });
+
+  it('does not treat a non-URL Photo cell as an avatar_url', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-contactlist-photo-bad-'));
+    const file = path.join(dir, 'contacts.csv');
+    fs.writeFileSync(
+      file,
+      'Name,E-mail 1 - Value,Phone 1 - Value,Photo\nKen Kelly,ken@example.com,555-7777,IMG_0001.HEIC',
+    );
+    const { params, collected } = makeParams();
+    await new ContactListFileImporter().fileImport(
+      undefined,
+      { fullPath: file } as DirEntry,
+      params as unknown as ImportParams,
+    );
+
+    expect(collected[0].entity?.metadata?.avatar_url).toBeUndefined();
+  });
 });

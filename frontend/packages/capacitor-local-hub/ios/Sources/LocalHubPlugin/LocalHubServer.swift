@@ -106,6 +106,19 @@ final class LocalHubServer {
         }
     }
 
+    /// Opens the outbox without starting HTTP. Background location writes here
+    /// while the webview — and this listener — may be asleep.
+    func ensureOutbox() throws -> OutboxStore {
+        try stateQueue.sync { () -> OutboxStore in
+            if let existing = outbox {
+                return existing
+            }
+            let store = try OutboxStore(databaseURL: OutboxStore.defaultDatabaseURL())
+            outbox = store
+            return store
+        }
+    }
+
     /// Starts the server if not already running (fresh port + fresh token), or
     /// returns the already-running instance's `baseUrl`/`token` unchanged.
     func start() throws -> (baseUrl: String, token: String) {

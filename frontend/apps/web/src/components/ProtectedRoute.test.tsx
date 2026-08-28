@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProtectedRoute } from './ProtectedRoute';
 
@@ -8,12 +8,22 @@ import { ProtectedRoute } from './ProtectedRoute';
 const h = vi.hoisted(() => ({
   auth: { authToken: null as string | null, expired: true, loading: false, error: null },
   user: { user: null as { id: string } | null, loading: false },
+  isNative: false,
 }));
 
 vi.mock('@/hooks', () => ({
   useAuth: () => [h.auth, {}],
   useCurrentUser: () => h.user,
 }));
+
+vi.mock('@ci/common', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@ci/common')>();
+
+  return {
+    ...actual,
+    isNativePlatform: () => h.isNative,
+  };
+});
 
 function renderProtected() {
   return render(
@@ -28,12 +38,17 @@ function renderProtected() {
           }
         />
         <Route path="/login" element={<div>login page</div>} />
+        <Route path="/device-connect" element={<div>device connect</div>} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
 describe('ProtectedRoute', () => {
+  beforeEach(() => {
+    h.isNative = false;
+  });
+
   it('shows a loading state while auth/user resolve', () => {
     h.auth = { authToken: null, expired: true, loading: true, error: null };
     h.user = { user: null, loading: false };
@@ -53,13 +68,23 @@ describe('ProtectedRoute', () => {
     expect(screen.getByText('login page')).toBeInTheDocument();
   });
 
-  it('redirects to /login when expired or unauthenticated', () => {
+  it('redirects to /login when expired or unauthenticated on web', () => {
     h.auth = { authToken: null, expired: true, loading: false, error: null };
     h.user = { user: null, loading: false };
 
     renderProtected();
 
     expect(screen.getByText('login page')).toBeInTheDocument();
+  });
+
+  it('redirects to /device-connect when expired or unauthenticated on native', () => {
+    h.isNative = true;
+    h.auth = { authToken: null, expired: true, loading: false, error: null };
+    h.user = { user: null, loading: false };
+
+    renderProtected();
+
+    expect(screen.getByText('device connect')).toBeInTheDocument();
   });
 
   it('renders children when authenticated with a user', () => {

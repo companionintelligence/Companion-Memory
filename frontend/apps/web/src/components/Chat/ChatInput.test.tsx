@@ -91,6 +91,16 @@ describe('ChatInput', () => {
     expect(screen.getByRole('textbox')).toBeDisabled();
   });
 
+  it('applies a new initialDraft after mount', () => {
+    const { rerender } = render(<ChatInput initialDraft="" />);
+
+    expect(screen.getByRole('textbox')).toHaveValue('');
+
+    rerender(<ChatInput initialDraft={'I\'d like to talk about "Picnic":\n\nBring snacks'} />);
+
+    expect(screen.getByRole('textbox')).toHaveValue('I\'d like to talk about "Picnic":\n\nBring snacks');
+  });
+
   it('uploads a selected file and sends its id with the message', async () => {
     const onSubmit = vi.fn().mockReturnValue(true);
     const { container } = render(<ChatInput onSubmit={onSubmit} />);

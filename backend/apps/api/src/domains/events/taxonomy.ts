@@ -104,6 +104,8 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
   ...searchIndexTypes('communication', 'communication'),
   ...searchIndexTypes('browseractivity', 'browsing record'),
   ...searchIndexTypes('position', 'GPS fix'),
+  ...searchIndexTypes('product', 'product'),
+  ...searchIndexTypes('receipt', 'receipt'),
   'agent-memory.created': {
     label: 'Agent memory saved',
     category: JOB_CATEGORIES.search,
@@ -114,11 +116,11 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     category: JOB_CATEGORIES.search,
     description: 'Drop a forgotten agent memory from the search index.',
   },
-  'search.embed.entity': {
-    label: 'Embed for semantic search',
-    category: JOB_CATEGORIES.search,
+  'agent-memory.turn-fragments': {
+    label: 'Remember a chat turn',
+    category: JOB_CATEGORIES.ingest,
     description:
-      'Compute the vector embedding that makes an entity findable by meaning rather than keyword. Runs on the local model, so a backlog here is usually the model being busy.',
+      'Turn one user\u2019s finished chat turns into raw memory fragments, so what was said in chat can be recalled later and compacted into the graph.',
   },
 
   // ── Ingest ──────────────────────────────────────────────────────────────
@@ -131,7 +133,7 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     label: 'File uploaded',
     category: JOB_CATEGORIES.ingest,
     description:
-      'The fan-out point for everything a new file needs: preview generation, document parsing, inventory extraction and search indexing all hang off this one event. By far the highest-volume job on the appliance.',
+      'The fan-out point for everything a new file needs: preview generation, document parsing, thing extraction and search indexing all hang off this one event. By far the highest-volume job on the appliance.',
   },
   'file.updated': {
     label: 'File changed',
@@ -176,6 +178,12 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     label: 'Estimate locations',
     category: JOB_CATEGORIES.enrich,
     description: 'Infer where something happened when it carries no explicit location.',
+  },
+  'file.image-description-backfill-request': {
+    label: 'Backfill image descriptions',
+    category: JOB_CATEGORIES.enrich,
+    description:
+      'Image description was turned back on; re-fire preview.generated for originals still missing a description (skipped while off, or previously failed on a text-only model).',
   },
 
   // ── Life graph ──────────────────────────────────────────────────────────
@@ -258,20 +266,23 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     description:
       'Copy exhausted-retry jobs out of the dead-letter queue into a durable table so the failure survives pg-boss retention.',
   },
-  'content.created': {
-    label: 'Content staged',
+  'maintenance.graph-edge-backfill-request': {
+    label: 'Kick graph-edge sweep',
     category: JOB_CATEGORIES.pipeline,
-    description: 'New raw content arrived and needs to enter the pipeline.',
+    description:
+      "Start an immediate promote.edge_* sweep for the requesting user so a bulk load's rows reach the graph without waiting for the next scheduled sweep.",
   },
-  'content.updated': {
-    label: 'Content changed',
+  'maintenance.search-index-backfill-request': {
+    label: 'Kick search-index sweep',
     category: JOB_CATEGORIES.pipeline,
-    description: 'Re-index content whose body or metadata changed.',
+    description:
+      "Start an immediate embed+vector sweep of the requested entity types for the requesting user so a bulk load's rows become searchable without waiting for the next scheduled sweep.",
   },
-  'content.deleted': {
-    label: 'Content removed',
+  'ingest.coalesce': {
+    label: 'Coalesce ingest',
     category: JOB_CATEGORIES.pipeline,
-    description: 'Drop deleted content from the search index.',
+    description:
+      'Server-side finish for a bulk /v1 push: a delayed singleton that runs enrichment even if the client never calls finish.',
   },
 
   // ── Import / ETL ────────────────────────────────────────────────────────
@@ -337,6 +348,12 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     label: 'Question raised',
     category: JOB_CATEGORIES.personalization,
     description: 'A new question about the user was raised for the feed.',
+  },
+  'user.created': {
+    label: 'Default searches seeded',
+    category: JOB_CATEGORIES.personalization,
+    description:
+      'Seed the starter saved-search library for a new account so the catalog exists before the first visit to Saved Searches.',
   },
 
   // ── Planning ────────────────────────────────────────────────────────────
@@ -411,8 +428,7 @@ export const SMART_ROTATION_WORK_LABELS: Readonly<Record<string, string>> = {
   graph_enrich: 'Enrich graph entities',
   context_prompt: 'Rebuild context prompt',
   hydrate_answers: 'Hydrate answers',
-  hydrate_inventory: 'Hydrate inventory',
-  promotion_review: 'Review entity promotions',
+  hydrate_things: 'Hydrate things',
 };
 
 const UNCLASSIFIED: JobTypeDescriptor = {
@@ -423,17 +439,65 @@ const UNCLASSIFIED: JobTypeDescriptor = {
 };
 
 /**
+ * JOB_TYPES is keyed by event name only, so a name two independent listeners
+ * share on different queues can only carry one description — whichever was
+ * registered last wins and the other listener is mislabeled. This is the
+ * disambiguation table for the events where that has actually happened: keyed
+ * by `${event}::${queue}`, checked before falling back to JOB_TYPES.
+ */
+const JOB_TYPES_BY_QUEUE: Readonly<Record<string, JobTypeDescriptor>> = {
+  // content.created also drives the pipeline's on-arrival dispatch — a
+  // different job from the search-indexing JOB_TYPES entry below.
+  'content.created::pipeline-index': {
+    label: 'Content staged',
+    category: JOB_CATEGORIES.pipeline,
+    description: 'New raw content arrived and needs to enter the pipeline.',
+  },
+  // communication.created also drives on-ingest people-linking, run on its own
+  // queue so it never waits behind a search-indexing job.
+  'communication.created::people-linking': {
+    label: 'Communication participants linked',
+    category: JOB_CATEGORIES.graph,
+    description:
+      "Resolve a communication's participants against the entity-identifier index, minting stub Person entities for anyone not yet known.",
+  },
+  // user.created also provisions the new account's inbox drop folders, on its
+  // own queue so a slow mount can never hold up saved-search seeding.
+  'user.created::import-inbox-provision': {
+    label: 'Inbox folders provisioned',
+    category: JOB_CATEGORIES.import,
+    description:
+      "Create a new account's inbox drop folders on the mount as soon as the user row exists, rather than waiting for a restart or the first Inbox visit.",
+  },
+  // answer.created also confirms the seeded home question, on the default
+  // queue — unrelated to the search-indexing job of the same event name.
+  'answer.created::default': {
+    label: 'Home confirmed from answer',
+    category: JOB_CATEGORIES.graph,
+    description:
+      'When an answer resolves the seeded home question, write the same LIVES_IN edge the selector persist path uses and refresh daily metrics.',
+  },
+};
+
+/**
  * Describe a job from its event name and (for rotation work) its work type.
+ * `queue` disambiguates the handful of events two unrelated listeners share —
+ * see {@link JOB_TYPES_BY_QUEUE} — and is optional because most callers don't
+ * need it: JOB_TYPES already covers events with a single listener.
  *
  * Never throws and never returns undefined: an unknown event is a gap in this
  * file, not a reason for the dashboard to fail.
  */
-export function describeJob(event: string | null, workType?: string | null): JobTypeDescriptor {
+export function describeJob(
+  event: string | null,
+  workType?: string | null,
+  queue?: string | null,
+): JobTypeDescriptor {
   if (!event) {
     return UNCLASSIFIED;
   }
 
-  const base = JOB_TYPES[event];
+  const base = (queue != null ? JOB_TYPES_BY_QUEUE[`${event}::${queue}`] : undefined) ?? JOB_TYPES[event];
 
   if (!base) {
     return UNCLASSIFIED;

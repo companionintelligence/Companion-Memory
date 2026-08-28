@@ -1,10 +1,32 @@
 # Partitioning audit: every hypertable in the schema
 
-> Status: accepted, remediation in progress (2026-08-07, branch
-> `hypertable-remediation`). Supersedes and merges the earlier
+> Status: **accepted; remediation landed.** Re-verified against `main` on
+> 2026-08-19: all three remediation migrations are in the tree —
+> `20260807071631_departition_position.sql`,
+> `20260807072056_departition_user_snapshots.sql` and
+> `20260807072321_dehypertable_communications.sql` — and the rule is written down
+> as [ADR-0002](adr/0002-timescaledb-hypertable-criteria.md). Workstream steps
+> 1, 3, 4, 5 and 7 are done, step 2 is decided-as-no, and only step 6 remains
+> open (and see the note under it: the table it concerns was never created).
+>
+> **[2026-08-26] `ci.user_snapshots` is gone, not retained.** This audit called it
+> the table with "the strongest unrealised retention argument". The follow-up
+> found the reason retention was never worth arguing about: the table had no
+> `SELECT` anywhere in the repo, and its ingest mutation
+> (`ingestUserSnapshot`) had no caller in any repo — nor could it, since its
+> `JwtAuthGuard` 401s the api-key/Portal-OIDC credentials CI-Capture presents,
+> and CI-Capture's supported lane POSTs the same payload to `/v1/events`
+> instead. Dropped in `20260826202515_retire_user_snapshots`, which settles the
+> retention question the only way it can be settled for a dataset with no
+> consumer. **Two** surviving hypertables now: `ci.position` and
+> `hbpe.prediction_log`. Everything below is the pre-2026-08-26 state.
+>
+> Supersedes and merges the earlier
 > `COMMUNICATIONS-HYPERTABLE-CASE.md`. Originally written against main as of
 > 2026-08-05; reconciled against main as of 2026-08-07 — the deltas found are
-> flagged inline with **[2026-08-07]**.
+> flagged inline with **[2026-08-07]**. The body below is left in its
+> pre-remediation voice on purpose: it is the argument, and the argument is what
+> ADR-0002 rests on.
 >
 > Audits every `create_hypertable` call in the migration history in both
 > directions: hypertables that should not exist, and tables that arguably should
@@ -29,6 +51,14 @@ Twelve `create_hypertable` calls exist in the history. **Four survive.**
 
 Of the four survivors: **one is correct, two are right tables with wrong
 configuration, and one is actively causing data corruption.**
+
+> **[2026-08-19] All three defects are now fixed.** `ci.position` and
+> `ci.user_snapshots` are time-only hypertables (space partition dropped);
+> `ci.communications` is a plain table with the provenance triple enforced
+> directly and `ci.communications_source_dedup` retired. That leaves **three**
+> surviving hypertables — `ci.position`, `ci.user_snapshots`,
+> `hbpe.prediction_log` — and one more de-partitioned table. The counts in the
+> table above are the 2026-08-05 snapshot and are left as written.
 
 Separately: **exactly one retention policy exists in the entire schema.**
 Retention is the strongest reason to reach for TimescaleDB, and 11 of 12
@@ -394,6 +424,12 @@ finding: this is a single-user appliance, and only genuine sensor streams qualif
 
 ### The one live question: `ci.entity_mutations`
 
+> **[2026-08-19] This table does not exist.** No migration creates it and nothing
+> references it; the entity-inheritance work landed as class-table inheritance on
+> `ci.entities` rather than a mutations log. The gate analysis below is retained
+> because it applies verbatim to `ci.graph_deltas`, which *does* exist and is the
+> table the last paragraph already redirects to.
+
 The audit table introduced by the entity-inheritance work.
 
 - **Gate 1**: passes. Surrogate `id` PK, no natural key.
@@ -460,6 +496,15 @@ sized to real volume. Same reasoning for `ci.graph_deltas`, which
    `ci.graph_deltas`, which `entity_mutations` is meant to replace, has an
    out-of-band Python consumer; see ENTITY-INHERITANCE-MATRIX.md before
    assuming it can simply be retired.
+   *[2026-08-19] Moot for now: **`ci.entity_mutations` was never created** — no
+   migration and no code reference it, so there is no retention to decide. The
+   entity-inheritance work landed as CTI on `ci.entities` instead.
+   `ci.graph_deltas` does exist (`20260120150000_create_graph_deltas.sql`) and is
+   now written explicitly by `GraphDeltaWriter` after the database triggers that
+   briefly wrote it were dropped in `20260811210000_drop_graph_delta_triggers.sql`;
+   the summary sidecar reads it as one of its `data_sources_used`. Its retention
+   is still undecided, and it is still not a hypertable. `ENTITY-INHERITANCE-MATRIX.md`
+   is not in the repo.*
 7. **Write the rule down** so the next time-stamped table does not inherit the
    pattern. The gates above are the starting point.
    *[2026-08-07] Implemented as ADR 0002 (`docs/architecture/adr/`).*

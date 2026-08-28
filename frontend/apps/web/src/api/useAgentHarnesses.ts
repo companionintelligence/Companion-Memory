@@ -133,10 +133,15 @@ export function useAgentHarnesses() {
     () => harnesses.filter((harness) => harness.running && harness.openUrl),
     [harnesses],
   );
+  const chatableHarnesses = useMemo(
+    () => harnesses.filter((harness) => harness.openUrl && (harness.connectedToMemory || harness.running)),
+    [harnesses],
+  );
 
   return {
     harnesses,
     runningHarnesses,
+    chatableHarnesses,
     /** @deprecated Prefer {@link runningHarnesses}. */
     openableHarnesses: runningHarnesses,
     /** @deprecated Prefer {@link runningHarnesses}. */

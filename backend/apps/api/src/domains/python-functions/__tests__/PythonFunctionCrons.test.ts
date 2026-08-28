@@ -2,6 +2,7 @@ import type { DataSource } from 'typeorm';
 
 import type { FeatureService } from '@ci/common/feature';
 import type { LoggerService } from '@ci/common/logging';
+import { CronRunStore } from '@ci/common/schedule';
 
 import { PythonFunctionCrons } from '../cron/PythonFunctionCrons';
 import type { PythonFunctionService } from '../services/PythonFunctionService';
@@ -138,6 +139,51 @@ describe('PythonFunctionCrons', () => {
       await crons.actions();
 
       expect(pythonFunctionService.dispatch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  /**
+   * These crons are the reason `ci.cron_runs` exists: `monthlySummaries` fires
+   * once on the 1st, so without a durable stamp the Jobs dashboard reports it
+   * as never run for up to a month after every deploy — the in-memory
+   * `lastDate()` fallback only survives while the process does. The stamp comes
+   * from the `@ci/common/schedule` wrapper, so a cron decorated with the raw
+   * `@nestjs/schedule` import writes nothing.
+   */
+  describe('durable last-run stamp', () => {
+    const stamp = jest.fn().mockResolvedValue([]);
+
+    beforeEach(() => {
+      stamp.mockClear();
+      // Deliberately not the DataSource the crons query through: a stamp landing
+      // in that mock would reorder the call assertions above.
+      CronRunStore.configure({ query: stamp } as unknown as DataSource);
+    });
+
+    afterEach(() => {
+      CronRunStore.configure(null as unknown as DataSource);
+    });
+
+    it.each([
+      ['hourlySummaries'],
+      ['dailySummaries'],
+      ['weeklySummaries'],
+      ['monthlySummaries'],
+      ['dossierRefresh'],
+      ['insights'],
+      ['actions'],
+      ['hbpeNightly'],
+      ['hbpeBootstrapSweep'],
+    ] as const)('records a run of %s under its registry name', async (method) => {
+      const { crons, pythonFunctionService } = makeCrons(['user-1']);
+
+      await crons[method]();
+
+      expect(stamp).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO ci.cron_runs'), [
+        `PythonFunctionCrons.${method}`,
+        expect.any(Date),
+      ]);
+      expect(pythonFunctionService.dispatch).toHaveBeenCalled();
     });
   });
 

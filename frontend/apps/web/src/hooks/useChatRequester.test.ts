@@ -15,7 +15,15 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('@ci/shadcn', () => ({ useToast: () => ({ toast: { error: h.toastError } }) }));
-vi.mock('./useAuth', () => ({ useAuth: () => [{ authToken: 'tok' }, {}] }));
+const auth = vi.hoisted(() => ({
+  authToken: 'tok' as string | null,
+  authenticated: true,
+  expired: false,
+}));
+
+vi.mock('./useAuth', () => ({
+  useAuth: () => [{ authToken: auth.authToken, authenticated: auth.authenticated, expired: auth.expired }, {}],
+}));
 vi.mock('./useModel', () => ({ useModel: () => [h.model, {}] }));
 
 function streamResponse(threadId = 'new-thread') {
@@ -30,6 +38,9 @@ function streamResponse(threadId = 'new-thread') {
 }
 
 beforeEach(() => {
+  auth.authToken = 'tok';
+  auth.authenticated = true;
+  auth.expired = false;
   h.model = {
     selectedModel: 'llama3',
     thinkingEnabled: false,
@@ -217,6 +228,20 @@ describe('useChatRequester', () => {
 
     expect(attached).toBe(false);
     expect(result.current[0].stream).toBeNull();
+  });
+
+  it('omits Authorization when there is no JWT (native API key session)', async () => {
+    auth.authToken = null;
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(streamResponse('thread-n')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useChatRequester({ threadId: null }));
+    await act(async () => {
+      await result.current[1].submit({ message: 'hello', fileIds: [] });
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
   });
 
   it('captures an error when the request is not ok', async () => {

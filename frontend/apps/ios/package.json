@@ -6,13 +6,16 @@
   "packageManager": "yarn@4.9.1",
   "scripts": {
     "build:web": "cd ../../.. && VITE_DISABLE_PWA=true yarn workspace @ci/fe-web build",
-    "sync": "cap sync ios",
+    "sync:safari-extension": "bash scripts/sync-safari-extension.sh",
+    "sync": "cap sync ios && yarn sync:safari-extension",
     "build": "yarn build:web && yarn sync",
     "open": "cap open ios",
     "run": "cap run ios"
   },
   "dependencies": {
+    "@capacitor-community/background-geolocation": "^1.2.26",
     "@capacitor-community/sqlite": "^7.0.1",
+    "@capacitor-mlkit/barcode-scanning": "^7.5.0",
     "@capacitor/app": "^7.0.0",
     "@capacitor/browser": "^7.0.0",
     "@capacitor/camera": "^7.0.0",

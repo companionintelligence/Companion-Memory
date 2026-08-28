@@ -10,7 +10,7 @@ import path from 'node:path';
 import { parseCSVRows } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams, Relationship } from './timeline';
+import type { ImportParams, LineItemRecord, Relationship } from './timeline';
 import { timeframeContains } from './timeline';
 
 // A Venmo header row is one that contains both "Datetime" and "Amount (total)".
@@ -292,6 +292,25 @@ export class VenmoFileImporter implements FileImporter {
     }
 
     const amount = t.amountTotal.replace(/^([+-])\s+/, '$1');
+    // A payment OUT is a purchase with one unnamed line — the note is the only
+    // description Venmo records. Money in (a credit, a bank transfer) is not a
+    // purchase, so it mints no line and therefore no receipt. See
+    // push/canonical.ts destinationsFor: a commerce.* record with LineItems
+    // also routes to `receipts`.
+    const numericAmount = Number(amount.replace(/[^0-9.-]/g, ''));
+    const lineTotal = Number.isFinite(numericAmount) ? Math.abs(numericAmount) : undefined;
+    const lineItems: LineItemRecord[] | undefined =
+      classification === 'payment'
+        ? [
+            {
+              LineNumber: 1,
+              Product: t.note || `Venmo payment${t.to ? ` to ${t.to}` : ''}`,
+              Quantity: 1,
+              Total: lineTotal,
+              IsDigital: undefined,
+            },
+          ]
+        : undefined;
     params.pipeline.push({
       item: {
         id: `venmo-${t.id}`,
@@ -311,6 +330,13 @@ export class VenmoFileImporter implements FileImporter {
           To: t.to || undefined,
           Amount: amount || undefined,
           'Transaction ID': t.id,
+          // CANONICAL commerce keys (push/commerceKeys.ts). Venmo has no order
+          // id — its transaction id is the reference — and on an outgoing
+          // payment the counterparty is who was paid.
+          'Order ID': t.id,
+          Merchant: classification === 'payment' ? t.to || undefined : undefined,
+          Total: lineTotal,
+          LineItems: lineItems,
           Source: 'Venmo',
         },
       },

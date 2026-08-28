@@ -2,9 +2,9 @@ import { Injectable } from '@nestjs/common';
 import plimit from 'p-limit';
 
 import { LoggerService } from '@ci/common/logging';
-import config from '@ci/configuration';
+import config, { isGeocodingConfigured } from '@ci/configuration';
 
-import type { GeocodePoint, GeocodeProvider, GeocodeProviderResult } from './GeocodeProvider';
+import type { GeocodeBounds, GeocodePoint, GeocodeProvider, GeocodeProviderResult } from './GeocodeProvider';
 
 /** Portal's batch endpoints, relative to `config.geocoding.portalBaseUrl`. */
 const FORWARD_PATH = '/api/geocode';
@@ -101,11 +101,41 @@ interface PortalGeocodeResultItem {
   locationType?: string;
   partialMatch?: boolean;
   components?: Record<string, unknown>;
+  /** Result bounding box, when Portal's upstream returned one. */
+  bounds?: { north?: number; south?: number; east?: number; west?: number };
   errorMessage?: string;
   /** Normalized/coarsened form Portal actually resolved. Not a correlation key. */
   query?: string;
   /** Whether Portal's shared cache served this item (no provider call billed). */
   cached?: boolean;
+}
+
+/**
+ * Validate a bounding box off the network. Same rules as the direct-provider
+ * path: all four corners finite, north above south, east above west (a box
+ * crossing the antimeridian is dropped rather than inverted).
+ */
+function toBounds(
+  box: { north?: number; south?: number; east?: number; west?: number } | undefined,
+): GeocodeBounds | undefined {
+  const { north, south, east, west } = box ?? {};
+
+  if (
+    typeof north !== 'number' ||
+    typeof south !== 'number' ||
+    typeof east !== 'number' ||
+    typeof west !== 'number' ||
+    !Number.isFinite(north) ||
+    !Number.isFinite(south) ||
+    !Number.isFinite(east) ||
+    !Number.isFinite(west) ||
+    north <= south ||
+    east <= west
+  ) {
+    return undefined;
+  }
+
+  return { north, south, east, west };
 }
 
 interface PortalGeocodeBatchResponse {
@@ -285,7 +315,7 @@ export class PortalGeocodeProvider implements GeocodeProvider {
     count: number,
     direction: GeocodeDirection,
   ): Promise<GeocodeProviderResult[]> {
-    if (!this.baseUrl || !this.deviceKey) {
+    if (!isGeocodingConfigured()) {
       this.warnUnconfiguredOnce();
 
       // Transient, NOT REQUEST_DENIED: missing configuration is a deployment
@@ -451,6 +481,7 @@ export class PortalGeocodeProvider implements GeocodeProvider {
       locationType: item.locationType,
       partialMatch: item.partialMatch,
       components: item.components,
+      bounds: toBounds(item.bounds),
       errorMessage: item.errorMessage,
     };
   }

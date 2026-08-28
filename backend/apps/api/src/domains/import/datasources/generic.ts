@@ -12,7 +12,7 @@ import path from 'node:path';
 
 import { extractMediaMetadata } from './_exif';
 import type { FileImporter, Recognition, DirEntry } from './registry';
-import { registerDataSource } from './registry';
+import { isPathWithinOrEqual, registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
 import { mediaItemFromFile } from './timeline';
 
@@ -29,6 +29,17 @@ class GenericFileImporter implements FileImporter {
       return;
     }
 
+    // Subtrees `ParseStage.dropGenericWhenSpecialised` already attributed to a
+    // specialised parser (see `registry.ts`'s `DataSourceRecognition.excludePaths`
+    // and `ImportParams.excludePaths`). Empty for every run with no specialised
+    // claims to skip, and for every OTHER importer's own `fileImport` call —
+    // this field only ever means something to `generic`.
+    const excludePaths = params.excludePaths ?? [];
+
+    if (isClaimed(startPath, excludePaths)) {
+      return;
+    }
+
     const stat = fs.statSync(startPath);
     if (!stat.isDirectory()) {
       await this.processFile(startPath, params);
@@ -36,7 +47,7 @@ class GenericFileImporter implements FileImporter {
       return;
     }
 
-    for await (const fpath of walkDir(startPath)) {
+    for await (const fpath of walkDir(startPath, excludePaths)) {
       await this.processFile(fpath, params);
     }
   }
@@ -96,16 +107,34 @@ class GenericFileImporter implements FileImporter {
   }
 }
 
-async function* walkDir(root: string): AsyncGenerator<string> {
+/**
+ * Is `p` one of `excludePaths`, or nested inside one of them? Checked once per
+ * directory entry BEFORE recursing — pruning a claimed directory here means
+ * `walkDir` never opens it at all, rather than opening every file inside it
+ * and rejecting each one individually. A Google Voice export claims 73,124
+ * files across `/Voice/`; the difference between the two is one `readdir`
+ * call skipped here versus 73,124 `stat`-and-reject calls, and it's what keeps
+ * an exclusion-aware `generic` from becoming its own O(files) rescan of
+ * exactly the tree this whole exclusion exists to avoid re-reading.
+ */
+function isClaimed(p: string, excludePaths: readonly string[]): boolean {
+  return excludePaths.some((claimed) => isPathWithinOrEqual(claimed, p));
+}
+
+async function* walkDir(root: string, excludePaths: readonly string[] = []): AsyncGenerator<string> {
   const entries = await fs.promises.readdir(root, { withFileTypes: true });
   for (const e of entries) {
     const full = path.join(root, e.name);
+    if (isClaimed(full, excludePaths)) {
+      continue;
+    }
+
     if (e.isDirectory()) {
       if (e.name.startsWith('.')) {
         continue;
       }
 
-      yield* walkDir(full);
+      yield* walkDir(full, excludePaths);
     } else if (e.isFile()) {
       yield full;
     }

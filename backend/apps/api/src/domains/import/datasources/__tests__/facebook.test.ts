@@ -787,3 +787,117 @@ describe('Facebook datasource — HTML body-text noise (UI chrome + reaction bad
     }
   });
 });
+
+describe('Facebook datasource — thread lanes beyond messages/inbox', () => {
+  // Meta scatters conversations across sibling lanes under messages/: inbox/,
+  // filtered_threads/, message_requests/, archived_threads/ and (for accounts
+  // migrated to encrypted Messenger) e2ee_cutover/. Walking inbox/ alone lost
+  // whole conversations silently — a real export imported 7 of its 24 messages.
+  function htmlThread(sender: string, other: string, text: string): string {
+    return [
+      '<!DOCTYPE html><html><head><title>Thread</title></head><body><div class="_a705"><main class="_a706" role="main">',
+      `<section class="_a6-g"><h2 class="_2ph_ _a6-h">Participants: ${sender}, ${other}</h2></section>`,
+      `<section class="_a6-g"><h2 class="_2ph_ _a6-h _a6-i">${sender}</h2>`,
+      `<div class="_2ph_ _a6-p"><div><div>${text}</div></div></div>`,
+      '<footer class="_3-94 _a6-o"><div class="_a72d">Jan 02, 2025 10:00:00 am</div></footer></section>',
+      '</main></div></body></html>',
+    ].join('');
+  }
+
+  function writeHtmlThread(root: string, lane: string, dirName: string, text: string) {
+    const threadDir = path.join(root, 'your_facebook_activity', 'messages', lane, dirName);
+    fs.mkdirSync(threadDir, { recursive: true });
+    fs.writeFileSync(path.join(threadDir, 'message_1.html'), htmlThread('Alice Smith', 'Test User', text));
+  }
+
+  function writeJsonThread(root: string, lane: string, dirName: string, text: string) {
+    const threadDir = path.join(root, 'messages', lane, dirName);
+    fs.mkdirSync(threadDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(threadDir, 'message_1.json'),
+      JSON.stringify({
+        participants: [{ name: 'Alice Smith' }, { name: 'Test User' }],
+        title: 'Alice Smith',
+        messages: [{ sender_name: 'Alice Smith', timestamp_ms: 1735815600000, content: text }],
+      }),
+    );
+  }
+
+  function buildExport(): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-lanes-'));
+    // HTML lanes — the shape of the real "Download Your Information" export.
+    writeHtmlThread(root, 'inbox', 'group_chat_2031253580255991', 'in the inbox');
+    writeHtmlThread(root, 'filtered_threads', 'jeff_and_236_others_6345334045584243', 'in filtered threads');
+    writeHtmlThread(root, 'e2ee_cutover', 'ashley_10102016970462065', 'in the e2ee cutover');
+    // JSON lanes — same tree, JSON format, under the un-nested messages/ root.
+    writeJsonThread(root, 'message_requests', 'stranger_555', 'in message requests');
+    writeJsonThread(root, 'archived_threads', 'oldfriend_777', 'in archived threads');
+    // Media siblings of the lanes: no <thread>/message_N file, so they must be
+    // skipped WITHOUT being named — the enumeration is shape-based, not a list.
+    const stickers = path.join(root, 'messages', 'stickers_used', 'pack_1');
+    fs.mkdirSync(stickers, { recursive: true });
+    fs.writeFileSync(path.join(stickers, 'sticker.png'), 'not a message');
+    fs.writeFileSync(path.join(root, 'messages', 'autofill_information.json'), '{}');
+
+    return root;
+  }
+
+  async function runImport(root: string) {
+    const fi = new FacebookFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: path.basename(root), fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return pipeline;
+  }
+
+  it('imports threads from every lane, not just inbox', async () => {
+    const root = buildExport();
+    try {
+      const messages = (await runImport(root)).filter((p) => p.item.classification === 'message');
+      expect(messages.map((m) => m.item.metadata.Text).sort()).toEqual([
+        'in archived threads',
+        'in filtered threads',
+        'in message requests',
+        'in the e2ee cutover',
+        'in the inbox',
+      ]);
+      // Ids stay unique per thread (contentId is scoped by the numeric thread id).
+      const ids = messages.map((m) => m.item.id!);
+      expect(ids.every((id) => !!id)).toBe(true);
+      expect(new Set(ids).size).toBe(ids.length);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('is idempotent across re-imports of the newly reachable lanes', async () => {
+    const root = buildExport();
+    try {
+      const first = (await runImport(root)).map((p) => p.item.id!);
+      // All five lanes, or the run is not exercising the newly reachable ones.
+      expect(first.length).toBe(5);
+      const second = (await runImport(root)).map((p) => p.item.id!);
+      expect(second).toEqual(first);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores media siblings of the thread lanes', async () => {
+    const root = buildExport();
+    try {
+      const pipeline = await runImport(root);
+      // The five real lanes are in — so the enumeration ran — and
+      // stickers_used/pack_1/sticker.png, which holds no message_N file, is
+      // not among them.
+      expect(pipeline.length).toBe(5);
+      expect(pipeline.some((p) => String(p.item.metadata.Text ?? '').includes('not a message'))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -1,0 +1,456 @@
+//! Orchestrates CI-Server's own Docker Compose stack locally. This binary
+//! runs natively on the host (not inside a container), so — unlike a backend
+//! that must reach the host's docker.sock from inside its own container —
+//! it just shells out to the `docker` CLI directly. No secret material is
+//! ever generated or touched here: `generate-secrets` (image
+//! `ci/setup-secrets` / `companion/setup-secrets`) creates every auth/DB
+//! secret into a shared Docker volume on first boot, exactly as it does for
+//! `make production` — see infrastructure/setup-secrets/entrypoint.sh at the
+//! repo root.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::time::Duration;
+
+use serde::Serialize;
+
+/// The only port CI-Server's production compose stack publishes to the host
+/// (`gateway`, which serves the built web app and proxies `/api/*` — see
+/// infrastructure/gateway/nginx.conf). Fixed rather than dynamically
+/// reassigned: it's a deliberately unusual port with low collision risk, and
+/// a moving target would complicate both the bootstrap page and the compose
+/// overlay's `ports:` handling for little real benefit.
+pub const GATEWAY_PORT: u16 = 8642;
+
+const PROJECT_NAME: &str = "ci-server-desktop";
+
+/// CI-Portal's production origin — the sensible default for "Sign in with
+/// CI-Portal" (see write_env_file). Override with the CI_PORTAL_URL env var
+/// (e.g. to `https://hub.companionintelligence.com`, the dev environment) for
+/// testing against a non-production Portal.
+const DEFAULT_PORTAL_URL: &str = "https://hub.ci.computer";
+
+const COMPOSE_FILES: [&str; 3] = [
+    "docker-compose.yml",
+    "docker-compose.production.yml",
+    "docker-compose.desktop.yml",
+];
+const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StackStatus {
+    DockerNotInstalled,
+    DockerNotRunning,
+    Stopped,
+    Starting,
+    Running,
+}
+
+#[derive(Debug, Clone)]
+pub struct StackPaths {
+    pub data_dir: PathBuf,
+    pub compose_dir: PathBuf,
+    pub logs_dir: PathBuf,
+    pub import_work_dir: PathBuf,
+}
+
+/// Creates the app-data directory layout, copies the bundled compose
+/// resources into it, and (re)writes `.env`. Run once at startup, and safe to
+/// re-run — it always overwrites the copied compose files + `.env` with the
+/// current bundle's contents, so a version upgrade picks up compose changes
+/// without any manual migration step.
+pub fn initialize_stack(resource_dir: &Path, data_dir: &Path) -> Result<StackPaths, String> {
+    let compose_dir = data_dir.join("compose");
+    let logs_dir = data_dir.join("logs");
+    let import_work_dir = data_dir.join("import-work");
+
+    for dir in [&compose_dir, &logs_dir, &import_work_dir] {
+        fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
+    }
+
+    let bundled_resources = resource_dir.join("resources");
+    for name in COMPOSE_FILES {
+        let src = bundled_resources.join(name);
+        let dest = compose_dir.join(name);
+        fs::copy(&src, &dest)
+            .map_err(|e| format!("Failed to copy bundled resource {name} ({}): {e}", src.display()))?;
+    }
+
+    let image_tag = read_bundled_image_tag(&bundled_resources)?;
+    write_env_file(&compose_dir.join(".env"), &image_tag, &import_work_dir)?;
+
+    Ok(StackPaths {
+        data_dir: data_dir.to_path_buf(),
+        compose_dir,
+        logs_dir,
+        import_work_dir,
+    })
+}
+
+/// The build-time-resolved default image tag, written by
+/// scripts/sync-compose-resources.cjs (see that file for the resolution
+/// algorithm — it mirrors scripts/publish/publish.sh's own VERSION logic and
+/// deliberately never falls back to "latest"). Missing here means this
+/// binary was built by invoking `cargo tauri build` directly instead of
+/// going through `yarn build`/`yarn dev` — fail loudly rather than silently
+/// guessing a tag.
+fn read_bundled_image_tag(bundled_resources: &Path) -> Result<String, String> {
+    let path = bundled_resources.join("image-tag.txt");
+    let contents = fs::read_to_string(&path).map_err(|e| {
+        format!(
+            "Missing bundled {} ({e}). This app must be built via `yarn build` / `yarn dev` \
+             (which run scripts/sync-compose-resources.cjs), not `cargo tauri build` directly.",
+            path.display()
+        )
+    })?;
+    let tag = contents.trim().to_string();
+    if tag.is_empty() {
+        return Err(format!("Bundled {} is empty.", path.display()));
+    }
+    Ok(tag)
+}
+
+fn write_env_file(env_path: &Path, image_tag: &str, import_work_dir: &Path) -> Result<(), String> {
+    // No secrets here — see the module doc comment. COMPOSE_PROJECT_NAME is a
+    // fixed constant, never changed across versions: it names the volumes
+    // (${COMPOSE_PROJECT_NAME}-production-db-data etc.) holding the user's
+    // actual data and generated secrets, so changing it would orphan them.
+    // CI_IMPORT_WORK_DIR is written as an absolute path — a packaged binary
+    // has no stable CWD for the compose files' own relative defaults to
+    // resolve against. CI_LOCAL_ONLY=true is a privacy default appropriate
+    // for a single-user local desktop app.
+    //
+    // OIDC_ISSUER_URL/APP_BASE_URL make "Sign in with CI-Portal" work at all
+    // here — see docker-compose.desktop.yml's own comment on the `api`
+    // service for exactly why both are needed (an unset issuer breaks the
+    // redirect outright; an unset public base URL derives the wrong
+    // redirect_uri port from gateway's forwarded, port-stripped Host header).
+    // CI_PORTAL_URL is the one operator-facing override — set it before
+    // `yarn dev`/launching the packaged app to point at a non-production
+    // Portal (e.g. the dev environment) instead.
+    let portal_url = std::env::var("CI_PORTAL_URL").unwrap_or_else(|_| DEFAULT_PORTAL_URL.to_string());
+    let contents = format!(
+        "COMPOSE_PROJECT_NAME={PROJECT_NAME}\n\
+         CI_SERVER_IMAGE_TAG={image_tag}\n\
+         APP_PUBLIC_HOSTNAME=127.0.0.1\n\
+         CI_IMPORT_WORK_DIR={}\n\
+         CI_LOCAL_ONLY=true\n\
+         OIDC_ISSUER_URL={portal_url}\n\
+         APP_BASE_URL=http://127.0.0.1:{GATEWAY_PORT}\n",
+        import_work_dir.display(),
+    );
+    fs::write(env_path, contents).map_err(|e| format!("Failed to write {}: {e}", env_path.display()))
+}
+
+/// Appends the LLM_API_BASE/LLM_API_KEY override
+/// local_model::LocalModelHandles::resolve_once resolved (Apple-on-device-
+/// for-chat only — every other outcome relies on the existing OLLAMA_HOST
+/// default and calls this with an empty override, a harmless no-op).
+/// Additive rather than rewriting write_env_file's own content: it never
+/// writes these two keys itself, so there's no duplicate-key risk, and this
+/// keeps "the no-secrets baseline env" and "the local-model resolution
+/// result" as two independently reasoned-about writers. Must run before the
+/// first `docker compose up` — Compose only reads `.env` when a container is
+/// (re)created, not on every request. resolve_once itself only calls this
+/// once (see its doc comment), so calling it twice is not a concern in
+/// practice, but it would still duplicate lines if it ever were.
+pub fn apply_llm_env_override(paths: &StackPaths, llm_env: &crate::local_model::LlmEnvOverride) -> Result<(), String> {
+    let (Some(api_base), Some(api_key)) = (&llm_env.llm_api_base, &llm_env.llm_api_key) else {
+        return Ok(());
+    };
+    let env_path = paths.compose_dir.join(".env");
+    let addition = format!("LLM_API_BASE={api_base}\nLLM_API_KEY={api_key}\n");
+    use std::io::Write;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&env_path)
+        .and_then(|mut file| file.write_all(addition.as_bytes()))
+        .map_err(|e| format!("Failed to append LLM override to {}: {e}", env_path.display()))
+}
+
+/// Extra host-tool search dirs Docker Desktop/Docker Engine installers don't
+/// always add to a GUI-launched app's PATH. Also reused by
+/// local_model::ollama_sidecar to find a host-installed `ollama` binary,
+/// since the same "GUI apps get a minimal PATH" problem applies there too.
+pub(crate) fn extended_path_env() -> String {
+    let existing = std::env::var("PATH").unwrap_or_default();
+    let mut extra_dirs: Vec<String> = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        extra_dirs.push("/opt/homebrew/bin".to_string());
+        extra_dirs.push("/usr/local/bin".to_string());
+        extra_dirs.push("/Applications/Docker.app/Contents/Resources/bin".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(program_files) = std::env::var("ProgramFiles") {
+            extra_dirs.push(format!("{program_files}\\Docker\\Docker\\resources\\bin"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        extra_dirs.push("/usr/local/bin".to_string());
+        extra_dirs.push("/usr/bin".to_string());
+    }
+
+    if extra_dirs.is_empty() {
+        return existing;
+    }
+    let separator = if cfg!(target_os = "windows") { ";" } else { ":" };
+    format!("{}{separator}{existing}", extra_dirs.join(separator))
+}
+
+fn docker_command() -> Command {
+    let mut cmd = Command::new("docker");
+    cmd.env("PATH", extended_path_env());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+fn compose_command(paths: &StackPaths) -> Command {
+    let mut cmd = docker_command();
+    cmd.current_dir(&paths.compose_dir);
+    cmd.args(["compose", "--env-file", ".env", "--project-name", PROJECT_NAME]);
+    for name in COMPOSE_FILES {
+        cmd.args(["-f", name]);
+    }
+    cmd.args(["--profile", "production"]);
+    cmd
+}
+
+pub fn is_docker_installed() -> bool {
+    docker_command()
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+pub fn is_docker_available() -> bool {
+    docker_command()
+        .arg("info")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+pub fn start_stack(paths: &StackPaths) -> Result<(), String> {
+    crate::port_check::preflight_port(GATEWAY_PORT)?;
+    if !is_docker_installed() {
+        return Err("Docker is not installed.".to_string());
+    }
+    if !is_docker_available() {
+        return Err("Docker is installed but the daemon is not running. Start Docker and try again.".to_string());
+    }
+
+    let output = compose_command(paths)
+        // --scale powersync=0: powersync is in the "production" profile in
+        // docker-compose.yml, so it's otherwise created by this `up`, but its
+        // Postgres/JWT credentials (PS_STORAGE_URI, PS_JWT_SECRET_B64URL) come
+        // from DATABASE_PASSWORD/POWERSYNC_JWT_SECRET, which this app's own
+        // secrets model never populates — generate-secrets writes real
+        // credentials straight into a Docker-managed volume for the other
+        // services to read, not into compose-interpolated env vars (see the
+        // module doc comment above). Left running, it crash-loops forever
+        // (confirmed live: exit 150, first on its bind-mounted config
+        // directory, then again on an empty JWT key) for a service nothing in
+        // this app talks to yet — per infrastructure/powersync/README.md it's
+        // an unverified, no-client-yet scaffold, excluded from the "local"
+        // profile for the same reason. `--scale` (not a profiles/compose-file
+        // override) sidesteps the docker-compose.yml service definition
+        // entirely: profiles merge by concatenation like devices/group_add
+        // above, and `!reset` clears a list to *empty*, which for `profiles`
+        // means "no restriction — always active," the opposite of exclusion
+        // (verified against this Compose CLI directly before choosing this
+        // approach).
+        .args(["up", "-d", "--remove-orphans", "--scale", "powersync=0"])
+        .output()
+        .map_err(|e| format!("Failed to run docker compose up: {e}"))?;
+
+    append_desktop_log(paths, "start", &describe_output(&output));
+
+    if !output.status.success() {
+        return Err(format!(
+            "docker compose up failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    clear_user_stopped(paths);
+    Ok(())
+}
+
+pub fn stop_stack(paths: &StackPaths) -> Result<(), String> {
+    let output = compose_command(paths)
+        .arg("down")
+        .output()
+        .map_err(|e| format!("Failed to run docker compose down: {e}"))?;
+
+    append_desktop_log(paths, "stop", &describe_output(&output));
+
+    if !output.status.success() {
+        return Err(format!(
+            "docker compose down failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    mark_user_stopped(paths);
+    Ok(())
+}
+
+/// Coarse, tray-facing status. `Starting` vs `Stopped` is disambiguated by
+/// the user-stopped marker file rather than container inspection, since a
+/// container that's still pulling its image looks identical to a stopped one
+/// from the health endpoint's perspective — both simply don't answer yet.
+pub async fn probe_status(paths: &StackPaths) -> StackStatus {
+    if !is_docker_installed() {
+        return StackStatus::DockerNotInstalled;
+    }
+    if !is_docker_available() {
+        return StackStatus::DockerNotRunning;
+    }
+    if is_healthy().await {
+        return StackStatus::Running;
+    }
+    if is_user_stopped(paths) {
+        StackStatus::Stopped
+    } else {
+        StackStatus::Starting
+    }
+}
+
+/// The single source of truth for "is CI-Server actually serving requests" —
+/// used both by the bootstrap page's polling loop (via
+/// check_stack_status_command) and by the tray's background status loop.
+/// Proxied through `gateway` to `api`'s own `/health` — see
+/// infrastructure/gateway/nginx.conf's `location /api/` block.
+pub async fn is_healthy() -> bool {
+    let url = format!("http://127.0.0.1:{GATEWAY_PORT}/api/health");
+    let client = match reqwest::Client::builder().timeout(Duration::from_millis(2500)).build() {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+    match client.get(url).send().await {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+fn user_stopped_marker(paths: &StackPaths) -> PathBuf {
+    paths.data_dir.join(".user-stopped")
+}
+
+fn mark_user_stopped(paths: &StackPaths) {
+    let _ = fs::write(user_stopped_marker(paths), b"");
+}
+
+fn clear_user_stopped(paths: &StackPaths) {
+    let _ = fs::remove_file(user_stopped_marker(paths));
+}
+
+fn is_user_stopped(paths: &StackPaths) -> bool {
+    user_stopped_marker(paths).exists()
+}
+
+fn describe_output(output: &Output) -> String {
+    format!(
+        "exit={:?} stdout={} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
+}
+
+fn append_desktop_log(paths: &StackPaths, op: &str, message: &str) {
+    let log_path = paths.logs_dir.join("desktop.log");
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+    let line = format!("[{timestamp}] {op}: {message}\n");
+
+    // Simple size-based rotation — just start over past the cap, no need for
+    // anything fancier at this app's log volume.
+    if let Ok(meta) = fs::metadata(&log_path) {
+        if meta.len() > MAX_LOG_BYTES {
+            let _ = fs::remove_file(&log_path);
+        }
+    }
+
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+        use std::io::Write;
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+pub fn read_desktop_logs(paths: &StackPaths, max_lines: usize) -> String {
+    let log_path = paths.logs_dir.join("desktop.log");
+    let contents = fs::read_to_string(log_path).unwrap_or_default();
+    let lines: Vec<&str> = contents.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn writes_env_file_with_no_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+        let import_work_dir = dir.path().join("import-work");
+
+        write_env_file(&env_path, "2026.8.25", &import_work_dir).unwrap();
+
+        let contents = fs::read_to_string(&env_path).unwrap();
+        assert!(contents.contains("COMPOSE_PROJECT_NAME=ci-server-desktop"));
+        assert!(contents.contains("CI_SERVER_IMAGE_TAG=2026.8.25"));
+        assert!(contents.contains("CI_LOCAL_ONLY=true"));
+        assert!(contents.contains("APP_BASE_URL=http://127.0.0.1:8642"));
+        // Not asserting a specific OIDC_ISSUER_URL value: it reads the
+        // CI_PORTAL_URL env var, which this test deliberately doesn't set or
+        // unset (mutating process env vars in a #[test] races against
+        // whatever else cargo test is running in parallel) — just that the
+        // key is present with *some* value.
+        assert!(contents.contains("OIDC_ISSUER_URL="));
+        assert!(!contents.to_lowercase().contains("secret"));
+        assert!(!contents.to_lowercase().contains("password"));
+    }
+
+    #[test]
+    fn initialize_stack_fails_clearly_without_a_bundled_image_tag() {
+        let resource_dir = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(resource_dir.path().join("resources")).unwrap();
+        for name in COMPOSE_FILES {
+            fs::write(resource_dir.path().join("resources").join(name), "services: {}\n").unwrap();
+        }
+        // Deliberately no image-tag.txt written.
+
+        let result = initialize_stack(resource_dir.path(), data_dir.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("image-tag.txt"));
+    }
+
+    #[test]
+    fn user_stopped_marker_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = StackPaths {
+            data_dir: dir.path().to_path_buf(),
+            compose_dir: dir.path().join("compose"),
+            logs_dir: dir.path().join("logs"),
+            import_work_dir: dir.path().join("import-work"),
+        };
+
+        assert!(!is_user_stopped(&paths));
+        mark_user_stopped(&paths);
+        assert!(is_user_stopped(&paths));
+        clear_user_stopped(&paths);
+        assert!(!is_user_stopped(&paths));
+    }
+}

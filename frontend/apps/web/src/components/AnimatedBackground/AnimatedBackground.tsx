@@ -14,9 +14,11 @@ import { useEffect, useRef } from 'react';
  * whether or not anyone was there — motion that cost a composited layer every
  * frame of every session and answered nothing the user did.
  *
- * Three ways it declines to run, all of them cheap to check and expensive to
+ * Four ways it declines to run, all of them cheap to check and expensive to
  * ignore:
  *
+ *  - **The Appearance toggle.** Desktop settings can turn the layer off; this
+ *    component is not mounted at all in that case (see `Main`).
  *  - **Coarse pointers.** There is no cursor on a phone, so the loop would burn
  *    battery to move a glow to a position that never updates.
  *  - **`prefers-reduced-motion`.** Movement is the whole effect, so the honest

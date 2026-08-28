@@ -7,6 +7,14 @@
 | **Author(s)** | @mltq                    |
 | **Reviewers** | TBD                      |
 
+> **Still in force, verified 2026-08-19.** `POST /files/upload` remains the only binary
+> upload path (`FilesController`, `FilesInterceptor('files')`), and `FileType` still
+> exposes `parseStatus` / `parseError` / `parsedAt`. Since this ADR was written the
+> parsing pipeline shipped (`domains/parsing` → `ci.file_chunks`), and a **second REST
+> upload lane** was added for machine callers: `POST /v1/files` (`BulkFilesController`),
+> the batch sibling of the other `/v1/*` ingest lanes. Both are REST for the same reason
+> given below; neither is a GraphQL mutation.
+
 ## Context
 
 CI-Server's API layer uses GraphQL (Apollo Server v5 via `@nestjs/apollo`) as its primary interface. The original intent was to expose all client-facing operations through a single GraphQL endpoint, giving clients a consistent, typed, self-documenting API surface.
@@ -74,5 +82,6 @@ No migration is required. The REST endpoint has always existed; this ADR formali
 
 - [Apollo Server v4 migration: uploads removed](https://www.apollographql.com/docs/apollo-server/migration/#file-uploads)
 - [GraphQL multipart request spec](https://github.com/jaydenseric/graphql-multipart-request-spec)
-- [Async Document Parsing Proposal](../../prd/CI-Server/Async%20Doc%20Parsing/Proposal.md)
-- [Async Document Parsing Spec](../../prd/CI-Server/Async%20Doc%20Parsing/Spec.md)
+- [PRD: Asynchronous Document Parsing and Search](../../prd/asynchronous-document-parsing.md)
+  — the original proposal and spec were consolidated into this one file; the
+  `docs/prd/CI-Server/Async Doc Parsing/` paths this ADR used to cite no longer exist.

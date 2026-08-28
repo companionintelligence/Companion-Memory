@@ -22,7 +22,7 @@ vi.mock('@ci/shadcn', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
 
   // Radix's Select needs PointerEvent, which jsdom doesn't implement — the same
-  // gotcha InventoryItemModal.test.tsx documents. Swap in a native <select> that
+  // gotcha ThingModal.test.tsx documents. Swap in a native <select> that
   // keeps the same value/onValueChange contract, so SortControl's own wiring
   // (URL round-trip + option mapping) is still exercised for real; only the
   // unrelated Radix listbox internals are bypassed.

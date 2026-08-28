@@ -1,3 +1,4 @@
+import { useApolloClient } from '@apollo/client';
 import { DropdownMenu, IconButton, Tooltip, useToast } from '@ci/shadcn';
 import {
   NotebookPen,
@@ -11,6 +12,7 @@ import {
   Package,
   CalendarPlus,
   MapPin,
+  ScanBarcode,
 } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
@@ -19,7 +21,8 @@ import { useUploadFile, useTriggerHbpe } from '@/api';
 import { AddEventModal, AddPersonModal, AddPlaceModal } from '@/components/modals/AddItemModal';
 import { AddConceptModal } from '@/components/modals/AddItemModal/AddConceptModal.tsx';
 import { CaptureModal } from '@/components/modals/CaptureModal';
-import { InventoryItemModal } from '@/components/modals/InventoryItemModal';
+import { ScanBarcodeModal } from '@/components/modals/ScanBarcodeModal';
+import { ThingModal } from '@/components/modals/ThingModal';
 import { UploadModal } from '@/components/modals/UploadModal';
 import { useModalControls } from '@/hooks';
 
@@ -32,6 +35,7 @@ export function AddMenu() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [, { trigger }] = useTriggerHbpe();
+  const client = useApolloClient();
 
   const [{ isOpen: isCaptureModalOpen }, { open: openCaptureModal, close: closeCaptureModal }] =
     useModalControls();
@@ -46,8 +50,19 @@ export function AddMenu() {
     useModalControls();
   const [{ isOpen: isAddPlaceModalOpen }, { open: openAddPlaceModal, close: closeAddPlaceModal }] =
     useModalControls();
+  const [{ isOpen: isScanModalOpen }, { open: openScanModal, close: closeScanModal }] = useModalControls();
 
   const [, { upload, reset: resetUploader }] = useUploadFile();
+
+  const overlayOpen =
+    isCaptureModalOpen ||
+    isUploadModalOpen ||
+    isAddPersonModalOpen ||
+    isAddConceptModalOpen ||
+    isItemModalOpen ||
+    isAddEventModalOpen ||
+    isAddPlaceModalOpen ||
+    isScanModalOpen;
 
   const handleUpload = (files: FileList) => {
     return upload(Array.from(files));
@@ -58,7 +73,7 @@ export function AddMenu() {
       <div className="flex items-center">
         <DropdownMenu modal={false}>
           <DropdownMenu.Trigger asChild>
-            <IconButton variant="default" size="icon-lg" label={t('NAV_ADD')}>
+            <IconButton variant="default" size="icon-lg" label={t('NAV_ADD')} hideTooltip={overlayOpen}>
               <Plus strokeWidth={2} className="h-5 w-5" />
             </IconButton>
           </DropdownMenu.Trigger>
@@ -119,7 +134,7 @@ export function AddMenu() {
 
                 <Tooltip delayDuration={600}>
                   <Tooltip.Content side="top" className="pointer-events-none">
-                    {t('NAV_ADD_ITEM')}
+                    {t('NAV_ADD_THING')}
                   </Tooltip.Content>
                   <Tooltip.Trigger asChild>
                     <DropdownMenu.Item
@@ -127,7 +142,7 @@ export function AddMenu() {
                       className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
                     >
                       <Package className="h-6! w-6!" strokeWidth={1.25} />
-                      <span className="text-xs text-center">Item</span>
+                      <span className="text-xs text-center">Thing</span>
                     </DropdownMenu.Item>
                   </Tooltip.Trigger>
                 </Tooltip>
@@ -197,6 +212,21 @@ export function AddMenu() {
 
                   <Tooltip delayDuration={600}>
                     <Tooltip.Content side="bottom" className="pointer-events-none">
+                      {t('NAV_ACTION_SCAN')}
+                    </Tooltip.Content>
+                    <Tooltip.Trigger asChild>
+                      <DropdownMenu.Item
+                        onSelect={openScanModal}
+                        className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
+                      >
+                        <ScanBarcode className="h-6! w-6!" strokeWidth={1.25} />
+                        <span className="text-xs text-center">Scan</span>
+                      </DropdownMenu.Item>
+                    </Tooltip.Trigger>
+                  </Tooltip>
+
+                  <Tooltip delayDuration={600}>
+                    <Tooltip.Content side="bottom" className="pointer-events-none">
                       {t('NAV_ACTION_CONNECT')}
                     </Tooltip.Content>
                     <Tooltip.Trigger asChild>
@@ -221,12 +251,25 @@ export function AddMenu() {
                           const status = await trigger();
                           if (status === 'already_running') {
                             toast.info('Prediction pipeline is already running');
+                          } else if (status === 'disabled') {
+                            // `ForecastResolver.triggerHbpe` returns this literal
+                            // when the `hbpe` flag is off. It used to fall into
+                            // the unconditional `else` below and report success,
+                            // so on an appliance with HBPE turned off this told
+                            // the owner a one-hour pipeline was running and to
+                            // watch Forecast. Nothing was enqueued, Forecast
+                            // never changes, and they wait an hour to find out.
+                            toast.info('Prediction is turned off on this Companion.');
                           } else if (status === 'triggered') {
-                            toast.success('Prediction pipeline started');
+                            toast.success(
+                              'Prediction started — this can take about an hour. Watch Forecast for progress.',
+                            );
                           } else if (status === 'error' || !status) {
                             toast.error('Failed to trigger prediction pipeline');
                           } else {
-                            toast.success('Prediction pipeline started');
+                            toast.success(
+                              'Prediction started — this can take about an hour. Watch Forecast for progress.',
+                            );
                           }
                         }}
                         className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
@@ -252,13 +295,22 @@ export function AddMenu() {
         onSubmit={handleUpload}
       />
 
-      <CaptureModal
-        open={isCaptureModalOpen}
-        onClose={() => {
-          resetUploader();
-          closeCaptureModal();
-        }}
-      />
+      {/* Rendered conditionally, not merely `open={false}`. `open` guards the
+          modal's OUTPUT, not its hooks: DesktopCaptureModal mounts
+          `useChatRequester` and runs a vision-capability effect that fetches
+          /api/llm/models/capabilities as soon as it exists. AddMenu is in the
+          desktop header AND the phone top bar, so every authenticated page load
+          was paying for a dialog nobody opened — and repeating it whenever the
+          selected model changed. SecondaryNavigation already does it this way. */}
+      {isCaptureModalOpen && (
+        <CaptureModal
+          open
+          onClose={() => {
+            resetUploader();
+            closeCaptureModal();
+          }}
+        />
+      )}
 
       <AddPersonModal open={isAddPersonModalOpen} onClose={closeAddPersonModal} />
 
@@ -270,7 +322,29 @@ export function AddMenu() {
 
       <AddConceptModal open={isAddConceptModalOpen} onClose={closeAddConceptModal} />
 
-      <InventoryItemModal open={isItemModalOpen} onClose={closeItemModal} item={null} create={true} />
+      {/* Unlike the modals above, this one MUST refresh: a thing created here
+          used to be spliced into every cached `items` field by the modal's own
+          `cache.modify`, and without a replacement it stays invisible until a
+          manual reload — on the Things browse the user was just looking at.
+          Evicting the root `items` field rather than naming the queries keeps
+          the nav from having to know which pages list things; `refetchQueries`
+          re-runs exactly the active ones the eviction touched. */}
+      <ThingModal
+        open={isItemModalOpen}
+        onClose={closeItemModal}
+        item={null}
+        create={true}
+        onSaved={() =>
+          client.refetchQueries({
+            updateCache: (cache) => {
+              cache.evict({ id: 'ROOT_QUERY', fieldName: 'items' });
+              cache.gc();
+            },
+          })
+        }
+      />
+
+      <ScanBarcodeModal open={isScanModalOpen} onClose={closeScanModal} />
     </>
   );
 }

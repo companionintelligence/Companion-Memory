@@ -30,8 +30,10 @@ export interface EntitySource {
   discriminator?: { column: string; value: string };
   /**
    * Extra SQL predicate (over source alias `s`) the BACKFILL sweep applies so
-   * rows that must never (re-)index are not treated as "missing". Used by the
-   * ci.entities-backed types to exclude merge tombstones: a merge deletes the
+   * rows that must never (re-)index are not treated as "missing". Used by every
+   * type whose table carries a merge tombstone — the ci.entities-backed ones
+   * (`merged_into_entity_id`), `item` (`ci.objects.merged_into_object_id`) and
+   * `product` (`ci.product_models.merged_into_product_id`): a merge deletes the
    * tombstone's embedding+vector, and without this filter the sweep would
    * re-find and re-index it via PersonCreatedEvent.
    */
@@ -51,12 +53,14 @@ export interface EntitySource {
  * | event            | ci.events            | event_id    | —                             |
  * | file             | ci.entities          | entity_id   | entity_type = 'File'          |
  * | file-chunk       | ci.file_chunks       | id          | —                             |
- * | item             | ci.inventory         | object_id   | —                             |
+ * | item             | ci.objects         | object_id   | — (live rows only, see below) |
  * | message          | ci.agent_memories    | id          | —                             |
  * | note             | ci.notes             | id          | —                             |
  * | person           | ci.entities          | entity_id   | entity_type = 'Person'        |
  * | place            | ci.entities          | entity_id   | entity_type = 'Location'      |
  * | position         | ci.position          | id          | downsample: hour × 3-dec cell |
+ * | product          | ci.product_models    | product_id  | — (live rows only, see below) |
+ * | receipt          | ci.receipts          | receipt_id  | —                             |
  * | thread           | ci.threads           | thread_id   | —                             |
  *
  * NOTE: `ci.communications` has a composite PK (id, time, user_id), but the
@@ -84,7 +88,17 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
     backfillPredicate: 's.merged_into_entity_id IS NULL',
   },
   'file-chunk': { schema: 'ci', table: 'file_chunks', idColumn: 'id' },
-  item: { schema: 'ci', table: 'inventory', idColumn: 'object_id' },
+  // Owned units tombstone on merge exactly like the ci.entities-backed types:
+  // ObjectMergeService.mergeObjects sets `merged_into_object_id` and DELETES the
+  // loser's embedding + vector. Without this predicate the sweep re-finds the
+  // tombstone (it has no embedding any more, by design) and re-indexes it via
+  // ItemCreatedEvent, resurrecting a thing the user merged away.
+  item: {
+    schema: 'ci',
+    table: 'objects',
+    idColumn: 'object_id',
+    backfillPredicate: 's.merged_into_object_id IS NULL',
+  },
   message: { schema: 'ci', table: 'agent_memories', idColumn: 'id' },
   note: { schema: 'ci', table: 'notes', idColumn: 'id' },
   person: {
@@ -120,6 +134,17 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
        LIMIT 1
     )`,
   },
+  // Catalog models carry their OWN merge tombstone column (`merged_into_product_id`,
+  // the ci.product_models twin of `merged_into_entity_id`), so the same
+  // exclusion the ci.entities-backed types use applies here: a merged-away model
+  // must not be re-found and re-indexed by the sweep.
+  product: {
+    schema: 'ci',
+    table: 'product_models',
+    idColumn: 'product_id',
+    backfillPredicate: 's.merged_into_product_id IS NULL',
+  },
+  receipt: { schema: 'ci', table: 'receipts', idColumn: 'receipt_id' },
   thread: { schema: 'ci', table: 'threads', idColumn: 'thread_id' },
 };
 

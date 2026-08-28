@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { useMutation } from '@apollo/client';
-import { Button, Dialog } from '@ci/shadcn';
+import { Button } from '@ci/shadcn';
 
 import {
   EventForm,
@@ -10,6 +10,7 @@ import {
   validateEventDraft,
   type EventDraftProblem,
 } from '@/components/EventForm';
+import { ResponsiveDialog } from '@/components/ResponsiveDialog';
 import { gql } from '@/graphql';
 
 const CREATE_EVENT = gql(`
@@ -82,11 +83,11 @@ export function AddEventModal({ open, onClose, onCreated }: Props) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
-      <Dialog.Content className="max-h-[85vh] overflow-hidden sm:max-w-2xl">
-        <Dialog.Header>
-          <Dialog.Title>Add Event</Dialog.Title>
-        </Dialog.Header>
+    <ResponsiveDialog open={open} onOpenChange={onClose}>
+      <ResponsiveDialog.Content className="max-h-[85vh] overflow-hidden sm:max-w-2xl">
+        <ResponsiveDialog.Header>
+          <ResponsiveDialog.Title>Add Event</ResponsiveDialog.Title>
+        </ResponsiveDialog.Header>
 
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-col gap-4">
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -99,16 +100,16 @@ export function AddEventModal({ open, onClose, onCreated }: Props) {
             </p>
           )}
 
-          <Dialog.Footer className="flex gap-2 justify-end">
+          <ResponsiveDialog.Footer className="flex gap-2 justify-end">
             <Button type="button" variant="outline" onClick={handleCancel} disabled={loading}>
               Cancel
             </Button>
             <Button type="submit" disabled={loading}>
               {loading ? 'Adding…' : 'Add'}
             </Button>
-          </Dialog.Footer>
+          </ResponsiveDialog.Footer>
         </form>
-      </Dialog.Content>
-    </Dialog>
+      </ResponsiveDialog.Content>
+    </ResponsiveDialog>
   );
 }

@@ -5,6 +5,8 @@ import { PersonEntity } from '../entities/PersonEntity';
 import {
   decodeMergeCandidateCursor,
   encodeMergeCandidateCursor,
+  hasEmailEvidence,
+  hasExactPhoneEvidence,
   MergeCandidateService,
 } from './MergeCandidateService';
 
@@ -64,16 +66,27 @@ function makeService(pageRows: Array<Record<string, unknown>>, entities: PersonE
     createQueryBuilder: jest.fn(() => qb),
   };
 
-  const logger = { setContext: jest.fn(), log: jest.fn() };
+  const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn() };
+  const personMerge = { mergePeople: jest.fn().mockResolvedValue({}) };
 
   return {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    service: new MergeCandidateService(repository as any, logger as any),
+    service: new MergeCandidateService(repository as any, logger as any, personMerge as any),
     query,
+    personMerge,
   };
 }
 
 describe('MergeCandidateService', () => {
+  it('treats email evidence as the auto-merge signal', () => {
+    expect(hasEmailEvidence([{ kind: 'email', value: 'dana@x.com', score: 0.95 }])).toBe(true);
+    expect(hasEmailEvidence([{ kind: 'phone', value: '9145826767', score: 0.85 }])).toBe(false);
+  });
+
+  it('treats E.164-exact phone evidence as deterministic too', () => {
+    expect(hasExactPhoneEvidence([{ kind: 'phone', value: '9145826767', score: 0.95 }])).toBe(true);
+    expect(hasExactPhoneEvidence([{ kind: 'phone', value: '9145826767', score: 0.85 }])).toBe(false);
+  });
   it('hydrates a scored pair with its evidence', async () => {
     const { service } = makeService(
       [candidateRow()],
@@ -177,5 +190,52 @@ describe('MergeCandidateService', () => {
 
     expect(await service.resolvePairs(CONTEXT, [PERSON_A], 'rejected')).toBe(0);
     expect(query).not.toHaveBeenCalled();
+  });
+
+  describe('autoMergePendingEmailPairs', () => {
+    it('merges a same-email pair into the self person when they are in it', async () => {
+      const { service, query, personMerge } = makeService([], []);
+      query.mockReset();
+      query
+        .mockResolvedValueOnce([{ entity_id: PERSON_B }])
+        .mockResolvedValueOnce([{ merge_candidate_id: 'c1', entity_id_a: PERSON_A, entity_id_b: PERSON_B }])
+        .mockResolvedValueOnce([{ merge_candidate_id: 'c1' }]);
+
+      const merged = await service.autoMergePendingEmailPairs(CONTEXT);
+
+      expect(merged).toBe(1);
+      expect(personMerge.mergePeople).toHaveBeenCalledWith(CONTEXT, [PERSON_A], PERSON_B);
+      expect(query.mock.calls[1]?.[0]).toMatch(/evidence @> '\[\{"kind":"email"\}\]'/);
+      expect(query.mock.calls[1]?.[0]).toMatch(/value_e164/);
+    });
+
+    it('keeps entity_id_a when neither person is self', async () => {
+      const { service, query, personMerge } = makeService([], []);
+      query.mockReset();
+      query
+        .mockResolvedValueOnce([{ entity_id: null }])
+        .mockResolvedValueOnce([{ merge_candidate_id: 'c1', entity_id_a: PERSON_A, entity_id_b: PERSON_B }])
+        .mockResolvedValueOnce([{ merge_candidate_id: 'c1' }]);
+
+      await service.autoMergePendingEmailPairs(CONTEXT);
+
+      expect(personMerge.mergePeople).toHaveBeenCalledWith(CONTEXT, [PERSON_B], PERSON_A);
+    });
+
+    it('leaves the pair pending when the merge throws', async () => {
+      const { service, query, personMerge } = makeService([], []);
+      query.mockReset();
+      personMerge.mergePeople.mockRejectedValueOnce(new Error('locked'));
+      query
+        .mockResolvedValueOnce([{ entity_id: null }])
+        .mockResolvedValueOnce([{ merge_candidate_id: 'c1', entity_id_a: PERSON_A, entity_id_b: PERSON_B }]);
+
+      const merged = await service.autoMergePendingEmailPairs(CONTEXT);
+
+      expect(merged).toBe(0);
+      expect(query.mock.calls.some((call) => String(call[0]).includes('UPDATE ci.merge_candidates'))).toBe(
+        false,
+      );
+    });
   });
 });

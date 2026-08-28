@@ -1,4 +1,4 @@
-import { type ComponentType, useMemo } from 'react';
+import { type ComponentType, useEffect, useMemo, useRef } from 'react';
 
 import { cn } from '@ci/shadcn';
 import { Squircle } from '@ci/shadcn/icons';
@@ -10,6 +10,7 @@ import { ENTITY_VISUALS, type EntityKind } from '@/components/entities/entityVis
 
 const MARKER_DIAMETER = 48; // Corresponds to h-12, w-12
 const POINTER_HEIGHT = 38; // The height of the CSS triangle
+const LONG_PRESS_MS = 500;
 
 // Entity-kind variants colour/icon-code each point by what it represents
 // (sourced from the shared entityVisuals palette so the map matches the list,
@@ -39,18 +40,82 @@ function styleFor(variant: MarkerVariant): MarkerStyle {
 interface Props extends Omit<MarkerProps, 'icon'> {
   variant?: MarkerVariant;
   onClick?: (e: LeafletMouseEvent) => void;
+  onContextMenu?: (e: LeafletMouseEvent) => void;
   onMouseEnter?: (e: LeafletMouseEvent) => void;
   onMouseLeave?: (e: LeafletMouseEvent) => void;
 }
 
-export function Marker({ variant = 'default', onClick, onMouseEnter, onMouseLeave, ...markerProps }: Props) {
+export function Marker({
+  variant = 'default',
+  onClick,
+  onContextMenu,
+  onMouseEnter,
+  onMouseLeave,
+  ...markerProps
+}: Props) {
   const icon = useMemo(() => makeMarkerIcon(variant), [variant]);
+  const pressTimerRef = useRef<number | null>(null);
+  const pressFiredRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (pressTimerRef.current != null) {
+        window.clearTimeout(pressTimerRef.current);
+      }
+    };
+  }, []);
 
   const eventHandlers = useMemo(
-    () => ({
+    () => {
+      const clearPress = () => {
+        if (pressTimerRef.current != null) {
+          window.clearTimeout(pressTimerRef.current);
+          pressTimerRef.current = null;
+        }
+      };
+
+      const isCoarsePointer = (e: LeafletMouseEvent) => {
+        const orig = e.originalEvent as PointerEvent | TouchEvent | MouseEvent;
+        if ('pointerType' in orig && orig.pointerType === 'touch') {
+          return true;
+        }
+
+        return window.matchMedia?.('(pointer: coarse)').matches ?? false;
+      };
+
+      return {
       click: (e: LeafletMouseEvent) => {
         L.DomEvent.stopPropagation(e);
+        if (pressFiredRef.current) {
+          pressFiredRef.current = false;
+          L.DomEvent.preventDefault(e.originalEvent);
+
+          return;
+        }
+
         onClick?.(e);
+      },
+      mousedown: (e: LeafletMouseEvent) => {
+        pressFiredRef.current = false;
+        if (!onContextMenu || !isCoarsePointer(e)) {
+          return;
+        }
+
+        clearPress();
+        pressTimerRef.current = window.setTimeout(() => {
+          pressTimerRef.current = null;
+          pressFiredRef.current = true;
+          onContextMenu(e);
+        }, LONG_PRESS_MS);
+      },
+      mouseup: () => {
+        clearPress();
+      },
+      contextmenu: (e: LeafletMouseEvent) => {
+        clearPress();
+        L.DomEvent.stopPropagation(e);
+        e.originalEvent.preventDefault();
+        onContextMenu?.(e);
       },
       dblclick: (e: LeafletMouseEvent) => {
         L.DomEvent.stopPropagation(e);
@@ -59,10 +124,12 @@ export function Marker({ variant = 'default', onClick, onMouseEnter, onMouseLeav
         onMouseEnter?.(e);
       },
       mouseout: (e: LeafletMouseEvent) => {
+        clearPress();
         onMouseLeave?.(e);
       },
-    }),
-    [onClick, onMouseEnter, onMouseLeave],
+      };
+    },
+    [onClick, onContextMenu, onMouseEnter, onMouseLeave],
   );
 
   return <LeafletMarker zIndexOffset={400} {...markerProps} icon={icon} eventHandlers={eventHandlers} />;

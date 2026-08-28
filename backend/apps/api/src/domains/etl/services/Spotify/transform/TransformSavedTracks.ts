@@ -3,10 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
+import { GraphIngestService } from '@ci/domains/graph';
 import { ContentService, EventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
+import { upsertContentForEvent } from './linkContentToEvent';
 import type { SpotifyPlaylistTrackItem } from './types';
 
 @Injectable()
@@ -14,6 +16,7 @@ export class SpotifySavedTracksTransformService {
   constructor(
     private readonly contentService: ContentService,
     private readonly eventService: EventService,
+    private readonly graph: GraphIngestService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(SpotifySavedTracksTransformService.name);
@@ -57,21 +60,42 @@ export class SpotifySavedTracksTransformService {
         const track = trackItem.track;
 
         try {
-          // Search for existing track with same type and external_id
+          // The save is the event; the track is content shared with every other
+          // save/play of it. Event first so the content row can point at it.
+          const addedAt = trackItem.added_at!;
+          const [event] = await this.eventService.create(context, {
+            connection_id: connection.id,
+            title: `Saved track ${track.name}`,
+            description: `Saved ${track.name} by ${track.artists!.map((artist) => artist.name).join(', ')} on Spotify at ${trackItem.added_at}`,
+            event_type: 'favorite',
+            start_time: new Date(addedAt),
+            duration_minutes: 0,
+            metadata: {
+              track_id: track.id,
+              album: track.album?.name,
+              artists: track.artists?.map((artist) => artist.name),
+              duration_ms: track.duration_ms,
+              explicit: track.explicit,
+              popularity: track.popularity,
+              preview_url: track.preview_url,
+              uri: track.uri,
+            },
+          });
+
           const existingTrack = await this.contentService.search(context, {
             type: 'Music',
             external_id: track.id,
           });
 
-          if (existingTrack.length > 0) {
-            this.logger.debug('Track already exists, skipping', {
-              trackId: track.id,
-              trackName: track.name,
-            });
-            skippedCount++;
-          } else {
-            // Create new content entry for the track
-            await this.contentService.create(context, {
+          const { created } = await upsertContentForEvent({
+            context,
+            contentService: this.contentService,
+            graph: this.graph,
+            logger: this.logger,
+            existing: existingTrack,
+            eventId: event?.id,
+            input: {
+              connection_id: connection.id,
               title: track.name,
               type: 'Music',
               url: track.external_urls?.spotify || '',
@@ -89,27 +113,16 @@ export class SpotifySavedTracksTransformService {
                 played_at: trackItem.played_at,
                 context: trackItem.context,
               },
-            });
-          }
-
-          const addedAt = trackItem.added_at!;
-          await this.eventService.create(context, {
-            title: `Saved track ${track.name}`,
-            description: `Saved ${track.name} by ${track.artists!.map((artist) => artist.name).join(', ')} on Spotify at ${trackItem.added_at}`,
-            event_type: 'favorite',
-            start_time: new Date(addedAt),
-            duration_minutes: 0,
-            metadata: {
-              track_id: track.id,
-              album: track.album?.name,
-              artists: track.artists?.map((artist) => artist.name),
-              duration_ms: track.duration_ms,
-              explicit: track.explicit,
-              popularity: track.popularity,
-              preview_url: track.preview_url,
-              uri: track.uri,
             },
           });
+
+          if (!created) {
+            this.logger.debug('Track already exists, linked save to it', {
+              trackId: track.id,
+              trackName: track.name,
+            });
+            skippedCount++;
+          }
 
           createdCount++;
 

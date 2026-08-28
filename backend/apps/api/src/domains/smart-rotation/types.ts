@@ -16,7 +16,7 @@ export const SMART_ROTATION_WORK_TYPES = [
   /** Ask one contextualizing selector prompt when the feed slot is empty. */
   'context_prompt',
   'hydrate_answers',
-  'hydrate_inventory',
+  'hydrate_things',
 ] as const;
 
 export type SmartRotationWorkType = (typeof SMART_ROTATION_WORK_TYPES)[number];
@@ -43,5 +43,5 @@ export const SMART_ROTATION_CRONS = {
   graph_enrich: '0 10 */6 * * *',
   context_prompt: '0 30 */4 * * *',
   hydrate_answers: '0 5 3 * * *',
-  hydrate_inventory: '0 15 3 * * *',
+  hydrate_things: '0 15 3 * * *',
 } as const satisfies Record<SmartRotationWorkType, string>;

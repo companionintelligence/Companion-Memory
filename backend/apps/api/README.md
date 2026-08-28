@@ -1,6 +1,6 @@
 # Companion Intelligence — Backend API (`@ci/be-api`)
 
-The NestJS 10 service that is the memory brain of the appliance: personal database,
+The NestJS 11 service that is the memory brain of the appliance: personal database,
 GraphQL/REST/MCP API, RAG/search indexing, and the enrichment/maintenance pipelines.
 It listens on `0.0.0.0:3030` and is fronted same-origin by a proxy that strips the
 browser's `/api` prefix (Caddy under `make dev`).
@@ -22,10 +22,36 @@ api + web dev servers). To run just this service against an already-running stac
 yarn dev          # nodemon + ts-node; watches src/, config/, and the repo-root .env
 ```
 
+> In normal local development you don't run this directly — `make dev` from the
+> repo root starts `api`, `worker`, and `web` via overmind behind Caddy (see the
+> [Procfile](../../../Procfile)). Run `yarn dev` on its own only when you want
+> the API server in isolation.
+
+## How a request flows
+
+The API is a NestJS app exposing REST (`/api`) and Apollo GraphQL (`/graphql`),
+backed by Postgres 18 (pgvector + TimescaleDB + PostGIS). Async work is handed to
+PGBoss, the in-Postgres job queue, which also dispatches the Python sidecars.
+Embeddings and LLM calls go to Ollama.
+
+```mermaid
+flowchart LR
+    Client["Web SPA / app / agent"] -->|"REST + GraphQL"| API["NestJS API"]
+    API <-->|"entities · graph · vectors"| PG[("Postgres")]
+    API <-->|"files / signed URLs"| OBJ[("MinIO")]
+    API -->|"background jobs + crons"| PGB["PGBoss<br/>(in Postgres)"]
+    API <-->|"embeddings / LLM"| OLLAMA["Ollama"]
+    PGB -->|"POST /functions/run"| Agents["hbpe · summary sidecars"]
+    Agents --> PG
+```
+
+For the full domain breakdown and data model, see
+[docs/architecture/architecture.md](../../../docs/architecture/architecture.md).
+
 Everyday commands (run from `backend/apps/api`):
 
 ```bash
-yarn test               # jest (82 spec files; colocated __tests__/ + *.spec.ts)
+yarn test               # jest (598 spec files; colocated __tests__/ + *.spec.ts)
 yarn typecheck          # tsc --noEmit
 yarn lint / lint:fix    # oxlint + eslint
 yarn depcheck           # dependency-cruiser import rules (see below)
@@ -46,23 +72,34 @@ src/
 
 | Domain | Purpose |
 |---|---|
-| `memory` | Core timeline records + graph-facing services: `EventService`, `CommunicationService`, `ContentService`, `ItemService`, `PersonService`, `PlaceService`, `ConceptService`, `FileService`; the `v1/events` capture-ingest controller |
+| `memory` | Core timeline records + graph-facing services: `EventService`, `CommunicationService`, `ContentService`, `ItemService`, `PersonService`, `PlaceService`, `ConceptService`, `FileService` |
 | `graph` | Graph primitives: nodes/relationships, `entity_identifiers`, `item_relationships`, bulk graph ingest |
-| `graphql` | Apollo schema assembly: resolvers (29), DataLoaders (15), complexity plugin, GraphiQL page |
-| `search-ingress` | The search **write** path: per-entity `*SearchIndexListener`s consuming the `search-index` queue → `ci_search.embeddings` / `ci_search.vectors`; skip markers |
+| `graphql` | Apollo schema assembly: resolvers (39), DataLoaders (27), complexity plugin, GraphiQL page |
+| `search-ingress` | The search **write** path: per-entity `*SearchIndexListener`s consuming the `search-index` queue → `ci_search.embeddings` / `ci_search.vectors`; skip markers; the shared search-text recipes in `searchTexts.ts` (also used by the pipeline's `index.*` stages) |
 | `search-next` | The search **read** path (the `search` GraphQL query): candidate-set + post-filter retrieval, tags |
-| `maintenance` | Post-ingest enrichment + operations: geocoding, location estimation, people/graph linking backfills, search-index backfill/cleanup, index deferral, ingest reset, the `orchestrate` chain (`/api/maintenance/*`) |
-| `intelligence` | Questions/answers/actions — the "ask my memory" surface |
+| `pipeline` | The durable, versioned enrichment ledger (`ci.pipeline_state`) + one generic worker: 37 registered stages across `index.*` / `enrich.*` / `clean.*` / `promote.*`, a control tick, dead letters and replay. Re-processing is triggered by bumping a stage's integer in `versions.ts`. See [`src/domains/pipeline/README.md`](src/domains/pipeline/README.md) |
+| `import` | The archive importer (Google Takeout, Twitter, iCloud, browser history…), ported from the now-retired CI-Import-Tools. `unpack → parse → media → push` (`media` uploads the archive's photos, videos, voicemails and MMS parts to the object store and stamps the resulting file id onto the staged rows), each a PGBoss job with its own queue and a row in `ci_import.import_stages`; the `ci-import` CLI and `/api/import/*` back the `/sources/import` wizard |
+| `ingest` | The REST bulk-ingest plane (`/v1/*`) for external machine clients: NDJSON or `{ records: [] }` envelopes per kind, plus `POST /v1/ingest/finish` + `GET /v1/ingest/status` |
+| `maintenance` | Post-ingest enrichment + operations: geocoding, location estimation, people/graph linking backfills, search-index backfill/cleanup, index deferral, ingest reset, the `orchestrate` chain (`/api/maintenance/*`). Superseded by `pipeline` for most legs, but not yet removed |
+| `intelligence` | Questions/answers/actions — the "ask my memory" surface. (The web UI now calls this **Reflections**; the tables, services and GraphQL types are still `question*`.) |
 | `conversations` | Chat threads/messages |
-| `llm` | Ollama wrapper (chat/vision/embeddings), answer-inference cron, OpenAI-compatible proxy routes |
+| `llm` | Ollama / OpenAI-compatible chat + vision + embeddings, durable queued chat generation and its stream/cancel routes, the persisted endpoint setting |
+| `smart-rotation` | Scheduled answer inference and entity promotion — split out of `llm` to break an `llm ↔ personalization` import cycle |
+| `personalization` / `persona` | Context prompts, "about you", and persona × task compose |
+| `daily-metrics` | `ci_derived.daily_metrics` feature store + the correlation / anomaly / suggestion engines over it |
+| `python-functions` | The pg-boss replacement for Temporal: crons fan out per-user jobs, a dispatch listener POSTs them to `/functions/run` in the summary and HBPE sidecars, and an authenticated callback webhook completes them |
 | `connections` / `etl` | OAuth connector catalog + instances; per-provider sync services and sync-job bookkeeping |
-| `auth` / `user` / `onboarding` | Sessions (JWT), API keys, OIDC (CI-Portal), signup codes, profiles |
+| `auth` / `user` / `onboarding` | Sessions (JWT), API keys, OIDC (CI-Portal), the CI-Hub app-connect flow (`/api/connect/*`), signup codes, profiles |
 | `files` | Uploads, previews, MinIO-backed storage, saved searches |
-| `events` | **The in-process event bus** (PGBoss) — not calendar events; see below |
-| `agent` / `mcp` / `tools` | Agent memory (`/memory/*`), the MCP server (`POST /mcp`), the shared ToolRegistry + intent catalog |
+| `parsing` | Document text extraction and chunking into `ci_search`-indexable file chunks (MarkItDown extractor + chunker) |
+| `events` | **The in-process event bus** (PGBoss) — not calendar events; see below. Also hosts the Jobs API (`/api/jobs*`) and the job taxonomy |
+| `agent` / `mcp` / `tools` | Agent memory (`/memory/*`), the MCP server (`POST /mcp`), the shared ToolRegistry + intent catalog served at `/api/agent/intents` (`/api/intents` still serves as the legacy prefix) |
+| `asks` / `peers` | The interpersonal **Ask** primitive — ask lifecycle, standing consent grants, per-ask audit — and peer federation between two boxes |
+| `portability` / `solid` | Account export/import archives; the Solid Protocol read facade (behind the `solid.protocol` flag) |
 | `planning` | Task list CRUD (`ci.tasks`), defer/reopen, tenancy isolation |
 | `schedule` | Schedule surface: `event_candidates` live in their own table (not `ci.events`) so HBPE never trains on hypotheticals; accept mints a real event, decline/snooze/return-to-slate manage the possible layer. `ci.rhythms` is P2 fit-solver scaffolding (schema only). |
-| `notes`, `devices`, `position`, `browser-activity`, `geocode`, `entity-resolution`, `summaries`, `predictions`, `audit` | What they say on the tin — `predictions` proxies HBPE histogram/week/due forecasts |
+| `activity`, `notes`, `devices`, `position`, `browser-activity`, `geocode`, `entity-resolution`, `summaries`, `predictions`, `powersync`, `user-snapshots`, `audit` | What they say on the tin — `predictions` proxies HBPE histogram/week/due forecasts, `activity` rolls per-domain hourly counts up on a 15-minute cron, `powersync` mints the sync token at `GET /api/powersync/token` |
+| `identity` | Canonical URLs, natural keys and the identity ladder. Dependency-free by design so it can be lifted into a package — **and nothing consumes it yet**; wiring it into the ingest write paths is still planned work |
 
 ### Common infrastructure (`src/common/`)
 
@@ -86,11 +123,16 @@ main database):
   by backfills (per-row awaited `send()` at ~1M scale was a throughput killer).
 - **`@OnEvent`** subscribes a service method to an event on a specific queue; the registry
   (`event-registry.ts`) types every event payload.
-- **Routing gotcha:** a send fans out to all registered queues and listeners self-scope by
-  queue — an event *sent* on a queue with no consumer is a **silent drop**.
+- **Routing:** a send is delivered only to the queues that have a registered listener for
+  that event (`EventListenerRegistry.getQueuesFor`, shared by the PGBoss and local
+  implementations). This replaced the old fan-out-to-every-queue behaviour, where each
+  worker no-opped on events it did not handle. An event with **no** listener anywhere
+  resolves to zero queues and is a **silent drop** — boot logs a warning for these.
+- **Priority tiers:** `INTERACTIVE_JOB_PRIORITY` (10), `DEFAULT_JOB_PRIORITY` (0),
+  `BACKFILL_JOB_PRIORITY` (-10) — PGBoss fetches highest priority first.
 - The big consumer family is `search-ingress/listeners/*SearchIndexListener.ts` on the
   `search-index` queue; other listeners cover previews, geocoding, LLM enrichment, ETL
-  orchestration, and maintenance backfills.
+  orchestration, import stages, and maintenance backfills.
 - Queue worker concurrency comes from the `queues` config block
   (`concurrency`/`fetchBatchSize`) — for large index drains this, not Ollama, is usually the
   bottleneck.
@@ -102,11 +144,14 @@ Two write modes, one invariant (provenance-triple idempotency —
 
 - **Interactive** single-row creates emit a per-row `*CreatedEvent` → the search index
   updates live.
-- **Bulk** (the GraphQL list mutations `createEvents`, `createCommunications`, … that
-  the native import domain uses) pass `emitCreated:false` — no per-row fan-out. Rows are
-  persisted and idempotent but **not searchable** until the post-load sweep
-  `POST /api/maintenance/search-index/backfill` re-emits create events for unindexed rows
-  (LEFT JOIN against `ci_search.embeddings`). The full post-import chain is
+- **Bulk** (the GraphQL list mutations `createEvents`, `createCommunications`, … and the
+  `/v1/*` REST lanes, for external clients; the in-repo import domain calls the same
+  services directly from `PushStage`) pass `emitCreated:false` — no per-row fan-out. Rows
+  are persisted and idempotent but **not searchable** until a sweep indexes them. A push
+  emits `SearchIndexBackfillRequestEvent`, which the **pipeline** domain's
+  `SearchIndexSweepRequestListener` turns into a ledger-backed sweep of the matching
+  `index.embed*` / `index.vector*` stages; `POST /api/maintenance/search-index/backfill`
+  remains as the manual, embedding-exists version. The full post-import chain is
   `POST /api/maintenance/orchestrate`; see
   [rest.md — what the importer drives](../../../docs/api/rest.md#what-the-importer-drives-during-a-run)
   and the [bulk load runbook](db/postgres/BULK_LOAD_RUNBOOK.md).

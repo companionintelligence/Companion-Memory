@@ -7,6 +7,14 @@ import { useEntityService } from '../../useEntityService';
 import { resolveStaticUrl } from '../EntityDetails/EntityDetailScaffold';
 import { eventDisplayTitle, formatEventTimeRange } from '../utils';
 
+// Mirrors the backend's TIME_SOURCES.INGEST (pipeline/stages/clean/
+// TemporalRepairStage) and the copy of the same string in Components/utils.tsx
+// getEntityTimestamp — see the note there on why this is a literal rather than
+// a shared import. startTime is NOT NULL, so an ingest-sourced event (a Google
+// Maps saved place, a Reddit affiliation, …) still carries a value here; it is
+// the import wall clock, not a real date, and must not render as one.
+const INGEST_TIME_SOURCE = 'ingest';
+
 interface Props {
   entity: FragmentType<typeof EVENT_FRAGMENT>;
 }
@@ -17,8 +25,12 @@ export const EVENT_FRAGMENT = gql(`
     title
     description
     sourceSystem
+    # The connector's catch-all for what has no column — for a social.like
+    # event that is the liked Page's URL, which the drawer offers as a link.
+    metadata
     startTime
     endTime
+    timeSource
     locationName
     location {
       ... on PlaceType {
@@ -36,16 +48,35 @@ export const EVENT_FRAGMENT = gql(`
     tags {
       label
     }
+    # What the event is about, for events that ARE a watch/listen/read: the
+    # first linked content rows, with their resolved preview and player.
+    contents(first: 3) {
+      edges {
+        node {
+          id
+          title
+          contentUrl: url
+          ...RichMediaData
+        }
+      }
+    }
   }
 `);
 
 export function EventCard({ entity }: Props) {
   const data = useFragment(EVENT_FRAGMENT, entity);
   const [, { setActiveEntity }] = useEntityService();
-  const hasStartDate = data.startTime;
+  // startTime is NOT NULL, so this is always truthy — but for an
+  // ingest-sourced record (see INGEST_TIME_SOURCE above) it is the import
+  // wall clock standing in for a date the source never gave, and rendering it
+  // as a specific time is exactly the fabrication this card must not repeat.
+  const isUndated = data.timeSource === INGEST_TIME_SOURCE;
+  const hasStartDate = Boolean(data.startTime);
   const title = eventDisplayTitle({
     title: data.title,
-    startTime: data.startTime,
+    // Withheld when undated so a media event with no real capture time never
+    // derives a "Photo · place · Aug 21, 2026" caption off the import clock.
+    startTime: isUndated ? null : data.startTime,
     locationName: data.locationName ?? data.location?.name,
     mediaContentType: data.mediaContentType,
   });
@@ -97,9 +128,17 @@ export function EventCard({ entity }: Props) {
       {hasStartDate && (
         <div className="flex items-center gap-2">
           <Clock className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-          <span className="text-sm tabular-nums text-card-foreground">
-            {formatEventTimeRange(data.startTime, data.endTime)}
-          </span>
+          {isUndated ? (
+            // The source gave this record no time at all — startTime is only
+            // the import wall clock (toEventInput stamps time_source =
+            // 'ingest' for exactly this case). Saying so beats a specific,
+            // fabricated-looking time a reader would reasonably trust.
+            <span className="text-sm italic text-muted-foreground">Date unknown</span>
+          ) : (
+            <span className="text-sm tabular-nums text-card-foreground">
+              {formatEventTimeRange(data.startTime, data.endTime)}
+            </span>
+          )}
         </div>
       )}
 

@@ -150,15 +150,29 @@ describe('native app config — store-required settings are not silently reverte
     expect(existsSync(join(ROOT, 'frontend/apps/mobile/capacitor.config.ts'))).toBe(false);
   });
 
-  it('does not request iOS Screen Time or full-library photo access', () => {
+  it('does not request iOS Screen Time, and keeps photo access to the picker story', () => {
     const plist = infoPlist();
     const pbxproj = readFileSync(join(IOS, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8');
 
-    expect(plist).not.toContain('NSPhotoLibraryUsageDescription');
-    expect(plist).toContain('NSPhotoLibraryAddUsageDescription');
+    // Screen Time / usage stats are the flat bans — nothing in the product asks
+    // for them, and both platforms treat them as high-scrutiny declarations.
     expect(plist).not.toContain('FamilyControls');
     expect(pbxproj).not.toContain('DeviceActivity');
     expect(androidManifest()).not.toContain('PACKAGE_USAGE_STATS');
+
+    // Photos are NOT a flat ban, and this assertion used to say they were.
+    // `NSPhotoLibraryUsageDescription` is present deliberately: Capacitor's
+    // Camera/Photos APIs are linked even though the product path is
+    // picker-style, and Apple rejects the upload without the key. See
+    // frontend/apps/ios/DEVICE_DATA_COMPLIANCE.md § 3.5 — "Re-file the
+    // nutrition label if the app ever does a full-library read."
+    //
+    // So what is worth guarding is the *purpose string*, which is the part a
+    // reviewer reads and the part that would have to change first if the app
+    // ever did start reading the whole library.
+    expect(plist).toContain('NSPhotoLibraryAddUsageDescription');
+    expect(plist).toContain('NSPhotoLibraryUsageDescription');
+    expect(plist).toContain('Companion reads photos you choose');
   });
 
   it('keeps the iOS cleartext exception scoped to web content, not app-wide', () => {

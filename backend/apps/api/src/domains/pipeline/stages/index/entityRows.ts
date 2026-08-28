@@ -27,7 +27,7 @@ import type {
  * ── CTI aggregates ─────────────────────────────────────────────────────────
  *
  * Events and items keep their title/name + description on their `ci.entities`
- * base row (`entities.entity_id = events.event_id / inventory.object_id`), so
+ * base row (`entities.entity_id = events.event_id / objects.object_id`), so
  * those two loaders LEFT JOIN the base — LEFT, so an envelope whose base row is
  * missing still indexes its own fields rather than vanishing.
  */
@@ -109,7 +109,7 @@ export async function loadItemRows(
             i.colors,
             i.materials,
             pl.name AS "lastSeenPlaceName"
-       FROM ci.inventory i
+       FROM ci.objects i
        LEFT JOIN ci.entities n ON n.entity_id = i.object_id
        LEFT JOIN ci.entities pl ON pl.entity_id = i.last_seen_place_entity_id
       WHERE i.object_id = ANY($1::uuid[])

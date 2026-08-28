@@ -4,10 +4,10 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 
-import { mediaItemForAsset, insideRoot } from './_ai_media';
+import { mediaAttachmentsFor, mediaItemForAsset, insideRoot } from './_ai_media';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams } from './timeline';
+import type { ImportParams, MediaAttachment } from './timeline';
 import { timeframeContains } from './timeline';
 
 // iOS 12-hr: [M/D/YY, H:MM:SS AM] Sender: message
@@ -125,8 +125,29 @@ function parseWALine(line: string): ParsedLine | null {
   return null;
 }
 
-const SYSTEM_RE =
+const SYSTEM_VERB_RE =
   /^(Messages and calls are end-to-end encrypted|.+ (added|removed|left|created group|changed|deleted|updated))/i;
+
+/**
+ * True only for a line WhatsApp wrote itself.
+ *
+ * `SYSTEM_VERB_RE` alone is right-unbounded: `.+ (added|removed|left|…)` matches
+ * those words ANYWHERE in a body, so ordinary prose was being destroyed —
+ * "everybody just LEFT the house", "I CHANGED the copyright", "there is a
+ * RS-232 cable … for reading from the LEFT side elevator motherboard". Measured
+ * on one real 5,254-message export: 94 lines matched, of which only 41 were
+ * system lines and 53 were human messages, 7,901 characters of them.
+ *
+ * WhatsApp prefixes every line it generates with U+200E LEFT-TO-RIGHT MARK, and
+ * a typed message never carries one — 41/41 of the genuine system lines were
+ * marked and 0/53 of the human messages were. The marker is NOT sufficient on
+ * its own: it also sits on every `image omitted` placeholder and every
+ * `<attached: …>` reference, which must be kept. So both conditions are
+ * required, and each covers the other's failure.
+ */
+function isSystemLine(text: string): boolean {
+  return LEADING_INVISIBLE_RE.test(text) && SYSTEM_VERB_RE.test(text);
+}
 
 // Shared-location messages embed a maps link, e.g.
 //   "location: https://maps.google.com/?q=37.7749,-122.4194"
@@ -274,13 +295,28 @@ export class WhatsAppFileImporter implements FileImporter {
 
     let current: ParsedLine | null = null;
     let seq = 0;
+    // How many logical messages this chat actually offered the parser — the
+    // floor `reconciled` checks every produced/dropped message against.
+    // Counted per flush(), not per physical line: a multi-line message folds
+    // several lines into one ParsedLine before it ever reaches here.
+    let total = 0;
 
     const flush = (p: ParsedLine) => {
+      total++;
+
       if (!timeframeContains(params.timeframe, p.ts)) {
+        params.pipeline.drop?.('outside_timeframe');
+
         return;
       }
 
-      if (SYSTEM_RE.test(p.text)) {
+      if (isSystemLine(p.text)) {
+        // Counted, not silent. The bare `return` here reported `dropped: 0` and
+        // `reconciled: true` while discarding rows — and because it sits above
+        // the attachment block, a photo whose caption tripped the old regex lost
+        // its bytes with no record either.
+        params.pipeline.drop?.('whatsapp_system_line');
+
         return;
       }
 
@@ -290,8 +326,28 @@ export class WhatsAppFileImporter implements FileImporter {
       // emit it as its own 'media' item (the text item below still carries
       // the transcript line, e.g. "<attached: X.jpg>", so nothing about the
       // original message is lost — this only adds the actual bytes).
+      //
+      // The message ALSO carries the resolved file as a `MediaAttachments`
+      // descriptor, which is what links the two. Without it the export produced
+      // two unrelated rows: a `ci.files` blob with no idea which message it
+      // arrived in, and a message whose whole body was the placeholder
+      // "<attached: X.jpg>" and whose `attachments` column was empty. The media
+      // leg uploads both paths, but they are the same bytes, so the object
+      // store's content hash resolves them onto ONE file — the attachment costs
+      // no storage and the message gains the reference.
+      //
+      // Deliberately no `AttachmentContent`: unlike Messenger, this file is
+      // already a standalone media item, so it already catalogues itself. Opting
+      // in would mint a SECOND ci.content row over the same bytes.
+      let attachments: MediaAttachment[] = [];
       const attached = attachedFilename(p.text);
       if (attached) {
+        // A referenced attachment is a SECOND thing this flush offers the
+        // parser beyond the message itself, and every branch below resolves
+        // it to exactly one push() (a media item) or one drop() — so it gets
+        // its own unit here too, or `produced + dropped` runs ahead of
+        // `consumed` by one for every message that carries an attachment.
+        total++;
         // path.basename strips any directory components the reference might
         // (maliciously or accidentally) contain, so the resolved path can
         // never escape mediaDir.
@@ -306,6 +362,7 @@ export class WhatsAppFileImporter implements FileImporter {
             { Sender: p.sender, Conversation: conversationName },
           );
           if (mediaItem) {
+            attachments = mediaAttachmentsFor([mediaItem]);
             params.pipeline.push({
               item: mediaItem,
               edges: p.sender
@@ -341,6 +398,7 @@ export class WhatsAppFileImporter implements FileImporter {
             // carries it through to CI-Server; otherwise it only lives in content.data.
             Text: p.text || undefined,
             ...(loc && { Location: `${loc.latitude}, ${loc.longitude}` }),
+            ...(attachments.length > 0 && { MediaAttachments: attachments }),
           },
         },
         // Link the message to whoever sent it, so the graph view gets a real
@@ -368,6 +426,8 @@ export class WhatsAppFileImporter implements FileImporter {
     if (current) {
       flush(current);
     }
+
+    params.pipeline.consumed?.(total);
   }
 }
 

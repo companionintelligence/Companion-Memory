@@ -4,6 +4,7 @@ import { useMutation, useQuery } from '@apollo/client';
 import { GlobalUID, LoadingPage, usePageTitle, EmptyState } from '@ci/common';
 import { useParams } from 'react-router-dom';
 
+import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import { EntityEvolutionPanel } from '@/components/EntityEvolution/EntityEvolutionPanel';
 import { EntityFieldsCard } from '@/components/EntityFields';
 import { EntityGraph } from '@/components/EntityGraph';
@@ -12,10 +13,12 @@ import { EntityEditToggle, EntityTagsDescriptionCard } from '@/components/Entity
 import { ContentIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
+import { namedChatContext } from '@/lib/agentChat';
 import {
   EntityMedia,
   resolveStaticUrl,
 } from '@/pages/MemoryPage/Components/EntityDetails/EntityDetailScaffold';
+import { hasRichMedia, RichMediaCard } from '@/pages/MemoryPage/Components/EntityDetails/RichMediaCard';
 
 const GET_CONTENT = gql(`
   query GetContent($id: ID!) {
@@ -23,10 +26,19 @@ const GET_CONTENT = gql(`
       id
       title
       text
-      # The drawer renders the image; the page used to select nothing to render it with.
       mimetype
       contentUrl: url
       sourceUrl
+      # The local copy (external_id -> ci.files), resolved server-side. Preferred
+      # over url/sourceUrl, which for imported photos is often the provider's
+      # web page (e.g. photos.google.com/photo/…) — not an image, and blocked
+      # by the browser when used as one.
+      mediaUrl
+      previewUrl
+      # Poster + click-to-play for a link with rich media (Spotify, YouTube,
+      # Netflix/Prime, …) — see RichMediaCard, the same fragment the memory
+      # drawer's ContentDetails spreads.
+      ...RichMediaData
       tags {
         id
         label
@@ -82,13 +94,23 @@ export function ContentPage() {
             <ContentIcon />
             <h1 className="text-2xl font-bold">{contentItem.title}</h1>
           </div>
-          <EntityEditToggle pressed={editMode} onPressedChange={setEditMode} />
+          <div className="flex items-center gap-2">
+            <ChatWithAgentMenu
+              context={namedChatContext({
+                title: contentItem.title,
+                body: contentItem.text,
+                sourceKind: 'ContentType',
+                sourceId: contentItem.id,
+              })}
+            />
+            <EntityEditToggle pressed={editMode} onPressedChange={setEditMode} />
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <div className="flex flex-col gap-4 md:col-span-2">
-            {/* The drawer's field set and its media, so "Open full page" does not
-                silently drop the title editor and the image. */}
+            {/* The drawer's field set and its media, so reaching this route directly
+                does not silently drop the title editor and the image. */}
             <EntityFieldsCard
               title="Content"
               resetKey={contentItem.id}
@@ -106,12 +128,27 @@ export function ContentPage() {
                 }
               }}
             >
-              {contentItem.mimetype?.startsWith('image/') && (
-                <EntityMedia
-                  src={resolveStaticUrl(contentItem.contentUrl ?? contentItem.sourceUrl)}
-                  contentType={contentItem.mimetype}
-                  alt={contentItem.title ?? ''}
+              {/* A link with a resolved preview or a provider player shows THAT — the
+                  poster, the facts, click-to-play — same as the memory drawer;
+                  otherwise the linked image renders as before. */}
+              {hasRichMedia(contentItem) ? (
+                <RichMediaCard
+                  content={contentItem}
+                  title={contentItem.title}
+                  url={contentItem.contentUrl ?? contentItem.sourceUrl}
                 />
+              ) : (
+                contentItem.mimetype?.startsWith('image/') && (
+                  <EntityMedia
+                    src={resolveStaticUrl(
+                      contentItem.mediaUrl ?? contentItem.contentUrl ?? contentItem.sourceUrl,
+                    )}
+                    previewSrc={resolveStaticUrl(contentItem.previewUrl)}
+                    contentType={contentItem.mimetype}
+                    alt={contentItem.title ?? ''}
+                    fallbackHref={contentItem.contentUrl ?? contentItem.sourceUrl}
+                  />
+                )
               )}
             </EntityFieldsCard>
 

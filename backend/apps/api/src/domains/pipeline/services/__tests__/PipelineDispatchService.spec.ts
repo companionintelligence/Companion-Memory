@@ -113,6 +113,13 @@ interface Select {
   entityType: string | undefined;
 }
 
+/** The `ack` a real `@OnEvent` binding passes a handler, mocked for direct calls. */
+interface AckMock {
+  done: jest.Mock;
+  fail: jest.Mock;
+  defer: jest.Mock;
+}
+
 interface HarnessOptions {
   /** Rows the source holds for {@link USER}, in key order. */
   corpus?: string[];
@@ -603,6 +610,63 @@ describe('PipelineDispatchService queue routing', () => {
       expect(enqueue.jobs.every((job) => job.name !== PipelineSliceEvent)).toBe(true);
     }
   });
+
+  it('refuses a hop whose queue does not match the stage, when a queue is supplied', async () => {
+    // The same guard `PipelineSliceListener.handleSlice` applies when a slice
+    // arrives on a queue its stage does not ride — see that method's identical
+    // check. Here it protects the sweep chain itself.
+    const h = makeHarness({ corpus: corpusOf(6) }); // stage.queue defaults to ENRICH
+
+    await expect(
+      h.service.runSweepHop(h.sweepPayload({ sliceSize: 2 }), PIPELINE_QUEUES.EMBED),
+    ).rejects.toThrow(/wrong resource pool/i);
+    expect(h.stateService.selectStale).not.toHaveBeenCalled();
+    expect(h.enqueued).toHaveLength(0);
+  });
+
+  it('the real per-queue binding fails the job instead of sweeping a stage bound to a different queue', async () => {
+    // Exercises the actual production wiring, not just the guard in isolation:
+    // `handleEmbedSweep` is decorated onto the EMBED queue, but this stage
+    // declares ENRICH — the misconfiguration the guard exists to catch. The
+    // `@OnEvent` autoAcknowledge wrapper reports a thrown handler error
+    // through `ack.fail()` rather than rejecting the call, so that is what is
+    // asserted here instead of a rejection.
+    const h = makeHarness({ corpus: corpusOf(6) }); // stage.queue defaults to ENRICH
+    const ack: AckMock = { done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+    const handler = h.service.handleEmbedSweep as unknown as (
+      payload: unknown,
+      ack: AckMock,
+    ) => Promise<void>;
+
+    await handler.call(h.service, h.sweepPayload({ sliceSize: 2 }), ack);
+
+    expect(ack.done).not.toHaveBeenCalled();
+    expect(ack.fail).toHaveBeenCalledTimes(1);
+    const [failure] = ack.fail.mock.calls[0];
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/wrong resource pool/i);
+    expect(h.stateService.selectStale).not.toHaveBeenCalled();
+  });
+
+  it('the real per-queue binding for the matching queue sweeps normally', async () => {
+    const h = makeHarness({ corpus: corpusOf(2) }); // stage.queue defaults to ENRICH
+
+    await h.service.handleEnrichSweep(h.sweepPayload({ sliceSize: 2 }));
+
+    expect(h.stateService.selectStale).toHaveBeenCalled();
+    expect(h.sliceJobs()).toHaveLength(1);
+  });
+
+  it('does not check the queue when a hop is driven directly with none supplied', async () => {
+    // Every pre-existing direct call to `runSweepHop` in this file omits the
+    // queue — a hop driven outside the three bindings has no binding to
+    // disagree with, so the guard must stay a no-op rather than reject it.
+    const h = makeHarness({ corpus: corpusOf(2), stage: { queue: PIPELINE_QUEUES.EMBED } });
+
+    await expect(h.service.runSweepHop(h.sweepPayload({ sliceSize: 2 }))).resolves.toEqual(
+      expect.objectContaining({ dispatched: 2 }),
+    );
+  });
 });
 
 describe('PipelineDispatchService backpressure ordering', () => {
@@ -951,6 +1015,36 @@ describe('PipelineDispatchService entity types', () => {
     });
 
     await expect(h.service.runSweepHop(h.sweepPayload({ sliceSize: 2 }))).rejects.toThrow(/entityType/i);
+    expect(h.stateService.selectStale).not.toHaveBeenCalled();
+    expect(h.enqueued).toHaveLength(0);
+  });
+
+  it('refuses a named entity type the stage does not declare', async () => {
+    // The same guard `PipelineSliceListener.handleSlice` applies to a slice's
+    // entityType. Without it, a typo'd or stale caller would sweep and dispatch
+    // under a type the ledger has no row for, rather than failing at the sweep
+    // that made it.
+    const h = makeHarness({
+      corpus: corpusOf(6),
+      stage: { entityTypes: ['file', 'contact'] },
+    });
+
+    await expect(
+      h.service.runSweepHop(h.sweepPayload({ entityType: 'bogus', sliceSize: 2 })),
+    ).rejects.toThrow(/does not declare/i);
+    expect(h.stateService.selectStale).not.toHaveBeenCalled();
+    expect(h.enqueued).toHaveLength(0);
+  });
+
+  it('refuses a named entity type even for a single-type stage, rather than silently sweeping under it', async () => {
+    // Before this guard, a single-type stage skipped the "must name" check
+    // entirely (entityType is not null) and just used whatever it was handed —
+    // this is the case that guard alone never caught.
+    const h = makeHarness({ corpus: corpusOf(6) });
+
+    await expect(
+      h.service.runSweepHop(h.sweepPayload({ entityType: 'bogus', sliceSize: 2 })),
+    ).rejects.toThrow(/does not declare/i);
     expect(h.stateService.selectStale).not.toHaveBeenCalled();
     expect(h.enqueued).toHaveLength(0);
   });

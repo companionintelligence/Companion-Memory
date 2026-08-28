@@ -6,11 +6,20 @@ import {
   buildPositionRecord,
   captureLocationFix,
   createLocationSampler,
+  fixFromBackgroundGeolocationLocation,
   fixFromGeolocationPosition,
+  type BackgroundGeolocationLocation,
   haversineMeters,
   positionSourceId,
   type DeviceLocationFix,
 } from '@ci/common/src/utils/deviceSources/location';
+import {
+  LOCATION_ENABLED_STORAGE_KEY,
+  LOCATION_MODE_STORAGE_KEY,
+  isLocationTrackingEnabled,
+  readLocationTrackingMode,
+  writeLocationTrackingMode,
+} from '@ci/common/src/utils/deviceSources/locationMode';
 import type { OutboxItem } from '@ci/common/src/utils/outbox';
 import {
   INGEST_FINISH_PATH,
@@ -20,7 +29,7 @@ import {
   outboxEndpointFor,
   resetIngestFinishState,
 } from '@ci/common/src/utils/outboxFlush';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type GlobalWithWindow = { window?: unknown };
 
@@ -766,5 +775,113 @@ describe('fixFromGeolocationPosition', () => {
     expect(fix.altitudeMeters).toBeNull();
     expect(fix.headingDegrees).toBeNull();
     expect(fix.speedMetersPerSecond).toBeNull();
+  });
+});
+
+/**
+ * The `@capacitor-community/background-geolocation` counterpart to
+ * `fixFromGeolocationPosition` — same adapter contract, different field names
+ * (`bearing`/`time` rather than `heading`/`timestamp`).
+ */
+describe('fixFromBackgroundGeolocationLocation', () => {
+  function backgroundLocation(
+    overrides: Partial<BackgroundGeolocationLocation> = {},
+  ): BackgroundGeolocationLocation {
+    return {
+      latitude: SF_LAT,
+      longitude: SF_LNG,
+      accuracy: 12,
+      altitude: 15,
+      altitudeAccuracy: 5,
+      bearing: 270,
+      speed: 3.5,
+      time: CAPTURED_AT,
+      ...overrides,
+    };
+  }
+
+  it('carries every field across, renamed to the DeviceLocationFix contract', () => {
+    const fix = fixFromBackgroundGeolocationLocation(backgroundLocation());
+
+    expect(fix).toEqual({
+      latitude: SF_LAT,
+      longitude: SF_LNG,
+      accuracyMeters: 12,
+      altitudeMeters: 15,
+      headingDegrees: 270,
+      speedMetersPerSecond: 3.5,
+      capturedAtMs: CAPTURED_AT,
+    });
+  });
+
+  it('falls back to the current time only when the plugin reports no timestamp at all', () => {
+    const before = Date.now();
+    const fix = fixFromBackgroundGeolocationLocation(backgroundLocation({ time: 0 }));
+    const after = Date.now();
+
+    expect(fix.capturedAtMs).toBeGreaterThanOrEqual(before);
+    expect(fix.capturedAtMs).toBeLessThanOrEqual(after);
+  });
+
+  it('passes through null optional fields rather than coercing them to 0', () => {
+    const fix = fixFromBackgroundGeolocationLocation(
+      backgroundLocation({ altitude: null, bearing: null, speed: null }),
+    );
+
+    expect(fix.altitudeMeters).toBeNull();
+    expect(fix.headingDegrees).toBeNull();
+    expect(fix.speedMetersPerSecond).toBeNull();
+  });
+});
+
+describe('location tracking mode persistence', () => {
+  beforeEach(() => {
+    const store = new Map<string, string>();
+    setWindow({
+      localStorage: {
+        getItem: (key: string) => store.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          store.set(key, value);
+        },
+        removeItem: (key: string) => {
+          store.delete(key);
+        },
+        clear: () => store.clear(),
+      },
+    });
+  });
+
+  afterEach(() => {
+    (window.localStorage as { clear: () => void }).clear();
+  });
+
+  it('defaults to off', () => {
+    expect(readLocationTrackingMode()).toBe('off');
+    expect(isLocationTrackingEnabled()).toBe(false);
+  });
+
+  it('migrates the legacy enabled flag to while using, never to always', () => {
+    window.localStorage.setItem(LOCATION_ENABLED_STORAGE_KEY, 'true');
+
+    expect(readLocationTrackingMode()).toBe('when_in_use');
+    expect(isLocationTrackingEnabled()).toBe(true);
+  });
+
+  it('prefers the explicit mode key over the legacy boolean', () => {
+    window.localStorage.setItem(LOCATION_ENABLED_STORAGE_KEY, 'true');
+    window.localStorage.setItem(LOCATION_MODE_STORAGE_KEY, 'off');
+
+    expect(readLocationTrackingMode()).toBe('off');
+  });
+
+  it('writes both keys so older readers still see the boolean', () => {
+    writeLocationTrackingMode('always');
+
+    expect(window.localStorage.getItem(LOCATION_MODE_STORAGE_KEY)).toBe('always');
+    expect(window.localStorage.getItem(LOCATION_ENABLED_STORAGE_KEY)).toBe('true');
+
+    writeLocationTrackingMode('off');
+
+    expect(window.localStorage.getItem(LOCATION_ENABLED_STORAGE_KEY)).toBe('false');
   });
 });

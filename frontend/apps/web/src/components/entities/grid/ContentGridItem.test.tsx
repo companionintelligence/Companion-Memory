@@ -15,7 +15,16 @@ function makeContent(overrides: Record<string, unknown> = {}) {
       text: 'some body text',
       contentUrl: null,
       sourceUrl: null,
+      sourceType: null,
+      sourceSystem: null,
+      sourceId: null,
+      createdAt: '2026-08-26T12:00:00.000Z',
       mimetype: null,
+      mediaUrl: null,
+      mediaFilename: null,
+      mediaSize: null,
+      player: null,
+      unfurl: null,
       ...overrides,
     },
     CONTENT_FRAGMENT,
@@ -62,6 +71,48 @@ describe('ContentGridItem', () => {
     expect(screen.getByText('A note')).toBeInTheDocument();
     expect(screen.getByText('some body text')).toBeInTheDocument();
     expect(screen.getByText('Content')).toBeInTheDocument();
+  });
+
+  // A Spotify track has no linked image (mimetype audio/ogg); once the
+  // enrich.unfurl stage has cached its poster, the tile should show it
+  // instead of falling to the plain text card.
+  it("shows the unfurl stage's cached poster for a non-image row (Spotify cover art)", () => {
+    renderWithProviders(
+      <ContentGridItem
+        content={makeContent({
+          mimetype: 'audio/ogg',
+          unfurl: {
+            __typename: 'UnfurlType' as const,
+            status: 'ok',
+            thumbnailUrl: 'https://i.scdn.co/image/ab67616d00001e02abc',
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByRole('img')).toHaveAttribute('src', 'https://i.scdn.co/image/ab67616d00001e02abc');
+  });
+
+  it("falls back to the player's templated poster when there is no unfurl thumbnail", () => {
+    renderWithProviders(
+      <ContentGridItem
+        content={makeContent({
+          mimetype: 'video/mp4',
+          player: {
+            __typename: 'EmbedPlayerType' as const,
+            posterUrl: 'https://i.ytimg.com/vi/abc/hqdefault.jpg',
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByRole('img')).toHaveAttribute('src', 'https://i.ytimg.com/vi/abc/hqdefault.jpg');
+  });
+
+  it('does not show a picture for a non-image row before the unfurl stage has visited it', () => {
+    renderWithProviders(<ContentGridItem content={makeContent({ mimetype: 'audio/ogg' })} />);
+
+    expect(screen.queryByRole('img')).toBeNull();
   });
 
   it('fires onClick', () => {

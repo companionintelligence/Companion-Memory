@@ -56,12 +56,35 @@ export function formatDateTime(dateStr: string, timeStr?: string): string {
 }
 
 /**
+ * `EventType.timeSource` for a row whose source gave it NO time — `startTime`
+ * is only the import wall clock (a Google Maps saved place, a Reddit
+ * affiliation, …), not evidence of anything. Mirrors `TIME_SOURCES.INGEST` in
+ * the backend's `pipeline/stages/clean/TemporalRepairStage`; mirrored rather
+ * than imported because the frontend has no dependency on backend source at
+ * all. `dateBucket.test.ts` pins this string against a fixture built from the
+ * same shape push/inputs.ts stamps, so the copy cannot drift silently.
+ */
+export const INGEST_TIME_SOURCE = 'ingest';
+
+/**
  * The canonical timestamp for an entity, matching the server's ordering logic
  * (`SearchResolver.getEntityTimestamp`, which keys off `time ?? startTime`).
  * Keeping the same field priority here ensures the date-group headers we render
  * line up with the chronological order the API already returned. Entities with
  * no domain timestamp (people, places, concepts, …) return null and fall into
- * the trailing "No date" bucket.
+ * the trailing "No date" bucket — unless a People/Places date filter stamped
+ * `bucketAppearedAt` (the first real activity in that window), in which case
+ * they group on the day they showed up, not the day the row was imported.
+ *
+ * An `EventType` whose `timeSource` is `'ingest'` gets the same treatment: the
+ * value in `startTime` is not a real date — it is the moment the import ran,
+ * substituted because the column is NOT NULL (see EventEntity.timeSource on
+ * the backend) — so it is treated as undated rather than sorted/grouped as a
+ * real instant. That is what keeps a bulk import's Google Maps saved places
+ * ("Home", "Work", "Gym") from pinning themselves to the top of the dated
+ * timeline; they fall into the trailing "No date" group instead (see
+ * {@link groupEntitiesByBucket}), and {@link EventCard} shows "Date unknown"
+ * for them rather than a fabricated time.
  *
  * Reads the aliased `bucketTime`/`bucketStartTime` fields selected directly on
  * the search query's node so access is type-safe under fragment masking (rather
@@ -76,7 +99,15 @@ export function getEntityTimestamp(entity: EntityItem): Date | null {
       raw = entity.bucketTime;
       break;
     case 'EventType':
+      if (entity.bucketTimeSource === INGEST_TIME_SOURCE) {
+        return null;
+      }
+
       raw = entity.bucketStartTime;
+      break;
+    case 'PersonType':
+    case 'PlaceType':
+      raw = entity.bucketAppearedAt;
       break;
     default:
       return null;
@@ -228,11 +259,23 @@ interface DateBucket {
   label: string;
 }
 
-/** Coarse, human-friendly bucket for a date: Today / Yesterday / This Week / This Month / "Month Year". */
+/**
+ * Coarse, human-friendly bucket for a date: Upcoming / In The Next Week /
+ * Tomorrow / Today / Yesterday / This Week / This Month / "Month Year".
+ *
+ * The forward direction exists because memory is no longer purely the past:
+ * a calendar import carries future events, and with only lower-bound checks
+ * the "Today" test (`day >= today`) was open-ended upward — an event in June
+ * 2027 rendered under Today, pinned to the top of every newest-first view.
+ */
 export function getDateBucket(date: Date, now: Date = new Date()): DateBucket {
   const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
   const today = startOfDay(now);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+  const weekAhead = new Date(today);
+  weekAhead.setDate(today.getDate() + 7);
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
   const weekStart = new Date(today);
@@ -240,6 +283,18 @@ export function getDateBucket(date: Date, now: Date = new Date()): DateBucket {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const day = startOfDay(date).getTime();
+
+  if (day >= weekAhead.getTime()) {
+    return { key: 'upcoming', label: 'Upcoming' };
+  }
+
+  if (day > tomorrow.getTime()) {
+    return { key: 'next-week', label: 'In The Next Week' };
+  }
+
+  if (day >= tomorrow.getTime()) {
+    return { key: 'tomorrow', label: 'Tomorrow' };
+  }
 
   if (day >= today.getTime()) {
     return { key: 'today', label: 'Today' };

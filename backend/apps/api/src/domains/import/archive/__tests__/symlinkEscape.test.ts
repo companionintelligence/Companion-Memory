@@ -21,7 +21,7 @@ function scratch(): string {
 }
 
 describe('symlink containment in the staged tree', () => {
-  it('does not follow a symlinked Takeout wrapper', () => {
+  it('does not follow a symlinked Takeout wrapper', async () => {
     const work = scratch();
     const staged = path.join(work, 'staged');
     const outside = path.join(work, 'precious');
@@ -32,7 +32,7 @@ describe('symlink containment in the staged tree', () => {
     // The attack: the unit's `Takeout` is a link to somewhere else entirely.
     fs.symlinkSync(outside, path.join(staged, 'Takeout'));
 
-    unpackArchives(staged, () => undefined, { deleteArchives: false });
+    await unpackArchives(staged, () => undefined, { deleteArchives: false });
 
     // The file must still be where it was, under its own name.
     expect(fs.existsSync(path.join(outside, 'irreplaceable.txt'))).toBe(true);

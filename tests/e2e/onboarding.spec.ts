@@ -11,7 +11,7 @@ import { expect, test } from '@playwright/test';
 //   2. Land on /onboarding and skip through the wizard (every step but the
 //      last has a Skip button — OnboardingPage.tsx / constants.ts).
 //   3. Finish on the last step and assert the redirect to the onboarded home
-//      (appHomePath: /plan when planning.page is on, else /today).
+//      (appHomePath: /plan when planning.page is on, else /calendar).
 //
 // A unique email per run (timestamp + random suffix) is the "per-run signup
 // helper" the old stub said did not exist yet — email/password are simple
@@ -44,22 +44,37 @@ test('completes onboarding for a new user', async ({ page }) => {
   const skipButton = page.getByRole('button', { name: 'Skip' });
   const finishButton = page.getByRole('button', { name: 'Run my first sync and finish' });
 
+  // Wait for the wizard's controls to mount before the loop starts. Step 1
+  // animates its heading in, so an immediate `isVisible()` can miss the footer
+  // and break the loop on iteration 0 — which then reads as "the wizard is
+  // broken" when nothing is wrong.
+  await expect(skipButton.or(finishButton).first()).toBeVisible({ timeout: 15_000 });
+
   for (let i = 0; i < 20; i++) {
     if (await finishButton.isVisible().catch(() => false)) {
       break;
     }
 
-    if (!(await skipButton.isVisible().catch(() => false))) {
+    if ((await skipButton.count()) === 0) {
       break;
     }
 
+    // The source step ("Connect a source") is a long, inner-scrolling panel and
+    // its footer sits below the fold, so Skip is present but not in view.
+    // Test on presence, scroll it in, then click — `isVisible()` alone would
+    // abandon the walk on a step that is working.
+    await skipButton.scrollIntoViewIfNeeded().catch(() => {});
     await skipButton.click();
+
+    // Each step swaps the panel; let the next one settle before re-querying,
+    // otherwise the click can land on the outgoing step's detached footer.
+    await page.waitForTimeout(300);
   }
 
   await expect(finishButton).toBeVisible({ timeout: 10_000 });
   await finishButton.click();
 
   // onboard() flips user.onboarded, and OnboardingPage redirects away once it
-  // does — to /plan (planning.page on) or /today (off).
-  await expect(page).toHaveURL(/\/(plan|today)/, { timeout: 20_000 });
+  // does — to /plan (planning.page on) or /calendar (off).
+  await expect(page).toHaveURL(/\/(plan|calendar)/, { timeout: 20_000 });
 });

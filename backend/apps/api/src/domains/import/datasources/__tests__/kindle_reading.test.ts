@@ -187,6 +187,7 @@ describe('Kindle reading datasource', () => {
       expect(items.length).toBe(4);
       expect(items[0].metadata.Title).toBe('The Inheritance Trilogy');
       expect(items[0].metadata.ASIN).toBe('B00JJ86YA4');
+      expect(items[0].metadata.URL).toBe('https://www.amazon.com/dp/B00JJ86YA4');
       // Not in Digital Items — the insights file supplies the name.
       expect(items[1].metadata.Title).toBe('Skin Game (Dresden Files Book 15)');
       // UUID pseudo-ASIN: no title exists anywhere; sessions still collapse
@@ -194,6 +195,7 @@ describe('Kindle reading datasource', () => {
       expect(items[2].metadata.Title).toBeUndefined();
       expect(items[2].metadata.URI).toBe('kindle:doc:6cb8e261-a9e5-4814-9b06-1d4994a9c239');
       expect(items[2].metadata.ASIN).toBeUndefined();
+      expect(items[2].metadata.URL).toBeUndefined();
       // No ASIN at all, flagged a personal document.
       expect(items[3].metadata.Title).toBe('Personal document');
       expect(items[3].metadata.URI).toBeUndefined();

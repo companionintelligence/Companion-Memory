@@ -189,6 +189,13 @@ export class VCardFileImporter implements FileImporter {
 
     const file = path.basename(fpath);
     let card: ContentLine[] | null = null;
+    // One entry per END:VCARD in file order — see extractCardPhotos for why this
+    // is a companion pass over `raw` rather than something unfoldContentLines
+    // itself hands back. `cardIndex` below advances on every END:VCARD, exactly
+    // when this array gained its next entry, so the two stay in lockstep even
+    // through a truncated card or a stray END with no matching BEGIN.
+    const photos = extractCardPhotos(raw);
+    let cardIndex = 0;
 
     for (const line of unfoldContentLines(raw)) {
       const trimmed = line.trim();
@@ -203,8 +210,11 @@ export class VCardFileImporter implements FileImporter {
       }
 
       if (/^END:VCARD$/i.test(trimmed)) {
+        const photo = photos[cardIndex];
+        cardIndex += 1;
+
         if (card) {
-          this.emitCard(card, file, params);
+          this.emitCard(card, file, params, photo);
         }
 
         card = null;
@@ -226,8 +236,8 @@ export class VCardFileImporter implements FileImporter {
     }
   }
 
-  private emitCard(lines: ContentLine[], file: string, params: ImportParams): void {
-    const contact = buildContact(lines, file);
+  private emitCard(lines: ContentLine[], file: string, params: ImportParams, photo?: CardPhoto): void {
+    const contact = buildContact(lines, file, photo);
     if (!contact) {
       // A card with neither a name nor one usable attribute. Rare, but it is a
       // record we chose not to keep — never a silent `continue`.
@@ -262,8 +272,11 @@ const BINARY_PROPERTY_HEAD = /^[A-Za-z0-9.-]+;[^:]*ENCODING=(?:b|base64)(?:[;:])
  * without the second rule every such N/FN/TEL is truncated at the fold.
  *
  * Continuations of a base64 property (a contact PHOTO, which is most of an
- * Apple export's bytes) are discarded rather than joined: the blob is never
- * used, and a 78 MB address book would otherwise be held twice in memory.
+ * Apple export's bytes) are discarded rather than joined here: joining them
+ * into `out` would hold every card's photo in this one shared buffer for the
+ * life of the whole file (a 78 MB address book held twice in memory). A card's
+ * PHOTO, when kept, is extracted by the separate {@link extractCardPhotos}
+ * pass below instead, which holds at most one card's photo at a time.
  */
 export function unfoldContentLines(raw: string): string[] {
   const physical = stripBom(raw).split(/\r\n|\r|\n/);
@@ -289,6 +302,151 @@ export function unfoldContentLines(raw: string): string[] {
   }
 
   return out;
+}
+
+/** A card's embedded PHOTO, decoded just enough to build a `data:` URI. */
+export interface CardPhoto {
+  /** e.g. `image/jpeg` — from the property's TYPE param, defaulting to JPEG (the
+   *  overwhelming majority of real exports; vCard's own default per RFC 2426). */
+  mimeType: string;
+  base64: string;
+}
+
+/** A PHOTO payload too large to be worth keeping as a `properties` value. */
+const MAX_PHOTO_BASE64_CHARS = 2_000_000; // ~1.5MB decoded
+
+/**
+ * The largest `data:` URI this parser will embed directly into
+ * `properties.avatar_url`, in characters.
+ *
+ * `ci.entities` maintains a functional search index over
+ * `to_tsvector('english', ... || properties::text)` (migration
+ * 20251203202414_update_search_vector_logic.sql), and Postgres's tsvector
+ * representation has a hard 1,048,575-BYTE ceiling — INDEPENDENT of
+ * MAX_PHOTO_BASE64_CHARS above, which only bounds the accumulator this parser
+ * uses while READING a PHOTO property, not what gets embedded here. A card
+ * whose photo falls between the two thresholds passed accumulation fine and
+ * then failed the INSERT/UPDATE itself with "string is too long for
+ * tsvector", taking the whole upsert BATCH down with it — confirmed against a
+ * real 9,911-contact export, where it also cratered push throughput roughly
+ * 10x (many-minute retries on the failing batches) for every contact sharing
+ * that batch, not just the one with the oversized photo.
+ *
+ * 700,000 leaves comfortable headroom under the limit for the OTHER fields
+ * the same trigger concatenates (name, description, search_content, and the
+ * rest of properties), while still embedding the vast majority of real
+ * contact photos — a phone-camera headshot's base64 is typically well under
+ * 200KB. A photo past this cap is dropped from `avatar_url` entirely rather
+ * than truncated: half a base64 image decodes to nothing, so keeping a
+ * fragment would be strictly worse than the "no photo" case this already
+ * degrades to when a card has none.
+ */
+const MAX_AVATAR_DATA_URI_CHARS = 700_000;
+
+const PHOTO_TYPE_PARAM = /(?:^|;)TYPE=([A-Za-z0-9.+-]+)/i;
+const PHOTO_MIME_BY_TYPE: Record<string, string> = {
+  JPEG: 'image/jpeg',
+  JPG: 'image/jpeg',
+  PNG: 'image/png',
+  GIF: 'image/gif',
+  WEBP: 'image/webp',
+};
+
+/**
+ * Each card's base64 PHOTO payload, in file order — a companion pass to
+ * {@link unfoldContentLines}, which deliberately discards these same bytes
+ * (see its docstring) rather than joining them into its own shared buffer.
+ *
+ * This pass holds at most ONE card's photo at a time: `BEGIN:VCARD` resets the
+ * accumulator, and whatever the matching `END:VCARD` finds becomes the return
+ * array's next entry (`undefined` when that card had no PHOTO, the payload was
+ * implausibly large, or the card was truncated). It applies the identical
+ * BEGIN/END bookkeeping `parseVCards`'s main loop does — a second BEGIN before
+ * an END drops the card in progress without emitting, a file that ends mid-card
+ * emits nothing for it — so the result lines up 1:1 with the cards
+ * {@link unfoldContentLines}'s consumer actually calls `emitCard` for.
+ *
+ * Line folding only, deliberately not the full tokenizer above: a PHOTO's
+ * value is opaque base64, so unlike TEXT properties it needs no CHARSET/
+ * QUOTED-PRINTABLE decode or `\;`-unescaping — string concatenation of the
+ * folded continuation lines IS the decode.
+ */
+export function extractCardPhotos(raw: string): (CardPhoto | undefined)[] {
+  const photos: (CardPhoto | undefined)[] = [];
+  const physical = stripBom(raw).split(/\r\n|\r|\n/);
+
+  let chunks: string[] | null = null;
+  let mimeType = '';
+  let tooLarge = false;
+
+  const finishCard = () => {
+    if (chunks && chunks.length && !tooLarge) {
+      const base64 = chunks.join('');
+
+      photos.push(base64 ? { mimeType, base64 } : undefined);
+    } else {
+      photos.push(undefined);
+    }
+
+    chunks = null;
+    mimeType = '';
+    tooLarge = false;
+  };
+
+  for (const line of physical) {
+    const trimmed = line.trim();
+    if (/^BEGIN:VCARD$/i.test(trimmed)) {
+      // A second BEGIN before an END means the previous card was truncated —
+      // parseVCards drops it without calling emitCard, so this pass must not
+      // push an entry for it either.
+      chunks = null;
+      mimeType = '';
+      tooLarge = false;
+      continue;
+    }
+
+    if (/^END:VCARD$/i.test(trimmed)) {
+      finishCard();
+      continue;
+    }
+
+    if (chunks !== null && (line.startsWith(' ') || line.startsWith('\t'))) {
+      if (!tooLarge) {
+        chunks.push(line.slice(1));
+        if (chunks.reduce((n, c) => n + c.length, 0) > MAX_PHOTO_BASE64_CHARS) {
+          tooLarge = true;
+          chunks = [];
+        }
+      }
+
+      continue;
+    }
+
+    // A new (non-continuation) line ends whatever PHOTO was being accumulated,
+    // same as unfoldContentLines's tailIsBinary reset.
+    chunks = null;
+
+    if (!/^PHOTO;/i.test(line) || !BINARY_PROPERTY_HEAD.test(line)) {
+      continue;
+    }
+
+    const colonIdx = line.indexOf(':');
+    if (colonIdx === -1) {
+      continue;
+    }
+
+    const head = line.slice(0, colonIdx);
+    const typeMatch = PHOTO_TYPE_PARAM.exec(head);
+    mimeType = (typeMatch && PHOTO_MIME_BY_TYPE[typeMatch[1].toUpperCase()]) || 'image/jpeg';
+    chunks = [line.slice(colonIdx + 1)];
+    tooLarge = false;
+  }
+
+  // An unterminated final card (no closing END:VCARD) — parseVCards drops it
+  // too, via the `if (card) drop('no_end_marker')` after its own loop, and
+  // never calls emitCard for it, so this pass must not push a trailing entry.
+
+  return photos;
 }
 
 /** Split on `sep` at the top level, ignoring separators inside double quotes. */
@@ -674,7 +832,7 @@ export interface BuiltContact {
  * Returns null when the card carries neither a name nor a single usable
  * attribute (an `END:VCARD` with nothing but VERSION/PRODID before it).
  */
-export function buildContact(lines: ContentLine[], file: string): BuiltContact | null {
+export function buildContact(lines: ContentLine[], file: string, photo?: CardPhoto): BuiltContact | null {
   // Labels first: `item1.X-ABLabel` names what `item1.EMAIL` is FOR, and both
   // orders occur in real files, so the map must be complete before it is read.
   const groupLabels = new Map<string, string>();
@@ -704,6 +862,7 @@ export function buildContact(lines: ContentLine[], file: string): BuiltContact |
   let structuredName = '';
   let birthday = '';
   let uid = '';
+  let avatarUrl = '';
 
   for (const line of lines) {
     if (line.binary) {
@@ -758,6 +917,22 @@ export function buildContact(lines: ContentLine[], file: string): BuiltContact |
 
         urls.push(v);
         attributes.push({ name: 'url', value: v, ...labelled });
+        break;
+      }
+
+      case 'PHOTO': {
+        // Reaching the switch at all means `decodeTransport` already found no
+        // ENCODING=B/BASE64 param (those lines are `line.binary` and skipped
+        // above, at `unfoldContentLines`'s cost of discarding the base64 rather
+        // than holding a whole address book's photos in memory twice — see its
+        // docstring). What's left is `PHOTO;VALUE=URI:https://…`, which some
+        // exports (Exchange/Outlook, some CRMs) use instead of embedding bytes —
+        // a plain URL, exactly as cheap to carry as EMAIL/URL above.
+        const v = text();
+        if (!avatarUrl && /^https?:\/\//i.test(v)) {
+          avatarUrl = v;
+        }
+
         break;
       }
 
@@ -891,6 +1066,18 @@ export function buildContact(lines: ContentLine[], file: string): BuiltContact |
     return null;
   }
 
+  // The URI form (PHOTO case above) wins when a card somehow carries both — it
+  // costs nothing to fetch until something actually renders it, where a data:
+  // URI is bytes the moment this row is written. Most real exports (Apple/
+  // Google/Android Contacts) only ever embed base64, so this is the common case.
+  if (!avatarUrl && photo && /^[A-Za-z0-9+/=\s]+$/.test(photo.base64)) {
+    const dataUri = `data:${photo.mimeType};base64,${photo.base64.replace(/\s+/g, '')}`;
+
+    if (dataUri.length <= MAX_AVATAR_DATA_URI_CHARS) {
+      avatarUrl = dataUri;
+    }
+  }
+
   const item: Item = {
     id: contactId(uid, file, lines),
     classification: CONTACT_CLASSIFICATION,
@@ -944,6 +1131,11 @@ export function buildContact(lines: ContentLine[], file: string): BuiltContact |
       ...(nicknames.length ? { Nicknames: uniq(nicknames) } : {}),
       ...(categories.length ? { Categories: uniq(categories) } : {}),
       ...(socials.length ? { SocialProfiles: uniq(socials) } : {}),
+      // Lowercase, unlike every other key here: this exact key is the contract
+      // `push/entities.ts` spreads straight into `ci.entities.properties`, and
+      // `PersonType.avatarUrl` (backend/.../types/PersonType.ts) reads it back
+      // as `properties.avatar_url`.
+      ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
       Files: [file],
     } as Metadata,
     accumulate: ACCUMULATED_KEYS,

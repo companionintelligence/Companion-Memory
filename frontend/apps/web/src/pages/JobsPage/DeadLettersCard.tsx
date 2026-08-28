@@ -334,7 +334,12 @@ function GroupCard({
         className="mt-0.5"
       />
       <div className="min-w-0 flex-1">
-        <button type="button" onClick={onToggleExpanded} className="w-full text-left" aria-expanded={expanded}>
+        <button
+          type="button"
+          onClick={onToggleExpanded}
+          className="w-full text-left"
+          aria-expanded={expanded}
+        >
           <span className="flex items-start gap-1.5">
             <AlertTriangle aria-hidden className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
             <span className="min-w-0 break-words text-sm">{group.error}</span>
@@ -364,7 +369,9 @@ function GroupDetail({ group }: { group: DeadLetterGroup }) {
           keeping, and it is what tells an operator whether a replay has any
           chance — a stack in `validateModel` is a config error, and
           replaying it will fail identically. */}
-      <pre className="max-h-48 overflow-auto rounded bg-muted/40 p-2 text-xs whitespace-pre-wrap">{group.detail}</pre>
+      <pre className="max-h-48 overflow-auto rounded bg-muted/40 p-2 text-xs whitespace-pre-wrap">
+        {group.detail}
+      </pre>
       <p className="pt-1 text-xs text-muted-foreground">First seen {formatAge(group.firstFailedAt)}.</p>
     </>
   );

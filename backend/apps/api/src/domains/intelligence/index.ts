@@ -62,3 +62,6 @@ export type { Action, Answer, Question };
 
 // Shared visibility rules for ci.questions
 export { excludeForkedOriginsSql } from './questionScope';
+
+// Persisted retrieval provenance for an inferred answer (ci.answers.answer_evidence)
+export type { AnswerEvidence, AnswerEvidenceCitation } from './types';

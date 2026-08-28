@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 
 import { useMutation, useQuery } from '@apollo/client';
-import { Button, Dialog, Skeleton } from '@ci/shadcn';
+import { Button, Skeleton } from '@ci/shadcn';
 
 import {
   PersonForm,
@@ -11,6 +11,7 @@ import {
   personDraftToInput,
   type PersonDraft,
 } from '@/components/PersonForm';
+import { ResponsiveDialog } from '@/components/ResponsiveDialog';
 import { gql, useFragment } from '@/graphql';
 
 /**
@@ -64,7 +65,8 @@ const GET_PERSON_FOR_EDIT = gql(`
   }
 `);
 
-const UPDATE_PERSON = gql(`
+/** Exported so other person-editing surfaces (e.g. Self, which embeds the form inline rather than behind this modal) can reuse the exact same mutation. */
+export const UPDATE_PERSON = gql(`
   mutation UpdatePersonProfile($input: UpdatePersonInput!) {
     updatePerson(input: $input) {
       success
@@ -151,14 +153,17 @@ export function EditPersonModal({ personId, open, onClose, onSaved }: Props) {
   };
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
+    <ResponsiveDialog open={open} onOpenChange={onClose}>
       {/* z-[1100] clears the entity drawer's z-[1000] Sheet.Content: this modal
           also opens from inside that drawer, and at the default z-50 it would
           render behind it. */}
-      <Dialog.Content className="z-[1100] max-h-[85vh] overflow-hidden sm:max-w-2xl">
-        <Dialog.Header>
-          <Dialog.Title>Edit Person</Dialog.Title>
-        </Dialog.Header>
+      <ResponsiveDialog.Content
+        className="z-[1100] max-h-[85vh] overflow-hidden sm:max-w-2xl"
+        overlayClassName="z-[1100]"
+      >
+        <ResponsiveDialog.Header>
+          <ResponsiveDialog.Title>Edit Person</ResponsiveDialog.Title>
+        </ResponsiveDialog.Header>
 
         <form onSubmit={handleSubmit} className="flex min-h-0 flex-col gap-4">
           <div className="min-h-0 flex-1 overflow-y-auto pr-1">
@@ -179,16 +184,16 @@ export function EditPersonModal({ personId, open, onClose, onSaved }: Props) {
             </p>
           )}
 
-          <Dialog.Footer className="flex gap-2 justify-end">
+          <ResponsiveDialog.Footer className="flex gap-2 justify-end">
             <Button type="button" variant="outline" onClick={() => onClose?.(false)} disabled={saving}>
               Cancel
             </Button>
             <Button type="submit" disabled={saving || person == null}>
               {saving ? 'Saving…' : 'Save'}
             </Button>
-          </Dialog.Footer>
+          </ResponsiveDialog.Footer>
         </form>
-      </Dialog.Content>
-    </Dialog>
+      </ResponsiveDialog.Content>
+    </ResponsiveDialog>
   );
 }

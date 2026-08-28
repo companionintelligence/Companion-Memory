@@ -5,6 +5,7 @@ import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/c
 import type { LoggerService } from '@ci/common/logging';
 import type { UserService } from '@ci/domains/user';
 
+import { makeUserService, type UserRow } from '../__tests__/support/userServiceDouble';
 import { DailyMetricEntity } from '../entities/DailyMetricEntity';
 import { DAILY_AGGREGATE_SQL } from '../metrics/dailyAggregateSql';
 import type { DailyMetrics, MetricCoverage, MetricValues } from '../types';
@@ -12,6 +13,7 @@ import type { DailyMetrics, MetricCoverage, MetricValues } from '../types';
 import { DailyMetricsService } from './DailyMetricsService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
+const SIGNED_UP_ONLY = '00000000-0000-0000-0000-0000000000bb';
 const CONTEXT: UserServiceContext = { userId: USER };
 
 type FindArg = { where: { userId?: string }; order?: unknown };
@@ -25,15 +27,15 @@ function makeRepo() {
   };
 }
 
-function makeService(repo: ReturnType<typeof makeRepo>) {
+function makeService(repo: ReturnType<typeof makeRepo>, users?: UserService) {
   const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
   const userService = {
-    findAll: jest.fn(async (): Promise<Array<{ id: string; timezone: string }>> => []),
+    findAllOnboarded: jest.fn(async (): Promise<Array<{ id: string; timezone: string }>> => []),
   };
   const service = new DailyMetricsService(
     repo as unknown as Repository<DailyMetricEntity>,
     logger as unknown as LoggerService,
-    userService as unknown as UserService,
+    users ?? (userService as unknown as UserService),
   );
 
   return { service, userService, logger };
@@ -178,12 +180,17 @@ describe('DailyMetricsService.getRange', () => {
   });
 });
 
+const AUDIENCE: UserRow[] = [
+  { id: USER, onboarded: true, timezone: 'America/New_York' },
+  { id: SIGNED_UP_ONLY, onboarded: false, timezone: 'UTC' },
+];
+
 describe('DailyMetricsService.refreshAll', () => {
   it('swallows per-user errors and continues the remaining users', async () => {
     const repo = makeRepo();
     const { service, userService, logger } = makeService(repo);
-    const other = '00000000-0000-0000-0000-0000000000bb';
-    userService.findAll.mockResolvedValue([
+    const other = '00000000-0000-0000-0000-0000000000cc';
+    userService.findAllOnboarded.mockResolvedValue([
       { id: USER, timezone: 'UTC' },
       { id: other, timezone: 'America/New_York' },
     ]);
@@ -197,5 +204,26 @@ describe('DailyMetricsService.refreshAll', () => {
 
     expect(refreshForUser).toHaveBeenCalledTimes(2);
     expect(logger.error).toHaveBeenCalled();
+  });
+
+  it('computes metrics for an onboarded user and not for one still in signup', async () => {
+    const repo = makeRepo();
+    const { service } = makeService(repo, makeUserService(AUDIENCE));
+
+    await service.refreshAll(1);
+
+    expect(repo.upsert.mock.calls.map((call) => call[0].userId)).toEqual([USER]);
+  });
+
+  it('never reads the raw capture tables for a user still in signup', async () => {
+    const repo = makeRepo();
+    const { service } = makeService(repo, makeUserService(AUDIENCE));
+
+    await service.refreshAll(1);
+
+    const scanned = repo.query.mock.calls.map((call) => (call[1] as string[])[0]);
+
+    expect(scanned).not.toContain(SIGNED_UP_ONLY);
+    expect(scanned).toContain(USER);
   });
 });

@@ -749,7 +749,14 @@ export class PipelineStateService {
     // bounded by the stage's own schedule (window, `minInterval`, `perRunCap`),
     // not by how many rows become due at once. Making them due is this
     // statement's whole job; deciding when to spend on them is not.
-    const rows = await this.dataSource.query<Array<{ entity_id: string }>>(
+    // TypeORM's Postgres driver special-cases UPDATE/DELETE and resolves
+    // `[rows, rowCount]`, NOT the rows array — so reading `.length` off the
+    // result counts the tuple (always 2), not the rows touched. `released` was
+    // therefore a constant 2 regardless of how many rows moved, which is what
+    // the two `releases quarantined rows by reason` integration tests catch.
+    // Destructure the pair, exactly as personalization/placement.ts:290-311
+    // already documents and defends against.
+    const [rows] = (await this.dataSource.query(
       `UPDATE ci.pipeline_state
           SET status             = 'failed',
               attempts           = 0,
@@ -762,7 +769,7 @@ export class PipelineStateService {
           AND ($3::text IS NULL OR stage = $3::text)
         RETURNING entity_id`,
       [userId, reasons, stage],
-    );
+    )) as [Array<{ entity_id: string }>, number];
 
     if (rows.length > 0) {
       this.logger.log('Released quarantined ledger rows', {

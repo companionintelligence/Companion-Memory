@@ -9,10 +9,12 @@ import { useSearchParams } from 'react-router-dom';
 import { useGraphDots } from '@/api/useGraphDots';
 import { useGraphOverview, type GraphNode, type GraphLink } from '@/api/useGraphOverview';
 import { useNodeGraphService } from '@/api/useNodeGraphService';
+import { ChatAboutSheet } from '@/components/ChatWithAgent';
 import { colorForRawType } from '@/components/entities/entityVisuals';
 import { ForceGraph } from '@/components/ForceGraph';
 import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
 import { useAuth } from '@/hooks';
+import { graphNodeChatContext } from '@/lib/agentChat';
 import { formatEnumLabel } from '@/lib/utils';
 import { Empty } from '@/pages/MemoryPage/Components';
 import { useEntityService } from '@/pages/MemoryPage/useEntityService';
@@ -90,6 +92,7 @@ const EMPTY_GRAPH: DisplayGraph = { nodes: [], links: [] };
 
 export function GraphTabPanel({ variant }: GraphTabPanelProps) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [chatAboutNode, setChatAboutNode] = useState<GraphNode | null>(null);
   const [selectedLinkId, setSelectedLinkId] = useState<string | null>(null);
   const [focusEntityId, setFocusEntityId] = useState<string | null>(null);
   const [is3D, setIs3D] = useState<boolean>(() => {
@@ -696,6 +699,15 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
     [dotsEligible, focusEntityId, isSearchMode],
   );
 
+  const handleNodeContextMenu = useCallback(
+    (nodeId: string) => {
+      handleNodeSelect(nodeId);
+      const node = displayGraph.nodes.find((item) => item.id === nodeId) ?? null;
+      setChatAboutNode(node);
+    },
+    [displayGraph.nodes, handleNodeSelect],
+  );
+
   const handleLinkSelect = useCallback((linkId: string) => {
     setSelectedNodeId(null);
     setSelectedLinkId(linkId);
@@ -836,6 +848,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
               selectedNodeId={selectedNodeId ?? undefined}
               selectedLinkId={selectedLinkId ?? undefined}
               onNodeSelect={handleNodeSelect}
+              onNodeContextMenu={handleNodeContextMenu}
               onLinkSelect={handleLinkSelect}
               onBackgroundClick={handleBackgroundClick}
               focusHops={mode === 'focus' ? FOCUS_OWN_HOPS : undefined}
@@ -851,6 +864,7 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
             selectedNodeId={selectedNodeId ?? undefined}
             selectedLinkId={selectedLinkId ?? undefined}
             onNodeSelect={handleNodeSelect}
+            onNodeContextMenu={handleNodeContextMenu}
             onLinkSelect={handleLinkSelect}
             onBackgroundClick={handleBackgroundClick}
             flyToNodeId={selectedNodeId}
@@ -1019,6 +1033,16 @@ export function GraphTabPanel({ variant }: GraphTabPanelProps) {
           onClose={() => setSelectedLinkId(null)}
         />
       )}
+
+      <ChatAboutSheet
+        open={chatAboutNode != null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setChatAboutNode(null);
+          }
+        }}
+        context={chatAboutNode ? graphNodeChatContext(chatAboutNode) : { title: 'This memory' }}
+      />
     </div>
   );
 }

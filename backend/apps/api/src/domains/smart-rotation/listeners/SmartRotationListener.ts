@@ -41,7 +41,15 @@ export class SmartRotationListener {
     this.logger.setContext(SmartRotationListener.name);
   }
 
-  @OnEvent(SmartRotationWorkEvent, { queue: SMART_ROTATION_QUEUE })
+  // `policy: 'short'` is what makes the singletonKeys both senders rely on
+  // (`smart-rotation:${userId}:${workType}` from SmartRotationService and
+  // ContextPromptController) actually refuse a duplicate — pg-boss's default
+  // `standard` policy stores a singletonKey but never enforces it. Safe here
+  // because every send on this queue carries a key.
+  @OnEvent(SmartRotationWorkEvent, {
+    queue: SMART_ROTATION_QUEUE,
+    queueOptions: { policy: 'short' },
+  })
   async handleWork(payload: SmartRotationWorkPayload): Promise<void> {
     await this.executeWork(payload.userId, payload.workType);
   }
@@ -213,11 +221,11 @@ export class SmartRotationListener {
         return;
       }
 
-      case 'hydrate_inventory': {
+      case 'hydrate_things': {
         const context = { userId } as UserServiceContext;
-        const result = await this.crossTableHydrationService.hydrateInventory(context);
+        const result = await this.crossTableHydrationService.hydrateThings(context);
 
-        this.logger.log('Smart rotation hydrate inventory', { userId, ...result });
+        this.logger.log('Smart rotation hydrate things', { userId, ...result });
 
         return;
       }
@@ -255,6 +263,14 @@ export class SmartRotationListener {
       SELECT q.question_id AS id
       FROM ci.questions q
       WHERE q.is_active = TRUE
+        -- Same guard as QuestionService.findUnansweredByUserId. This is a
+        -- SECOND, independent copy of "next unanswered question", and it did
+        -- not carry the filter — so hand-entry questions the cron path refuses
+        -- were still reaching inference through here, once an hour, forever.
+        -- Observed: "How tall are you?" (hand_entry) answered from the owner's
+        -- own outbound line "It'll be like a foot tall." — about an object,
+        -- written to their profile as their height.
+        AND q.evidence_class <> 'hand_entry'
         AND (q.is_private_to IS NULL OR q.is_private_to = $1)
         ${excludeForkedOriginsSql('q', '$1')}
         AND NOT EXISTS (

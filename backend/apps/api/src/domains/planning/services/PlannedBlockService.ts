@@ -118,6 +118,71 @@ export class PlannedBlockService {
   }
 
   /**
+   * User-triggered schedule at an EXPLICIT instant — a calendar drop, not a
+   * "put this somewhere" click.
+   *
+   * ═══ WHY THIS EXISTS SEPARATELY FROM `scheduleTask` ═══
+   *
+   * `scheduleTask` takes only a preferred DATE and runs the gap solver
+   * (`propose`) to pick a time within working hours. That is correct for the
+   * Plan page's Schedule button, which has no time to offer — but the calendar
+   * grid computes an exact 15-minute-snapped instant under the cursor and
+   * paints it live while dragging, then this method used to be bypassed
+   * entirely: the frontend collapsed the instant to a bare date and let the
+   * gap solver re-derive a time, so a drop at 3:15pm could land at 9:00am.
+   * This method places (or moves) the block at exactly the instant given —
+   * the gap solver never runs, because the drop already IS the placement
+   * decision.
+   *
+   * ═══ AN EXISTING BLOCK IS MOVED, NOT REFUSED ═══
+   *
+   * `place()`'s `already_placed` status is correct for `scheduleTask`, whose
+   * only lever is "put this somewhere" — there is nothing to move TO, so a
+   * second click is rightly a no-op. A drag names a destination. Dropping an
+   * already-placed task's card again is the same gesture the grid's own
+   * event-drag uses to MOVE a committed block (`rescheduleEvent`), so this
+   * reuses that path (`EventService.reschedule`, which preserves duration when
+   * `end` is omitted) rather than reporting nothing happened.
+   *
+   * Past dates are accepted deliberately. The date-only path clamps a
+   * preferred date earlier than today up to today, which is right for "put
+   * this somewhere in the next 7 working days" — but wrong here, where the
+   * instant is what the user pointed at. Backfilling a task onto a day already
+   * gone is a legitimate use of this method, and refusing it would just move
+   * the same silent-surprise bug from "always today" to "always refused".
+   */
+  async scheduleTaskAt(
+    context: UserServiceContext,
+    taskId: string,
+    start: Date,
+    end?: Date,
+    estimatedMinutes?: number,
+  ): Promise<PlaceOutcome> {
+    const task = await this.taskService.findById(context, taskId);
+
+    if (!task || task.status === 'done' || task.status === 'archived' || task.status === 'skipped') {
+      return { status: 'skipped', task };
+    }
+
+    const existing = await this.findActiveForTask(context, task.id);
+
+    if (existing) {
+      const moved = await this.eventService.reschedule(context, existing.id, start, end);
+
+      // `reschedule` returns null only on a race (the block vanished between
+      // `findActiveForTask` and here) or a cross-user id — both genuinely
+      // "nothing to place", so falling back to the old already_placed status
+      // is honest rather than claiming a move that did not happen.
+      return moved ? { status: 'placed', event: moved, task } : { status: 'already_placed', event: existing, task };
+    }
+
+    const minutes = estimatedMinutes ?? task.estimatedMinutes ?? undefined;
+    const placedEnd = end ?? new Date(start.getTime() + (minutes && minutes > 0 ? minutes : DEFAULT_ESTIMATED_MINUTES) * 60_000);
+
+    return this.placeAt(context, task, start, placedEnd, estimatedMinutes ?? task.estimatedMinutes);
+  }
+
+  /**
    * Automation path. Trust dial decides auto-place vs a Plan-page confirmation.
    */
   async tryPlaceAfterOpen(context: UserServiceContext, task: Task, confidence = 0.8): Promise<PlaceOutcome> {

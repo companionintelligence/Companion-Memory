@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { SYSTEM_USER, type ServiceContext } from '@ci/common/context';
-import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EmbeddingGenerationService, shouldEmbedType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 import { type Person, PersonService } from '@ci/domains/memory';
@@ -111,7 +111,9 @@ export class PersonSearchIndexListener {
 
     const searchDocument = this.getSearchDocument(person);
 
-    if (searchDocument == null) {
+    if (!shouldEmbedType('person')) {
+      this.logger.log('Person type not in embed allowlist, skipping embedding');
+    } else if (searchDocument == null) {
       this.logger.log('Person has no search document, skipping embedding');
 
       // Persist the skip so the backfill sweep (LEFT JOIN on ci_search.embeddings)

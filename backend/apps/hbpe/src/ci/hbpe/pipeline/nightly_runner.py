@@ -93,6 +93,7 @@ async def label_unlabeled(user_id: str) -> dict:
 
     def _run(should_stop) -> dict:
         from ci.hbpe.data_client import get_unlabeled_content, get_unlabeled_events
+        from ci.hbpe.functions import update_pipeline_progress
         from ci.hbpe.tokenizer.qwen_labeler import QwenLabeler
 
         labeler = QwenLabeler()
@@ -103,6 +104,12 @@ async def label_unlabeled(user_id: str) -> dict:
 
         # ── Unlabeled events ─────────────────────────────────────────────────
         unlabeled_events = get_unlabeled_events(user_id)
+        unlabeled_content = get_unlabeled_content(user_id)
+        total = len(unlabeled_events) + len(unlabeled_content)
+        done = 0
+        update_pipeline_progress(
+            user_id, done=0, total=max(total, 1), detail=f"0 of {total}"
+        )
 
         for row in unlabeled_events:
             if should_stop.is_set():
@@ -122,9 +129,9 @@ async def label_unlabeled(user_id: str) -> dict:
                     "label_unlabeled event failed: event_id=%s", row["event_id"]
                 )
                 errors += 1
-
-        # ── Unlabeled content ────────────────────────────────────────────────
-        unlabeled_content = get_unlabeled_content(user_id)
+            done += 1
+            if done == 1 or done % 10 == 0 or done == total:
+                update_pipeline_progress(user_id, done=done, total=max(total, 1))
 
         for row in unlabeled_content:
             if should_stop.is_set():
@@ -144,6 +151,9 @@ async def label_unlabeled(user_id: str) -> dict:
                     "label_unlabeled content failed: content_id=%s", row["content_id"]
                 )
                 errors += 1
+            done += 1
+            if done == 1 or done % 10 == 0 or done == total:
+                update_pipeline_progress(user_id, done=done, total=max(total, 1))
 
         return {
             "user_id": user_id,
@@ -245,8 +255,9 @@ async def needs_bootstrap(user_id: str) -> dict:
     Decide whether the user needs a (re)bootstrap before LoRA fine-tune.
 
     Returns {"needs": bool, "reason": str}. Needs is True when the user has no
-    per-user HMT checkpoint (cold start) or when their current L1 vocabulary has
-    drifted away from the one their checkpoint was trained with (so a freshly
+    per-user HMT checkpoint (cold start), when the checkpoint was trained with
+    a different HMT shape (64-d toy → 256-d), or when their current L1 vocabulary
+    has drifted away from the one their checkpoint was trained with (so a freshly
     built model would no longer load the saved weights — the size-mismatch that
     motivated CI-Server-ad4).
     """
@@ -258,6 +269,8 @@ async def needs_bootstrap(user_id: str) -> dict:
         from ci.hbpe.model.checkpoints import (
             HMT_CALIBRATED,
             HMT_CKPT,
+            architecture_fingerprint,
+            architecture_matches,
             l1_vocab_fingerprint,
             model_exists,
             user_ckpt_dir,
@@ -267,6 +280,9 @@ async def needs_bootstrap(user_id: str) -> dict:
         if not model_exists(user_id):
             return {"needs": True, "reason": "no_checkpoint"}
 
+        if not architecture_matches(user_id):
+            return {"needs": True, "reason": "architecture_mismatch"}
+
         d = user_ckpt_dir(user_id)
         ckpt_path = (
             d / HMT_CALIBRATED if (d / HMT_CALIBRATED).exists() else d / HMT_CKPT
@@ -275,6 +291,10 @@ async def needs_bootstrap(user_id: str) -> dict:
             ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         except Exception:
             return {"needs": True, "reason": "checkpoint_unreadable"}
+
+        stored_arch = ckpt.get("architecture")
+        if stored_arch and stored_arch != architecture_fingerprint():
+            return {"needs": True, "reason": "architecture_mismatch"}
 
         stored = ckpt.get("l1_vocab_fingerprint")
         current = l1_vocab_fingerprint(build_l1_vocab(user_id))

@@ -12,7 +12,20 @@ Where a prior survey or design asserted something the code does not support, the
 > References to CI-Import-Tools below describe the system as it existed when
 > this plan was written; §10 ("Changes needed in CI-Import-Tools") in particular
 > is now moot as a set of external-repo action items — any equivalent work
-> belongs in the native import domain instead.
+> belongs in the native import domain instead. Concretely, every
+> `CI-Import-Tools/backend/src/datasources/` path below is now
+> `backend/apps/api/src/domains/import/datasources/` **in this repo**, and the
+> push no longer crosses the network at all: `PushStage` calls the destination
+> services in-process.
+>
+> **Two things a search-and-replace must not touch.** (1) The *value*
+> `source_type = "ci-import-tools"` — e.g. the payload at §10 — is deliberately
+> unchanged (`domains/import/push/canonical.ts`): it is one third of the dedup
+> triple, so renaming it would duplicate every previously imported record on the
+> first re-import. (2) "Temporal" in this document means Temporal.io, the
+> orchestrator, which **was** removed in favour of pg-boss — but
+> `clean.temporal_repair` / `TemporalRepairStage` in `domains/pipeline/` mean
+> *temporal* as in time, and are an unrelated ETL stage.
 
 ---
 
@@ -107,7 +120,7 @@ Queue names come from three places: `@OnEvent` literals, exported constants, and
 | `telemetry` | 2 | `domains/tools/` | yes |
 | `geocode` | 2 | `domains/geocode/listeners/GeocodeBatchListener.ts:21` | yes |
 | `people-linking` | 1 | `domains/maintenance/listeners/CommunicationParticipantLinkListener.ts` | yes |
-| `inventory` | 1 | `domains/llm/listeners/InventoryListener.ts` | yes |
+| `thing-vision` | 1 | `domains/llm/listeners/ThingVisionListener.ts` | yes |
 | `image-description` | 1 | `domains/llm/listeners/ImageDescriptionListener.ts` | yes |
 | `file-preview-generation` | 1 | `domains/files/listeners/FilePreviewGenerationListener.ts` | yes |
 | `document-parsing` | 1 | `domains/parsing/listeners/FileDocumentParseListener.ts` | yes |
@@ -186,6 +199,17 @@ web: yarn workspace @ci/fe-web dev --clearScreen false
 `migrate-database`, `setup-database`, `setup-orchestrator`. **There is no worker service and no
 replica count.** `PGBossEventService.onModuleInit` starts a poll loop per queue inside the same
 process that serves HTTP.
+
+> **Both halves of that paragraph have since changed (checked 2026-08-19).**
+> `orchestrator` and `setup-orchestrator` are gone — Temporal.io was retired in
+> favour of pg-boss, and the compose file no longer declares them. And a
+> **`worker` service now exists**: the same `ci/api` image with `CI_ROLE=worker`,
+> on the `production` profile, running `bootstrapWorker()` — the full DI graph
+> with no HTTP server — so queues and crons marked `role: 'worker'` execute in a
+> process whose event loop no interactive request shares. Today's production
+> service list is `api`, `worker`, `database`, `gateway`, `hbpe-service`,
+> `object-store`, `summary-service` plus the one-shots `generate-secrets`,
+> `migrate-database`, `setup-database`. There is still no replica count.
 
 The damage is recorded in the code that works around it:
 
@@ -274,7 +298,7 @@ not include `capture_events` (or `ci.position`):
 backend/apps/api/src/domains/maintenance/services/IngestResetService.ts:11-18
 const INGEST_TABLES = [
   { schema: 'ci', table: 'events' }, { schema: 'ci', table: 'communications' },
-  { schema: 'ci', table: 'content' }, { schema: 'ci', table: 'inventory' },
+  { schema: 'ci', table: 'content' }, { schema: 'ci', table: 'objects' },
   { schema: 'ci', table: 'browser_activity' },
 ] as const;
 ```
@@ -346,7 +370,7 @@ Verified by grepping `backend/apps/api/src` excluding `/entities/` and `__tests_
 | `ci.receipt_line_items` | *entire table* | only `domains/memory/index.ts` |
 | `ci.object_observations` | *entire table* (incl. `vector(768)` + HNSW) | only `domains/memory/index.ts` |
 | `ci.object_identifiers` | *entire table* | `ObjectIdentifierService` exists; **zero callers** — only `domains/graph/index.ts:37,68,78,91` module wiring |
-| `ci.inventory` | `product_id`, `acquisition_receipt_id`, `acquisition_line_item_id`, `lifecycle_state`, `quantity`, `identity_confidence`, `identity_method`, `last_seen_at`, `last_seen_place_entity_id`, `merged_into_object_id`, `object_entity_id` | none |
+| `ci.objects` | `product_id`, `acquisition_receipt_id`, `acquisition_line_item_id`, `lifecycle_state`, `quantity`, `identity_confidence`, `identity_method`, `last_seen_at`, `last_seen_place_entity_id`, `merged_into_object_id`, `object_entity_id` | none |
 | `ci.events` | `salience`, `access_count`, `last_accessed`, `tags`, `energy_level`, `productivity_impact` | none |
 | `ci.entities` | `dossier` (read by `domains/memory/services/UserContextService.ts`, never written), `outgoing_relationships` (trigger function defined, `CREATE TRIGGER` never written), `location_boundary` (DTO passthrough only, `domains/memory/types.ts`) | none |
 | `ci.summaries` | all eight `related_*_ids` arrays | none |
@@ -657,7 +681,7 @@ interprets it. Unifies the two lanes: the `/v1` bulk plane (already one row per 
 lane (currently a whole provider page in one jsonb column).
 
 **Input.** Provider HTTP responses via `domains/connections` OAuth clients; NDJSON and
-`{records:[]}` bodies on `POST /v1/{events,communications,contents,inventory,browser-activity,positions}`;
+`{records:[]}` bodies on `POST /v1/{events,communications,contents,things,browser-activity,positions}`;
 multipart on `POST /v1/files`. Cursor from `ci.pipeline_shards.cursor`.
 
 **Output.** `ci.source_records` rows carrying `payload jsonb` **verbatim** (the full importer
@@ -704,7 +728,7 @@ all 14 `INDEXABLE_ENTITIES` via `domains/search-ingress/entitySourceMap.ts`.
 `spec_version`, `document_digest`) and `ci_search.vectors`; ledger rows.
 
 **Reads / writes.** Reads `ci.source_records`. Writes `ci.events`, `ci.communications`,
-`ci.content`, `ci.inventory`, `ci.browser_activity`, `ci.position`, `ci.entity_identifiers`,
+`ci.content`, `ci.objects`, `ci.browser_activity`, `ci.position`, `ci.entity_identifiers`,
 `ci.identifier_claims`, `ci_search.embeddings`, `ci_search.vectors`, `ci.pipeline_state`.
 
 **Queues.** `pipeline-index`, `pipeline-embed`.
@@ -815,7 +839,7 @@ the hot read columns. Stages: `promote.place`, `promote.person`, `promote.object
 **Output.** `ci.entities` (Place with real `place_kind` hierarchy and `location_boundary`; canonical
 Person), `ci.relationships` with the per-item edge label, `ci.item_relationships`,
 `ci.product_models`, `ci.receipts`, `ci.receipt_line_items`, `ci.object_observations`,
-`ci.object_identifiers`, the 11 `ci.inventory` identity columns, `ci.entity_provenance`, and
+`ci.object_identifiers`, the 11 `ci.objects` identity columns, `ci.entity_provenance`, and
 `ci.graph_deltas` (explicitly — see below).
 
 **Queue.** `pipeline-promote`.
@@ -888,7 +912,7 @@ CREATE TABLE IF NOT EXISTS ci.pipeline_state (
 
 Plain table, not a hypertable: ADR-0002 gate 1 (natural uniqueness required) disqualifies it.
 `confidence` is a nullable column here from day one so PROMOTE has something to source
-`ci.inventory.identity_confidence` from — which currently defaults to `1.0`, making every importer
+`ci.objects.identity_confidence` from — which currently defaults to `1.0`, making every importer
 guess read as user-verified ground truth to HBPE and RAG.
 
 **Entity:** new `PipelineStateEntity` with `@PrimaryColumn` on the three key columns.
@@ -1211,7 +1235,7 @@ last one anyone dares.
 ### 6.1 Geolookup / place resolution — `enrich.geocode`, `enrich.position_reverse`, `enrich.estimate_location`
 
 **Input.** `ci.events.location_name` (forward), `ci.events.location_coordinates` (reverse),
-`ci.position.location` (reverse — **new**), `ci.inventory.current_location_coordinates` (**new**),
+`ci.position.location` (reverse — **new**), `ci.objects.current_location_coordinates` (**new**),
 `ci.object_observations.location_coordinates` (**new**), plus
 `ci.source_records.payload` for `Pickup Address`/`Dropoff Address` on `travel.trip` records, which
 today sit in metadata where the candidate predicate never sees them.
@@ -1374,7 +1398,7 @@ same unreadable HEIC is re-fetched from Minio and re-decoded on every single run
 
 ### 6.5 Object & product identity — `enrich.object_identify`, `enrich.receipt_extract`, `enrich.observation_vision`
 
-**Input.** `ci.inventory.identifier_codes` (the unindexed JSONB bag ASINs have landed in since
+**Input.** `ci.objects.identifier_codes` (the unindexed JSONB bag ASINs have landed in since
 2025-09), `ci.source_records.payload` (Amazon `ASIN`/`Order ID`, Audible `Payment`, Steam app ids),
 receipt line items, and CV detections.
 
@@ -1384,7 +1408,7 @@ receipt line items, and CV detections.
    service with **zero callers** today (only module wiring at `domains/graph/index.ts:37,68,78,91`).
    Claim arbiter: `UNIQUE (owner_user_id, namespace, value_normalized, qualifier)`, first-writer-wins,
    with losers to `ci.identifier_claims`.
-2. Mints `ci.product_models` from the claim + title/brand/model, sets `ci.inventory.product_id`.
+2. Mints `ci.product_models` from the claim + title/brand/model, sets `ci.objects.product_id`.
 3. `enrich.receipt_extract` parses order/receipt source records (Amazon order-line grouping, PayPal,
    Venmo, Uber) into `ci.receipts` + `ci.receipt_line_items`, setting `extraction_confidence` and
    `extraction_model`. CSV/JSON exports parse deterministically; only the unstructured tail goes to
@@ -1405,7 +1429,7 @@ unstructured receipt.
 **Batch strategy.** Slices of 500 on `pipeline-enrich-object`; the LLM tail on `pipeline-enrich-llm`.
 
 **Confidence.** `object.identifier` facts at 1.0 for a checksum-valid GTIN/ISBN/IMEI, 0.7 for a
-bare `sku`/`custom` namespace. `ci.inventory.identity_confidence` is projected from the winning fact
+bare `sku`/`custom` namespace. `ci.objects.identity_confidence` is projected from the winning fact
 — it currently **defaults to 1.0 with no writer**, so every importer guess reads as user-verified
 ground truth to HBPE and RAG.
 
@@ -1867,6 +1891,13 @@ shared helpers — `_exif.ts`, `_ai_media.ts`, `_ai_memory.ts`, `email_mime.ts`,
 
 Ten phases. Each is PR-sized-to-sprint-sized, ships alone, and leaves the system working.
 
+> **This section is the plan, not the status.** Much of it has since landed —
+> phases 1–2, 4, 5 and 8 in full or nearly so, 3 and 7 in part, 6 and 9 not
+> started as of 2026-08-19. The maintained, per-phase status table lives beside
+> the code in `backend/apps/api/src/domains/pipeline/README.md` ("Phase status"),
+> which is the one to read before planning work; it records what shipped
+> *differently* from the design below, which is most of the interesting part.
+
 ---
 
 ### Phase 0 — Routing table + priority tiers
@@ -1963,7 +1994,7 @@ Chat p95 latency unchanged while it runs.
 **Scope.** Convert all three geo legs. Add `ci.geocode_cache.provider` / `rule_version`. Extend
 `PlaceService.COMPONENT_HIERARCHY`. Add `NominatimGeocodeProvider` behind the existing
 `GEOCODE_PROVIDER` token, selected by `config.geocoding.provider`, **defaulting to local**. Extend
-geocoding to `ci.position` (seven address columns no code fills today), `ci.inventory` and
+geocoding to `ci.position` (seven address columns no code fills today), `ci.objects` and
 `ci.object_observations`. Add `ci.derived_facts` + its retention reaper.
 
 **Why the provider ships here.** Making the geo legs run automatically in continuous mode turns a
@@ -2065,7 +2096,7 @@ Minio objects are reclaimed.
 
 **Scope.** `promote.place`, `promote.person`, `promote.object`, `promote.interaction`,
 `promote.projection`, `promote.graph_delta`. Writers for `ci.product_models`, `ci.receipts`,
-`ci.receipt_line_items`, `ci.object_observations`, `ci.object_identifiers`, the 11 `ci.inventory`
+`ci.receipt_line_items`, `ci.object_observations`, `ci.object_identifiers`, the 11 `ci.objects`
 identity columns, `ci.item_relationships`, `ci.entities.location_boundary`.
 
 **Gate — non-negotiable.** Every table gets a **read path in the same PR**. Two prior attempts at
@@ -2274,9 +2305,17 @@ exist.
    out: `deleteAfterHours: 24` is inert (v9 name) and retention is v10's 14-day default (§2.3).
    Still to confirm before Phase 1: whether `policy: 'singleton'` and `getQueueSize` behave as the
    design assumes; if not, substitute `pg_try_advisory_lock(hashtext(shardId))`.
-8. **Ledger sweep plan.** The `LEFT JOIN ci.pipeline_state` from each source table must stay
-   index-only on the largest tables. `EXPLAIN` it on real data during Phase 2 before porting more
-   stages; the fallback is a per-stage covering index.
+8. ~~**Ledger sweep plan.** The `LEFT JOIN ci.pipeline_state` from each source table must stay
+   index-only on the largest tables.~~ **RESOLVED — and the answer was no.** Measured on 324,044 real
+   `ci.events` with 50,000 ledger rows, the `LEFT JOIN` fell off `events_pkey` onto a `Parallel Seq
+   Scan` and the keyset cursor was demoted from an `Index Cond` to a `Filter`, making a full sweep
+   O(corpus²/slice). The `OR` chain reads columns from the NULL-extended side, so it cannot be
+   pushed down and the `LIMIT` cannot reach the scan; a covering index would not have fixed that.
+   `PipelineStateService.selectStale` was rewritten as a `NOT EXISTS` anti-join, which returns a
+   byte-identical id set and keeps the primary key. `realData.integration.spec.ts` now asserts the
+   indexed plan (its §14.2 tests are marked `CLOSED`), and
+   [`scripts/dev-stack/pipeline-smoke.md` §5](../scripts/dev-stack/pipeline-smoke.md) is the
+   run-it-yourself version on your own corpus.
 9. **Live row counts.** The ledger is O(subjects × stages). Derive the real number from
    `SELECT count(*)` on each source table before committing to a storage budget — the prior estimates
    in circulation are unsourced.

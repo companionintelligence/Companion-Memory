@@ -7,14 +7,12 @@
  * a DOM and what lets the DST cases below be asserted at all.
  */
 
-export type SectionKey =
-  | 'proposed'
-  | 'needs_confirmation'
-  | 'overdue'
-  | 'today'
-  | 'upcoming'
-  | 'someday'
-  | 'done';
+export type ColumnKey = 'proposed' | 'unscheduled' | 'scheduled' | 'done';
+
+export type LaneKey = 'inbox' | 'proposed_upcoming' | 'upcoming' | 'overdue';
+
+/** @deprecated Use ColumnKey. Kept as an alias so existing imports compile. */
+export type SectionKey = ColumnKey;
 
 export interface SectionedTask {
   id: string;
@@ -30,31 +28,49 @@ export interface SectionedTask {
   hasPendingChange?: boolean;
 }
 
-export interface Section<T> {
-  key: SectionKey;
-  label: string;
+export interface Placement {
+  column: ColumnKey;
+  lane: LaneKey;
+}
+
+export interface Lane<T> {
+  key: LaneKey;
+  /** Null when the column heading already names the list (Proposed inbox, Done). */
+  label: string | null;
   tasks: T[];
 }
 
-const SECTION_LABELS: Record<SectionKey, string> = {
+export interface Section<T> {
+  key: ColumnKey;
+  label: string;
+  lanes: Lane<T>[];
+  /** Flattened lane tasks, same order as `lanes`. */
+  tasks: T[];
+}
+
+const COLUMN_LABELS: Record<ColumnKey, string> = {
   proposed: 'Proposed',
-  needs_confirmation: 'Needs confirmation',
-  overdue: 'Overdue',
-  today: 'Today',
-  upcoming: 'Upcoming',
-  someday: 'Potential upcoming',
+  unscheduled: 'Unscheduled',
+  scheduled: 'Scheduled on calendar',
   done: 'Done',
 };
 
-const SECTION_ORDER: SectionKey[] = [
-  'proposed',
-  'needs_confirmation',
-  'overdue',
-  'today',
-  'upcoming',
-  'someday',
-  'done',
-];
+const LANE_LABELS: Record<LaneKey, string | null> = {
+  inbox: null,
+  proposed_upcoming: 'Proposed upcoming',
+  upcoming: 'Upcoming',
+  overdue: 'Overdue',
+};
+
+const COLUMN_ORDER: ColumnKey[] = ['proposed', 'unscheduled', 'scheduled', 'done'];
+
+/** Inbox and Upcoming first; Proposed upcoming / Overdue follow in list order. */
+const LANE_ORDER: Record<ColumnKey, LaneKey[]> = {
+  proposed: ['inbox', 'proposed_upcoming'],
+  unscheduled: ['upcoming', 'overdue'],
+  scheduled: ['upcoming', 'overdue'],
+  done: ['inbox'],
+};
 
 /**
  * The user-local calendar date (`YYYY-MM-DD`) of an instant.
@@ -81,48 +97,67 @@ export function localDateOf(instant: Date, timeZone?: string): string {
 }
 
 /**
- * Which section a task belongs in, relative to a user-local `today`.
+ * Which Kanban column and lane a task belongs in, relative to a user-local `today`.
+ *
+ * Mapping from the previous flat sections:
+ *   proposed + needs confirmation → Proposed / inbox
+ *   someday (undated or still-deferred) → Proposed / Proposed upcoming
+ *   overdue / today / upcoming without scheduledFor → Unscheduled / Overdue or Upcoming
+ *   those same date buckets with scheduledFor → Scheduled on calendar
+ *   done / skipped / archived → Done
  *
  * `dueAt` is an instant and is compared by local date; `scheduledFor` and
  * `deferUntil` are already user-local `YYYY-MM-DD` strings and are compared
  * lexicographically, which is correct for a zero-padded ISO date.
  */
-export function sectionFor(task: SectionedTask, today: string, timeZone?: string): SectionKey {
-  if (task.status === 'proposed') {
-    return 'proposed';
-  }
-
-  if (task.hasPendingChange) {
-    return 'needs_confirmation';
+export function sectionFor(task: SectionedTask, today: string, timeZone?: string): Placement {
+  if (task.status === 'proposed' || task.hasPendingChange) {
+    return { column: 'proposed', lane: 'inbox' };
   }
 
   if (task.status === 'done' || task.status === 'skipped' || task.status === 'archived') {
-    return 'done';
+    return { column: 'done', lane: 'inbox' };
   }
 
   // A deferred task is invisible until its date arrives, whatever its deadline.
   if (task.deferUntil && task.deferUntil > today) {
-    return 'someday';
+    return { column: 'proposed', lane: 'proposed_upcoming' };
   }
 
   const dueDate = task.dueAt ? localDateOf(new Date(task.dueAt), timeZone) : null;
   const dates = [dueDate, task.scheduledFor].filter((d): d is string => d != null);
 
   if (dates.length === 0) {
-    return 'someday';
+    return { column: 'proposed', lane: 'proposed_upcoming' };
   }
 
   const earliest = dates.reduce((a, b) => (a < b ? a : b));
+  const column: ColumnKey = task.scheduledFor ? 'scheduled' : 'unscheduled';
+  const lane: LaneKey = earliest < today ? 'overdue' : 'upcoming';
 
-  if (earliest < today) {
-    return 'overdue';
-  }
+  return { column, lane };
+}
 
-  if (earliest === today) {
-    return 'today';
-  }
+/** True when the task would render in an Overdue lane for `today`. */
+export function isOverdue(task: SectionedTask, today: string, timeZone?: string): boolean {
+  return sectionFor(task, today, timeZone).lane === 'overdue';
+}
 
-  return 'upcoming';
+/** Shift a user-local `YYYY-MM-DD` by a number of calendar days. */
+export function addLocalDays(isoDate: string, days: number): string {
+  const [year, month, day] = isoDate.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+
+  date.setDate(date.getDate() + days);
+
+  return localDateOf(date);
+}
+
+/** Noon on a user-local calendar date, as an instant — matches the edit-due control. */
+export function dueAtFromLocalDate(isoDate: string): string {
+  const [year, month, day] = isoDate.split('-').map(Number);
+
+  return new Date(year, month - 1, day, 12).toISOString();
 }
 
 /** Ascending by due date (undated last), then by priority, then by title. */
@@ -141,9 +176,18 @@ export function compareTasks(a: SectionedTask, b: SectionedTask): number {
   return a.title.localeCompare(b.title);
 }
 
+function emptyLanes(): Record<ColumnKey, Record<LaneKey, SectionedTask[]>> {
+  return {
+    proposed: { inbox: [], proposed_upcoming: [], upcoming: [], overdue: [] },
+    unscheduled: { inbox: [], proposed_upcoming: [], upcoming: [], overdue: [] },
+    scheduled: { inbox: [], proposed_upcoming: [], upcoming: [], overdue: [] },
+    done: { inbox: [], proposed_upcoming: [], upcoming: [], overdue: [] },
+  };
+}
+
 /**
- * Groups tasks into display sections, dropping empty ones so the UI never
- * renders a bare heading.
+ * Groups tasks into Kanban columns with lanes, dropping empty columns and
+ * empty lanes so the UI never renders a bare heading.
  *
  * Only roots are sectioned; children stay nested under their parent via
  * `parentId` (rendered by the Plan page tree).
@@ -154,28 +198,52 @@ export function groupIntoSections<T extends SectionedTask>(
   timeZone?: string,
 ): Section<T>[] {
   const roots = tasks.filter((task) => !task.parentId);
-  const buckets = new Map<SectionKey, T[]>();
+  const buckets = emptyLanes() as Record<ColumnKey, Record<LaneKey, T[]>>;
 
   for (const task of roots) {
-    const key = sectionFor(task, today, timeZone);
-    const bucket = buckets.get(key);
-
-    if (bucket) {
-      bucket.push(task);
-    } else {
-      buckets.set(key, [task]);
-    }
+    const { column, lane } = sectionFor(task, today, timeZone);
+    buckets[column][lane].push(task);
   }
 
-  return SECTION_ORDER.flatMap((key) => {
-    const bucket = buckets.get(key);
+  return COLUMN_ORDER.flatMap((column) => {
+    const lanes = LANE_ORDER[column].flatMap((lane) => {
+      const bucket = buckets[column][lane];
 
-    if (!bucket?.length) {
+      if (!bucket.length) {
+        return [];
+      }
+
+      return [{ key: lane, label: LANE_LABELS[lane], tasks: [...bucket].sort(compareTasks) }];
+    });
+
+    if (!lanes.length) {
       return [];
     }
 
-    return [{ key, label: SECTION_LABELS[key], tasks: [...bucket].sort(compareTasks) }];
+    return [
+      {
+        key: column,
+        label: COLUMN_LABELS[column],
+        lanes,
+        tasks: lanes.flatMap((lane) => lane.tasks),
+      },
+    ];
   });
+}
+
+/** Plan's four columns, with empty buckets kept so the tabs never disappear. */
+export function withAllColumns<T extends SectionedTask>(sections: readonly Section<T>[]): Section<T>[] {
+  const byKey = new Map(sections.map((section) => [section.key, section]));
+
+  return COLUMN_ORDER.map(
+    (key) =>
+      byKey.get(key) ?? {
+        key,
+        label: COLUMN_LABELS[key],
+        lanes: [],
+        tasks: [],
+      },
+  );
 }
 
 /** Direct children of `parentId`, sorted like section rows. */

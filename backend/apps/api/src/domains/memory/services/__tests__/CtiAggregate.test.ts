@@ -4,7 +4,7 @@ import { CtiAggregate } from '../CtiAggregate';
 
 /**
  * `fetchBaseMap` is the read side of the CTI aggregate every detail service
- * (events, content, inventory) composes through. A caller that hands it every
+ * (events, content, objects) composes through. A caller that hands it every
  * row it owns — as EventResolver.events() did before it paginated — can push
  * `id IN (...)` past Postgres's bound-parameter ceiling. Verified live: 62,277
  * ids from a real events(first: 3) call, failing as "bind message has 62277

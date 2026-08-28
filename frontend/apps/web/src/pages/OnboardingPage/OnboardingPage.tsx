@@ -274,6 +274,36 @@ export function OnboardingPage() {
 
   const isFinalStep = currentStepKey === 'run-first-sync';
   const showNav = !isFinalStep;
+  const navInScroll =
+    currentStepKey === 'connect-source' || currentStepKey === 'import-archives';
+
+  const navRow = showNav ? (
+    <div
+      data-testid="onboarding-nav"
+      className={
+        navInScroll
+          ? 'mt-6 mb-2 flex items-center justify-center gap-2 px-4 sm:gap-3'
+          : 'mb-5 flex items-center gap-2 px-4 sm:mb-6 sm:gap-3'
+      }
+    >
+      {stepIndex > 0 && (
+        <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleBack}>
+          Back
+        </Button>
+      )}
+      <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleSkip}>
+        Skip
+      </Button>
+      <OnboardingButton
+        type="button"
+        size="lg"
+        className="px-10 sm:px-14 text-base sm:text-lg h-12"
+        onClick={handleNext}
+      >
+        Next
+      </OnboardingButton>
+    </div>
+  ) : null;
 
   return (
     <Form {...form}>
@@ -306,6 +336,7 @@ export function OnboardingPage() {
 
           <div
             ref={scrollRef}
+            data-testid="onboarding-scroll"
             className={cn(
               'relative flex-1 overflow-y-auto min-h-0 w-full mx-auto px-5 md:px-8',
               contentMaxWidth,
@@ -318,29 +349,11 @@ export function OnboardingPage() {
               )}
             >
               {stepContent}
+              {navInScroll ? navRow : null}
             </div>
           </div>
 
-          {showNav && (
-            <div className="mb-5 flex items-center gap-2 px-4 sm:mb-6 sm:gap-3">
-              {stepIndex > 0 && (
-                <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleBack}>
-                  Back
-                </Button>
-              )}
-              <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleSkip}>
-                Skip
-              </Button>
-              <OnboardingButton
-                type="button"
-                size="lg"
-                className="px-10 sm:px-14 text-base sm:text-lg h-12"
-                onClick={handleNext}
-              >
-                Next
-              </OnboardingButton>
-            </div>
-          )}
+          {!navInScroll ? navRow : null}
 
           <div className="flex flex-col items-center gap-1 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
             <div className="flex justify-center items-center gap-1.5">

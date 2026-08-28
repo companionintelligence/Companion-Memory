@@ -1,8 +1,45 @@
 # Prediction & Planning: System Map
 
-> **Status:** Index &nbsp;•&nbsp; **Updated:** 2026-08-09
+> **Status:** Index &nbsp;•&nbsp; **Updated:** 2026-08-09 &nbsp;•&nbsp; **Implementation state re-checked:** 2026-08-19
 >
 > One page: how the four prediction/planning systems relate, which document owns which decision, and what order the work lands in.
+
+> **What has actually landed since this was written (verified against the tree 2026-08-19).**
+> These are proposals; treat the tables below as the plan of record, not a description of
+> the appliance.
+>
+> - **15-minute buckets shipped and were REVERTED.** The "Bucket resolution" row below and
+>   the P1 "15-min buckets" cell are no longer the decision.
+>   `backend/apps/hbpe/src/ci/hbpe/buckets.py` today reads
+>   `BUCKET_MINUTES = 30`, `BUCKETS_PER_DAY = 48` — the 96-bucket redesign landed
+>   (`20260809160500_hbpe_15_minute_buckets.sql`) and was rolled back
+>   (`20260811174700_hbpe_30_minute_buckets.sql`, which also DELETEs `hbpe.prediction_log`
+>   and `hbpe.token_stream`, because a 15-minute index is not a 30-minute one).
+>   `ONNX_SEQ_LEN` is still 256 (`model/onnx_export.py:46`). Anything downstream that
+>   assumes 96 buckets is wrong.
+> - **HBPE P0 shipped.** `pipeline/baselines.py` implements B0 (per-bucket Laplace
+>   occupancy), B1 (per bucket × day-of-week) and B2 (daypart Markov), and `pipeline/serve.py`
+>   is the D3 serve gate: the transformer is served only when it beats B1 on top-1 by a
+>   margin, or beats B1 on Brier **and** B2 on ECE. Scoring lands in `hbpe.prediction_score`
+>   via `pipeline/scoring.py`, and `pipeline/actuals_backfill.py` fills
+>   `prediction_log.actual_*`.
+> - **Tasks & Scheduling schema landed** in `20260808150000_schedule_planning_and_hbpe.sql`:
+>   `ci.tasks`, `ci.task_dependencies`, `ci.event_candidates` (with `time_flex`, `fit_score`,
+>   `fit_curve`, `l0_class`, `l1_cluster_id`), `ci.rhythms`, and `ci.actions.task_id`. The
+>   domains are `domains/planning` and `domains/schedule`, with a `/plan` page. Two P1 items
+>   in the table below did **not** land: there is no `l0_class` / `l1_cluster_id` on
+>   `ci.tasks` (those columns are on `ci.event_candidates`), and no `task_id` on
+>   `ci.event_candidates`. What did arrive instead is the trust-dial triage inbox —
+>   `proposed` tasks plus `ci.task_pending_changes` (`20260818185920`, `20260819010000`).
+> - **Completion is essentially NOT built.** There is no `ci.completion_records` table
+>   anywhere in the migrations, no matcher and no receipt extraction. The one exception is
+>   `VerifyDoneService` (`domains/planning`), which closes a *planned block's* task and
+>   stamps `ci.events.status='completed'` under the trust dial — a narrow slice of the
+>   Completion column, with no outcome record and no emotional capture.
+> - **Temporal is gone**, if any linked document still assumes it: pg-boss is the single
+>   scheduler, and HBPE's nightly runs as a plain async function dispatched through
+>   `domains/python-functions`. (Do not confuse this with the pipeline's
+>   `clean.temporal_repair` stage, which is about timestamps and is very much alive.)
 
 ---
 
@@ -104,7 +141,7 @@ Emotion Complexity needs no migration — it is a JSONB key on the self Person e
 
 - **HBPE:** ~85 events/day ceiling, 1,000/night labeling cap, unbounded retrains, dead vocab cap, annual blindness, no consumer for `/forecast/due`.
 - **Tasks & Scheduling:** tasks lose HBPE grounding on creation; no roll-forward; `time_flex`, `fit_score`, `fit_curve`, `ci.rhythms`, `ci.actions.task_id`, `defer_count`, `task_time`, `PlanningTimeService`, and `ci.task_dependencies` all built with no consumer.
-- **Completion:** `ci.events.status='completed'` never written, `actual_minutes` never written, no sentiment analysis anywhere, no completion inference of any kind.
+- **Completion:** `ci.events.status='completed'` never written, `actual_minutes` never written, no sentiment analysis anywhere, no completion inference of any kind. *(Two of these have since changed — `VerifyDoneService` writes `status='completed'` for planned blocks and `completeTask` accepts `actualMinutes`; see the [Completion Detection](completion-detection.md) header. The rest holds.)*
 
 ---
 
@@ -122,7 +159,7 @@ These proposals do **not** depend on the knowledge graph service (`domains/graph
 | Out of scope for this work | Notes |
 |---|---|
 | `GraphIngestService`, entity/relationship promotion accept | Existing code only — do not extend |
-| Smart rotation `graph_link`, `graph_enrich`, `hydrate_inventory` | Separate from this pipeline |
+| Smart rotation `graph_link`, `graph_enrich`, `hydrate_things` | Separate from this pipeline |
 | `LifeContextService` / `graph_deltas` novelty | Not used by these docs |
 | Ambient completion P3 | Deferred; when built, use `ci.events` / receipts, not graph traversal |
 

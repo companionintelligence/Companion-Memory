@@ -153,14 +153,17 @@ SELECT user_id AS u FROM ci.files GROUP BY user_id ORDER BY count(*) DESC LIMIT 
 SELECT count(*) AS candidates_now FROM (
   SELECT s."id"
     FROM "ci"."files" s
-    LEFT JOIN ci.pipeline_state p
-      ON p.entity_type = 'file' AND p.entity_id = s."id" AND p.stage = 'enrich.media_dimensions'
    WHERE s."user_id" = :'u'::uuid
      AND (s.variant = 'ORIGINAL' AND s.deleted_at IS NULL AND s.key IS NOT NULL
           AND (s.content_type LIKE 'image/%' OR s.content_type LIKE 'video/%'))
-     AND ( p.entity_id IS NULL
-        OR p.stage_version < 1
-        OR (p.status = 'failed' AND p.next_attempt_at <= now()) )
+     AND NOT EXISTS (
+           SELECT 1
+             FROM ci.pipeline_state p
+            WHERE p.entity_type = 'file'
+              AND p.entity_id = s."id"
+              AND p.stage = 'enrich.media_dimensions'
+              AND p.stage_version >= 1
+              AND NOT (p.status = 'failed' AND p.next_attempt_at <= now()))
      AND (NULL::uuid IS NULL OR s."id" > NULL::uuid)
    ORDER BY s."id"
    LIMIT 200) t;
@@ -174,18 +177,28 @@ SQL
 ```
 
 170 of 340 `ci.files` rows are originals this stage applies to, and none of them
-has a ledger row yet. Bump the `< 1` to the stage's next version to get the
-candidate count a version bump would produce — **get the count before you get the
-bill**, especially for `index.embed`, which shares one Ollama process with
+has a ledger row yet. The `>= 1` is the stage's current version
+(`STAGE_VERSIONS['enrich.media_dimensions']`); raise it to the next version to get
+the candidate count a version bump would produce — **get the count before you get
+the bill**, especially for `index.embed`, which shares one Ollama process with
 interactive chat.
+
+> The `NOT EXISTS` shape above is not a stylistic choice — it is the statement
+> `selectStale` issues today. It replaced a `LEFT JOIN … WHERE (p.entity_id IS NULL
+> OR …)` that returned the same ids and could not stay on an index; §5 is that
+> story.
 
 ---
 
-## 5. The §14.2 measurement: does the LEFT JOIN stay index-only?
+## 5. The §14.2 measurement: does the staleness sweep stay index-only?
 
-`docs/jobs-system-rebuild-plan.md` §14.2 carries this as an open risk. The answer
-is **no**, and this is how to see it on your own data. Everything runs inside one
-transaction that is rolled back.
+`docs/jobs-system-rebuild-plan.md` §14.2 carried this as an open risk. Under the
+original `LEFT JOIN` the answer was **no**; `selectStale` was rewritten to the
+`NOT EXISTS` anti-join of step 4 and the answer is now **yes**. The measurement
+below is how you see both halves on your own data — the old shape is still worth
+running, because it is the one an engineer reaches for by reflex and the one the
+plan's §14.2 text describes. Everything runs inside one transaction that is
+rolled back.
 
 The `ANALYZE` in the middle is not optional. `ci.pipeline_state` is empty on a
 fresh box, so its statistics say "0 rows" and the planner would keep choosing the
@@ -214,13 +227,25 @@ SELECT 'event', t.event_id, 'test.smoke', 1, 'done', 1, t.user_id
          ORDER BY event_id LIMIT 50000) t;
 ANALYZE ci.pipeline_state;
 
-\echo '--- B. ledger POPULATED (50000 rows)'
+\echo '--- B. ledger POPULATED (50000 rows), the OLD LEFT JOIN shape'
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
 SELECT s."event_id" FROM "ci"."events" s
   LEFT JOIN ci.pipeline_state p
     ON p.entity_type='event' AND p.entity_id=s."event_id" AND p.stage='test.smoke'
  WHERE s."user_id" = :'u'::uuid AND (TRUE)
    AND (p.entity_id IS NULL OR p.stage_version < 1 OR (p.status='failed' AND p.next_attempt_at <= now()))
+   AND (NULL::uuid IS NULL OR s."event_id" > NULL::uuid)
+ ORDER BY s."event_id" LIMIT 200;
+
+\echo '--- C. ledger POPULATED (50000 rows), the SHIPPED NOT EXISTS shape'
+EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
+SELECT s."event_id" FROM "ci"."events" s
+ WHERE s."user_id" = :'u'::uuid AND (TRUE)
+   AND NOT EXISTS (
+         SELECT 1 FROM ci.pipeline_state p
+          WHERE p.entity_type='event' AND p.entity_id=s."event_id" AND p.stage='test.smoke'
+            AND p.stage_version >= 1
+            AND NOT (p.status='failed' AND p.next_attempt_at <= now()))
    AND (NULL::uuid IS NULL OR s."event_id" > NULL::uuid)
  ORDER BY s."event_id" LIMIT 200;
 
@@ -241,8 +266,8 @@ SQL
  Execution Time: 0.145 ms
 ```
 
-**B — 50,000 ledger rows.** The whole table, twice, then a sort. 37,633 blocks,
-69 ms.
+**B — 50,000 ledger rows, LEFT JOIN.** The whole table, twice, then a sort. 37,633
+blocks, 69 ms.
 
 ```
  Limit (actual time=63.405..69.170 rows=200.00 loops=1)
@@ -262,10 +287,17 @@ the `LIMIT` cannot reach the scan: the join is materialised in full and then
 sorted. Every hop re-reads the source table, which makes a full sweep
 O(corpus²/slice) rather than O(corpus).
 
-Run it with a cursor in the `> NULL::uuid` slot to see the other half: with the
-ledger populated the keyset cursor appears as `Filter:` on the sequential scan
-instead of `Index Cond:` on `events_pkey`, so resuming stops costing
-O(remaining).
+**C — 50,000 ledger rows, NOT EXISTS.** Same ids, anti-join, and the primary key
+survives: an indexed scan of `ci.events` with the `LIMIT` still reaching it. The
+figures `PipelineStateService` records for this corpus are ~7 ms and 7,803 blocks,
+against 69–81 ms and 35,488 for B — read your own run rather than trusting those,
+since the ratio is what transfers between boxes, not the milliseconds.
+
+Run B and C with a cursor in the `> NULL::uuid` slot to see the other half: under
+the LEFT JOIN the keyset cursor is demoted to a `Filter:` on the sequential scan,
+so resuming costs O(remaining) — every row before the cursor is read and thrown
+away. Under `NOT EXISTS` it stays an `Index Cond:` on `events_pkey`, which is the
+whole point of paging by key.
 
 ---
 
@@ -324,7 +356,8 @@ Drives `PipelineStateService` against this database, EXPLAINs the statement it
 actually issued, pages 4,000 real ids at the real slice size, and takes 250 real
 rows through claim → complete → version bump — all inside a transaction it rolls
 back, then re-checks the ledger fingerprint to prove it. It prints the same
-measurements as step 5 as a table:
+measurements as step 5 as a table — label, execution ms, blocks read on
+`ci.events`, scan node:
 
 ```
 empty ledger, hop 0 (cursor null)                             0.130 ms      37 blocks on ci.events  Index Scan using events_pkey
@@ -334,6 +367,14 @@ baseline: same page, ledger still empty                       0.111 ms      37 b
 50000 ledger rows, cursor past the processed prefix          80.262 ms   35488 blocks on ci.events  Parallel Seq Scan
 50000 ledger rows, NOT EXISTS rewrite (candidate remedy)     74.368 ms    7803 blocks on ci.events  Index Scan using events_pkey
 ```
+
+**That output is the BEFORE picture** — the run that found the defect, kept
+because it is what step 5 explains. `selectStale` has since been rewritten to the
+anti-join, so the two `50000 ledger rows` rows are no longer sequential scans, and
+the suite now *asserts* it: the tests naming §14.2 are marked `CLOSED` and expect
+zero sequential source scans plus a surviving `Index Cond` on the deep-cursor
+page. A change that reintroduces a `Parallel Seq Scan` there fails them — that is
+the regression guard, not a flake.
 
 The whole suite skips — loudly, with a printed reason — when no Postgres is
 reachable. It fails, rather than skipping, when a database IS reachable but is

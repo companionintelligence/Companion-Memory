@@ -2,7 +2,12 @@
 
 > **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
-> Status: **in progress** on `feat/hbpe-landing`.
+> Status: **landed.** `feat/hbpe-landing` merged to `main` on 2026-08-17 as
+> [#2045](https://github.com/companionintelligence/CI-Server/pull/2045)
+> (`f4f058942`); verified an ancestor of `main` on 2026-08-19. D1–D5 below are
+> shipped, not proposed: the kernel, the daypart HMM, the B0/B1/B2 baselines and
+> the D3 serve gate all exist under `backend/apps/hbpe/src/ci/hbpe/pipeline/`,
+> and the gated HMT math (`hierarchical_src_mask`) is in `model/transformer.py`.
 > Paper: CI-HBPE-SUMMARY-001 v1.0 (2026-03-16). Capacity redesign (15-min
 > buckets, static labeler, seasonal) stays in
 > [scratch1-bdc/hbpe-data-rich-redesign.md](../scratch1-bdc/hbpe-data-rich-redesign.md)

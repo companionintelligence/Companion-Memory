@@ -202,6 +202,141 @@ describe('getEntityMedia', () => {
       },
     );
 
+    // With a server-derived player the same row becomes an embed tile: poster
+    // (when the provider has one) in the grid, provider iframe in the lightbox.
+    it('resolves a provider player to embed media, poster as the thumbnail', () => {
+      const media = getEntityMedia(
+        entity({
+          __typename: 'ContentType',
+          id: 'c-yt',
+          galleryMimetype: 'video/youtube',
+          galleryContentUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          galleryTitle: 'A liked video',
+          galleryPlayer: {
+            provider: 'youtube',
+            playerUrl: 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ',
+            posterUrl: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+            aspectRatio: 16 / 9,
+            mediaKind: 'video',
+          },
+        }),
+      );
+      expect(media).toMatchObject({
+        kind: 'embed',
+        thumbUrl: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+        fullUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        title: 'A liked video',
+        player: { provider: 'youtube', playerUrl: 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ' },
+      });
+    });
+
+    it('keeps a poster-less player (Spotify) as an embed with a null thumbnail', () => {
+      const media = getEntityMedia(
+        entity({
+          __typename: 'ContentType',
+          id: 'c-sp',
+          galleryMimetype: 'audio/mpeg',
+          galleryContentUrl: 'https://open.spotify.com/track/3fzTpBMSQKjo9sW0T8Tw2O',
+          galleryPlayer: {
+            provider: 'spotify',
+            playerUrl: 'https://open.spotify.com/embed/track/3fzTpBMSQKjo9sW0T8Tw2O',
+            posterUrl: null,
+            aspectRatio: 352 / 152,
+            mediaKind: 'audio',
+          },
+        }),
+      );
+      expect(media?.kind).toBe('embed');
+      expect(media?.thumbUrl).toBeNull();
+      expect(media?.player?.provider).toBe('spotify');
+    });
+
+    it('uses the unfurl poster for a player that has none of its own (Spotify)', () => {
+      const media = getEntityMedia(
+        entity({
+          __typename: 'ContentType',
+          id: 'c-sp-art',
+          galleryMimetype: 'audio/spotify',
+          galleryContentUrl: 'https://open.spotify.com/track/3fzTpBMSQKjo9sW0T8Tw2O',
+          galleryPlayer: {
+            provider: 'spotify',
+            playerUrl: 'https://open.spotify.com/embed/track/3fzTpBMSQKjo9sW0T8Tw2O',
+            posterUrl: null,
+            aspectRatio: 352 / 152,
+            mediaKind: 'audio',
+          },
+          galleryUnfurl: {
+            status: 'ok',
+            title: 'Stillness Speaks',
+            thumbnailUrl: '/ci-files/poster?sig=1',
+            canonicalUrl: null,
+          },
+        }),
+      );
+      expect(media?.kind).toBe('embed');
+      expect(media?.thumbUrl).toBe('/static/ci-files/poster?sig=1');
+      expect(media?.title).toBe('Stillness Speaks');
+    });
+
+    it('renders a title-only row with a resolved poster (Netflix via TMDB) as an image tile opening the provider page', () => {
+      const media = getEntityMedia(
+        entity({
+          __typename: 'ContentType',
+          id: 'c-nf',
+          galleryMimetype: 'text/plain',
+          galleryTitle: 'Dark: Season 1: Alpha and Omega (Episode 10)',
+          galleryUnfurl: {
+            status: 'ok',
+            title: 'Dark',
+            thumbnailUrl: 'https://image.tmdb.org/t/p/w500/p.jpg',
+            canonicalUrl: 'https://www.themoviedb.org/tv/70523',
+          },
+        }),
+      );
+      expect(media).toMatchObject({
+        kind: 'image',
+        thumbUrl: 'https://image.tmdb.org/t/p/w500/p.jpg',
+        fullUrl: 'https://image.tmdb.org/t/p/w500/p.jpg',
+        title: 'Dark: Season 1: Alpha and Omega (Episode 10)',
+        pageUrl: 'https://www.themoviedb.org/tv/70523',
+      });
+    });
+
+    it('renders a Prime Video row (video/mp4, no file, no URL) with a resolved poster as an image tile', () => {
+      const media = getEntityMedia(
+        entity({
+          __typename: 'ContentType',
+          id: 'c-prime',
+          galleryMimetype: 'video/mp4',
+          galleryTitle: 'The Flame of Tar Valon-The Wheel of Time - Season 1',
+          galleryUnfurl: {
+            status: 'ok',
+            title: 'The Wheel of Time',
+            thumbnailUrl: '/ci-files/wot?sig=1',
+            canonicalUrl: 'https://en.wikipedia.org/wiki/The_Wheel_of_Time_(TV_series)',
+          },
+        }),
+      );
+      expect(media).toMatchObject({
+        kind: 'image',
+        thumbUrl: '/static/ci-files/wot?sig=1',
+        pageUrl: expect.stringContaining('wikipedia.org'),
+      });
+    });
+
+    it('ignores a non-ok unfurl', () => {
+      expect(
+        getEntityMedia(
+          entity({
+            __typename: 'ContentType',
+            id: 'c-nf-404',
+            galleryMimetype: 'text/plain',
+            galleryUnfurl: { status: 'not_found', title: null, thumbnailUrl: null, canonicalUrl: null },
+          }),
+        ),
+      ).toBeNull();
+    });
+
     it('is case-insensitive about provider pseudo-mimetypes', () => {
       expect(
         getEntityMedia(

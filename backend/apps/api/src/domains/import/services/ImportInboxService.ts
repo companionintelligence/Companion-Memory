@@ -10,7 +10,13 @@ import { UserService } from '@ci/domains/user';
 
 import { allDataSources, dataSourcesRecognize, type DirEntry } from '../datasources/registry';
 import type { ImportRunSource } from '../entities/ImportRunEntity';
-import { inboxRoot, realUserInboxDir, resolveWithinUserInbox, userInboxDir } from '../sources/importRoots';
+import {
+  inboxRoot,
+  realUserInboxDir,
+  resolveWithinUserInbox,
+  userInboxDir,
+  userInboxDisplayDir,
+} from '../sources/importRoots';
 import { declaredSourcesForInboxUnit, serviceInboxFolders } from '../sources/inboxFolders';
 
 import { ImportRunService } from './ImportRunService';
@@ -19,7 +25,7 @@ import { StagedSourceService } from './StagedSourceService';
 /**
  * How deep the has-any-file probe looks inside a top-level folder. A folder
  * whose only files sit deeper than this is treated as empty and not offered —
- * the probe exists to hide empty drop folders, not to inventory archives.
+ * the probe exists to hide empty drop folders, not to catalogue archives.
  */
 const FILE_PROBE_DEPTH = 4;
 
@@ -172,7 +178,16 @@ export interface InboxUnit {
 export interface InboxScan {
   available: boolean;
   reason?: string;
+  /** The caller's inbox subtree as the API itself sees it (`CI_IMPORT_INBOX_DIR/<user>`). */
   inboxDir: string;
+  /**
+   * The same folder as a PERSON reaches it: the host-side spelling of the
+   * bind mount when the operator set `CI_IMPORT_INBOX_HOST_DIR`, otherwise
+   * `inboxDir`. This is what to show someone who is about to drop files in;
+   * `inboxDir` is a path inside the container and means nothing on a desktop.
+   * Display only — nothing accepts it back.
+   */
+  displayDir: string;
   units: InboxUnit[];
   skippedSymlinks: number;
   /** UNITS are missing: a walk ceiling dropped top-level entries. */
@@ -266,14 +281,16 @@ export class ImportInboxService implements OnModuleInit {
    * import is FOR is whoever's folder the archive sits in, not whoever
    * happens to press the button first.
    */
-  private async userDir(ctx: UserServiceContext): Promise<{ dir: string; email: string }> {
+  private async userDir(
+    ctx: UserServiceContext,
+  ): Promise<{ dir: string; displayDir: string; email: string }> {
     const user = await this.users.findById({ userId: ctx.userId }, ctx.userId);
 
     if (user == null) {
       throw new BadRequestException('No such user');
     }
 
-    return { dir: userInboxDir(user.email), email: user.email };
+    return { dir: userInboxDir(user.email), displayDir: userInboxDisplayDir(user.email), email: user.email };
   }
 
   /**
@@ -290,7 +307,7 @@ export class ImportInboxService implements OnModuleInit {
    * of an unchanged inbox agree.
    */
   async scan(ctx: UserServiceContext): Promise<InboxScan> {
-    const { dir: inboxDir, email } = await this.userDir(ctx);
+    const { dir: inboxDir, displayDir, email } = await this.userDir(ctx);
 
     try {
       // Re-ensured on every scan, not only at boot: a whole-folder unit
@@ -304,6 +321,7 @@ export class ImportInboxService implements OnModuleInit {
         available: false,
         reason: `The inbox directory is not readable: ${(err as Error).message}`,
         inboxDir,
+        displayDir,
         units: [],
         skippedSymlinks: 0,
         truncated: false,
@@ -352,6 +370,7 @@ export class ImportInboxService implements OnModuleInit {
     return {
       available: true,
       inboxDir,
+      displayDir,
       units,
       skippedSymlinks: state.symlinks,
       truncated: state.truncated,

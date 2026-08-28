@@ -199,6 +199,29 @@ class LocalHubPlugin : Plugin() {
     }
 
     /**
+     * One-shot high-accuracy fix ("use my location") is iOS-only for now -- see
+     * `LocationTracker.swift`. Continuous background tracking on Android is owned
+     * entirely by `@capacitor-community/background-geolocation`, not this plugin.
+     */
+    @PluginMethod
+    fun getCurrentLocation(call: PluginCall) {
+        call.reject("getCurrentLocation is only available on iOS")
+    }
+
+    @PluginMethod
+    fun openAppSettings(call: PluginCall) {
+        try {
+            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            intent.data = Uri.fromParts("package", context.packageName, null)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            call.resolve()
+        } catch (e: Exception) {
+            call.reject(e.message ?: "Could not open app settings", e)
+        }
+    }
+
+    /**
      * Lazy, not a field initializer: a `Plugin` is constructed before Capacitor attaches its
      * `Context`, so `context` is only safe to read once a method has actually been called.
      * `by lazy` is thread-safe, which matters because the three secure* methods run on

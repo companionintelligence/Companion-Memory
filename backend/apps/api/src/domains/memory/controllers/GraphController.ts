@@ -177,7 +177,7 @@ interface FilterMatch {
 const STATS_TAG_LIMIT = 15;
 
 /** Optional window for the life series (spend / time / conversations / social).
- * Inventory totals stay all-time. Absent or unparseable bounds mean unbounded. */
+ * Thing totals stay all-time. Absent or unparseable bounds mean unbounded. */
 const memoryStatsSchema = z.object({
   from: z.string().optional(),
   to: z.string().optional(),
@@ -440,7 +440,7 @@ export class GraphController {
 
   /**
    * Memory-wide totals for the stats page plus the life series (spend, time,
-   * conversations, social). Inventory totals / tag / source breakdowns stay
+   * conversations, social). Thing totals / tag / source breakdowns stay
    * all-time; `from`/`to` filter only the life series.
    */
   @Get('stats')

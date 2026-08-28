@@ -182,8 +182,8 @@ describe('PersonMergeService', () => {
     expect(folded.emails).toEqual(expect.arrayContaining(['dana@x.com', 'danaq@y.com']));
     expect(folded.first_name).toBe('Dana');
 
-    // Target keeps its own name.
-    expect(propertiesUpdate[0].params?.[3]).toBe('Dana');
+    // The fuller name wins — "Dana Q" is a token-superset of "Dana".
+    expect(propertiesUpdate[0].params?.[3]).toBe('Dana Q');
 
     // Sources tombstoned and their search rows dropped from BOTH stores
     // (embedding = semantic, vectors = keyword), with tags re-pointed.

@@ -51,11 +51,12 @@ Every row below was read, not assumed.
 | Fact | Where | Status |
 |---|---|---|
 | Native auth is a long-lived API key sent as `x-api-key`, held in a module singleton so the request layer can read it synchronously | [`common/src/utils/apiAuth.ts`](../../packages/common/src/utils/apiAuth.ts) | **[V]** |
-| Key + key id persist under `ci.apiKey` / `ci.apiKeyId` via `secureStorage*` → `capacitor-secure-storage-plugin` | [`hooks/useAuth.ts:24-25`](../web/src/hooks/useAuth.ts), [`common/src/utils/nativeBridge.ts:110-167`](../../packages/common/src/utils/nativeBridge.ts) | **[V]** |
-| The appliance base URL is *also* mirrored into the keystore so native App Intents can read it | `nativeBridge.ts:393-411` (`syncNativeIntentConfig`) | **[V]** |
+| Key + key id persist under `ci.apiKey` / `ci.apiKeyId` via `secureStorage*` → `capacitor-secure-storage-plugin` | [`hooks/useAuth.ts:29-30`](../web/src/hooks/useAuth.ts), [`common/src/utils/nativeBridge.ts:195-310`](../../packages/common/src/utils/nativeBridge.ts) | **[V]** |
+| The appliance base URL is *also* mirrored into the keystore so native App Intents can read it | `nativeBridge.ts:579-597` (`syncNativeIntentConfig`) | **[V]** |
 | **iOS**: the plugin writes with `withAccessibility: .afterFirstUnlock` — *not* `…ThisDeviceOnly` | `node_modules/capacitor-secure-storage-plugin/ios/Plugin/SecureStoragePluginPlugin.swift:15` | **[V]** — see §2.4 |
 | **Android**: an RSA/ECB/PKCS1 keypair in AndroidKeyStore (alias `<pkg>_cap_sec`) wraps values stored in the `cap_sec` SharedPreferences file — with a **silent fallback to unencrypted Base64 in the same file** if Keystore init throws | `node_modules/capacitor-secure-storage-plugin/android/…/PasswordStorageHelper.java:53-67, 102-146` | **[V]** — see §2.4 |
 | `android:allowBackup="false"` keeps that SharedPreferences file out of adb/cloud backup | [`AndroidManifest.xml`](./android/app/src/main/AndroidManifest.xml) | **[V]** |
+| **On-device LLM tool calling reuses this exact credential** — `configureIntentTools({baseUrl, apiKey})` is handed the same key from the web layer, not read from the Keychain/Keystore by this plugin itself — so it inherits D1/D2 as-is. See §11 | [`LocalLLMPlugin.swift`](../ios/ios/App/App/LocalLLM/LocalLLMPlugin.swift), [`LocalLlmPlugin.kt`](../../packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/LocalLlmPlugin.kt) | **[V]** |
 
 ### 1b. Local durable stores
 
@@ -66,7 +67,7 @@ Every row below was read, not assumed.
 | `onUpgrade` **throws** rather than migrating — deliberately, so an upgrade can never drop unflushed user data | `OutboxStore.kt:112-117` | **[V]** — makes adding SQLCipher a schema-version event, see §2.1 |
 | Hard cap 5000 items, rejects rather than evicts (HTTP 507) | `OutboxStore.kt:339`, [`outbox.ts:51`](../../packages/common/src/utils/outbox.ts) | **[V]** |
 | ~~**iOS has no outbox at all yet**~~ **SUPERSEDED.** iOS has a real outbox: `OutboxStore.swift`, SQLCipher-backed from commit one (S2's stated goal), verified on an iOS 27 simulator to create the database in the app container — `sqlite_sequence` present, `journal_mode=wal` | [`OutboxStore.swift`](../../packages/capacitor-local-hub/ios/Sources/LocalHubPlugin/OutboxStore.swift) | **[V]** exists · **[P]** ciphertext |
-| PowerSync keeps a local SQLite copy in the WebView via `IDBBatchAtomicVFS` (IndexedDB), file `ci-powersync.db`. The comment states this is the only VFS that works without cross-origin-isolation headers the Capacitor webview can't set — "Do not switch to OPFSCoopSyncVFS or similar" | [`PowerSyncProvider.tsx:27-39`](../web/src/api/powersync/PowerSyncProvider.tsx) | **[V]** |
+| PowerSync keeps a local SQLite copy in the WebView via `IDBBatchAtomicVFS` (IndexedDB), file `ci-powersync.db`. The comment states this is the only VFS that works without cross-origin-isolation headers the Capacitor webview can't set; native uses Capacitor SQLite instead | [`webDatabase.ts:5-16`](../web/src/api/powersync/webDatabase.ts), [`nativeDatabase.ts`](../web/src/api/powersync/nativeDatabase.ts) | **[V]** |
 | Installed version is `@powersync/web@1.39.1` | `.yarn/cache/@powersync-web-npm-1.39.1-…zip` | **[V]** |
 | Logout calls `database.disconnect()`, **not** `disconnectAndClear()` — locally synced rows survive logout. Flagged in-source as a known gap | `PowerSyncProvider.tsx:43-51` | **[V]** — this is the wipe primitive, see §4 |
 | `PowerSyncProvider` is mounted unconditionally in the app tree — no feature flag | `App.tsx:101` | **[V]** |
@@ -100,14 +101,14 @@ underneath: the data the boundary protects is on disk in the clear.
 |---|---|---|
 | `android:usesCleartextTraffic="true"` app-wide; **no** `networkSecurityConfig`; `res/xml/` contains only `config.xml` and `file_paths.xml` | `AndroidManifest.xml`, `android/app/src/main/res/xml/` | **[V]** |
 | `androidScheme: 'https'` + `android.allowMixedContent: true` | [`capacitor.config.ts`](./capacitor.config.ts) | **[V]** |
-| iOS is already narrower: `NSAllowsArbitraryLoadsInWebContent`, not the app-wide `NSAllowsArbitraryLoads` | [`Info.plist`](./ios/App/App/Info.plist) | **[V]** |
+| iOS ATS carries **two** exceptions — `NSAllowsArbitraryLoadsInWebContent` (WKWebView content only) and `NSAllowsLocalNetworking` (`.local` + unqualified/private-range LAN, for the plain-`URLSession` App Intents clients). Still narrower than the app-wide `NSAllowsArbitraryLoads`, and neither needs a review justification. Reaching a LAN address additionally requires `NSLocalNetworkUsageDescription`, which is set — Local Network Privacy is a separate gate from ATS | [`Info.plist`](../ios/ios/App/App/Info.plist) | **[V]** |
 
 ### 1e. Server-side revocation
 
 | Fact | Where | Status |
 |---|---|---|
 | `DELETE /api/keys/:id` **hard-deletes the row**; `validateKey` then finds nothing and returns null → 401 on every subsequent request | [`ApiKeyService.ts:322-329, 361-398`](../../../backend/apps/api/src/domains/auth/services/ApiKeyService.ts) | **[V]** |
-| Every `/api/keys` route is guarded by `JwtOrPortalAuthGuard` — **never an API key**, explicitly "so a leaked key cannot mint successors that outlive its revocation" | [`ApiKeyController.ts:74-79`](../../../backend/apps/api/src/domains/auth/controllers/ApiKeyController.ts) | **[V]** |
+| Every `/api/keys` route is guarded by `JwtOrPortalAuthGuard` — **never an API key**, explicitly "so a leaked key cannot mint successors that outlive its revocation" | [`ApiKeyController.ts:81-90`](../../../backend/apps/api/src/domains/auth/controllers/ApiKeyController.ts) | **[V]** |
 | Keys are SHA-256 hashed at rest, 32 random bytes, with `scopes` (`memory`/`intents`/`mcp`) and `capability` (`read`/`write`/`full`) as two orthogonal axes | `ApiKeyService.ts:46-48, 400-402`, `ApiKeyCapability.ts` | **[V]** |
 | `ci.devices` exists with `is_active`, `push_token`, and an **unused `privacy_settings` jsonb** column | [`DeviceEntity.ts:51-65`](../../../backend/apps/api/src/domains/devices/entities/DeviceEntity.ts) | **[V]** |
 | **`ci.devices` and `ci.api_keys` are unrelated tables** — no FK, no column joining them | both entities | **[V]** — this is the missing link for §4 |
@@ -119,8 +120,8 @@ This list is the input to §5. All **[V]**.
 
 | Lane | Choke point | Coverable by a JS hook? |
 |---|---|---|
-| REST (incl. outbox flush, health probes) | single `fetch()` at [`fetchJson.ts:202`](../../packages/common/src/utils/fetchJson.ts) | ✅ yes |
-| GraphQL | `createHttpLink({ uri: buildApiUrl('/api/graphql') })` + `setContext` auth link, [`ApolloProvider.tsx:23-37`](../web/src/api/ApolloProvider.tsx) | ✅ yes, via a custom `fetch` |
+| REST (incl. outbox flush, health probes) | single `fetch()` at [`fetchJson.ts:264`](../../packages/common/src/utils/fetchJson.ts) | ✅ yes |
+| GraphQL | `createHttpLink({ uri: buildApiUrl('/api/graphql') })` + `setContext` auth link, [`ApolloProvider.tsx:26-37`](../web/src/api/ApolloProvider.tsx) | ✅ yes, via a custom `fetch` |
 | PowerSync credentials + upload | own `fetch` calls in [`powersync/connector.ts`](../web/src/api/powersync/connector.ts) | ✅ yes |
 | **PowerSync download stream** | opened inside `@powersync/web`, in a Web Worker | ❌ **no** — not reachable from app code |
 | LLM generate (remote fallback) | raw `fetch` at `nativeBridge.ts:501` | ⚠️ bypasses `fetchJson` |
@@ -161,7 +162,7 @@ to what any one device actually downloads from an AAB, since Play splits per ABI
 
 1. **16 KB page size stops being a no-op.** `DELIVERY.md` §1a says "likely a no-op — no
    native libs." That is *already* false: `@ci/capacitor-local-llm` pulls
-   `com.google.ai.edge.litertlm:litertlm-android:0.11.0` **[V]**, which ships native
+   `com.google.ai.edge.litertlm:litertlm-android:0.14.0` **[V]**, which ships native
    libraries. SQLCipher makes it doubly so. Both need an API-35 device check.
 2. **`ITSAppUsesNonExemptEncryption=false` needs re-examination on iOS.** The Info.plist
    comment states the basis as "only exempt standard cryptography (HTTPS/TLS via the OS,
@@ -292,7 +293,7 @@ first (S0 in §8).
 
 The full S0 replacement above is still the right destination. In the meantime the **iOS**
 half of D1 is mitigated in-repo by
-[`ios/App/App/KeychainHardening.swift`](./ios/App/App/KeychainHardening.swift), which
+[`ios/App/App/KeychainHardening.swift`](../ios/ios/App/App/KeychainHardening.swift), which
 sweeps every `cap_sec` item to `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` via
 `SecItemUpdate`. `AppDelegate` runs it at launch and again on entering the background —
 the second call matters because the web layer can store a fresh key mid-session, and a
@@ -660,7 +661,7 @@ what turns that from a claim into something a user can check.
 
 | Lane | Hook |
 |---|---|
-| REST | One counter inside `fetchJson` around the single `fetch()` at `fetchJson.ts:202`. Covers the outbox flush and health probes for free — both go through it **[V]** |
+| REST | One counter inside `fetchJson` around the single `fetch()` at `fetchJson.ts:264`. Covers the outbox flush and health probes for free — both go through it **[V]** |
 | GraphQL | An `ApolloLink` after `authLink` for operation names, **plus a custom `fetch` passed to `createHttpLink({ fetch })`** for actual byte counts in both directions. The link alone cannot see response size |
 | PowerSync upload | Wrap the `fetch` calls in `connector.ts`; count CRUD entries in `uploadData` |
 | PowerSync **download** | **Not observable.** The sync stream lives in a Web Worker inside `@powersync/web` **[V]**. Use `db.registerListener` / `SyncStatus` to report **rows synced**, and **label it as rows, not bytes.** Do not fabricate a byte figure |
@@ -1040,6 +1041,36 @@ Severity: 🔴 **P0** = blocks the next data source · 🟠 **P1** = before the 
   work.
 - [`docs/architecture/third-party-egress.md`](../../../docs/architecture/third-party-egress.md)
   — the server-side half of §6; its recommendations become Sovereign Mode's exception list.
+
+---
+
+## 11. On-device LLM tool calling (`capacitor-local-llm` / `LocalLLMPlugin`)
+
+Added 2026-08-26, auditing code that landed after §0-§10's 2026-08-13 basis. Not named
+anywhere above despite depending on the exact credential surface §2.4 covers — worth
+fixing here rather than leaving the gap implicit.
+
+| Fact | Where | Status |
+|---|---|---|
+| Tool calls reach the appliance over `POST /mcp` (JSON-RPC, session-id handshake), authenticated with the same `x-api-key` as §1a | [`CompanionIntentClient.swift`](../ios/ios/App/App/LocalLLM/CompanionIntentClient.swift), [`intents/CompanionIntentClient.kt`](../../packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/intents/CompanionIntentClient.kt) | **[V]** |
+| The server — not the phone — computes the execute/queue/deny ruling per intent; both platforms re-check that ruling immediately before invoking a tool, not only at registration ("one security rule, not three") | [`dispatchPolicy.ts`](../../../backend/apps/api/src/domains/tools/policy/dispatchPolicy.ts), [`CompanionIntentTools.swift`](../ios/ios/App/App/LocalLLM/CompanionIntentTools.swift), [`IntentToolProvider.kt`](../../packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/intents/IntentToolProvider.kt) | **[V]** |
+| **"Fully on-device" only covers tool-less generation.** Bare chat completion needs no network; the agent-harness capability — the feature's actual differentiator — requires reaching the appliance for every tool call. Worth stating here plainly, not only in the model's own README, since it changes what "the device is offline" means for anyone relying on tool calling | [`LocalLLMEngine.swift`](../ios/ios/App/App/LocalLLM/LocalLLMEngine.swift) | **[V]** |
+| Model weights (~330 MB) live in app-private storage — iOS `Application Support`, excluded from backup; Android the app-private files dir — and are treated as public, re-downloadable weights, not user data needing encryption at rest | [`LocalLLMModels.swift`](../ios/ios/App/App/LocalLLM/LocalLLMModels.swift) | **[V]** |
+| As of this pass: both platforms gained a live thermal-state check (refuses to start generation, and cancels one in flight, once the OS reports `.critical` / `THERMAL_STATUS_SEVERE`) and a background-execution guard (Android: a foreground service around the call; iOS: `beginBackgroundTask`). Neither existed before — an app backgrounded or overheating mid-generation had no protection at all | [`LocalLLMEngine.swift`](../ios/ios/App/App/LocalLLM/LocalLLMEngine.swift), [`LocalLlmGenerationService.kt`](../../packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/LocalLlmGenerationService.kt) | **[V]** |
+| Also fixed this pass: Android's only offered model was 401-gated (Hugging Face `gated: "auto"`); both platforms now ship the same ungated model, at a reconciled LiteRT-LM engine version and a reconciled 4 GB RAM floor (was 3 GB Android / 6 GB iOS for models with the same ~2 GB estimated peak RSS) | [`LocalLlmModels.kt`](../../packages/capacitor-local-llm/android/src/main/java/com/companionintelligence/localllm/LocalLlmModels.kt) | **[V]** |
+
+**Inherited, not fixed here:** this plugin's credential dependency is one more reason
+**S0** (§9a — fix D1/D2) is "do it first," not "do it eventually." Nothing in this
+section changes that priority or attempts the fix itself.
+
+**Not addressed here, named rather than left implicit:** no on-device retrieval grounds
+"memory" answers locally — grounding is the live MCP call above, not a local index, so the
+product's core differentiator is unavailable in exactly the scenario (offline) where it
+would matter most; iOS and Android still bind tools through structurally different
+mechanisms (Android: a runtime OpenAPI-schema adapter; iOS: hand-written `Tool` structs,
+because LiteRT-LM's Swift surface has no schema-string entry point — forced by the
+runtime, not chosen); and no commit in this project's history reports a completed
+real-device inference run, on either platform, for this feature at all.
 
 ---
 

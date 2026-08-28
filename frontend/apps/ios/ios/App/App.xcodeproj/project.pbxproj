@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 48;
+	objectVersion = 54;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -39,7 +39,19 @@
 		F3DD56FEDB1867E3C1605BEE /* LocalLLMEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7021E00E72046395A277A74 /* LocalLLMEngine.swift */; };
 		FE1D9E4F0DD60F1961BB8A2E /* LiteRTLMError.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE733B188F8A217BB829D653 /* LiteRTLMError.swift */; };
 		FF41B3A95920E8A2ABB376E2 /* CLiteRTLM.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = BD96EAB2C0C7105FC14572C9 /* CLiteRTLM.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		A2B3C4D50000000000000005 /* SafariWebExtensionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B3C4D50000000000000001 /* SafariWebExtensionHandler.swift */; };
+		A2B3C4D50000000000000007 /* SafariWebExtension.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A2B3C4D50000000000000004 /* SafariWebExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A2B3C4D50000000000000040 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 504EC2FC1FED79650016851F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A2B3C4D50000000000000010;
+			remoteInfo = SafariWebExtension;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
 		1D8BF16352FF158AB0FDB36C /* Embed Frameworks */ = {
@@ -51,6 +63,17 @@
 				FF41B3A95920E8A2ABB376E2 /* CLiteRTLM.xcframework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A2B3C4D50000000000000050 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A2B3C4D50000000000000007 /* SafariWebExtension.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -91,6 +114,9 @@
 		BD96EAB2C0C7105FC14572C9 /* CLiteRTLM.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; name = CLiteRTLM.xcframework; path = Frameworks/CLiteRTLM.xcframework; sourceTree = "<group>"; };
 		DE733B188F8A217BB829D653 /* LiteRTLMError.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiteRTLMError.swift; sourceTree = "<group>"; };
 		FC68EB0AF532CFC21C3344DD /* Pods-App.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-App.debug.xcconfig"; path = "Pods/Target Support Files/Pods-App/Pods-App.debug.xcconfig"; sourceTree = "<group>"; };
+		A2B3C4D50000000000000001 /* SafariWebExtensionHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariWebExtensionHandler.swift; sourceTree = "<group>"; };
+		A2B3C4D50000000000000002 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A2B3C4D50000000000000004 /* SafariWebExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SafariWebExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -100,6 +126,13 @@
 			files = (
 				A084ECDBA7D38E1E42DFC39D /* Pods_App.framework in Frameworks */,
 				093E0721AC99C58B1693FAD8 /* CLiteRTLM.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A2B3C4D50000000000000013 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -119,6 +152,7 @@
 			isa = PBXGroup;
 			children = (
 				504EC3061FED79650016851F /* App */,
+				A2B3C4D50000000000000020 /* SafariWebExtension */,
 				504EC3051FED79650016851F /* Products */,
 				7F8756D8B27F46E3366F6CEA /* Pods */,
 				27E2DDA53C4D2A4D1A88CE4A /* Frameworks */,
@@ -129,8 +163,18 @@
 			isa = PBXGroup;
 			children = (
 				504EC3041FED79650016851F /* App.app */,
+				A2B3C4D50000000000000004 /* SafariWebExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		A2B3C4D50000000000000020 /* SafariWebExtension */ = {
+			isa = PBXGroup;
+			children = (
+				A2B3C4D50000000000000001 /* SafariWebExtensionHandler.swift */,
+				A2B3C4D50000000000000002 /* Info.plist */,
+			);
+			path = SafariWebExtension;
 			sourceTree = "<group>";
 		};
 		504EC3061FED79650016851F /* App */ = {
@@ -170,7 +214,6 @@
 			children = (
 				C52161ACEC92564F9E540A1C /* LiteRTLM */,
 			);
-			name = Vendor;
 			path = Vendor;
 			sourceTree = "<group>";
 		};
@@ -188,7 +231,6 @@
 				3C1B4C55E2E686E1E7B906AE /* Tool.swift */,
 				746697B2AFBED88C9F36DEF7 /* ToolManager.swift */,
 			);
-			name = LiteRTLM;
 			path = LiteRTLM;
 			sourceTree = "<group>";
 		};
@@ -202,7 +244,6 @@
 				A28A8A2180EC92EA8160113A /* LocalLLMModels.swift */,
 				103C568D3125B3C480E28C5E /* ModelDownloader.swift */,
 			);
-			name = LocalLLM;
 			path = LocalLLM;
 			sourceTree = "<group>";
 		};
@@ -219,15 +260,36 @@
 				504EC3021FED79650016851F /* Resources */,
 				9592DBEFFC6D2A0C8D5DEB22 /* [CP] Embed Pods Frameworks */,
 				1D8BF16352FF158AB0FDB36C /* Embed Frameworks */,
+				A2B3C4D50000000000000050 /* Embed App Extensions */,
+				A2B3C4D50000000000000060 /* Generate CLiteRTLM dSYM */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A2B3C4D50000000000000041 /* PBXTargetDependency */,
 			);
 			name = App;
 			productName = App;
 			productReference = 504EC3041FED79650016851F /* App.app */;
 			productType = "com.apple.product-type.application";
+		};
+		A2B3C4D50000000000000010 /* SafariWebExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A2B3C4D50000000000000032 /* Build configuration list for PBXNativeTarget "SafariWebExtension" */;
+			buildPhases = (
+				A2B3C4D50000000000000014 /* Sync Safari Web Extension */,
+				A2B3C4D50000000000000011 /* Sources */,
+				A2B3C4D50000000000000013 /* Frameworks */,
+				A2B3C4D50000000000000015 /* Copy Safari Web Extension Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SafariWebExtension;
+			productName = SafariWebExtension;
+			productReference = A2B3C4D50000000000000004 /* SafariWebExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -241,6 +303,10 @@
 					504EC3031FED79650016851F = {
 						CreatedOnToolsVersion = 9.2;
 						LastSwiftMigration = 1100;
+						ProvisioningStyle = Automatic;
+					};
+					A2B3C4D50000000000000010 = {
+						CreatedOnToolsVersion = 16.0;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -259,6 +325,7 @@
 			projectRoot = "";
 			targets = (
 				504EC3031FED79650016851F /* App */,
+				A2B3C4D50000000000000010 /* SafariWebExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -314,6 +381,55 @@
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-App/Pods-App-frameworks.sh\"\n";
 			showEnvVarsInLog = 0;
 		};
+		A2B3C4D50000000000000014 /* Sync Safari Web Extension */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+			);
+			name = "Sync Safari Web Extension";
+			outputPaths = (
+				"$(SRCROOT)/SafariWebExtension/Resources/manifest.json",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/../../scripts/sync-safari-extension.sh\"\n";
+		};
+		A2B3C4D50000000000000060 /* Generate CLiteRTLM dSYM */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/CLiteRTLM",
+			);
+			name = "Generate CLiteRTLM dSYM";
+			outputPaths = (
+				"${DWARF_DSYM_FOLDER_PATH}/CLiteRTLM.framework.dSYM",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "FRAMEWORK=\"${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}/CLiteRTLM.framework/CLiteRTLM\"\nDSYM=\"${DWARF_DSYM_FOLDER_PATH}/CLiteRTLM.framework.dSYM\"\nif [ ! -f \"$FRAMEWORK\" ]; then\n  echo \"note: CLiteRTLM.framework not in this product; skipping dSYM\"\n  exit 0\nfi\nmkdir -p \"${DWARF_DSYM_FOLDER_PATH}\"\n/usr/bin/dsymutil \"$FRAMEWORK\" -o \"$DSYM\"\n";
+		};
+		A2B3C4D50000000000000015 /* Copy Safari Web Extension Resources */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/SafariWebExtension/Resources/manifest.json",
+			);
+			name = "Copy Safari Web Extension Resources";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "DEST=\"${BUILT_PRODUCTS_DIR}/${WRAPPER_NAME}\"\nmkdir -p \"$DEST\"\nrsync -a --exclude '.gitkeep' --exclude 'README.md' \"${SRCROOT}/SafariWebExtension/Resources/\" \"$DEST/\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -346,7 +462,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A2B3C4D50000000000000011 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A2B3C4D50000000000000005 /* SafariWebExtensionHandler.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A2B3C4D50000000000000041 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A2B3C4D50000000000000010 /* SafariWebExtension */;
+			targetProxy = A2B3C4D50000000000000040 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin PBXVariantGroup section */
 		504EC30B1FED79650016851F /* Main.storyboard */ = {
@@ -416,7 +548,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.5;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -467,10 +599,11 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.5;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
-				SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
@@ -481,10 +614,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 68U45V853Y;
 				INFOPLIST_FILE = App/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
@@ -495,7 +632,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -505,10 +642,14 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 68U45V853Y;
 				INFOPLIST_FILE = App/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
@@ -518,7 +659,58 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		A2B3C4D50000000000000030 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 68U45V853Y;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SafariWebExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.companionintelligence.app.SafariWebExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		A2B3C4D50000000000000031 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 3;
+				DEVELOPMENT_TEAM = 68U45V853Y;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SafariWebExtension/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.5;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.companionintelligence.app.SafariWebExtension;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
@@ -539,6 +731,15 @@
 			buildConfigurations = (
 				504EC3171FED79650016851F /* Debug */,
 				504EC3181FED79650016851F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A2B3C4D50000000000000032 /* Build configuration list for PBXNativeTarget "SafariWebExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A2B3C4D50000000000000030 /* Debug */,
+				A2B3C4D50000000000000031 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

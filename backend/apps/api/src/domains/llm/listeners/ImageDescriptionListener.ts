@@ -6,6 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 import { FileService, PreviewGeneratedEvent, type PreviewGeneratedPayload } from '@ci/domains/files';
 
+import { IMAGE_DESCRIPTION_QUEUE, IMAGE_DESCRIPTION_QUEUE_OPTIONS } from '../constants';
 import { ImageDescriptionPreferenceService } from '../services/ImageDescriptionPreferenceService';
 import { OllamaService } from '../services/OllamaService';
 import { isNonMultimodalModelError } from '../visionErrors';
@@ -41,7 +42,10 @@ export class ImageDescriptionListener {
     this.logger.setContext(ImageDescriptionListener.name);
   }
 
-  @OnEvent(PreviewGeneratedEvent, { queue: 'image-description' })
+  @OnEvent(PreviewGeneratedEvent, {
+    queue: IMAGE_DESCRIPTION_QUEUE,
+    queueOptions: IMAGE_DESCRIPTION_QUEUE_OPTIONS,
+  })
   async handle(payload: PreviewGeneratedPayload) {
     // When the capture source opted out of server-side analysis (e.g. Companion Capture
     // with its own vision endpoint, which writes the title/description directly

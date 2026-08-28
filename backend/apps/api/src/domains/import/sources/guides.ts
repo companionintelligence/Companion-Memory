@@ -710,8 +710,9 @@ export const WIZARD_SOURCES: WizardSource[] = [
         '- **Windows:** `C:\\Users\\{USERNAME}\\AppData\\Local\\{Google\\Chrome|BraveSoftware\\Brave-Browser|Microsoft\\Edge|Arc}\\User Data\\Default\\`',
       ].join('\n'),
       '`Default/` is your first profile. If you use more than one profile in that browser, the others sit beside it as `Profile 1/`, `Profile 2/`, and so on — do this once per profile you want to import.',
+      'Find the file(s) named `History`, without any additional text.',
+      'Rename them to e.g. `History-chrome1` / `Bookmarks-chrome1` to tell several browsers or profiles apart — they all ship the same two filenames, so unrenamed copies overwrite each other in `browser/`.',
       UPLOAD_STEP,
-      'Rename them to e.g. `History-chrome` / `Bookmarks-chrome` to tell several browsers or profiles apart — they all ship the same two filenames, so unrenamed copies overwrite each other in `browser/`.',
     ],
     inboxPath: 'browser',
     expectedFormat:
@@ -1901,10 +1902,22 @@ export const WIZARD_SOURCES: WizardSource[] = [
       'Click "Request your data"; Flickr emails a download link when ready (1–3 days for large libraries).',
       UPLOAD_STEP,
     ],
+    expectedFormat:
+      'A flat folder of Flickr’s `photo_<id>.json` sidecars (one per photo/video) alongside the media files themselves, named `<slug>_<id>_o.<ext>`.',
+    whatImported: [
+      'Photos and videos with their title, description, capture date, and license',
+      'GPS coordinates and tags from each photo’s JSON sidecar',
+      'Album membership as collection edges, and tagged people as person entities',
+    ],
+    caveats: [
+      'Only the photo/video library imports today — contacts and the CSV activity log in the export are not yet read.',
+      'A photo whose JSON sidecar has no matching media file (e.g. only the metadata archive was unzipped) is skipped rather than imported without its bytes.',
+    ],
     inboxPath: 'flickr',
-    importerReady: false,
+    importer: 'flickr',
+    importerReady: true,
     notes: [
-      'Export includes all photos with EXIF, JSON metadata files per album and contact, and CSV activity data. Backed by the Data Transfer Project.',
+      'Export includes all photos with EXIF, JSON metadata files per album and contact, and CSV activity data.',
     ],
   },
   {
@@ -2070,7 +2083,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
   {
     id: 'remember_the_milk',
     title: 'Remember the Milk',
-    blurb: 'Your tasks, lists, and notes from Remember the Milk.',
+    blurb: 'Your tasks from a Remember the Milk account export.',
     ecosystem: 'productivity',
     category: 'productivity',
     tier: 3,
@@ -2078,13 +2091,20 @@ export const WIZARD_SOURCES: WizardSource[] = [
     wait: 'minutes',
     url: 'https://www.rememberthemilk.com/app/#settings/account',
     steps: [
-      'Open Remember the Milk → Settings → Account (link below).',
-      'Look for "Export" or "Backup" under the account or data section.',
+      'Open Remember the Milk (web or desktop app) → click the Settings gear (top right).',
+      'Choose "Account settings" → "Export" in the left menu.',
+      'Click "Download Export" for the JSON format (the iCalendar link next to it is more limited — skip it).',
       UPLOAD_STEP,
     ],
+    expectedFormat:
+      'RTM\'s account "Download Export" JSON — a `{ "tasks": [ { "name", "date_completed"?, ... } ] }` file. RTM does not publish a schema for it, so only the two fields a real downloaded export was confirmed to carry (github.com/feoh/forgetthemilk) are imported.',
+    whatImported: ["Each task's title", 'Whether the task is completed'],
     inboxPath: 'remember_the_milk',
-    importerReady: false,
-    notes: ['Backed by the Data Transfer Project — RTM supports tasks export and import. No importer yet.'],
+    importer: 'remember_the_milk',
+    importerReady: true,
+    notes: [
+      "RTM's Help Center documents the export button but not the JSON layout, and RTM has not published one — so due dates, notes, tags, priority, and list names are not imported yet, only each task's title and completed/not-completed status.",
+    ],
   },
 
   // ===========================================================================
@@ -2388,23 +2408,41 @@ export const WIZARD_SOURCES: WizardSource[] = [
   {
     id: 'robinhood',
     title: 'Robinhood',
-    blurb: 'Account activity, orders, and holdings from Robinhood.',
+    blurb: 'Brokerage/retirement transaction history — trades, dividends, and transfers.',
     ecosystem: 'finance',
     category: 'finance',
     tier: 3,
     acquisition: 'web-export',
-    wait: 'days',
-    url: 'https://robinhood.com/account/settings',
+    wait: 'hours',
+    url: 'https://robinhood.com/account/reports-statements/activity-reports',
     steps: [
-      'Open Robinhood → Account → Settings → look for a "Privacy" or "Data Request" section.',
-      'Submit a CCPA/GDPR access request.',
-      'Wait for the email with a download link (a few days).',
+      'Open Robinhood → Account → Reports and Statements → "Generate a New Report" (or go straight to the URL above).',
+      'Pick a date range and generate the report; download it as a CSV once it finishes (usually minutes, but can take up to 24 hours at peak times).',
       UPLOAD_STEP,
     ],
+    altPath: {
+      title:
+        'Full CCPA/GDPR data request (slower, broader — a different export this importer does not parse)',
+      url: 'https://robinhood.com/account/settings',
+      steps: [
+        'Open Robinhood → Account → Settings → look for a "Privacy" or "Data Request" section.',
+        'Submit a CCPA/GDPR access request and wait for the emailed download link (a few days).',
+      ],
+    },
+    expectedFormat:
+      'A Robinhood transaction-history CSV ("Activity Date"/"Trans Code"/"Instrument" columns) from Reports and Statements → "Generate a New Report". Recognizes buys/sells, cash dividends, interest, ACH transfers, the Gold fee, and stock-split/option-lifecycle rows; any other Trans Code is skipped rather than guessed.',
+    whatImported: [
+      'Buys and sells, with the security, quantity, and price',
+      'Cash dividends, interest, and ACH bank transfers',
+      'Stock splits and other corporate-action / option-lifecycle rows the report itself records',
+    ],
     inboxPath: 'robinhood',
-    importerReady: false,
-    notes: [
-      'Account → Reports & Statements also offers per-statement CSVs for a quicker (but partial) history.',
+    signature: ['*.csv'],
+    importer: 'robinhood',
+    importerReady: true,
+    caveats: [
+      'Futures, crypto, and the spending account are excluded from this export by Robinhood itself, not just this importer.',
+      'The CCPA/GDPR data request is a separate bundle and is not recognized by this importer — use the CSV activity report above.',
     ],
   },
 

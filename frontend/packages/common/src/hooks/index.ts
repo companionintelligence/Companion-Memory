@@ -1,2 +1,2 @@
-export { DeviceLayoutProvider, useDeviceLayout } from './useDeviceLayout';
+export { MOBILE_BREAKPOINT, DeviceLayoutProvider, useDeviceLayout } from './useDeviceLayout';
 export { usePageTitle } from './usePageTitle';

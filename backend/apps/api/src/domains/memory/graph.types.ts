@@ -19,6 +19,10 @@ export const ENTITY_TYPES = [
   'Communication',
   'Item',
   'Thing',
+  // The catalog MODEL a unit is an INSTANCE_OF. Distinct from Item/Object/Thing,
+  // which are the units themselves: one Product node, N Item nodes pointing at
+  // it. Must satisfy the ci.entities CHECK `^[A-Z][A-Za-z]*$`.
+  'Product',
   'Tag',
 ] as const;
 
@@ -38,7 +42,7 @@ export type EntityType = (typeof ENTITY_TYPES)[number];
 export const EXPLORER_TO_GRAPH_ENTITY_TYPES: Record<string, string[]> = {
   person: ['Person', 'Contact'],
   place: ['Location', 'Place'],
-  item: ['Object', 'Item', 'Thing'],
+  item: ['Object', 'Item', 'Thing', 'Product'],
   event: ['Event'],
   content: ['Content'],
   file: ['File'],
@@ -53,7 +57,7 @@ export const EXPLORER_TO_GRAPH_ENTITY_TYPES: Record<string, string[]> = {
  * `entity` — the node IS the record: Person/Place/Concept are stored in `ci.entities` itself
  *   (single-table inheritance), so `entity_id` is already the GraphQL id.
  * `linked` — the node MIRRORS a record in its own table (`ci.events`, `ci.communications`,
- *   `ci.content`, `ci.files`, `ci.inventory`); `linked_id` is the GraphQL id. Ingest happens to
+ *   `ci.content`, `ci.files`, `ci.objects`); `linked_id` is the GraphQL id. Ingest happens to
  *   reuse the source uuid as `entity_id` for most of these, but `File` is proof that is a
  *   coincidence and not a contract — resolve through `linked_id`.
  */
@@ -212,6 +216,20 @@ export const RELATIONSHIP_TYPES = [
   'DERIVED_FROM',
   'REPLIES_TO',
   'ASSOCIATED_WITH',
+  // Object identity. Each must satisfy the ci.relationships CHECK
+  // `^[A-Z_][A-Z0-9_]*$`.
+  //
+  // INSTANCE_OF is the product/instance edge — the mug on the desk is an
+  // instance of a catalog model — and is what makes "how many of these do I
+  // own" answerable in the graph rather than only in SQL.
+  'INSTANCE_OF',
+  // Where a thing was bought: PURCHASED_AT takes a place, PURCHASED_FROM takes
+  // a merchant. Separate edges because a store and its location are different
+  // nodes, and collapsing them loses whichever one the receipt actually named.
+  'PURCHASED_AT',
+  'PURCHASED_FROM',
+  // A confirmed sighting of a thing at a place.
+  'SEEN_AT',
 ] as const;
 
 export type RelationshipType = (typeof RELATIONSHIP_TYPES)[number];

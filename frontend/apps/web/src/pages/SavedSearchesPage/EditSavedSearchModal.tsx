@@ -19,7 +19,7 @@ interface Props {
   onClose: () => void;
 }
 
-const UPDATE_SAVED_SEARCH = gql(`
+export const UPDATE_SAVED_SEARCH = gql(`
   mutation UpdateSavedSearch($input: UpdateSavedSearchInput!) {
     updateSavedSearch(input: $input) {
       success
@@ -55,6 +55,15 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
   const [description, setDescription] = useState(savedSearch.description);
   const [query, setQuery] = useState(savedSearch.query);
   const [filters, setFilters] = useState<EditableFilters>(savedSearch.filters ?? {});
+  // `TagInput` is a controlled display list driven by callbacks, not an
+  // uncontrolled field — it never owned this state itself, and this form
+  // never gave it any: `onTagAdded={() => true}` accepted every add into
+  // nothing, there was no `onTagRemoved` at all, and `handleSave` never sent
+  // `tags`. The backend writes `tags: this.assembleTags(data)` unconditionally
+  // on every update, so an absent `tags` field silently overwrote the stored
+  // array with `[]` (plus whatever `#hashtag`s the query text still supplies)
+  // — renaming a search wiped its tag filter.
+  const [tags, setTags] = useState<string[]>(savedSearch.tags ? [...savedSearch.tags] : []);
   const [{ selectedEntityTypes }, { setSelectedEntityTypes }] = useDropdown();
 
   useEffect(() => {
@@ -119,6 +128,7 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
             (type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP],
           ),
           filters: toFiltersInput(filters),
+          tags,
         },
       },
     });
@@ -172,7 +182,17 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
 
           <div className="space-y-2">
             <Label htmlFor="tags">Tags</Label>
-            <TagInput tags={savedSearch.tags || undefined} onTagAdded={() => true} />
+            <TagInput
+              tags={tags}
+              onTagAdded={(tag) => {
+                setTags((current) => (current.includes(tag) ? current : [...current, tag]));
+
+                return true;
+              }}
+              onTagRemoved={(tag) => {
+                setTags((current) => current.filter((existing) => existing !== tag));
+              }}
+            />
           </div>
 
           <div className="space-y-2 border-t border-border pt-4">

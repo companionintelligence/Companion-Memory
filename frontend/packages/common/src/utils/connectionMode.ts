@@ -13,9 +13,10 @@
  *   3. "cached"    — neither is reachable, but there is local data to show.
  *   4. "fresh"     — nothing is available yet.
  *
- * Detection races two probes — remote health and (on native) the LocalHub
- * sidecar health — each bounded by a short timeout, and resolves to whichever
- * succeeds first. Neither succeeding falls through toward "fresh".
+ * Both probes run in parallel. Remote health wins whenever it succeeds — the
+ * sidecar is a fallback, not a faster path to "local" while the appliance is
+ * up. On iOS the sidecar answers in milliseconds, so first-wins painted
+ * "On this phone" against a Memory Server the rest of the app was using.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -114,64 +115,20 @@ async function probeLocal(): Promise<boolean> {
 }
 
 /**
- * Resolves to the first probe that yields a non-null value (whichever
- * responds first genuinely wins the race — "connected" has no fixed
- * priority over "local"), or `null` once every probe has settled to null.
- *
- * A rejecting probe counts as a failed one rather than being dropped. The
- * probes above each swallow their own errors today, but nothing here can
- * enforce that: an unhandled rejection would never decrement `remaining`, so
- * one throwing probe would leave the race pending forever instead of falling
- * through to `null`.
- */
-function firstSuccess<T>(probes: Array<Promise<T | null>>): Promise<T | null> {
-  if (probes.length === 0) {
-    return Promise.resolve(null);
-  }
-
-  return new Promise((resolve) => {
-    let remaining = probes.length;
-
-    const settleFailure = () => {
-      remaining -= 1;
-
-      if (remaining === 0) {
-        resolve(null);
-      }
-    };
-
-    for (const probe of probes) {
-      void probe.then((value) => {
-        if (value != null) {
-          resolve(value);
-
-          return;
-        }
-
-        settleFailure();
-      }, settleFailure);
-    }
-  });
-}
-
-/**
- * Runs the raced health check and resolves the current {@link ConnectionMode}.
+ * Runs the health check and resolves the current {@link ConnectionMode}.
  * Called on network-change events and on-demand via `refresh()` from
  * {@link useConnectionMode}.
  */
 export async function resolveConnectionMode(): Promise<ConnectionMode> {
-  const probes: Array<Promise<ConnectionMode | null>> = [
-    probeRemote().then((ok) => (ok ? 'connected' : null)),
-  ];
+  const remote = probeRemote();
+  const local = isNativePlatform() ? probeLocal() : Promise.resolve(false);
 
-  if (isNativePlatform()) {
-    probes.push(probeLocal().then((ok) => (ok ? 'local' : null)));
+  if (await remote) {
+    return 'connected';
   }
 
-  const resolved = await firstSuccess(probes);
-
-  if (resolved) {
-    return resolved;
+  if (await local) {
+    return 'local';
   }
 
   // TODO(cached-detection): once a durable local cache/outbox exists (LocalHub

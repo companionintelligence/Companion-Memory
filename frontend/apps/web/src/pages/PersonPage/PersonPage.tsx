@@ -7,6 +7,7 @@ import { Link as LinkIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router-dom';
 
+import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import { EntityEvolutionPanel } from '@/components/EntityEvolution/EntityEvolutionPanel';
 import { EntityGraph } from '@/components/EntityGraph';
 import { EntityRelationshipCards } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
@@ -17,6 +18,7 @@ import { AddRelationshipModal } from '@/components/modals/AddItemModal/AddRelati
 import { EditPersonModal, PERSON_EDITOR_FIELDS } from '@/components/modals/AddItemModal/EditPersonModal';
 import { PersonProfileCard } from '@/components/PersonForm';
 import { gql, useFragment } from '@/graphql';
+import { namedChatContext } from '@/lib/agentChat';
 
 const ALLOWED_TYPES = {
   communication: ['SENT', 'RECEIVED'],
@@ -194,6 +196,14 @@ export function PersonPage() {
               </Tooltip.Trigger>
               <Tooltip.Content>Add relationship</Tooltip.Content>
             </Tooltip>
+            <ChatWithAgentMenu
+              context={namedChatContext({
+                title: person.name,
+                body: person.description,
+                sourceKind: 'PersonType',
+                sourceId: person.id,
+              })}
+            />
             <EntityEditToggle pressed={editMode} onPressedChange={setEditMode} />
           </div>
         </div>

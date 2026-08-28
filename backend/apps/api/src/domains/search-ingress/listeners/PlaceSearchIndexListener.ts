@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
-import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EmbeddingGenerationService, shouldEmbedType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
 import { type Place, PlaceService } from '@ci/domains/memory';
@@ -93,7 +93,9 @@ export class PlaceSearchIndexListener {
 
     const searchDocument = this.getSearchDocument(place);
 
-    if (searchDocument == null) {
+    if (!shouldEmbedType('place')) {
+      this.logger.log('Place type not in embed allowlist, skipping embedding');
+    } else if (searchDocument == null) {
       this.logger.log('Place has no search document, skipping embedding');
     } else {
       const embedding = await this.embeddingGenerationService.generateEmbedding(searchDocument);

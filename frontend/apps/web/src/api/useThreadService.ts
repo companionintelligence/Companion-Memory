@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 
 import { fetchJson } from '@ci/common';
 
-import { useAuth } from '@/hooks';
+import { useSessionAuth } from '@/hooks/useSessionAuth';
 
 import type { Thread } from './types';
 
@@ -18,14 +18,14 @@ type ReturnType = [
 ];
 
 export function useThreadService(id: string | null): ReturnType {
-  const [{ authToken }] = useAuth();
+  const { ready, headers } = useSessionAuth();
 
   const [thread, setThread] = useState<Thread | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
 
   const fetchThread = useCallback(async () => {
-    if (id == null) {
+    if (id == null || !ready) {
       setThread(null);
       setError(null);
       setLoading(false);
@@ -38,7 +38,7 @@ export function useThreadService(id: string | null): ReturnType {
     try {
       const thread = await fetchJson<Thread>(`/api/threads/${id}?includeMessages=true`, {
         headers: {
-          Authorization: `Bearer ${authToken}`,
+          ...headers,
           'Content-Type': 'application/json',
         },
       });
@@ -49,11 +49,11 @@ export function useThreadService(id: string | null): ReturnType {
     } finally {
       setLoading(false);
     }
-  }, [setLoading, setThread, setError, id]);
+  }, [headers, id, ready]);
 
   useEffect(() => {
-    fetchThread();
-  }, [id]);
+    void fetchThread();
+  }, [fetchThread]);
 
   return [
     {

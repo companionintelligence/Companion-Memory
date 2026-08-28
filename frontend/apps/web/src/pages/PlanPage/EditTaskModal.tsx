@@ -19,7 +19,7 @@ interface Props {
   onSaved?: () => void;
 }
 
-const UPDATE_TASK = gql(`
+export const UPDATE_TASK = gql(`
   mutation UpdateTask($input: UpdateTaskInput!) {
     updateTask(input: $input) {
       success

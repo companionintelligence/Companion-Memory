@@ -179,8 +179,11 @@ export type PipelineQuarantineReleaseResponse = ReleaseQuarantinedResult;
  *
  * Every route is user-scoped in the service, by `user_id` in SQL rather than by
  * filtering after the fact. These tables hold verbatim payloads.
+ *
+ * Public URLs stay `/api/pipeline/...`. The gateway rewrites `/api/(.*)` to
+ * `/$1` before Nest, so this controller is `pipeline`, matching `JobsController`.
  */
-@Controller('api/pipeline')
+@Controller('pipeline')
 @UseGuards(JwtOrApiKeyAuthGuard)
 export class PipelineController {
   constructor(

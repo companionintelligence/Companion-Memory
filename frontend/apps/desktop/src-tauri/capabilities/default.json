@@ -1,0 +1,14 @@
+{
+  "identifier": "default",
+  "description": "Bootstrap-page-only capabilities. No remote.urls: after window.location.replace() navigates to http://127.0.0.1:8642/, that page is the real CI-Server web app and gets NO Tauri IPC access by design — it has no legitimate need for native commands, and granting any would be an unnecessary privilege-escalation surface for a future XSS there.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-focus",
+    "opener:default"
+  ]
+}

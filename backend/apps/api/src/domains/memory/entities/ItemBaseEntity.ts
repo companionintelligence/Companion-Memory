@@ -3,10 +3,10 @@ import { ChildEntity, Column } from 'typeorm';
 import { BaseEntity } from './BaseEntity';
 
 /**
- * The `ci.entities` half of an inventory item's CTI aggregate: an
- * `Item`-discriminated base row sharing its uuid with the `ci.inventory` detail
- * row (`inventory.object_id = entities.entity_id`, enforced by the
- * `inventory_object_id_entities_fk` foreign key). The base row is the SOLE
+ * The `ci.entities` half of an thing's CTI aggregate: an
+ * `Item`-discriminated base row sharing its uuid with the `ci.objects` detail
+ * row (`objects.object_id = entities.entity_id`, enforced by the
+ * `objects_object_id_entities_fk` foreign key). The base row is the SOLE
  * owner of `name`/`description` — the detail table carries only item-specific
  * data — so every egress read composes the pair (see
  * {@link ItemService.composeMany}).
@@ -18,7 +18,7 @@ import { BaseEntity } from './BaseEntity';
  */
 @ChildEntity('Item')
 export class ItemBaseEntity extends BaseEntity {
-  /** Always `'inventory'` — self-describing provenance for the linked lookups. */
+  /** Always `'objects'` — self-describing provenance for the linked lookups. */
   @Column({ type: 'text', name: 'linked_table', nullable: true })
   linkedTable!: string | null;
 

@@ -2,7 +2,7 @@ export { EmptyState } from './src/components/EmptyState';
 export { ErrorPage } from './src/components/error-page';
 export { LoadingPage } from './src/components/loading-page';
 export { Portal } from './src/components/portal';
-export { DeviceLayoutProvider, useDeviceLayout, usePageTitle } from './src/hooks';
+export { MOBILE_BREAKPOINT, DeviceLayoutProvider, useDeviceLayout, usePageTitle } from './src/hooks';
 export { GlobalUID } from './src/utils/GlobalUID';
 export { apiKeyHeaders, getApiKey, setApiKey } from './src/utils/apiAuth';
 export {
@@ -10,9 +10,13 @@ export {
   getApiBaseUrl,
   initApiBaseUrl,
   isIosPlatform,
+  isLocalApplianceOrigin,
   isNativePlatform,
+  needsNativeCloudConnect,
   persistApiBaseUrl,
+  resolveHttpOrigin,
   setApiBaseUrl,
+  subscribeApiBaseUrl,
 } from './src/utils/apiBase';
 export {
   CONNECTION_REPROBE_INTERVAL_MS,
@@ -25,6 +29,14 @@ export {
 export type { ConnectionMode } from './src/utils/connectionMode';
 export { createHookContext } from './src/utils/createHookContext';
 export {
+  BACKGROUND_MAX_ACCURACY_METERS,
+  BACKGROUND_MIN_DISTANCE_METERS,
+  BACKGROUND_MIN_INTERVAL_MS,
+  HOME_GEOFENCE_RADIUS_METERS,
+  LOCATION_ENABLED_STORAGE_KEY,
+  LOCATION_MODE_CHANGE_EVENT,
+  LOCATION_MODE_STORAGE_KEY,
+  LOCATION_TRACKING_MODES,
   MIN_DISTANCE_METERS,
   MIN_INTERVAL_MS,
   buildNoteRecord,
@@ -33,27 +45,41 @@ export {
   captureNote,
   createLocationSampler,
   deviceSourceKey,
+  fixFromBackgroundGeolocationLocation,
   fixFromGeolocationPosition,
   forgetQueuedNote,
   haversineMeters,
+  isLocationTrackingEnabled,
+  isLocationTrackingMode,
   isQueuedNote,
   newNoteId,
   positionSourceId,
+  publishLocationTrackingMode,
+  readLocationTrackingMode,
   rememberQueuedNote,
+  writeLocationTrackingMode,
 } from './src/utils/deviceSources';
 export type {
+  BackgroundGeolocationLocation,
   CaptureLocationOptions,
   DeviceLocationFix,
   LocationCaptureOutcome,
   LocationSample,
   LocationSampler,
   LocationSourceKind,
+  LocationTrackingMode,
   NoteCaptureOutcome,
   NoteRecord,
   PositionRecord,
   PositionRecordOptions,
 } from './src/utils/deviceSources';
-export { FetchJsonError, fetchJson, type FetchJsonIssue } from './src/utils/fetchJson';
+export {
+  FetchJsonError,
+  apiFetch,
+  fetchJson,
+  streamingFetch,
+  type FetchJsonIssue,
+} from './src/utils/fetchJson';
 export { localHubPlugin, localHubSession, type LocalHubSession } from './src/utils/localHub';
 export {
   OUTBOX_MAX_ATTEMPTS,
@@ -100,25 +126,43 @@ export {
   addAppStateListener,
   addAppUrlOpenListener,
   addBackButtonListener,
+  addBackgroundLocationWatcher,
   closeBrowser,
   exitApp,
+  getCurrentDeviceLocation,
   getLaunchUrl,
+  getNativeCurrentLocation,
   hasNotificationPermission,
   hideSplashScreen,
+  isBarcodeScanError,
+  isDeviceLocationError,
   openExternalUrl,
+  openNativeAppSettings,
+  openNativeLocationSettings,
+  removeBackgroundLocationWatcher,
   requestNotificationPermission,
+  scanQrCode,
   scheduleLocalNotification,
   secureStorageGet,
   secureStorageRemove,
   secureStorageSet,
   setStatusBarStyle,
   syncNativeIntentConfig,
+  takeNativePhoto,
 } from './src/utils/nativeBridge';
-export type { LocalNotification } from './src/utils/nativeBridge';
+export type {
+  BackgroundGeolocationError,
+  BarcodeScanErrorCode,
+  DeviceLocationErrorCode,
+  LocalNotification,
+  NativeCurrentLocation,
+} from './src/utils/nativeBridge';
+export { BarcodeScanError, DeviceLocationError } from './src/utils/nativeBridge';
 export {
   OIDC_NATIVE_CALLBACK_URL,
   OIDC_NATIVE_CLIENT_FLAG,
   OIDC_NATIVE_SCHEME,
+  claimNativeOidcCode,
   parseOidcCallbackUrl,
 } from './src/utils/oidcNative';
 export type { OidcCallbackParams } from './src/utils/oidcNative';

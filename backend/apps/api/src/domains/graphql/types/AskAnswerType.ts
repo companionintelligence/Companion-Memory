@@ -1,7 +1,7 @@
 import { Field, GraphQLISODateTime, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
 
 import type { AskAnswer, DisclosedItem } from '@ci/domains/asks';
-import { formDisclosesItems } from '@ci/domains/asks';
+import { countFreeSummary, formDisclosesItems } from '@ci/domains/asks';
 
 import { GlobalUID } from './GlobalUID';
 
@@ -87,6 +87,18 @@ export class AskAnswerType {
    * receipt, and the stored record keeps them because the audit is written from
    * it. Only the projection to the asker is narrowed — and an omitted argument
    * gets the narrow one, so a caller that forgets cannot leak.
+   *
+   * TWO THINGS THE FIRST PASS AT THIS MISSED, both because they leave by a
+   * different door than `disclosedCount`:
+   *
+   * - The SUMMARY embeds the same count in prose. Zeroing the numeric field
+   *   while passing "3 matching items." straight through did not remove the
+   *   oracle, it relocated it. The asker gets {@link countFreeSummary} instead.
+   * - The ITEMS were emitted unconditionally. The stored row should already be
+   *   empty for a non-itemizing form, but "should already" is not an invariant
+   *   this layer can check — a `boolean` row with entity references in it would
+   *   have shipped them, under a form the asker was told answers yes/no. Gating
+   *   on the form makes it structurally impossible instead of merely unlikely.
    */
   static toType(answer: AskAnswer, isResponder = false): AskAnswerType {
     const itemizes = formDisclosesItems(answer.form);
@@ -97,8 +109,13 @@ export class AskAnswerType {
       askId: GlobalUID.encode('ask', answer.askId),
       form: answer.form as AnswerFormEnum,
       answerSource: answer.answerSource as AnswerSourceEnum,
-      summary: answer.summary,
-      items: answer.disclosedEntities.map(DisclosedItemType.toType),
+      // A null summary stays null: the projection narrows what was said, it
+      // does not invent an answer where the responder produced none.
+      summary:
+        showCounts || answer.summary == null
+          ? answer.summary
+          : countFreeSummary(answer.form, answer.disclosedCount > 0),
+      items: itemizes ? answer.disclosedEntities.map(DisclosedItemType.toType) : [],
       disclosedCount: showCounts ? answer.disclosedCount : 0,
       withheldCount: showCounts ? answer.withheldCount : 0,
       consentBasis: isResponder ? answer.consentBasis : null,

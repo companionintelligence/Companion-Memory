@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { rm } from 'node:fs/promises';
 
 import { DataSource } from 'typeorm';
 
 import { EntityIdentifierEntity, NodeEntity, RelationshipEntity } from '@ci/domains/graph';
 
-import { syntheticTestUserEmail } from '../../../__tests__/support/applianceUser';
+import { SYNTHETIC_TEST_USER_DOMAIN, syntheticTestUserEmail } from '../../../__tests__/support/applianceUser';
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock } from '../../../__tests__/support/schemaLock';
 import type { ImportStageKindName } from '../../constants';
@@ -17,6 +18,7 @@ import { StagedRelationshipEntity } from '../../entities/StagedRelationshipEntit
 import { StagedSourceEntity } from '../../entities/StagedSourceEntity';
 import { ImportRunService, type StartRunResult } from '../../services/ImportRunService';
 import { StagedSourceService } from '../../services/StagedSourceService';
+import { userInboxDir } from '../../sources/importRoots';
 import { StagedWriter } from '../../staging/StagedWriter';
 
 /**
@@ -44,6 +46,30 @@ export const IMPORT_DATABASE_ENV = {
 
 /** Whether these specs can run at all. Consulted at collection time. */
 export const importDatabase = databaseAvailability(IMPORT_DATABASE_ENV);
+
+/**
+ * Remove the inbox folder the appliance scaffolds for a synthetic user.
+ *
+ * These suites never touch the real inbox themselves, but the API does it for
+ * them: it provisions `<inboxRoot>/<email>` for EVERY `ci.users` row — at boot
+ * and on user-created events (`ImportInboxService.onModuleInit`,
+ * `InboxProvisionListener`) — so a dev server running alongside a test run
+ * scaffolds folders for the harness's users. Deleting the row does not delete
+ * the folder, and `import-harness-*_example.invalid` litter accumulated in the
+ * real inbox until teardown learned to sweep it. Best-effort by nature: the
+ * folder only exists if the server provisioned while the row did, and a server
+ * that boots mid-teardown can still recreate it a beat later.
+ *
+ * Guarded to synthetic addresses because this is a recursive delete under a
+ * shared mount whose other folders are real accounts' drop targets.
+ */
+export async function removeSyntheticUserInbox(email: string): Promise<void> {
+  if (!email.endsWith(`@${SYNTHETIC_TEST_USER_DOMAIN}`)) {
+    throw new Error(`Refusing to remove the inbox folder of a non-synthetic address: ${email}`);
+  }
+
+  await rm(userInboxDir(email), { recursive: true, force: true });
+}
 
 export interface StagingHarness {
   dataSource: DataSource;
@@ -153,6 +179,7 @@ export async function createStagingHarness(): Promise<{
   const service = new ImportRunService(dataSource, events as never, stagedSources, stubLogger());
 
   const userId = randomUUID();
+  const userEmail = syntheticTestUserEmail('import-harness', userId);
   const createdRuns: string[] = [];
   const createdDrops: string[] = [];
 
@@ -167,7 +194,7 @@ export async function createStagingHarness(): Promise<{
      ON CONFLICT (id) DO NOTHING`,
     // The email is the marker that keeps other suites off this row while it
     // exists — see `__tests__/support/applianceUser.ts`, which owns both halves.
-    [userId, syntheticTestUserEmail('import-harness', userId)],
+    [userId, userEmail],
   );
 
   const stageDrop = async (filename = 'export.zip'): Promise<string> => {
@@ -270,6 +297,14 @@ export async function createStagingHarness(): Promise<{
     await attempt(`DELETE FROM ci.entity_identifiers WHERE owner_user_id = $1::uuid`, [userId]);
     await attempt(`DELETE FROM ci.entities WHERE owner_user_id = $1::uuid`, [userId]);
     await attempt(`DELETE FROM ci.users WHERE id = $1::uuid`, [userId]);
+
+    // The row is gone; the inbox folder a running server scaffolded for it is
+    // not, and nothing else will ever remove it (see removeSyntheticUserInbox).
+    try {
+      await removeSyntheticUserInbox(userEmail);
+    } catch (err: unknown) {
+      failures.push(err);
+    }
 
     // Before `destroy()`, and before the rethrow: a lock this harness failed to
     // release would stall every DDL suite for LOCK_TIMEOUT_MS.

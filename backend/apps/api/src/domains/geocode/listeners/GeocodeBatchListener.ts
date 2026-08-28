@@ -21,50 +21,19 @@ import {
 const GEOCODE_QUEUE = 'geocode';
 
 /**
- * Hard concurrency ceiling on in-flight provider calls, independent of the QPS
- * throttle. Well under Google's 25 QPS, it bounds memory / open sockets even if
- * rateLimitPerSecond were misconfigured high. The effective rate is the lower
- * of this cap and config.geocoding.rateLimitPerSecond.
+ * Hard concurrency ceiling on in-flight provider calls. Well under Google's 25
+ * QPS, it bounds memory / open sockets even if rateLimitPerSecond were
+ * misconfigured high.
+ *
+ * This is NOT the QPS throttle — that lives in {@link GeocodeService} (a Nest
+ * singleton shared with `GeocodeStage` and `PositionReverseStage`), so it is
+ * the one budget for every caller combined, not one per caller. This constant
+ * only bounds how many of THIS listener's calls may be in flight at once.
  */
 const MAX_CONCURRENCY = 10;
 
 /** Exponential-backoff schedule (ms) for transient provider failures. */
 const BACKOFF_MS = [500, 1500, 4000];
-
-/**
- * Token-bucket / minimum-interval QPS throttle. Concurrency (p-limit) caps how
- * many calls run *at once*; this caps how many *start per second*. A burst of
- * cache misses otherwise fires MAX_CONCURRENCY calls instantly and can trip
- * OVER_QUERY_LIMIT regardless of the concurrency cap, so the two are
- * complementary. `acquire()` resolves no sooner than `1000 / qps` ms after the
- * previous acquisition.
- */
-export class RateLimiter {
-  private readonly minIntervalMs: number;
-
-  private nextAvailableAt = 0;
-
-  constructor(qps: number) {
-    // Guard against a 0/negative config slipping through (schema enforces
-    // positive, but be defensive): fall back to unthrottled.
-    this.minIntervalMs = qps > 0 ? 1000 / qps : 0;
-  }
-
-  async acquire(): Promise<void> {
-    if (this.minIntervalMs <= 0) {
-      return;
-    }
-
-    const now = Date.now();
-    const startAt = Math.max(now, this.nextAvailableAt);
-    this.nextAvailableAt = startAt + this.minIntervalMs;
-
-    const waitMs = startAt - now;
-    if (waitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-    }
-  }
-}
 
 interface CandidateRow {
   event_id: string;
@@ -93,9 +62,6 @@ export class GeocodeBatchListener {
   /** Concurrency cap: min(MAX_CONCURRENCY, configured QPS) — never exceed either. */
   private readonly limiter = plimit(Math.min(MAX_CONCURRENCY, config.geocoding.rateLimitPerSecond));
 
-  /** QPS throttle from config.geocoding.rateLimitPerSecond (default 10). */
-  private readonly rateLimiter = new RateLimiter(config.geocoding.rateLimitPerSecond);
-
   /** Default batch size from config.geocoding.batchSize (default 200). */
   private readonly defaultLimit = config.geocoding.batchSize;
 
@@ -115,8 +81,9 @@ export class GeocodeBatchListener {
     const retry = retryNull ?? false;
     const batchLimit = limit ?? this.defaultLimit;
 
-    // Reverse direction (coords -> name) shares this queue + rate limiter so the
-    // two never collectively exceed the provider's QPS.
+    // Reverse direction (coords -> name) shares this queue, and shares
+    // GeocodeService's rate limiter with every other caller, so the two never
+    // collectively exceed the provider's QPS.
     if (direction === 'reverse') {
       await this.handleReverseBatch(userId, { eventIds, limit: batchLimit, retryNull: retry });
 
@@ -152,6 +119,7 @@ export class GeocodeBatchListener {
             const place = await this.linkPlace(context, candidate.location_name, lat, lng, {
               placeId: outcome.placeId,
               components: outcome.components,
+              bounds: outcome.bounds,
             });
 
             await this.eventService.update(context, candidate.event_id, {
@@ -209,18 +177,17 @@ export class GeocodeBatchListener {
 
   /**
    * Geocode with exponential backoff on transient provider failures. Non-
-   * retryable statuses (and successes) return immediately. Each provider-facing
-   * attempt waits on the QPS throttle first (cache hits inside GeocodeService
-   * still short-circuit before any network call). `bustCache` re-attempts a
-   * previously negative-cached location (the retryNull path).
+   * retryable statuses (and successes) return immediately. The QPS throttle
+   * lives inside {@link GeocodeService.geocode} itself now (shared with every
+   * other caller), so this loop just calls it — a cache hit still short-
+   * circuits before any network call, and before any wait. `bustCache`
+   * re-attempts a previously negative-cached location (the retryNull path).
    */
   private async geocodeWithRetry(location: string, bustCache: boolean) {
-    await this.rateLimiter.acquire();
     let outcome = await this.geocodeService.geocode(location, { bustCache });
 
     for (let attempt = 0; outcome.retryable && attempt < BACKOFF_MS.length; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS[attempt]));
-      await this.rateLimiter.acquire();
       // A retry is always a fresh provider call; bust the cache so a transient
       // status that briefly got cached can't pin the result.
       outcome = await this.geocodeService.geocode(location, { bustCache: true });
@@ -275,6 +242,7 @@ export class GeocodeBatchListener {
             const place = await this.linkPlace(context, outcome.placeName, lat, lng, {
               placeId: outcome.placeId,
               components: outcome.components,
+              bounds: outcome.bounds,
             });
 
             await this.eventService.update(context, candidate.event_id, {
@@ -317,12 +285,10 @@ export class GeocodeBatchListener {
     lng: number,
     bustCache: boolean,
   ): Promise<ReverseGeocodeOutcome> {
-    await this.rateLimiter.acquire();
     let outcome = await this.geocodeService.reverseGeocode(lat, lng, { bustCache });
 
     for (let attempt = 0; outcome.retryable && attempt < BACKOFF_MS.length; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, BACKOFF_MS[attempt]));
-      await this.rateLimiter.acquire();
       outcome = await this.geocodeService.reverseGeocode(lat, lng, { bustCache: true });
     }
 
@@ -425,7 +391,11 @@ export class GeocodeBatchListener {
     name: string,
     lat: number,
     lng: number,
-    resolution: { placeId?: string | null; components?: Record<string, unknown> | null } = {},
+    resolution: {
+      placeId?: string | null;
+      components?: Record<string, unknown> | null;
+      bounds?: { north: number; south: number; east: number; west: number } | null;
+    } = {},
   ): Promise<{ id: string } | null> {
     try {
       return await this.placeService.findOrCreateForGeocode(context, {
@@ -434,6 +404,7 @@ export class GeocodeBatchListener {
         lng,
         placeId: resolution.placeId ?? null,
         components: resolution.components ?? null,
+        bounds: resolution.bounds ?? null,
       });
     } catch (error) {
       this.logger.warn('Failed to find-or-create place for geocoded event', {

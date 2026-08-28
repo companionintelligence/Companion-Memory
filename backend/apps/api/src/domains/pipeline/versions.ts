@@ -111,6 +111,33 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 1,
 
   /**
+   * v1 — first ledger-driven run of the preview generator (`FilePreviewService`,
+   * the same sharp / ffmpeg path the upload listener uses).
+   *
+   * Bump when the generator can decode something it previously could not, or
+   * when the preview itself changes shape (size, format, frame choice for
+   * video). Note the stage's source predicate excludes files that already
+   * carry a PREVIEW, so a bump re-offers only the preview-LESS corpus; a
+   * change that must re-render existing previews needs the predicate widened
+   * too — see FilePreviewStage.
+   */
+  [STAGE_IDS.ENRICH_FILE_PREVIEW]: 1,
+
+  /**
+   * v1 — oEmbed (YouTube/Spotify/Vimeo/SoundCloud/Dailymotion/X), Wikidata +
+   * Wikipedia for Netflix + Prime titles, OpenGraph with oEmbed discovery for
+   * the rest. Bump when a resolver's ANSWER for an unchanged key changes (new
+   * field, better entity pick); the `ci.unfurls` row's expiry — not this —
+   * governs re-fetching.
+   *
+   * v2 — streaming titles moved from TMDB to Wikidata/Wikipedia (licence), and
+   * poster copies are real objects now (v1 wrote `ci.files` rows with no bytes).
+   * v1 never shipped; its rows were cleared by hand on the one dev database
+   * that had them, and this bump re-offers every row so they are re-resolved.
+   */
+  [STAGE_IDS.ENRICH_UNFURL]: 2,
+
+  /**
    * DERIVED, not chosen — the one entry in this map nobody bumps by hand.
    *
    * `embedStageVersion()` reads `config.embedding.model` and the pgvector column
@@ -194,6 +221,19 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   [STAGE_IDS.ENRICH_GEOCODE]: 1,
 
   /**
+   * v1 — initial writer for `ci.events.location_name` from a coordinate.
+   *
+   * A LITERAL mirroring a derivation, the same shape as its two siblings:
+   * `EventReverseStage` computes its version from
+   * `REVERSE_GEOCODE_PROVIDER_GENERATION` — the SAME term
+   * `enrich.position_reverse` derives from, imported rather than re-declared, so
+   * a provider swap re-opens both tables or neither — plus its own rule
+   * generation, and throws at module load if this line disagrees. Not a thunk,
+   * for the reason given above.
+   */
+  [STAGE_IDS.ENRICH_EVENT_REVERSE]: 1,
+
+  /**
    * v1 — initial conversion of `LocationEstimateService.estimateBatch`.
    *
    * Also a literal mirroring a derivation, and the derivation's second term is
@@ -227,14 +267,50 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
   [STAGE_IDS.ENRICH_PERSON_LINK]: 1,
   [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: 1,
 
-  /** v1 — initial temporal repair. Bump when SOURCE_TIME_SPECS gains a source; only a bump re-opens a skip. */
-  [STAGE_IDS.CLEAN_TEMPORAL_REPAIR]: 1,
+  /**
+   * v1 — initial self-claim producer (PERSON_SELF_CLAIM_GENERATION in
+   * PersonSelfClaimStage.ts). Bump alongside that generation.
+   */
+  [STAGE_IDS.ENRICH_PERSON_SELF_CLAIM]: 1,
 
-  /** v1 — initial duplicate proposer. A bump rescores pending candidates; it never resurrects a rejected pair. */
-  [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: 1,
+  /** v2 — reddit added to SOURCE_TIME_SPECS. Bump when it gains a source; only a bump re-opens a skip. */
+  [STAGE_IDS.CLEAN_TEMPORAL_REPAIR]: 2,
+
+  /**
+   * v4 — DUPLICATE_SCORING_GENERATION bumped to 3: name evidence is token-
+   * subset overlap (honorifics stripped, last-name conflicts refused), not
+   * exact display-string only. v3 was phone E.164 adjudication; v2 was
+   * enrich.person_self_claim widening the evidence set. A bump rescores
+   * pending candidates; it never resurrects a rejected pair.
+   */
+  [STAGE_IDS.CLEAN_DUPLICATE_DETECT]: 4,
+
+  /**
+   * v1 — initial owned-unit detector. A literal mirroring the derivation in
+   * `ObjectDuplicateDetectStage.ts`, which throws at module load if this line
+   * disagrees: OBJECT_DUPLICATE_SCORING_GENERATION (the per-reason scores) +
+   * OBJECT_DUPLICATE_CANDIDATE_GENERATION (the applicability predicate AND the
+   * `keys` CTE in `ObjectDuplicateService.findDuplicateGroups`, which has no
+   * version of its own) - 1.
+   */
+  [STAGE_IDS.CLEAN_OBJECT_DUPLICATE_DETECT]: 1,
 
   /** v1 — initial identifier canonicaliser. Deliberately NOT tied to IDENTITY_SPEC_VERSION, which versions the object identity ladder. */
   [STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE]: 1,
+
+  /**
+   * v1 — initial single-valued contradiction audit. A literal mirroring the
+   * derivation in `SingleValuedEdgeAuditStage.ts`, which throws at module load
+   * if this line disagrees: SINGLE_VALUED_AUDIT_RULE_GENERATION, which versions
+   * `SINGLE_VALUED_RELATIONSHIP_TYPES` together with the overlap test.
+   *
+   * Expect to bump this OFTEN and deliberately. The declared type set starts at
+   * one entry (`LIVES_IN`) and the whole purpose of the stage is to tell us
+   * which other types belong in it; adding one and bumping here is how the
+   * corpus gets re-counted under the wider rule. A bump costs one Postgres
+   * group-by per slice and nothing else — no provider, no bill.
+   */
+  [STAGE_IDS.CLEAN_SINGLE_VALUED_EDGE_AUDIT]: 1,
 
   /** v1 — place promotion. Derives from the forward-geocode generation: a better provider makes every hierarchy provisional. Cheap to bump — no provider call. */
   [STAGE_IDS.PROMOTE_PLACE]: 1,
@@ -269,7 +345,7 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * generation + PERSON_LINK_VERSION (its edges are a COPY of the linker's
    * columns, so a linker bump re-projects); the event leg additionally tracks
    * PROMOTE_PLACE_VERSION (`location_entity_id` is that stage's output); the
-   * inventory and observation legs track PROMOTE_OBJECT_VERSION; the position
+   * object and observation legs track PROMOTE_OBJECT_VERSION; the position
    * leg tracks PROMOTE_PLACE_POSITION_VERSION (`ci.position.location_entity_id`
    * is that stage's output — it had no writer at all until it landed); the
    * content, receipt and device legs have no versioned producer (importers,
@@ -281,17 +357,20 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    *
    * v4 = matrix generation 4: LOCATED_AT/DOCUMENTS canonical storage, Place and
    * File hierarchy legs.
+   *
+   * v5 = matrix generation 5: communication.has_attachment (File -ATTACHED_TO->
+   * Communication).
    */
-  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 4,
-  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 4,
-  [STAGE_IDS.PROMOTE_EDGE_CONTENT]: 4,
-  [STAGE_IDS.PROMOTE_EDGE_INVENTORY]: 4,
-  [STAGE_IDS.PROMOTE_EDGE_RECEIPT]: 4,
-  [STAGE_IDS.PROMOTE_EDGE_OBSERVATION]: 4,
-  [STAGE_IDS.PROMOTE_EDGE_POSITION]: 4,
-  [STAGE_IDS.PROMOTE_EDGE_DEVICE]: 4,
-  [STAGE_IDS.PROMOTE_EDGE_FILE]: 4,
-  [STAGE_IDS.PROMOTE_EDGE_PLACE]: 4,
+  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 5,
+  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 5,
+  [STAGE_IDS.PROMOTE_EDGE_CONTENT]: 5,
+  [STAGE_IDS.PROMOTE_EDGE_OBJECT]: 5,
+  [STAGE_IDS.PROMOTE_EDGE_RECEIPT]: 5,
+  [STAGE_IDS.PROMOTE_EDGE_OBSERVATION]: 5,
+  [STAGE_IDS.PROMOTE_EDGE_POSITION]: 5,
+  [STAGE_IDS.PROMOTE_EDGE_DEVICE]: 5,
+  [STAGE_IDS.PROMOTE_EDGE_FILE]: 5,
+  [STAGE_IDS.PROMOTE_EDGE_PLACE]: 5,
 };
 
 /**

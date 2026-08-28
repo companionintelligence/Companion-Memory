@@ -76,6 +76,103 @@ struct CompanionAPI {
         return (note?["title"] as? String) ?? title
     }
 
+    /// Plan tasks the user can reschedule. Overdue is computed on the same
+    /// local-date rule the web Plan board uses (earliest of dueAt / scheduledFor
+    /// before today; deferred work stays hidden).
+    func planTasks() async throws -> [PlanTaskSnapshot] {
+        let gql = """
+        query AppIntentPlanTasks {
+          tasks(first: 100) {
+            edges {
+              node {
+                id
+                title
+                status
+                dueAt
+                scheduledFor
+                deferUntil
+              }
+            }
+          }
+        }
+        """
+
+        let json = try await graphql(query: gql, variables: [:])
+        let tasks = (json["data"] as? [String: Any])?["tasks"] as? [String: Any]
+        let edges = tasks?["edges"] as? [[String: Any]] ?? []
+        let today = PlanDate.today
+
+        return edges.compactMap { edge in
+            guard let node = edge["node"] as? [String: Any],
+                  let id = node["id"] as? String,
+                  let title = node["title"] as? String
+            else {
+                return nil
+            }
+
+            let status = node["status"] as? String ?? "open"
+            if status == "proposed" || status == "done" || status == "skipped" || status == "archived" {
+                return nil
+            }
+
+            let dueAt = node["dueAt"] as? String
+            let scheduledFor = node["scheduledFor"] as? String
+            let deferUntil = node["deferUntil"] as? String
+            let overdue = PlanTaskSnapshot.isOverdue(
+                status: status,
+                dueAt: dueAt,
+                scheduledFor: scheduledFor,
+                deferUntil: deferUntil,
+                today: today
+            )
+
+            return PlanTaskSnapshot(id: id, title: title, isOverdue: overdue)
+        }
+    }
+
+    /// Push an overdue (or any open) task onto a user-local calendar date, then
+    /// place a planned block on that day — same two writes the Plan page makes.
+    func reschedulePlanTask(id: String, date: String) async throws -> String {
+        let updateGql = """
+        mutation AppIntentUpdateTask($input: UpdateTaskInput!) {
+          updateTask(input: $input) { success task { id title dueAt scheduledFor } }
+        }
+        """
+        let scheduleGql = """
+        mutation AppIntentScheduleTask($id: ID!, $date: String) {
+          scheduleTask(id: $id, date: $date) {
+            success
+            status
+            task { id title scheduledFor }
+          }
+        }
+        """
+
+        let update = try await graphql(
+            query: updateGql,
+            variables: ["input": ["id": id, "dueAt": PlanDate.noonISO(fromLocalDate: date)]]
+        )
+        let updatePayload = (update["data"] as? [String: Any])?["updateTask"] as? [String: Any]
+        guard updatePayload?["success"] as? Bool == true else {
+            throw CompanionIntentError.requestFailed("Couldn't move that task.")
+        }
+
+        let scheduled = try await graphql(
+            query: scheduleGql,
+            variables: ["id": id, "date": date]
+        )
+        let schedulePayload = (scheduled["data"] as? [String: Any])?["scheduleTask"] as? [String: Any]
+        let task = (updatePayload?["task"] as? [String: Any])
+        let title = (task?["title"] as? String) ?? "the task"
+
+        if schedulePayload?["success"] as? Bool == true {
+            return title
+        }
+
+        // Due date moved even if there was no calendar gap — still a reschedule.
+        return title
+    }
+
     private func graphql(query: String, variables: [String: Any]) async throws -> [String: Any] {
         var request = authorizedRequest(path: "/api/graphql")
         request.httpMethod = "POST"
@@ -171,5 +268,82 @@ struct CompanionAPI {
         guard (200..<300).contains(http.statusCode) else {
             throw CompanionIntentError.requestFailed("Companion returned an error (\(http.statusCode)).")
         }
+    }
+}
+
+/// User-local `YYYY-MM-DD` helpers shared by Plan App Intents and the Plan page's chips.
+enum PlanDate {
+    static var today: String { localDate(addingDays: 0) }
+
+    static func localDate(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar.current
+        formatter.locale = Locale(identifier: "en_CA")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    static func localDate(addingDays days: Int) -> String {
+        let calendar = Calendar.current
+        let date = calendar.date(byAdding: .day, value: days, to: Date()) ?? Date()
+        return localDate(from: date)
+    }
+
+    static func noonISO(fromLocalDate ymd: String) -> String {
+        let parts = ymd.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return ISO8601DateFormatter().string(from: Date()) }
+
+        var components = DateComponents()
+        components.year = parts[0]
+        components.month = parts[1]
+        components.day = parts[2]
+        components.hour = 12
+        let date = Calendar.current.date(from: components) ?? Date()
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.string(from: date)
+    }
+
+    static func localDate(fromISO iso: String) -> String? {
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = isoFormatter.date(from: iso) ?? {
+            isoFormatter.formatOptions = [.withInternetDateTime]
+            return isoFormatter.date(from: iso)
+        }()
+        guard let date else { return nil }
+
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar.current
+        formatter.locale = Locale(identifier: "en_CA")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+}
+
+struct PlanTaskSnapshot {
+    let id: String
+    let title: String
+    let isOverdue: Bool
+
+    /// Mirrors `isOverdue` / `sectionFor` on the web Plan board.
+    static func isOverdue(
+        status: String,
+        dueAt: String?,
+        scheduledFor: String?,
+        deferUntil: String?,
+        today: String
+    ) -> Bool {
+        if status == "proposed" || status == "done" || status == "skipped" || status == "archived" {
+            return false
+        }
+        if let deferUntil, deferUntil > today {
+            return false
+        }
+
+        let dueDate = dueAt.flatMap(PlanDate.localDate(fromISO:))
+        let dates = [dueDate, scheduledFor].compactMap { $0 }
+        guard let earliest = dates.min() else { return false }
+        return earliest < today
     }
 }

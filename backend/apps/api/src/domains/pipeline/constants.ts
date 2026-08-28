@@ -110,6 +110,17 @@ export const STAGE_IDS = {
   ENRICH_MEDIA_DIMENSIONS: 'enrich.media_dimensions',
 
   /**
+   * Generate the 300px JPEG `PREVIEW` variant for `ci.files` originals that
+   * have none. The upload path (`FilePreviewGenerationListener`) only ever
+   * ran once per upload and had no way back: a preview that was lost — to
+   * the hash dedup that used to collapse identical previews across parents,
+   * to a worker restart, or simply to predating the listener — stayed lost,
+   * and the explorer drew the file's full original (or, for a video, nothing
+   * decodable) in its place. Same generator, driven by the ledger.
+   */
+  ENRICH_FILE_PREVIEW: 'enrich.file_preview',
+
+  /**
    * Dense-embed `ci.content` into `ci_search.embeddings`. The conversion that
    * justifies the whole rebuild, because its version is not a hand-chosen
    * integer: it is a function of `(embedding model, pgvector width)`, so
@@ -148,6 +159,30 @@ export const STAGE_IDS = {
   ENRICH_GEOCODE: 'enrich.geocode',
 
   /**
+   * The OTHER direction over the same table: reverse-geocode
+   * `ci.events.location_coordinates` into `location_name`.
+   *
+   * `enrich.geocode` runs name → coordinates only, so an event that arrived with
+   * a MEASUREMENT and no label (photo EXIF GPS, a GPX check-in, a geotagged
+   * post) had no scheduled path to a name at all — the only coords → name path
+   * over `ci.events` was `MaintenanceOrchestratorService`'s operator-triggered
+   * reverse leg and the `reverse_geocode` CLI backfill, neither on a cron nor
+   * chained from an import. And a name is not cosmetic here: `promote.place`
+   * requires a coordinate AND a non-blank name, so an unnamed geotagged event
+   * never becomes a place and never reaches the map.
+   *
+   * The third stage whose sweep is a BILL. Bump deliberately.
+   */
+  ENRICH_EVENT_REVERSE: 'enrich.event_reverse',
+
+  /**
+   * Resolve a content row's link (oEmbed), streaming title (Wikidata) or page
+   * (OpenGraph) into `ci.unfurls` — title, author, poster, duration. External
+   * providers through the SSRF chokepoint; one request per distinct key.
+   */
+  ENRICH_UNFURL: 'enrich.unfurl',
+
+  /**
    * Fill a physical-presence event's coordinates from the nearest-in-time REAL
    * location, replacing `LocationEstimateService`'s temporal fill — and its
    * `forced` flag, a request-scoped re-run lever that recorded nothing anywhere.
@@ -175,6 +210,29 @@ export const STAGE_IDS = {
    * bump is CPU on the appliance and nothing else.
    */
   ENRICH_PERSON_LINK: 'enrich.person_link',
+
+  /**
+   * A Person entity's OWN identifiers (`ci.entities.name` /
+   * `properties.emails` / `properties.phones`) as `ci.identifier_claims` rows
+   * (`subject_type = 'person'`, `role = 'self'`, `entity_id` = itself).
+   *
+   * `clean.duplicate_detect`'s evidence query groups on `entity_id`
+   * regardless of `subject_type`, so this is the missing PRODUCER, not a
+   * change to that stage: without it, only Persons a communication or event
+   * resolved to (`enrich.person_link` / `enrich.event_person_link`'s claims)
+   * ever had evidence — a contact-card/vCard/apple_contacts-imported Person
+   * who never sent a message had zero claims and could never be proposed as
+   * a duplicate of anything, no matter how many fields it shared.
+   *
+   * Deliberately NOT sourced from `ci.entity_identifiers`: that table is
+   * UNIQUE on `(owner_user_id, kind, value_normalized)`, so when two
+   * DUPLICATE Persons both hold the same email, only the first insert wins
+   * and the second's identical identifier is silently absent — exactly the
+   * pair this stage exists to find. Reading `ci.entities.properties`
+   * directly (the same JSONB `PersonDuplicateService`'s ad-hoc computation
+   * already reaches into) keeps every entity's own claim, lossy or not.
+   */
+  ENRICH_PERSON_SELF_CLAIM: 'enrich.person_self_claim',
 
   /**
    * The same algorithm over `ci.events`, replacing
@@ -210,12 +268,47 @@ export const STAGE_IDS = {
   CLEAN_DUPLICATE_DETECT: 'clean.duplicate_detect',
 
   /**
+   * The same proposal, over OWNED UNITS (`ci.objects`) instead of people.
+   *
+   * A SECOND id rather than a second entity type on `clean.duplicate_detect`,
+   * for the reason `enrich.event_person_link` is one: a `Stage` declares
+   * exactly one `source`, and this is a different table with a different
+   * primary key. The evidence is different too — a shared barcode, catalogue
+   * product or brand+model+day, not a shared mailbox — and the two therefore
+   * have to be able to improve, and re-sweep, independently.
+   *
+   * Reuses `ObjectDuplicateService.findDuplicateGroups`, until now reachable
+   * only from a GraphQL read that recomputed the whole corpus per request and
+   * wrote nothing. Same standing decision as its sibling: CLEAN proposes, a
+   * human disposes, and this stage has no merge path at all.
+   */
+  CLEAN_OBJECT_DUPLICATE_DETECT: 'clean.object_duplicate_detect',
+
+  /**
    * Canonicalise identifiers already stored — emails, phones to E.164, handles —
    * so identity work runs over a consistent corpus. Writes `value_e164` BESIDE
    * `value` rather than over it: `value` is a join key existing rows point at.
    * Idempotent by construction.
    */
   CLEAN_IDENTIFIER_NORMALIZE: 'clean.identifier_normalize',
+
+  /**
+   * COUNT contradictory single-valued relationships. Repair none of them.
+   *
+   * A subject holding more than one active edge of a type that can only have
+   * one true answer — two `LIVES_IN` homes at once — is a contradiction, and
+   * `ci.relationships` has no way to say a fact stopped being true. Fixing that
+   * is supersession, which touches every writer; this stage is the evidence for
+   * whether it is worth doing. It has no writer, closes no incumbent and adds
+   * no column: it groups, counts, and records the number in the ledger's
+   * `reason`.
+   *
+   * The precedent is `ci.facts`, which shipped `valid_from`, `valid_until`,
+   * `supersedes_fact_id`, `is_current` and two indexes for them, was never
+   * written by anything, and was dropped whole in
+   * `20260212191500_drop_unused_tables_and_document_chunk_function.sql`.
+   */
+  CLEAN_SINGLE_VALUED_EDGE_AUDIT: 'clean.single_valued_edge_audit',
 
   /**
    * Promote a resolved event location into a first-class place: the entity, its
@@ -246,7 +339,7 @@ export const STAGE_IDS = {
   PROMOTE_PLACE_POSITION: 'promote.place_position',
 
   /**
-   * Promote purchases into `ci.inventory` with real identity — the first writer
+   * Promote purchases into `ci.objects` with real identity — the first writer
    * the rich object model has ever had.
    */
   PROMOTE_OBJECT: 'promote.object',
@@ -258,7 +351,7 @@ export const STAGE_IDS = {
    * CI-Spatial has been pushing one `capture.scan` event per scan, carrying
    * `payload.objects`, since the scan pipeline shipped; nothing read them, and
    * the sightings table sat empty behind a downstream edge projection that was
-   * already built. Reads event metadata only, writes no `ci.inventory` row and
+   * already built. Reads event metadata only, writes no `ci.objects` row and
    * sets no resolution column: a sighting is the weak claim.
    */
   PROMOTE_OBSERVATION: 'promote.observation',
@@ -292,11 +385,11 @@ export const STAGE_IDS = {
   PROMOTE_EDGE_CONTENT: 'promote.edge_content',
 
   /**
-   * The same projection over `ci.inventory`: `last_seen_place_entity_id`
+   * The same projection over `ci.objects`: `last_seen_place_entity_id`
    * (written by `promote.object` and importers) becomes Item −LOCATED_AT→
    * Place.
    */
-  PROMOTE_EDGE_INVENTORY: 'promote.edge_inventory',
+  PROMOTE_EDGE_OBJECT: 'promote.edge_object',
 
   /**
    * The same projection over `ci.receipts`: extraction's resolved columns
@@ -596,6 +689,57 @@ export const DEAD_LETTER_REAP_BATCH = 500;
  * a fourth scheduled job there turns a quiet appliance into a periodic spike.
  */
 export const DEAD_LETTER_REAP_CRON = '40 */2 * * * *';
+
+/**
+ * Days a REPLAYED dead letter is kept before the reaper's purge leg reclaims it.
+ *
+ * ── Why the table needed a bound at all ────────────────────────────────────
+ *
+ * `ci.pipeline_dead_letters` is the only destination on this appliance with a
+ * scheduled, batched writer and no cap of any kind: {@link DEAD_LETTER_REAP_BATCH}
+ * rows every two minutes is a 360k/day ceiling, and every row carries a payload
+ * VERBATIM plus a full stack. The migration that created it says the rows "never
+ * expire — the payload is often the only surviving copy of the record", and that
+ * is exactly right for a letter nobody has replayed. It was never an argument
+ * about the replayed ones: replay re-emits the payload onto the bus and stamps
+ * `replayed_at`, and `pipeline_dead_letters_unreplayed_idx ... WHERE replayed_at
+ * IS NULL` already excludes those rows from every replay path. They were kept
+ * forever by omission, not by decision.
+ *
+ * ── Why deleting a replayed letter is not deleting evidence ────────────────
+ *
+ * `replayed_at` is only ever non-NULL when `EventService.send` actually accepted
+ * the job: `PipelineRunService.emitClaimedLetter` releases the claim on every
+ * failure path, including the silent one where `send()` returns no job ids. So a
+ * stamped letter is one whose payload has been handed back to the system. If the
+ * re-emitted job then died again, pg-boss dead-lettered it again and the reaper
+ * harvested a NEW row — the evidence moved forward, it did not disappear.
+ *
+ * ── Why 30 days ───────────────────────────────────────────────────────────
+ *
+ * The same window `JobMetricsCollector` keeps its samples for, and for the same
+ * reason: long enough to answer "did we already replay this, and when?" through
+ * an incident and its post-mortem, short enough that the replayed half of the
+ * table cannot outgrow the appliance.
+ *
+ * Overridable — `config/default.json` → `queues.replayedDeadLetterRetentionDays`,
+ * env `CI_REPLAYED_DEAD_LETTER_RETENTION_DAYS`. Set it to something enormous to
+ * suspend the purge while an incident is still being read.
+ */
+export const DEAD_LETTER_REPLAYED_RETENTION_DAYS = config.queues.replayedDeadLetterRetentionDays;
+
+/**
+ * Replayed dead letters deleted per purge.
+ *
+ * Deliberately the same number as {@link DEAD_LETTER_REAP_BATCH}, on the same
+ * tick: the purge can therefore drain at exactly the rate the harvest can fill,
+ * so no burst of failures can put the table permanently ahead of reclamation.
+ *
+ * Bounded for the reason every sweep here is bounded — one statement's work has
+ * to be predictable when the table is at its largest, which is precisely when
+ * this leg starts finding rows.
+ */
+export const DEAD_LETTER_PURGE_BATCH = 500;
 
 // ---------------------------------------------------------------------------
 // The nightly enrichment window

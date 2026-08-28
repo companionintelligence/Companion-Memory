@@ -5,7 +5,7 @@ import { GraphController } from '../GraphController';
 describe('GraphController.getMemoryStats', () => {
   const ctx = { userId: 'user-1' } as RequestContext;
 
-  it('returns inventory plus life series and forwards the date window', async () => {
+  it('returns thing totals plus life series and forwards the date window', async () => {
     const getLifeSeries = jest.fn(async () => ({
       spend: { rows: [] },
       time: { mode: 'counts', coverage: { timedEvents: 0, consideredEvents: 0 }, rows: [] },

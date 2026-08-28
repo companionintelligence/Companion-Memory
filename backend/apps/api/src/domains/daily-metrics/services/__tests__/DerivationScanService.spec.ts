@@ -2,6 +2,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { UserService } from '@ci/domains/user';
 
+import { makeUserService, type UserRow } from '../../__tests__/support/userServiceDouble';
 import type { AnomalyEngine } from '../../anomaly/AnomalyEngine';
 import type { CorrelationEngine } from '../../correlation/CorrelationEngine';
 import type { MetricAnomaly } from '../../entities/MetricAnomalyEntity';
@@ -9,6 +10,7 @@ import type { SuggestionEngine } from '../../suggest/SuggestionEngine';
 import { DerivationScanService } from '../DerivationScanService';
 
 const USER = '00000000-0000-0000-0000-0000000000aa';
+const SIGNED_UP_ONLY = '00000000-0000-0000-0000-0000000000bb';
 const CONTEXT: UserServiceContext = { userId: USER };
 
 const ANOMALIES: MetricAnomaly[] = [
@@ -42,6 +44,7 @@ function makeService(overrides: {
   correlationScan?: jest.Mock;
   anomalyScan?: jest.Mock;
   suggestionPropose?: jest.Mock;
+  users?: UserService;
 }) {
   const correlationScan = overrides.correlationScan ?? jest.fn().mockResolvedValue(undefined);
   const anomalyScan = overrides.anomalyScan ?? jest.fn().mockResolvedValue([]);
@@ -52,7 +55,7 @@ function makeService(overrides: {
     { scan: correlationScan } as unknown as CorrelationEngine,
     { scan: anomalyScan } as unknown as AnomalyEngine,
     { propose: suggestionPropose } as unknown as SuggestionEngine,
-    {} as unknown as UserService,
+    overrides.users ?? ({} as unknown as UserService),
     log,
   );
 
@@ -114,5 +117,32 @@ describe('DerivationScanService.scanUser cascading failure isolation', () => {
 
     await expect(service.scanUser(CONTEXT, 'UTC')).resolves.toBeUndefined();
     expect(log.error).toHaveBeenCalledTimes(3);
+  });
+});
+
+const ROWS: UserRow[] = [
+  { id: USER, onboarded: true, timezone: 'America/New_York' },
+  { id: SIGNED_UP_ONLY, onboarded: false, timezone: 'UTC' },
+];
+
+describe('DerivationScanService.scanAll audience', () => {
+  it('scans an onboarded user and skips one still in signup', async () => {
+    const { service, correlationScan, anomalyScan, suggestionPropose } = makeService({
+      users: makeUserService(ROWS),
+    });
+
+    await service.scanAll();
+
+    for (const engine of [correlationScan, anomalyScan, suggestionPropose]) {
+      expect(engine.mock.calls.map((call) => (call[0] as UserServiceContext).userId)).toEqual([USER]);
+    }
+  });
+
+  it('scans each onboarded user in their own profile timezone', async () => {
+    const { service, correlationScan } = makeService({ users: makeUserService(ROWS) });
+
+    await service.scanAll();
+
+    expect(correlationScan).toHaveBeenCalledWith({ userId: USER }, 'America/New_York');
   });
 });

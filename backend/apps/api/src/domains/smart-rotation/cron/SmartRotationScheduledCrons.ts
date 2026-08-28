@@ -107,13 +107,13 @@ export class SmartRotationHydrateAnswersCron {
   }
 }
 
-/** Hydrate graph from inventory — daily. */
+/** Hydrate graph from things — daily. */
 @Injectable()
-export class SmartRotationHydrateInventoryCron {
+export class SmartRotationHydrateThingsCron {
   constructor(private readonly rotationService: SmartRotationService) {}
 
-  @Cron(SMART_ROTATION_CRONS.hydrate_inventory, { name: 'SmartRotationHydrateInventoryCron.run' })
+  @Cron(SMART_ROTATION_CRONS.hydrate_things, { name: 'SmartRotationHydrateThingsCron.run' })
   async run(): Promise<void> {
-    await this.rotationService.runScheduledWork('hydrate_inventory');
+    await this.rotationService.runScheduledWork('hydrate_things');
   }
 }

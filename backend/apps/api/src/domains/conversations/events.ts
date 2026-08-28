@@ -30,6 +30,7 @@ export type MessageUpdatedPayload = {
 
 export type MessageDeletedPayload = {
   messageId: string;
+  threadId: string | null;
 };
 
 defineEvent<ThreadCreatedPayload>(ThreadCreatedEvent);

@@ -245,6 +245,19 @@ export class MessageService {
   }
 
   async remove(context: ServiceContext, id: string): Promise<boolean> {
+    // Fetched before the delete: once the row is gone, nothing can say which
+    // thread this message belonged to for the reindex listener.
+    const existing = await this.messageRepository.findOne({
+      where: {
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
+      },
+    });
+
     const result = await this.messageRepository.delete({
       id,
       ...(context.userId !== SYSTEM_USER && {
@@ -260,12 +273,26 @@ export class MessageService {
 
     await this.eventService.send(MessageDeletedEvent, {
       messageId: id,
+      threadId: existing?.threadId ?? null,
     });
 
     return true;
   }
 
   async softRemove(context: ServiceContext, id: string): Promise<boolean> {
+    // Fetched before the cancel: findById filters canceled: false, so once
+    // this flips, the reindex listener can no longer look the thread up itself.
+    const existing = await this.messageRepository.findOne({
+      where: {
+        id,
+        ...(context.userId !== SYSTEM_USER && {
+          user: {
+            id: context.userId,
+          },
+        }),
+      },
+    });
+
     const result = await this.messageRepository.update(
       {
         id,
@@ -286,6 +313,7 @@ export class MessageService {
 
     await this.eventService.send(MessageDeletedEvent, {
       messageId: id,
+      threadId: existing?.threadId ?? null,
     });
 
     return true;

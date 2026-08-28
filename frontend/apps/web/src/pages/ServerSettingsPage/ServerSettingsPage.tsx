@@ -1,8 +1,18 @@
 import { type FormEvent, useState } from 'react';
 
-import { buildApiUrl, getApiBaseUrl, persistApiBaseUrl } from '@ci/common';
+import {
+  buildApiUrl,
+  getApiBaseUrl,
+  isBarcodeScanError,
+  isNativePlatform,
+  persistApiBaseUrl,
+  resolveHttpOrigin,
+  scanQrCode,
+} from '@ci/common';
 import { Button, Card, Input, Label } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
+
+import { probeMemoryOrigin } from '@/pages/DeviceConnectPage/portal-client';
 
 type Status = 'idle' | 'testing' | 'error';
 
@@ -23,23 +33,58 @@ export function ServerSettingsPage() {
   const [url, setUrl] = useState<string>(() => getApiBaseUrl());
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
 
   // Parse to a clean http(s) origin, dropping any path/query/hash so the persisted
   // value is always a true origin (e.g. `https://host/app` → `https://host`) and
   // request URLs like `${origin}/api/...` resolve correctly. Returns null if invalid.
   function toOrigin(value: string): string | null {
     try {
-      const parsed = new URL(value.trim());
-
-      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return null;
-      }
-
-      return parsed.origin;
+      return resolveHttpOrigin(value);
     } catch {
       return null;
     }
   }
+
+  // Scanning only fills in and validates the field — it never health-checks or persists
+  // itself. That keeps exactly one code path (handleSubmit, below) responsible for
+  // deciding an origin is actually reachable, so a scanned URL gets exactly the same
+  // scrutiny as a typed one, and the user gets a chance to see what was scanned (and
+  // back out) before anything is saved.
+  const handleScan = async () => {
+    setScanning(true);
+    setStatus('idle');
+    setError(null);
+
+    try {
+      const raw = await scanQrCode();
+
+      if (raw === null) {
+        // User backed out of the scanner, or scanning isn't available here — not an error.
+        return;
+      }
+
+      const candidate = toOrigin(raw);
+
+      if (!candidate) {
+        setStatus('error');
+        setError('That QR code did not contain a valid Memory Server URL.');
+
+        return;
+      }
+
+      setUrl(candidate);
+    } catch (err) {
+      setStatus('error');
+      setError(
+        isBarcodeScanError(err) && err.code === 'denied'
+          ? 'Camera access is needed to scan a QR code. Enable it in Settings, or type the URL instead.'
+          : 'Could not open the scanner. Try again, or type the URL instead.',
+      );
+    } finally {
+      setScanning(false);
+    }
+  };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -56,20 +101,10 @@ export function ServerSettingsPage() {
     setStatus('testing');
     setError(null);
 
-    // Health-check the candidate origin directly (not via buildApiUrl, since we are
-    // validating a URL the user has not committed to yet). `/api/health` is
-    // unauthenticated, so a 2xx confirms reachability before we save.
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
+    // Probe via native HTTP (same as cloud-connect). WKWebView fetch is CORS-bound
+    // and fails with TypeError "Load failed" against a Hub-published appliance.
     try {
-      const response = await fetch(`${candidate}/api/health`, {
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Memory Server responded with ${response.status}`);
-      }
+      await probeMemoryOrigin(candidate);
 
       persistApiBaseUrl(candidate);
 
@@ -82,9 +117,6 @@ export function ServerSettingsPage() {
           ? 'Could not reach your Companion Memory (timed out). Check the URL and your network.'
           : `Could not reach your Companion Memory. ${err instanceof Error ? err.message : ''}`.trim(),
       );
-    } finally {
-      // Always clear the abort timer, including the network-error path.
-      clearTimeout(timeout);
     }
   };
 
@@ -115,16 +147,28 @@ export function ServerSettingsPage() {
                 placeholder="https://memory.example.com"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                disabled={status === 'testing'}
+                disabled={status === 'testing' || scanning}
               />
               <p className="text-muted-foreground text-xs">
                 Currently targeting: {currentTarget || '(same origin)'}
               </p>
             </div>
 
+            {isNativePlatform() && (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={handleScan}
+                disabled={status === 'testing' || scanning}
+              >
+                {scanning ? 'Scanning…' : 'Scan QR Code'}
+              </Button>
+            )}
+
             {status === 'error' && error && <p className="text-destructive text-sm">{error}</p>}
 
-            <Button type="submit" className="w-full" disabled={status === 'testing'}>
+            <Button type="submit" className="w-full" disabled={status === 'testing' || scanning}>
               {status === 'testing' ? 'Testing…' : 'Test & Connect'}
             </Button>
             <Button

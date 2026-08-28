@@ -2,13 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   addAppUrlOpenListener,
-  buildApiUrl,
   createHookContext,
   fetchJson,
   FetchJsonError,
+  getApiBaseUrl,
+  persistApiBaseUrl,
+  setApiBaseUrl,
+  syncNativeIntentConfig,
   getLaunchUrl,
   isIosPlatform,
   isNativePlatform,
+  claimNativeOidcCode,
   parseOidcCallbackUrl,
   secureStorageGet,
   secureStorageRemove,
@@ -18,7 +22,7 @@ import {
 import { jwtDecode } from 'jwt-decode';
 import { useNavigate, useLocation } from 'react-router-dom';
 
-import { disconnectAndClearPowerSync } from '@/api/powersync/session';
+import { disconnectAndClearPowerSyncForLogout } from '@/api/powersync/session';
 import { registerNativePushToken } from '@/lib/registerNativePushToken';
 
 const authChannel = new BroadcastChannel('auth');
@@ -71,24 +75,26 @@ async function primeCsrfCookie(): Promise<boolean> {
   // uncredentialed, or it becomes a credentialed cross-origin call and requires an
   // Access-Control-Allow-Credentials the appliance/proxy may not send. Doing this
   // here rather than at each call site means login, logout and refresh all inherit it.
+  //
+  // Go through fetchJson (CapacitorHttp on native). WKWebView `fetch` against the
+  // Memory origin is CORS-bound and fails silently here, leaving login with no
+  // header → "Missing CSRF token".
   const native = isNativePlatform();
 
   try {
-    const res = await fetch(buildApiUrl('/api/authenticate/csrf'), {
+    const body = await fetchJson<{ csrfToken?: string }>('/api/authenticate/csrf', {
+      method: 'GET',
       credentials: native ? 'omit' : 'include',
+      skipApiKey: true,
     });
 
     if (native) {
-      const body = (await res.json().catch(() => null)) as { csrfToken?: string } | null;
       nativeCsrfToken = body?.csrfToken ?? null;
+
+      return Boolean(nativeCsrfToken);
     }
 
-    // The status matters: on a non-2xx the cookie was NOT (re)issued, so the
-    // caller must not treat a retry as meaningfully different from the attempt
-    // that just failed. Swallow the error rather than propagating — a priming
-    // blip should not by itself log out a user whose session is still valid;
-    // let the refresh attempt below decide that.
-    return res.ok;
+    return true;
   } catch {
     return false;
   }
@@ -209,9 +215,12 @@ interface CreateApiKeyResponse {
 // Exchange a freshly-issued JWT for a long-lived API key (the /api/keys endpoint is
 // JWT-guarded, so this must run while we still hold the login JWT), persist it to the
 // keystore, and activate it for subsequent requests. Returns the raw key, or null.
-async function mintAndStoreApiKey(jwt: string): Promise<string | null> {
-  const created = await fetchJson<CreateApiKeyResponse>('/api/keys', {
+async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<string | null> {
+  const origin = memoryOrigin || getApiBaseUrl();
+  const keysUrl = /^https?:\/\//i.test(origin) ? `${origin.replace(/\/+$/, '')}/api/keys` : '/api/keys';
+  const created = await fetchJson<CreateApiKeyResponse>(keysUrl, {
     method: 'POST',
+    skipApiKey: true,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${jwt}`,
@@ -287,6 +296,20 @@ type ReturnValue = [
     login: (username: string, password: string) => Promise<void>;
     logout: () => void;
     signup: (name: string, email: string, password: string, signup_code?: string) => Promise<void>;
+    /**
+     * After Portal cloud-connect: trade a portal OIDC bearer for a Memory API
+     * key so the phone does not do a second Safari/login hop.
+     */
+    completePortalMemoryConnect: (portalBearer: string, memoryOrigin?: string) => Promise<boolean>;
+    /**
+     * Fallback when the Portal bearer is rejected (401): sign in with the same
+     * Memory email/password the browser uses, then mint a key from that JWT.
+     */
+    completeMemoryPasswordConnect: (
+      email: string,
+      password: string,
+      memoryOrigin: string,
+    ) => Promise<boolean>;
   },
 ];
 
@@ -352,8 +375,87 @@ function useAuth(): ReturnValue {
     [navigate, location.state],
   );
 
+  const completePortalMemoryConnect = useCallback(
+    async (portalBearer: string, memoryOrigin?: string): Promise<boolean> => {
+      // CapacitorHttp cannot follow relative `/api/...` paths. Point the
+      // in-memory origin at the picked server *before* minting so the `me`
+      // query and feature flags that fire on `setNativeApiKey` have an
+      // absolute URL. Persist only after a key comes back — a leftover origin
+      // with no key used to skip cloud-connect and dump Safari returns on /login.
+      const previousOrigin = getApiBaseUrl();
+
+      if (memoryOrigin) {
+        setApiBaseUrl(memoryOrigin);
+      }
+
+      try {
+        const key = await mintAndStoreApiKey(portalBearer, memoryOrigin);
+
+        if (!key) {
+          throw new Error('Memory Server did not return an API key.');
+        }
+
+        if (memoryOrigin) {
+          persistApiBaseUrl(memoryOrigin);
+          void syncNativeIntentConfig();
+        }
+
+        setNativeApiKey(key);
+
+        return true;
+      } catch (err) {
+        setApiBaseUrl(previousOrigin);
+        throw err;
+      }
+    },
+    [],
+  );
+
+  const completeMemoryPasswordConnect = useCallback(
+    async (email: string, password: string, memoryOrigin: string) => {
+      persistApiBaseUrl(memoryOrigin);
+      await primeCsrfCookie();
+
+      const native = isNativePlatform();
+      const data = await fetchJson<AuthResponse>('/api/authenticate', {
+        method: 'POST',
+        headers: withCsrfHeader({
+          'Content-Type': 'application/json',
+        }),
+        credentials: native ? 'omit' : 'include',
+        body: JSON.stringify({
+          username: email,
+          password,
+        }),
+      });
+
+      const jwt = data?.accessToken ?? null;
+
+      if (!jwt) {
+        throw new Error('Memory Server did not return a session.');
+      }
+
+      if (native) {
+        const key = await mintAndStoreApiKey(jwt, memoryOrigin);
+
+        if (!key) {
+          throw new Error('Memory Server did not return an API key.');
+        }
+
+        setNativeApiKey(key);
+      } else {
+        setAccessToken(jwt);
+      }
+
+      return true;
+    },
+    [],
+  );
+
   const logout = useCallback(async () => {
-    await disconnectAndClearPowerSync();
+    // Bounded: a replica that cannot be dropped (worker never came up) must not
+    // leave the user stuck signed in. Everything below still runs on timeout.
+    await disconnectAndClearPowerSyncForLogout();
 
     if (isNativePlatform()) {
       // No cookie session to revoke. Clear the local credential; the API key stays
@@ -447,9 +549,15 @@ function useAuth(): ReturnValue {
     (async () => {
       try {
         if (isNativePlatform()) {
-          // Native restore: load the stored API key. There is no cookie session to
-          // refresh, so returning here is what keeps a native user signed in across
-          // launches — falling through to refreshSession would log them out.
+          // Native restore: origin first, then the API key. A key without an
+          // origin makes every `/api/...` call relative, which CapacitorHttp
+          // rejects — the cloud-connect picker then looks like a failed mint.
+          const storedOrigin = await secureStorageGet('ci.apiBaseUrl');
+
+          if (storedOrigin) {
+            persistApiBaseUrl(storedOrigin);
+          }
+
           const storedKey = await secureStorageGet(API_KEY_STORAGE);
 
           if (storedKey) {
@@ -484,6 +592,7 @@ function useAuth(): ReturnValue {
     }
 
     let unsubscribe = () => {};
+
     let cancelled = false;
     const seenCodes = new Set<string>();
 
@@ -500,7 +609,7 @@ function useAuth(): ReturnValue {
         return;
       }
 
-      if (seenCodes.has(params.code)) {
+      if (seenCodes.has(params.code) || !claimNativeOidcCode(params.code)) {
         return;
       }
 
@@ -539,6 +648,12 @@ function useAuth(): ReturnValue {
 
       unsubscribe = cleanup;
 
+      // iOS ONLY. The effect above already returned unless native, so checking
+      // `isNativePlatform()` here was always true and Android consumed the
+      // launch URL too — contradicting the contract three lines up, which says
+      // web and Android keep the live listener only. Android delivers the
+      // callback through `appUrlOpen`; reading the launch URL there re-handles
+      // a deep link the listener has already taken.
       if (isIosPlatform()) {
         const launched = await getLaunchUrl();
 
@@ -591,6 +706,12 @@ function useAuth(): ReturnValue {
   const pathname = location.pathname;
 
   useEffect(() => {
+    // Native cold-start from Safari lands on `/` then hops to `/login`. Do not
+    // drop an OIDC error that was raised on the first path of that hop.
+    if (pathname === '/login') {
+      return;
+    }
+
     setLoginError(null);
   }, [pathname]);
 
@@ -610,6 +731,8 @@ function useAuth(): ReturnValue {
       login,
       logout,
       signup,
+      completePortalMemoryConnect,
+      completeMemoryPasswordConnect,
     },
   ];
 }

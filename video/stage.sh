@@ -31,7 +31,7 @@
 #
 # WHAT IT STANDS UP
 #   Postgres 18 + TimescaleDB + PostGIS + pgvector   (container, host port $DB_HOST_PORT)
-#   188 dbmate migrations + the full seed corpus
+#   281 dbmate migrations + the full seed corpus
 #   @ci/be-api                                       (node, :$API_PORT)
 #   @ci/fe-web  — Vite, proxies /api -> the API      (node, :$WEB_PORT)
 #

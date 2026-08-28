@@ -2,9 +2,14 @@ import {
   OIDC_NATIVE_CALLBACK_URL,
   OIDC_NATIVE_CLIENT_FLAG,
   OIDC_NATIVE_SCHEME,
+  claimNativeOidcCode,
   parseOidcCallbackUrl,
 } from '@ci/common/src/utils/oidcNative';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+
+afterEach(() => {
+  sessionStorage.clear();
+});
 
 describe('oidcNative — constants', () => {
   it('exposes the expected scheme/callback/flag', () => {
@@ -56,5 +61,13 @@ describe('parseOidcCallbackUrl', () => {
       code: undefined,
       error: undefined,
     });
+  });
+});
+
+describe('claimNativeOidcCode', () => {
+  it('claims a code once so getLaunchUrl remounts cannot replay it', () => {
+    expect(claimNativeOidcCode('otc-1')).toBe(true);
+    expect(claimNativeOidcCode('otc-1')).toBe(false);
+    expect(claimNativeOidcCode('otc-2')).toBe(true);
   });
 });

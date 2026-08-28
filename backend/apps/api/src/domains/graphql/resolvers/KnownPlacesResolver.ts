@@ -3,6 +3,7 @@ import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { isGeocodingConfigured } from '@ci/configuration';
 import { DailyMetricsService } from '@ci/domains/daily-metrics';
 import { type KnownPlaceKind, KnownPlacesService, type KnownPlaceSource } from '@ci/domains/memory';
 
@@ -54,6 +55,18 @@ export class KnownPlacesResolver {
     const candidates = await this.knownPlacesService.buildKnownPlaces(serviceContext);
 
     return candidates.map((candidate) => KnownPlaceCandidateType.toType(candidate));
+  }
+
+  /**
+   * Whether reverse-geocoding is set up on this appliance. A GPS-only known-
+   * place candidate with no name defaults its label to "Unknown place" and
+   * kind to "other" (KnownPlacesService.clusterToCandidate) whether or not
+   * geocoding has ever run — a client needs this fact to tell "not yet named"
+   * from "genuinely unclassifiable" apart in the UI.
+   */
+  @Query(() => Boolean)
+  geocodingConfigured(): boolean {
+    return isGeocodingConfigured();
   }
 
   /** Confirm / update a known place, upserting the LIVES_IN/WORKS_AT/VISITED graph relationship. */

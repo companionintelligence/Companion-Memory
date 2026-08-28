@@ -7,10 +7,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Seals any credential written by a previous version (or a previous session) to
+        // Seals any credential left behind by a build that predates CompanionSecureStore to
         // this device, so it cannot ride along in an encrypted backup and restore onto
-        // different hardware. See KeychainHardening for why this is a sweep.
-        KeychainHardening.hardenStoredCredentials()
+        // different hardware, before the JS layer migrates it and deletes the legacy copy.
+        // A no-op once that has happened — see KeychainHardening.
+        KeychainHardening.migrateLegacyCredentials()
         return true
     }
 
@@ -29,7 +30,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
     func applicationDidEnterBackground(_ application: UIApplication) {
         // Superseded by SceneDelegate.sceneDidEnterBackground — see the note above.
-        // KeychainHardening's periodic sweep is called from there, not here.
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {

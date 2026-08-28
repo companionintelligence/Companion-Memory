@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
-import { EventService, OnEvent } from '@ci/domains/events';
+import { BACKFILL_JOB_PRIORITY, EventService, OnEvent } from '@ci/domains/events';
 import { PipelineSweepEvent } from '@ci/domains/pipeline/events';
 
 import { MediaDimensionsBackfillRequestEvent, type MediaDimensionsBackfillRequestPayload } from '../events';
@@ -119,7 +119,7 @@ export class MediaDimensionsBackfillListener {
         userId,
         cursor: null,
       },
-      { queue: MEDIA_DIMENSIONS_STAGE_QUEUE },
+      { queue: MEDIA_DIMENSIONS_STAGE_QUEUE, priority: BACKFILL_JOB_PRIORITY },
     );
   }
 }

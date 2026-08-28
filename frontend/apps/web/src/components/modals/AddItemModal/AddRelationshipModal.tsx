@@ -2,10 +2,11 @@ import { useCallback, useState, useMemo } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { GlobalUID } from '@ci/common';
-import { Button, Calendar, Dialog, IconButton, Label, Select } from '@ci/shadcn';
+import { Button, Calendar, IconButton, Label, Select } from '@ci/shadcn';
 import { X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { ResponsiveDialog } from '@/components/ResponsiveDialog';
 import { type SearchResultItem, SearchBox } from '@/components/SearchBox';
 import { CommunicationResult } from '@/components/SearchBox/results/CommunicationResult.tsx';
 import { ConceptResult } from '@/components/SearchBox/results/ConceptResult.tsx';
@@ -196,13 +197,13 @@ export function AddRelationshipModal({
   }, []);
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <Dialog.Content className="top-[15%] translate-y-0 sm:max-w-2xl">
-        <Dialog.Header>
-          <Dialog.Title className="text-xl mb-4">Add Relationship</Dialog.Title>
-        </Dialog.Header>
+    <ResponsiveDialog open={open} onOpenChange={handleClose}>
+      <ResponsiveDialog.Content className="top-[15%] translate-y-0 sm:max-w-2xl">
+        <ResponsiveDialog.Header>
+          <ResponsiveDialog.Title className="text-xl mb-4">Add Relationship</ResponsiveDialog.Title>
+        </ResponsiveDialog.Header>
 
-        <Dialog.Title>Related Entity</Dialog.Title>
+        <ResponsiveDialog.Title>Related Entity</ResponsiveDialog.Title>
         {!selectedEntity && (
           <SearchBox
             onSearch={handleSearch}
@@ -322,7 +323,7 @@ export function AddRelationshipModal({
           </div>
         )}
 
-        <Dialog.Footer className="flex gap-2 justify-end">
+        <ResponsiveDialog.Footer className="flex gap-2 justify-end">
           <Button type="button" variant="destructive" onClick={handleCancel} disabled={loading}>
             Cancel
           </Button>
@@ -333,8 +334,8 @@ export function AddRelationshipModal({
           >
             Add
           </Button>
-        </Dialog.Footer>
-      </Dialog.Content>
-    </Dialog>
+        </ResponsiveDialog.Footer>
+      </ResponsiveDialog.Content>
+    </ResponsiveDialog>
   );
 }

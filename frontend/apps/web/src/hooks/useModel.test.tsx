@@ -5,9 +5,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ModelProvider, useModel } from './useModel';
 
+const h = vi.hoisted(() => ({
+  auth: {
+    authToken: 'test-token' as string | null,
+    authenticated: true,
+    expired: false,
+    loading: false,
+    error: null,
+  },
+}));
+
 vi.mock('./useAuth', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
-  useAuth: () => [{ authToken: 'test-token', expired: false, loading: false, error: null }, {}],
+  useAuth: () => [h.auth, {}],
 }));
 
 const MODELS = [
@@ -32,19 +42,24 @@ const MODELS = [
 ];
 
 function setFetch(body: unknown, ok = true) {
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(() =>
-      Promise.resolve({ ok, status: ok ? 200 : 500, text: async () => JSON.stringify(body) } as Response),
-    ),
+  const fetchMock = vi.fn<typeof fetch>(() =>
+    Promise.resolve({ ok, status: ok ? 200 : 500, text: async () => JSON.stringify(body) } as Response),
   );
+  vi.stubGlobal('fetch', fetchMock);
+
+  return fetchMock;
 }
 
 const wrapper = ({ children }: { children: ReactNode }) => (
   <ModelProvider args={[]}>{children}</ModelProvider>
 );
 
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  h.auth.authToken = 'test-token';
+  h.auth.authenticated = true;
+  h.auth.expired = false;
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe('useModel', () => {
@@ -153,5 +168,22 @@ describe('useModel', () => {
     await waitFor(() => expect(result.current[0].loading).toBe(false));
     expect(result.current[0].selectedModel).toBeNull();
     expect(result.current[0].selectedVisionModel).toBeNull();
+  });
+
+  // Native has no JWT. The phone used to skip this fetch and the composer
+  // sat on "Couldn't load models" even with Ollama answering on the appliance.
+  it('loads models when authenticated with no JWT (native API key session)', async () => {
+    h.auth.authToken = null;
+    h.auth.authenticated = true;
+    const fetchMock = setFetch(MODELS);
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].activeModels).toHaveLength(2);
+    expect(result.current[0].selectedModel).toBe('llama3');
+    expect(fetchMock).toHaveBeenCalled();
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
   });
 });

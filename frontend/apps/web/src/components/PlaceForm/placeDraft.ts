@@ -57,6 +57,36 @@ export interface PlaceDraft {
   longitude: string;
 }
 
+/** Persist a GPS fix without rounding away the pin. Seven decimals is ~1 cm. */
+export function formatExactCoordinate(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '';
+  }
+
+  return value.toFixed(7);
+}
+
+/**
+ * Apply a device GPS fix to the draft: exact lat/lng, address when reverse
+ * geocode found one, and a name/kind only when the user has not set them yet.
+ */
+export function applyCurrentLocation(
+  draft: PlaceDraft,
+  fix: { latitude: number; longitude: number; address?: string | null },
+): PlaceDraft {
+  const address = fix.address?.trim() ?? '';
+  const nameIsPlaceholder = draft.name.trim() === '' || draft.name.trim() === 'Current location';
+
+  return {
+    ...draft,
+    latitude: formatExactCoordinate(fix.latitude),
+    longitude: formatExactCoordinate(fix.longitude),
+    address: address === '' ? draft.address : address,
+    name: nameIsPlaceholder ? (address === '' ? 'Current location' : address) : draft.name,
+    placeKind: draft.placeKind === '' ? 'address' : draft.placeKind,
+  };
+}
+
 export function emptyPlaceDraft(): PlaceDraft {
   return {
     name: '',

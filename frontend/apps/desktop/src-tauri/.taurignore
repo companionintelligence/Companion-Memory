@@ -1,0 +1,8 @@
+# `cargo tauri dev`'s file watcher doesn't read the parent directory's
+# .gitignore — without this, build.rs's own `swift build` writes temp lock
+# files under apple-bridge/.build/ on every invocation, the watcher sees them
+# as a source change, and triggers another rebuild that writes another lock
+# file: an infinite rebuild loop (reproduced while testing this app).
+apple-bridge/.build
+resources/apple-bridge
+ollama-runtime

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NativeToolProvider } from '../../providers/NativeToolProvider';
+import { openGate } from '../../registry/__tests__/gateDouble';
 import { ToolRegistry } from '../../registry/ToolRegistry';
 import { AnomaliesRecentTool } from '../../tools/AnomaliesRecentTool';
 import { BriefListTool } from '../../tools/BriefListTool';
@@ -94,7 +95,7 @@ const EXPECTED_NOT_LOCAL_CAPABLE = [
 
 async function buildCatalog(): Promise<IntentCatalogService> {
   const tools = TOOL_CLASSES.map((Cls) => new Cls(...Array(Cls.length).fill(stub)));
-  const registry = new ToolRegistry(stub, stub);
+  const registry = new ToolRegistry(stub, stub, openGate().double);
   await registry.registerProvider(new NativeToolProvider(tools, stub));
 
   return new IntentCatalogService(registry);

@@ -36,4 +36,11 @@ describe('ImportArchivesStep', () => {
 
     expect(screen.getByText(/keep running after setup finishes/i)).toBeInTheDocument();
   });
+
+  it('does not trap the catalog in a nested 58vh scroller', () => {
+    const { container } = render(<ImportArchivesStep />);
+
+    expect(container.innerHTML).not.toMatch(/58vh/);
+    expect(container.querySelector('.overflow-hidden')).toBeNull();
+  });
 });

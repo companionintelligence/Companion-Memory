@@ -14,4 +14,19 @@ export interface PortalTokenVerifier {
    * null if it is not a valid portal token.
    */
   verifyAndProvision(token: string): Promise<{ id: string } | null>;
+  /**
+   * Verify a portal token's claims WITHOUT provisioning a local user. Used by
+   * the peer-ask surface, where the caller is another Companion rather than a
+   * local user: provisioning there would mint a shadow account on every box a
+   * portal user can reach.
+   *
+   * `audience`, when supplied, REPLACES the default first-party audience list.
+   * The peer surface passes this box's own audience so a token minted for a
+   * different box cannot be replayed here — without it, any token bearing any
+   * first-party audience would be accepted by every box that trusts the issuer.
+   */
+  verifyClaims(
+    token: string,
+    options?: { audience?: string[] },
+  ): Promise<{ issuer: string; subject: string } | null>;
 }

@@ -12,6 +12,8 @@ import {
   NoteIcon,
   PersonIcon,
   PlaceIcon,
+  ProductIcon,
+  ReceiptIcon,
 } from '@/components/icons';
 
 export type EntityTypeIcon = ComponentType<{ className?: string; colorized?: boolean }>;
@@ -99,11 +101,20 @@ export const WHAT_CATEGORIES: WhatCategory[] = [
     ],
   },
   {
-    kind: 'standalone',
+    // Three types, one question: "what do I own, what model is it, and what did
+    // it cost". Products and Receipts are search-union members server-side, so
+    // leaving them out of the picker would have made them unreachable while
+    // still leaking them into every narrowed browse (they ride the same
+    // exclude-list as everything in AVAILABLE_ENTITY_TYPES).
+    kind: 'group',
     id: 'thing',
-    label: 'Thing',
-    entityType: 'Thing',
+    label: 'Things',
     icon: ItemIcon,
+    items: [
+      { entityType: 'Thing', label: 'Things', icon: ItemIcon },
+      { entityType: 'Product', label: 'Products', icon: ProductIcon },
+      { entityType: 'Receipt', label: 'Receipts', icon: ReceiptIcon },
+    ],
   },
   {
     kind: 'tag',
@@ -138,6 +149,9 @@ export const WHAT_BAR_ICON_CLASS: Record<string, string> = {
 
 export const WHAT_BAR_ITEM_ICON_CLASS: Record<string, string> = {
   Browser: 'text-emerald-600 dark:text-emerald-400',
+  Thing: 'text-yellow-600 dark:text-yellow-400',
+  Product: 'text-amber-600 dark:text-amber-400',
+  Receipt: 'text-lime-700 dark:text-lime-400',
   Content: 'text-pink-600 dark:text-pink-400',
   File: 'text-gray-600 dark:text-gray-400',
   Note: 'text-teal-700 dark:text-teal-400',

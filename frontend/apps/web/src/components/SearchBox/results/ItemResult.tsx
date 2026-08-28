@@ -21,7 +21,7 @@ export function ItemResult({ item }: Props) {
         <ItemIcon />
         <div className="font-medium">{data.name}</div>
       </div>
-      <div className="text-muted-foreground">Item</div>
+      <div className="text-muted-foreground">Thing</div>
     </div>
   );
 }

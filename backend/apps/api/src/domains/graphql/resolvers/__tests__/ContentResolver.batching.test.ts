@@ -63,6 +63,7 @@ function makeHarness() {
     { load: jest.fn() } as never,
     { load: jest.fn() } as never,
     contentFileLoader,
+    { load: jest.fn() } as never,
   );
 
   return { resolver, findByIds, findVariantsByParentIds };

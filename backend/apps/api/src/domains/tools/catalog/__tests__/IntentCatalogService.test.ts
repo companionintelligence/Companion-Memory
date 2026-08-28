@@ -19,7 +19,7 @@ function schema(name: string, domain: string, extra: Record<string, unknown> = {
 }
 
 function fakeRegistry(schemas: unknown[]): ToolRegistry {
-  return { getAvailableTools: () => schemas } as unknown as ToolRegistry;
+  return { getAvailableTools: () => schemas, getOutboundCatalogTools: () => schemas } as unknown as ToolRegistry;
 }
 
 describe('IntentCatalogService', () => {

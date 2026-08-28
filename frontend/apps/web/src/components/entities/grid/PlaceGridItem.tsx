@@ -11,6 +11,8 @@ export const PLACE_FRAGMENT = gql(`
     name
     description
     properties
+    latitude
+    longitude
   }
 `);
 

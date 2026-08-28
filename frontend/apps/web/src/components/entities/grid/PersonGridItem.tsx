@@ -1,6 +1,6 @@
 import { type MouseEvent } from 'react';
 
-import { PersonIcon } from '@/components/icons';
+import { PersonAvatar } from '@/components/PersonAvatar';
 import { gql, useFragment, type FragmentType } from '@/graphql';
 
 import { EntityGridItem } from './EntityGridItem';
@@ -25,20 +25,13 @@ interface Props {
 export function PersonGridItem({ person, onClick }: Props) {
   const data = useFragment(PERSON_FRAGMENT, person);
 
-  const avatarUrl = data.avatarUrl
-    ? /^https?:\/\//.test(data.avatarUrl)
-      ? data.avatarUrl
-      : `/static${data.avatarUrl}`
-    : undefined;
-
   return (
     <EntityGridItem onClick={onClick}>
       <EntityGridItem.Header>
-        {avatarUrl ? (
-          <img src={avatarUrl} alt={data.name || ''} className="h-8 w-8 shrink-0 rounded-full object-cover" />
-        ) : (
-          <PersonIcon className="shrink-0" />
-        )}
+        {/* size="sm" is 32px — the exact h-8 w-8 this rendered before
+            PersonAvatar existed, so this is a no-op for anyone who already
+            has a photo. */}
+        <PersonAvatar name={data.name} avatarUrl={data.avatarUrl} size="sm" />
 
         <div className="text-md font-semibold truncate">{data.name}</div>
       </EntityGridItem.Header>

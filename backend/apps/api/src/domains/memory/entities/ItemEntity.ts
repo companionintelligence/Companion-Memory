@@ -4,13 +4,13 @@ import type { AcquisitionMethod, UnitSystem } from '../physicalProperties';
 
 import { numericMeasurementTransformer } from './numericMeasurement';
 
-export type InventoryCondition = 'new' | 'like_new' | 'good' | 'fair' | 'poor' | 'broken' | 'n/a';
+export type ObjectCondition = 'new' | 'like_new' | 'good' | 'fair' | 'poor' | 'broken' | 'n/a';
 
 /**
- * Ownership state. Mirrors the inventory_lifecycle_state_check constraint —
+ * Ownership state. Mirrors the objects_lifecycle_state_check constraint —
  * widening one without the other fails the write, so change both together.
  */
-export type InventoryLifecycleState =
+export type ObjectLifecycleState =
   | 'active'
   | 'stored'
   | 'lent_out'
@@ -20,10 +20,10 @@ export type InventoryLifecycleState =
   | 'returned'
   | 'archived';
 
-/** How this unit's identity was established. Mirrors inventory_identity_method_check. */
-export type InventoryIdentityMethod = 'user' | 'barcode' | 'receipt' | 'vision' | 'import' | 'inferred';
+/** How this unit's identity was established. Mirrors objects_identity_method_check. */
+export type ObjectIdentityMethod = 'user' | 'barcode' | 'receipt' | 'vision' | 'import' | 'inferred';
 
-@Entity({ schema: 'ci', name: 'inventory' })
+@Entity({ schema: 'ci', name: 'objects' })
 export class ItemEntity {
   @PrimaryColumn('uuid', { name: 'object_id' })
   id!: string;
@@ -100,7 +100,7 @@ export class ItemEntity {
   currentLocationCoordinates!: Point | null;
 
   @Column('text', { name: 'condition', nullable: true })
-  condition!: InventoryCondition | null;
+  condition!: ObjectCondition | null;
 
   @Column('boolean', { name: 'maintenance_needed', default: false })
   maintenanceNeeded!: boolean;
@@ -133,8 +133,8 @@ export class ItemEntity {
   ownerUserId!: string | null;
 
   // Provenance triple — the stable key capture sources carry. Lets the importer
-  // route timeline items into inventory and re-ingest idempotently (paired with
-  // the inventory_source_triple_uniq partial unique index).
+  // route timeline items into ci.objects and re-ingest idempotently (paired with
+  // the objects_source_triple_uniq partial unique index).
   @Column('text', { name: 'source_type', nullable: true })
   sourceType!: string | null;
 
@@ -147,7 +147,7 @@ export class ItemEntity {
   // ---------------------------------------------------------------------------
   // Object identity (migration 20260803223025_extend_inventory_object_identity)
   //
-  // ci.inventory stays the table of record for OWNED UNITS; these columns give
+  // ci.objects stays the table of record for OWNED UNITS; these columns give
   // a unit its catalog model, its purchase provenance, an honest lifecycle, and
   // a merge tombstone — the four things it could not express before.
   // ---------------------------------------------------------------------------
@@ -168,7 +168,7 @@ export class ItemEntity {
    * filter (those keep the when and the how, and are not deprecated).
    */
   @Column('text', { name: 'lifecycle_state', default: 'active' })
-  lifecycleState!: InventoryLifecycleState;
+  lifecycleState!: ObjectLifecycleState;
 
   @Column('int', { name: 'quantity', default: 1 })
   quantity!: number;
@@ -182,7 +182,7 @@ export class ItemEntity {
   identityConfidence!: number;
 
   @Column('text', { name: 'identity_method', nullable: true })
-  identityMethod!: InventoryIdentityMethod | null;
+  identityMethod!: ObjectIdentityMethod | null;
 
   /** Last confirmed sighting, denormalized from ci.object_observations for sort/filter. */
   @Column('timestamptz', { name: 'last_seen_at', nullable: true })
@@ -312,7 +312,7 @@ export class ItemEntity {
   }
 
   /**
-   * Composes the egress item from the CTI pair: the ci.inventory detail row
+   * Composes the egress item from the CTI pair: the ci.objects detail row
    * plus its ci.entities base row, which is the sole owner of
    * name/description. Callers that only have the detail (e.g. straight after
    * an insert they themselves composed) may pass the base values inline.

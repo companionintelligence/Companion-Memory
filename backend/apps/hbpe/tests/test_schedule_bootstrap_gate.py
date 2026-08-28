@@ -19,16 +19,23 @@ from __future__ import annotations
 import pytest
 
 from ci.hbpe import functions
-from ci.hbpe.model.checkpoints import HMT_INT8_ONNX, model_exists, user_ckpt_dir
+from ci.hbpe.model.checkpoints import (
+    HMT_INT8_ONNX,
+    model_exists,
+    user_ckpt_dir,
+    write_architecture_stamp,
+)
 
 WARM_USER = "11111111-warm-0000-0000-000000000000"
 COLD_USER = "22222222-cold-0000-0000-000000000000"
 
 
-def _make_checkpoint(user_id: str) -> None:
+def _make_checkpoint(user_id: str, *, stamp: bool = True) -> None:
     """Materialise one servable artifact in the user's per-user ckpt dir."""
     d = user_ckpt_dir(user_id, create=True)
     (d / HMT_INT8_ONNX).write_bytes(b"\x00")
+    if stamp:
+        write_architecture_stamp(user_id)
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +102,27 @@ async def test_ensure_bootstrap_noop_when_all_warm(bootstrapped_users):
     await functions.ensure_bootstrap(WARM_USER)
     await functions.ensure_bootstrap(COLD_USER)
 
+    assert bootstrapped_users == []
+
+
+@pytest.mark.asyncio
+async def test_ensure_bootstrap_retrains_on_architecture_mismatch(
+    bootstrapped_users, monkeypatch
+):
+    """A leftover 64-d checkpoint (no architecture stamp) must not skip retrain."""
+    _make_checkpoint(WARM_USER, stamp=False)
+    ran_nightly: list[str] = []
+
+    async def _fake_nightly(user_id: str, **_):
+        ran_nightly.append(user_id)
+        return {"user_id": user_id, "workflow": "nightly", "steps": {}}
+
+    monkeypatch.setattr(functions, "nightly", _fake_nightly)
+
+    result = await functions.ensure_bootstrap(WARM_USER)
+
+    assert result["workflow"] == "nightly"
+    assert ran_nightly == [WARM_USER]
     assert bootstrapped_users == []
 
 

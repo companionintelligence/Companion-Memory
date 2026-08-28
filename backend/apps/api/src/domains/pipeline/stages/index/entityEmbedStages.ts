@@ -126,7 +126,7 @@ export class EventEmbedStage extends DenseEmbedStageBase {
 
 export const INDEX_EMBED_ITEM_SOURCE: StageSource = {
   schema: 'ci',
-  table: 'inventory',
+  table: 'objects',
   idColumn: 'object_id',
   userColumn: 'user_id',
 };

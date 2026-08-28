@@ -71,6 +71,7 @@ export const SavedSearchGridItemFragment = gql(`
     }
     isPublic
     shareToken
+    isSeed
   }
 `);
 
@@ -96,6 +97,11 @@ export function SavedSearch({
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
             <span className="truncate font-medium">{savedSearch.name || 'Untitled saved search'}</span>
+            {savedSearch.isSeed && (
+              <span className="inline-flex shrink-0 items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                Starter
+              </span>
+            )}
             {sharingEnabled && savedSearch.isPublic && (
               <Tooltip delayDuration={600}>
                 <Tooltip.Content>{t('SAVED_SEARCH_SHARED_BADGE')}</Tooltip.Content>

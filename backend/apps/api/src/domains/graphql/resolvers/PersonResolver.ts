@@ -51,6 +51,7 @@ import { UpdatePersonInput } from '../types/UpdatePersonInput';
 import { UpdatePersonPayload } from '../types/UpdatePersonPayload';
 import { memoryRelToGql } from '../utils/lifeGraphRelationships';
 import { Paginator } from '../utils/Paginator';
+import { contactMethodsFromPersonProperties, mergePersonIdentifiers } from '../utils/personContactMethods';
 
 /** Map the structured input fields onto the established properties JSONB keys. */
 function structuredPropertiesPatch(
@@ -626,6 +627,13 @@ export class PersonResolver {
       parsedStatus = status;
     }
 
+    // Shared email or an E.164-exact phone is the same person. Fold those
+    // before the queue is shown so "95% match" on a shared mailbox never
+    // sits waiting for a click.
+    if (parsedStatus === 'pending') {
+      await this.mergeCandidateService.autoMergePendingEmailPairs(serviceContext);
+    }
+
     const page = await this.mergeCandidateService.findCandidates(serviceContext, {
       status: parsedStatus,
       limit: first ?? undefined,
@@ -661,7 +669,12 @@ export class PersonResolver {
     return tags.map((tag) => EntityTagType.toType(tag));
   }
 
-  /** Contact methods / identifiers claimed by this person. */
+  /**
+   * Contact methods for this person. Indexed `ci.entity_identifiers` rows plus
+   * emails/phones still sitting on the person properties — import often writes
+   * the address onto the row and never copies it into the identifier table, and
+   * the Details card only reads this field.
+   */
   @ResolveField(() => [PersonIdentifierType])
   async identifiers(
     @Context() context: RequestContext,
@@ -671,7 +684,10 @@ export class PersonResolver {
 
     const rows = await this.personIdentifiersLoader.load(serviceContext, parent.__source.id);
 
-    return rows.map((row) => PersonIdentifierType.toType(row));
+    return mergePersonIdentifiers(
+      rows.map((row) => PersonIdentifierType.toType(row)),
+      contactMethodsFromPersonProperties(parent.__source),
+    );
   }
 
   /** Event/communication activity aggregates for this person. */

@@ -58,7 +58,7 @@ by every Python service) implement the same rules:
 - Home directories (`/Users/<name>`, `/home/<name>`, `C:\Users\<name>`) → `~`,
   since they leak the account name
 - Object and header keys matching
-  `password|secret|token|authorization|cookie|jwt|api[-_ ]?key|dsn|pepper|private_key`
+  `password|secret|token|authorization|cookie|jwt|api[-_ ]?key|dsn|pepper|private[-_]?key|signature`
   → `[Filtered]`. The hyphenated form matters: `x-api-key` is the API's own
   key header, and the SDK ships request headers even with PII disabled.
 - Request cookies and bodies dropped; **query strings removed from
@@ -78,8 +78,8 @@ by every Python service) implement the same rules:
 - `logentry.formatted` and `logentry.params`, not just `logentry.message` —
   `message` is only the printf *format string*, so scrubbing it alone stamps
   `[Filtered]` on the template while shipping the interpolated user data intact
-- Strings over 8 KB truncated, so a stray blob can't smuggle memory contents out
-  inside an exception message
+- Strings over 8,000 characters truncated (`MAX_STRING_LENGTH`), so a stray blob
+  can't smuggle memory contents out inside an exception message
 
 The browser bundle (`frontend/apps/web/src/lib/telemetry.ts`) applies the same
 rules and additionally strips the query string and hash from every reported URL,
@@ -180,8 +180,12 @@ container start.
 Turning it off again:
 
 ```bash
-CI_TELEMETRY=off docker compose --profile production up -d
+CI_TELEMETRY=off make production
 ```
+
+(`make production` is what composes the two files and selects the profile —
+`docker compose --profile production up -d` on its own would miss
+`docker-compose.production.yml`.)
 
 ## Verifying
 
@@ -202,7 +206,7 @@ To confirm reporting is genuinely inert without a DSN, start the API with no
 | `backend/apps/api/src/common/filters/GlobalExceptionsFilter.ts` | Captures unexpected request failures (not 4xx) |
 | `backend/apps/api/src/application.ts` | Crash handlers capture + flush before `process.exit` |
 | `frontend/apps/web/src/main.tsx` | Calls `initTelemetry()` before render |
-| `backend/apps/{hbpe,summary}` | `init_telemetry()` in the FastAPI app entry points |
+| `backend/apps/hbpe/src/ci/hbpe/api.py`, `backend/apps/summary/src/ci/summary/api.py` | `init_telemetry("ci-server-hbpe" \| "ci-server-summary")` at module scope in the FastAPI entry points |
 
 ## Not wired up yet
 

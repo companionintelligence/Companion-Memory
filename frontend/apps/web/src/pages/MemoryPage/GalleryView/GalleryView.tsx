@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { useSearchParams } from 'react-router-dom';
 
+import { MemoryChatAbout } from '@/components/ChatWithAgent';
 import {
   AnswerGridItem,
   BrowserActivityGridItem,
@@ -16,6 +17,8 @@ import {
   NoteGridItem,
   PersonGridItem,
   PlaceGridItem,
+  ProductGridItem,
+  ReceiptGridItem,
   ThreadGridItem,
 } from '@/components/entities';
 
@@ -96,7 +99,7 @@ export function GalleryView() {
 
   if (loading && data.length === 0) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
         <EntityGrid>
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="h-full w-full animate-pulse rounded-lg border bg-card" />
@@ -110,7 +113,7 @@ export function GalleryView() {
   // query failure read as "No results found".
   if (error && data.length === 0) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
         <ErrorState onRetry={refetch} />
       </div>
     );
@@ -118,7 +121,7 @@ export function GalleryView() {
 
   if (data.length === 0) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
         <MemoryEmptyState filtered={filteredBrowse} />
       </div>
     );
@@ -126,7 +129,7 @@ export function GalleryView() {
 
   return (
     <>
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
         <EntityGrid>
           {ordered.map((item) => {
             // Media-bearing entities (image/video) render as real thumbnails and
@@ -147,66 +150,87 @@ export function GalleryView() {
                 setLightboxIndex(mediaIdx);
               };
 
-              return <MediaTile key={item.id} media={mediaEntries[mediaIdx]} onClick={openMedia} />;
+              return (
+                <MemoryChatAbout key={item.id} entity={item} className="h-full min-w-0">
+                  <MediaTile media={mediaEntries[mediaIdx]} onClick={openMedia} />
+                </MemoryChatAbout>
+              );
             }
+
+            let tile: ReactNode;
 
             switch (item.__typename) {
               case 'AnswerType':
-                return <AnswerGridItem key={item.id} answer={item} onClick={() => setActiveEntity(item)} />;
+                tile = <AnswerGridItem answer={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'BrowserActivityType':
-                return (
-                  <BrowserActivityGridItem
-                    key={item.id}
-                    browserActivity={item}
-                    onClick={() => setActiveEntity(item)}
-                  />
+                tile = (
+                  <BrowserActivityGridItem browserActivity={item} onClick={() => setActiveEntity(item)} />
                 );
+                break;
 
               case 'CommunicationType':
-                return (
-                  <CommunicationGridItem
-                    key={item.id}
-                    communication={item}
-                    onClick={() => setActiveEntity(item)}
-                  />
-                );
+                tile = <CommunicationGridItem communication={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'ConceptType':
-                return <ConceptGridItem key={item.id} concept={item} onClick={() => setActiveEntity(item)} />;
+                tile = <ConceptGridItem concept={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'ContentType':
-                return <ContentGridItem key={item.id} content={item} onClick={() => setActiveEntity(item)} />;
+                tile = <ContentGridItem content={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'EventType':
-                return <EventGridItem key={item.id} event={item} onClick={() => setActiveEntity(item)} />;
+                tile = <EventGridItem event={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'FileChunkType':
-                return (
-                  <FileChunkGridItem key={item.id} fileChunk={item} onClick={() => setActiveEntity(item)} />
-                );
+                tile = <FileChunkGridItem fileChunk={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'FileType':
-                return <FileGridItem key={item.id} file={item} onClick={() => setActiveEntity(item)} />;
+                tile = <FileGridItem file={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'ItemType':
-                return <ItemGridItem key={item.id} item={item} onClick={() => setActiveEntity(item)} />;
+                tile = <ItemGridItem item={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'NoteType':
-                return <NoteGridItem key={item.id} note={item} onClick={() => setActiveEntity(item)} />;
+                tile = <NoteGridItem note={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'PersonType':
-                return <PersonGridItem key={item.id} person={item} onClick={() => setActiveEntity(item)} />;
+                tile = <PersonGridItem person={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'PlaceType':
-                return <PlaceGridItem key={item.id} place={item} onClick={() => setActiveEntity(item)} />;
+                tile = <PlaceGridItem place={item} onClick={() => setActiveEntity(item)} />;
+                break;
+
+              case 'ProductModelType':
+                tile = <ProductGridItem product={item} onClick={() => setActiveEntity(item)} />;
+                break;
+
+              case 'ReceiptType':
+                tile = <ReceiptGridItem receipt={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               case 'ThreadType':
-                return <ThreadGridItem key={item.id} thread={item} onClick={() => setActiveEntity(item)} />;
+                tile = <ThreadGridItem thread={item} onClick={() => setActiveEntity(item)} />;
+                break;
 
               default:
                 return null;
             }
+
+            return (
+              <MemoryChatAbout key={item.id} entity={item} className="h-full min-w-0">
+                {tile}
+              </MemoryChatAbout>
+            );
           })}
 
           {/* Pulsing placeholders for the page being fetched (mirrors ListView). */}

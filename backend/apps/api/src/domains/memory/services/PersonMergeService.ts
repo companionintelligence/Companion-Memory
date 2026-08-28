@@ -8,6 +8,7 @@ import { EventService } from '@ci/domains/events';
 import { PersonUpdatedEvent } from '@ci/domains/memory/events';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
+import { pickFullerName } from '../utils/personNameTokens';
 
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 
@@ -128,7 +129,7 @@ export class PersonMergeService {
         sources.map((id) => byId.get(id)?.properties ?? {}),
       );
 
-      const mergedName = firstNonEmpty([target.name, ...sources.map((id) => byId.get(id)?.name)]);
+      const mergedName = pickFullerName([target.name, ...sources.map((id) => byId.get(id)?.name)]);
       const mergedDescription = firstNonEmpty([
         target.description,
         ...sources.map((id) => byId.get(id)?.description),

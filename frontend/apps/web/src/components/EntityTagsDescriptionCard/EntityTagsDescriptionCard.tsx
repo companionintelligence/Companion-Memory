@@ -34,6 +34,11 @@ interface Props {
    * stays read-only even in edit mode, rather than accepting edits it cannot keep.
    */
   onDescriptionSave?: (value: string) => Promise<void>;
+  /**
+   * Leave the description out entirely — for a page that edits it elsewhere
+   * (e.g. PlacePage's per-field editor) and only wants the tags here.
+   */
+  hideDescription?: boolean;
   /** Type-specific detail rendered above Tags — an event's organizer and location, say. */
   children?: ReactNode;
   className?: string;
@@ -49,6 +54,7 @@ export function EntityTagsDescriptionCard({
   descriptionLabel = 'Description',
   editMode,
   onDescriptionSave,
+  hideDescription = false,
   children,
   className,
   contentClassName,
@@ -143,38 +149,40 @@ export function EntityTagsDescriptionCard({
           )}
         </div>
 
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            {/*
+        {!hideDescription && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              {/*
               `htmlFor` only when the control it names is actually rendered. The empty state
               replaces the textarea with static text, and a label pointing at an id that is not in
               the document is announced by a screen reader as labelling nothing.
             */}
-            <Label htmlFor={showDescriptionPlaceholder ? undefined : descriptionFieldId}>
-              {descriptionLabel}
-            </Label>
-            <span className="text-xs text-muted-foreground" aria-live="polite">
-              {saving ? 'Saving…' : ''}
-            </span>
-          </div>
+              <Label htmlFor={showDescriptionPlaceholder ? undefined : descriptionFieldId}>
+                {descriptionLabel}
+              </Label>
+              <span className="text-xs text-muted-foreground" aria-live="polite">
+                {saving ? 'Saving…' : ''}
+              </span>
+            </div>
 
-          {showDescriptionPlaceholder ? (
-            <p className="text-sm italic text-muted-foreground">No {descriptionLabel.toLowerCase()} yet</p>
-          ) : (
-            <Textarea
-              id={descriptionFieldId}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onBlur={handleDescriptionBlur}
-              readOnly={!canEditDescription}
-              placeholder={canEditDescription ? `Add a ${descriptionLabel.toLowerCase()}…` : undefined}
-              className={cn(
-                'resize-none min-h-[120px]',
-                canEditDescription ? '' : 'shadow-none focus-visible:ring-0 focus-visible:border-border',
-              )}
-            />
-          )}
-        </div>
+            {showDescriptionPlaceholder ? (
+              <p className="text-sm italic text-muted-foreground">No {descriptionLabel.toLowerCase()} yet</p>
+            ) : (
+              <Textarea
+                id={descriptionFieldId}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onBlur={handleDescriptionBlur}
+                readOnly={!canEditDescription}
+                placeholder={canEditDescription ? `Add a ${descriptionLabel.toLowerCase()}…` : undefined}
+                className={cn(
+                  'resize-none min-h-[120px]',
+                  canEditDescription ? '' : 'shadow-none focus-visible:ring-0 focus-visible:border-border',
+                )}
+              />
+            )}
+          </div>
+        )}
       </Card.Content>
     </Card>
   );

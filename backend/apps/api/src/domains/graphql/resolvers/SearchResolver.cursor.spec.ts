@@ -116,8 +116,16 @@ function makeResolver() {
     stub('getEntitiesForNotes') as never,
     stub('getEntitiesForPeople') as never,
     stub('getEntitiesForPlaces') as never,
+    stub('getEntitiesForProducts') as never,
+    stub('getEntitiesForReceipts') as never,
     stub('getEntitiesForAnswers') as never,
     {} as never,
+    {
+      // Authorizes with no ceiling: these suites are not about consent, and a
+      // share created before `share_max_disclosure` existed reads exactly this way.
+      authorize: jest.fn().mockResolvedValue({ grantId: 'grant-test', ceiling: undefined }),
+      recordRead: jest.fn().mockResolvedValue(undefined),
+    } as never,
     { search: jest.fn(empty) } as never,
     { getEntitiesForTags: jest.fn(empty), searchByLabel: jest.fn(empty) } as never,
     { isFeatureEnabled: jest.fn(async () => false) } as never,

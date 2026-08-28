@@ -5,7 +5,13 @@ import { DataSource, type QueryRunner } from 'typeorm';
 import type { LoggerService } from '@ci/common/logging';
 
 import { databaseAvailability, resolveConnection } from '../../__tests__/harness/pipelineHarness';
-import { DEAD_LETTER_QUEUE, DEAD_LETTER_REAP_BATCH, PIPELINE_CONTROL_QUEUE } from '../../constants';
+import {
+  DEAD_LETTER_PURGE_BATCH,
+  DEAD_LETTER_QUEUE,
+  DEAD_LETTER_REAP_BATCH,
+  DEAD_LETTER_REPLAYED_RETENTION_DAYS,
+  PIPELINE_CONTROL_QUEUE,
+} from '../../constants';
 import { PipelineDeadLetterReapEvent } from '../../events';
 import { DeadLetterReaperListener } from '../DeadLetterReaperListener';
 
@@ -79,10 +85,20 @@ interface Statement {
 interface ReaperOptions {
   /** Does `pgboss.job` exist? False models a deployment that never booted pg-boss. */
   pgboss?: boolean;
+  /**
+   * Does `ci.pipeline_dead_letters` exist? False models a node that started
+   * before `migrate-database` finished — the purge guards it separately from
+   * the harvest because it never reads `pgboss.job` at all.
+   */
+  letters?: boolean;
   /** Ids the `INSERT ... RETURNING id` answers with — i.e. what was harvested. */
   harvested?: string[];
+  /** Ids the purge's `DELETE ... RETURNING id` answers with — i.e. what was reclaimed. */
+  purged?: string[];
   /** Make the copy fail, the way a missing table or a dead connection would. */
   insertError?: Error;
+  /** Make the purge fail, independently of the copy. */
+  purgeError?: Error;
 }
 
 function makeReaper(options: ReaperOptions = {}) {
@@ -95,7 +111,13 @@ function makeReaper(options: ReaperOptions = {}) {
     if (/to_regclass/i.test(sql)) {
       // Shaped like the real answer: one row, one boolean column. The listener
       // destructures it positionally.
-      return [{ exists: options.pgboss ?? true }];
+      //
+      // The two legs ask DIFFERENT questions and are answered apart: the
+      // harvest needs `pgboss.job` AND our table, the purge only ours. A single
+      // shared answer here would hide a purge that skipped itself because
+      // pg-boss was absent — which is a node with an unbounded table and no
+      // reason for it.
+      return [{ exists: /pgboss\.job/i.test(sql) ? (options.pgboss ?? true) : (options.letters ?? true) }];
     }
 
     if (/insert into ci\.pipeline_dead_letters/i.test(sql)) {
@@ -104,6 +126,14 @@ function makeReaper(options: ReaperOptions = {}) {
       }
 
       return (options.harvested ?? []).map((id) => ({ id }));
+    }
+
+    if (/delete from ci\.pipeline_dead_letters/i.test(sql)) {
+      if (options.purgeError != null) {
+        throw options.purgeError;
+      }
+
+      return (options.purged ?? []).map((id) => ({ id }));
     }
 
     // Anything else is a statement this spec does not know the reaper makes.
@@ -135,6 +165,9 @@ function makeReaper(options: ReaperOptions = {}) {
     /** Just the copy statements — the ones that write anything. */
     inserts: (): Statement[] =>
       statements.filter((s) => /insert into ci\.pipeline_dead_letters/i.test(s.sql)),
+    /** Just the purge statements — the ones that destroy anything. */
+    deletes: (): Statement[] =>
+      statements.filter((s) => /delete from ci\.pipeline_dead_letters/i.test(s.sql)),
   };
 }
 
@@ -282,6 +315,174 @@ describe('DeadLetterReaperListener', () => {
       await h.listener.reapOnSchedule();
 
       expect(h.inserts()[0].params).toEqual([DEAD_LETTER_QUEUE, DEAD_LETTER_REAP_BATCH]);
+    });
+
+    it('also runs the retention purge — the growth and its bound share one tick', async () => {
+      // The reason there is no second cron: this writer is scheduled and
+      // batched (500 rows every two minutes, 360k/day) and its destination had
+      // no cap of any kind. A separate schedule for the bound would be one more
+      // thing to correlate; here the two legs cannot drift apart.
+      const h = makeReaper({ harvested: [randomUUID()], purged: [randomUUID()] });
+
+      await h.listener.reapOnSchedule();
+
+      expect(h.inserts()).toHaveLength(1);
+      expect(h.deletes()).toHaveLength(1);
+    });
+
+    it('purges even when the harvest fails — a broken read must not disable reclamation', async () => {
+      // The two legs fail for unrelated reasons: the harvest reads pgboss.job,
+      // the purge does not. Sharing one try/catch would mean a database hiccup
+      // during the harvest silently skipped reclamation on every tick from then
+      // on — an unbounded table reporting itself healthy.
+      const h = makeReaper({
+        insertError: new Error('relation "pgboss.job" does not exist'),
+        purged: [randomUUID()],
+      });
+
+      await expect(h.listener.reapOnSchedule()).resolves.toBeUndefined();
+
+      expect(h.deletes()).toHaveLength(1);
+      expect(h.logger.error).toHaveBeenCalledTimes(1);
+    });
+
+    it('never rejects out of the tick when the purge throws, and says which leg failed', async () => {
+      // Same reasoning as the harvest: an unhandled rejection from a @Cron body
+      // exits the process, and on a two-minute timer that is a crash loop.
+      const h = makeReaper({ harvested: [randomUUID()], purgeError: new Error('deadlock detected') });
+
+      await expect(h.listener.reapOnSchedule()).resolves.toBeUndefined();
+
+      expect(h.inserts()).toHaveLength(1);
+      expect(h.logger.error).toHaveBeenCalledTimes(1);
+      const [message] = h.logger.error.mock.calls[0] as [string, unknown];
+      expect(message).toMatch(/purge/i);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // The retention purge — what the reaper is allowed to destroy
+  // -------------------------------------------------------------------------
+
+  describe('the retention purge', () => {
+    it('deletes only letters that have already been replayed', async () => {
+      // THE invariant of this change. `ci.pipeline_dead_letters` was created
+      // with the promise that rows never expire, because the payload is often
+      // the only surviving copy of a record. That promise is about UNREPLAYED
+      // letters; a replayed one has already been handed back to the bus. If this
+      // predicate ever widens, the table stops being the thing it exists to be.
+      const h = makeReaper({ purged: [randomUUID()] });
+
+      await h.listener.purgeReplayed();
+
+      const [purge] = h.deletes();
+      expect(purge).toBeDefined();
+      expect(purge.sql).toMatch(/replayed_at is not null/i);
+      // Bounded candidate set, oldest first — not an open DELETE ... WHERE.
+      expect(purge.sql).toMatch(/order by replayed_at/i);
+      expect(purge.sql).toMatch(/limit \$2/i);
+      expect(purge.sql).toMatch(/for update skip locked/i);
+    });
+
+    it('reads its window from configuration and bounds the batch', async () => {
+      const h = makeReaper();
+
+      await h.listener.purgeReplayed();
+
+      expect(h.deletes()[0].params).toEqual([DEAD_LETTER_REPLAYED_RETENTION_DAYS, DEAD_LETTER_PURGE_BATCH]);
+      // Default is the documented ~30 days, not "whatever config happened to
+      // say" — a deployment that lowered it should have to say so out loud.
+      expect(DEAD_LETTER_REPLAYED_RETENTION_DAYS).toBeGreaterThanOrEqual(1);
+    });
+
+    it('computes the cutoff in Postgres, never from this process’s clock', async () => {
+      // `replayed_at` is written by the database clock. Comparing it against a
+      // JS `Date` computed here would make a node with a skewed clock delete
+      // rows the operator can still see in the UI as recent.
+      const h = makeReaper();
+
+      await h.listener.purgeReplayed();
+
+      const [purge] = h.deletes();
+      expect(purge.sql).toMatch(/now\(\) - make_interval\(days =>/i);
+      expect(purge.params.some((param) => param instanceof Date)).toBe(false);
+    });
+
+    it.each([
+      ['zero', 0],
+      ['negative', -1],
+      ['fractional', 2.5],
+      ['not a number', Number.NaN],
+    ])('refuses a %s window before issuing a single statement', async (_label, days) => {
+      // A non-positive window means "delete letters replayed just now", which
+      // would empty the replay history of an incident in progress. Refuse, do
+      // not obey: there is no value here that means "purge everything".
+      const h = makeReaper();
+
+      await expect(h.listener.purgeReplayed(days)).rejects.toThrow(RangeError);
+      expect(h.statements).toHaveLength(0);
+    });
+
+    it('refuses an unbounded batch', async () => {
+      const h = makeReaper();
+
+      await expect(h.listener.purgeReplayed(30, 0)).rejects.toThrow(RangeError);
+      expect(h.statements).toHaveLength(0);
+    });
+
+    it('skips itself when the control-plane table is absent', async () => {
+      // A node that started before `migrate-database` finished. Guarded
+      // separately from the harvest, which additionally needs `pgboss.job`.
+      const h = makeReaper({ letters: false });
+
+      await expect(h.listener.purgeReplayed()).resolves.toBe(0);
+      expect(h.deletes()).toHaveLength(0);
+    });
+
+    it('still purges on a deployment that never booted pg-boss', async () => {
+      // The purge reads nothing from pg-boss. Gating it on `pgboss.job` would
+      // leave exactly the deployments that use LocalEventService with a table
+      // that only ever grows.
+      const h = makeReaper({ pgboss: false, purged: [randomUUID()] });
+
+      await expect(h.listener.purgeReplayed()).resolves.toBe(1);
+    });
+
+    it('never touches pg-boss’s own copy', async () => {
+      const h = makeReaper({ purged: [randomUUID()] });
+
+      await h.listener.purgeReplayed();
+
+      for (const { sql } of h.statements) {
+        expect(sql).not.toMatch(/delete\s+from\s+pgboss/i);
+        expect(sql).not.toMatch(/update\s+pgboss/i);
+      }
+    });
+
+    it('reports what it reclaimed, and says nothing on the steady-state empty purge', async () => {
+      const busy = makeReaper({ purged: [randomUUID(), randomUUID()] });
+      await expect(busy.listener.purgeReplayed()).resolves.toBe(2);
+      expect(busy.logger.log).toHaveBeenCalledTimes(1);
+      const [message, meta] = busy.logger.log.mock.calls[0] as [string, Record<string, unknown>];
+      expect(message).toContain('2');
+      expect(meta).toEqual(
+        expect.objectContaining({ purged: 2, retentionDays: DEAD_LETTER_REPLAYED_RETENTION_DAYS }),
+      );
+
+      // Runs every two minutes forever on a healthy appliance; a line per tick
+      // would be the whole log.
+      const quiet = makeReaper({ purged: [] });
+      await expect(quiet.listener.purgeReplayed()).resolves.toBe(0);
+      expect(quiet.logger.log).not.toHaveBeenCalled();
+    });
+
+    it('flags a full batch, so an operator knows more is past the horizon', async () => {
+      const h = makeReaper({ purged: [randomUUID(), randomUUID()] });
+
+      await h.listener.purgeReplayed(30, 2);
+
+      const [, meta] = h.logger.log.mock.calls[0] as [string, Record<string, unknown>];
+      expect(meta).toEqual(expect.objectContaining({ moreLikely: true }));
     });
   });
 
@@ -746,6 +947,160 @@ describe('DeadLetterReaperListener', () => {
       expect(rows).toHaveLength(1);
       expect(rows[0].state).toBe('created');
       expect(rows[0].completed_on).toBeNull();
+    });
+
+    // -----------------------------------------------------------------------
+    // The retention purge
+    // -----------------------------------------------------------------------
+    //
+    // Everything that matters about this leg is in the WHERE clause, so it can
+    // only be demonstrated against real Postgres. A mock would agree that
+    // `replayed_at IS NOT NULL` excludes an unreplayed row; Postgres is the only
+    // thing that can be asked whether the row is still there afterwards.
+    //
+    // Ages are written as `now() - make_interval(...)` so the seeded rows are
+    // dated by the SAME clock the purge compares against, and the very old ones
+    // (~24 years) are older than any letter the live appliance could hold, which
+    // keeps `ORDER BY replayed_at LIMIT n` deterministic while the suite runs.
+    describe('purging replayed letters', () => {
+      beforeEach(async () => {
+        // The purge is a table-wide sweep, so a count assertion here would
+        // otherwise depend on whatever the live appliance has replayed. Inside
+        // the enclosing transaction — which is ALWAYS rolled back, so no other
+        // session ever sees this and nothing is destroyed — the replayed half of
+        // the table is emptied first, making it exactly the rows each test
+        // seeds. The unreplayed half is deliberately left as it is: those rows
+        // must survive this suite for the same reason they survive the purge.
+        await runner.query(`DELETE FROM ci.pipeline_dead_letters WHERE replayed_at IS NOT NULL`);
+      });
+
+      /** One harvested letter, aged exactly as the test needs it. */
+      async function seedLetter(fields: {
+        failedDaysAgo?: number;
+        /** `undefined`/`null` leaves `replayed_at` NULL — an unreplayed letter. */
+        replayedDaysAgo?: number | null;
+        eventName?: string;
+      }): Promise<string> {
+        const id = randomUUID();
+
+        await runner.query(
+          `INSERT INTO ci.pipeline_dead_letters
+                  (id, queue, event_name, payload, error, failed_at, replayed_at)
+           VALUES ($1::uuid,
+                   $2,
+                   $3,
+                   $4::jsonb,
+                   'seeded by DeadLetterReaperListener.spec',
+                   now() - make_interval(days => $5::int),
+                   CASE WHEN $6::int IS NULL THEN NULL ELSE now() - make_interval(days => $6::int) END)`,
+          [
+            id,
+            DEAD_LETTER_QUEUE,
+            fields.eventName ?? 'file.ingested',
+            JSON.stringify({ name: fields.eventName ?? 'file.ingested', seeded: true }),
+            fields.failedDaysAgo ?? 400,
+            fields.replayedDaysAgo ?? null,
+          ],
+        );
+
+        return id;
+      }
+
+      async function survivingIds(ids: string[]): Promise<string[]> {
+        const rows = (await runner.query(
+          `SELECT id FROM ci.pipeline_dead_letters WHERE id = ANY($1::uuid[])`,
+          [ids],
+        )) as Array<{ id: string }>;
+
+        return rows.map((row) => row.id);
+      }
+
+      it('deletes a letter replayed longer ago than the window', async () => {
+        const stale = await seedLetter({ replayedDaysAgo: 31 });
+
+        await expect(listener.purgeReplayed(30)).resolves.toBe(1);
+
+        expect(await survivingIds([stale])).toEqual([]);
+      });
+
+      it('KEEPS an unreplayed letter of any age — the promise the table was created with', async () => {
+        // The migration says these rows "never expire — the payload is often the
+        // only surviving copy of the record". This test is that sentence. A
+        // letter nobody has replayed is not reclaimable at ten years old, and
+        // whether it should ever be is a product decision about data loss, not
+        // something a purge may decide by widening a predicate.
+        const ancient = await seedLetter({ failedDaysAgo: 3650, replayedDaysAgo: null });
+
+        await listener.purgeReplayed(30);
+        // Even a one-day window, which is as aggressive as an operator can
+        // configure, must not touch it.
+        await listener.purgeReplayed(1);
+
+        expect(await survivingIds([ancient])).toEqual([ancient]);
+      });
+
+      it('keeps a letter replayed inside the window', async () => {
+        const recent = await seedLetter({ replayedDaysAgo: 29 });
+
+        await listener.purgeReplayed(30);
+
+        expect(await survivingIds([recent])).toEqual([recent]);
+      });
+
+      it('sorts the survivors by the REPLAY date, not by when the job failed', async () => {
+        // The two dates are independent: a letter can fail today and be replayed
+        // today, or fail two years ago and be replayed this morning. Ageing on
+        // `failed_at` would delete a letter an operator replayed minutes ago.
+        const oldFailureFreshReplay = await seedLetter({ failedDaysAgo: 3650, replayedDaysAgo: 1 });
+        const freshFailureOldReplay = await seedLetter({ failedDaysAgo: 90, replayedDaysAgo: 200 });
+
+        await listener.purgeReplayed(30);
+
+        expect(await survivingIds([oldFailureFreshReplay, freshFailureOldReplay])).toEqual([
+          oldFailureFreshReplay,
+        ]);
+      });
+
+      it('takes the oldest replayed first and stops at the limit, leaving the rest for the next tick', async () => {
+        const oldest = await seedLetter({ replayedDaysAgo: 9000 });
+        const middle = await seedLetter({ replayedDaysAgo: 8999 });
+        const newest = await seedLetter({ replayedDaysAgo: 8998 });
+
+        // Returns the row count, not TypeORM's `[rows, rowCount]` pair — the
+        // trap a bare `DELETE ... RETURNING` falls into, which no mock can catch.
+        await expect(listener.purgeReplayed(30, 2)).resolves.toBe(2);
+
+        expect(await survivingIds([oldest, middle, newest])).toEqual([newest]);
+
+        await expect(listener.purgeReplayed(30, 1)).resolves.toBe(1);
+        expect(await survivingIds([oldest, middle, newest])).toEqual([]);
+      });
+
+      it('leaves the unreplayed half of a mixed table completely alone', async () => {
+        // The realistic shape after an incident: a pile of failures, some of
+        // which an operator has replayed. Only the replayed ones age out.
+        const unreplayed = [
+          await seedLetter({ failedDaysAgo: 900, replayedDaysAgo: null }),
+          await seedLetter({ failedDaysAgo: 400, replayedDaysAgo: null }),
+        ];
+        const replayed = [
+          await seedLetter({ failedDaysAgo: 900, replayedDaysAgo: 9000 }),
+          await seedLetter({ failedDaysAgo: 400, replayedDaysAgo: 8999 }),
+        ];
+
+        await listener.purgeReplayed(30);
+
+        expect((await survivingIds([...unreplayed, ...replayed])).sort()).toEqual([...unreplayed].sort());
+      });
+
+      it('reclaims nothing on a healthy appliance', async () => {
+        // Steady state: no replayed letters past the horizon. The statement must
+        // still be a bounded index-friendly one, but the answer is zero.
+        const fresh = await seedLetter({ replayedDaysAgo: 1 });
+
+        await expect(listener.purgeReplayed(30, 1)).resolves.toBe(0);
+        expect(await survivingIds([fresh])).toEqual([fresh]);
+      });
     });
   });
 });

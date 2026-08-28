@@ -10,7 +10,7 @@ export async function syncLikes({
   nextCursor: Record<string, unknown>;
 }): Promise<{ data: Record<string, unknown>; nextCursor?: Record<string, unknown> }> {
   try {
-    client.logger.log('Performing historical Facebook Posts sync', {
+    client.logger.log('Performing historical Facebook Likes sync', {
       connectionId: connection.id,
       nextCursor,
     });
@@ -21,9 +21,13 @@ export async function syncLikes({
       fields: fieldsList,
     });
 
+    // `/me/likes` — the Pages this user has liked. This used to request
+    // `/me/posts` with like-shaped fields, so every "like" it stored was
+    // actually one of the user's own posts under the wrong content type, and
+    // real likes were never fetched.
     const endpoint = nextCursor.nextLink
       ? String(nextCursor.nextLink)
-      : `/v21.0/me/posts?${params.toString()}`;
+      : `/v21.0/me/likes?${params.toString()}`;
     const response = (await client.request(connection, endpoint)) as {
       data: FacebookLike[];
       paging?: { next: string; previous: string };

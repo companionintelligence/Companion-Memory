@@ -5,6 +5,7 @@ import { Plus, RefreshCw, Trash2, MessageSquare, ChevronLeft } from '@ci/shadcn/
 import { useTranslation } from 'react-i18next';
 
 import type { Thread } from './types';
+import { threadLabel } from './useRecentThreads';
 
 interface ChatSidebarProps {
   threads: Thread[];
@@ -16,6 +17,14 @@ interface ChatSidebarProps {
   onRefresh: () => void;
 }
 
+/**
+ * Thread management for the desktop chat: create, pick, delete, refresh.
+ *
+ * Portaled into `tertiary-navigation`, a slot only the desktop layout renders —
+ * on the phone this component mounts and portals into nothing. Switching
+ * threads there is the Power Rail drawer's Chat submenu, which shows the same
+ * threads under the same names (see `threadLabel`) as read-only links.
+ */
 export const ChatSidebar = memo(function ChatSidebar({
   threads,
   selectedThreadId,
@@ -195,9 +204,7 @@ export const ChatSidebar = memo(function ChatSidebar({
                           <MessageSquare className="h-4 w-4 text-muted-foreground" />
                         </div>
                         <div className="flex-1 min-w-0 text-left">
-                          <div className="truncate font-medium text-sm">
-                            {thread.name || `Thread ${thread.id.slice(0, 8)}`}
-                          </div>
+                          <div className="truncate font-medium text-sm">{threadLabel(thread)}</div>
                           {thread.description && (
                             <div className="text-xs text-muted-foreground truncate mt-0.5">
                               {thread.description}
@@ -261,7 +268,7 @@ export const ChatSidebar = memo(function ChatSidebar({
             {threads.map((thread) => (
               <div key={thread.id} className="flex justify-center">
                 <Tooltip delayDuration={600}>
-                  <Tooltip.Content>{thread.name || `Thread ${thread.id.slice(0, 8)}`}</Tooltip.Content>
+                  <Tooltip.Content>{threadLabel(thread)}</Tooltip.Content>
                   <Tooltip.Trigger asChild>
                     <button
                       onClick={() => onSelectThread(thread.id)}
@@ -269,7 +276,7 @@ export const ChatSidebar = memo(function ChatSidebar({
                         'w-10 h-10 rounded-lg hover:bg-muted/60 transition-all duration-200 relative flex items-center justify-center',
                         selectedThreadId === thread.id && 'bg-primary/10',
                       )}
-                      aria-label={thread.name || `Thread ${thread.id.slice(0, 8)}`}
+                      aria-label={threadLabel(thread)}
                     >
                       <div
                         className={cn(

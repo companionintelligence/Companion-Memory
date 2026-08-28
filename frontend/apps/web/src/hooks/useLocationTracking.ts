@@ -1,91 +1,213 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
+  type BackgroundGeolocationError,
   type LocationCaptureOutcome,
   type LocationSampler,
+  type LocationTrackingMode,
+  BACKGROUND_MIN_DISTANCE_METERS,
+  BACKGROUND_MIN_INTERVAL_MS,
+  LOCATION_MODE_CHANGE_EVENT,
+  MIN_DISTANCE_METERS,
+  addAppStateListener,
+  addBackgroundLocationWatcher,
   captureLocationFix,
   createLocationSampler,
+  fixFromBackgroundGeolocationLocation,
   fixFromGeolocationPosition,
   isNativePlatform,
+  publishLocationTrackingMode,
+  readLocationTrackingMode,
+  removeBackgroundLocationWatcher,
+  requestNotificationPermission,
+  writeLocationTrackingMode,
 } from '@ci/common';
 
 import { useAuth } from './useAuth';
 
-const STORAGE_KEY = 'ci-location-tracking-enabled';
-/** Keeps multiple hook instances (app-level watcher + settings toggle) in sync. */
-const CHANGE_EVENT = 'ci:location-tracking-changed';
-
-export function isLocationTrackingEnabled(): boolean {
-  try {
-    return localStorage.getItem(STORAGE_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
+export { isLocationTrackingEnabled } from '@ci/common';
 
 /**
- * Location tracking (issue #1811, LifeScope's location-tracking feature rebuilt):
- * while enabled, watches the platform geolocation and records fixes into
- * ci.position, throttled to meaningful movement (>=50 m) or a 5-minute
- * heartbeat — deliberately better than LifeScope's one-snapshot-per-page-visit.
+ * Location tracking: records `ci.position` fixes from this device.
  *
- * The sampling gate, the wire record and the delivery path all live in
- * `@ci/common` (`utils/deviceSources/location.ts`), because this is the first
- * **device-native ETL source** and every later one repeats the shape. This hook
- * is only the browser-geolocation adapter plus the enable toggle. Notably, on
- * native the capture goes through the durable outbox first — a fix taken with no
- * connectivity is committed to on-device SQLite before `captureLocationFix`
- * resolves, and is delivered whenever the appliance is next reachable.
+ * Native (iOS + Android) uses `@capacitor-community/background-geolocation` as the one
+ * writer, gated by `mode`: `when_in_use` starts a foreground-only watcher, `always` adds
+ * a `backgroundMessage`/`backgroundTitle` so the OS keeps sampling once the app leaves
+ * the foreground (a persistent notification on Android, the blue status-bar indicator on
+ * iOS). Plain web (no Capacitor) falls back to `navigator.geolocation`, foreground-only,
+ * since the plugin doesn't run there.
  *
- * The enable flag is per-device (localStorage): location consent is a property
- * of the device, not the account. Toggled from Settings -> Location.
+ * Consent is per-device (localStorage). Settings → Location owns the disclosure.
  */
 export function useLocationTracking(options: { watch?: boolean } = {}) {
   const { watch = true } = options;
   const [{ authToken, authenticated }] = useAuth();
-  const [enabled, setEnabledState] = useState<boolean>(() => isLocationTrackingEnabled());
+  const [mode, setModeState] = useState<LocationTrackingMode>(() => readLocationTrackingMode());
   const [lastOutcome, setLastOutcome] = useState<LocationCaptureOutcome | null>(null);
+  const [needsSettingsUpgrade, setNeedsSettingsUpgrade] = useState(false);
 
-  // One gate per hook instance, surviving re-renders. Only the watching instance
-  // ever consults it; the settings instance passes `watch: false`.
   const samplerRef = useRef<LocationSampler | null>(null);
+  const backgroundSamplerRef = useRef<LocationSampler | null>(null);
+  const isActiveRef = useRef(true);
 
   samplerRef.current ??= createLocationSampler();
+  backgroundSamplerRef.current ??= createLocationSampler({
+    minDistanceMeters: BACKGROUND_MIN_DISTANCE_METERS,
+    minIntervalMs: BACKGROUND_MIN_INTERVAL_MS,
+  });
 
-  const setEnabled = useCallback((value: boolean) => {
-    try {
-      localStorage.setItem(STORAGE_KEY, value ? 'true' : 'false');
-    } catch {
-      // Storage unavailable (private mode) — session-only toggle still works.
-    }
+  const setMode = useCallback((next: LocationTrackingMode) => {
+    const resolved: LocationTrackingMode = next === 'always' && !isNativePlatform() ? 'when_in_use' : next;
 
-    setEnabledState(value);
-    window.dispatchEvent(new CustomEvent(CHANGE_EVENT, { detail: value }));
+    writeLocationTrackingMode(resolved);
+    setModeState(resolved);
+    publishLocationTrackingMode(resolved);
   }, []);
 
-  // The settings toggle and the app-level watcher are separate hook instances;
-  // sync them through the change event.
+  const setEnabled = useCallback(
+    (value: boolean) => {
+      setMode(value ? 'when_in_use' : 'off');
+    },
+    [setMode],
+  );
+
   useEffect(() => {
     const onChange = (event: Event) => {
-      setEnabledState(Boolean((event as CustomEvent).detail));
+      const detail = (event as CustomEvent<LocationTrackingMode>).detail;
+
+      if (detail === 'off' || detail === 'when_in_use' || detail === 'always') {
+        setModeState(detail);
+      }
     };
 
-    window.addEventListener(CHANGE_EVENT, onChange);
+    window.addEventListener(LOCATION_MODE_CHANGE_EVENT, onChange);
 
-    return () => window.removeEventListener(CHANGE_EVENT, onChange);
+    return () => window.removeEventListener(LOCATION_MODE_CHANGE_EVENT, onChange);
   }, []);
 
+  const enabled = mode !== 'off';
+
+  // Tracks foreground/background so the watcher callback can pick the right sampling
+  // gate — the OS keeps delivering fixes on the same watcher across the transition.
   useEffect(() => {
-    // Gate on `authenticated`, NOT on authToken: the native shell authenticates
-    // with an API key (fetchJson attaches x-api-key itself) and never populates
-    // a JWT, so an authToken gate would silently disable tracking on mobile.
-    if (!watch || !enabled || !authenticated || typeof navigator === 'undefined' || !navigator.geolocation) {
+    if (!watch || !isNativePlatform()) {
       return;
     }
 
-    // The one-shot getCurrentPosition below can resolve long after the effect
-    // is torn down (it blocks on the permission prompt), so a disabled toggle
-    // must not still record a fix.
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    void addAppStateListener((isActive) => {
+      isActiveRef.current = isActive;
+    }).then((fn) => {
+      if (cancelled) {
+        void fn();
+
+        return;
+      }
+
+      unsubscribe = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [watch]);
+
+  // Native watcher — one writer for iOS + Android. Web never starts this; it uses
+  // navigator.geolocation below instead.
+  useEffect(() => {
+    if (!watch || mode === 'off' || !authenticated || !isNativePlatform()) {
+      return;
+    }
+
+    let cancelled = false;
+    let watcherId: string | null = null;
+
+    setNeedsSettingsUpgrade(false);
+
+    const onLocation = (location: Parameters<typeof fixFromBackgroundGeolocationLocation>[0]) => {
+      if (cancelled) {
+        return;
+      }
+
+      const activeSampler = isActiveRef.current ? samplerRef.current : backgroundSamplerRef.current;
+
+      void captureLocationFix(fixFromBackgroundGeolocationLocation(location), {
+        sampler: activeSampler ?? undefined,
+        authToken,
+        provider: 'companion-mobile',
+      })
+        .then((outcome) => {
+          if (!cancelled && outcome.status !== 'throttled') {
+            setLastOutcome(outcome);
+          }
+        })
+        .catch(() => {
+          // captureLocationFix reports failures in its result rather than throwing.
+        });
+    };
+
+    const onError = (error: BackgroundGeolocationError) => {
+      if (!cancelled && error.code === 'NOT_AUTHORIZED') {
+        setNeedsSettingsUpgrade(true);
+      }
+    };
+
+    void (async () => {
+      if (mode === 'always') {
+        // Android 13+ requires POST_NOTIFICATIONS before the persistent tracking
+        // notification (the OS's price of admission for background sampling) can show.
+        await requestNotificationPermission();
+      }
+
+      const id = await addBackgroundLocationWatcher(
+        {
+          background: mode === 'always',
+          distanceFilter: mode === 'always' ? BACKGROUND_MIN_DISTANCE_METERS : MIN_DISTANCE_METERS,
+        },
+        onLocation,
+        onError,
+      );
+
+      if (cancelled) {
+        if (id) {
+          void removeBackgroundLocationWatcher(id);
+        }
+
+        return;
+      }
+
+      watcherId = id;
+    })();
+
+    return () => {
+      cancelled = true;
+
+      if (watcherId) {
+        void removeBackgroundLocationWatcher(watcherId);
+      }
+
+      samplerRef.current?.reset();
+      backgroundSamplerRef.current?.reset();
+    };
+  }, [watch, mode, authenticated, authToken]);
+
+  // Web-only foreground watcher. Native (iOS + Android) never starts this — the
+  // background-geolocation watcher above owns sampling there.
+  useEffect(() => {
+    if (
+      !watch ||
+      mode === 'off' ||
+      !authenticated ||
+      isNativePlatform() ||
+      typeof navigator === 'undefined' ||
+      !navigator.geolocation
+    ) {
+      return;
+    }
+
     let cancelled = false;
     const sampler = samplerRef.current;
 
@@ -97,9 +219,7 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
       void captureLocationFix(fixFromGeolocationPosition(position), {
         sampler: sampler ?? undefined,
         authToken,
-        // Distinguishes a fix recorded by the phone from one recorded by a
-        // desktop browser; both are the user's own devices, stored verbatim.
-        provider: isNativePlatform() ? 'companion-mobile' : 'browser',
+        provider: 'browser',
       })
         .then((outcome) => {
           if (!cancelled && outcome.status !== 'throttled') {
@@ -107,12 +227,10 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
           }
         })
         .catch(() => {
-          // captureLocationFix reports failures in its result rather than
-          // throwing; this is belt-and-braces so a watch callback never rejects.
+          // captureLocationFix reports failures in its result rather than throwing.
         });
     };
 
-    // One immediate fix so enabling has a visible effect, then a watch.
     navigator.geolocation.getCurrentPosition(send, () => undefined, {
       enableHighAccuracy: false,
       maximumAge: 60_000,
@@ -127,11 +245,16 @@ export function useLocationTracking(options: { watch?: boolean } = {}) {
     return () => {
       cancelled = true;
       navigator.geolocation.clearWatch(watchId);
-      // Re-enabling should record straight away rather than wait out a
-      // heartbeat left over from the previous session.
       sampler?.reset();
     };
-  }, [watch, enabled, authenticated, authToken]);
+  }, [watch, mode, authenticated, authToken]);
 
-  return { enabled, setEnabled, lastOutcome };
+  return {
+    mode,
+    setMode,
+    enabled,
+    setEnabled,
+    lastOutcome,
+    needsSettingsUpgrade,
+  };
 }

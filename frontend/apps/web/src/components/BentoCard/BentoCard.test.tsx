@@ -59,4 +59,15 @@ describe('BentoCard', () => {
     expect(screen.getByRole('button', { name: 'Dismiss action' })).toBeInTheDocument();
     expect(document.querySelector('img')).toHaveClass('h-14');
   });
+
+  it('does not reserve an image slot on a phone when there is no image', async () => {
+    setViewport(true);
+    renderWithProviders(
+      <BentoCard title="Call Maya" description={<p>She asked about Saturday.</p>} tags={['action']} />,
+    );
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Call Maya' })).toBeInTheDocument());
+    expect(document.querySelector('img')).toBeNull();
+    expect(document.querySelector('.h-14.w-14')).toBeNull();
+  });
 });

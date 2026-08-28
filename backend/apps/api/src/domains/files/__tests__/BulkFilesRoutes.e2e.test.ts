@@ -113,20 +113,33 @@ describe('POST /v1/files (batch upload)', () => {
     ]);
   });
 
-  it('passes skipDescription/inventoryCapture form fields through to the upload pipeline', async () => {
+  it('passes skipDescription/thingCapture form fields through to the upload pipeline', async () => {
     await request(app.getHttpServer())
       .post('/v1/files')
       .field('skipDescription', 'true')
-      .field('inventoryCapture', 'true')
+      .field('thingCapture', 'true')
       .attach('files', Buffer.from('flagged'), 'flagged.txt')
       .expect(201);
 
     const dto = fileService.uploadWithDedupInfo.mock.calls[0][1] as {
       skipDescription: boolean;
-      inventoryCapture: boolean;
+      thingCapture: boolean;
     };
     expect(dto.skipDescription).toBe(true);
-    expect(dto.inventoryCapture).toBe(true);
+    expect(dto.thingCapture).toBe(true);
+  });
+
+  // The retired inventory feature's spelling of the same field, still accepted
+  // for capture clients in other repos.
+  it('still honours the deprecated inventoryCapture form field', async () => {
+    await request(app.getHttpServer())
+      .post('/v1/files')
+      .field('inventoryCapture', 'true')
+      .attach('files', Buffer.from('legacy'), 'legacy.txt')
+      .expect(201);
+
+    const dto = fileService.uploadWithDedupInfo.mock.calls[0][1] as { thingCapture: boolean };
+    expect(dto.thingCapture).toBe(true);
   });
 
   it('rejects a request over the 50-file cap with a 400', async () => {

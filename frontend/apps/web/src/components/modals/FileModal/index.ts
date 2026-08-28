@@ -1,1 +1,0 @@
-export { FileModal } from './FileModal';

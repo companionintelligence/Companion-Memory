@@ -8,6 +8,11 @@ import type { AskStatus } from './types';
  *                  ↘ answering (standing pre-auth)      ↘ (terminal)
  *                  ↘ expired          ↘ declined | expired
  * ```
+ *
+ * `delivered`, `under_review` AND `answering` each carry an `expired` edge —
+ * see the note on the `answering` row for why the last of those is the one
+ * that matters. `sent` does not, because an ask never persists in it:
+ * `AskService.create` marks it `delivered` in the same call.
  */
 export const ASK_TRANSITIONS: Readonly<Record<AskStatus, readonly AskStatus[]>> = {
   sent: ['delivered'],
@@ -15,7 +20,15 @@ export const ASK_TRANSITIONS: Readonly<Record<AskStatus, readonly AskStatus[]>> 
   // refuses the ask on delivery without owner review.
   delivered: ['under_review', 'answering', 'declined', 'expired'],
   under_review: ['answering', 'declined', 'expired'],
-  answering: ['answered'],
+  // `answering → expired` is the edge the expiry sweep needs, and the one whose
+  // absence made `answering` the ONE state an ask could park in forever. Every
+  // other non-terminal state already had an expiry edge; `answering` did not,
+  // so an approved-but-unanswered ask stayed answerable past its `expires_at`
+  // indefinitely — and `complete()` deliberately does NOT re-check the standing
+  // grant on the owner-approved path, so nothing else could ever retire it
+  // either. It is a forward edge to a terminal state, so it neither un-approves
+  // an ask nor re-opens a closed one.
+  answering: ['answered', 'expired'],
   answered: [],
   declined: [],
   expired: [],

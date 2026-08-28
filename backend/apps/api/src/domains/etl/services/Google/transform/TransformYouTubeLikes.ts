@@ -174,6 +174,7 @@ export class YouTubeLikesTransformService {
       source_type: 'ETL',
       source_system: YOUTUBE_SOURCE_SYSTEM,
       source_id: `like:${videoId}`,
+      connection_id: connectionId,
       source_data: {
         connectionId,
         channelTitle,

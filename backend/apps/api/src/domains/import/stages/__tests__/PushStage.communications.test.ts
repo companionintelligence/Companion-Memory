@@ -1,4 +1,4 @@
-import type { CreateCommunicationDto } from '@ci/domains/memory';
+import type { CreateCommunicationDto, CreateContentDto } from '@ci/domains/memory';
 
 import type { StagedItem } from '../../entities/StagedItemEntity';
 import type { StageRunContext } from '../../types';
@@ -75,6 +75,8 @@ interface Harness {
   stage: PushStage;
   /** Every CreateCommunicationDto the stage handed CommunicationService, in order. */
   sent: CreateCommunicationDto[];
+  /** Every CreateContentDto the stage handed ContentService, in order. */
+  contentSent: CreateContentDto[];
   warnings: Array<[string, unknown]>;
 }
 
@@ -89,10 +91,17 @@ function makeStage(
     ownerRows?: Array<{ name: string | null; email: string | null }>;
     ownerQueryThrows?: boolean;
     participants?: Array<{ relation: string; server_entity_id: string }>;
+    /** Fail the FIRST batched communications write, to exercise the row-by-row retry. */
+    failFirstCommunicationBatch?: boolean;
+    /** Return one fewer content result than inputs, to exercise the alignment check. */
+    shortContentResults?: boolean;
   } = {},
 ): Harness {
   let servedBatch = false;
+  let communicationBatches = 0;
+  let nextContentId = 0;
   const sent: CreateCommunicationDto[] = [];
+  const contentSent: CreateContentDto[] = [];
   const warnings: Array<[string, unknown]> = [];
 
   const dataSource = {
@@ -183,9 +192,45 @@ function makeStage(
 
   const communications = {
     createManyDetailed: jest.fn(async (_ctx: unknown, input: CreateCommunicationDto[]) => {
+      communicationBatches += 1;
+
+      if (options.failFirstCommunicationBatch && communicationBatches === 1) {
+        throw new Error('batched communications write refused');
+      }
+
       sent.push(...input);
 
       return input.map(() => ({ inserted: true }));
+    }),
+  };
+
+  // Content is no longer inert on this path: the communications lane writes a
+  // row per Discord attachment link before the message that references it.
+  // The real service upserts on the provenance triple, so this one does too —
+  // a re-sent row resolves onto the id it already had and reports
+  // `inserted: false`, which is what makes the row-by-row retry of a failed
+  // batch idempotent rather than merely tolerable.
+  const contentIdsBySourceId = new Map<string, string>();
+  const contents = {
+    createManyDetailed: jest.fn(async (_ctx: unknown, input: CreateContentDto[]) => {
+      contentSent.push(...input);
+
+      const results = input.map((item) => {
+        const key = String(item.source_id);
+        const known = contentIdsBySourceId.get(key);
+
+        if (known) {
+          return { inserted: false, entity: { id: known } };
+        }
+
+        nextContentId += 1;
+        const id = `content-${nextContentId}`;
+        contentIdsBySourceId.set(key, id);
+
+        return { inserted: true, entity: { id } };
+      });
+
+      return options.shortContentResults ? results.slice(0, -1) : results;
     }),
   };
 
@@ -203,9 +248,15 @@ function makeStage(
   const stage = new PushStage(
     dataSource as never,
     communications as never,
+    contents as never,
     noop as never,
     noop as never,
+    // The commerce plane — unused by this test's records, but the constructor
+    // takes them.
+    { upsertFromExtraction: jest.fn(async () => undefined) } as never,
     noop as never,
+    { createMany: jest.fn(async () => undefined) } as never,
+    { upsertForSubjects: jest.fn(async () => 0) } as never,
     { create: jest.fn(async () => undefined) } as never,
     noop as never,
     { ingest: jest.fn(async () => ({ entities: [], errors: [] })) } as never,
@@ -213,7 +264,7 @@ function makeStage(
     logger as never,
   );
 
-  return { stage, sent, warnings };
+  return { stage, sent, contentSent, warnings };
 }
 
 const context: StageRunContext = {
@@ -250,6 +301,131 @@ describe('WhatsApp communications', () => {
     await stage.run(context);
 
     expect(sent[0].thread_id).toBe('Family');
+  });
+});
+
+describe('Discord attachment links', () => {
+  /**
+   * A Discord package ships NO attachment bytes: an upload survives only as a
+   * signed cdn.discordapp.com URL in the message's `Attachments` field. The
+   * mapping has always known how to catalogue those links
+   * (`discordAttachmentContentInputs`) and nothing called it — a Discord
+   * message routes to `['communications']` alone, so a message carrying three
+   * uploads produced ZERO ci.content rows, and `attachments` stayed empty on
+   * the row whose entire payload those uploads were.
+   *
+   * These drive the real `PushStage.run()` rather than the mapper for the same
+   * reason the rest of this file does: the mapper was never in doubt, the wiring
+   * was.
+   */
+  function discordRow(text: string, attachments: string): StagedItem {
+    return stagedRow({
+      dataSource: 'discord',
+      metadata: {
+        Conversation: 'general',
+        Source: 'Discord',
+        Text: text || undefined,
+        Attachments: attachments,
+      },
+    });
+  }
+
+  const TWO_LINKS =
+    'https://cdn.discordapp.com/attachments/1/2/Screenshot%20from%202020.png?ex=1&is=2&hm=3 ' +
+    'https://cdn.discordapp.com/attachments/1/2/notes.pdf?ex=1';
+
+  it('writes one content row per link and hands the ids to the message', async () => {
+    const { stage, sent, contentSent } = makeStage([discordRow('look at these', TWO_LINKS)]);
+
+    const outcome = await stage.run(context);
+
+    expect(contentSent).toHaveLength(2);
+    expect(contentSent[0]).toMatchObject({
+      type: 'media',
+      title: 'Screenshot from 2020.png',
+      mimetype: 'image/png',
+      source_type: 'ci-import-tools',
+      source_system: 'discord',
+      source_id: `${contentSent[0].source_id}`,
+      url: 'https://cdn.discordapp.com/attachments/1/2/Screenshot%20from%202020.png?ex=1&is=2&hm=3',
+    });
+    // The identity convention MediaStage uses for the bytes-bearing half of the
+    // lane: the message's own sourceId with an `:attachment:<n>` suffix.
+    expect(contentSent.map((input) => input.source_id)).toEqual([
+      `${sent[0].source_id}:attachment:0`,
+      `${sent[0].source_id}:attachment:1`,
+    ]);
+    expect(contentSent[1]).toMatchObject({ type: 'file', title: 'notes.pdf' });
+
+    // The whole point: the ids reach the column that references them.
+    expect(sent[0].attachments).toEqual([
+      { type: 'content', id: 'content-1' },
+      { type: 'content', id: 'content-2' },
+    ]);
+
+    // Counted where they were written, so the post-push search-index and
+    // graph-edge kicks fire for them.
+    expect(outcome.detail).toMatchObject({ destinations: { communications: 1, content: 2 } });
+  });
+
+  it('gives an attachment-only message the payload it had nothing else to show', async () => {
+    // `isDiscordAttachmentOnly` deliberately blanks the body of a message posted
+    // with no caption, because the attachments ARE the payload. Until the links
+    // were catalogued that left an entirely empty row.
+    const { stage, sent } = makeStage([discordRow('', TWO_LINKS)]);
+
+    await stage.run(context);
+
+    expect(sent[0].content).toBe('');
+    expect(sent[0].attachments).toHaveLength(2);
+  });
+
+  it('leaves a message with no links, and every other source, alone', async () => {
+    const { stage, sent, contentSent } = makeStage([
+      discordRow('just talking', ''),
+      whatsAppRow('Alice Example', 'hi'),
+    ]);
+
+    await stage.run(context);
+
+    expect(contentSent).toEqual([]);
+    expect(sent.every((input) => input.attachments === undefined)).toBe(true);
+  });
+
+  it('still catalogues them when the batched write degrades to row by row', async () => {
+    // The retry path builds its own inputs, so a lane wired only into the batch
+    // path would silently drop every attachment on any batch that failed for an
+    // unrelated reason.
+    const { stage, sent, contentSent } = makeStage([discordRow('look at these', TWO_LINKS)], {
+      failFirstCommunicationBatch: true,
+    });
+
+    const outcome = await stage.run(context);
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0].attachments).toEqual([
+      { type: 'content', id: 'content-1' },
+      { type: 'content', id: 'content-2' },
+    ]);
+    // Re-sent, and resolved onto the same two rows — so the tally counts the
+    // rows that exist, not the calls that were made.
+    expect(contentSent).toHaveLength(4);
+    expect(outcome.detail).toMatchObject({ destinations: { content: 2 } });
+  });
+
+  it('refuses to pair attachments onto messages when the write comes back short', async () => {
+    // A short result array would re-pair every attachment after the gap onto the
+    // wrong message. Failing the group hands it to the row-by-row retry, which
+    // asks the same question one message at a time.
+    const { stage, warnings } = makeStage([discordRow('a', TWO_LINKS), discordRow('b', TWO_LINKS)], {
+      shortContentResults: true,
+    });
+
+    await stage.run(context);
+
+    expect(warnings.map(([message]) => message)).toContain(
+      'Batched push failed; retrying the group row by row',
+    );
   });
 });
 

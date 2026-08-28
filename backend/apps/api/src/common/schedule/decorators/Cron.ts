@@ -27,7 +27,10 @@ import { CronRunStore } from '../CronRunStore';
  * Each tick also stamps `ci.cron_runs` so the Jobs dashboard's "Last run"
  * survives API restarts. The registry name (explicit `name:` option, else
  * `Class.method`) is the key — same string SchedulerRegistry and the dashboard
- * use.
+ * use. Two stamps, not one: the attempt lands before the body so a hung or
+ * throwing tick still counts as fired, and the success lands after it returns.
+ * A schedule that fails every tick is otherwise indistinguishable from a
+ * healthy one on the dashboard.
  */
 const cronLogger = new Logger('Cron');
 
@@ -59,7 +62,11 @@ export function Cron(expression: string, options?: CiCronOptions) {
       CronRunStore.record(runName);
 
       try {
-        return await ContextService.run({ traceId }, () => originalMethod.apply(this, args));
+        const result: unknown = await ContextService.run({ traceId }, () => originalMethod.apply(this, args));
+
+        CronRunStore.recordSuccess(runName);
+
+        return result;
       } catch (err: unknown) {
         // Swallowed on purpose — see the note on `cronLogger`. Nest would
         // otherwise catch this one frame further out and log it without saying

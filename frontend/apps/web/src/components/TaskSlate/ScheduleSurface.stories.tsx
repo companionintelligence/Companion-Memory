@@ -1,11 +1,12 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import type { Meta, StoryObj } from '@storybook/react';
 
-import type { ScheduleCandidate } from '@/api/useScheduleCandidates';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
-import { HorizonGrid } from '@/components/HorizonGrid';
+import { VerticalCalendar } from '@/components/HorizonGrid';
 import type { ColorMode } from '@/lib/activityPalette';
+import { groupIntoSections, localDateOf } from '@/pages/PlanPage/taskSections';
+import type { PlanTask } from '@/pages/PlanPage/usePlanTasks';
 
 import { TaskSlate } from './TaskSlate';
 
@@ -109,55 +110,37 @@ const RHYTHM: RhythmDay[] = Array.from({ length: 7 }, (_, i) => {
   };
 });
 
-function candidate(id: string, title: string, rationale: string, kind: string): ScheduleCandidate {
+function task(id: string, title: string, overrides: Partial<PlanTask> = {}): PlanTask {
   return {
     id,
     title,
-    description: rationale,
-    rationale,
-    rationaleSources: [{ kind, id: `${kind}-${id}`, note: null }],
-    windowStart: START.toISOString(),
-    windowEnd: at(6, 23),
-    timeFlex: 'week',
-    durationMinutes: 30,
-    l0Class: null,
-    fitScore: null,
     status: 'open',
-    generator: `adapter/${kind}`,
-    confidence: 0.7,
-    personalization: null,
+    priority: 3,
+    ...overrides,
   };
 }
 
-const CANDIDATES: ScheduleCandidate[] = [
-  candidate(
-    'c1',
-    'Review goals for Backlog Grooming',
-    'Take a moment to review the core objectives of Backlog Grooming.',
-    'action',
-  ),
-  candidate(
-    'c2',
-    'Pre-Read Prep',
-    'Dedicate a minimum of 2 hours to outline the top 3 discussion points. (from "Optimize Meeting Cadence")',
-    'insight',
-  ),
-  candidate(
-    'c3',
-    'The ‘Triple Threat’ Check-in',
-    'Schedule a quick 15-minute virtual coffee chat with Liam and Max. (from "Strategic Networking")',
-    'insight',
-  ),
+const TASKS: PlanTask[] = [
+  task('p1', 'Review goals for Backlog Grooming', { status: 'proposed' }),
+  task('u1', 'Pre-Read Prep', { dueAt: '2026-08-25T17:00:00.000Z', estimatedMinutes: 120 }),
+  task('u2', 'Call the dentist', { dueAt: '2026-08-20T17:00:00.000Z' }),
 ];
+
+function backlogOf(tasks: PlanTask[]) {
+  return groupIntoSections(tasks, localDateOf(START)).filter(
+    (section) => section.key === 'proposed' || section.key === 'unscheduled',
+  );
+}
 
 /** Live wiring, so the drop actually places a card during a manual drag. */
 function Surface({ colorMode = 'type' }: { colorMode?: ColorMode }) {
   const [events, setEvents] = useState(EVENTS);
-  const [slate, setSlate] = useState(CANDIDATES);
+  const [tasks, setTasks] = useState(TASKS);
+  const sections = useMemo(() => backlogOf(tasks), [tasks]);
 
   return (
     <div className="flex flex-col gap-4">
-      <HorizonGrid
+      <VerticalCalendar
         start={START}
         days={7}
         events={events}
@@ -165,13 +148,13 @@ function Surface({ colorMode = 'type' }: { colorMode?: ColorMode }) {
         colorMode={colorMode}
         footer="Rhythm from your own patterns, updated Aug 4."
         onDropCandidate={(id, startTime) => {
-          const placed = slate.find((c) => c.id === id);
+          const placed = tasks.find((item) => item.id === id);
 
           if (!placed) {
             return;
           }
 
-          setSlate((rest) => rest.filter((c) => c.id !== id));
+          setTasks((rest) => rest.filter((item) => item.id !== id));
           setEvents((current) => [
             ...current,
             {
@@ -208,39 +191,9 @@ function Surface({ colorMode = 'type' }: { colorMode?: ColorMode }) {
       />
 
       <TaskSlate
-        candidates={slate}
+        sections={sections}
         loading={false}
-        onDecline={(id) => setSlate((rest) => rest.filter((c) => c.id !== id))}
-        onSnooze={(id) => setSlate((rest) => rest.filter((c) => c.id !== id))}
-        onReturnEvent={(eventId) => {
-          const placed = events.find((e) => e.id === eventId);
-
-          if (!placed) {
-            return;
-          }
-
-          setEvents((rest) => rest.filter((e) => e.id !== eventId));
-          setSlate((rest) => [
-            {
-              id: `returned-${eventId}`,
-              title: placed.title,
-              description: null,
-              rationale: 'Taken back off the week.',
-              rationaleSources: [{ kind: 'answer', id: eventId, note: null }],
-              windowStart: START.toISOString(),
-              windowEnd: at(6, 23),
-              timeFlex: 'week',
-              durationMinutes: 30,
-              l0Class: placed.category,
-              fitScore: null,
-              status: 'open',
-              generator: 'braindump/llm',
-              confidence: 0.9,
-              personalization: null,
-            },
-            ...rest,
-          ]);
-        }}
+        onDismissProposed={(id) => setTasks((rest) => rest.filter((item) => item.id !== id))}
       />
     </div>
   );

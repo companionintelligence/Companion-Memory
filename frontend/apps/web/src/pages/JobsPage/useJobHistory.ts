@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 
-import { useAuth } from '@/hooks';
+import { readJobsSnapshot, writeJobsSnapshot } from './jobsSnapshots';
+import { useJobsAuth } from './useJobsAuth';
 
 export interface JobHistoryPoint {
   readonly at: string;
@@ -43,40 +44,62 @@ export const HISTORY_WINDOWS = [
  * Polls more slowly than the table: the collector samples every five minutes,
  * so a faster refresh would redraw the same points.
  */
+/** The request a window/queue pair makes, which is also its snapshot key. */
+function historyUrl(windowHours: number, queue: string): string {
+  const params = new URLSearchParams({ hours: String(windowHours) });
+
+  if (queue) {
+    params.set('queue', queue);
+  }
+
+  return `/api/jobs/history?${params}`;
+}
+
 export function useJobHistory(windowHours: number, queue: string, refreshIntervalMs = 60000) {
-  const [data, setData] = useState<JobHistoryResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const url = historyUrl(windowHours, queue);
+
+  const [data, setData] = useState<JobHistoryResponse | null>(
+    () => readJobsSnapshot<JobHistoryResponse>(url)?.value ?? null,
+  );
+  const [loading, setLoading] = useState(() => readJobsSnapshot(url) == null);
   const [error, setError] = useState<string | null>(null);
 
-  const [{ authToken }] = useAuth();
+  const { ready, headers } = useJobsAuth();
+
+  // Switching to a window that has already been drawn this session redraws it
+  // at once, rather than emptying the charts while the collector is re-read.
+  useEffect(() => {
+    const snapshot = readJobsSnapshot<JobHistoryResponse>(url);
+
+    if (snapshot) {
+      setData(snapshot.value);
+      setLoading(false);
+    }
+  }, [url]);
 
   const load = useCallback(async () => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
-    const params = new URLSearchParams({ hours: String(windowHours) });
-
-    if (queue) {
-      params.set('queue', queue);
-    }
-
     try {
-      const response = await fetchJson<JobHistoryResponse>(`/api/jobs/history?${params}`, {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
+      const response = await fetchJson<JobHistoryResponse>(url, { headers });
 
       setData(response ?? null);
       setError(null);
+
+      if (response) {
+        writeJobsSnapshot(url, response);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
-  }, [authToken, windowHours, queue]);
+  }, [ready, headers, url]);
 
   useEffect(() => {
-    if (!authToken) {
+    if (!ready) {
       return;
     }
 
@@ -95,7 +118,7 @@ export function useJobHistory(windowHours: number, queue: string, refreshInterva
     }, refreshIntervalMs);
 
     return () => window.clearInterval(handle);
-  }, [authToken, load, refreshIntervalMs]);
+  }, [ready, load, refreshIntervalMs]);
 
   return { data, loading, error, refresh: load } as const;
 }

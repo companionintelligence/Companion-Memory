@@ -212,7 +212,12 @@ export class TaskService {
     return TaskEntity.toEgressType(entity);
   }
 
-  /** Append knowledge to notes without wiping existing text. */
+  /**
+   * Append knowledge to notes without wiping existing text. Idempotent on the
+   * exact fragment: callers (todo/inbox scan loops) redeliver the whole batch
+   * on a mid-loop failure under pg-boss retry, and re-running an already-applied
+   * append must not duplicate the note text.
+   */
   async appendNotes(context: UserServiceContext, id: string, fragment: string): Promise<Task | null> {
     const record = await this.taskRepository.findOne({
       where: { id, userId: context.userId },
@@ -224,7 +229,7 @@ export class TaskService {
 
     const trimmed = fragment.trim();
 
-    if (!trimmed) {
+    if (!trimmed || record.notes?.includes(trimmed)) {
       return TaskEntity.toEgressType(record);
     }
 

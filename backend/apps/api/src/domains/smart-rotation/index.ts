@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { LoggingModule } from '@ci/common/logging';
+import { AgentModule } from '@ci/domains/agent';
 import { EventsModule } from '@ci/domains/events';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { LLMModule } from '@ci/domains/llm';
@@ -14,13 +15,12 @@ import { SearchNextModule } from '@ci/domains/search-next';
 import './events';
 
 import { AnswerInferenceCron } from './cron/AnswerInferenceCron';
-import { EntityPromotionCron } from './cron/EntityPromotionCron';
 import {
   SmartRotationAnswerInferCron,
   SmartRotationGraphEnrichCron,
   SmartRotationGraphLinkCron,
   SmartRotationHydrateAnswersCron,
-  SmartRotationHydrateInventoryCron,
+  SmartRotationHydrateThingsCron,
   SmartRotationInsightsCron,
   SmartRotationContextPromptCron,
   SmartRotationQuestionFeedCron,
@@ -34,6 +34,11 @@ import { SmartRotationService } from './services/SmartRotationService';
 
 @Module({
   imports: [
+    // Provides RecallService — the retrieval pipeline AnswerInferenceListener
+    // grounds inferred answers in. Not a cycle: nothing in the Agent graph
+    // imports SmartRotationModule (only application.ts does), which is the same
+    // reason ScheduleModule can import AgentModule for the same service.
+    AgentModule,
     EventsModule,
     IntelligenceModule,
     LLMModule,
@@ -60,8 +65,7 @@ import { SmartRotationService } from './services/SmartRotationService';
     SmartRotationGraphEnrichCron,
     SmartRotationContextPromptCron,
     SmartRotationHydrateAnswersCron,
-    SmartRotationHydrateInventoryCron,
-    EntityPromotionCron,
+    SmartRotationHydrateThingsCron,
   ],
   exports: [SmartRotationService],
 })

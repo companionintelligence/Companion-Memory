@@ -1,0 +1,1 @@
+export { ResponsiveDialog } from './ResponsiveDialog';

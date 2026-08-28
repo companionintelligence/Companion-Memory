@@ -43,13 +43,14 @@
  * until the appliance has a device-registration flow; when it does, populate `device_id`
  * and keep the triple as-is, and history stays intact.
  *
- * ## Foreground only
+ * ## Foreground vs background
  *
- * Nothing here asks for background location. Per `DEVICE_DATA_COMPLIANCE.md` §3.4 that
- * would pull in Play's background-location declaration plus a video review, and a
- * "passive life timeline" framing reads to a reviewer as untargeted tracking. The capture
- * runs while the app is in the foreground; the outbox is what makes a fix taken with no
- * connectivity survive until there is one.
+ * This module shapes and queues a fix; it does not talk to the OS location APIs itself.
+ * On native (iOS + Android), `useLocationTracking` drives
+ * `@capacitor-community/background-geolocation` and hands each delivered fix to
+ * {@link captureLocationFix} via {@link fixFromBackgroundGeolocationLocation}. Plain web
+ * (no Capacitor) falls back to `navigator.geolocation` via {@link fixFromGeolocationPosition}
+ * instead, foreground-only.
  */
 
 import { fetchJson } from '../fetchJson';
@@ -460,5 +461,41 @@ export function fixFromGeolocationPosition(position: GeolocationPosition): Devic
     headingDegrees: heading,
     speedMetersPerSecond: speed,
     capturedAtMs: position.timestamp || Date.now(),
+  };
+}
+
+/**
+ * The location shape delivered by `@capacitor-community/background-geolocation`'s
+ * `addWatcher` callback (both iOS and Android). Declared here — not imported from the
+ * plugin package — for the same reason every other native payload shape in this module
+ * is declared locally: the web bundle must stay free of `@capacitor/*` native deps.
+ */
+export interface BackgroundGeolocationLocation {
+  latitude: number;
+  longitude: number;
+  /** Radius of horizontal uncertainty in metres, with 68% confidence. */
+  accuracy: number;
+  altitude: number | null;
+  altitudeAccuracy: number | null;
+  /** Degrees clockwise from true north. */
+  bearing: number | null;
+  speed: number | null;
+  simulated?: boolean | null;
+  /** Milliseconds since the Unix epoch. */
+  time: number;
+}
+
+/** Adapt a `@capacitor-community/background-geolocation` fix to {@link DeviceLocationFix}. */
+export function fixFromBackgroundGeolocationLocation(
+  location: BackgroundGeolocationLocation,
+): DeviceLocationFix {
+  return {
+    latitude: location.latitude,
+    longitude: location.longitude,
+    accuracyMeters: location.accuracy,
+    altitudeMeters: location.altitude,
+    headingDegrees: location.bearing,
+    speedMetersPerSecond: location.speed,
+    capturedAtMs: location.time || Date.now(),
   };
 }

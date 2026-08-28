@@ -55,10 +55,31 @@ class Settings(BaseSettings):
         default_factory=lambda: os.getenv("TOKEN_CORPUS_DIR", "/app/data/token_corpus")
     )
 
-    # ── Qwen labeler (GGUF via llama-cpp-python) ─────────────────────────────
+    # ── Qwen labeler ─────────────────────────────────────────────────────────
+    # Prefer the Hub-injected OpenAI-compatible chat endpoint (vLLM Qwen3-8B)
+    # so we do not load a second GGUF next to the already-resident 8B. GGUF is
+    # the fallback when no API base is set (laptop / CI without vLLM).
     # Set QWEN_GGUF_PATH to an absolute local path to skip the HF download.
     # Otherwise the file is fetched from qwen_gguf_repo / qwen_gguf_file and
-    # cached under models_dir/qwen/ (~500 MB for Q4_K_M).
+    # cached under models_dir/qwen/.
+    label_api_base: str = Field(
+        default_factory=lambda: (
+            os.getenv("HBPE_LABEL_API_BASE") or os.getenv("LLM_API_BASE") or ""
+        )
+    )
+    label_api_key: str = Field(
+        default_factory=lambda: (
+            os.getenv("HBPE_LABEL_API_KEY")
+            or os.getenv("LLM_API_KEY")
+            or os.getenv("VLLM_API_KEY")
+            or ""
+        )
+    )
+    label_chat_model: str = Field(
+        default_factory=lambda: (
+            os.getenv("HBPE_LABEL_MODEL") or os.getenv("LLM_DEFAULT_CHAT_MODEL") or ""
+        )
+    )
     qwen_gguf_path: str = Field(default_factory=lambda: os.getenv("QWEN_GGUF_PATH", ""))
     qwen_gguf_repo: str = Field(
         default_factory=lambda: os.getenv("QWEN_GGUF_REPO", "unsloth/Qwen3.5-0.8B-GGUF")

@@ -1,4 +1,5 @@
 /* Netflix — privacy / "Download all" export (ViewingActivity.csv). */
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -28,6 +29,23 @@ function headerHasSimpleCols(text: string): boolean {
     .map((h) => h.trim());
 
   return cols.length === 2 && cols.includes('Title') && cols.includes('Date');
+}
+
+/**
+ * Stable per-title identity for the content row: case/whitespace-insensitive
+ * hash of the title string, so every viewing of "The Old Guard" (and every
+ * re-export) lands on ONE content row while each viewing stays its own event —
+ * the prime_video.ts / audible.ts pattern. Without it the importer minted one
+ * content row per watch (3,484 rows for 2,682 titles on a real export).
+ *
+ * sha256, not sha1, so plain Postgres can compute the identical value when
+ * legacy per-viewing rows need collapsing onto it by hand (the dev database
+ * that had them was fixed that way; nothing shipped with the old identity).
+ */
+function titleUri(title: string): string {
+  const norm = title.replace(/\s+/g, ' ').trim().toLowerCase();
+
+  return `netflix:title:${crypto.createHash('sha256').update(norm).digest('hex').slice(0, 16)}`;
 }
 
 // Parse the full export's Duration ("hh:mm:ss") into milliseconds. Hours can
@@ -299,6 +317,9 @@ export class NetflixFileImporter implements FileImporter {
         content: { filename: 'watch.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },
         metadata: {
           Title: row['Title'] || undefined,
+          // One content row per TITLE: the URI replaces the per-viewing item id
+          // as the content row's triple identity (mapping.toContentInput).
+          URI: title ? titleUri(title) : undefined,
           Profile: row['Profile Name'] || undefined,
           Device: row['Device Type'] || undefined,
           Duration: row['Duration'] || undefined,

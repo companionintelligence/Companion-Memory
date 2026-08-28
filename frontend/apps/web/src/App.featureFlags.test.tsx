@@ -119,7 +119,7 @@ function deferredFlags() {
       }
 
       return new Promise<Response>((resolve) => {
-        const flags = String(input).endsWith('/global') ? {} : { 'stats.page': true };
+        const flags = String(input).endsWith('/global') ? {} : { 'self.page': true };
 
         release.push(() => resolve(ok(flags)));
       });
@@ -135,7 +135,7 @@ function notFound() {
 
 beforeEach(() => {
   h.notFoundRenders = 0;
-  window.history.pushState({}, '', '/stats');
+  window.history.pushState({}, '', '/self');
 });
 
 afterEach(() => vi.unstubAllGlobals());
@@ -146,15 +146,57 @@ describe('App feature-gated routes, end to end', () => {
 
     render(<App />);
 
-    // In flight: /stats is not in the route table yet, so "*" is what matches.
+    // In flight: /self is not in the route table yet, so "*" is what matches.
     expect(notFound()).not.toBeInTheDocument();
 
     releaseFlags();
 
-    // Landed: the route exists and the layout mounts...
-    expect(await screen.findByLabelText('Stats')).toBeInTheDocument();
+    // Landed: the route exists and the page under it mounts. `Life details` is
+    // the landmark because `LifeDetailsSection` renders that heading
+    // unconditionally — its loading and error states sit *below* it — and it
+    // reads over REST, so neither the never-resolving Apollo link above nor the
+    // empty `fetch` stub can keep it out of the DOM. (Don't reach for the rail's
+    // Self entry: it renders as the user tile, labelled with the user's name
+    // rather than 'Self', and it would still be there on a 404 anyway.)
+    // `timeout` because the default 1000ms is not a realistic budget for what
+    // this line waits on. It is a full `<App />` render — providers, router,
+    // the whole shell — followed by a lazy route chunk, a deferred flag
+    // promise, and a REST read inside LifeDetailsSection. On a loaded machine
+    // that exceeded 1s often enough to fail roughly half of all runs, on `main`
+    // as well as on branches, which made a genuine regression here
+    // indistinguishable from noise. Raising the budget changes nothing this
+    // test asserts: `notFoundRenders` below still has to be 0 at every commit.
+    expect(
+      await screen.findByRole('heading', { name: 'Life details' }, { timeout: 10_000 }),
+    ).toBeInTheDocument();
 
     // ...and 404 was never rendered on the way there, not at any commit.
+    expect(h.notFoundRenders).toBe(0);
+  });
+
+  // Same handover, seen from a legacy redirect rather than the destination.
+  // /prompts is registered inside the `self.page` gate with /self/*, so while
+  // the flags are in flight it is "*" that matches — a bookmark waits on the
+  // loading page instead of being committed to /self/reflections before the
+  // route behind it is known to exist.
+  it('lands an old /prompts bookmark on Self without ever rendering 404', async () => {
+    window.history.pushState({}, '', '/prompts');
+
+    const releaseFlags = deferredFlags();
+
+    render(<App />);
+
+    // In flight: no 404, and no redirect decided on incomplete information.
+    expect(notFound()).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe('/prompts');
+
+    releaseFlags();
+
+    // Landed. `insights.page` is absent from these flags, so SelfPage sends
+    // the missing Reflections tab back to its index — Self, not a 404.
+    // Same reasoning as above: two chained redirects behind a deferred flag
+    // fetch, on a full app render.
+    await waitFor(() => expect(window.location.pathname).toBe('/self'), { timeout: 10_000 });
     expect(h.notFoundRenders).toBe(0);
   });
 

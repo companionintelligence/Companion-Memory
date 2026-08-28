@@ -739,7 +739,7 @@ erDiagram
           <tr>
             <td>Things</td><td class="num">1</td>
             <td class="m">things</td>
-            <td class="m">ci.inventory <span class="bar-note">(+ 5 object tables)</span></td>
+            <td class="m">ci.objects <span class="bar-note">(+ 5 object tables)</span></td>
           </tr>
           <tr>
             <td>Location files</td><td class="num">1</td>
@@ -803,7 +803,7 @@ flowchart TB
 
   subgraph OBJ["PHYSICAL OBJECTS & COMMERCE — shipped 2026-08-03"]
     direction LR
-    INV["ci.inventory<br/>53 cols"]
+    INV["ci.objects<br/>53 cols"]
     PM["ci.product_models<br/>27"]
     RC["ci.receipts<br/>33"]
     RLI["ci.receipt_line_items<br/>19"]
@@ -1029,7 +1029,7 @@ flowchart TB
           <tr>
             <td class="m">things</td>
             <td class="num">4</td>
-            <td class="m">ci.inventory (53) · ci.product_models · ci.receipts ·
+            <td class="m">ci.objects (53) · ci.product_models · ci.receipts ·
               ci.receipt_line_items · ci.object_observations · ci.object_identifiers</td>
             <td class="num"><span class="fan">×6</span></td>
             <td>The biggest genuine expansion in the schema. LifeScope's <code>things</code> was a
@@ -1147,7 +1147,7 @@ flowchart LR
     V3["ci.provider_keys"]
     T2["ci_search.tags"]
     T3["ci_search.entity_tag"]
-    G2["ci.inventory"]
+    G2["ci.objects"]
     G3["ci.product_models"]
     G4["ci.receipts"]
     G5["ci.receipt_line_items"]
@@ -1252,7 +1252,7 @@ flowchart LR
         <span><i class="sw-now"></i>CI-Server</span>
       </div>
       <div class="bars">
-        <div class="bar-row"><span class="bar-lab">ci.inventory</span>
+        <div class="bar-row"><span class="bar-lab">ci.objects</span>
           <span class="bar-track pair">
             <span class="bar-track"><span class="bar now" style="width:100%"></span><span class="bar-val">53</span></span>
             <span class="bar-track"><span class="bar then" style="width:7.5%"></span><span class="bar-val">4</span><span class="bar-note">LifeScope things — a stub</span></span>
@@ -1639,7 +1639,7 @@ flowchart TB
         <p class="note" style="margin-top:8px">Narrowed: <code>ci.object_identifiers</code> is
           <em>not</em> in this group — it has a 497-line service with a passing spec, wired into
           <code>GraphModule</code>. Its defect is that nothing calls it. And the ten new
-          <code>ci.inventory</code> columns are mapped and returned by every item read — they must
+          <code>ci.objects</code> columns are mapped and returned by every item read — they must
           not be dropped.</p>
       </div>
 
@@ -1659,7 +1659,7 @@ flowchart TB
         <p>The eleven per-type join tables were correctly consolidated into one polymorphic
           <code>ci_search.entity_tag</code> — but two older mechanisms survived the migration:
           <code>TEXT[]</code> columns on <code>ci.events</code>, <code>ci.communications</code> and
-          <code>ci.saved_searches</code>, and JSONB tag bags on <code>ci.inventory</code> and
+          <code>ci.saved_searches</code>, and JSONB tag bags on <code>ci.objects</code> and
           <code>ci.summaries</code>. Five columns across five tables, none of them the canonical
           store.</p>
         <div class="ls"><b>LifeScope did</b>One <code>tags</code> collection plus one embedded
@@ -1839,7 +1839,7 @@ flowchart TB
         <tbody>
           <tr><td class="num">1</td>
             <td><strong>Deletions.</strong> Drop <code>ci.agent_messages</code>, 3 orphan enum
-              types, a redundant index, 3 unmapped <code>ci.inventory</code> JSONB bags.</td>
+              types, a redundant index, 3 unmapped <code>ci.objects</code> JSONB bags.</td>
             <td class="m">drop_dead_agent_tables · drop_orphan_enum_types ·
               drop_redundant_item_relationships_from_idx · drop_dead_inventory_jsonb_bags</td>
             <td>None — nothing reads them. <span class="gone">EXCEPT</span> item 1.1 also drops
@@ -1864,7 +1864,7 @@ flowchart TB
             <td class="m">5 migrations</td>
             <td>Real — ship the app image <em>before</em> the migration or every read 42703s.</td></tr>
           <tr><td class="num">5</td>
-            <td><strong>Coherence.</strong> Re-key <code>inventory_source_triple_uniq</code> onto
+            <td><strong>Coherence.</strong> Re-key <code>objects_source_triple_uniq</code> onto
               <code>user_id</code>; migrate the 5 residual tag columns onto
               <code>ci_search.entity_tag</code> <em>with provenance</em>; constrain search-dispatch
               types; annotate the unread object/commerce tables.</td>
@@ -1882,7 +1882,7 @@ flowchart TB
         Measured; the fold doesn't pay for itself. This reverses §12 of the earlier plan.</li>
       <li><strong>Don't side-table the <code>ci.events</code> analytics block</strong> — just drop
         the dead columns outright.</li>
-      <li><strong>Don't split <code>ci.inventory</code>.</strong> Its 53 columns look like three
+      <li><strong>Don't split <code>ci.objects</code>.</strong> Its 53 columns look like three
         concepts but the seams don't hold under measurement.</li>
       <li><strong>Don't build one class over <code>ci.entities</code>.</strong> The 25
         <code>toEgressType</code> sites are 7 Person / 7 Concept / 5 Place / 3 Node with mutually

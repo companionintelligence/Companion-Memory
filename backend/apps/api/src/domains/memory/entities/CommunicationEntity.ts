@@ -81,6 +81,12 @@ export class CommunicationEntity {
   @Column({ type: 'jsonb', default: '{}', name: 'participants_metadata' })
   participantsMetadata!: Record<string, unknown>;
 
+  // Catch-all for whatever the parser set that has no dedicated column (e.g.
+  // a tweet's permalink/likes/retweets/language/reply-parent) — mirrors
+  // EventEntity.metadata.
+  @Column({ type: 'jsonb', default: '{}' })
+  metadata!: Record<string, unknown>;
+
   @Column({ type: 'text', nullable: true })
   subject!: string | null;
 
@@ -147,6 +153,7 @@ export class CommunicationEntity {
       fromEntityId: entity.fromEntityId,
       toEntityIds: entity.toEntityIds,
       participantsMetadata: entity.participantsMetadata,
+      metadata: entity.metadata,
       subject: entity.subject,
       content: entity.content,
       attachments: entity.attachments,

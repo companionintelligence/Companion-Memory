@@ -157,6 +157,19 @@ describe('WeekAhead', () => {
     expect(screen.getByLabelText('on your calendar')).toBeInTheDocument();
   });
 
+  it('hides junk cluster names even when probability is high', () => {
+    const week = makeWeek({
+      Drs: [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
+      'No Think': [0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8],
+      'Deep Focus': [0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9],
+    });
+    render(<WeekAhead week={week} due={null} />);
+
+    expect(screen.getByText('Deep Focus')).toBeInTheDocument();
+    expect(screen.queryByText('Drs')).not.toBeInTheDocument();
+    expect(screen.queryByText('No Think')).not.toBeInTheDocument();
+  });
+
   it('renders nothing when no cluster clears the floor', () => {
     const empty: WeekForecast = {
       horizon: '7d',

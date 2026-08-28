@@ -28,10 +28,12 @@ import {
   ClientFactory,
   FacebookClient,
   GitHubClient,
+  RedditClient,
   GoogleClient,
   MicrosoftClient,
   SpotifyClient,
   SignalClient,
+  SlackClient,
   SteamClient,
 } from './clients';
 import { ConnectionsController } from './controllers/ConnectionsController';
@@ -53,6 +55,7 @@ import { ProviderService } from './services/ProviderService';
     ClientFactory,
     FacebookClient,
     GitHubClient,
+    RedditClient,
     GoogleClient,
     CloudOAuthProxyService,
     ConnectionService,
@@ -61,6 +64,7 @@ import { ProviderService } from './services/ProviderService';
     MicrosoftClient,
     SpotifyClient,
     SignalClient,
+    SlackClient,
     SteamClient,
   ],
   controllers: [ConnectionsController, ProvidersController],
@@ -72,10 +76,12 @@ import { ProviderService } from './services/ProviderService';
     ProviderKeyService,
     FacebookClient,
     GitHubClient,
+    RedditClient,
     GoogleClient,
     MicrosoftClient,
     SpotifyClient,
     SignalClient,
+    SlackClient,
     SteamClient,
   ],
 })
@@ -93,15 +99,21 @@ export { ClientFactory } from './clients';
 export {
   FacebookClient,
   GitHubClient,
+  RedditClient,
   GoogleClient,
   MicrosoftClient,
   SpotifyClient,
   SignalClient,
+  SlackClient,
   SteamClient,
 };
 
 // Types
 export type { BaseClient } from './clients/BaseClient';
+// BaseOAuth2Client is exported as a VALUE (not just a type) so consumers can do
+// `instanceof BaseOAuth2Client` to detect OAuth2 (vs OpenID) providers — used by
+// the privacy domain's token-revocation path.
+export { BaseOAuth2Client } from './clients/BaseOAuth2Client';
 export type { Connection } from './entities/ConnectionEntity';
 export type { Provider } from './entities/ProviderEntity';
 export type { ProviderKey } from './entities/ProviderKeyEntity';
@@ -116,6 +128,7 @@ export type {
   FacebookLike,
   FacebookPhoto,
   FacebookPost,
+  FacebookPostAttachment,
   FacebookVideo,
   GmailMessage,
   EmailParticipant,

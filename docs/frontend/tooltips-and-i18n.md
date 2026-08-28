@@ -132,7 +132,8 @@ delay from the *nearest* provider. So an outer `Tooltip.Provider` has no effect,
 and Radix's `skipDelayDuration` — which normally lets a second tooltip open
 instantly as you sweep along a toolbar — never engages: every control waits the
 full delay. Fixing that means dropping the self-wrap and mounting one provider in
-`App.tsx`, which is a change to the shared primitive and its ~130 call sites, so it
+`App.tsx`, which is a change to the shared primitive and its ~150 call sites (74
+direct `<Tooltip>` roots plus ~80 `IconButton`s, each of which mounts one), so it
 is deliberately left for its own PR.
 
 ## i18n
@@ -197,4 +198,7 @@ piecemeal buys indirection without ever making the app translatable.
 
 When a second locale lands, add `i18next-http-backend` with
 `partialBundledLanguages: true` and serve the JSON from the API, matching
-[Hub's provider](../../../CI-Hub/packages/frontend/src/components/providers/i18n/i18n-provider.tsx).
+Hub's provider — `CI-Hub` (separate repo),
+`packages/frontend/src/components/providers/i18n/i18n-provider.tsx`. Written as a
+path rather than a link on purpose: a `../../../CI-Hub/…` relative link only
+resolves for someone whose clone sits beside a CI-Hub clone, and is dead on GitHub.

@@ -1,10 +1,51 @@
 import { Injectable } from '@nestjs/common';
-import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
 import { type EventPayloads, Events, EventService, OnEvent } from '@ci/domains/events';
 
+import {
+  ConceptCreatedEvent,
+  ConceptUpdatedEvent,
+  PersonCreatedEvent,
+  PersonUpdatedEvent,
+  PlaceCreatedEvent,
+  PlaceUpdatedEvent,
+} from '../events';
 import { GraphUtilityService } from '../services/GraphUtilityService';
+
+/**
+ * The domains whose graph node lives in `ci.entities` AND is resolvable by their
+ * own service, so re-emitting the per-type `*Created`/`*UpdatedEvent` is enough
+ * to get the node indexed: the matching
+ * `*SearchIndexListener` re-reads the row and writes BOTH the `ci_search.vectors`
+ * tsvector (the search CANDIDATE source) and the `ci_search.embeddings` vector
+ * (only a re-rank boost).
+ *
+ * Every other graph type is NOT indexed today. Its row has no detail half in
+ * whatever table its own domain service reads (`ci.events`, `ci.objects`,
+ * `ci.content`, `ci.files`, ...), so that per-type listener would find nothing
+ * and log "not found, skipping indexing" if invoked — and
+ * `GraphNodeSearchIndexListener` in search-ingress, which DOES see the payload
+ * for these types, deliberately declines them too, for the identical reason: a
+ * `ci_search.vectors` row for something `EntityResolutionService` can never
+ * resolve is a paid-for row that can never be returned. See that listener's
+ * `RESOLVABLE_FROM_ENTITIES_ALONE` for the full argument and what would need to
+ * be true to change it.
+ */
+type IndexedDomain = 'person' | 'place' | 'concept';
+
+/**
+ * Graph vocabulary (`ci.entities.entity_type`, lower-cased) aliased onto the
+ * domains above. Mirrors `GRAPH_TYPE_ALIASES` in `@ci/common/embeddings`,
+ * restricted to the types this listener can re-emit for.
+ */
+const GRAPH_TYPE_TO_DOMAIN: Record<string, IndexedDomain> = {
+  person: 'person',
+  contact: 'person',
+  place: 'place',
+  location: 'place',
+  concept: 'concept',
+};
 
 @Injectable()
 export class GraphEventListener {
@@ -16,360 +57,98 @@ export class GraphEventListener {
     this.logger.setContext(GraphEventListener.name);
   }
 
-  @OnEvent(Events.GRAPH_PERSON_CREATED)
-  async handlePersonCreated(payload: EventPayloads[Events.GRAPH_PERSON_CREATED]) {
-    try {
-      const searchContent = this.buildPersonSearchContent(payload.person);
-      const { node, created } = await this.graphUtility.createOrUpdateNode(payload.ownerId, {
-        entityId: payload.person.entityId,
-        entityType: payload.person.entityType,
-        name: payload.person.name ?? null,
-        description: payload.person.description ?? null,
-        properties: payload.person.properties ?? {},
-        searchContent,
-      });
-
-      if (created && searchContent) {
-        await this.enqueueEntityEmbedding(
-          payload.ownerId,
-          node.entity_id,
-          payload.person.entityType,
-          searchContent,
-        );
-      }
-
-      if (payload.relationships?.length) {
-        for (const rel of payload.relationships) {
-          await this.graphUtility.createOrUpdateRelationship(payload.ownerId, {
-            relationshipId: rel.relationshipId,
-            fromEntityId: rel.fromEntityId,
-            toEntityId: rel.toEntityId,
-            relationshipType: rel.relationshipType,
-            strength: rel.strength,
-            properties: rel.properties,
-            isBidirectional: rel.isBidirectional,
-            startDate: this.parseDate(rel.startDate),
-            endDate: this.parseDate(rel.endDate),
-          });
-        }
-      }
-    } catch (error) {
-      this.logger.error('Failed to handle GRAPH_PERSON_CREATED', {
-        ownerId: payload.ownerId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  @OnEvent(Events.GRAPH_FAMILY_MEMBERS_ADDED)
-  async handleFamilyMembersAdded(payload: EventPayloads[Events.GRAPH_FAMILY_MEMBERS_ADDED]) {
-    for (const member of payload.members) {
-      try {
-        await this.graphUtility.createOrUpdateNode(payload.ownerId, {
-          entityId: member.entityId,
-          entityType: member.entityType,
-          name: member.name ?? null,
-          description: member.description ?? null,
-          properties: member.properties ?? {},
-        });
-
-        for (const rel of member.relationships) {
-          await this.graphUtility.createOrUpdateRelationship(payload.ownerId, {
-            relationshipId: rel.relationshipId,
-            fromEntityId: rel.fromEntityId,
-            toEntityId: rel.toEntityId,
-            relationshipType: rel.relationshipType,
-            strength: rel.strength,
-            properties: rel.properties,
-            isBidirectional: rel.isBidirectional,
-            startDate: this.parseDate(rel.startDate),
-            endDate: this.parseDate(rel.endDate),
-          });
-        }
-      } catch (error) {
-        this.logger.error('Failed to handle GRAPH_FAMILY_MEMBERS_ADDED', {
-          ownerId: payload.ownerId,
-          memberId: member.entityId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-  }
-
-  @OnEvent(Events.GRAPH_PREFERENCE_ADDED)
-  async handlePreferenceAdded(payload: EventPayloads[Events.GRAPH_PREFERENCE_ADDED]) {
-    try {
-      const conceptId = await this.ensureConcept(payload.ownerId, payload.concept);
-
-      await this.graphUtility.createOrUpdateRelationship(payload.ownerId, {
-        relationshipId: payload.relationship.relationshipId,
-        fromEntityId: payload.relationship.fromEntityId,
-        toEntityId: conceptId,
-        relationshipType: payload.relationship.relationshipType,
-        strength: payload.relationship.strength,
-        properties: payload.relationship.properties,
-        isBidirectional: payload.relationship.isBidirectional,
-        startDate: this.parseDate(payload.relationship.startDate),
-        endDate: this.parseDate(payload.relationship.endDate),
-      });
-    } catch (error) {
-      this.logger.error('Failed to handle GRAPH_PREFERENCE_ADDED', {
-        ownerId: payload.ownerId,
-        concept: payload.concept.name,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  @OnEvent(Events.GRAPH_PREFERENCES_ADDED)
-  async handlePreferencesAdded(payload: EventPayloads[Events.GRAPH_PREFERENCES_ADDED]) {
-    for (const preference of payload.preferences) {
-      try {
-        const conceptId = await this.ensureConcept(payload.ownerId, preference.concept);
-
-        await this.graphUtility.createOrUpdateRelationship(payload.ownerId, {
-          relationshipId: preference.relationship.relationshipId,
-          fromEntityId: preference.relationship.fromEntityId,
-          toEntityId: conceptId,
-          relationshipType: preference.relationship.relationshipType,
-          strength: preference.relationship.strength,
-          properties: preference.relationship.properties,
-          isBidirectional: preference.relationship.isBidirectional,
-          startDate: this.parseDate(preference.relationship.startDate),
-          endDate: this.parseDate(preference.relationship.endDate),
-        });
-      } catch (error) {
-        this.logger.error('Failed to handle GRAPH_PREFERENCES_ADDED item', {
-          ownerId: payload.ownerId,
-          concept: preference.concept.name,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-  }
-
-  @OnEvent(Events.GRAPH_LOCATION_CREATED)
-  async handleLocationCreated(payload: EventPayloads[Events.GRAPH_LOCATION_CREATED]) {
-    try {
-      await this.graphUtility.createOrUpdateNode(payload.ownerId, {
-        entityId: payload.location.entityId,
-        entityType: payload.location.entityType,
-        name: payload.location.name ?? null,
-        description: payload.location.description ?? null,
-        properties: payload.location.properties ?? {},
-      });
-    } catch (error) {
-      this.logger.error('Failed to handle GRAPH_LOCATION_CREATED', {
-        ownerId: payload.ownerId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  @OnEvent(Events.GRAPH_VISIT_RECORDED)
-  async handleVisitRecorded(payload: EventPayloads[Events.GRAPH_VISIT_RECORDED]) {
-    try {
-      await this.graphUtility.createOrUpdateRelationship(payload.ownerId, {
-        relationshipId: payload.relationship.relationshipId,
-        fromEntityId: payload.relationship.fromEntityId,
-        toEntityId: payload.relationship.toEntityId,
-        relationshipType: payload.relationship.relationshipType,
-        strength: payload.relationship.strength,
-        properties: payload.relationship.properties,
-        isBidirectional: payload.relationship.isBidirectional,
-        startDate: this.parseDate(payload.relationship.startDate),
-        endDate: this.parseDate(payload.relationship.endDate),
-      });
-    } catch (error) {
-      this.logger.error('Failed to handle GRAPH_VISIT_RECORDED', {
-        ownerId: payload.ownerId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  @OnEvent(Events.GRAPH_CONNECTION_CREATED)
-  async handleConnectionCreated(payload: EventPayloads[Events.GRAPH_CONNECTION_CREATED]) {
-    try {
-      await this.graphUtility.createOrUpdateRelationship(payload.ownerId, {
-        relationshipId: payload.relationship.relationshipId,
-        fromEntityId: payload.relationship.fromEntityId,
-        toEntityId: payload.relationship.toEntityId,
-        relationshipType: payload.relationship.relationshipType,
-        strength: payload.relationship.strength,
-        properties: payload.relationship.properties,
-        isBidirectional: payload.relationship.isBidirectional,
-        startDate: this.parseDate(payload.relationship.startDate),
-        endDate: this.parseDate(payload.relationship.endDate),
-      });
-    } catch (error) {
-      this.logger.error('Failed to handle GRAPH_CONNECTION_CREATED', {
-        ownerId: payload.ownerId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  @OnEvent(Events.GRAPH_NODE_DELETED)
-  async handleNodeDeleted(payload: EventPayloads[Events.GRAPH_NODE_DELETED]) {
-    try {
-      await this.graphUtility.softDeleteNode(payload.entityId, payload.ownerId);
-    } catch (error) {
-      this.logger.error('Failed to handle GRAPH_NODE_DELETED', {
-        ownerId: payload.ownerId,
-        entityId: payload.entityId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
-  @OnEvent(Events.GRAPH_NODE_UPDATED)
-  async handleNodeUpdated(payload: EventPayloads[Events.GRAPH_NODE_UPDATED]) {
-    try {
-      await this.graphUtility.createOrUpdateNode(payload.ownerId, {
-        entityId: payload.entityId,
-        name: payload.nodeName ?? null,
-        description: payload.description ?? null,
-        properties: payload.properties,
-      });
-    } catch (error) {
-      this.logger.error('Failed to handle GRAPH_NODE_UPDATED', {
-        ownerId: payload.ownerId,
-        entityId: payload.entityId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-
   @OnEvent(Events.GRAPH_NODE_UPSERTED)
   async handleNodeUpserted(payload: EventPayloads[Events.GRAPH_NODE_UPSERTED]) {
-    try {
-      await this.graphUtility.createOrUpdateNode(payload.ownerId, {
-        entityId: payload.node.entityId,
-        entityType: payload.node.entityType,
-        name: payload.node.name ?? null,
-        description: payload.node.description ?? null,
-        properties: payload.node.properties ?? {},
-        searchContent: payload.node.searchContent ?? null,
-        linkedTable: payload.node.linkedTable ?? null,
-        linkedId: payload.node.linkedId ?? null,
-        mergeProperties: payload.node.mergeProperties,
-      });
-    } catch (error) {
-      this.logger.error('Failed to handle GRAPH_NODE_UPSERTED', {
-        ownerId: payload.ownerId,
-        entityId: payload.node.entityId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+    const { node, created } = await this.graphUtility.createOrUpdateNode(payload.ownerId, {
+      entityId: payload.node.entityId,
+      entityType: payload.node.entityType,
+      name: payload.node.name ?? null,
+      description: payload.node.description ?? null,
+      properties: payload.node.properties ?? {},
+      searchContent: payload.node.searchContent ?? null,
+      linkedTable: payload.node.linkedTable ?? null,
+      linkedId: payload.node.linkedId ?? null,
+      mergeProperties: payload.node.mergeProperties,
+    });
 
-  @OnEvent(Events.GRAPH_RELATIONSHIP_DELETED)
-  async handleRelationshipDeleted(payload: EventPayloads[Events.GRAPH_RELATIONSHIP_DELETED]) {
-    try {
-      await this.graphUtility.softDeleteRelationship(payload.relationshipId, payload.ownerId);
-    } catch (error) {
-      this.logger.error('Failed to handle GRAPH_RELATIONSHIP_DELETED', {
-        ownerId: payload.ownerId,
-        relationshipId: payload.relationshipId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    // The write above is the ONLY thing that used to happen here: the
+    // `created` flag `createOrUpdateNode` returns was discarded and no search
+    // event was ever emitted, so everything an agent wrote through
+    // `write_knowledge` (`GraphEventService.upsertNode`) landed in
+    // `ci.entities` and was invisible to search and to /api/memory/recall.
+    // Concept is not even in the backfill sweep's BACKFILLABLE_ENTITIES, so
+    // nothing recovered it later either.
+    //
+    // No try/catch here: this handler is fire-and-forget from the agent's
+    // point of view (WriteKnowledgeTool has already reported success by the
+    // time this job runs), so a swallowed failure would be invisible
+    // everywhere. Let it throw so the @OnEvent wrapper's ack.fail() engages
+    // pg-boss's retryLimit/dead-letter path instead.
+    await this.emitSearchIndexEvent(node.entity_type, node.entity_id, created);
   }
 
   @OnEvent(Events.GRAPH_RELATIONSHIP_UPSERTED)
   async handleRelationshipUpserted(payload: EventPayloads[Events.GRAPH_RELATIONSHIP_UPSERTED]) {
-    try {
-      await this.graphUtility.createOrUpdateRelationship(payload.ownerId, {
-        relationshipId: payload.relationship.relationshipId,
-        fromEntityId: payload.relationship.fromEntityId,
-        toEntityId: payload.relationship.toEntityId,
-        relationshipType: payload.relationship.relationshipType,
-        properties: payload.relationship.properties,
-        strength: payload.relationship.strength,
-        isBidirectional: payload.relationship.isBidirectional,
-        startDate: this.parseDate(payload.relationship.startDate),
-        endDate: this.parseDate(payload.relationship.endDate),
-        mergeProperties: payload.relationship.mergeProperties,
-      });
-    } catch (error) {
-      this.logger.error('Failed to handle GRAPH_RELATIONSHIP_UPSERTED', {
-        ownerId: payload.ownerId,
-        relationshipId: payload.relationship.relationshipId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    // See handleNodeUpserted: no try/catch, so a write failure fails the ack
+    // and engages retry/dead-letter instead of vanishing silently.
+    await this.graphUtility.createOrUpdateRelationship(payload.ownerId, {
+      relationshipId: payload.relationship.relationshipId,
+      fromEntityId: payload.relationship.fromEntityId,
+      toEntityId: payload.relationship.toEntityId,
+      relationshipType: payload.relationship.relationshipType,
+      properties: payload.relationship.properties,
+      strength: payload.relationship.strength,
+      isBidirectional: payload.relationship.isBidirectional,
+      startDate: this.parseDate(payload.relationship.startDate),
+      endDate: this.parseDate(payload.relationship.endDate),
+      mergeProperties: payload.relationship.mergeProperties,
+    });
   }
 
-  private buildPersonSearchContent(
-    person: EventPayloads[Events.GRAPH_PERSON_CREATED]['person'],
-  ): string | null {
-    const parts = new Set<string>();
-
-    const push = (value: unknown) => {
-      if (typeof value !== 'string') {
-        return;
-      }
-
-      const normalized = value.trim();
-      if (normalized.length === 0) {
-        return;
-      }
-
-      parts.add(normalized);
-    };
-
-    push(person.name ?? null);
-    push(person.description ?? null);
-
-    const properties = (person.properties ?? {}) as Record<string, unknown>;
-    const candidateKeys = ['first_name', 'last_name', 'email', 'occupation', 'bio'];
-
-    for (const key of candidateKeys) {
-      push(properties[key]);
-    }
-
-    const aliases = properties['aliases'];
-    if (Array.isArray(aliases)) {
-      for (const alias of aliases) {
-        push(alias);
-      }
-    }
-
-    const result = Array.from(parts).join(' ');
-
-    return result.length > 0 ? result : null;
-  }
-
-  private async enqueueEntityEmbedding(
-    ownerId: string,
+  /**
+   * Re-emit the per-type `*Created`/`*UpdatedEvent` for a graph node whose row
+   * its own domain service can resolve, so the existing `*SearchIndexListener`
+   * indexes it. Emitting AFTER the node write (rather than letting search-ingress
+   * subscribe to `GRAPH_NODE_UPSERTED` directly) is deliberate: the two queues
+   * are worked concurrently, so a listener racing the write would find no row.
+   *
+   * Updates re-emit too — an `entity.update` through `write_knowledge` can change
+   * the name or description, and a stale tsvector is its own bug.
+   *
+   * Types with no entry fall through silently; `GraphNodeSearchIndexListener`
+   * picks those up from the event payload instead.
+   */
+  private async emitSearchIndexEvent(
+    entityType: string | null | undefined,
     entityId: string,
-    entityType: string,
-    searchContent: string,
+    created: boolean,
   ): Promise<void> {
-    await this.eventService.send(Events.SEARCH_EMBED_ENTITY, {
-      ownerId,
-      entityId,
-      entityType,
-      searchContent,
-    });
-  }
+    const domain = GRAPH_TYPE_TO_DOMAIN[(entityType ?? '').trim().toLowerCase()];
 
-  private async ensureConcept(
-    ownerId: string,
-    concept: EventPayloads[Events.GRAPH_PREFERENCE_ADDED]['concept'],
-  ): Promise<string> {
-    const entityId = concept.entityId ?? uuidv7();
+    if (!domain) {
+      return;
+    }
 
-    await this.graphUtility.createOrUpdateNode(ownerId, {
-      entityId,
-      entityType: concept.entityType,
-      name: concept.name ?? null,
-      description: concept.description ?? null,
-      properties: concept.properties ?? {},
-    });
+    switch (domain) {
+      case 'person':
+        await this.eventService.send(created ? PersonCreatedEvent : PersonUpdatedEvent, {
+          personId: entityId,
+        });
 
-    return entityId;
+        return;
+      case 'place':
+        await this.eventService.send(created ? PlaceCreatedEvent : PlaceUpdatedEvent, {
+          placeId: entityId,
+        });
+
+        return;
+      case 'concept':
+        await this.eventService.send(created ? ConceptCreatedEvent : ConceptUpdatedEvent, {
+          conceptId: entityId,
+        });
+
+        return;
+    }
   }
 
   private parseDate(value?: string | null): Date | undefined {

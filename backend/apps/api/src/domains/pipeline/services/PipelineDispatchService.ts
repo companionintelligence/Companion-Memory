@@ -162,17 +162,17 @@ export class PipelineDispatchService {
 
   @OnEvent(PipelineSweepEvent, { queue: PIPELINE_QUEUES.INDEX })
   async handleIndexSweep(payload: unknown): Promise<void> {
-    await this.runSweepHop(payload);
+    await this.runSweepHop(payload, PIPELINE_QUEUES.INDEX);
   }
 
   @OnEvent(PipelineSweepEvent, { queue: PIPELINE_QUEUES.ENRICH })
   async handleEnrichSweep(payload: unknown): Promise<void> {
-    await this.runSweepHop(payload);
+    await this.runSweepHop(payload, PIPELINE_QUEUES.ENRICH);
   }
 
   @OnEvent(PipelineSweepEvent, { queue: PIPELINE_QUEUES.EMBED })
   async handleEmbedSweep(payload: unknown): Promise<void> {
-    await this.runSweepHop(payload);
+    await this.runSweepHop(payload, PIPELINE_QUEUES.EMBED);
   }
 
   /**
@@ -198,9 +198,12 @@ export class PipelineDispatchService {
    * weekly budget of one or two thousand, and every one of them rides
    * `GeocodeService`'s cache.
    *
-   * Public so a test can drive a sweep hop by hop without a queue.
+   * Public so a test can drive a sweep hop by hop without a queue. `queue` is
+   * the physical queue the caller is bound to — the three bindings above each
+   * pass their own — and is optional only because a hop driven directly, with
+   * no binding in the picture, has none to disagree with.
    */
-  async runSweepHop(rawPayload: unknown): Promise<SweepHopResult> {
+  async runSweepHop(rawPayload: unknown, queue?: string): Promise<SweepHopResult> {
     // Parsed, not cast. The payload came out of `pgboss.job.data` — JSON
     // written by some earlier release of this code, possibly weeks ago. A
     // malformed one throws here, where it dead-letters with the payload intact,
@@ -208,6 +211,18 @@ export class PipelineDispatchService {
     const payload = pipelineSweepPayloadSchema.parse(rawPayload);
 
     const stage = this.stageRegistry.get(payload.stage);
+
+    // A hop that arrived on a queue its stage does not ride means the binding
+    // and the registry disagree — the same guard `PipelineSliceListener.handleSlice`
+    // applies to slices. Processing it anyway would work, and that is precisely
+    // the problem: the resource isolation the queue split exists to provide
+    // would silently stop holding.
+    if (queue != null && stage.queue !== queue) {
+      throw new Error(
+        `Sweep for stage "${stage.id}" arrived on queue "${queue}" but the stage declares ` +
+          `"${stage.queue}". Refusing to process it on the wrong resource pool.`,
+      );
+    }
 
     // A multi-type stage MUST be told which type it is sweeping — the ledger is
     // keyed per (entity_type, entity_id, stage), so defaulting to the first
@@ -219,6 +234,17 @@ export class PipelineDispatchService {
       throw new Error(
         `Sweep for stage "${stage.id}" must name an entityType: the stage declares ` +
           `${stage.entityTypes.length} (${stage.entityTypes.join(', ')}).`,
+      );
+    }
+
+    // And a NAMED type must be one the stage actually declares — the same
+    // check `PipelineSliceListener.handleSlice` makes for a slice's entityType.
+    // Without it a typo'd or stale caller would sweep and dispatch under a type
+    // the ledger has no row for, rather than failing at the sweep that made it.
+    if (payload.entityType != null && !stage.entityTypes.includes(payload.entityType)) {
+      throw new Error(
+        `Sweep for stage "${stage.id}" named entityType "${payload.entityType}", which the stage ` +
+          `does not declare (declares: ${stage.entityTypes.join(', ')}).`,
       );
     }
 

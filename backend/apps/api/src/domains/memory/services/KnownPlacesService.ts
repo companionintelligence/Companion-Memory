@@ -5,6 +5,8 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { isValidTimezone } from '@ci/common/time/zoned';
+import { hourDowInTz } from '@ci/domains/daily-metrics/places/transitionMath';
 
 import { PlaceService } from './PlaceService';
 
@@ -172,13 +174,15 @@ export class KnownPlacesService {
       lat: number;
       lng: number;
       start_time: Date;
+      timezone: string | null;
     }> = await this.dataSource.query(
       `SELECT
          event.location_entity_id AS location_entity_id,
          event.location_name      AS location_name,
          ST_Y(event.location_coordinates::geometry) AS lat,
          ST_X(event.location_coordinates::geometry) AS lng,
-         event.start_time         AS start_time
+         event.start_time         AS start_time,
+         (SELECT u.timezone FROM ci.users u WHERE u.id = $1) AS timezone
        FROM ci.events event
        WHERE event.user_id = $1
          AND event.location_coordinates IS NOT NULL`,
@@ -188,6 +192,13 @@ export class KnownPlacesService {
     if (rows.length === 0) {
       return [];
     }
+
+    // Night/work-hours buckets are judged on the user's wall clock, not UTC:
+    // a Los Angeles user's 22:00 is 05:00/06:00 UTC, which would otherwise
+    // land half their evenings outside the "night" window and shift weekday
+    // office hours by a full working day's worth of offset.
+    const rawTimezone = rows[0]?.timezone?.trim();
+    const timezone = rawTimezone && isValidTimezone(rawTimezone) ? rawTimezone : 'UTC';
 
     const clusters = new Map<string, Cluster>();
 
@@ -226,9 +237,7 @@ export class KnownPlacesService {
         cluster.labelCounts.set(name, (cluster.labelCounts.get(name) ?? 0) + 1);
       }
 
-      const date = new Date(row.start_time);
-      const hour = date.getUTCHours();
-      const day = date.getUTCDay(); // 0 = Sunday
+      const { hour, dow: day } = hourDowInTz(new Date(row.start_time), timezone); // day: 0 = Sunday
       if (hour >= 21 || hour < 6) {
         cluster.nightCount += 1;
       }

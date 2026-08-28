@@ -28,7 +28,14 @@ export function RailEdgeToggle({
         className,
       )}
     >
-      <Icon className="h-5 w-5" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" />
+      {/* Lucide's chevron sits left of optical center in a circle — the same
+          1px nudge the logo disc uses, flipped with the direction. */}
+      <Icon
+        className={cn('h-5 w-5', open ? '-translate-x-px' : 'translate-x-px')}
+        strokeWidth={3}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </button>
   );
 }

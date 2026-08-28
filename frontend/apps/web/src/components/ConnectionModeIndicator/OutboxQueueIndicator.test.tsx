@@ -14,7 +14,10 @@ const h = vi.hoisted(() => ({
   useOutboxQueue: vi.fn(),
 }));
 
-vi.mock('@ci/common', () => ({ useOutboxQueue: h.useOutboxQueue }));
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
+  useOutboxQueue: h.useOutboxQueue,
+}));
 
 function setQueue(pending: number, needsAttention: number) {
   h.useOutboxQueue.mockReturnValue({ pending, needsAttention });

@@ -34,28 +34,43 @@ const REPLACEMENT = Buffer.from('�', 'utf8');
  * caller can fall back rather than store rubbish.
  */
 export function decodeAttributedBody(blob: Buffer | Uint8Array | null | undefined): string | undefined {
-  if (!blob || blob.length === 0) return undefined;
+  if (!blob || blob.length === 0) {
+    return undefined;
+  }
+
   const buf = Buffer.isBuffer(blob) ? blob : Buffer.from(blob);
 
   const nameAt = buf.indexOf(NSSTRING);
-  if (nameAt === -1) return undefined;
+  if (nameAt === -1) {
+    return undefined;
+  }
 
   const typeAt = buf.indexOf(CHAR_ARRAY, nameAt);
-  if (typeAt === -1) return undefined;
+  if (typeAt === -1) {
+    return undefined;
+  }
 
   let at = typeAt + 1;
-  if (at >= buf.length) return undefined;
+  if (at >= buf.length) {
+    return undefined;
+  }
 
   // typedstream integer escape: 0x81 -> uint16, 0x82 -> uint32, else a literal
   // byte. Values >= 0x80 that are not an escape are reference tags, not lengths.
   let length: number;
   const marker = buf[at];
   if (marker === 0x81) {
-    if (at + 3 > buf.length) return undefined;
+    if (at + 3 > buf.length) {
+      return undefined;
+    }
+
     length = buf.readUInt16LE(at + 1);
     at += 3;
   } else if (marker === 0x82) {
-    if (at + 5 > buf.length) return undefined;
+    if (at + 5 > buf.length) {
+      return undefined;
+    }
+
     length = buf.readUInt32LE(at + 1);
     at += 5;
   } else if (marker < 0x80) {
@@ -65,7 +80,9 @@ export function decodeAttributedBody(blob: Buffer | Uint8Array | null | undefine
     return undefined;
   }
 
-  if (length <= 0 || at + length > buf.length) return undefined;
+  if (length <= 0 || at + length > buf.length) {
+    return undefined;
+  }
 
   const raw = buf.subarray(at, at + length);
   const text = raw.toString('utf8');
@@ -73,7 +90,9 @@ export function decodeAttributedBody(blob: Buffer | Uint8Array | null | undefine
   // Node substitutes U+FFFD for invalid UTF-8 instead of throwing. Treat a
   // replacement char that was not literally present in the bytes as a failed
   // decode, so a misidentified offset can never masquerade as a message body.
-  if (text.includes('�') && !raw.includes(REPLACEMENT)) return undefined;
+  if (text.includes('�') && !raw.includes(REPLACEMENT)) {
+    return undefined;
+  }
 
   return text;
 }

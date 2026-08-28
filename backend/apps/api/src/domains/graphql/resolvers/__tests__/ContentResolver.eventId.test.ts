@@ -47,6 +47,7 @@ describe('ContentResolver — createContents batch cap + createContent live-inde
       { load: jest.fn() } as never,
       { load: jest.fn() } as never,
       { load: jest.fn() } as never,
+      { load: jest.fn() } as never,
     );
 
     return { resolver, contentService };

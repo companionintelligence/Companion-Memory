@@ -2,6 +2,7 @@ import { type MouseEvent, useMemo } from 'react';
 
 import { ContentIcon } from '@/components/icons';
 import { gql, useFragment, type FragmentType } from '@/graphql';
+import { RICH_MEDIA_FRAGMENT } from '@/pages/MemoryPage/Components/EntityDetails/RichMediaCard';
 
 import { EntityGridItem } from './EntityGridItem';
 
@@ -12,7 +13,16 @@ export const CONTENT_FRAGMENT = gql(`
     text
     contentUrl: url
     sourceUrl
+    sourceType
+    sourceSystem
+    sourceId
+    createdAt
     mimetype
+    mediaUrl
+    mediaFilename
+    mediaSize
+    previewUrl
+    ...RichMediaData
   }
 `);
 
@@ -33,12 +43,23 @@ function resolveMediaUrl(value?: string | null): string | undefined {
 
 export function ContentGridItem({ content, onClick }: Props) {
   const data = useFragment(CONTENT_FRAGMENT, content);
+  const richMedia = useFragment(RICH_MEDIA_FRAGMENT, data);
 
   const imageUrl = useMemo(() => {
     const isImage = data.mimetype?.startsWith('image/');
 
-    return isImage ? resolveMediaUrl(data.contentUrl ?? data.sourceUrl) : undefined;
-  }, [data.mimetype, data.contentUrl, data.sourceUrl]);
+    if (isImage) {
+      return resolveMediaUrl(data.contentUrl ?? data.sourceUrl);
+    }
+
+    // No linked image: fall back to the resolved link preview — the
+    // `enrich.unfurl` stage's cached poster (Spotify album art, an
+    // OpenGraph image), then a tier-0 embed's own templated poster
+    // (YouTube's thumbnail; Spotify has none).
+    const unfurlThumbnail = richMedia.unfurl?.status === 'ok' ? richMedia.unfurl.thumbnailUrl : null;
+
+    return resolveMediaUrl(unfurlThumbnail) ?? resolveMediaUrl(richMedia.player?.posterUrl) ?? undefined;
+  }, [data.mimetype, data.contentUrl, data.sourceUrl, richMedia]);
 
   if (imageUrl) {
     return (

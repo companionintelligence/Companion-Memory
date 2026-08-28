@@ -6,7 +6,7 @@ import { GrokFileImporter } from '../grok';
 import type { Graph, ImportParams } from '../timeline';
 import { TwitterFileImporter } from '../twitter';
 
-import type { EmittedGraph, EmittedItem } from './support/emitted';
+import type { EmittedGraph, EmittedItem, TestPipeline } from './support/emitted';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 
@@ -476,5 +476,127 @@ describe('Grok chats inside an X archive', () => {
     const { items, drops } = await runImport(new TwitterFileImporter(), dir);
     expect(items.filter((i) => i.id!.startsWith('grok:'))).toHaveLength(0);
     expect(drops.filter((d) => d.reason.startsWith('grok_'))).toEqual([]);
+  });
+
+  describe('parser loss reporting (reconciliation)', () => {
+    async function runWithPipeline(pipeline: TestPipeline, root: string): Promise<void> {
+      await new GrokFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+        timeframe: {},
+        log: () => {},
+        options: {},
+        pipeline,
+      } as unknown as ImportParams);
+    }
+
+    it('reports every row via consumed(), plus one extra unit for the one attachment', async () => {
+      // The default fixture: 3 grok-chat-item.js rows, one of which also
+      // carries an attachment reference that resolves successfully (by
+      // mediaId, despite its recorded filename not matching — see the
+      // "resolves a generated image" test above) — a fourth pushed item.
+      const root = writeXArchive();
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+
+      await runWithPipeline(pipeline, root);
+
+      const consumedSum = (pipeline.consumed as jest.Mock).mock.calls.reduce(
+        (sum: number, [n]: [number]) => sum + n,
+        0,
+      );
+      const producedCount = pipeline.filter((g) => g.item).length;
+      const droppedCount = (pipeline.drop as jest.Mock).mock.calls.length;
+
+      expect(producedCount).toBe(4); // 3 messages + 1 resolved media item
+      expect(droppedCount).toBe(0);
+      expect(consumedSum).toBe(producedCount + droppedCount);
+      // 3 base rows + 1 extra for the one attachment = 4.
+      expect(consumedSum).toBe(4);
+    });
+
+    it('drops a row with no chatId instead of silently skipping it', async () => {
+      const root = writeXArchive({
+        rows: [{ createdAt: TURN_AT, sender: { name: 'User' }, message: 'no chatId on this row' }],
+      });
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+
+      await runWithPipeline(pipeline, root);
+
+      expect(pipeline.length).toBe(0);
+      expect(pipeline.drop).toHaveBeenCalledWith('grok_unknown_conversation');
+      expect(pipeline.consumed).toHaveBeenCalledWith(1);
+    });
+
+    it('drops a timeframe-excluded row instead of silently skipping it', async () => {
+      const root = writeXArchive({
+        rows: [{ chatId: 'chat1', createdAt: TURN_AT, sender: { name: 'User' }, message: 'old news' }],
+      });
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+
+      await new GrokFileImporter().fileImport({}, { filename: path.basename(root), fullPath: root }, {
+        timeframe: { since: new Date('2027-01-01T00:00:00Z') },
+        log: () => {},
+        options: {},
+        pipeline,
+      } as unknown as ImportParams);
+
+      expect(pipeline.length).toBe(0);
+      expect(pipeline.drop).toHaveBeenCalledWith('outside_timeframe');
+      expect(pipeline.consumed).toHaveBeenCalledWith(1);
+    });
+
+    it('drops a row with no text and no attachments instead of silently skipping it', async () => {
+      const root = writeXArchive({
+        rows: [{ chatId: 'chat1', createdAt: TURN_AT, sender: { name: 'User' }, message: '' }],
+      });
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+
+      await runWithPipeline(pipeline, root);
+
+      expect(pipeline.length).toBe(0);
+      expect(pipeline.drop).toHaveBeenCalledWith('empty_after_parse');
+      expect(pipeline.consumed).toHaveBeenCalledWith(1);
+    });
+
+    it('does not drop empty_after_parse for a row with no text but a real attachment', async () => {
+      // An image-only turn is not an empty record — its attachment fully
+      // accounts for the row via its own consumed()/drop() unit.
+      const root = writeXArchive({
+        rows: [
+          {
+            chatId: 'chat1',
+            createdAt: TURN_AT,
+            sender: { name: 'Agent' },
+            message: '',
+            attachments: [{ url: `https://ton.x.com/grok-attachment/${MEDIA_ID}`, mediaId: MEDIA_ID }],
+          },
+        ],
+      });
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+
+      await runWithPipeline(pipeline, root);
+
+      expect(pipeline.filter((g) => g.item?.classification === 'media')).toHaveLength(1);
+      expect(pipeline.drop).not.toHaveBeenCalledWith('empty_after_parse');
+      // 1 base row unit + 1 attachment unit = 2, both spent on the media push.
+      const consumedSum = (pipeline.consumed as jest.Mock).mock.calls.reduce(
+        (sum: number, [n]: [number]) => sum + n,
+        0,
+      );
+      expect(consumedSum).toBe(2);
+    });
   });
 });

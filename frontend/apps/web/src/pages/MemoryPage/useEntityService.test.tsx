@@ -297,4 +297,22 @@ describe('useEntityService', () => {
 
     expect(fetchMore).not.toHaveBeenCalled();
   });
+
+  it('does not leave an unhandled rejection when fetchMore fails', async () => {
+    setResult({
+      data: {
+        search: { totalCount: 2, pageInfo: { hasNextPage: true, endCursor: 'c1' }, edges: [edge('e1', 'c1')] },
+      },
+    });
+    fetchMore.mockRejectedValueOnce(new Error('network'));
+
+    const { result } = renderService({ searchQuery: '' });
+
+    await act(async () => {
+      result.current[0].loadMore();
+      await Promise.resolve();
+    });
+
+    expect(fetchMore).toHaveBeenCalledTimes(1);
+  });
 });

@@ -63,7 +63,7 @@ describe('SmartRotationService.enqueueWork', () => {
     ['graph_enrich', 5],
     ['context_prompt', 5],
     ['hydrate_answers', 5],
-    ['hydrate_inventory', 5],
+    ['hydrate_things', 5],
     ['schedule_sync', 2],
     ['summaries', 2],
     ['insights', 2],

@@ -239,6 +239,50 @@ describeWithDatabase(`staged source runs (${importDatabase.target})`, () => {
     });
   });
 
+  describe('a claim whose run no longer exists', () => {
+    it('is re-staged by the purge, and its bytes fall back under the TTL', async () => {
+      const { dropId, sourcePath } = await seedUpload('orphaned.zip');
+      const { run } = await startUpload(dropId);
+
+      // `run_id` is ON DELETE SET NULL, so a run row deleted by anything other
+      // than `ImportRetentionService.retireRun` — a restore, an operator's
+      // DELETE — leaves the claim behind pointing at nothing.
+      await dataSource.query(`DELETE FROM ci_import.import_runs WHERE id = $1::uuid`, [run.id]);
+
+      expect(await rowByDropId(dropId)).toMatchObject({ status: 'claimed', run_id: null });
+
+      // And in that state the archive is unreachable from every direction: not
+      // in the uploads list, not deletable, not importable — the conflict names
+      // a run that no longer exists.
+      expect(await harness.stagedSources.listStagedUploads({ userId })).not.toContainEqual(
+        expect.objectContaining({ dropId }),
+      );
+      expect(await harness.stagedSources.releaseUpload({ userId }, dropId)).toBe(false);
+      await expect(startUpload(dropId)).rejects.toThrow(/already been claimed/);
+
+      // The purge adopts it: same bytes, back in the staged pool, TTL running.
+      await harness.stagedSources.purgeExpired();
+
+      expect(await rowByDropId(dropId)).toMatchObject({ status: 'staged', run_id: null });
+      expect((await stat(sourcePath)).size).toBe(5);
+      expect(await harness.stagedSources.listStagedUploads({ userId })).toContainEqual(
+        expect.objectContaining({ dropId }),
+      );
+
+      // Which is what makes it a backstop rather than a rename: once that
+      // window elapses the ordinary sweep reclaims the bytes it was pinning.
+      await dataSource.query(
+        `UPDATE ci_import.staged_sources SET expires_at = now() - interval '1 hour'
+          WHERE user_id = $1::uuid AND drop_id = $2`,
+        [userId, dropId],
+      );
+
+      expect(await harness.stagedSources.purgeExpired()).toBeGreaterThanOrEqual(1);
+      await expect(stat(sourcePath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect((await rowByDropId(dropId))?.status).toBe('expired');
+    });
+  });
+
   describe('the move', () => {
     it('unpack moves an inbox directory out of the inbox into scratch and marks it moved', async () => {
       const source = await seedInboxUnit('takeout', 'directory');

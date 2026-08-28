@@ -1,4 +1,5 @@
 import { SYSTEM_USER } from '@ci/common/context';
+import config from '@ci/configuration';
 
 import { NoteSearchIndexListener } from '../NoteSearchIndexListener';
 
@@ -124,5 +125,29 @@ describe('NoteSearchIndexListener.indexNote / updateNote', () => {
       { userId: 'user-1' },
       expect.objectContaining({ entityType: 'note' }),
     );
+  });
+
+  describe('CI_EMBED_TYPES allowlist', () => {
+    const originalTypes = config.embedding.types;
+
+    afterEach(() => {
+      config.embedding.types = originalTypes;
+    });
+
+    it('skips embedding (but still vectorizes) a note when "note" is excluded from the allowlist', async () => {
+      config.embedding.types = ['event'];
+
+      const { listener, embeddingService, vectorService } = makeListener({
+        id: 'note-4',
+        userId: 'user-1',
+        title: 'Grocery list',
+        content: 'Milk, eggs, bread',
+      });
+
+      await listener.indexNote({ noteId: 'note-4' } as never);
+
+      expect(embeddingService.upsert).not.toHaveBeenCalled();
+      expect(vectorService.upsert).toHaveBeenCalled();
+    });
   });
 });

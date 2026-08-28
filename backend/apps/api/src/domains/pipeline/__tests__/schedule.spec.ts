@@ -115,7 +115,14 @@ describe('metered stages', () => {
 
     // STAGE_ID_LIST order — declaration order, so the answer is comparable
     // between runs and between log lines.
-    expect(meteredStageIds()).toEqual([STAGE_IDS.ENRICH_POSITION_REVERSE, STAGE_IDS.ENRICH_GEOCODE]);
+    expect(meteredStageIds()).toEqual([
+      STAGE_IDS.ENRICH_POSITION_REVERSE,
+      STAGE_IDS.ENRICH_GEOCODE,
+      // The other direction over `ci.events`, and the same provider — a stage
+      // that names a coordinate is billed exactly like one that resolves a name.
+      STAGE_IDS.ENRICH_EVENT_REVERSE,
+      STAGE_IDS.ENRICH_UNFURL,
+    ]);
   });
 
   it('agrees with the map for every stage, in both directions', () => {
@@ -146,8 +153,25 @@ describe('metered stages', () => {
       expect(schedule.window).toBe('enrichment');
       expect(schedule.perRunCap).toBeGreaterThan(0);
       // Weekly at least. The user asked for geocoding at a slower cadence, and
-      // "slower" is the number this line pins.
-      expect(schedule.minInterval).toBeGreaterThanOrEqual(7 * 24 * 60 * 60);
+      // "slower" is the number this line pins. `enrich.unfurl` is the one
+      // exception — daily, so a large existing corpus backfills over days
+      // rather than months at the same per-run cap.
+      const minFloor = stageId === STAGE_IDS.ENRICH_UNFURL ? 24 * 60 * 60 : 7 * 24 * 60 * 60;
+      expect(schedule.minInterval).toBeGreaterThanOrEqual(minFloor);
+    }
+  });
+
+  it('runs enrich.unfurl daily, not weekly like the other metered stages', () => {
+    // A personal library backlog (tens of thousands of Spotify/YouTube keys)
+    // reaches full coverage in days at the per-run cap instead of months.
+    expect(stageSchedule(STAGE_IDS.ENRICH_UNFURL).minInterval).toBe(24 * 60 * 60);
+
+    for (const stageId of meteredStageIds()) {
+      if (stageId === STAGE_IDS.ENRICH_UNFURL) {
+        continue;
+      }
+
+      expect(stageSchedule(stageId).minInterval).toBe(7 * 24 * 60 * 60);
     }
   });
 
@@ -234,7 +258,7 @@ describe('the declared cadences', () => {
       STAGE_IDS.PROMOTE_EDGE_COMMUNICATION,
       STAGE_IDS.PROMOTE_EDGE_EVENT,
       STAGE_IDS.PROMOTE_EDGE_CONTENT,
-      STAGE_IDS.PROMOTE_EDGE_INVENTORY,
+      STAGE_IDS.PROMOTE_EDGE_OBJECT,
       STAGE_IDS.PROMOTE_EDGE_RECEIPT,
       STAGE_IDS.PROMOTE_EDGE_OBSERVATION,
       STAGE_IDS.PROMOTE_EDGE_POSITION,
@@ -272,7 +296,11 @@ describe('the declared cadences', () => {
     const weekly = STAGE_ID_LIST.filter((stageId) => stageSchedule(stageId).minInterval === 7 * 24 * 60 * 60);
 
     expect(hourly.length + nightly.length + weekly.length).toBe(STAGE_ID_LIST.length);
-    expect(weekly).toEqual(meteredStageIds());
+    // `enrich.unfurl` shares the nightly bucket's interval (daily) without
+    // sharing the edge legs' cost profile — it is the one metered stage NOT
+    // weekly, backfilling a large corpus faster than a weekly cadence would.
+    expect(weekly).toEqual(meteredStageIds().filter((id) => id !== STAGE_IDS.ENRICH_UNFURL));
+    expect(nightly).toContain(STAGE_IDS.ENRICH_UNFURL);
   });
 
   it('caps the reverse geocoder, because the cap matters more than the interval', () => {

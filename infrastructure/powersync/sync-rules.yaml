@@ -26,17 +26,17 @@
 # ci.content (NULL user_id), ci.entities/relationships (graph), ci_search.embeddings
 # (pgvector — huge, server-computed), HBPE tables.
 #
-# NOT YET synced — ci.inventory: as of migration 20260811061402
-# (convert_inventory_to_cti), ci.inventory no longer carries name/description; that
-# text lives on the matching ci.entities row (entities.entity_id = inventory.object_id
+# NOT YET synced — ci.objects: as of migration 20260811061402
+# (convert_inventory_to_cti), ci.objects no longer carries name/description; that
+# text lives on the matching ci.entities row (entities.entity_id = objects.object_id
 # AND entities.entity_type = 'Item'). PowerSync sync rules do not support JOINs in
 # data or parameter queries (docs.powersync.com/sync/supported-sql lists JOINs as
-# unsupported in both), so a nameless inventory row isn't worth syncing on its own.
-# Do not work around this by denormalizing name/description back onto ci.inventory
+# unsupported in both), so a nameless object row isn't worth syncing on its own.
+# Do not work around this by denormalizing name/description back onto ci.objects
 # (a trigger/dual-write would fight the CTI migration's whole point) or by
 # publishing a view (logical replication publishes tables only, never views). The
 # documented PowerSync path, if/when this is prioritized, is a Postgres `pg_ivm`
-# incrementally-maintained materialized view joining ci.inventory + the Item-typed
+# incrementally-maintained materialized view joining ci.objects + the Item-typed
 # slice of ci.entities, added as its own real relation to POWERSYNC_TABLES.
 #
 # Adding a table here is only half the change: POWERSYNC_TABLES in

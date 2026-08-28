@@ -13,8 +13,3 @@ function currentOrigin(): string {
 export function shareUrl(token: string, origin: string = currentOrigin()): string {
   return `${origin}/shared/${token}`;
 }
-
-/** An embeddable iframe snippet for the shared search. */
-export function iframeSnippet(token: string, origin: string = currentOrigin()): string {
-  return `<iframe frameborder="0" width="100%" height="600" src="${shareUrl(token, origin)}"></iframe>`;
-}

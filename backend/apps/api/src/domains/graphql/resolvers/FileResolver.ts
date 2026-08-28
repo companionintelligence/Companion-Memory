@@ -31,21 +31,37 @@ export class FileResolver {
     private readonly previewLoader: PreviewLoader,
   ) {}
 
+  /** Largest page one request may sign; also the page when `first` is absent. */
+  private static readonly MAX_FILES_PAGE = 200;
+
+  /**
+   * Paginated in SQL (see FileService.findPage) rather than through
+   * Paginator.paginate over findAll(): the load-everything-slice-later shape
+   * pre-signed a URL for EVERY file in the library on EVERY page request —
+   * seconds of event-loop-blocking crypto per scroll on a real library, during
+   * which the whole API stalled. Forward-only, which is all the connection's
+   * one consumer (the /memory/content grid) has ever used; the cursor stays
+   * the file's global id, so pages issued before this change still resume.
+   */
   @Query(() => FileConnection)
   async files(
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
   ): Promise<FileConnection> {
+    if (pagination.last != null || pagination.before != null) {
+      throw new Error('files: backward pagination (last/before) is not supported');
+    }
+
     const serviceContext = toServiceContext(context);
+    const limit = Math.min(pagination.first ?? FileResolver.MAX_FILES_PAGE, FileResolver.MAX_FILES_PAGE);
+    const afterId = pagination.after ? GlobalUID.parse('file', pagination.after) : null;
 
-    const entities = await this.fileService.findAll(serviceContext);
-
-    const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
-      ...pagination,
-      getId: (entity) => GlobalUID.encode('file', entity.id),
+    const { files, totalCount, hasNextPage } = await this.fileService.findPage(serviceContext, {
+      limit,
+      afterId,
     });
 
-    const edges: FileEdge[] = slice.map((entity) => {
+    const edges: FileEdge[] = files.map((entity) => {
       const node = FileType.toType(entity);
 
       return {
@@ -56,7 +72,15 @@ export class FileResolver {
 
     return {
       edges,
-      pageInfo,
+      pageInfo: {
+        hasNextPage,
+        // `after` only ever moves forward from the start, so anything behind a
+        // cursor is a previous page — the same answer the in-memory paginator
+        // gave.
+        hasPreviousPage: afterId != null,
+        startCursor: edges.length > 0 ? edges[0].cursor : null,
+        endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
+      },
       totalCount,
     };
   }
@@ -107,7 +131,7 @@ export class FileResolver {
     return preview ? preview.url : null;
   }
 
-  @ResolveField(() => ItemConnection, { nullable: true })
+  @ResolveField(() => ItemConnection, { nullable: true, complexity: 5 })
   async items(
     @Context() context: RequestContext,
     @Parent() parent: FileType,

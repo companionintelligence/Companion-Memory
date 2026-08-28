@@ -107,18 +107,27 @@ cat > "$OVERRIDE_FILE" <<EOF
 services:
   api:
     image: ${API_IMAGE}
+    # Checkout can be ahead of the live DB. Do not apply those migrations
+    # from this script unless the operator passes no --skip-migrate AND
+    # has confirmed the SQL. Until then the API must boot anyway.
+    environment:
+      CI_SKIP_SCHEMA_CHECK: "1"
 ${ENV_FILE_YAML}
   gateway:
     image: ${GATEWAY_IMAGE}
 ${ENV_FILE_YAML}
   hbpe-service:
     image: ${HBPE_IMAGE}
+    extra_hosts:
+      - host.docker.internal:host-gateway
 ${ENV_FILE_YAML}
   summary-service:
     image: ${SUMMARY_IMAGE}
 ${ENV_FILE_YAML}
   migrate-database:
     image: ${API_IMAGE}
+  database:
+    shm_size: 1gb
 EOF
 
 echo "==> Wrote override: $OVERRIDE_FILE"

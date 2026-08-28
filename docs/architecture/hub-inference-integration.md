@@ -9,10 +9,39 @@
 > **Update 2026-07-06:** the marketplace slug question below is settled differently than
 > proposed — `scripts/publish/manifest/config.json` now publishes as **`ci-memory`**
 > (not `companion`, and not the proposed `companion-memory`). Read every slug mention
-> below as `ci-memory`. The NestJS API still uses the native Ollama client with hardcoded
-> models (`domains/llm/services/OllamaService.ts`), so the core unification work in
-> §4b remains open. The 768-dim embedding coupling is documented in
+> below as `ci-memory`. The 768-dim embedding coupling is documented in
 > [Database.md](Database.md#search-index--deferred-indexing).
+>
+> **Update 2026-08-19 — most of §4b has since landed, from the CI-Server side.**
+> The 2026-07-06 note above claimed the NestJS API "still uses the native Ollama client
+> with hardcoded models" and "does not read the `LLM_*` env vars." All three halves of
+> that are now false:
+>
+> - `config.llm` maps `LLM_API_BASE`, `LLM_API_KEY` and `LLM_DEFAULT_CHAT_MODEL`
+>   (`backend/apps/api/config/custom-environment-variables.json:73-77`), and
+>   `config.embedding.model` maps `CI_EMBED_MODEL` (same file, `:94`).
+> - `OpenAiCompatChatDriver` (`domains/llm/services/`) speaks OpenAI `/v1` whenever an
+>   `apiBase` is configured, so the Hub proxy is already a supported backend; native
+>   Ollama is the fallback, not the only path.
+> - The compiled-in default is `DEFAULT_CHAT_MODEL = 'gemma4:e4b'`
+>   (`backend/apps/api/src/configuration.ts:33`), **not** `gemma3:1b`. `qwen3:14b` and
+>   `gemma3:27b` survive only as `DEMO_TEXT_MODEL` / `DEMO_VISION_MODEL`
+>   (`OllamaService.ts:31-32`), reached only behind the `pinned.demo.models` feature
+>   flag (`OllamaService.ts:739-741`).
+> - `LlmEndpointService` additionally persists a user-chosen endpoint and syncs the
+>   `LLM_*` values through to the summary-service.
+>
+> What that leaves open is the **Hub side of the handshake**, not the client side: the
+> §7 blockers (Hub has no embedding model; the `v1/*` data plane is unguarded) and the
+> `APP_ENV_KEYS` entry for `ci-memory` in `app-bootstrap.service.ts`. CI-Server can
+> already be *pointed* at the Hub proxy by setting `LLM_API_BASE`; nothing yet fetches
+> `bootstrap.env` at boot to do it automatically.
+>
+> One path in §1 is also stale: `AnswerInferenceCron` moved out of `domains/llm` to
+> `backend/apps/api/src/domains/smart-rotation/cron/AnswerInferenceCron.ts` (with its
+> listener alongside it) to break an `llm` ↔ `personalization` import cycle. It is still
+> `@Cron(CronExpression.EVERY_MINUTE)`, so the point it was cited for — CI-Server
+> self-schedules and needs no wake webhook — is unchanged.
 
 ---
 
@@ -54,26 +83,30 @@ binary" is answerable from this repo:
 | Renders `/data/config.yaml` | **No YAML.** `node-config` JSON layers (`backend/apps/api/config/*.json`) + repo-root `.env` (dotenv); secrets at `/run/secrets/.env.secrets`. |
 | Main port `8080` | **3030** (API, `config/default.json`); marketplace **main port is the gateway: 8642** (`scripts/publish/manifest/config.json`). |
 | Author a new `config.json`/`docker-compose.json` | **Already packaged** (currently slug `companion`, **renaming to `companion-memory`**) via `scripts/publish/publish.sh` (Runtipi v2; `gateway` service `isMain`, `internalPort: 8642`). |
-| Needs `/hooks/hub-wake` + `mcp_client: true` | **No wake route exists**; inference is driven by `@Cron(EVERY_MINUTE)` in `domains/llm/cron/AnswerInferenceCron.ts`. CI-Server self-schedules. |
+| Needs `/hooks/hub-wake` + `mcp_client: true` | **No wake route exists**; inference is driven by `@Cron(EVERY_MINUTE)` in `domains/smart-rotation/cron/AnswerInferenceCron.ts`. CI-Server self-schedules. |
 | pgvector sidecar vs shared Hub Postgres | **Neither** — CI-Server ships its own Postgres+pgvector image (`infrastructure/database/`); all embedding columns are `vector(768)`. |
 | Unknown inference var names | CI-Server already has `HUB_*` awareness, but **only for cloud OAuth** (`ciPortal`: `HUB_DEVICE_ID`/`HUB_API_KEY` in `CloudOAuthProxyService`) — **not inference**. |
 
-### CI-Server's two LLM paths today (both must be unified)
+### CI-Server's two LLM paths (as written; see the 2026-08-19 update at the top)
 
-1. **NestJS API** — native `ollama` npm client against `OLLAMA_HOST`
-   (default `http://host.docker.internal:11434`), with **hardcoded models**
+1. **NestJS API** — *at the time of writing*, the native `ollama` npm client against
+   `OLLAMA_HOST` (default `http://host.docker.internal:11434`), with **hardcoded models**
    (`gemma3:1b` prompts, `qwen3:14b` text, `gemma3:27b` vision) in
    `domains/llm/services/OllamaService.ts`, and a **hardcoded** `nomic-embed-text`
-   in `common/embeddings/services/EmbeddingGenerationService.ts`. It does **not**
-   read the `LLM_*` env vars.
+   in `common/embeddings/services/EmbeddingGenerationService.ts`.
+   **This is no longer true.** As of 2026-08-19 the API reads `LLM_API_BASE` /
+   `LLM_API_KEY` / `LLM_DEFAULT_CHAT_MODEL` (and `CI_EMBED_MODEL` for embeddings)
+   through `config.llm` / `config.embedding`, and routes through
+   `OpenAiCompatChatDriver` whenever an `apiBase` is set. The default chat model is
+   `gemma4:e4b`; the two demo models are flag-gated.
 2. **Python summary-service** — already an **OpenAI-compatible** client
    (`apps/summary/src/ci/summary/llm_config.py`) reading `LLM_API_BASE` / `LLM_API_KEY` /
    `LLM_DEFAULT_CHAT_MODEL` / `LLM_DEFAULT_EMBEDDING_MODEL`
    (`apps/summary/src/ci/summary/config.py`).
 
-The summary-service is already shaped correctly. The unification work is mostly
-**bringing the NestJS API up to the same OpenAI-compatible contract** and pointing
-both at the Hub.
+The summary-service was already shaped correctly, and the NestJS API has since been
+brought onto the same OpenAI-compatible contract. What is left is **pointing both at
+the Hub automatically** — the bootstrap fetch and the Hub-side blockers in §7.
 
 ---
 
@@ -173,6 +206,16 @@ In `packages/backend/src/modules/inference/app-bootstrap.service.ts`:
 No controller change is needed — `apps/:slug/bootstrap.env` is slug-generic.
 
 ### 4b. CI-Server-side edits
+
+> **Status 2026-08-19:** items 2 and 3 have substantially landed (see the update at the
+> top of this file) — the API speaks OpenAI `/v1` through `OpenAiCompatChatDriver`,
+> `LLM_API_BASE` / `LLM_API_KEY` / `LLM_DEFAULT_CHAT_MODEL` are mapped in
+> `custom-environment-variables.json`, and the chat model is `config.llm.chatModel`
+> rather than a constant. Items 1 and 4 have **not** — there is no
+> `bootstrap-from-hub.sh` and nothing fetches `bootstrap.env` at boot; the endpoint is
+> supplied by env (or persisted through `LlmEndpointService`) instead.
+> `EmbeddingGenerationService` reads `config.embedding.model` (`CI_EMBED_MODEL`), so
+> item 3's embedding half is config-driven but still pinned to 768 dims by the schema.
 
 1. **Add a `bootstrap-from-hub.sh`** (copy the Hermes script's structure: fetch,
    fail-open, atomic write to `${APP_DATA_DIR}/data/.env.hub-bootstrap`, mode 600),
@@ -339,10 +382,10 @@ These gate the whole integration:
 | `bootstrap.env` route | `…/inference/inference.controller.ts` (`apps/:slug/bootstrap.env`) |
 | Hermes transport | `CI-Hermes/bootstrap-from-hub.sh`, `start-hermes.sh` |
 | OpenClaw render + `/models` | `CI-Hub/packages/backend/src/modules/app-lifecycle/data/openclaw-ci-entrypoint.sh` |
-| CI-Server API native Ollama client + hardcoded models | `CI-Server/backend/apps/api/src/domains/llm/services/OllamaService.ts` |
-| CI-Server hardcoded embedding model | `CI-Server/backend/apps/api/src/common/embeddings/services/EmbeddingGenerationService.ts` |
+| CI-Server API Ollama client + model resolution *(no longer hardcoded — see the 2026-08-19 update)* | `CI-Server/backend/apps/api/src/domains/llm/services/OllamaService.ts`, `…/OpenAiCompatChatDriver.ts`, `…/LlmEndpointService.ts` |
+| CI-Server embedding model *(now `config.embedding.model` ← `CI_EMBED_MODEL`)* | `CI-Server/backend/apps/api/src/common/embeddings/services/EmbeddingGenerationService.ts` |
 | CI-Server summary OpenAI client + `LLM_*` | `CI-Server/backend/apps/summary/src/ci/summary/llm_config.py`, `…/config.py` |
 | CI-Server config layering | `CI-Server/backend/apps/api/config/*.json`, `…/src/configuration.ts` |
 | CI-Server marketplace packaging (slug `companion` → rename `companion-memory`, 8642) | `CI-Server/scripts/publish/manifest/config.json`, `…/publish.sh` |
 | CI-Server cloud-OAuth-only Hub use | `CI-Server/backend/apps/api/src/domains/connections/services/CloudOAuthProxyService.ts` |
-| CI-Server internal inference cron | `CI-Server/backend/apps/api/src/domains/llm/cron/AnswerInferenceCron.ts` |
+| CI-Server internal inference cron | `CI-Server/backend/apps/api/src/domains/smart-rotation/cron/AnswerInferenceCron.ts` *(moved out of `domains/llm` in `edec81e6a`)* |

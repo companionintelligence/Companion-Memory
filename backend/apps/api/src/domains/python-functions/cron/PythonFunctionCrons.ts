@@ -1,11 +1,11 @@
 import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { serves } from '@ci/common/roles';
+import { Cron } from '@ci/common/schedule';
 
 import { PythonFunctionService } from '../services/PythonFunctionService';
 import type { PythonFunctionTarget } from '../types';

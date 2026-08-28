@@ -49,7 +49,7 @@ describe('resolveConnectionMode — "connected"', () => {
     await expect(resolveConnectionMode()).resolves.toBe('connected');
   });
 
-  it('is a genuine race: "connected" wins when remote answers faster than a slower-but-healthy LocalHub', async () => {
+  it('prefers "connected" when remote answers, even if LocalHub is also healthy', async () => {
     // Fake timers so the LOSING (local) leg's 20ms delay, below, never becomes a real
     // pending timer that outlives this test: left real, it fires ~20ms of wall-clock
     // time later — often while a *later* test has since become the one with a `fetch`
@@ -81,6 +81,32 @@ describe('resolveConnectionMode — "connected"', () => {
         if (urlOf(input).startsWith('http://127.0.0.1:4100')) {
           return okResponse();
         }
+
+        return okResponse();
+      }),
+    );
+
+    await expect(resolveConnectionMode()).resolves.toBe('connected');
+  });
+
+  it('still resolves "connected" when the on-device sidecar answers first', async () => {
+    const start = vi.fn(async () => ({ baseUrl: 'http://127.0.0.1:4100', token: 'tok-abc' }));
+
+    setWindow({
+      Capacitor: {
+        isNativePlatform: () => true,
+        Plugins: { LocalHub: { start, stop: vi.fn(), getStatus: vi.fn() } },
+      },
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo) => {
+        if (urlOf(input).startsWith('http://127.0.0.1:4100')) {
+          return okResponse();
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 30));
 
         return okResponse();
       }),

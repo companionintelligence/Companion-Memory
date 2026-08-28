@@ -33,6 +33,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import AdmZip from 'adm-zip';
 
@@ -151,12 +152,12 @@ function assertInside(destDir: string, entryName: string): void {
  * zip-slip, declared size) before writing any byte, and re-checks the real
  * decompressed size mid-write.
  */
-function extractViaAdmZip(
+async function extractViaAdmZip(
   archivePath: string,
   destDir: string,
   maxEntries: number,
   maxTotalBytes: number,
-): ExtractResult {
+): Promise<ExtractResult> {
   const zip = new AdmZip(archivePath);
   const entries = zip.getEntries();
   if (entries.length > maxEntries) {
@@ -200,6 +201,11 @@ function extractViaAdmZip(
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, data);
     files += 1;
+
+    // Bound the event-loop block to one entry, not the whole archive: this
+    // path decompresses synchronously, and the worker runs every stage of
+    // every run in one process.
+    await yieldToEventLoop();
   }
 
   return { destDir, files, method: 'adm-zip' };
@@ -254,12 +260,12 @@ function declaredUncompressedBytes(archivePath: string): number | null {
  * `-qq` is silent. unzip exits 0 (ok) or 1 (ok, with warnings such as a skipped
  * bad entry) — both count as success.
  */
-function extractViaSystemUnzip(
+async function extractViaSystemUnzip(
   archivePath: string,
   destDir: string,
   maxEntries: number,
   maxTotalBytes: number,
-): ExtractResult {
+): Promise<ExtractResult> {
   const names = listEntryNames(archivePath);
   if (names.length > maxEntries) {
     throw new Error(`archive has ${names.length} entries (cap ${maxEntries})`);
@@ -284,7 +290,7 @@ function extractViaSystemUnzip(
   // directory is named after (and holds only) this archive — see
   // `extractionDestDir` — which lets the UTF-8 name repair delete the mangled
   // copies it supersedes instead of leaving them to import as duplicates.
-  const r = systemExtract(archivePath, destDir, { exclusiveDest: true });
+  const r = await systemExtract(archivePath, destDir, { exclusiveDest: true });
   if (!r.ok) {
     throw new Error(`archive extraction failed (${r.detail})`);
   }
@@ -309,7 +315,10 @@ function extractViaSystemUnzip(
  * archives — the caller decides whether that fails the stage or is reported and
  * retried.
  */
-export function extractUploadedArchive(archivePath: string, limits: ExtractLimits = {}): ExtractResult {
+export async function extractUploadedArchive(
+  archivePath: string,
+  limits: ExtractLimits = {},
+): Promise<ExtractResult> {
   const maxEntries = limits.maxEntries ?? DEFAULT_MAX_ENTRIES;
   const maxTotalBytes = limits.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
   const largeThreshold = limits.largeArchiveThreshold ?? DEFAULT_LARGE_ARCHIVE_BYTES;
@@ -345,9 +354,9 @@ export function extractUploadedArchive(archivePath: string, limits: ExtractLimit
       );
     }
 
-    result = extractViaSystemUnzip(archivePath, destDir, maxEntries, maxTotalBytes);
+    result = await extractViaSystemUnzip(archivePath, destDir, maxEntries, maxTotalBytes);
   } else {
-    result = extractViaAdmZip(archivePath, destDir, maxEntries, maxTotalBytes);
+    result = await extractViaAdmZip(archivePath, destDir, maxEntries, maxTotalBytes);
   }
 
   // Reclaim the staged copy the moment the extraction fully succeeded — any

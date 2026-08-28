@@ -173,6 +173,24 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
     ],
   },
   {
+    rawId: '019e3c66-b5d2-7f03-c9e5-1a4f6b9d0c08',
+    logo: '/branding/slack/logo.svg',
+    name: 'Slack',
+    tracks: [
+      { icon: MessageSquare, label: 'Messages' },
+      { icon: Hash, label: 'Channels' },
+    ],
+  },
+  {
+    rawId: '019e2b55-a4c1-7f02-b8d4-0c3e5a8f6b07',
+    logo: '/branding/reddit/logo.svg',
+    name: 'Reddit',
+    tracks: [
+      { icon: MessageSquare, label: 'Posts & comments' },
+      { icon: Bookmark, label: 'Saved' },
+    ],
+  },
+  {
     rawId: 'discord',
     logo: '/branding/discord/logo.svg',
     name: 'Discord',
@@ -200,17 +218,6 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
     tracks: [
       { icon: ShoppingBag, label: 'Orders' },
       { icon: Package, label: 'Products' },
-    ],
-    disabled: true,
-  },
-  {
-    rawId: 'slack',
-    logo: '/branding/slack/logo.svg',
-    name: 'Slack',
-    tracks: [
-      { icon: MessageSquare, label: 'Messages' },
-      { icon: Hash, label: 'Channels' },
-      { icon: Files, label: 'Shared files' },
     ],
     disabled: true,
   },
@@ -257,16 +264,6 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
     disabled: true,
   },
   {
-    rawId: 'reddit',
-    logo: '/branding/reddit/logo.svg',
-    name: 'Reddit',
-    tracks: [
-      { icon: MessageSquare, label: 'Posts & comments' },
-      { icon: Bookmark, label: 'Saved' },
-    ],
-    disabled: true,
-  },
-  {
     rawId: 'dropbox',
     logo: '/branding/dropbox/logo.svg',
     name: 'Dropbox',
@@ -286,13 +283,11 @@ interface SetupProviderState {
 
 interface ServiceIntegrationsSectionProps {
   variant?: 'page' | 'onboarding';
-  disabledWhenConnected?: boolean;
   onProviderSelect?: (rawProviderId: string) => void;
 }
 
 export function ServiceIntegrationsSection({
   variant = 'page',
-  disabledWhenConnected = false,
   onProviderSelect,
 }: ServiceIntegrationsSectionProps) {
   const navigate = useNavigate();
@@ -358,12 +353,6 @@ export function ServiceIntegrationsSection({
 
   function handleProviderClick(rawId: string) {
     const provider = providerMap[rawId];
-    const connectedCount = connectionsCount[rawId] ?? 0;
-
-    if (disabledWhenConnected && connectedCount > 0) {
-      return;
-    }
-
     const isLocalOnlyWithoutKeys = provider?.localOnly && !provider?.providerKeys;
 
     if (isLocalOnlyWithoutKeys) {
@@ -409,11 +398,10 @@ export function ServiceIntegrationsSection({
               count={count}
               lastActivityAt={lastSyncByProvider[config.rawId] ?? null}
               activityVerb="synced"
-              // `disabled` is "not implemented yet"; `disabledWhenConnected` is
-              // onboarding asking for one account per service. Same inert card,
-              // different reason — so they read differently to the user.
+              // `disabled` is "not implemented yet". Connected cards stay
+              // clickable so a second account of the same service can be added,
+              // matching /sources/connect.
               comingSoon={Boolean(config.disabled)}
-              locked={disabledWhenConnected && count > 0}
               onSelect={() => handleProviderClick(config.rawId)}
             />
           );

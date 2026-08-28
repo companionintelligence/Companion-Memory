@@ -49,6 +49,10 @@ export const Default: Story = {
       id: 'mock-id-1',
       name: args.name,
       description: args.description,
+      quantity: 1,
+      currency: 'USD',
+      lifecycleState: 'ACTIVE' as const,
+      identifiers: [],
     };
 
     const maskedItem = makeFragmentData(item, ITEM_FRAGMENT);
@@ -73,6 +77,10 @@ export const WithImage: Story = {
       id: 'mock-id-1',
       name: args.name,
       description: 'A sample item',
+      quantity: 1,
+      currency: 'USD',
+      lifecycleState: 'ACTIVE' as const,
+      identifiers: [],
       file: {
         id: 'file-id-1',
         url: 'https://images.unsplash.com/photo-1656543802898-41c8c46683a7?q=80&w=1471&auto=format&fit=crop&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D',

@@ -39,16 +39,16 @@ const CV_DEFAULT_DETECTOR = 'cv';
  * source {@link FileEntity}, closing the "CV detections never become entities"
  * gap in the spatial-memory chain (plan §3 gap 3).
  *
- * Mirrors the {@link InventoryListener} pattern: subscribe to an ingestion
+ * Mirrors the {@link ThingVisionListener} pattern: subscribe to an ingestion
  * event carrying an image reference, then upsert entities via the memory
- * services. Where InventoryListener runs its own Ollama vision pass, this
+ * services. Where ThingVisionListener runs its own Ollama vision pass, this
  * listener trusts detections already normalized by the capture source (the
  * ci-time-machine cv-client, or a device pipeline) into the canonical
  * {@link CvDetection} shape.
  *
  * Person detections become `PersonEntity` rows. Thing detections become
  * SIGHTINGS — `ci.object_observations` rows written through
- * {@link ObjectObservationService} — and deliberately NOT `ci.inventory` rows:
+ * {@link ObjectObservationService} — and deliberately NOT `ci.objects` rows:
  * "a coffee mug is visible in this photo" is not "I own this specific coffee
  * mug", and the observation table exists to keep those two claims apart.
  * Promoting a sighting to an owned unit is a later, revisable decision made

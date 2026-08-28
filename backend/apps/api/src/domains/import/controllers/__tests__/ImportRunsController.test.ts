@@ -81,6 +81,7 @@ function makeController(
     cancel?: boolean;
     retry?: boolean;
     batch?: null;
+    discarded?: null;
   } = {},
 ) {
   const runs = {
@@ -125,11 +126,39 @@ function makeController(
     findById: jest.fn(async () => ({ id: 'user-1', email: 'tester@example.com' })),
   };
 
+  const retention = {
+    discardRun: jest.fn(async () =>
+      overrides.discarded === undefined
+        ? {
+            runId: RUN.id,
+            label: RUN.label,
+            stagedRowsDeleted: 1_201,
+            sourceRowsDeleted: 1,
+            uploadsRestaged: 0,
+            mediaFilesKept: 412,
+            attachmentContentsKept: 0,
+          }
+        : overrides.discarded,
+    ),
+  };
+
+  const objectCounts = {
+    countsForUser: jest.fn(async () => [{ importer: 'gmail', label: 'Mail', count: 42 }]),
+  };
+
   return {
-    controller: new ImportRunsController(runs as never, catalog as never, users as never),
+    controller: new ImportRunsController(
+      runs as never,
+      catalog as never,
+      retention as never,
+      users as never,
+      objectCounts as never,
+    ),
     runs,
     catalog,
+    retention,
     users,
+    objectCounts,
   };
 }
 
@@ -275,6 +304,52 @@ describe('ImportRunsController.cancel and retry', () => {
   });
 });
 
+/**
+ * The one route on this controller that destroys data with no undo.
+ *
+ * The guards worth pinning at the edge are the two the service cannot make:
+ * a DELETE must not fire without the caller having said so in as many words,
+ * and a run that is not the caller's must be a 404 rather than a silent
+ * success. What MAY be discarded is the service's rule and is asserted against
+ * real Postgres in `importRetention.integration.spec.ts`.
+ */
+describe('ImportRunsController.discard', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('refuses to delete anything without an explicit confirmation', async () => {
+    const { controller, retention } = makeController();
+
+    await expect(controller.discard(ctx, 'run-1')).rejects.toBeInstanceOf(BadRequestException);
+    await expect(controller.discard(ctx, 'run-1', 'yes')).rejects.toBeInstanceOf(BadRequestException);
+    expect(retention.discardRun).not.toHaveBeenCalled();
+  });
+
+  it('discards a confirmed run and reports exactly what went', async () => {
+    const { controller, retention } = makeController();
+
+    expect(await controller.discard(ctx, 'run-1', 'discard')).toEqual({
+      runId: 'run-1',
+      label: 'Takeout.zip',
+      stagedRowsDeleted: 1_201,
+      sourceRowsDeleted: 1,
+      uploadsRestaged: 0,
+      // Passed through untouched, including the survivals. The route must not
+      // summarise a destructive reply down to what it took.
+      mediaFilesKept: 412,
+      attachmentContentsKept: 0,
+    });
+    expect(retention.discardRun).toHaveBeenCalledWith({ userId: 'user-1' }, 'run-1');
+  });
+
+  it('404s a run that is not this user’s', async () => {
+    const { controller } = makeController({ discarded: null });
+
+    await expect(controller.discard(ctx, 'someone-elses-run', 'discard')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+});
+
 describe('ImportRunsController.listSources', () => {
   it('lists what this appliance can import', () => {
     const { controller } = makeController();
@@ -290,6 +365,33 @@ describe('ImportRunsController.sourceCatalog', () => {
     const { controller, catalog } = makeController();
 
     expect(controller.sourceCatalog()).toBe(catalog.catalog.mock.results[0].value);
+  });
+});
+
+describe('ImportRunsController.objectCountsForCaller', () => {
+  it('asks the service for the CALLER only, never a bare list-everything', () => {
+    const { controller, objectCounts } = makeController();
+
+    void controller.objectCountsForCaller(ctx);
+
+    expect(objectCounts.countsForUser).toHaveBeenCalledWith('user-1');
+  });
+
+  it('serves the service result verbatim', async () => {
+    const { controller } = makeController();
+
+    await expect(controller.objectCountsForCaller(ctx)).resolves.toEqual([
+      { importer: 'gmail', label: 'Mail', count: 42 },
+    ]);
+  });
+
+  it('refuses an unauthenticated caller before touching the database', async () => {
+    const { controller, objectCounts } = makeController();
+
+    await expect(controller.objectCountsForCaller({} as RequestContext)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(objectCounts.countsForUser).not.toHaveBeenCalled();
   });
 });
 

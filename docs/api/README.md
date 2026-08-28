@@ -4,35 +4,40 @@
 
 CI-Server is the **memory brain** of the Companion Intelligence appliance — a personal database, RAG/search engine, knowledge graph, and behavioral-prediction engine. This directory documents every way to talk to it.
 
-It is a single **NestJS 10** process (default `0.0.0.0:3030`) backed by PostgreSQL 18 + pgvector + TimescaleDB + PostGIS (see [Database.md](../architecture/Database.md)), Ollama (local LLM/embeddings), PGBoss (jobs), and MinIO (object store). All clients — the React/Vite web app, CI-Connect, mobile App Intents, and MCP agents (CI-Hermes, CI-OpenClaw) — reach it through the surfaces below. (The importer is CI-Server's own native import domain, `backend/apps/api/src/domains/import/`, running in-process — not a separate external client — ported from the now-retired CI-Import-Tools.)
+It is a single **NestJS 11** process (default `0.0.0.0:3030`) backed by PostgreSQL 18 + pgvector + TimescaleDB + PostGIS (see [Database.md](../architecture/Database.md)), Ollama (local LLM/embeddings), PGBoss (jobs), and MinIO (object store). All clients — the React/Vite web app, the native iOS/Android shells (`frontend/apps/ios`, `frontend/apps/android`) and the iOS App Intents, Companion Capture, and MCP agents (CI-Hermes, CI-OpenClaw) — reach it through the surfaces below. (The importer is CI-Server's own native import domain, `backend/apps/api/src/domains/import/`, running in-process — not a separate external client — ported from the now-retired CI-Import-Tools, since renamed `ZARCHIVED-CI-Import-Tools`.)
+
+The same binary also boots headless as a **worker** (`processRole() === 'worker'` in `main.ts`) — the full DI graph with no HTTP server — so the long synchronous import stages run off the interactive event loop.
 
 ## The three surfaces
 
 | Surface | Endpoint | Best for | Doc |
 |---|---|---|---|
-| **GraphQL** | `POST /graphql` | The web app and any rich client: reads (events, communications, content, graph, search, forecast) and writes, incl. the high-throughput **bulk ingest** mutations | **[graphql.md](graphql.md)** — 54 queries, 68 mutations, ~160 types |
-| **REST** | ~28 NestJS controllers | Capture ingest (`/v1/events`), file/media upload, the `/api/maintenance/*` enrichment chain, agent memory (`/memory/*`), connectors, LLM proxy, health | **[rest.md](rest.md)** |
-| **MCP** | `POST /mcp` (JSON-RPC + SSE) | AI agents: every GraphQL query/mutation is auto-exposed as a privacy-labelled tool, plus curated intents | **[auth-and-conventions.md](auth-and-conventions.md) §5** |
+| **GraphQL** | `POST /graphql` | The web app and any rich client: reads (events, communications, content, graph, search, forecast, tasks/schedule, metrics, asks) and writes, incl. the high-throughput **bulk ingest** mutations | **[graphql.md](graphql.md)** — 93 queries, 117 mutations, 285 named types |
+| **REST** | 50 NestJS controllers | Bulk capture ingest (`/v1/*`), file/media upload, the `/api/maintenance/*` and `/api/pipeline/*` enrichment surfaces, in-process import runs (`/import/*`), agent memory (`/memory/*`), the intent catalog, connectors, LLM/chat, account export & deletion, health | **[rest.md](rest.md)** |
+| **MCP** | `POST /mcp` (JSON-RPC + SSE) | AI agents: every GraphQL query/mutation is auto-exposed as a privacy-labelled tool, plus curated intents — both filtered per caller by the key's scopes and capability | **[auth-and-conventions.md](auth-and-conventions.md) §5** |
 
-Cross-cutting concerns — **authentication (session cookies / API keys / OIDC), the guard model, CORS, body limits, validation, error shapes, and the provenance-triple idempotency convention** — are in **[auth-and-conventions.md](auth-and-conventions.md)**.
+Cross-cutting concerns — **authentication (session cookies / API keys / OIDC / Portal bearers), the guard model, API-key scopes and capability, CORS, body limits, validation, error shapes, and the provenance-triple idempotency convention** — are in **[auth-and-conventions.md](auth-and-conventions.md)**.
 
 ## Orientation — the five things to know first
 
-1. **No server-side `/api` prefix.** Controllers mount at bare paths (`/graph`, `/v1/events`). Browsers call same-origin `/api/*`; the fronting proxy (Vite dev server / Caddy / Traefik) **strips `/api`** before the request reaches Nest. A raw API client (or the importer) calls the bare path. *(A few controllers — `api/maintenance`, `api/intents` — hardcode `api/` into their own path so their public URL survives the rewrite.)*
+1. **No server-side `/api` prefix.** Controllers mount at bare paths (`/graph`, `/v1/events`). Browsers call same-origin `/api/*`; the fronting proxy (Vite dev server / Caddy / Traefik) **strips `/api`** before the request reaches Nest. A raw API client calls the bare path. *(Three controllers — `MaintenanceController` (`api/maintenance`), `PipelineController` (`api/pipeline`) and `IntentsController` (`api/intents` + `api/agent/intents`) — hardcode `api/` into their own path. Behind the stripping proxy that **doubles** the browser-facing URL — `/api/api/maintenance/*`, `/api/api/pipeline/*`, `/api/api/intents/*`, `/api/api/agent/intents/*` — while a client hitting the API host directly uses the single `/api/…` form quoted throughout these docs.)*
 
-2. **Three credentials, one guard.** Most routes accept **either** an access-token `Authorization: Bearer` JWT (the web app), an API key as `x-api-key` or `Authorization: Bearer <key>` (programmatic clients), **or** a Portal OIDC bearer (migration path) — via `JwtOrApiKeyAuthGuard`. `userId` flows through an AsyncLocalStorage context and scopes every query. There is no global auth guard and no `@Public` decorator — a route is public simply by declaring no auth guard (`/health`, the login endpoints, `/_internal/features/global`).
+2. **Three credentials, one guard.** Most routes accept **either** an access-token `Authorization: Bearer` JWT (the web app), an API key as `x-api-key` or `Authorization: Bearer <key>` (programmatic clients), **or** a Portal OIDC bearer (**on by default** since `auth.portal.enabled` flipped true) — via `JwtOrApiKeyAuthGuard`. `userId` flows through an AsyncLocalStorage context and scopes every query. There is no global auth guard and no `@Public` decorator — a route is public simply by declaring no auth guard (`/health`, the login endpoints, `/config/telemetry`, `/_internal/features/global`).
 
-3. **Bulk ingest dedups on the provenance triple `(source_type, source_system, source_id)`.** Every high-volume write path (`createEvents`, `createCommunications`, `createContents`, `createInventoryItems`, `createBrowserActivities`, `/v1/events`) is set-based and idempotent on this triple — the importer can re-push the same records without creating duplicates. See [graphql.md §4.7](graphql.md#47-bulk-ingest-mutations-the-importer-surface--detailed).
+   A **scope-limited** API key is additionally confined deny-by-default to the routes that declare a scope it holds (`memory`, `intents`, `mcp`, `capture`), and its `capability` (`read` / `write` / `full`) decides what it may do there.
 
-4. **Bulk load defers indexing.** The bulk paths pass `emitCreated:false` — they skip the per-row event fan-out, so search embedding is **deferred** to `POST /api/maintenance/search-index/backfill`. An import that pushes data but never runs the maintenance chain will have rows that are stored but not yet searchable.
+3. **Bulk ingest dedups on the provenance triple `(source_type, source_system, source_id)`.** The high-volume write paths that carry it — `/v1/events`, `/v1/communications`, `/v1/contents`, `/v1/things`, `/v1/browser-activity`, `/v1/positions`, `/v1/receipts`, `/v1/product-models`, `/v1/observations`, and the GraphQL `createEvents`, `createCommunications`, `createContents`, `createThings`, `createBrowserActivities` — are set-based and idempotent on it, so the importer can re-push the same records without creating duplicates. The triple is optional on every one of those lanes except `/v1/events`, which requires `source_system` + `source_id` (and defaults `source_type` to `capture`); a record that omits it has no capture identity and materializes directly, deduped only by its own service's key — positions on `(user_id, time)`. **`POST /v1/notes` is the one lane with no triple in its schema at all** (`bulkNoteRecordSchema` is `id`/`title`/`content`/`captured_at`): it is idempotent on the client-minted note uuid, last-write-wins on `captured_at`. See [graphql.md §4.7](graphql.md#47-bulk-ingest-mutations-the-importer-surface--detailed).
 
-5. **The importer's full flow** is: push records via the GraphQL bulk mutations → upload media via `POST /files/upload` → sync the graph via `bulkIngestGraph` + `bulkIngestItemRelationships` → run the enrichment chain via `POST /api/maintenance/orchestrate` (or the per-leg fallback) → poll `GET /api/maintenance/search-index/embedded-count` for the embed-drain progress. See [rest.md — "What the importer drives"](rest.md#what-the-importer-drives-during-a-run).
+4. **Bulk load defers indexing.** The bulk paths pass `emitCreated:false` — they skip the per-row event fan-out, so search embedding is **deferred** to `POST /v1/ingest/finish` (or the older `POST /api/maintenance/search-index/backfill`). A load that pushes data but never runs the finish/maintenance chain will have rows that are stored but not yet searchable. (`/v1/notes` is again the exception — it emits per row and indexes live, because `note` is in `INDEXABLE_ENTITIES` but not `BACKFILLABLE_ENTITIES`, so the deferred sweep could never reach it.)
+
+5. **The full load flow** is: stream records to the REST `/v1/*` lanes (NDJSON) → upload media via `POST /v1/files` (or `POST /files/upload`) → sync the graph via GraphQL `bulkIngestGraph` + `bulkIngestItemRelationships` → run the enrichment chain via `POST /v1/ingest/finish` (or `POST /api/maintenance/orchestrate`) → poll `GET /v1/ingest/status` / `GET /api/maintenance/search-index/embedded-count` for the embed-drain progress. See [rest.md — "What the importer drives"](rest.md#what-the-importer-drives-during-a-run).
 
 ## Quick start
 
 ```bash
 # 1. Authenticate — either a browser session (see auth-and-conventions.md §1.1)
-#    or, for a programmatic client, an API key (managed at /keys, session-required):
+#    or, for a programmatic client, an API key (managed at /keys, which needs a
+#    browser session or a CI-Portal bearer — never another API key):
 KEY=a1b2c…   # 64 hex chars, shown once at creation
 
 # 2. Query GraphQL
@@ -57,8 +62,8 @@ curl -i -X POST https://ci-memory.example.com/api/mcp \
 ## Contents
 
 - **[graphql.md](graphql.md)** — the GraphQL endpoint, auth/context, the full query & mutation catalog, the bulk-ingest contract (idempotency, deferred indexing, per-service arbiters), key types, and error semantics.
-- **[rest.md](rest.md)** — every REST controller (ingest, files, maintenance/enrichment, memory/graph, agent memory, connectors, LLM proxy, jobs, health) with per-route tables, plus what the importer drives.
-- **[auth-and-conventions.md](auth-and-conventions.md)** — the three auth mechanisms, guard model, CORS, body/validation/error conventions, the provenance-triple idempotency key, and the MCP surface.
+- **[rest.md](rest.md)** — every REST controller (ingest, files, maintenance/enrichment, pipeline, import runs, memory/graph, agent memory & intents, connectors, LLM/chat, account portability, pairing, peers, Solid, jobs, health) with per-route tables, plus what the importer drives.
+- **[auth-and-conventions.md](auth-and-conventions.md)** — the auth mechanisms, guard model, API-key scopes & capability, CORS, body/validation/error conventions, the provenance-triple idempotency key, and the MCP surface.
 
 ## See also
 
@@ -71,3 +76,5 @@ curl -i -X POST https://ci-memory.example.com/api/mcp \
 ---
 
 *These documents are generated from and cite the actual source (`backend/apps/api/src`, `file:line`). The generated GraphQL SDL at `domains/graphql/__generated__/schema.graphql` is the ultimate source of truth for the GraphQL surface.*
+
+*Route catalogs, controller/query/mutation counts and guard assignments re-verified against the tree on **2026-08-19**.*

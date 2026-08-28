@@ -1,4 +1,4 @@
-import { Injectable, Optional, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, Optional, UnauthorizedException } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -24,7 +24,8 @@ export interface JobFailureDto {
  *
  * This deliberately does NOT carry `data` or `output` verbatim. A job payload is
  * user content — `graph.person.created` carries name, email, phone and bio;
- * `search.embed.entity` carries the entity's searchable text — and the dashboard
+ * `graph.node.upserted` carries a node's name, description and searchable text —
+ * and the dashboard
  * endpoint is guarded only by "some user is authenticated", with no owner
  * predicate on the rows it returns. Serialising the payloads therefore handed
  * any signed-in user the most recent 25 jobs of whoever happened to generate
@@ -98,12 +99,38 @@ export interface CronScheduleDto {
   /** The cron expression as registered. */
   readonly cron: string;
   readonly timezone?: string | null;
-  /** Whether the scheduler currently has this job started. */
+  /**
+   * Whether the scheduler currently has this job started.
+   *
+   * NOT health. The `@Cron` wrapper catches, logs and returns, so a schedule
+   * whose body throws on every tick stays started forever. Read this with
+   * {@link lastSuccessAt} and {@link overdue}, never alone.
+   */
   readonly running: boolean;
   /** Next fire time, ISO-8601, or null if the job is stopped. */
   readonly nextRunAt: string | null;
-  /** Previous fire time, ISO-8601, or null if it has never been recorded. */
+  /**
+   * Last *attempt*, ISO-8601, or null if none has ever been recorded. Stamped
+   * before the body runs, so it stays fresh for a tick that threw.
+   */
   readonly lastRunAt: string | null;
+  /**
+   * Last tick whose body returned without throwing, ISO-8601, or null if none
+   * has. "Returned" is the whole claim: a cron that exits on a feature gate
+   * counts. What it rules out is the schedule that has been failing for weeks
+   * while {@link lastRunAt} stayed two minutes old.
+   */
+  readonly lastSuccessAt: string | null;
+  /**
+   * The schedule's own expression says it should have fired by now, and no
+   * attempt was recorded for that fire.
+   *
+   * False when nothing has ever been recorded: a freshly installed appliance
+   * cannot tell "never fired in three weeks" from "booted a minute ago", and
+   * lighting up all 40 rows on first boot would teach operators to ignore the
+   * column.
+   */
+  readonly overdue: boolean;
 }
 
 export interface JobQueueDto {
@@ -201,6 +228,8 @@ export class JobMonitorService {
     @Optional() private readonly schedulerRegistry?: SchedulerRegistry,
   ) {}
 
+  private readonly logger = new Logger(JobMonitorService.name);
+
   async getDashboard(context: RequestContext): Promise<JobDashboardDto> {
     if (!context.userId) {
       throw new UnauthorizedException('A user context is required.');
@@ -233,7 +262,13 @@ export class JobMonitorService {
       this.getActiveDistribution(),
       this.getQueueDistribution(),
       this.getSmartRotationDistribution(),
-      this.getCronSchedules(),
+      this.getCronSchedules().catch((err: unknown) => {
+        this.logger.warn(
+          `Cron schedule panel unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        );
+
+        return [];
+      }),
     ]);
 
     return {
@@ -303,15 +338,23 @@ export class JobMonitorService {
    *
    * `nextRunAt` comes from the live registry. `lastRunAt` prefers the durable
    * `ci.cron_runs` row (survives restarts) and falls back to in-memory
-   * `lastDate()` for the rare tick that has not flushed yet.
+   * `lastDate()` for the rare tick that has not flushed yet. `lastSuccessAt`
+   * has no in-memory equivalent — only the wrapper knows whether the body
+   * returned — so it is durable-only.
+   *
+   * `overdue` is computed here rather than left to the UI because it needs the
+   * cron expression evaluated, and the only evaluator is the `CronTime` the
+   * registry is holding.
    */
   private async getCronSchedules(): Promise<CronScheduleDto[]> {
     const schedules: CronScheduleDto[] = [];
-    const persisted = await CronRunStore.lastRunByName();
+    const persisted = await CronRunStore.runsByName();
 
     if (!this.schedulerRegistry) {
       return schedules;
     }
+
+    const now = Date.now();
 
     for (const [name, job] of this.schedulerRegistry.getCronJobs()) {
       let nextRunAt: string | null = null;
@@ -331,9 +374,12 @@ export class JobMonitorService {
         // Never fired since boot.
       }
 
-      const times = [durable?.getTime(), memoryLastRunAt ? Date.parse(memoryLastRunAt) : Number.NaN].filter(
-        (value): value is number => Number.isFinite(value),
-      );
+      const times = [
+        durable?.lastRunAt.getTime(),
+        memoryLastRunAt ? Date.parse(memoryLastRunAt) : Number.NaN,
+      ].filter((value): value is number => Number.isFinite(value));
+
+      const lastRunAt = times.length > 0 ? Math.max(...times) : null;
 
       schedules.push({
         name,
@@ -341,7 +387,9 @@ export class JobMonitorService {
         timezone: job.cronTime?.timeZone ?? null,
         running: Boolean(job.isActive),
         nextRunAt,
-        lastRunAt: times.length > 0 ? new Date(Math.max(...times)).toISOString() : null,
+        lastRunAt: lastRunAt == null ? null : new Date(lastRunAt).toISOString(),
+        lastSuccessAt: durable?.lastSuccessAt?.toISOString() ?? null,
+        overdue: isOverdue(job.cronTime, lastRunAt, now),
       });
     }
 
@@ -468,6 +516,7 @@ export class JobMonitorService {
       .filter((item) => item.count > 0);
   }
 
+  /** Live smart.rotation.work by workType. Excludes the dead-letter queue, for the reason above. */
   private async getSmartRotationDistribution(): Promise<SmartRotationWorkDistributionDto[]> {
     const rows = await this.jobRepository
       .createQueryBuilder('job')
@@ -475,6 +524,7 @@ export class JobMonitorService {
       .addSelect('COUNT(*)::int', 'count')
       .where('job.state IN (:...states)', { states: ['created', 'active', 'retry'] })
       .andWhere("job.data->>'name' = :eventName", { eventName: 'smart.rotation.work' })
+      .andWhere('job.name != :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
       .groupBy("COALESCE(job.data->>'workType', 'unknown')")
       .orderBy('count', 'DESC')
       .getRawMany<{ workType: string | null; count: number }>();
@@ -606,4 +656,171 @@ export class JobMonitorService {
       updatedOn: queue.updatedOn ? queue.updatedOn.toISOString() : undefined,
     };
   }
+}
+
+/**
+ * The slice of the `cron` library's `CronTime` this file uses.
+ *
+ * Declared structurally because `cron` is a transitive dependency of
+ * `@nestjs/schedule` and PnP will not let this workspace import it — the only
+ * handle on it is the live instance the registry hands back on `job.cronTime`.
+ * Nothing here parses a cron string; the expression is only ever evaluated by
+ * the library that registered it.
+ */
+interface CronTimeLike {
+  readonly timeZone?: string | null;
+  sendAt?: (count: number) => unknown;
+  getNextDateFrom?: (start: Date, timeZone?: string) => unknown;
+}
+
+/** Below a minute, clock skew alone would flip the verdict. */
+const MIN_OVERDUE_GRACE_MS = 60_000;
+
+/** Above an hour, "overdue" stops being actionable — daily jobs are the cap case. */
+const MAX_OVERDUE_GRACE_MS = 60 * 60_000;
+
+/** A second of slack cannot change an overdue verdict; the grace is minutes at least. */
+const OVERDUE_SEARCH_PRECISION_MS = 1_000;
+
+/** How far the search may widen before giving up on finding any past fire time. */
+const OVERDUE_LOOKBACK_DOUBLINGS = 6;
+
+/**
+ * Has this schedule missed the fire time its own expression asked for?
+ *
+ * `running` cannot answer that: the `@Cron` wrapper catches and returns, so a
+ * schedule stays started whatever its body does, and a scheduler that stopped
+ * ticking leaves no dead letters to notice either. The only ground truth is the
+ * expression itself against the last recorded attempt.
+ *
+ * The grace is half a cadence, floored at a minute and capped at an hour, so a
+ * two-minute job is late after three minutes and a daily job after an hour —
+ * generous enough that a slow tick or a restart never cries wolf.
+ */
+function isOverdue(cronTime: CronTimeLike | undefined, lastRunAtMs: number | null, nowMs: number): boolean {
+  if (!cronTime || lastRunAtMs == null || typeof cronTime.getNextDateFrom !== 'function') {
+    return false;
+  }
+
+  const cadence = cadenceMs(cronTime);
+  if (cadence == null) {
+    return false;
+  }
+
+  const grace = Math.min(Math.max(cadence / 2, MIN_OVERDUE_GRACE_MS), MAX_OVERDUE_GRACE_MS);
+
+  // The previous fire can never be later than now, so anything recorded within
+  // the grace is healthy without evaluating the expression at all — which is
+  // the case for all but a handful of the ~40 schedules on every poll.
+  if (nowMs - lastRunAtMs <= grace) {
+    return false;
+  }
+
+  const previousFire = previousExpectedFireAt(cronTime, nowMs, cadence);
+  if (previousFire == null) {
+    return false;
+  }
+
+  return previousFire - lastRunAtMs > grace;
+}
+
+/**
+ * The gap between the next two fires — the schedule's own idea of how often it
+ * should run, which is what both the grace and the search window scale from.
+ */
+function cadenceMs(cronTime: CronTimeLike): number | null {
+  if (typeof cronTime.sendAt !== 'function') {
+    return null;
+  }
+
+  let upcoming: unknown;
+  try {
+    upcoming = cronTime.sendAt(2);
+  } catch {
+    return null;
+  }
+
+  if (!Array.isArray(upcoming) || upcoming.length < 2) {
+    return null;
+  }
+
+  const first = asMillis(upcoming[0]);
+  const second = asMillis(upcoming[1]);
+
+  return first != null && second != null && second > first ? second - first : null;
+}
+
+/**
+ * The most recent fire time at or before `nowMs`.
+ *
+ * `CronTime` only walks forward, and stepping forward one fire at a time is
+ * unbounded for a per-second schedule. `getNextDateFrom` is monotonic, though,
+ * so bisecting on "does the next fire from here still land before now" reaches
+ * the answer in a couple of dozen evaluations whatever the cadence — and it
+ * stays correct for the irregular expressions (weekdays only, day-of-month)
+ * where the cadence between the next two fires says nothing about the last one.
+ */
+function previousExpectedFireAt(cronTime: CronTimeLike, nowMs: number, cadence: number): number | null {
+  let lo = nowMs - cadence * 2;
+
+  for (let widened = 0; ; widened++) {
+    const fire = nextFireAfter(cronTime, lo);
+    if (fire == null) {
+      return null;
+    }
+
+    if (fire <= nowMs) {
+      break;
+    }
+
+    if (widened >= OVERDUE_LOOKBACK_DOUBLINGS) {
+      return null;
+    }
+
+    lo = nowMs - (nowMs - lo) * 2;
+  }
+
+  let hi = nowMs;
+  while (hi - lo > OVERDUE_SEARCH_PRECISION_MS) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    const fire = nextFireAfter(cronTime, mid);
+    if (fire == null) {
+      return null;
+    }
+
+    if (fire <= nowMs) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  return nextFireAfter(cronTime, lo);
+}
+
+function nextFireAfter(cronTime: CronTimeLike, atMs: number): number | null {
+  if (typeof cronTime.getNextDateFrom !== 'function') {
+    return null;
+  }
+
+  try {
+    return asMillis(cronTime.getNextDateFrom(new Date(atMs), cronTime.timeZone ?? undefined));
+  } catch {
+    return null;
+  }
+}
+
+/** Luxon `DateTime`s in practice, but a `Date` or an epoch reads the same here. */
+function asMillis(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.getTime() : null;
+  }
+
+  const millis = (value as { toMillis?: () => unknown } | null)?.toMillis?.();
+
+  return typeof millis === 'number' && Number.isFinite(millis) ? millis : null;
 }

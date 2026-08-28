@@ -154,6 +154,9 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   // auto-played, a title abandoned in the first seconds.
   abandoned_playback: 'filtered',
   promo_playback: 'filtered',
+  // Spotify's own skip signal: under a second of `ms_played` on an
+  // end-of-play/streaming-history row.
+  sub_second_play: 'filtered',
 
   // Deliberate policy exclusions.
   bulk_filtered: 'filtered',
@@ -162,6 +165,14 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   excluded_retweet: 'filtered',
   outside_timeframe: 'filtered',
   non_message: 'filtered',
+  // A line WhatsApp wrote itself — "X added you", "Y left" — recognised by its
+  // U+200E marker plus the system-verb pattern. Policy, not a failure: the
+  // conversation is the user's, the announcement around it is not.
+  whatsapp_system_line: 'filtered',
+  // A Grok turn with an attachment but no text — an image-only generation,
+  // not a loss. The attachment itself is what this row actually contains,
+  // and it accounts for itself via its own drop/push.
+  grok_media_only_turn: 'filtered',
 
   // The source says it did not happen.
   cancelled_order: 'cancelled',
@@ -175,8 +186,19 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
 
   // Nothing to key it by.
   unnamed_product: 'no_identity',
+  // A tweets.js/tweet.js row with neither id_str nor id — the export's own
+  // primary key absent from its own row.
+  tweet_without_id: 'no_identity',
+  // A download row whose URL chain and tab URL are both empty: ci.browser_activity
+  // is keyed by url, so there is nothing to file it under.
+  download_no_url: 'no_identity',
   unnamed_track: 'no_identity',
+  // A Connections.csv row with no First Name and no Last Name.
+  unnamed_connection: 'no_identity',
   grok_unknown_sender: 'no_identity',
+  // A grok-chat-item.js row with no chatId — nothing to group it under or key
+  // its id by.
+  grok_unknown_conversation: 'no_identity',
   note_tweet_unmatched: 'no_identity',
 
   // Time.
@@ -202,6 +224,9 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
 
   // Shape.
   unsupported_entity_type: 'unsupported_shape',
+  // A Spotify play row with none of the track/episode/audiobook fields set —
+  // the source recorded a play but not what was played.
+  unresolvable_playback_stub: 'unsupported_shape',
 
   // Read failures.
   no_end_marker: 'unreadable_source',
@@ -246,6 +271,14 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   media_not_a_file: 'media_unsupported',
   /** MediaStage: the object store refused or errored on the upload. */
   media_upload_failed: 'media_store_failed',
+  /**
+   * MediaStage: a message declared an attachment that carried no local path, so
+   * there were no bytes to store. An iMessage row whose attachment survived the
+   * export as a guid alone is the common case.
+   */
+  attachment_no_path: 'media_missing',
+  /** MediaStage: the attachment's bytes stored, but its ci.content row did not. */
+  attachment_content_failed: 'media_store_failed',
   /** UnpackStage: an archive that could not be expanded. Everything inside it is absent. */
   archive_rejected: 'archive_rejected',
   /** PushStage: rows still `pending` when the stage stopped. */

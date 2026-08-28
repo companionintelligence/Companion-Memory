@@ -38,8 +38,8 @@ interface Props {
  * for the same object — usually description-only, with the title, the
  * timestamps and every type-specific field either read-only or absent. This
  * card renders the drawer's own `editFields` / `onSave` contract (shared via
- * {@link useEntityFieldsEditor}) so "Open full page" lands on an editor that
- * can do at least as much as the drawer it came from.
+ * {@link useEntityFieldsEditor}) so anyone landing on the route directly gets an
+ * editor that can do at least as much as the drawer for the same object.
  */
 export function EntityFieldsCard({
   title = 'Details',

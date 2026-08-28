@@ -234,9 +234,9 @@ describe('EventVectorStage (loadTexts: ci.events -> eventWeightedTexts)', () => 
   });
 });
 
-describe('ItemVectorStage (loadTexts: ci.inventory -> itemWeightedTexts)', () => {
+describe('ItemVectorStage (loadTexts: ci.objects -> itemWeightedTexts)', () => {
   it('writes name + brand + last-seen place as weighted text under entity_type "item"', async () => {
-    const h = makeVectorStageHarness(/FROM ci\.inventory/i, [
+    const h = makeVectorStageHarness(/FROM ci\.objects/i, [
       {
         id: 'item-1',
         name: 'Cordless drill',
@@ -267,7 +267,7 @@ describe('ItemVectorStage (loadTexts: ci.inventory -> itemWeightedTexts)', () =>
   });
 
   it('skips a row with no weighted text as "empty"', async () => {
-    const h = makeVectorStageHarness(/FROM ci\.inventory/i, [
+    const h = makeVectorStageHarness(/FROM ci\.objects/i, [
       {
         id: 'item-1',
         name: null,

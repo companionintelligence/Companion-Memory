@@ -5,9 +5,34 @@
 > Redesign of the HBPE input layer, capacity model, training corpus, time hierarchy, and planner integration so the engine scales from ~10 calendar events/day to hundreds of mixed-source events/day, detects annual patterns, and delivers predictions users actually want in the planner.
 >
 > **Companion designs:** [Tasks & Scheduling](tasks-and-scheduling.md) · [Completion Detection](completion-detection.md) · [System map](ci-prediction-doc-map.md)
-> **Platform context:** [CI-Server architecture](architecture.md) · [Database architecture](Database.md)
+> **Platform context:** [CI-Server architecture](../architecture/architecture.md) · [Database architecture](../architecture/Database.md)
 >
 > **v2 changes from v1:** 15-minute buckets (96/day) instead of 10-minute, which keeps `ONNX_SEQ_LEN` at 256 unchanged · tasks map to L0 and only *completed* tasks become training tokens · flat 180-day corpus replaced by a 90-day multi-resolution corpus with weekly rollups and a previous-year anchor · completion records become a first-class model input.
+
+> ### ⚠️ §2 was implemented and then reverted (checked 2026-08-19)
+>
+> **The 15-minute / 96-bucket decision is not in force.** It shipped
+> (`20260809160500_hbpe_15_minute_buckets.sql`) and was rolled back two days later
+> (`20260811174700_hbpe_30_minute_buckets.sql`, which also DELETEs `hbpe.prediction_log`
+> and `hbpe.token_stream` because 15-minute indices are not semantically compatible with
+> 30-minute ones). `backend/apps/hbpe/src/ci/hbpe/buckets.py` today declares
+> `BUCKET_MINUTES = 30`, `BUCKETS_PER_DAY = 48`, and
+> `docs/architecture/hbpe-landing.md` puts the 15-minute redesign explicitly out of scope.
+> Read §2, §2.4, §5.2 and the P1 row of §10 as the rejected branch, not the plan of record.
+>
+> Other §9 items **did** land, in the reverted-bucket world: `pipeline/baselines.py` has
+> B0/B1/B2, `pipeline/serve.py` is the D3 serve gate (transformer served only when it beats
+> B1 on top-1 by a margin, or beats B1 on Brier *and* B2 on ECE), `pipeline/scoring.py`
+> writes `hbpe.prediction_score`, and `pipeline/actuals_backfill.py` fills
+> `prediction_log.actual_*`. §9.4(a)'s temporal smoothing landed as the daypart HMM in
+> `pipeline/hmm.py`; the separate `l0_temporal_smooth.py` experiment was added and reverted
+> and is not in the tree.
+>
+> Two more things this document assumes that are no longer true: **Temporal is gone** (the
+> "seasonal-insight Temporal workflow" in §8 would now be a pg-boss job dispatched through
+> `domains/python-functions`), and every HBPE module moved from `src/ci/<module>` to
+> `src/ci/hbpe/<module>`, so the `*.py` paths and line citations below are one level shallow
+> and drifted.
 
 ---
 

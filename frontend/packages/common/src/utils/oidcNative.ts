@@ -64,3 +64,34 @@ export function parseOidcCallbackUrl(url: string): OidcCallbackParams | null {
 
   return { code, error };
 }
+
+const SEEN_NATIVE_CODES_KEY = 'ci.oidc.seenNativeCodes';
+
+/**
+ * Claim a Memory-login one-time code so iOS `getLaunchUrl` cannot redeem it
+ * again after a remount. Capacitor keeps the last deep link for the process;
+ * the code is single-use on the appliance, so a replay is always
+ * "Invalid or expired code". Returns false if this code was already claimed.
+ */
+export function claimNativeOidcCode(code: string): boolean {
+  if (!code) {
+    return false;
+  }
+
+  try {
+    const raw = sessionStorage.getItem(SEEN_NATIVE_CODES_KEY);
+    const prev: unknown = raw ? JSON.parse(raw) : [];
+    const seen = Array.isArray(prev) ? prev.filter((item): item is string => typeof item === 'string') : [];
+
+    if (seen.includes(code)) {
+      return false;
+    }
+
+    seen.push(code);
+    sessionStorage.setItem(SEEN_NATIVE_CODES_KEY, JSON.stringify(seen.slice(-16)));
+
+    return true;
+  } catch {
+    return true;
+  }
+}

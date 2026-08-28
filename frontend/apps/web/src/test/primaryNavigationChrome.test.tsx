@@ -56,7 +56,7 @@ vi.mock('@/common/feature', async () => {
 });
 
 // The header mounts every add-menu modal (closed) alongside the chrome, and
-// each drags in its own context graph — chat requester, uploads, inventory.
+// each drags in its own context graph — chat requester, uploads, things.
 // None of that bears on where the chips sit, so the modals are stubbed out
 // rather than provided for.
 vi.mock('@/components/modals/CaptureModal', () => ({ CaptureModal: () => null }));
@@ -67,7 +67,7 @@ vi.mock('@/components/modals/AddItemModal', () => ({
   AddPlaceModal: () => null,
 }));
 vi.mock('@/components/modals/AddItemModal/AddConceptModal.tsx', () => ({ AddConceptModal: () => null }));
-vi.mock('@/components/modals/InventoryItemModal', () => ({ InventoryItemModal: () => null }));
+vi.mock('@/components/modals/ThingModal', () => ({ ThingModal: () => null }));
 
 beforeEach(() => {
   // An unreachable appliance is the case that produced the report: it resolves

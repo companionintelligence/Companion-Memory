@@ -24,7 +24,7 @@ import { ChatGenerateListener } from './listeners/ChatGenerateListener';
 import { CvDetectionsListener } from './listeners/CvDetectionsListener';
 import { ImageDescriptionBackfillListener } from './listeners/ImageDescriptionBackfillListener';
 import { ImageDescriptionListener } from './listeners/ImageDescriptionListener';
-import { InventoryListener } from './listeners/InventoryListener';
+import { ThingVisionListener } from './listeners/ThingVisionListener';
 import { ChatGenerationBroker } from './services/ChatGenerationBroker';
 import { ChatTurnService } from './services/ChatTurnService';
 
@@ -54,7 +54,7 @@ import { ChatTurnService } from './services/ChatTurnService';
     CvDetectionsListener,
     ImageDescriptionListener,
     ImageDescriptionBackfillListener,
-    InventoryListener,
+    ThingVisionListener,
   ],
   controllers: [OllamaController, LlmEndpointController],
   exports: [LlmCoreModule],
@@ -63,17 +63,38 @@ export class LLMModule {}
 
 export { LlmCoreModule } from './core.module';
 export { OllamaService } from './services/OllamaService';
-export { PROMPT_MODEL, type ChatRequestContext } from './services/OllamaService';
+export { PROMPT_MODEL, UTILITY_MODEL, type ChatRequestContext } from './services/OllamaService';
 export { LLM_QUEUE, LLM_QUEUE_OPTIONS } from './constants';
 export {
+  ANSWER_SUPPORT_LEVELS,
+  type AnswerSupport,
+  answersTheQuestion,
   calibrateInferredConfidence,
   confidenceLabel,
+  CONFIDENCE_IMPLIED_CEILING,
+  CONFIDENCE_NON_ANSWER,
+  CONFIDENCE_OFF_QUESTION,
+  CONFIDENCE_UNATTRIBUTED,
   DEFAULT_MIN_ANSWER_CONFIDENCE,
+  enforceEvidenceIsAboutThePerson,
+  enforceFirstPersonEvidence,
+  enforceForcedChoiceCommitment,
+  enforceYesNoQualifierIsInformative,
   estimateInferredAnswerConfidence,
+  extractForcedChoiceAlternatives,
+  type ForcedChoiceAlternative,
+  type ForcedChoiceQuestion,
   INFERRED_ANSWER_JSON_SCHEMA,
   INFERRED_ANSWER_PROMPT_RULES,
   type InferredAnswer,
+  isAboutSomethingElse,
+  isNarratedVoice,
+  isNonAnswer,
+  normalizeAnswerSupport,
+  normalizeEvidenceRefs,
   parseInferredAnswer,
+  sanitizeInferredAnswerVoice,
+  supportConfidenceCeiling,
 } from './inferredAnswerConfidence';
 export { CV_DETECTION_LINKED_TABLE } from './listeners/CvDetectionsListener';
 export {

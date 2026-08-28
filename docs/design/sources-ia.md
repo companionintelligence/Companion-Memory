@@ -33,7 +33,7 @@ Three problems compounded:
 **One nav entry, one page, three paths.**
 
 ```
-Sidebar → Sources → /sources
+Power Rail → Sources → /sources
                       ├── /sources/connect   Services — accounts you sign into
                       ├── /sources/import    Import — the archive wizard + Inbox + History
                       └── /sources/devices   Devices — the extension and Capture, and what has registered
@@ -68,9 +68,9 @@ memory. "Data" is true of every page in the app.
 ### Why paths and not routes
 
 Each path is addressable (`/sources/connect`, `/sources/import`,
-`/sources/browser`, `/sources/capture`) so that redirects, onboarding, and any
-deep link can land someone in the right place — but they render inside **one
-page**, under one switch that is always on screen. The switch is not a tab
+`/sources/devices` — the three members of `SOURCE_PATHS`) so that redirects,
+onboarding, and any deep link can land someone in the right place — but they
+render inside **one page**, under one switch that is always on screen. The switch is not a tab
 strip; it is a tile per path, each saying what that path is for and how long it
 takes. Someone who lands on the wrong one can see the others without going
 back.
@@ -92,9 +92,9 @@ Moving between paths changes the answers and not the shape — and it is read at
 the moment someone has already chosen to look, rather than shouted at them
 three times at once.
 
-The page carries **no heading and no standfirst**. The breadcrumb already reads
-"Sources", the rail entry is labelled Sources, and the
-tiles say what each path is for — a title plus an introductory paragraph on top
+The page carries **no heading and no standfirst**. The Power Rail entry is
+labelled Sources and the tiles say what each path is for — a title plus an
+introductory paragraph on top
 of that was the third and fourth restatement of the same thing, and it pushed
 the only actionable content on the screen below the fold. The tiles are the
 first thing you see.
@@ -103,7 +103,8 @@ One component, two densities. The empty state cannot drift from the navigation,
 because it *is* the navigation — and the screen a new user sees is the screen
 that explains the only decision they have to make.
 
-The distinction the tiles draw is the one people actually get wrong:
+The distinction the three tiles draw is the one people actually get wrong (the
+last two below are the two halves of the single **Devices** tile):
 
 - **Connect a service** — a minute of work, and it keeps syncing. Gets you
   *from now on*, plus whatever recent history the API exposes.
@@ -118,7 +119,7 @@ Most people should do more than one, and the first-run tiles say so.
 
 ### What each source card claims
 
-Every card across all four paths is the same component: a logo, a name, and a
+Every card across all three paths is the same component: a logo, a name, and a
 list of what that source hands over. Those lists are keyed off the catalog's
 `category`, not inferred from each guide's authored prose — a keyword matcher
 over `whatImported` had GPX, a GPS track format, advertising "Listening,
@@ -210,6 +211,8 @@ This matches how onboarding already treats it —
   "where am I" inside a flow that already has one.
 - **`ImportSurface`.** `/sources/import` hosts the same surface `/import` did,
   with the same wizard, Inbox and History — reorganised only as described above.
-- **Mobile.** The mobile bottom bar has five slots and no header; `/sources` is
-  reached from System, which is where the mobile layout already collects
-  appliance-level destinations.
+- **Mobile.** The phone no longer has its own five-slot bottom bar to fight
+  over: `MobileNavigation` renders the **same** Power Rail as the desktop, as a
+  glass overlay drawer opened by the chevron in `MobileTopBar` or a swipe from
+  the left edge. Sources is therefore the same single entry on both, and needs
+  no separate mobile placement.

@@ -11,13 +11,13 @@ import { MediaBackground } from './MediaBackground';
 
 interface Props {
   onSelectLastCapture?: () => void;
-  onRecordingModeChange?: (mode: 'photo' | 'video' | 'inventory') => void;
+  onRecordingModeChange?: (mode: 'photo' | 'video' | 'thing') => void;
 }
 
 export function MobileControls({ onSelectLastCapture, onRecordingModeChange }: Props) {
   const [{ isRecording, lastCapture }, { captureFrame, toggleRecording }] = useRecorder();
   const [{ facingMode }, { swapFacingMode }] = useFacingMode();
-  const [{ recordingMode }, { setPhotoMode, setVideoMode, setInventoryMode }] = useRecordingMode();
+  const [{ recordingMode }, { setPhotoMode, setVideoMode, setThingMode }] = useRecordingMode();
 
   const handleRecordClick = useCallback(() => {
     if (recordingMode === 'video') {
@@ -39,10 +39,10 @@ export function MobileControls({ onSelectLastCapture, onRecordingModeChange }: P
     onRecordingModeChange?.('video');
   }, [setVideoMode, onRecordingModeChange]);
 
-  const handleSetInventoryMode = useCallback(() => {
-    setInventoryMode();
-    onRecordingModeChange?.('inventory');
-  }, [setInventoryMode, onRecordingModeChange]);
+  const handleSetThingMode = useCallback(() => {
+    setThingMode();
+    onRecordingModeChange?.('thing');
+  }, [setThingMode, onRecordingModeChange]);
 
   return (
     <div>
@@ -68,11 +68,11 @@ export function MobileControls({ onSelectLastCapture, onRecordingModeChange }: P
         <div
           className={cn(
             'py-4 text-center text-sm basis-1/3',
-            recordingMode === 'inventory' ? 'text-yellow-300' : 'text-white',
+            recordingMode === 'thing' ? 'text-yellow-300' : 'text-white',
           )}
-          onClick={handleSetInventoryMode}
+          onClick={handleSetThingMode}
         >
-          INVENTORY
+          THING
         </div>
       </div>
 

@@ -25,6 +25,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 
 import AdmZip from 'adm-zip';
 
@@ -378,8 +379,11 @@ function systemUnzipAvailable(): boolean {
 // stricter extractors. `-o` overwrites so a resumed/partial extraction
 // completes; `-qq` is silent. unzip exits 0 (ok) or 1 (ok, with warnings such as
 // a skipped bad entry) — both count as success.
-function runSystemUnzip(archive: string, destDir: string): { ok: boolean; files: number; detail: string } {
-  const r = systemExtract(archive, destDir);
+async function runSystemUnzip(
+  archive: string,
+  destDir: string,
+): Promise<{ ok: boolean; files: number; detail: string }> {
+  const r = await systemExtract(archive, destDir);
   let files = 0;
   if (r.ok) {
     const list = spawnSync('unzip', ['-Z1', archive], { encoding: 'utf8', maxBuffer: 1 << 30 });
@@ -391,18 +395,51 @@ function runSystemUnzip(archive: string, destDir: string): { ok: boolean; files:
   return { ok: r.ok, files, detail: r.detail };
 }
 
+/**
+ * adm-zip's `extractAllTo`, unrolled so the event loop breathes.
+ *
+ * `extractAllTo` decompresses and writes every entry in ONE synchronous call —
+ * up to a whole sub-1GB archive with the worker frozen. Writing the entries
+ * ourselves keeps its semantics (never overwrite; directories created) while
+ * yielding between entries, so the block is bounded by the largest single
+ * entry instead of the archive. Entry names get the same containment check the
+ * guarded single-archive path applies — hand-rolling the writes means adm-zip's
+ * own sanitisation no longer stands between an entry name and the filesystem.
+ */
+async function extractViaAdmZip(full: string, destDir: string): Promise<UnpackResult> {
+  const zip = new AdmZip(full);
+  const entries = zip.getEntries();
+
+  for (const entry of entries) {
+    const target = path.resolve(destDir, entry.entryName);
+    if (path.relative(destDir, target).startsWith('..') || path.isAbsolute(path.relative(destDir, target))) {
+      throw new Error(`archive entry escapes extraction dir: ${entry.entryName}`);
+    }
+
+    if (entry.isDirectory) {
+      fs.mkdirSync(target, { recursive: true });
+      continue;
+    }
+
+    if (!fs.existsSync(target)) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, entry.getData());
+    }
+
+    await yieldToEventLoop();
+  }
+
+  return { archive: full, files: entries.filter((en) => !en.isDirectory).length, method: 'adm-zip' };
+}
+
 // Extract one archive into destDir. Small archives go through adm-zip (fast, no
 // subprocess); anything large — or an adm-zip failure (ZIP64 / corruption it
 // can't read) — falls through to the streaming system `unzip`.
-function extractArchive(full: string, destDir: string, size: number): UnpackResult {
+async function extractArchive(full: string, destDir: string, size: number): Promise<UnpackResult> {
   const large = size >= LARGE_ZIP_BYTES;
   if (!large) {
     try {
-      const zip = new AdmZip(full);
-      zip.extractAllTo(destDir, /* overwrite */ false);
-      const files = zip.getEntries().filter((en) => !en.isDirectory).length;
-
-      return { archive: full, files, method: 'adm-zip' };
+      return await extractViaAdmZip(full, destDir);
     } catch (err) {
       if (!systemUnzipAvailable()) {
         throw err;
@@ -417,7 +454,7 @@ function extractArchive(full: string, destDir: string, size: number): UnpackResu
     );
   }
 
-  const r = runSystemUnzip(full, destDir);
+  const r = await runSystemUnzip(full, destDir);
   if (!r.ok) {
     throw new Error(`archive extraction failed (${r.detail})`);
   }
@@ -648,7 +685,7 @@ export async function unpackArchives(
       await opts.onProgress?.({ done, total, current: path.basename(full) });
 
       try {
-        const res = extractArchive(full, d, size);
+        const res = await extractArchive(full, d, size);
         if (opts.deleteArchives) {
           // The staged copy is spent — reclaim it now (not at end-of-run
           // cleanup) so the next archive extracts into the space this one

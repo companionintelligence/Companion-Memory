@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { fetchJson } from '@ci/common';
-import { AlertDialog, Button, Card, Switch } from '@ci/shadcn';
+import {
+  fetchJson,
+  isNativePlatform,
+  openNativeLocationSettings,
+  type LocationTrackingMode,
+} from '@ci/common';
+import { AlertDialog, Button, Card, cn } from '@ci/shadcn';
 import { MapPin } from '@ci/shadcn/icons';
 
 import { useAuth, useLocationTracking } from '@/hooks';
@@ -15,31 +20,32 @@ interface PositionStats {
 /** Providers written by the device-native location source — see @ci/common deviceSources. */
 const DEVICE_PROVIDERS = ['browser', 'companion-mobile'];
 
+const MODES: Array<{
+  value: LocationTrackingMode;
+  label: string;
+  nativeOnly?: boolean;
+}> = [
+  { value: 'off', label: 'Off' },
+  { value: 'when_in_use', label: 'While using' },
+  { value: 'always', label: 'Always', nativeOnly: true },
+];
+
 /**
- * Settings -> Location: device location tracking (issue #1811). Enable/disable
- * recording of ci.position fixes from this device, with live counts — the
- * LifeScope locations settings rebuilt on the position store.
+ * Settings -> Location: device location tracking.
  *
- * The confirm dialog is also the **prominent disclosure** Play requires for a
- * sensitive permission (DEVICE_DATA_COMPLIANCE.md §8), which is a rejection cause
- * in its own right regardless of whether the permission is granted. Three details
- * there are load-bearing and should not be "tidied": it must appear in-app
- * immediately before the OS prompt (not in the listing or the privacy policy), it
- * must answer why/what/how in plain language, and consent must be an affirmative
- * tap on a button reading **"Agree"** — Play names "Allow access" and "Got it" as
- * explicitly insufficient. Declining leaves the app fully usable.
+ * The confirm dialogs are the **prominent disclosure** Play requires for a
+ * sensitive permission (DEVICE_DATA_COMPLIANCE.md §8). Consent is an affirmative
+ * tap on **"Agree"** — Play names "Allow access" and "Got it" as insufficient.
+ * Declining leaves the app fully usable.
  */
 export function LocationSection() {
   const [{ authToken, authenticated }] = useAuth();
-  // State-only: the app-level instance in AppRoutes owns the geolocation
-  // watcher. Registering a second watcher here would double-post every fix
-  // while this page is open.
-  const { enabled, setEnabled } = useLocationTracking({ watch: false });
+  const { mode, setMode, needsSettingsUpgrade } = useLocationTracking({ watch: false });
   const [stats, setStats] = useState<PositionStats | null>(null);
-  const [confirming, setConfirming] = useState(false);
+  const [pendingMode, setPendingMode] = useState<Exclude<LocationTrackingMode, 'off'> | null>(null);
+  const showAlways = isNativePlatform();
 
   const refreshStats = useCallback(async () => {
-    // Native authenticates by API key with no JWT — gate on `authenticated`.
     if (!authenticated) {
       return;
     }
@@ -58,12 +64,34 @@ export function LocationSection() {
 
   useEffect(() => {
     void refreshStats();
-  }, [refreshStats, enabled]);
+  }, [refreshStats, mode]);
 
   const trackedCount = DEVICE_PROVIDERS.reduce(
     (total, provider) => total + (stats?.byProvider?.[provider] ?? 0),
     0,
   );
+
+  const visibleModes = MODES.filter((entry) => !entry.nativeOnly || showAlways);
+
+  const onSelectMode = (next: LocationTrackingMode) => {
+    if (next === mode) {
+      return;
+    }
+
+    if (next === 'off') {
+      setMode('off');
+
+      return;
+    }
+
+    if (privilegeRank(next) <= privilegeRank(mode)) {
+      setMode(next);
+
+      return;
+    }
+
+    setPendingMode(next);
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -73,38 +101,63 @@ export function LocationSection() {
           Location
         </h2>
         <p className="text-sm text-muted-foreground">
-          Track where you are so your memory can place events, photos and messages on the map.
+          Track where you are so your memory can place events, photos and messages on a map.
         </p>
       </div>
 
       <Card>
         <Card.Header>
-          <Card.Title className="text-base">Location tracking on this device</Card.Title>
-          <Card.Description>
-            While enabled, this device records your location as you use Companion — throttled to meaningful
-            movement (about 50 metres) or every five minutes, whichever comes first. Fixes are stored
-            privately in your position history and improve location estimates for everything else in your
-            memory. On phones, a fix taken with no connection is saved on the device and sent when your server
-            is reachable again.
-          </Card.Description>
+          <Card.Title className="text-base">Location on this device</Card.Title>
+          <Card.Description>{modeDescription(mode, showAlways)}</Card.Description>
         </Card.Header>
         <Card.Content className="flex flex-col gap-4">
-          <div className="flex items-center justify-between">
-            <div className="text-sm font-medium">
-              {enabled ? 'Tracking is on for this device' : 'Tracking is off'}
-            </div>
-            <Switch
-              checked={enabled}
-              onCheckedChange={(next) => {
-                if (next) {
-                  setConfirming(true);
-                } else {
-                  setEnabled(false);
-                }
-              }}
-              aria-label="Toggle location tracking on this device"
-            />
+          <div
+            role="radiogroup"
+            aria-label="Location tracking"
+            className="flex gap-1 rounded-md bg-muted p-1 text-xs"
+          >
+            {visibleModes.map((entry) => (
+              <button
+                key={entry.value}
+                type="button"
+                role="radio"
+                aria-checked={mode === entry.value}
+                onClick={() => onSelectMode(entry.value)}
+                className={cn(
+                  'flex-1 cursor-pointer rounded-sm px-2 py-1.5 transition-colors',
+                  mode === entry.value
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {entry.label}
+              </button>
+            ))}
           </div>
+
+          {!showAlways && (
+            <p className="text-sm text-muted-foreground">
+              Background location is on the mobile app. This device records places only while Companion is
+              open.
+            </p>
+          )}
+
+          {needsSettingsUpgrade && showAlways && (
+            <div className="flex flex-col gap-2 rounded-md border border-border p-3 text-sm">
+              <p>
+                Your device didn&apos;t grant background location access. Open Settings to allow it if you
+                want Companion to remember places after you leave the app.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void openNativeLocationSettings()}
+              >
+                Open Settings
+              </Button>
+            </div>
+          )}
 
           <div className="text-sm text-muted-foreground">
             <div>{trackedCount} fixes recorded from your devices</div>
@@ -120,15 +173,18 @@ export function LocationSection() {
         </Card.Content>
       </Card>
 
-      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+      <AlertDialog
+        open={pendingMode === 'when_in_use'}
+        onOpenChange={(open) => !open && setPendingMode(null)}
+      >
         <AlertDialog.Content>
           <AlertDialog.Header>
-            <AlertDialog.Title>Record your location?</AlertDialog.Title>
+            <AlertDialog.Title>Record your location while using Companion?</AlertDialog.Title>
             <AlertDialog.Description>
               <span className="block">
                 Companion collects this device&apos;s location — including precise GPS location — while the
                 app is open, so it can place your notes, photos and events on a map and work out where you
-                were when something happened. It does not track you in the background.
+                were when something happened.
               </span>
               <span className="mt-2 block">
                 Locations are sent only to your own Companion server. They are not shared with anyone else and
@@ -142,12 +198,46 @@ export function LocationSection() {
             </AlertDialog.Description>
           </AlertDialog.Header>
           <AlertDialog.Footer>
-            {/* "Cancel" / "Agree" is the exact affirmative-consent pairing Play asks for. */}
             <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
             <AlertDialog.Action
               onClick={() => {
-                setEnabled(true);
-                setConfirming(false);
+                setMode('when_in_use');
+                setPendingMode(null);
+              }}
+            >
+              Agree
+            </AlertDialog.Action>
+          </AlertDialog.Footer>
+        </AlertDialog.Content>
+      </AlertDialog>
+
+      <AlertDialog open={pendingMode === 'always'} onOpenChange={(open) => !open && setPendingMode(null)}>
+        <AlertDialog.Content>
+          <AlertDialog.Header>
+            <AlertDialog.Title>Remember places in the background?</AlertDialog.Title>
+            <AlertDialog.Description>
+              <span className="block">
+                Companion records your location in the background, including while your phone is locked or the
+                app is closed, so it can attach places to your memories after you leave the app. Your device
+                will show an ongoing indicator while this is on — a persistent notification on Android, the
+                blue location indicator on iOS.
+              </span>
+              <span className="mt-2 block">
+                This cannot work with While Using only. Locations are sent only to your own Companion server,
+                are never used for advertising, and you can turn this off here at any time.
+              </span>
+              <span className="mt-2 block">
+                Your device will ask for background/Always Allow next. You can stay on While Using and keep
+                using Companion.
+              </span>
+            </AlertDialog.Description>
+          </AlertDialog.Header>
+          <AlertDialog.Footer>
+            <AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+            <AlertDialog.Action
+              onClick={() => {
+                setMode('always');
+                setPendingMode(null);
               }}
             >
               Agree
@@ -157,4 +247,28 @@ export function LocationSection() {
       </AlertDialog>
     </div>
   );
+}
+
+function privilegeRank(mode: LocationTrackingMode): number {
+  if (mode === 'off') {
+    return 0;
+  }
+
+  if (mode === 'when_in_use') {
+    return 1;
+  }
+
+  return 2;
+}
+
+function modeDescription(mode: LocationTrackingMode, native: boolean): string {
+  if (mode === 'off') {
+    return 'This device is not recording location.';
+  }
+
+  if (mode === 'always' && native) {
+    return 'Companion records your location in the background, including while your phone is locked or the app is closed, so it can attach places to your notes, photos and events on the map.';
+  }
+
+  return 'While Companion is open, this device records your location when you move about 50 metres or every five minutes. Fixes are stored privately in your position history.';
 }

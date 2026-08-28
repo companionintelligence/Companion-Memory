@@ -16,7 +16,7 @@ export default meta;
 
 type Story = StoryObj<typeof ShareSavedSearchModal>;
 
-// Public: shows the capability link, social buttons, and iframe embed.
+// Public: shows the capability link and social buttons.
 export const LinkShared: Story = {
   args: { savedSearch: mockSavedSearch() },
 };

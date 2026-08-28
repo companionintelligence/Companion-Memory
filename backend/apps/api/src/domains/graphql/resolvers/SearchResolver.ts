@@ -5,6 +5,7 @@ import { type FindOptionsOrder } from 'typeorm';
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { SharedSearchConsentService, applySearchCeiling } from '@ci/domains/asks';
 import { BrowserActivityEntity, BrowserActivityService } from '@ci/domains/browser-activity';
 import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
 import { FileService, SavedSearchService, resolveSavedSearchDateRange } from '@ci/domains/files';
@@ -19,6 +20,8 @@ import {
   ItemService,
   PersonService,
   PlaceService,
+  ProductModelService,
+  ReceiptService,
 } from '@ci/domains/memory';
 import { NoteService } from '@ci/domains/notes';
 import { FileChunkService } from '@ci/domains/parsing';
@@ -45,6 +48,8 @@ import { MapPinsType } from '../types/MapPinType';
 import { NoteType } from '../types/NoteType';
 import { PersonType } from '../types/PersonType';
 import { PlaceType } from '../types/PlaceType';
+import { ProductModelType } from '../types/ProductModelType';
+import { ReceiptType } from '../types/ReceiptType';
 import { SearchInput } from '../types/SearchInput';
 import { SearchResultConnection } from '../types/SearchResultConnection';
 import { type SearchResult } from '../types/SearchResultType';
@@ -129,7 +134,33 @@ const BROWSE_OPT_IN_TYPES: ReadonlySet<IndexableEntity> = new Set([
   'place',
   'concept',
   'item',
+  // A catalog model is not a moment at all: `ci.product_models` has only
+  // `created_at`, so a product on the chronology is an import artifact wearing a
+  // date, exactly like `person` and `place` above.
+  'product',
+  // A receipt IS a moment — `purchased_at` is when the purchase happened, and
+  // the browse orders by it (see ReceiptService.getEntitiesForReceipts). It is
+  // still opt-in because that column is NULLABLE: an OCR backlog is mostly
+  // undated, falls back to `created_at`, and would land the whole backlog at
+  // import time ahead of the real timeline — the head this gate exists to keep
+  // clear.
+  'receipt',
 ]);
+
+/**
+ * Entity ids behind a page of search results, for the disclosure audit.
+ *
+ * `node` is a GraphQL union (`SearchResultType`) whose members all carry an
+ * `id`, but the union itself declares none — so this reads defensively rather
+ * than casting to a member type. An edge with no readable id is dropped instead
+ * of audited as `undefined`: a wrong id in a disclosure record is worse than a
+ * missing one, and the count that sits beside it comes from the same array.
+ */
+function searchResultIds(edges: readonly { node: unknown }[]): string[] {
+  return edges
+    .map((edge) => (edge.node as { id?: unknown } | null)?.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
 
 /** PageInfo for an empty connection (e.g. an unknown/revoked share token). */
 const EMPTY_PAGE_INFO = {
@@ -218,8 +249,11 @@ export class SearchResolver {
     private readonly noteService: NoteService,
     private readonly personService: PersonService,
     private readonly placeService: PlaceService,
+    private readonly productModelService: ProductModelService,
+    private readonly receiptService: ReceiptService,
     private readonly answerService: AnswerService,
     private readonly savedSearchService: SavedSearchService,
+    private readonly sharedSearchConsentService: SharedSearchConsentService,
     private readonly searchService: SearchService,
     private readonly tagService: TagService,
     private readonly featureService: FeatureService,
@@ -244,7 +278,7 @@ export class SearchResolver {
         return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
       }
 
-      return this.runSharedSearch(input);
+      return this.runSharedSearch(toServiceContext(context), input);
     }
 
     return this.executeSearch(toServiceContext(context), input, { matchTags: true });
@@ -361,17 +395,48 @@ export class SearchResolver {
   }
 
   /**
-   * Run a shared saved search as its owner. The viewer cannot influence which
-   * data is returned beyond paging/sort — the query, entity-type and tag filters
-   * are taken verbatim from the stored saved search, so a leaked token can only
-   * ever surface exactly what the owner chose to share. Unknown/revoked tokens
-   * yield an empty result rather than an error so the viewer can show a tidy
-   * "link expired" state.
+   * Run a shared saved search as its owner, under the reader's standing grant.
+   *
+   * The viewer cannot influence which data is returned beyond paging/sort — the
+   * query, entity-type and tag filters are taken verbatim from the stored saved
+   * search, so a leaked token can only ever surface exactly what the owner chose
+   * to share.
+   *
+   * ═══ THE TOKEN IS NO LONGER THE WHOLE AUTHORIZATION ═══
+   *
+   * It used to be: holding the string got you the owner's full result set,
+   * forever, anonymously, and unrecorded. The token is now the INVITATION, and
+   * {@link SharedSearchConsentService.authorize} exchanges it for a
+   * `ci.ask_grants` row naming THIS reader — which is what makes a ceiling, an
+   * expiry, a per-reader revocation and a Disclosure History entry expressible
+   * at all. See that service for why each of those was impossible before.
+   *
+   * FOUR OUTCOMES, ONE RESPONSE. An unknown token, a revoked link, a lapsed
+   * link, and a reader the owner specifically revoked all return the same empty
+   * connection. The viewer gets the same tidy "link unavailable" state for all
+   * four, which is the `PEER_ASK_PENDING` rule applied here: which of the four
+   * it was is a fact about the owner's posture, and a refused reader does not
+   * need it in order to be refused.
    */
-  private async runSharedSearch(input: SearchInput): Promise<SearchResultConnection> {
+  private async runSharedSearch(
+    context: UserServiceContext,
+    input: SearchInput,
+  ): Promise<SearchResultConnection> {
     const saved = await this.savedSearchService.findByShareToken(input.shareToken ?? '');
 
     if (saved == null || saved.userId == null) {
+      return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
+    }
+
+    const authorization = await this.sharedSearchConsentService.authorize({
+      ownerUserId: saved.userId,
+      viewerUserId: context.userId,
+      savedSearchId: saved.id,
+      declaredCeiling: saved.shareMaxDisclosure,
+      shareExpiresAt: saved.shareExpiresAt,
+    });
+
+    if (authorization == null) {
       return { edges: [], pageInfo: EMPTY_PAGE_INFO, totalCount: 0, matchingTags: [] };
     }
 
@@ -381,7 +446,7 @@ export class SearchResolver {
     const filters = saved.filters ?? {};
     const dateRange = resolveSavedSearchDateRange(filters);
 
-    return this.executeSearch(
+    const unclamped = await this.executeSearch(
       { userId: saved.userId },
       {
         query: saved.query ?? undefined,
@@ -403,6 +468,25 @@ export class SearchResolver {
         after: input.after,
       },
     );
+
+    const disclosed = applySearchCeiling(unclamped, authorization.ceiling);
+
+    // Written AFTER the clamp and from BOTH sets, because they answer different
+    // questions: `disclosedEntities` is what crossed to the reader, and
+    // `backingEntities` is what the owner's box read to produce it. Auditing the
+    // pre-clamp set as "disclosed" is the exact disagreement
+    // 20260820224500_add_ask_audit_backing_entities was written to end.
+    await this.sharedSearchConsentService.recordRead({
+      ownerUserId: saved.userId,
+      viewerUserId: context.userId,
+      savedSearchId: saved.id,
+      savedSearchName: saved.name,
+      grantId: authorization.grantId,
+      disclosedEntityIds: searchResultIds(disclosed.edges),
+      backingEntityIds: searchResultIds(unclamped.edges),
+    });
+
+    return disclosed;
   }
 
   private async executeSearch(
@@ -836,6 +920,8 @@ export class SearchResolver {
       personResults,
       placeResults,
       itemResults,
+      productResults,
+      receiptResults,
       conceptResults,
       answerResults,
     ] = await Promise.all([
@@ -860,6 +946,13 @@ export class SearchResolver {
       wants('person') ? this.personService.getEntitiesForPeople(context, createdAtOptions) : [],
       wants('place') ? this.placeService.getEntitiesForPlaces(context, createdAtOptions) : [],
       wants('item') ? this.itemService.getEntitiesForItems(context, createdAtOptions) : [],
+      wants('product') ? this.productModelService.getEntitiesForProducts(context, createdAtOptions) : [],
+      // Receipts order by COALESCE(purchased_at, created_at) rather than the row
+      // timestamp the other opt-in types use — the only one of them with a real
+      // domain time. Same keyset shape, different column; see
+      // ReceiptService.getEntitiesForReceipts and getEntityTimestamp, which reads
+      // `purchasedAt ?? createdAt` so the cursor it mints matches this order.
+      wants('receipt') ? this.receiptService.getEntitiesForReceipts(context, createdAtOptions) : [],
       wants('concept') ? this.conceptService.getEntitiesForConcepts(context, createdAtOptions) : [],
       wants('answer') ? this.answerService.getEntitiesForAnswers(context, createdAtOptions) : [],
     ]);
@@ -875,6 +968,8 @@ export class SearchResolver {
       ...personResults,
       ...placeResults,
       ...itemResults,
+      ...productResults,
+      ...receiptResults,
       ...conceptResults,
       ...answerResults,
     ];
@@ -948,6 +1043,8 @@ export class SearchResolver {
       wants('person') ? this.personService.countEntitiesForPeople(context, dateOptions) : 0,
       wants('place') ? this.placeService.countEntitiesForPlaces(context, dateOptions) : 0,
       wants('item') ? this.itemService.countEntitiesForItems(context, dateOptions) : 0,
+      wants('product') ? this.productModelService.countEntitiesForProducts(context, dateOptions) : 0,
+      wants('receipt') ? this.receiptService.countEntitiesForReceipts(context, dateOptions) : 0,
       wants('concept') ? this.conceptService.countEntitiesForConcepts(context, dateOptions) : 0,
       wants('answer') ? this.answerService.countEntitiesForAnswers(context, dateOptions) : 0,
     ]);
@@ -963,7 +1060,23 @@ export class SearchResolver {
     const resolved = await this.entityResolutionService.resolve(context, identifiers);
 
     return identifiers
-      .map((identifier) => resolved.get(`${identifier.type}:${identifier.id}`) ?? null)
+      .map((identifier) => {
+        const entry = resolved.get(`${identifier.type}:${identifier.id}`) ?? null;
+        if (entry == null) {
+          return null;
+        }
+
+        // People/places date-filter by first real activity in the window. The
+        // identifier carries that instant as sortTime; copy it onto the loaded
+        // entity as appearedAt so getEntityTimestamp, the cursor, and the
+        // GraphQL field all read the same value. Do not add a ResolveField that
+        // overwrites this with first-ever — that would lose in-window time.
+        if (identifier.sortTime != null && (identifier.type === 'person' || identifier.type === 'place')) {
+          (entry.entity as { appearedAt?: Date }).appearedAt = identifier.sortTime;
+        }
+
+        return entry;
+      })
       .filter((entry): entry is ResolvedEntity => entry != null);
   }
 
@@ -1024,7 +1137,27 @@ export class SearchResolver {
     }
 
     if (BROWSE_OPT_IN_TYPES.has(type)) {
-      return namedExplicitly;
+      if (namedExplicitly) {
+        return true;
+      }
+
+      // The web What picker writes an exclude-list of everything *else*, never
+      // `includeTypes`. Person / place / thing / product / receipt have to
+      // honour that remaining selection or a People-only browse is an empty
+      // page (the heatmap already converted the same URL to includes).
+      // `file-chunk` is not in the picker, so it never appears in those
+      // exclude lists and must stay include-only — otherwise a People browse
+      // would also pull every document chunk.
+      if (
+        type !== 'file-chunk' &&
+        excludeTypes != null &&
+        excludeTypes.length > 0 &&
+        !excludeTypes.includes(type)
+      ) {
+        return true;
+      }
+
+      return false;
     }
 
     return true;
@@ -1114,10 +1247,24 @@ export class SearchResolver {
     // change, not a resolver change: `ci.files.external_created_at` exists and
     // is populated on 0 of 14,194 rows.
     //
-    // Types reached by NAMING them (includeTypes) still sort by write time,
-    // which is the honest answer for a set that has no other time — a browse
-    // restricted to People is ordered by when each person was learned about.
-    const value = entity.time ?? entity.startTime ?? entity.createdAt ?? entity.answeredAt ?? null;
+    // Types reached by NAMING them (includeTypes) still sort by write time
+    // when they have no other time — except people/places with a date window,
+    // which stamp `appearedAt` (first real activity in that window) so Last
+    // week groups them on the day they showed up, not the import day.
+    // `purchasedAt` before `createdAt`: a receipt's purchase date is its real
+    // domain time, and the browse's SQL orders by COALESCE(purchased_at,
+    // created_at) — a nullish chain in the same order, so a null purchase date
+    // falls through to the write time here exactly as the COALESCE does there.
+    // If the two disagreed, a receipt's cursor would not match its position and
+    // paging past it would skip or repeat rows.
+    const value =
+      entity.appearedAt ??
+      entity.time ??
+      entity.startTime ??
+      entity.purchasedAt ??
+      entity.createdAt ??
+      entity.answeredAt ??
+      null;
 
     if (value instanceof Date) {
       return value;
@@ -1168,6 +1315,10 @@ export class SearchResolver {
         return PersonType.toType(resolved.entity);
       case 'place':
         return PlaceType.toType(resolved.entity);
+      case 'product':
+        return ProductModelType.toType(resolved.entity);
+      case 'receipt':
+        return ReceiptType.toType(resolved.entity);
       case 'thread':
         return ThreadType.toType(resolved.entity);
     }

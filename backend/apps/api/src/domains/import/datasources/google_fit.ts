@@ -297,13 +297,23 @@ export class GoogleFitFileImporter implements FileImporter {
     return { confidence: 0 };
   }
 
-  // Find a directory that has the Google Fit signature subfolders. Accepts the
-  // Fit folder itself, a Takeout root containing it, or a daily-metrics folder.
-  private async findFitRoot(root: string, depth = 0): Promise<string | undefined> {
-    if (depth > 3) {
-      return undefined;
-    }
-
+  /**
+   * Find a directory that has the Google Fit signature subfolders. Accepts the
+   * Fit folder itself, a Takeout root directly containing it, or a
+   * daily-metrics folder — checking only `root`'s own immediate children, not
+   * an unbounded recursive walk of the whole subtree below it.
+   *
+   * A prior version, on finding none of these at `root`, recursed into EVERY
+   * child directory (`Drive/`, `Photos/`, …) hunting for a `Fit` folder or the
+   * daily/sessions names arbitrarily deep, and returned confidence for `root`
+   * itself when it found one — so a folder that merely happened to be named
+   * "Fit" anywhere inside an unrelated multi-GB export claimed the entire tree
+   * above it. Real Takeout data ships `Fit/` as a direct child of the export
+   * root, which this single-level check already covers; anything deeper is
+   * left for the recognition system's own `descend` walk (registry.ts) to
+   * find and attribute correctly when it visits that directory itself.
+   */
+  private async findFitRoot(root: string): Promise<string | undefined> {
     let names: string[];
     try {
       names = await readdir(root);
@@ -321,25 +331,17 @@ export class GoogleFitFileImporter implements FileImporter {
     }
 
     for (const n of names) {
+      if (n.toLowerCase() !== 'fit') {
+        continue;
+      }
+
       const p = path.join(root, n);
-      let st: fs.Stats;
       try {
-        st = await stat(p);
+        if ((await stat(p)).isDirectory()) {
+          return p;
+        }
       } catch {
-        continue;
-      }
-
-      if (!st.isDirectory()) {
-        continue;
-      }
-
-      if (n.toLowerCase() === 'fit') {
-        return p;
-      }
-
-      const nested = await this.findFitRoot(p, depth + 1);
-      if (nested) {
-        return nested;
+        /* ignore */
       }
     }
 

@@ -15,7 +15,8 @@ vi.mock('@/hooks', () => ({
   useAuth: () => [{ authToken: 'test-token' }],
 }));
 
-vi.mock('@ci/common', () => ({
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
   fetchJson: vi.fn(),
 }));
 

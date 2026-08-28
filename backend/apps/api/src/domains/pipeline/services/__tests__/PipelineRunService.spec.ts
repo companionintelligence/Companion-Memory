@@ -3,11 +3,17 @@ import type { DataSource } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
-import { BACKFILL_JOB_PRIORITY, type EventService } from '@ci/domains/events';
+import {
+  BACKFILL_JOB_PRIORITY,
+  EventListenerRegistry,
+  EventService,
+  type EventSendOptions,
+} from '@ci/domains/events';
 
 import { DEAD_LETTER_QUEUE, STAGE_ID_LIST } from '../../constants';
 import { stageVersion } from '../../versions';
 import {
+  DEAD_LETTER_REPLAY_KEY_PREFIX,
   DEFAULT_DEAD_LETTER_PAGE,
   MAX_DEAD_LETTER_PAGE,
   MAX_SHARDS_PER_RUN,
@@ -744,6 +750,7 @@ describe('PipelineRunService.replayDeadLetter', () => {
     expect(harness.send).toHaveBeenCalledWith('pipeline.slice', payload, {
       queue: 'pipeline-enrich',
       priority: BACKFILL_JOB_PRIORITY,
+      singletonKey: `${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTER_ID}`,
     });
     expect(result.jobIds).toEqual(['job-9']);
     expect(result.queue).toBe('pipeline-enrich');
@@ -759,6 +766,7 @@ describe('PipelineRunService.replayDeadLetter', () => {
 
     expect(harness.send).toHaveBeenCalledWith('pipeline.slice', expect.any(Object), {
       priority: BACKFILL_JOB_PRIORITY,
+      singletonKey: `${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTER_ID}`,
     });
     expect(result.queue).toBeNull();
   });
@@ -1008,6 +1016,7 @@ describe('PipelineRunService.replayDeadLetters (bulk)', () => {
     // instead, exactly as the single-id path does it.
     expect(harness.send).toHaveBeenCalledWith('infer.question.answer', payload, {
       priority: BACKFILL_JOB_PRIORITY,
+      singletonKey: `${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTER_ID}`,
     });
     expect(result.replayed[0]).toMatchObject({ id: LETTER_ID, jobIds: ['job-7'], queue: null });
   });
@@ -1054,7 +1063,7 @@ describe('PipelineRunService.replayDeadLetters (bulk)', () => {
     const result = await harness.service.replayDeadLetters(CTX, { ids: [LETTER_ID] });
 
     expect(result.replayed).toHaveLength(0);
-    expect(result.failed[0].reason).toMatch(/produced no job/);
+    expect(result.failed[0].reason).toMatch(/nothing in this process listens/);
     expect(harness.matching(/SET replayed_at = NULL/)).toHaveLength(1);
   });
 
@@ -1076,5 +1085,187 @@ describe('PipelineRunService.replayDeadLetters (bulk)', () => {
 
     expect(result).toMatchObject({ requested: null, claimed: 0, skipped: [] });
     expect(harness.send).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Bulk replay against the de-duplication a real queue performs.
+ *
+ * The mock above answers every `send` with a job id, so it cannot observe what a
+ * `policy: 'short'` queue does to a batch: pg-boss's `job_i1` is UNIQUE on
+ * `(name, COALESCE(singleton_key,''))` over jobs still in `created`, and the
+ * insert is ON CONFLICT DO NOTHING — so N keyless sends onto one such queue
+ * create ONE job and hand back N-1 null ids, which `send()` reports as `[]`.
+ * That is a bulk replay dropping every letter but the first, and it stayed green
+ * for exactly as long as a mock stood in for the index.
+ *
+ * So the double below is an `EventService` — the real one, inheriting the real
+ * routing (`getQueuesForEvent` / `getRegisteredQueues`) and reading the real
+ * `EventListenerRegistry` queue policy — whose only invented part is the index
+ * predicate itself, reproduced verbatim.
+ */
+describe('PipelineRunService.replayDeadLetters against a de-duplicating queue', () => {
+  const REPLAY_QUEUE = 'planning';
+  const REPLAY_EVENT = 'planning.inbox_scan';
+  const LETTERS = [1, 2, 3].map((index) => `00000000-0000-7000-8000-00000000e00${index}`);
+
+  /** A job in `created` — the rows pg-boss's partial unique index covers. */
+  interface CreatedJob {
+    queue: string;
+    singletonKey: string;
+  }
+
+  class IndexedQueueEventService extends EventService {
+    constructor(private readonly created: CreatedJob[]) {
+      super();
+    }
+
+    async send(name: string, _event: unknown, options?: EventSendOptions): Promise<string[]> {
+      const queues = options?.queue
+        ? this.getRegisteredQueues().has(options.queue)
+          ? [options.queue]
+          : []
+        : [...this.getQueuesForEvent(name)];
+
+      const jobIds: string[] = [];
+
+      for (const queue of queues) {
+        const singletonKey = options?.singletonKey ?? '';
+        const policy = EventListenerRegistry.getQueueOptions(queue)?.policy ?? 'standard';
+        const conflicts =
+          policy === 'short' &&
+          this.created.some((job) => job.queue === queue && job.singletonKey === singletonKey);
+
+        // ON CONFLICT DO NOTHING: pg-boss returns a null id rather than throwing,
+        // and `send()` drops the null instead of reporting a job.
+        if (conflicts) {
+          continue;
+        }
+
+        this.created.push({ queue, singletonKey });
+        jobIds.push(`job-${this.created.length}`);
+      }
+
+      return jobIds;
+    }
+
+    async sendMany(): Promise<void> {}
+
+    async completeJob(): Promise<void> {}
+
+    async failJob(): Promise<void> {}
+  }
+
+  interface QueueHarness {
+    service: PipelineRunService;
+    created: CreatedJob[];
+    releases: Statement[];
+  }
+
+  /**
+   * @param seeded singletonKeys already held by a `created` job on the queue.
+   * @param registerListener false leaves the event unroutable, exactly as a
+   *   listener module that never loaded in this process does.
+   */
+  function makeQueueHarness(
+    claimed: Array<Record<string, unknown>>,
+    { seeded = [] as string[], registerListener = true } = {},
+  ): QueueHarness {
+    EventListenerRegistry.clear();
+
+    if (registerListener) {
+      EventListenerRegistry.register(REPLAY_EVENT, 'InboxScanListener', 'scan', REPLAY_QUEUE, {
+        policy: 'short',
+      });
+    }
+
+    const created: CreatedJob[] = seeded.map((singletonKey) => ({ queue: REPLAY_QUEUE, singletonKey }));
+    const statements: Statement[] = [];
+
+    const query = jest.fn(async (raw: string, params: unknown[] = []) => {
+      statements.push({ sql: raw.replace(/\s+/g, ' ').trim(), params });
+
+      return /replayed_at = now\(\)/.test(raw) ? claimed : [];
+    });
+
+    const logger = {
+      setContext: jest.fn(),
+      log: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    };
+
+    return {
+      service: new PipelineRunService(
+        { query } as unknown as DataSource,
+        new IndexedQueueEventService(created) as unknown as EventService,
+        logger as unknown as LoggerService,
+      ),
+      created,
+      releases: statements.filter((statement) => /SET replayed_at = NULL/.test(statement.sql)),
+    };
+  }
+
+  const letterRow = (id: string) => ({
+    id,
+    queue: REPLAY_QUEUE,
+    event_name: REPLAY_EVENT,
+    payload: { userId: USER, letter: id },
+    replayed_at: new Date('2026-08-20T12:00:00Z'),
+  });
+
+  afterEach(() => {
+    EventListenerRegistry.clear();
+  });
+
+  it('enqueues EVERY letter of a batch onto one de-duplicating queue', async () => {
+    const harness = makeQueueHarness(LETTERS.map(letterRow));
+
+    const result = await harness.service.replayDeadLetters(CTX, { ids: LETTERS });
+
+    expect(result.replayed.map((entry) => entry.id)).toEqual(LETTERS);
+    expect(result.failed).toEqual([]);
+    expect(harness.created.map((job) => job.singletonKey)).toEqual(
+      LETTERS.map((id) => `${DEAD_LETTER_REPLAY_KEY_PREFIX}${id}`),
+    );
+  });
+
+  it("does not collide with the live producer's key, in either direction", async () => {
+    // The producer keys on the WORK; a replay keys on the letter. Sharing a
+    // namespace would either swallow the replay or suppress the live job.
+    const harness = makeQueueHarness([letterRow(LETTERS[0])], { seeded: [`inbox-scan:${USER}`] });
+
+    const result = await harness.service.replayDeadLetters(CTX, { ids: [LETTERS[0]] });
+
+    expect(result.replayed).toHaveLength(1);
+    expect(harness.created).toHaveLength(2);
+  });
+
+  it('reports a real singleton conflict as one, never as a missing listener', async () => {
+    // An earlier replay of this same letter is still sitting in `created`, so
+    // the insert is refused. Reading that as "the listener module is not loaded"
+    // sends an operator hunting a module-loading problem that does not exist,
+    // mid-incident.
+    const harness = makeQueueHarness([letterRow(LETTERS[0])], {
+      seeded: [`${DEAD_LETTER_REPLAY_KEY_PREFIX}${LETTERS[0]}`],
+    });
+
+    const result = await harness.service.replayDeadLetters(CTX, { ids: [LETTERS[0]] });
+
+    expect(result.replayed).toHaveLength(0);
+    expect(result.failed[0].reason).toMatch(/singletonKey duplicates a job still in "created"/);
+    expect(result.failed[0].reason).not.toMatch(/module/);
+  });
+
+  it('still names an unloaded listener module when nothing consumes the event', async () => {
+    const harness = makeQueueHarness([letterRow(LETTERS[0])], { registerListener: false });
+
+    const result = await harness.service.replayDeadLetters(CTX, { ids: [LETTERS[0]] });
+
+    expect(result.replayed).toHaveLength(0);
+    expect(result.failed[0].reason).toMatch(/nothing in this process listens/);
+    expect(result.failed[0].reason).toMatch(/module is probably not loaded/);
+    expect(harness.created).toEqual([]);
   });
 });

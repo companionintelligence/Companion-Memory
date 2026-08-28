@@ -91,6 +91,29 @@ describe('WizardSteps', () => {
       expect(onStep).toHaveBeenCalledWith('export');
     });
 
+    it('renders unreachable, not merely unresponsive, before anything is picked', () => {
+      // The click-refusal test above proves the gate works functionally, but a
+      // button that silently eats a click with zero visual sign anything was
+      // gated is its own bug — indistinguishable from broken. It has to look
+      // inert too: really disabled, not just hover-styled and quietly no-op.
+      render(<WizardSteps step="pick" canExport={false} onStep={vi.fn()} />);
+
+      const exportStep = screen.getAllByRole('button')[1];
+
+      expect(exportStep).toBeDisabled();
+      expect(exportStep.className).toMatch(/cursor-not-allowed/);
+      expect(exportStep.className).not.toMatch(/hover:bg-muted/);
+    });
+
+    it('renders reachable, matching every other live step, once something is picked', () => {
+      render(<WizardSteps step="pick" canExport onStep={vi.fn()} />);
+
+      const exportStep = screen.getAllByRole('button')[1];
+
+      expect(exportStep).not.toBeDisabled();
+      expect(exportStep.className).not.toMatch(/cursor-not-allowed/);
+    });
+
     it('stays clickable even while Export is the current step, once canExport is true', () => {
       // Not a gate on VIEWING the current step — only on navigating TO it —
       // but Export can only be current after it was reached with something

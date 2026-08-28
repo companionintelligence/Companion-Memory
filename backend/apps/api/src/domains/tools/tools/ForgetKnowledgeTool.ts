@@ -1,8 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
+import { normalizeEmbeddableType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
+import { EventService } from '@ci/domains/events';
 import { GraphUtilityService, GraphNodeEntity, RelationshipEntity } from '@ci/domains/memory';
+import { ConceptRemovedEvent, PersonRemovedEvent, PlaceRemovedEvent } from '@ci/domains/memory/events';
 
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
@@ -91,6 +94,7 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
 
   constructor(
     private readonly graphUtility: GraphUtilityService,
+    private readonly eventService: EventService,
     protected readonly logger: LoggerService,
   ) {
     super();
@@ -161,6 +165,10 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
         ownerId,
         hardDelete,
       );
+
+      for (const entry of uniqueEntitySnapshots) {
+        await this.unindexEntity(entry.node);
+      }
     }
 
     if (relationshipIdsToDisable.size > 0) {
@@ -177,5 +185,59 @@ export class ForgetKnowledgeTool extends BaseTool<ForgetKnowledgeInput, ForgetKn
       mode,
       warnings: warnings.length ? warnings : undefined,
     };
+  }
+
+  /**
+   * Drop a forgotten node from the search index.
+   *
+   * `deactivateEntities` only flips `ci.entities.is_active` (or deletes the
+   * row). `ci_search.vectors` / `ci_search.embeddings` are a separate store
+   * keyed by (search type, id) and neither is reached by that write, so
+   * without this the node keeps answering search and recall after the user
+   * asked the appliance to forget it.
+   *
+   * This is the mirror image of how the node was indexed in the first place:
+   * `GraphEventListener.emitSearchIndexEvent` re-emits the per-type
+   * `*Created`/`*UpdatedEvent` after a graph write and the matching
+   * `*SearchIndexListener` writes the tsvector and the embedding. The
+   * `*RemovedEvent` is that same listener's other half — it is the only
+   * consumer any of these three events has — and its handler deletes both rows
+   * and clears the index-skip marker, so a node that is later recreated or
+   * reactivated is re-indexed normally rather than suppressed by a stale skip.
+   *
+   * Only the types whose record IS the `ci.entities` row are handled. Every
+   * other graph type (Event/Item/Content/Communication/File) is the base or
+   * mirror half of a pair whose detail row this tool does not touch, so
+   * `event.deleted` for an event that still exists in `ci.events` would be
+   * false to every future consumer of that event, and unindexing it would
+   * desync search from a record the rest of the app still lists.
+   */
+  private async unindexEntity(node: GraphNodeEntity): Promise<void> {
+    // Reuses the canonical graph→search alias table rather than restating
+    // which spellings ('Contact', 'Location', …) mean which search type.
+    const searchType = normalizeEmbeddableType(node.entity_type);
+
+    switch (searchType) {
+      case 'person':
+        await this.eventService.send(PersonRemovedEvent, { personId: node.entity_id });
+
+        return;
+      case 'place':
+        await this.eventService.send(PlaceRemovedEvent, { placeId: node.entity_id });
+
+        return;
+      case 'concept':
+        await this.eventService.send(ConceptRemovedEvent, { conceptId: node.entity_id });
+
+        return;
+      default:
+        this.logger.debug('Forgotten entity has no graph-owned search index rows to remove', {
+          entityId: node.entity_id,
+          entityType: node.entity_type ?? null,
+          searchType,
+        });
+
+        return;
+    }
   }
 }

@@ -4,6 +4,7 @@ import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ClientFactory, ConnectionService, type Connection } from '@ci/domains/connections';
+import { DataDeletionService } from '@ci/domains/privacy';
 
 import { ProviderLoader } from '../loaders/ProviderLoader';
 import { ConnectionConnection } from '../types/ConnectionConnection';
@@ -26,6 +27,7 @@ export class ConnectionResolver {
   constructor(
     private readonly connectionService: ConnectionService,
     private readonly clientFactory: ClientFactory,
+    private readonly dataDeletionService: DataDeletionService,
     private readonly providerLoader: ProviderLoader,
   ) {}
 
@@ -89,6 +91,13 @@ export class ConnectionResolver {
     };
   }
 
+  /**
+   * Disconnect a connection: revoke its OAuth grant with the provider and
+   * HARD-delete the connection plus the data derived from it (CASA ASVS V8).
+   * Routes through {@link DataDeletionService} — the same owner-scoped,
+   * audit-logged purge as the REST DELETE /connections/:id — so this GraphQL
+   * path no longer leaves the token stored and derived data orphaned.
+   */
   @Mutation(() => DeleteByIdPayload)
   async deleteConnection(
     @Context() context: RequestContext,
@@ -98,16 +107,11 @@ export class ConnectionResolver {
 
     const id = GlobalUID.parse('connection', input.id);
 
-    const success = await this.connectionService.remove(serviceContext, id);
-
-    if (!success) {
-      return {
-        success: false,
-      };
-    }
+    // Throws NotFoundException if the connection is not owned by the caller.
+    await this.dataDeletionService.disconnectConnection(serviceContext, id);
 
     return {
-      success,
+      success: true,
       deletedId: input.id,
     };
   }

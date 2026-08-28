@@ -246,6 +246,26 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
       try {
         switch (operation.kind) {
           case 'entity.create': {
+            if (operation.entityId) {
+              // A soft-deleted (forgotten) row still owns its id, so an id-reuse
+              // create must not fall through to createOrUpdateNode's update
+              // branch, which unconditionally flips is_active back to true.
+              const existing = await this.graphQuery.getNode(ownerId, operation.entityId, {
+                includeInactive: true,
+              });
+
+              if (existing && !existing.is_active) {
+                results.push({
+                  kind: operation.kind,
+                  status: 'failed',
+                  message: `Entity ${operation.entityId} was forgotten and cannot be recreated by id reuse`,
+                  entityId: operation.entityId,
+                });
+                failures += 1;
+                break;
+              }
+            }
+
             if (dryRun) {
               rememberName(operation.entityType, operation.name, operation.entityId ?? 'dry-run');
               results.push({
@@ -339,6 +359,25 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
           }
 
           case 'relationship.create': {
+            if (operation.relationshipId) {
+              // Same id-reuse guard as entity.create, mirrored for relationships.
+              const existingRels = await this.graphQuery.getRelationships(ownerId, {
+                relationshipIds: [operation.relationshipId],
+                includeInactive: true,
+              });
+
+              if (existingRels[0] && !existingRels[0].is_active) {
+                results.push({
+                  kind: operation.kind,
+                  status: 'failed',
+                  message: `Relationship ${operation.relationshipId} was forgotten and cannot be recreated by id reuse`,
+                  relationshipId: operation.relationshipId,
+                });
+                failures += 1;
+                break;
+              }
+            }
+
             const fromEntityId = await this.resolveEndpoint(
               ownerId,
               operation.fromEntityId,
@@ -415,6 +454,31 @@ export class WriteKnowledgeTool extends BaseTool<WriteKnowledgeInput, WriteKnowl
                 kind: operation.kind,
                 status: 'failed',
                 message: `Relationship ${operation.relationshipId} not found or not owned by user`,
+                relationshipId: operation.relationshipId,
+              });
+              failures += 1;
+              break;
+            }
+
+            // The update path reaches the same reactivating write as
+            // relationship.create — createOrUpdateRelationship sets
+            // is_active = true on its update branch regardless — so without
+            // this check `update` is simply a second door onto a forgotten
+            // relationship. entity.update needs no equivalent: its existence
+            // read is active-only, so a soft-deleted node already fails above
+            // as not found.
+            //
+            // The check stays here rather than moving down to where the write
+            // happens (GraphEventListener → createOrUpdateRelationship): that
+            // write is shared with the importers, which legitimately re-assert
+            // edges, and refusing reactivation there would change what every
+            // producer means by an upsert. This is a policy on agent writes,
+            // and it is a check-then-act across the queue boundary either way.
+            if (!existingRel.is_active) {
+              results.push({
+                kind: operation.kind,
+                status: 'failed',
+                message: `Relationship ${operation.relationshipId} was forgotten and cannot be updated`,
                 relationshipId: operation.relationshipId,
               });
               failures += 1;

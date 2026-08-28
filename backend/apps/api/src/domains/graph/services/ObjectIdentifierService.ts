@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { type EntityManager, In, Repository } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import { computeChunkSize } from '@ci/common/persistence';
@@ -63,7 +63,7 @@ export interface ObjectIdentifierBatchEntry {
  * another subject already claims, the write is silently ignored rather than
  * re-pointed: two things claiming one barcode is a duplicate signal for review,
  * not something to resolve automatically. That is also why duplicate detection
- * must scan `ci.inventory` / `ci.product_models` directly — the losing claim was
+ * must scan `ci.objects` / `ci.product_models` directly — the losing claim was
  * never inserted, so it is invisible in this table.
  */
 @Injectable()
@@ -92,7 +92,20 @@ export class ObjectIdentifierService {
    *
    * Returns the number of rows actually inserted.
    */
-  async upsertForSubjects(ownerUserId: string, entries: ObjectIdentifierBatchEntry[]): Promise<number> {
+  async upsertForSubjects(
+    ownerUserId: string,
+    entries: ObjectIdentifierBatchEntry[],
+    /**
+     * Join the CALLER's transaction instead of running on the pool.
+     *
+     * Not optional in spirit: a claim inserted on a separate connection
+     * survives a rollback of the write that created its subject, leaving a
+     * barcode pointing at a product or unit that never existed — and
+     * first-writer-wins then makes that ghost claim permanent. Every caller
+     * inside a transaction (ReceiptService.upsertFromExtraction) MUST pass it.
+     */
+    manager?: EntityManager,
+  ): Promise<number> {
     // Plain rows, NOT repository.create() instances: TypeORM's insert builder
     // types a jsonb `Record<string, unknown>` column as a deep-partial it
     // cannot accept, and `metadata` is defaulted by the database anyway.
@@ -143,10 +156,11 @@ export class ObjectIdentifierService {
     const chunkSize = computeChunkSize(this.repository.metadata.columns.length);
     let inserted = 0;
     const failures: string[] = [];
+    const repository = manager ? manager.withRepository(this.repository) : this.repository;
 
     for (let offset = 0; offset < rows.length; offset += chunkSize) {
       try {
-        const result = await this.repository
+        const result = await repository
           .createQueryBuilder()
           .insert()
           .into(ObjectIdentifierEntity)
@@ -176,8 +190,9 @@ export class ObjectIdentifierService {
     subjectId: string,
     identifiers: RawObjectIdentifier[],
     source?: string,
+    manager?: EntityManager,
   ): Promise<number> {
-    return this.upsertForSubjects(ownerUserId, [{ subjectType, subjectId, identifiers, source }]);
+    return this.upsertForSubjects(ownerUserId, [{ subjectType, subjectId, identifiers, source }], manager);
   }
 
   /**
@@ -189,6 +204,8 @@ export class ObjectIdentifierService {
     namespace: ObjectIdentifierNamespace,
     rawValue: string,
     scope: { brand?: string | null; sourceSystem?: string | null } = {},
+    /** Read inside the caller's transaction, so claims it just wrote are visible. */
+    manager?: EntityManager,
   ): Promise<ObjectIdentifierMatch | null> {
     const normalized = normalizeObjectIdentifier(namespace, rawValue);
     if (normalized == null) {
@@ -196,8 +213,9 @@ export class ObjectIdentifierService {
     }
 
     const qualifier = computeQualifier(normalized.namespace, scope);
+    const repository = manager ? manager.withRepository(this.repository) : this.repository;
 
-    const row = await this.repository.findOne({
+    const row = await repository.findOne({
       where: {
         ownerUserId,
         namespace: normalized.namespace,
@@ -463,6 +481,8 @@ export class ObjectIdentifierService {
     subjectType: ObjectIdentifierSubjectType,
     fromSubjectId: string,
     toSubjectId: string,
+    /** Join the merge's transaction, so a rollback takes the re-point with it. */
+    manager?: EntityManager,
   ): Promise<number> {
     if (fromSubjectId === toSubjectId) {
       throw new Error(
@@ -470,7 +490,9 @@ export class ObjectIdentifierService {
       );
     }
 
-    const result = await this.repository.update(
+    const repository = manager ? manager.withRepository(this.repository) : this.repository;
+
+    const result = await repository.update(
       { ownerUserId, subjectType, subjectId: fromSubjectId },
       { subjectId: toSubjectId },
     );

@@ -8,7 +8,12 @@ import { ConflictException } from '@nestjs/common';
 import { syntheticTestUserEmail } from '../../__tests__/support/applianceUser';
 import { UnpackStage } from '../stages/UnpackStage';
 
-import { createStagingHarness, importDatabase, type StagingHarness } from './support/stagingHarness';
+import {
+  createStagingHarness,
+  importDatabase,
+  removeSyntheticUserInbox,
+  type StagingHarness,
+} from './support/stagingHarness';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -40,6 +45,7 @@ describeWithDatabase(`inbox tenancy (${importDatabase.target})`, () => {
   let teardown: () => Promise<void>;
   let inbox: string;
   let otherUserId: string;
+  let otherEmail: string;
   const otherRuns: string[] = [];
 
   beforeAll(async () => {
@@ -50,10 +56,11 @@ describeWithDatabase(`inbox tenancy (${importDatabase.target})`, () => {
     // exotic — it is what "multi-user" means — and it is the configuration the
     // per-user claim silently mishandled.
     otherUserId = randomUUID();
+    otherEmail = syntheticTestUserEmail('inbox-tenancy-other', otherUserId);
     await harness.dataSource.query(
       `INSERT INTO ci.users (id, name, email) VALUES ($1::uuid, 'inbox tenancy other', $2)
        ON CONFLICT (id) DO NOTHING`,
-      [otherUserId, syntheticTestUserEmail('inbox-tenancy-other', otherUserId)],
+      [otherUserId, otherEmail],
     );
   });
 
@@ -66,6 +73,9 @@ describeWithDatabase(`inbox tenancy (${importDatabase.target})`, () => {
       otherUserId,
     ]);
     await harness.dataSource.query(`DELETE FROM ci.users WHERE id = $1::uuid`, [otherUserId]);
+    // A running server scaffolds a REAL inbox folder for every ci.users row;
+    // deleting the row leaves it behind (see removeSyntheticUserInbox).
+    await removeSyntheticUserInbox(otherEmail);
 
     await teardown();
   });

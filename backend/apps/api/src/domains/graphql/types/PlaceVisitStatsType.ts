@@ -17,11 +17,21 @@ export class PlaceVisitStatsType {
   @Field(() => Date, { nullable: true })
   lastVisitAt!: Date | null;
 
+  /**
+   * `confirmed`: visitCount is a fact. `pending_enrichment`: geocoding isn't
+   * configured, or this user's geocode/place-promotion work isn't finished
+   * yet, so a visitCount of 0 here isn't yet a measurement — a client should
+   * render this differently from a place that is genuinely never visited.
+   */
+  @Field(() => String)
+  status!: 'confirmed' | 'pending_enrichment';
+
   static toType(stats: PlaceVisitStats): PlaceVisitStatsType {
     return {
       visitCount: stats.visitCount,
       firstVisitAt: stats.firstVisitAt,
       lastVisitAt: stats.lastVisitAt,
+      status: stats.status,
     };
   }
 }

@@ -1,9 +1,9 @@
 import { COALESCE_STAGES, INGEST_KIND_STAGES, stagesForDestination } from '../owedStages';
 
 describe('owedStages', () => {
-  it('never owes extract_graph for GPS or inventory', () => {
+  it('never owes extract_graph for GPS or things', () => {
     expect(INGEST_KIND_STAGES.position).not.toContain('extract_graph');
-    expect(INGEST_KIND_STAGES.inventory).not.toContain('extract_graph');
+    expect(INGEST_KIND_STAGES.things).not.toContain('extract_graph');
     expect(COALESCE_STAGES).not.toContain('extract_graph');
   });
 

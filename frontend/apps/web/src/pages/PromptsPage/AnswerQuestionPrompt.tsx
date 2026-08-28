@@ -10,6 +10,8 @@ interface Question {
   id: string;
   text: string;
   category?: string;
+  /** `ci.feed_queue.feed_queue_id` for this presentation. Needed by Skip. */
+  presentationId?: string;
 }
 
 interface Props {
@@ -136,9 +138,35 @@ export function AnswerQuestionPrompt({ onAnswerSubmitted }: Props) {
     [question, authToken, onAnswerSubmitted, fetchUnansweredQuestion],
   );
 
+  /**
+   * `findOneUnanswered` deterministically returns the front of the queue —
+   * refetching alone hands back the identical question. This used to set
+   * `dismissed` and unmount the card instead, which looked like "moved on"
+   * but only hid it for the current mount: reload the page and the same
+   * question is back, with no memory of having been skipped. `POST
+   * /questions/unanswered/skip` moves the front-of-queue row to the back
+   * server-side first, so the follow-up fetch genuinely returns a different
+   * one (or nothing, if the queue only had this one question).
+   */
   const handleDismiss = useCallback(() => {
-    setDismissed(true);
-  }, []);
+    if (!authToken || !question?.presentationId) {
+      setDismissed(true);
+
+      return;
+    }
+
+    void fetch(buildApiUrl('/api/questions/unanswered/skip'), {
+      method: 'POST',
+      headers: {
+        ...apiKeyHeaders(),
+        Authorization: `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ presentationId: question.presentationId }),
+    })
+      .catch(() => undefined)
+      .then(() => fetchUnansweredQuestion());
+  }, [authToken, question, fetchUnansweredQuestion]);
 
   // Don't render if dismissed or no question and not loading
   if (dismissed || (!question && !fetchingQuestion)) {

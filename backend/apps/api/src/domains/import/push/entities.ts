@@ -1,6 +1,7 @@
-import { type GraphEntityInputDto, isNonNameParticipant } from '@ci/domains/graph';
+import { type GraphEntityInputDto, isNonNameParticipant, isPlaceholderPersonName } from '@ci/domains/graph';
 
 import type { StagedEntity } from '../entities/StagedEntityEntity';
+import { stagedNaturalKey } from '../staging/identity';
 
 /**
  * The `ci.entities.entity_type` a staged type resolves to.
@@ -17,6 +18,14 @@ const ENTITY_TYPES: Record<string, string> = {
   place: 'Location',
   location: 'Location',
   address: 'Location',
+  // A catalogued product (a book, a device model) and a concrete object.
+  // Without these both fall through to `Concept`, which is where every
+  // purchased thing lands in the graph: unqueryable as a product, and
+  // indistinguishable from a topic tag — `GraphController` never removes
+  // connective types (Concept, Goal, Tag) with the explorer's type filter, so
+  // they cannot even be filtered back out.
+  product: 'Product',
+  object: 'Object',
 };
 
 const DEFAULT_ENTITY_TYPE = 'Concept';
@@ -64,15 +73,7 @@ export function entityTypeFor(staged: StagedEntity): string {
  * collide on a shared name.
  */
 export function naturalKeyFor(staged: StagedEntity): string | null {
-  const handle = staged.identityKey?.trim();
-
-  if (handle) {
-    return `${staged.type ?? 'entity'}:${handle}`;
-  }
-
-  const name = staged.name?.trim().toLowerCase();
-
-  return name ? `${staged.type ?? 'entity'}:${name}` : null;
+  return stagedNaturalKey(staged.type, staged.identityKey, staged.name);
 }
 
 /**
@@ -138,23 +139,71 @@ export function toGraphEntity(staged: StagedEntity): GraphEntityInputDto | null 
   // `properties.names`, which is the array `GraphIngestService` indexes into
   // `ci.entity_identifiers`.
   //
-  // Person-only. A `Concept` legitimately named "invoice.pdf" is a thing the
-  // export really did contain, and the filename rule would delete it.
-  const nameIsGarbage = entityType === 'Person' && isNonNameParticipant(stagedName, 'import.toGraphEntity');
+  // Two doors, deliberately separate modules. `isNonNameParticipant` is the
+  // narrow structural one shared with the participant/identifier lanes, where a
+  // refusal costs a communication its edge. `isPlaceholderPersonName` is this
+  // lane's own, because a placeholder is only a problem for the DISPLAY name and
+  // the `name` identifier — 139 `Person` rows on the same appliance carry an
+  // empty name from `.vcf` cards with no `FN`, with the address sitting unused
+  // in `properties.email`.
+  //
+  // Person-only, both of them. A `Concept` legitimately named "invoice.pdf" is a
+  // thing the export really did contain, and the filename rule would delete it.
+  const nameIsUnusable =
+    entityType === 'Person' &&
+    (isNonNameParticipant(stagedName, 'import.toGraphEntity') ||
+      isPlaceholderPersonName(stagedName, 'import.toGraphEntity'));
 
-  if (stagedName && !nameIsGarbage) {
-    properties.names = [stagedName];
+  // The trimmed name, or undefined when there is none worth showing. `undefined`
+  // rather than `''` is load-bearing below: `??` does not catch the empty
+  // string, which is how a nameless vCard landed a blank display name on a row
+  // whose email was right there to fall back to.
+  const usableName = stagedName && !nameIsUnusable ? stagedName : undefined;
+
+  if (usableName) {
+    properties.names = [usableName];
   }
 
   return {
     key,
     entityType,
     // Not the display name as identity — only what this sighting called them.
-    // A garbage display name falls back to the handle rather than being shown;
-    // with no handle there is nothing better, and the staged row keeps the
-    // parser's honest record of what it saw.
-    name: (nameIsGarbage ? (handle ?? staged.name) : staged.name) ?? handle ?? null,
+    // An unusable display name falls back to the handle rather than being shown,
+    // and with no handle to fall back to the row is honestly NAMELESS: the
+    // column is nullable, `GraphIngestService` writes `input.name ?? null`
+    // straight through, and a null name is a People row the merge flow can still
+    // repair. Showing "Missed call from" instead would put the parser's fumble
+    // in the address book while `properties.names` — suppressed just above —
+    // withholds the very string the identifier index would need to find it
+    // again. The staged row keeps the parser's honest record either way.
+    name: usableName ?? handle ?? null,
     sourceSystem: staged.dataSource ?? 'unknown',
     properties,
   };
+}
+
+/**
+ * The relations a staged edge uses to name WHERE a record happened.
+ *
+ * The parsers' own vocabulary, mapped to `Location` by {@link ENTITY_TYPES}
+ * — a place edge is read the same way `resolveCorrespondents` reads a
+ * `from`/`to` edge, through `ci_import.entity_mappings`.
+ */
+export const PLACE_RELATIONS: readonly string[] = ['place', 'location', 'venue', 'address'];
+
+/** The `ci.entities.entity_type` a place resolves to. Same value {@link ENTITY_TYPES} gives. */
+export const PLACE_ENTITY_TYPE = ENTITY_TYPES.place;
+
+/**
+ * The natural key a place NAME resolves under — the same string
+ * {@link naturalKeyFor} mints for a staged entity of type `place`.
+ *
+ * Deliberately identical, and that is the whole point: a record that only
+ * STATES an address in its metadata and a parser that staged the same place as
+ * an entity must land on ONE graph node, not two spellings of one location.
+ */
+export function placeKeyFor(name: string): string | null {
+  const trimmed = name.trim().toLowerCase();
+
+  return trimmed ? `place:${trimmed}` : null;
 }

@@ -3,10 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
+import { GraphIngestService } from '@ci/domains/graph';
 import { ContentService, EventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
+import { upsertContentForEvent } from './linkContentToEvent';
 import type { SpotifyEpisode } from './types';
 
 @Injectable()
@@ -14,6 +16,7 @@ export class SpotifySavedEpisodesTransformService {
   constructor(
     private readonly contentService: ContentService,
     private readonly eventService: EventService,
+    private readonly graph: GraphIngestService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(SpotifySavedEpisodesTransformService.name);
@@ -57,21 +60,44 @@ export class SpotifySavedEpisodesTransformService {
         const episode = episodeItem.episode;
 
         try {
-          // Search for existing episode with same type and external_id
+          // The save is the event; the episode is content shared with every other
+          // save/play of it. Event first so the content row can point at it.
+          const [event] = episodeItem.added_at
+            ? await this.eventService.create(context, {
+                connection_id: connection.id,
+                title: `Saved episode ${episode.name}`,
+                description: `Saved ${episode.name} from ${episode.show?.name || 'podcast'} on Spotify at ${episodeItem.added_at}`,
+                event_type: 'favorite',
+                start_time: new Date(episodeItem.added_at),
+                duration_minutes: Math.floor(episode.duration_ms / 60000),
+                metadata: {
+                  episode_id: episode.id,
+                  show_name: episode.show?.name,
+                  show_id: episode.show?.id,
+                  publisher: episode.show?.publisher,
+                  release_date: episode.release_date,
+                  duration_ms: episode.duration_ms,
+                  explicit: episode.explicit,
+                  uri: episode.uri,
+                  resume_point: episode.resume_point,
+                },
+              })
+            : [];
+
           const existingEpisode = await this.contentService.search(context, {
             type: 'Episode',
             external_id: episode.id,
           });
 
-          if (existingEpisode.length > 0) {
-            this.logger.debug('Episode already exists, skipping', {
-              episodeId: episode.id,
-              episodeName: episode.name,
-            });
-            skippedCount++;
-          } else {
-            // Create new content entry for the episode
-            await this.contentService.create(context, {
+          const { created } = await upsertContentForEvent({
+            context,
+            contentService: this.contentService,
+            graph: this.graph,
+            logger: this.logger,
+            existing: existingEpisode,
+            eventId: event?.id,
+            input: {
+              connection_id: connection.id,
               title: episode.name,
               type: 'Episode',
               url: episode.external_urls?.spotify || '',
@@ -99,31 +125,17 @@ export class SpotifySavedEpisodesTransformService {
                 show: episode.show,
                 added_at: episodeItem.added_at,
               },
-            });
+            },
+          });
 
+          if (created) {
             createdCount++;
-          }
-
-          // Create event for saving the episode
-          if (episodeItem.added_at) {
-            await this.eventService.create(context, {
-              title: `Saved episode ${episode.name}`,
-              description: `Saved ${episode.name} from ${episode.show?.name || 'podcast'} on Spotify at ${episodeItem.added_at}`,
-              event_type: 'favorite',
-              start_time: new Date(episodeItem.added_at),
-              duration_minutes: Math.floor(episode.duration_ms / 60000),
-              metadata: {
-                episode_id: episode.id,
-                show_name: episode.show?.name,
-                show_id: episode.show?.id,
-                publisher: episode.show?.publisher,
-                release_date: episode.release_date,
-                duration_ms: episode.duration_ms,
-                explicit: episode.explicit,
-                uri: episode.uri,
-                resume_point: episode.resume_point,
-              },
+          } else {
+            this.logger.debug('Episode already exists, linked save to it', {
+              episodeId: episode.id,
+              episodeName: episode.name,
             });
+            skippedCount++;
           }
 
           this.logger.debug('Episode transformed and stored', {

@@ -3,6 +3,8 @@ import path from 'path';
 import { MultiBar, Presets } from 'cli-progress';
 
 import { LoggerService } from '@ci/common/logging';
+import { verifyDatabaseSchema } from '@ci/common/persistence';
+import config from '@ci/configuration';
 import { FileService } from '@ci/domains/files';
 
 import { createAdminTestingModule } from '../support/admin-testing-module';
@@ -41,6 +43,16 @@ import { seedUsers } from './seed-users';
 const logger = new LoggerService();
 
 (async function () {
+  // Same guard the api runs at boot. Seeding writes across a dozen tables, so a
+  // schema that is not this checkout's fails partway — half the demo dataset
+  // in, the rest lost to `relation "ci.x" does not exist`.
+  try {
+    await verifyDatabaseSchema(config.db);
+  } catch (err) {
+    console.error(`\n${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  }
+
   const dataDir = path.resolve(__dirname, '..', 'seed-database');
 
   const module = await createAdminTestingModule()

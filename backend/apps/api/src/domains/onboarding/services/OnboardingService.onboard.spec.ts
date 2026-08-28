@@ -66,6 +66,7 @@ describe('OnboardingService onboard', () => {
       name: 'user@example.com',
       email: 'user@example.com',
       onboarded: false,
+      role: 'user',
       timezone: 'UTC',
       onboardingProgress: { stepKey: 'run-first-sync', draft: {}, updatedAt: new Date().toISOString() },
       entityId: null,

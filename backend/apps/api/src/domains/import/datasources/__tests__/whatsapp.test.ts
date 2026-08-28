@@ -5,7 +5,7 @@ import path from 'path';
 import type { Graph, ImportParams } from '../timeline';
 import { WhatsAppFileImporter } from '../whatsapp';
 
-import type { EmittedGraph } from './support/emitted';
+import type { EmittedGraph, TestPipeline } from './support/emitted';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 
@@ -260,6 +260,60 @@ describe('WhatsApp datasource', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('links the attached file to the message that carried it', async () => {
+    /**
+     * The orphan case. WhatsApp's 172 `<attached: …>` lines DID upload — they
+     * become standalone media items — but the message that carried each one kept
+     * only the placeholder as its body and an empty `attachments` column, so the
+     * file and its message were two unlinked rows. The descriptor is what joins
+     * them; the media leg resolves both paths onto ONE stored file because they
+     * are the same bytes.
+     */
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-media-link-'));
+    const photo = path.join(dir, '00000048-PHOTO-2026-05-08-08-35-29.jpg');
+    fs.writeFileSync(photo, Buffer.from('fake-jpg-bytes'));
+    fs.writeFileSync(
+      path.join(dir, '_chat.txt'),
+      '[5/8/26, 8:35:29 AM] Alice: <attached: 00000048-PHOTO-2026-05-08-08-35-29.jpg>\n' +
+        '[5/8/26, 8:36:00 AM] Bob: no photo here\n',
+    );
+
+    const pushed: EmittedGraph[] = [];
+    const fi = new WhatsAppFileImporter();
+    await fi.fileImport({}, { filename: '_chat.txt', fullPath: path.join(dir, '_chat.txt') }, {
+      pipeline: { push: (g: Graph) => pushed.push(g as EmittedGraph), drop: () => {} },
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const messages = pushed.filter((g) => g.item.classification === 'message');
+    const withPhoto = messages.find((g) => (g.item.metadata.Text as string).includes('attached'));
+    const withoutPhoto = messages.find((g) => g.item.metadata.Text === 'no photo here');
+
+    const attachments = withPhoto!.item.metadata.MediaAttachments as Array<Record<string, unknown>>;
+    expect(attachments).toEqual([
+      {
+        path: photo,
+        filename: '00000048-PHOTO-2026-05-08-08-35-29.jpg',
+        type: 'image',
+        mimetype: 'image/jpeg',
+      },
+    ]);
+    // The SAME path the standalone media item carries, which is what makes the
+    // object store's content hash collapse them onto one file.
+    const mediaGraph = pushed.find((g) => g.item.classification === 'media');
+    expect(mediaGraph!.item.intermediateLocation).toBe(attachments[0].path);
+
+    // No content opt-in: the standalone media item already catalogues these
+    // bytes, and opting in would mint a second ci.content row over them.
+    expect(withPhoto!.item.metadata.AttachmentContent).toBeUndefined();
+
+    // The descriptor must not leak onto the next message in the transcript.
+    expect(withoutPhoto!.item.metadata.MediaAttachments).toBeUndefined();
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('resolves an Android "X (file attached)" reference to a real media item', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-media-android-'));
     fs.writeFileSync(path.join(dir, 'IMG-20260508-WA0001.jpg'), Buffer.from('fake-jpg-bytes'));
@@ -449,5 +503,157 @@ describe('WhatsApp chat identity across export shapes', () => {
 
     expect(pushed).toHaveLength(1);
     expect(pushed[0].item.metadata!.Conversation).toBe('LITA Companion Tech Team');
+  });
+});
+
+describe('parser loss reporting (reconciliation)', () => {
+  it('reports every logical message via consumed(), one per flush() not per physical line', async () => {
+    // The fixture's 7 messages include at least one multi-line body, so this
+    // also proves consumed() counts folded (logical) messages, not raw lines.
+    const root = path.join(FIXTURES_DIR, 'whatsapp-export');
+    const fi = new WhatsAppFileImporter();
+    const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], { consumed: jest.fn() });
+
+    await fi.fileImport({}, { filename: 'whatsapp-export', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    expect(pipeline.consumed).toHaveBeenCalledTimes(1);
+    expect(pipeline.consumed).toHaveBeenCalledWith(7);
+  });
+
+  it('drops a timeframe-excluded message instead of just omitting it', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-reconcile-'));
+    fs.writeFileSync(
+      path.join(dir, '_chat.txt'),
+      '[1/1/21, 8:00:00 AM] Alice: in range\n' + '[1/2/21, 8:00:00 AM] Alice: out of range\n',
+    );
+
+    try {
+      const fi = new WhatsAppFileImporter();
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], {
+        drop: jest.fn(),
+        consumed: jest.fn(),
+      });
+
+      await fi.fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+        pipeline,
+        timeframe: { since: new Date('2021-01-01T00:00:00Z'), until: new Date('2021-01-01T23:59:59Z') },
+        log: () => {},
+      } as unknown as ImportParams);
+
+      expect(pipeline.length).toBe(1);
+      expect(pipeline.drop).toHaveBeenCalledWith('outside_timeframe');
+      expect(pipeline.consumed).toHaveBeenCalledWith(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * A message with a resolved attachment pushes TWO items — the message and
+   * the media — from ONE flush(). `produced` counts every item push, so a
+   * naive "one flush() = one consumed unit" undercounts by exactly the number
+   * of resolved attachments: on the real corpus that motivated this,
+   * `produced: 5385` against a naive `consumed: 5254` — 131 messages short,
+   * one per resolved attachment. The attachment reference is a second thing
+   * this flush offers the parser, and it always resolves to one push() or one
+   * drop(), so it earns its own consumed() unit.
+   */
+  it('counts a message with a resolved attachment as 2 toward consumed(), matching its 2 pushes', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-reconcile-media-'));
+    fs.writeFileSync(path.join(dir, '00000048-PHOTO-2026-05-08-08-35-29.jpg'), Buffer.from('fake-jpg-bytes'));
+    fs.writeFileSync(
+      path.join(dir, '_chat.txt'),
+      '[5/8/26, 8:35:29 AM] Alice: <attached: 00000048-PHOTO-2026-05-08-08-35-29.jpg>\n' +
+        '[5/8/26, 8:36:00 AM] Alice: a plain text message with no attachment\n',
+    );
+
+    try {
+      const fi = new WhatsAppFileImporter();
+      const pipeline: TestPipeline = Object.assign([] as EmittedGraph[], { consumed: jest.fn() });
+
+      await fi.fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      // 2 items pushed for the attached message (media + text) + 1 for the
+      // plain one = 3 produced, 0 dropped — so consumed() must report 3.
+      expect(pipeline.length).toBe(3);
+      expect(pipeline.consumed).toHaveBeenCalledWith(3);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the system-line filter must not eat human messages', () => {
+  const LRM = '\u200e';
+
+  const importChat = async (body: string): Promise<EmittedGraph[]> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-sys-'));
+    fs.writeFileSync(path.join(dir, '_chat.txt'), body);
+    const pipeline: EmittedGraph[] = [];
+    const drops: string[] = [];
+    // `drop` hangs off the PIPELINE, not off params — that is where the parser
+    // calls it (`params.pipeline.drop?.()`), and the real collaborator is
+    // StagedWriter, which carries both `push` and `drop`.
+    const collector = Object.assign(pipeline, { drop: (reason: string) => drops.push(reason) });
+
+    await new WhatsAppFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline: collector,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+    fs.rmSync(dir, { recursive: true, force: true });
+    (pipeline as EmittedGraph[] & { drops?: string[] }).drops = drops;
+
+    return pipeline;
+  };
+
+  const line = (text: string) => `[1/15/25, 9:30:00 AM] Dana Wu: ${text}\n`;
+  const bodies = (p: EmittedGraph[]) => p.map((g) => String(g.item.metadata?.Text ?? ''));
+
+  /**
+   * `SYSTEM_VERB_RE` is right-unbounded — `.+ (added|removed|left|…)` matches
+   * those words ANYWHERE in a body. On one real 5,254-message export it
+   * destroyed 53 human messages (7,901 characters) alongside the 41 system
+   * lines it meant to suppress. These five are verbatim from that corpus.
+   */
+  it.each([
+    'btw there is a RS-232 cable in the box if needed for reading from the left side elevator motherboard',
+    'We just wrapped up xmas here, everybody just left the house',
+    'I changed the copyright to Lita from Clai on that web panel also.',
+    'well i left the page anyway',
+    'To be 100% clear - I have unplugged and removed their PI',
+  ])('keeps a human message containing a system verb: %s', async (text) => {
+    const pipeline = await importChat(line(text));
+
+    expect(bodies(pipeline)).toEqual([text]);
+  });
+
+  it('still suppresses a genuine system line, which WhatsApp marks with U+200E', async () => {
+    const pipeline = await importChat(line(`${LRM}Batis Samadian added you`));
+
+    expect(pipeline).toHaveLength(0);
+  });
+
+  it('records the suppression instead of returning silently', async () => {
+    const pipeline = await importChat(line(`${LRM}Batis Samadian added you`));
+
+    expect((pipeline as EmittedGraph[] & { drops?: string[] }).drops).toEqual(['whatsapp_system_line']);
+  });
+
+  it('keeps a media placeholder, which carries the marker but is not a system line', async () => {
+    // The marker alone cannot be the rule: WhatsApp puts it on every line it
+    // generates, including these. 745 of one export's lines carry it and only
+    // 41 are system lines.
+    const pipeline = await importChat(line(`${LRM}image omitted`));
+
+    expect(pipeline).toHaveLength(1);
   });
 });

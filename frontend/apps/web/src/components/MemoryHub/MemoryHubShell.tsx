@@ -32,8 +32,14 @@ export function MemoryHubShell({
   const shellClass = cn('flex flex-col gap-2', fillHeight && 'min-h-0 flex-1');
 
   if (isExplorer) {
+    // Two distinct rows, not one: which Memory destination you're in
+    // (MemoryHubNav — the same row every other hub page shows), then which
+    // slice of it you're filtered to (MemoryEntityTypeNav, the What bar).
+    // The explorer used to render only the second row, landing exactly where
+    // the rail points at with no sign People/Places/Things/etc. exist.
     return (
       <div className={shellClass}>
+        <MemoryHubNav />
         <DropdownProvider args={[{ changeSearchParams: true }]}>
           <MemoryEntityTypeNav actions={actions} />
           {children}

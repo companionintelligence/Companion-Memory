@@ -155,7 +155,22 @@ export class LyftFileImporter implements FileImporter {
     return { confidence: 0 };
   }
 
-  // Locate a matching ride CSV in a directory, recursing up to two levels deep.
+  /**
+   * Locate a matching ride CSV in a directory, recursing up to two levels deep.
+   *
+   * The exact-filename check (`passenger_rides.csv` / `rides.csv`, still
+   * header-validated) is safe to run at every level: it is specific enough
+   * that a coincidental hit deep inside an unrelated export is vanishingly
+   * unlikely. The generic "any .csv whose header merely mentions a
+   * pickup/dropoff column" fallback is a much weaker signal — 'pickup' and
+   * 'dropoff' are ordinary English words that turn up in unrelated CSVs (a
+   * moving-house checklist, a shipping log) — so it is only trusted at the
+   * directory the CALLER actually asked about (`depth === 0`), never at a
+   * directory this function walked into on its own. Checking it at every
+   * recursion level used to mean one such coincidental CSV, anywhere inside a
+   * multi-GB unrelated export, could claim confidence for the entire tree
+   * above it — at the path the caller queried, not the file that matched.
+   */
   private async findCsv(dir: string, depth = 0): Promise<string | undefined> {
     let names: string[];
     try {
@@ -173,14 +188,16 @@ export class LyftFileImporter implements FileImporter {
       }
     }
 
-    for (const name of names) {
-      if (path.extname(name).toLowerCase() !== '.csv') {
-        continue;
-      }
+    if (depth === 0) {
+      for (const name of names) {
+        if (path.extname(name).toLowerCase() !== '.csv') {
+          continue;
+        }
 
-      const fpath = path.join(dir, name);
-      if (await this.headerMatches(fpath)) {
-        return fpath;
+        const fpath = path.join(dir, name);
+        if (await this.headerMatches(fpath)) {
+          return fpath;
+        }
       }
     }
 

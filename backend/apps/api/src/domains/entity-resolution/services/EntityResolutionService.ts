@@ -1,4 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { In, Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { type BrowserActivity, BrowserActivityService } from '@ci/domains/browser-activity';
@@ -13,6 +15,8 @@ import {
   type Item,
   type Person,
   type Place,
+  type ProductModel,
+  type Receipt,
   CommunicationService,
   ConceptService,
   ContentService,
@@ -20,6 +24,8 @@ import {
   ItemService,
   PersonService,
   PlaceService,
+  ProductModelService,
+  ReceiptEntity,
 } from '@ci/domains/memory';
 import { type Note, NoteService } from '@ci/domains/notes';
 import { type FileChunk, FileChunkService } from '@ci/domains/parsing';
@@ -43,6 +49,8 @@ export type ResolvedEntity =
   | { type: 'note'; id: string; entity: Note }
   | { type: 'person'; id: string; entity: Person }
   | { type: 'place'; id: string; entity: Place }
+  | { type: 'product'; id: string; entity: ProductModel }
+  | { type: 'receipt'; id: string; entity: Receipt }
   | { type: 'thread'; id: string; entity: Thread };
 
 @Injectable()
@@ -61,6 +69,12 @@ export class EntityResolutionService {
     private readonly noteService: NoteService,
     private readonly personService: PersonService,
     private readonly placeService: PlaceService,
+    private readonly productModelService: ProductModelService,
+    // Read directly because `ReceiptService` has no batch id read, and the
+    // alternative — one findById per result — is the N+1 this whole service
+    // exists to prevent. Scoped on user_id here exactly as the service would.
+    @InjectRepository(ReceiptEntity)
+    private readonly receiptRepository: Repository<ReceiptEntity>,
     private readonly threadService: ThreadService,
   ) {}
 
@@ -90,6 +104,8 @@ export class EntityResolutionService {
       notes,
       people,
       places,
+      products,
+      receipts,
       threads,
     ] = await Promise.all([
       this.actionService.findByIds(context, grouped.get('action') ?? []),
@@ -105,6 +121,8 @@ export class EntityResolutionService {
       this.noteService.findByIds(context, grouped.get('note') ?? []),
       this.personService.findByIds(context, grouped.get('person') ?? []),
       this.placeService.findByIds(context, grouped.get('place') ?? []),
+      this.productModelService.findByIds(context, grouped.get('product') ?? []),
+      this.findReceiptsByIds(context.userId, grouped.get('receipt') ?? []),
       this.threadService.findByIds(context, grouped.get('thread') ?? []),
     ]);
 
@@ -122,6 +140,8 @@ export class EntityResolutionService {
     this.addToMap(map, 'note', notes);
     this.addToMap(map, 'person', people);
     this.addToMap(map, 'place', places);
+    this.addToMap(map, 'product', products);
+    this.addToMap(map, 'receipt', receipts);
     this.addToMap(map, 'thread', threads);
 
     // File chunks join their parent file so results can link back to the source
@@ -144,6 +164,18 @@ export class EntityResolutionService {
     }
 
     return map;
+  }
+
+  /** Batch id read for receipts, in the order asked for. */
+  private async findReceiptsByIds(userId: string, ids: string[]): Promise<(Receipt | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const rows = await this.receiptRepository.find({ where: { userId, id: In(ids) } });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+
+    return ids.map((id) => byId.get(id) ?? null);
   }
 
   // 'file-chunk' is excluded: its resolved entity is a { chunk, file } join with

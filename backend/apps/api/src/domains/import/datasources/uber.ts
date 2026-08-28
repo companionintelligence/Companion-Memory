@@ -20,7 +20,7 @@ import path from 'node:path';
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams, Relationship } from './timeline';
+import type { ImportParams, LineItemRecord, Relationship } from './timeline';
 import { timeframeContains } from './timeline';
 
 // First non-empty value among the candidate column names (new + legacy styles).
@@ -542,6 +542,40 @@ export class UberFileImporter implements FileImporter {
         return name ? (qty > 1 ? `${qty}× ${name}` : name) : '';
       })
       .filter(Boolean);
+    // The order's itemisation, in the shape the receipt mapper reads
+    // (push/inputs.ts toReceiptLineItemInputs). An Eats order row IS a line
+    // item — the CSV has one row per dish — so the grouping this method already
+    // does by (request time, restaurant) is exactly the receipt. A
+    // commerce.transaction carrying LineItems routes to `receipts` as well as
+    // to `events`, so the meal keeps its timeline entry AND becomes a receipt
+    // with the dishes on it.
+    //
+    // LINE NUMBER STABILITY: `items` is the CSV's own row order within the
+    // group, so a re-import of the same export renumbers nothing.
+    const lineItems: LineItemRecord[] = items
+      .filter((it) => (it['Item_Name'] || '').trim())
+      .map((it, i) => ({
+        LineNumber: i + 1,
+        Product: (it['Item_Name'] || '').trim(),
+        Quantity: parseInt(it['Item_quantity'] || '1', 10) || 1,
+        // Eats prices the LINE, not the unit; `Item_Price` is what the line
+        // cost, so it is the TOTAL, not a unit price.
+        Total: it['Item_Price'] ? parsePrice(it['Item_Price']) : undefined,
+        Currency: currency || undefined,
+        // A dish is a PHYSICAL good, and stating it (rather than letting the
+        // name heuristic guess) is what stops "Kindle Bowl" or "Gift Card Roll"
+        // being read as a digital purchase. `IsDigital: false` means
+        // is_physical: TRUE on the receipt line.
+        //
+        // It does not put the dish in ci.objects: an Eats order is a
+        // commerce.transaction carrying LineItems, which routes to events +
+        // receipts. Line items live on the receipt; only a commerce.purchase
+        // record mints an object row. "Not a thing you keep" is a
+        // distinction the schema does not draw, and faking it with is_physical
+        // would mislabel every meal as a digital good.
+        IsDigital: false,
+        Customizations: (it['Customizations'] || '').trim() || undefined,
+      }));
     const summary = itemNames.length ? `${restaurant} — ${itemNames.join(', ')}` : restaurant;
 
     params.pipeline.push({
@@ -552,7 +586,7 @@ export class UberFileImporter implements FileImporter {
       item: {
         // Stable per-order id (no order id in the export): request time + restaurant.
         id: ['ubereats', tsRaw, restaurant].join('|'),
-        classification: 'transaction', // commerce.transaction -> events (food delivery is spend, not inventory)
+        classification: 'transaction', // commerce.transaction -> events (food delivery is spend, not a thing you keep)
         timestamp: ts,
         content: { filename: 'order.txt', mediaType: 'text/plain', data: async () => Buffer.from(summary) },
         metadata: {
@@ -562,9 +596,28 @@ export class UberFileImporter implements FileImporter {
           Restaurant: restaurant,
           City: city || undefined,
           'Order Status': status || undefined,
+          // Kept under its export name AND under the canonical `Total`
+          // (push/commerceKeys.ts) so the receipt header gets an order total
+          // without the reader needing an Uber-specific chain entry.
           'Order Price': orderPrice || undefined,
+          Total: orderPrice ? parsePrice(orderPrice) : undefined,
           Currency: currency || undefined,
           Items: itemNames.length ? itemNames : undefined,
+          LineItems: lineItems.length ? lineItems : undefined,
+          // CANONICAL merchant key: the restaurant is who was paid.
+          Merchant: restaurant,
+          // CANONICAL place key (push/canonical.ts locationNameFor). A
+          // restaurant is a real place, and it is the one commerce source that
+          // reliably names one — Amazon and card exports name a seller, not a
+          // location. This is what populates ci.receipts.place_entity_id, which
+          // in turn is what ObjectResolutionService's place_prior rung reads.
+          //
+          // Node volume is bounded and correct: the place is resolved under the
+          // natural key `place:<lowercased name>`, so every order from the same
+          // restaurant converges on ONE node rather than minting one per order.
+          // The city qualifies the name where the export gives it, so two
+          // same-named branches in different cities stay distinct.
+          Place: city ? `${restaurant}, ${city}` : restaurant,
           'Item Count': items.length,
           Summary: summary,
           Source: 'Uber Eats',

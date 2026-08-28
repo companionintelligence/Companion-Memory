@@ -32,6 +32,7 @@ import { AsksModule } from '@ci/domains/asks';
 import { AuditModule } from '@ci/domains/audit';
 import { AuthModule } from '@ci/domains/auth';
 import { PortalAuthModule } from '@ci/domains/auth/PortalAuthModule';
+import { BlueBubblesModule } from '@ci/domains/bluebubbles';
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { ConnectionsModule } from '@ci/domains/connections';
 import { DailyMetricsModule } from '@ci/domains/daily-metrics';
@@ -48,11 +49,13 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { LLMModule } from '@ci/domains/llm';
 import { MaintenanceModule } from '@ci/domains/maintenance';
 import { McpModule } from '@ci/domains/mcp';
+import { McpClientModule } from '@ci/domains/mcp-client';
 import { MemoryModule } from '@ci/domains/memory';
+import { ModelRoutingModule } from '@ci/domains/model-routing';
 import { NotesModule } from '@ci/domains/notes';
 import { OnboardingModule } from '@ci/domains/onboarding';
-import { PairingModule } from '@ci/domains/pairing';
 import { ParsingModule } from '@ci/domains/parsing';
+import { PeersModule } from '@ci/domains/peers';
 import { PersonaModule } from '@ci/domains/persona';
 import { PersonalizationModule } from '@ci/domains/personalization';
 import { PipelineModule } from '@ci/domains/pipeline';
@@ -60,15 +63,17 @@ import { PlanningModule } from '@ci/domains/planning';
 import { PositionModule } from '@ci/domains/position';
 import { PowerSyncModule } from '@ci/domains/powersync';
 import { PredictionsModule } from '@ci/domains/predictions';
+import { PrivacyModule } from '@ci/domains/privacy';
 import { PythonFunctionsModule } from '@ci/domains/python-functions';
+import { RetrievalPolicyModule } from '@ci/domains/retrieval-policy';
 import { ScheduleModule } from '@ci/domains/schedule';
 import { SearchIngressModule } from '@ci/domains/search-ingress';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { SmartRotationModule } from '@ci/domains/smart-rotation';
+import { SolidModule } from '@ci/domains/solid';
 import { SummariesModule } from '@ci/domains/summaries';
 import { ToolsModule } from '@ci/domains/tools';
 import { UserModule } from '@ci/domains/user';
-import { UserSnapshotsModule } from '@ci/domains/user-snapshots';
 import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
 
 @Module({
@@ -99,13 +104,14 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     LoggingModule,
     EventEmitterModule.forRoot(),
     NestCronModule.forRoot(),
-    PairingModule,
     ActivityModule,
     AgentModule,
     AsksModule,
+    PeersModule,
     AuditModule,
     AuthModule,
     PortalAuthModule,
+    BlueBubblesModule,
     BrowserActivityModule,
     ConnectionsModule,
     DailyMetricsModule,
@@ -125,6 +131,8 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     IntelligenceModule,
     LLMModule,
     McpModule,
+    McpClientModule,
+    ModelRoutingModule,
     OnboardingModule,
     PersonalizationModule,
     PersonaModule,
@@ -132,7 +140,9 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     PositionModule,
     PowerSyncModule,
     PredictionsModule,
+    PrivacyModule,
     PythonFunctionsModule,
+    RetrievalPolicyModule,
     ToolsModule,
     MemoryModule,
     GeocodeModule,
@@ -142,9 +152,9 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     SmartRotationModule,
     SearchIngressModule,
     SearchNextModule,
+    SolidModule,
     SummariesModule,
     UserModule,
-    UserSnapshotsModule,
   ],
   controllers: [HealthController, MapsConfigController, TelemetryConfigController],
   providers: [

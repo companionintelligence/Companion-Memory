@@ -32,6 +32,9 @@ function placeLabel(position: Position): string | null {
   return city.length > 0 ? city : null;
 }
 
+/** A user changes their timezone rarely; re-fetching every 15m keeps the query volume low without letting a stale zone haunt indexed text for the life of the process. */
+export const TIMEZONE_CACHE_TTL_MS = 15 * 60_000;
+
 function resolveTimeZone(timeZone: string | null | undefined): string {
   const candidate = timeZone?.trim();
   if (!candidate) {
@@ -71,7 +74,7 @@ export function formatLocalPositionStamp(time: Date, timeZone: string): string {
 
 @Injectable()
 export class PositionSearchIndexListener {
-  private readonly timezoneByUser = new Map<string, string>();
+  private readonly timezoneByUser = new Map<string, { timezone: string; expiresAt: number }>();
 
   constructor(
     private readonly positionService: PositionService,
@@ -169,8 +172,8 @@ export class PositionSearchIndexListener {
 
   private async userTimeZone(userId: string): Promise<string> {
     const cached = this.timezoneByUser.get(userId);
-    if (cached) {
-      return cached;
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.timezone;
     }
 
     const rows = (await this.dataSource.query(`SELECT timezone FROM ci.users WHERE id = $1`, [
@@ -179,7 +182,7 @@ export class PositionSearchIndexListener {
       timezone: string | null;
     }>;
     const timezone = resolveTimeZone(rows[0]?.timezone);
-    this.timezoneByUser.set(userId, timezone);
+    this.timezoneByUser.set(userId, { timezone, expiresAt: Date.now() + TIMEZONE_CACHE_TTL_MS });
 
     return timezone;
   }

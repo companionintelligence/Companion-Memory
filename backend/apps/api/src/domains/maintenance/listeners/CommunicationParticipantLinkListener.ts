@@ -141,9 +141,19 @@ export class CommunicationParticipantLinkListener {
     }
 
     const ownerId = communication.userId;
-    const identity = await readSelfIdentity(this.dataSource, ownerId).catch(
-      (): SelfIdentity => ({ names: [], email: null, phones: [] }),
-    );
+    // Failure is deliberately swallowed into an empty identity, same fail-safe
+    // as PushStage.resolveIsSelf — a bad self-match is worse than no
+    // self-collation. Logged so that fail-safe can't be confused with the
+    // (much more common) case of an owner who simply has no self identity yet.
+    const identity = await readSelfIdentity(this.dataSource, ownerId).catch((err: unknown): SelfIdentity => {
+      this.logger.warn('Self-identity lookup failed; participants will not be self-collated', {
+        communicationId: communication.id,
+        userId: ownerId,
+        error: (err as Error).message,
+      });
+
+      return { names: [], email: null, phones: [] };
+    });
     const trustMode = await this.personalization.getTrustMode(ownerId);
     const selfEntityId = await this.resolveSelfEntityId(ownerId);
 

@@ -18,6 +18,8 @@ services:
 
   hbpe-service:
     image: ci/hbpe-service
+    extra_hosts:
+      - host.docker.internal:host-gateway
     volumes:
       - hbpe-models:/app/models
       - hbpe-corpus:/app/data
@@ -31,6 +33,11 @@ services:
       CI_TELEMETRY: ${CI_TELEMETRY:-}
       CI_LOCAL_ONLY: ${CI_LOCAL_ONLY:-}
       CI_SERVER_VERSION: ${CI_SERVER_VERSION:-}
+      # Cluster naming uses the Hub chat endpoint (Qwen3-8B via vLLM) when set.
+      # GGUF 0.8B is the fallback if these are empty.
+      LLM_API_BASE: ${LLM_API_BASE:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
     networks:
       - ci
     depends_on:

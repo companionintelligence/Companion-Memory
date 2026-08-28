@@ -1,28 +1,33 @@
-# PowerSync — local-first sync (backend scaffold)
+# PowerSync — local-first sync (server side)
 
-This directory scaffolds the **server side** of local-first sync for CI-Server: an
+This directory holds the **server side** of local-first sync for CI-Server: an
 on-device SQLite database that syncs bidirectionally with Postgres via
-[PowerSync](https://docs.powersync.com/). It is **infrastructure + config only** —
-the client SDK integration (reading synced tables from local SQLite, the upload
-connector) is a **separate, later** piece and is intentionally not included here.
+[PowerSync](https://docs.powersync.com/). It is **infrastructure + config only** — the
+client SDK integration lives in `frontend/apps/web/src/api/powersync/`.
 
-> ⚠️ **Partially verified.** Server-side replication works against
-> `journeyapps/powersync-service:1.23.0`: the service boots, storage migrations run, the
-> router listens on 8080, and the replicator takes an initial snapshot of the three
-> replicated tables and then streams changes from the WAL. **The client path is still
-> unverified** — no SDK has connected, so the sync rules, the token flow, and the
-> on-device schema have not been exercised end to end. See "Verify before relying on it".
+> ⚠️ **Partially verified, and NOT running locally.**
+>
+> - Server-side replication works against `journeyapps/powersync-service:1.23.0`: the
+>   service boots, storage migrations run, the router listens on 8080, and the
+>   replicator snapshots the replicated tables and then streams changes from the WAL.
+> - **The `powersync` service is deliberately not in the `local` compose profile**, so
+>   `make dev` does not start it. `GET /api/powersync/token` returns 503 until
+>   `POWERSYNC_URL` is set and the app falls back to GraphQL, so nothing breaks — but
+>   it also means the end-to-end path is not exercised in ordinary local development.
+> - The client phase **has shipped** (see below); what remains unverified is the two
+>   sync-rule questions under "Verify before relying on it".
 
 ## Pieces
 
 | Piece | Where |
 |-------|-------|
 | Postgres logical replication | `infrastructure/database/Dockerfile` (`wal_level=logical`) |
-| Replication role + publication | `infrastructure/setup-database/entrypoint.sh` |
-| PowerSync service | `docker-compose.yml` → `powersync` service |
+| Replication role + publication | `infrastructure/setup-database/entrypoint.sh` (`POWERSYNC_TABLES`) |
+| PowerSync service | `docker-compose.yml` → `powersync` service (**`staging`/`production` profiles only**) |
 | Service config | `powersync.yaml` (this dir) |
 | Sync rules (what syncs per user) | `sync-rules.yaml` (this dir) |
 | Client token endpoint | `GET /api/powersync/token` (`backend/.../domains/powersync`) |
+| Client SDK integration | `frontend/apps/web/src/api/powersync/` — `PowerSyncProvider` (mounted in `App.tsx`), `connector.ts`, `schema.ts`, `webDatabase.ts` (WASQLite/IndexedDB), `nativeDatabase.ts` (Capacitor SQLite) |
 
 ## How it fits together
 
@@ -42,15 +47,21 @@ on-device SQLite   ──writes──▶  CI-Server API (preserves auth + domain
 The token's `sub` = the CI-Server user id; sync rules scope each bucket with
 `request.user_id()`. **Writes must go through the existing NestJS/GraphQL mutations**
 (so auth + validation + business logic are preserved) — do **not** let the sync
-engine write Postgres directly. That write connector is part of the client phase.
+engine write Postgres directly. `connector.ts`'s `uploadData()` implements exactly
+that, and today only **notes** replay as full CRUD (`createNote`/`updateNote`/
+`deleteNote`); tags, threads, messages and files are **read-only on device** because
+no GraphQL mutation of the right shape exists to replay their local writes through.
 
 ## What syncs
 
-Only small, `user_id`-scoped, read-mostly tables: `ci.notes`, `ci.files` (metadata
-only — the binary stays in Minio), `ci_search.tags`. Large/server-computed/PII data
-(events, communications, browser_activity, pgvector embeddings, the knowledge graph)
-stays online via GraphQL. See `sync-rules.yaml` for the rationale and the TODO list
-for tables that still need their exact names verified before being added.
+Only small, `user_id`-scoped, read-mostly tables. `sync-rules.yaml` and
+`POWERSYNC_TABLES` in `infrastructure/setup-database/entrypoint.sh` must agree; today
+both list `ci.notes`, `ci.files` (metadata only — the binary stays in Minio),
+`ci_search.tags`, `ci.threads`, `ci.messages` and `ci_search.entity_tag`.
+Large/server-computed/PII data (events, communications, browser_activity, pgvector
+embeddings, the knowledge graph) stays online via GraphQL. See `sync-rules.yaml` for
+the rationale and the TODO list for tables that still need their exact names verified
+before being added.
 
 ## Configuration
 
@@ -149,24 +160,28 @@ Done (against 1.23.0):
 3. ~~Grant replication rights.~~ Resolved with a dedicated `powersync` role rather than
    `REPLICATION` on `companion` — see "The two URIs are different roles" above.
    `setup-database` provisions the role, its `SELECT` grants and the publication; the
-   replicator snapshots `ci.notes`, `ci.files` and `ci_search.tags`, then streams WAL
-   changes. Confirmed against a live local stack: the slot is active, a write to
-   `ci.notes` is flushed by the replicator, and the role is refused `SELECT` on
-   non-replicated tables (`ci.events`), any write, and DDL in either schema.
+   replicator snapshots the `POWERSYNC_TABLES` list, then streams WAL changes.
+   Confirmed against a live local stack: the slot is active, a write to `ci.notes` is
+   flushed by the replicator, and the role is refused `SELECT` on non-replicated tables
+   (`ci.events`), any write, and DDL in either schema.
+4. ~~Client phase (`@powersync/web`, on-device schema, upload connector).~~ Shipped —
+   `frontend/apps/web/src/api/powersync/` carries `PowerSyncProvider` (mounted in
+   `App.tsx`), `schema.ts`, `connector.ts`, and the web/native database factories.
 
 Still open:
 
-4. Confirm `request.user_id()` is the correct sync-rules accessor for the token `sub`
+5. Confirm `request.user_id()` is the correct sync-rules accessor for the token `sub`
    (older docs use `token_parameters.user_id`).
-5. Check uuid↔text comparison of `user_id = bucket.user_id` in the replicated schema.
+6. Check uuid↔text comparison of `user_id = bucket.user_id` in the replicated schema.
 
-Items 4 and 5 need a real client: the replicator applies the sync rules' `SELECT`
-lists, but nothing has requested a bucket, so the parameter query and the `user_id`
-comparison are still untested.
+Items 5 and 6 still need a **connected** client against a running service. Because the
+`powersync` container is out of the `local` profile, `make dev` does not provide one —
+set `POWERSYNC_URL` and run the service under the `staging` profile to exercise them.
 
-## Next (client phase, not in this scaffold)
+## Next
 
-- Add `@powersync/web` + `@powersync/react`; define the on-device schema for the
-  synced tables; implement the connector (`fetchCredentials` → `/api/powersync/token`;
-  `uploadData` → existing GraphQL mutations).
-- Migrate a first collection's reads (notes) from Apollo to a PowerSync watched query.
+- Widen `uploadData()` beyond notes as the matching GraphQL mutations appear (a
+  tag-by-id mutation, a thread CRUD mutation) — see the read-only rationale at the top
+  of `connector.ts`.
+- Decide whether `powersync` rejoins the `local` compose profile now that a client
+  exists.

@@ -1,6 +1,11 @@
 import type { Message as OllamaMessage, Tool } from 'ollama';
 
-import { extractEmbeddedToolCalls, toOpenAiMessages, toOpenAiTools } from '../OpenAiCompatChatDriver';
+import {
+  extractEmbeddedToolCalls,
+  toOpenAiMessages,
+  toOpenAiTools,
+  vllmThinkingExtraBody,
+} from '../OpenAiCompatChatDriver';
 
 describe('toOpenAiMessages', () => {
   it('passes plain system/user/assistant messages through', () => {
@@ -157,6 +162,18 @@ place
     expect(toolCalls[0].function.name).toBe('memory_remember');
     expect(toolCalls[0].function.arguments).toMatchObject({
       operations: [{ kind: 'entity.create', entityType: 'place', name: 'Home' }],
+    });
+  });
+
+  it('sends enable_thinking false unless the UI explicitly turns thinking on', () => {
+    expect(vllmThinkingExtraBody(undefined)).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    expect(vllmThinkingExtraBody(false)).toEqual({
+      chat_template_kwargs: { enable_thinking: false },
+    });
+    expect(vllmThinkingExtraBody(true)).toEqual({
+      chat_template_kwargs: { enable_thinking: true },
     });
   });
 

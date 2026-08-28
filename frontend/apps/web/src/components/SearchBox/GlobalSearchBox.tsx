@@ -10,6 +10,7 @@ import { isMemoryExplorerPath, isMemoryHubPath } from '@/components/MemoryHub/me
 import { DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { useRecentSearches } from '@/hooks';
 import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
+import { chatThreadPath } from '@/pages/ChatPage/chatPaths';
 import { SearchPanelFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/ExplorerToolbar';
 import {
   FILTER_PARAMS,
@@ -521,7 +522,7 @@ export function GlobalSearchBox() {
           break;
 
         case 'thread':
-          navigate(`/chat/${decodedId}`);
+          navigate(chatThreadPath(decodedId));
           break;
 
         default:

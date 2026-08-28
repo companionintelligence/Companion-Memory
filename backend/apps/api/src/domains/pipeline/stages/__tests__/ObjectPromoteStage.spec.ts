@@ -22,15 +22,15 @@ import {
 } from '../promote/ObjectPromoteStage';
 
 /**
- * `promote.object` — Amazon purchases become inventory with real identity.
+ * `promote.object` — Amazon purchases become owned things with real identity.
  *
- * `ci.inventory` has 0 rows on an appliance holding 2,147 `purchase` events and
+ * `ci.objects` has 0 rows on an appliance holding 2,147 `purchase` events and
  * 630 `order` events, all imported from a real Amazon export. The rich object
  * schema was migrated and then never filled. This stage is the writer, and this
  * suite is mostly about the four things a writer of an empty table has to get
  * right before anyone will trust it again:
  *
- *  1. **Selection never anti-joins `ci.inventory`.** "Events that have not
+ *  1. **Selection never anti-joins `ci.objects`.** "Events that have not
  *     produced an object yet" is the ratchet: a purchase would leave the
  *     candidate set the moment an object existed, so a better extractor could
  *     never revisit a line it once read badly.
@@ -175,9 +175,9 @@ function fakeDataSource(options: FakeOptions = {}) {
   const query = jest.fn(async (sql: string, params: unknown[] = []) => {
     calls.push({ sql, params });
 
-    if (sql.includes('INSERT INTO ci.inventory')) {
+    if (sql.includes('INSERT INTO ci.objects')) {
       if (options.failWrite === true) {
-        throw new Error('inventory write exploded');
+        throw new Error('object write exploded');
       }
 
       const eventIds = params[5] as string[];
@@ -192,7 +192,7 @@ function fakeDataSource(options: FakeOptions = {}) {
       return [];
     }
 
-    if (sql.includes('FROM ci.inventory inv')) {
+    if (sql.includes('FROM ci.objects inv')) {
       if (options.failClassification === true) {
         throw new Error('classification failed');
       }
@@ -226,19 +226,19 @@ function makeStage(options: FakeOptions = {}) {
 }
 
 /* ===================================================================== *
- * 1. Selection asks the LEDGER, never ci.inventory
+ * 1. Selection asks the LEDGER, never ci.objects
  * ===================================================================== */
 
 describe('ObjectPromoteStage — the applicability predicate says what a row IS', () => {
   const predicate = PROMOTE_OBJECT_SOURCE.predicate ?? '';
 
-  it('never mentions ci.inventory, the table this stage writes', () => {
+  it('never mentions ci.objects, the table this stage writes', () => {
     // THE HEADLINE REGRESSION, and the shape the pipeline README calls out by
     // name: `LEFT JOIN <output> … WHERE <output> IS NULL` is the same ratchet as
     // `width IS NULL`. A purchase would leave the candidate set the moment an
     // object existed for it, so a better extractor could never revisit the 130
     // lines it read without an identifier.
-    expect(predicate).not.toMatch(/inventory/i);
+    expect(predicate).not.toMatch(/\bobjects\b/i);
     expect(predicate).not.toMatch(/product_models|receipts|object_identifiers/i);
   });
 
@@ -307,7 +307,7 @@ describe('extractPurchase — a receipt line becomes an object', () => {
     return result.object;
   }
 
-  it('maps the real Amazon grocery line onto ci.inventory columns', () => {
+  it('maps the real Amazon grocery line onto ci.objects columns', () => {
     expect(extracted(groceryPurchase())).toMatchObject({
       name: 'Organic Russet Potato',
       purchasePrice: 3.8,
@@ -410,7 +410,7 @@ describe('extractPurchase — a receipt line becomes an object', () => {
   });
 
   it('falls back to the event title when the metadata has no product name', () => {
-    // `ci.inventory.name` is NOT NULL, and an object with no name is one nobody
+    // `ci.objects.name` is NOT NULL, and an object with no name is one nobody
     // could find again — but the event title is a real name, not a fabrication.
     const untitled = groceryPurchase(1, { metadata: { kind: 'commerce.purchase' } });
 
@@ -448,7 +448,7 @@ describe('extractPurchase — the value parsers refuse to hand Postgres a bad ro
     [-4, 1],
     [undefined, 1],
     ['many', 1],
-  ])('parseQuantity(%s) respects inventory_quantity_check', (raw, expected) => {
+  ])('parseQuantity(%s) respects objects_quantity_check', (raw, expected) => {
     // The constraint is `quantity > 0`; a receipt line exists, so at least one
     // thing was bought.
     expect(parseQuantity(raw)).toBe(expected);
@@ -461,7 +461,7 @@ describe('extractPurchase — the value parsers refuse to hand Postgres a bad ro
     ['Used - Acceptable', 'fair'],
     ['for parts', 'broken'],
     ['Renewed Premium', null],
-  ])('parseCondition(%s) stays inside inventory_condition_check', (raw, expected) => {
+  ])('parseCondition(%s) stays inside objects_condition_check', (raw, expected) => {
     // Anything unrecognised is NULL, never 'n/a'. 'n/a' asserts "this thing has
     // no meaningful condition"; NULL is the absence of an assertion, which is
     // what an unknown string actually means.
@@ -556,14 +556,14 @@ describe('ObjectPromoteStage.run — every id gets exactly one answer', () => {
     for (const id of [eventId(1), eventId(2)]) {
       expect(results.get(id)).toMatchObject({
         outcome: 'failed',
-        reason: 'inventory_write_failed',
+        reason: 'object_write_failed',
       });
     }
   });
 });
 
 describe('ObjectPromoteStage.run — a row the upsert refused is explained, not guessed at', () => {
-  it('reports inventory_row_user_modified when a person edited it since promotion', async () => {
+  it('reports object_row_user_modified when a person edited it since promotion', async () => {
     const { stage } = makeStage({
       rows: [groceryPurchase()],
       refuse: [eventId(1)],
@@ -574,11 +574,11 @@ describe('ObjectPromoteStage.run — a row the upsert refused is explained, not 
 
     expect(results.get(eventId(1))).toEqual({
       outcome: 'skipped',
-      reason: 'inventory_row_user_modified',
+      reason: 'object_row_user_modified',
     });
   });
 
-  it('reports inventory_row_not_owned when the row belongs to another writer', async () => {
+  it('reports object_row_not_owned when the row belongs to another writer', async () => {
     const { stage } = makeStage({
       rows: [groceryPurchase()],
       refuse: [eventId(1)],
@@ -589,13 +589,13 @@ describe('ObjectPromoteStage.run — a row the upsert refused is explained, not 
 
     expect(results.get(eventId(1))).toEqual({
       outcome: 'skipped',
-      reason: 'inventory_row_not_owned',
+      reason: 'object_row_not_owned',
     });
   });
 
   it('still names a reason when the classification query itself fails', async () => {
     // A reason that is optional is a reason that is absent exactly when it
-    // matters. `inventory_row_not_written` is vaguer than the other two and it is
+    // matters. `object_row_not_written` is vaguer than the other two and it is
     // still greppable and still countable.
     const { stage } = makeStage({
       rows: [groceryPurchase()],
@@ -607,7 +607,7 @@ describe('ObjectPromoteStage.run — a row the upsert refused is explained, not 
 
     expect(results.get(eventId(1))).toEqual({
       outcome: 'skipped',
-      reason: 'inventory_row_not_written',
+      reason: 'object_row_not_written',
     });
   });
 });
@@ -617,7 +617,7 @@ describe('ObjectPromoteStage.run — a row the upsert refused is explained, not 
  * ===================================================================== */
 
 describe('ObjectPromoteStage — it writes only the table that has a reader', () => {
-  it('touches ci.inventory and nothing else', async () => {
+  it('touches ci.objects and nothing else', async () => {
     // THE PHASE 8 GATE, as an assertion. `ci.product_models`, `ci.receipts`,
     // `ci.receipt_line_items`, `ci.object_observations` and
     // `ci.object_identifiers` have no service, no resolver and no operator
@@ -637,13 +637,13 @@ describe('ObjectPromoteStage — it writes only the table that has a reader', ()
     for (const sql of written) {
       // ci.entities is the detail row's CTI base half (Item aggregates span
       // both), not a new write-only table; everything else stays refused.
-      expect(sql).toMatch(/ci\.inventory|ci\.entities/);
+      expect(sql).toMatch(/ci\.objects|ci\.entities/);
       expect(sql).not.toMatch(/ci\.product_models|ci\.receipts|ci\.receipt_line_items/);
       expect(sql).not.toMatch(/ci\.object_identifiers|ci\.object_observations/);
     }
   });
 
-  it('keeps the identifiers on ci.inventory.identifier_codes, where Item already reads them', () => {
+  it('keeps the identifiers on ci.objects.identifier_codes, where Item already reads them', () => {
     // ci.object_identifiers is refused on a SEMANTIC ground as well as the gate:
     // an ASIN identifies a product MODEL, its claim index is first-writer-wins,
     // and with no product models to attach to, the first unit bought would
@@ -678,10 +678,10 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
     query: (sql: string, params?: unknown[]) => runner.query(sql, params),
 
     // `writeObjects` wraps its INSERTs in `dataSource.transaction()` so the CTI
-    // base row in ci.entities and the ci.inventory detail row land together.
+    // base row in ci.entities and the ci.objects detail row land together.
     // Without this the double answered `transaction is not a function`, the
     // stage caught it, and every row came back
-    // `failed: inventory_write_failed` — which read like a schema problem and
+    // `failed: object_write_failed` — which read like a schema problem and
     // was a missing method.
     //
     // Running the callback INLINE on the same runner is the faithful stand-in:
@@ -768,7 +768,7 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
     }
   });
 
-  it('writes a real ci.inventory row with the identity columns filled', async () => {
+  it('writes a real ci.objects row with the identity columns filled', async () => {
     const eventA = await seedEvent(groceryPurchase());
     const stage = new ObjectPromoteStage(transactionalDataSource() as never, makeLogger() as never);
 
@@ -777,7 +777,7 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
     expect(results.get(eventA)).toMatchObject({ outcome: 'done' });
 
     const [row] = await runner.query(
-      // `name` is the CTI base row's, joined back: ci.inventory keeps the
+      // `name` is the CTI base row's, joined back: ci.objects keeps the
       // detail columns and ci.entities owns the label.
       `SELECT e.name, brand, purchase_price, currency, acquired_at, is_digital, condition,
               quantity, lifecycle_state, identity_confidence, identity_method,
@@ -786,9 +786,9 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
               (metadata->'promote'->>'version')::int AS promoted_version,
               metadata->'promote'->>'event_id'     AS promoted_from,
               product_id, acquisition_receipt_id, acquisition_line_item_id
-         FROM ci.inventory
-         JOIN ci.entities e ON e.entity_id = ci.inventory.object_id
-        WHERE ci.inventory.user_id = $1 AND source_id = $2`,
+         FROM ci.objects
+         JOIN ci.entities e ON e.entity_id = ci.objects.object_id
+        WHERE ci.objects.user_id = $1 AND source_id = $2`,
       [realUserId, eventA],
     );
 
@@ -831,7 +831,7 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
 
     expect(first.get(eventA)).toMatchObject({ outcome: 'done' });
     expect(second.get(eventA)).toMatchObject({ outcome: 'done' });
-    // Same object id both times, which is `inventory_source_triple_uniq` doing
+    // Same object id both times, which is `objects_source_triple_uniq` doing
     // the work — no anti-join, no "have I done this?" query.
     const firstDetail = first.get(eventA)?.detail as { objectId: string } | undefined;
     const secondDetail = second.get(eventA)?.detail as { objectId: string } | undefined;
@@ -840,7 +840,7 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
     expect(secondDetail?.objectId).toBe(firstDetail?.objectId);
 
     const [{ count }] = await runner.query(
-      `SELECT count(*)::int AS count FROM ci.inventory WHERE user_id = $1 AND source_id = $2`,
+      `SELECT count(*)::int AS count FROM ci.objects WHERE user_id = $1 AND source_id = $2`,
       [realUserId, eventA],
     );
 
@@ -862,12 +862,12 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
       // stamp in metadata — is what the stage's overwrite guard actually reads.
       `UPDATE ci.entities e
           SET name = 'Potatoes (renamed by the user)'
-         FROM ci.inventory inv
+         FROM ci.objects inv
         WHERE e.entity_id = inv.object_id AND inv.user_id = $1 AND inv.source_id = $2`,
       [realUserId, eventA],
     );
     await runner.query(
-      `UPDATE ci.inventory
+      `UPDATE ci.objects
           SET updated_at = now() + interval '1 hour'
         WHERE user_id = $1 AND source_id = $2`,
       [realUserId, eventA],
@@ -877,12 +877,12 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
 
     expect(results.get(eventA)).toEqual({
       outcome: 'skipped',
-      reason: 'inventory_row_user_modified',
+      reason: 'object_row_user_modified',
     });
 
     const [row] = await runner.query(
       `SELECT e.name
-         FROM ci.inventory inv
+         FROM ci.objects inv
          JOIN ci.entities e ON e.entity_id = inv.object_id
         WHERE inv.user_id = $1 AND inv.source_id = $2`,
       [realUserId, eventA],
@@ -909,7 +909,7 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
               inv.identity_confidence, inv.identity_method, inv.product_id,
               inv.acquisition_receipt_id, inv.acquisition_line_item_id,
               inv.last_seen_at, inv.last_seen_place_entity_id, inv.merged_into_object_id
-         FROM ci.inventory inv
+         FROM ci.objects inv
          JOIN ci.entities b ON b.entity_id = inv.object_id
         WHERE inv.user_id = $1 AND inv.source_type = $2
         ORDER BY inv.created_at DESC`,
@@ -926,7 +926,7 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
     // user's imported archive, through the stage, inside the rollback.
     //
     // 2,777 commerce events live here: 2,147 `purchase` lines and 630 `order`
-    // rollups. What this asserts is the property that made `ci.inventory` sit at
+    // rollups. What this asserts is the property that made `ci.objects` sit at
     // zero unnoticed — that no candidate can come back with no verdict at all.
     const candidates: Array<{ id: string }> = await runner.query(
       `SELECT s.event_id AS id
@@ -971,13 +971,13 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
     console.log('promote.object over real data:', Object.fromEntries(tally));
 
     // Rows actually landed, and they landed with identity — the exit criterion
-    // for this half of Phase 8 is `SELECT count(*) FROM ci.inventory > 0`.
+    // for this half of Phase 8 is `SELECT count(*) FROM ci.objects > 0`.
     const [written] = await runner.query(
       `SELECT count(*)::int                                        AS n,
               count(*) FILTER (WHERE identity_method = 'receipt')::int AS with_method,
               count(*) FILTER (WHERE identifier_codes <> '{}'::jsonb)::int AS with_codes,
               min(identity_confidence)                             AS min_confidence
-         FROM ci.inventory
+         FROM ci.objects
         WHERE user_id = $1 AND source_type = $2 AND source_id = ANY($3::text[])`,
       [realUserId, PROMOTE_OBJECT_STAGE_ID, ids],
     );
@@ -1000,20 +1000,20 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
     await stage.run({ userId: realUserId }, [eventA]);
 
     const [{ before }] = await runner.query(
-      `SELECT count(*)::int AS before FROM ci.inventory WHERE user_id = $1 AND source_id = $2`,
+      `SELECT count(*)::int AS before FROM ci.objects WHERE user_id = $1 AND source_id = $2`,
       [realUserId, eventA],
     );
 
     expect(before).toBe(1);
 
     await runner.query(
-      `DELETE FROM ci.inventory
+      `DELETE FROM ci.objects
         WHERE user_id = $1 AND metadata->'promote'->>'stage' = $2 AND source_id = $3`,
       [realUserId, PROMOTE_OBJECT_STAGE_ID, eventA],
     );
 
     const [{ after }] = await runner.query(
-      `SELECT count(*)::int AS after FROM ci.inventory WHERE user_id = $1 AND source_id = $2`,
+      `SELECT count(*)::int AS after FROM ci.objects WHERE user_id = $1 AND source_id = $2`,
       [realUserId, eventA],
     );
 

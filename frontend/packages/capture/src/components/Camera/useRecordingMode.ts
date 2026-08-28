@@ -1,7 +1,7 @@
 import { createHookContext } from '@ci/common';
 import { useCallback, useState } from 'react';
 
-export type RecordingMode = 'photo' | 'video' | 'inventory';
+export type RecordingMode = 'photo' | 'video' | 'thing';
 
 type ReturnType = [
   {
@@ -10,7 +10,7 @@ type ReturnType = [
   {
     setPhotoMode: () => void;
     setVideoMode: () => void;
-    setInventoryMode: () => void;
+    setThingMode: () => void;
     swapRecordingMode: () => void;
   },
 ];
@@ -20,7 +20,7 @@ function useRecordingMode(): ReturnType {
 
   const setPhotoMode = useCallback(() => setRecordingMode('photo'), []);
   const setVideoMode = useCallback(() => setRecordingMode('video'), []);
-  const setInventoryMode = useCallback(() => setRecordingMode('inventory'), []);
+  const setThingMode = useCallback(() => setRecordingMode('thing'), []);
   const swapRecordingMode = useCallback(
     () =>
       setRecordingMode((current) => {
@@ -29,7 +29,7 @@ function useRecordingMode(): ReturnType {
         }
 
         if (current === 'video') {
-          return 'inventory';
+          return 'thing';
         }
 
         return 'photo';
@@ -44,7 +44,7 @@ function useRecordingMode(): ReturnType {
     {
       setPhotoMode,
       setVideoMode,
-      setInventoryMode,
+      setThingMode,
       swapRecordingMode,
     },
   ];

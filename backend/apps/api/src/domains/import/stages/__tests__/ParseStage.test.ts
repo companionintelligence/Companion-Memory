@@ -1,4 +1,5 @@
 import type { DataSourceRecognition } from '../../datasources/registry';
+import { SUMMARY_KEY, type StageSummary } from '../../telemetry/stageSummary';
 import type { StageRunContext } from '../../types';
 import { ParseStage } from '../ParseStage';
 
@@ -59,7 +60,7 @@ function matchFor(name: string, opts: { throws?: string; items?: number } = {}):
   } as unknown as DataSourceRecognition;
 }
 
-function buildStage(totalsBySource: Record<string, typeof emptyTotals> = {}) {
+function buildStage(totalsBySource: Record<string, typeof emptyTotals & { recordsRead?: number }> = {}) {
   const updates: Array<{ sql: string; params: unknown[] }> = [];
 
   const dataSource = {
@@ -130,6 +131,30 @@ describe('ParseStage.run', () => {
       String(call[0]).includes('UPDATE ci_import.import_runs'),
     );
     expect(stampCall![1]).toEqual([RUN_ID, ['gmail', 'calendar']]);
+  });
+
+  it('lets the reconciliation check actually fail once a parser reports what it read', async () => {
+    // Before any parser called `pipeline.consumed()`, `consumed` was always
+    // DERIVED as `produced + dropped` — so `reconciled` could never disagree
+    // with itself, and a record lost through a branch that forgot `drop()`
+    // was invisible to this check by construction. A parser that reports a
+    // measured `recordsRead` (spotify.ts, via StagedWriter.consumed) gives the
+    // check an independent floor to compare against, and a mismatch is a real
+    // finding rather than an impossible one.
+    dataSourcesRecognize.mockResolvedValue([matchFor('spotify')]);
+    const { stage } = buildStage({
+      // 8 produced + 1 dropped = 9 accounted for, but the parser measured 12
+      // records read from the file — 3 vanished through an uncounted branch.
+      spotify: { ...emptyTotals, items: 8, drops: { sub_second_play: 1 }, recordsRead: 12 },
+    });
+
+    const outcome = await stage.run(contextFor());
+
+    const summary = outcome.detail[SUMMARY_KEY] as StageSummary;
+
+    expect(summary.reconciled).toBe(false);
+    expect(summary.consumed).toBe(12);
+    expect(summary.produced + summary.dropped).toBe(9);
   });
 
   it('catches one parser throwing, records it, and still runs the rest', async () => {

@@ -1,0 +1,56 @@
+-- migrate:up
+-- ---------------------------------------------------------------------------
+-- ci_search.embeddings: an HNSW ANN index scoped to the `item` rows.
+--
+-- `ObjectResolutionService`'s embedding rung asks one question — "which OWNED
+-- UNIT is nearest this sighting's crop vector?" — and it is always the same
+-- narrow slice of the corpus: `entity_type = 'item'`, joined back to
+-- `ci.inventory` to skip merge tombstones. `resolveUnresolved` asks it once per
+-- observation, up to 100 per sweep.
+--
+-- The existing whole-corpus index (`embeddings_embedding_hnsw_idx`, migration
+-- 20260701120100) cannot serve that question well. Measured on a dev corpus of
+-- 1,282,941 embeddings of which 2,006 are `item` (0.16%):
+--
+--   * ordered scan of the whole-corpus HNSW, no filters .............. 530 ms
+--     — the graph walk spends nearly all its effort on communication,
+--       browser-activity and event vectors that the `entity_type` filter then
+--       throws away;
+--   * filtered exact scan + top-N sort (what the planner correctly
+--     preferred instead, because it is cheaper than the above) ....... 130 ms
+--   * ordered scan of THIS index ..................................... 0.8 ms
+--
+-- So this is not "add an index the planner was already asking for" — the
+-- planner was right to refuse the whole-corpus one. Scoping the graph to the
+-- rows the query can actually match is what makes ANN the cheap plan here, and
+-- at 2k rows the index is small enough that the cost is a rounding error.
+--
+-- The predicate is repeated VERBATIM in ObjectResolutionService's query
+-- (`entity_type = 'item' AND embedding IS NOT NULL`): a partial index is only
+-- usable when the planner can prove the query implies its predicate.
+--
+-- The probe vector must reach the query as a pseudoconstant for ANY hnsw index
+-- to be reachable — see buildEmbeddingQuery. This index without that change is
+-- dead weight; that change without this index leaves the planner on the 130 ms
+-- exact scan.
+--
+-- vector_cosine_ops, matching `<=>` — nomic-embed-text vectors are
+-- unnormalised, so cosine and not L2 is the correct metric, the same choice the
+-- whole-corpus index made.
+--
+-- Deliberately NOT registered in IndexDeferralService.DEFERRABLE_INDEXES. That
+-- registry exists for indexes whose maintenance dominates a bulk load; this one
+-- covers 0.16% of the table and builds in under a second, which is the same
+-- reason `embeddings_user_id_idx` is excluded from it.
+--
+-- NOTE: a plain (blocking) CREATE INDEX, consistent with the rest of this
+-- migration set. It builds over the `item` slice only, so it is orders of
+-- magnitude cheaper than 20260701120100's; on a live appliance with a large
+-- corpus, prefer CREATE INDEX CONCURRENTLY out of band anyway.
+-- ---------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS embeddings_item_embedding_hnsw_idx
+  ON ci_search.embeddings USING hnsw (embedding vector_cosine_ops)
+  WHERE entity_type = 'item' AND embedding IS NOT NULL;
+
+-- migrate:down
+DROP INDEX IF EXISTS ci_search.embeddings_item_embedding_hnsw_idx;

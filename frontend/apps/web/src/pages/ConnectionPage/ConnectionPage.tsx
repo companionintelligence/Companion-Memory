@@ -53,7 +53,7 @@ export const EditConnectFormSchema = s.object({
 
 export type EditConnectFormData = s.input<typeof EditConnectFormSchema>;
 
-const GET_CONNECTION = gql(`
+export const GET_CONNECTION = gql(`
   query GetConnection($id: ID!) {
     connection(id: $id) {
       id
@@ -82,7 +82,7 @@ const GET_CONNECTION = gql(`
   }
 `);
 
-const UPDATE_CONNECTION = gql(`
+export const UPDATE_CONNECTION = gql(`
   mutation UpdateConnection($input: UpdateConnectionInput!) {
     updateConnection(input: $input) {
       success
@@ -288,7 +288,6 @@ export function ConnectionPage() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editFormData, setEditFormData] = useState({
     name: '',
-    schedule: '1 hour',
     accessToken: '',
   });
   const [modalLoading, setModalLoading] = useState(false);
@@ -372,12 +371,20 @@ export function ConnectionPage() {
         throw new Error('Name is required');
       }
 
+      // `schedule` is deliberately NOT sent. This dialog has no field that
+      // edits it — `editFormData.schedule` exists only to be seeded on open
+      // and echoed back — so `schedule: editFormData.schedule || '1 hour'`
+      // used to send a truthy value on every save regardless. The resolver
+      // already treats an omitted `schedule` as "leave it alone"
+      // (`input.schedule ? input.schedule : undefined`); the bug was that
+      // this call site never gave it the chance to. A connection whose
+      // schedule was null silently became hourly the first time its name was
+      // edited, and there was no way to set it back — or forward — from here.
       await updateConnection({
         variables: {
           input: {
             id: connection.id,
             name: editFormData.name || '',
-            schedule: editFormData.schedule || '1 hour',
             activeEndpoints: form.getValues('endpoints') || [],
             ...(editFormData.accessToken ? { accessToken: editFormData.accessToken } : {}),
           },
@@ -398,7 +405,7 @@ export function ConnectionPage() {
   const handleDeleteConnection = async () => {
     if (
       !confirm(
-        'Are you sure you want to delete this connection? Data from this connection will not be deleted.',
+        'Delete this connection? Its sign-in, every page fetched from the service, and the messages, events, photos, videos, people and organizations it created will be permanently deleted. Copied media files stay until the account is deleted.',
       )
     ) {
       return;
@@ -453,7 +460,6 @@ export function ConnectionPage() {
     if (connection) {
       setEditFormData({
         name: connection.name || '',
-        schedule: connection.schedule || '1 hour',
         accessToken: '',
       });
       setModalError(null);

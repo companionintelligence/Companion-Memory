@@ -1,24 +1,21 @@
 import { Injectable } from '@nestjs/common';
-import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
-import { type Connection } from '@ci/domains/connections';
-import { ContentService, type CreateContentDto, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import { type Connection, type FacebookPhoto } from '@ci/domains/connections';
 
 import { ConnectionSyncJob } from '../../../types';
-interface FacebookPhoto {
-  id: string;
-  name?: string;
-  created_time: string;
-  images?: Array<{
-    source: string;
-  }>;
-  link?: string;
-}
+import { FacebookMediaService, facebookUrl } from '../FacebookMediaService';
+
+/**
+ * `/me/photos?type=uploaded` → one `ci.content` row per photo, with the
+ * bytes in the object store. The row shape, the download, and the "one row
+ * per Graph id even when a post also carries it" rule all live in
+ * FacebookMediaService; this only maps the endpoint's payload onto it.
+ */
 @Injectable()
 export class FacebookPhotosTransformService {
   constructor(
-    private readonly contentService: ContentService,
+    private readonly facebookMediaService: FacebookMediaService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(FacebookPhotosTransformService.name);
@@ -44,59 +41,35 @@ export class FacebookPhotosTransformService {
         return;
       }
 
+      let stored = 0;
+
       for (const photo of photos) {
         try {
-          // Search for existing content by external_id
-          const existingContent = await this.contentService.search({ userId }, { external_id: photo.id });
-          if (existingContent.length > 0) {
-            // Update existing content
-            const existingItem = existingContent[0];
-            await this.contentService.update({ userId }, existingItem.id, {
-              type: 'Content',
-              title: photo.name || `Photo ${photo.id}`,
-              text: photo.name || '',
-              url: photo.link || photo.images?.[0]?.source || undefined,
+          // Graph lists `images` largest first.
+          const largest = photo.images?.[0];
+
+          const { fileId } = await this.facebookMediaService.upsertMedia({
+            userId,
+            connectionId: connection.id,
+            media: {
+              kind: 'photo',
+              id: photo.id,
+              title: photo.name?.trim() || `Photo ${photo.id}`,
+              text: photo.name ?? '',
+              pageUrl: facebookUrl(photo.link),
+              cdnUrl: largest?.source,
               mimetype: 'image/jpeg',
-              external_id: photo.id,
-              external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-              source_url: photo.images?.[0]?.source || undefined,
-              source_data: {
-                facebook_photo_id: photo.id,
-                created_time: photo.created_time,
-                image_url: photo.images?.[0]?.source,
-                connection_id: connection.id,
-                contentType: 'facebook_photo',
+              createdTime: photo.created_time,
+              sourceData: {
+                width: largest?.width,
+                height: largest?.height,
+                place: photo.place,
               },
-            });
-            this.logger.log('Updated existing Facebook photo content', {
-              photoId: photo.id,
-              contentId: existingItem.id,
-            });
-          } else {
-            // Create new content
-            const contentDto = {
-              id: uuidv7(),
-              type: 'Content',
-              title: photo.name || `Photo ${photo.id}`,
-              text: photo.name || '',
-              url: photo.link || photo.images?.[0]?.source || undefined,
-              mimetype: 'image/jpeg',
-              external_id: photo.id,
-              external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-              source_url: photo.images?.[0]?.source || undefined,
-              source_data: {
-                facebook_photo_id: photo.id,
-                created_time: photo.created_time,
-                image_url: photo.images?.[0]?.source,
-                connection_id: connection.id,
-                contentType: 'facebook_photo',
-              },
-              user: { id: userId },
-            };
-            await this.contentService.create({ userId }, contentDto as unknown as CreateContentDto);
-            this.logger.log('Created new Facebook photo content', {
-              photoId: photo.id,
-            });
+            },
+          });
+
+          if (fileId) {
+            stored += 1;
           }
         } catch (error) {
           this.logger.error('Error processing Facebook photo', {
@@ -110,6 +83,7 @@ export class FacebookPhotosTransformService {
         userId,
         connectionId: connection.id,
         processedCount: photos.length,
+        storedCount: stored,
       });
     } catch (error) {
       this.logger.error('Error transforming Facebook photos', {

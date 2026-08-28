@@ -180,7 +180,13 @@ export default defineConfig({
       },
     },
     fs: {
-      allow: ['.', path.resolve(__dirname, '../../packages')],
+      // Vite auto-allows the Yarn PnP cache (`.yarn/cache`) but not the virtual
+      // paths PnP hands out for packages with peer dependencies
+      // (`.yarn/__virtual__/<pkg>/0/cache/<zip>/node_modules/...`). @powersync/web
+      // is one, and it reaches its SQLite worker via `new URL(..., import.meta.url)`
+      // — a plain file request, not an import, so it gets no module-graph
+      // exemption and the dev server answers 403 without this entry.
+      allow: ['.', path.resolve(__dirname, '../../packages'), path.resolve(__dirname, '../../../.yarn')],
     },
     warmup: {
       clientFiles: ['./src/main.tsx'],
@@ -188,7 +194,16 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['@ci/shadcn', 'react', 'react-dom', 'react-router-dom'],
-    exclude: ['@powersync/capacitor', '@capacitor-community/sqlite'],
+    // @powersync/web must not be pre-bundled: it opens its SQLite worker via
+    // `new SharedWorker(new URL('./WASQLiteDB.worker.js', import.meta.url))`,
+    // and once the package is flattened into `.vite/deps/@powersync_web.js`
+    // that URL resolves to a file that does not exist (Vite logs "The file
+    // does not exist at .../.vite/deps/WASQLiteDB.worker.js"). The database
+    // then never becomes ready, and anything awaiting it — logout's
+    // `disconnectAndClear()` — hangs. This is PowerSync's own Vite example
+    // config (demos/example-vite/vite.config.ts). Dev-only: the production
+    // build handles `new URL(..., import.meta.url)` workers itself.
+    exclude: ['@powersync/web', '@powersync/capacitor', '@capacitor-community/sqlite'],
   },
   worker: {
     // @powersync/web ships its SQLite worker as an ES module; the default

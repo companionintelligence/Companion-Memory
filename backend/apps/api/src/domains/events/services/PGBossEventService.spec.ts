@@ -26,7 +26,10 @@ describe('PGBossEventService.sendMany', () => {
       logger as unknown as LoggerService,
       {} as never,
     );
-    insert = jest.fn(async () => undefined);
+    // pg-boss's insert() resolves with the ids it actually wrote — a short array
+    // is how a conflict-discarded bulk row reaches the caller, and a stub that
+    // returns `undefined` is a shape the library never produces.
+    insert = jest.fn(async (jobs: unknown[]) => jobs.map((_, i) => `bulk-${i}`));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (service as any).boss = { insert };
 
@@ -72,6 +75,48 @@ describe('PGBossEventService.sendMany', () => {
     expect(insert.mock.calls[0][0]).toEqual([
       { name: 'default', data: { communicationId: 'c1', name: 'communication.created' }, priority: -5 },
     ]);
+  });
+
+  it('carries a caller-supplied singletonKey and startAfter onto every inserted job', async () => {
+    delete process.env.CI_QUEUE_SUPPRESS;
+    const service = makeService();
+    const startAfter = new Date('2026-08-21T00:00:00.000Z');
+
+    await service.sendMany(
+      'default',
+      [
+        { name: 'communication.created', data: { communicationId: 'c1' } },
+        { name: 'event.created', data: { eventId: 'e1' } },
+      ],
+      { singletonKey: 'batch-key', startAfter },
+    );
+
+    expect(insert.mock.calls[0][0]).toEqual([
+      {
+        name: 'default',
+        data: { communicationId: 'c1', name: 'communication.created' },
+        priority: DEFAULT_JOB_PRIORITY,
+        singletonKey: 'batch-key',
+        startAfter,
+      },
+      {
+        name: 'default',
+        data: { eventId: 'e1', name: 'event.created' },
+        priority: DEFAULT_JOB_PRIORITY,
+        singletonKey: 'batch-key',
+        startAfter,
+      },
+    ]);
+  });
+
+  it('omits singletonKey and startAfter from the inserted jobs when not supplied', async () => {
+    delete process.env.CI_QUEUE_SUPPRESS;
+    const service = makeService();
+
+    await service.sendMany('default', [{ name: 'communication.created', data: { communicationId: 'c1' } }]);
+
+    expect(insert.mock.calls[0][0][0]).not.toHaveProperty('singletonKey');
+    expect(insert.mock.calls[0][0][0]).not.toHaveProperty('startAfter');
   });
 
   it('splits large batches into bounded insert() chunks', async () => {

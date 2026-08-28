@@ -7,6 +7,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
 
+import { ScratchDatabase, scratchDatabaseAvailability } from '../../__tests__/support/scratchDatabase';
 import { DEFAULT_SLICE_SIZE, MAX_SLICES_PER_SWEEP } from '../constants';
 import type { PipelineRunDesiredState } from '../entities/PipelineRunEntity';
 import { PipelineSliceEvent, PipelineSweepEvent } from '../events';
@@ -22,7 +23,6 @@ import { STAGE_VERSIONS } from '../versions';
 
 import { seedLoopCorpus, type SeededCorpus } from './harness/loopCorpus';
 import { HarnessQueue } from './harness/pipelineHarness';
-import { ScratchDatabase, scratchDatabaseAvailability } from './harness/scratchDatabase';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -101,7 +101,7 @@ import { ScratchDatabase, scratchDatabaseAvailability } from './harness/scratchD
  * over the operator's own 324,044 imported events, and kept them safe by
  * funnelling every statement through one `QueryRunner` inside a transaction it
  * always rolled back. That did not hold. A run against the dev appliance
- * committed ~599,000 `ci.pipeline_state` rows, 2,147 `ci.inventory` objects and
+ * committed ~599,000 `ci.pipeline_state` rows, 2,147 `ci.objects` objects and
  * 2,875 `ci.events` rows carrying repaired time provenance into a personal
  * archive, with nobody's permission.
  *
@@ -124,7 +124,7 @@ import { ScratchDatabase, scratchDatabaseAvailability } from './harness/scratchD
  * guards), `PipelineSliceListener` (claim → run → reconcile → complete), and TWO
  * REAL DECLARED STAGES doing their real work against real tables:
  *
- *  - `ObjectPromoteStage` — commerce events → `ci.inventory` rows. Postgres-only,
+ *  - `ObjectPromoteStage` — commerce events → `ci.objects` rows. Postgres-only,
  *    no provider, no bill. Small enough to drive to CONVERGENCE, which is what
  *    §2-§5 need.
  *  - `TemporalRepairStage` — every event in the corpus. Used for §6.
@@ -804,7 +804,7 @@ describeWithDatabase(`the enrichment loop, in a database of its own (${availabil
 
     // Three corpora, three users. The ledger is keyed by stage id and every
     // block invents its own, so blocks could in principle share a corpus — but
-    // `ci.inventory` is keyed by the EVENT, and `pipeline_runs_active_uniq` is
+    // `ci.objects` is keyed by the EVENT, and `pipeline_runs_active_uniq` is
     // keyed by the USER, so sharing would make §5's run illegal and let §1's
     // objects show up in §5's counts. Separate users cost a second to seed and
     // remove the whole class of question.
@@ -866,7 +866,7 @@ describeWithDatabase(`the enrichment loop, in a database of its own (${availabil
       `SELECT (SELECT count(*) FROM ci.pipeline_state)::int  AS state,
               (SELECT count(*) FROM ci.pipeline_shards)::int AS shards,
               (SELECT count(*) FROM ci.pipeline_runs)::int   AS runs,
-              (SELECT count(*) FROM ci.inventory)::int       AS inventory,
+              (SELECT count(*) FROM ci.objects)::int       AS objects,
               (SELECT count(*) FROM ci.events
                 WHERE time_source IS NOT NULL)::int          AS events_labelled`,
     )) as Array<Record<string, number>>;
@@ -880,7 +880,7 @@ describeWithDatabase(`the enrichment loop, in a database of its own (${availabil
   });
 
   // -------------------------------------------------------------------------
-  // §1-§4. The loop over ci.events → ci.inventory, driven to convergence.
+  // §1-§4. The loop over ci.events → ci.objects, driven to convergence.
   // -------------------------------------------------------------------------
 
   describe('promote.object over the commerce corpus', () => {
@@ -1000,25 +1000,25 @@ describeWithDatabase(`the enrichment loop, in a database of its own (${availabil
       expect(coverage.skipped).toBeGreaterThan(0);
     });
 
-    it('§1 actually ENRICHED — ci.inventory objects exist that did not before', async () => {
-      const [inventory] = (await scratch.dataSource.query(
+    it('§1 actually ENRICHED — ci.objects objects exist that did not before', async () => {
+      const [objects] = (await scratch.dataSource.query(
         `SELECT count(*)::int AS n
-           FROM ci.inventory
+           FROM ci.objects
           WHERE owner_user_id = $1::uuid AND source_type = 'promote.object'`,
         [promoteCorpus.userId],
       )) as Array<{ n: number }>;
 
       // The end-to-end claim, stated as a row count in a user table rather than
       // as a ledger status.
-      expect(inventory.n).toBeGreaterThan(0);
+      expect(objects.n).toBeGreaterThan(0);
       // NOT 1:1 in general — one commerce event can be an ORDER, which mints no
       // object at all. Duplication is ruled out structurally rather than by this
       // count: ObjectPromoteStage upserts ON CONFLICT (owner_user_id,
       // source_type, source_system, source_id), so a re-run cannot inflate it —
       // which §3 (converges and stops) then confirms by finding nothing left.
-      expect(inventory.n).toBeGreaterThanOrEqual(firstPass[0].coverage.done);
+      expect(objects.n).toBeGreaterThanOrEqual(firstPass[0].coverage.done);
 
-      record('objects minted by tick 1', String(inventory.n));
+      record('objects minted by tick 1', String(objects.n));
     });
 
     // -----------------------------------------------------------------------
@@ -1100,21 +1100,21 @@ describeWithDatabase(`the enrichment loop, in a database of its own (${availabil
       // does not match the thing it claims coverage over is the unearned
       // confidence this whole subsystem replaces — it is exactly how `ci.content`
       // sat at zero embedded rows while nothing looked wrong.
-      const [inventory] = (await scratch.dataSource.query(
+      const [objects] = (await scratch.dataSource.query(
         `SELECT count(*)::int AS n
-           FROM ci.inventory
+           FROM ci.objects
           WHERE owner_user_id = $1::uuid AND source_type = 'promote.object'`,
         [promoteCorpus.userId],
       )) as Array<{ n: number }>;
 
-      expect(inventory.n).toBe(final.done);
-      expect(inventory.n).toBe(promoteCorpus.purchases);
+      expect(objects.n).toBe(final.done);
+      expect(objects.n).toBe(promoteCorpus.purchases);
 
       record(
         'outcomes',
         `done ${final.done}, skipped ${final.skipped}, failed ${final.failed}, quarantined ${final.quarantined}`,
       );
-      record('ci.inventory rows written (from 0)', String(inventory.n));
+      record('ci.objects rows written (from 0)', String(objects.n));
     });
 
     // -----------------------------------------------------------------------
@@ -1201,7 +1201,7 @@ describeWithDatabase(`the enrichment loop, in a database of its own (${availabil
       expect(report.errors).toEqual([]);
 
       // The SAME rows come back, with a terminal ledger row already sitting on
-      // every one of them. Under the `LEFT JOIN ci.inventory ... IS NULL`
+      // every one of them. Under the `LEFT JOIN ci.objects ... IS NULL`
       // predicate this stage's docblock refuses to write, they were finished
       // forever.
       const firstPassSet = new Set(dispatched);
@@ -1248,15 +1248,15 @@ describeWithDatabase(`the enrichment loop, in a database of its own (${availabil
 
       // Re-promotion is an UPSERT, not a second mint. The whole corpus was
       // re-processed and the target table did not grow by one row — the
-      // idempotency `ci.inventory`'s source triple exists to provide.
-      const [inventory] = (await scratch.dataSource.query(
+      // idempotency `ci.objects`'s source triple exists to provide.
+      const [objects] = (await scratch.dataSource.query(
         `SELECT count(*)::int AS n
-           FROM ci.inventory
+           FROM ci.objects
           WHERE owner_user_id = $1::uuid AND source_type = 'promote.object'`,
         [promoteCorpus.userId],
       )) as Array<{ n: number }>;
 
-      expect(inventory.n).toBe(promoteCorpus.purchases);
+      expect(objects.n).toBe(promoteCorpus.purchases);
 
       record('ticks to re-converge after the bump', String(working.length + 1));
     });

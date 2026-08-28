@@ -262,7 +262,7 @@ stage_up() {
          union all select 'communications '||count(*) from ci.communications
          union all select 'content '||count(*) from ci.content
          union all select 'browser_activity '||count(*) from ci.browser_activity
-         union all select 'inventory '||count(*) from ci.inventory
+         union all select 'objects '||count(*) from ci.objects
          union all select 'entities '||count(*) from ci.entities
          union all select 'events with coordinates '||count(*) from ci.events where location_coordinates is not null;"
 

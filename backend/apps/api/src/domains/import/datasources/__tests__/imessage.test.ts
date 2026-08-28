@@ -803,8 +803,10 @@ describe('imessage attributedBody bodies', () => {
             const b = Buffer.alloc(3);
             b[0] = 0x81;
             b.writeUInt16LE(body.length, 1);
+
             return b;
           })();
+
     return Buffer.concat([
       Buffer.from([0x04, 0x0b]),
       Buffer.from('streamtyped', 'ascii'),
@@ -840,6 +842,7 @@ describe('imessage attributedBody bodies', () => {
          VALUES (?, ?, ?, ?, ?, 0, 'iMessage', 1)`,
       ).run(r.id, `guid-${r.id}`, 700000000000000000 + r.id, r.text, r.blob);
     }
+
     db.close();
 
     const pushed: EmittedGraph[] = [];
@@ -852,6 +855,7 @@ describe('imessage attributedBody bodies', () => {
         log: () => {},
       } as unknown as ImportParams,
     );
+
     return pushed;
   }
 

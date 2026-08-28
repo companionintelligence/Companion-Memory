@@ -467,3 +467,98 @@ declare module '@ci/domains/events/registry' {
     [EstimateLocationBatchRequestEvent]: EstimateLocationBatchRequestPayload;
   }
 }
+
+/**
+ * Event emitted when a catalog product model is created / changed / removed.
+ *
+ * Consumed by {@link ProductSearchIndexListener} on the `search-index` queue.
+ * A `*CreatedEvent` with no listener is a SILENT DROP — `send()` fans a job out
+ * to every registered queue and an unconsumed queue simply discards it — so
+ * these three names and that listener must always ship together.
+ */
+export const ProductCreatedEvent = 'product.created';
+export const ProductUpdatedEvent = 'product.updated';
+export const ProductRemovedEvent = 'product.deleted';
+
+/**
+ * Payload of {@link ProductCreatedEvent}.
+ */
+export type ProductCreatedPayload = {
+  /** `ci.product_models.product_id` of the newly created model */
+  productId: string;
+};
+
+/**
+ * Payload of {@link ProductUpdatedEvent}.
+ */
+export type ProductUpdatedPayload = {
+  /** `ci.product_models.product_id` of the updated model */
+  productId: string;
+};
+
+/**
+ * Payload of {@link ProductRemovedEvent}.
+ */
+export type ProductDeletedPayload = {
+  /** `ci.product_models.product_id` of the removed model */
+  productId: string;
+};
+
+defineEvent<ProductCreatedPayload>(ProductCreatedEvent);
+defineEvent<ProductUpdatedPayload>(ProductUpdatedEvent);
+defineEvent<ProductDeletedPayload>(ProductRemovedEvent);
+
+declare module '@ci/domains/events/registry' {
+  interface EventRegistry {
+    [ProductCreatedEvent]: ProductCreatedPayload;
+    [ProductUpdatedEvent]: ProductUpdatedPayload;
+    [ProductRemovedEvent]: ProductDeletedPayload;
+  }
+}
+
+/**
+ * Event emitted when a receipt (purchase evidence) is created / changed /
+ * removed.
+ *
+ * Consumed by {@link ReceiptSearchIndexListener} on the `search-index` queue —
+ * same pairing rule as the product events above.
+ */
+export const ReceiptCreatedEvent = 'receipt.created';
+export const ReceiptUpdatedEvent = 'receipt.updated';
+export const ReceiptRemovedEvent = 'receipt.deleted';
+
+/**
+ * Payload of {@link ReceiptCreatedEvent}.
+ */
+export type ReceiptCreatedPayload = {
+  /** `ci.receipts.receipt_id` of the newly created receipt */
+  receiptId: string;
+};
+
+/**
+ * Payload of {@link ReceiptUpdatedEvent}.
+ */
+export type ReceiptUpdatedPayload = {
+  /** `ci.receipts.receipt_id` of the updated receipt */
+  receiptId: string;
+};
+
+/**
+ * Payload of {@link ReceiptRemovedEvent}.
+ */
+export type ReceiptDeletedPayload = {
+  /** `ci.receipts.receipt_id` of the removed receipt */
+  receiptId: string;
+};
+
+defineEvent<ReceiptCreatedPayload>(ReceiptCreatedEvent);
+defineEvent<ReceiptUpdatedPayload>(ReceiptUpdatedEvent);
+defineEvent<ReceiptDeletedPayload>(ReceiptRemovedEvent);
+
+declare module '@ci/domains/events/registry' {
+  interface EventRegistry {
+    [ReceiptCreatedEvent]: ReceiptCreatedPayload;
+    [ReceiptUpdatedEvent]: ReceiptUpdatedPayload;
+    [ReceiptRemovedEvent]: ReceiptDeletedPayload;
+  }
+}

@@ -1,34 +1,121 @@
 """
-Qwen labeler — on-device LLM for behavioral label generation.
+Cluster labeler — on-device or Hub-resident LLM for behavioral labels.
 
-Uses llama-cpp-python (GGUF) rather than HuggingFace transformers so the
-same code path runs efficiently on all three hardware targets:
+Backends (first match wins):
 
-  - Apple Silicon (M-series): Metal GPU via llama.cpp's Metal backend
-  - ROCm (AMD GPU, prod):     HIPBLAS via llama-cpp-python compiled with
-                              CMAKE_ARGS="-DGGML_HIPBLAS=ON"
-  - CPU fallback:             pure C++ — still faster than transformers
-                              on Qwen3.5's DeltaNet hybrid attention
-
-Model: Qwen3.5-0.8B Q8_0 GGUF  (~800 MB, public — no HF token required)
-  Configurable via QWEN_GGUF_PATH env var (absolute path) or auto-downloaded
-  from QWEN_GGUF_REPO + QWEN_GGUF_FILE via huggingface_hub.
+  1. OpenAI-compatible HTTP (``LLM_API_BASE`` / ``HBPE_LABEL_API_BASE``)
+     — Hub already serves Qwen3-8B via vLLM. Labeling goes through that
+     endpoint so HBPE does not load a second 8B GGUF next to it.
+  2. llama-cpp GGUF (``QWEN_GGUF_PATH`` or auto-download Qwen3.5-0.8B)
+     — laptop / CI without a chat endpoint.
 
 The singleton is lazy-loaded on first get_qwen() call (thread-safe).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import threading
+import urllib.error
+import urllib.request
+from typing import Protocol
 
 from ci.hbpe.config import settings
 
 log = logging.getLogger(__name__)
 
 _LOCK: threading.Lock = threading.Lock()
-_INSTANCE: QwenModel | None = None
+_INSTANCE: LabelGenerator | None = None
+
+
+class LabelGenerator(Protocol):
+    def generate(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        max_new_tokens: int = 32,
+    ) -> str: ...
+
+    def batch_generate(
+        self,
+        prompts: list[tuple[str, str | None]],
+        max_new_tokens: int = 32,
+    ) -> list[str]: ...
+
+
+class OpenAIChatLabeler:
+    """OpenAI-compatible chat completions (vLLM, Ollama, llama.cpp server)."""
+
+    def __init__(self, base_url: str, model: str, api_key: str = "") -> None:
+        self._base = base_url.rstrip("/")
+        self._model = model
+        self._api_key = api_key or "not-needed"
+        self._gen_lock = threading.Lock()
+        log.info("HBPE labeler using chat API %s model=%s", self._base, self._model)
+
+    def generate(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        max_new_tokens: int = 32,
+    ) -> str:
+        max_tokens = max_new_tokens
+        if settings.qwen_disable_thinking:
+            user_message = f"{user_message} /no_think"
+            max_tokens = min(max_new_tokens, settings.qwen_max_tokens_no_think)
+
+        messages: list[dict] = []
+        if system_message:
+            messages.append({"role": "system", "content": system_message})
+        messages.append({"role": "user", "content": user_message})
+
+        body = json.dumps(
+            {
+                "model": self._model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": 0.15,
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._base}/chat/completions",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self._api_key}",
+            },
+            method="POST",
+        )
+        with self._gen_lock:
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp:
+                    payload = json.loads(resp.read().decode("utf-8"))
+            except urllib.error.URLError as exc:
+                log.warning("Label chat API failed: %s", exc)
+                raise
+
+        raw = (
+            payload.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            or ""
+        ).strip()
+        stripped = _strip_thinking(raw)
+        log.debug("RAW OUTPUT: %r", raw[:500])
+        log.debug("STRIPPED:   %r", stripped[:200])
+        return stripped
+
+    def batch_generate(
+        self,
+        prompts: list[tuple[str, str | None]],
+        max_new_tokens: int = 32,
+    ) -> list[str]:
+        return [
+            self.generate(user_msg, sys_msg, max_new_tokens)
+            for user_msg, sys_msg in prompts
+        ]
 
 
 class QwenModel:
@@ -157,11 +244,30 @@ def _strip_thinking(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
-def get_qwen() -> QwenModel:
-    """Return the process-level QwenModel singleton (lazy-initialised, thread-safe)."""
+def reset_qwen_for_tests() -> None:
+    """Drop the process singleton so tests can switch backends."""
+    global _INSTANCE
+    _INSTANCE = None
+
+
+def get_qwen() -> LabelGenerator:
+    """Return the process-level labeler singleton (lazy-initialised, thread-safe)."""
     global _INSTANCE
     if _INSTANCE is None:
         with _LOCK:
             if _INSTANCE is None:
-                _INSTANCE = QwenModel(_resolve_model_path())
+                _INSTANCE = _build_labeler()
     return _INSTANCE
+
+
+def _build_labeler() -> LabelGenerator:
+    base = (settings.label_api_base or "").strip()
+    model = (settings.label_chat_model or "").strip()
+    if base and model:
+        return OpenAIChatLabeler(base, model, settings.label_api_key)
+    if base and not model:
+        log.warning(
+            "LLM_API_BASE is set but LLM_DEFAULT_CHAT_MODEL is empty — "
+            "falling back to GGUF labeler"
+        )
+    return QwenModel(_resolve_model_path())

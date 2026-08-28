@@ -82,6 +82,14 @@ describe('SearchResolver — event-type ("how") filter', () => {
       getEntitiesForFileChunks: jest.fn().mockResolvedValue([]),
       countEntitiesForFileChunks: jest.fn().mockResolvedValue(0),
     };
+    const productModelService = {
+      getEntitiesForProducts: jest.fn().mockResolvedValue([]),
+      countEntitiesForProducts: jest.fn().mockResolvedValue(0),
+    };
+    const receiptService = {
+      getEntitiesForReceipts: jest.fn().mockResolvedValue([]),
+      countEntitiesForReceipts: jest.fn().mockResolvedValue(0),
+    };
     const resolver = new SearchResolver(
       browserActivityService as never,
       communicationService as never,
@@ -95,8 +103,16 @@ describe('SearchResolver — event-type ("how") filter', () => {
       noteService as never,
       personService as never,
       placeService as never,
+      productModelService as never,
+      receiptService as never,
       answerService as never,
       savedSearchService as never,
+      {
+        // Authorizes with no ceiling: these suites are not about consent, and a
+        // share created before `share_max_disclosure` existed reads exactly this way.
+        authorize: jest.fn().mockResolvedValue({ grantId: 'grant-test', ceiling: undefined }),
+        recordRead: jest.fn().mockResolvedValue(undefined),
+      } as never,
       searchService as never,
       tagService as never,
       { isFeatureEnabled: jest.fn().mockResolvedValue(true) } as never,

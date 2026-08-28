@@ -205,13 +205,91 @@ describe('a Person is never named with a parser leak', () => {
     expect(dto?.properties?.names).toEqual(['invoice.pdf']);
   });
 
-  it('keeps the staged record when there is no handle to fall back to', () => {
-    // Nothing better exists, and dropping the entity would silently delete an
-    // edge endpoint. The identifier index is still protected — properties.names
-    // is empty, so nothing claims the string.
+  it('leaves the Person NAMELESS when there is no handle to fall back to', () => {
+    // The entity survives — dropping it would silently delete an edge endpoint —
+    // but it is not named after the leak. Withholding `properties.names` and
+    // then showing the same string as the display name was the worst of both:
+    // the People view read "Missed call from" while the identifier index, which
+    // is what would let a later import find this contact again, held nothing.
+    // `ci.entities.name` is nullable and GraphIngestService writes
+    // `input.name ?? null` straight through, so null is a representable answer.
     const dto = toGraphEntity(staged({ name: 'Missed call from', identityKey: null }));
 
-    expect(dto?.name).toBe('Missed call from');
+    expect(dto).not.toBeNull();
+    expect(dto?.name).toBeNull();
     expect(dto?.properties?.names).toBeUndefined();
+  });
+
+  it('still keys on the staged name, so refusing to SHOW it moves no natural key', () => {
+    // The display name and the identity are different questions. `naturalKeyFor`
+    // reads `staged.name`, GraphIngestService derives linked_id from that key,
+    // and the ingest coordinate is the idempotency anchor — so a row whose name
+    // this function refuses must still resolve to the row a previous import
+    // created, or every run mints another one.
+    const dto = toGraphEntity(staged({ name: 'Missed call from', identityKey: null }));
+
+    expect(dto?.key).toBe(naturalKeyFor(staged({ name: 'Missed call from', identityKey: null })));
+    expect(dto?.key).toBe('contact:missed call from');
+  });
+});
+
+describe('a Person is never named with a placeholder', () => {
+  it('falls back to the handle for a vCard that carried no name at all', () => {
+    // 139 live Person rows are exactly this: `vcard.ts` computes
+    // `const name = fn || structuredName` — the empty string when a card has
+    // neither — and `'' ?? handle` is `''`, because `??` does not catch it. The
+    // address was in properties.email the whole time.
+    const dto = toGraphEntity(staged({ name: '', identityKey: 'wallon@3data.io' }));
+
+    expect(dto?.name).toBe('wallon@3data.io');
+    expect(dto?.properties?.names).toBeUndefined();
+  });
+
+  it('does the same for a whitespace-only and a punctuation-only name', () => {
+    expect(toGraphEntity(staged({ name: '   ', identityKey: 'alice@example.com' }))?.name).toBe(
+      'alice@example.com',
+    );
+    expect(toGraphEntity(staged({ name: '?', identityKey: '4155550100' }))?.name).toBe('4155550100');
+  });
+
+  it('refuses a generic label the identifier index would turn into an attractor', () => {
+    // ci.entity_identifiers is UNIQUE on (owner, kind, value_normalized), so one
+    // `name` row for "Unknown" belongs to ONE Person and every later participant
+    // called "Unknown" resolves to them.
+    const dto = toGraphEntity(staged({ name: '(Unknown)', identityKey: '4155550100' }));
+
+    expect(dto?.name).toBe('4155550100');
+    expect(dto?.properties?.names).toBeUndefined();
+  });
+
+  it('keeps a real name that merely LOOKS decorated', () => {
+    // Most of a LinkedIn export: an emoji or a credential hung off a real name.
+    // The predicate asks whether there is a letter anywhere, not whether the
+    // string is tidy.
+    for (const name of ['🚀 Russell Levine', 'Alex Terrazas, Ph.D.', '田中', 'Na', 'Nil']) {
+      const dto = toGraphEntity(staged({ name, identityKey: 'alice@example.com' }));
+
+      expect(dto?.name).toBe(name);
+      expect(dto?.properties?.names).toEqual([name]);
+    }
+  });
+
+  it('does not apply the rule to non-Person types', () => {
+    // A Concept named "Unknown" is a thing an export really did contain, and it
+    // claims no identifier index.
+    const dto = toGraphEntity(staged({ type: 'music_genre', name: 'Unknown', identityKey: null }));
+
+    expect(dto?.entityType).toBe('Concept');
+    expect(dto?.name).toBe('Unknown');
+    expect(dto?.properties?.names).toEqual(['Unknown']);
+  });
+
+  it('trims the display name it does keep', () => {
+    // properties.names has always been trimmed; the display name was not, so the
+    // two disagreed about what this person is called.
+    const dto = toGraphEntity(staged({ name: '  Judy Collins  ', identityKey: '4155550100' }));
+
+    expect(dto?.name).toBe('Judy Collins');
+    expect(dto?.properties?.names).toEqual(['Judy Collins']);
   });
 });

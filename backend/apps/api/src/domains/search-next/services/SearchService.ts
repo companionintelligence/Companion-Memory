@@ -4,28 +4,41 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EmbeddingGenerationService } from '@ci/common/embeddings';
+import { EventService } from '@ci/domains/events';
+import {
+  RETRIEVAL_POLICY_DEFAULTS,
+  RetrievalPolicyService,
+  sqlNumberLiteral,
+  tsRankWeightsLiteral,
+} from '@ci/domains/retrieval-policy';
 
-import type { EntityIdentifier, IndexableEntity } from '../types';
+import { queryTokenCount, RetrievalQueryEvent, type RetrievalQueryPayload } from '../events';
+import { buildPromptQuery, type BuildPromptQueryOptions } from '../promptQuery';
+import type { EntityIdentifier, IndexableEntity, PromptSearchResult } from '../types';
 
 /**
- * PostgreSQL ts_rank weight multipliers for weighted tsvectors.
- * Format: {D, C, B, A} - D is lowest priority, A is highest.
- * These weights determine how much each category contributes to the final score.
+ * ═══ Where the retrieval knobs live now ═══
  *
- * Current configuration:
- * - A (weight 10+ at ingestion): 1.0 multiplier - names, titles, primary identifiers
- * - B (weight 4-7 at ingestion): 0.4 multiplier - descriptions, summaries
- * - C (weight 2-3 at ingestion): 0.2 multiplier - categories, types, URLs
- * - D (weight <2 at ingestion): 0.1 multiplier - properties, bulk content
+ * `TS_RANK_WEIGHTS` and `EMBEDDING_BOOST_FACTOR` used to be module-level
+ * literals here. They are fields of the appliance's versioned retrieval policy
+ * (`ci.retrieval_policy`, read through {@link RetrievalPolicyService}), so a
+ * measured tuning result can be promoted without an edit-rebuild-redeploy.
+ *
+ * The baseline is unchanged and still stated in code, as
+ * `RETRIEVAL_POLICY_DEFAULTS` in `domains/retrieval-policy/constants.ts`:
+ *
+ * - ts_rank weights `{D, C, B, A}` = `{0.1, 0.2, 0.4, 1.0}` — D lowest priority,
+ *   A highest. A (ingestion weight 10+) is names/titles/primary identifiers, B
+ *   (4-7) descriptions and summaries, C (2-3) categories/types/URLs, D (<2)
+ *   properties and bulk content.
+ * - embedding boost 0.5 — the keyword score is multiplied by
+ *   `(1 + boost * similarity)`, so with similarity in [0,1] a score can rise by
+ *   up to 50%.
+ *
+ * Version 1 of the table is seeded with exactly those numbers and the service
+ * falls back to them when the table is empty or unreachable, so behaviour is
+ * identical until somebody promotes a v2.
  */
-const TS_RANK_WEIGHTS = '{0.1, 0.2, 0.4, 1.0}';
-
-/**
- * Embedding similarity boost factor.
- * The keyword score is multiplied by (1 + EMBEDDING_BOOST * similarity).
- * With similarity in [0,1] and boost of 0.5, scores can increase by up to 50%.
- */
-const EMBEDDING_BOOST_FACTOR = 0.5;
 
 /**
  * Default cosine-distance floor for `searchMessages` (naive-RAG message channel).
@@ -49,6 +62,137 @@ const MESSAGE_DISTANCE_FLOOR = 0.5;
  */
 const MESSAGE_DEFAULT_K = 10;
 
+/**
+ * BASELINE cosine-distance floor for `semanticSearch`. Rows at or beyond it are
+ * not results at any `ef_search`, so the recall probe's exact leg has to apply
+ * the same floor or it would count rows production would never return.
+ *
+ * The live value is `retrievalPolicy.semanticDistanceThreshold`; this is the
+ * value it falls back to, re-exported from `RETRIEVAL_POLICY_DEFAULTS` so there
+ * is one literal rather than two that agree today. Callers that need the number
+ * without a policy read (`RecallProbeService`) keep using this.
+ */
+export const SEMANTIC_DISTANCE_THRESHOLD = RETRIEVAL_POLICY_DEFAULTS.semanticDistanceThreshold;
+
+/**
+ * BASELINE LIMIT for `semanticSearch`, and therefore the k recall is measured
+ * at. Live value: `retrievalPolicy.semanticMaxResults`.
+ */
+export const SEMANTIC_MAX_RESULTS = RETRIEVAL_POLICY_DEFAULTS.semanticMaxResults;
+
+/**
+ * pgvector's own default for `hnsw.ef_search`, restated here because this
+ * appliance never sets it: a repo-wide grep finds the parameter only in
+ * `RecallProbeService`'s `SET LOCAL` (which dies with its own transaction),
+ * in migration prose, and here. Every production semantic query therefore runs
+ * the index at 40.
+ *
+ * An HNSW scan keeps a candidate list of `ef_search` nodes and can return at
+ * most that many rows — and it returns them BEFORE `user_id`, the type filter
+ * and the distance floor discard any of them (see
+ * {@link SearchService.buildSemanticSearchPlan}, where all three sit outside
+ * the ORDER BY). A statement whose `LIMIT k` exceeds this budget therefore
+ * cannot fill its own LIMIT even against a corpus with nothing to filter out:
+ * the shortfall is arithmetic, not a property of the data.
+ *
+ * This constant is NOT a tuning decision. It is a restatement of what the index
+ * will do at its current setting, so that a caller asking for k rows can be
+ * checked against it. What `ef_search` this corpus SHOULD run at — a question
+ * about post-filter selectivity, latency and recall — is what
+ * `ci.recall_probe_results` (migration `20260821223302`) was built to answer,
+ * and nothing here pre-empts it.
+ */
+export const HNSW_DEFAULT_EF_SEARCH = 40;
+
+/** pgvector's hard ceiling on `hnsw.ef_search`; setting past it raises. */
+export const HNSW_MAX_EF_SEARCH = 1000;
+
+/**
+ * The candidate budget a `LIMIT k` HNSW request needs to be answerable at all.
+ *
+ * `max(default, k)`, clamped to pgvector's ceiling. This is the MINIMUM
+ * coherent value, not a recall target: at `ef_search = k` the index can still
+ * only just produce k candidates, and any filter that rejects one of them
+ * shortens the result. Asking for more than that on every query would be the
+ * corpus-wide tuning decision the recall probe owns, so this deliberately stops
+ * at "the request is satisfiable" and goes no further.
+ *
+ * Below the default it returns the default, so a caller asking for fewer rows
+ * than the index already offers needs no `SET` at all and is left untouched.
+ */
+export function requiredEfSearch(maxResults: number): number {
+  const k = Math.trunc(maxResults);
+
+  if (!Number.isFinite(k) || k <= HNSW_DEFAULT_EF_SEARCH) {
+    return HNSW_DEFAULT_EF_SEARCH;
+  }
+
+  return Math.min(k, HNSW_MAX_EF_SEARCH);
+}
+
+/**
+ * Default ceiling on how many rows a lexeme may match and still be allowed to
+ * anchor {@link SearchService.searchAnchored}.
+ *
+ * Measured on the reference 907k-row corpus, over the questions the answer
+ * inference asks. Document frequency is what separates a word that NAMES
+ * something in the archive from a word the archive is simply full of:
+ *
+ *   cuisine 58 · favorite 426 · sports 265 · languages 267
+ *   speak 903 | follow 1,175 · learning 1,648 · food 2,022 · city 3,848 · live 8,302
+ *
+ * Everything left of the bar is a usable anchor; everything right of it is a
+ * lexical collision waiting to happen — "What city do you live in?" anchored on
+ * `city` returns Suffragette City and Midnight City, because in a corpus with
+ * 3,848 rows carrying the word, matching it says nothing. A question whose every
+ * term lands right of the bar gets NO lexical channel at all, which is the
+ * correct answer: there is no keyword in it worth searching on.
+ *
+ * The ceiling is absolute rather than a fraction of the corpus so it needs no
+ * `count(*)` over ci_search.vectors (which has no user_id index) to evaluate,
+ * and so the bounded count below is O(ceiling) instead of O(corpus). On a much
+ * smaller archive it is proportionally permissive, which is the right direction
+ * to be wrong in: with little indexed, recall matters more than precision.
+ */
+const ANCHOR_MAX_MATCHES = 1000;
+
+/** Everything {@link SearchService.buildSemanticSearchPlan} needs besides the vector. */
+export type SemanticSearchScope = {
+  maxResults?: number;
+  includeTypes?: IndexableEntity[];
+  excludeTypes?: IndexableEntity[];
+  /**
+   * Cosine-distance floor, overriding {@link SEMANTIC_DISTANCE_THRESHOLD}.
+   * Smaller = stricter. Callers that need a tighter relevance bar than plain
+   * search (evidence retrieval, where a merely-word-adjacent row is worse than
+   * no row) pass one; everyone else inherits the default and is unaffected.
+   */
+  distanceThreshold?: number;
+};
+
+/** Options for {@link SearchService.searchAnchored}. */
+export type AnchoredSearchOptions = {
+  maxResults?: number;
+  /** See {@link ANCHOR_MAX_MATCHES}. */
+  maxAnchorMatches?: number;
+  includeTypes?: IndexableEntity[];
+  excludeTypes?: IndexableEntity[];
+};
+
+/** One semantic statement plus its bind parameters, ready to run on any connection. */
+export type SemanticSearchPlan = {
+  sql: string;
+  params: (number | string | string[])[];
+  /**
+   * The resolved `LIMIT` this statement carries — the k the HNSW index is being
+   * asked for, after the caller's `maxResults` and the default have been folded
+   * together. Reported rather than re-derived so that whoever has to reconcile
+   * it with a candidate budget (see {@link requiredEfSearch}) reads the number
+   * that is actually in the SQL, not a second computation of it.
+   */
+  maxResults: number;
+};
+
 type ScoredRowResult = {
   entity_id: string;
   entity_type: string;
@@ -71,6 +215,8 @@ type BaseSearchOptions = {
    */
   mode?: 'semantic' | 'keyword' | 'boosted' | 'hybrid' | 'auto';
   maxResults?: number;
+  /** Semantic modes only. See {@link SemanticSearchScope.distanceThreshold}. */
+  distanceThreshold?: number;
 };
 
 type SearchOptions =
@@ -78,13 +224,56 @@ type SearchOptions =
   | (BaseSearchOptions & { excludeTypes: IndexableEntity[]; includeTypes?: never })
   | (BaseSearchOptions & { includeTypes?: never; excludeTypes?: never });
 
+/**
+ * A prompt search names its input `prompt` rather than `query`, because it is
+ * NOT a query: it is a sentence someone else wrote, and {@link buildPromptQuery}
+ * decides what part of it may constrain the owner's memory.
+ */
+type PromptSearchOptions = BuildPromptQueryOptions & {
+  prompt: string;
+  maxResults?: number;
+  includeTypes?: IndexableEntity[];
+  excludeTypes?: IndexableEntity[];
+};
+
 @Injectable()
 export class SearchService {
   constructor(
     @InjectDataSource()
     private readonly dataSource: DataSource,
     private readonly embeddingGenerationService: EmbeddingGenerationService,
+    private readonly retrievalPolicy: RetrievalPolicyService,
+    private readonly events: EventService,
   ) {}
+
+  /**
+   * The ts_rank weight literal and embedding boost currently in force, ready to
+   * interpolate.
+   *
+   * Both are written into the statement TEXT rather than bound as parameters —
+   * `ts_rank`'s first argument is an array literal and the boost sits inside an
+   * arithmetic expression — so the values are formatted by
+   * {@link tsRankWeightsLiteral} / {@link sqlNumberLiteral}, which refuse
+   * anything that is not a plain bounded number. `RetrievalPolicyService`
+   * already validates the row; this is the second gate, and if it ever fires we
+   * fall back to the compiled-in baseline rather than build a statement out of
+   * whatever the row held.
+   */
+  private async rankingLiterals(): Promise<{ weights: string; boost: string }> {
+    const policy = await this.retrievalPolicy.get();
+
+    try {
+      return {
+        weights: tsRankWeightsLiteral(policy.tsRankWeights),
+        boost: sqlNumberLiteral(policy.embeddingBoostFactor, 'embeddingBoostFactor'),
+      };
+    } catch {
+      return {
+        weights: tsRankWeightsLiteral(RETRIEVAL_POLICY_DEFAULTS.tsRankWeights),
+        boost: sqlNumberLiteral(RETRIEVAL_POLICY_DEFAULTS.embeddingBoostFactor, 'embeddingBoostFactor'),
+      };
+    }
+  }
 
   async search(
     context: UserServiceContext,
@@ -93,9 +282,17 @@ export class SearchService {
     const resolvedOptions = this.applyDefaultTypeExclusions(options);
     const { mode = 'auto' } = resolvedOptions;
 
-    let results: EntityIdentifier<IndexableEntity>[];
+    // Resolve 'auto' BEFORE dispatching rather than inside a private
+    // `autoSearch`, so the mode that actually ran is a value this method holds
+    // and can record. Logged as 'auto' it would be unreadable: auto is the
+    // default, so it is most calls, and the three strategies it picks between
+    // have completely different recall behaviour.
+    const modeTaken = mode === 'auto' ? resolveAutoMode(resolvedOptions.query) : mode;
+    const startedAt = Date.now();
 
-    switch (mode) {
+    let results: ScoredSearchResult[];
+
+    switch (modeTaken) {
       case 'semantic':
         results = await this.semanticSearch(context, resolvedOptions);
         break;
@@ -112,16 +309,201 @@ export class SearchService {
         results = await this.hybridSearch(context, resolvedOptions);
         break;
 
-      case 'auto':
       default:
-        results = await this.autoSearch(context, resolvedOptions);
+        results = await this.keywordSearch(context, resolvedOptions);
         break;
     }
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search',
+      modeTaken,
+      queryTokenCount: queryTokenCount(resolvedOptions.query),
+      includeTypes: resolvedOptions.includeTypes ?? null,
+      excludeTypes: resolvedOptions.excludeTypes ?? null,
+      resultCount: results.length,
+      topScore: topScoreOf(results),
+      latencyMs: Date.now() - startedAt,
+    });
 
     return results.map((result) => ({
       id: result.id,
       type: result.type,
     }));
+  }
+
+  /**
+   * Emit one {@link RetrievalQueryEvent} onto the `telemetry` queue, and never
+   * wait for it.
+   *
+   * Not awaited and never rethrown: a search that already produced its answer
+   * must not fail, or slow down, because a telemetry row could not be enqueued.
+   * The failure is not silent at the queue layer — `PGBossEventService` logs an
+   * unknown or suppressed queue itself — so the catch here is the last resort
+   * for a genuinely broken connection, which the retrieval path cannot act on
+   * anyway.
+   */
+  private recordQuery(payload: RetrievalQueryPayload): void {
+    void this.events.send(RetrievalQueryEvent, payload, { queue: 'telemetry' }).catch(() => undefined);
+  }
+
+  /**
+   * Keyword search for an ASKER-SUPPLIED question, with precision the owner's
+   * own searches do not need.
+   *
+   * `search({ mode: 'keyword' })` OR-joins every token with no floor, so a row
+   * matching one common word is indistinguishable from a row that answers the
+   * question. That is a recall win when the owner is searching their own memory
+   * and a fabrication risk when another person is asking: see
+   * {@link buildPromptQuery} for the measured cases ("Have you seen <invented
+   * name>?" → 297 matches, all on 'seen'). This method is a SEPARATE entry point
+   * rather than a change to `keywordSearch`, because the tools, activity and
+   * planning domains all depend on the loose behaviour and none of them is
+   * disclosing anything to a third party.
+   *
+   * The rebuilt query is `AND(required phrases) & OR(alternative terms)`:
+   * anything the asker NAMED has to be there, anything they merely mentioned is
+   * an alternative. A prompt that yields no groups at all matches NOTHING —
+   * failing closed is the whole point, because the caller of an ask executor
+   * turns an empty result into "no" and a non-empty one into "yes".
+   *
+   * Unlike the other search methods this one reports {@link
+   * PromptSearchResult.totalMatches}, so a saturated result set is
+   * distinguishable from an exact one. A count answer that silently stops at the
+   * cap states a number that is not true.
+   */
+  async searchPrompt(context: UserServiceContext, options: PromptSearchOptions): Promise<PromptSearchResult> {
+    const { prompt, maxResults = 25 } = options;
+    const groups = buildPromptQuery(prompt, { subjectIsName: options.subjectIsName });
+    const limit = Math.max(1, Math.trunc(maxResults));
+    const startedAt = Date.now();
+
+    // No groups means the prompt named nothing. Short-circuit rather than send a
+    // query with an empty tsquery: `vector @@ ''::tsquery` is a NULL comparison
+    // that already returns no rows, but relying on that makes "asked nothing"
+    // and "asked for everything" one code path, and only one of them is safe.
+    if (groups.length === 0) {
+      // Recorded, not skipped. "The prompt named nothing we could search on" is
+      // a zero-result retrieval like any other, and it is the one an operator
+      // most wants counted: it is the shape a failing ask executor takes.
+      this.recordQuery({
+        userId: context.userId,
+        caller: 'search_prompt',
+        modeTaken: 'prompt',
+        queryTokenCount: queryTokenCount(prompt),
+        includeTypes: options.includeTypes ?? null,
+        excludeTypes: options.excludeTypes ?? null,
+        resultCount: 0,
+        topScore: null,
+        latencyMs: Date.now() - startedAt,
+      });
+
+      return { items: [], totalMatches: 0, truncated: false, limit };
+    }
+
+    const resolvedOptions = this.applyDefaultTypeExclusions({
+      query: prompt,
+      ...(options.includeTypes ? { includeTypes: options.includeTypes } : {}),
+      ...(options.excludeTypes ? { excludeTypes: options.excludeTypes } : {}),
+    } as SearchOptions);
+
+    const typeFilter = this.buildTypeFilter(resolvedOptions, 4, 'v');
+    const { weights } = await this.rankingLiterals();
+
+    // Each group's text crosses as a PARAMETER and is turned into a tsquery by
+    // Postgres (`phraseto_tsquery` / `plainto_tsquery`), never by concatenating
+    // asker text into SQL. The later `string_agg(tq::text, ...)` re-parses only
+    // Postgres's OWN canonical tsquery output, which round-trips exactly — so
+    // hostile punctuation in the prompt can reach the parser but never the
+    // statement. `phraseto_tsquery` is what makes a name a name: it emits
+    // `'david' <-> 'miller'`, exact adjacency, so a corpus holding Steve Miller
+    // does not answer a question about David Miller.
+    const sql = `
+      WITH parts AS (
+        SELECT
+          s.kind,
+          CASE
+            WHEN s.kind = 'phrase' THEN phraseto_tsquery('english', s.txt)
+            ELSE plainto_tsquery('english', s.txt)
+          END AS tq
+        FROM unnest($2::text[], $3::text[]) AS s(txt, kind)
+      ),
+      kept AS (
+        SELECT kind, tq FROM parts WHERE tq <> ''::tsquery
+      ),
+      grouped AS (
+        SELECT
+          (SELECT string_agg(tq::text, ' & ') FROM kept WHERE kind = 'phrase') AS phrases,
+          (SELECT string_agg(tq::text, ' | ') FROM kept WHERE kind = 'term') AS terms
+      ),
+      q AS (
+        SELECT (
+          CASE
+            WHEN phrases IS NOT NULL AND terms IS NOT NULL
+              THEN '(' || phrases || ') & (' || terms || ')'
+            WHEN phrases IS NOT NULL THEN phrases
+            ELSE terms
+          END
+        )::tsquery AS tq
+        FROM grouped
+      )
+      SELECT
+        v.entity_id,
+        v.entity_type,
+        ts_rank('${weights}', v.vector, q.tq) AS score,
+        count(*) OVER () AS total_matches
+      FROM
+        ci_search.vectors v
+        CROSS JOIN q
+      WHERE v.user_id = $1
+        AND q.tq IS NOT NULL
+        AND v.vector @@ q.tq
+        ${typeFilter.clause}
+      ORDER BY score DESC
+      LIMIT ${limit}
+    `;
+
+    const params: (string | string[])[] = [
+      context.userId,
+      groups.map((group) => group.text),
+      groups.map((group) => group.kind),
+    ];
+
+    if (typeFilter.param) {
+      params.push(typeFilter.param);
+    }
+
+    const rows: (ScoredRowResult & { total_matches: string })[] = await this.dataSource.query(sql, params);
+
+    // `count(*) OVER ()` is evaluated after WHERE and before LIMIT, so it is the
+    // TRUE size of the match set, not the truncated page. Every row carries the
+    // same value; zero rows means zero matches.
+    const totalMatches = rows.length > 0 ? Number(rows[0].total_matches) : 0;
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search_prompt',
+      modeTaken: 'prompt',
+      queryTokenCount: queryTokenCount(prompt),
+      includeTypes: resolvedOptions.includeTypes ?? null,
+      excludeTypes: resolvedOptions.excludeTypes ?? null,
+      // The PAGE size, not `totalMatches`: every other caller records what it
+      // handed back, and a zero_result rate computed over a mixture of the two
+      // would mean nothing.
+      resultCount: rows.length,
+      topScore: rows.length > 0 ? Number(rows[0].score) : null,
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return {
+      items: rows.map((row) => ({
+        id: row.entity_id,
+        type: row.entity_type as IndexableEntity,
+      })),
+      totalMatches,
+      truncated: totalMatches > rows.length,
+      limit,
+    };
   }
 
   /**
@@ -148,6 +530,7 @@ export class SearchService {
     maxResults = MESSAGE_DEFAULT_K,
     distanceFloor = MESSAGE_DISTANCE_FLOOR,
   ): Promise<{ id: string; score: number }[]> {
+    const startedAt = Date.now();
     const vector = await this.embeddingGenerationService.generateEmbeddingString(query);
 
     // ORDER BY the raw distance operator (ascending) — NOT `1 - (embedding <=> $2)
@@ -171,10 +554,206 @@ export class SearchService {
 
     const rows = await this.dataSource.query(sql, [context.userId, vector, distanceFloor]);
 
-    return rows.map((row: { entity_id: string; score: string }) => ({
+    const hits = rows.map((row: { entity_id: string; score: string }) => ({
       id: row.entity_id,
       score: parseFloat(row.score),
     }));
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search_messages',
+      modeTaken: 'semantic',
+      queryTokenCount: queryTokenCount(query),
+      // This channel is 'message' BY CONSTRUCTION (the predicate is in the SQL,
+      // not in an option), which is precisely why it is recorded as an include:
+      // it is the one retrieval path that reads the type every other path
+      // excludes by default, so a reader comparing its zero-result rate against
+      // `search`'s is comparing two different corpora.
+      includeTypes: ['message'],
+      excludeTypes: null,
+      resultCount: hits.length,
+      topScore: topScoreOf(hits),
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return hits;
+  }
+
+  /**
+   * Lexical retrieval for a natural-language QUESTION, anchored on the one word
+   * in it that is actually selective against this user's corpus, and ordered by
+   * how close each match is to the question as a whole.
+   *
+   * ═══ WHY NOT `mode: 'boosted'` ═══
+   *
+   * `boostedKeywordSearch` OR-joins every term in the question and ranks by
+   * `ts_rank`, with the embedding only as a ≤1.5× multiplier. Both halves of
+   * that fail on a question:
+   *
+   *   1. OR with nothing that has to be true. "What city do you live in?" becomes
+   *      `citi | live`, and a corpus holding 3,848 rows with 'city' and 8,302
+   *      with 'live' answers it with Suffragette City, Midnight City and
+   *      "Tessellate — Live from Spotify Sessions, New York City". Measured, on
+   *      the reference corpus: the entire top-8 was song titles.
+   *   2. `ts_rank` with no length normalisation rewards REPETITION. A 6,000-char
+   *      browser row whose AI-overview body says "follow" nine times outranks a
+   *      title that says "Sports" once at weight A — which is how "What sports do
+   *      you follow?" retrieved a git-login page, an Ubuntu upgrade guide and RC
+   *      monster-truck shopping.
+   *
+   * This method fixes both. It picks a single ANCHOR — the lowest-document-
+   * frequency lexeme in the question, and only if it clears
+   * {@link ANCHOR_MAX_MATCHES} — so a row must carry the word that makes the
+   * question specific ('cuisin', 'sport', 'languag') rather than the words the
+   * archive is full of. Then it orders the (by construction small) match set by
+   * embedding distance to the WHOLE question, so length bias cannot rank a
+   * body-text mention over a title.
+   *
+   * A question with no selective term returns NOTHING, deliberately. "What city
+   * do you live in?" has no keyword worth searching this corpus on, and an empty
+   * lexical channel is the honest result — the caller's semantic channel is what
+   * should answer it.
+   *
+   * Rows with no embedding sort last rather than being dropped: they still
+   * matched the anchor, so they are worse evidence than a scored row, not
+   * non-evidence.
+   */
+  async searchAnchored(
+    context: UserServiceContext,
+    question: string,
+    options: AnchoredSearchOptions = {},
+  ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    const { maxResults = 25, maxAnchorMatches = ANCHOR_MAX_MATCHES } = options;
+    const limit = Math.max(1, Math.trunc(maxResults));
+    const startedAt = Date.now();
+
+    const anchor = await this.findAnchorLexeme(context, question, maxAnchorMatches);
+
+    if (!anchor) {
+      // "No term in the question is selective enough to anchor on" is the
+      // deliberate empty answer this method documents. It still has to be
+      // COUNTED, or the anchored channel's zero-result rate is measured only
+      // over the calls that got as far as running a query.
+      this.recordQuery({
+        userId: context.userId,
+        caller: 'search_anchored',
+        modeTaken: 'no_anchor',
+        queryTokenCount: queryTokenCount(question),
+        includeTypes: options.includeTypes ?? null,
+        excludeTypes: options.excludeTypes ?? null,
+        resultCount: 0,
+        topScore: null,
+        latencyMs: Date.now() - startedAt,
+      });
+
+      return [];
+    }
+
+    const vector = await this.embeddingGenerationService.generateEmbeddingString(question);
+    const typeFilter = this.buildTypeFilter(options, 4, 'v');
+
+    // `plainto_tsquery('simple', $2)` — 'simple', not 'english', because $2 is
+    // already a lexeme that Postgres's english stemmer produced ('cuisin', not
+    // 'cuisine'), and re-stemming a stem is not guaranteed to be a fixed point.
+    // Passing it as a BIND PARAMETER and letting Postgres build the tsquery is
+    // also what keeps this injection-free: no lexeme text is ever concatenated
+    // into the statement.
+    const sql = `
+      WITH q AS (
+        SELECT plainto_tsquery('simple', $2) AS tq
+      )
+      SELECT
+        v.entity_id,
+        v.entity_type
+      FROM
+        ci_search.vectors v
+        CROSS JOIN q
+      LEFT JOIN ci_search.embeddings e
+        ON e.entity_type = v.entity_type
+        AND e.entity_id = v.entity_id
+        AND e.user_id = $1
+        AND e.embedding IS NOT NULL
+      WHERE v.user_id = $1
+        AND q.tq <> ''::tsquery
+        AND v.vector @@ q.tq
+        ${typeFilter.clause}
+      ORDER BY (e.embedding <=> $3::vector) ASC NULLS LAST
+      LIMIT ${limit}
+    `;
+
+    const params: (string | string[])[] = [context.userId, anchor, vector];
+
+    if (typeFilter.param) {
+      params.push(typeFilter.param);
+    }
+
+    const rows: Omit<ScoredRowResult, 'score'>[] = await this.dataSource.query(sql, params);
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search_anchored',
+      modeTaken: 'anchored',
+      queryTokenCount: queryTokenCount(question),
+      includeTypes: options.includeTypes ?? null,
+      excludeTypes: options.excludeTypes ?? null,
+      resultCount: rows.length,
+      // This statement selects no score at all — it orders by embedding
+      // distance and returns identifiers — so there is no top score to claim.
+      topScore: null,
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return rows.map((row) => ({
+      id: row.entity_id,
+      type: row.entity_type as IndexableEntity,
+    }));
+  }
+
+  /**
+   * The rarest word in `question` that still clears `maxMatches`, or null.
+   *
+   * The count is BOUNDED — `LIMIT maxMatches` inside the subquery — so this
+   * costs O(maxMatches) index probes per term regardless of how many rows
+   * actually carry the word. A true `count(*)` for 'live' would walk 8,302 rows
+   * to learn something the first 1,001 already settled.
+   */
+  private async findAnchorLexeme(
+    context: UserServiceContext,
+    question: string,
+    maxMatches: number,
+  ): Promise<string | null> {
+    const cap = Math.max(1, Math.trunc(maxMatches)) + 1;
+
+    const rows: { lexeme: string; df: string }[] = await this.dataSource.query(
+      `
+        WITH lexemes AS (
+          SELECT DISTINCT l AS lexeme
+          FROM unnest(tsvector_to_array(to_tsvector('english', $2))) AS l
+        )
+        SELECT
+          lx.lexeme,
+          (
+            SELECT count(*) FROM (
+              SELECT 1
+              FROM ci_search.vectors v
+              WHERE v.user_id = $1
+                AND v.vector @@ plainto_tsquery('simple', lx.lexeme)
+              LIMIT $3
+            ) capped
+          ) AS df
+        FROM lexemes lx
+      `,
+      [context.userId, question, cap],
+    );
+
+    const eligible = rows
+      .map((row) => ({ lexeme: row.lexeme, df: Number(row.df) }))
+      // df === 0 means the word is nowhere in the corpus: anchoring on it
+      // returns nothing, so it is not an anchor, it is a dead end.
+      .filter((row) => row.df > 0 && row.df <= maxMatches)
+      .sort((a, b) => a.df - b.df);
+
+    return eligible[0]?.lexeme ?? null;
   }
 
   private applyDefaultTypeExclusions(options: SearchOptions): SearchOptions {
@@ -194,37 +773,6 @@ export class SearchService {
   }
 
   /**
-   * Automatically selects the best search strategy based on query characteristics.
-   *
-   * - Short queries (≤3 words) or special chars: keyword only (fast, no embedding call)
-   * - Medium queries (4-7 words): boosted keyword (embedding call for relevance boost)
-   * - Long queries (≥8 words): semantic only (conceptual/natural language)
-   */
-  private async autoSearch(
-    context: UserServiceContext,
-    options: SearchOptions,
-  ): Promise<ScoredSearchResult[]> {
-    const { query } = options;
-
-    // Auto-detect search strategy based on query characteristics
-    const wordCount = query.trim().split(/\s+/).length;
-    const hasSpecialChars = /[@.:\-_]/.test(query);
-
-    // Short queries or those with special characters (emails, IDs) → keyword only (fast)
-    if (wordCount <= 3 || hasSpecialChars) {
-      return this.keywordSearch(context, options);
-    }
-
-    // Long natural language queries → semantic (conceptual matching)
-    if (wordCount >= 8) {
-      return this.semanticSearch(context, options);
-    }
-
-    // Medium length queries → boosted keyword (best balance of speed and relevance)
-    return this.boostedKeywordSearch(context, options);
-  }
-
-  /**
    * Hybrid search combining semantic and keyword results with score fusion.
    * Uses normalized score weighting instead of RRF for better score preservation.
    *
@@ -237,6 +785,21 @@ export class SearchService {
   ): Promise<ScoredSearchResult[]> {
     const { maxResults = 25 } = options;
 
+    // Over-fetch so fusion has something to fuse: a row that ranks 30th on the
+    // semantic side and 5th on the keyword side has to be present in BOTH lists
+    // for the 50/50 average to see it at all.
+    //
+    // At the default `maxResults` of 25 this asks the semantic leg for 50 rows.
+    // That is more than {@link HNSW_DEFAULT_EF_SEARCH}, so before this was
+    // derived the leg could not fill its own LIMIT under ANY conditions — not
+    // "under a selective filter", but with no filter at all, because the index
+    // only ever produced 40 candidates. `semanticSearch` now widens the
+    // candidate list to match whatever it is asked for (see
+    // {@link runSemanticPlan}), so the two numbers agree by construction rather
+    // than by two independent constants happening to line up.
+    //
+    // The keyword leg needs no such treatment: `ci_search.vectors` is a GIN
+    // full-text scan with no candidate-list budget.
     const doubledMaxResults = maxResults * 2;
 
     // Run both semantic and keyword searches in parallel
@@ -306,17 +869,37 @@ export class SearchService {
     return fusedResults.sort((a, b) => b.score - a.score).slice(0, maxResults);
   }
 
-  private async semanticSearch(
-    context: UserServiceContext,
-    options: SearchOptions,
-  ): Promise<ScoredSearchResult[]> {
-    const { query, maxResults = 25 } = options;
+  /**
+   * The semantic statement, as data, so something other than a search can run
+   * exactly what a search runs.
+   *
+   * `RecallProbeCron` measures this query against an exact answer, and a probe
+   * that measured a COPY of the SQL would measure the copy. Building the plan
+   * here — one function, used by {@link semanticSearch} itself — is what makes
+   * "the probe ran the production query" true by construction rather than by
+   * two strings agreeing today.
+   *
+   * Deliberately SYNCHRONOUS, and therefore policy-free: `semanticSearch`
+   * resolves `ci.retrieval_policy` and passes the resulting `maxResults` /
+   * `distanceThreshold` in through `scope`. The fallbacks below are the
+   * compiled-in baseline, which is what a caller supplying its own scope (the
+   * recall probe, which fixes k at `PROBE_K`) gets — see the follow-up note in
+   * the PR: if a v2 changes `semanticMaxResults`, the probe still measures at
+   * the baseline k until it is taught to read the policy too.
+   *
+   * @param vector the query embedding, already in pgvector's text form (the
+   *   same shape `EmbeddingGenerationService.generateEmbeddingString` returns);
+   *   passed as a bind parameter exactly as production does, because the
+   *   planner's use of the HNSW index depends on that placement.
+   */
+  buildSemanticSearchPlan(
+    userId: string,
+    vector: string,
+    scope: SemanticSearchScope = {},
+  ): SemanticSearchPlan {
+    const { maxResults = SEMANTIC_MAX_RESULTS, distanceThreshold = SEMANTIC_DISTANCE_THRESHOLD } = scope;
 
-    const vector = await this.embeddingGenerationService.generateEmbeddingString(query);
-
-    const distanceThreshold = 0.5;
-
-    const typeFilter = this.buildTypeFilter(options, 4);
+    const typeFilter = this.buildTypeFilter(scope, 4);
 
     // Cosine distance (<=>), NOT L2 (<->): embeddings are unnormalised, so the
     // L2 distance is ~22 and never < 0.5 — the threshold made semantic search
@@ -326,6 +909,11 @@ export class SearchService {
     // HNSW index serves the KNN; `embedding IS NOT NULL` matches its partial predicate.
     // Nearest-first == highest-similarity-first, so results are unchanged but the query
     // uses the index instead of a full Seq Scan + Sort at corpus scale.
+    //
+    // `user_id` and the type filter sit OUTSIDE the ordering, so the index
+    // returns its nearest neighbours across every user and type and these
+    // predicates then discard some of them — which is why a filtered query can
+    // come back short of its LIMIT, and why the recall probe exists.
     const sql = `
       SELECT
         entity_id,
@@ -341,19 +929,94 @@ export class SearchService {
       LIMIT ${maxResults}
     `;
 
-    const params: (number | string | string[])[] = [context.userId, vector, distanceThreshold];
+    const params: (number | string | string[])[] = [userId, vector, distanceThreshold];
 
     if (typeFilter.param) {
       params.push(typeFilter.param);
     }
 
-    const results = await this.dataSource.query(sql, params);
+    return { sql, params, maxResults };
+  }
+
+  private async semanticSearch(
+    context: UserServiceContext,
+    options: SearchOptions,
+  ): Promise<ScoredSearchResult[]> {
+    const vector = await this.embeddingGenerationService.generateEmbeddingString(options.query);
+    const policy = await this.retrievalPolicy.get();
+
+    // An explicit caller scope still wins — `groundedSeeds` passes a tighter
+    // distance threshold on purpose, and the policy is the DEFAULT, not a cap.
+    // Resolving the defaults here rather than inside `buildSemanticSearchPlan`
+    // keeps that method synchronous, which is what lets `RecallProbeService`
+    // measure the production statement without a policy read of its own.
+    const plan = this.buildSemanticSearchPlan(context.userId, vector, {
+      ...options,
+      maxResults: options.maxResults ?? policy.semanticMaxResults,
+      distanceThreshold: options.distanceThreshold ?? policy.semanticDistanceThreshold,
+    });
+
+    const results = await this.runSemanticPlan(plan);
 
     return results.map((row: ScoredRowResult) => ({
       id: row.entity_id,
       type: row.entity_type as IndexableEntity,
       score: parseFloat(row.score),
     }));
+  }
+
+  /**
+   * Run a semantic plan on a connection whose HNSW candidate list is at least
+   * as wide as the plan's own `LIMIT`.
+   *
+   * The plan's SQL is untouched — {@link buildSemanticSearchPlan} stays the one
+   * statement `RecallProbeService` measures — and so is the fast path: a request
+   * the default budget can already satisfy (k <= {@link HNSW_DEFAULT_EF_SEARCH},
+   * which is every default-`maxResults` search in the codebase) runs on the pool
+   * exactly as before, with no transaction and no `SET`.
+   *
+   * A request that CANNOT be satisfied gets its own transaction and a `SET
+   * LOCAL`. `LOCAL`, never a session or global `SET`: the pool hands this
+   * connection to the next query the moment it is released, and a leaked
+   * `hnsw.ef_search` would silently re-tune every unrelated vector query that
+   * borrowed it afterwards. Bounded by {@link requiredEfSearch} to an integer in
+   * [40, 1000] before it reaches the statement, because `SET` takes no bind
+   * parameters and this value is interpolated.
+   *
+   * The HNSW index scan is preserved exactly: `ef_search` widens the candidate
+   * list the scan walks, it does not change the plan. `ORDER BY embedding <=> $2
+   * ASC LIMIT k` against a pseudoconstant is still the only shape the index can
+   * serve, and nothing here touches it.
+   */
+  private async runSemanticPlan(plan: SemanticSearchPlan): Promise<ScoredRowResult[]> {
+    const efSearch = requiredEfSearch(plan.maxResults);
+
+    if (efSearch <= HNSW_DEFAULT_EF_SEARCH) {
+      return this.dataSource.query(plan.sql, plan.params);
+    }
+
+    const runner = this.dataSource.createQueryRunner();
+
+    try {
+      await runner.connect();
+      await runner.startTransaction();
+
+      try {
+        await runner.query(`SET LOCAL hnsw.ef_search = ${efSearch}`);
+
+        const rows = await runner.query(plan.sql, plan.params);
+
+        await runner.commitTransaction();
+
+        return rows;
+      } catch (error) {
+        await runner.rollbackTransaction();
+
+        throw error;
+      }
+    } finally {
+      await runner.release();
+    }
   }
 
   private async keywordSearch(
@@ -363,6 +1026,7 @@ export class SearchService {
     const { query, maxResults = 25 } = options;
 
     const typeFilter = this.buildTypeFilter(options, 3);
+    const { weights } = await this.rankingLiterals();
 
     // Same OR-rewriting as boostedKeywordSearch: turn the AND-joined tsquery
     // from websearch_to_tsquery into an OR-joined one so a 2-3 word query like
@@ -377,7 +1041,7 @@ export class SearchService {
       SELECT
         entity_id,
         entity_type,
-        ts_rank('${TS_RANK_WEIGHTS}', vector, q.tq) as score
+        ts_rank('${weights}', vector, q.tq) as score
       FROM
         ci_search.vectors
         CROSS JOIN q
@@ -409,7 +1073,8 @@ export class SearchService {
    * Requires keyword match (precision) but uses embedding similarity to boost relevance.
    * This combines the best of both worlds in a single query.
    *
-   * Score formula: keyword_score * (1 + EMBEDDING_BOOST_FACTOR * embedding_similarity)
+   * Score formula: keyword_score * (1 + embeddingBoostFactor * embedding_similarity),
+   * where the boost comes from the retrieval policy (baseline 0.5).
    */
   private async boostedKeywordSearch(
     context: UserServiceContext,
@@ -422,6 +1087,7 @@ export class SearchService {
 
     // Use 'v' table alias since we're joining vectors and embeddings
     const typeFilter = this.buildTypeFilter(options, 4, 'v');
+    const { weights, boost } = await this.rankingLiterals();
 
     // The natural-language questions we get from clients ("Where does Jordan
     // live?") are routed here, but `websearch_to_tsquery` builds an AND-joined
@@ -439,8 +1105,8 @@ export class SearchService {
       SELECT
         v.entity_id,
         v.entity_type,
-        ts_rank('${TS_RANK_WEIGHTS}', v.vector, q.tq)
-          * (1 + ${EMBEDDING_BOOST_FACTOR} * COALESCE(1 - (e.embedding <=> $3::vector), 0)) as score
+        ts_rank('${weights}', v.vector, q.tq)
+          * (1 + ${boost} * COALESCE(1 - (e.embedding <=> $3::vector), 0)) as score
       FROM
         ci_search.vectors v
         CROSS JOIN q
@@ -472,7 +1138,7 @@ export class SearchService {
   }
 
   private buildTypeFilter(
-    options: SearchOptions,
+    options: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
     paramOffset: number,
     tableAlias?: string,
   ): { clause: string; param: string[] | null } {
@@ -501,4 +1167,51 @@ export class SearchService {
 
 function makeCompositeKey(type: IndexableEntity, id: string): string {
   return `${type}:${id}`;
+}
+
+/**
+ * Which strategy `mode: 'auto'` picks for a query. Unchanged rules, lifted out
+ * of the private `autoSearch` it used to live inside so that
+ * {@link SearchService.search} can name the mode it is about to run — the
+ * dispatcher needs the DECISION, not just its effect, in order to record it.
+ *
+ * - Short queries (≤3 words) or special chars: keyword only (fast, no embedding call)
+ * - Medium queries (4-7 words): boosted keyword (embedding call for relevance boost)
+ * - Long queries (≥8 words): semantic only (conceptual/natural language)
+ */
+export function resolveAutoMode(query: string): 'keyword' | 'boosted' | 'semantic' {
+  const wordCount = query.trim().split(/\s+/).length;
+  const hasSpecialChars = /[@.:\-_]/.test(query);
+
+  // Short queries or those with special characters (emails, IDs) → keyword only (fast)
+  if (wordCount <= 3 || hasSpecialChars) {
+    return 'keyword';
+  }
+
+  // Long natural language queries → semantic (conceptual matching)
+  if (wordCount >= 8) {
+    return 'semantic';
+  }
+
+  // Medium length queries → boosted keyword (best balance of speed and relevance)
+  return 'boosted';
+}
+
+/**
+ * Highest score in a result set, or null when there is none to report.
+ *
+ * A max rather than `results[0]`: every ranked path here already returns its
+ * best row first, but a log column that quietly assumes that would start lying
+ * the day a caller re-orders a result set before it is recorded.
+ */
+function topScoreOf(results: { score: number }[]): number | null {
+  let top: number | null = null;
+
+  for (const result of results) {
+    if (Number.isFinite(result.score) && (top === null || result.score > top)) {
+      top = result.score;
+    }
+  }
+
+  return top;
 }

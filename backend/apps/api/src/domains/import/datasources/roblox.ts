@@ -52,14 +52,19 @@ function findDate(rec: Record<string, unknown>): Date | undefined {
 
 // Classify by filename heuristic (Roblox's format is undocumented, so this is
 // best-effort): chat/message files → 'message', purchase/billing files →
-// 'purchase' (so they reach inventory, not social.post), everything else
+// 'purchase' (so they reach ci.objects, not social.post), everything else
 // → 'social'.
-function classify(file: string): string {
-  if (/chat|message|conversation/i.test(file)) {
+//
+// Takes the BASENAME only. Matching the full path lets any ancestor directory
+// the user happened to name — an inbox folder, a Downloads subfolder, the
+// checkout this runs from — decide the classification for every row in the
+// export.
+function classify(basename: string): string {
+  if (/chat|message|conversation/i.test(basename)) {
     return 'message';
   }
 
-  if (/purchase|transaction|order|payment|billing/i.test(file)) {
+  if (/purchase|transaction|order|payment|billing/i.test(basename)) {
     return 'purchase';
   }
 
@@ -290,7 +295,7 @@ export class RobloxFileImporter implements FileImporter {
     params.pipeline.push({
       item: {
         id: `roblox:${rowKey}`,
-        classification: classify(fpath),
+        classification: classify(path.basename(fpath)),
         timestamp: ts,
         content: { filename: 'roblox.txt', mediaType: 'text/plain', data: async () => Buffer.from(summary) },
         metadata,

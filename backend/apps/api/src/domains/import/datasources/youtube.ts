@@ -1,12 +1,13 @@
 /* YouTube — watch + search history from Google Takeout.
  * Supports both the legacy JSON export (watch-history.json) and the modern
  * Google MyActivity HTML export (watch-history.html / search-history.html). */
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { parseActivityCell, sha1, watchTitle, youtubeActivityGraph } from './_youtube_activity';
 import { parseCSV } from './csv';
+import { matchingDivCloseIndex } from './htmlBlocks';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph } from './timeline';
@@ -38,53 +39,13 @@ function subscriptionsHeaderMatches(text: string): boolean {
   return header.includes('Channel Id') && header.includes('Channel Url') && header.includes('Channel Title');
 }
 
-// Google MyActivity exports separate each entry with this cell container.
-const ENTRY_RE =
-  /<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">([\s\S]*?)<\/div>/g;
-const ANCHOR_RE = /<a [^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
-
-// Removed/private videos carry no title (video.text === video.url in the HTML
-// path, or a blank e.title in the JSON path). Leaving metadata.Title undefined
-// there made the title-derivation fall back to content.filename — the literal,
-// uninformative "watch.txt" for every such row. Fall back to something that
-// actually identifies the video instead.
-function watchTitle(title: string, channel: string, url: string): string | undefined {
-  return title || channel || url || undefined;
-}
-
-function sha1(s: string): string {
-  return crypto.createHash('sha1').update(s).digest('hex');
-}
-
-// Minimal HTML-entity decode for the few entities MyActivity emits.
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&emsp;/g, ' ');
-}
-
-// Google writes the timestamp with a narrow no-break space (U+202F) and a
-// trailing TZ abbreviation (e.g. "Jun 18, 2026, 7:30:56 PM PDT"). Normalise the
-// exotic spaces; V8's Date parser understands the rest including the TZ.
-function parseActivityDate(raw: string | undefined): Date | undefined {
-  if (!raw) {
-    return undefined;
-  }
-
-  const norm = raw.replace(/[\u202F\u00A0]/g, ' ').trim();
-  if (!norm) {
-    return undefined;
-  }
-
-  const d = new Date(norm);
-
-  return isNaN(d.getTime()) ? undefined : d;
-}
+// Google MyActivity exports separate each entry with this cell container,
+// matched by its OPENING tag only — the close comes from
+// matchingDivCloseIndex (./htmlBlocks), not a non-greedy `[\s\S]*?<\/div>`:
+// some product types nest a thumbnail/icon div inside the cell, and a
+// non-greedy match stops at THAT close and truncates the entry (see
+// google_my_activity.ts, which shares this exact cell shape and history).
+const ENTRY_OPEN_RE = /<div class="content-cell mdl-cell mdl-cell--6-col mdl-typography--body-1">/g;
 
 export class YouTubeFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
@@ -258,100 +219,23 @@ export class YouTubeFileImporter implements FileImporter {
     const isSearch = base.startsWith('search');
     let index = 0;
     let m: RegExpExecArray | null;
-    ENTRY_RE.lastIndex = 0;
-    while ((m = ENTRY_RE.exec(raw)) !== null) {
-      const cell = m[1];
-      // The action verb ("Watched", "Searched for") precedes the first anchor.
-      const verbMatch = /^([\s\S]*?)<a /.exec(cell);
-      const verb = verbMatch
-        ? decodeEntities(verbMatch[1].replace(/<[^>]*>/g, ''))
-            .replace(/[\u202F\u00A0]/g, ' ')
-            .trim()
-        : '';
-
-      const anchors: Array<{ url: string; text: string }> = [];
-      ANCHOR_RE.lastIndex = 0;
-      let a: RegExpExecArray | null;
-      while ((a = ANCHOR_RE.exec(cell)) !== null) {
-        anchors.push({
-          url: decodeEntities(a[1]),
-          text: decodeEntities(a[2].replace(/<[^>]*>/g, '')).trim(),
-        });
-      }
-
-      if (!anchors.length) {
+    ENTRY_OPEN_RE.lastIndex = 0;
+    while ((m = ENTRY_OPEN_RE.exec(raw)) !== null) {
+      const start = m.index + m[0].length;
+      const end = matchingDivCloseIndex(raw, start);
+      // Resume scanning AFTER the cell, not from the regex's own default
+      // (right after the opening tag): a cell that nests another div must not
+      // be re-entered and its content double-counted.
+      ENTRY_OPEN_RE.lastIndex = end;
+      const cell = parseActivityCell(raw.slice(start, end));
+      if (!cell.anchors.length || !timeframeContains(params.timeframe, cell.ts)) {
         continue;
       }
 
-      // The timestamp is the trailing text node after the last <br>.
-      const tail = cell.replace(/<[^>]*>/g, '\n');
-      const lines = tail
-        .split('\n')
-        .map((l) =>
-          decodeEntities(l)
-            .replace(/[\u202F\u00A0]/g, ' ')
-            .trim(),
-        )
-        .filter(Boolean);
-      const ts = parseActivityDate(lines[lines.length - 1]);
-      if (!timeframeContains(params.timeframe, ts)) {
-        continue;
+      const g = youtubeActivityGraph(cell, { index: index++, isSearch });
+      if (g) {
+        params.pipeline.push(g);
       }
-
-      const i = index++;
-
-      if (isSearch || /^Searched/i.test(verb)) {
-        const query = anchors[0].text;
-        const url = anchors[0].url;
-        const id = 'youtube:' + (url || ts ? sha1(`${url} ${ts?.toISOString() ?? ''}`) : String(i));
-        params.pipeline.push({
-          item: {
-            id,
-            classification: 'search',
-            timestamp: ts,
-            content: {
-              filename: 'search.txt',
-              mediaType: 'text/plain',
-              data: async () => Buffer.from(query),
-            },
-            metadata: {
-              Title: query || undefined,
-              Text: query || undefined,
-              Query: query || undefined,
-              URL: url || undefined,
-              Kind: 'search',
-              Source: 'YouTube',
-            },
-          },
-        } as Graph);
-        continue;
-      }
-
-      // Watch entry: first anchor is the video (title may equal the URL for
-      // removed/private videos); a second anchor, when present, is the channel.
-      const video = anchors[0];
-      const channel = anchors[1];
-      const title = video.text && video.text !== video.url ? video.text : '';
-      const url = video.url;
-      const id = 'youtube:' + (url || ts ? sha1(`${url} ${ts?.toISOString() ?? ''}`) : String(i));
-      params.pipeline.push({
-        item: {
-          id,
-          classification: 'watch',
-          timestamp: ts,
-          content: {
-            filename: 'watch.txt',
-            mediaType: 'text/plain',
-            data: async () => Buffer.from(url || title),
-          },
-          metadata: {
-            Title: watchTitle(title, channel?.text ?? '', url),
-            URL: url || undefined,
-            Channel: channel?.text || undefined,
-            Source: 'YouTube',
-          },
-        },
-      } as Graph);
     }
   }
 

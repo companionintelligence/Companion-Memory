@@ -6,10 +6,10 @@ import { Sheet, Tabs } from '@ci/shadcn';
 import { Images, List, Map as MapIcon, Share2, type LucideIcon } from '@ci/shadcn/icons';
 import { useParams } from 'react-router-dom';
 
+import { ErrorState } from '@/components/ErrorState';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
 
-import { ErrorState } from '../MemoryPage/Components';
 import { EntityDetails } from '../MemoryPage/Components/EntityDetails';
 import { GalleryView } from '../MemoryPage/GalleryView';
 import { ListView } from '../MemoryPage/ListView';

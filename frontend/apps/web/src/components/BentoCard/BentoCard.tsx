@@ -101,14 +101,7 @@ export function BentoCard({
         {unseenIndicator}
         {imageUrl ? (
           <img src={imageUrl} alt="" className="h-14 w-14 shrink-0 rounded-md object-cover bg-muted" />
-        ) : (
-          <div
-            aria-hidden
-            className="flex h-14 w-14 shrink-0 items-center justify-center rounded-md bg-muted px-1 text-center text-[10px] font-medium leading-tight text-muted-foreground"
-          >
-            {tags[0] ?? ''}
-          </div>
-        )}
+        ) : null}
 
         <div className="min-w-0 flex-1">
           <h3 className="line-clamp-1 text-base font-semibold leading-snug text-foreground">{title}</h3>

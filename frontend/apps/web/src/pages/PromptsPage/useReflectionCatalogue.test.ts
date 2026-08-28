@@ -11,6 +11,7 @@ vi.mock('@/hooks', () => ({
 function entry(overrides: Partial<CatalogueEntry> = {}): CatalogueEntry {
   return {
     id: 'q1',
+    key: null,
     text: 'What foods are you allergic to?',
     category: 'Health & Body',
     answerTier: 'factual',

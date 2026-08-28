@@ -7,10 +7,12 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import { useActionListService } from '@/api';
 import { useFeatures } from '@/common/feature';
+import { ChatAbout } from '@/components/ChatWithAgent';
 import { PageContent } from '@/components/layout';
 import { Markdown } from '@/components/Markdown';
 import { type FragmentType } from '@/graphql';
 import { useModalControls } from '@/hooks';
+import { namedChatContext } from '@/lib/agentChat';
 
 import { BentoCard } from '../../components/BentoCard';
 import { Carousel } from '../../components/Carousel';
@@ -30,7 +32,7 @@ const MAX_INSIGHT_SUMMARY_CARDS = 20;
 
 export interface FeedPageProps {
   /**
-   * Rendered inside a host page (Today) that already owns the document title
+   * Rendered inside a host page (Calendar) that already owns the document title
    * and the page frame. PageContent is the page's scroll container
    * (`w-full h-full overflow-auto`), so nesting a second one gives the screen
    * two scrollbars and two sets of padding.
@@ -53,10 +55,10 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
    * Where this brief lives, so its own links stay inside it.
    *
    * The cards deep-link by action id and the modal writes that id into the URL.
-   * Embedded in Today those have to address /today, or opening a card would
-   * navigate you off the page you opened it from.
+   * Embedded in Calendar those have to address /calendar, or opening a card
+   * would navigate you off the page you opened it from.
    */
-  const basePath = embedded ? '/today' : '/brief';
+  const basePath = embedded ? '/calendar' : '/brief';
 
   // Embedded, the host owns the frame; this keeps the column gap PageContent
   // would have supplied, and none of its padding, height or scrolling. No
@@ -232,6 +234,12 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
   }, [question, visibleActions]);
   const isActionsRowEmpty = actionCards.length === 0;
   const isInsightsRowEmpty = mixedInsightSummaryCards.length === 0;
+  // Suppressed on error ON PURPOSE: "You've seen everything for now" is a claim
+  // about the owner's data, and a failed query is not evidence for it. The
+  // banner above the row carries the reason instead — which is why that banner
+  // had to stop promising preview cards that `useSummariesService` never
+  // returns (it is `|| []`, with no fallback of any kind), since between the
+  // two the region said "placeholders are shown" over nothing at all.
   const showInsightsRowEmptyState = isInsightsRowEmpty && !summariesLoading && !summariesError;
   const showMobileEmptyState = isActionsRowEmpty && showInsightsRowEmptyState;
 
@@ -339,8 +347,16 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
           onSubmit={handleQuestionSubmit}
         />
       ) : (
-        <BentoCard
+        <ChatAbout
           key={card.id}
+          context={namedChatContext({
+            title: card.action.title,
+            body: card.action.text,
+            sourceKind: 'action',
+            sourceId: card.action.id,
+          })}
+        >
+        <BentoCard
           title={card.action.title}
           description={
             <div className="prose dark:prose-invert">
@@ -354,6 +370,7 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
           dismissLabel={t('FEED_CARD_DISMISS_ACTION')}
           showUnseenIndicator={!card.action.seen}
         />
+        </ChatAbout>
       ),
     );
 
@@ -399,8 +416,9 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
               <section className="flex flex-col gap-2">
                 <h2 className="text-lg font-semibold tracking-tight text-foreground">Insights & Summaries</h2>
                 {summariesError && (
-                  <p className="text-sm text-muted-foreground">
-                    We could not load live insights. Preview cards are shown until the service recovers.
+                  <p className="text-sm text-destructive" role="alert">
+                    Insights could not be loaded just now — this is a connection problem, not an empty
+                    Companion.
                   </p>
                 )}
                 {showInsightsRowEmptyState ? (
@@ -415,14 +433,11 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
           )}
         </Frame>
 
-        {/* Outside the frame, as the desktop exit already does it.
-          On mobile FeedModal is an InlineModal — `absolute inset-0` — so it
-          fills its nearest positioned ancestor. Inside the frame that ancestor
-          is the frame, which is only as tall as the brief's own content, so an
-          action card would open into a box partway down the page instead of
-          over it. Outside, it resolves to the host: Today's PageContent when
-          embedded, or the layout's `relative` <main> when this page stands on
-          its own. */}
+        {/* Outside the frame, as the desktop exit already does it. On mobile
+          FeedModal portals into the layout `content-modal` on `<main>` so it
+          fills the visible content area instead of the scrolled PageContent
+          origin — opening a card mid-page used to paint the chat at the top of
+          the document, out of view. */}
         {isModalOpen && <FeedModal onClose={handleModalClose} />}
       </>
     );
@@ -463,8 +478,16 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
                       className="hover:shadow-lg transition-shadow duration-200"
                     />
                   ) : (
-                    <BentoCard
+                    <ChatAbout
                       key={card.id}
+                      context={namedChatContext({
+                        title: card.action.title,
+                        body: card.action.text,
+                        sourceKind: 'action',
+                        sourceId: card.action.id,
+                      })}
+                    >
+                    <BentoCard
                       title={card.action.title}
                       description={
                         <div className="prose dark:prose-invert">
@@ -479,6 +502,7 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
                       showUnseenIndicator={!card.action.seen}
                       className="hover:shadow-lg transition-shadow duration-200"
                     />
+                    </ChatAbout>
                   ),
                 )}
               </Carousel>
@@ -490,8 +514,8 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
 
         <div className="space-y-2">
           {summariesError && (
-            <div className="text-sm text-destructive">
-              We could not load live insights. Preview cards are shown until the service recovers.
+            <div className="text-sm text-destructive" role="alert">
+              Insights could not be loaded just now — this is a connection problem, not an empty Companion.
             </div>
           )}
 

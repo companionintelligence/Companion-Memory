@@ -6,10 +6,39 @@ import path from 'node:path';
 import { parseCSV } from './csv';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams } from './timeline';
+import type { ImportParams, ObjectIdentifierRef } from './timeline';
 import { timeframeContains } from './timeline';
 
 const GOODREADS_FILENAME = 'goodreads_library_export.csv';
+
+/**
+ * The ISBN identifiers a Goodreads row states, in the shape
+ * `CanonicalRecord.identifiers` is built from.
+ *
+ * Goodreads writes both columns as `="9780306406157"` (an Excel text-armour
+ * idiom); the shared normalizer's non-digit strip handles that, so the raw cell
+ * can be passed through. ISBN-13 first because it needs no upconversion. A row
+ * with neither — Goodreads leaves both blank for many editions — mints nothing.
+ */
+export function isbnIdentifiers(
+  isbn13: string | undefined,
+  isbn10: string | undefined,
+): ObjectIdentifierRef[] | undefined {
+  const out: ObjectIdentifierRef[] = [];
+
+  for (const raw of [isbn13, isbn10]) {
+    const value = (raw ?? '').trim();
+
+    // `=""` is Goodreads' spelling of "no ISBN on file".
+    if (!value || !/[0-9]/.test(value)) {
+      continue;
+    }
+
+    out.push({ namespace: 'isbn', value });
+  }
+
+  return out.length ? out : undefined;
+}
 
 function headerHasGoodreadsCols(text: string): boolean {
   const nl = text.indexOf('\n');
@@ -205,6 +234,10 @@ export class GoodreadsFileImporter implements FileImporter {
           DateAdded: row['Date Added'] || undefined,
           ISBN: row['ISBN'] || undefined,
           ISBN13: row['ISBN13'] || undefined,
+          // The canonical identifier list, so this book mints a PRODUCT MODEL
+          // (a catalogue entry keyed by ISBN-13) that the same book bought on
+          // Amazon or scanned off its barcode resolves to as well.
+          Identifiers: isbnIdentifiers(row['ISBN13'], row['ISBN']),
           Publisher: row['Publisher'] || undefined,
           Binding: row['Binding'] || undefined,
           NumberOfPages: row['Number of Pages'] || undefined,

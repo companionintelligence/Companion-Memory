@@ -6,6 +6,14 @@ import type { User } from '../user';
 
 export type JobStatus = 'in_progress' | 'failed' | 'success' | 'pending';
 
+/**
+ * The states a sync job passes through on its way to a terminal one, and the
+ * states the partial unique index `connection_sync_jobs_live_job_idx` covers:
+ * at most one row in either of them may exist per connection endpoint and
+ * iteration type. Everything else on that endpoint is history.
+ */
+export const LIVE_JOB_STATUSES: readonly JobStatus[] = ['pending', 'in_progress'];
+
 export type OrderByFormat = `${string}:${'ASC' | 'DESC'}`;
 
 export interface ConnectionSyncJob {
@@ -65,10 +73,21 @@ export interface SearchConnectionSyncJobDto {
   connectionId?: string;
   endpointName?: string;
   status?: JobStatus;
+  /** Any-of alternative to {@link status}, pushed down as a SQL `IN`. */
+  statuses?: readonly JobStatus[];
   type?: string;
   properties?: Record<string, unknown> | null;
   lastTransformed?: Date | null | undefined;
+  /**
+   * Restrict to rows `ConnectionSyncJobService.claimTransform` could actually
+   * win — unclaimed, or claimed longer than its staleness window ago. Lets the
+   * sweep skip transforms already in flight instead of re-sending them every
+   * tick for the life of the transform.
+   */
+  transformClaimable?: boolean;
   orderBy?: OrderByFormat;
+  /** Row cap, pushed down as a SQL LIMIT. */
+  limit?: number;
 }
 
 export const createConnectionSyncJobSchema = z.object({

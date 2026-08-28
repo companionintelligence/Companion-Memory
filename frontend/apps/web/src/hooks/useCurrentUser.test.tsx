@@ -1,4 +1,5 @@
 import { useQuery } from '@apollo/client';
+import { setApiBaseUrl } from '@ci/common';
 import { renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -73,7 +74,28 @@ describe('useCurrentUser', () => {
 
     const { result } = renderHook(() => useCurrentUser());
 
-    // loading || (authToken && !data && !error) → true even though query loading is false.
+    // loading || (authenticated && !skip && !data && !error) → true even though query loading is false.
     expect(result.current.loading).toBe(true);
+  });
+
+  it('skips GraphQL on native until a Memory origin is set', () => {
+    (window as unknown as { Capacitor?: unknown }).Capacitor = {
+      isNativePlatform: () => true,
+    };
+    setApiBaseUrl('');
+    mockedUseQuery.mockReturnValue({
+      data: undefined,
+      loading: false,
+      error: undefined,
+    } as unknown as ReturnType<typeof useQuery>);
+
+    const { result } = renderHook(() => useCurrentUser());
+
+    const options = mockedUseQuery.mock.calls.at(-1)?.[1] as { skip: boolean };
+    expect(options.skip).toBe(true);
+    expect(result.current.loading).toBe(false);
+
+    delete (window as unknown as { Capacitor?: unknown }).Capacitor;
+    setApiBaseUrl('');
   });
 });

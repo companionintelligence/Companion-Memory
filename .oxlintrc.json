@@ -8,6 +8,8 @@
     "**/coverage/**",
     ".yarn/**",
     ".pnp.*",
+    ".local/**",
+    "tools/**",
     ".claude/worktrees/**",
     ".worktrees/**",
     "**/.venv/**",

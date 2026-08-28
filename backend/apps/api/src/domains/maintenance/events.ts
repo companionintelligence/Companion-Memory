@@ -138,3 +138,60 @@ declare module '@ci/domains/events/registry' {
     [GraphEdgeBackfillRequestEvent]: GraphEdgeBackfillRequestPayload;
   }
 }
+
+/**
+ * Run the nightly DERIVATION pass for one user.
+ *
+ * ── Why an event and not a direct call in the cron ─────────────────────────
+ *
+ * The same shape `PythonFunctionCrons.fanOut` uses, for the same three reasons:
+ * one pg-boss job per user means a per-user failure retries on its own instead
+ * of aborting the fan-out; a window-scoped `singletonKey`
+ * (`derive:<userId>:<dayKey>`) means a slow pass never stacks a second copy of
+ * itself on the next tick; and the job survives the process being killed
+ * between the tick and the work.
+ *
+ * The key is only ENFORCED because {@link DERIVATION_RUN_QUEUE} declares
+ * `policy: 'short'` — under pg-boss 10's default `standard` a singletonKey is
+ * stored and never checked. Every send on this queue carries one, which is what
+ * makes the queue-wide policy safe.
+ *
+ * @see DerivationCron - the producer
+ * @see DerivationRunListener - the consumer
+ */
+export const DerivationRunRequestEvent = 'maintenance.derivation-run-request';
+
+/**
+ * Dedicated PGBoss queue, consumed by the WORKER process
+ * (`queueOptions.role: 'worker'` on the listener). A nightly graph aggregate is
+ * exactly the "heavy in-process sweep" the split exists for, and giving it its
+ * own queue is what makes "what is the derivation pass doing?" answerable from
+ * pg-boss alone.
+ */
+export const DERIVATION_RUN_QUEUE = 'derivation-run';
+
+/** Event payload of {@link DerivationRunRequestEvent}. */
+export type DerivationRunRequestPayload = {
+  /**
+   * The user whose graph is derived. Every leg is user-scoped SQL, so a request
+   * without a user cannot be run and is refused by the listener rather than
+   * guessed at.
+   */
+  userId?: string;
+  /**
+   * The UTC day this run belongs to (`YYYY-MM-DD`) — the window component of
+   * the singleton key, carried on the payload so a job in flight says which
+   * night it is for.
+   */
+  dayKey?: string;
+  /** Free-form provenance for the log line, e.g. `DerivationCron`. */
+  requestedBy?: string;
+};
+
+defineEvent<DerivationRunRequestPayload>(DerivationRunRequestEvent);
+
+declare module '@ci/domains/events/registry' {
+  interface EventRegistry {
+    [DerivationRunRequestEvent]: DerivationRunRequestPayload;
+  }
+}

@@ -31,9 +31,6 @@ export class PersonEntity extends BaseEntity {
   @Column({ type: 'text', name: 'linked_id', nullable: true })
   linkedId!: string | null;
 
-  @Column({ type: 'timestamptz', name: 'last_accessed', default: () => 'NOW()' })
-  lastAccessed!: Date;
-
   @Column({ type: 'boolean', name: 'is_active', default: true })
   isActive!: boolean;
 
@@ -173,7 +170,6 @@ export class PersonEntity extends BaseEntity {
       searchContent: entity.searchContent,
       linkedTable: entity.linkedTable,
       linkedId: entity.linkedId,
-      lastAccessed: entity.lastAccessed,
       userId: entity.userId ?? null,
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
@@ -185,4 +181,9 @@ export type Person = Readonly<Omit<PersonEntity, 'loadPropertiesFromJsonb' | 'pr
   // Normalized keys are stripped on egress; only source-specific data remains,
   // and accessing a normalized key here is a compile-time error.
   readonly properties: PersonProperties;
+  /**
+   * Browse-only: first real activity inside the active search date window.
+   * Absent on an unfiltered unique list so the frontend keeps people in "No date".
+   */
+  readonly appearedAt?: Date | null;
 };

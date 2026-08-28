@@ -7,20 +7,36 @@ import L, { type LatLngExpression } from 'leaflet';
 import { Marker as LeafletMarker, Popup, useMap as useLeafletMap, useMapEvents } from 'react-leaflet';
 import { useSearchParams } from 'react-router-dom';
 
+import { ChatAbout, ChatAboutSheet } from '@/components/ChatWithAgent';
 import { Map } from '@/components/Map';
 import { type MarkerVariant } from '@/components/Map/Marker';
 import { gql, useFragment } from '@/graphql';
+import { namedChatContext, type AgentChatContext } from '@/lib/agentChat';
+import { entityToAgentChatContext } from '@/lib/entityToAgentChatContext';
 
 import { useEntityService, type EntityItem } from '../../MemoryPage/useEntityService';
 import { boundsToBbox, bboxCenter, formatBbox, parseBbox } from '../bbox';
-import { Empty, ErrorState, formatEventTimeRange } from '../Components';
+import { Empty, ErrorState, formatEventTimeRange, INGEST_TIME_SOURCE } from '../Components';
 import { EVENT_FRAGMENT } from '../Components/EntityCard/EventCard';
 import { countActiveFilters } from '../Components/ExplorerToolbar/filterParams';
+import {
+  EMPTY_TRACK_SOURCE,
+  PlaybackBar,
+  PlaybackProvider,
+  PlaybackTrackLayer,
+  useOptionalPlayback,
+  usePlaybackControls,
+  usePlayheadPin,
+  useRevealedPins,
+  type PlaybackPin,
+} from '../Playback';
 import { TimelineView } from '../TimelineView';
 
 import { clusterDiameterPx, mergeCollidingClusters, type PixelCluster } from './clusterOverlap';
 import { readCoordinates, readGeoJsonPoint } from './mapCoordinates';
 import { fitSignature, pinsInBounds, routePoints } from './pinSet';
+import { PositionTraceLayer, TraceToggleControl } from './TraceLayer';
+import { HOME_MAP_ZOOM, useHomeMapCenter } from './useHomeMapCenter';
 import './memory-map.css';
 
 // Colour/icon-code each marker by what it represents, like the old LifeScope map.
@@ -70,6 +86,7 @@ const MAP_PINS_QUERY = gql(`
         endTime
         eventType
         locationName
+        timeSource
       }
     }
   }
@@ -112,6 +129,19 @@ type Pin = {
   variant: MarkerVariant;
   entity: EntityItem | null;
 };
+
+function pinChatContext(pin: Pin): AgentChatContext {
+  if (pin.entity) {
+    return entityToAgentChatContext(pin.entity);
+  }
+
+  return namedChatContext({
+    title: pin.title,
+    body: pin.timeLabel,
+    sourceKind: 'EventType',
+    sourceId: pin.id,
+  });
+}
 
 /**
  * Resolve a marker position for any entity in the explorer result set. Events
@@ -208,15 +238,24 @@ function useMapPins({ skip }: { skip: boolean }) {
     const rows = data?.mapPins?.pins ?? [];
 
     return rows
-      .map((pin) => ({
-        id: pin.id,
-        coords: { lat: pin.latitude, lng: pin.longitude },
-        title: pin.title || 'Untitled event',
-        timeLabel: pin.startTime ? formatEventTimeRange(pin.startTime, pin.endTime) : null,
-        sortTime: pin.startTime ? new Date(pin.startTime).getTime() : 0,
-        variant: 'event' as MarkerVariant,
-        entity: null,
-      }))
+      .map((pin) => {
+        // `timeSource === 'ingest'` means `startTime` is only the import wall
+        // clock (a Google Maps saved place, an undated Reddit affiliation, …),
+        // not a real moment — same rule getEntityTimestamp applies on the
+        // timeline/explorer side. Without this a saved place captioned itself
+        // "Yesterday 9:56 PM" using the instant the import happened to run.
+        const dated = pin.startTime && pin.timeSource !== INGEST_TIME_SOURCE;
+
+        return {
+          id: pin.id,
+          coords: { lat: pin.latitude, lng: pin.longitude },
+          title: pin.title || 'Untitled event',
+          timeLabel: dated ? formatEventTimeRange(pin.startTime, pin.endTime) : null,
+          sortTime: dated ? new Date(pin.startTime as string).getTime() : 0,
+          variant: 'event' as MarkerVariant,
+          entity: null,
+        };
+      })
       .sort((a, b) => a.sortTime - b.sortTime);
   }, [data]);
 
@@ -408,8 +447,8 @@ function ClusterPopupContent({
     <div className="w-72 overflow-hidden text-card-foreground" onClick={(event) => event.stopPropagation()}>
       <div className="max-h-72 overflow-y-auto py-2">
         {cluster.items.map((pin) => (
+          <ChatAbout key={pin.id} context={pinChatContext(pin)}>
           <button
-            key={pin.id}
             type="button"
             className="flex w-full items-start gap-2 px-3 py-2 text-left text-card-foreground transition-colors duration-150 hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             onClick={() => onSelect(pin)}
@@ -425,6 +464,7 @@ function ClusterPopupContent({
               )}
             </span>
           </button>
+          </ChatAbout>
         ))}
       </div>
 
@@ -493,6 +533,24 @@ function zoomToCluster(map: L.Map, cluster: Cluster) {
   map.flyToBounds(bounds, { padding: [60, 60], maxZoom: 17 });
 }
 
+/**
+ * Max-wait on the viewport re-sync. A human gesture ends in exactly one
+ * `moveend`, so this is invisible in normal use — but the playback camera calls
+ * `setView` on every animation frame, and each of those fires `moveend` too.
+ * Without coalescing, a fly-through would re-project and re-cluster every pin
+ * in the viewport sixty times a second.
+ *
+ * This has to be a leading+trailing THROTTLE, not a pure trailing debounce.
+ * A trailing debounce reschedules on every call and only fires once the calls
+ * stop — which they never do during playback, since the camera's per-frame
+ * `setView` keeps `moveend` firing faster than the delay could ever elapse.
+ * That froze `view` for the entire playback and, with it, ClusteredMarkers'
+ * viewport-bounds filter: no marker in the region the camera was flying
+ * through ever rendered. A throttle instead guarantees a sync at most
+ * {@link VIEW_SYNC_DELAY_MS} apart no matter how densely `moveend` fires.
+ */
+const VIEW_SYNC_DELAY_MS = 120;
+
 function ClusteredMarkers({
   pins,
   onSelect,
@@ -503,13 +561,52 @@ function ClusteredMarkers({
   onHoverPin?: (pin: Pin | null) => void;
 }) {
   const map = useLeafletMap();
+  const [chatPin, setChatPin] = useState<Pin | null>(null);
   // One state for both, because clustering depends on both: zoom decides the
   // projection, the viewport decides which pins are candidates at all.
   const [view, setView] = useState(() => ({ zoom: map.getZoom(), bounds: map.getBounds() }));
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Epoch ms of the last actual sync. Starts at 0 so the very first call — the
+  // common, non-playback case — runs on the leading edge instead of waiting
+  // out a delay nobody asked for.
+  const lastSyncAtRef = useRef(0);
 
   const syncView = useCallback(() => {
-    setView({ zoom: map.getZoom(), bounds: map.getBounds() });
+    const run = () => {
+      lastSyncAtRef.current = Date.now();
+      setView({ zoom: map.getZoom(), bounds: map.getBounds() });
+    };
+
+    if (syncTimerRef.current != null) {
+      clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = null;
+    }
+
+    const elapsed = Date.now() - lastSyncAtRef.current;
+
+    if (elapsed >= VIEW_SYNC_DELAY_MS) {
+      // Leading edge: nothing has synced recently, so do it now rather than
+      // making an isolated human gesture wait out the delay too.
+      run();
+    } else {
+      // Trailing/max-wait edge: something synced too recently to run again
+      // immediately, but this call still has to land within the delay —
+      // otherwise a continuous stream of calls (the playback camera) would
+      // keep pushing the timer out and never fire, exactly the bug above.
+      syncTimerRef.current = setTimeout(() => {
+        syncTimerRef.current = null;
+        run();
+      }, VIEW_SYNC_DELAY_MS - elapsed);
+    }
   }, [map]);
+
+  useEffect(() => {
+    return () => {
+      if (syncTimerRef.current != null) {
+        clearTimeout(syncTimerRef.current);
+      }
+    };
+  }, []);
 
   // `moveend` covers panning AND zooming (Leaflet fires it after a zoom too);
   // `zoomend` is kept so a zoom with no pan still resyncs on every path.
@@ -531,6 +628,7 @@ function ClusteredMarkers({
               position={[pin.coords.lat, pin.coords.lng]}
               variant={pin.variant}
               onClick={() => onSelect(pin)}
+              onContextMenu={() => setChatPin(pin)}
               onMouseEnter={() => onHoverPin?.(pin)}
               onMouseLeave={() => onHoverPin?.(null)}
             />
@@ -548,6 +646,15 @@ function ClusteredMarkers({
           />
         );
       })}
+      <ChatAboutSheet
+        open={chatPin != null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setChatPin(null);
+          }
+        }}
+        context={chatPin ? pinChatContext(chatPin) : { title: 'This memory' }}
+      />
     </>
   );
 }
@@ -565,6 +672,10 @@ function SearchAreaControl() {
   const activeBbox = parseBbox(searchParams.get('bbox'));
   const [movedSinceSearch, setMovedSinceSearch] = useState(false);
   const map = useLeafletMap();
+  // Read imperatively, never subscribed to: this control must know whether a
+  // move came from the viewer or from the playback camera, and subscribing to
+  // the playhead would re-render it on every frame.
+  const playback = useOptionalPlayback();
 
   const setBbox = useCallback(
     (value: string | null) => {
@@ -590,6 +701,13 @@ function SearchAreaControl() {
   // searched area's centre has scrolled out of view, drop the filter.
   useMapEvents({
     moveend: () => {
+      // A fly-through drives the camera across the whole world; letting it
+      // count as "the user panned away" would silently drop their area filter
+      // and re-run the search underneath them mid-playback.
+      if (playback?.store.getState().status === 'playing') {
+        return;
+      }
+
       setMovedSinceSearch(true);
 
       if (activeBbox && !map.getBounds().contains(L.latLng(bboxCenter(activeBbox)))) {
@@ -786,13 +904,13 @@ function MapStatusOverlay({
  * when filters do, and a filter the user just applied should be what the
  * viewport shows. Panning inside an unchanged set is never overridden.
  */
-function FitBoundsToPins({ pins }: { pins: Pin[] }) {
+function FitBoundsToPins({ pins, skip = false }: { pins: Pin[]; skip?: boolean }) {
   const map = useLeafletMap();
   const fittedSignature = useRef<string | null>(null);
   const signature = fitSignature(pins);
 
   useEffect(() => {
-    if (signature === '' || fittedSignature.current === signature) {
+    if (skip || signature === '' || fittedSignature.current === signature) {
       return;
     }
 
@@ -800,7 +918,24 @@ function FitBoundsToPins({ pins }: { pins: Pin[] }) {
 
     map.fitBounds(L.latLngBounds(points), { padding: [60, 60], maxZoom: 13 });
     fittedSignature.current = signature;
-  }, [signature, pins, map]);
+  }, [skip, signature, pins, map]);
+
+  return null;
+}
+
+/** Apply Self home as the camera once, after the async lookup. MapContainer only honours its initial center. */
+function HomeCamera({ center }: { center: [number, number] | null }) {
+  const map = useLeafletMap();
+  const applied = useRef(false);
+
+  useEffect(() => {
+    if (!center || applied.current) {
+      return;
+    }
+
+    applied.current = true;
+    map.setView(center, HOME_MAP_ZOOM);
+  }, [center, map]);
 
   return null;
 }
@@ -985,7 +1120,44 @@ function useMapView(readOnly: boolean) {
   };
 }
 
+/**
+ * The map pins, reduced to what a playback needs and stripped of the undated.
+ *
+ * An undated pin has no place on a timeline: it would sort to 1970 and be
+ * "revealed" before the film starts. `pins` is already time-ascending, so the
+ * filtered result is too.
+ */
+function usePlaybackPins(pins: Pin[]): PlaybackPin[] {
+  return useMemo(
+    () =>
+      pins
+        .filter((pin) => pin.sortTime > 0)
+        .map((pin) => ({ id: pin.id, coords: pin.coords, sortTime: pin.sortTime })),
+    [pins],
+  );
+}
+
 export function DesktopMapView({ readOnly = false }: { readOnly?: boolean } = {}) {
+  const view = useMapView(readOnly);
+  const playbackPins = usePlaybackPins(view.pins);
+
+  return (
+    <PlaybackProvider
+      args={[
+        {
+          pins: playbackPins,
+          // The shared viewer reads the owner's saved search, and a saved
+          // search never carries their position history.
+          source: readOnly ? EMPTY_TRACK_SOURCE : undefined,
+        },
+      ]}
+    >
+      <DesktopMapSurface view={view} readOnly={readOnly} />
+    </PlaybackProvider>
+  );
+}
+
+function DesktopMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapView>; readOnly: boolean }) {
   const {
     pins,
     routeLocations,
@@ -1001,14 +1173,32 @@ export function DesktopMapView({ readOnly = false }: { readOnly?: boolean } = {}
     loadingMore,
     loadMore,
     setActiveEntity,
-  } = useMapView(readOnly);
+  } = view;
   const rowElementsRef = useRef(new globalThis.Map<string, HTMLDivElement>());
+  // The location-history trace is on by default: `ci.position` is where the
+  // overwhelming majority of this user's geography lives (63,044 fixes against
+  // 121 located events on the QA appliance), so a map that hides it by default
+  // is the empty map all over again. The toggle is there to get it out of the
+  // way once you have found what you came for.
+  const [showTrace, setShowTrace] = useState(true);
   const [hoveredEntityId, setHoveredEntityId] = useState<string | null>(null);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const activeEntityId = hoveredEntityId ?? selectedEntityId;
 
   const pinsById = useMemo(() => new globalThis.Map(pins.map((pin) => [pin.id, pin])), [pins]);
   const activePin = activeEntityId ? (pinsById.get(activeEntityId) ?? null) : null;
+
+  // ── Playback ────────────────────────────────────────────────────────────
+  // The playhead drives both halves of this view: the map reveals pins as it
+  // crosses them, and the timeline panel highlights and scrolls to the memory
+  // it has just reached — through TimelineView's EXISTING `activeEntityId`
+  // prop, so playback adds no second selection mechanism. Hover still wins
+  // while playback is idle, which is the whole of the map's normal behaviour.
+  const { status: playbackStatus } = usePlaybackControls();
+  const revealedPins = useRevealedPins(pins);
+  const playheadPin = usePlayheadPin(pins);
+  const playing = playbackStatus === 'playing';
+  const timelineActiveId = playing ? (playheadPin?.id ?? null) : activeEntityId;
 
   const registerTimelineRow = useCallback((entityId: string, element: HTMLDivElement | null) => {
     if (element) {
@@ -1048,7 +1238,7 @@ export function DesktopMapView({ readOnly = false }: { readOnly?: boolean } = {}
       <Map.Controls position="top-right" />
       <Map.Panel position="left" className="w-[300px] relative">
         <TimelineView
-          activeEntityId={activeEntityId}
+          activeEntityId={timelineActiveId}
           onEntityHover={handleTimelineHover}
           onEntitySelect={handleTimelineSelect}
           registerTimelineRow={registerTimelineRow}
@@ -1059,6 +1249,17 @@ export function DesktopMapView({ readOnly = false }: { readOnly?: boolean } = {}
       {/* "Search this area" writes ?bbox, which the shared viewer can't honour
           (the server ignores viewer filters), so hide it in read-only mode. */}
       {!readOnly && <SearchAreaControl />}
+      {/* The trace answers `positionTrack`, which resolves for the SIGNED-IN
+          caller — so, like mapPins, it has no place on the shared viewer, whose
+          results belong to somebody else. Padded past the 300px timeline panel. */}
+      {!readOnly && (
+        <TraceToggleControl
+          enabled={showTrace}
+          onToggle={() => setShowTrace((value) => !value)}
+          className="left-[312px]"
+        />
+      )}
+      {!readOnly && <PositionTraceLayer enabled={showTrace} fitToTrace={pins.length === 0} />}
       {readOnly && (
         <LoadMorePinsControl
           shown={pins.length}
@@ -1067,10 +1268,17 @@ export function DesktopMapView({ readOnly = false }: { readOnly?: boolean } = {}
           onLoadMore={loadMore}
         />
       )}
-      {truncated && <PinCountNotice shown={pins.length} totalCount={totalCount} />}
-      <MapTimelineConnector active={activePin} rowElementsRef={rowElementsRef} />
+      {truncated && !playing && <PinCountNotice shown={pins.length} totalCount={totalCount} />}
+      {/* The connector is a hover affordance for a still map. During a
+          fly-through it would whip a dashed line across the viewport on every
+          frame, and recompute two bounding rects to do it. */}
+      <MapTimelineConnector active={playing ? null : activePin} rowElementsRef={rowElementsRef} />
       <Map.RouteLayer locations={routeLocations} />
-      <ClusteredMarkers pins={pins} onSelect={handlePinSelect} onHoverPin={handlePinHover} />
+      <PlaybackTrackLayer />
+      <ClusteredMarkers pins={revealedPins} onSelect={handlePinSelect} onHoverPin={handlePinHover} />
+      {/* Fitted to the WHOLE set, never the revealed subset — otherwise every
+          pin the playhead crossed would re-fit the viewport and fight the
+          playback camera for control of it. */}
       <FitBoundsToPins pins={pins} />
       {/* Padded past the 300px timeline panel so the state reads over the map
           itself rather than half-hidden behind the panel. Padding, not `left`,
@@ -1083,11 +1291,24 @@ export function DesktopMapView({ readOnly = false }: { readOnly?: boolean } = {}
         onRetry={refetch}
         className="pl-[300px]"
       />
+      {/* Cleared past the timeline panel so the transport never sits under it. */}
+      <PlaybackBar className="left-[312px]" />
     </Map>
   );
 }
 
 export function MobileMapView({ readOnly = false }: { readOnly?: boolean } = {}) {
+  const view = useMapView(readOnly);
+  const playbackPins = usePlaybackPins(view.pins);
+
+  return (
+    <PlaybackProvider args={[{ pins: playbackPins, source: readOnly ? EMPTY_TRACK_SOURCE : undefined }]}>
+      <MobileMapSurface view={view} readOnly={readOnly} />
+    </PlaybackProvider>
+  );
+}
+
+function MobileMapSurface({ view, readOnly }: { view: ReturnType<typeof useMapView>; readOnly: boolean }) {
   const {
     pins,
     routeLocations,
@@ -1102,12 +1323,26 @@ export function MobileMapView({ readOnly = false }: { readOnly?: boolean } = {})
     hasNextPage,
     loadingMore,
     loadMore,
-  } = useMapView(readOnly);
+  } = view;
+  const [showTrace, setShowTrace] = useState(true);
+  const { status: playbackStatus } = usePlaybackControls();
+  const revealedPins = useRevealedPins(pins);
+  const playing = playbackStatus === 'playing';
+  // Owner map only: the shared viewer must not aim someone else's pins at the viewer's home.
+  const { center: homeCenter, resolved: homeResolved } = useHomeMapCenter(!readOnly);
 
   return (
-    <Map center={[37.7749, -122.4194]}>
+    <Map center={homeCenter ?? [37.7749, -122.4194]} zoom={homeCenter ? HOME_MAP_ZOOM : 13}>
       <Map.Controls position="top-right" />
       {!readOnly && <SearchAreaControl />}
+      {!readOnly && (
+        <TraceToggleControl
+          enabled={showTrace}
+          onToggle={() => setShowTrace((value) => !value)}
+          className="top-14"
+        />
+      )}
+      {!readOnly && <PositionTraceLayer enabled={showTrace} fitToTrace={pins.length === 0} />}
       {readOnly && (
         <LoadMorePinsControl
           shown={pins.length}
@@ -1116,11 +1351,15 @@ export function MobileMapView({ readOnly = false }: { readOnly?: boolean } = {})
           onLoadMore={loadMore}
         />
       )}
-      {truncated && <PinCountNotice shown={pins.length} totalCount={totalCount} />}
+      {/* Both live at the bottom centre; the transport wins while it is out. */}
+      {truncated && !playing && <PinCountNotice shown={pins.length} totalCount={totalCount} />}
       <Map.RouteLayer locations={routeLocations} />
-      <ClusteredMarkers pins={pins} onSelect={selectPin} />
-      <FitBoundsToPins pins={pins} />
+      <PlaybackTrackLayer />
+      <ClusteredMarkers pins={revealedPins} onSelect={selectPin} />
+      <FitBoundsToPins pins={pins} skip={!homeResolved || homeCenter != null} />
+      <HomeCamera center={homeCenter} />
       <MapStatusOverlay loading={loading} error={error} empty={empty} filtered={filtered} onRetry={refetch} />
+      <PlaybackBar />
     </Map>
   );
 }

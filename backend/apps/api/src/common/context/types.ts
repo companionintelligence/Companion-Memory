@@ -19,6 +19,18 @@ export interface RequestContext {
    * Identifier for the authenticated user making the request.
    */
   userId?: string;
+
+  /**
+   * `ci.api_keys.id` of the key that authenticated this request, when one did. Absent for a
+   * session/JWT caller and for in-process work.
+   *
+   * WHICH key, not just which user: on a single-owner appliance every agent key resolves to the
+   * same account, so `userId` alone cannot say whether a call came from the chat agent, the bulk
+   * importer, or a connected MCP client. Stamped by `ApiKeyStrategy.validate` rather than by
+   * `RequestContextMiddleware` — the middleware runs before the guards, so at the point it opens
+   * the async-local store nothing has authenticated yet and there is no key to name.
+   */
+  apiKeyId?: string;
 }
 
 /**

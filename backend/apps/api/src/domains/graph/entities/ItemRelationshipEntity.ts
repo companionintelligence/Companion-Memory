@@ -6,7 +6,7 @@ import { Column, CreateDateColumn, Entity, PrimaryColumn } from 'typeorm';
  * Both endpoints are referenced by their PROVENANCE TRIPLE
  * (source_type, source_system, source_id) rather than a CI-Server row id, because
  * one importer item may land in ci.events / ci.communications / ci.content /
- * ci.inventory depending on its kind — the triple is the table-agnostic handle
+ * ci.objects depending on its kind — the triple is the table-agnostic handle
  * both sides already share. Rows dedup on
  * (user_id, from-triple, to-triple, relation) — see the item_relationships_edge_uniq
  * index and ItemRelationshipService.createMany's ON CONFLICT DO NOTHING.

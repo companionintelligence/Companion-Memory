@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { type UserServiceContext } from '@ci/common/context';
+import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { ConnectionService } from '@ci/domains/connections';
 
@@ -10,6 +11,12 @@ export interface SyncNowResult {
   jobIds: string[];
   enqueued: number;
   skipped: number;
+  /**
+   * Set when `scheduled.connection.sync` is off. The executor that drains these
+   * rows is gated on the same flag, so enqueuing anyway would hand the caller a
+   * job id for work that cannot start until an operator flips the switch back.
+   */
+  disabledReason?: 'scheduled_sync_disabled';
 }
 
 @Injectable()
@@ -17,6 +24,7 @@ export class SyncNowService {
   constructor(
     private readonly connectionService: ConnectionService,
     private readonly connectionSyncJobService: ConnectionSyncJobService,
+    private readonly featureService: FeatureService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(SyncNowService.name);
@@ -27,6 +35,14 @@ export class SyncNowService {
    * connections, skipping endpoints that already have pending/in-progress work.
    */
   async enqueueForUser(context: UserServiceContext): Promise<SyncNowResult> {
+    if (!(await this.featureService.isFeatureEnabled('scheduled.connection.sync'))) {
+      this.logger.log('Refusing sync-now: scheduled connection sync is switched off', {
+        userId: context.userId,
+      });
+
+      return { jobIds: [], enqueued: 0, skipped: 0, disabledReason: 'scheduled_sync_disabled' };
+    }
+
     const connections = await this.connectionService.findAll(context);
     const activeConnections = connections.filter((c) => c.active && !c.needsReauth);
 

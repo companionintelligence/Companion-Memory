@@ -2,6 +2,7 @@ import { BrowserActivityCreatedEvent } from '@ci/domains/browser-activity/events
 import { FileCreatedEvent } from '@ci/domains/files/events';
 import {
   CommunicationCreatedEvent,
+  ConceptCreatedEvent,
   ContentCreatedEvent,
   EventCreatedEvent,
   ItemCreatedEvent,
@@ -13,24 +14,28 @@ import {
   BACKFILLABLE_ENTITIES,
   PIPELINE_COVERED_STAGES,
   SearchIndexBackfillService,
-  expandBackfillEntityTypes,
+  normalizeBackfillEntityTypes,
 } from './SearchIndexBackfillService';
 
 const SEARCH_INDEX_QUEUE = 'search-index';
 
-describe('expandBackfillEntityTypes', () => {
-  it('expands browser-activity to also include event and content (Wave D dual-write)', () => {
-    expect(expandBackfillEntityTypes(['browser-activity'])).toEqual(['event', 'content', 'browser-activity']);
+describe('normalizeBackfillEntityTypes', () => {
+  // Regression guard for the reverted Wave D fold
+  // (20260812144811_revert_browser_activity_event_fold): this used to widen a
+  // browser-activity scope to event + content for the dual-written mirrors. The
+  // dual-write is gone, so widening would silently sweep the whole events and
+  // content corpora for a caller who asked only for browsing rows.
+  it('does not widen a browser-activity scope to event or content', () => {
+    expect(normalizeBackfillEntityTypes(['browser-activity'])).toEqual(['browser-activity']);
   });
 
-  it('is a no-op when browser-activity is not in the scope', () => {
-    expect(expandBackfillEntityTypes(['communication', 'event'])).toEqual(['communication', 'event']);
+  it('leaves an already-canonical scope alone', () => {
+    expect(normalizeBackfillEntityTypes(['communication', 'event'])).toEqual(['communication', 'event']);
   });
 
-  it('does not duplicate when event/content are already requested', () => {
-    expect(expandBackfillEntityTypes(['browser-activity', 'event', 'content', 'item'])).toEqual([
+  it('dedupes and orders by BACKFILLABLE_ENTITIES, whatever order the caller used', () => {
+    expect(normalizeBackfillEntityTypes(['item', 'browser-activity', 'event', 'item'])).toEqual([
       'event',
-      'content',
       'item',
       'browser-activity',
     ]);
@@ -117,9 +122,15 @@ describe('PIPELINE_COVERED_STAGES', () => {
 
   it('covers every backfillable type except the declared exceptions', () => {
     // `position` arrived with the GPS→places indexing and has no pipeline
-    // stage yet — the old backfill path still owns it. Anything ELSE missing
-    // from the map is a regression: the pipeline is the indexing path.
-    const uncovered = ['position'];
+    // stage yet — the old backfill path still owns it. `product` and `receipt`
+    // arrived the same way with the object tables: their listeners exist, their
+    // pipeline `index.embed_*` stages do not. `concept` has no pipeline stage AT
+    // ALL (no INDEX_EMBED_CONCEPT in STAGE_IDS) — building one is the deliberate,
+    // larger follow-up; omitting it here just means the sweep does not
+    // double-check against ci.pipeline_state for concept, the same safe fallback
+    // `missingIds` already uses for the others. Anything ELSE missing from the
+    // map is a regression: the pipeline is the indexing path.
+    const uncovered = ['position', 'product', 'receipt', 'concept'];
 
     expect(Object.keys(PIPELINE_COVERED_STAGES).sort()).toEqual(
       BACKFILLABLE_ENTITIES.filter((type) => !uncovered.includes(type)).sort(),
@@ -137,12 +148,13 @@ describe('SearchIndexBackfillService', () => {
       'browser-activity': [['b1'], []],
       file: [['f1', 'f2'], []],
       person: [['p1'], []],
+      concept: [['k1'], []],
     });
 
     const result = await service.backfill({ batchSize: 100 });
 
     expect(result).toEqual({
-      enqueued: 10,
+      enqueued: 11,
       perType: {
         communication: 2,
         event: 1,
@@ -151,7 +163,10 @@ describe('SearchIndexBackfillService', () => {
         'browser-activity': 1,
         file: 2,
         person: 1,
+        concept: 1,
         position: 0,
+        product: 0,
+        receipt: 0,
       },
       // No embeddings configured for this DS → drain count is 0 for every type.
       embedded: 0,
@@ -163,7 +178,10 @@ describe('SearchIndexBackfillService', () => {
         'browser-activity': 0,
         file: 0,
         person: 0,
+        concept: 0,
         position: 0,
+        product: 0,
+        receipt: 0,
       },
     });
 
@@ -193,6 +211,12 @@ describe('SearchIndexBackfillService', () => {
     expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
       { name: PersonCreatedEvent, data: { personId: 'p1' } },
     ]);
+    // concept rows (GraphIngestService bulk upserts, same no-per-row-event path
+    // as person) ride the same bulk path — this is the regression #2175's
+    // review caught: 0 of N imported concepts were ever searchable before this.
+    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
+      { name: ConceptCreatedEvent, data: { conceptId: 'k1' } },
+    ]);
 
     // content had an empty page — never enqueued — and nothing left the search-index queue.
     const contentEmitted = sendMany.mock.calls.some((call) =>
@@ -204,11 +228,14 @@ describe('SearchIndexBackfillService', () => {
     }
   });
 
-  it('expands a browser-activity-only scope to also sweep dual-written event + content', async () => {
+  it('keeps a browser-activity-only scope scoped: no event or content sweep', async () => {
+    // The Wave D dual-write into ci.events + ci.content was reverted
+    // (20260812144811), so this scope must stay exactly what was asked for —
+    // widening it would reindex the entire events and content corpora.
     const { service, sendMany } = makeService({
       'browser-activity': [['b1'], []],
-      event: [['e1'], []],
-      content: [['c1'], []],
+      event: [['should-not-run'], []],
+      content: [['should-not-run'], []],
       communication: [['should-not-run'], []],
     });
 
@@ -217,25 +244,18 @@ describe('SearchIndexBackfillService', () => {
       batchSize: 100,
     });
 
-    expect(result.perType).toEqual({
-      'browser-activity': 1,
-      event: 1,
-      content: 1,
-    });
-    expect(result.enqueued).toBe(3);
-    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
-      { name: EventCreatedEvent, data: { eventId: 'e1' } },
-    ]);
-    expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
-      { name: ContentCreatedEvent, data: { contentId: 'c1' } },
-    ]);
+    expect(result.perType).toEqual({ 'browser-activity': 1 });
+    expect(result.enqueued).toBe(1);
     expect(sendMany).toHaveBeenCalledWith(SEARCH_INDEX_QUEUE, [
       { name: BrowserActivityCreatedEvent, data: { browserActivityId: 'b1' } },
     ]);
-    const communicationEmitted = sendMany.mock.calls.some((call) =>
-      ((call as unknown[])[1] as Array<{ name: string }>).some((e) => e.name === CommunicationCreatedEvent),
+
+    const otherTypesEmitted = sendMany.mock.calls.some((call) =>
+      ((call as unknown[])[1] as Array<{ name: string }>).some((e) =>
+        [EventCreatedEvent, ContentCreatedEvent, CommunicationCreatedEvent].includes(e.name),
+      ),
     );
-    expect(communicationEmitted).toBe(false);
+    expect(otherTypesEmitted).toBe(false);
   });
 
   it('surfaces the embedded (drain) count per type and in total, alongside enqueued', async () => {

@@ -26,6 +26,25 @@ describe('getDateBucket', () => {
     expect(getDateBucket(new Date(2026, 0, 15, 8, 0, 0), NOW).label).toBe('Today');
   });
 
+  it('labels the next day as Tomorrow', () => {
+    expect(getDateBucket(new Date(2026, 0, 16), NOW).label).toBe('Tomorrow');
+  });
+
+  it('labels days after tomorrow but inside a week as In The Next Week', () => {
+    // Day after tomorrow through six days out.
+    expect(getDateBucket(new Date(2026, 0, 17), NOW).label).toBe('In The Next Week');
+    expect(getDateBucket(new Date(2026, 0, 21), NOW).label).toBe('In The Next Week');
+  });
+
+  it('labels one week out and beyond as Upcoming', () => {
+    // The boundary day itself (Jan 22 = NOW + 7 days) is already Upcoming, so
+    // the two future buckets tile the calendar with no gap between them.
+    expect(getDateBucket(new Date(2026, 0, 22), NOW).label).toBe('Upcoming');
+    // The motivating case: a calendar event more than a year ahead rendered
+    // under "Today", because the today check was open-ended upward.
+    expect(getDateBucket(new Date(2027, 5, 1), NOW).label).toBe('Upcoming');
+  });
+
   it('labels the prior day as Yesterday', () => {
     expect(getDateBucket(new Date(2026, 0, 14), NOW).label).toBe('Yesterday');
   });
@@ -66,6 +85,42 @@ describe('getEntityTimestamp', () => {
   it('returns null for entity types with no domain timestamp', () => {
     expect(getEntityTimestamp(entity({ __typename: 'PersonType' }))).toBeNull();
   });
+
+  it('reads bucketAppearedAt for people and places when a date window stamped an appearance', () => {
+    const date = new Date('2024-03-04T12:00:00Z');
+
+    expect(
+      getEntityTimestamp(entity({ __typename: 'PersonType', bucketAppearedAt: date.toISOString() })),
+    ).toEqual(date);
+    expect(getEntityTimestamp(entity({ __typename: 'PlaceType', bucketAppearedAt: date }))).toEqual(date);
+  });
+
+  it('treats an ingest-sourced event as undated rather than sorting by the import instant', () => {
+    // The motivating bug: a Google Maps saved place ("Home") carries a real
+    // (non-null) startTime — the moment the import ran, because ci.events.
+    // start_time is NOT NULL — but the backend marks it timeSource = 'ingest'
+    // because the export gave it no time at all. This string is a mirror of
+    // the backend's TIME_SOURCES.INGEST (pipeline/stages/clean/
+    // TemporalRepairStage); pinned here as a literal so a drift in the local
+    // copy shows up as a red test rather than a silently-reintroduced pin.
+    const savedPlace = entity({
+      __typename: 'EventType',
+      bucketStartTime: new Date().toISOString(),
+      bucketTimeSource: 'ingest',
+    });
+
+    expect(getEntityTimestamp(savedPlace)).toBeNull();
+  });
+
+  it('still reads bucketStartTime when timeSource is anything else (including unset)', () => {
+    const date = new Date('2026-01-10T10:00:00Z');
+
+    for (const bucketTimeSource of [undefined, null, 'source', 'user', 'repaired']) {
+      expect(
+        getEntityTimestamp(entity({ __typename: 'EventType', bucketStartTime: date, bucketTimeSource })),
+      ).toEqual(date);
+    }
+  });
 });
 
 describe('groupEntitiesByBucket', () => {
@@ -98,6 +153,16 @@ describe('groupEntitiesByBucket', () => {
     expect(groups[0].bucket).toBe('undated');
   });
 
+  it('groups a person with bucketAppearedAt on the day they showed up', () => {
+    const groups = groupEntitiesByBucket(
+      [entity({ __typename: 'PersonType', bucketAppearedAt: new Date(2026, 0, 14, 18, 0, 0) })],
+      NOW,
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].label).toBe('Yesterday');
+  });
+
   // The server orders undated types by row-write time, so a bulk import
   // interleaves them through the dated run. Emitting a header per contiguous
   // run gave alternating "No date" / "Today" sections; there is now exactly
@@ -118,6 +183,22 @@ describe('groupEntitiesByBucket', () => {
     const groups = groupEntitiesByBucket([event('2026-01-15T09:00:00')], NOW);
 
     expect(groups.map((g) => g.bucket)).toEqual(['today']);
+  });
+
+  it('drops an ingest-sourced saved place into "No date" instead of pinning it to the top', () => {
+    // The exact shape of the bug this fixes: the server sorts newest-first, so
+    // a Google Maps saved place whose start_time IS the import instant sorts
+    // ahead of everything the user actually did that week — unless its
+    // timeSource marks it as not a real date.
+    const savedPlace = entity({
+      __typename: 'EventType',
+      bucketStartTime: new Date().toISOString(),
+      bucketTimeSource: 'ingest',
+    });
+    const groups = groupEntitiesByBucket([savedPlace, event('2026-01-15T09:00:00')], NOW);
+
+    expect(groups.map((g) => g.label)).toEqual(['Today', 'No date']);
+    expect(groups[groups.length - 1].entities).toEqual([savedPlace]);
   });
 });
 

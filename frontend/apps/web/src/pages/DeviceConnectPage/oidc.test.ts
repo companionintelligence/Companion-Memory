@@ -7,6 +7,7 @@ import {
   OIDC_REDIRECT_URI,
   OidcCancelledError,
   resumePendingOidcLogin,
+  selectMemoryPortalBearers,
 } from './oidc';
 import { DEFAULT_PORTAL_URL } from './portal-client';
 
@@ -16,7 +17,8 @@ const getLaunchUrl = vi.fn(async (): Promise<string | null> => null);
 let urlHandler: ((url: string) => void) | undefined;
 const unlisten = vi.fn();
 
-vi.mock('@ci/common', () => ({
+vi.mock('@ci/common', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@ci/common')>()),
   openExternalUrl: (url: string) => openExternalUrl(url),
   closeBrowser: () => closeBrowser(),
   getLaunchUrl: () => getLaunchUrl(),
@@ -25,6 +27,7 @@ vi.mock('@ci/common', () => ({
 
     return unlisten;
   }),
+  apiFetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, init),
 }));
 
 function openedAuthorizeUrl(): URL {
@@ -88,6 +91,7 @@ describe('loginWithPortalOidc', () => {
 
     const [tokenUrl, init] = (vi.mocked(fetch).mock.calls[0] ?? []) as [string, RequestInit];
     expect(tokenUrl).toBe(`${DEFAULT_PORTAL_URL}/api/auth/oauth2/token`);
+    expect(init.headers).toMatchObject({ Origin: DEFAULT_PORTAL_URL });
     const body = new URLSearchParams(String(init.body));
     expect(body.get('grant_type')).toBe('authorization_code');
     expect(body.get('code')).toBe('auth-code-1');
@@ -201,5 +205,32 @@ describe('emailFromIdToken', () => {
     expect(emailFromIdToken(null)).toBeNull();
     expect(emailFromIdToken('not-a-jwt')).toBeNull();
     expect(emailFromIdToken(tokenWithPayload({ sub: 'user-1' }))).toBeNull();
+  });
+});
+
+describe('selectMemoryPortalBearers', () => {
+  function tokenWithPayload(payload: unknown): string {
+    const json = btoa(JSON.stringify(payload)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+    return `hdr.${json}.sig`;
+  }
+
+  it('prefers an unexpired id_token whose aud Memory accepts', () => {
+    const idToken = tokenWithPayload({
+      aud: 'ci-server',
+      exp: Math.floor(Date.now() / 1000) + 600,
+    });
+    const accessToken = tokenWithPayload({
+      aud: 'https://hub.ci.computer',
+      exp: Math.floor(Date.now() / 1000) + 600,
+    });
+
+    expect(selectMemoryPortalBearers([idToken, accessToken])).toEqual([idToken]);
+  });
+
+  it('drops expired JWTs and keeps opaque tokens for the mint attempt', () => {
+    const expired = tokenWithPayload({ aud: 'ci-server', exp: Math.floor(Date.now() / 1000) - 120 });
+
+    expect(selectMemoryPortalBearers([expired, 'opaque-at'])).toEqual(['opaque-at']);
   });
 });

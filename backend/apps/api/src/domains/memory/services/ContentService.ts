@@ -22,6 +22,7 @@ import { EventService } from '@ci/domains/events';
 import { ContentCreatedEvent, ContentRemovedEvent, ContentUpdatedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
+import { BaseEntity } from '../entities/BaseEntity';
 import { ContentBaseEntity } from '../entities/ContentBaseEntity';
 import { Content, ContentEntity } from '../entities/ContentEntity';
 import { EventEntity } from '../entities/EventEntity';
@@ -133,6 +134,7 @@ export class ContentService {
       sourceType: item.source_type ?? undefined,
       sourceSystem: item.source_system ?? undefined,
       sourceId: item.source_id ?? undefined,
+      connectionId: item.connection_id ?? undefined,
       event,
       userId: context.userId,
     });
@@ -493,6 +495,9 @@ export class ContentService {
       alias: 'content',
       timeProp: 'createdAt',
       userId: context.userId,
+      // Same rule as findById/findByIds: a deleted event's photo must not resurface
+      // in the paginated library (and must not inflate totalCount).
+      scope: (qb) => this.excludeDeletedEventMedia(qb, 'content'),
     });
 
     return {
@@ -667,36 +672,68 @@ export class ContentService {
    * Batch-load content rows linked to each of `eventIds`, oldest first.
    * Returns one `Content[]` per input id (same order), so a GraphQL DataLoader
    * can resolve `Event.contents` in a single query. Ownership is scoped through
-   * the joined event's `user_id` — same rationale as {@link findMediaFilesByEventIds}.
+   * the event's `user_id` — same rationale as {@link findMediaFilesByEventIds}.
+   *
+   * Two links are followed, because a content row has ONE `event_id` but may
+   * stand for many events: every Audible session of a book, every Netflix
+   * viewing of a title, shares the work's single content row, and only the
+   * first session's id fits in the column. The rest are reachable through the
+   * `Content -DOCUMENTS-> Event` edge the pipeline projects for each of them,
+   * so without the second arm a drawer for the third viewing showed nothing.
    */
   async findByEventIds(context: UserServiceContext, eventIds: string[]): Promise<Content[][]> {
     if (eventIds.length === 0) {
       return [];
     }
 
+    const rows = await this.contentRepository.manager.query<Array<{ content_id: string; event_id: string }>>(
+      `SELECT DISTINCT l.content_id, l.event_id
+         FROM (
+           SELECT c.id AS content_id, c.event_id
+             FROM ci.content c
+            WHERE c.event_id = ANY($1::uuid[])
+           UNION ALL
+           SELECT r.from_entity_id AS content_id, r.to_entity_id AS event_id
+             FROM ci.relationships r
+            WHERE r.to_entity_id = ANY($1::uuid[])
+              AND r.relationship_type = 'DOCUMENTS'
+              AND r.is_active IS DISTINCT FROM false
+         ) l
+         JOIN ci.events e ON e.event_id = l.event_id AND e.user_id = $2::uuid
+         JOIN ci.content c ON c.id = l.content_id AND c.user_id = $2::uuid`,
+      [eventIds, context.userId],
+    );
+
+    const contentIds = [...new Set(rows.map((row) => row.content_id))];
+    if (contentIds.length === 0) {
+      return eventIds.map(() => []);
+    }
+
     const entities = await this.contentRepository
       .createQueryBuilder('content')
-      .innerJoinAndSelect('content.event', 'event')
-      .where('event.userId = :userId', { userId: context.userId })
-      .andWhere('content.event_id IN (:...eventIds)', { eventIds })
+      .leftJoinAndSelect('content.event', 'event')
+      .where('content.id IN (:...contentIds)', { contentIds })
       .orderBy('content.created_at', 'ASC')
       .getMany();
 
     const contents = await this.composeMany(entities);
     const contentsMap = new Map<string, Content[]>();
 
+    // Preserve created_at order within each event's list.
     for (const content of contents) {
-      const eventId = content.eventId;
-      if (!eventId) {
-        continue;
-      }
+      for (const link of rows) {
+        if (link.content_id !== content.id) {
+          continue;
+        }
 
-      const list = contentsMap.get(eventId);
-
-      if (list) {
-        list.push(content);
-      } else {
-        contentsMap.set(eventId, [content]);
+        const list = contentsMap.get(link.event_id);
+        if (list) {
+          if (!list.includes(content)) {
+            list.push(content);
+          }
+        } else {
+          contentsMap.set(link.event_id, [content]);
+        }
       }
     }
 
@@ -777,6 +814,10 @@ export class ContentService {
       updateData.externalId = data.external_id;
     }
 
+    if (data.connection_id !== undefined) {
+      updateData.connectionId = data.connection_id;
+    }
+
     if (data.external_id_kind !== undefined) {
       updateData.externalIdKind = data.external_id_kind;
     } else if (data.external_id !== undefined) {
@@ -799,6 +840,18 @@ export class ContentService {
     // no patch semantics, so a merge would make key removal impossible.
     if (data.source_data !== undefined) {
       updateData.sourceData = data.source_data;
+    }
+
+    if (data.source_type !== undefined) {
+      updateData.sourceType = data.source_type;
+    }
+
+    if (data.source_system !== undefined) {
+      updateData.sourceSystem = data.source_system;
+    }
+
+    if (data.source_id !== undefined) {
+      updateData.sourceId = data.source_id;
     }
 
     const basePatch: Partial<Pick<ContentBaseEntity, 'name'>> = {};
@@ -884,12 +937,43 @@ export class ContentService {
     return true;
   }
 
+  /**
+   * The content row a provenance triple already resolves to, if any.
+   *
+   * The per-row connector transforms cannot use `createMany`'s ON CONFLICT
+   * path (it does not emit ContentCreatedEvent, so the row would not be
+   * indexed until a manual backfill), and `search()` has no triple filter.
+   * This is the read half of their find-then-update, mirroring
+   * CommunicationService.findBySource.
+   */
+  async findBySource(
+    context: ServiceContext,
+    source: { source_type: string; source_system: string; source_id: string },
+  ): Promise<Content | null> {
+    const entity = await this.contentRepository.findOne({
+      where: {
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+        sourceType: source.source_type,
+        sourceSystem: source.source_system,
+        sourceId: source.source_id,
+      },
+    });
+
+    if (!entity) {
+      return null;
+    }
+
+    const [content] = await this.composeMany([entity]);
+
+    return content ?? null;
+  }
+
   async search(context: ServiceContext, filters: SearchContentDto): Promise<Content[]> {
     // title lives on the CTI base row; join ci.entities so title filters and
     // egress composition share one query.
     let executable = this.contentRepository
       .createQueryBuilder('content')
-      .innerJoin('ci.entities', 'base', "base.entity_id = content.id AND base.entity_type = 'Content'")
+      .innerJoin(BaseEntity, 'base', "base.entity_id = content.id AND base.entity_type = 'Content'")
       .addSelect('base.name', 'base_name')
       .addSelect('base.description', 'base_description');
 

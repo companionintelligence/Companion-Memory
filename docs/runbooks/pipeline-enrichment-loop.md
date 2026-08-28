@@ -48,9 +48,15 @@ pass.
 
 ## 1. What exists today — check this before anything else
 
-The subsystem shipped complete and **inert**: twelve stages bind and resolve,
-`startSweep()` works, `PipelineSliceListener` executes slices, `PipelineRunService`
-manages runs — and until the control tick is wired, *nothing calls any of it*.
+> **Changed since this runbook was first written (re-verified 2026-08-19).** The
+> subsystem is no longer inert. `PipelineTickCron` and `PipelineControlService`
+> are both in `PipelineModule`'s `providers`, `PIPELINE_TICK` is bound to the
+> control service, and `PipelineController` is in the module's `controllers`
+> array — so the loop runs on its own and the HTTP surface answers. **37** stages
+> bind and resolve, not twelve.
+
+The two checks are still worth keeping, because they are what tells you whether
+the box in front of you is running that code:
 
 ```bash
 # Does anything schedule a sweep?
@@ -61,12 +67,12 @@ grep -n "PipelineControlService\|PipelineTickCron\|controllers:" \
      backend/apps/api/src/domains/pipeline/index.ts
 ```
 
-Both are one-line checks with an unambiguous answer. Two states you can be in:
+Two states you can be in:
 
 | `grep` result | Meaning |
 |---|---|
-| `PipelineControlService` and `PipelineTickCron` are in `index.ts`'s `providers` | The loop is live. Continue at §3. |
-| they are not | **The loop cannot start.** Wiring them is the fix; nothing on this page will do anything until then. |
+| `PipelineControlService` and `PipelineTickCron` are in `index.ts`'s `providers` | The loop is live — the expected state. Continue at §3. |
+| they are not | You are on an old checkout. **The loop cannot start**; nothing on this page will do anything until you are on current code. |
 
 ```sql
 -- The blunt version of the same question. Zero rows in BOTH means no loop
@@ -81,30 +87,30 @@ SELECT (SELECT count(*) FROM ci.pipeline_runs)  AS runs_ever,
          0 |           0
 ```
 
-### The HTTP surface is not registered
+That output is the pre-tick reading this runbook was captured against; on a box
+whose tick has fired, both numbers are non-zero.
 
-`PipelineController` exists and is fully implemented, and it is in **no module's
-`controllers` array** — not `PipelineModule` (which declares none) and not
-`application.ts` (which lists only `HealthController`, `MapsConfigController`,
-`TelemetryConfigController`). So:
+### The HTTP surface
 
-```console
-$ curl -s -o /dev/null -w "%{http_code}\n" --max-time 4 http://localhost:3000/api/pipeline/state
-000
-```
+`PipelineController` is registered (`controllers: [PipelineController]` in
+`domains/pipeline/index.ts`) and mounts at `api/pipeline`:
 
-`000` is curl reporting no listener at all on a stopped API; with the API up you
-get `404`, because the route does not exist. **Every `curl` in this runbook is
-marked ✅ (works today) or ⛔ (needs the controller registered).** Until the
-registration lands, use the psql equivalent given beside each one. The fix is one
-line in `domains/pipeline/index.ts`:
+| Method | Route |
+|---|---|
+| `GET` | `state` · `runs` · `runs/:id` · `dead-letters` |
+| `POST` | `runs/:id/pause` · `runs/:id/resume` · `runs/:id/cancel` · `dead-letters/replay` · `dead-letters/:id/replay` · `quarantine/release` |
 
-```ts
-@Module({
-  controllers: [PipelineController],       // ← add
-  providers: [ …, PipelineRunService ],    // ← and its service
-})
-```
+There is deliberately **no create-run route** — runs are opened by the control
+tick. Every `curl` in this runbook is marked ✅ where a route exists and ⛔ where
+it does not; the psql equivalent beside each one works either way and is what to
+use against a database you are not serving.
+
+> **`$CI` is the API host itself**, e.g. `http://localhost:3030` or this
+> worktree's assigned API port — not the `<project>.localhost` proxy host.
+> `main.ts` sets no global prefix and the edge proxy strips a browser's `/api`,
+> but `PipelineController` bakes `api/` into its own path, so the routes above
+> are literal only against the API directly. See
+> [`pipeline-operations.md` §4b](./pipeline-operations.md) for the full note.
 
 ---
 
@@ -113,6 +119,14 @@ line in `domains/pipeline/index.ts`:
 **Always run the census first.** It is the only thing that tells you whether you
 are about to start a five-second job or a five-hour one, and it is the only place
 the two metered stages are visible as metered.
+
+> **It covers 12 of the 37 registered stages.** The ten `promote.edge_*` legs,
+> the six `index.embed_*` and seven `index.vector_*` per-type legs,
+> `promote.place_position` and `promote.observation` are not in the query below —
+> spelling out every predicate by hand is exactly the drift this note exists to
+> warn about. `STAGE_IDS` in `domains/pipeline/constants.ts` is the full list;
+> add a `UNION ALL` from the stage's own `*_SOURCE` const when you need one of
+> them counted.
 
 ```sql
 -- CANDIDATE CENSUS — what each stage's applicability predicate matches, and how
@@ -203,11 +217,25 @@ Read it like this:
   genuine starting condition of a first import: `ci.pipeline_state` is empty, so
   every row is stale for every stage.
 - **`BILL` means an external, metered provider.** `enrich.geocode` and
-  `enrich.position_reverse` egress through Portal. They are excluded from the
-  loop's default stage set (`METERED_STAGES` in `PipelineControlService`), so the
-  timer can never start them; they are reachable only from a run that *names*
-  them. That exclusion is asserted at module load, so adding one to the default
-  set fails the boot rather than the invoice.
+  `enrich.position_reverse` egress through Portal. They **are** in the loop's
+  default stage set — `defaultStageSet()` returns `automaticStageIds()`, every
+  stage whose `trigger` is not `manual`, and nothing is `manual` today, so the
+  timer can start them. The exclusion that used to make "costs money" and
+  "unreachable by a timer" the same statement is gone; what bounds the spend now
+  is three declared numbers per stage in `STAGE_SCHEDULES` (`schedule.ts`),
+  enforced by `assertStageSchedules` at module load:
+
+  | | `enrich.geocode` | `enrich.position_reverse` |
+  |---|---|---|
+  | `minInterval` | 7 days | 7 days |
+  | `window` | `enrichment` | `enrichment` |
+  | `perRunCap` | 1,000 ids | 2,000 ids |
+  | `maxStaleness` | 30 days | 30 days |
+
+  `METERED_STAGES` survives as the derived label set behind the `BILL` column —
+  it no longer gates dispatch. A leg with an overdue retry may jump
+  `minInterval` (those rows were already counted against a past `perRunCap`);
+  the window still binds it.
 - **A zero is a fact, not a gap.** `enrich.person_link` at 0 means
   `ci.communications` is empty on this box, not that the stage is broken.
 
@@ -217,11 +245,14 @@ Read it like this:
 
 ### 3a. Continuous mode — the intended path
 
-Once `PipelineTickCron` and `PipelineControlService` are in `PipelineModule`'s
-providers, **there is nothing to start.** The tick fires on its own cron, takes a
+`PipelineTickCron` and `PipelineControlService` are in `PipelineModule`'s
+providers, so **there is nothing to start.** The tick fires on its own cron —
+`PIPELINE_TICK_CRON = '20 */5 * * * *'`, i.e. every five minutes at :20 — takes a
 Postgres advisory lock (so a second replica cannot double-fire it), opens a
-`kind='continuous'` run for any user with stale rows, and sweeps the non-metered
-stages in dependency order. Starting a loop is a deploy, not a command.
+`kind='continuous'` run for any user with stale rows, and sweeps every stage it
+judges due, in dependency order. Metered stages included: their cadence is
+`minInterval` + `window` + `perRunCap` (§2), not exclusion. Starting a loop is a
+deploy, not a command.
 
 Confirm it woke up:
 
@@ -232,10 +263,9 @@ SELECT id, kind, desired_state, status, started_at, detail
 
 ### 3b. Start one by hand
 
-⛔ **Needs the controller registered.** There is no `POST /api/pipeline/runs`
-route even in the implemented controller — it exposes `state`, `runs`,
-`runs/:id`, `pause`, `resume`, `cancel`, `dead-letters` and `replay`, but no
-create. Runs are created by the control tick.
+⛔ **No such route, by design.** The registered controller exposes `state`,
+`runs`, `runs/:id`, `pause`, `resume`, `cancel`, `dead-letters`, `replay` and
+`quarantine/release` — but no create. Runs are created by the control tick.
 
 ✅ **psql equivalent.** Insert the run and let the next tick pick it up. The
 partial unique index `pipeline_runs_active_uniq` makes a second active run for the
@@ -300,7 +330,8 @@ SELECT r.id, r.kind, r.desired_state, r.status,
 `desired_state` is what you asked for; `status` is what the workers report. They
 are separate channels on purpose — see §5.
 
-⛔ `curl -s $CI/api/pipeline/runs?activeOnly=true | jq` once registered.
+✅ `curl -s $CI/api/pipeline/runs?activeOnly=true | jq` — same answer, this
+user's runs only.
 
 ### 4b. Where has it got to?
 
@@ -334,6 +365,9 @@ This is the question the pipeline was rebuilt to be able to answer.
 -- Paste the CURRENT versions from domains/pipeline/versions.ts. They live in
 -- code, not in the database. `index.embed` is DERIVED from the embedding model —
 -- read it with: yarn workspace @ci/be-api node -e "…embedStageVersion()".
+-- Same 12-stage subset as §2's census; the values below were re-checked against
+-- versions.ts on 2026-08-19 and are all still 1. Two stages OUTSIDE this list
+-- have moved: every promote.edge_* is at 4, and index.vector_item at 2.
 WITH current_versions(stage, version) AS (VALUES
   ('enrich.media_dimensions',1),('index.embed',1),('enrich.position_reverse',1),('enrich.geocode',1),
   ('enrich.estimate_location',1),('enrich.person_link',1),('enrich.event_person_link',1),
@@ -384,7 +418,7 @@ SELECT stage, status, coalesce(reason, '(none)') AS reason, count(*)
 this stage replaces they would simply have been absent, indistinguishable from
 work that was never scheduled.
 
-⛔ `curl -s $CI/api/pipeline/state | jq '.stages[] | {stage, done, skipped, stale, coverage}'`
+✅ `curl -s $CI/api/pipeline/state | jq '.stages[] | {stage, done, skipped, stale, coverage}'`
 
 ### 4d. Rate and ETA
 
@@ -456,7 +490,7 @@ RETURNING id, desired_state, status;
  1722e423-636b-4f1e-930a-eb8510c98de2 | running       | running
 ```
 
-⛔ `curl -X POST $CI/api/pipeline/runs/$ID/pause` · `…/resume` · `…/cancel`
+✅ `curl -X POST $CI/api/pipeline/runs/$ID/pause` · `…/resume` · `…/cancel`
 
 ### What pause does and does not stop
 
@@ -603,7 +637,7 @@ adjectives.
 > **These are machinery numbers from a seeded corpus, not appliance numbers.**
 > An earlier version of this suite ran over the operator's own 324,044 imported
 > events and kept them safe with a rolled-back transaction. That did not hold —
-> it committed ~599,000 ledger rows, 2,147 `ci.inventory` objects and 2,875
+> it committed ~599,000 ledger rows, 2,147 `ci.objects` objects and 2,875
 > time-provenance labels into a personal archive. A test that drives real
 > enrichers writes real tables by name, and the only isolation worth having for
 > that is a database of its own. The ratios below (ticks to converge, attempts
@@ -619,7 +653,7 @@ adjectives.
 | Ticks to converge | **3** (1,000 + 1,000 + 790 ids) |
 | Wall clock per tick | 137, 133, 104 ms |
 | Outcomes | 2,170 `done`, 620 `skipped: order_rollup_no_line_item`, 0 failed |
-| Objects written | 2,170 `ci.inventory` rows, from 0 — and `done` matches that count exactly |
+| Objects written | 2,170 `ci.objects` rows, from 0 — and `done` matches that count exactly |
 | Idle ticks after convergence | 5, **all dispatching 0** |
 | Rows claimed more than once | **0** (`max(attempts) = 1` across all 2,790) |
 
@@ -663,7 +697,8 @@ adjectives.
 > everything that actually costs: the stage's own work (an Ollama round trip for
 > `index.embed`, a provider call for `enrich.geocode`), the queue's throughput
 > ceiling — **10 in-flight jobs appliance-wide, 6 per queue**
-> (`config/default.json` → `queues.concurrency`) — and the tick cadence, which
+> (`config/default.json` → `queues.concurrency` and `queues.perQueueConcurrency`)
+> — and the tick cadence, which
 > bounds how fast a *new* sweep starts, not how fast a running one drains. The
 > number is a floor and a regression tripwire: it says the ledger and the sweep
 > are not the bottleneck.
@@ -691,7 +726,7 @@ is a recurring bill.
 | `hit the hop ceiling (10000)` in the log | the cursor advances but the source never drains | the applicability predicate is matching rows the stage never terminates |
 | `running` rows that never settle | worker died mid-slice | nothing to do. The 15-minute claim lease expires and the next sweep re-selects them |
 | `quarantined` climbing | 5 failed attempts | read the reason, fix the enricher, **bump the version** — a bump re-admits quarantined rows |
-| Ledger grows but nothing is enriched | the stage's target table is not being written | compare `done` against a `count(*)` on the target, e.g. `ci.inventory WHERE source_type = 'promote.object'` |
+| Ledger grows but nothing is enriched | the stage's target table is not being written | compare `done` against a `count(*)` on the target, e.g. `ci.objects WHERE source_type = 'promote.object'` |
 
 The single most useful check, and the one to run first:
 

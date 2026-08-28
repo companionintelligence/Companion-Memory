@@ -391,10 +391,22 @@ export class RedditFileImporter implements FileImporter {
         },
         metadata: {
           Product: product,
-          Cost: row.cost || undefined,
+          // CANONICAL key (push/commerceKeys.ts). This used to be `Cost`, which
+          // NO price chain read — the things lane reads 'Unit Price' then 'Total' —
+          // so every Reddit purchase reached ci.* priceless.
+          Total: row.cost || undefined,
           Currency: row.currency || undefined,
           Status: row.status || undefined,
+          Merchant: 'Reddit',
+          // The PAYMENT processor (Stripe/PayPal), deliberately kept out of the
+          // MERCHANT chain: it is neither who issued the receipt nor the brand
+          // of the thing bought.
           Processor: row.processor || undefined,
+          // Reddit sells Coins, Awards and Premium: there is no physical good
+          // in this file, ever. Stating it keeps the purchase out of physical
+          // the things lane without relying on the product-name heuristic (which
+          // matches "Premium" but not "1,000 Coins").
+          IsDigital: true,
           Kind: 'purchase',
           Source: 'Reddit',
         },

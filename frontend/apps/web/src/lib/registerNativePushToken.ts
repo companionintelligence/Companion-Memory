@@ -29,6 +29,7 @@ function pushPlugin(): PushPlugin | undefined {
 
 function nativePlatform(): 'ios' | 'android' {
   const cap = (window as unknown as { Capacitor?: { getPlatform?: () => string } }).Capacitor;
+
   return cap?.getPlatform?.() === 'ios' ? 'ios' : 'android';
 }
 

@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, type ReactNode } from 'react';
 
 import { useSearchParams } from 'react-router-dom';
 
+import { MemoryChatAbout } from '@/components/ChatWithAgent';
 import {
   DateGroupHeader,
   ErrorState,
@@ -29,6 +30,8 @@ import { ItemRow } from './rows/ItemRow';
 import { NoteRow } from './rows/NoteRow';
 import { PersonRow } from './rows/PersonRow';
 import { PlaceRow } from './rows/PlaceRow';
+import { ProductRow } from './rows/ProductRow';
+import { ReceiptRow } from './rows/ReceiptRow';
 import { ThreadRow } from './rows/ThreadRow';
 
 export function ListView() {
@@ -78,70 +81,88 @@ export function ListView() {
   // Every row opens the same shared details drawer (incl. File/Item media).
   const renderRow = (item: EntityItem) => {
     const time = formatRowTime(getEntityTimestamp(item));
+    let row: ReactNode;
 
     switch (item.__typename) {
       case 'AnswerType':
-        return <AnswerRow key={item.id} answer={item} time={time} onClick={() => setActiveEntity(item)} />;
+        row = <AnswerRow answer={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
 
       case 'BrowserActivityType':
-        return (
-          <BrowserActivityRow
-            key={item.id}
-            browserActivity={item}
-            time={time}
-            onClick={() => setActiveEntity(item)}
-          />
+        row = (
+          <BrowserActivityRow browserActivity={item} time={time} onClick={() => setActiveEntity(item)} />
         );
+        break;
 
       case 'CommunicationType':
-        return (
-          <CommunicationRow
-            key={item.id}
-            communication={item}
-            time={time}
-            onClick={() => setActiveEntity(item)}
-          />
+        row = (
+          <CommunicationRow communication={item} time={time} onClick={() => setActiveEntity(item)} />
         );
+        break;
 
       case 'ConceptType':
-        return <ConceptRow key={item.id} concept={item} time={time} onClick={() => setActiveEntity(item)} />;
+        row = <ConceptRow concept={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
 
       case 'ContentType':
-        return <ContentRow key={item.id} content={item} time={time} onClick={() => setActiveEntity(item)} />;
+        row = <ContentRow content={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
 
       case 'EventType':
-        return <EventRow key={item.id} event={item} time={time} onClick={() => setActiveEntity(item)} />;
+        row = <EventRow event={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
 
       case 'FileChunkType':
-        return <FileChunkRow key={item.id} fileChunk={item} onClick={() => setActiveEntity(item)} />;
+        row = <FileChunkRow fileChunk={item} onClick={() => setActiveEntity(item)} />;
+        break;
 
       case 'FileType':
-        return <FileRow key={item.id} file={item} time={time} onClick={() => setActiveEntity(item)} />;
+        row = <FileRow file={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
 
       case 'ItemType':
-        return <ItemRow key={item.id} item={item} time={time} onClick={() => setActiveEntity(item)} />;
+        row = <ItemRow item={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
 
       case 'NoteType':
-        return <NoteRow key={item.id} note={item} time={time} onClick={() => setActiveEntity(item)} />;
+        row = <NoteRow note={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
 
       case 'PersonType':
-        return <PersonRow key={item.id} person={item} time={time} onClick={() => setActiveEntity(item)} />;
+        row = <PersonRow person={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
 
       case 'PlaceType':
-        return <PlaceRow key={item.id} place={item} time={time} onClick={() => setActiveEntity(item)} />;
+        row = <PlaceRow place={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
+
+      case 'ProductModelType':
+        row = <ProductRow product={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
+
+      case 'ReceiptType':
+        row = <ReceiptRow receipt={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
 
       case 'ThreadType':
-        return <ThreadRow key={item.id} thread={item} time={time} onClick={() => setActiveEntity(item)} />;
+        row = <ThreadRow thread={item} time={time} onClick={() => setActiveEntity(item)} />;
+        break;
 
       default:
         return null;
     }
+
+    return (
+      <MemoryChatAbout key={item.id} entity={item}>
+        {row}
+      </MemoryChatAbout>
+    );
   };
 
   // First load (no data yet): skeletons over a bare spinner.
   if (loading && data.length === 0) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
         <ListSkeleton count={10} />
       </div>
     );
@@ -150,7 +171,7 @@ export function ListView() {
   // Hard error with nothing to show.
   if (error && data.length === 0) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
         <ErrorState onRetry={refetch} />
       </div>
     );
@@ -158,14 +179,14 @@ export function ListView() {
 
   if (data.length === 0) {
     return (
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
         <MemoryEmptyState filtered={filteredBrowse} />
       </div>
     );
   }
 
   return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-2" data-list-scroll="">
       <div className="flex flex-col">
         {groups
           ? groups.map((group) => (

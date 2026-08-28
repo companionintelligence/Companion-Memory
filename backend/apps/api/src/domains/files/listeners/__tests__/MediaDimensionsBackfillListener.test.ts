@@ -1,3 +1,4 @@
+import { BACKFILL_JOB_PRIORITY } from '@ci/domains/events';
 import { PIPELINE_QUEUES, STAGE_IDS } from '@ci/domains/pipeline';
 import { PipelineSweepEvent } from '@ci/domains/pipeline/events';
 
@@ -48,7 +49,7 @@ function handoff(send: jest.Mock) {
   const [event, payload, options] = send.mock.calls[0] as [
     string,
     Record<string, unknown>,
-    { queue?: string } | undefined,
+    { queue?: string; priority?: number } | undefined,
   ];
 
   return { event, payload, options };
@@ -83,6 +84,17 @@ describe('MediaDimensionsBackfillListener.handleBatch', () => {
     const { payload, options } = handoff(send);
     expect(payload.stage).toBe(STAGE_IDS.ENRICH_MEDIA_DIMENSIONS);
     expect(PIPELINE_QUEUES.ENRICH).toBe(options?.queue);
+  });
+
+  it('starts the sweep at backfill priority, like every other hop on the shared queue', async () => {
+    // A missing priority here defaults to DEFAULT_JOB_PRIORITY (0), which would
+    // let this shim's first hop cut ahead of the BACKFILL_JOB_PRIORITY (-10)
+    // slices and later hops it enqueues on the same pipeline-enrich queue.
+    const { listener, send } = makeListener();
+
+    await listener.handleBatch({ userId: USER });
+
+    expect(handoff(send).options?.priority).toBe(BACKFILL_JOB_PRIORITY);
   });
 
   it('starts the sweep at the beginning, with no cursor', async () => {

@@ -16,6 +16,16 @@ vi.mock('./useSourceUsage', async (importOriginal) => {
   return { ...actual, useSourceUsage: () => usage.value };
 });
 
+// Same reason, same pattern, for the object-count rollup. `countFor` is a
+// pure derivation and stays real.
+const objectCounts = vi.hoisted(() => ({ value: new Map<string, ReadonlyMap<string, number>>() }));
+
+vi.mock('./useObjectCounts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./useObjectCounts')>();
+
+  return { ...actual, useObjectCounts: () => objectCounts.value };
+});
+
 /**
  * Step 1's contract: recognizable brands in sections, each tile saying what
  * picking it imports, coming-soon visible-but-badged, and Continue earned by
@@ -60,6 +70,7 @@ describe('PickStep', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     usage.value = new Map();
+    objectCounts.value = new Map();
   });
 
   it('groups services into their sections', () => {
@@ -135,6 +146,57 @@ describe('PickStep', () => {
     // Answering "what would picking this give me" on the tile is the whole
     // reason it is a card rather than a one-line label.
     expect(screen.getByRole('button', { name: /Spotify/ })).toHaveTextContent('Listening');
+  });
+
+  // The feature this file exists to cover: a real, compact count next to the
+  // kind it describes — "118.3k Listening", not a bare label.
+  it('shows a compact count next to an object kind this appliance can actually count', () => {
+    objectCounts.value = new Map([['spotify', new Map([['Listening', 118_286]])]]);
+
+    renderStep();
+
+    expect(screen.getByRole('button', { name: /Spotify/ })).toHaveTextContent('118.3k Listening');
+  });
+
+  // Never imported and "imported, and it was zero" must look identical: no
+  // number at all, the same way the "imported ✓" line renders nothing rather
+  // than a date for a source that has never run.
+  it('shows no number for a kind nobody has imported, or that this feature cannot count', () => {
+    renderStep();
+
+    const spotify = screen.getByRole('button', { name: /Spotify/ });
+
+    expect(spotify).toHaveTextContent('Listening');
+    expect(spotify).not.toHaveTextContent(/\d/);
+  });
+
+  it("sums a bundle's own members instead of showing nothing just because it is a bundle", () => {
+    objectCounts.value = new Map([
+      ['gmail', new Map([['Mail', 24_000]])],
+      ['google_photos', new Map([['Photos', 1_234_000]])],
+    ]);
+
+    render(
+      <PickStep
+        catalog={[
+          catalogSource({ id: 'gmail', title: 'Gmail', ecosystem: 'google', category: 'mail' }),
+          catalogSource({
+            id: 'google_photos',
+            title: 'Google Photos',
+            ecosystem: 'google',
+            category: 'photos',
+          }),
+        ]}
+        picked={new Set()}
+        onToggle={vi.fn()}
+        onContinue={vi.fn()}
+      />,
+    );
+
+    const google = screen.getByRole('button', { name: /Google/ });
+
+    expect(google).toHaveTextContent('24.0k Mail');
+    expect(google).toHaveTextContent('1.2M Photos');
   });
 
   it('renders every kind on a tile that has more than four, none dropped', () => {
@@ -235,5 +297,29 @@ describe('PickStep', () => {
     expect(button).toBeEnabled();
     fireEvent.click(button);
     expect(onContinue).toHaveBeenCalled();
+  });
+
+  it('pins Continue and scrolls the catalog by default', () => {
+    renderStep();
+
+    expect(screen.getByTestId('pick-catalog').className).toMatch(/overflow-y-auto/);
+  });
+
+  it('lets Continue sit after the catalog when the page is the scroller', () => {
+    render(
+      <PickStep
+        catalog={CATALOG}
+        picked={new Set(['spotify'])}
+        onToggle={vi.fn()}
+        onContinue={vi.fn()}
+        pinContinue={false}
+      />,
+    );
+
+    const catalog = screen.getByTestId('pick-catalog');
+    const continueButton = screen.getByRole('button', { name: /continue/i });
+
+    expect(catalog.className).not.toMatch(/overflow-y-auto/);
+    expect(catalog.compareDocumentPosition(continueButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

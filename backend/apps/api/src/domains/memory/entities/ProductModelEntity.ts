@@ -6,9 +6,9 @@ import { minorUnitsTransformer } from './minorUnits';
  * A catalog product model — the thing a GTIN names ("iPhone 15 Pro 256GB Blue
  * Titanium"). Mirrors migration 20260803223013_create_product_models.
  *
- * The other half of the product/instance split: `ItemEntity` (ci.inventory)
+ * The other half of the product/instance split: `ItemEntity` (ci.objects)
  * holds the owned UNITS, this holds what they are instances of. Before this
- * table, buying three of the same headphones produced three unrelated inventory
+ * table, buying three of the same headphones produced three unrelated object
  * rows with the brand/model strings duplicated three times and nowhere to hang
  * the canonical barcode, spec sheet, MSRP or manual.
  */

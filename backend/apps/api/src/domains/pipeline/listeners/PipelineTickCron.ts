@@ -12,7 +12,7 @@ import { BackpressureService, type QueueAdmissions } from '../services/Backpress
 // ---------------------------------------------------------------------------
 
 /**
- * Tick cadence: every 30 s, at seconds 5 and 35.
+ * Tick cadence: every five minutes, at second 20.
  *
  * Off the top of the minute on purpose — `SyncOrchestrator`,
  * `AnswerInferenceCron` and `McpController` all fire at second 0, and the
@@ -20,25 +20,18 @@ import { BackpressureService, type QueueAdmissions } from '../services/Backpress
  * fifth scheduled job on the same second turns a quiet appliance into a
  * periodic spike.
  *
- * 30 s is the interval a tick's decisions are worth: it enqueues work and reads
- * operator intent, so it bounds how long a pause or a cancel waits before a
- * worker hears about it, and how long a drained queue sits idle before it is
- * refilled. It does no processing itself — a tick that takes tens of seconds
- * means something downstream is wrong, not that the cadence is too tight.
+ * Five minutes, NOT thirty seconds. The tick itself is cheap — an advisory lock
+ * and a due-check — but what it GUARDS is not: enrichment shares one Ollama
+ * process with interactive chat, and two of the twelve stages egress to a
+ * metered provider. A perpetual half-minute tick makes enrichment a permanent
+ * background tenant of the appliance and a metered stage a recurring bill with
+ * no natural stopping point.
+ *
+ * Cadence is decided in two places instead: ENRICHMENT_WINDOW says WHEN the
+ * appliance is willing to spend, and STAGE_CADENCE says how often each stage
+ * is due within it. This cron only has to fire often enough to notice the
+ * window opening and to resume promptly after a restart.
  */
-// Every five minutes, NOT every thirty seconds.
-//
-// The tick itself is cheap — an advisory lock and a due-check — but what it
-// GUARDS is not: enrichment shares one Ollama process with interactive chat,
-// and two of the twelve stages egress to a metered provider. A perpetual
-// half-minute tick makes enrichment a permanent background tenant of the
-// appliance and a metered stage a recurring bill with no natural stopping
-// point.
-//
-// Cadence is decided in two places instead: ENRICHMENT_WINDOW says WHEN the
-// appliance is willing to spend, and STAGE_CADENCE says how often each stage
-// is due within it. This cron only has to fire often enough to notice the
-// window opening and to resume promptly after a restart.
 export const PIPELINE_TICK_CRON = '20 */5 * * * *';
 
 // ---------------------------------------------------------------------------
@@ -57,9 +50,15 @@ export const PIPELINE_TICK_CRON = '20 */5 * * * *';
  * for collisions by reading, and is not contractually stable across Postgres
  * major versions.
  *
- * Nothing else in this repository takes an advisory lock today. This pair is
- * where that starts, and a second cron takes the same class with a new object
- * id.
+ * That namespace is already shared, so the collision risk above is live rather
+ * than hypothetical. Three other components lock today:
+ * `PipelineControlService` takes `(0x6369, 0x7443)` around the tick body — same
+ * class, different object id, by agreement; `PGBossEventService` takes the
+ * single-argument `804_551_297` around queue provisioning, which Postgres keys
+ * separately from the two-int form; and `AccountPurgeService` takes
+ * `pg_try_advisory_lock(hashtext('ci.account_purge'), hashtext(userId))`, which
+ * lands in this same two-int space under keys nobody can check by reading. Any
+ * new lock under this class must take an unused object id and be listed here.
  */
 export const PIPELINE_ADVISORY_LOCK_CLASS = 0x6369;
 
@@ -142,9 +141,10 @@ interface UnlockRow {
 }
 
 /**
- * Ticks with no target before the cron says so again. 120 ticks at 30 s is
- * roughly an hour: loud enough that an unbound tick is discovered, quiet enough
- * that it is not the whole log.
+ * Ticks with no target before the cron says so again. The first tick always
+ * warns, so an unbound tick is discovered immediately; 120 ticks at five
+ * minutes is the reminder after it, roughly twice a day, quiet enough that it
+ * is not the whole log.
  */
 const UNBOUND_WARN_EVERY = 120;
 
@@ -189,7 +189,7 @@ const UNBOUND_WARN_EVERY = 120;
  *     table: a row would have to be reaped by something, and that something
  *     would need a lock.
  *  3. **Re-entrancy, for free.** Each tick takes its own `QueryRunner` and
- *     therefore its own session, so a tick that overruns its 30 s cadence
+ *     therefore its own session, so a tick that overruns its five-minute cadence
  *     blocks the NEXT tick on the same node exactly as it blocks another node's.
  *     No separate "already running" flag, and no way for the two mechanisms to
  *     disagree.
@@ -217,7 +217,7 @@ const UNBOUND_WARN_EVERY = 120;
  * `waitForCompletion`, and `cron` only awaits — and therefore only catches —
  * the callback when that flag is set. Nothing awaits a `@Cron` method, so an
  * async tick that rejects is an UNHANDLED REJECTION, and `application.ts`
- * answers those with `process.exit(1)`. On a 30-second timer that is a crash
+ * answers those with `process.exit(1)`. On a repeating timer that is a crash
  * loop: the API dies because the pipeline could not plan a slice.
  * `DeadLetterReaperListener` had exactly this bug and fixed it the same way, so
  * {@link runOnSchedule} catches and logs while {@link tickOnce} — the on-demand
@@ -277,7 +277,7 @@ export class PipelineTickCron {
   /**
    * The scheduled tick.
    *
-   * Swallows everything. The next tick is thirty seconds away and retries; an
+   * Swallows everything. The next tick is five minutes away and retries; an
    * unhandled rejection here would exit the process, which is a strictly worse
    * outcome than one missed planning pass.
    */

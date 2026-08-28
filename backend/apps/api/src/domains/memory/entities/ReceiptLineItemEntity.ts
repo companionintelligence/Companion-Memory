@@ -7,7 +7,7 @@ import { minorUnitsTransformer } from './minorUnits';
  * 20260803223019_create_receipts_and_line_items.
  *
  * The unit of object minting: a four-item order produces four lines and up to
- * four ci.inventory rows, replacing the single order-named row the importer
+ * four ci.objects rows, replacing the single order-named row the importer
  * writes today. `(receiptId, lineNumber)` is the natural key, so re-extracting
  * the same document updates lines in place instead of appending a second copy.
  */
@@ -80,7 +80,7 @@ export class ReceiptLineItemEntity {
   @Column('boolean', { name: 'is_physical', default: true })
   isPhysical!: boolean;
 
-  /** The ci.inventory row minted from this line, if any. */
+  /** The ci.objects row minted from this line, if any. */
   @Column('uuid', { name: 'minted_object_id', nullable: true })
   mintedObjectId!: string | null;
 

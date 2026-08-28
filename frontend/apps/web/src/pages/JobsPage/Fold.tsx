@@ -30,9 +30,7 @@ export function FoldCard({
   children: ReactNode;
 }) {
   const phone = usePhone();
-  const card = (
-    <Card className={cn(phone ? PHONE_CARD : COMPACT_CARD, className)}>{children}</Card>
-  );
+  const card = <Card className={cn(phone ? PHONE_CARD : COMPACT_CARD, className)}>{children}</Card>;
 
   if (!phone || !fold) {
     return card;

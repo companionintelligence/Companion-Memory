@@ -3,7 +3,13 @@ import { Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 
-import type { GeocodeProvider, GeocodeProviderResult } from './GeocodeProvider';
+import type { GeocodeBounds, GeocodeProvider, GeocodeProviderResult } from './GeocodeProvider';
+
+/** Google's box shape, shared by geometry.bounds and geometry.viewport. */
+interface GoogleViewport {
+  northeast?: { lat?: number; lng?: number };
+  southwest?: { lat?: number; lng?: number };
+}
 
 interface GoogleGeocodeResponse {
   status: string;
@@ -15,9 +21,47 @@ interface GoogleGeocodeResponse {
     geometry?: {
       location?: { lat?: number; lng?: number };
       location_type?: string;
+      bounds?: GoogleViewport;
+      viewport?: GoogleViewport;
     };
     address_components?: unknown[];
   }>;
+}
+
+/**
+ * Normalize Google's box into {@link GeocodeBounds}, preferring `bounds` (the
+ * feature's true footprint) over `viewport` (a padded display box Google
+ * returns for everything, including single addresses).
+ *
+ * Returns undefined unless all four corners are finite AND the box is
+ * well-formed: north above south, and east above west. A box crossing the
+ * antimeridian arrives with east < west and is dropped rather than silently
+ * turned inside out into an envelope wrapping the whole globe.
+ */
+function toBounds(geometry: { bounds?: GoogleViewport; viewport?: GoogleViewport } | undefined) {
+  for (const box of [geometry?.bounds, geometry?.viewport]) {
+    const north = box?.northeast?.lat;
+    const east = box?.northeast?.lng;
+    const south = box?.southwest?.lat;
+    const west = box?.southwest?.lng;
+
+    if (
+      typeof north === 'number' &&
+      typeof south === 'number' &&
+      typeof east === 'number' &&
+      typeof west === 'number' &&
+      Number.isFinite(north) &&
+      Number.isFinite(south) &&
+      Number.isFinite(east) &&
+      Number.isFinite(west) &&
+      north > south &&
+      east > west
+    ) {
+      return { north, south, east, west } satisfies GeocodeBounds;
+    }
+  }
+
+  return undefined;
 }
 
 const GOOGLE_GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
@@ -66,6 +110,7 @@ export class GoogleGeocodeProvider implements GeocodeProvider {
       locationType: result.geometry?.location_type,
       partialMatch: result.partial_match ?? false,
       components: { address_components: result.address_components ?? [] },
+      bounds: toBounds(result.geometry),
     };
   }
 
@@ -93,6 +138,7 @@ export class GoogleGeocodeProvider implements GeocodeProvider {
       locationType: result.geometry?.location_type,
       partialMatch: result.partial_match ?? false,
       components: { address_components: result.address_components ?? [] },
+      bounds: toBounds(result.geometry),
     };
   }
 

@@ -38,9 +38,11 @@ import { Module, type Provider } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { EmbeddingModule } from '@ci/common/embeddings';
+import { EmbedModule } from '@ci/domains/embed';
 import { EventsModule } from '@ci/domains/events';
 import { FileEntity, FilesModule } from '@ci/domains/files';
 import { GeocodeModule } from '@ci/domains/geocode';
+import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MaintenanceModule } from '@ci/domains/maintenance';
 import { MemoryModule } from '@ci/domains/memory';
 
@@ -53,11 +55,13 @@ import { PipelineShardEntity } from './entities/PipelineShardEntity';
 import { PipelineStateEntity } from './entities/PipelineStateEntity';
 import { RecordRejectionEntity } from './entities/RecordRejectionEntity';
 import { DeadLetterReaperListener } from './listeners/DeadLetterReaperListener';
+import { FilePreviewSweepRequestListener } from './listeners/FilePreviewSweepRequestListener';
 import { GraphEdgeSweepRequestListener } from './listeners/GraphEdgeSweepRequestListener';
 import { PipelineSliceListener } from './listeners/PipelineSliceListener';
 import { PIPELINE_TICK, PipelineTickCron } from './listeners/PipelineTickCron';
 import { SearchIndexSweepRequestListener } from './listeners/SearchIndexSweepRequestListener';
 import { StageArrivalListener } from './listeners/StageArrivalListener';
+import { UnfurlSweepRequestListener } from './listeners/UnfurlSweepRequestListener';
 import { BackpressureService } from './services/BackpressureService';
 import { EnrichmentWindowService } from './services/EnrichmentWindowService';
 import { PipelineControlService } from './services/PipelineControlService';
@@ -67,12 +71,18 @@ import { PipelineStateService } from './services/PipelineStateService';
 import { STAGE_REGISTRY, StageRegistry } from './services/StageRegistry';
 import { DuplicateDetectStage } from './stages/clean/DuplicateDetectStage';
 import { IdentifierNormalizeStage } from './stages/clean/IdentifierNormalizeStage';
+import { ObjectDuplicateDetectStage } from './stages/clean/ObjectDuplicateDetectStage';
+import { SingleValuedEdgeAuditStage } from './stages/clean/SingleValuedEdgeAuditStage';
 import { TemporalRepairStage } from './stages/clean/TemporalRepairStage';
 import { EstimateLocationStage } from './stages/enrich/EstimateLocationStage';
+import { EventReverseStage } from './stages/enrich/EventReverseStage';
+import { FilePreviewStage } from './stages/enrich/FilePreviewStage';
 import { GeocodeStage } from './stages/enrich/GeocodeStage';
 import { MediaDimensionsStage } from './stages/enrich/MediaDimensionsStage';
 import { EventPersonLinkStage, PersonLinkStage } from './stages/enrich/PersonLinkStage';
+import { PersonSelfClaimStage } from './stages/enrich/PersonSelfClaimStage';
 import { PositionReverseStage } from './stages/enrich/PositionReverseStage';
+import { UnfurlStage } from './stages/enrich/UnfurlStage';
 import { EmbedStage } from './stages/index/EmbedStage';
 import {
   BrowserActivityEmbedStage,
@@ -97,7 +107,7 @@ import {
   DeviceEdgePromoteStage,
   EventEdgePromoteStage,
   FileEdgePromoteStage,
-  InventoryEdgePromoteStage,
+  ObjectEdgePromoteStage,
   ObservationEdgePromoteStage,
   PlaceEdgePromoteStage,
   PositionEdgePromoteStage,
@@ -135,6 +145,8 @@ import { PositionPlacePromoteStage } from './stages/promote/PositionPlacePromote
  */
 const stageProviders: Provider[] = [
   { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_MEDIA_DIMENSIONS], useClass: MediaDimensionsStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_FILE_PREVIEW], useClass: FilePreviewStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_UNFURL], useClass: UnfurlStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.INDEX_EMBED], useClass: EmbedStage },
   // The rest of the dense-embed family — one id per source table, one shared
   // implementation (DenseEmbedStageBase), all at the model-derived version.
@@ -154,15 +166,31 @@ const stageProviders: Provider[] = [
   { provide: STAGE_REGISTRY[STAGE_IDS.INDEX_VECTOR_BROWSER_ACTIVITY], useClass: BrowserActivityVectorStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_POSITION_REVERSE], useClass: PositionReverseStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_GEOCODE], useClass: GeocodeStage },
+  // The other direction over the same table. A second id rather than a second
+  // mode on `enrich.geocode`, because one integer could not then re-open the
+  // forward corpus without re-billing the reverse one — and vice versa.
+  { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_EVENT_REVERSE], useClass: EventReverseStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_ESTIMATE_LOCATION], useClass: EstimateLocationStage },
   // Two ids, one implementation. `PersonLinkStage.ts` carries the argument: a
   // Stage has exactly one `source`, and the three backfills these replace read
   // two tables.
   { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_PERSON_LINK], useClass: PersonLinkStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_EVENT_PERSON_LINK], useClass: EventPersonLinkStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.ENRICH_PERSON_SELF_CLAIM], useClass: PersonSelfClaimStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.CLEAN_TEMPORAL_REPAIR], useClass: TemporalRepairStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.CLEAN_DUPLICATE_DETECT], useClass: DuplicateDetectStage },
+  {
+    provide: STAGE_REGISTRY[STAGE_IDS.CLEAN_OBJECT_DUPLICATE_DETECT],
+    useClass: ObjectDuplicateDetectStage,
+  },
   { provide: STAGE_REGISTRY[STAGE_IDS.CLEAN_IDENTIFIER_NORMALIZE], useClass: IdentifierNormalizeStage },
+  // A DETECTOR, not a repairer: it counts subjects holding more than one active
+  // edge of a single-valued type and writes nothing to `ci.relationships`. See
+  // the file for why the count has to come before any supersession work.
+  {
+    provide: STAGE_REGISTRY[STAGE_IDS.CLEAN_SINGLE_VALUED_EDGE_AUDIT],
+    useClass: SingleValuedEdgeAuditStage,
+  },
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_PLACE], useClass: PlacePromoteStage },
   // The same promotion over `ci.position` — a second id because a Stage has
   // exactly one `source` and this is a different table. It is the only writer
@@ -176,7 +204,7 @@ const stageProviders: Provider[] = [
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_COMMUNICATION], useClass: CommunicationEdgePromoteStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_EVENT], useClass: EventEdgePromoteStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_CONTENT], useClass: ContentEdgePromoteStage },
-  { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_INVENTORY], useClass: InventoryEdgePromoteStage },
+  { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_OBJECT], useClass: ObjectEdgePromoteStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_RECEIPT], useClass: ReceiptEdgePromoteStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_OBSERVATION], useClass: ObservationEdgePromoteStage },
   { provide: STAGE_REGISTRY[STAGE_IDS.PROMOTE_EDGE_POSITION], useClass: PositionEdgePromoteStage },
@@ -229,6 +257,9 @@ const stageProviders: Provider[] = [
     FilesModule,
     EmbeddingModule,
     GeocodeModule,
+    //  - `EmbedModule`     -> UnfurlService (ci.unfurls cache + resolvers + SSRF
+    //                        fetcher) for `enrich.unfurl`.
+    EmbedModule,
     //  - `MemoryModule`    -> PlaceService (find-or-create place identity + the
     //                        city/region/country hierarchy fold) for `promote.place`.
     MemoryModule,
@@ -237,6 +268,13 @@ const stageProviders: Provider[] = [
     //                        legs. The projection is shared with the operator
     //                        backfill endpoint rather than re-implemented here.
     MaintenanceModule,
+    //  - `IntelligenceModule` -> ActionService, for the one card
+    //                        `clean.single_valued_edge_audit` raises when it
+    //                        finds a contradiction. It imports only
+    //                        TypeOrmModule.forFeature + EventsModule, so nothing
+    //                        in its graph reaches back here and no `forwardRef`
+    //                        is needed.
+    IntelligenceModule,
   ],
   providers: [
     PipelineStateService,
@@ -261,6 +299,8 @@ const stageProviders: Provider[] = [
     // until a scheduled sweep — `ci.relationships` is the only table a
     // traversal reads, and nothing was telling it a corpus had landed.
     GraphEdgeSweepRequestListener,
+    UnfurlSweepRequestListener,
+    FilePreviewSweepRequestListener,
     PipelineTickCron,
     // The cron owns the schedule and the cluster-safe advisory lock; the control
     // service owns what a tick DOES. Binding by token rather than importing the
@@ -336,3 +376,14 @@ export type {
   StageResult,
   StageSource,
 } from './types';
+
+/**
+ * The public vocabulary for "where did this record's timestamp come from" —
+ * `TemporalRepairStage`'s own constants, not a domain-boundary copy. A caller
+ * outside this domain that needs to reference or assert against them (e.g. a
+ * mirrored-constant test in another domain checking its own copy has not
+ * drifted) does so through here rather than reaching into the stage file
+ * directly, which is what `no-cross-domain-internals` exists to catch.
+ */
+export { TIME_PRECISIONS, TIME_SOURCES } from './stages/clean/TemporalRepairStage';
+export type { TimePrecision, TimeSource } from './stages/clean/TemporalRepairStage';

@@ -2,16 +2,16 @@ import { useCallback, useEffect, useMemo, useState, type ElementType } from 'rea
 
 import { EmptyState, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Button, IconButton, cn } from '@ci/shadcn';
-import { CalendarRange, ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from '@ci/shadcn/icons';
+import { CalendarRange, ChevronLeft, ChevronRight, Inbox } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
 import { useRescheduleEvent } from '@/api/useRescheduleEvent';
-import { type DeclineReason, useScheduleCandidates } from '@/api/useScheduleCandidates';
 import { type RhythmDay, type ScheduleEvent, useScheduleService } from '@/api/useScheduleService';
-import { HorizonGrid, TodayStoryTimeline } from '@/components/HorizonGrid';
+import { useFeatures } from '@/common/feature';
+import { VerticalCalendar } from '@/components/HorizonGrid';
 import { TodayNowNext, WeekDayChips } from '@/components/HorizonGrid/TodayNowNext';
 import { PageContent } from '@/components/layout';
-import { TaskSlate } from '@/components/TaskSlate';
+import { TaskSlate, TaskSlateDrawer } from '@/components/TaskSlate';
 import {
   type ActivityClass,
   type ColorMode,
@@ -24,6 +24,7 @@ import {
   sourceLabel,
   sourceOf,
 } from '@/lib/activityPalette';
+import { usePlanTasks } from '@/pages/PlanPage/usePlanTasks';
 
 const DAYS_IN_VIEW = 7;
 
@@ -55,10 +56,24 @@ function formatRange(start: Date, end: Date): string {
  * seven days from today. Saying "updated <date>" over a lane that has nothing
  * to draw reads as "the model has learned nothing about you" — a different and
  * much worse statement than "this view cannot fetch that week".
+ *
+ * Three-way branch: `hbpeEnabled` is the sole "is it off" signal (the local
+ * flags fetch, same source of truth as the backend FeatureService) — a falsy
+ * `generatedAt` no longer implies "off" by itself. With the flag off, the
+ * layer really is off. With the flag on but `generatedAt` still falsy, the
+ * resolver's try/catch (ForecastResolver.ts) swallowed a real HBPE failure —
+ * a genuinely untrained model returns real data with
+ * systemStatus: 'COLD_START' instead, so a null `weekForecast` here can only
+ * mean the call failed, never "not started yet". Only once the flag is on and
+ * data resolved does `coversWindow` / the success copy apply.
  */
-function rhythmFooter(generatedAt: string | null, coversWindow: boolean): string {
-  if (!generatedAt) {
+function rhythmFooter(generatedAt: string | null, coversWindow: boolean, hbpeEnabled: boolean): string {
+  if (!hbpeEnabled) {
     return 'HBPE rhythm forecast is off — showing committed time only.';
+  }
+
+  if (!generatedAt) {
+    return "Couldn't reach the rhythm forecast just now — showing committed time only.";
   }
 
   if (!coversWindow) {
@@ -74,6 +89,40 @@ const COLOR_MODE_LABEL: Record<ColorMode, string> = {
   type: 'Activity',
   source: 'Source',
 };
+
+/**
+ * The activity classes and sources the visible window actually contains.
+ *
+ * Both lanes contribute a class: one the rhythm predicts but you have not
+ * committed to is exactly the kind of thing this page exists to show.
+ */
+function windowVocabulary(events: ScheduleEvent[], rhythm: RhythmDay[]) {
+  const classes = new Set<ActivityClass>(events.map(classifyEvent));
+
+  for (const day of rhythm) {
+    for (const cluster of day.clusters) {
+      classes.add(normalizeClass(cluster.l0Class));
+    }
+  }
+
+  return { classes, sources: new Set(events.map(sourceOf)) };
+}
+
+/**
+ * Whether hue is carrying information this week.
+ *
+ * Activity / Source is a choice between two readings of the same marks, and
+ * both collapse to one colour when the window holds a single class and a single
+ * source — at which point the control and its legend are chrome that answers a
+ * question nothing on screen is asking. An empty week is the extreme case of
+ * that, not a special case, so this is derived from what loaded rather than
+ * from the viewport.
+ */
+function colorSaysSomething(events: ScheduleEvent[], rhythm: RhythmDay[]): boolean {
+  const { classes, sources } = windowVocabulary(events, rhythm);
+
+  return classes.size > 1 || sources.size > 1;
+}
 
 /** One swatch + word. The word is why hue never carries identity alone. */
 function LegendKey({ color, label }: { color: string; label: string }) {
@@ -101,27 +150,17 @@ function ScheduleLegend({
   rhythm: RhythmDay[];
 }) {
   const keys = useMemo(() => {
-    if (mode === 'source') {
-      const sources = [...new Set(events.map(sourceOf))].sort();
+    const { classes, sources } = windowVocabulary(events, rhythm);
 
-      return sources.map((source) => ({
+    if (mode === 'source') {
+      return [...sources].sort().map((source) => ({
         key: source,
         color: sourceColor(source),
         label: sourceLabel(source),
       }));
     }
 
-    // Both lanes contribute: a class the rhythm predicts but you have not
-    // committed to is exactly the kind of thing this page exists to show.
-    const present = new Set<ActivityClass>(events.map(classifyEvent));
-
-    for (const day of rhythm) {
-      for (const cluster of day.clusters) {
-        present.add(normalizeClass(cluster.l0Class));
-      }
-    }
-
-    return ACTIVITY_CLASSES.filter((cls) => present.has(cls)).map((cls) => ({
+    return ACTIVITY_CLASSES.filter((cls) => classes.has(cls)).map((cls) => ({
       key: cls,
       color: classColor(cls),
       label: CLASS_LABEL[cls],
@@ -150,9 +189,12 @@ export interface SchedulePageProps {
 export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   const { t } = useTranslation();
   const { isMobile } = useDeviceLayout();
+  const { isFeatureEnabled } = useFeatures();
+  const hbpeEnabled = isFeatureEnabled('hbpe');
   const [weekOffset, setWeekOffset] = useState(0);
   const [colorMode, setColorMode] = useState<ColorMode>('type');
-  const [weekOpen, setWeekOpen] = useState(false);
+  /** Phone only: Possibilities lives behind a drawer rather than under the day. */
+  const [slateOpen, setSlateOpen] = useState(false);
 
   usePageTitle(embedded ? null : 'Schedule - Companion Intelligence');
 
@@ -171,17 +213,15 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   const { events, rhythm, generatedAt, rhythmCoversWindow, loading, fetching, error, refetch } =
     useScheduleService(start, end);
 
-  // Placing a candidate mints an event, so the committed lane has to re-read.
+  // Placing a backlog task mints a planned block, so the committed lane has to re-read.
   const {
-    candidates,
-    loading: candidatesLoading,
-    error: candidatesError,
-    accept,
-    decline,
-    snooze,
-    breakDown,
-    returnEvent,
-  } = useScheduleCandidates(start, end, refetch);
+    backlog,
+    backlogCount,
+    loading: planLoading,
+    error: planError,
+    placeOnDay,
+    dismissProposed,
+  } = usePlanTasks(refetch);
 
   /**
    * Whatever a drag or a card button asked the server to do, and it refused.
@@ -198,10 +238,10 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   }, []);
 
   const handleDrop = useCallback(
-    (candidateId: string, startTime: Date) => {
-      run(accept(candidateId, startTime), 'Could not put that on the calendar. Try again shortly.');
+    (taskId: string, startTime: Date) => {
+      run(placeOnDay(taskId, startTime), 'Could not put that on the calendar. Try again shortly.');
     },
-    [accept, run],
+    [placeOnDay, run],
   );
 
   const rescheduleEvent = useRescheduleEvent(refetch);
@@ -213,25 +253,11 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
     [rescheduleEvent, run],
   );
 
-  const handleDecline = useCallback(
-    (id: string, reason: DeclineReason) => {
-      run(decline(id, reason), 'Could not dismiss that suggestion. Try again shortly.');
+  const handleDismissProposed = useCallback(
+    (id: string) => {
+      run(dismissProposed(id), 'Could not dismiss that task. Try again shortly.');
     },
-    [decline, run],
-  );
-
-  const handleSnooze = useCallback(
-    (id: string, until: Date) => {
-      run(snooze(id, until), 'Could not snooze that suggestion. Try again shortly.');
-    },
-    [snooze, run],
-  );
-
-  const handleReturnEvent = useCallback(
-    (eventId: string) => {
-      run(returnEvent(eventId), 'Could not take that off the week. Try again shortly.');
-    },
-    [returnEvent, run],
+    [dismissProposed, run],
   );
 
   const goBack = useCallback(() => setWeekOffset((offset) => offset - 1), []);
@@ -240,10 +266,10 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
 
   // `errorPolicy: 'all'` means an error and usable data can arrive together, so
   // the surface is gated on whether anything resolved rather than on `error`.
-  const hasAnything = events.length > 0 || rhythm.length > 0 || candidates.length > 0;
+  const hasAnything = events.length > 0 || rhythm.length > 0 || backlogCount > 0;
   const isTrulyEmpty =
-    !loading && !fetching && !hasAnything && !error && !candidatesError && weekOffset === 0;
-  const showScheduleSurface = weekOffset !== 0 || hasAnything || candidatesError || fetching;
+    !loading && !fetching && !hasAnything && !error && !planError && weekOffset === 0;
+  const showScheduleSurface = weekOffset !== 0 || hasAnything || planError || fetching;
 
   // Embedded, the host supplies the frame, so this keeps only the column gap
   // and drops the safe-area top padding, which belongs to whatever is actually
@@ -268,6 +294,9 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   // so `Frame` keeps the same element type across renders — no remounting, and
   // `weekOffset` / `selectedDay` survive the host re-rendering.
   const Frame: ElementType = embedded ? 'div' : PageContent;
+
+  // Shown only once hue has more than one thing to say — see `colorSaysSomething`.
+  const colorKey = useMemo(() => colorSaysSomething(events, rhythm), [events, rhythm]);
 
   const colorModeToggle = (
     <div
@@ -300,6 +329,17 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
     </div>
   );
 
+  // Hue answers one question at a time; this picks which one. Committed time
+  // and rhythm stay told apart by their lanes and by fill weight, so colour is
+  // free to carry category instead of certainty — but only while the week holds
+  // more than one category to tell apart.
+  const colorChrome = colorKey ? (
+    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+      <ScheduleLegend mode={colorMode} events={events} rhythm={rhythm} />
+      {colorModeToggle}
+    </div>
+  ) : null;
+
   // Week chrome: range, legend, activity/source. Lives under the TimelineJS
   // today strip and immediately above the week so it sits next to schedule /
   // rhythm instead of floating above the zoomable story.
@@ -323,13 +363,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
         </Button>
       )}
 
-      {/* Hue answers one question at a time; this picks which one. Committed
-          time and rhythm stay told apart by their lanes and by fill weight,
-          so colour is free to carry category instead of certainty. */}
-      <div className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-        <ScheduleLegend mode={colorMode} events={events} rhythm={rhythm} />
-        {colorModeToggle}
-      </div>
+      {colorChrome && <div className="ml-auto">{colorChrome}</div>}
     </div>
   );
 
@@ -364,17 +398,10 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
 
         {showScheduleSurface && (
           <>
-            {/* TimelineJS today strip, then week chrome, then the week, then
-                Possibilities. The chrome belongs with schedule/rhythm, not
-                above the zoomable story. On a phone the story strip is a
-                now/next list and the week starts as day chips plus one row. */}
+            {/* One schedule, one geometry. Week chrome, then the week — where
+                what a day usually holds rides in beside the hours rather than
+                as a second tab of the same seven days. */}
             <div className={cn('flex flex-col', isMobile ? 'gap-3' : 'gap-4')}>
-              {isMobile ? (
-                <TodayNowNext events={events} day={selectedDay} onShowMore={() => setWeekOpen(true)} />
-              ) : (
-                <TodayStoryTimeline events={events} day={selectedDay} />
-              )}
-
               {isMobile ? (
                 <div className="flex flex-col gap-2">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -396,47 +423,39 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                       </Button>
                     )}
 
+                    {/* Possibilities is a drawer here, not a board under the
+                        day — see TaskSlateDrawer. */}
                     <Button
                       variant="ghost"
                       size="sm"
                       className="ml-auto h-8 text-xs"
-                      aria-expanded={weekOpen}
-                      onClick={() => setWeekOpen((open) => !open)}
+                      aria-expanded={slateOpen}
+                      onClick={() => setSlateOpen(true)}
                     >
-                      {weekOpen ? (
-                        <ChevronUp className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
-                      ) : (
-                        <ChevronDown className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
-                      )}
-                      {weekOpen ? 'Hide week' : 'Show week'}
+                      <Inbox className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
+                      Possibilities
+                      {backlogCount > 0 && <span className="ml-1 tabular-nums">{backlogCount}</span>}
                     </Button>
                   </div>
 
-                  {!weekOpen && (
-                    <WeekDayChips
-                      start={start}
-                      days={DAYS_IN_VIEW}
-                      selectedDay={selectedDay}
-                      onSelectDay={setSelectedDay}
-                    />
-                  )}
+                  <WeekDayChips
+                    start={start}
+                    days={DAYS_IN_VIEW}
+                    selectedDay={selectedDay}
+                    onSelectDay={setSelectedDay}
+                  />
 
-                  <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-                    {weekOpen && <ScheduleLegend mode={colorMode} events={events} rhythm={rhythm} />}
-                    {colorModeToggle}
-                  </div>
+                  {colorChrome}
                 </div>
               ) : (
                 weekChrome
               )}
 
-              {weekOffset !== 0 && !hasAnything && !fetching && (
-                <p className="text-sm text-muted-foreground">Nothing on the calendar this week.</p>
-              )}
+              {isMobile && <TodayNowNext events={events} day={selectedDay} />}
 
-              <HorizonGrid
-                start={isMobile && !weekOpen ? selectedDay : start}
-                days={isMobile && !weekOpen ? 1 : DAYS_IN_VIEW}
+              <VerticalCalendar
+                start={isMobile ? selectedDay : start}
+                days={isMobile ? 1 : DAYS_IN_VIEW}
                 events={events}
                 rhythm={rhythm}
                 colorMode={colorMode}
@@ -444,18 +463,30 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                 onSelectDay={setSelectedDay}
                 onDropCandidate={handleDrop}
                 onMoveEvent={handleMove}
-                footer={rhythmFooter(generatedAt, rhythmCoversWindow)}
+                footer={rhythmFooter(generatedAt, rhythmCoversWindow, hbpeEnabled)}
               />
 
-              <TaskSlate
-                candidates={candidates}
-                loading={candidatesLoading}
-                error={candidatesError}
-                onDecline={handleDecline}
-                onSnooze={handleSnooze}
-                onBreakDown={breakDown}
-                onReturnEvent={handleReturnEvent}
-              />
+              {/* `=== false` rather than a plain ternary: `isMobile` is
+                  undefined until the media query resolves, and defaulting to
+                  the closed drawer means a phone never flashes the inline board
+                  this change exists to take off the calendar. */}
+              {isMobile === false ? (
+                <TaskSlate
+                  sections={backlog}
+                  loading={planLoading}
+                  error={planError}
+                  onDismissProposed={handleDismissProposed}
+                />
+              ) : (
+                <TaskSlateDrawer
+                  open={slateOpen}
+                  onOpenChange={setSlateOpen}
+                  sections={backlog}
+                  loading={planLoading}
+                  error={planError}
+                  onDismissProposed={handleDismissProposed}
+                />
+              )}
             </div>
           </>
         )}

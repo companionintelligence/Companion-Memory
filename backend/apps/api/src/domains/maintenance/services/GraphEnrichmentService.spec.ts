@@ -69,6 +69,7 @@ function makeService(opts: {
   events?: EventRow[];
   extraction: LlmExtraction;
   persons?: Record<string, string>;
+  decision?: 'auto' | 'review' | 'skip';
 }) {
   const { dataSource, query } = makeDataSource(opts.comms ?? [], opts.events ?? []);
 
@@ -93,7 +94,11 @@ function makeService(opts: {
   const graphQuery = { getNodes };
 
   const personalizationService = {
-    decideAction: jest.fn().mockResolvedValue('auto'),
+    decideAction: jest.fn().mockResolvedValue(opts.decision ?? 'auto'),
+  };
+
+  const reviewService = {
+    recordProposal: jest.fn().mockResolvedValue(undefined),
   };
 
   const service = new GraphEnrichmentService(
@@ -109,9 +114,11 @@ function makeService(opts: {
     personalizationService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     makeLogger() as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    reviewService as any,
   );
 
-  return { service, chat, ingest, getNodes, query };
+  return { service, chat, ingest, getNodes, query, personalizationService, reviewService };
 }
 
 describe('GraphEnrichmentService.buildPreferenceInput (parse -> graph-input mapping)', () => {
@@ -343,6 +350,35 @@ describe('GraphEnrichmentService.enrich (end-to-end with mocked LLM)', () => {
     expect(result.familyEdgesWritten).toBe(0);
     // Nothing plausible to write -> ingest is never called.
     expect(ingest).not.toHaveBeenCalled();
+  });
+
+  it('files a review proposal (and never ingests) when the trust dial returns review', async () => {
+    const { service, ingest, reviewService } = makeService({
+      comms: [{ subject: 'Dinner', content: 'I love Italian food', summary: null }],
+      extraction: {
+        preferences: [{ concept: 'Italian', type: 'cuisine', sentiment: 'like' }],
+        familyRelations: [],
+        generalRelations: [],
+      },
+      decision: 'review',
+    });
+
+    const result = await service.enrich(USER, { maxEvents: 0 });
+
+    // Previously this batch was discarded outright: reviewQueued incremented
+    // but nothing was written anywhere a human could see or approve later.
+    expect(ingest).not.toHaveBeenCalled();
+    expect(result.reviewQueued).toBe(1);
+    expect(result.conceptsWritten).toBe(0);
+    expect(result.preferenceEdgesWritten).toBe(0);
+
+    expect(reviewService.recordProposal).toHaveBeenCalledTimes(1);
+    const [, params] = reviewService.recordProposal.mock.calls[0];
+    expect(params.category).toBe('preference');
+    expect(params.confidence).toBe(0.8);
+    expect(params.evidence).toEqual(['PREFERS Italian (cuisine)']);
+    expect(params.input.entities).toHaveLength(1);
+    expect(params.input.relationships).toHaveLength(1);
   });
 
   it('no-ops cleanly when there are no sampled records', async () => {

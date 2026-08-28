@@ -7,8 +7,10 @@ import { MaxArraySizePipe } from '@ci/common/pipes';
 import { CommunicationService, CommunicationType as CommunicationTypeEnum } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
+import { AttachmentFileLoader } from '../loaders/AttachmentFileLoader';
 import { PersonLoader } from '../loaders/PersonLoader';
 import { TagLoader } from '../loaders/TagLoader';
+import { CommunicationAttachmentType } from '../types/CommunicationAttachmentType';
 import { CommunicationConnection } from '../types/CommunicationConnection';
 import { CommunicationEdge } from '../types/CommunicationEdge';
 import { CommunicationType } from '../types/CommunicationType';
@@ -29,6 +31,7 @@ import { Paginator } from '../utils/Paginator';
 export class CommunicationResolver {
   constructor(
     private readonly communicationService: CommunicationService,
+    private readonly attachmentFileLoader: AttachmentFileLoader,
     private readonly personLoader: PersonLoader,
     private readonly tagLoader: TagLoader,
   ) {}
@@ -231,6 +234,66 @@ export class CommunicationResolver {
     };
   }
 
+  /**
+   * The files that arrived with this message.
+   *
+   * Reads `ci.communications.attachments`, which holds a flat list of
+   * `{ type, id }` references — every `file` ref, then every `content` ref —
+   * and pairs them back into one entry per attachment. The pairing is by index,
+   * which is the invariant the writer states and enforces: `MediaStage` stamps
+   * `AttachmentFileIds` and `AttachmentContentIds` from the same descriptor
+   * list, all-or-nothing, so attachment i is `{ file: files[i], content:
+   * contents[i] }`. Any content ref beyond the file list still gets its own
+   * entry rather than being dropped — the column predates the writer, and a
+   * reference nobody can explain is better shown than silently swallowed.
+   *
+   * Empty for every message in an import that ran before the attachment leg
+   * existed: those files were deleted with the run's scratch tree, so there is
+   * nothing to point at until the archive is imported again.
+   */
+  @ResolveField(() => [CommunicationAttachmentType])
+  async attachments(
+    @Context() context: RequestContext,
+    @Parent() parent: CommunicationType,
+  ): Promise<CommunicationAttachmentType[]> {
+    const refs = parent.__source.attachments;
+
+    // The overwhelmingly common case, and it must not cost a query: every
+    // message imported before the attachment leg existed sits at `[]`.
+    if (!Array.isArray(refs) || refs.length === 0) {
+      return [];
+    }
+
+    const serviceContext = toServiceContext(context);
+    const fileIds = attachmentRefIds(refs, 'file');
+    const contentIds = attachmentRefIds(refs, 'content');
+
+    const files = await this.attachmentFileLoader.loadMany(serviceContext, fileIds);
+    const total = Math.max(fileIds.length, contentIds.length);
+    const attachments: CommunicationAttachmentType[] = [];
+
+    for (let i = 0; i < total; i += 1) {
+      const file = files[i];
+      // `loadMany` resolves a failed key to an Error rather than rejecting, so a
+      // single unreadable file cannot take the whole message's list with it.
+      const media = file instanceof Error || file == null ? null : file;
+
+      attachments.push({
+        fileId: fileIds[i] ?? null,
+        contentId: contentIds[i] ?? null,
+        filename: media?.filename ?? null,
+        contentType: media?.contentType ?? null,
+        url: media?.url ?? null,
+        previewUrl: media?.previewUrl ?? null,
+        width: media?.width ?? null,
+        height: media?.height ?? null,
+        size: media?.size ?? null,
+      });
+    }
+
+    return attachments;
+  }
+
   @ResolveField(() => [EntityTagType])
   async tags(
     @Context() context: RequestContext,
@@ -245,4 +308,30 @@ export class CommunicationResolver {
 
     return tags.map((tag) => EntityTagType.toType(tag));
   }
+}
+
+/**
+ * The ids of one kind of reference in an `attachments` column.
+ *
+ * Defensive about the element shape on purpose: this is a `jsonb` column with no
+ * constraint behind it, written by an importer and previously by nothing at all,
+ * so an entry that is not an object with a string id is skipped rather than
+ * allowed to throw on a message list.
+ */
+function attachmentRefIds(refs: unknown[], kind: 'file' | 'content'): string[] {
+  const ids: string[] = [];
+
+  for (const ref of refs) {
+    if (!ref || typeof ref !== 'object') {
+      continue;
+    }
+
+    const entry = ref as { type?: unknown; id?: unknown };
+
+    if (entry.type === kind && typeof entry.id === 'string' && entry.id.length > 0) {
+      ids.push(entry.id);
+    }
+  }
+
+  return ids;
 }

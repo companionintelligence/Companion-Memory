@@ -56,7 +56,7 @@ export class DerivationScanService {
   }
 
   async scanAll(): Promise<void> {
-    const users = await this.userService.findAll();
+    const users = await this.userService.findAllOnboarded();
     this.logger.log('Running derivation scan', { users: users.length });
 
     for (const user of users) {

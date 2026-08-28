@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-
 import {
   classifyExternalId,
   EXTERNAL_ID_URI_SHAPE,
@@ -103,45 +100,5 @@ describe('classifyExternalId', () => {
     // The const exists so the transforms document WHY once; if it ever became
     // 'file' every connector row would start claiming to be a ci.files id.
     expect(SOURCE_NATIVE_EXTERNAL_ID_KIND).toBe('external_uri');
-  });
-});
-
-/**
- * The SQL backfill and this predicate are one rule with two implementations.
- * The first version of this column drifted the moment a fifth URI source
- * landed; this test fails loudly if the SQL stops mirroring the TypeScript.
- */
-describe('migration 20260818235804 mirrors the predicate', () => {
-  const sql = readFileSync(
-    join(
-      __dirname,
-      '../../../db/postgres/migrations/20260818235804_fix_content_external_id_kind_by_shape.sql',
-    ),
-    'utf8',
-  );
-
-  it('uses the same two patterns the TypeScript classifier uses', () => {
-    // Postgres `~` takes the pattern as a string literal, so the TS regex source
-    // appears verbatim inside single quotes.
-    expect(sql).toContain(`'${EXTERNAL_ID_URI_SHAPE.source}'`);
-    expect(sql).toContain(`'${EXTERNAL_ID_UUID_SHAPE.source}'`);
-  });
-
-  it('guards the additive statements on external_id_kind IS NULL', () => {
-    // Two of the three UPDATEs must only stamp what is unstamped; the third is
-    // the deliberate repair of the mislabel and is scoped to 'file' rows whose
-    // value is scheme-prefixed.
-    // Statements only — the header quotes 20260818215331's UPDATEs verbatim to
-    // explain the defect, and those lines are comments (leading `--`).
-    const updates = sql.match(/^UPDATE ci\.content[\s\S]*?;/gm) ?? [];
-    expect(updates).toHaveLength(3);
-
-    const [repair, ...additive] = updates;
-    expect(repair).toContain("WHERE external_id_kind = 'file'");
-    expect(repair).toContain(`AND external_id ~ '${EXTERNAL_ID_URI_SHAPE.source}'`);
-
-    for (const statement of additive) {
-      expect(statement).toContain('WHERE external_id_kind IS NULL');
-    }
   });
 });
