@@ -6,16 +6,7 @@
 export const MIN_WEEK_OCCUR = 0.3;
 export const MIN_PLACE_PROB = 0.3;
 
-const NEWS_LIKE = new Set([
-  'ransom',
-  'activist',
-  'riot',
-  'hostage',
-  'protest',
-  'shooting',
-  'war',
-  'attack',
-]);
+const NEWS_LIKE = new Set(['ransom', 'activist', 'riot', 'hostage', 'protest', 'shooting', 'war', 'attack']);
 
 const JUNK_PHRASES = new Set(['nothink', 'noidea', 'unknown', 'unsorted']);
 
@@ -69,7 +60,11 @@ export function dueItemVisible(item: { name: string }): boolean {
   return isDisplayableLabel(item.name);
 }
 
-export function placeVisible(place: { label?: string | null; probability?: number; share?: number }): boolean {
+export function placeVisible(place: {
+  label?: string | null;
+  probability?: number;
+  share?: number;
+}): boolean {
   const label = place.label?.trim() ?? '';
   const probability = place.probability ?? place.share ?? 0;
 

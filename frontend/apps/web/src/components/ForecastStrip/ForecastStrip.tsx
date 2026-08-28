@@ -105,8 +105,7 @@ function orderLocalDay(
     const lm = localMinutesOfDay(bucket.startTime);
     if (lm != null) {
       offsetMin =
-        (((lm - bucket.bucketIndex * minutes) % MINUTES_PER_DAY) + MINUTES_PER_DAY) %
-        MINUTES_PER_DAY;
+        (((lm - bucket.bucketIndex * minutes) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
       break;
     }
   }
@@ -182,7 +181,10 @@ function SlotTooltip({
         <p className="pt-1 border-t border-current/20 text-[10px] opacity-60">
           Top context:{' '}
           {isFeatureEnabled('insights.page') ? (
-            <Link to="/calendar" className="underline underline-offset-2 hover:opacity-100 transition-opacity">
+            <Link
+              to="/calendar"
+              className="underline underline-offset-2 hover:opacity-100 transition-opacity"
+            >
               {top1.name.slice(0, 24)}
             </Link>
           ) : (
@@ -346,7 +348,9 @@ export function ForecastStrip({
       : (STATUS_LABELS[systemStatus] ?? 'Processing...');
   if (!isReady && !stalled && pipelineRunning) {
     const bits = [statusLabel];
-    if (pipelineDetail) {bits.push(pipelineDetail);}
+    if (pipelineDetail) {
+      bits.push(pipelineDetail);
+    }
 
     if (pipelineEtaSeconds != null && pipelineEtaSeconds > 0) {
       bits.push(`${formatEta(pipelineEtaSeconds)} remaining`);
@@ -397,7 +401,9 @@ export function ForecastStrip({
           {statusLabel}
         </span>
         <span>
-          {formatClock(ordered[ordered.length - 1]?.localMin ?? MINUTES_PER_DAY - (ordered[0]?.minutes ?? 15))}
+          {formatClock(
+            ordered[ordered.length - 1]?.localMin ?? MINUTES_PER_DAY - (ordered[0]?.minutes ?? 15),
+          )}
         </span>
       </div>
 

@@ -202,7 +202,9 @@ function ClusterBlock({
           borderLeftColor: color,
         }}
       >
-        <span className="px-1.5 font-semibold tabular-nums text-background mix-blend-difference">{count}</span>
+        <span className="px-1.5 font-semibold tabular-nums text-background mix-blend-difference">
+          {count}
+        </span>
       </div>
     </EventPeek>
   );

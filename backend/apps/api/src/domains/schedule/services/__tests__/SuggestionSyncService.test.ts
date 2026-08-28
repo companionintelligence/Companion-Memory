@@ -8,7 +8,6 @@ import { flexWindow, PersonalizationService, PlacementService } from '@ci/domain
 import { HbpeService } from '@ci/domains/predictions';
 import { SummaryEntity } from '@ci/domains/summaries';
 
-
 import { EventCandidateEntity } from '../../entities/EventCandidateEntity';
 import { CandidateService } from '../CandidateService';
 import { SuggestionSyncService } from '../SuggestionSyncService';

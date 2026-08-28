@@ -7,13 +7,7 @@ import { l0Background } from '@/components/ForecastStrip/ForecastStrip';
 import { normalizeClass } from '@/lib/activityPalette';
 import { placeVisible } from '@/lib/forecastDisplay';
 
-import {
-  COMMIT_MASS,
-  branchPick,
-  formatSlotClock,
-  pickOpenSlot,
-  rankSaccades,
-} from './forageModel';
+import { COMMIT_MASS, branchPick, formatSlotClock, pickOpenSlot, rankSaccades } from './forageModel';
 import {
   HEATMAP_COLUMNS,
   MINUTES_PER_SLOT,
@@ -90,14 +84,14 @@ export function OccupancyHonestyPanel() {
       <Card.Header>
         <Card.Title>One winner per quarter-hour</Card.Title>
         <Card.Description>
-          Each 15-minute bucket keeps one L0 + one L1. Anchor events beat ambient media; duration
-          only breaks ties inside a tier.
+          Each 15-minute bucket keeps one L0 + one L1. Anchor events beat ambient media; duration only breaks
+          ties inside a tier.
         </Card.Description>
       </Card.Header>
       <Card.Content className="flex flex-col gap-3 text-sm">
         <p className="text-muted-foreground">
-          A 30-second dentist visit outranks fourteen minutes of Spotify. Losers stay in the L0
-          occupancy mix on the winning token so evening Listening can still colour the strip.
+          A 30-second dentist visit outranks fourteen minutes of Spotify. Losers stay in the L0 occupancy mix
+          on the winning token so evening Listening can still colour the strip.
         </p>
         <dl className="grid gap-2 sm:grid-cols-2">
           <div>
@@ -122,13 +116,7 @@ export function OccupancyHonestyPanel() {
   );
 }
 
-export function BranchTexturePanel({
-  buckets,
-  nowMs,
-}: {
-  buckets: ForecastBucket[];
-  nowMs?: number;
-}) {
+export function BranchTexturePanel({ buckets, nowMs }: { buckets: ForecastBucket[]; nowMs?: number }) {
   const slot = useMemo(() => pickOpenSlot(buckets, nowMs ?? Date.now()), [buckets, nowMs]);
   if (!slot) {
     return null;
@@ -142,9 +130,9 @@ export function BranchTexturePanel({
       <Card.Header>
         <Card.Title>Branches for {clock}</Card.Title>
         <Card.Description>
-          The most unsettled upcoming half-hour. Slider 1 is L0 (the branch). Slider 2 is L1 under
-          that slot (the permutation) — Forager&apos;s who-you-meet factor, on the labels we actually
-          have. A pick commits at mass {Math.round(COMMIT_MASS * 100)}%.
+          The most unsettled upcoming half-hour. Slider 1 is L0 (the branch). Slider 2 is L1 under that slot
+          (the permutation) — Forager&apos;s who-you-meet factor, on the labels we actually have. A pick
+          commits at mass {Math.round(COMMIT_MASS * 100)}%.
         </Card.Description>
       </Card.Header>
       <Card.Content className="flex flex-col gap-4">
@@ -224,9 +212,9 @@ export function SaccadePanel({
       <Card.Header>
         <Card.Title>What would collapse {clock}</Card.Title>
         <Card.Description>
-          Discrete saccades over history days, not pixels. Ranked by how much that day&apos;s same
-          half-hour disagrees with tomorrow (KL). High disagreement is high epistemic value — reading
-          that slice would move the call. Matrices that never fill: duration, source type, L2.
+          Discrete saccades over history days, not pixels. Ranked by how much that day&apos;s same half-hour
+          disagrees with tomorrow (KL). High disagreement is high epistemic value — reading that slice would
+          move the call. Matrices that never fill: duration, source type, L2.
         </Card.Description>
       </Card.Header>
       <Card.Content className="flex flex-col gap-3">
@@ -247,8 +235,8 @@ export function SaccadePanel({
           ))}
         </div>
         <p className="text-sm text-muted-foreground">
-          This ranking is a reading of the histogram we already serve. It does not yet drive which
-          events get labeled, how long they count, or what the summary gap-fill writes.
+          This ranking is a reading of the histogram we already serve. It does not yet drive which events get
+          labeled, how long they count, or what the summary gap-fill writes.
         </p>
       </Card.Content>
     </Card>
@@ -530,8 +518,8 @@ export function DivergenceHeatmapPanel({
       <Card.Header>
         <Card.Title>Where it was wrong</Card.Title>
         <Card.Description>
-          Each row is a forecast day, each cell a 15-minute slot on your local clock. Past days show what actually
-          happened; a ring marks a slot the model called differently.
+          Each row is a forecast day, each cell a 15-minute slot on your local clock. Past days show what
+          actually happened; a ring marks a slot the model called differently.
         </Card.Description>
       </Card.Header>
       <Card.Content className="flex flex-col gap-3">

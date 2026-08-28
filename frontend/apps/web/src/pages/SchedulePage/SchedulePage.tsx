@@ -283,8 +283,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   // `errorPolicy: 'all'` means an error and usable data can arrive together, so
   // the surface is gated on whether anything resolved rather than on `error`.
   const hasAnything = events.length > 0 || rhythm.length > 0 || backlogCount > 0;
-  const isTrulyEmpty =
-    !loading && !fetching && !hasAnything && !error && !planError && weekOffset === 0;
+  const isTrulyEmpty = !loading && !fetching && !hasAnything && !error && !planError && weekOffset === 0;
   const showScheduleSurface = weekOffset !== 0 || hasAnything || planError || fetching;
 
   // Embedded, the host supplies the frame, so this keeps only the column gap

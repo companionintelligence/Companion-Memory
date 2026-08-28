@@ -359,10 +359,7 @@ export class SuggestionSyncService {
 
       return (due.due ?? [])
         .filter(
-          (item) =>
-            item.confidence >= 0.6 &&
-            (item.overdue || item.due_in_days <= 3) &&
-            !item.scheduled_date,
+          (item) => item.confidence >= 0.6 && (item.overdue || item.due_in_days <= 3) && !item.scheduled_date,
         )
         .slice(0, MAX_PER_SOURCE)
         .map((item) => ({

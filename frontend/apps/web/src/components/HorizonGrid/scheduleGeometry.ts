@@ -301,12 +301,14 @@ function rhythmCells(dayStart: Date, lookup: (utcDate: string) => RhythmDay | un
 /** Top behaviours for a day, for the row tooltip. */
 function topClusters(day: RhythmDay | undefined, limit = 4): RhythmCluster[] {
   return [...(day?.clusters ?? [])]
-    .filter((cluster) => weekClusterVisible({
-      name: cluster.name,
-      l0Class: cluster.l0Class,
-      pOccur: cluster.pOccur,
-      scheduled: Boolean(cluster.scheduled),
-    }))
+    .filter((cluster) =>
+      weekClusterVisible({
+        name: cluster.name,
+        l0Class: cluster.l0Class,
+        pOccur: cluster.pOccur,
+        scheduled: Boolean(cluster.scheduled),
+      }),
+    )
     .sort((a, b) => b.pOccur - a.pOccur)
     .slice(0, limit);
 }

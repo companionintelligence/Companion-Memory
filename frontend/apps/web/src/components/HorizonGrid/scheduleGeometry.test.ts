@@ -573,4 +573,3 @@ describe('movedStart — dragging a committed event to a new time', () => {
     expect(movedStart(MONDAY, Number.NaN, 0).getTime()).toBe(MONDAY.getTime());
   });
 });
-
