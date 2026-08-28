@@ -62,23 +62,28 @@ class OpenAIChatLabeler:
         max_new_tokens: int = 32,
     ) -> str:
         max_tokens = max_new_tokens
+        system = system_message or ""
         if settings.qwen_disable_thinking:
-            user_message = f"{user_message} /no_think"
+            # Never append /no_think to the user turn — the 0.8B labeler
+            # echoed that token as an L1 name (No_think). Keep it off the
+            # label surface; ask for JSON only in the system turn.
+            system = (system + " Do not reason. Output a JSON object only.").strip()
             max_tokens = min(max_new_tokens, settings.qwen_max_tokens_no_think)
 
         messages: list[dict] = []
-        if system_message:
-            messages.append({"role": "system", "content": system_message})
+        if system:
+            messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": user_message})
 
-        body = json.dumps(
-            {
-                "model": self._model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": 0.15,
-            }
-        ).encode("utf-8")
+        payload = {
+            "model": self._model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.15,
+        }
+        if settings.qwen_disable_thinking:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        body = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             f"{self._base}/chat/completions",
             data=body,
@@ -90,17 +95,16 @@ class OpenAIChatLabeler:
         )
         with self._gen_lock:
             try:
-                with urllib.request.urlopen(req, timeout=120) as resp:
+                with urllib.request.urlopen(
+                    req, timeout=settings.label_http_timeout_seconds
+                ) as resp:
                     payload = json.loads(resp.read().decode("utf-8"))
             except urllib.error.URLError as exc:
                 log.warning("Label chat API failed: %s", exc)
                 raise
 
         raw = (
-            payload.get("choices", [{}])[0]
-            .get("message", {})
-            .get("content", "")
-            or ""
+            payload.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
         ).strip()
         stripped = _strip_thinking(raw)
         log.debug("RAW OUTPUT: %r", raw[:500])
@@ -157,18 +161,14 @@ class QwenModel:
     ) -> str:
         """Single chat completion, greedy decoding."""
         max_tokens = max_new_tokens
+        system = system_message or ""
         if settings.qwen_disable_thinking:
-            # Qwen3.x reads the `/no_think` soft switch from the user turn and
-            # skips the <think> reasoning block. A label is a 1-3 word JSON
-            # object — nothing to reason about — and the CoT tokens dominate CPU
-            # cost, so we suppress them and cap output hard. (_strip_thinking
-            # below is a safety net if a given GGUF template ignores the switch.)
-            user_message = f"{user_message} /no_think"
+            system = (system + " Do not reason. Output a JSON object only.").strip()
             max_tokens = min(max_new_tokens, settings.qwen_max_tokens_no_think)
 
         messages: list[dict] = []
-        if system_message:
-            messages.append({"role": "system", "content": system_message})
+        if system:
+            messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": user_message})
 
         with self._gen_lock:

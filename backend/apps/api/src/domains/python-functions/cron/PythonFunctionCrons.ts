@@ -14,6 +14,24 @@ import type { PythonFunctionTarget } from '../types';
 const DOSSIER_LOOKBACK_DAYS = 30;
 
 /**
+ * Nightly (02:30) and ensure_bootstrap (boot+30s / 03:00) share one worker and
+ * one pipeline. Distinct keys let both sit `active` after a missed callback.
+ * Manual Predict keeps `fn:nightly:<user>:manual` and is not this path.
+ */
+function hbpePipelineSingleton(
+  target: PythonFunctionTarget,
+  functionName: string,
+  userId: string,
+  windowKey: string,
+): string {
+  if (target === 'hbpe' && (functionName === 'nightly' || functionName === 'ensure_bootstrap')) {
+    return `fn:hbpe:${userId}:${windowKey}`;
+  }
+
+  return `fn:${functionName}:${userId}:${windowKey}`;
+}
+
+/**
  * The scheduler half of the Temporal replacement. These crons replicate the
  * former Temporal Schedules (summary system_schedules.py + HBPE schedule.py):
  * each tick enumerates onboarded users and enqueues ONE pg-boss job per user,
@@ -181,7 +199,7 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
     for (const userId of userIds) {
       try {
         const didEnqueue = await this.pythonFunctionService.dispatch(target, functionName, userId, args, {
-          singletonKey: `fn:${functionName}:${userId}:${windowKey}`,
+          singletonKey: hbpePipelineSingleton(target, functionName, userId, windowKey),
         });
 
         if (didEnqueue) {

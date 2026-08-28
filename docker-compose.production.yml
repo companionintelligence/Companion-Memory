@@ -134,6 +134,8 @@ services:
     profiles: [ "production" ]
 
   hbpe-service:
+    environment:
+      API_URL: http://api:3030
     volumes:
       - secrets:/run/secrets:ro
     depends_on:

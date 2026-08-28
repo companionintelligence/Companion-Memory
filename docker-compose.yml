@@ -38,6 +38,7 @@ services:
       LLM_API_BASE: ${LLM_API_BASE:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
+      API_URL: ${API_URL:-http://api:3030}
     networks:
       - ci
     depends_on:

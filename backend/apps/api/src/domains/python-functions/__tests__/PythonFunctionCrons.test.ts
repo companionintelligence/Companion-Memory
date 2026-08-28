@@ -62,19 +62,29 @@ describe('PythonFunctionCrons', () => {
     );
   });
 
-  it('scopes nightly HBPE singleton keys to the UTC day', async () => {
+  it('scopes nightly and ensure_bootstrap to one HBPE pipeline key per UTC day', async () => {
     const { crons, pythonFunctionService } = makeCrons(['user-1']);
 
     await crons.hbpeNightly();
+    await crons.hbpeBootstrapSweep();
 
     const dayKey = new Date().toISOString().slice(0, 10);
 
-    expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
+    expect(pythonFunctionService.dispatch).toHaveBeenNthCalledWith(
+      1,
       'hbpe',
       'nightly',
       'user-1',
       {},
-      { singletonKey: `fn:nightly:user-1:${dayKey}` },
+      { singletonKey: `fn:hbpe:user-1:${dayKey}` },
+    );
+    expect(pythonFunctionService.dispatch).toHaveBeenNthCalledWith(
+      2,
+      'hbpe',
+      'ensure_bootstrap',
+      'user-1',
+      {},
+      { singletonKey: `fn:hbpe:user-1:${dayKey}` },
     );
   });
 
