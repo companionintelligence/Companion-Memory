@@ -52,11 +52,11 @@ const forecastBuckets = [
 ] as ForecastBucket[];
 
 describe('OccupancyHonestyPanel', () => {
-  it('says occupancy is unweighted', () => {
+  it('says one winner per quarter-hour', () => {
     render(<OccupancyHonestyPanel />);
 
-    expect(screen.getByTestId('occupancy-honesty')).toHaveTextContent('Every label counts as one');
-    expect(screen.getByText(/Duration never/)).toBeInTheDocument();
+    expect(screen.getByTestId('occupancy-honesty')).toHaveTextContent('One winner per quarter-hour');
+    expect(screen.getByText(/Anchor events beat ambient/)).toBeInTheDocument();
   });
 });
 
@@ -117,7 +117,7 @@ describe('DivergenceHeatmapPanel', () => {
     render(<DivergenceHeatmapPanel historyDays={history} buckets={forecastBuckets} />);
 
     expect(screen.getAllByTestId('heatmap-cell-divergent')).toHaveLength(2);
-    expect(screen.getByText('Missed 2 of 3 scored half-hours (67%).')).toBeInTheDocument();
+    expect(screen.getByText('Missed 2 of 3 scored slots (67%).')).toBeInTheDocument();
   });
 
   it('names the miss in the cell title so hovering explains it', () => {
@@ -156,7 +156,7 @@ describe('DivergenceHeatmapPanel', () => {
 
     expect(screen.queryAllByTestId('heatmap-cell-divergent')).toHaveLength(0);
     expect(
-      screen.getByText(/No half-hours scored yet — rings appear once the nightly actuals backfill/),
+      screen.getByText(/No slots scored yet — rings appear once the nightly actuals backfill/),
     ).toBeInTheDocument();
   });
 

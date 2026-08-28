@@ -19,6 +19,9 @@ const NEWS_LIKE = new Set([
 
 const JUNK_PHRASES = new Set(['nothink', 'noidea', 'unknown', 'unsorted']);
 
+/** Static ambient L1s may occupy the 24h strip but never the week tooltip. */
+const AMBIENT_WEEK_LABELS = new Set(['listening', 'watching', 'browsing']);
+
 export function isUnknownClass(label: string): boolean {
   return label.trim().toUpperCase() === 'UNKNOWN';
 }
@@ -32,10 +35,12 @@ export function isDisplayableLabel(name: string): boolean {
   if (!trimmed || isUnknownClass(trimmed) || /_\d+$/.test(trimmed)) {
     return false;
   }
+
   const letters = lettersOf(trimmed);
   if (letters.length < 4) {
     return false;
   }
+
   if (NEWS_LIKE.has(letters) || JUNK_PHRASES.has(letters)) {
     return false;
   }
@@ -50,6 +55,10 @@ export function weekClusterVisible(cluster: {
   scheduled: boolean;
 }): boolean {
   if (!isDisplayableLabel(cluster.name)) {
+    return false;
+  }
+
+  if (AMBIENT_WEEK_LABELS.has(lettersOf(cluster.name))) {
     return false;
   }
 

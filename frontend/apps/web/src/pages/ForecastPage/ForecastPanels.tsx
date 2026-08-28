@@ -88,26 +88,25 @@ export function OccupancyHonestyPanel() {
   return (
     <Card data-testid="occupancy-honesty">
       <Card.Header>
-        <Card.Title>Every label counts as one</Card.Title>
+        <Card.Title>One winner per quarter-hour</Card.Title>
         <Card.Description>
-          Occupancy is unweighted. A three-hour gym session and a one-minute Slack ping are the same
-          vote if each is one labeled event.
+          Each 15-minute bucket keeps one L0 + one L1. Anchor events beat ambient media; duration
+          only breaks ties inside a tier.
         </Card.Description>
       </Card.Header>
       <Card.Content className="flex flex-col gap-3 text-sm">
         <p className="text-muted-foreground">
-          The serializer writes one L0 token per event with <code>soft_prob = [1.0]</code>, parked in
-          the 30-minute bucket of <code>start_time</code>. Baselines add +1 per token. Duration never
-          enters. Source type never enters. Twenty emails in a half-hour outvote one long workout.
+          A 30-second dentist visit outranks fourteen minutes of Spotify. Losers stay in the L0
+          occupancy mix on the winning token so evening Listening can still colour the strip.
         </p>
         <dl className="grid gap-2 sm:grid-cols-2">
           <div>
             <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">Counted</dt>
-            <dd>Event count per L0 class in a bucket</dd>
+            <dd>The salient L0 + L1 in each 15-minute bucket</dd>
           </div>
           <div>
             <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">Not counted</dt>
-            <dd>How long it lasted, which app it came from</dd>
+            <dd>Ambient names on the week forecast; song titles as life labels</dd>
           </div>
           <div>
             <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">Day kernel</dt>
@@ -426,8 +425,8 @@ export function CalibrationPanel({ calibration }: { calibration: Calibration | n
 
 // ── Divergence heatmap ────────────────────────────────────────────────────────
 
-/** One label per three hours; 48 tick labels collide at any card width. */
-const COLUMN_LABEL_EVERY = 6;
+/** One label per three hours; 96 tick labels collide at any card width. */
+const COLUMN_LABEL_EVERY = 12;
 
 /**
  * Cell hue comes from the shared activity palette, exactly as the strip above
@@ -478,7 +477,7 @@ function HeatmapCellView({ cell, rowLabel }: { cell: HeatmapCell | null; rowLabe
  *
  * "Forecast trust" reports top-1 match and ECE — one number for how often the
  * model is right, with no way to see WHICH hours it misses. This grid puts each
- * logged day on a row of 48 half-hours: past days render the class that actually
+ * logged day on a row of 96 fifteen-minute slots: past days render the class that actually
  * happened, ringed wherever the model's dominant class disagreed; then a seam;
  * then the day ahead at confidence opacity. A ring that keeps landing at 6pm
  * says something an aggregate ECE never can.
@@ -523,16 +522,16 @@ export function DivergenceHeatmapPanel({
 
   const summary =
     scored === 0
-      ? 'No half-hours scored yet — rings appear once the nightly actuals backfill has run.'
-      : `Missed ${missed} of ${scored} scored half-hours (${Math.round((missed / scored) * 100)}%).`;
+      ? 'No slots scored yet — rings appear once the nightly actuals backfill has run.'
+      : `Missed ${missed} of ${scored} scored slots (${Math.round((missed / scored) * 100)}%).`;
 
   return (
     <Card className={className}>
       <Card.Header>
         <Card.Title>Where it was wrong</Card.Title>
         <Card.Description>
-          Each row is a forecast day, each cell a half-hour on your local clock. Past days show what actually
-          happened; a ring marks a half-hour the model called differently.
+          Each row is a forecast day, each cell a 15-minute slot on your local clock. Past days show what actually
+          happened; a ring marks a slot the model called differently.
         </Card.Description>
       </Card.Header>
       <Card.Content className="flex flex-col gap-3">

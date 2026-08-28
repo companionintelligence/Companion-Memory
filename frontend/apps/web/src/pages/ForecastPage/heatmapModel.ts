@@ -1,6 +1,6 @@
 /**
  * Pure derivation for the forecast divergence heatmap — one row per HBPE
- * forecast day, 48 half-hour columns, kept free of React so it runs in the fast
+ * forecast day, 96 fifteen-minute columns, kept free of React so it runs in the fast
  * `node` vitest project.
  *
  * The point of the grid is the *misses*. `predictionCalibration` already tells
@@ -10,7 +10,7 @@
  *
  * ── Time basis ───────────────────────────────────────────────────────────────
  * HBPE bins behaviour by UTC time-of-day: `hbpe.prediction_log.horizon_start` is
- * a UTC midnight and `bucket_index` is the 30-minute slot after it
+ * a UTC midnight and `bucket_index` is the 15-minute slot after it
  * (histogram_api.build_histogram → InferenceEngine.predict). `forecastHistory`
  * therefore hands us a UTC `date` plus a bucket index and NO instant, while the
  * live `forecast` hands us a real `startTime`.
@@ -23,8 +23,8 @@
  * into the viewer's local day, exactly as the strip renders it.
  */
 
-export const HEATMAP_COLUMNS = 48;
-export const MINUTES_PER_SLOT = 30;
+export const HEATMAP_COLUMNS = 96;
+export const MINUTES_PER_SLOT = 15;
 
 const MINUTES_PER_DAY = 24 * 60;
 const MS_PER_MINUTE = 60_000;
@@ -59,7 +59,7 @@ export interface ForecastBucketLike {
 }
 
 export interface HeatmapCell {
-  /** Local half-hour column, 0 (midnight) … 47 (23:30). */
+  /** Local 15-minute column, 0 (midnight) … 95 (23:45). */
   column: number;
   /** Minutes since local midnight for the slot start. */
   localMin: number;
@@ -101,7 +101,7 @@ export function dominantEntry(probs: ProbabilityEntryLike[]): ProbabilityEntryLi
 
 /**
  * The real instant a logged bucket describes: UTC midnight of `dateKey` plus
- * `bucketIndex` half-hours. Null when either input is out of range.
+ * `bucketIndex` fifteen-minute slots. Null when either input is out of range.
  *
  * This is the field the abandoned spike keyed off directly — `startTime` is not
  * on `ForecastHistoryBucketType`, and deriving it needs no resolver change
@@ -137,7 +137,7 @@ export function localMinutesOfDay(instant: Date | string | null): number | null 
   return d.getHours() * 60 + d.getMinutes();
 }
 
-/** Local half-hour column (0..47) for an instant, or null when unparseable. */
+/** Local 15-minute column (0..95) for an instant, or null when unparseable. */
 export function localColumn(instant: Date | string | null): number | null {
   const minutes = localMinutesOfDay(instant);
 
@@ -327,7 +327,7 @@ export function buildHeatmapRows(
 }
 
 export interface DivergenceTally {
-  /** Half-hour slots with a backfilled actual. */
+  /** 15-minute slots with a backfilled actual. */
   scored: number;
   /** Of those, how many the model got wrong. */
   missed: number;
