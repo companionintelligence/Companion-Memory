@@ -9,12 +9,20 @@ import { SchedulePage } from './SchedulePage';
 const h = vi.hoisted(() => ({
   schedule: {} as Record<string, unknown>,
   plan: {} as Record<string, unknown>,
+  forecast: [
+    { data: { systemStatus: 'READY' } as { systemStatus: string } | null, stalled: false },
+    { refetch: vi.fn() },
+  ] as [{ data: { systemStatus: string } | null; stalled: boolean }, { refetch: ReturnType<typeof vi.fn> }],
   reschedule: vi.fn(),
   hbpeEnabled: true,
 }));
 
 vi.mock('@/api/useScheduleService', () => ({
   useScheduleService: () => h.schedule,
+}));
+
+vi.mock('@/api/useForecastService', () => ({
+  useForecastService: () => h.forecast,
 }));
 
 // Defaults ON so the existing rhythm-copy tests exercise the resolved-data
@@ -141,6 +149,7 @@ function setPlan(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   setSchedule();
   setPlan();
+  h.forecast = [{ data: { systemStatus: 'READY' }, stalled: false }, { refetch: vi.fn() }];
   h.reschedule = vi.fn().mockResolvedValue(undefined);
   h.hbpeEnabled = true;
 });
@@ -170,6 +179,20 @@ describe('SchedulePage — what the footer is allowed to claim', () => {
 
     expect(screen.queryByText(/Pattern rhythm \(HBPE\)/)).not.toBeInTheDocument();
     expect(screen.getByText(/only covers the next seven days/)).toBeInTheDocument();
+  });
+
+  it('tells the user to wait when Predict is running and the strip is empty', () => {
+    h.forecast = [{ data: { systemStatus: 'NIGHTLY:label' }, stalled: false }, { refetch: vi.fn() }];
+    setSchedule({
+      generatedAt: '2026-08-28T21:00:00.000Z',
+      rhythm: [{ date: '2026-08-28', dow: 'Fri', clusters: [] }],
+      rhythmCoversWindow: true,
+    });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByText(/Predict is still running/)).toBeInTheDocument();
+    expect(screen.queryByText(/Pattern rhythm \(HBPE\) from your history/)).not.toBeInTheDocument();
   });
 
   it('says the layer is off when the hbpe flag is off', () => {

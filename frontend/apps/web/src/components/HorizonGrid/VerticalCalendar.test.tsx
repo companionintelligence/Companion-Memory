@@ -205,6 +205,7 @@ describe('VerticalCalendar — the rhythm strip', () => {
     const strip = screen.getByTestId('vertical-rhythm-strip');
     const lane = screen.getByTestId('vertical-day-lane');
 
+    expect(strip.children).toHaveLength(96);
     expect(strip.compareDocumentPosition(lane) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Nothing paints the forecast inside the column any more.
     expect(lane.querySelector('[style*="--primary"]')).toBeNull();
@@ -221,6 +222,24 @@ describe('VerticalCalendar — the rhythm strip', () => {
 
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
     expect(screen.getByTestId('vertical-rhythm-strip')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('shimmers empty cells while Predict is still running', () => {
+    render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} pipelineRunning />);
+
+    const strip = screen.getByTestId('vertical-rhythm-strip');
+
+    expect(screen.getByRole('img', { name: /still being built/i })).toBeInTheDocument();
+    expect(strip.querySelectorAll('.rhythm-cell-waiting')).toHaveLength(96);
+  });
+
+  it('does not shimmer when the day already has a pattern', () => {
+    render(
+      <VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={rhythmFor(MONDAY)} pipelineRunning />,
+    );
+
+    expect(screen.getByTestId('vertical-rhythm-strip').querySelectorAll('.rhythm-cell-waiting')).toHaveLength(0);
+    expect(screen.getByRole('img', { name: /Morning gym/ })).toBeInTheDocument();
   });
 
   it('reads the selected day, since one strip serves the whole week', () => {
