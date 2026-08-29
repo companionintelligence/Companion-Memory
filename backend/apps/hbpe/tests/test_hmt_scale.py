@@ -124,14 +124,13 @@ def test_openai_chat_labeler_does_not_append_no_think(monkeypatch):
     assert user == "Standup"
     assert captured["body"]["chat_template_kwargs"]["enable_thinking"] is False
     assert captured["timeout"] == settings.label_http_timeout_seconds
-    assert captured["timeout"] is None
 
 
-def test_label_http_timeout_defaults_to_none(monkeypatch):
+def test_label_http_timeout_defaults_to_five_minutes(monkeypatch):
     monkeypatch.delenv("HBPE_LABEL_HTTP_TIMEOUT", raising=False)
     from ci.hbpe.config import Settings
 
-    assert Settings().label_http_timeout_seconds is None
+    assert Settings().label_http_timeout_seconds == 300
 
 
 def test_label_http_timeout_env_cap(monkeypatch):
@@ -139,6 +138,13 @@ def test_label_http_timeout_env_cap(monkeypatch):
     from ci.hbpe.config import Settings
 
     assert Settings().label_http_timeout_seconds == 45
+
+
+def test_label_http_timeout_none_waits_forever(monkeypatch):
+    monkeypatch.setenv("HBPE_LABEL_HTTP_TIMEOUT", "none")
+    from ci.hbpe.config import Settings
+
+    assert Settings().label_http_timeout_seconds is None
 
 
 def test_api_url_defaults_to_api_3030(monkeypatch):

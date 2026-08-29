@@ -46,6 +46,20 @@ def _optional_positive_seconds(raw: str | None) -> float | None:
     return seconds
 
 
+# One dropped Ollama completion parked a nightly for hours when this was None.
+# Five minutes is well above a healthy 8B label (~5s here) and still lets the
+# drain skip a dead socket and continue. Set HBPE_LABEL_HTTP_TIMEOUT to 0 /
+# none to wait forever.
+_DEFAULT_LABEL_HTTP_TIMEOUT_SECONDS = 300.0
+
+
+def _label_http_timeout_seconds() -> float | None:
+    raw = os.getenv("HBPE_LABEL_HTTP_TIMEOUT")
+    if raw is None:
+        return _DEFAULT_LABEL_HTTP_TIMEOUT_SECONDS
+    return _optional_positive_seconds(raw)
+
+
 class Settings(BaseSettings):
     # ── Database ──────────────────────────────────────────────────────────────
     database_url: str = Field(default_factory=_get_database_url)
@@ -115,14 +129,11 @@ class Settings(BaseSettings):
     qwen_max_tokens_no_think: int = Field(
         default_factory=lambda: int(os.getenv("QWEN_MAX_TOKENS_NO_THINK", "64"))
     )
-    # Per-call HTTP timeout for the chat labeler. Default is no timeout:
-    # generate time depends on the model and the box. Set
-    # HBPE_LABEL_HTTP_TIMEOUT to a positive number of seconds to cap a
-    # hung endpoint; 0 / unset / "none" wait until the server responds.
+    # Per-call HTTP timeout for the chat labeler. Default 5 minutes so a
+    # dropped completion cannot park the nightly. Set
+    # HBPE_LABEL_HTTP_TIMEOUT to 0 / "none" to wait until the server responds.
     label_http_timeout_seconds: float | None = Field(
-        default_factory=lambda: _optional_positive_seconds(
-            os.getenv("HBPE_LABEL_HTTP_TIMEOUT")
-        )
+        default_factory=_label_http_timeout_seconds
     )
 
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────
