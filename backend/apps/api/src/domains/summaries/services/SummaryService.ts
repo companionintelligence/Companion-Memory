@@ -76,6 +76,7 @@ export class SummaryService {
     query.andWhere(
       `summary.content->>'summary_text' IS DISTINCT FROM 'No activity recorded during this window.'`,
     );
+    query.andWhere(`summary.content->>'summary_text' IS DISTINCT FROM 'Nothing new.'`);
     query.andWhere(`summary.content->'activity_counts'->>'total' IS DISTINCT FROM '0'`);
 
     query.orderBy('summary.periodEnd', 'DESC');
@@ -95,6 +96,7 @@ export class SummaryService {
     query.andWhere(
       `summary.content->>'summary_text' IS DISTINCT FROM 'No activity recorded during this window.'`,
     );
+    query.andWhere(`summary.content->>'summary_text' IS DISTINCT FROM 'Nothing new.'`);
     query.andWhere(`summary.content->'activity_counts'->>'total' IS DISTINCT FROM '0'`);
 
     query.orderBy('summary.periodEnd', 'DESC');

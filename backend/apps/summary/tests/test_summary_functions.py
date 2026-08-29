@@ -108,6 +108,62 @@ async def test_rollup_still_aggregates_when_the_window_has_summaries(monkeypatch
     assert len(stored) == 1
 
 
+# ── Hourly ───────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_hourly_summary_skips_when_the_window_has_no_activity(monkeypatch):
+    _patch(monkeypatch, "aggregate_data_activity", {"events": [], "messages": []})
+    generated = _patch(monkeypatch, "generate_hourly_summary_activity", {})
+    stored = _patch(monkeypatch, "store_summary_activity", "summary-1")
+
+    result = await functions.hourly_summary(
+        "01a0124f-cbca-7609-938a-2d044dd8fbbc",
+        start_time="2026-08-18T14:00:00+00:00",
+        end_time="2026-08-18T15:00:00+00:00",
+        timezone="UTC",
+    )
+
+    assert result["skipped"] == "no_activity"
+    assert result["summary_id"] is None
+    assert result["summary_type"] == "hourly"
+    assert result["summary_text"] == "Nothing new."
+    assert result["tokens_used"] == 0
+    assert generated == []
+    assert stored == []
+
+
+@pytest.mark.asyncio
+async def test_hourly_summary_still_generates_when_the_window_has_activity(
+    monkeypatch,
+):
+    _patch(monkeypatch, "aggregate_data_activity", {"events": [{"id": "e1"}]})
+    _patch(
+        monkeypatch,
+        "generate_hourly_summary_activity",
+        {
+            "summary_text": "a meeting",
+            "key_insights": ["one"],
+            "activity_counts": {"events": 1, "total": 1},
+            "tokens_used": 40,
+        },
+    )
+    stored = _patch(monkeypatch, "store_summary_activity", "summary-1")
+
+    result = await functions.hourly_summary(
+        "01a0124f-cbca-7609-938a-2d044dd8fbbc",
+        start_time="2026-08-18T14:00:00+00:00",
+        end_time="2026-08-18T15:00:00+00:00",
+        timezone="UTC",
+    )
+
+    assert "skipped" not in result
+    assert result["summary_id"] == "summary-1"
+    assert result["summary_text"] == "a meeting"
+    assert result["tokens_used"] == 40
+    assert len(stored) == 1
+
+
 # ── Dossier ──────────────────────────────────────────────────────────
 
 

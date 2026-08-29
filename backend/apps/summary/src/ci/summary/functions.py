@@ -36,6 +36,7 @@ from .activities import (
     store_insight_activity,
     store_summary_activity,
 )
+from .summary_functions import count_activities
 
 logger = structlog.get_logger()
 
@@ -83,6 +84,30 @@ async def hourly_summary(
     )
 
     aggregated_data = await aggregate_data_activity(user_id, start_iso, end_iso)
+    activity_counts = count_activities(aggregated_data)
+
+    if activity_counts.get("total", 0) == 0:
+        # Quiet hours are the common case. Calling the model (or even the
+        # embedder) to say so just occupies the GPU; writing the row then
+        # feeds dossier_refresh something to regenerate from. Report the
+        # same skip shape the rollups use and leave the next window clean.
+        logger.info(
+            "hourly_summary_skipped",
+            user_id=user_id[:8],
+            reason="no_activity",
+            start=start_iso,
+            end=end_iso,
+        )
+        return {
+            "summary_id": None,
+            "summary_type": "hourly",
+            "skipped": "no_activity",
+            "summary_text": "Nothing new.",
+            "key_insights": [],
+            "activity_counts": activity_counts,
+            "tokens_used": 0,
+        }
+
     summary_data = await generate_hourly_summary_activity(aggregated_data)
     summary_id = await store_summary_activity(
         user_id, summary_data, start_iso, end_iso, timezone
