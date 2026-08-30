@@ -15,7 +15,7 @@ import {
 import { GraphIngestService } from '@ci/domains/graph';
 import { AnswerService, QuestionService } from '@ci/domains/intelligence';
 import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
-import { EventService } from '@ci/domains/memory';
+import { CalendarEventService } from '@ci/domains/memory';
 
 import {
   parseJsonObject,
@@ -91,7 +91,7 @@ export class ContextPromptPersistService {
     private readonly answerService: AnswerService,
     private readonly questionService: QuestionService,
     private readonly graphIngestService: GraphIngestService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly placement: PlacementService,
     private readonly homeConfirmService: HomeConfirmService,
     private readonly dailyMetricsService: DailyMetricsService,

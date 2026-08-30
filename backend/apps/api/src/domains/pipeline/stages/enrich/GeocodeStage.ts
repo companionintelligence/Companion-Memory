@@ -745,7 +745,7 @@ export class GeocodeStage implements Stage {
   /**
    * The slice's events, in one statement.
    *
-   * Raw SQL rather than `EventService`, for the reason `EmbedStage` gives about
+   * Raw SQL rather than `CalendarEventService`, for the reason `EmbedStage` gives about
    * `ContentService`: the columns wanted are a strict subset (a `ci.events` row
    * carries ~40 columns including jsonb blobs, at 200 rows a slice), and going
    * through the memory domain's barrel from inside `domains/pipeline` would
@@ -776,7 +776,7 @@ export class GeocodeStage implements Stage {
    * Write every resolved event in ONE statement.
    *
    * `unnest()` over parallel arrays, one round trip per slice. The per-row version
-   * of this pattern — `EventService.update` in a loop, as the listener does — is
+   * of this pattern — `CalendarEventService.update` in a loop, as the listener does — is
    * why a 200-row geocode batch is 200 round trips plus 200 more for the
    * provenance tag.
    *

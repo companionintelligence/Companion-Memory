@@ -115,7 +115,7 @@ const UNCLAIMED_SPEND_EVENTS_WHERE = `e.user_id = $1
 
 /**
  * Server-side aggregates for the stats page life charts. Thing totals stay
- * on {@link GraphUtilityService} / {@link EventService.getTimelineStats}; this
+ * on {@link GraphUtilityService} / {@link CalendarEventService.getTimelineStats}; this
  * service only builds spend / time / conversation / social series so the
  * browser never pages those tables.
  */

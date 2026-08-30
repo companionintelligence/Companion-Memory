@@ -2,14 +2,14 @@ import { Injectable } from '@nestjs/common';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { type Event, EventService } from '@ci/domains/memory';
+import { type Event, CalendarEventService } from '@ci/domains/memory';
 
 import { Loader } from './Loader';
 
 @Injectable()
 export class EventLoader extends Loader<Event | null> {
   constructor(
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     protected readonly logger: LoggerService,
   ) {
     super();

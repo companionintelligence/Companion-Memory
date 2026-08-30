@@ -3,7 +3,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
-import { BaseEntity, EventBaseEntity, EventEntity, EventService, GraphDeltaWriter } from '@ci/domains/memory';
+import { BaseEntity, EventBaseEntity, EventEntity, CalendarEventService, GraphDeltaWriter } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
@@ -27,7 +27,7 @@ describeWithDb('CandidateService — accept / returnToSlate lifecycle (integrati
   let dataSource: DataSource;
   let schemaLock: SchemaLock | null = null;
   let candidateService: CandidateService;
-  let eventService: EventService;
+  let eventService: CalendarEventService;
 
   const ctx: UserServiceContext = { userId: uuidv7() } as UserServiceContext;
   let candidateId: string;
@@ -67,7 +67,7 @@ describeWithDb('CandidateService — accept / returnToSlate lifecycle (integrati
       [ctx.userId, `schedule.${ctx.userId}@example.test`],
     );
 
-    eventService = new EventService(
+    eventService = new CalendarEventService(
       dataSource.getRepository(EventEntity),
       dataSource.getRepository(EventBaseEntity),
       noopSignalling as never,

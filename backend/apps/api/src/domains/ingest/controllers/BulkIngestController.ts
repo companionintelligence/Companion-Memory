@@ -11,7 +11,7 @@ import {
   CommunicationService,
   CommunicationType,
   ContentService,
-  EventService,
+  CalendarEventService,
   ItemService,
   ObjectObservationService,
   ProductModelService,
@@ -221,7 +221,7 @@ async function envelopeResponse(
  * chunk-safe bulk service (CommunicationService.createMany,
  * ContentService.createMany, ItemService.createMany,
  * BrowserActivityService.createMany, PositionService.create,
- * EventService.create[]) — idempotent on the service's own key, internally
+ * CalendarEventService.create[]) — idempotent on the service's own key, internally
  * chunked under the 65535 bind-param limit, `emitCreated: false` semantics
  * throughout: no per-row *CreatedEvent fan-out, so search indexing and
  * enrichment are DEFERRED until the client calls `POST /v1/ingest/finish`
@@ -246,7 +246,7 @@ export class BulkIngestController {
     private readonly itemService: ItemService,
     private readonly browserActivityService: BrowserActivityService,
     private readonly positionService: PositionService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly noteService: NoteService,
     private readonly receiptService: ReceiptService,
     private readonly productModelService: ProductModelService,

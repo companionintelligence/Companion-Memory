@@ -73,7 +73,7 @@ interface CtiAggregateOptions<TDetail extends ObjectLiteral & { id: string }, TB
 /**
  * The shared machinery of a class-table-inheritance aggregate: ONE logical
  * entity persisted as a discriminated `ci.entities` base row plus a detail row
- * sharing the same uuid. {@link ItemService}, {@link EventService}, and
+ * sharing the same uuid. {@link ItemService}, {@link CalendarEventService}, and
  * {@link CommunicationService} each compose an instance instead of hand-rolling
  * the split (this deliberately complements the single-repository
  * {@link EntityService} rather than subclassing it — a CTI aggregate owns two

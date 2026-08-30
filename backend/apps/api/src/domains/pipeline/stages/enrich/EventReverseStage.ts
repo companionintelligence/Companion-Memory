@@ -718,7 +718,7 @@ export class EventReverseStage implements Stage {
   /**
    * The slice's events, in one statement.
    *
-   * Raw SQL rather than `EventService`, for the reason `GeocodeStage` gives: the
+   * Raw SQL rather than `CalendarEventService`, for the reason `GeocodeStage` gives: the
    * columns wanted are a strict subset (a `ci.events` row carries ~40 columns
    * including jsonb blobs, at 200 rows a slice), and going through the memory
    * domain's barrel from inside `domains/pipeline` would couple the pipeline's
@@ -756,7 +756,7 @@ export class EventReverseStage implements Stage {
    * Write every resolved event in ONE statement.
    *
    * `unnest()` over parallel arrays, one round trip per slice. The per-row
-   * version of this — `EventService.update` in a loop, plus a second call to
+   * version of this — `CalendarEventService.update` in a loop, plus a second call to
    * `tagLocationSource`, which is exactly what `GeocodeBatchListener`'s reverse
    * leg does — is two round trips per event.
    *

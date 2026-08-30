@@ -6,7 +6,7 @@ import { SpotifySavedTracksTransformService } from '../transform/TransformSavedT
 /**
  * One concern, four services: every Spotify transform that writes a
  * `ci.events` row must stamp the provenance triple, because
- * EventService.createOne only find-or-creates when source_type and source_id
+ * CalendarEventService.createOne only find-or-creates when source_type and source_id
  * are present — without them each re-sweep of the rolling recently-played
  * window / the saved lists minted a fresh event per item.
  */

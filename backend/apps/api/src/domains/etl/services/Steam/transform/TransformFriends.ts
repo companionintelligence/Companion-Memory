@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { EventService, PersonService } from '@ci/domains/memory';
+import { CalendarEventService, PersonService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -21,7 +21,7 @@ interface SteamFriendData {
 export class SteamFriendsTransformService {
   constructor(
     private readonly personService: PersonService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(SteamFriendsTransformService.name);
@@ -114,7 +114,7 @@ export class SteamFriendsTransformService {
               // to be guarded only by the person-exists check above, so a
               // replay after a person write that raced or half-failed would
               // duplicate the event (source_type alone engages neither
-              // EventService.createOne's find-or-create nor the unique index).
+              // CalendarEventService.createOne's find-or-create nor the unique index).
               source_type: 'ETL',
               source_system: 'steam',
               source_id: `friend_added:${friend.steamid}`,

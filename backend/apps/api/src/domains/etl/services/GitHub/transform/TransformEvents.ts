@@ -17,7 +17,7 @@ import {
   GithubPushEvent,
   GithubReleaseEvent,
 } from '@ci/domains/etl/services/GitHub/sync/SyncEvents';
-import { ContentService, EventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -25,7 +25,7 @@ import { ConnectionSyncJob } from '../../../types';
 export class GitHubEventsTransformService {
   constructor(
     private readonly contentService: ContentService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(GitHubEventsTransformService.name);
@@ -61,7 +61,7 @@ export class GitHubEventsTransformService {
 
       // This search is the legacy-row guard; the real idempotency is the full
       // (source_type, source_system, source_id) triple every create below now
-      // carries — without source_type, EventService.createOne skipped its
+      // carries — without source_type, CalendarEventService.createOne skipped its
       // find-or-create and events_source_triple_uniq treated the rows as
       // NULL-distinct, so this racy pre-check was all that prevented replays
       // from duplicating.

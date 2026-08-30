@@ -266,7 +266,7 @@ export class GeocodeService {
 
   /**
    * Build the PostGIS geography Point from a (lat, lng) pair. PostGIS / GeoJSON
-   * order coordinates [lng, lat] (X, Y) — the same axis order EventService and
+   * order coordinates [lng, lat] (X, Y) — the same axis order CalendarEventService and
    * TransformGoogleCalendar write. Guarded so an accidental swap can't silently
    * persist a transposed coordinate.
    */

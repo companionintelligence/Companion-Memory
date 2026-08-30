@@ -62,7 +62,7 @@ const provenanceRefSchema = z.object({
 export type ProvenanceRef = z.infer<typeof provenanceRefSchema>;
 
 // ---------------------------------------------------------------------------
-// POST /v1/events → capture raw log + EventService.create
+// POST /v1/events → capture raw log + CalendarEventService.create
 // ---------------------------------------------------------------------------
 
 // G1 unified-capture ingest envelope (event-ingest-spec §4.2), pragmatic v1

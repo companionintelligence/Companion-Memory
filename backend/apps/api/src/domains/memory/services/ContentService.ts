@@ -201,7 +201,7 @@ export class ContentService {
   /**
    * Batch, idempotent content ingest for the importer. Dedupes on the provenance
    * triple (user_id, source_type, source_system, source_id) — like
-   * EventService.create / ItemService.createMany — via one set-based
+   * CalendarEventService.create / ItemService.createMany — via one set-based
    * INSERT ... ON CONFLICT DO NOTHING instead of the old per-row findOne + save
    * loop. The old path did, per row, up to 2 SELECTs (triple dedup + event
    * lookup) and 1 INSERT, fanned out unbounded — ~2M+ round trips at 1M rows.
@@ -227,7 +227,7 @@ export class ContentService {
    * (POST /api/maintenance/search-index/backfill). The single-record
    * `createContent` mutation passes `emitCreated: true` so an interactive create
    * still indexes live — but only rows this call actually INSERTED emit (a re-send
-   * that finds an existing row is a no-op), mirroring EventService/ItemService.
+   * that finds an existing row is a no-op), mirroring CalendarEventService/ItemService.
    *
    * Returns the created-or-existing rows in input order.
    */
@@ -511,7 +511,7 @@ export class ContentService {
    *
    * A photo/video event carries its binary through a `ci.content` row
    * (type='media'), and that row is indexed in its own right. Deleting the event
-   * is a soft delete (see {@link EventService.remove}), so the FK never fires
+   * is a soft delete (see {@link CalendarEventService.remove}), so the FK never fires
    * and the content row would otherwise keep showing the deleted photo in the
    * explorer. The LEFT JOIN keeps standalone content (`event_id IS NULL`)
    * visible, and restoring the event brings its media back with it.
@@ -640,7 +640,7 @@ export class ContentService {
   /**
    * True total of content matching the same filters {@link getEntitiesForContents} applies
    * (minus the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`, not
-   * the length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
+   * the length of one `limit`-bounded page of identifiers. See CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForContents(
     context: ServiceContext,

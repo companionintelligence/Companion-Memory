@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { ContentService, EventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import type { RedditComment } from '../sync/redditListing';
@@ -11,7 +11,7 @@ import type { RedditComment } from '../sync/redditListing';
 export class RedditCommentsTransformService {
   constructor(
     private readonly contentService: ContentService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(RedditCommentsTransformService.name);
@@ -86,7 +86,7 @@ export class RedditCommentsTransformService {
           {
             connection_id: connection.id,
             event_type: 'reddit_comment',
-            // Without source_type, EventService.createOne skips its
+            // Without source_type, CalendarEventService.createOne skips its
             // find-or-create AND events_source_triple_uniq treats the row as
             // NULL-distinct — only the search above stood between a replay
             // and a duplicate.

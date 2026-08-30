@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { EventEntity, EventService, PersonService, UserContextService, type Event } from '@ci/domains/memory';
+import { EventEntity, CalendarEventService, PersonService, UserContextService, type Event } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
 import {
@@ -37,7 +37,7 @@ export class PlannedBlockService {
   constructor(
     @InjectRepository(EventEntity)
     private readonly eventRepository: Repository<EventEntity>,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly taskService: TaskService,
     private readonly planningTime: PlanningTimeService,
     private readonly personalizationService: PersonalizationService,
@@ -50,7 +50,7 @@ export class PlannedBlockService {
 
   /**
    * SQL-pushdown of `event_type = 'planned_block'` overlapping [from, to).
-   * Not EventService.findAll — that path is unbounded and explorer-facing.
+   * Not CalendarEventService.findAll — that path is unbounded and explorer-facing.
    */
   async list(context: UserServiceContext, from: Date, to: Date): Promise<Event[]> {
     const rows = await this.eventRepository
@@ -141,7 +141,7 @@ export class PlannedBlockService {
    * second click is rightly a no-op. A drag names a destination. Dropping an
    * already-placed task's card again is the same gesture the grid's own
    * event-drag uses to MOVE a committed block (`rescheduleEvent`), so this
-   * reuses that path (`EventService.reschedule`, which preserves duration when
+   * reuses that path (`CalendarEventService.reschedule`, which preserves duration when
    * `end` is omitted) rather than reporting nothing happened.
    *
    * Past dates are accepted deliberately. The date-only path clamps a

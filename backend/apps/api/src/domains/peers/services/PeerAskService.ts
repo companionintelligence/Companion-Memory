@@ -401,7 +401,7 @@ export class PeerAskService {
         where: [
           {
             userId: context.userId,
-            // Events are tombstoned, not destroyed (`EventService.softDeleteFlag`),
+            // Events are tombstoned, not destroyed (`CalendarEventService.softDeleteFlag`),
             // so a raw repository read has to skip flagged rows itself. Without
             // this a deleted meeting still marks the owner busy to a peer.
             isDeleted: false,

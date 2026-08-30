@@ -29,7 +29,7 @@ interface Options {
   order?: FindOptionsOrder<BrowserActivityEntity>;
   startTime?: Date;
   endTime?: Date;
-  /** Composite keyset cursor for the timed search path (see EventService). */
+  /** Composite keyset cursor for the timed search path (see CalendarEventService). */
   afterTime?: Date;
   afterId?: string;
 }
@@ -366,7 +366,7 @@ export class BrowserActivityService {
   /**
    * True total of browser activities matching the same filters {@link getEntitiesForBrowserActivities}
    * applies (minus the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`,
-   * not the length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
+   * not the length of one `limit`-bounded page of identifiers. See CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForBrowserActivities(
     context: ServiceContext,

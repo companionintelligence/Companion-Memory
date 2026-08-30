@@ -498,7 +498,7 @@ export class PersonService extends EntityService<PersonEntity, Person> {
   /**
    * True total of people matching the same filters {@link getEntitiesForPeople} applies (minus
    * the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`, not the
-   * length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
+   * length of one `limit`-bounded page of identifiers. See CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForPeople(
     context: ServiceContext,

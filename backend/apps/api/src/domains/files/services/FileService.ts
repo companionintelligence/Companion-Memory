@@ -374,7 +374,7 @@ export class FileService implements OnModuleInit {
   /**
    * True total of files matching the same filters {@link getEntitiesForFiles} applies (minus
    * the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`, not the
-   * length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
+   * length of one `limit`-bounded page of identifiers. See CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForFiles(
     context: ServiceContext,

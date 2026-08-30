@@ -75,11 +75,11 @@ import {
 import { type ReceiptLineItem, ReceiptLineItemEntity } from './entities/ReceiptLineItemEntity';
 import { RelationshipEntity } from './entities/RelationshipEntity';
 import { GraphEventListener } from './listeners/GraphEventListener';
+import { CalendarEventService } from './services/CalendarEventService';
 import { CommunicationService } from './services/CommunicationService';
 import { ConceptService } from './services/ConceptService';
 import { ContentService } from './services/ContentService';
 import { EntityMergeBlockService } from './services/EntityMergeBlockService';
-import { EventService } from './services/EventService';
 import { FileService } from './services/FileService';
 import { GraphDeltaWriter } from './services/GraphDeltaWriter';
 import { GraphEventService } from './services/GraphEventService';
@@ -148,7 +148,7 @@ import { UserContextService } from './services/UserContextService';
     GraphDeltaWriter,
     CommunicationService,
     ContentService,
-    EventService,
+    CalendarEventService,
     GraphEventService,
     GraphUtilityService,
     GraphQueryService,
@@ -188,7 +188,7 @@ import { UserContextService } from './services/UserContextService';
     CommunicationService,
     ContentService,
     GraphDeltaWriter,
-    EventService,
+    CalendarEventService,
     GraphEventService,
     ItemService,
     PersonService,
@@ -252,7 +252,7 @@ export {
 export {
   ContentService,
   GraphDeltaWriter,
-  EventService,
+  CalendarEventService,
   CommunicationService,
   GraphEventService,
   ItemService,
@@ -282,7 +282,7 @@ export {
 };
 
 export type { Content } from './entities/ContentEntity';
-export type { MapPin } from './services/EventService';
+export type { MapPin } from './services/CalendarEventService';
 export type { PlaceKind } from './entities/PlaceEntity';
 export type { PlaceVisitStats } from './services/PlaceService';
 export { EntityMergeBlockEntity, orderPair, pairKey } from './entities/EntityMergeBlockEntity';

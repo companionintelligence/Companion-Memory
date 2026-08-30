@@ -3,11 +3,11 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { SYSTEM_USER, type ServiceContext } from '@ci/common/context';
-import { EventService as SignallingEventService } from '@ci/domains/events';
+import { EventService } from '@ci/domains/events';
 
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
-import { EventService } from '../EventService';
+import { CalendarEventService } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
@@ -38,8 +38,8 @@ function makeQueryBuilder(many: unknown[]) {
   return qb;
 }
 
-describe('EventService.findInRange — the calendar read path', () => {
-  let service: EventService;
+describe('CalendarEventService.findInRange — the calendar read path', () => {
+  let service: CalendarEventService;
   let qb: ReturnType<typeof makeQueryBuilder>;
 
   const ctx = { userId: 'user-1' } as ServiceContext;
@@ -58,17 +58,17 @@ describe('EventService.findInRange — the calendar read path', () => {
 
     return Test.createTestingModule({
       providers: [
-        EventService,
+        CalendarEventService,
         { provide: getRepositoryToken(EventEntity), useValue: {} },
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepository },
-        { provide: SignallingEventService, useValue: { send: jest.fn() } },
+        { provide: EventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: dataSource },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     })
       .compile()
       .then((moduleRef) => {
-        service = moduleRef.get(EventService);
+        service = moduleRef.get(CalendarEventService);
       });
   }
 

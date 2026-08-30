@@ -5,7 +5,7 @@ import { DataSource } from 'typeorm';
 import { LoggerService } from '@ci/common/logging';
 import { BrowserActivityService } from '@ci/domains/browser-activity';
 import { UNFURL_SWEEP_QUEUE, UnfurlSweepRequestEvent } from '@ci/domains/embed/events';
-import { EventService as SignallingEventService } from '@ci/domains/events';
+import { EventService } from '@ci/domains/events';
 // Events leaf only (see the maintenance import below for why a barrel would cycle).
 import { type GraphEntityInputDto, GraphIngestService, ObjectIdentifierService } from '@ci/domains/graph';
 // The events leaf, NOT the maintenance barrel: the barrel would close the
@@ -17,10 +17,10 @@ import {
   SearchIndexBackfillRequestEvent,
 } from '@ci/domains/maintenance/events';
 import {
+  CalendarEventService,
   CommunicationService,
   ContentService,
   type CreateContentDto,
-  EventService,
   ItemService,
   ObjectObservationService,
   ProductModelService,
@@ -340,7 +340,7 @@ export class PushStage implements ImportStageRunner {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly communications: CommunicationService,
     private readonly contents: ContentService,
-    private readonly events: EventService,
+    private readonly events: CalendarEventService,
     private readonly items: ItemService,
     private readonly receipts: ReceiptService,
     private readonly productModels: ProductModelService,
@@ -349,7 +349,7 @@ export class PushStage implements ImportStageRunner {
     private readonly positions: PositionService,
     private readonly browserActivity: BrowserActivityService,
     private readonly graph: GraphIngestService,
-    private readonly signals: SignallingEventService,
+    private readonly signals: EventService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(PushStage.name);

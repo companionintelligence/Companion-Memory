@@ -3,7 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { EventEntity, EventService, PersonService, UserContextService } from '@ci/domains/memory';
+import { EventEntity, CalendarEventService, PersonService, UserContextService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
 import { PlannedBlockService } from '../PlannedBlockService';
@@ -101,7 +101,7 @@ describe('PlannedBlockService', () => {
       providers: [
         PlannedBlockService,
         { provide: getRepositoryToken(EventEntity), useValue: eventRepository },
-        { provide: EventService, useValue: eventService },
+        { provide: CalendarEventService, useValue: eventService },
         { provide: TaskService, useValue: taskService },
         { provide: PlanningTimeService, useValue: planningTime },
         { provide: PersonalizationService, useValue: personalizationService },

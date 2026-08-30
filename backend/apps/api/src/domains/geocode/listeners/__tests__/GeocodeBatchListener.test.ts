@@ -41,7 +41,7 @@ function makeDataSource(builder: ReturnType<typeof makeQueryBuilder>) {
 
 /**
  * Build a listener with a geocodeService whose `geocode` returns a scripted
- * outcome (provider never touched), and capture EventService.update calls.
+ * outcome (provider never touched), and capture CalendarEventService.update calls.
  */
 function makeListener(
   rows: Array<Record<string, unknown>>,
@@ -354,7 +354,7 @@ describe('GeocodeBatchListener Place linking', () => {
       components: null,
       bounds: null,
     });
-    // The name + entity-id are written in the same EventService.update payload
+    // The name + entity-id are written in the same CalendarEventService.update payload
     // so the index update is atomic.
     expect(updates[0].data.location_name).toBe('1401 N Shoreline Blvd, Mountain View, CA');
     expect(updates[0].data.location_entity_id).toBe(
