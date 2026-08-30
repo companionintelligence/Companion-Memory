@@ -296,6 +296,17 @@ export class TodoScanService {
         query: MEMORY_LOOKBACK_QUERY,
         mode: 'boosted',
         maxResults: 20,
+        // `browser-activity` is indexed into ci_search.vectors for the general
+        // search UI but is never projected into ci.entities the way every
+        // other IndexableEntity is (Communication/Event/Content/Person/Item/
+        // Location all do) — confirmed live: 0 of a real user's 254,357
+        // browser-activity vectors joined to ci.entities, versus 100% for
+        // every other type. The lookup below silently drops any hit that
+        // doesn't resolve, so on an account with heavy browsing history a
+        // browser-activity hit just burns one of this scan's 20 candidate
+        // slots for nothing — over half the slots, in that measurement.
+        // Excluding it here keeps the budget on hits this scan can ever use.
+        excludeTypes: ['browser-activity'],
       });
 
       const hits = results ?? [];
