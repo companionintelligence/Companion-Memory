@@ -21,6 +21,7 @@ import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next'
 import { BaseEntity } from '../entities/BaseEntity';
 import { EventBaseEntity } from '../entities/EventBaseEntity';
 import { EventEntity, Event } from '../entities/EventEntity';
+import { PlaceEntity } from '../entities/PlaceEntity';
 import { CreateEventDto, UpdateEventDto, SearchEventDto } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
@@ -1094,9 +1095,38 @@ export class EventService {
       });
     }
 
-    // "Where" (located only): the event must carry geographic coordinates.
+    // "Where" (located only): the event must carry geographic coordinates —
+    // either its own denormalised `location_coordinates` (set directly, e.g. by
+    // EXIF/reverse-geocode ingest) or, when the event is only linked to a known
+    // Place via `location_entity_id`, that Place's `location_point`. An event
+    // can carry either one independently (CreateEventInput/UpdateEventInput
+    // accept `locationCoordinates` and `locationEntityId` as separate, optional
+    // fields — see EventResolver), so a coordinate-only check here missed every
+    // event whose location came from a Place link alone: `locationCoordinates`
+    // stayed null while `location` (the resolved Place) was fully populated,
+    // which made the map render zero pins for such events despite the event
+    // itself being genuinely located and appearing correctly in the explorer
+    // (which resolves the same fallback client-side — see
+    // MapView.getEntityCoordinates).
+    const needsLocationCoordinate =
+      options.hasLocation === true ||
+      (options.bbox != null &&
+        options.bbox.length === 4 &&
+        options.bbox.every((value) => Number.isFinite(value)));
+
+    if (needsLocationCoordinate) {
+      query = query.leftJoin(
+        PlaceEntity,
+        'location_entity',
+        'location_entity.entity_id = event.location_entity_id AND location_entity.entity_type = :locationEntityType',
+        { locationEntityType: 'Location' },
+      );
+    }
+
     if (options.hasLocation) {
-      query = query.andWhere('event.location_coordinates IS NOT NULL');
+      query = query.andWhere(
+        'COALESCE(event.location_coordinates, location_entity.location_point) IS NOT NULL',
+      );
     }
 
     // "Where" (viewport): the event's coordinates fall inside the bounding box
@@ -1109,7 +1139,8 @@ export class EventService {
       const [minLon, minLat, maxLon, maxLat] = options.bbox;
 
       query = query.andWhere(
-        'ST_Within(event.location_coordinates::geometry, ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326))',
+        'ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry, ' +
+          'ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326))',
         { minLon, minLat, maxLon, maxLat },
       );
     }
@@ -1239,8 +1270,17 @@ export class EventService {
       .addSelect('event.event_type', 'event_type')
       .addSelect('event.location_name', 'location_name')
       .addSelect('event.time_source', 'time_source')
-      .addSelect('ST_Y(event.location_coordinates::geometry)', 'latitude')
-      .addSelect('ST_X(event.location_coordinates::geometry)', 'longitude')
+      // COALESCE with the linked Place's `location_point` — see the comment in
+      // applyEventFilters for why an event's location is not always on the
+      // event row itself.
+      .addSelect(
+        'ST_Y(COALESCE(event.location_coordinates, location_entity.location_point)::geometry)',
+        'latitude',
+      )
+      .addSelect(
+        'ST_X(COALESCE(event.location_coordinates, location_entity.location_point)::geometry)',
+        'longitude',
+      )
       .where('event.user_id = :userId', { userId: context.userId })
       .orderBy('event.start_time', 'DESC')
       .addOrderBy('event.event_id', 'DESC')

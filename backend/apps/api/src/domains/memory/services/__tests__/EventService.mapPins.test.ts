@@ -29,6 +29,7 @@ function makeQueryBuilder(rawMany: unknown[]) {
     select: record('select'),
     addSelect: record('addSelect'),
     innerJoin: record('innerJoin'),
+    leftJoin: record('leftJoin'),
     where: record('where'),
     andWhere: record('andWhere'),
     limit: record('limit'),
@@ -122,7 +123,9 @@ describe('EventService.findMapPins', () => {
 
     await service.findMapPins(ctx, { limit: 100, hasLocation: false });
 
-    expect(clause('event.location_coordinates IS NOT NULL')).toBeDefined();
+    expect(
+      clause('COALESCE(event.location_coordinates, location_entity.location_point) IS NOT NULL'),
+    ).toBeDefined();
   });
 
   it('scopes to the caller and caps the read at `limit`', async () => {
@@ -144,7 +147,9 @@ describe('EventService.findMapPins', () => {
       eventTypes: ['visited'],
     });
 
-    expect(clause('ST_Within(event.location_coordinates::geometry')).toBeDefined();
+    expect(
+      clause('ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry'),
+    ).toBeDefined();
     expect(clause('event.start_time >= :startTime')).toBeDefined();
     expect(clause('event.event_type IN (:...eventTypes)')).toBeDefined();
   });

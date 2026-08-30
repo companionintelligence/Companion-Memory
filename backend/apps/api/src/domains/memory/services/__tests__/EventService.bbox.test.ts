@@ -28,6 +28,7 @@ function makeQueryBuilder(rawMany: unknown[]) {
 
   const qb = {
     select: record('select'),
+    leftJoin: record('leftJoin'),
     where: record('where'),
     andWhere: record('andWhere'),
     limit: record('limit'),
@@ -39,7 +40,8 @@ function makeQueryBuilder(rawMany: unknown[]) {
   return qb;
 }
 
-const ST_WITHIN = 'ST_Within(event.location_coordinates::geometry, ST_MakeEnvelope(';
+const ST_WITHIN =
+  'ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry, ST_MakeEnvelope(';
 
 describe('EventService — bounding-box ("search this area") filtering', () => {
   let service: EventService;
