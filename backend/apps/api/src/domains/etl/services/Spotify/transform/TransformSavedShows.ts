@@ -86,6 +86,12 @@ export class SpotifySavedShowsTransformService {
                 event_type: 'favorite',
                 start_time: new Date(showItem.added_at),
                 duration_minutes: 0,
+                // Provenance triple: EventService.createOne find-or-creates on
+                // it, so a re-sweep of the saved-shows list resolves to the
+                // existing event instead of minting another.
+                source_type: 'ETL',
+                source_system: 'spotify',
+                source_id: `saved_show:${show.id}`,
                 metadata: {
                   show_id: show.id,
                   total_episodes: show.total_episodes,

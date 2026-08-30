@@ -27,33 +27,48 @@ export class SlackChannelsTransformService {
 
     for (const channel of channels) {
       const title = channel.name || channel.id;
-      const existingContent = await this.contentService.search({ userId }, { external_id: channel.id });
 
-      if (existingContent.length > 0) {
-        continue;
-      }
+      // Per-row try/catch, matching TransformMessages: if the search below
+      // races another worker, the insert raises 23505 against
+      // content_source_triple_uniq — that must skip this channel, not abort
+      // the whole transform.
+      try {
+        const existingContent = await this.contentService.search(
+          { userId },
+          { type: 'slack_channel', external_id: channel.id },
+        );
 
-      await this.contentService.create(
-        { userId },
-        {
-          connection_id: connection.id,
-          type: 'slack_channel',
-          title,
-          text: `Slack channel ${title}`,
-          external_id: channel.id,
-          external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-          source_type: 'ETL',
-          source_system: 'slack',
-          source_id: channel.id,
-          source_data: {
-            slack_channel_id: channel.id,
-            is_private: channel.is_private,
-            is_im: channel.is_im,
-            is_mpim: channel.is_mpim,
-            num_members: channel.num_members,
+        if (existingContent.length > 0) {
+          continue;
+        }
+
+        await this.contentService.create(
+          { userId },
+          {
+            connection_id: connection.id,
+            type: 'slack_channel',
+            title,
+            text: `Slack channel ${title}`,
+            external_id: channel.id,
+            external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+            source_type: 'ETL',
+            source_system: 'slack',
+            source_id: channel.id,
+            source_data: {
+              slack_channel_id: channel.id,
+              is_private: channel.is_private,
+              is_im: channel.is_im,
+              is_mpim: channel.is_mpim,
+              num_members: channel.num_members,
+            },
           },
-        },
-      );
+        );
+      } catch (error) {
+        this.logger.error('Failed to transform Slack channel', {
+          channelId: channel.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
     }
 
     this.logger.log('Slack channels transformation completed', {

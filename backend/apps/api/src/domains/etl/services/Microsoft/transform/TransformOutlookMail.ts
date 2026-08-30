@@ -102,7 +102,6 @@ export class OutlookMailTransformService {
         messageCount: messages.length,
       });
 
-      console.log('messages to transform', messages);
       await Promise.all(
         messages.map(
           async (message) =>
@@ -283,10 +282,7 @@ export class OutlookMailTransformService {
         date,
       );
 
-      console.log('communication to insert', communicationDto);
       await this.communicationService.create({ userId }, communicationDto);
-
-      console.log('communication inserted', communicationDto);
 
       this.logger.log('Outlook Mail message saved successfully', {
         messageId,
@@ -393,6 +389,15 @@ export class OutlookMailTransformService {
       connection_id: connectionId,
       attachments: [], // TODO: Handle attachments
       preview: message.bodyPreview ?? null,
+      // Provenance triple: communications_source_triple_uniq rejects a
+      // re-synced message. Prefer internetMessageId — the Graph `id` is not
+      // stable across folder moves, so keying on it would re-duplicate a
+      // message the user refiles. A message with neither leaves source_id
+      // NULL (uncovered by the partial index) rather than collapsing every
+      // id-less message onto one shared row.
+      source_type: 'ETL',
+      source_system: 'outlook_mail',
+      source_id: message.internetMessageId || message.id || undefined,
     };
   }
 

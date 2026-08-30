@@ -54,6 +54,13 @@ export class RedditCommentsTransformService {
             url: permalink,
             external_id: comment.name,
             external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+            // content_source_triple_uniq backstops the racy search-then-create
+            // above. source_system is 'reddit' (not 'reddit_comments') so the
+            // saved-items transform, which writes the same underlying thing,
+            // lands on the same key.
+            source_type: 'ETL',
+            source_system: 'reddit',
+            source_id: comment.name,
             source_url: permalink,
             source_data: {
               reddit_comment_id: comment.id,
@@ -79,6 +86,11 @@ export class RedditCommentsTransformService {
           {
             connection_id: connection.id,
             event_type: 'reddit_comment',
+            // Without source_type, EventService.createOne skips its
+            // find-or-create AND events_source_triple_uniq treats the row as
+            // NULL-distinct — only the search above stood between a replay
+            // and a duplicate.
+            source_type: 'ETL',
             source_id: comment.name,
             start_time: new Date(comment.created_utc * 1000),
             title: `Commented on "${comment.link_title}" in r/${comment.subreddit}`,

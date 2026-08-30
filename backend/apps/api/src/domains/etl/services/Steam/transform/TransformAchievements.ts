@@ -83,6 +83,11 @@ export class SteamAchievementsTransformService {
               text: achievementDescription,
               external_id: externalId,
               external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+              // content_source_triple_uniq backstops the racy
+              // search-then-create above.
+              source_type: 'ETL',
+              source_system: 'steam',
+              source_id: `achievement:${externalId}`,
               source_data: {
                 appid: item.appid,
                 gameName,
@@ -109,7 +114,13 @@ export class SteamAchievementsTransformService {
                 description: `Earned achievement: ${achievementName} in ${gameName}`,
                 event_type: 'achievement_unlocked',
                 category: 'games',
+                // source_type alone did nothing: EventService.createOne needs
+                // source_id too before it find-or-creates, and the unique
+                // index only covers full triples. An achievement unlocks once,
+                // so the key carries no timestamp.
                 source_type: 'ETL',
+                source_system: 'steam',
+                source_id: `achievement_unlocked:${externalId}`,
                 start_time: new Date(item.achievement.unlocktime * 1000),
                 metadata: {
                   appid: item.appid,

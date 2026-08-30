@@ -70,6 +70,12 @@ export class SpotifySavedEpisodesTransformService {
                 event_type: 'favorite',
                 start_time: new Date(episodeItem.added_at),
                 duration_minutes: Math.floor(episode.duration_ms / 60000),
+                // Provenance triple: EventService.createOne find-or-creates on
+                // it, so a re-sweep of the saved-episodes list resolves to the
+                // existing event instead of minting another.
+                source_type: 'ETL',
+                source_system: 'spotify',
+                source_id: `saved_episode:${episode.id}`,
                 metadata: {
                   episode_id: episode.id,
                   show_name: episode.show?.name,

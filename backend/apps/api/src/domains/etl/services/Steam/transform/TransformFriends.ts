@@ -110,7 +110,14 @@ export class SteamFriendsTransformService {
               description: `Became friends with ${friend.personaname} on Steam`,
               event_type: 'friend_added',
               category: 'social',
+              // The full triple gives this write its own idempotency: it used
+              // to be guarded only by the person-exists check above, so a
+              // replay after a person write that raced or half-failed would
+              // duplicate the event (source_type alone engages neither
+              // EventService.createOne's find-or-create nor the unique index).
               source_type: 'ETL',
+              source_system: 'steam',
+              source_id: `friend_added:${friend.steamid}`,
               start_time: new Date(friend.friend_since * 1000),
               metadata: {
                 steamid: friend.steamid,

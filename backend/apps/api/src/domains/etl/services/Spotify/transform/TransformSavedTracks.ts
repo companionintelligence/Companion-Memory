@@ -70,6 +70,13 @@ export class SpotifySavedTracksTransformService {
             event_type: 'favorite',
             start_time: new Date(addedAt),
             duration_minutes: 0,
+            // Provenance triple: EventService.createOne find-or-creates on it,
+            // so a re-sweep of the saved-tracks list resolves to the existing
+            // event instead of minting another. Keyed on the track alone —
+            // an unsave/re-save keeps the original save event.
+            source_type: 'ETL',
+            source_system: 'spotify',
+            source_id: `saved_track:${track.id}`,
             metadata: {
               track_id: track.id,
               album: track.album?.name,

@@ -12,10 +12,19 @@ const CAPSULE =
   'inline-flex h-10 min-w-0 items-center overflow-hidden rounded-full border border-white/55 bg-white/30 p-1 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.7),0_1px_2px_rgba(0,0,0,0.08)] backdrop-blur-md transition-[max-width,padding,gap] duration-200 ease-in-out dark:border-white/20 dark:bg-white/10';
 
 /**
- * Mark and name. One definition, so the phone drawer and the pinned dock can
- * never disagree about what the app is called.
+ * Mark and name. Desktop keeps the full product name. The phone drawer
+ * shares 224px with the close chevron, so it uses the short form — the
+ * full string used to ellipsize.
  */
-function RailMark({ showName, truncateName = false }: { showName: boolean; truncateName?: boolean }) {
+function RailMark({
+  showName,
+  truncateName = false,
+  name = 'Companion Memory',
+}: {
+  showName: boolean;
+  truncateName?: boolean;
+  name?: string;
+}) {
   return (
     <>
       {/* Full-size mark on a white disc. `max-w-none` defeats Tailwind
@@ -34,7 +43,7 @@ function RailMark({ showName, truncateName = false }: { showName: boolean; trunc
           truncateName ? 'min-w-0 truncate' : 'overflow-hidden whitespace-nowrap',
         )}
       >
-        Companion Memory
+        {name}
       </span>
     </>
   );
@@ -55,7 +64,7 @@ function RailMark({ showName, truncateName = false }: { showName: boolean; trunc
 export function PowerRailWordmark() {
   return (
     <span className="flex min-w-0 items-center gap-2" data-testid="power-rail-wordmark">
-      <RailMark showName truncateName />
+      <RailMark showName truncateName name="Memory" />
     </span>
   );
 }

@@ -160,6 +160,14 @@ export class GmailTransformService {
           category: 'personal', // TODO: Classify emails
           connection_id: connectionId,
           preview: messageDetails.snippet || null,
+          // Provenance triple: communications_source_triple_uniq rejects a
+          // re-synced message (the sent/inbox sweeps overlap, and history
+          // replays re-send whole pages). A missing id leaves source_id NULL —
+          // uncovered by the partial index — rather than collapsing every
+          // id-less message onto one 'unknown' row.
+          source_type: 'ETL',
+          source_system: 'gmail',
+          source_id: message.id || undefined,
         },
       );
 

@@ -135,7 +135,10 @@ describe('MobileNavigation', () => {
     const nav = await screen.findByRole('navigation');
     const wordmark = within(nav).getByTestId('power-rail-wordmark');
 
-    expect(within(wordmark).getByText('Companion Memory')).toHaveAttribute('aria-hidden', 'false');
+    // Short form — the drawer shares 224px with the close chevron, so the
+    // full "Companion Memory" used to ellipsize. Desktop keeps the long name.
+    expect(within(wordmark).getByText('Memory')).toHaveAttribute('aria-hidden', 'false');
+    expect(within(wordmark).queryByText('Companion Memory')).toBeNull();
     expect(wordmark.querySelector('img[src*="logo"]')).not.toBeNull();
   });
 

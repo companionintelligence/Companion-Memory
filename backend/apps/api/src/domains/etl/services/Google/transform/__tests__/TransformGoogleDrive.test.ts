@@ -27,6 +27,7 @@ function makeLogger() {
 function build() {
   const contentService = {
     create: jest.fn(async (_ctx: unknown, _input: Record<string, unknown>) => ({ id: 'content-1' })),
+    findBySource: jest.fn(async () => null as { id: string } | null),
   };
   const fileService = {
     create: jest.fn(async (_ctx: unknown, _input: Record<string, unknown>) => ({ id: 'file-1' })),
@@ -222,6 +223,52 @@ describe('GoogleDriveTransformService.transformGoogleDrive — document branch',
     expect(cloudFileIngestService.ingestDriveDocument).not.toHaveBeenCalled();
     expect(fileService.create).toHaveBeenCalledTimes(1);
     expect(contentService.create).not.toHaveBeenCalled();
+  });
+
+  it('stamps the provenance triple on the placeholder so a re-sync dedupes', async () => {
+    const { service, contentService } = build();
+
+    await service.transformGoogleDrive({
+      connection,
+      syncJob: syncJobWithFile({
+        id: 'drive-2',
+        name: 'Meeting Notes',
+        mimeType: 'application/vnd.google-apps.document',
+        webViewLink: 'https://docs.google.com/document/d/drive-2/edit',
+      }),
+    });
+
+    expect(contentService.findBySource).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      { source_type: 'ETL', source_system: 'google_drive', source_id: 'drive-2' },
+    );
+    expect(contentService.create).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({
+        source_type: 'ETL',
+        source_system: 'google_drive',
+        source_id: 'drive-2',
+      }),
+    );
+  });
+
+  it('skips the placeholder when the triple already resolves to a content row', async () => {
+    const { service, contentService, fileService } = build();
+    contentService.findBySource.mockResolvedValue({ id: 'content-9' });
+
+    await service.transformGoogleDrive({
+      connection,
+      syncJob: syncJobWithFile({
+        id: 'drive-2',
+        name: 'Meeting Notes',
+        mimeType: 'application/vnd.google-apps.document',
+        webViewLink: 'https://docs.google.com/document/d/drive-2/edit',
+      }),
+    });
+
+    expect(contentService.create).not.toHaveBeenCalled();
+    // The pointer row still goes through FileService, which dedupes internally.
+    expect(fileService.create).toHaveBeenCalledTimes(1);
   });
 
   it('still skips folders without calling any of the file/content/ingest paths', async () => {

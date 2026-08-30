@@ -142,19 +142,25 @@ describe('Google My Activity datasource', () => {
     it('imports one item per entry, including link-less and multi-line ones', async () => {
       const items = await runImport(YOUTUBE_HTML);
       expect(items.length).toBe(4);
-      expect(items.every((i) => i.metadata?.Product === 'YouTube')).toBe(true);
+      // Verbs _youtube_activity.ts models are attributed to the youtube data
+      // source instead; only the ones it doesn't (Dismissed shelf) keep Product.
+      expect(items.every((i) => i.dataSource === 'youtube' || i.metadata?.Product === 'YouTube')).toBe(
+        true,
+      );
     });
 
-    it('classifies "Watched" as page_view using the FIRST link (the video, not the channel)', async () => {
+    it('classifies "Watched" as watch, via the youtube data source, using the FIRST link (the video, not the channel)', async () => {
       const items = await runImport(YOUTUBE_HTML);
       const watched = items[0];
-      expect(watched.classification).toBe('page_view');
+      expect(watched.classification).toBe('watch');
+      expect(watched.dataSource).toBe('youtube');
       expect(watched.metadata?.Title).toBe(
         'UK & Makerfield Election: Last Week Tonight with John Oliver (HBO)',
       );
       expect(watched.metadata?.URL).toContain('watch?v=RZL_TctrNco');
-      // The second <a> (the channel) is never captured as its own field.
+      // The second <a> is the channel, captured in its own field, not folded into URL.
       expect(watched.metadata?.URL).not.toContain('/channel/');
+      expect(watched.metadata?.Channel).toBe('LastWeekTonight');
     });
 
     it('classifies "Searched for" as search, scoped to the YouTube product', async () => {
@@ -164,10 +170,11 @@ describe('Google My Activity datasource', () => {
       expect(searched.metadata?.Query).toBe('companion intelligence');
     });
 
-    it('keeps a channel-only "Subscribed to" entry as page_view with the channel URL', async () => {
+    it('classifies a channel-only "Subscribed to" entry as subscription, via the youtube data source', async () => {
       const items = await runImport(YOUTUBE_HTML);
       const subscribed = items[2];
-      expect(subscribed.classification).toBe('page_view');
+      expect(subscribed.classification).toBe('subscription');
+      expect(subscribed.dataSource).toBe('youtube');
       expect(subscribed.metadata?.URL).toContain('/channel/UCxTclqPDlFzC6yMVtWYm_DA');
     });
 

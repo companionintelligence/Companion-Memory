@@ -54,6 +54,13 @@ export class RedditPostsTransformService {
             url: permalink,
             external_id: post.name,
             external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+            // content_source_triple_uniq backstops the racy search-then-create
+            // above. source_system is 'reddit' (not 'reddit_posts') so the
+            // saved-items transform, which writes the same underlying thing,
+            // lands on the same key.
+            source_type: 'ETL',
+            source_system: 'reddit',
+            source_id: post.name,
             source_url: permalink,
             source_data: {
               reddit_post_id: post.id,
@@ -81,6 +88,11 @@ export class RedditPostsTransformService {
           {
             connection_id: connection.id,
             event_type: 'reddit_post',
+            // Without source_type, EventService.createOne skips its
+            // find-or-create AND events_source_triple_uniq treats the row as
+            // NULL-distinct — only the search above stood between a replay
+            // and a duplicate.
+            source_type: 'ETL',
             source_id: post.name,
             start_time: new Date(post.created_utc * 1000),
             title: `Posted in r/${post.subreddit}: ${post.title}`,

@@ -83,6 +83,12 @@ export class SteamOwnedGamesTransformService {
               ...(iconUrl ? { source_url: iconUrl } : {}),
               external_id: String(game.appid),
               external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+              // content_source_triple_uniq backstops the racy
+              // search-then-create above; the prefix keeps the bare numeric
+              // appid distinct inside 'steam'.
+              source_type: 'ETL',
+              source_system: 'steam',
+              source_id: `game:${game.appid}`,
               source_data: {
                 appid: game.appid,
                 playtime_forever: game.playtime_forever,
@@ -113,7 +119,13 @@ export class SteamOwnedGamesTransformService {
                 description: `Played ${game.name} on Steam`,
                 event_type: 'game_played',
                 category: 'games',
+                // source_type alone did nothing: EventService.createOne needs
+                // source_id too before it find-or-creates, and the unique
+                // index only covers full triples. rtime_last_played is part of
+                // the key on purpose — playing the game again IS a new event.
                 source_type: 'ETL',
+                source_system: 'steam',
+                source_id: `played:${game.appid}:${game.rtime_last_played}`,
                 start_time: new Date(game.rtime_last_played * 1000),
                 metadata: {
                   appid: game.appid,

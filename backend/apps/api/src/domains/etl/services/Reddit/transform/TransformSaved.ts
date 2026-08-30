@@ -63,6 +63,13 @@ export class RedditSavedTransformService {
             url: permalink,
             external_id: item.name,
             external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+            // content_source_triple_uniq backstops the racy search-then-create
+            // above. source_system is 'reddit' (matching the posts/comments
+            // transforms) because the content row IS the post or comment —
+            // whichever transform writes it first owns the key.
+            source_type: 'ETL',
+            source_system: 'reddit',
+            source_id: item.name,
             source_url: permalink,
             source_data: {
               reddit_item_id: item.id,
@@ -88,6 +95,11 @@ export class RedditSavedTransformService {
           {
             connection_id: connection.id,
             event_type: eventType,
+            // Without source_type, EventService.createOne skips its
+            // find-or-create AND events_source_triple_uniq treats the row as
+            // NULL-distinct — only the search above stood between a replay
+            // and a duplicate.
+            source_type: 'ETL',
             source_id: item.name,
             start_time: new Date(item.created_utc * 1000),
             title,

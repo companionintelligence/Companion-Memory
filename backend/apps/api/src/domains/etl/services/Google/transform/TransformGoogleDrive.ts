@@ -282,6 +282,30 @@ export class GoogleDriveTransformService {
     mimeType: string;
     webViewLink: string | null;
   }): Promise<void> {
+    // The real Drive id, or undefined — never the 'unknown' logging fallback,
+    // which as a dedup key would collapse every id-less file onto one row.
+    const sourceId = fileId !== 'unknown' ? fileId : undefined;
+
+    // Find-or-skip on the provenance triple: content_source_triple_uniq only
+    // covers rows with a source_id, and ContentService.create is a plain
+    // insert — without this, every re-sync appended another placeholder row
+    // per document.
+    const existing = sourceId
+      ? await this.contentService.findBySource(
+          { userId },
+          { source_type: 'ETL', source_system: 'google_drive', source_id: sourceId },
+        )
+      : null;
+
+    if (existing) {
+      this.logger.debug('Drive document content already present; skipping', {
+        fileId,
+        fileName,
+      });
+
+      return;
+    }
+
     await this.contentService.create(
       { userId },
       {
@@ -296,6 +320,9 @@ export class GoogleDriveTransformService {
         // against ci.files would find nothing.
         external_id: fileId,
         external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+        source_type: sourceId ? 'ETL' : undefined,
+        source_system: sourceId ? 'google_drive' : undefined,
+        source_id: sourceId,
         user: {
           id: userId,
         },

@@ -71,6 +71,14 @@ export class SpotifyRecentlyPlayedTransformService {
             start_time: new Date(new Date(playedAt).getTime() - track.duration_ms),
             end_time: new Date(playedAt),
             duration_minutes: Math.round(track.duration_ms / 60000),
+            // Provenance triple: EventService.createOne find-or-creates on it,
+            // so re-sweeps of the rolling recently-played window (the same
+            // plays come back every sync) resolve to the existing event. A
+            // play is unique per (track, played_at) — Spotify's timestamp is
+            // stable across sweeps.
+            source_type: 'ETL',
+            source_system: 'spotify',
+            source_id: `play:${track.id}:${playedAt}`,
             metadata: {
               track_id: track.id,
               album: track.album?.name,

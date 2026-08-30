@@ -189,6 +189,9 @@ export class OneDriveTransformService {
 
       const mimeType = item.content?.file?.mimeType || item.file?.mimeType || 'application/octet-stream';
       const webUrl = item.content?.webUrl || item.webUrl || null;
+      // The real Graph id, or null — never the 'unknown' logging fallback,
+      // which as a dedup key would collapse every id-less item onto one row.
+      const graphItemId = item.content?.id || item.id || null;
 
       this.logger.log('Processing OneDrive file', {
         itemId,
@@ -196,14 +199,16 @@ export class OneDriveTransformService {
         mimeType,
       });
 
-      console.log('Processing OneDrive item', item);
-      // Create file entity
+      // Create file entity. FileService.create dedupes by externalId (then by
+      // content hash, but a pointer row has no bytes to hash), so fall back to
+      // the Graph item id when webUrl is missing — with a NULL externalId
+      // every re-sync minted another ci.files row for the same item.
       await this.fileService.create(
         { userId },
         {
           filename: itemName,
           contentType: mimeType,
-          externalId: webUrl,
+          externalId: webUrl ?? graphItemId,
           size: item.content?.size || item.size || null,
           height: item.content?.image?.height || item.content?.video?.height || null,
           width: item.content?.image?.width || item.content?.video?.width || null,
@@ -218,30 +223,51 @@ export class OneDriveTransformService {
 
       // If it's a document type, also create a content entity
       if (this.isDocumentType(mimeType)) {
-        await this.contentService.create(
-          { userId },
-          {
-            connection_id: connectionId,
-            type: 'onedrive_document',
-            title: itemName,
-            text: `OneDrive document: ${itemName}`,
-            url: webUrl ?? undefined,
-            mimetype: mimeType,
-            // OneDrive's OWN item id, not the ci.files row created just above
-            // (that one gets its own generated uuid) — joining this against
-            // ci.files would find nothing.
-            external_id: itemId,
-            external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-            user: {
-              id: userId,
-            },
-          },
-        );
+        // Find-or-skip on the provenance triple: content_source_triple_uniq
+        // only covers rows with a source_id, and ContentService.create is a
+        // plain insert — without this, every re-sync appended another
+        // placeholder row per document.
+        const existing = graphItemId
+          ? await this.contentService.findBySource(
+              { userId },
+              { source_type: 'ETL', source_system: 'onedrive', source_id: graphItemId },
+            )
+          : null;
 
-        this.logger.log('Created content entity for OneDrive document', {
-          itemId,
-          itemName,
-        });
+        if (existing) {
+          this.logger.debug('OneDrive document content already present; skipping', {
+            itemId,
+            itemName,
+          });
+        } else {
+          await this.contentService.create(
+            { userId },
+            {
+              connection_id: connectionId,
+              type: 'onedrive_document',
+              title: itemName,
+              text: `OneDrive document: ${itemName}`,
+              url: webUrl ?? undefined,
+              mimetype: mimeType,
+              // OneDrive's OWN item id, not the ci.files row created just above
+              // (that one gets its own generated uuid) — joining this against
+              // ci.files would find nothing.
+              external_id: itemId,
+              external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+              source_type: graphItemId ? 'ETL' : undefined,
+              source_system: graphItemId ? 'onedrive' : undefined,
+              source_id: graphItemId ?? undefined,
+              user: {
+                id: userId,
+              },
+            },
+          );
+
+          this.logger.log('Created content entity for OneDrive document', {
+            itemId,
+            itemName,
+          });
+        }
       }
 
       this.logger.log('OneDrive file saved successfully', {
