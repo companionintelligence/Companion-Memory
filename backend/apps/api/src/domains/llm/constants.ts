@@ -56,6 +56,21 @@ export const THING_VISION_QUEUE_OPTIONS: QueueOptions = {
   localConcurrency: 1,
 };
 
+/**
+ * Same 1-slot local-GPU discipline, and deliberately NO `policy: 'short'` —
+ * same reasoning as THING_VISION_QUEUE. This queue's only event is
+ * `browseractivity.created`, whose sole producer (`BrowserActivityService.create`)
+ * sends without a singletonKey, and that event already fans out to the
+ * `search-index` queue under the same keyless send. Under `short`, every
+ * keyless job collapses into one row and every page visit but the first
+ * would lose its insight pass silently.
+ */
+export const BROWSER_ACTIVITY_INSIGHT_QUEUE = 'browser-activity-insight';
+
+export const BROWSER_ACTIVITY_INSIGHT_QUEUE_OPTIONS: QueueOptions = {
+  localConcurrency: 1,
+};
+
 export type ThreadGenerationStatus = 'idle' | 'queued' | 'running' | 'failed';
 
 export const GENERATION_STATUSES = ['idle', 'queued', 'running', 'failed'] as const;

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository, type FindOptionsOrder } from 'typeorm';
+import { DataSource, In, IsNull, MoreThanOrEqual, Not, Repository, type FindOptionsOrder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
@@ -314,6 +314,29 @@ export class BrowserActivityService {
     });
 
     return true;
+  }
+
+  /**
+   * The most recently categorized visit to this exact URL for this user,
+   * within `since`. Lets `BrowserActivityInsightListener` reuse a category
+   * instead of paying an LLM call for every revisit to the same page — the
+   * dominant case for a URL, not the exception.
+   */
+  async findMostRecentCategorized(
+    userId: string,
+    url: string,
+    since: Date,
+  ): Promise<Pick<BrowserActivityEntity, 'category' | 'productivity_score'> | null> {
+    return this.browserActivityRepository.findOne({
+      where: {
+        user_id: userId,
+        url,
+        category: Not(IsNull()),
+        time: MoreThanOrEqual(since),
+      },
+      order: { time: 'DESC' },
+      select: ['category', 'productivity_score'],
+    });
   }
 
   async getEntitiesForBrowserActivities(
