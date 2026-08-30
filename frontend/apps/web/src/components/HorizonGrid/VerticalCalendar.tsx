@@ -786,11 +786,6 @@ export function VerticalCalendar({
     [onMoveEvent],
   );
 
-  // One rhythm strip serves the whole gutter, so it has to name a day: the one
-  // the header is already highlighting. On a phone that is the only column
-  // there is; on a week, tapping a weekday moves both the highlight and this.
-  const focusDay = dayStarts.find((day) => sameLocalDay(day, selectedDay ?? today)) ?? dayStarts[0];
-
   return (
     <div
       role="group"
@@ -857,15 +852,21 @@ export function VerticalCalendar({
           const dayLabel = dayStart.toLocaleDateString([], { weekday: 'long' });
 
           return (
-            <div
-              key={key}
-              role="list"
-              aria-label={`All day on ${dayLabel}`}
-              className="flex min-h-10 min-w-0 flex-1 flex-col gap-0.5 border-l border-border/60 px-1 py-1"
-            >
-              {allDay.map((event) => (
-                <AllDayChip key={event.id} event={event} colorMode={colorMode} />
-              ))}
+            // Mirrors the rhythm-strip + gap leading each day lane below, with
+            // an unlabeled spacer in place of the strip, so the all-day chips
+            // and the timed grid share the same left edge instead of the
+            // all-day row drifting a rhythm-strip's width left of it.
+            <div key={key} className="flex min-w-0 flex-1 gap-1 pl-1">
+              <div aria-hidden className="w-2 shrink-0" />
+              <div
+                role="list"
+                aria-label={`All day on ${dayLabel}`}
+                className="flex min-h-10 min-w-0 flex-1 flex-col gap-0.5 border-l border-border/60 px-1 py-1"
+              >
+                {allDay.map((event) => (
+                  <AllDayChip key={event.id} event={event} colorMode={colorMode} />
+                ))}
+              </div>
             </div>
           );
         })}
@@ -878,21 +879,16 @@ export function VerticalCalendar({
         {...{ [SCHEDULE_SCROLL_ATTR]: '' }}
       >
         <div className="flex min-w-0">
-          {/* Rhythm, then the hours it describes, then the days. Reading order
-              is the argument for the order on screen: what you usually do,
-              what time it is, what you actually committed to. */}
-          <div className="sticky left-0 z-10 flex w-16 shrink-0 gap-1 bg-card pl-1.5">
-            <RhythmStrip
-              dayStart={focusDay}
-              lookup={lookup}
-              colorMode={colorMode}
-              waiting={pipelineRunning}
-            />
-            <div className="relative flex-1" style={{ height: GRID_HEIGHT_PX }}>
+          {/* The hours the rhythm and the days both read against. Reading
+              order per day is rhythm, then time, then what was committed —
+              see the per-day wrapper below, where each day gets its own
+              strip rather than one shared strip speaking for all of them. */}
+          <div className="sticky left-0 z-10 flex w-16 shrink-0 items-start justify-end bg-card pr-1.5">
+            <div className="relative w-full" style={{ height: GRID_HEIGHT_PX }}>
               {AXIS_HOURS.map((hour) => (
                 <span
                   key={hour}
-                  className="absolute right-1.5 -translate-y-1/2 text-[10px] tabular-nums text-muted-foreground"
+                  className="absolute right-0 -translate-y-1/2 text-[10px] tabular-nums text-muted-foreground"
                   style={{ top: `${(hour / HOURS_PER_DAY) * 100}%` }}
                 >
                   {hour === 0 ? '' : formatHour(hour)}
@@ -907,16 +903,23 @@ export function VerticalCalendar({
               const isToday = sameLocalDay(dayStart, today);
 
               return (
-                <DayLane
-                  key={key}
-                  dayStart={dayStart}
-                  dayEvents={eventsByDayKey.get(key) ?? []}
-                  isToday={isToday}
-                  nowPct={isToday ? nowPct : null}
-                  colorMode={colorMode}
-                  onDropCandidate={onDropCandidate ? handleDropCandidate : undefined}
-                  onMoveEvent={onMoveEvent ? handleMoveEvent : undefined}
-                />
+                <div key={key} className="flex min-w-0 flex-1 gap-1 pl-1">
+                  <RhythmStrip
+                    dayStart={dayStart}
+                    lookup={lookup}
+                    colorMode={colorMode}
+                    waiting={pipelineRunning}
+                  />
+                  <DayLane
+                    dayStart={dayStart}
+                    dayEvents={eventsByDayKey.get(key) ?? []}
+                    isToday={isToday}
+                    nowPct={isToday ? nowPct : null}
+                    colorMode={colorMode}
+                    onDropCandidate={onDropCandidate ? handleDropCandidate : undefined}
+                    onMoveEvent={onMoveEvent ? handleMoveEvent : undefined}
+                  />
+                </div>
               );
             })}
           </div>
