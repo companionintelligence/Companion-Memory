@@ -90,6 +90,15 @@ export const captureEventSchema = z.object({
   description: z.string().optional(),
   payload: z.record(z.unknown()).default({}),
   confidence_score: z.number().min(0).max(1).optional(),
+  /**
+   * Per-tick correlator: CI-Capture mints one UUID per worker tick and sends
+   * it on BOTH this event and the screenshot uploaded via the same tick
+   * (POST /files/upload's `captureTickId` field), so CI-Server can link a
+   * `ci.files` row back to the desktop-activity event it was captured
+   * alongside. Unrelated to the provenance triple above — that's this row's
+   * own dedup key; this is a cross-table link.
+   */
+  capture_tick_id: z.string().uuid().optional(),
 });
 
 export const ingestEventsSchema = z.object({

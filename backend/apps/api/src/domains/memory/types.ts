@@ -67,6 +67,8 @@ export interface CreateEventDto {
   source_id?: string;
   /** The connection whose sync produced this event; null for manual/imported/predicted. */
   connection_id?: string | null;
+  /** Per-tick correlator shared with a ci.files row captured the same tick; see EventEntity.captureTickId. */
+  capture_tick_id?: string;
   confidence_score?: number;
   is_recurring?: boolean;
   recurrence_pattern?: Record<string, unknown>;

@@ -302,6 +302,7 @@ export class BulkIngestController {
               source_system: e.source_system,
               source_id: e.source_id,
               confidence_score: e.confidence_score,
+              capture_tick_id: e.capture_tick_id,
               metadata: { kind: e.kind, ...e.payload },
             })),
           ),

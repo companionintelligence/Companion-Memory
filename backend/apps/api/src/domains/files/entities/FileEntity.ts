@@ -80,6 +80,35 @@ export class FileEntity {
   @Column({ type: 'text', name: 'chunker_version', nullable: true })
   chunkerVersion!: string | null;
 
+  /**
+   * The `ci.events` row this file was captured alongside — e.g. a CI-Capture
+   * screenshot linked to the desktop-activity ("vizier") event from the same
+   * worker tick. A PLAIN column, not a TypeORM relation to `EventEntity`:
+   * that class lives in the memory domain, and this domain must never import
+   * memory (see the identical note on `@ci/domains/memory`'s own local
+   * `FileEntity` — "the dependency runs one way"; importing EventEntity here
+   * created a real circular module import, `files → memory → user → files`,
+   * since EventEntity itself pulls in UserEntity, and UserModule imports
+   * FilesModule for the account-purge cron). Resolution — matching this to
+   * an actual event — happens from the memory side instead, in
+   * `memory/services/FileService`'s `FileUploadedEvent` listener, which sets
+   * this via {@link linkEvent}. NULL until then, or forever if the
+   * correlator never resolved (screenshot upload and event ingest race
+   * independently — see the migration's comment).
+   */
+  @Column({ type: 'uuid', name: 'event_id', nullable: true })
+  eventId!: string | null;
+
+  /**
+   * Per-tick correlator this file arrived with (see EventEntity.captureTickId
+   * for the full contract). Stored even when `eventId` above never resolved —
+   * a screenshot upload can land before its event does — so a future repair
+   * pass can still link it, mirroring
+   * 20260819064129_link_content_to_events_by_triple.sql for content/events.
+   */
+  @Column({ type: 'uuid', name: 'capture_tick_id', nullable: true })
+  captureTickId!: string | null;
+
   static toEgressType(entity: FileEntity): File {
     return {
       id: entity.id,
@@ -108,6 +137,8 @@ export class FileEntity {
       parserName: entity.parserName,
       parserVersion: entity.parserVersion,
       chunkerVersion: entity.chunkerVersion,
+      eventId: entity.eventId,
+      captureTickId: entity.captureTickId,
     };
   }
 }

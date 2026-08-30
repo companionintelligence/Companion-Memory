@@ -165,6 +165,14 @@ export class FileService implements OnModuleInit {
       userId: context.userId,
       externalCreatedAt: file.externalCreatedAt,
       externalUpdatedAt: file.externalUpdatedAt,
+      // A direct eventId is stored as-is (trusting the caller — this domain
+      // cannot itself validate it belongs to the caller's user without
+      // importing the memory domain, which it must never do; see the note on
+      // `event_id`/`linkEvent` above). captureTickId's resolution to an
+      // eventId, when no direct id is given, happens asynchronously from the
+      // memory domain instead — see `linkEvent` below.
+      eventId: file.eventId ?? null,
+      captureTickId: file.captureTickId ?? null,
     });
 
     // Bytes BEFORE the row. This used to save first and upload second, so a
@@ -204,6 +212,29 @@ export class FileService implements OnModuleInit {
     const result = await this.fileRepository.save(entity);
 
     return this.signFile(result);
+  }
+
+  /**
+   * Stamp `event_id` onto an already-created file — the second half of the
+   * capture-correlation resolution described on `FileEntity.eventId`.
+   *
+   * This domain cannot itself resolve a `captureTickId` to an event (that
+   * needs `ci.events`, owned by the memory domain, which this domain must
+   * never import). Instead the memory domain resolves it — its
+   * `FileUploadedEvent` listener looks up the event carrying the same
+   * correlator and calls this — and this method just persists the answer.
+   * A targeted write like {@link setDimensions}: no `FileUpdatedEvent`, so
+   * linking doesn't fan out a spurious re-index of a file nothing about its
+   * own content changed.
+   */
+  async linkEvent(context: ServiceContext, id: string, eventId: string): Promise<void> {
+    await this.fileRepository.update(
+      {
+        id,
+        ...(context.userId !== SYSTEM_USER && { userId: context.userId }),
+      },
+      { eventId },
+    );
   }
 
   async findAll(context: ServiceContext): Promise<SignedFile[]> {
