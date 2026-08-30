@@ -69,6 +69,7 @@ describe('TaskSlate — Plan backlog', () => {
             id: 's1',
             title: 'Already placed',
             scheduledFor: '2026-08-24',
+            placedOnCalendar: true,
             dueAt: '2026-08-24T17:00:00.000Z',
           }),
           task({ id: 'd1', title: 'Finished', status: 'done' }),
