@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, In, IsNull, type FindOptionsOrder, type FindOptionsWhere } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
+import { HbpeNotifyService } from '@ci/common/hbpe';
 import { LoggerService } from '@ci/common/logging';
 import {
   INGEST_REFRESH_COLUMNS,
@@ -63,6 +64,7 @@ export class CommunicationService {
     private readonly logger: LoggerService,
     private readonly dataSource: DataSource,
     private readonly graphDeltaWriter: GraphDeltaWriter,
+    @Optional() private readonly hbpeNotify?: HbpeNotifyService,
   ) {
     this.logger.setContext(CommunicationService.name);
     this.aggregate = new CtiAggregate({
@@ -215,6 +217,7 @@ export class CommunicationService {
     await this.eventService.send(CommunicationCreatedEvent, {
       communicationId: communicationResult.id,
     });
+    await this.hbpeNotify?.notifyCommunications(communicationResult.userId, communicationResult.time);
 
     return CommunicationEntity.toEgressType(communicationResult);
   }
@@ -365,10 +368,16 @@ export class CommunicationService {
       return detailResults;
     });
 
-    return results.map(({ entity, inserted }) => ({
+    const egress = results.map(({ entity, inserted }) => ({
       entity: CommunicationEntity.toEgressType(entity),
       inserted,
     }));
+    await this.hbpeNotify?.notifyCommunications(
+      context.userId,
+      results.map(({ entity }) => entity.time),
+    );
+
+    return egress;
   }
 
   async findAll(context: UserServiceContext): Promise<Communication[]> {
@@ -580,6 +589,7 @@ export class CommunicationService {
     await this.eventService.send(CommunicationUpdatedEvent, {
       communicationId: id,
     });
+    await this.hbpeNotify?.notifyCommunications(updated.userId, updated.time);
 
     // The transaction already reloaded the detail row; the Communication
     // egress composes from it alone.
@@ -589,8 +599,10 @@ export class CommunicationService {
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     // Authorized load + base-row delete — the communications_id_entities_fk
     // ON DELETE CASCADE removes the detail in the same statement.
+    let removedAt: { userId: string; time: Date } | undefined;
     const removed = await this.aggregate.remove(context, id, {
       withinTx: async ({ manager, before }) => {
+        removedAt = { userId: before.userId, time: before.time };
         await this.graphDeltaWriter.entityDeleted({
           entityId: id,
           entityType: 'Communication',
@@ -610,6 +622,9 @@ export class CommunicationService {
     await this.eventService.send(CommunicationRemovedEvent, {
       communicationId: id,
     });
+    if (removedAt) {
+      await this.hbpeNotify?.notifyCommunications(removedAt.userId, removedAt.time);
+    }
 
     return true;
   }

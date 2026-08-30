@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, IsNull, MoreThanOrEqual, Not, Repository, type FindOptionsOrder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
+import { HbpeNotifyService } from '@ci/common/hbpe';
 import { LoggerService } from '@ci/common/logging';
 import {
   type BulkInsertResult,
@@ -42,6 +43,7 @@ export class BrowserActivityService {
     private readonly eventService: EventService,
     private readonly logger: LoggerService,
     private readonly dataSource: DataSource,
+    @Optional() private readonly hbpeNotify?: HbpeNotifyService,
   ) {
     this.logger.setContext(BrowserActivityService.name);
   }
@@ -86,6 +88,7 @@ export class BrowserActivityService {
         await this.eventService.send(BrowserActivityCreatedEvent, {
           browserActivityId: result.id,
         });
+        await this.hbpeNotify?.notifyBrowserActivity(result.user_id, result.time);
 
         return BrowserActivityEntity.toEgressType(result);
       }),
@@ -183,6 +186,11 @@ export class BrowserActivityService {
     // pgboss fan-out was the dominant cost at import volume. Search indexing for
     // bulk-loaded rows is deferred to the post-load batch embed
     // (POST /api/maintenance/search-index/backfill). Single-row create() still emits.
+    await this.hbpeNotify?.notifyBrowserActivity(
+      context.userId,
+      results.map(({ entity }) => entity.time),
+    );
+
     return egress;
   }
 
@@ -289,6 +297,8 @@ export class BrowserActivityService {
     await this.eventService.send(BrowserActivityUpdatedEvent, {
       browserActivityId: browserActivity.id,
     });
+    const nextTime = (updateData.time as Date | undefined) ?? browserActivity.time;
+    await this.hbpeNotify?.notifyBrowserActivity(browserActivity.user_id, [browserActivity.time, nextTime]);
 
     return this.findById(context, browserActivity.id);
   }
@@ -317,6 +327,7 @@ export class BrowserActivityService {
     await this.eventService.send(BrowserActivityRemovedEvent, {
       browserActivityId: id,
     });
+    await this.hbpeNotify?.notifyBrowserActivity(browserActivity.user_id, browserActivity.time);
 
     return true;
   }

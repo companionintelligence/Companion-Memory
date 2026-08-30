@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
@@ -13,6 +13,7 @@ import {
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
+import { HbpeNotifyService } from '@ci/common/hbpe';
 import { type BulkInsertResult, bulkInsertIdempotent, INGEST_REFRESH_COLUMNS } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { EventCreatedEvent, EventUpdatedEvent, EventRemovedEvent } from '@ci/domains/memory/events';
@@ -175,6 +176,7 @@ export class CalendarEventService {
     private readonly signallingEventService: EventService,
     private readonly dataSource: DataSource,
     private readonly graphDeltaWriter: GraphDeltaWriter,
+    @Optional() private readonly hbpeNotify?: HbpeNotifyService,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.eventRepository,
@@ -420,6 +422,7 @@ export class CalendarEventService {
     await this.signallingEventService.send(EventCreatedEvent, {
       eventId: eventResult.id,
     });
+    await this.hbpeNotify?.notifyEvents(eventResult.userId, eventResult.startTime);
 
     return EventEntity.toEgressType(eventResult, {
       name: item.title,
@@ -575,6 +578,13 @@ export class CalendarEventService {
     // bulk-loaded rows is deferred to the post-load batch embed
     // (POST /api/maintenance/search-index/backfill). Single-row create() still
     // emits, so interactive creates index live.
+    // One HBPE notify per distinct UTC day — not per row — so a 90k import
+    // does not flood LISTEN.
+    await this.hbpeNotify?.notifyEvents(
+      context.userId,
+      results.map(({ entity }) => entity.startTime),
+    );
+
     return results.map(({ entity, inserted }) => ({
       entity: EventEntity.toEgressType(entity, bases.get(entity.id)),
       inserted,
@@ -921,6 +931,7 @@ export class CalendarEventService {
     await this.signallingEventService.send(EventUpdatedEvent, {
       eventId: updated.id,
     });
+    await this.hbpeNotify?.notifyEvents(updated.userId, updated.startTime);
 
     // The transaction already reloaded the detail row; one base fetch
     // completes the egress composition.
@@ -938,8 +949,10 @@ export class CalendarEventService {
    * back verbatim.
    */
   async remove(context: ServiceContext, id: string): Promise<boolean> {
+    let removedAt: { userId: string; time: Date | null } | undefined;
     const removed = await this.aggregate.remove(context, id, {
-      withinTx: async ({ manager }) => {
+      withinTx: async ({ manager, before }) => {
+        removedAt = { userId: before.userId, time: before.startTime };
         const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
         await this.graphDeltaWriter.entityDeleted({
           entityId: id,
@@ -960,6 +973,9 @@ export class CalendarEventService {
     await this.signallingEventService.send(EventRemovedEvent, {
       eventId: id,
     });
+    if (removedAt) {
+      await this.hbpeNotify?.notifyEvents(removedAt.userId, [removedAt.time]);
+    }
 
     return true;
   }
@@ -996,6 +1012,7 @@ export class CalendarEventService {
     await this.signallingEventService.send(EventUpdatedEvent, {
       eventId: id,
     });
+    await this.hbpeNotify?.notifyEvents(restored.userId, restored.startTime);
 
     return this.composeOne(restored);
   }
