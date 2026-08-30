@@ -4,6 +4,7 @@
 
 import { Module } from '@nestjs/common';
 
+import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { ConversationModule } from '@ci/domains/conversations';
 import { DailyMetricsModule } from '@ci/domains/daily-metrics';
 import { EventsModule } from '@ci/domains/events';
@@ -20,6 +21,7 @@ import { LlmEndpointController } from './controllers/LlmEndpointController';
 import { OllamaController } from './controllers/OllamaController';
 import { LlmCoreModule } from './core.module';
 import { ImageDescriptionPreferenceModule } from './image-description-preference.module';
+import { BrowserActivityInsightsListener } from './listeners/BrowserActivityInsightsListener';
 import { ChatGenerateListener } from './listeners/ChatGenerateListener';
 import { CvDetectionsListener } from './listeners/CvDetectionsListener';
 import { ImageDescriptionBackfillListener } from './listeners/ImageDescriptionBackfillListener';
@@ -34,6 +36,7 @@ import { ChatTurnService } from './services/ChatTurnService';
 @Module({
   imports: [
     LlmCoreModule,
+    BrowserActivityModule,
     ConversationModule,
     DailyMetricsModule,
     EventsModule,
@@ -50,6 +53,7 @@ import { ChatTurnService } from './services/ChatTurnService';
   providers: [
     ChatGenerationBroker,
     ChatTurnService,
+    BrowserActivityInsightsListener,
     ChatGenerateListener,
     CvDetectionsListener,
     ImageDescriptionListener,

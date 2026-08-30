@@ -56,6 +56,29 @@ export const THING_VISION_QUEUE_OPTIONS: QueueOptions = {
   localConcurrency: 1,
 };
 
+/**
+ * Category / productivity-score classification for browser-activity rows
+ * (`BrowserActivityInsightsListener`). Same 1-slot local-GPU discipline as the
+ * queues above — page visits are much higher volume than image uploads, so
+ * serializing generations is what keeps a burst of browsing from stampeding a
+ * 1-2 slot local backend.
+ *
+ * Deliberately NO `policy: 'short'`, for the same reason as `thing-vision`:
+ * this queue's only event, `browser.activity.created`, is sent keyless by its
+ * sole producer (`BrowserActivityService.create`) — see
+ * `BrowserActivitySearchIndexListener`, an existing consumer of the same
+ * event on the unrelated `search-index` queue, which also receives it
+ * keyless. Declaring `short` here would collapse two page visits created
+ * back-to-back into one job under pg-boss's `COALESCE(singleton_key, '')`
+ * uniqueness, silently dropping every insight but the first — exactly the
+ * failure `visionQueuePolicy.test.ts` catches for `thing-vision`.
+ */
+export const BROWSER_ACTIVITY_INSIGHTS_QUEUE = 'browser-activity-insights';
+
+export const BROWSER_ACTIVITY_INSIGHTS_QUEUE_OPTIONS: QueueOptions = {
+  localConcurrency: 1,
+};
+
 export type ThreadGenerationStatus = 'idle' | 'queued' | 'running' | 'failed';
 
 export const GENERATION_STATUSES = ['idle', 'queued', 'running', 'failed'] as const;

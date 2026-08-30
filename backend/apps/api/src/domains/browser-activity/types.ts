@@ -2,6 +2,35 @@ import { z } from 'zod';
 
 import type { BrowserActivity } from './entities/BrowserActivityEntity';
 
+/**
+ * Closed taxonomy for `browser_activity.category` — an AI-generated insight
+ * (see `BrowserActivityInsightsListener` in `domains/llm/listeners`, the sole
+ * producer of `category`/`productivity_score` as of 2026-08; a prior audit
+ * found the columns had carried an "AI-generated insights" comment since the
+ * entity was written but nothing in the codebase ever computed either one).
+ *
+ * A small fixed set beats free text here for two reasons: two differently
+ * worded categories for the same kind of page ("News", "news site") do not
+ * roll up together in any aggregate query, and a small closed set is also
+ * what a background classifier model can hit reliably call after call — see
+ * the listener's own doc comment for the per-category definitions it prompts
+ * with. `createBrowserActivitySchemaRoot` below deliberately still accepts
+ * free-text `category` (it always has, for any future non-LLM producer); this
+ * taxonomy only constrains what THIS listener writes.
+ */
+export const BROWSER_ACTIVITY_CATEGORIES = [
+  'work',
+  'entertainment',
+  'social',
+  'shopping',
+  'news',
+  'reference',
+  'communication',
+  'other',
+] as const;
+
+export type BrowserActivityCategory = (typeof BROWSER_ACTIVITY_CATEGORIES)[number];
+
 // Validation schema for creating browser activity
 export const createBrowserActivitySchemaRoot = z.object({
   time: z.string().datetime(),
