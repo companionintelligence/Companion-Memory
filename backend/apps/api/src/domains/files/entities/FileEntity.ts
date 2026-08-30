@@ -44,6 +44,25 @@ export class FileEntity {
   @Column({ type: 'uuid', name: 'parent_id', nullable: true })
   parentId!: string | null;
 
+  /**
+   * The ci.events row this file was captured alongside (e.g. CI-Capture's
+   * screenshot + desktop-activity event from the same worker tick), resolved
+   * by FileService via the shared (source_type, source_system, source_id)
+   * provenance triple — see `@ci/common/persistence`'s
+   * `resolveEventIdsByTriple`, the same lookup ContentService uses to
+   * auto-link ci.content.event_id. Migration: add_event_id_to_files.
+   *
+   * Deliberately a plain scalar, not a `@ManyToOne`/`@JoinColumn` relation:
+   * `EventEntity` lives in the `memory` domain, which already imports `files`
+   * (MemoryModule -> FilesModule), and EventEntity.ts imports the `user`
+   * domain barrel, which itself imports `files` — a value-level import of
+   * EventEntity here would close that cycle (see the identical warning in
+   * memory/index.ts about the `graph` barrel). The FK constraint itself lives
+   * on the migration, which is schema sync's source of truth here anyway.
+   */
+  @Column({ type: 'uuid', name: 'event_id', nullable: true })
+  eventId!: string | null;
+
   @Column({ type: 'text', name: 'user_id' })
   userId!: string;
 
@@ -85,6 +104,7 @@ export class FileEntity {
       id: entity.id,
       userId: entity.userId,
       parentId: entity.parentId,
+      eventId: entity.eventId,
       variant: entity.variant,
       filename: entity.filename,
       contentType: entity.contentType,

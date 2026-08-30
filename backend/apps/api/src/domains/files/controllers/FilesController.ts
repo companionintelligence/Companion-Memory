@@ -51,6 +51,15 @@ export class FilesController {
     @Body('inventoryCapture') inventoryCapture?: string | boolean,
     @Body('skipDescription') skipDescription?: string | boolean,
     @Body('model') model?: string,
+    // Provenance passthrough so a capture source's screenshot auto-links to
+    // the desktop-activity event it recorded in the same tick (they upload
+    // via separate requests, so nothing else correlates the two). An
+    // explicit `eventId` wins over the triple in FileService.resolveEventId;
+    // absent/unmatched inputs just leave ci.files.event_id null.
+    @Body('eventId') eventId?: string,
+    @Body('sourceType') sourceType?: string,
+    @Body('sourceSystem') sourceSystem?: string,
+    @Body('sourceId') sourceId?: string,
   ) {
     if (!files || files.length === 0) {
       throw new BadRequestException('At least one file is required');
@@ -63,6 +72,12 @@ export class FilesController {
       inventoryCapture === 'true';
     const shouldSkipDescription = skipDescription === true || skipDescription === 'true';
     const selectedModel = typeof model === 'string' && model.trim().length > 0 ? model.trim() : undefined;
+    const trimmedOrUndefined = (value?: string): string | undefined =>
+      typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+    const linkEventId = trimmedOrUndefined(eventId);
+    const linkSourceType = trimmedOrUndefined(sourceType);
+    const linkSourceSystem = trimmedOrUndefined(sourceSystem);
+    const linkSourceId = trimmedOrUndefined(sourceId);
 
     const serviceContext = toServiceContext(context);
 
@@ -98,6 +113,10 @@ export class FilesController {
             thingCapture: shouldCaptureThing,
             skipDescription: shouldSkipDescription,
             model: selectedModel,
+            eventId: linkEventId,
+            sourceType: linkSourceType,
+            sourceSystem: linkSourceSystem,
+            sourceId: linkSourceId,
           });
         }),
       );

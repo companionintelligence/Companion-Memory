@@ -19,6 +19,13 @@ export interface CreateFileDto extends Partial<Pick<Express.Multer.File, 'path' 
   parentId?: string | null;
   externalCreatedAt?: Date | null;
   externalUpdatedAt?: Date | null;
+  /**
+   * The ci.events row this file was captured alongside, already resolved (by
+   * an explicit id, or by triple — see {@link UploadFileDto}). Callers that
+   * already know the event id (e.g. a resolved upload) pass it straight
+   * through; {@link FileService.create} does no further resolution.
+   */
+  eventId?: string | null;
 }
 
 export type UploadFileDto = Omit<
@@ -36,6 +43,21 @@ export type UploadFileDto = Omit<
    */
   skipDescription?: boolean;
   model?: string;
+  /**
+   * Provenance for auto-linking this upload to the `ci.events` row it was
+   * captured alongside (e.g. CI-Capture sends a screenshot and a
+   * desktop-activity event from the same worker tick). An explicit `eventId`
+   * wins; otherwise, when `sourceType` + `sourceId` are present,
+   * {@link FileService.uploadWithDedupInfo} resolves them against `ci.events`
+   * by the (source_type, source_system, source_id) triple — the same
+   * resolution ContentService uses to auto-link `ci.content.event_id` (see
+   * `@ci/common/persistence`'s `resolveEventIdsByTriple`). Absent/unmatched
+   * triples simply leave `ci.files.event_id` null.
+   */
+  eventId?: string;
+  sourceType?: string;
+  sourceSystem?: string;
+  sourceId?: string;
 };
 
 export type UpdateFileDto = Pick<CreateFileDto, 'title' | 'description' | 'externalUpdatedAt'>;

@@ -19,6 +19,7 @@ import { v4 as uuidv4, v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { eventTripleKey, type EventTriple, resolveEventIdsByTriple } from '@ci/common/persistence';
 import { serves } from '@ci/common/roles';
 import config from '@ci/configuration';
 import { EventService } from '@ci/domains/events';
@@ -162,6 +163,7 @@ export class FileService implements OnModuleInit {
       key,
       hash,
       parentId: file.parentId,
+      eventId: file.eventId ?? null,
       userId: context.userId,
       externalCreatedAt: file.externalCreatedAt,
       externalUpdatedAt: file.externalUpdatedAt,
@@ -494,7 +496,16 @@ export class FileService implements OnModuleInit {
     context: UserServiceContext,
     file: UploadFileDto,
   ): Promise<{ file: SignedFile; deduped: boolean }> {
-    const { thingCapture = false, skipDescription = false, model, ...uploadData } = file;
+    const {
+      thingCapture = false,
+      skipDescription = false,
+      model,
+      eventId: explicitEventId,
+      sourceType,
+      sourceSystem,
+      sourceId,
+      ...uploadData
+    } = file;
     const hash = await this.getFileHash(uploadData);
 
     if (hash) {
@@ -519,8 +530,16 @@ export class FileService implements OnModuleInit {
       }
     }
 
+    const eventId = await this.resolveEventId(context, {
+      eventId: explicitEventId,
+      sourceType,
+      sourceSystem,
+      sourceId,
+    });
+
     const created = await this.create(context, {
       ...uploadData,
+      eventId,
       variant: FileVariant.ORIGINAL,
     });
 
@@ -533,6 +552,41 @@ export class FileService implements OnModuleInit {
     });
 
     return { file: created, deduped: false };
+  }
+
+  /**
+   * Resolve the `ci.events` row a capture upload should link to (`ci.files.event_id`).
+   * An explicit `eventId` wins; otherwise, when a (source_type, source_id) pair is
+   * present, resolve it against `ci.events` via `resolveEventIdsByTriple`
+   * (`@ci/common/persistence`) — the same NULL-safe provenance-triple matching
+   * ContentService's own resolver uses to auto-link `ci.content.event_id`. Absent
+   * or unmatched inputs return null: CI-Server never invents a link, it only
+   * recognizes one the capture source asserted (e.g. CI-Capture echoing the
+   * vizier event's own (source_type, source_system, source_id) alongside its
+   * screenshot upload, so the two land correlated even though they upload via
+   * separate requests).
+   */
+  private async resolveEventId(
+    context: UserServiceContext,
+    input: { eventId?: string; sourceType?: string; sourceSystem?: string; sourceId?: string },
+  ): Promise<string | null> {
+    if (input.eventId) {
+      return input.eventId;
+    }
+
+    if (!input.sourceType || !input.sourceId) {
+      return null;
+    }
+
+    const triple: EventTriple = {
+      sourceType: input.sourceType,
+      sourceSystem: input.sourceSystem ?? null,
+      sourceId: input.sourceId,
+    };
+
+    const matches = await resolveEventIdsByTriple(this.fileRepository.manager, context.userId, [triple]);
+
+    return matches.get(eventTripleKey(triple)) ?? null;
   }
 
   async putObject(_context: ServiceContext, bucket: string, key: string, body: Buffer): Promise<void> {
