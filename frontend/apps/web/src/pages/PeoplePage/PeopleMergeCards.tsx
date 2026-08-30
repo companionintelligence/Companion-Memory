@@ -174,9 +174,16 @@ export function MergeClusterCard({
 
       <div className="flex flex-col gap-2">
         {options.map((person) => (
-          <div key={person.id} className="flex flex-col gap-2 rounded-md border p-2 sm:flex-row sm:items-center">
+          <div
+            key={person.id}
+            className="flex flex-col gap-2 rounded-md border p-2 sm:flex-row sm:items-center"
+          >
             <div className="min-w-0 flex-1">
-              <PersonSummary person={person} shared={sharedNameTokens(anchor.name, person.name)} counterpart={anchor} />
+              <PersonSummary
+                person={person}
+                shared={sharedNameTokens(anchor.name, person.name)}
+                counterpart={anchor}
+              />
             </div>
             <Button
               size="sm"
@@ -417,9 +424,7 @@ function PersonSummary({
               <div key={`${identifier.kind}:${identifier.value}`}>
                 {formatIdentifier(identifier)}
                 {unique && <span className="ml-1 text-xs">only here</span>}
-                {!unique && counterpart != null && (
-                  <span className="ml-1 text-xs">shared</span>
-                )}
+                {!unique && counterpart != null && <span className="ml-1 text-xs">shared</span>}
               </div>
             );
           })}
@@ -534,9 +539,12 @@ function describeDifferences(people: readonly MergablePerson[]): string[] {
   const onlyRight = (right.identifiers ?? []).filter((item) => !leftKeys.has(identifierKey(item)));
 
   if (onlyLeft.length > 0 || onlyRight.length > 0) {
-    const leftBit = onlyLeft.length > 0 ? `${left.name || 'Left'} has ${onlyLeft.map(formatIdentifier).join(', ')}` : null;
+    const leftBit =
+      onlyLeft.length > 0 ? `${left.name || 'Left'} has ${onlyLeft.map(formatIdentifier).join(', ')}` : null;
     const rightBit =
-      onlyRight.length > 0 ? `${right.name || 'Right'} has ${onlyRight.map(formatIdentifier).join(', ')}` : null;
+      onlyRight.length > 0
+        ? `${right.name || 'Right'} has ${onlyRight.map(formatIdentifier).join(', ')}`
+        : null;
     lines.push([leftBit, rightBit].filter(Boolean).join('; '));
   }
 

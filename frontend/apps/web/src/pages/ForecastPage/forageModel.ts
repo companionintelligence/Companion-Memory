@@ -65,9 +65,7 @@ export function normalizeMass(entries: ProbabilityEntry[]): MassRow[] {
     return [];
   }
 
-  return rows
-    .map((row) => ({ ...row, mass: row.mass / total }))
-    .sort((a, b) => b.mass - a.mass);
+  return rows.map((row) => ({ ...row, mass: row.mass / total })).sort((a, b) => b.mass - a.mass);
 }
 
 export function entropy(mass: MassRow[]): number {
@@ -87,6 +85,7 @@ export function klDivergence(p: MassRow[], q: MassRow[]): number {
     if (row.mass <= 0) {
       continue;
     }
+
     kl += row.mass * Math.log(row.mass / (qMap.get(row.label) ?? EPS));
   }
 
@@ -172,12 +171,14 @@ export function rankSaccades(
     if (!slot) {
       continue;
     }
+
     const observed = slot.actualL0 ?? null;
     const predicted = topOf(normalizeMass(slot.predictedL0))?.label ?? null;
     const reference = observed ? oneHot(observed) : normalizeMass(slot.predictedL0);
     if (reference.length === 0) {
       continue;
     }
+
     rows.push({
       date: day.date,
       kl: klDivergence(forecast, reference),

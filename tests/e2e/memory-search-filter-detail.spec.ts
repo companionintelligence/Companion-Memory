@@ -35,27 +35,39 @@ test('an entity-type filter is reflected in the URL', async ({ page }) => {
 // The "detail" half this filename promises: clicking a result row opens the
 // shared EntityDetailScaffold drawer (a Radix Sheet/Dialog) with that row's
 // title, and closing it returns to the list. Every ListView row (EntityRow)
-// is a `role="button"` div with no other role="button" elements competing for
-// it on this page (nav/header controls render real semantic <button>s without
-// an explicit role), so the first list result is a reliable, content-agnostic
-// target regardless of which entity types the seed data happens to contain.
+// is a `role="button"` div, but it is NOT the only explicit role="button" on
+// this page: the header's ConnectionModeIndicator ("Connected" pill; see
+// ConnectionModeIndicator.tsx) renders a `<Badge role="button">` too, and it
+// sits earlier in the DOM than the results list. An unscoped
+// `[role="button"]` locator matches that pill first — its click handler just
+// re-runs the connection health check, so the click "succeeds" but no drawer
+// ever opens. Scope to ListView's results container (`data-list-scroll`,
+// shared by every list-like view) so `.first()` reliably lands on a real
+// result row regardless of which entity types the seed data contains.
 test('opens the entity detail drawer from a result tile and can close it', async ({ page }) => {
   await page.goto('/memory/events');
 
-  const firstRow = page.locator('[role="button"]').first();
+  const firstRow = page.locator('[data-list-scroll] [role="button"]').first();
   await expect(firstRow).toBeVisible();
-  const rowTitle = (await firstRow.textContent())?.trim();
+  // EntityRow's title div is tagged `entity-row-title` specifically so this
+  // can read the title alone — the row's plain textContent runs the title
+  // and subtitle divs together with no separator (e.g. "Pizza NightHomemade
+  // pizza night."), which is not a substring of anything the drawer renders.
+  const rowTitle = (await firstRow.getByTestId('entity-row-title').textContent())?.trim();
 
   await firstRow.click();
 
   const drawer = page.getByRole('dialog');
   await expect(drawer).toBeVisible();
 
-  // The drawer's heading (Sheet.Title) carries the same entity title the row
-  // showed — proof the drawer opened for the row that was clicked, not just
-  // that some dialog appeared.
+  // The drawer's heading (Sheet.Title, rendered as an <h2 data-slot="sheet-title">)
+  // carries the same entity title the row showed — proof the drawer opened
+  // for the row that was clicked, not just that some dialog appeared. The
+  // details body renders its own <h2> section headings ("Location",
+  // "Connections", …), so scope to the sheet's own title slot rather than
+  // `getByRole('heading')`, which resolves to all of them.
   if (rowTitle) {
-    await expect(drawer).toContainText(rowTitle.slice(0, 20));
+    await expect(drawer.locator('[data-slot="sheet-title"]')).toHaveText(rowTitle);
   }
 
   // Radix Sheet closes on Escape; the drawer should unmount/hide.

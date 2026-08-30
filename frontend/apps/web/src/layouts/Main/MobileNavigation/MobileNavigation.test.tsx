@@ -23,10 +23,9 @@ vi.mock('../SecondaryNavigation/usePlanBadgeCount', () => ({ usePlanBadgeCount: 
 const recentThreads = vi.hoisted(() => ({ current: [] as { id: string; name: string | null }[] }));
 
 vi.mock('@/pages/ChatPage/useRecentThreads', async () => {
-  const actual =
-    await vi.importActual<typeof import('@/pages/ChatPage/useRecentThreads')>(
-      '@/pages/ChatPage/useRecentThreads',
-    );
+  const actual = await vi.importActual<typeof import('@/pages/ChatPage/useRecentThreads')>(
+    '@/pages/ChatPage/useRecentThreads',
+  );
 
   return {
     ...actual,

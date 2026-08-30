@@ -123,7 +123,7 @@ export class GmailTransformService {
 
       // Create person entities for recipients (with EMAILED relationship)
       const bccEntityIds = await this.promoteService.processParticipants(
-        ccParticipants,
+        bccParticipants,
         userId,
         connectionId,
         'email',

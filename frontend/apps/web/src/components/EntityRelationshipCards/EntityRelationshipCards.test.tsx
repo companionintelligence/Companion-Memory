@@ -141,7 +141,15 @@ describe('EntityRelationshipCards', () => {
         nodes: SUBGRAPH.nodes,
         links: [
           SUBGRAPH.links[0], // KNOWS
-          { id: 'rel-3', relationship_id: 'rel-3', source: FOCUS_ID, target: 'friend-1', relationship_type: 'SPOUSE', strength: 0.9, properties: {} },
+          {
+            id: 'rel-3',
+            relationship_id: 'rel-3',
+            source: FOCUS_ID,
+            target: 'friend-1',
+            relationship_type: 'SPOUSE',
+            strength: 0.9,
+            properties: {},
+          },
         ],
       },
       loading: false,
@@ -169,11 +177,26 @@ describe('EntityRelationshipCards', () => {
         nodes: [
           SUBGRAPH.nodes[0],
           SUBGRAPH.nodes[1],
-          { id: 'place-1', entity_id: 'place-1', entity_type: 'place', name: 'Home', description: null, properties: {} },
+          {
+            id: 'place-1',
+            entity_id: 'place-1',
+            entity_type: 'place',
+            name: 'Home',
+            description: null,
+            properties: {},
+          },
         ],
         links: [
           SUBGRAPH.links[0],
-          { id: 'rel-4', relationship_id: 'rel-4', source: FOCUS_ID, target: 'place-1', relationship_type: 'LIVES_IN', strength: 1, properties: {} },
+          {
+            id: 'rel-4',
+            relationship_id: 'rel-4',
+            source: FOCUS_ID,
+            target: 'place-1',
+            relationship_type: 'LIVES_IN',
+            strength: 1,
+            properties: {},
+          },
         ],
       },
       loading: false,
@@ -193,7 +216,10 @@ describe('EntityRelationshipCards', () => {
   it('uses a custom heading when given one', () => {
     renderWithProviders(
       <Routes>
-        <Route path="/" element={<EntityRelationshipCards entityId={FOCUS_ID} heading="Friends & Connections" />} />
+        <Route
+          path="/"
+          element={<EntityRelationshipCards entityId={FOCUS_ID} heading="Friends & Connections" />}
+        />
       </Routes>,
     );
 

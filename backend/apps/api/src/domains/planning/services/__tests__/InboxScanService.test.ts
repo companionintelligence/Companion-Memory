@@ -76,6 +76,7 @@ describe('InboxScanService per-item error isolation', () => {
 
     const created = new Set<string>();
     const taskService = {
+      findAll: jest.fn(async () => []),
       findBySourceRef: jest.fn(async () => null),
       findByTitleMatch: jest.fn(async () => null),
       create: jest.fn(async (_ctx: unknown, dto: { title: string }) => {
@@ -129,6 +130,7 @@ describe('InboxScanService stale proposed sweep', () => {
     const service = new InboxScanService(
       makeCommunicationRepository([]) as never,
       {
+        findAll: jest.fn(async () => []),
         findBySourceRef: jest.fn(),
         findByTitleMatch: jest.fn(),
         create: jest.fn(),
@@ -160,6 +162,7 @@ describe('InboxScanService stale proposed sweep', () => {
     const service = new InboxScanService(
       makeCommunicationRepository([makeMessage()]) as never,
       {
+        findAll: jest.fn(async () => []),
         findBySourceRef: jest.fn(),
         findByTitleMatch: jest.fn(),
         create: jest.fn(),
@@ -201,6 +204,7 @@ describe('InboxScanService scan window and LLM budget', () => {
     const service = new InboxScanService(
       communicationRepository as never,
       {
+        findAll: jest.fn(async () => []),
         findBySourceRef: jest.fn(),
         findByTitleMatch: jest.fn(),
         create: jest.fn(),
@@ -234,5 +238,185 @@ describe('InboxScanService scan window and LLM budget', () => {
     // ever responded — 20s was not a safety margin, it was a guarantee of
     // failure on exactly the hardware most likely to need a generous one.
     expect(SCAN_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+  });
+});
+
+describe('InboxScanService duplicate suppression', () => {
+  it('does not create a near-duplicate of an already proposed task', async () => {
+    const create = jest.fn();
+    const ollamaService = makeOllamaService([
+      {
+        title: 'Register for Network On Zoom',
+        detail: 'One Registration. A New Network Every Month.',
+        confidence: 0.9,
+      },
+    ]);
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => [
+          { title: "Register for 'Network On Zoom'", status: 'proposed', sourceKind: 'inbox', metadata: {} },
+        ]),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create,
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn(async () => 'review') } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(USER_ID);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(result.proposed).toBe(0);
+    expect(ollamaService.chat).toHaveBeenCalledWith(
+      expect.anything(),
+      [
+        expect.objectContaining({
+          content: expect.stringContaining('Already tracked'),
+        }),
+      ],
+      expect.anything(),
+    );
+  });
+
+  it('keeps existing proposals when the model returns nothing new', async () => {
+    const proposedReconcile = makeProposedReconcile();
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => [
+          { title: "Register for 'Network On Zoom'", status: 'proposed', sourceKind: 'inbox', metadata: {} },
+        ]),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      makeOllamaService([]),
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      proposedReconcile,
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    expect(proposedReconcile.reconcileStaleProposed).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID }),
+      expect.objectContaining({
+        sourceKind: 'inbox',
+        relevantTitles: ["Register for 'Network On Zoom'"],
+      }),
+    );
+  });
+
+  it('skips the model when every recent message already produced a task', async () => {
+    const ollamaService = makeOllamaService([{ title: 'Should not run', confidence: 0.9 }]);
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage({ id: 'comm-1' })]) as never,
+      {
+        findAll: jest.fn(async () => [
+          {
+            title: "Register for 'Network On Zoom'",
+            status: 'proposed',
+            sourceKind: 'inbox',
+            metadata: { sourceCommunicationId: 'comm-1' },
+          },
+        ]),
+        findBySourceRef: jest.fn(),
+        findByTitleMatch: jest.fn(),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(USER_ID);
+
+    expect(ollamaService.chat).not.toHaveBeenCalled();
+    expect(result.proposed).toBe(0);
+  });
+
+  it('archives later proposed rephrasings of a task already on the board', async () => {
+    const declineProposed = jest.fn(async () => ({ status: 'archived' }));
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => [
+          {
+            id: 'first',
+            title: "Register for 'Network On Zoom'",
+            status: 'proposed',
+            sourceKind: 'inbox',
+            metadata: {},
+            createdAt: new Date('2026-08-20T10:00:00.000Z'),
+          },
+          {
+            id: 'second',
+            title: 'Register for Network On Zoom',
+            status: 'proposed',
+            sourceKind: 'inbox',
+            metadata: {},
+            createdAt: new Date('2026-08-21T10:00:00.000Z'),
+          },
+        ]),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        declineProposed,
+        create: jest.fn(),
+      } as unknown as TaskService,
+      makeOllamaService([]),
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    expect(declineProposed).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), 'second');
+    expect(declineProposed).not.toHaveBeenCalledWith(expect.anything(), 'first');
+  });
+
+  it('creates only one task when the model emits several wordings of the same job', async () => {
+    const create = jest.fn(async (_ctx: unknown, dto: { title: string }) => ({
+      id: `task-${dto.title}`,
+      ...dto,
+      status: 'proposed',
+    }));
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create,
+      } as unknown as TaskService,
+      makeOllamaService([
+        { title: "Register for 'Network On Zoom'", confidence: 0.9 },
+        { title: 'Register for Network On Zoom', confidence: 0.8 },
+        { title: "Register for the 'Network On Zoom' event", confidence: 0.7 },
+      ]),
+      { decideAction: jest.fn(async () => 'review') } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(USER_ID);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(result.proposed).toBe(1);
   });
 });

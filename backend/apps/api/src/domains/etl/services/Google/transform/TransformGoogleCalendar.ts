@@ -5,7 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
 import { GeocodeService, isUriLocation } from '@ci/domains/geocode';
-import { EventService as MemoryEventService, type CreateEventDto } from '@ci/domains/memory';
+import { CalendarEventService, type CreateEventDto } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
@@ -74,7 +74,7 @@ const CALENDAR_TRANSFORM_BATCH_SIZE = 10;
 @Injectable()
 export class GoogleCalendarTransformService {
   constructor(
-    private readonly eventService: MemoryEventService,
+    private readonly eventService: CalendarEventService,
     private readonly connectionService: ConnectionService,
     private readonly promoteService: PromoteService,
     private readonly geocodeService: GeocodeService,

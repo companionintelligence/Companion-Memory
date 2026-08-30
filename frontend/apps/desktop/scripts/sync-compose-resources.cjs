@@ -7,16 +7,19 @@
 //    drift from the real compose files (they are gitignored here — see
 //    .gitignore — and always regenerated).
 // 2. Resolves the CI-Server image tag this build should default to pulling,
-//    using the SAME algorithm scripts/publish/publish.sh uses to name the
-//    images it pushes (git describe --tags --exact-match, else a
-//    dev-<short-sha> tag), and writes it to src-tauri/resources/image-tag.txt
-//    — a bundled resource stack_manager.rs reads at runtime as the default
-//    CI_SERVER_IMAGE_TAG. This deliberately never defaults to "latest":
-//    publish.sh's own comments record that a stale companion/*:latest tag
-//    previously orphaned (amd64-only, pointing at no real release), so a
-//    desktop build instead always pins to the exact version it was built
-//    from (or, for a dev build, a dev-<sha> tag — which only exists in the
-//    registry if that commit was actually published; see README.md).
+//    and writes it to src-tauri/resources/image-tag.txt — a bundled resource
+//    stack_manager.rs reads at runtime as the default CI_SERVER_IMAGE_TAG.
+//    This deliberately never defaults to "latest": publish.sh's own comments
+//    record that a stale companion/*:latest tag previously orphaned
+//    (amd64-only, pointing at no real release), so a desktop build instead
+//    always pins to a real tag: the exact release this checkout IS (git
+//    describe --tags --exact-match, mirroring scripts/publish/publish.sh's
+//    own naming), else — deliberately DIVERGING from publish.sh here — the
+//    nearest ancestor release tag reached from HEAD, since no `dev-<sha>`
+//    image has ever actually been published to the registry and baking one
+//    in just fails the pull silently at first launch (see README.md). A
+//    dev-<sha> tag is used only as the very last resort, when no release tag
+//    is reachable from HEAD at all (e.g. a shallow clone).
 //
 // Deliberately plain Node (no deps) — this runs on a bare `node` before
 // anything has been installed, mirroring bin/check-migration-versions.js's
@@ -66,8 +69,32 @@ function resolveImageTag() {
     return exactTag.replace(/^v/, '');
   }
 
+  // No `dev-<sha>` image has ever been published to
+  // ghcr.io/companionintelligence/companion/api, so falling straight back to
+  // `dev-<sha>` here would bake in a tag Docker can never pull — the desktop
+  // app would build fine and then fail silently at first launch. Fall back to
+  // the nearest ancestor release tag instead: it's not exact, but it's real.
+  const nearestTag = git(['describe', '--tags', '--abbrev=0']);
+  if (nearestTag) {
+    const resolved = nearestTag.replace(/^v/, '');
+    console.warn(
+      `  ⚠ HEAD is not an exact release tag; falling back to the nearest published release ` +
+        `"${resolved}" instead. This is NOT the exact code in this checkout — cut and publish ` +
+        `a real release for an exact match.`,
+    );
+    return resolved;
+  }
+
+  // No tag reachable from HEAD at all (e.g. a shallow clone) — there's no
+  // better option left, so fall back to dev-<sha> as a last resort even
+  // though it almost certainly hasn't been published.
   const shortSha = git(['rev-parse', '--short', 'HEAD']);
   if (shortSha) {
+    console.warn(
+      `  ⚠ No release tag reachable from HEAD (shallow clone?); falling back to ` +
+        `"dev-${shortSha}", which has almost certainly NOT been published to GHCR and will ` +
+        `fail to pull at first launch.`,
+    );
     return `dev-${shortSha}`;
   }
 

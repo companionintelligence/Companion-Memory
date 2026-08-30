@@ -130,7 +130,9 @@ export function EventPage() {
             <ChatWithAgentMenu
               context={namedChatContext({
                 title: event.title,
-                body: [event.description, event.eventType, event.sourceSystem].filter(Boolean).join(' · ') || null,
+                body:
+                  [event.description, event.eventType, event.sourceSystem].filter(Boolean).join(' · ') ||
+                  null,
                 sourceKind: 'EventType',
                 sourceId: event.id,
               })}

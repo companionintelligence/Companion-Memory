@@ -112,7 +112,9 @@ export function DestinationWithChildrenSubmenu({ destination }: { destination: R
           </Link>
           <Collapsible.Trigger
             className="flex shrink-0 items-center self-stretch rounded-r-md px-2 transition hover:bg-accent hover:text-accent-foreground [&[data-state=open]>svg]:rotate-90"
-            aria-label={open ? `Collapse ${destination.label} sections` : `Expand ${destination.label} sections`}
+            aria-label={
+              open ? `Collapse ${destination.label} sections` : `Expand ${destination.label} sections`
+            }
           >
             <ChevronRight className="h-4 w-4 shrink-0 transition-transform" />
           </Collapsible.Trigger>

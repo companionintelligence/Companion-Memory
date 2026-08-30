@@ -30,8 +30,8 @@ describe('offScriptLine', () => {
       },
     ];
 
-    expect(
-      offScriptFromHistory({ historyDays: history, weekday: 'Tuesday', hour: 20, drift: false }),
-    ).toBe('Tonight does not look like your usual Tuesday.');
+    expect(offScriptFromHistory({ historyDays: history, weekday: 'Tuesday', hour: 20, drift: false })).toBe(
+      'Tonight does not look like your usual Tuesday.',
+    );
   });
 });

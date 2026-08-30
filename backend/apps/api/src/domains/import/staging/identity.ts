@@ -315,7 +315,9 @@ export function hasContactIdentity(entity: Entity): boolean {
 function hasOnlyOrganizationalIdentity(entity: Entity): boolean {
   const handles = identityHandles(entity);
 
-  return handles.length > 0 && handles.every((handle) => handle.includes('@') && isOrganizationalAddress(handle));
+  return (
+    handles.length > 0 && handles.every((handle) => handle.includes('@') && isOrganizationalAddress(handle))
+  );
 }
 
 /**

@@ -618,7 +618,7 @@ describeIfDb(`PlacePromoteStage — against real Postgres (${availability.reason
    * transaction and returns the id.
    *
    * The real one is covered by `PlaceService.geocode.spec.ts` and needs a
-   * repository plus `EventService`; what this suite proves is what THIS stage
+   * repository plus `CalendarEventService`; what this suite proves is what THIS stage
    * writes — the event link, the footprint polygon and the provenance — against
    * a real PostGIS, so the place row only has to exist. It is NOT `ON CONFLICT
    * DO NOTHING`: a collision here would mean the test fixtures overlap, and

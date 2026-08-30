@@ -57,9 +57,15 @@ const logger = new LoggerService();
 
   const module = await createAdminTestingModule()
     // Seed data references files by id without uploading any bytes, so nothing
-    // here needs object storage.
+    // here needs object storage. ActivityRollupCron.onApplicationBootstrap still
+    // fires a refresh on module.init() below, and ActivityRollupService injects
+    // this same FileService for aggregateHourlyActivity() — the one FileService
+    // method any onApplicationBootstrap/onModuleInit hook in the seed's module
+    // graph calls — so the stub has to answer it too, or that refresh throws
+    // (non-fatally, but every seed run logs an ERROR and skips the 'files'
+    // activity rollup source).
     .overrideProvider(FileService)
-    .useValue({})
+    .useValue({ aggregateHourlyActivity: async () => [] })
     .compile();
 
   await module.init();

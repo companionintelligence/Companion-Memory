@@ -4,7 +4,7 @@ import { SteamOwnedGamesTransformService } from '../transform/TransformOwnedGame
 
 /**
  * Steam events carried source_type: 'ETL' alone — which engages neither
- * EventService.createOne's find-or-create (it needs source_id too) nor
+ * CalendarEventService.createOne's find-or-create (it needs source_id too) nor
  * events_source_triple_uniq — and content rows carried no triple. Dedup
  * rested entirely on app-level pre-checks (for friends, on whether the person
  * row already existed). These tests pin the full triples.

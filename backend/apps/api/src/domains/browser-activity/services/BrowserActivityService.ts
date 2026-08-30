@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository, type FindOptionsOrder } from 'typeorm';
+import { DataSource, In, IsNull, MoreThanOrEqual, Not, Repository, type FindOptionsOrder } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, UserServiceContext, type ServiceContext } from '@ci/common/context';
@@ -29,7 +29,7 @@ interface Options {
   order?: FindOptionsOrder<BrowserActivityEntity>;
   startTime?: Date;
   endTime?: Date;
-  /** Composite keyset cursor for the timed search path (see EventService). */
+  /** Composite keyset cursor for the timed search path (see CalendarEventService). */
   afterTime?: Date;
   afterId?: string;
 }
@@ -164,8 +164,13 @@ export class BrowserActivityService {
       scope: { user_id: context.userId },
       conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
       tripleColumns: ['source_type', 'source_system', 'source_id'],
-      // Centralized refresh contract — currently empty, so conflicts stay
-      // DO NOTHING find-or-return.
+      // Centralized refresh contract — self-heals the capture-derived columns
+      // (action_type, properties, duration_seconds, scroll_depth_percent,
+      // is_incognito, contains_sensitive) on a conflicting re-sync. Excludes
+      // title/url (user-editable via updateBrowserActivity) and the
+      // AI-generated insight columns (page_summary, category,
+      // productivity_score) so enrichment output survives a re-import. See
+      // INGEST_REFRESH_COLUMNS.browser_activity for the full rationale.
       conflictUpdateColumns: INGEST_REFRESH_COLUMNS.browser_activity,
     });
 
@@ -316,6 +321,29 @@ export class BrowserActivityService {
     return true;
   }
 
+  /**
+   * The most recently categorized visit to this exact URL for this user,
+   * within `since`. Lets `BrowserActivityInsightListener` reuse a category
+   * instead of paying an LLM call for every revisit to the same page — the
+   * dominant case for a URL, not the exception.
+   */
+  async findMostRecentCategorized(
+    userId: string,
+    url: string,
+    since: Date,
+  ): Promise<Pick<BrowserActivityEntity, 'category' | 'productivity_score'> | null> {
+    return this.browserActivityRepository.findOne({
+      where: {
+        user_id: userId,
+        url,
+        category: Not(IsNull()),
+        time: MoreThanOrEqual(since),
+      },
+      order: { time: 'DESC' },
+      select: ['category', 'productivity_score'],
+    });
+  }
+
   async getEntitiesForBrowserActivities(
     context: ServiceContext,
     options: Options,
@@ -366,7 +394,7 @@ export class BrowserActivityService {
   /**
    * True total of browser activities matching the same filters {@link getEntitiesForBrowserActivities}
    * applies (minus the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`,
-   * not the length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
+   * not the length of one `limit`-bounded page of identifiers. See CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForBrowserActivities(
     context: ServiceContext,

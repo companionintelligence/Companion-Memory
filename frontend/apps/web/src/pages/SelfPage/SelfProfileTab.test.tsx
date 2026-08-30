@@ -22,7 +22,9 @@ vi.mock('./sections/ConnectionsSection', () => ({ ConnectionsSection: () => <div
 vi.mock('@/pages/SettingsPage/sections/AboutYouSection', () => ({
   AboutYouSection: () => <div>AboutYouSection</div>,
 }));
-vi.mock('@/pages/SettingsPage/sections/AccountSection', () => ({ AccountSection: () => <div>AccountSection</div> }));
+vi.mock('@/pages/SettingsPage/sections/AccountSection', () => ({
+  AccountSection: () => <div>AccountSection</div>,
+}));
 
 const ENTITY_ID = 'cGVyc29uOjQy';
 
@@ -134,7 +136,9 @@ describe('SelfProfileTab — the inline person editor', () => {
         request: { query: UPDATE_PERSON },
         variableMatcher: (variables: { input: unknown }) =>
           (variables.input as { jobTitle?: string }).jobTitle === 'Staff Engineer',
-        result: { data: { updatePerson: { success: true, person: personRecord({ jobTitle: 'Staff Engineer' }) } } },
+        result: {
+          data: { updatePerson: { success: true, person: personRecord({ jobTitle: 'Staff Engineer' }) } },
+        },
       } as unknown as MockedResponse,
     ]);
 

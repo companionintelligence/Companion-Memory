@@ -130,7 +130,8 @@ export const COVERED_COMPONENT_PURPOSE: Readonly<Record<string, { title: string;
   },
   'content-digest': {
     title: 'The question itself',
-    protects: 'Stops anything on the network path altering the question between them sending it and you seeing it.',
+    protects:
+      'Stops anything on the network path altering the question between them sending it and you seeing it.',
   },
 };
 

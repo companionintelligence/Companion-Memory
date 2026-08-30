@@ -15,7 +15,13 @@ export type GrantMode = 'auto' | 'review' | 'block';
 export type DisclosureRung = 'none' | 'boolean' | 'count' | 'summary' | 'redacted' | 'full';
 
 export type AskStatus =
-  'sent' | 'delivered' | 'under_review' | 'answering' | 'answered' | 'declined' | 'expired';
+  | 'sent'
+  | 'delivered'
+  | 'under_review'
+  | 'answering'
+  | 'answered'
+  | 'declined'
+  | 'expired';
 
 /**
  * Owner-facing label for a grant mode.

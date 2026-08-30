@@ -199,11 +199,7 @@ export {
   downloadAttachments,
   mapBlueBubblesMessageToGraph,
 } from './datasources/bluebubbles';
-export {
-  BlueBubblesApiClient,
-  BLUEBUBBLES_PAGE_LIMIT,
-  redactUrl,
-} from './datasources/bluebubblesApiClient';
+export { BlueBubblesApiClient, BLUEBUBBLES_PAGE_LIMIT, redactUrl } from './datasources/bluebubblesApiClient';
 export type {
   BlueBubblesClientConfig,
   BlueBubblesHandle,

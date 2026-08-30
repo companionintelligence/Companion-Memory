@@ -174,12 +174,15 @@ describe('peerEgressFetch — everything else is the caller’s business', () =>
     await expect(peerEgressFetch(PEER, INIT)).resolves.toBe(response);
   });
 
-  it.each([400, 403, 404, 500, 503])('hands back %i untouched — a peer error is not a refusal', async (status) => {
-    const response = respond({ status });
-    mockFetch.mockResolvedValue(response);
+  it.each([400, 403, 404, 500, 503])(
+    'hands back %i untouched — a peer error is not a refusal',
+    async (status) => {
+      const response = respond({ status });
+      mockFetch.mockResolvedValue(response);
 
-    await expect(peerEgressFetch(PEER, INIT)).resolves.toBe(response);
-  });
+      await expect(peerEgressFetch(PEER, INIT)).resolves.toBe(response);
+    },
+  );
 
   it('reports a CONNECT-time block as a refusal, even though undici wraps it', async () => {
     // undici surfaces a failure from the agent's `lookup` as the `cause` of a

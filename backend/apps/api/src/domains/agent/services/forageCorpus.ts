@@ -93,12 +93,11 @@ export function observationCue(item: {
   return 'none';
 }
 
-export function expandQuery(args: {
-  question: string;
-  branch: string;
-  people: string[];
-}): string {
-  const who = args.people.filter((name) => name !== 'solo').slice(0, 3).join(' ');
+export function expandQuery(args: { question: string; branch: string; people: string[] }): string {
+  const who = args.people
+    .filter((name) => name !== 'solo')
+    .slice(0, 3)
+    .join(' ');
 
   return [args.branch, who, 'where they live home work places events'].filter(Boolean).join(' ');
 }
@@ -112,10 +111,12 @@ export function peopleLinkedToEvents<T extends { entity_id: string; name: string
   return people.filter((person) => allowed.has(person.entity_id) && isDisplayableLabel(person.name));
 }
 
-export function eventParticipantIds(events: Array<{
-  organizer_entity_id?: string | null;
-  participant_entity_ids?: string[] | null;
-}>): string[] {
+export function eventParticipantIds(
+  events: Array<{
+    organizer_entity_id?: string | null;
+    participant_entity_ids?: string[] | null;
+  }>,
+): string[] {
   const ids = new Set<string>();
   for (const event of events) {
     if (event.organizer_entity_id) {

@@ -134,6 +134,14 @@ jobs:
       # without any Apple Developer credentials. For a device-installable, signed .ipa,
       # swap this for `xcodebuild archive … -exportArchive` gated on the signing secrets
       # (see frontend/apps/ios/README.md → "CI builds").
+      #
+      # ARCHS=arm64 ONLY_ACTIVE_ARCH=YES: the generic 'iOS Simulator' destination below
+      # otherwise resolves to BOTH arm64 and x86_64 slices, but CLiteRTLM.xcframework
+      # (fetched above) ships only ios-arm64 / ios-arm64-simulator — no x86_64 simulator
+      # slice — so the x86_64 link fails with "required architecture 'x86_64'" undefined
+      # symbols. No runner or realistic dev machine here needs an Intel simulator slice.
+      # This exact combination was hand-verified to build, install and launch correctly
+      # (docs/qa/baseline-2026-08-26.md §6.2/§5).
       - name: Build (iOS Simulator, unsigned)
         working-directory: frontend/apps/ios/ios/App
         run: |
@@ -145,6 +153,8 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
             build
 
       - name: Package .app

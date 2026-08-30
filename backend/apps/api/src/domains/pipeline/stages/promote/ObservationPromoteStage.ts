@@ -549,7 +549,7 @@ export class ObservationPromoteStage implements Stage {
   /**
    * The slice's events, in one statement.
    *
-   * Raw SQL rather than `EventService` for the reason `ObjectPromoteStage`
+   * Raw SQL rather than `CalendarEventService` for the reason `ObjectPromoteStage`
    * gives: the columns wanted are a strict subset of a ~40-column row, and
    * `metadata` is the exception because it IS the scan record.
    *

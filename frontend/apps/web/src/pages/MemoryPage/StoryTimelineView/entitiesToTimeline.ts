@@ -161,10 +161,9 @@ function slideFromEntity(entity: EntityItem): DatedSlide | null {
       const data = readFragment(BROWSER_ACTIVITY_FRAGMENT, entity);
       const headline = data.title?.trim() || 'Untitled page';
       const durationSeconds = typeof data.duration === 'number' ? data.duration : 0;
-      const bodyBits = [
-        time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        data.url,
-      ].filter(Boolean);
+      const bodyBits = [time.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), data.url].filter(
+        Boolean,
+      );
       const slide: TimelineSlide = {
         start_date: partsOf(time),
         text: { headline, text: bodyBits.join(' · ') },

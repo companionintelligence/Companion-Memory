@@ -3,7 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { EventEntity, EventService, PersonService, UserContextService } from '@ci/domains/memory';
+import { EventEntity, CalendarEventService, PersonService, UserContextService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
 import { PlannedBlockService } from '../PlannedBlockService';
@@ -33,6 +33,7 @@ const OPEN_TASK = {
 
 function makeEventQb(row: EventEntity | null) {
   const qb = {
+    select: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
@@ -40,6 +41,7 @@ function makeEventQb(row: EventEntity | null) {
     take: jest.fn().mockReturnThis(),
     getOne: jest.fn().mockResolvedValue(row),
     getMany: jest.fn().mockResolvedValue(row ? [row] : []),
+    getRawMany: jest.fn().mockResolvedValue(row?.taskId ? [{ taskId: row.taskId }] : []),
   };
 
   return qb;
@@ -60,6 +62,9 @@ describe('PlannedBlockService', () => {
     findById: jest.Mock;
     update: jest.Mock;
     createPendingChange: jest.Mock;
+    findPendingChanges: jest.Mock;
+    declinePendingChange: jest.Mock;
+    acceptProposed: jest.Mock;
   };
   let personalizationService: { decideAction: jest.Mock };
 
@@ -85,13 +90,16 @@ describe('PlannedBlockService', () => {
       findById: jest.fn().mockResolvedValue(OPEN_TASK),
       update: jest.fn().mockResolvedValue({ ...OPEN_TASK, scheduledFor: TODAY }),
       createPendingChange: jest.fn(),
+      findPendingChanges: jest.fn().mockResolvedValue([]),
+      declinePendingChange: jest.fn(),
+      acceptProposed: jest.fn(),
     };
     personalizationService = { decideAction: jest.fn() };
 
     const planningTime = {
       timezoneFor: jest.fn().mockResolvedValue('UTC'),
       today: jest.fn().mockResolvedValue(TODAY),
-      localDate: jest.fn().mockResolvedValue(TODAY),
+      localDate: jest.fn(async (_ctx: unknown, instant: Date) => instant.toISOString().slice(0, 10)),
       toInstant: jest.fn(
         async (_ctx: unknown, date: string, wall: string) => new Date(`${date}T${wall}:00.000Z`),
       ),
@@ -101,7 +109,7 @@ describe('PlannedBlockService', () => {
       providers: [
         PlannedBlockService,
         { provide: getRepositoryToken(EventEntity), useValue: eventRepository },
-        { provide: EventService, useValue: eventService },
+        { provide: CalendarEventService, useValue: eventService },
         { provide: TaskService, useValue: taskService },
         { provide: PlanningTimeService, useValue: planningTime },
         { provide: PersonalizationService, useValue: personalizationService },
@@ -209,10 +217,7 @@ describe('PlannedBlockService', () => {
     const outcome = await service.scheduleTaskAt(CTX, OPEN_TASK.id, yesterday);
 
     expect(outcome.status).toBe('placed');
-    expect(eventService.create).toHaveBeenCalledWith(
-      CTX,
-      expect.objectContaining({ start_time: yesterday }),
-    );
+    expect(eventService.create).toHaveBeenCalledWith(CTX, expect.objectContaining({ start_time: yesterday }));
   });
 
   it('scheduleTaskAt MOVES an already-placed task instead of reporting a silent no-op', async () => {
@@ -250,6 +255,72 @@ describe('PlannedBlockService', () => {
 
     expect(outcome.status).toBe('skipped');
     expect(eventService.create).not.toHaveBeenCalled();
+  });
+
+  it('lists which of the given tasks already have a planned block', async () => {
+    const qb = makeEventQb({ taskId: OPEN_TASK.id } as EventEntity);
+    qb.getRawMany.mockResolvedValue([{ taskId: OPEN_TASK.id }]);
+    eventRepository.createQueryBuilder.mockReturnValue(qb);
+
+    await expect(service.listActiveTaskIds(CTX, [OPEN_TASK.id, 'other'])).resolves.toEqual(
+      new Set([OPEN_TASK.id]),
+    );
+    await expect(service.listActiveTaskIds(CTX, [])).resolves.toEqual(new Set());
+  });
+
+  it('planAsUnscheduled declines a pending date, opens a proposal, and clears the block', async () => {
+    taskService.findById.mockResolvedValue({ ...OPEN_TASK, status: 'proposed', scheduledFor: TODAY });
+    taskService.findPendingChanges.mockResolvedValue([{ id: 'chg-1' }]);
+    taskService.acceptProposed.mockResolvedValue({ ...OPEN_TASK, status: 'open' });
+    taskService.update.mockResolvedValue({ ...OPEN_TASK, status: 'open', scheduledFor: null });
+    eventRepository.createQueryBuilder = jest.fn(() => makeEventQb({ id: 'evt-existing' } as EventEntity));
+    eventService.findById.mockResolvedValue({ id: 'evt-existing', taskId: OPEN_TASK.id });
+
+    const result = await service.planAsUnscheduled(CTX, OPEN_TASK.id);
+
+    expect(taskService.declinePendingChange).toHaveBeenCalledWith(CTX, 'chg-1');
+    expect(taskService.acceptProposed).toHaveBeenCalledWith(CTX, OPEN_TASK.id);
+    expect(eventService.remove).toHaveBeenCalledWith(CTX, 'evt-existing');
+    expect(taskService.update).toHaveBeenCalledWith(CTX, OPEN_TASK.id, { scheduledFor: null });
+    expect(result?.scheduledFor).toBeNull();
+  });
+
+  it('planAsUnscheduled strips a past proposed window so the task is undated', async () => {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const pastDue = new Date(`${yesterday}T12:00:00.000Z`);
+    taskService.findById.mockResolvedValue({
+      ...OPEN_TASK,
+      status: 'proposed',
+      scheduledFor: yesterday,
+      dueAt: pastDue,
+    });
+    taskService.update.mockResolvedValue({
+      ...OPEN_TASK,
+      status: 'open',
+      scheduledFor: null,
+      dueAt: null,
+    });
+
+    const result = await service.planAsUnscheduled(CTX, OPEN_TASK.id);
+
+    expect(taskService.acceptProposed).toHaveBeenCalledWith(CTX, OPEN_TASK.id);
+    expect(taskService.update).toHaveBeenCalledWith(CTX, OPEN_TASK.id, {
+      scheduledFor: null,
+      dueAt: null,
+    });
+    expect(result?.scheduledFor).toBeNull();
+    expect(result?.dueAt).toBeNull();
+  });
+
+  it('planAsUnscheduled on already-open work does not re-accept, only unschedules', async () => {
+    taskService.findPendingChanges.mockResolvedValue([{ id: 'chg-2' }]);
+    taskService.update.mockResolvedValue({ ...OPEN_TASK, scheduledFor: null });
+
+    await service.planAsUnscheduled(CTX, OPEN_TASK.id);
+
+    expect(taskService.acceptProposed).not.toHaveBeenCalled();
+    expect(taskService.declinePendingChange).toHaveBeenCalledWith(CTX, 'chg-2');
+    expect(taskService.update).toHaveBeenCalledWith(CTX, OPEN_TASK.id, { scheduledFor: null });
   });
 
   it('automation skip leaves the task unscheduled', async () => {

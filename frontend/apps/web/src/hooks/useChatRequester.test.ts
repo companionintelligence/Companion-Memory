@@ -22,7 +22,10 @@ const auth = vi.hoisted(() => ({
 }));
 
 vi.mock('./useAuth', () => ({
-  useAuth: () => [{ authToken: auth.authToken, authenticated: auth.authenticated, expired: auth.expired }, {}],
+  useAuth: () => [
+    { authToken: auth.authToken, authenticated: auth.authenticated, expired: auth.expired },
+    {},
+  ],
 }));
 vi.mock('./useModel', () => ({ useModel: () => [h.model, {}] }));
 

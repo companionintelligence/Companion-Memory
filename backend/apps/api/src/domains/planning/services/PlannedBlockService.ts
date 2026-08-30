@@ -4,7 +4,7 @@ import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { EventEntity, EventService, PersonService, UserContextService, type Event } from '@ci/domains/memory';
+import { EventEntity, CalendarEventService, PersonService, UserContextService, type Event } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
 import {
@@ -37,7 +37,7 @@ export class PlannedBlockService {
   constructor(
     @InjectRepository(EventEntity)
     private readonly eventRepository: Repository<EventEntity>,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly taskService: TaskService,
     private readonly planningTime: PlanningTimeService,
     private readonly personalizationService: PersonalizationService,
@@ -50,7 +50,7 @@ export class PlannedBlockService {
 
   /**
    * SQL-pushdown of `event_type = 'planned_block'` overlapping [from, to).
-   * Not EventService.findAll — that path is unbounded and explorer-facing.
+   * Not CalendarEventService.findAll — that path is unbounded and explorer-facing.
    */
   async list(context: UserServiceContext, from: Date, to: Date): Promise<Event[]> {
     const rows = await this.eventRepository
@@ -94,6 +94,25 @@ export class PlannedBlockService {
     }
 
     return this.eventService.findById(context, row.id);
+  }
+
+  /** Task ids in `taskIds` that currently have an active planned block. */
+  async listActiveTaskIds(context: UserServiceContext, taskIds: string[]): Promise<Set<string>> {
+    if (taskIds.length === 0) {
+      return new Set();
+    }
+
+    const rows = await this.eventRepository
+      .createQueryBuilder('event')
+      .select('event.task_id', 'taskId')
+      .where('event.user_id = :userId', { userId: context.userId })
+      .andWhere('event.task_id IN (:...taskIds)', { taskIds })
+      .andWhere('event.event_type = :type', { type: PLANNED_BLOCK })
+      .andWhere('event.is_deleted = false')
+      .andWhere("event.status NOT IN ('cancelled', 'no_show', 'skipped')")
+      .getRawMany<{ taskId?: string; task_id?: string }>();
+
+    return new Set(rows.map((row) => row.taskId ?? row.task_id).filter((id): id is string => Boolean(id)));
   }
 
   /**
@@ -141,7 +160,7 @@ export class PlannedBlockService {
    * second click is rightly a no-op. A drag names a destination. Dropping an
    * already-placed task's card again is the same gesture the grid's own
    * event-drag uses to MOVE a committed block (`rescheduleEvent`), so this
-   * reuses that path (`EventService.reschedule`, which preserves duration when
+   * reuses that path (`CalendarEventService.reschedule`, which preserves duration when
    * `end` is omitted) rather than reporting nothing happened.
    *
    * Past dates are accepted deliberately. The date-only path clamps a
@@ -173,11 +192,15 @@ export class PlannedBlockService {
       // `findActiveForTask` and here) or a cross-user id — both genuinely
       // "nothing to place", so falling back to the old already_placed status
       // is honest rather than claiming a move that did not happen.
-      return moved ? { status: 'placed', event: moved, task } : { status: 'already_placed', event: existing, task };
+      return moved
+        ? { status: 'placed', event: moved, task }
+        : { status: 'already_placed', event: existing, task };
     }
 
     const minutes = estimatedMinutes ?? task.estimatedMinutes ?? undefined;
-    const placedEnd = end ?? new Date(start.getTime() + (minutes && minutes > 0 ? minutes : DEFAULT_ESTIMATED_MINUTES) * 60_000);
+    const placedEnd =
+      end ??
+      new Date(start.getTime() + (minutes && minutes > 0 ? minutes : DEFAULT_ESTIMATED_MINUTES) * 60_000);
 
     return this.placeAt(context, task, start, placedEnd, estimatedMinutes ?? task.estimatedMinutes);
   }
@@ -254,6 +277,75 @@ export class PlannedBlockService {
     }
 
     return this.taskService.update(context, taskId, { scheduledFor: null });
+  }
+
+  /**
+   * Plan-page Plan: keep the work, put it in the unscheduled backlog.
+   * Drops pending confirmations, opens a proposal, and removes any calendar
+   * block. A proposed time that is already in the past is stripped entirely
+   * (including the scan-stamped dueAt) so the row is ordinary undated work.
+   */
+  async planAsUnscheduled(context: UserServiceContext, taskId: string): Promise<Task | null> {
+    const task = await this.taskService.findById(context, taskId);
+
+    if (!task) {
+      return null;
+    }
+
+    const pending = await this.taskService.findPendingChanges(context, { taskId });
+
+    for (const change of pending) {
+      await this.taskService.declinePendingChange(context, change.id);
+    }
+
+    if (task.status === 'proposed') {
+      await this.taskService.acceptProposed(context, taskId);
+    }
+
+    const existing = await this.findActiveForTask(context, taskId);
+
+    if (existing) {
+      await this.eventService.remove(context, existing.id);
+    }
+
+    const stripPastWindow = await this.proposedTimeIsPast(context, task, pending);
+
+    return this.taskService.update(context, taskId, {
+      scheduledFor: null,
+      ...(stripPastWindow ? { dueAt: null } : {}),
+    });
+  }
+
+  private async proposedTimeIsPast(
+    context: UserServiceContext,
+    task: Task,
+    pending: ReadonlyArray<{ kind: string; patch?: Record<string, unknown> }>,
+  ): Promise<boolean> {
+    const today = await this.planningTime.today(context);
+
+    if (task.scheduledFor != null && task.scheduledFor < today) {
+      return true;
+    }
+
+    if (task.status === 'proposed' && task.dueAt != null) {
+      const dueDate = await this.planningTime.localDate(context, task.dueAt);
+
+      if (dueDate < today) {
+        return true;
+      }
+    }
+
+    const now = Date.now();
+
+    return pending.some((change) => {
+      if (change.kind !== 'schedule') {
+        return false;
+      }
+
+      const start = parseInstant(change.patch?.startTime);
+
+      return start != null && start.getTime() < now;
+    });
   }
 
   private async place(

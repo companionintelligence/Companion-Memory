@@ -1193,7 +1193,7 @@ export class TemporalRepairStage implements Stage {
   /**
    * The slice's events, in one statement.
    *
-   * Raw SQL rather than the memory domain's `EventService`, for the reason
+   * Raw SQL rather than the memory domain's `CalendarEventService`, for the reason
    * `GeocodeStage` gives: a `ci.events` row carries ~40 columns including jsonb
    * blobs at 200 rows a slice, the projection wanted is seven of them, and
    * reaching through another domain's barrel for a projection couples the

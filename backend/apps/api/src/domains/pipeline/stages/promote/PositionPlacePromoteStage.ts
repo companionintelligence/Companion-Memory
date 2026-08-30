@@ -620,7 +620,7 @@ export class PositionPlacePromoteStage implements Stage {
    * The slice's fixes, in one statement.
    *
    * Raw SQL rather than `PositionService`, for the reason `PlacePromoteStage`
-   * gives about `EventService`: the columns wanted are a strict subset of a
+   * gives about `CalendarEventService`: the columns wanted are a strict subset of a
    * ~30-column row, at 200 rows a slice.
    *
    * `time` comes back because it is half of `ci.position`'s `(time, user_id)`

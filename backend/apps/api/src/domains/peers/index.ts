@@ -76,7 +76,12 @@ export type { SendAskDto, SendAskResult } from './services/OutboundAskService';
 export { PeerLinkService, PeerDirectoryService, PeerAskClient, PeerAskService };
 export { PeerAskCorrelationService } from './services/PeerAskCorrelationService';
 export type { PeerAskCorrelation } from './entities/PeerAskCorrelationEntity';
-export { computeFreeBusy, summarizeAvailability } from './availability';
+export {
+  coarsenFreeBusy,
+  computeFreeBusy,
+  summarizeAvailability,
+  REDACTED_SLOT_GRANULARITY_MINUTES,
+} from './availability';
 export {
   PEER_ASK_ARCHETYPES,
   PEER_ASK_PENDING,

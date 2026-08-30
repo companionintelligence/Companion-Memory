@@ -3,12 +3,12 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource, getMetadataArgsStorage } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
-import { EventService as SignallingEventService } from '@ci/domains/events';
+import { EventService } from '@ci/domains/events';
 
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import type { CreateEventDto } from '../../types';
-import { EventService } from '../EventService';
+import { CalendarEventService } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
@@ -29,8 +29,8 @@ import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
  * Two assertions, because it takes both to be safe: the service must rename the
  * key, and the entity must declare the column it is renamed to.
  */
-describe('EventService — timestamp provenance reaches the entity', () => {
-  let service: EventService;
+describe('CalendarEventService — timestamp provenance reaches the entity', () => {
+  let service: CalendarEventService;
   let repo: {
     findOne: jest.Mock;
     create: jest.Mock;
@@ -61,16 +61,16 @@ describe('EventService — timestamp provenance reaches the entity', () => {
 
     const moduleRef = await Test.createTestingModule({
       providers: [
-        EventService,
+        CalendarEventService,
         { provide: getRepositoryToken(EventEntity), useValue: repo },
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
-        { provide: SignallingEventService, useValue: { send: jest.fn() } },
+        { provide: EventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: {} },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();
 
-    service = moduleRef.get(EventService);
+    service = moduleRef.get(CalendarEventService);
   });
 
   const undatedDto = (): CreateEventDto =>

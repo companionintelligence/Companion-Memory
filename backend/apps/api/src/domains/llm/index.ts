@@ -4,6 +4,7 @@
 
 import { Module } from '@nestjs/common';
 
+import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { ConversationModule } from '@ci/domains/conversations';
 import { DailyMetricsModule } from '@ci/domains/daily-metrics';
 import { EventsModule } from '@ci/domains/events';
@@ -16,10 +17,12 @@ import { SearchNextModule } from '@ci/domains/search-next';
 import { SummariesModule } from '@ci/domains/summaries';
 import { ToolsModule } from '@ci/domains/tools';
 
+import { BrowserActivityInsightPreferenceModule } from './browser-activity-insight-preference.module';
 import { LlmEndpointController } from './controllers/LlmEndpointController';
 import { OllamaController } from './controllers/OllamaController';
 import { LlmCoreModule } from './core.module';
 import { ImageDescriptionPreferenceModule } from './image-description-preference.module';
+import { BrowserActivityInsightListener } from './listeners/BrowserActivityInsightListener';
 import { ChatGenerateListener } from './listeners/ChatGenerateListener';
 import { CvDetectionsListener } from './listeners/CvDetectionsListener';
 import { ImageDescriptionBackfillListener } from './listeners/ImageDescriptionBackfillListener';
@@ -34,6 +37,8 @@ import { ChatTurnService } from './services/ChatTurnService';
 @Module({
   imports: [
     LlmCoreModule,
+    BrowserActivityModule,
+    BrowserActivityInsightPreferenceModule,
     ConversationModule,
     DailyMetricsModule,
     EventsModule,
@@ -50,6 +55,7 @@ import { ChatTurnService } from './services/ChatTurnService';
   providers: [
     ChatGenerationBroker,
     ChatTurnService,
+    BrowserActivityInsightListener,
     ChatGenerateListener,
     CvDetectionsListener,
     ImageDescriptionListener,

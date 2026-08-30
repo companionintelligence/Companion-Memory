@@ -84,7 +84,9 @@ export function SavedSearchPicker() {
             <div className="px-2 py-4 text-center text-xs text-muted-foreground">Loading…</div>
           ) : results.length === 0 ? (
             <div className="px-2 py-4 text-center text-xs text-muted-foreground">
-              {filterText.trim() ? `No saved searches match "${filterText.trim()}".` : 'No saved searches yet.'}
+              {filterText.trim()
+                ? `No saved searches match "${filterText.trim()}".`
+                : 'No saved searches yet.'}
             </div>
           ) : (
             results.map((result) => (

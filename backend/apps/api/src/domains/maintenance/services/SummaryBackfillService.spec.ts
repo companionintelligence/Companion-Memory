@@ -162,13 +162,21 @@ describe('SummaryBackfillService.backfill', () => {
     expect(result.daysAlreadySummarized).toBe(0);
     expect(result.daysWithoutLandedHourly).toEqual([]);
 
-    expect(result.hourly).toMatchObject({ enqueued: 48, deduped: 0, landed: 48, expected: 48, drained: true });
+    expect(result.hourly).toMatchObject({
+      enqueued: 48,
+      deduped: 0,
+      landed: 48,
+      expected: 48,
+      drained: true,
+    });
     expect(result.daily).toMatchObject({ enqueued: 2, deduped: 0, landed: 2, expected: 2, drained: true });
     expect(result.weekly).toMatchObject({ enqueued: 1, deduped: 0, landed: 1, expected: 1, drained: true });
     expect(result.monthly).toMatchObject({ enqueued: 1, deduped: 0, landed: 1, expected: 1, drained: true });
 
     // Every hourly dispatch carries the same singletonKey shape the live cron uses.
-    const hourlyKeys = dispatched.filter((d) => d.functionName === 'hourly_summary').map((d) => d.singletonKey);
+    const hourlyKeys = dispatched
+      .filter((d) => d.functionName === 'hourly_summary')
+      .map((d) => d.singletonKey);
     expect(hourlyKeys).toContain(`fn:hourly_summary:${USER}:2023-01-16T00`);
     expect(hourlyKeys).toContain(`fn:hourly_summary:${USER}:2023-01-17T23`);
 
