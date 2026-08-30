@@ -151,6 +151,23 @@ export function isIosPlatform(): boolean {
 }
 
 /**
+ * Whether the app is running inside the desktop Tauri shell (`frontend/apps/desktop`).
+ * A DIFFERENT native shell from Capacitor's — Tauri injects `window.__TAURI_INTERNALS__`,
+ * never `window.Capacitor` — so `isNativePlatform()` is always false here and callers
+ * that need to treat desktop like a native platform (system-browser OAuth today) must
+ * check both explicitly rather than folding this into isNativePlatform(): most of what
+ * that flag gates (device-connect on launch, camera/location bridges, …) is genuinely
+ * mobile-only and wrong for a desktop window.
+ */
+export function isTauriPlatform(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+
+  return '__TAURI_INTERNALS__' in window;
+}
+
+/**
  * Loopback / .localhost / .local appliance URLs. iOS must not treat these as a
  * finished pairing — the phone always goes through Portal cloud-connect.
  */

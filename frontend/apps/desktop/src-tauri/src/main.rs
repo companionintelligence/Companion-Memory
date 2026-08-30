@@ -5,7 +5,10 @@ mod port_check;
 mod stack_manager;
 mod tray;
 
+use std::sync::Mutex;
+
 use tauri::Manager;
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_opener::OpenerExt;
 
 /// Shared app state: the resolved on-disk paths for the compose files,
@@ -14,17 +17,82 @@ use tauri_plugin_opener::OpenerExt;
 #[derive(Clone)]
 pub struct StackPathsState(pub stack_manager::StackPaths);
 
+/// A deep link that arrived before the frontend had a listener up — the cold-start
+/// case (app not yet running when the OS delivers the URL) and, defensively, any
+/// warm-start delivery that raced page load. `main.tsx`'s deep-link wiring drains
+/// this via take_pending_deep_link_command on mount, THEN subscribes to the live
+/// `companion-deep-link` DOM event for anything that arrives after — the same
+/// two-mechanism shape iOS's getLaunchUrl (cold start) + appUrlOpen (live) already
+/// uses, just adapted to Tauri's own event surface instead of Capacitor's.
+#[derive(Default)]
+struct PendingDeepLink(Mutex<Option<String>>);
+
+/// Deliver a deep-link URL to the frontend: dispatch it live if a window exists
+/// (covers the warm-start case, where the page — and hopefully its listener — is
+/// already up), and ALWAYS also record it in PendingDeepLink so
+/// take_pending_deep_link_command can hand it to a listener that mounts later,
+/// whether that's because this delivery raced page load or because it arrived
+/// before any window existed at all (true cold start).
+///
+/// The single caller is the on_open_url listener registered in .setup() below —
+/// every platform's delivery mechanism (macOS/iOS's RunEvent::Opened, and
+/// Windows/Linux's CLI-arg handling, both the plugin's own cold-start scan AND
+/// the warm-start relaunch we feed it explicitly in the single-instance callback)
+/// funnels through the SAME "deep-link://new-url" Tauri event the plugin emits,
+/// so there is exactly one place downstream of the OS that needs to know how to
+/// reach the frontend.
+fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
+    // Never log the full URL — the OIDC callback's `code` query param is a short-lived
+    // credential. Everything before the first `?` is enough to confirm delivery.
+    log::info!(
+        "deep link received: {}",
+        url.split('?').next().unwrap_or(url)
+    );
+
+    if let Ok(mut pending) = app.state::<PendingDeepLink>().0.lock() {
+        *pending = Some(url.to_string());
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        // serde_json::to_string on a &str produces a properly quoted-and-escaped JS
+        // string literal — the safe way to splice an arbitrary URL (OAuth `code`/
+        // `state` params included) into an eval'd script.
+        if let Ok(js_literal) = serde_json::to_string(url) {
+            let _ = window.eval(format!(
+                "window.dispatchEvent(new CustomEvent('companion-deep-link', {{ detail: {js_literal} }}));"
+            ));
+        }
+    }
+}
+
 fn main() {
     env_logger::init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .manage(PendingDeepLink::default())
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+
+            // Windows/Linux deep-link delivery when the app is ALREADY running: the OS
+            // launches a new instance with the URL as its one CLI arg, which
+            // single-instance intercepts and hands us here instead of actually
+            // starting a second process. Feed it to the deep-link plugin's own
+            // parser/validator (it checks the arg against the configured schemes
+            // and ignores anything that isn't a match) rather than re-implementing
+            // that match ourselves — doing so also makes it emit the SAME
+            // "deep-link://new-url" event our on_open_url listener below already
+            // handles, so this path and every other one converge on one place.
+            //
+            // The plugin's own cold-start scan (this app's FIRST launch, not a
+            // relaunch) already runs automatically inside tauri_plugin_deep_link's
+            // own init() against std::env::args() — nothing to do for that case here.
+            app.deep_link().handle_cli_arguments(args.iter());
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             let resource_dir = app.path().resource_dir()?;
             let data_dir = app.path().app_data_dir()?;
@@ -34,6 +102,17 @@ fn main() {
             app.manage(local_model::LocalModelHandles::default());
 
             tray::create_tray(app.handle())?;
+
+            // The one listener every deep-link delivery path (macOS/iOS's
+            // RunEvent::Opened, and both the plugin's automatic Windows/Linux
+            // cold-start argv scan and our own warm-start relaunch handling above)
+            // converges on — see dispatch_deep_link's doc comment.
+            let deep_link_handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                if let Some(url) = event.urls().first() {
+                    dispatch_deep_link(&deep_link_handle, url.as_str());
+                }
+            });
 
             // Kick off the stack in the background so the window can appear
             // immediately instead of blocking startup on `docker compose up`
@@ -82,6 +161,8 @@ fn main() {
             open_docker_downloads_command,
             read_desktop_logs_command,
             get_local_model_status_command,
+            open_external_url_command,
+            take_pending_deep_link_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Companion Memory desktop app");
@@ -168,6 +249,30 @@ fn open_docker_downloads_command(app: tauri::AppHandle) -> Result<(), String> {
     app.opener()
         .open_url("https://www.docker.com/products/docker-desktop/", None::<String>)
         .map_err(|e| e.to_string())
+}
+
+/// Open an arbitrary URL in the system's default browser. The one caller today is
+/// "Sign in with CI Portal" (see OidcButton.tsx): OAuth must run in a browser the
+/// user already trusts and may already be signed into, not this app's own webview.
+/// Restricted to http(s) so a compromised webview can't use this as a generic
+/// local-file/other-scheme open primitive.
+#[tauri::command]
+fn open_external_url_command(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("open_external_url_command only accepts http(s) URLs".to_string());
+    }
+
+    app.opener()
+        .open_url(url, None::<String>)
+        .map_err(|e| e.to_string())
+}
+
+/// Drain (return and clear) any deep-link URL that reached this process before the
+/// frontend had a listener up — see PendingDeepLink's doc comment for why this
+/// exists alongside the live `companion-deep-link` DOM event.
+#[tauri::command]
+fn take_pending_deep_link_command(state: tauri::State<'_, PendingDeepLink>) -> Option<String> {
+    state.0.lock().ok().and_then(|mut pending| pending.take())
 }
 
 #[tauri::command]
