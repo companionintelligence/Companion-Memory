@@ -200,6 +200,17 @@ export {
   mapBlueBubblesMessageToGraph,
 } from './datasources/bluebubbles';
 export { BlueBubblesApiClient, BLUEBUBBLES_PAGE_LIMIT, redactUrl } from './datasources/bluebubblesApiClient';
+// Shared mail policy for live Gmail/Outlook ETL. Leaf files, not the
+// datasources barrel — importing that barrel would register every parser.
+export {
+  headersFromGmailApi,
+  headersFromOutlookMessage,
+  isHumanCorrespondence,
+  liveMailDropReason,
+  mailIncludeBulkEnabled,
+} from './datasources/human_correspondence';
+export type { LiveMailDropSlug } from './datasources/human_correspondence';
+export { emailThreadId } from './datasources/email_thread';
 export type {
   BlueBubblesClientConfig,
   BlueBubblesHandle,
