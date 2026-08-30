@@ -58,7 +58,10 @@ function reverseMock(placeName: string | null, status = 'OK'): MockedResponse {
   };
 }
 
-function renderField(draft: PlaceDraft = emptyPlaceDraft(), mocks: MockedResponse[] = [reverseMock('66 Mint St')]) {
+function renderField(
+  draft: PlaceDraft = emptyPlaceDraft(),
+  mocks: MockedResponse[] = [reverseMock('66 Mint St')],
+) {
   const onChange = vi.fn();
 
   renderWithProviders(<CurrentLocationField value={draft} onChange={onChange} />, { mocks });

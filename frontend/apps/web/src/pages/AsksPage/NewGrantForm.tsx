@@ -77,8 +77,8 @@ export function NewGrantForm({ myAddress, busy = false, onCreate, onCancel }: Pr
       <div className="flex flex-col gap-1">
         <h3 className="text-sm font-medium">Let someone ask you</h3>
         <p className="text-muted-foreground text-xs">
-          A grant says who may ask, and what about. It does not answer anything on its own unless you
-          choose “Answers automatically”.
+          A grant says who may ask, and what about. It does not answer anything on its own unless you choose
+          “Answers automatically”.
         </p>
       </div>
 
@@ -88,9 +88,7 @@ export function NewGrantForm({ myAddress, busy = false, onCreate, onCancel }: Pr
             Your ask address — give this to someone so they can grant you back
           </span>
           <div className="flex flex-wrap items-center gap-2">
-            <code className="bg-muted min-w-0 flex-1 truncate rounded-md px-2 py-1 text-xs">
-              {myAddress}
-            </code>
+            <code className="bg-muted min-w-0 flex-1 truncate rounded-md px-2 py-1 text-xs">{myAddress}</code>
             <Button variant="outline" size="sm" onClick={copyAddress}>
               {copied ? 'Copied' : 'Copy'}
             </Button>
@@ -155,9 +153,7 @@ export function NewGrantForm({ myAddress, busy = false, onCreate, onCancel }: Pr
           ))}
         </div>
         {mode === 'auto' ? (
-          <p className="text-destructive text-xs">
-            Asks of this kind will be answered without you present.
-          </p>
+          <p className="text-destructive text-xs">Asks of this kind will be answered without you present.</p>
         ) : null}
       </div>
 

@@ -898,7 +898,10 @@ describe('PeoplePage', () => {
       mocks: mocks({
         candidates: [
           candidateEdge(
-            [mergePerson({ name: 'william' }), mergePerson({ id: DUPLICATE_GLOBAL_ID, name: 'William Broza' })],
+            [
+              mergePerson({ name: 'william' }),
+              mergePerson({ id: DUPLICATE_GLOBAL_ID, name: 'William Broza' }),
+            ],
             { evidence: clusterEvidence },
           ),
           candidateEdge(

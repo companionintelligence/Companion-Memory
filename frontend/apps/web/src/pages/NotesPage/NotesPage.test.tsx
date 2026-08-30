@@ -69,7 +69,10 @@ describe('NotesPage', () => {
     it('shows the shared ErrorState with a working retry when the query fails, not the empty state', async () => {
       renderWithProviders(<NotesPage />, {
         mocks: [
-          { request: { query: GET_NOTES, variables: { first: PAGE_SIZE } }, error: new Error('network down') },
+          {
+            request: { query: GET_NOTES, variables: { first: PAGE_SIZE } },
+            error: new Error('network down'),
+          },
           // Consumed only after the retry click.
           mockQuery(GET_NOTES, { first: PAGE_SIZE }, notesResult([makeNote(NOTE_A, 'Grocery list')])),
         ],

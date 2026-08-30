@@ -1,11 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  ASK_ARCHETYPES,
-  COMPOSER_SHAPES,
-  composeRecipients,
-  unreachablePeers,
-} from './composeRecipients';
+import { ASK_ARCHETYPES, COMPOSER_SHAPES, composeRecipients, unreachablePeers } from './composeRecipients';
 
 const EMPTY = { grants: [], inbox: [], outbox: [] };
 

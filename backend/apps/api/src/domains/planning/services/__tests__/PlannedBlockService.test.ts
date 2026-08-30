@@ -209,10 +209,7 @@ describe('PlannedBlockService', () => {
     const outcome = await service.scheduleTaskAt(CTX, OPEN_TASK.id, yesterday);
 
     expect(outcome.status).toBe('placed');
-    expect(eventService.create).toHaveBeenCalledWith(
-      CTX,
-      expect.objectContaining({ start_time: yesterday }),
-    );
+    expect(eventService.create).toHaveBeenCalledWith(CTX, expect.objectContaining({ start_time: yesterday }));
   });
 
   it('scheduleTaskAt MOVES an already-placed task instead of reporting a silent no-op', async () => {

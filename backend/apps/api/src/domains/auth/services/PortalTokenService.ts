@@ -137,10 +137,7 @@ export class PortalTokenService implements PortalTokenVerifier {
    * an existing CI-Server user, else the request is rejected (null). This keeps a
    * compromised or misconfigured sidecar from minting identities.
    */
-  private async resolveServiceAccountUser(
-    clientId: string,
-    onBehalfOfUserId: string,
-  ): Promise<User | null> {
+  private async resolveServiceAccountUser(clientId: string, onBehalfOfUserId: string): Promise<User | null> {
     const user = await this.userService.findById({ userId: SYSTEM_USER }, onBehalfOfUserId);
 
     if (!user) {

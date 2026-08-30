@@ -144,9 +144,7 @@ describe('Google My Activity datasource', () => {
       expect(items.length).toBe(4);
       // Verbs _youtube_activity.ts models are attributed to the youtube data
       // source instead; only the ones it doesn't (Dismissed shelf) keep Product.
-      expect(items.every((i) => i.dataSource === 'youtube' || i.metadata?.Product === 'YouTube')).toBe(
-        true,
-      );
+      expect(items.every((i) => i.dataSource === 'youtube' || i.metadata?.Product === 'YouTube')).toBe(true);
     });
 
     it('classifies "Watched" as watch, via the youtube data source, using the FIRST link (the video, not the channel)', async () => {

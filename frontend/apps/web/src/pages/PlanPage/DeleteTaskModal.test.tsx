@@ -92,7 +92,9 @@ function ListAndModal({
 describe('DeleteTaskModal', () => {
   it('asks for confirmation before deleting anything', () => {
     const onClose = vi.fn();
-    renderWithProviders(<DeleteTaskModal taskIds={['t1']} onClose={onClose} />, { mocks: [deleteMock('t1')] });
+    renderWithProviders(<DeleteTaskModal taskIds={['t1']} onClose={onClose} />, {
+      mocks: [deleteMock('t1')],
+    });
 
     expect(screen.getByText('Delete task')).toBeInTheDocument();
     expect(screen.getByText(/cannot be undone/i)).toBeInTheDocument();

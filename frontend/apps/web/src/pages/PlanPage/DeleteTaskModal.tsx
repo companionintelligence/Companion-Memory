@@ -100,7 +100,9 @@ export function DeleteTaskModal({ taskIds, onClose }: Props) {
       // Leave the dialog open on failure — closing it here would read as a
       // successful delete even though the task is still there.
       setError(
-        many ? 'Could not delete these tasks. Please try again.' : 'Could not delete this task. Please try again.',
+        many
+          ? 'Could not delete these tasks. Please try again.'
+          : 'Could not delete this task. Please try again.',
       );
     }
   };

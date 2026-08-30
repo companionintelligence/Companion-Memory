@@ -65,25 +65,24 @@ export function Marker({
     };
   }, []);
 
-  const eventHandlers = useMemo(
-    () => {
-      const clearPress = () => {
-        if (pressTimerRef.current != null) {
-          window.clearTimeout(pressTimerRef.current);
-          pressTimerRef.current = null;
-        }
-      };
+  const eventHandlers = useMemo(() => {
+    const clearPress = () => {
+      if (pressTimerRef.current != null) {
+        window.clearTimeout(pressTimerRef.current);
+        pressTimerRef.current = null;
+      }
+    };
 
-      const isCoarsePointer = (e: LeafletMouseEvent) => {
-        const orig = e.originalEvent as PointerEvent | TouchEvent | MouseEvent;
-        if ('pointerType' in orig && orig.pointerType === 'touch') {
-          return true;
-        }
+    const isCoarsePointer = (e: LeafletMouseEvent) => {
+      const orig = e.originalEvent as PointerEvent | TouchEvent | MouseEvent;
+      if ('pointerType' in orig && orig.pointerType === 'touch') {
+        return true;
+      }
 
-        return window.matchMedia?.('(pointer: coarse)').matches ?? false;
-      };
+      return window.matchMedia?.('(pointer: coarse)').matches ?? false;
+    };
 
-      return {
+    return {
       click: (e: LeafletMouseEvent) => {
         L.DomEvent.stopPropagation(e);
         if (pressFiredRef.current) {
@@ -127,10 +126,8 @@ export function Marker({
         clearPress();
         onMouseLeave?.(e);
       },
-      };
-    },
-    [onClick, onContextMenu, onMouseEnter, onMouseLeave],
-  );
+    };
+  }, [onClick, onContextMenu, onMouseEnter, onMouseLeave]);
 
   return <LeafletMarker zIndexOffset={400} {...markerProps} icon={icon} eventHandlers={eventHandlers} />;
 }

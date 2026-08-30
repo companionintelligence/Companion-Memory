@@ -109,40 +109,40 @@ export function ContentLibraryPage() {
 
   return (
     <PullToRefresh onRefresh={refetch}>
-    <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
-      <MemoryHubShell>
-        <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
-          {loading && contents.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Loading content…</p>
-          ) : error && contents.length === 0 ? (
-            // `error` was not destructured, so a failed query rendered the
-            // branch below with an empty array: a blank tile area under an
-            // InfiniteListFooter reading "0 of 0 loaded · end". That footer is
-            // the worst part — it is a positive statement that the library has
-            // been fully enumerated and holds nothing.
-            <ErrorState
-              title="Could not load your content"
-              description="Your files are still here — this device could not reach them just now."
-              onRetry={() => void refetch()}
-            />
-          ) : contents.length === 0 ? (
-            <EmptyState message="Nothing here yet. Content appears as your sources sync and files finish parsing." />
-          ) : (
-            <>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                {contents.map((content) => (
-                  <ContentTile key={content.id} content={content} onSelect={handleSelect} />
-                ))}
-              </div>
+      <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
+        <MemoryHubShell>
+          <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
+            {loading && contents.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Loading content…</p>
+            ) : error && contents.length === 0 ? (
+              // `error` was not destructured, so a failed query rendered the
+              // branch below with an empty array: a blank tile area under an
+              // InfiniteListFooter reading "0 of 0 loaded · end". That footer is
+              // the worst part — it is a positive statement that the library has
+              // been fully enumerated and holds nothing.
+              <ErrorState
+                title="Could not load your content"
+                description="Your files are still here — this device could not reach them just now."
+                onRetry={() => void refetch()}
+              />
+            ) : contents.length === 0 ? (
+              <EmptyState message="Nothing here yet. Content appears as your sources sync and files finish parsing." />
+            ) : (
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                  {contents.map((content) => (
+                    <ContentTile key={content.id} content={content} onSelect={handleSelect} />
+                  ))}
+                </div>
 
-              <InfiniteListFooter pagination={pagination} noun="content" />
-            </>
-          )}
+                <InfiniteListFooter pagination={pagination} noun="content" />
+              </>
+            )}
 
-          <ContentSheet contentId={selectedGlobalId} onClose={handleClose} onChanged={handleChanged} />
-        </div>
-      </MemoryHubShell>
-    </PageContent>
+            <ContentSheet contentId={selectedGlobalId} onClose={handleClose} onChanged={handleChanged} />
+          </div>
+        </MemoryHubShell>
+      </PageContent>
     </PullToRefresh>
   );
 }

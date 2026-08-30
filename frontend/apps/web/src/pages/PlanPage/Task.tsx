@@ -108,9 +108,7 @@ export function Task({
   const [pickingWhen, setPickingWhen] = useState(false);
   const [descOpen, setDescOpen] = useState(false);
   const suppressTap = useRef(false);
-  const gesture = useRef<{ pointerId: number; startX: number; startY: number; timer: number } | null>(
-    null,
-  );
+  const gesture = useRef<{ pointerId: number; startX: number; startY: number; timer: number } | null>(null);
   const priorityLabel = PRIORITY_LABELS[task.priority];
   const phone = isMobile === true;
   const canSelect = phone && Boolean(onLongPressSelect || onSelectToggle);
@@ -271,7 +269,9 @@ export function Task({
                 {task.title}
               </button>
             ) : (
-              <span className={`min-w-0 flex-1 truncate font-medium ${done ? 'text-muted-foreground line-through' : ''}`}>
+              <span
+                className={`min-w-0 flex-1 truncate font-medium ${done ? 'text-muted-foreground line-through' : ''}`}
+              >
                 {task.title}
               </span>
             )}
@@ -294,7 +294,9 @@ export function Task({
           </div>
 
           {task.description && (!phone || descOpen) ? (
-            <span className={cn('text-sm text-muted-foreground', phone ? 'whitespace-pre-wrap' : 'line-clamp-2')}>
+            <span
+              className={cn('text-sm text-muted-foreground', phone ? 'whitespace-pre-wrap' : 'line-clamp-2')}
+            >
               {task.description}
             </span>
           ) : null}

@@ -118,7 +118,8 @@ export function PlanPage() {
    * silently the MOST likely week to hit it on.
    */
   const scheduleStatusMessage: Record<string, string> = {
-    no_gap: 'No free slot in your working hours over the next week — try a specific day, or shorten the estimate.',
+    no_gap:
+      'No free slot in your working hours over the next week — try a specific day, or shorten the estimate.',
     skipped: 'That task can no longer be scheduled — it may already be done or removed.',
   };
 

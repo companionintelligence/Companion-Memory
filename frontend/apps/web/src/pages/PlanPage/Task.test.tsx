@@ -62,10 +62,7 @@ describe('Task actions', () => {
     const onAcceptProposed = vi.fn();
     const onAcceptAndSchedule = vi.fn();
 
-    renderTask(
-      { status: 'proposed' },
-      { onAcceptProposed, onDeclineProposed: vi.fn(), onAcceptAndSchedule },
-    );
+    renderTask({ status: 'proposed' }, { onAcceptProposed, onDeclineProposed: vi.fn(), onAcceptAndSchedule });
 
     fireEvent.click(screen.getByRole('button', { name: /^plan$/i }));
     expect(onAcceptProposed).toHaveBeenCalledWith('dGFzazoxMTE=');

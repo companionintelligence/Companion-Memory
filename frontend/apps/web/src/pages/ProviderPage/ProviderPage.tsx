@@ -65,7 +65,12 @@ export function ProviderPage() {
   const { toast } = useToast();
   const { t } = useTranslation();
 
-  const { data, loading: queryLoading, error: queryError, refetch } = useQuery(GET_PROVIDER, {
+  const {
+    data,
+    loading: queryLoading,
+    error: queryError,
+    refetch,
+  } = useQuery(GET_PROVIDER, {
     variables: {
       id: GlobalUID.encode('provider', id!),
     },

@@ -24,15 +24,9 @@ describe('formatNeighborKind', () => {
 
 describe('formatRelationshipPhrase', () => {
   it('reads mail from the page the user is on, not the raw enum', () => {
-    expect(
-      formatRelationshipPhrase('EMAILED', { focusIsSource: false }),
-    ).toBe('Emailed you');
-    expect(
-      formatRelationshipPhrase('EMAILED', { focusIsSource: true }),
-    ).toBe('You emailed');
-    expect(
-      formatRelationshipPhrase('RECEIVED_EMAIL_FROM', { focusIsSource: true }),
-    ).toBe('Emailed you');
+    expect(formatRelationshipPhrase('EMAILED', { focusIsSource: false })).toBe('Emailed you');
+    expect(formatRelationshipPhrase('EMAILED', { focusIsSource: true })).toBe('You emailed');
+    expect(formatRelationshipPhrase('RECEIVED_EMAIL_FROM', { focusIsSource: true })).toBe('Emailed you');
   });
 
   it('uses normalized_from when the live type was collapsed to a generic edge', () => {
@@ -45,9 +39,7 @@ describe('formatRelationshipPhrase', () => {
   });
 
   it('hides leftover associated-with edges that have no original type', () => {
-    expect(
-      formatRelationshipPhrase('ASSOCIATED_WITH', { focusIsSource: true }),
-    ).toBeNull();
+    expect(formatRelationshipPhrase('ASSOCIATED_WITH', { focusIsSource: true })).toBeNull();
   });
 
   it('falls back to a title-cased enum for types we have not curated', () => {

@@ -185,33 +185,34 @@ function PersonRow({ person, onOpen }: { person: PersonNode; onOpen: () => void 
         sourceId: person.id,
       })}
     >
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex w-full items-center gap-3 rounded-md border bg-card p-3 text-left transition hover:bg-accent"
-    >
-      {/* size="md" is 40px — the exact h-10 w-10 this rendered before
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex w-full items-center gap-3 rounded-md border bg-card p-3 text-left transition hover:bg-accent"
+      >
+        {/* size="md" is 40px — the exact h-10 w-10 this rendered before
           PersonAvatar existed. */}
-      <PersonAvatar name={person.name} avatarUrl={person.avatarUrl} size="md" />
+        <PersonAvatar name={person.name} avatarUrl={person.avatarUrl} size="md" />
 
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate font-medium">{person.name || 'Unnamed'}</span>
-          {person.isSelf && <Badge variant="secondary">You</Badge>}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-medium">{person.name || 'Unnamed'}</span>
+            {person.isSelf && <Badge variant="secondary">You</Badge>}
+          </div>
+
+          <div className="truncate text-sm text-muted-foreground">
+            {[emailText, phoneText, person.description].filter(Boolean).join(' · ') || '—'}
+          </div>
         </div>
 
-        <div className="truncate text-sm text-muted-foreground">
-          {[emailText, phoneText, person.description].filter(Boolean).join(' · ') || '—'}
+        <div className="hidden shrink-0 text-right text-sm text-muted-foreground sm:block">
+          <div>
+            {person.interactionStats.eventCount} events · {person.interactionStats.communicationCount}{' '}
+            messages
+          </div>
+          {lastSeen && <div>Last seen {lastSeen}</div>}
         </div>
-      </div>
-
-      <div className="hidden shrink-0 text-right text-sm text-muted-foreground sm:block">
-        <div>
-          {person.interactionStats.eventCount} events · {person.interactionStats.communicationCount} messages
-        </div>
-        {lastSeen && <div>Last seen {lastSeen}</div>}
-      </div>
-    </button>
+      </button>
     </ChatAbout>
   );
 }
@@ -403,113 +404,113 @@ export function PeoplePage() {
   } else {
     content = (
       <PullToRefresh onRefresh={refreshPeople}>
-      <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
-        <MemoryHubShell>
-          <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
-            <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-              <Input
-                placeholder="Search people and communications..."
-                value={searchQuery}
-                onChange={(e) => {
-                  const value = e.target.value;
+        <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
+          <MemoryHubShell>
+            <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
+              <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
+                <Input
+                  placeholder="Search people and communications..."
+                  value={searchQuery}
+                  onChange={(e) => {
+                    const value = e.target.value;
 
-                  setSearchParams(
-                    (params) => {
-                      if (value === '') {
-                        params.delete('q');
-                      } else {
-                        params.set('q', value);
-                      }
+                    setSearchParams(
+                      (params) => {
+                        if (value === '') {
+                          params.delete('q');
+                        } else {
+                          params.set('q', value);
+                        }
 
-                      return params;
-                    },
-                    { replace: true },
-                  );
-                  // New query, new cursor space — a stale failure must not gate it.
-                  pagination.reset();
-                }}
-                // A long placeholder next to the count on one row always has SOME
-                // width where it clips mid-word — a min-width guess just moves the
-                // threshold. Full-width below `sm` sidesteps that: the count drops
-                // to its own line instead of fighting the input for space.
-                className="max-w-xl w-full flex-1 sm:w-auto"
-              />
-              <div className="text-sm text-muted-foreground">{pagination.totalCount} people</div>
-            </div>
-
-            {candidatesError && (
-              <div className="text-sm text-muted-foreground">
-                Suggested merges are unavailable right now ({candidatesError.message}).
+                        return params;
+                      },
+                      { replace: true },
+                    );
+                    // New query, new cursor space — a stale failure must not gate it.
+                    pagination.reset();
+                  }}
+                  // A long placeholder next to the count on one row always has SOME
+                  // width where it clips mid-word — a min-width guess just moves the
+                  // threshold. Full-width below `sm` sidesteps that: the count drops
+                  // to its own line instead of fighting the input for space.
+                  className="max-w-xl w-full flex-1 sm:w-auto"
+                />
+                <div className="text-sm text-muted-foreground">{pagination.totalCount} people</div>
               </div>
-            )}
 
-            {mergeCandidates.length > 0 && (
-              <Card>
-                <Card.Header>
-                  <Card.Title className="flex items-center gap-2 text-base">
-                    <Merge className="h-4 w-4" />
-                    Suggested merges
-                    <Badge variant="secondary">{candidatesData?.mergeCandidates.totalCount ?? 0}</Badge>
-                  </Card.Title>
-                  <Card.Description>
-                    Name variants and uncertain matches. Same email or exact phone is folded
-                    automatically — what remains is a question, with what differs on each side.
-                  </Card.Description>
-                </Card.Header>
-                <Card.Content className="flex flex-col gap-3">
-                  {mergeGroups.map((group) =>
-                    group.type === 'cluster' ? (
-                      <MergeClusterCard
-                        key={`cluster:${group.anchor.id}:${group.token}`}
-                        token={group.token}
-                        anchor={group.anchor}
-                        members={group.members}
-                        onMerged={onMerged}
-                      />
-                    ) : (
-                      <MergeCandidateCard
-                        key={group.candidate.id}
-                        candidate={group.candidate}
-                        onMerged={onMerged}
-                      />
-                    ),
-                  )}
-
-                  {candidatesPageInfo?.hasNextPage && (
-                    <div className="flex justify-center">
-                      <Button variant="outline" size="sm" onClick={loadMoreCandidates}>
-                        Load more suggestions
-                      </Button>
-                    </div>
-                  )}
-
-                  <div className="text-center text-xs text-muted-foreground">
-                    {mergeCandidates.length} of {candidatesData?.mergeCandidates.totalCount ?? 0} shown
-                  </div>
-                </Card.Content>
-              </Card>
-            )}
-
-            {people.length === 0 ? (
-              <EmptyState message="No people found" />
-            ) : (
-              <>
-                <div className="flex flex-col gap-2">
-                  {people.map((person) => (
-                    <PersonRow
-                      key={person.id}
-                      person={person}
-                      onOpen={() => navigate(`/people/${GlobalUID.parse('person', person.id)}`)}
-                    />
-                  ))}
+              {candidatesError && (
+                <div className="text-sm text-muted-foreground">
+                  Suggested merges are unavailable right now ({candidatesError.message}).
                 </div>
+              )}
 
-                <InfiniteListFooter pagination={pagination} noun="people" />
-              </>
-            )}
-          </div>
-        </MemoryHubShell>
-      </PageContent>
+              {mergeCandidates.length > 0 && (
+                <Card>
+                  <Card.Header>
+                    <Card.Title className="flex items-center gap-2 text-base">
+                      <Merge className="h-4 w-4" />
+                      Suggested merges
+                      <Badge variant="secondary">{candidatesData?.mergeCandidates.totalCount ?? 0}</Badge>
+                    </Card.Title>
+                    <Card.Description>
+                      Name variants and uncertain matches. Same email or exact phone is folded automatically —
+                      what remains is a question, with what differs on each side.
+                    </Card.Description>
+                  </Card.Header>
+                  <Card.Content className="flex flex-col gap-3">
+                    {mergeGroups.map((group) =>
+                      group.type === 'cluster' ? (
+                        <MergeClusterCard
+                          key={`cluster:${group.anchor.id}:${group.token}`}
+                          token={group.token}
+                          anchor={group.anchor}
+                          members={group.members}
+                          onMerged={onMerged}
+                        />
+                      ) : (
+                        <MergeCandidateCard
+                          key={group.candidate.id}
+                          candidate={group.candidate}
+                          onMerged={onMerged}
+                        />
+                      ),
+                    )}
+
+                    {candidatesPageInfo?.hasNextPage && (
+                      <div className="flex justify-center">
+                        <Button variant="outline" size="sm" onClick={loadMoreCandidates}>
+                          Load more suggestions
+                        </Button>
+                      </div>
+                    )}
+
+                    <div className="text-center text-xs text-muted-foreground">
+                      {mergeCandidates.length} of {candidatesData?.mergeCandidates.totalCount ?? 0} shown
+                    </div>
+                  </Card.Content>
+                </Card>
+              )}
+
+              {people.length === 0 ? (
+                <EmptyState message="No people found" />
+              ) : (
+                <>
+                  <div className="flex flex-col gap-2">
+                    {people.map((person) => (
+                      <PersonRow
+                        key={person.id}
+                        person={person}
+                        onOpen={() => navigate(`/people/${GlobalUID.parse('person', person.id)}`)}
+                      />
+                    ))}
+                  </div>
+
+                  <InfiniteListFooter pagination={pagination} noun="people" />
+                </>
+              )}
+            </div>
+          </MemoryHubShell>
+        </PageContent>
       </PullToRefresh>
     );
   }

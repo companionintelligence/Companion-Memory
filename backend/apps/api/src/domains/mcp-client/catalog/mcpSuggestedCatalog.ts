@@ -174,7 +174,9 @@ const HIGH_RISK_CATALOG: McpCatalogEntry[] = [
 ];
 
 /** Re-checked server-side by `McpServerConfigService.create()` — the UI gate is not the enforcement. */
-export const HIGH_RISK_CATALOG_SLUGS: ReadonlySet<string> = new Set(HIGH_RISK_CATALOG.map((entry) => entry.slug));
+export const HIGH_RISK_CATALOG_SLUGS: ReadonlySet<string> = new Set(
+  HIGH_RISK_CATALOG.map((entry) => entry.slug),
+);
 
 export function getMcpSuggestedCatalog(): { normal: McpCatalogEntry[]; highRisk: McpCatalogEntry[] } {
   return { normal: NORMAL_CATALOG, highRisk: HIGH_RISK_CATALOG };

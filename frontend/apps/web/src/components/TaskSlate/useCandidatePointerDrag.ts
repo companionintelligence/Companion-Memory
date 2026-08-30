@@ -28,81 +28,79 @@ type Gesture = {
 export function useCandidatePointerDrag(task: { id: string; title: string }, enabled: boolean) {
   const gesture = useRef<Gesture | null>(null);
 
-  const attachFollow = useCallback(
-    (target: HTMLElement, pointerId: number) => {
-      const onMove = (moveEvent: PointerEvent) => {
-        if (moveEvent.pointerId !== pointerId) {
-          return;
-        }
+  const attachFollow = useCallback((target: HTMLElement, pointerId: number) => {
+    const onMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) {
+        return;
+      }
 
-        const current = gesture.current;
+      const current = gesture.current;
 
-        if (!current) {
-          return;
-        }
+      if (!current) {
+        return;
+      }
 
-        if (!current.armed) {
-          if (Math.hypot(moveEvent.clientX - current.startX, moveEvent.clientY - current.startY) > CANCEL_PX) {
-            if (current.timer != null) {
-              window.clearTimeout(current.timer);
-            }
-
-            gesture.current = null;
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-            window.removeEventListener('pointercancel', onUp);
+      if (!current.armed) {
+        if (Math.hypot(moveEvent.clientX - current.startX, moveEvent.clientY - current.startY) > CANCEL_PX) {
+          if (current.timer != null) {
+            window.clearTimeout(current.timer);
           }
 
-          return;
+          gesture.current = null;
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          window.removeEventListener('pointercancel', onUp);
         }
 
-        if (moveEvent.cancelable) {
-          moveEvent.preventDefault();
-        }
+        return;
+      }
 
-        moveSchedulePointerDrag(moveEvent.clientX, moveEvent.clientY);
-      };
+      if (moveEvent.cancelable) {
+        moveEvent.preventDefault();
+      }
 
-      const onUp = (upEvent: PointerEvent) => {
-        if (upEvent.pointerId !== pointerId) {
-          return;
-        }
+      moveSchedulePointerDrag(moveEvent.clientX, moveEvent.clientY);
+    };
 
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        window.removeEventListener('pointercancel', onUp);
+    const onUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== pointerId) {
+        return;
+      }
 
-        const current = gesture.current;
-        gesture.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
 
-        if (!current) {
-          return;
-        }
+      const current = gesture.current;
+      gesture.current = null;
 
-        if (current.timer != null) {
-          window.clearTimeout(current.timer);
-        }
+      if (!current) {
+        return;
+      }
 
-        if (!current.armed) {
-          return;
-        }
+      if (current.timer != null) {
+        window.clearTimeout(current.timer);
+      }
 
-        target.releasePointerCapture?.(pointerId);
+      if (!current.armed) {
+        return;
+      }
 
-        if (upEvent.type === 'pointercancel') {
-          cancelSchedulePointerDrag();
-          return;
-        }
+      target.releasePointerCapture?.(pointerId);
 
-        endSchedulePointerDrag(upEvent.clientX, upEvent.clientY);
-      };
+      if (upEvent.type === 'pointercancel') {
+        cancelSchedulePointerDrag();
 
-      window.addEventListener('pointermove', onMove, { passive: false });
-      window.addEventListener('pointerup', onUp);
-      window.addEventListener('pointercancel', onUp);
-    },
-    [],
-  );
+        return;
+      }
+
+      endSchedulePointerDrag(upEvent.clientX, upEvent.clientY);
+    };
+
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }, []);
 
   const onPointerDown = useCallback(
     (event: React.PointerEvent<HTMLElement>) => {

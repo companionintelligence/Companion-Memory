@@ -213,7 +213,11 @@ export function SecondaryNavigation() {
             label={destination.label}
             end={destination.end}
             badgeCount={
-              destination.badge === 'feed' ? feedBadgeCount : destination.badge === 'plan' ? planBadgeCount : 0
+              destination.badge === 'feed'
+                ? feedBadgeCount
+                : destination.badge === 'plan'
+                  ? planBadgeCount
+                  : 0
             }
           >
             <Icon className="h-6 w-6 shrink-0" strokeWidth={1.25} />

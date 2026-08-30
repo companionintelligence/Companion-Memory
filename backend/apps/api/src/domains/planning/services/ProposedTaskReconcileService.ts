@@ -40,9 +40,7 @@ export class ProposedTaskReconcileService {
   }
 
   /** Owner-local today plus noon, used when a scan stamps a new proposed row. */
-  async windowForToday(
-    context: UserServiceContext,
-  ): Promise<{ scheduledFor: string; dueAt: Date }> {
+  async windowForToday(context: UserServiceContext): Promise<{ scheduledFor: string; dueAt: Date }> {
     const scheduledFor = await this.planningTime.today(context);
 
     return {
@@ -78,8 +76,7 @@ export class ProposedTaskReconcileService {
       }
 
       const stillRelevant =
-        titles.has(normalizeTitle(task.title)) ||
-        (task.sourceRef != null && refs.has(task.sourceRef));
+        titles.has(normalizeTitle(task.title)) || (task.sourceRef != null && refs.has(task.sourceRef));
 
       if (stillRelevant) {
         await this.taskService.update(context, task.id, await this.redatePatch(context, task, today));
@@ -124,11 +121,7 @@ export class ProposedTaskReconcileService {
     return false;
   }
 
-  private async redatePatch(
-    context: UserServiceContext,
-    task: Task,
-    today: string,
-  ): Promise<UpdateTaskDto> {
+  private async redatePatch(context: UserServiceContext, task: Task, today: string): Promise<UpdateTaskDto> {
     if (task.dueAt == null) {
       return {
         scheduledFor: today,

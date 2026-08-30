@@ -272,7 +272,14 @@ describe('PlanPage', () => {
         {
           request: { query: SCHEDULE_TASK, variables: { id: 'dGFzazoxMTE=' } },
           result: {
-            data: { scheduleTask: { __typename: 'ScheduleTaskPayload', success: false, status: 'no_gap', task: null } },
+            data: {
+              scheduleTask: {
+                __typename: 'ScheduleTaskPayload',
+                success: false,
+                status: 'no_gap',
+                task: null,
+              },
+            },
           },
         },
         tasksMock([node()]),
@@ -281,9 +288,7 @@ describe('PlanPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /^schedule$/i }));
 
-    await waitFor(() =>
-      expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/no free slot/i)),
-    );
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/no free slot/i)));
   });
 
   it('says nothing when Schedule actually succeeds', async () => {
@@ -309,7 +314,9 @@ describe('PlanPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /^schedule$/i }));
 
-    await waitFor(() => expect(screen.queryByRole('button', { name: /^schedule$/i })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /^schedule$/i })).not.toBeInTheDocument(),
+    );
     expect(toastError).not.toHaveBeenCalled();
   });
 
@@ -491,28 +498,30 @@ describe('PlanPage mobile tabs', () => {
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: /^proposed 0$/i }), { button: 0 });
 
-    expect(await screen.findByRole('tab', { name: /^proposed 0$/i })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('tab', { name: /^proposed 0$/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     expect(screen.queryByText('Overdue thing')).not.toBeInTheDocument();
   });
 
   it('keeps edit and delete off the title row, and opens edit from the card body', async () => {
     setViewport(true);
 
-    renderWithProviders(
-      <PlanPage />,
-      {
-        mocks: [
-          tasksMock([
-            node({
-              title: 'Write the migration',
-              description: 'A long note that should not open edit by itself.',
-            }),
-          ]),
-        ],
-      },
-    );
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([
+          node({
+            title: 'Write the migration',
+            description: 'A long note that should not open edit by itself.',
+          }),
+        ]),
+      ],
+    });
 
-    expect(await screen.findByRole('button', { name: /more actions for write the migration/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: /more actions for write the migration/i }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /edit write the migration/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /delete write the migration/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/a long note/i)).not.toBeInTheDocument();
@@ -528,17 +537,9 @@ describe('PlanPage mobile tabs', () => {
   it('enters selection on a long-press and bulk-deletes with confirmation', async () => {
     setViewport(true);
 
-    renderWithProviders(
-      <PlanPage />,
-      {
-        mocks: [
-          tasksMock([
-            node({ id: 'a', title: 'First thing' }),
-            node({ id: 'b', title: 'Second thing' }),
-          ]),
-        ],
-      },
-    );
+    renderWithProviders(<PlanPage />, {
+      mocks: [tasksMock([node({ id: 'a', title: 'First thing' }), node({ id: 'b', title: 'Second thing' })])],
+    });
 
     const first = await screen.findByRole('button', { name: /^first thing$/i });
     vi.useFakeTimers();

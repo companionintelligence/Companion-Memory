@@ -65,7 +65,12 @@ describe('TaskSlate — Plan backlog', () => {
     renderWithProviders(
       <TaskSlate
         sections={backlog([
-          task({ id: 's1', title: 'Already placed', scheduledFor: '2026-08-24', dueAt: '2026-08-24T17:00:00.000Z' }),
+          task({
+            id: 's1',
+            title: 'Already placed',
+            scheduledFor: '2026-08-24',
+            dueAt: '2026-08-24T17:00:00.000Z',
+          }),
           task({ id: 'd1', title: 'Finished', status: 'done' }),
         ])}
         {...NOOP}
@@ -145,12 +150,7 @@ describe('TaskSlate — Plan backlog', () => {
 
 describe('TaskSlate — the header hint', () => {
   it('tells you what to do with the cards that are there', () => {
-    renderWithProviders(
-      <TaskSlate
-        sections={backlog([task({ status: 'proposed' })])}
-        {...NOOP}
-      />,
-    );
+    renderWithProviders(<TaskSlate sections={backlog([task({ status: 'proposed' })])} {...NOOP} />);
 
     expect(screen.getByText('drag one onto a day above')).toBeInTheDocument();
   });
@@ -212,9 +212,7 @@ describe('TaskSlate — phone tabs', () => {
   it('tells a phone to drag the handle rather than hold the card', async () => {
     setViewport(true);
 
-    renderWithProviders(
-      <TaskSlate sections={backlog([task({ status: 'proposed' })])} {...NOOP} />,
-    );
+    renderWithProviders(<TaskSlate sections={backlog([task({ status: 'proposed' })])} {...NOOP} />);
 
     expect(await screen.findByText('drag the handle onto the day above')).toBeInTheDocument();
   });
@@ -224,7 +222,10 @@ describe('TaskSlate — phone tabs', () => {
     vi.useFakeTimers();
 
     renderWithProviders(
-      <TaskSlate sections={backlog([task({ id: 'task-9', title: 'Call Mum', status: 'proposed' })])} {...NOOP} />,
+      <TaskSlate
+        sections={backlog([task({ id: 'task-9', title: 'Call Mum', status: 'proposed' })])}
+        {...NOOP}
+      />,
     );
 
     const card = screen.getByText('Call Mum').closest('li') as HTMLElement;
@@ -256,7 +257,10 @@ describe('TaskSlate — phone tabs', () => {
     setViewport(true);
 
     renderWithProviders(
-      <TaskSlate sections={backlog([task({ id: 'task-9', title: 'Call Mum', status: 'proposed' })])} {...NOOP} />,
+      <TaskSlate
+        sections={backlog([task({ id: 'task-9', title: 'Call Mum', status: 'proposed' })])}
+        {...NOOP}
+      />,
     );
 
     const handle = await screen.findByRole('button', { name: /drag call mum onto the calendar/i });
@@ -337,9 +341,7 @@ describe('TaskSlateDrawer — the phone drawer', () => {
   });
 
   it('says the plan failed rather than that there is nothing waiting', async () => {
-    renderWithProviders(
-      <TaskSlateDrawer open onOpenChange={() => {}} sections={[]} loading={false} error />,
-    );
+    renderWithProviders(<TaskSlateDrawer open onOpenChange={() => {}} sections={[]} loading={false} error />);
 
     expect(await screen.findByText(/Could not load your plan/)).toBeInTheDocument();
     expect(screen.queryByText(/Nothing in Proposed or Unscheduled/)).not.toBeInTheDocument();

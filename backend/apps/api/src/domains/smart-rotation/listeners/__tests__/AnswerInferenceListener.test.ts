@@ -1979,7 +1979,8 @@ describe('AnswerInferenceListener.inferQuestionAnswer — the forced-choice comm
           message: {
             content: structuredResponse({
               support: 'stated',
-              answer: "I am somewhere between cat and dog, though I currently take care of my neighbor's dogs.",
+              answer:
+                "I am somewhere between cat and dog, though I currently take care of my neighbor's dogs.",
               confidence: 0.8,
             }),
           },
@@ -1997,7 +1998,9 @@ describe('AnswerInferenceListener.inferQuestionAnswer — the forced-choice comm
       questionService: {
         findById: jest
           .fn()
-          .mockResolvedValue(makeQuestion('q-1', 'Do you prefer the beach or the mountains?', 'multiple_choice')),
+          .mockResolvedValue(
+            makeQuestion('q-1', 'Do you prefer the beach or the mountains?', 'multiple_choice'),
+          ),
       },
       ollamaService: {
         chat: jest.fn().mockResolvedValue({

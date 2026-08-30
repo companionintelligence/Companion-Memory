@@ -155,10 +155,7 @@ export function usePlanTasks(onPlaced?: () => void) {
 
   // "Today" is the viewer's local day, not the server's. Recomputed per render
   // rather than memoised on [] so an open tab rolls over at local midnight.
-  const sections = useMemo(
-    () => groupIntoSections(nodes, localDateOf(new Date())),
-    [nodes],
-  );
+  const sections = useMemo(() => groupIntoSections(nodes, localDateOf(new Date())), [nodes]);
 
   const backlog = useMemo(
     () => sections.filter((section): section is Section<PlanTask> => BACKLOG_KEYS.has(section.key)),

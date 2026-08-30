@@ -35,10 +35,7 @@ export function SelfPage() {
             `replace`, losing the destination before the flags ever arrive.
             Same wait App's own catch-all does, and the reason `loading`
             exists (see useFeatures). */}
-        <Route
-          path="*"
-          element={featuresLoading ? <LoadingPage /> : <Navigate to="/self" replace />}
-        />
+        <Route path="*" element={featuresLoading ? <LoadingPage /> : <Navigate to="/self" replace />} />
       </Routes>
     </div>
   );

@@ -173,11 +173,15 @@ export class PlannedBlockService {
       // `findActiveForTask` and here) or a cross-user id — both genuinely
       // "nothing to place", so falling back to the old already_placed status
       // is honest rather than claiming a move that did not happen.
-      return moved ? { status: 'placed', event: moved, task } : { status: 'already_placed', event: existing, task };
+      return moved
+        ? { status: 'placed', event: moved, task }
+        : { status: 'already_placed', event: existing, task };
     }
 
     const minutes = estimatedMinutes ?? task.estimatedMinutes ?? undefined;
-    const placedEnd = end ?? new Date(start.getTime() + (minutes && minutes > 0 ? minutes : DEFAULT_ESTIMATED_MINUTES) * 60_000);
+    const placedEnd =
+      end ??
+      new Date(start.getTime() + (minutes && minutes > 0 ? minutes : DEFAULT_ESTIMATED_MINUTES) * 60_000);
 
     return this.placeAt(context, task, start, placedEnd, estimatedMinutes ?? task.estimatedMinutes);
   }

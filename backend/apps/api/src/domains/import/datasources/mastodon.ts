@@ -116,7 +116,6 @@ function isMastodonActor(parsed: unknown, outboxId: unknown): boolean {
   return typeof outboxId !== 'string' || a.outbox === outboxId;
 }
 
-
 export class MastodonFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const root = entry.fullPath || entry.fsRoot || entry.filename;

@@ -43,7 +43,10 @@ export class ForageItemType {
   @Field(() => String)
   label!: string;
 
-  @Field(() => String, { nullable: true, description: 'Index the fact came from: person, place, event, search, graph, derived' })
+  @Field(() => String, {
+    nullable: true,
+    description: 'Index the fact came from: person, place, event, search, graph, derived',
+  })
   source!: string | null;
 
   @Field(() => Boolean)
@@ -90,8 +93,7 @@ export class ForageInterestType {
 }
 
 @ObjectType({
-  description:
-    'CI Forager trial: discrete active inference over a memory lake. Not the occupancy histogram.',
+  description: 'CI Forager trial: discrete active inference over a memory lake. Not the occupancy histogram.',
 })
 export class ForageTrialType {
   @Field(() => String)

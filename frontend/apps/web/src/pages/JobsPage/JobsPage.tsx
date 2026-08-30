@@ -256,9 +256,7 @@ function SummaryCard({
           aria-busy={refreshing || undefined}
           className={phone ? 'shrink-0' : 'w-full md:w-auto'}
         >
-          <RefreshCcw
-            className={cn(phone ? 'h-4 w-4' : 'mr-2 h-4 w-4', refreshing && 'animate-spin')}
-          />
+          <RefreshCcw className={cn(phone ? 'h-4 w-4' : 'mr-2 h-4 w-4', refreshing && 'animate-spin')} />
           {phone ? (
             <span className="sr-only">{refreshing ? 'Refreshing' : 'Refresh'}</span>
           ) : refreshing ? (

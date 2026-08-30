@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
-import { createHookContext, fetchJson, getApiBaseUrl, isNativePlatform, subscribeApiBaseUrl } from '@ci/common';
+import {
+  createHookContext,
+  fetchJson,
+  getApiBaseUrl,
+  isNativePlatform,
+  subscribeApiBaseUrl,
+} from '@ci/common';
 
 import { useAuth } from '@/hooks';
 

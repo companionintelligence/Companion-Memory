@@ -88,7 +88,10 @@ export function ChatAboutSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <Sheet.Content side="bottom" className="z-[1100] rounded-t-xl pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <Sheet.Content
+        side="bottom"
+        className="z-[1100] rounded-t-xl pb-[max(1rem,env(safe-area-inset-bottom))]"
+      >
         <Sheet.Header>
           <Sheet.Title>{t('CHAT_WITH_AGENT_ABOUT', { title: context.title })}</Sheet.Title>
           <Sheet.Description className="sr-only">{t('CHAT_WITH_AGENT_OPEN_MENU')}</Sheet.Description>

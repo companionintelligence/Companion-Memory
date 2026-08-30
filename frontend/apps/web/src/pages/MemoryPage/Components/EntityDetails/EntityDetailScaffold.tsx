@@ -461,9 +461,7 @@ export function EntityDetailScaffold({
         <div className="flex items-start justify-between gap-2">
           <Sheet.Title className="text-xl leading-tight tracking-tight">{title}</Sheet.Title>
           <div className="flex shrink-0 items-center gap-1">
-            {!readOnly && (
-              <ChatWithAgentMenu context={chatContext} className="-mt-1 size-8 shrink-0" />
-            )}
+            {!readOnly && <ChatWithAgentMenu context={chatContext} className="-mt-1 size-8 shrink-0" />}
             {canEnterEditMode && !editing && (
               <IconButton
                 variant="ghost"
