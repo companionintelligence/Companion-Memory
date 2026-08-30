@@ -23,16 +23,34 @@ function makeMessage(overrides: Partial<CommunicationEntity> = {}): Communicatio
   } as unknown as CommunicationEntity;
 }
 
-function makeCommunicationRepository(rows: CommunicationEntity[]) {
+/**
+ * The service issues TWO query builders now: the anchor query
+ * (`select(MAX(comm.time)).getRawOne()`) that positions the scan window on the
+ * corpus, and the candidate query (`getMany()`). One shared spy object serves
+ * both, so `andWhere` calls from either are visible on the same mock.
+ *
+ * `anchor` defaults to the newest row's time — i.e. "the corpus is what these
+ * rows say it is" — which is what makes the historical-import case the DEFAULT
+ * shape in these tests rather than a special one.
+ */
+function makeCommunicationRepository(rows: CommunicationEntity[], anchor?: Date | null) {
+  const newest =
+    anchor === undefined
+      ? rows.reduce<Date | null>((max, row) => (max == null || row.time > max ? row.time : max), null)
+      : anchor;
+
   const qb = {
+    select: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
     limit: jest.fn().mockReturnThis(),
+    getRawOne: jest.fn(async () => ({ newest })),
     getMany: jest.fn(async () => rows),
   };
 
-  return { createQueryBuilder: jest.fn(() => qb) };
+  return { createQueryBuilder: jest.fn(() => qb), qb };
 }
 
 function makeOllamaService(items: Array<Record<string, unknown>>) {
@@ -181,32 +199,67 @@ describe('InboxScanService stale proposed sweep', () => {
 });
 
 describe('InboxScanService scan window and LLM budget', () => {
-  it('looks back 30 days, not 3', () => {
-    // Was 3 days. A personal-data export is historical by construction — its
-    // newest message is whenever the export was taken, not "now" — so a
-    // 3-day window swept zero rows on every run against a real 432k-message
-    // import (the most recent communication was over two months old). 30
-    // days still bounds this to a "recent inbox" triage, not a full-history
-    // scan, while actually having a chance of finding something.
+  it('keeps the window 30 days wide', () => {
+    // This is the WIDTH, and it was never the bug — widening it from 3 days to
+    // 30 was the previous attempt at the dead-scan fix and the 30-day window
+    // was also empty on the live appliance. Position is the fix (see the next
+    // test); 30 days just keeps this a "recent inbox" triage rather than a
+    // full-history scan, which is extract_graph's job.
     expect(LOOKBACK_MS).toBe(30 * 24 * 60 * 60 * 1000);
   });
 
-  it('passes a `since` to the query that is ~30 days ago, not ~3', async () => {
-    const qb = {
-      where: jest.fn().mockReturnThis(),
-      andWhere: jest.fn().mockReturnThis(),
-      orderBy: jest.fn().mockReturnThis(),
-      limit: jest.fn().mockReturnThis(),
-      getMany: jest.fn(async () => []),
-    };
-    const communicationRepository = { createQueryBuilder: jest.fn(() => qb) };
+  it('anchors `since` to the newest message in the corpus, not to the wall clock', async () => {
+    // THE regression test for the dead scan. On the live appliance the newest
+    // inbound message is 2026-06-16 and the exact predicate this service issued
+    // (`time >= now() - 30d`) returned 0 rows, so ~48 runs a day short-circuited
+    // before the model was ever called.
+    //
+    // Note this also fails the tempting `GREATEST(now() - LOOKBACK,
+    // max(time) - LOOKBACK)` formulation, which is algebraically
+    // `GREATEST(now(), max(time)) - LOOKBACK` and therefore just `now() -
+    // LOOKBACK` for any historical import — a "fix" that changes nothing.
+    const corpusNewest = new Date('2026-06-16T18:24:00.000Z');
+    const repository = makeCommunicationRepository([makeMessage({ time: corpusNewest })]);
 
     const service = new InboxScanService(
-      communicationRepository as never,
+      repository as never,
       {
         findAll: jest.fn(async () => []),
-        findBySourceRef: jest.fn(),
-        findByTitleMatch: jest.fn(),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      makeOllamaService([]),
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    const sinceCall = repository.qb.andWhere.mock.calls.find((call) => call[0] === 'comm.time >= :since');
+    expect(sinceCall).toBeDefined();
+    const since = (sinceCall![1] as { since: Date }).since;
+
+    expect(since.getTime()).toBe(corpusNewest.getTime() - LOOKBACK_MS);
+    // And emphatically not the old behaviour.
+    expect(Math.abs(since.getTime() - (Date.now() - LOOKBACK_MS))).toBeGreaterThan(24 * 60 * 60 * 1000);
+  });
+
+  it('caps the anchor at now() so a future-dated row cannot drag the window forward', async () => {
+    // Import corpora have shipped garbage timestamps before. The cap lives in
+    // the anchor QUERY (`time <= :now`), which both ignores the bad row and
+    // avoids the `LEAST(now(), max(time))` form, where one 2099-dated row
+    // collapses the anchor to now() and silently restores the broken behaviour.
+    const repository = makeCommunicationRepository([makeMessage()]);
+
+    const service = new InboxScanService(
+      repository as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
         create: jest.fn(),
       } as unknown as TaskService,
       makeOllamaService([]),
@@ -218,17 +271,121 @@ describe('InboxScanService scan window and LLM budget', () => {
 
     const before = Date.now();
     await service.runForUser(USER_ID);
-    const after = Date.now();
 
-    const sinceCall = qb.andWhere.mock.calls.find((call) => call[0] === 'comm.time >= :since');
-    expect(sinceCall).toBeDefined();
-    const since = (sinceCall![1] as { since: Date }).since;
-    const ageMs = before - since.getTime();
+    const nowCall = repository.qb.andWhere.mock.calls.find((call) => call[0] === 'comm.time <= :now');
+    expect(nowCall).toBeDefined();
+    expect((nowCall![1] as { now: Date }).now.getTime()).toBeGreaterThanOrEqual(before);
+    // The candidate query deliberately does NOT carry that cap — filtering
+    // future-dated rows out of the candidate list is a separate behaviour
+    // change and is not made here.
+    expect(repository.qb.andWhere.mock.calls.filter((call) => call[0] === 'comm.time <= :now')).toHaveLength(
+      1,
+    );
+  });
 
-    // Bracket around 30 days (not exactly 3, and not so far off that this
-    // would pass with e.g. a stray extra/missing zero in the constant).
-    expect(ageMs).toBeGreaterThan(29 * 24 * 60 * 60 * 1000);
-    expect(ageMs).toBeLessThan(31 * 24 * 60 * 60 * 1000 + (after - before));
+  it('never runs the candidate query when the user has no inbound messages at all', async () => {
+    const repository = makeCommunicationRepository([], null);
+    const proposedReconcile = makeProposedReconcile();
+    const ollamaService = makeOllamaService([{ title: 'Should not run' }]);
+
+    const service = new InboxScanService(
+      repository as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(),
+        findByTitleMatch: jest.fn(),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      proposedReconcile,
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    expect(repository.qb.getMany).not.toHaveBeenCalled();
+    expect(ollamaService.chat).not.toHaveBeenCalled();
+    // Same sweep as the pre-existing "no recent messages" path.
+    expect(proposedReconcile.reconcileStaleProposed).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID }),
+      expect.objectContaining({ relevantTitles: [] }),
+    );
+  });
+
+  it('bounds generation and keeps the model warm across the 30-minute cadence', async () => {
+    // Without these the 60s budget is not one the call can meet: a bounded
+    // `items` array does not bound generation, and a 30-minute cadence exceeds
+    // Ollama's 5-minute eviction window so the model reloads inside the budget.
+    const ollamaService = makeOllamaService([]);
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    const options = (ollamaService.chat as jest.Mock).mock.calls[0][2] as {
+      maxOutputTokens?: number;
+      keepAlive?: string;
+      format?: {
+        properties: { items: { maxItems?: number; items: { properties: Record<string, unknown> } } };
+      };
+    };
+
+    expect(options.maxOutputTokens).toBeGreaterThan(0);
+    expect(options.keepAlive).toBe('1h');
+    // The grammar the schema compiles to is what actually stops the model.
+    expect(options.format?.properties.items.maxItems).toBe(12);
+    expect(options.format?.properties.items.items.properties.title).toEqual(
+      expect.objectContaining({ maxLength: expect.any(Number) }),
+    );
+  });
+
+  it('treats an output-cap truncation as a model failure and does not sweep', async () => {
+    const proposedReconcile = makeProposedReconcile();
+    const ollamaService = {
+      chat: jest.fn(async () => ({
+        done_reason: 'length',
+        message: { role: 'assistant', content: '{"items":[{"title":"trunca' },
+      })),
+    } as unknown as OllamaService;
+    const logger = makeLogger();
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      proposedReconcile,
+      logger,
+    );
+
+    await service.runForUser(USER_ID);
+
+    expect(proposedReconcile.reconcileStaleProposed).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Inbox scan hit its output cap; raise SCAN_MAX_OUTPUT_TOKENS',
+      expect.anything(),
+    );
   });
 
   it('allows the LLM at least 60s before aborting, not 20', () => {
@@ -238,6 +395,348 @@ describe('InboxScanService scan window and LLM budget', () => {
     // ever responded — 20s was not a safety margin, it was a guarantee of
     // failure on exactly the hardware most likely to need a generous one.
     expect(SCAN_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000);
+  });
+});
+
+describe('InboxScanService idempotency over an unchanging corpus', () => {
+  // Anchoring the window turns this job from "0 rows, no-op" into one that
+  // actually asks the model every 30 minutes. On a static import the candidate
+  // set is CONSTANT, and nothing is claimed when the model answers `{"items":[]}`
+  // — so without a structural gate the identical prompt is re-sent 48 times a
+  // day, forever. These tests are the proof that it is not.
+
+  it('asks the model once, then skips while the candidate set is unchanged', async () => {
+    const proposedReconcile = makeProposedReconcile();
+    const ollamaService = makeOllamaService([]);
+    const create = jest.fn();
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => [
+          { title: 'Existing proposal', status: 'proposed', sourceKind: 'inbox', metadata: {} },
+        ]),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create,
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      proposedReconcile,
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+    await service.runForUser(USER_ID);
+    await service.runForUser(USER_ID);
+
+    expect(ollamaService.chat).toHaveBeenCalledTimes(1);
+    expect(create).not.toHaveBeenCalled();
+    // Both runs still sweep — and with the LIVE proposal titles, never with []
+    // (which would mass-archive the user's own proposals every 30 minutes).
+    expect(proposedReconcile.reconcileStaleProposed).toHaveBeenCalledTimes(3);
+    for (const call of (proposedReconcile.reconcileStaleProposed as jest.Mock).mock.calls) {
+      expect(call[1]).toEqual(expect.objectContaining({ relevantTitles: ['Existing proposal'] }));
+    }
+  });
+
+  it('asks once more after a claim shrinks the candidate set, then stops', async () => {
+    // Model claims message 1 on run 1 -> `fresh` shrinks -> a new fingerprint
+    // earns exactly one more ask -> run 3 sees a stable set and skips.
+    const ollamaService = makeOllamaService([{ title: 'Pay the invoice', confidence: 0.9, sourceIndex: 1 }]);
+    const tasks: Array<Record<string, unknown>> = [];
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage({ id: 'comm-1' }), makeMessage({ id: 'comm-2' })]) as never,
+      {
+        findAll: jest.fn(async () => tasks),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(async (_ctx: unknown, dto: Record<string, unknown>) => {
+          const task = { id: `task-${tasks.length}`, ...dto };
+          tasks.push(task);
+
+          return task;
+        }),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn(async () => 'review') } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+    expect(tasks[0]?.metadata).toEqual(expect.objectContaining({ sourceCommunicationId: 'comm-1' }));
+
+    await service.runForUser(USER_ID);
+    await service.runForUser(USER_ID);
+
+    expect(ollamaService.chat).toHaveBeenCalledTimes(2);
+    // One card total, not one per run.
+    expect(tasks).toHaveLength(1);
+  });
+
+  it('does not arm the gate when the model fails, so an outage cannot silence the scan', async () => {
+    let attempts = 0;
+    const ollamaService = {
+      chat: jest.fn(async () => {
+        attempts += 1;
+
+        if (attempts === 1) {
+          throw new Error('model timeout');
+        }
+
+        return { message: { role: 'assistant', content: '{"items":[]}' } };
+      }),
+    } as unknown as OllamaService;
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+    await service.runForUser(USER_ID);
+
+    expect(ollamaService.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-arms when a genuinely new message arrives', async () => {
+    const rows = [makeMessage({ id: 'comm-1' })];
+    const qb = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn(async () => ({ newest: rows[rows.length - 1].time })),
+      getMany: jest.fn(async () => rows),
+    };
+    const ollamaService = makeOllamaService([]);
+
+    const service = new InboxScanService(
+      { createQueryBuilder: jest.fn(() => qb) } as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+    await service.runForUser(USER_ID);
+    expect(ollamaService.chat).toHaveBeenCalledTimes(1);
+
+    rows.push(makeMessage({ id: 'comm-2', time: new Date('2026-08-20T10:00:00.000Z') }));
+    await service.runForUser(USER_ID);
+
+    expect(ollamaService.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it('gates per user, not globally', async () => {
+    const ollamaService = makeOllamaService([]);
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+    await service.runForUser('user-2');
+
+    expect(ollamaService.chat).toHaveBeenCalledTimes(2);
+  });
+
+  it('orders candidates by a UNIQUE key so tied timestamps cannot reshuffle the set', async () => {
+    // `ORDER BY time DESC` alone is a PARTIAL order. Postgres may return tied
+    // rows in any order and the order it picks depends on the plan, so both the
+    // fingerprint's input AND — where a tie group straddles LIMIT 30 — the
+    // candidate set itself vary run to run on an unchanging corpus. Either one
+    // defeats the gate and puts the job back to asking the model every 30
+    // minutes forever. The live window has three timestamp ties inside its top
+    // 30 and the inbound corpus has tie groups up to 17 rows wide, so this is
+    // reachable, not theoretical. `id` is the surrogate uuid PK, so (time, id)
+    // is a total order.
+    const repo = makeCommunicationRepository([makeMessage()]);
+
+    const service = new InboxScanService(
+      repo as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      makeOllamaService([]),
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+
+    expect(repo.qb.orderBy).toHaveBeenCalledWith('comm.time', 'DESC');
+    expect(repo.qb.addOrderBy).toHaveBeenCalledWith('comm.id', 'DESC');
+  });
+
+  it('fingerprints the candidate SET, not the row order it arrived in', async () => {
+    // Belt and braces for the tiebreaker above, guarding the other half of the
+    // same defect: if the two runs see the same rows in a different order —
+    // a plan flip, a HOT update, a later edit to the query's ORDER BY — an
+    // order-sensitive hash misses the gate and the model is asked again. Feed
+    // the identical set back reversed and assert the gate still holds.
+    const a = makeMessage({ id: 'comm-a' });
+    const b = makeMessage({ id: 'comm-b' });
+    const orderings = [
+      [a, b],
+      [b, a],
+    ];
+    let run = 0;
+
+    const qb = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      limit: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn(async () => ({ newest: a.time })),
+      getMany: jest.fn(async () => orderings[Math.min(run++, orderings.length - 1)]),
+    };
+    const ollamaService = makeOllamaService([]);
+
+    const service = new InboxScanService(
+      { createQueryBuilder: jest.fn(() => qb) } as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create: jest.fn(),
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn() } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+    await service.runForUser(USER_ID);
+
+    expect(ollamaService.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not arm the gate when the answer is discarded by a later failure', async () => {
+    // The gate must be armed by APPLYING an answer, not by receiving one.
+    // `sweepStale` and `windowForToday` are unguarded DB round trips, and
+    // neither runForUser nor PlanningJobsListener.onInboxScan catches, so a
+    // transient error there rejects the pg-boss job and it retries IN THIS
+    // PROCESS. Arming before that work meant the retry matched the gate,
+    // skipped the model, created nothing — and, the corpus being static and the
+    // fingerprint therefore constant, went on creating nothing forever. That is
+    // the very "planning proposes nothing" symptom, reintroduced by its own fix.
+    const proposedReconcile = makeProposedReconcile();
+    let sweeps = 0;
+    (proposedReconcile.reconcileStaleProposed as jest.Mock).mockImplementation(async () => {
+      sweeps += 1;
+
+      if (sweeps === 1) {
+        throw new Error('pool exhausted during a bulk import');
+      }
+
+      return { redated: 0, archived: 0 };
+    });
+
+    const ollamaService = makeOllamaService([{ title: 'Pay the invoice', confidence: 0.9 }]);
+    const create = jest.fn(async (_ctx: unknown, dto: Record<string, unknown>) => ({ id: 'task-1', ...dto }));
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create,
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn(async () => 'auto') } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn(async () => ({ status: 'skipped' })) } as unknown as PlannedBlockService,
+      proposedReconcile,
+      makeLogger(),
+    );
+
+    // Run 1 gets a real answer, then dies in the sweep before applying it.
+    await expect(service.runForUser(USER_ID)).rejects.toThrow('pool exhausted');
+    expect(create).not.toHaveBeenCalled();
+
+    // The retry must ask again and actually create the task the model already
+    // produced once.
+    await service.runForUser(USER_ID);
+
+    expect(ollamaService.chat).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('still arms after a run that created nothing, so a stable answer is asked once', async () => {
+    // The mirror of the test above, and the reason its fix is "arm after the
+    // loop" rather than "arm only when something was created". A model that
+    // answers `{"items":[]}`, or a personalization policy that skips every
+    // item, is a COMPLETE run over an unchanged corpus — re-asking it 48 times
+    // a day is the unbounded loop the gate exists to prevent.
+    const ollamaService = makeOllamaService([{ title: 'Pay the invoice', confidence: 0.9 }]);
+    const create = jest.fn();
+
+    const service = new InboxScanService(
+      makeCommunicationRepository([makeMessage()]) as never,
+      {
+        findAll: jest.fn(async () => []),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create,
+      } as unknown as TaskService,
+      ollamaService,
+      { decideAction: jest.fn(async () => 'skip') } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    await service.runForUser(USER_ID);
+    await service.runForUser(USER_ID);
+    await service.runForUser(USER_ID);
+
+    expect(ollamaService.chat).toHaveBeenCalledTimes(1);
+    expect(create).not.toHaveBeenCalled();
   });
 });
 
