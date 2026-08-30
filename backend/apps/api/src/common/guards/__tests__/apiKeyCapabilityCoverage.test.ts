@@ -11,6 +11,7 @@ import { FilesController } from '../../../domains/files/controllers/FilesControl
 import { BulkIngestController } from '../../../domains/ingest/controllers/BulkIngestController';
 import { McpController } from '../../../domains/mcp/controllers/McpController';
 import { PersonaIntelligenceController } from '../../../domains/persona/controllers/PersonaIntelligenceController';
+import { PendingActionsController } from '../../../domains/tools/controllers/PendingActionsController';
 
 /**
  * The invariant that makes read-only mean something.
@@ -33,6 +34,7 @@ const SCOPED_CONTROLLERS = [
   // would see these as unscoped and skip the capability assertion entirely.
   FilesController,
   BulkIngestController,
+  PendingActionsController,
 ];
 
 /** Every own method on a controller prototype (route handlers and helpers alike). */
