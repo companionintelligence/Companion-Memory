@@ -27,6 +27,24 @@ const GENERATED_QUESTION_JSON_SCHEMA: Record<string, unknown> = {
 /** Minimum gap between LLM-authored feed questions for one user. */
 const LLM_QUESTION_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * This call was previously unbounded — no signal, no timeout — so a hung or
+ * slow-loading model call blocked its caller (SmartRotationListener) for as
+ * long as the underlying fetch took to fail on its own, rather than failing
+ * fast and being retried. Same fix, same 60s budget, as
+ * AnswerInferenceListener.INFERENCE_TIMEOUT_MS in the same domain — see that
+ * constant for the full contention story. Stays on {@link PROMPT_MODEL}
+ * deliberately: this generates the actual question text a person reads on
+ * their feed, so it is a bounds-only fix, not a model change.
+ */
+const QUESTION_GENERATION_TIMEOUT_MS = 60_000;
+
+/** Output cap (Ollama `options.num_predict`) — one short question, generous headroom. */
+const QUESTION_GENERATION_MAX_OUTPUT_TOKENS = 300;
+
+/** Keep the model resident (Ollama `keep_alive`) — same PROMPT_MODEL as chat, so this warms it rather than contending. */
+const QUESTION_GENERATION_KEEP_ALIVE = '1h';
+
 @Injectable()
 export class ContextGapQuestionService {
   constructor(
@@ -67,11 +85,17 @@ export class ContextGapQuestionService {
     const serviceContext = { userId } as UserServiceContext;
 
     let parsed: z.infer<typeof GENERATED_QUESTION_SCHEMA>;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), QUESTION_GENERATION_TIMEOUT_MS);
+
     try {
       const response = await this.ollamaService.chat(llmContext, [{ role: 'user', content: prompt }], {
         model: PROMPT_MODEL,
         enableTools: false,
         format: GENERATED_QUESTION_JSON_SCHEMA,
+        signal: controller.signal,
+        maxOutputTokens: QUESTION_GENERATION_MAX_OUTPUT_TOKENS,
+        keepAlive: QUESTION_GENERATION_KEEP_ALIVE,
       });
 
       parsed = GENERATED_QUESTION_SCHEMA.parse(JSON.parse(response.message.content));
@@ -82,6 +106,8 @@ export class ContextGapQuestionService {
       });
 
       return false;
+    } finally {
+      clearTimeout(timer);
     }
 
     const question = await this.questionService.create(

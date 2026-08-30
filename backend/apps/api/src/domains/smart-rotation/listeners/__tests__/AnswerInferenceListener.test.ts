@@ -357,6 +357,26 @@ describe('AnswerInferenceListener.inferQuestionAnswer — confidence floor', () 
     });
   });
 
+  it('bounds the inference call — signal, output cap, keep_alive — without changing the model', async () => {
+    // This call used to be issued with none of these, so a hung generation
+    // held its job (and the single-slot LLM_QUEUE behind it) indefinitely.
+    // The model stays PROMPT_MODEL deliberately — this is a bounds-only fix.
+    const { listener, ollamaService } = buildListener({});
+
+    await listener.inferQuestionAnswer({ ownerId: 'user-1', questionId: 'q-1' } as Payload);
+
+    const [, , options] = (ollamaService.chat as jest.Mock).mock.calls[0] as [
+      unknown,
+      unknown,
+      { signal?: AbortSignal; maxOutputTokens?: number; keepAlive?: string | number; model?: string },
+    ];
+
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(options.signal?.aborted).toBe(false);
+    expect(options.maxOutputTokens).toBeGreaterThan(0);
+    expect(options.keepAlive).toBeTruthy();
+  });
+
   it('states the confidence scale to the model in the system prompt', async () => {
     const { listener, ollamaService } = buildListener({});
 

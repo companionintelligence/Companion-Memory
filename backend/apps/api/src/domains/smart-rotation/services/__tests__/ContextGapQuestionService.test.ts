@@ -157,6 +157,28 @@ describe('ContextGapQuestionService.tryGenerateAndEnqueue', () => {
     expect(messages[0].content).toContain('Target category (lowest coverage): General');
   });
 
+  it('bounds the generation call — signal, output cap, keep_alive — without changing the model', async () => {
+    // Previously issued with none of these, so a hung generation blocked its
+    // caller (SmartRotationListener) for as long as the fetch took to fail on
+    // its own. The model stays PROMPT_MODEL deliberately — this is a
+    // bounds-only fix, since the output is the actual question text a person
+    // reads on their feed.
+    const { service, ollamaService } = buildService({});
+
+    await service.tryGenerateAndEnqueue('user-1');
+
+    const [, , options] = (ollamaService.chat as jest.Mock).mock.calls[0] as [
+      unknown,
+      unknown,
+      { signal?: AbortSignal; maxOutputTokens?: number; keepAlive?: string | number },
+    ];
+
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(options.signal?.aborted).toBe(false);
+    expect(options.maxOutputTokens).toBeGreaterThan(0);
+    expect(options.keepAlive).toBeTruthy();
+  });
+
   it('does not create a question when the LLM returns malformed JSON', async () => {
     const { service, questionService } = buildService({
       ollamaService: { chat: jest.fn().mockResolvedValue({ message: { content: 'not valid json at all' } }) },

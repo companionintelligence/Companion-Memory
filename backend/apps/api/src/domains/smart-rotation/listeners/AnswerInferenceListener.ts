@@ -40,6 +40,39 @@ const RELATED_ANSWER_LIMIT = 10;
 const RECENT_ANSWER_FALLBACK = 5;
 
 /**
+ * This call was previously unbounded — no signal, no timeout — so a hung or
+ * slow-loading model held its job (and the single-slot LLM_QUEUE behind it)
+ * indefinitely, up to pg-boss's own 900s `expireInSeconds`. Observed on a real
+ * appliance as `infer.question.answer` jobs dead-lettering with a raw "fetch
+ * failed" and no useful diagnosis, under the SAME contention pattern documented
+ * on `TodoScanService.SCAN_TIMEOUT_MS`: a request that cannot be cancelled
+ * holds its model slot regardless of what killed the caller, so retries queue
+ * behind their own predecessors' orphaned generations instead of behind
+ * nothing.
+ *
+ * 60s matches the other planning-domain budgets. Unlike those, this call
+ * stays on {@link PROMPT_MODEL} rather than moving to the utility tier — see
+ * that constant's use below. This is a bounds-only fix.
+ */
+const INFERENCE_TIMEOUT_MS = 60_000;
+
+/**
+ * Output cap (Ollama `options.num_predict`). The schema's `answer` is
+ * documented as "ONE short first-person sentence at most" and `rationale` as
+ * "one line" — generous headroom over a legitimate response, sized only to
+ * stop runaway generation, not to shape a real one.
+ */
+const INFERENCE_MAX_OUTPUT_TOKENS = 800;
+
+/**
+ * Keep the model resident across the run (Ollama `keep_alive`). Answer
+ * inference fires per-question on the same single-slot LLM_QUEUE as chat and
+ * title generation, so an hour keeps it warm across that traffic rather than
+ * reloading it inside this call's own budget.
+ */
+const INFERENCE_KEEP_ALIVE = '1h';
+
+/**
  * Seed hits to pull from the user's OWN indexed memory for the question.
  *
  * Deliberately small. This is the whole corpus — communications, events,
@@ -306,13 +339,25 @@ ${evidence.block}`
       },
     ];
 
-    const llmResponse = await this.ollamaService.chat(serviceContext, ragThread, {
-      model: PROMPT_MODEL,
-      // The schema — not the bare 'json' string — is what makes the confidence
-      // and rationale a contract rather than a request. See
-      // INFERRED_ANSWER_JSON_SCHEMA.
-      format: INFERRED_ANSWER_JSON_SCHEMA,
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), INFERENCE_TIMEOUT_MS);
+
+    let llmResponse;
+
+    try {
+      llmResponse = await this.ollamaService.chat(serviceContext, ragThread, {
+        model: PROMPT_MODEL,
+        // The schema — not the bare 'json' string — is what makes the confidence
+        // and rationale a contract rather than a request. See
+        // INFERRED_ANSWER_JSON_SCHEMA.
+        format: INFERRED_ANSWER_JSON_SCHEMA,
+        signal: controller.signal,
+        maxOutputTokens: INFERENCE_MAX_OUTPUT_TOKENS,
+        keepAlive: INFERENCE_KEEP_ALIVE,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const rawContent = llmResponse.message.content ?? '';
     const inferred: InferredAnswer | null = parseInferredAnswer(rawContent);
