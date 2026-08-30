@@ -25,7 +25,7 @@ import {
 } from '@ci/domains/asks';
 import { EventEntity } from '@ci/domains/memory';
 
-import { computeFreeBusy, summarizeAvailability, type FreeBusy } from '../availability';
+import { coarsenFreeBusy, computeFreeBusy, summarizeAvailability, type FreeBusy } from '../availability';
 import { PeerAskCorrelationEntity } from '../entities/PeerAskCorrelationEntity';
 import { type PeerLink } from '../entities/PeerLinkEntity';
 import { type BusyInterval, type PeerAskBody, type PeerAskResponse, peerAskPending } from '../protocol';
@@ -735,7 +735,12 @@ export function toWireAnswer(stored: AskAnswer): NonNullable<PeerAskResponse['an
  * is spelled out here in the same shape and the same order, and it degrades the
  * same way — each rung strictly removes what the one above it revealed:
  *
- *   full / redacted — the busy and free intervals, as computed
+ *   full            — the busy and free intervals, as computed
+ *   redacted        — free slots only, coarsened to a half-hour grid; the busy
+ *                     intervals are dropped entirely. Where the `trusted` tier
+ *                     lands, and where this used to return `full`'s answer
+ *                     verbatim — see {@link coarsenFreeBusy} for the defect and
+ *                     what `redacted` means for a calendar.
  *   summary         — the templated sentence only (slot count + longest gap),
  *                     no boundaries. This is where the tier defaults land for
  *                     the `peer` tier.
@@ -763,13 +768,30 @@ export function clampAvailability(
 
   switch (ceiling) {
     case 'full':
-    case 'redacted':
       return {
         summary: summarizeAvailability(freeBusy, who),
         busy: freeBusy.busy,
         free: freeBusy.free,
         disclosedCount: slots,
       };
+    case 'redacted': {
+      // Coarsened FIRST, then summarized from the coarsened set — the same
+      // ordering rule the docstring states above. Summarizing the original and
+      // returning the coarsened arrays would put a count in the sentence that
+      // the arrays contradict, which is how a clamp leaks the thing it claims
+      // to withhold.
+      const coarse = coarsenFreeBusy(freeBusy);
+
+      return {
+        summary: summarizeAvailability(coarse, who),
+        busy: coarse.busy,
+        free: coarse.free,
+        // NOT `slots`. Quantization drops slots too short to survive the grid,
+        // and the audit records the magnitude that actually crossed.
+        disclosedCount: coarse.free.length,
+      };
+    }
+
     case 'summary':
       // The sentence carries a slot count and a duration but no instants, which
       // is the same trade `summary` makes elsewhere: magnitude, not content. So
