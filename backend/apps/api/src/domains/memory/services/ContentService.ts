@@ -2,7 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   Brackets,
+  IsNull,
   Repository,
+  type FindOptionsWhere,
   type ObjectLiteral,
   type SelectQueryBuilder,
   type WhereExpressionBuilder,
@@ -140,6 +142,25 @@ export class ContentService {
     });
   }
 
+  /**
+   * The provenance-triple lookup shared by the find-before-insert check and
+   * the race-loss fallback in {@link create} — mirrors
+   * EventService.createOne's sourceWhere / CommunicationService's.
+   */
+  private sourceWhereFor(
+    context: UserServiceContext,
+    item: Pick<CreateContentDto, 'source_type' | 'source_system' | 'source_id'>,
+  ): FindOptionsWhere<ContentEntity> | null {
+    return item.source_type && item.source_id
+      ? {
+          userId: context.userId,
+          sourceType: item.source_type,
+          sourceSystem: item.source_system ?? IsNull(),
+          sourceId: item.source_id,
+        }
+      : null;
+  }
+
   async create(
     context: UserServiceContext,
     data: CreateContentDto | CreateContentDto[],
@@ -156,33 +177,60 @@ export class ContentService {
     // TODO: Some of these can fail, we need to return partial success here?
     return Promise.all(
       dataArray.map(async (item) => {
+        // Idempotency: re-sending an existing (source_type, source_system,
+        // source_id) triple must return the existing row instead of hitting
+        // content_source_triple_uniq's unhandled 23505 — this per-row path
+        // (GitHub/Reddit ETL transforms, MemoryController) has no ON CONFLICT
+        // handling of its own, unlike createMany's set-based upsert.
+        const sourceWhere = this.sourceWhereFor(context, item);
+        if (sourceWhere) {
+          const existing = await this.contentRepository.findOne({ where: sourceWhere });
+          if (existing) {
+            return this.composeOneExisting(existing);
+          }
+        }
+
         const id = item.id ?? uuidv7();
 
-        const contentResult = await this.contentRepository.manager.transaction(async (manager) => {
-          await manager.getRepository(ContentBaseEntity).save(
-            this.aggregate.createBaseRow(manager, {
-              id,
-              userId: context.userId,
+        let contentResult: ContentEntity;
+        try {
+          contentResult = await this.contentRepository.manager.transaction(async (manager) => {
+            await manager.getRepository(ContentBaseEntity).save(
+              this.aggregate.createBaseRow(manager, {
+                id,
+                userId: context.userId,
+                name: item.title ?? null,
+                description: null,
+              }),
+            );
+
+            const detail = this.toDetailFields(item, id, context, item.event);
+            const saved = await manager.getRepository(ContentEntity).save(detail);
+
+            await this.graphDeltaWriter.entityCreated({
+              entityId: id,
+              entityType: 'Content',
               name: item.title ?? null,
-              description: null,
-            }),
-          );
+              ownerUserId: context.userId,
+              changeSource: 'ContentService.create',
+              changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+              manager,
+            });
 
-          const detail = this.toDetailFields(item, id, context, item.event);
-          const saved = await manager.getRepository(ContentEntity).save(detail);
-
-          await this.graphDeltaWriter.entityCreated({
-            entityId: id,
-            entityType: 'Content',
-            name: item.title ?? null,
-            ownerUserId: context.userId,
-            changeSource: 'ContentService.create',
-            changedByUserId: typeof context.userId === 'string' ? context.userId : null,
-            manager,
+            return saved;
           });
+        } catch (err) {
+          // Lost a race to a concurrent insert of the same triple — fetch and
+          // return the winner rather than surfacing the raw 23505.
+          if (sourceWhere && (err as { code?: string })?.code === '23505') {
+            const existing = await this.contentRepository.findOne({ where: sourceWhere });
+            if (existing) {
+              return this.composeOneExisting(existing);
+            }
+          }
 
-          return saved;
-        });
+          throw err;
+        }
 
         if (emitCreated) {
           await this.eventService.send(ContentCreatedEvent, {
@@ -196,6 +244,13 @@ export class ContentService {
         });
       }),
     );
+  }
+
+  /** Composes one existing detail row's egress Content, for the dedup-hit paths in {@link create}. */
+  private async composeOneExisting(entity: ContentEntity): Promise<Content> {
+    const [content] = await this.composeMany([entity]);
+
+    return content;
   }
 
   /**

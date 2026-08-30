@@ -57,6 +57,8 @@ export interface CreateEventDto {
   time_source?: string;
   /** How much of `start_time` is meaningful — `TIME_PRECISIONS` (…|`unknown`). */
   time_precision?: string;
+  /** When the capture source recorded this event, distinct from `start_time` (when it occurred). */
+  observed_at?: Date;
   location_name?: string;
   location_entity_id?: string;
   location_coordinates?: Point;

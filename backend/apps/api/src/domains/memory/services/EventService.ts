@@ -241,6 +241,10 @@ export class EventService {
       toCreate.timePrecision = item.time_precision;
     }
 
+    if (item.observed_at) {
+      toCreate.observedAt = item.observed_at;
+    }
+
     if (item.source_system) {
       toCreate.sourceSystem = item.source_system;
     }

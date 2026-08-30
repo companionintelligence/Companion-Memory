@@ -59,375 +59,396 @@ export class GitHubEventsTransformService {
         continue;
       }
 
-      // This search is the legacy-row guard; the real idempotency is the full
-      // (source_type, source_system, source_id) triple every create below now
-      // carries — without source_type, EventService.createOne skipped its
-      // find-or-create and events_source_triple_uniq treated the rows as
-      // NULL-distinct, so this racy pre-check was all that prevented replays
-      // from duplicating.
-      const existingEvent = await this.eventService.search(
-        { userId },
-        {
-          sourceSystem: 'github_events',
-          sourceId: event.id.toString(),
-        },
-      );
-
-      switch (event.type) {
-        case 'CommitCommentEvent': {
-          const comment = (event as GithubCommitCommentEvent).payload.comment;
-          const contentExternalId = `${comment.commit_id}:${comment.id}`;
-          const existingContent = await this.contentService.search(
-            { userId },
-            { type: 'github_comment', external_id: contentExternalId },
-          );
-          if (existingContent.length === 0) {
-            await this.contentService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                type: 'github_comment',
-                title: `Commented on commit ${comment.commit_id.slice(0, 8)} in repo ${event.repo.name}`,
-                text: comment.body,
-                url: comment.html_url,
-                external_id: contentExternalId,
-                external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-                // content_source_triple_uniq backstops the racy
-                // search-then-create above.
-                source_type: 'ETL',
-                source_system: 'github',
-                source_id: `commit_comment:${contentExternalId}`,
-              },
-            );
-          }
-
-          if (existingEvent.length === 0) {
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: 'github_comment',
-                source_id: event.id.toString(),
-                start_time: new Date(event.created_at),
-                title: `Commented on commit in repo ${event.repo.name}`,
-                description: comment.body,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-        }
-
-        case 'CreateEvent': {
-          const thisEvent = event as GithubCreateEvent;
-          if (thisEvent.payload.ref_type === 'branch' && existingEvent.length === 0) {
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: 'github_branch_creation',
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `Created branch ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
-                description: thisEvent.payload.description,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          } else if (thisEvent.payload.ref_type === 'tag' && existingEvent.length === 0) {
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: 'github_tag_creation',
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `Created tag ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
-                description: thisEvent.payload.description,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          } else if (thisEvent.payload.ref_type === 'repository' && existingEvent.length === 0) {
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: 'github_repository_creation',
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `Created repository ${thisEvent.repo.name}`,
-                description: thisEvent.payload.description,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-        }
-
-        case 'DeleteEvent': {
-          const thisEvent = event as GithubDeleteEvent;
-          if (thisEvent.payload.ref_type === 'branch' && existingEvent.length === 0) {
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: 'github_branch_deletion',
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `Deleted branch ${thisEvent.payload.ref}`,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          } else if (thisEvent.payload.ref_type === 'tag' && existingEvent.length === 0) {
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: 'github_tag_deletion',
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `Deleted tag ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-        }
-
-        case 'DiscussionEvent':
-          if (existingEvent.length === 0) {
-            const thisEvent = event as GithubDiscussionEvent;
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: 'github_discussion_creation',
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `Created discussion  ${thisEvent.payload.discussion.title}`,
-                description: thisEvent.payload.discussion.body_text,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-
-        case 'ForkEvent':
-          if (existingEvent.length === 0) {
-            const thisEvent = event as GithubForkEvent;
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: 'github_repo_fork',
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `Forked repo  ${thisEvent.payload.forkee.full_name}`,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-
-        case 'IssueCommentEvent': {
-          const thisEvent = event as GithubIssueCommentEvent;
-          // Scoped by type: the comment id is a bare number, and an unscoped
-          // external_id search can hit another provider's numeric id (a Steam
-          // appid, say) — a false "already exists" that silently drops the row.
-          const existingContent = await this.contentService.search(
-            { userId },
-            { type: 'github_comment', external_id: thisEvent.payload.comment.id.toString() },
-          );
-          if (existingContent.length === 0) {
-            await this.contentService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                type: 'github_comment',
-                title: `Commented on issue ${thisEvent.payload.issue.number} in repo ${thisEvent.repo.name}`,
-                text: thisEvent.payload.comment.body,
-                url: thisEvent.payload.comment.html_url,
-                external_id: thisEvent.payload.comment.id.toString(),
-                external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-                // content_source_triple_uniq backstops the racy
-                // search-then-create above. The 'issue_comment:' prefix keeps
-                // the bare numeric id from colliding inside 'github' too.
-                source_type: 'ETL',
-                source_system: 'github',
-                source_id: `issue_comment:${thisEvent.payload.comment.id.toString()}`,
-              },
-            );
-          }
-
-          if (existingEvent.length === 0) {
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: 'github_comment',
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `Commented on issue ${thisEvent.payload.issue.number} in repo ${thisEvent.repo.name}`,
-                description: thisEvent.payload.comment.body,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-        }
-
-        case 'IssuesEvent':
-          if (existingEvent.length === 0) {
-            const thisEvent = event as GithubIssueEvent;
-            const actionCapitalized =
-              String(thisEvent.payload.action).charAt(0).toUpperCase() +
-              String(thisEvent.payload.action).slice(1);
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: `github_issue_${thisEvent.payload.action}`,
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `${actionCapitalized} issue ${thisEvent.payload.issue.number} in repo ${thisEvent.repo.name}`,
-                description: thisEvent.payload.issue.body,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-
-        case 'PullRequestEvent':
-          if (existingEvent.length === 0) {
-            const thisEvent = event as GithubPullRequestEvent;
-            const actionCapitalized =
-              String(thisEvent.payload.action).charAt(0).toUpperCase() +
-              String(thisEvent.payload.action).slice(1);
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: `github_pull_request_${thisEvent.payload.action}`,
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.payload.pull_request.updated_at),
-                title: `${actionCapitalized} pull request #${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
-                description: thisEvent.payload.pull_request.title,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-
-        case 'PullRequestReviewEvent':
-          if (existingEvent.length === 0) {
-            const thisEvent = event as GithubPullRequestReviewEvent;
-            const actionCapitalized =
-              String(thisEvent.payload.action).charAt(0).toUpperCase() +
-              String(thisEvent.payload.action).slice(1);
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: `github_pull_request_review_${thisEvent.payload.action}`,
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `${actionCapitalized} pull request review for ${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
-                description: thisEvent.payload.review.body,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-
-        case 'PullRequestReviewCommentEvent':
-          if (existingEvent.length === 0) {
-            const thisEvent = event as GithubPullRequestReviewCommentEvent;
-            const actionCapitalized =
-              String(thisEvent.payload.action).charAt(0).toUpperCase() +
-              String(thisEvent.payload.action).slice(1);
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: `github_pull_request_review_comment_${thisEvent.payload.action}`,
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `${actionCapitalized} pull request review comment for ${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
-                description: thisEvent.payload.comment.body,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-
-        case 'PushEvent': {
-          const thisEvent = event as GithubPushEvent;
-          if (existingEvent.length === 0) {
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: `github_push`,
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `Pushed commits to branch ${thisEvent.payload.ref.replace('refs/heads/', '')} in repo ${thisEvent.repo.name}`,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-        }
-
-        case 'ReleaseEvent':
-          if (existingEvent.length === 0) {
-            const thisEvent = event as GithubReleaseEvent;
-            const actionCapitalized =
-              String(thisEvent.payload.action).charAt(0).toUpperCase() +
-              String(thisEvent.payload.action).slice(1);
-            await this.eventService.create(
-              { userId },
-              {
-                connection_id: connection.id,
-                event_type: `github_release_${thisEvent.payload.action}`,
-                source_id: thisEvent.id.toString(),
-                start_time: new Date(thisEvent.created_at),
-                title: `${actionCapitalized} release ${thisEvent.payload.release.name} in repo ${thisEvent.repo.name}`,
-                description: thisEvent.payload.release.body,
-                source_system: 'github_events',
-                source_type: 'ETL',
-              },
-            );
-          }
-
-          break;
-
-        default:
-          break;
+      try {
+        await this.transformOne(event, { connection, userId });
+      } catch (error) {
+        // Per-row isolation, matching Slack/Gmail/Signal's transforms:
+        // SyncOrchestrator marks a job lastTransformed even on an uncaught
+        // error, so one bad row here would otherwise silently drop the rest
+        // of this sync batch with no retry.
+        this.logger.error('Failed to transform GitHub event', {
+          userId,
+          connectionId: connection.id,
+          eventType: event.type,
+          eventId: event.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
       }
+    }
+  }
+
+  private async transformOne(
+    event: GithubEvent,
+    { connection, userId }: { connection: Connection; userId: string },
+  ): Promise<void> {
+    // This search is the legacy-row guard; the real idempotency is the full
+    // (source_type, source_system, source_id) triple every create below now
+    // carries — without source_type, EventService.createOne skipped its
+    // find-or-create and events_source_triple_uniq treated the rows as
+    // NULL-distinct, so this racy pre-check was all that prevented replays
+    // from duplicating.
+    const existingEvent = await this.eventService.search(
+      { userId },
+      {
+        sourceSystem: 'github_events',
+        sourceId: event.id.toString(),
+      },
+    );
+
+    switch (event.type) {
+      case 'CommitCommentEvent': {
+        const comment = (event as GithubCommitCommentEvent).payload.comment;
+        const contentExternalId = `${comment.commit_id}:${comment.id}`;
+        const existingContent = await this.contentService.search(
+          { userId },
+          { type: 'github_comment', external_id: contentExternalId },
+        );
+        if (existingContent.length === 0) {
+          await this.contentService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              type: 'github_comment',
+              title: `Commented on commit ${comment.commit_id.slice(0, 8)} in repo ${event.repo.name}`,
+              text: comment.body,
+              url: comment.html_url,
+              external_id: contentExternalId,
+              external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+              // content_source_triple_uniq backstops the racy
+              // search-then-create above.
+              source_type: 'ETL',
+              source_system: 'github',
+              source_id: `commit_comment:${contentExternalId}`,
+            },
+          );
+        }
+
+        if (existingEvent.length === 0) {
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: 'github_comment',
+              source_id: event.id.toString(),
+              start_time: new Date(event.created_at),
+              title: `Commented on commit in repo ${event.repo.name}`,
+              description: comment.body,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+      }
+
+      case 'CreateEvent': {
+        const thisEvent = event as GithubCreateEvent;
+        if (thisEvent.payload.ref_type === 'branch' && existingEvent.length === 0) {
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: 'github_branch_creation',
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `Created branch ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
+              description: thisEvent.payload.description,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        } else if (thisEvent.payload.ref_type === 'tag' && existingEvent.length === 0) {
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: 'github_tag_creation',
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `Created tag ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
+              description: thisEvent.payload.description,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        } else if (thisEvent.payload.ref_type === 'repository' && existingEvent.length === 0) {
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: 'github_repository_creation',
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `Created repository ${thisEvent.repo.name}`,
+              description: thisEvent.payload.description,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+      }
+
+      case 'DeleteEvent': {
+        const thisEvent = event as GithubDeleteEvent;
+        if (thisEvent.payload.ref_type === 'branch' && existingEvent.length === 0) {
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: 'github_branch_deletion',
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `Deleted branch ${thisEvent.payload.ref}`,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        } else if (thisEvent.payload.ref_type === 'tag' && existingEvent.length === 0) {
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: 'github_tag_deletion',
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `Deleted tag ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+      }
+
+      case 'DiscussionEvent':
+        if (existingEvent.length === 0) {
+          const thisEvent = event as GithubDiscussionEvent;
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: 'github_discussion_creation',
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `Created discussion  ${thisEvent.payload.discussion.title}`,
+              description: thisEvent.payload.discussion.body_text,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+
+      case 'ForkEvent':
+        if (existingEvent.length === 0) {
+          const thisEvent = event as GithubForkEvent;
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: 'github_repo_fork',
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `Forked repo  ${thisEvent.payload.forkee.full_name}`,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+
+      case 'IssueCommentEvent': {
+        const thisEvent = event as GithubIssueCommentEvent;
+        // Scoped by type: the comment id is a bare number, and an unscoped
+        // external_id search can hit another provider's numeric id (a Steam
+        // appid, say) — a false "already exists" that silently drops the row.
+        const existingContent = await this.contentService.search(
+          { userId },
+          { type: 'github_comment', external_id: thisEvent.payload.comment.id.toString() },
+        );
+        if (existingContent.length === 0) {
+          await this.contentService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              type: 'github_comment',
+              title: `Commented on issue ${thisEvent.payload.issue.number} in repo ${thisEvent.repo.name}`,
+              text: thisEvent.payload.comment.body,
+              url: thisEvent.payload.comment.html_url,
+              external_id: thisEvent.payload.comment.id.toString(),
+              external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
+              // content_source_triple_uniq backstops the racy
+              // search-then-create above. The 'issue_comment:' prefix keeps
+              // the bare numeric id from colliding inside 'github' too.
+              source_type: 'ETL',
+              source_system: 'github',
+              source_id: `issue_comment:${thisEvent.payload.comment.id.toString()}`,
+            },
+          );
+        }
+
+        if (existingEvent.length === 0) {
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: 'github_comment',
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `Commented on issue ${thisEvent.payload.issue.number} in repo ${thisEvent.repo.name}`,
+              description: thisEvent.payload.comment.body,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+      }
+
+      case 'IssuesEvent':
+        if (existingEvent.length === 0) {
+          const thisEvent = event as GithubIssueEvent;
+          const actionCapitalized =
+            String(thisEvent.payload.action).charAt(0).toUpperCase() +
+            String(thisEvent.payload.action).slice(1);
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: `github_issue_${thisEvent.payload.action}`,
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `${actionCapitalized} issue ${thisEvent.payload.issue.number} in repo ${thisEvent.repo.name}`,
+              description: thisEvent.payload.issue.body,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+
+      case 'PullRequestEvent':
+        if (existingEvent.length === 0) {
+          const thisEvent = event as GithubPullRequestEvent;
+          const actionCapitalized =
+            String(thisEvent.payload.action).charAt(0).toUpperCase() +
+            String(thisEvent.payload.action).slice(1);
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: `github_pull_request_${thisEvent.payload.action}`,
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.payload.pull_request.updated_at),
+              title: `${actionCapitalized} pull request #${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
+              description: thisEvent.payload.pull_request.title,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+
+      case 'PullRequestReviewEvent':
+        if (existingEvent.length === 0) {
+          const thisEvent = event as GithubPullRequestReviewEvent;
+          const actionCapitalized =
+            String(thisEvent.payload.action).charAt(0).toUpperCase() +
+            String(thisEvent.payload.action).slice(1);
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: `github_pull_request_review_${thisEvent.payload.action}`,
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `${actionCapitalized} pull request review for ${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
+              description: thisEvent.payload.review.body,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+
+      case 'PullRequestReviewCommentEvent':
+        if (existingEvent.length === 0) {
+          const thisEvent = event as GithubPullRequestReviewCommentEvent;
+          const actionCapitalized =
+            String(thisEvent.payload.action).charAt(0).toUpperCase() +
+            String(thisEvent.payload.action).slice(1);
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: `github_pull_request_review_comment_${thisEvent.payload.action}`,
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `${actionCapitalized} pull request review comment for ${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
+              description: thisEvent.payload.comment.body,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+
+      case 'PushEvent': {
+        const thisEvent = event as GithubPushEvent;
+        if (existingEvent.length === 0) {
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: `github_push`,
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `Pushed commits to branch ${thisEvent.payload.ref.replace('refs/heads/', '')} in repo ${thisEvent.repo.name}`,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+      }
+
+      case 'ReleaseEvent':
+        if (existingEvent.length === 0) {
+          const thisEvent = event as GithubReleaseEvent;
+          const actionCapitalized =
+            String(thisEvent.payload.action).charAt(0).toUpperCase() +
+            String(thisEvent.payload.action).slice(1);
+          await this.eventService.create(
+            { userId },
+            {
+              connection_id: connection.id,
+              event_type: `github_release_${thisEvent.payload.action}`,
+              source_id: thisEvent.id.toString(),
+              start_time: new Date(thisEvent.created_at),
+              title: `${actionCapitalized} release ${thisEvent.payload.release.name} in repo ${thisEvent.repo.name}`,
+              description: thisEvent.payload.release.body,
+              source_system: 'github_events',
+              source_type: 'ETL',
+            },
+          );
+        }
+
+        break;
+
+      default:
+        break;
     }
   }
 }
