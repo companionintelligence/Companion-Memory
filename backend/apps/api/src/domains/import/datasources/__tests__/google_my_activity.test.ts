@@ -244,7 +244,9 @@ describe('Google My Activity — standalone file with YouTube entries', () => {
     const items = await runImport(STANDALONE);
     const visited = items.find((i) => i.metadata.Action === 'Visited Example')!;
     expect(visited.metadata.Product).toBe('Search');
-    expect(visited.id).toBe('gactivity:Search:7');
+    // Content-derived, not `gactivity:Search:7` (this entry's position in the
+    // fixture) — see the re-export tests below for why position can't be the key.
+    expect(visited.id).toMatch(/^gactivity:Search:[0-9a-f]{10}$/);
     expect(items.some((i) => String(i.metadata.Product).includes('2026-07-24'))).toBe(false);
   });
 
@@ -352,5 +354,72 @@ describe('body cell extraction survives a nested div', () => {
     expect(entry.metadata?.Action).toContain('Explored on Google Maps');
     expect(entry.timestamp).toBeInstanceOf(Date);
     expect(entry.metadata?.Product).toBe('Maps');
+  });
+});
+
+// Both fixtures below are real outer-cell blocks lifted verbatim from
+// .../google-takeout/My Activity/Search/MyActivity.html (Liam-CI-Import-Tools
+// -Test-Inbox corpus): "Visited Jaron Lanier's Homepage" (9:30:52 PM),
+// "Searched for The road Lanier iMessage reality" (9:30:50 PM), "Searched
+// for Lanier" (9:30:38 PM) and "Searched for around Lanier" (9:30:23 PM) —
+// the same real session, just reassembled into two snapshots to model a
+// re-export.
+describe('id stability across a re-export (growing-account regression)', () => {
+  // v1 is an EARLIER export, taken mid-session: 3 entries, oldest→newest by
+  // FILE POSITION is [around Lanier, Lanier, road...reality] since
+  // MyActivity.html is newest-first (position 0 = "road...reality").
+  const V1 = path.join(__dirname, 'fixtures', 'google_my_activity', 're_export', 'v1', 'Search', 'MyActivity.html');
+  // v2 is a LATER export of the SAME account: the account did one more real
+  // search ("Visited Jaron Lanier's Homepage") in between, which Google
+  // prepends — so v2 = [Homepage (NEW), road...reality, Lanier, around
+  // Lanier], and the 3 entries common to both files have each shifted one
+  // position later (0→1, 1→2, 2→3).
+  const V2 = path.join(__dirname, 'fixtures', 'google_my_activity', 're_export', 'v2', 'Search', 'MyActivity.html');
+
+  it('gives the position-shifted, previously-seen entries the SAME id both times (dedup/self-heal)', async () => {
+    const v1Items = await runImport(V1);
+    const v2Items = await runImport(V2);
+    expect(v1Items).toHaveLength(3);
+    expect(v2Items).toHaveLength(4);
+
+    const byTitle = (items: typeof v1Items, title: string) => items.find((i) => i.metadata?.Title === title)!;
+
+    for (const title of ['The road Lanier iMessage reality', 'Lanier', 'around Lanier']) {
+      const before = byTitle(v1Items, title);
+      const after = byTitle(v2Items, title);
+      expect(before.id).toBeTruthy();
+      // Same logical entry, now one position later in the file → must still
+      // resolve to the same id, or the importer's find-or-return destination
+      // treats it as a brand-new row instead of the same one re-seen.
+      expect(after.id).toBe(before.id);
+    }
+  });
+
+  it('gives the genuinely NEW, prepended entry an id that does not collide with any v1 id', async () => {
+    const v1Items = await runImport(V1);
+    const v2Items = await runImport(V2);
+    const v1Ids = new Set(v1Items.map((i) => i.id));
+
+    const newEntry = v2Items.find((i) => i.metadata?.Title === "Jaron Lanier's Homepage")!;
+    expect(newEntry).toBeTruthy();
+    expect(newEntry.id).toBeTruthy();
+    // The old bug: position-keyed ids meant this entry (now at position 0)
+    // computed whatever id v1's position-0 entry ("road...reality") held,
+    // so it collided and was dropped as an already-seen duplicate.
+    expect(v1Ids.has(newEntry.id)).toBe(false);
+
+    // Every id in v2 must be distinct — no unintended collisions anywhere.
+    expect(new Set(v2Items.map((i) => i.id)).size).toBe(v2Items.length);
+  });
+});
+
+describe('id hash collision sanity', () => {
+  it('gives two entries with different timestamp + title distinct ids', async () => {
+    const items = await runImport(SEARCH_HTML);
+    expect(items).toHaveLength(2);
+    // Visited "Jaron Lanier's Homepage" @ 9:30:52 PM vs. Searched "Lanier" @
+    // 9:30:38 PM — different ts and title (and, for the search entry, a
+    // different url too).
+    expect(items[0].id).not.toBe(items[1].id);
   });
 });
