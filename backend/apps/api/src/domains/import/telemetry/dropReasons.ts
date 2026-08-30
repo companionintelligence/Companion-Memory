@@ -183,6 +183,9 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   // Parsed and empty.
   empty_after_parse: 'empty_record',
   empty_card: 'empty_record',
+  // A Robinhood row with a blank "Trans Code" — a running-total/footer row the
+  // export appends, never an actual transaction.
+  empty_trans_code: 'empty_record',
 
   // Nothing to key it by.
   unnamed_product: 'no_identity',
@@ -227,6 +230,9 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   // A Spotify play row with none of the track/episode/audiobook fields set —
   // the source recorded a play but not what was played.
   unresolvable_playback_stub: 'unsupported_shape',
+  // A Robinhood transaction row whose "Trans Code" is a real code this build
+  // does not have a handler for — recognized as a transaction, not a home for it.
+  unrecognized_trans_code: 'unsupported_shape',
 
   // Read failures.
   no_end_marker: 'unreadable_source',
