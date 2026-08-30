@@ -34,6 +34,7 @@ import {
   movedStart,
   rhythmClaims,
   rhythmLabel,
+  rhythmWaitingLabel,
   spanForDay,
   topClusters,
   utcDateKey,
@@ -399,9 +400,10 @@ function RhythmStrip({ dayStart, lookup, colorMode, waiting = false }: RhythmStr
   const clusters = useMemo(() => topClusters(lookup(utcDateKey(dayStart))), [dayStart, lookup]);
   const hasRhythm = claims.some((claim) => claim.weight >= RHYTHM_NOISE_FLOOR);
   const waitingForRhythm = waiting && !hasRhythm;
-  const label = waitingForRhythm
-    ? 'Predicted rhythm is still being built. This can take a while.'
-    : rhythmLabel(dayStart, clusters);
+  // Both names are day-scoped: the week draws one strip per day and they can
+  // all be waiting at once, so a constant waiting name would give a screen
+  // reader seven focusable images sharing a single name.
+  const label = waitingForRhythm ? rhythmWaitingLabel(dayStart) : rhythmLabel(dayStart, clusters);
 
   const strip = (
     <div
