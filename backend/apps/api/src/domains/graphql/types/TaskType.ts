@@ -66,6 +66,12 @@ export class TaskType implements Node {
   })
   scheduledFor!: string | null;
 
+  @Field(() => Boolean, {
+    description:
+      'True when a planned calendar block exists. `scheduledFor` alone is a preferred date, not a placement.',
+  })
+  placedOnCalendar!: boolean;
+
   @Field(() => String, {
     nullable: true,
     description: 'User-local calendar date, `YYYY-MM-DD`, before which the task stays hidden.',
@@ -108,6 +114,7 @@ export class TaskType implements Node {
       dueAt: source.dueAt,
       taskTime: source.taskTime,
       scheduledFor: source.scheduledFor,
+      placedOnCalendar: false,
       deferUntil: source.deferUntil,
       deferCount: source.deferCount,
       estimatedMinutes: source.estimatedMinutes,

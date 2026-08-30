@@ -4,7 +4,7 @@ import { Args, ID, Int, Mutation, Parent, Query, ResolveField, Resolver } from '
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { TaskService, PlannedBlockService, type TaskStatus } from '@ci/domains/planning';
+import { TaskService, PlannedBlockService, type Task, type TaskStatus } from '@ci/domains/planning';
 
 import { CreateTaskInput } from '../types/CreateTaskInput';
 import { CreateTaskPayload } from '../types/CreateTaskPayload';
@@ -45,6 +45,28 @@ export class TaskResolver {
     if (!(await this.isPlanningEnabled())) {
       throw new ForbiddenException('The planning surface is disabled');
     }
+  }
+
+  private toTaskType(task: Task, placedOnCalendar: boolean): TaskType {
+    return { ...TaskType.toType(task), placedOnCalendar };
+  }
+
+  @ResolveField(() => Boolean)
+  async placedOnCalendar(@Context() context: RequestContext, @Parent() parent: TaskType): Promise<boolean> {
+    if (typeof parent.placedOnCalendar === 'boolean') {
+      return parent.placedOnCalendar;
+    }
+
+    if (!(await this.isPlanningEnabled())) {
+      return false;
+    }
+
+    const event = await this.plannedBlockService.findActiveForTask(
+      toServiceContext(context),
+      GlobalUID.parse('task', parent.id),
+    );
+
+    return event != null;
   }
 
   @ResolveField(() => [TaskType])
@@ -171,7 +193,8 @@ export class TaskResolver {
 
   @Mutation(() => TaskType, {
     nullable: true,
-    description: 'Accept a trust-dial proposed task into the open backlog.',
+    description:
+      'Accept a proposed task into the open backlog. Keeps any preferred date as a hint; does not place a calendar block.',
   })
   async acceptProposedTask(
     @Context() context: RequestContext,
@@ -184,15 +207,7 @@ export class TaskResolver {
     const serviceContext = toServiceContext(context);
     const task = await this.taskService.acceptProposed(serviceContext, GlobalUID.parse('task', gid));
 
-    if (!task) {
-      return null;
-    }
-
-    await this.plannedBlockService.tryPlaceAfterOpen(serviceContext, task);
-
-    const refreshed = await this.taskService.findById(serviceContext, task.id);
-
-    return TaskType.toType(refreshed ?? task);
+    return task ? this.toTaskType(task, false) : null;
   }
 
   @Mutation(() => TaskType, {
@@ -319,12 +334,36 @@ export class TaskResolver {
         )
       : await this.plannedBlockService.scheduleTask(serviceContext, taskId, { estimatedMinutes, date });
 
+    const placed = outcome.status === 'placed' || outcome.status === 'already_placed';
+
     return {
-      success: outcome.status === 'placed' || outcome.status === 'already_placed',
+      success: placed,
       status: outcome.status,
-      task: outcome.task ? TaskType.toType(outcome.task) : undefined,
+      task: outcome.task ? this.toTaskType(outcome.task, placed) : undefined,
       event: 'event' in outcome && outcome.event ? EventType.toType(outcome.event) : undefined,
     };
+  }
+
+  @Mutation(() => TaskType, {
+    nullable: true,
+    description:
+      'Accept into Unscheduled: open if proposed, drop pending suggestions, remove any calendar block.',
+  })
+  async planTask(
+    @Context() context: RequestContext,
+    @Args('id', { type: () => ID }) gid: string,
+  ): Promise<TaskType | null> {
+    if (!(await this.isPlanningEnabled())) {
+      return null;
+    }
+
+    const serviceContext = toServiceContext(context);
+    const task = await this.plannedBlockService.planAsUnscheduled(
+      serviceContext,
+      GlobalUID.parse('task', gid),
+    );
+
+    return task ? this.toTaskType(task, false) : null;
   }
 
   @Mutation(() => TaskType, {
@@ -342,7 +381,7 @@ export class TaskResolver {
     const serviceContext = toServiceContext(context);
     const task = await this.plannedBlockService.unschedule(serviceContext, GlobalUID.parse('task', gid));
 
-    return task ? TaskType.toType(task) : null;
+    return task ? this.toTaskType(task, false) : null;
   }
 
   @Query(() => [EventType], {
@@ -401,8 +440,13 @@ export class TaskResolver {
       getId: (entity) => GlobalUID.encode('task', entity.id),
     });
 
+    const placedIds = await this.plannedBlockService.listActiveTaskIds(
+      serviceContext,
+      slice.map((entity) => entity.id),
+    );
+
     const edges: TaskEdge[] = slice.map((entity) => {
-      const node = TaskType.toType(entity);
+      const node = this.toTaskType(entity, placedIds.has(entity.id));
 
       return { node, cursor: node.id };
     });
@@ -441,6 +485,12 @@ export class TaskResolver {
     const serviceContext = toServiceContext(context);
     const task = await this.taskService.findById(serviceContext, GlobalUID.parse('task', gid));
 
-    return task ? TaskType.toType(task) : null;
+    if (!task) {
+      return null;
+    }
+
+    const placed = (await this.plannedBlockService.findActiveForTask(serviceContext, task.id)) != null;
+
+    return this.toTaskType(task, placed);
   }
 }

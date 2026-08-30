@@ -1352,7 +1352,7 @@ type ForageTrialType {
   textureMass: Float
 }
 
-"""One 30-minute forecast bucket from the HBPE histogram"""
+"""One 15-minute forecast bucket from the HBPE histogram"""
 type ForecastBucketType {
   bucketIndex: Int!
   l0Probs: [ProbabilityEntryType!]!
@@ -1383,7 +1383,7 @@ type ForecastHistoryProbType {
   probability: Float!
 }
 
-"""48-bucket (30-min) HBPE day-ahead forecast"""
+"""96-bucket (15-min) HBPE day-ahead forecast"""
 type ForecastType {
   buckets: [ForecastBucketType!]!
 
@@ -1889,7 +1889,9 @@ type Mutation {
   """Accept a candidate at a chosen time, minting a real event"""
   acceptCandidate(endTime: DateTime, id: ID!, startTime: DateTime!): EventType!
 
-  """Accept a trust-dial proposed task into the open backlog."""
+  """
+  Accept a proposed task into the open backlog. Keeps any preferred date as a hint; does not place a calendar block.
+  """
   acceptProposedTask(id: ID!): TaskType
 
   """Apply a pending automation change (mutate / complete / event revise)."""
@@ -2014,6 +2016,11 @@ type Mutation {
   mergePeople(input: MergePeopleInput!): MergePeoplePayload!
   mergePlaces(input: MergePlacesInput!): MergePlacesPayload!
   mergeProductModels(input: MergeProductModelsInput!): MergeProductModelsPayload!
+
+  """
+  Accept into Unscheduled: open if proposed, drop pending suggestions, remove any calendar block.
+  """
+  planTask(id: ID!): TaskType
 
   """
   Rebuild stay-point clusters and recency-decayed transitions for the current user
@@ -3462,6 +3469,11 @@ type TaskType implements Node {
 
   """Parent task, for subtasks."""
   parentId: ID
+
+  """
+  True when a planned calendar block exists. `scheduledFor` alone is a preferred date, not a placement.
+  """
+  placedOnCalendar: Boolean!
 
   """0 (highest) to 5 (lowest). Defaults to 3."""
   priority: Int!

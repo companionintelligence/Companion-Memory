@@ -96,6 +96,25 @@ export class PlannedBlockService {
     return this.eventService.findById(context, row.id);
   }
 
+  /** Task ids in `taskIds` that currently have an active planned block. */
+  async listActiveTaskIds(context: UserServiceContext, taskIds: string[]): Promise<Set<string>> {
+    if (taskIds.length === 0) {
+      return new Set();
+    }
+
+    const rows = await this.eventRepository
+      .createQueryBuilder('event')
+      .select('event.task_id', 'taskId')
+      .where('event.user_id = :userId', { userId: context.userId })
+      .andWhere('event.task_id IN (:...taskIds)', { taskIds })
+      .andWhere('event.event_type = :type', { type: PLANNED_BLOCK })
+      .andWhere('event.is_deleted = false')
+      .andWhere("event.status NOT IN ('cancelled', 'no_show', 'skipped')")
+      .getRawMany<{ taskId?: string; task_id?: string }>();
+
+    return new Set(rows.map((row) => row.taskId ?? row.task_id).filter((id): id is string => Boolean(id)));
+  }
+
   /**
    * User-triggered schedule: always place if a gap exists. The click is consent.
    */
@@ -258,6 +277,75 @@ export class PlannedBlockService {
     }
 
     return this.taskService.update(context, taskId, { scheduledFor: null });
+  }
+
+  /**
+   * Plan-page Plan: keep the work, put it in the unscheduled backlog.
+   * Drops pending confirmations, opens a proposal, and removes any calendar
+   * block. A proposed time that is already in the past is stripped entirely
+   * (including the scan-stamped dueAt) so the row is ordinary undated work.
+   */
+  async planAsUnscheduled(context: UserServiceContext, taskId: string): Promise<Task | null> {
+    const task = await this.taskService.findById(context, taskId);
+
+    if (!task) {
+      return null;
+    }
+
+    const pending = await this.taskService.findPendingChanges(context, { taskId });
+
+    for (const change of pending) {
+      await this.taskService.declinePendingChange(context, change.id);
+    }
+
+    if (task.status === 'proposed') {
+      await this.taskService.acceptProposed(context, taskId);
+    }
+
+    const existing = await this.findActiveForTask(context, taskId);
+
+    if (existing) {
+      await this.eventService.remove(context, existing.id);
+    }
+
+    const stripPastWindow = await this.proposedTimeIsPast(context, task, pending);
+
+    return this.taskService.update(context, taskId, {
+      scheduledFor: null,
+      ...(stripPastWindow ? { dueAt: null } : {}),
+    });
+  }
+
+  private async proposedTimeIsPast(
+    context: UserServiceContext,
+    task: Task,
+    pending: ReadonlyArray<{ kind: string; patch?: Record<string, unknown> }>,
+  ): Promise<boolean> {
+    const today = await this.planningTime.today(context);
+
+    if (task.scheduledFor != null && task.scheduledFor < today) {
+      return true;
+    }
+
+    if (task.status === 'proposed' && task.dueAt != null) {
+      const dueDate = await this.planningTime.localDate(context, task.dueAt);
+
+      if (dueDate < today) {
+        return true;
+      }
+    }
+
+    const now = Date.now();
+
+    return pending.some((change) => {
+      if (change.kind !== 'schedule') {
+        return false;
+      }
+
+      const start = parseInstant(change.patch?.startTime);
+
+      return start != null && start.getTime() < now;
+    });
   }
 
   private async place(
