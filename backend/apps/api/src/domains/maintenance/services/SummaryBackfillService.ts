@@ -25,6 +25,21 @@ const DEFAULT_DRAIN_POLL_INTERVAL_MS = 3_000;
  * ten. A day whose ONLY content lands in one of the excluded tables is
  * skipped by the pre-check (never dispatched) even though it has real
  * activity — the trade-off documented in {@link SummaryBackfillService}.
+ *
+ * `data_aggregator.py`'s `TABLES` also lists `activities` and `measurements`,
+ * but neither exists anywhere in the `ci` schema (verified directly against
+ * `information_schema.tables` — not merely missing the `ci.` prefix every
+ * other entry here has). The Python aggregator survives this: it introspects
+ * a table's columns before querying and treats "no columns found" as "no
+ * rows", so those two entries have always silently contributed nothing.
+ * This UNION query has no such guard, so including them here made every
+ * single backfill call fail outright with `relation "activities" does not
+ * exist` — not degraded, not partial, a 100% failure of the whole leg,
+ * confirmed live against a real 844,885-record import where `ci.summaries`
+ * stayed completely empty as a result. Left out rather than guessed at:
+ * whatever "activities"/"measurements" were meant to name doesn't exist to
+ * query either way, so dropping them is strictly a bug fix, not a narrowing
+ * of real coverage.
  */
 const ACTIVITY_SOURCES = [
   { table: 'ci.events', column: 'start_time' },
@@ -32,8 +47,6 @@ const ACTIVITY_SOURCES = [
   { table: 'ci.files', column: 'created_at' },
   { table: 'ci.position', column: 'time' },
   { table: 'ci.browser_activity', column: 'time' },
-  { table: 'activities', column: 'start_time' },
-  { table: 'measurements', column: 'time' },
 ] as const;
 
 export interface SummaryBackfillOptions {
