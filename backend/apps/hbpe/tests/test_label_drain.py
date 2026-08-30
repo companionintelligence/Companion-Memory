@@ -529,12 +529,18 @@ class _RecordingConn:
 
 
 def _capture(monkeypatch, **kwargs) -> tuple[str, list]:
+    """
+    Capture the SQL get_unlabeled_events emits, with the REAL kind predicate.
+
+    This used to stub ``mapped_kind_sql`` out to the constant ``FALSE``, which
+    is exactly why nothing here caught the map joining on the wrong column for
+    two releases: the one part of this WHERE clause that had a bug was the one
+    part the tests replaced. It contributes no bind parameters, so letting the
+    real predicate through changes none of the param-order assertions below.
+    """
     calls: list = []
     monkeypatch.setattr(dc, "get_conn", lambda: _RecordingConn(calls))
     monkeypatch.setattr(dc, "_ensure_events_cti_schema", lambda conn: None)
-    monkeypatch.setattr(
-        "ci.hbpe.tokenizer.static_labeler.mapped_kind_sql", lambda: "FALSE"
-    )
     dc.get_unlabeled_events(USER, **kwargs)
     return calls[0]
 
@@ -545,6 +551,21 @@ def test_default_query_is_unchanged_oldest_first_full_history(monkeypatch):
     assert "DESC" not in sql
     assert "::timestamptz" not in sql.replace("'2010-01-01'::timestamptz", "")
     assert params == [USER, 1000]
+
+
+def test_drain_excludes_mapped_kinds_on_the_capture_kind_column(monkeypatch):
+    """
+    The static labeler and the LLM drain must partition the corpus, and they
+    only do so while both key on the same column. ci.events.event_type holds
+    the importer's bare-verb classification ('listen'), hbpe.kind_l0_map holds
+    the dotted capture kind ('media.listen'), and the two never overlap — so a
+    drain that excluded on event_type excluded nothing and sent all 195k
+    ambient events to the chat LLM one at a time.
+    """
+    sql, _ = _capture(monkeypatch)
+    assert "NOT ( EXISTS ( SELECT 1 FROM hbpe.kind_l0_map m" in sql
+    assert "(e.metadata->>'kind') LIKE m.kind_pattern" in sql
+    assert "e.event_type LIKE" not in sql
 
 
 def test_ascending_keyset_uses_a_greater_than_comparison(monkeypatch):

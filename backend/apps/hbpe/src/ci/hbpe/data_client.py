@@ -231,7 +231,22 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
     request, which would silently truncate active days and corrupt the token
     stream; (b) ContentType does not expose eventId in the schema, so the
     L2-cluster JOIN cannot be expressed in GraphQL.
+
+    The kind_l0_map lookup is a LATERAL ... LIMIT 1, not a plain LEFT JOIN, for
+    two independent reasons. It joins on ``metadata->>'kind'`` because that is
+    the vocabulary the map is keyed on (see static_labeler.KIND_EXPR); and it
+    takes only the longest — i.e. most specific — matching pattern because the
+    map is explicitly allowed to hold overlapping ones (``load_kind_map``
+    already orders longest-first so the claim loop resolves them that way). A
+    plain LEFT JOIN would instead emit the event once per matching pattern, so
+    adding e.g. a ``social.post`` row beside the existing ``social.%`` would
+    silently double every Instagram post's tokens for that bucket.
     """
+    # Imported here, not at module scope, for the same reason
+    # _unlabeled_events_where does: static_labeler imports vocab_registry,
+    # which imports this module.
+    from ci.hbpe.tokenizer.static_labeler import KIND_EXPR
+
     sql = f"""
         WITH day_events AS (
             SELECT
@@ -253,7 +268,13 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
             FROM ci.events e
             JOIN hbpe.l1_event_cluster ec  ON ec.event_id   = e.event_id
             JOIN hbpe.l1_clusters      cl1 ON cl1.cluster_id = ec.cluster_id
-            LEFT JOIN hbpe.kind_l0_map m ON e.event_type LIKE m.kind_pattern
+            LEFT JOIN LATERAL (
+                SELECT km.tier, km.default_duration_min
+                FROM hbpe.kind_l0_map km
+                WHERE {KIND_EXPR} LIKE km.kind_pattern
+                ORDER BY length(km.kind_pattern) DESC
+                LIMIT 1
+            ) m ON TRUE
             WHERE e.user_id    = %s
               AND e.is_deleted = FALSE
               AND e.event_type IS DISTINCT FROM 'planned_block'
@@ -295,6 +316,11 @@ def get_completed_tasks_for_day(user_id: str, date_str: str) -> list[dict]:
     Done tasks with an L0 class, occurring at completed_at on date_str.
 
     Open/scheduled tasks are reconciliation-only and never become tokens.
+
+    Raises on a read failure rather than returning []. The sole caller
+    (serializer._fetch_tokens_for_day) still treats the failure as non-fatal,
+    but it has to be able to tell "no completed tasks" from "could not read
+    the completed tasks" before it deletes a day's token stream.
     """
     sql = """
         SELECT
@@ -319,14 +345,10 @@ def get_completed_tasks_for_day(user_id: str, date_str: str) -> list[dict]:
           AND t.l0_class IS NOT NULL
           AND t.l0_class <> 'UNKNOWN'
     """
-    try:
-        with get_conn() as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(sql, (str(user_id), date_str, date_str))
-                return [dict(r) for r in cur.fetchall()]
-    except Exception as exc:
-        log.info("completed-task tokens skipped: %s", exc)
-        return []
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, (str(user_id), date_str, date_str))
+            return [dict(r) for r in cur.fetchall()]
 
 
 # ── Content ───────────────────────────────────────────────────────────────────
