@@ -83,6 +83,16 @@ export class EventEntity {
   @Column({ type: 'text', nullable: true, name: 'time_precision' })
   timePrecision!: string | null;
 
+  /**
+   * WHEN the capture source actually recorded this event, as distinct from
+   * `startTime` (when the event itself occurred). Threaded through from
+   * `ci.capture_events.observed_at` by the /v1/events materialize step
+   * (migration 20260830040124); null for events materialized before that, and
+   * for pathways that never send it (OAuth sync, bulk import).
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'observed_at' })
+  observedAt!: Date | null;
+
   @Column({ type: 'integer', nullable: true, insert: false, update: false, name: 'duration_minutes' })
   durationMinutes!: number | null;
 
@@ -222,6 +232,7 @@ export class EventEntity {
       endTime: entity.endTime,
       timeSource: entity.timeSource,
       timePrecision: entity.timePrecision,
+      observedAt: entity.observedAt,
       durationMinutes: entity.durationMinutes,
       locationName: entity.locationName,
       locationCoordinates: entity.locationCoordinates,

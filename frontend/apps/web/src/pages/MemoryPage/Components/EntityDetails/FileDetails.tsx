@@ -64,9 +64,7 @@ export function FileDetails({ entity }: Props) {
       ]}
       rawData={data}
     >
-      {downloadUrl && (
-        <DocumentFileActions href={downloadUrl} filename={data.filename} download />
-      )}
+      {downloadUrl && <DocumentFileActions href={downloadUrl} filename={data.filename} download />}
     </EntityDetailScaffold>
   );
 }

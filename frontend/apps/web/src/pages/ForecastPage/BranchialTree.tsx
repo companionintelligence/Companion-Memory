@@ -6,7 +6,12 @@ import { l0Background } from '@/components/ForecastStrip/ForecastStrip';
 import { CLASS_LABEL, normalizeClass } from '@/lib/activityPalette';
 import { isDisplayableLabel } from '@/lib/forecastDisplay';
 
-import { useBranchial, type BranchialBranch, type BranchialStep, type BranchialTreeData } from './useBranchial';
+import {
+  useBranchial,
+  type BranchialBranch,
+  type BranchialStep,
+  type BranchialTreeData,
+} from './useBranchial';
 
 const TODAY_IDS = new Set(['night', 'morning', 'afternoon', 'evening']);
 
@@ -19,6 +24,7 @@ function stretchTitle(branch: BranchialBranch): string {
   if (perm && (branch.title === branch.l0 || !isDisplayableLabel(branch.title))) {
     return perm.title;
   }
+
   if (branch.title === branch.l0) {
     return CLASS_LABEL[normalizeClass(branch.l0)] ?? branch.title.toLowerCase();
   }
@@ -154,13 +160,12 @@ export function BranchialTreeView({ tree }: { tree: BranchialTreeData }) {
         if (!focused) {
           return;
         }
+
         event.preventDefault();
         const current = path[focused.id] ?? focused.branches[0]?.id;
         const at = focused.branches.findIndex((branch) => branch.id === current);
         const next =
-          event.key === 'ArrowDown'
-            ? Math.min(at + 1, focused.branches.length - 1)
-            : Math.max(at - 1, 0);
+          event.key === 'ArrowDown' ? Math.min(at + 1, focused.branches.length - 1) : Math.max(at - 1, 0);
         const pick = focused.branches[next];
         if (pick) {
           setPath((prev) => ({ ...prev, [focused.id]: pick.id }));
@@ -204,6 +209,7 @@ function NextSentences({ steps }: { steps: BranchialStep[] }) {
     if (!branch) {
       return [];
     }
+
     const what = stretchTitle(branch);
     const who = whoLine(branch, what);
     const text = who ? `${step.label} — ${what} · ${who}` : `${step.label} — ${what}`;

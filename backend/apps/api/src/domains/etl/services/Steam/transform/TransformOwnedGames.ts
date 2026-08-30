@@ -98,6 +98,7 @@ export class SteamOwnedGamesTransformService {
                 playtime_linux_forever: game.playtime_linux_forever,
                 playtime_deck_forever: game.playtime_deck_forever,
                 rtime_last_played: game.rtime_last_played,
+                has_community_visible_stats: game.has_community_visible_stats,
               },
             });
 

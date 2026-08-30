@@ -159,7 +159,12 @@ export function ObservationReview({ onResolved }: { onResolved?: () => Promise<u
   const [pending, setPending] = useState<{ id: string; label: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const { data, loading, error: loadError, refetch } = useQuery(GET_UNRESOLVED_OBSERVATIONS, {
+  const {
+    data,
+    loading,
+    error: loadError,
+    refetch,
+  } = useQuery(GET_UNRESOLVED_OBSERVATIONS, {
     variables: { limit: REVIEW_PAGE_SIZE, offset: page * REVIEW_PAGE_SIZE },
     notifyOnNetworkStatusChange: true,
   });

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, type FindOptionsOrder } from 'typeorm';
+import { DataSource, Repository, In, IsNull, type FindOptionsOrder, type FindOptionsWhere } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
@@ -105,7 +105,39 @@ export class CommunicationService {
     });
   }
 
+  /**
+   * The provenance-triple lookup shared by the find-before-insert check and
+   * the race-loss fallback below — mirrors EventService.createOne's
+   * sourceWhere. Communications have no soft-delete column, so unlike Event
+   * this doesn't need to special-case tombstoned rows.
+   */
+  private sourceWhereFor(
+    context: UserServiceContext,
+    data: Pick<CreateCommunicationDto, 'source_type' | 'source_system' | 'source_id'>,
+  ): FindOptionsWhere<CommunicationEntity> | null {
+    return data.source_type && data.source_id
+      ? {
+          userId: context.userId,
+          sourceType: data.source_type,
+          sourceSystem: data.source_system ?? IsNull(),
+          sourceId: data.source_id,
+        }
+      : null;
+  }
+
   async create(context: UserServiceContext, data: CreateCommunicationDto): Promise<Communication> {
+    // Idempotency: re-sending an existing (source_type, source_system,
+    // source_id) triple — a flaky-client retry, a webhook re-delivery like
+    // MemoryController.turn() — must return the existing row instead of
+    // hitting communications_source_triple_uniq's unhandled 23505.
+    const sourceWhere = this.sourceWhereFor(context, data);
+    if (sourceWhere) {
+      const existing = await this.communicationRepository.findOne({ where: sourceWhere });
+      if (existing) {
+        return CommunicationEntity.toEgressType(existing);
+      }
+    }
+
     const id = data.id ?? uuidv7();
 
     const communication = this.communicationRepository.create({
@@ -148,23 +180,37 @@ export class CommunicationService {
     //
     // One transaction across both halves of the CTI aggregate: the base row
     // (derived display label) first, then the detail.
-    const communicationResult = await this.communicationRepository.manager.transaction(async (manager) => {
-      await manager.getRepository(CommunicationBaseEntity).save(this.baseRowFor(manager, communication));
+    let communicationResult: CommunicationEntity;
+    try {
+      communicationResult = await this.communicationRepository.manager.transaction(async (manager) => {
+        await manager.getRepository(CommunicationBaseEntity).save(this.baseRowFor(manager, communication));
 
-      const saved = await manager.getRepository(CommunicationEntity).save(communication);
-      await this.graphDeltaWriter.entityCreated({
-        entityId: id,
-        entityType: 'Communication',
-        name: this.labelFor(saved),
-        description: saved.summary ?? null,
-        ownerUserId: context.userId,
-        changeSource: 'CommunicationService.create',
-        changedByUserId: typeof context.userId === 'string' ? context.userId : null,
-        manager,
+        const saved = await manager.getRepository(CommunicationEntity).save(communication);
+        await this.graphDeltaWriter.entityCreated({
+          entityId: id,
+          entityType: 'Communication',
+          name: this.labelFor(saved),
+          description: saved.summary ?? null,
+          ownerUserId: context.userId,
+          changeSource: 'CommunicationService.create',
+          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+          manager,
+        });
+
+        return saved;
       });
+    } catch (err) {
+      // Lost a race to a concurrent insert of the same triple — fetch and
+      // return the winner rather than surfacing the raw 23505.
+      if (sourceWhere && (err as { code?: string })?.code === '23505') {
+        const existing = await this.communicationRepository.findOne({ where: sourceWhere });
+        if (existing) {
+          return CommunicationEntity.toEgressType(existing);
+        }
+      }
 
-      return saved;
-    });
+      throw err;
+    }
 
     await this.eventService.send(CommunicationCreatedEvent, {
       communicationId: communicationResult.id,

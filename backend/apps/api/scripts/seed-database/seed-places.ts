@@ -20,6 +20,9 @@ export async function seedPlaces(module: TestingModule, multibar: MultiBar) {
     );
 
     if (existingPlace == null) {
+      const latitude = place.properties?.latitude;
+      const longitude = place.properties?.longitude;
+
       await placeService.create(
         {
           userId: JOHN_SMITH.id,
@@ -30,6 +33,15 @@ export async function seedPlaces(module: TestingModule, multibar: MultiBar) {
           ...(place.properties && {
             properties: place.properties,
           }),
+          // create() does not derive locationPoint from properties — only
+          // update() does that lat/lng conversion, and only from top-level
+          // fields, never from inside properties. Every seeded place carries
+          // real coordinates in properties.{latitude,longitude}; without this,
+          // no seeded place ever gets a queryable location_point at all.
+          ...(typeof latitude === 'number' &&
+            typeof longitude === 'number' && {
+              locationPoint: { type: 'Point', coordinates: [longitude, latitude] },
+            }),
         },
       );
     }

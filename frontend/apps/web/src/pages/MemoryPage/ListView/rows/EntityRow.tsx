@@ -49,7 +49,12 @@ export function EntityRow({ icon, title, subtitle, time, onClick, className }: E
       </span>
 
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium leading-tight text-foreground">{title}</div>
+        <div
+          data-testid="entity-row-title"
+          className="truncate text-sm font-medium leading-tight text-foreground"
+        >
+          {title}
+        </div>
         {subtitle != null && subtitle !== '' && (
           <div className="mt-0.5 truncate text-xs leading-tight text-muted-foreground">{subtitle}</div>
         )}

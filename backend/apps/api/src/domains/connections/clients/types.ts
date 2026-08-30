@@ -219,11 +219,15 @@ export interface FacebookLike {
 export interface FacebookFriend {
   id: string;
   name: string;
+  // The Graph API returns "picture" wrapped like a connection response, not
+  // flat -- matches what /me/friends?fields=id,name,picture actually sends.
   picture?: {
-    height: number;
-    width: number;
-    url: string;
-    is_silhouette: boolean;
+    data: {
+      height: number;
+      width: number;
+      url: string;
+      is_silhouette: boolean;
+    };
   };
 }
 

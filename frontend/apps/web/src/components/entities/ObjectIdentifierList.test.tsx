@@ -105,7 +105,9 @@ describe('ObjectIdentifierList', () => {
       },
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Remove 0012345678905' }));
+    // The accessible name tracks the displayed (raw) value, not the normalized
+    // matching key underneath it — see ObjectIdentifierList's `displayValue`.
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 012345678905' }));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
   });

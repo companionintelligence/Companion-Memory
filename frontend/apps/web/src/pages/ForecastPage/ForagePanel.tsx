@@ -34,7 +34,9 @@ function BranchList({
               branch.past && 'opacity-50',
             )}
           >
-            <span className="min-w-0 flex-1 truncate font-medium capitalize">{branch.id.replace(/_/g, ' ')}</span>
+            <span className="min-w-0 flex-1 truncate font-medium capitalize">
+              {branch.id.replace(/_/g, ' ')}
+            </span>
             <div className="h-2 min-w-0 flex-1 overflow-hidden rounded-sm bg-muted">
               <div className="h-full bg-foreground/70" style={{ width: pct(branch.mass) }} />
             </div>
@@ -96,9 +98,9 @@ export function ForagePanel() {
       <Card.Header>
         <Card.Title>Forager</Card.Title>
         <Card.Description>
-          Discrete saccades over your memory — people, places they live, events, search indexes, and
-          derived forecasts. Question: {trial.question}. Click a branch to pin it; sample reads the
-          unread item with lowest G, and queries indexes again when the lake runs thin.
+          Discrete saccades over your memory — people, places they live, events, search indexes, and derived
+          forecasts. Question: {trial.question}. Click a branch to pin it; sample reads the unread item with
+          lowest G, and queries indexes again when the lake runs thin.
         </Card.Description>
       </Card.Header>
       <Card.Content className="flex flex-col gap-4">
@@ -115,7 +117,10 @@ export function ForagePanel() {
             {trial.attention.map((item) => (
               <div
                 key={item.id}
-                className={cn('flex items-baseline justify-between gap-3 text-sm', item.read && 'text-muted-foreground')}
+                className={cn(
+                  'flex items-baseline justify-between gap-3 text-sm',
+                  item.read && 'text-muted-foreground',
+                )}
               >
                 <span className="min-w-0 flex-1 truncate">
                   {item.read ? 'read' : 'unread'}

@@ -41,19 +41,27 @@ describe('SavedSearchPicker', () => {
       {
         route: '/memory',
         mocks: [
-          mockQuery(GetSavedSearchesForPickerDocument, { first: 8, query: undefined }, pickerResult(id, 'My trip')),
-          mockQuery(GetSavedSearchDocument, { id }, {
-            savedSearch: {
-              __typename: 'SavedSearchType' as const,
-              id,
-              name: 'My trip',
-              description: null,
-              query: 'paris',
-              entityTypes: [],
-              tags: ['vacation'],
-              filters: null,
+          mockQuery(
+            GetSavedSearchesForPickerDocument,
+            { first: 8, query: undefined },
+            pickerResult(id, 'My trip'),
+          ),
+          mockQuery(
+            GetSavedSearchDocument,
+            { id },
+            {
+              savedSearch: {
+                __typename: 'SavedSearchType' as const,
+                id,
+                name: 'My trip',
+                description: null,
+                query: 'paris',
+                entityTypes: [],
+                tags: ['vacation'],
+                filters: null,
+              },
             },
-          }),
+          ),
         ],
       },
     );
@@ -64,9 +72,7 @@ describe('SavedSearchPicker', () => {
 
     fireEvent.click(screen.getByText('My trip'));
 
-    await waitFor(() =>
-      expect(screen.getByTestId('location')).toHaveTextContent('search=paris'),
-    );
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('search=paris'));
     expect(screen.getByTestId('location')).toHaveTextContent('tags=vacation');
   });
 
@@ -76,7 +82,11 @@ describe('SavedSearchPicker', () => {
     renderWithProviders(<SavedSearchPicker />, {
       route: '/memory',
       mocks: [
-        mockQuery(GetSavedSearchesForPickerDocument, { first: 8, query: undefined }, pickerResult(id, 'Work stuff')),
+        mockQuery(
+          GetSavedSearchesForPickerDocument,
+          { first: 8, query: undefined },
+          pickerResult(id, 'Work stuff'),
+        ),
         mockQuery(
           GetSavedSearchesForPickerDocument,
           { first: 8, query: 'work' },
@@ -99,9 +109,13 @@ describe('SavedSearchPicker', () => {
     renderWithProviders(<SavedSearchPicker />, {
       route: '/memory',
       mocks: [
-        mockQuery(GetSavedSearchesForPickerDocument, { first: 8, query: undefined }, {
-          savedSearches: { __typename: 'SavedSearchConnection', totalCount: 0, edges: [] },
-        }),
+        mockQuery(
+          GetSavedSearchesForPickerDocument,
+          { first: 8, query: undefined },
+          {
+            savedSearches: { __typename: 'SavedSearchConnection', totalCount: 0, edges: [] },
+          },
+        ),
       ],
     });
 

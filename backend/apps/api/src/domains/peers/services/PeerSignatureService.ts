@@ -303,9 +303,7 @@ export class PeerSignatureService {
     } catch (error) {
       // Never throw out of here: a misconfigured key must degrade to "this box
       // does not sign", not take down every outbound ask.
-      this.logger.warn(
-        `peers.signingKeyJwk is unusable, outbound asks will be unsigned: ${String(error)}`,
-      );
+      this.logger.warn(`peers.signingKeyJwk is unusable, outbound asks will be unsigned: ${String(error)}`);
       this.cachedSigningKey = null;
     }
 

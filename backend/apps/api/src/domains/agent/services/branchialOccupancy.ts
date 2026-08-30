@@ -255,8 +255,7 @@ export function buildOccupancyTree(args: {
     day: '2-digit',
   }).format(now);
 
-  const todayClusters =
-    args.week?.days.find((day) => day.date === todayKey)?.clusters ?? [];
+  const todayClusters = args.week?.days.find((day) => day.date === todayKey)?.clusters ?? [];
   mergeScheduled(steps, todayClusters, now, args.timezone);
 
   return {

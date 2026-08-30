@@ -566,7 +566,9 @@ export function BackgroundProvider({
       textureOpacity: resolvedOpacity,
     };
   });
-  const [glowEnabled, setGlowEnabledState] = useState(() => readStoredGlow(glowStorageKey, defaultGlowEnabled));
+  const [glowEnabled, setGlowEnabledState] = useState(() =>
+    readStoredGlow(glowStorageKey, defaultGlowEnabled),
+  );
 
   useEffect(() => {
     const root = window.document.documentElement;

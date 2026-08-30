@@ -45,7 +45,17 @@ test('imports a vCard export end-to-end and the contacts land in Memory', async 
   // (ExportStep.handleFiles). Wait for the run to finish parsing — the
   // finished-run row renders "<n> records" once the server reports a
   // terminal status (isRunFinished / FinishedRow in LiveRunList.tsx).
-  await expect(page.getByText(/2 records/)).toBeVisible({ timeout: 60_000 });
+  //
+  // "0 records" here, not "2 records": `records` is a deliberately narrow
+  // metric — "rows this run actually wrote to ci.*" (ImportRunService's own
+  // recordsFor() reads only the PUSH stage's detail.pushed, never the parse
+  // stage's item count; see its doc comment). This run's stage list is
+  // unpack+parse+media — no push — so 0 is the correct, honest value the
+  // instant it reaches terminal status. The "Finish → Sync" button below
+  // isn't itself gated on that terminal status (ExportStep.tsx has no
+  // isRunFinished check on it), so this wait is still load-bearing: without
+  // it, a click here can race a run that hasn't finished parsing yet.
+  await expect(page.getByText(/0 records/)).toBeVisible({ timeout: 60_000 });
 
   await page.getByRole('button', { name: /Finish → Sync/ }).click();
 
@@ -54,8 +64,18 @@ test('imports a vCard export end-to-end and the contacts land in Memory', async 
   await expect(page.getByText(/ready to save/)).toBeVisible({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Sync to my memory' }).click();
 
-  // The push run also finishes and reports records pushed.
-  await expect(page.getByText(/2 records/).last()).toBeVisible({ timeout: 60_000 });
+  // The push run also finishes — and, like the parse run above, correctly
+  // reports "0 records" pushed. Verified directly against the push stage's
+  // own persisted detail: {"pushed": 0, "deduped": 2, "entities":
+  // {"resolved": 2, ...}, "summary": {"gaps": [{"reason": "no_destination",
+  // "count": 2}]}}. `records`/`detail.pushed` counts item-level rows landed
+  // in ci.* (communications, events, content); a vCard contact resolves
+  // straight to a Person entity with no accompanying item, so it is
+  // correctly excluded — same rule as the ImportRunService.recordsFor()
+  // doc comment: entity resolutions are deliberately "not records at all".
+  // The real proof this import worked is below: both contacts findable by
+  // name in Memory.
+  await expect(page.getByText(/0 records/).last()).toBeVisible({ timeout: 60_000 });
 
   // Confirm the data actually landed: both contacts are findable in the
   // Memory People view, by name — proof the import did not just report

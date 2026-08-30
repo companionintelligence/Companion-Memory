@@ -6,16 +6,7 @@
 export const MIN_BRANCH_MASS = 0.25;
 export const MIN_WEEK_OCCUR = 0.3;
 
-const NEWS_LIKE = new Set([
-  'ransom',
-  'activist',
-  'riot',
-  'hostage',
-  'protest',
-  'shooting',
-  'war',
-  'attack',
-]);
+const NEWS_LIKE = new Set(['ransom', 'activist', 'riot', 'hostage', 'protest', 'shooting', 'war', 'attack']);
 
 const JUNK_PHRASES = new Set(['nothink', 'noidea', 'unknown', 'unsorted']);
 

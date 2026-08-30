@@ -62,9 +62,7 @@ function BacklogCard({ task, onDismiss, touchDrag = false, placeable = true }: C
       className={cn(
         'group relative flex flex-col rounded-lg border border-border bg-background',
         'p-2.5 transition-colors',
-        placeable
-          ? 'cursor-grab pl-7 hover:border-primary/50 active:cursor-grabbing'
-          : 'pl-2.5 pr-9',
+        placeable ? 'cursor-grab pl-7 hover:border-primary/50 active:cursor-grabbing' : 'pl-2.5 pr-9',
         placeable && touchDrag && 'select-none touch-pan-y [-webkit-touch-callout:none]',
       )}
     >
@@ -328,11 +326,7 @@ export function TaskSlate({
       <div className="mb-2.5 flex items-baseline justify-between gap-2">
         <h3 className="text-sm font-medium text-foreground">Possibilities</h3>
         <span className="text-[11px] text-muted-foreground">
-          {hasCards
-            ? isMobile
-              ? 'drag the handle onto the day above'
-              : 'drag one onto a day above'
-            : null}
+          {hasCards ? (isMobile ? 'drag the handle onto the day above' : 'drag one onto a day above') : null}
         </span>
       </div>
 

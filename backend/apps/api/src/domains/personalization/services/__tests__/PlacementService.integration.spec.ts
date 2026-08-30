@@ -229,9 +229,13 @@ describeWithDatabase(
       expect(row.promoted_event_id).toBe(winnerEventId);
 
       // And the event the LOSER minted before discovering it lost the claim must
-      // not linger as an orphan: `acceptCandidate` deletes it on the way out.
+      // not linger as an orphan. `acceptCandidate` rolls it back via
+      // `EventService.remove`, which is a deliberate soft delete (`ci.events.is_deleted`,
+      // see its doc comment: "restore can bring it back verbatim") rather than a
+      // physical delete, so the row itself still exists — it just must be tombstoned.
       const orphans = await dataSource.query(
-        `SELECT event_id FROM ci.events WHERE user_id = $1 AND inference_sources->>'candidate_id' = $2`,
+        `SELECT event_id FROM ci.events
+          WHERE user_id = $1 AND inference_sources->>'candidate_id' = $2 AND is_deleted = false`,
         [ctx.userId, candidateId],
       );
       expect(orphans).toHaveLength(0);
