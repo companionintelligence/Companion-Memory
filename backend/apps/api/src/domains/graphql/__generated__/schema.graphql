@@ -1352,7 +1352,7 @@ type ForageTrialType {
   textureMass: Float
 }
 
-"""One 30-minute forecast bucket from the HBPE histogram"""
+"""One 15-minute forecast bucket from the HBPE histogram"""
 type ForecastBucketType {
   bucketIndex: Int!
   l0Probs: [ProbabilityEntryType!]!
@@ -1383,7 +1383,7 @@ type ForecastHistoryProbType {
   probability: Float!
 }
 
-"""48-bucket (30-min) HBPE day-ahead forecast"""
+"""96-bucket (15-min) HBPE day-ahead forecast"""
 type ForecastType {
   buckets: [ForecastBucketType!]!
 
