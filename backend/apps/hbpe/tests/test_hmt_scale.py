@@ -63,6 +63,12 @@ def test_get_qwen_uses_http_when_api_base_set(monkeypatch):
     )
     monkeypatch.setattr(settings, "label_chat_model", "Qwen3-8B")
     monkeypatch.setattr(settings, "label_api_key", "vllm-local")
+    # This test is about backend SELECTION, not reachability: no vLLM listens on
+    # host.docker.internal:8000 in CI. _build_labeler now probes the endpoint and
+    # degrades to the GGUF labeler when nothing answers (see
+    # test_labeler_backend_selection.py), so the probe has to be stubbed for the
+    # selection assertion below to mean anything.
+    monkeypatch.setattr(qwen_mod, "_endpoint_reachable", lambda base, timeout: True)
     qwen_mod.reset_qwen_for_tests()
     try:
         inst = qwen_mod.get_qwen()
