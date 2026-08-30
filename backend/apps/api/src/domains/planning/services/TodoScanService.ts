@@ -9,6 +9,16 @@ import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaSer
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
+import {
+  SCAN_DEDUP_LIMIT,
+  SCAN_DEDUP_STATUSES,
+  claimedSourceIds,
+  findSimilarTitle,
+  formatAlreadyTracked,
+  newerDuplicateIds,
+} from '../engine/taskTitleSimilarity';
+import type { Task } from '../entities/TaskEntity';
+
 import { PlannedBlockService } from './PlannedBlockService';
 import { ProposedTaskReconcileService } from './ProposedTaskReconcileService';
 import { TaskService } from './TaskService';
@@ -64,6 +74,7 @@ const itemSchema = z.object({
   title: z.string(),
   detail: z.string().optional(),
   confidence: z.number().optional(),
+  sourceIndex: z.number().int().positive().optional(),
 });
 
 const responseSchema = z.object({
@@ -97,6 +108,7 @@ const RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
           title: { type: 'string', maxLength: 120 },
           detail: { type: 'string', maxLength: 200 },
           confidence: { type: 'number' },
+          sourceIndex: { type: 'integer' },
         },
         required: ['title'],
       },
@@ -134,22 +146,41 @@ export class TodoScanService {
     const context = { userId } as UserServiceContext;
     const tallies = { created: 0, proposed: 0, appended: 0, redated: 0, archived: 0 };
 
-    const memoryBlock = await this.memoryBlock(context);
+    const hits = await this.memoryHits(context);
 
-    if (memoryBlock == null) {
+    if (hits == null) {
       this.logger.log('Todo scan finished', { userId, ...tallies, skippedReconcile: true });
 
       return tallies;
     }
 
-    if (!memoryBlock.trim()) {
+    if (hits.length === 0) {
       this.logger.debug('Todo scan found no memory hits', { userId });
       const sweep = await this.sweepStale(context, []);
 
       return { ...tallies, ...sweep };
     }
 
-    const surfaced = await this.surfaceItems(context, memoryBlock);
+    const tracked = await this.collapseDuplicateProposed(
+      context,
+      await this.taskService.findAll(context, {
+        status: [...SCAN_DEDUP_STATUSES],
+        limit: SCAN_DEDUP_LIMIT,
+      }),
+    );
+    const claimedEntities = claimedSourceIds(tracked, 'sourceEntityId');
+    const fresh = hits.filter((hit) => !claimedEntities.has(hit.id));
+
+    if (fresh.length === 0) {
+      this.logger.debug('Todo scan found no unprocessed memory hits', { userId, seen: hits.length });
+      const sweep = await this.sweepStale(context, proposedTitles(tracked, 'memory_scan'));
+
+      return { ...tallies, ...sweep };
+    }
+
+    const memoryBlock = fresh.map((hit, index) => `[${index + 1}] ${hit.text}`).join('\n---\n');
+
+    const surfaced = await this.surfaceItems(context, memoryBlock, tracked);
 
     if (surfaced == null) {
       this.logger.log('Todo scan finished', { userId, ...tallies, skippedReconcile: true });
@@ -157,11 +188,16 @@ export class TodoScanService {
       return tallies;
     }
 
-    const sweep = await this.sweepStale(context, surfaced);
+    const sweep = await this.sweepStale(
+      context,
+      surfaced.length > 0 ? surfaced.map((item) => item.title) : proposedTitles(tracked, 'memory_scan'),
+    );
     tallies.redated = sweep.redated;
     tallies.archived = sweep.archived;
 
     const proposedWindow = await this.proposedReconcile.windowForToday(context);
+    const acceptedThisRun: string[] = [];
+    const claimedThisRun = new Set<string>();
 
     for (const item of surfaced.slice(0, MAX_SURFACED)) {
       const title = item.title.trim();
@@ -173,6 +209,7 @@ export class TodoScanService {
       try {
         const confidence = clampConfidence(item.confidence);
         const sourceRef = TaskService.memoryScanSourceRef(title);
+        const source = sourceOf(item.sourceIndex, fresh);
         const existing =
           (await this.taskService.findBySourceRef(context, 'memory_scan', sourceRef)) ??
           (await this.taskService.findByTitleMatch(context, title));
@@ -183,6 +220,17 @@ export class TodoScanService {
             tallies.appended += 1;
           }
 
+          continue;
+        }
+
+        if (
+          findSimilarTitle(title, tracked) ||
+          acceptedThisRun.some((seen) => findSimilarTitle(title, [{ title: seen }]))
+        ) {
+          continue;
+        }
+
+        if (source && (claimedEntities.has(source.id) || claimedThisRun.has(source.id))) {
           continue;
         }
 
@@ -202,11 +250,21 @@ export class TodoScanService {
           status,
           sourceKind: 'memory_scan',
           sourceRef,
-          metadata: { confidence, generator: 'planning.todo_scan' },
+          metadata: {
+            confidence,
+            generator: 'planning.todo_scan',
+            ...(source ? { sourceEntityId: source.id } : {}),
+          },
           ...(status === 'proposed' ? proposedWindow : {}),
         });
 
         if (created) {
+          if (source) {
+            claimedThisRun.add(source.id);
+          }
+
+          acceptedThisRun.push(title);
+
           if (status === 'proposed') {
             tallies.proposed += 1;
           } else {
@@ -232,7 +290,7 @@ export class TodoScanService {
     return tallies;
   }
 
-  private async memoryBlock(context: UserServiceContext): Promise<string | null> {
+  private async memoryHits(context: UserServiceContext): Promise<Array<{ id: string; text: string }> | null> {
     try {
       const results = await this.searchService.search(context, {
         query: MEMORY_LOOKBACK_QUERY,
@@ -243,7 +301,7 @@ export class TodoScanService {
       const hits = results ?? [];
 
       if (hits.length === 0) {
-        return '';
+        return [];
       }
 
       const ids = hits.map((hit) => hit.id);
@@ -258,22 +316,24 @@ export class TodoScanService {
 
       const byId = new Map(rows.map((row) => [row.id, row]));
 
-      return hits
-        .map((hit) => {
-          const row = byId.get(hit.id);
-          const title = row?.name?.trim();
-          const snippet = row?.snippet?.trim();
+      return hits.flatMap((hit) => {
+        const row = byId.get(hit.id);
+        const title = row?.name?.trim();
+        const snippet = row?.snippet?.trim();
 
-          if (!title && !snippet) {
-            return '';
-          }
+        if (!title && !snippet) {
+          return [];
+        }
 
-          return [`${row?.entity_type ?? hit.type}: ${title || '(untitled)'}`, snippet]
-            .filter(Boolean)
-            .join('\n');
-        })
-        .filter(Boolean)
-        .join('\n---\n');
+        return [
+          {
+            id: hit.id,
+            text: [`${row?.entity_type ?? hit.type}: ${title || '(untitled)'}`, snippet]
+              .filter(Boolean)
+              .join('\n'),
+          },
+        ];
+      });
     } catch (err) {
       this.logger.warn('Todo scan search failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -283,14 +343,35 @@ export class TodoScanService {
     }
   }
 
+  private async collapseDuplicateProposed(context: UserServiceContext, tracked: Task[]): Promise<Task[]> {
+    const dropIds = newerDuplicateIds(tracked);
+
+    if (dropIds.length === 0) {
+      return tracked;
+    }
+
+    for (const id of dropIds) {
+      await this.taskService.declineProposed(context, id);
+    }
+
+    this.logger.log('Collapsed duplicate proposed tasks', {
+      userId: context.userId,
+      archived: dropIds.length,
+    });
+
+    const dropped = new Set(dropIds);
+
+    return tracked.filter((task) => !dropped.has(task.id));
+  }
+
   private async sweepStale(
     context: UserServiceContext,
-    surfaced: Array<{ title: string }>,
+    titles: readonly string[],
   ): Promise<{ redated: number; archived: number }> {
     return this.proposedReconcile.reconcileStaleProposed(context, {
       sourceKind: 'memory_scan',
-      relevantTitles: surfaced.map((item) => item.title),
-      relevantSourceRefs: surfaced.map((item) => TaskService.memoryScanSourceRef(item.title.trim())),
+      relevantTitles: titles,
+      relevantSourceRefs: titles.map((title) => TaskService.memoryScanSourceRef(title.trim())),
     });
   }
 
@@ -302,20 +383,27 @@ export class TodoScanService {
   private async surfaceItems(
     context: UserServiceContext,
     memoryBlock: string,
-  ): Promise<Array<{ title: string; detail?: string; confidence?: number }> | null> {
+    tracked: readonly Task[],
+  ): Promise<Array<z.infer<typeof itemSchema>> | null> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
 
     try {
+      const alreadyTracked = formatAlreadyTracked(tracked.map((task) => task.title));
       const prompt = [
         "You extract possible to-do items from a person's recent memory.",
         'Return only concrete actionable items the person still needs to do.',
         'Skip completed work, past events with no remaining action, and vague reflections.',
-        'JSON: {"items":[{"title":"string","detail":"optional string","confidence":0.0-1.0}]}',
+        'Never propose work that is already tracked, even if the wording differs.',
+        'Each memory item is numbered. Set sourceIndex to that number when the task comes from it.',
+        'JSON: {"items":[{"title":"string","detail":"optional string","confidence":0.0-1.0,"sourceIndex":1}]}',
+        alreadyTracked,
         '',
         'Memory:',
         memoryBlock.slice(0, 6000),
-      ].join('\n');
+      ]
+        .filter((line) => line !== '')
+        .join('\n');
 
       const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
         model: UTILITY_MODEL,
@@ -375,6 +463,20 @@ export class TodoScanService {
       clearTimeout(timer);
     }
   }
+}
+
+function proposedTitles(tasks: readonly Task[], sourceKind: string): string[] {
+  return tasks
+    .filter((task) => task.status === 'proposed' && task.sourceKind === sourceKind)
+    .map((task) => task.title);
+}
+
+function sourceOf<T>(index: number | undefined, items: readonly T[]): T | undefined {
+  if (index == null || index < 1 || index > items.length) {
+    return undefined;
+  }
+
+  return items[index - 1];
 }
 
 function clampConfidence(value: number | undefined): number {

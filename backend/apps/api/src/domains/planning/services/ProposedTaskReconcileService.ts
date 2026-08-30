@@ -4,6 +4,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 
 import { shiftLocalDate } from '../engine/computePlacement';
+import { titlesAreSimilar } from '../engine/taskTitleSimilarity';
 import type { Task } from '../entities/TaskEntity';
 import type { UpdateTaskDto } from '../types';
 
@@ -76,7 +77,9 @@ export class ProposedTaskReconcileService {
       }
 
       const stillRelevant =
-        titles.has(normalizeTitle(task.title)) || (task.sourceRef != null && refs.has(task.sourceRef));
+        titles.has(normalizeTitle(task.title)) ||
+        [...options.relevantTitles].some((title) => titlesAreSimilar(task.title, title)) ||
+        (task.sourceRef != null && refs.has(task.sourceRef));
 
       if (stillRelevant) {
         await this.taskService.update(context, task.id, await this.redatePatch(context, task, today));

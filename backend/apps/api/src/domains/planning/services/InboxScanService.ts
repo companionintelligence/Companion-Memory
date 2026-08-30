@@ -9,6 +9,16 @@ import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaSer
 import { CommunicationEntity } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
+import {
+  SCAN_DEDUP_LIMIT,
+  SCAN_DEDUP_STATUSES,
+  claimedSourceIds,
+  findSimilarTitle,
+  formatAlreadyTracked,
+  newerDuplicateIds,
+} from '../engine/taskTitleSimilarity';
+import type { Task } from '../entities/TaskEntity';
+
 import { PlannedBlockService } from './PlannedBlockService';
 import { ProposedTaskReconcileService } from './ProposedTaskReconcileService';
 import { TaskService } from './TaskService';
@@ -43,6 +53,7 @@ const itemSchema = z.object({
   detail: z.string().optional(),
   confidence: z.number().optional(),
   estimatedMinutes: z.number().optional(),
+  sourceIndex: z.number().int().positive().optional(),
 });
 
 const responseSchema = z.object({
@@ -61,6 +72,7 @@ const RESPONSE_JSON_SCHEMA: Record<string, unknown> = {
           detail: { type: 'string' },
           confidence: { type: 'number' },
           estimatedMinutes: { type: 'number' },
+          sourceIndex: { type: 'integer' },
         },
         required: ['title'],
       },
@@ -114,12 +126,32 @@ export class InboxScanService {
       return { ...tallies, ...sweep };
     }
 
-    const block = messages
-      .map((message) => formatMessage(message))
+    const tracked = await this.collapseDuplicateProposed(
+      context,
+      await this.taskService.findAll(context, {
+        status: [...SCAN_DEDUP_STATUSES],
+        limit: SCAN_DEDUP_LIMIT,
+      }),
+    );
+    const claimedComms = claimedSourceIds(tracked, 'sourceCommunicationId');
+    const fresh = messages.filter((message) => !claimedComms.has(message.id));
+
+    if (fresh.length === 0) {
+      this.logger.debug('Inbox scan found no unprocessed inbound messages', {
+        userId,
+        seen: messages.length,
+      });
+      const sweep = await this.sweepStale(context, proposedTitles(tracked, 'inbox'));
+
+      return { ...tallies, ...sweep };
+    }
+
+    const block = fresh
+      .map((message, index) => formatMessage(message, index + 1))
       .join('\n---\n')
       .slice(0, 8000);
 
-    const surfaced = await this.surfaceItems(context, block);
+    const surfaced = await this.surfaceItems(context, block, tracked);
 
     if (surfaced == null) {
       this.logger.log('Inbox scan finished', { userId, ...tallies, skippedReconcile: true });
@@ -127,11 +159,16 @@ export class InboxScanService {
       return tallies;
     }
 
-    const sweep = await this.sweepStale(context, surfaced);
+    const sweep = await this.sweepStale(
+      context,
+      surfaced.length > 0 ? surfaced.map((item) => item.title) : proposedTitles(tracked, 'inbox'),
+    );
     tallies.redated = sweep.redated;
     tallies.archived = sweep.archived;
 
     const proposedWindow = await this.proposedReconcile.windowForToday(context);
+    const acceptedThisRun: string[] = [];
+    const claimedThisRun = new Set<string>();
 
     for (const item of surfaced.slice(0, MAX_SURFACED)) {
       const title = item.title.trim();
@@ -143,6 +180,7 @@ export class InboxScanService {
       try {
         const confidence = clampConfidence(item.confidence);
         const sourceRef = TaskService.memoryScanSourceRef(title, 'inbox');
+        const source = sourceOf(item.sourceIndex, fresh);
         const existing =
           (await this.taskService.findBySourceRef(context, 'inbox', sourceRef)) ??
           (await this.taskService.findByTitleMatch(context, title));
@@ -152,6 +190,17 @@ export class InboxScanService {
             await this.taskService.appendNotes(context, existing.id, item.detail.trim());
           }
 
+          continue;
+        }
+
+        if (
+          findSimilarTitle(title, tracked) ||
+          acceptedThisRun.some((seen) => findSimilarTitle(title, [{ title: seen }]))
+        ) {
+          continue;
+        }
+
+        if (source && (claimedComms.has(source.id) || claimedThisRun.has(source.id))) {
           continue;
         }
 
@@ -174,13 +223,23 @@ export class InboxScanService {
             item.estimatedMinutes && item.estimatedMinutes > 0 ? Math.round(item.estimatedMinutes) : null,
           sourceKind: 'inbox',
           sourceRef,
-          metadata: { confidence, generator: 'planning.inbox_scan' },
+          metadata: {
+            confidence,
+            generator: 'planning.inbox_scan',
+            ...(source ? { sourceCommunicationId: source.id } : {}),
+          },
           ...(status === 'proposed' ? proposedWindow : {}),
         });
 
         if (!created) {
           continue;
         }
+
+        if (source) {
+          claimedThisRun.add(source.id);
+        }
+
+        acceptedThisRun.push(title);
 
         if (status === 'proposed') {
           tallies.proposed += 1;
@@ -209,14 +268,35 @@ export class InboxScanService {
     return tallies;
   }
 
+  private async collapseDuplicateProposed(context: UserServiceContext, tracked: Task[]): Promise<Task[]> {
+    const dropIds = newerDuplicateIds(tracked);
+
+    if (dropIds.length === 0) {
+      return tracked;
+    }
+
+    for (const id of dropIds) {
+      await this.taskService.declineProposed(context, id);
+    }
+
+    this.logger.log('Collapsed duplicate proposed tasks', {
+      userId: context.userId,
+      archived: dropIds.length,
+    });
+
+    const dropped = new Set(dropIds);
+
+    return tracked.filter((task) => !dropped.has(task.id));
+  }
+
   private async sweepStale(
     context: UserServiceContext,
-    surfaced: Array<{ title: string }>,
+    titles: readonly string[],
   ): Promise<{ redated: number; archived: number }> {
     return this.proposedReconcile.reconcileStaleProposed(context, {
       sourceKind: 'inbox',
-      relevantTitles: surfaced.map((item) => item.title),
-      relevantSourceRefs: surfaced.map((item) => TaskService.memoryScanSourceRef(item.title.trim(), 'inbox')),
+      relevantTitles: titles,
+      relevantSourceRefs: titles.map((title) => TaskService.memoryScanSourceRef(title.trim(), 'inbox')),
     });
   }
 
@@ -228,20 +308,27 @@ export class InboxScanService {
   private async surfaceItems(
     context: UserServiceContext,
     inboxBlock: string,
+    tracked: readonly Task[],
   ): Promise<Array<z.infer<typeof itemSchema>> | null> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
 
     try {
+      const alreadyTracked = formatAlreadyTracked(tracked.map((task) => task.title));
       const prompt = [
         "You extract possible to-do items from a person's inbound inbox (email, SMS, chat).",
         'Return only concrete actionable items the person still needs to do.',
         'Skip newsletters, receipts with no action, FYI threads, and completed work.',
-        'JSON: {"items":[{"title":"string","detail":"optional","confidence":0.0-1.0,"estimatedMinutes":number}]}',
+        'Never propose work that is already tracked, even if the wording differs.',
+        'Each inbox item is numbered. Set sourceIndex to that number when the task comes from it.',
+        'JSON: {"items":[{"title":"string","detail":"optional","confidence":0.0-1.0,"estimatedMinutes":number,"sourceIndex":1}]}',
+        alreadyTracked,
         '',
         'Inbox:',
         inboxBlock,
-      ].join('\n');
+      ]
+        .filter((line) => line !== '')
+        .join('\n');
 
       const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
         model: UTILITY_MODEL,
@@ -281,15 +368,29 @@ export class InboxScanService {
   }
 }
 
-function formatMessage(message: CommunicationEntity): string {
+function formatMessage(message: CommunicationEntity, index: number): string {
   const subject = message.subject?.trim() || '(no subject)';
   const preview = (message.preview || message.summary || message.content || '').replace(/\s+/g, ' ').trim();
 
   return [
-    `${message.communicationType} ${message.time.toISOString()}`,
+    `[${index}] ${message.communicationType} ${message.time.toISOString()}`,
     `Subject: ${subject}`,
     preview.slice(0, 500),
   ].join('\n');
+}
+
+function proposedTitles(tasks: readonly Task[], sourceKind: string): string[] {
+  return tasks
+    .filter((task) => task.status === 'proposed' && task.sourceKind === sourceKind)
+    .map((task) => task.title);
+}
+
+function sourceOf<T>(index: number | undefined, items: readonly T[]): T | undefined {
+  if (index == null || index < 1 || index > items.length) {
+    return undefined;
+  }
+
+  return items[index - 1];
 }
 
 function clampConfidence(value: number | undefined): number {
