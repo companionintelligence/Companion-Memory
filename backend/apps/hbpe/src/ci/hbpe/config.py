@@ -144,6 +144,38 @@ class Settings(BaseSettings):
         default_factory=lambda: int(os.getenv("HBPE_LABEL_BUDGET_SECONDS", "14400"))
     )
 
+    # ── Label drain ordering (see nightly_runner.label_unlabeled) ─────────────
+    # The drain used to be strictly oldest-first over the whole corpus, so on a
+    # real appliance (198k events back to 2006) the labeling front sat years in
+    # the past and hbpe.recurrence_profiles — which only reads the last
+    # HISTORY_DAYS of hbpe.token_stream — was permanently empty, i.e. /forecast
+    # returned clusters:[] for months. The drain now runs the recency window
+    # first.
+    #
+    # The width of that window is bootstrap.SERIALIZE_WINDOW_DAYS, NOT
+    # recurrence.HISTORY_DAYS (180). A label reaches the profiler only via
+    # hbpe.token_stream, and the only writer of that table serializes the
+    # trailing SERIALIZE_WINDOW_DAYS; a day that fell out of that window before
+    # its events were labeled is never revisited. Labeling the 90–180-day band
+    # therefore produces zero token_stream rows — on the dev corpus that is
+    # 5,775 of the 7,192 unlabeled events inside 180 days, i.e. most of a
+    # reserved budget share spent for no forecast at all. A value *smaller*
+    # than the serialize window is the harmful direction: it hands days that
+    # serialize will write to the oldest-first historical phase, which reaches
+    # them last. Kept equal by a test in tests/test_label_drain.py.
+    label_recency_days: int = Field(
+        default_factory=lambda: int(os.getenv("HBPE_LABEL_RECENCY_DAYS", "90"))
+    )
+    # Fraction of label_budget_seconds reserved for that recency phase. The
+    # remainder is what guarantees the historical backfill still makes progress
+    # every night, so old data is never permanently starved. Unused recency time
+    # rolls over automatically (both phases share one wall-clock budget), so an
+    # already-drained or empty recency window costs one query, not 80% of the
+    # night. Clamped to [0, 1] at the use site.
+    label_recency_budget_share: float = Field(
+        default_factory=lambda: float(os.getenv("HBPE_LABEL_RECENCY_SHARE", "0.8"))
+    )
+
     # ── App GraphQL API ───────────────────────────────────────────────────────
     # Set API_URL to the base URL of the main application service (e.g.
     # http://api:3030).  graphql_client.py posts to {api_url}/graphql.

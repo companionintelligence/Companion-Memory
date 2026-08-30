@@ -118,11 +118,53 @@ def _ensure_events_cti_schema(conn) -> None:
     _events_cti_ready = True
 
 
+def _unlabeled_events_where(
+    user_id: str,
+    since: datetime | None,
+    before: datetime | None,
+) -> tuple[str, list]:
+    """
+    Build the shared WHERE clause for the unlabeled-event queries.
+
+    ``since`` / ``before`` are half-open (``>= since``, ``< before``) so two
+    calls carrying the same boundary partition the set exactly: no row is
+    visible to both phases of the drain, and no row falls between them.
+
+    The bounds are bound as ``%s::timestamptz`` rather than compared against a
+    bare date literal on purpose. Comparing a timestamptz to a date casts using
+    the *session* TimeZone; the container happens to run Etc/UTC today, but an
+    appliance deployed with any other TimeZone would silently shift the window
+    off the one hbpe.pipeline.recurrence computes in UTC.
+    """
+    from ci.hbpe.tokenizer.static_labeler import mapped_kind_sql
+
+    params: list = [str(user_id)]
+    window = ""
+    if since is not None:
+        window += "\n          AND e.start_time >= %s::timestamptz"
+        params.append(since)
+    if before is not None:
+        window += "\n          AND e.start_time <  %s::timestamptz"
+        params.append(before)
+
+    where = f"""WHERE e.user_id    = %s::uuid
+          AND e.is_deleted = FALSE
+          AND e.event_type IS DISTINCT FROM 'planned_block'
+          AND ec.event_id  IS NULL
+          AND e.start_time >= '2010-01-01'::timestamptz
+          AND NOT ({mapped_kind_sql()}){window}"""
+    return where, params
+
+
 def get_unlabeled_events(
     user_id: str,
     limit: int = 1000,
     after_start: datetime | None = None,
     after_id: str | None = None,
+    *,
+    since: datetime | None = None,
+    before: datetime | None = None,
+    newest_first: bool = False,
 ) -> list[dict]:
     """
     Return events that have no entry in hbpe.l1_event_cluster.
@@ -130,30 +172,45 @@ def get_unlabeled_events(
     Kinds present in hbpe.kind_l0_map are excluded — the static labeler owns
     those. Keyset (start_time, event_id) pages the drain loop.
 
+    ``since`` / ``before`` bound the window (half-open, see
+    ``_unlabeled_events_where``); ``newest_first`` flips the scan to descending.
+    The nightly drain uses those to label the recency window that the
+    recurrence profiler actually reads *before* the historical backfill — see
+    ``ci.hbpe.pipeline.nightly_runner.label_unlabeled``. Defaults reproduce the
+    original oldest-first full-history query, so existing callers are unchanged.
+
+    The ORDER BY must stay the *full composite* in a *single* direction, and the
+    keyset comparison must point the same way (``>`` for ASC, ``<`` for DESC).
+    Real corpora contain exact duplicate start_times (this dev database has two
+    reddit events at 2026-08-30 08:38:22.313+00); ordering by start_time alone,
+    or mixing directions between the two clauses, makes the keyset skip rows —
+    they are then never labeled, with no error signal anywhere.
+
     Keys: event_id (str), title (str|None), description (str|None)
     """
-    from ci.hbpe.tokenizer.static_labeler import mapped_kind_sql
+    where, params = _unlabeled_events_where(user_id, since, before)
 
     keyset = ""
-    params: list = [str(user_id)]
     if after_start is not None and after_id:
-        keyset = "AND (e.start_time, e.event_id) > (%s::timestamptz, %s::uuid)"
+        cmp = "<" if newest_first else ">"
+        keyset = f"AND (e.start_time, e.event_id) {cmp} (%s::timestamptz, %s::uuid)"
         params.extend([after_start, after_id])
     params.append(limit)
+
+    order = (
+        "ORDER BY e.start_time DESC, e.event_id DESC"
+        if newest_first
+        else "ORDER BY e.start_time, e.event_id"
+    )
 
     sql = f"""
         SELECT e.event_id::text, e.start_time, b.name AS title, b.description AS description
         FROM ci.events e
         JOIN ci.entities b ON b.entity_id = e.event_id
         LEFT JOIN hbpe.l1_event_cluster ec ON ec.event_id = e.event_id
-        WHERE e.user_id    = %s::uuid
-          AND e.is_deleted = FALSE
-          AND e.event_type IS DISTINCT FROM 'planned_block'
-          AND ec.event_id  IS NULL
-          AND e.start_time >= '2010-01-01'::timestamptz
-          AND NOT ({mapped_kind_sql()})
+        {where}
           {keyset}
-        ORDER BY e.start_time, e.event_id
+        {order}
         LIMIT %s
     """
     with get_conn() as conn:
