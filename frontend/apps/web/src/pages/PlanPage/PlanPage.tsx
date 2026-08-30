@@ -10,13 +10,20 @@ import { ErrorState } from '@/components/ErrorState';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
 
-import { DeleteTaskModal } from './DeleteTaskModal';
 import { EditTaskModal, UPDATE_TASK, type EditableTask } from './EditTaskModal';
 import { NewTaskForm } from './NewTaskForm';
 import { Task } from './Task';
 import { TaskBoard } from './TaskBoard';
 import { childrenOf, dueAtFromLocalDate, type SectionedTask } from './taskSections';
-import { ACCEPT_PROPOSED, DECLINE_PROPOSED, SCHEDULE_TASK, usePlanTasks } from './usePlanTasks';
+import { useDeleteTasks } from './useDeleteTasks';
+import {
+  ACCEPT_PROPOSED,
+  DECLINE_PROPOSED,
+  GET_TASKS,
+  PLAN_TASK,
+  SCHEDULE_TASK,
+  usePlanTasks,
+} from './usePlanTasks';
 
 const COMPLETE_TASK = gql(`
   mutation CompleteTask($id: ID!) {
@@ -75,18 +82,20 @@ export function PlanPage() {
   const [declineProposed] = useMutation(DECLINE_PROPOSED);
   const [acceptPending] = useMutation(ACCEPT_PENDING);
   const [declinePending] = useMutation(DECLINE_PENDING);
+  const [planTask] = useMutation(PLAN_TASK);
   const [scheduleTask] = useMutation(SCHEDULE_TASK);
   const [updateTask] = useMutation(UPDATE_TASK);
-  const [focusedTasks, setFocusedTasks] = useState<string[] | null>(null);
   const [editingTask, setEditingTask] = useState<EditableTask | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [boardTab, setBoardTab] = useState<string | null>(null);
+  const { deleteTasks } = useDeleteTasks();
 
   const handleToggle = (id: string, done: boolean) => {
     void (done ? completeTask({ variables: { id } }) : reopenTask({ variables: { id } }));
   };
 
   const handleDelete = (id: string) => {
-    setFocusedTasks([id]);
+    void deleteTasks([id]);
   };
 
   const handleEdit = (task: EditableTask) => {
@@ -153,6 +162,26 @@ export function PlanPage() {
     })();
   };
 
+  const showUnscheduled = () => {
+    setBoardTab('unscheduled');
+  };
+
+  const handlePlan = (id: string) => {
+    void (async () => {
+      try {
+        await planTask({
+          variables: { id },
+          refetchQueries: [{ query: GET_TASKS, variables: { first: 200 } }],
+          awaitRefetchQueries: true,
+        });
+      } catch {
+        toast.error('Could not move that task to Unscheduled. Try again.');
+      } finally {
+        showUnscheduled();
+      }
+    })();
+  };
+
   const handleAcceptAndSchedule = (id: string) => {
     void acceptProposed({ variables: { id } }).then(() =>
       scheduleTask({ variables: { id } }).then((result) => {
@@ -178,7 +207,7 @@ export function PlanPage() {
         selected={selectedIds.includes(task.id)}
         onSelectToggle={handleSelectToggle}
         onLongPressSelect={handleLongPressSelect}
-        onAcceptProposed={(id) => void acceptProposed({ variables: { id } }).then(refresh)}
+        onAcceptProposed={handlePlan}
         onDeclineProposed={(id) => void declineProposed({ variables: { id } }).then(refresh)}
         onAcceptAndSchedule={handleAcceptAndSchedule}
         onSchedule={handleSchedule}
@@ -188,6 +217,20 @@ export function PlanPage() {
         pendingKind={pending?.kind}
         onAcceptPending={(changeId) => void acceptPending({ variables: { id: changeId } }).then(refresh)}
         onDeclinePending={(changeId) => void declinePending({ variables: { id: changeId } }).then(refresh)}
+        onPlanPending={(taskId) => handlePlan(taskId)}
+        onDismissPendingTask={(taskId, changeId) => {
+          void (async () => {
+            await declinePending({ variables: { id: changeId } });
+
+            if (task.status === 'proposed') {
+              await declineProposed({ variables: { id: taskId } });
+            } else {
+              await updateTask({ variables: { input: { id: taskId, status: 'archived' } } });
+            }
+
+            refresh();
+          })();
+        }}
       >
         {kids.map((child) => renderTree(child, depth + 1))}
       </Task>
@@ -224,7 +267,12 @@ export function PlanPage() {
     // The columns ARE the explanation of what this page does.
     content = (
       <>
-        <TaskBoard sections={[]} renderTask={(task) => renderTree(task, 0)} />
+        <TaskBoard
+          sections={[]}
+          renderTask={(task) => renderTree(task, 0)}
+          tab={boardTab}
+          onTabChange={setBoardTab}
+        />
         {showEmptyState ? (
           <EmptyState
             icon={<ListTodo size={48} />}
@@ -234,7 +282,14 @@ export function PlanPage() {
       </>
     );
   } else {
-    content = <TaskBoard sections={sections} renderTask={(task) => renderTree(task, 0)} />;
+    content = (
+      <TaskBoard
+        sections={sections}
+        renderTask={(task) => renderTree(task, 0)}
+        tab={boardTab}
+        onTabChange={setBoardTab}
+      />
+    );
   }
 
   return (
@@ -259,7 +314,13 @@ export function PlanPage() {
                   type="button"
                   variant="destructive"
                   size="sm"
-                  onClick={() => setFocusedTasks(selectedIds)}
+                  onClick={() => {
+                    void deleteTasks(selectedIds).then((ok) => {
+                      if (ok) {
+                        setSelectedIds([]);
+                      }
+                    });
+                  }}
                 >
                   Delete
                 </Button>
@@ -276,15 +337,6 @@ export function PlanPage() {
         </div>
       </PageContent>
 
-      {focusedTasks && focusedTasks.length > 0 ? (
-        <DeleteTaskModal
-          taskIds={focusedTasks}
-          onClose={() => {
-            setFocusedTasks(null);
-            setSelectedIds([]);
-          }}
-        />
-      ) : null}
       {editingTask && (
         <EditTaskModal task={editingTask} onClose={() => setEditingTask(null)} onSaved={refresh} />
       )}

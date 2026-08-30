@@ -36,6 +36,10 @@ interface Props {
   pendingKind?: string | null;
   onAcceptPending?: (changeId: string) => void;
   onDeclinePending?: (changeId: string) => void;
+  /** Keep the task, drop the calendar suggestion, and file it as Unscheduled. */
+  onPlanPending?: (taskId: string, changeId: string) => void;
+  /** Archive the task and drop its pending change — same as Dismiss on a proposal. */
+  onDismissPendingTask?: (taskId: string, changeId: string) => void;
   /** Long-press multi-select on a phone. */
   selecting?: boolean;
   selected?: boolean;
@@ -54,6 +58,7 @@ export const TaskRowFragment = gql(`
     parentId
     dueAt
     scheduledFor
+    placedOnCalendar
     deferUntil
     estimatedMinutes
     completedAt
@@ -93,6 +98,8 @@ export function Task({
   pendingKind,
   onAcceptPending,
   onDeclinePending,
+  onPlanPending,
+  onDismissPendingTask,
   selecting = false,
   selected = false,
   onSelectToggle,
@@ -308,47 +315,14 @@ export function Task({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             {proposed ? <span>Proposed</span> : null}
             {task.dueAt ? <span>Due {formatDue(task.dueAt as string)}</span> : null}
-            {task.scheduledFor ? <span>Planned {task.scheduledFor}</span> : null}
+            {task.scheduledFor ? (
+              <span>
+                {task.placedOnCalendar ? `Planned ${task.scheduledFor}` : `Suggested ${task.scheduledFor}`}
+              </span>
+            ) : null}
             {task.estimatedMinutes ? <span>{task.estimatedMinutes} min</span> : null}
             {priorityLabel ? <span>{priorityLabel}</span> : null}
           </div>
-
-          {proposed && onAcceptProposed && onDeclineProposed ? (
-            <div className="mt-1 flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="default"
-                onClick={(event) => {
-                  stop(event);
-                  onAcceptProposed(task.id);
-                }}
-              >
-                Plan
-              </Button>
-              {onAcceptAndSchedule ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={(event) => {
-                    stop(event);
-                    onAcceptAndSchedule(task.id);
-                  }}
-                >
-                  Schedule
-                </Button>
-              ) : null}
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={(event) => {
-                  stop(event);
-                  onDeclineProposed(task.id);
-                }}
-              >
-                Dismiss
-              </Button>
-            </div>
-          ) : null}
 
           {!proposed && !done && overdue && onReschedule ? (
             pickingWhen ? (
@@ -377,7 +351,7 @@ export function Task({
             )
           ) : null}
 
-          {!proposed && !done && !overdue && !task.scheduledFor && !pendingSchedule && onSchedule ? (
+          {!proposed && !done && !overdue && !task.placedOnCalendar && !pendingSchedule && onSchedule ? (
             <div className="mt-1 flex flex-wrap gap-2">
               <Button
                 type="button"
@@ -393,9 +367,10 @@ export function Task({
             </div>
           ) : null}
 
-          {pendingChangeId && onAcceptPending && onDeclinePending ? (
+          {pendingChangeId && !pendingSchedule && onAcceptPending && onDeclinePending ? (
             <div className="mt-1 flex flex-wrap gap-2">
               <Button
+                type="button"
                 size="sm"
                 variant="default"
                 onClick={(event) => {
@@ -403,9 +378,10 @@ export function Task({
                   onAcceptPending(pendingChangeId);
                 }}
               >
-                {pendingKind === 'schedule' ? 'Schedule' : 'Confirm'}
+                Confirm
               </Button>
               <Button
+                type="button"
                 size="sm"
                 variant="outline"
                 onClick={(event) => {
@@ -413,7 +389,7 @@ export function Task({
                   onDeclinePending(pendingChangeId);
                 }}
               >
-                Ignore
+                Dismiss
               </Button>
             </div>
           ) : null}
@@ -478,6 +454,95 @@ export function Task({
           </div>
         ) : null}
       </div>
+
+      {proposed && onAcceptProposed && onDeclineProposed ? (
+        <div className="grid w-full grid-cols-3 gap-2" data-testid="proposed-actions">
+          <Button
+            type="button"
+            size="sm"
+            variant="default"
+            className="min-w-0 w-full px-2"
+            onClick={(event) => {
+              stop(event);
+              onAcceptProposed(task.id);
+            }}
+          >
+            Plan
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="min-w-0 w-full px-2"
+            disabled={!onAcceptAndSchedule}
+            onClick={(event) => {
+              stop(event);
+              onAcceptAndSchedule?.(task.id);
+            }}
+          >
+            Schedule
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="min-w-0 w-full px-2"
+            onClick={(event) => {
+              stop(event);
+              onDeclineProposed(task.id);
+            }}
+          >
+            Dismiss
+          </Button>
+        </div>
+      ) : pendingSchedule && pendingChangeId && onAcceptPending && onDeclinePending ? (
+        <div className="grid w-full grid-cols-3 gap-2" data-testid="pending-schedule-actions">
+          <Button
+            type="button"
+            size="sm"
+            variant="default"
+            className="min-w-0 w-full px-2"
+            onClick={(event) => {
+              stop(event);
+              if (onPlanPending) {
+                onPlanPending(task.id, pendingChangeId);
+              } else {
+                onDeclinePending(pendingChangeId);
+              }
+            }}
+          >
+            Plan
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="min-w-0 w-full px-2"
+            onClick={(event) => {
+              stop(event);
+              onAcceptPending(pendingChangeId);
+            }}
+          >
+            Schedule
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="min-w-0 w-full px-2"
+            onClick={(event) => {
+              stop(event);
+              if (onDismissPendingTask) {
+                onDismissPendingTask(task.id, pendingChangeId);
+              } else {
+                onDeclinePending(pendingChangeId);
+              }
+            }}
+          >
+            Dismiss
+          </Button>
+        </div>
+      ) : null}
 
       {children ? <ul className="flex flex-col gap-2">{children}</ul> : null}
     </li>

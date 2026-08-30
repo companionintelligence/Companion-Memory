@@ -16,6 +16,7 @@ function node(overrides: Record<string, unknown> = {}) {
     parentId: null,
     dueAt: null,
     scheduledFor: null,
+    placedOnCalendar: false,
     deferUntil: null,
     estimatedMinutes: null,
     completedAt: null,
@@ -54,8 +55,18 @@ describe('Task actions', () => {
     expect(screen.getByRole('button', { name: /^plan$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^schedule$/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^dismiss$/i })).toBeInTheDocument();
+    expect(screen.getByTestId('proposed-actions')).toHaveClass('grid-cols-3', 'w-full');
     expect(screen.queryByRole('button', { name: /add to plan/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /add and schedule/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps Plan, Schedule, and Dismiss in fixed columns even without a schedule handler', () => {
+    renderTask({ status: 'proposed' }, { onAcceptProposed: vi.fn(), onDeclineProposed: vi.fn() });
+
+    const buttons = screen.getByTestId('proposed-actions').querySelectorAll('button');
+
+    expect([...buttons].map((button) => button.textContent)).toEqual(['Plan', 'Schedule', 'Dismiss']);
+    expect(screen.getByRole('button', { name: /^schedule$/i })).toBeDisabled();
   });
 
   it('keeps the proposed buttons wired to their own handlers', () => {
@@ -71,8 +82,11 @@ describe('Task actions', () => {
     expect(onAcceptAndSchedule).toHaveBeenCalledWith('dGFzazoxMTE=');
   });
 
-  it('accepts a pending schedule with Schedule rather than Place on calendar', () => {
+  it('offers Plan, Schedule, and Dismiss on a pending calendar suggestion', () => {
     const onAcceptPending = vi.fn();
+    const onDeclinePending = vi.fn();
+    const onPlanPending = vi.fn();
+    const onDismissPendingTask = vi.fn();
 
     renderTask(
       {},
@@ -80,18 +94,25 @@ describe('Task actions', () => {
         pendingChangeId: 'change-1',
         pendingKind: 'schedule',
         onAcceptPending,
-        onDeclinePending: vi.fn(),
+        onDeclinePending,
+        onPlanPending,
+        onDismissPendingTask,
       },
     );
 
     expect(screen.queryByText(/place on calendar/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^ignore$/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('pending-schedule-actions')).toHaveClass('grid-cols-3', 'w-full');
 
-    // One card, one Schedule: the pending row replaces the standalone button.
-    const schedule = screen.getByRole('button', { name: /^schedule$/i });
-    fireEvent.click(schedule);
+    fireEvent.click(screen.getByRole('button', { name: /^plan$/i }));
+    expect(onPlanPending).toHaveBeenCalledWith('dGFzazoxMTE=', 'change-1');
+    expect(onDeclinePending).not.toHaveBeenCalled();
 
+    fireEvent.click(screen.getByRole('button', { name: /^schedule$/i }));
     expect(onAcceptPending).toHaveBeenCalledWith('change-1');
-    expect(screen.getByRole('button', { name: /^ignore$/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^dismiss$/i }));
+    expect(onDismissPendingTask).toHaveBeenCalledWith('dGFzazoxMTE=', 'change-1');
   });
 
   it('still offers Confirm for a pending change that is not a schedule', () => {
@@ -106,6 +127,8 @@ describe('Task actions', () => {
     );
 
     expect(screen.getByRole('button', { name: /^confirm$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^dismiss$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^ignore$/i })).not.toBeInTheDocument();
     // A non-schedule proposal leaves the ordinary Schedule button alone.
     expect(screen.getByRole('button', { name: /^schedule$/i })).toBeInTheDocument();
   });
