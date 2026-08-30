@@ -95,6 +95,16 @@ export class GitHubEventsTransformService {
       },
     );
 
+    // Fetched but otherwise unused by any branch below -- ci.events.metadata
+    // is an open jsonb bag already accepted by CreateEventDto, so this rides
+    // along on every create() call rather than being dropped.
+    const actorRepoMetadata = {
+      actor_login: event.actor?.login,
+      actor_avatar_url: event.actor?.avatar_url,
+      repo_id: event.repo?.id,
+      repo_url: event.repo?.url,
+    };
+
     switch (event.type) {
       case 'CommitCommentEvent': {
         const comment = (event as GithubCommitCommentEvent).payload.comment;
@@ -135,6 +145,7 @@ export class GitHubEventsTransformService {
               description: comment.body,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -156,6 +167,7 @@ export class GitHubEventsTransformService {
               description: thisEvent.payload.description,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         } else if (thisEvent.payload.ref_type === 'tag' && existingEvent.length === 0) {
@@ -170,6 +182,7 @@ export class GitHubEventsTransformService {
               description: thisEvent.payload.description,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         } else if (thisEvent.payload.ref_type === 'repository' && existingEvent.length === 0) {
@@ -184,6 +197,7 @@ export class GitHubEventsTransformService {
               description: thisEvent.payload.description,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -204,6 +218,7 @@ export class GitHubEventsTransformService {
               title: `Deleted branch ${thisEvent.payload.ref}`,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         } else if (thisEvent.payload.ref_type === 'tag' && existingEvent.length === 0) {
@@ -217,6 +232,7 @@ export class GitHubEventsTransformService {
               title: `Deleted tag ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -238,6 +254,7 @@ export class GitHubEventsTransformService {
               description: thisEvent.payload.discussion.body_text,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -257,6 +274,7 @@ export class GitHubEventsTransformService {
               title: `Forked repo  ${thisEvent.payload.forkee.full_name}`,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -305,6 +323,7 @@ export class GitHubEventsTransformService {
               description: thisEvent.payload.comment.body,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -329,6 +348,7 @@ export class GitHubEventsTransformService {
               description: thisEvent.payload.issue.body,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -352,6 +372,7 @@ export class GitHubEventsTransformService {
               description: thisEvent.payload.pull_request.title,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -375,6 +396,7 @@ export class GitHubEventsTransformService {
               description: thisEvent.payload.review.body,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -398,6 +420,7 @@ export class GitHubEventsTransformService {
               description: thisEvent.payload.comment.body,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -417,6 +440,7 @@ export class GitHubEventsTransformService {
               title: `Pushed commits to branch ${thisEvent.payload.ref.replace('refs/heads/', '')} in repo ${thisEvent.repo.name}`,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }
@@ -441,6 +465,7 @@ export class GitHubEventsTransformService {
               description: thisEvent.payload.release.body,
               source_system: 'github_events',
               source_type: 'ETL',
+              metadata: actorRepoMetadata,
             },
           );
         }

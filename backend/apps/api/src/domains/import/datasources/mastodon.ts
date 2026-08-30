@@ -260,6 +260,8 @@ export class MastodonFileImporter implements FileImporter {
     }
 
     if (act.type !== 'Create') {
+      params.pipeline.drop?.('non_create_activity');
+
       return;
     } // skip "Announce" (boosts) and others
 
@@ -269,6 +271,8 @@ export class MastodonFileImporter implements FileImporter {
     }
 
     if (obj.type !== 'Note') {
+      params.pipeline.drop?.('non_note_object');
+
       return;
     }
 

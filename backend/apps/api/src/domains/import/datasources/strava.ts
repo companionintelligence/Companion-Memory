@@ -96,7 +96,9 @@ export class StravaFileImporter implements FileImporter {
       return;
     }
 
-    for (const row of parseCSV(raw)) {
+    const rows = parseCSV(raw);
+    for (let index = 0; index < rows.length; index++) {
+      const row = rows[index];
       const actDate = row['Activity Date'] ? new Date(row['Activity Date']) : undefined;
       if (!timeframeContains(params.timeframe, actDate)) {
         continue;
@@ -118,7 +120,7 @@ export class StravaFileImporter implements FileImporter {
       params.pipeline.push({
         item: {
           classification: 'workout',
-          ...(row['Activity ID'] && { id: `strava:${row['Activity ID']}` }),
+          id: row['Activity ID'] ? `strava:${row['Activity ID']}` : `strava:${path.basename(csvPath)}:${index}`,
           timestamp: actDate,
           ...(start && { location: start }),
           content: {

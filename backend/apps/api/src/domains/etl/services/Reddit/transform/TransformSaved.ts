@@ -107,6 +107,7 @@ export class RedditSavedTransformService {
             // link post is identified by its url differing from its own
             // permalink — a self post's url is the permalink itself.
             ...(!isComment && item.url && item.url !== permalink ? { link_url: item.url } : {}),
+            author: item.author,
           },
         },
       );

@@ -56,7 +56,7 @@ export class FileEntity {
   @DeleteDateColumn({ type: 'timestamptz', name: 'deleted_at', nullable: true })
   deletedAt!: Date | null;
 
-  @Column({ type: 'text', name: 'external_created_at', nullable: true })
+  @Column({ type: 'timestamptz', name: 'external_created_at', nullable: true })
   externalCreatedAt!: Date | null;
 
   @Column({ type: 'timestamptz', name: 'external_updated_at', nullable: true })

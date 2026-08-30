@@ -94,6 +94,7 @@ export class RedditCommentsTransformService {
             subreddit: comment.subreddit,
             link_title: comment.link_title,
             score: comment.score,
+            author: comment.author,
           },
         },
       );

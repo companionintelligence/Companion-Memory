@@ -158,6 +158,7 @@ export class AppleContactsFileImporter implements FileImporter {
       db = new Database(dbPath, { readonly: true });
     } catch (e) {
       params.log?.('error', 'open contacts db failed', { error: (e as Error).message });
+      params.pipeline.drop?.('unreadable_file', path.basename(dbPath));
 
       return;
     }
@@ -230,6 +231,7 @@ export class AppleContactsFileImporter implements FileImporter {
       this.flushEntity(currentId, current, params, dbPath);
     } catch (e) {
       params.log?.('error', 'contacts query failed', { error: (e as Error).message });
+      params.pipeline.drop?.('query_failed', path.basename(dbPath));
     } finally {
       try {
         db?.close();
@@ -264,7 +266,13 @@ export class AppleContactsFileImporter implements FileImporter {
     if (typeof c.bday === 'number' && c.bday > -1e9) {
       const appleEpoch = new Date('2001-01-01T00:00:00Z').getTime();
       const ts = new Date(appleEpoch + c.bday * 1000);
-      attributes.push({ name: 'birth_date', value: ts.toISOString() });
+      // ZBIRTHDAYYEARLESS means Apple stamped a sentinel year onto ZBIRTHDAY
+      // because the card has no real year -- emitting the full ISO date would
+      // report that sentinel as a fact. Emit month/day only in that case.
+      const value = c.bdayYearless
+        ? `${String(ts.getUTCMonth() + 1).padStart(2, '0')}-${String(ts.getUTCDate()).padStart(2, '0')}`
+        : ts.toISOString();
+      attributes.push({ name: 'birth_date', value });
     }
 
     if (!name && attributes.length === 0) {

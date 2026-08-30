@@ -212,6 +212,8 @@ export class EmailFileImporter implements FileImporter {
   private processRawMessage(raw: string, location: string, index: number, params: ImportParams) {
     const parts = raw.split(/\n\n/);
     if (parts.length < 2) {
+      params.pipeline.drop?.('non_message');
+
       return;
     }
 
@@ -219,6 +221,8 @@ export class EmailFileImporter implements FileImporter {
     const bodyRaw = parts.slice(1).join('\n\n');
     const headers = parseHeaders(headersRaw);
     if (!headers.Date && !headers.Subject) {
+      params.pipeline.drop?.('non_message');
+
       return;
     } // likely not a real message
 

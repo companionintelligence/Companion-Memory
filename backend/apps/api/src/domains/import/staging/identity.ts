@@ -368,7 +368,7 @@ export function resolveEntityType(entity: Entity): string | null {
   return entity.type ?? null;
 }
 
-function dateToIso(value: Date | undefined): string | null {
+export function dateToIso(value: Date | undefined): string | null {
   if (!value) {
     return null;
   }

@@ -14,6 +14,7 @@ interface CalendarEvent {
   id?: string;
   summary?: string;
   description?: string;
+  htmlLink?: string;
   start?: {
     dateTime?: string;
     date?: string;
@@ -276,7 +277,7 @@ export class GoogleCalendarTransformService {
       organizerName: eventDetails.organizerName,
       participantCount: eventDetails.participants.length,
       participants: eventDetails.participants,
-      googleCalendarUrl: `https://calendar.google.com/calendar/event?eid=${eventDetails.id}`,
+      googleCalendarUrl: rawEvent.htmlLink ?? `https://calendar.google.com/calendar/event?eid=${eventDetails.id}`,
       created: eventDetails.created,
       updated: eventDetails.updated,
       rawEventId: rawEvent.id,

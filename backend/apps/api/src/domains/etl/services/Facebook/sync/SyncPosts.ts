@@ -10,7 +10,7 @@ import type { BaseClient, Connection, FacebookPost } from '@ci/domains/connectio
  */
 const ATTACHMENT_FIELDS = 'media,media_type,type,target,url';
 export const POST_FIELDS =
-  'id,message,created_time,story,link,type,permalink_url,full_picture,picture,from,' +
+  'id,message,created_time,story,link,type,permalink_url,full_picture,from,' +
   `attachments{${ATTACHMENT_FIELDS},subattachments{${ATTACHMENT_FIELDS}}}`;
 
 export async function syncPosts({

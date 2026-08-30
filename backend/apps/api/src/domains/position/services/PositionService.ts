@@ -189,9 +189,13 @@ export class PositionService {
           }
         }
 
+        // createPositionEntity() reads item.heading_degrees (snake_case, the
+        // DTO's own field), not a headingDegrees key -- normalizing onto the
+        // wrong key here was a no-op that let out-of-range headings through
+        // to storage unfiltered. Overwrite the field it actually reads.
         const normalizedItem = {
           ...item,
-          headingDegrees: this.normalizeHeading(item.heading_degrees),
+          heading_degrees: this.normalizeHeading(item.heading_degrees),
         };
 
         newPositions.push(normalizedItem);

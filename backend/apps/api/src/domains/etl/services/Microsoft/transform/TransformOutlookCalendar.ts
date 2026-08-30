@@ -267,7 +267,8 @@ export class OutlookCalendarTransformService {
     userId: string,
     connectionId: string,
   ): Promise<CreateEventDto> {
-    const start_time = event.start?.dateTime ? new Date(event.start.dateTime) : new Date();
+    const hasStartTime = !!event.start?.dateTime;
+    const start_time = hasStartTime ? new Date(event.start!.dateTime!) : new Date();
     const end_time = event.end?.dateTime ? new Date(event.end.dateTime) : null;
 
     // Extract location. A meeting-join link is not a place name — see
@@ -313,6 +314,10 @@ export class OutlookCalendarTransformService {
       is_recurring: !!event.recurrence || !!event.seriesMasterId,
       is_all_day: event.isAllDay || false,
       status: this.normalizeStatus(event.isCancelled),
+      // Outlook gave no start.dateTime: this instant is a wall-clock fallback,
+      // not a real occurrence time -- same stamp import/push/inputs.ts's
+      // toEventInput uses for the identical "no real date" case.
+      ...(hasStartTime ? {} : { time_source: 'ingest', time_precision: 'unknown' }),
       metadata,
       user: { id: userId },
     };

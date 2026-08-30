@@ -147,16 +147,20 @@ export class LastFmFileImporter implements FileImporter {
       return;
     }
 
+    // Occurrence counts so a true duplicate scrobble (same track re-played in
+    // the same UTC second) still gets a distinct, stable id, matching the
+    // pattern netflix.ts/kindle_reading.ts use for the identical problem.
+    const seen = new Map<string, number>();
     for (const row of rows) {
       try {
-        this.pushRow(row, params);
+        this.pushRow(row, params, seen);
       } catch (e) {
         params.log?.('error', `Failed to import row in ${base}`, { error: (e as Error).message });
       }
     }
   }
 
-  private pushRow(row: Record<string, string>, params: ImportParams): void {
+  private pushRow(row: Record<string, string>, params: ImportParams, seen: Map<string, number>): void {
     // uts is a Unix timestamp in seconds; fall back to utc_time string
     let ts: Date | undefined;
     if (row['uts'] && /^\d+$/.test(row['uts'].trim())) {
@@ -181,8 +185,13 @@ export class LastFmFileImporter implements FileImporter {
     const artist = row['artist'] || '';
     const album = row['album'] || '';
 
+    const idBase = `last_fm:${row['uts'] || row['utc_time'] || ''}:${artist}:${track}`;
+    const n = seen.get(idBase) ?? 0;
+    seen.set(idBase, n + 1);
+
     params.pipeline.push({
       item: {
+        id: n === 0 ? idBase : `${idBase}:${n}`,
         classification: 'listen',
         timestamp: ts,
         content: {

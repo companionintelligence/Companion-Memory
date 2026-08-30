@@ -96,6 +96,7 @@ export class RedditPostsTransformService {
             num_comments: post.num_comments,
             is_self: post.is_self,
             link_url: post.is_self ? undefined : post.url,
+            author: post.author,
           },
         },
       );

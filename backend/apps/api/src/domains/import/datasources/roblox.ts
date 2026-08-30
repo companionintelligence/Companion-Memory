@@ -261,8 +261,12 @@ export class RobloxFileImporter implements FileImporter {
         continue;
       }
 
+      // 'Kind'/'Source' are reserved for this importer's own fixed stamps set
+      // above -- mirror microsoft_account.ts's identical guard so a Roblox
+      // export column named either cannot silently overwrite them.
+      const key = k === 'Kind' ? 'RowKind' : k === 'Source' ? 'RowSource' : k;
       if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
-        metadata[k] = v;
+        metadata[key] = v;
         n++;
       }
     }
