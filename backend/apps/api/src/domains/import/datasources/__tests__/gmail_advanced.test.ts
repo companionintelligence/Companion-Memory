@@ -44,5 +44,8 @@ describe('Gmail advanced mbox parsing', () => {
     // stored raw — parseHeaders now runs every header value through
     // decodeHeaderField (email_mime.ts).
     expect(second?.item?.metadata?.Subject).toBe('Re: First Mail');
+    // Conversation key is the References root, not each message's own Message-ID.
+    expect(first?.item?.metadata?.ThreadId).toBe('abc123@mx.example.com');
+    expect(second?.item?.metadata?.ThreadId).toBe('abc123@mx.example.com');
   });
 });

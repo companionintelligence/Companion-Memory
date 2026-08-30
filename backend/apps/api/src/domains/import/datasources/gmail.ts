@@ -9,6 +9,8 @@ import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extra
 import { mboxFromLineDate, receivedDate } from './email_date';
 import { emailDirection, isDraft } from './email_direction';
 import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
+import { emailThreadId } from './email_thread';
+import { isHumanCorrespondence } from './human_correspondence';
 import {
   extractReceiptFields,
   isLikelyReceipt,
@@ -434,6 +436,10 @@ export class GmailFileImporter implements FileImporter {
       MessageID: cleanMsgID,
       InReplyTo: inReply?.replace(/[<>]/g, ''),
       References: refs?.replace(/[<>]/g, ' '),
+      // Conversation key — References root / In-Reply-To / own Message-ID.
+      // Without ThreadId, toCommunicationInput falls through to MessageID and
+      // every archive row becomes its own thread.
+      ThreadId: emailThreadId(headersMap),
       Text: bodyText ? bodyText.slice(0, bodyCap) : undefined,
       MediaAttachments: mediaAttachments.length ? mediaAttachments : undefined,
       Merchant: receiptFields?.merchant,
@@ -481,126 +487,16 @@ export class GmailFileImporter implements FileImporter {
       metadata: itemMetadata,
     };
     const g: Graph = { item, edges: edges.length ? edges : undefined };
-    // naïve threading: create entity for thread id via Message-ID sans angle brackets
-    if (cleanMsgID) {
-      const threadID = cleanMsgID;
-      g.entity = { name: threadID, type: 'email_thread' } as Entity; // simplistic; could use separate graph
+    const threadID = emailThreadId(headersMap);
+    if (threadID) {
+      g.entity = { name: threadID, type: 'email_thread' } as Entity;
     }
 
     params.pipeline.push(g);
   }
 }
 
-// Gmail category / user labels that mark non-human mail (bulk, automated, spam).
-// Google Takeout writes these in the `X-Gmail-Labels` header. "Google Voice" is
-// excluded because those SMS/voicemail rows arrive via the dedicated googlevoice
-// source; "Chat" is Hangouts logs, not email correspondence.
-const BULK_GMAIL_LABELS = new Set([
-  'spam',
-  'trash',
-  'junk',
-  'category promotions',
-  'category social',
-  'category forums',
-  'category updates',
-  'newsletters',
-  'notifications',
-  'google voice',
-  'chat',
-]);
-// Labels that affirmatively mark human correspondence and override the heuristics
-// below: Gmail's own Primary-tab classification, and the user's own Sent mail.
-const HUMAN_GMAIL_LABELS = new Set(['category personal', 'sent']);
-// Engagement/importance signals that rescue a message filed ONLY under Gmail's
-// "Updates" category. Updates swallows transactional mail users consider real —
-// receipts, bills, bookings (a live mailbox had 2,849 of 3,846 Inbox messages
-// there, 1,679 of them Gmail-flagged Important). Important/Starred are Gmail's
-// own significance verdicts, Opened is the user's engagement, and the
-// Purchases/Travel/Bills co-categories mark transactional records worth keeping.
-const UPDATES_OVERRIDE_LABELS = new Set([
-  'important',
-  'opened',
-  'starred',
-  'category purchases',
-  'category travel',
-  'category bills',
-]);
-
-/**
- * Decide whether a parsed email is real human correspondence (vs spam, a
- * newsletter, a promotion, or an automated notification). Order of evidence:
- *   1. X-Gmail-Labels — trust Gmail's own classification. Personal/Sent → keep;
- *      a bulk category/Spam/Junk → drop — EXCEPT a message filed only under
- *      "Category Updates" that also carries an engagement/importance label
- *      (Important, Starred, Opened, or a Purchases/Travel/Bills co-category),
- *      which is kept (see UPDATES_OVERRIDE_LABELS).
- *   2. Bulk headers — List-Unsubscribe / List-Id / Precedence: bulk|list|auto /
- *      Auto-Submitted mark mailing-list and machine-generated mail.
- *   3. Sender shape — no-reply@, notifications@, marketing@, mailer-daemon, etc.
- * Defaults to KEEP when there is no bulk signal, so ambiguous/older mail (which
- * predates Gmail categories) is preserved rather than silently dropped.
- */
-export function isHumanCorrespondence(h: Record<string, string>): boolean {
-  const labels = (h['X-Gmail-Labels'] || '')
-    .toLowerCase()
-    .split(',')
-    .map((l) => l.replace(/^imap_\$?/, '').trim()) // IMAP_$Junk → junk, IMAP_NotJunk → notjunk
-    .filter(Boolean);
-
-  // Google Voice SMS/voicemail notification emails are machine-generated and
-  // duplicate the dedicated googlevoice source — drop them even though Gmail
-  // tends to file them under "Category Personal".
-  const from = (h['From'] || '').toLowerCase();
-  const subject = h['Subject'] || '';
-  if (
-    from.includes('voice.google.com') ||
-    /^(New (text|picture|group) message|New voicemail|New missed call) from /i.test(subject)
-  ) {
-    return false;
-  }
-
-  if (labels.some((l) => HUMAN_GMAIL_LABELS.has(l))) {
-    return true;
-  }
-
-  const bulk = labels.filter((l) => BULK_GMAIL_LABELS.has(l));
-  if (bulk.length) {
-    // A message whose ONLY bulk signal is "Category Updates" is kept when an
-    // engagement/importance label says it mattered to the user. KEEP outright
-    // rather than falling through: receipts/bills nearly always come from
-    // no-reply senders with List-Unsubscribe headers, so the heuristics below
-    // would immediately re-drop everything this override is for. A message
-    // that ALSO carries Spam/Trash/Promotions/etc. is never rescued.
-    if (bulk.every((l) => l === 'category updates') && labels.some((l) => UPDATES_OVERRIDE_LABELS.has(l))) {
-      return true;
-    }
-
-    return false;
-  }
-
-  if (h['List-Unsubscribe'] || h['List-Id'] || h['List-ID']) {
-    return false;
-  }
-
-  if (/\b(bulk|list|junk|auto_reply|auto-reply)\b/i.test(h['Precedence'] || '')) {
-    return false;
-  }
-
-  const autoSubmitted = (h['Auto-Submitted'] || '').toLowerCase();
-  if (autoSubmitted && autoSubmitted !== 'no') {
-    return false;
-  }
-
-  if (
-    /(?:^|[<\s."'])(?:no-?reply|do-?not-?reply|donotreply|notifications?|newsletter|news|mailer-daemon|postmaster|bounce[sd]?|marketing|noreply)[._-]?@/.test(
-      from,
-    )
-  ) {
-    return false;
-  }
-
-  return true;
-}
+export { isHumanCorrespondence } from './human_correspondence';
 
 function parseHeaders(raw: string): Record<string, string> {
   const map: Record<string, string> = {};
