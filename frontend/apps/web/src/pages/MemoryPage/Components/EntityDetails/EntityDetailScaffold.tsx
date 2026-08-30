@@ -456,6 +456,19 @@ export function EntityDetailScaffold({
     <Sheet.Content
       data-testid="entity-detail-sheet"
       className="z-[1000] w-full gap-0 overflow-hidden border-l border-white/10 bg-background/75 p-0 shadow-2xl backdrop-blur-2xl supports-[backdrop-filter]:bg-background/65 sm:max-w-xl pt-[var(--safe-area-top)] pb-[var(--safe-area-bottom)] [&>button]:top-[calc(var(--safe-area-top)+1rem)]"
+      // Radix's default open-autofocus lands on the first tabbable descendant —
+      // here that is always the header's ChatWithAgentMenu IconButton, whose
+      // `Tooltip` opens on keyboard focus. That mounts a second DismissableLayer
+      // (the tooltip's) *after* this sheet's own layer in Radix's shared,
+      // app-wide layer stack, so it becomes the topmost layer and swallows the
+      // very first Escape press to itself (closing only the tooltip); a second
+      // Escape is then needed to actually close the sheet. Move initial focus to
+      // the sheet container instead — nothing inside opens on focus, so Escape
+      // reaches this sheet's own dismiss handler on the first press.
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        (event.currentTarget as HTMLElement | null)?.focus();
+      }}
     >
       <Sheet.Header className="gap-2 border-b border-border/60 bg-background/45 p-5 pr-12 backdrop-blur-xl">
         <div className="flex items-start justify-between gap-2">
