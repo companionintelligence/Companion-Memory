@@ -7,7 +7,7 @@ Re-serializing a day deletes existing rows for that (user_id, date) first.
 Token stream layout for a calendar day:
   [SOD] bucket_idx=0,  seq_order=0
   (L0, L1, L2 token triples for each event in chronological order)
-  [EOD] bucket_idx=47, seq_order=N
+  [EOD] bucket_idx=95, seq_order=N
 
 soft_prob is a FLOAT4[] holding the assignment similarity score.  Currently
 1-element; the full distribution over all centroids is deferred to Phase 2
@@ -112,48 +112,21 @@ class TokenSerializer:
 
 def _fetch_tokens_for_day(user_id: str, date_str: str) -> list[dict]:
     """
-    Fetch all L0/L1/L2 token records for a user on a given calendar date.
+    Fetch L0/L1/L2 token records for a user on a calendar date.
 
-    Each event generates up to 3 token rows (one per level), ordered chronologically.
-    bucket_idx = floor((start_time - midnight) / 30min), clamped to [0, 47].
-
-    Delegates app-table reads (ci.events, ci.content) to data_client.
+    Events (and completed tasks) collapse to one L0+L1 winner per bucket.
+    Hourly summaries fill buckets that still have no event-derived coverage.
     """
-    from ci.hbpe.data_client import get_token_events_for_day
+    from ci.hbpe.data_client import (
+        get_completed_tasks_for_day,
+        get_token_events_for_day,
+    )
+    from ci.hbpe.tokenizer.bucket_aggregator import aggregate_day
 
-    db_rows = get_token_events_for_day(user_id, date_str)
+    events = get_token_events_for_day(user_id, date_str)
+    events.extend(get_completed_tasks_for_day(user_id, date_str))
+    records = aggregate_day(events)
 
-    records: list[dict] = []
-    for r in db_rows:
-        bidx = int(r["bucket_idx"])
-        records.append(
-            {
-                "level": "L0",
-                "token_id": r["l0_class"],
-                "soft_prob_vector": [1.0],
-                "bucket_idx": bidx,
-            }
-        )
-        records.append(
-            {
-                "level": "L1",
-                "token_id": r["l1_cluster_id"],
-                "soft_prob_vector": [float(r["l1_sim"] or 0.0)],
-                "bucket_idx": bidx,
-            }
-        )
-        if r["l2_cluster_id"] is not None:
-            records.append(
-                {
-                    "level": "L2",
-                    "token_id": r["l2_cluster_id"],
-                    "soft_prob_vector": [float(r["l2_sim"] or 0.0)],
-                    "bucket_idx": bidx,
-                }
-            )
-
-    # Merge in summary-derived tokens for buckets with no event coverage.
-    # Summary tokens use soft_prob=0.7; they never override direct event labels.
     try:
         from ci.hbpe.tokenizer.summary_tokenizer import SummaryTokenizer
 

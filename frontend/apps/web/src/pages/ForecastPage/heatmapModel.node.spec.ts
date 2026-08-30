@@ -35,7 +35,7 @@ function probs(...entries: [string, number][]) {
 
 function bucket(over: Partial<HistoryBucketLike> = {}): HistoryBucketLike {
   return {
-    bucketIndex: 18, // 09:00Z
+    bucketIndex: 36, // 09:00Z
     predictedL0: probs(['WORK', 0.8], ['LEISURE', 0.2]),
     actualL0: 'WORK',
     ...over,
@@ -62,30 +62,30 @@ describe('dominantEntry', () => {
 describe('bucketInstant', () => {
   it('reconstructs the UTC instant from the logged date and bucket index', () => {
     expect(bucketInstant('2026-07-14', 0)?.toISOString()).toBe('2026-07-14T00:00:00.000Z');
-    expect(bucketInstant('2026-07-14', 18)?.toISOString()).toBe('2026-07-14T09:00:00.000Z');
-    expect(bucketInstant('2026-07-14', 47)?.toISOString()).toBe('2026-07-14T23:30:00.000Z');
+    expect(bucketInstant('2026-07-14', 36)?.toISOString()).toBe('2026-07-14T09:00:00.000Z');
+    expect(bucketInstant('2026-07-14', 95)?.toISOString()).toBe('2026-07-14T23:45:00.000Z');
   });
 
   it('rejects malformed dates and out-of-range indices', () => {
     expect(bucketInstant('not-a-date', 0)).toBeNull();
     expect(bucketInstant('2026-7-4', 0)).toBeNull();
     expect(bucketInstant('2026-07-14', -1)).toBeNull();
-    expect(bucketInstant('2026-07-14', 48)).toBeNull();
+    expect(bucketInstant('2026-07-14', 96)).toBeNull();
     expect(bucketInstant('2026-07-14', 1.5)).toBeNull();
   });
 });
 
 describe('localColumn', () => {
-  it('maps an instant to its local half-hour column', () => {
+  it('maps an instant to its local 15-minute column', () => {
     expect(localColumn('2026-07-14T00:00:00Z')).toBe(0);
-    expect(localColumn('2026-07-14T09:30:00Z')).toBe(19);
-    expect(localColumn('2026-07-14T23:59:00Z')).toBe(47);
+    expect(localColumn('2026-07-14T09:30:00Z')).toBe(38);
+    expect(localColumn('2026-07-14T23:59:00Z')).toBe(95);
   });
 
   it('shifts with the viewer zone rather than the logged UTC slot', () => {
     useZone('America/Los_Angeles'); // UTC-7 in July
-    expect(localColumn('2026-07-14T00:00:00Z')).toBe(34); // 17:00 local
-    expect(localColumn('2026-07-14T14:00:00Z')).toBe(14); // 07:00 local
+    expect(localColumn('2026-07-14T00:00:00Z')).toBe(68); // 17:00 local
+    expect(localColumn('2026-07-14T14:00:00Z')).toBe(28); // 07:00 local
   });
 
   it('returns null for unparseable input', () => {
@@ -96,13 +96,13 @@ describe('localColumn', () => {
 });
 
 describe('buildHistoryCells', () => {
-  it('always returns 48 slots', () => {
+  it('always returns 96 slots', () => {
     expect(buildHistoryCells({ date: '2026-07-14', buckets: [] })).toHaveLength(HEATMAP_COLUMNS);
     expect(buildHistoryCells({ date: 'garbage', buckets: [bucket()] }).filter(Boolean)).toHaveLength(0);
   });
 
   it('renders a matching actual at full opacity without divergence', () => {
-    expect(buildHistoryCells(day())[18]).toMatchObject({
+    expect(buildHistoryCells(day())[36]).toMatchObject({
       kind: 'actual',
       colorLabel: 'WORK',
       opacity: 1,
@@ -112,7 +112,7 @@ describe('buildHistoryCells', () => {
   });
 
   it('flags divergence when the actual disagrees with the predicted dominant', () => {
-    expect(buildHistoryCells(day({ buckets: [bucket({ actualL0: 'LEISURE' })] }))[18]).toMatchObject({
+    expect(buildHistoryCells(day({ buckets: [bucket({ actualL0: 'LEISURE' })] }))[36]).toMatchObject({
       kind: 'actual',
       colorLabel: 'LEISURE',
       predictedDominant: 'WORK',
@@ -121,7 +121,7 @@ describe('buildHistoryCells', () => {
   });
 
   it('does not flag a case-or-whitespace difference as a miss', () => {
-    expect(buildHistoryCells(day({ buckets: [bucket({ actualL0: ' work ' })] }))[18]?.divergent).toBe(false);
+    expect(buildHistoryCells(day({ buckets: [bucket({ actualL0: ' work ' })] }))[36]?.divergent).toBe(false);
   });
 
   it('flags a miss between two labels the palette does not recognise', () => {
@@ -130,11 +130,11 @@ describe('buildHistoryCells', () => {
       day({ buckets: [bucket({ predictedL0: probs(['CHORES', 0.9]), actualL0: 'GAMING' })] }),
     );
 
-    expect(cells[18]?.divergent).toBe(true);
+    expect(cells[36]?.divergent).toBe(true);
   });
 
   it('falls back to the prediction at confidence opacity when the actual is missing', () => {
-    expect(buildHistoryCells(day({ buckets: [bucket({ actualL0: null })] }))[18]).toMatchObject({
+    expect(buildHistoryCells(day({ buckets: [bucket({ actualL0: null })] }))[36]).toMatchObject({
       kind: 'predicted',
       colorLabel: 'WORK',
       opacity: 0.8,
@@ -147,32 +147,32 @@ describe('buildHistoryCells', () => {
       day({ buckets: [bucket({ actualL0: null, predictedL0: probs(['ERRAND', 0.02]) })] }),
     );
 
-    expect(cells[18]?.opacity).toBe(0.2);
+    expect(cells[36]?.opacity).toBe(0.2);
   });
 
   it('leaves slots with neither an actual nor a prediction empty', () => {
-    expect(buildHistoryCells(day({ buckets: [bucket({ actualL0: null, predictedL0: [] })] }))[18]).toBeNull();
+    expect(buildHistoryCells(day({ buckets: [bucket({ actualL0: null, predictedL0: [] })] }))[36]).toBeNull();
   });
 
   it('places the row by local clock, not by the logged UTC slot', () => {
     useZone('America/Los_Angeles');
     const cells = buildHistoryCells(day());
 
-    expect(cells[18]).toBeNull();
-    expect(cells[4]).toMatchObject({ colorLabel: 'WORK', kind: 'actual' }); // 02:00 local
+    expect(cells[36]).toBeNull();
+    expect(cells[8]).toMatchObject({ colorLabel: 'WORK', kind: 'actual' }); // 02:00 local
   });
 
   it('keeps the earlier bucket when two land in the same column', () => {
     const cells = buildHistoryCells(
       day({
         buckets: [
-          bucket({ bucketIndex: 18, actualL0: 'WORK' }),
-          bucket({ bucketIndex: 18, actualL0: 'SLEEP' }),
+          bucket({ bucketIndex: 36, actualL0: 'WORK' }),
+          bucket({ bucketIndex: 36, actualL0: 'SLEEP' }),
         ],
       }),
     );
 
-    expect(cells[18]?.actualL0).toBe('WORK');
+    expect(cells[36]?.actualL0).toBe('WORK');
   });
 });
 
@@ -187,7 +187,7 @@ describe('buildForecastRow', () => {
 
     expect(row).toMatchObject({ key: '2026-07-15', kind: 'ahead' });
     expect(row?.cells[0]).toMatchObject({ colorLabel: 'SLEEP', opacity: 0.9, kind: 'predicted' });
-    expect(row?.cells[30]).toMatchObject({ colorLabel: 'WORK', opacity: 0.6 });
+    expect(row?.cells[60]).toMatchObject({ colorLabel: 'WORK', opacity: 0.6 });
     expect(row?.cells.filter(Boolean)).toHaveLength(2);
   });
 
@@ -196,7 +196,7 @@ describe('buildForecastRow', () => {
     const row = buildForecastRow(forecastBuckets);
 
     expect(row?.key).toBe('2026-07-15');
-    expect(row?.cells[34]).toMatchObject({ colorLabel: 'SLEEP' }); // 17:00 local
+    expect(row?.cells[68]).toMatchObject({ colorLabel: 'SLEEP' }); // 17:00 local
   });
 
   it('returns null when nothing is drawable', () => {

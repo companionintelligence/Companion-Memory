@@ -2,7 +2,11 @@ import { act, createEvent, fireEvent, render, screen } from '@testing-library/re
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
-import { cancelSchedulePointerDrag, endSchedulePointerDrag, startSchedulePointerDrag } from '@/lib/schedulePointerDrag';
+import {
+  cancelSchedulePointerDrag,
+  endSchedulePointerDrag,
+  startSchedulePointerDrag,
+} from '@/lib/schedulePointerDrag';
 
 import { addDays, startOfLocalDay } from './nowNext';
 import { VerticalCalendar } from './VerticalCalendar';
@@ -205,6 +209,7 @@ describe('VerticalCalendar — the rhythm strip', () => {
     const strip = screen.getByTestId('vertical-rhythm-strip');
     const lane = screen.getByTestId('vertical-day-lane');
 
+    expect(strip.children).toHaveLength(96);
     expect(strip.compareDocumentPosition(lane) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Nothing paints the forecast inside the column any more.
     expect(lane.querySelector('[style*="--primary"]')).toBeNull();
@@ -221,6 +226,26 @@ describe('VerticalCalendar — the rhythm strip', () => {
 
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
     expect(screen.getByTestId('vertical-rhythm-strip')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('shimmers empty cells while Predict is still running', () => {
+    render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} pipelineRunning />);
+
+    const strip = screen.getByTestId('vertical-rhythm-strip');
+
+    expect(screen.getByRole('img', { name: /still being built/i })).toBeInTheDocument();
+    expect(strip.querySelectorAll('.rhythm-cell-waiting')).toHaveLength(96);
+  });
+
+  it('does not shimmer when the day already has a pattern', () => {
+    render(
+      <VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={rhythmFor(MONDAY)} pipelineRunning />,
+    );
+
+    expect(screen.getByTestId('vertical-rhythm-strip').querySelectorAll('.rhythm-cell-waiting')).toHaveLength(
+      0,
+    );
+    expect(screen.getByRole('img', { name: /Morning gym/ })).toBeInTheDocument();
   });
 
   it('reads the selected day, since one strip serves the whole week', () => {
@@ -369,7 +394,17 @@ describe('VerticalCalendar — pointer drop from Possibilities', () => {
 
     const lane = container.querySelector('[data-schedule-drop-axis="y"]') as HTMLElement;
     lane.getBoundingClientRect = () =>
-      ({ height: 1440, top: 0, bottom: 1440, width: 100, left: 0, right: 100, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
+      ({
+        height: 1440,
+        top: 0,
+        bottom: 1440,
+        width: 100,
+        left: 0,
+        right: 100,
+        x: 0,
+        y: 0,
+        toJSON: () => {},
+      }) as DOMRect;
     document.elementFromPoint = () => lane;
 
     act(() => {
@@ -386,20 +421,24 @@ describe('VerticalCalendar — pointer drop from Possibilities', () => {
   it('still places the card when the finger is over an event chip or a covering ghost', () => {
     const onDrop = vi.fn();
     const { container } = render(
-      <VerticalCalendar
-        start={MONDAY}
-        days={1}
-        events={[event()]}
-        rhythm={[]}
-        onDropCandidate={onDrop}
-      />,
+      <VerticalCalendar start={MONDAY} days={1} events={[event()]} rhythm={[]} onDropCandidate={onDrop} />,
     );
 
     const lane = container.querySelector('[data-schedule-drop-axis="y"]') as HTMLElement;
     const chip = container.querySelector('[data-schedule-chip]') as HTMLElement;
     const ghost = document.createElement('div');
     lane.getBoundingClientRect = () =>
-      ({ height: 1440, top: 0, bottom: 1440, width: 100, left: 0, right: 100, x: 0, y: 0, toJSON: () => {} }) as DOMRect;
+      ({
+        height: 1440,
+        top: 0,
+        bottom: 1440,
+        width: 100,
+        left: 0,
+        right: 100,
+        x: 0,
+        y: 0,
+        toJSON: () => {},
+      }) as DOMRect;
     document.elementsFromPoint = () => [ghost, chip];
     document.elementFromPoint = () => ghost;
 

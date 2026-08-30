@@ -7,9 +7,15 @@ import { classColor, normalizeClass } from '@/lib/activityPalette';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const N_BUCKETS = 48;
-const MINUTES_PER_BUCKET = 30;
+const DEFAULT_N_BUCKETS = 96;
 const MINUTES_PER_DAY = 24 * 60;
+
+function bucketLayout(raw: ForecastBucket[]): { n: number; minutes: number } {
+  const maxIdx = raw.reduce((m, b) => Math.max(m, b.bucketIndex ?? -1), -1);
+  const n = maxIdx >= 0 ? Math.max(maxIdx + 1, 1) : DEFAULT_N_BUCKETS;
+
+  return { n, minutes: MINUTES_PER_DAY / n };
+}
 
 // ── Colour mapping ────────────────────────────────────────────────────────────
 
@@ -56,12 +62,12 @@ function formatClock(minutesOfDay: number): string {
   });
 }
 
-/** Always returns exactly N_BUCKETS entries sorted 0–47, filling gaps with neutral defaults. */
-function normalizeBuckets(raw: ForecastBucket[]): ForecastBucket[] {
+/** Always returns exactly `n` entries sorted 0…n-1, filling gaps with neutral defaults. */
+function normalizeBuckets(raw: ForecastBucket[], n: number): ForecastBucket[] {
   const byIndex = new Map(raw.map((b) => [b.bucketIndex, b]));
 
   return Array.from(
-    { length: N_BUCKETS },
+    { length: n },
     (_, i) =>
       byIndex.get(i) ?? {
         bucketIndex: i,
@@ -77,27 +83,29 @@ function normalizeBuckets(raw: ForecastBucket[]): ForecastBucket[] {
 }
 
 /**
- * Order the 48 buckets so the strip reads local midnight → 23:30, labeling each by its
+ * Order buckets so the strip reads local midnight → last slot, labeling each by its
  * real instant in the viewer's local time.
  *
- * HBPE bins behaviour by UTC time-of-day, so bucket N describes the UTC 30-minute slot N — but
+ * HBPE bins behaviour by UTC time-of-day, so bucket N describes the UTC 15-minute slot N — but
  * each bucket carries its real `startTime` instant. We derive the viewer's UTC→local
  * offset from the first bucket with a valid instant, apply it to every bucket (so gap-
  * filled buckets sort correctly too), then order into a local day. Timezone handling stays
  * purely at display: no server-side re-bucketing, and it tracks the browser clock (incl.
  * DST) automatically. With no valid instants (non-READY placeholder), offset is 0 and the
- * strip falls back to index order (00:00 → 23:30).
+ * strip falls back to index order (00:00 → last slot).
  */
-function orderLocalDay(raw: ForecastBucket[]): { bucket: ForecastBucket; localMin: number }[] {
-  const pinned = normalizeBuckets(raw);
+function orderLocalDay(
+  raw: ForecastBucket[],
+): { bucket: ForecastBucket; localMin: number; minutes: number }[] {
+  const { n, minutes } = bucketLayout(raw);
+  const pinned = normalizeBuckets(raw, n);
 
   let offsetMin = 0;
   for (const bucket of pinned) {
     const lm = localMinutesOfDay(bucket.startTime);
     if (lm != null) {
       offsetMin =
-        (((lm - bucket.bucketIndex * MINUTES_PER_BUCKET) % MINUTES_PER_DAY) + MINUTES_PER_DAY) %
-        MINUTES_PER_DAY;
+        (((lm - bucket.bucketIndex * minutes) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
       break;
     }
   }
@@ -105,7 +113,8 @@ function orderLocalDay(raw: ForecastBucket[]): { bucket: ForecastBucket; localMi
   return pinned
     .map((bucket) => ({
       bucket,
-      localMin: (bucket.bucketIndex * MINUTES_PER_BUCKET + offsetMin) % MINUTES_PER_DAY,
+      localMin: (bucket.bucketIndex * minutes + offsetMin) % MINUTES_PER_DAY,
+      minutes,
     }))
     .sort((a, b) => a.localMin - b.localMin);
 }
@@ -129,7 +138,15 @@ function topL1(probs: ProbabilityEntry[]): { name: string; prob: number } | null
 
 // ── Tooltip content ───────────────────────────────────────────────────────────
 
-function SlotTooltip({ bucket, localMin }: { bucket: ForecastBucket; localMin: number }) {
+function SlotTooltip({
+  bucket,
+  localMin,
+  minutes,
+}: {
+  bucket: ForecastBucket;
+  localMin: number;
+  minutes: number;
+}) {
   const { isFeatureEnabled } = useFeatures();
   const sorted = [...bucket.l0Probs].sort((a, b) => b.probability - a.probability);
   const top1 = topL1(bucket.l1Probs);
@@ -137,7 +154,7 @@ function SlotTooltip({ bucket, localMin }: { bucket: ForecastBucket; localMin: n
   return (
     <div className="w-52 space-y-2 text-left">
       <p className="text-xs font-semibold">
-        {formatClock(localMin)} – {formatClock(localMin + MINUTES_PER_BUCKET)}
+        {formatClock(localMin)} – {formatClock(localMin + minutes)}
       </p>
 
       <div className="space-y-1">
@@ -164,7 +181,10 @@ function SlotTooltip({ bucket, localMin }: { bucket: ForecastBucket; localMin: n
         <p className="pt-1 border-t border-current/20 text-[10px] opacity-60">
           Top context:{' '}
           {isFeatureEnabled('insights.page') ? (
-            <Link to="/calendar" className="underline underline-offset-2 hover:opacity-100 transition-opacity">
+            <Link
+              to="/calendar"
+              className="underline underline-offset-2 hover:opacity-100 transition-opacity"
+            >
               {top1.name.slice(0, 24)}
             </Link>
           ) : (
@@ -177,17 +197,19 @@ function SlotTooltip({ bucket, localMin }: { bucket: ForecastBucket; localMin: n
   );
 }
 
-// ── Single 30-min slot ────────────────────────────────────────────────────────
+// ── Single occupancy slot ─────────────────────────────────────────────────────
 
 function ForecastSlot({
   bucket,
   localMin,
+  minutes,
   isFirst,
   isLast,
   systemStatus,
 }: {
   bucket: ForecastBucket;
   localMin: number;
+  minutes: number;
   isFirst: boolean;
   isLast: boolean;
   systemStatus: string;
@@ -221,7 +243,7 @@ function ForecastSlot({
       </Tooltip.Trigger>
       {showClasses && (
         <Tooltip.Content side="top" sideOffset={6} className="max-w-none p-3">
-          <SlotTooltip bucket={bucket} localMin={localMin} />
+          <SlotTooltip bucket={bucket} localMin={localMin} minutes={minutes} />
         </Tooltip.Content>
       )}
     </Tooltip>
@@ -288,12 +310,16 @@ const STATUS_LABELS: Record<string, string> = {
 export function formatEta(seconds: number): string {
   if (seconds >= 3300) {
     const hours = Math.round(seconds / 3600);
+
     return hours <= 1 ? 'about an hour' : `about ${hours} hours`;
   }
+
   if (seconds >= 90) {
     const minutes = Math.max(2, Math.round(seconds / 60));
+
     return `about ${minutes} minutes`;
   }
+
   return 'less than a minute';
 }
 
@@ -322,14 +348,19 @@ export function ForecastStrip({
       : (STATUS_LABELS[systemStatus] ?? 'Processing...');
   if (!isReady && !stalled && pipelineRunning) {
     const bits = [statusLabel];
-    if (pipelineDetail) bits.push(pipelineDetail);
+    if (pipelineDetail) {
+      bits.push(pipelineDetail);
+    }
+
     if (pipelineEtaSeconds != null && pipelineEtaSeconds > 0) {
       bits.push(`${formatEta(pipelineEtaSeconds)} remaining`);
     } else if (systemStatus.endsWith(':train') || systemStatus.endsWith(':label')) {
       bits.push('this can take about an hour');
     }
+
     statusLabel = bits.join(' · ');
   }
+
   if (isReady && stillLearning) {
     statusLabel = baselineName
       ? `Still learning — ${baselineName} baseline · ${statusLabel}`
@@ -340,21 +371,22 @@ export function ForecastStrip({
 
   return (
     <div className={cn('space-y-2', className)}>
-      {/* Strip — always 48 slots, 00:00 left → 23:30 right */}
+      {/* Strip — one slot per occupancy bucket, 00:00 left → last slot right */}
       <div className="flex items-stretch gap-px" role="img" aria-label="24-hour behavioral forecast strip">
-        {ordered.map(({ bucket, localMin }, idx) => (
+        {ordered.map(({ bucket, localMin, minutes }, idx) => (
           <ForecastSlot
             key={bucket.bucketIndex}
             bucket={bucket}
             localMin={localMin}
+            minutes={minutes}
             isFirst={idx === 0}
-            isLast={idx === N_BUCKETS - 1}
+            isLast={idx === ordered.length - 1}
             systemStatus={systemStatus}
           />
         ))}
       </div>
 
-      {/* Time labels — local midnight to 23:30 */}
+      {/* Time labels — local midnight to last slot */}
       <div className="flex justify-between text-[10px] text-muted-foreground px-0.5">
         <span>{formatClock(ordered[0]?.localMin ?? 0)}</span>
         <span
@@ -369,7 +401,9 @@ export function ForecastStrip({
           {statusLabel}
         </span>
         <span>
-          {formatClock(ordered[ordered.length - 1]?.localMin ?? MINUTES_PER_DAY - MINUTES_PER_BUCKET)}
+          {formatClock(
+            ordered[ordered.length - 1]?.localMin ?? MINUTES_PER_DAY - (ordered[0]?.minutes ?? 15),
+          )}
         </span>
       </div>
 

@@ -7,9 +7,10 @@ Lifecycle:
 
 Endpoints:
   GET /health               — liveness probe
-  GET /histogram            — 48-bucket (30-min) 24h behavioral forecast
+  GET /histogram            — 96-bucket (15-min) 24h behavioral forecast
   GET /forecast             — week-horizon per-day occurrence forecast
   GET /forecast/due         — renewal ("due"/overdue) predictions for periodic clusters
+  GET /forecast/seasonal    — month-of-year occurrence for anchor clusters
   POST /invalidate/{date}   — manual cache invalidation (for testing / admin)
 
 The engine registry maps user_id → InferenceEngine.  In a single-user
@@ -131,9 +132,9 @@ async def histogram(
     horizon: str = Query("24h", description="Forecast window (only '24h' supported)"),
 ) -> dict:
     """
-    Return a 48-bucket (30-minute) 24-hour behavioral forecast.
+    Return a 96-bucket (15-minute) 24-hour behavioral forecast.
 
-    Response: { horizon, generated_at, buckets: [...48 items...] }
+    Response: { horizon, generated_at, buckets: [...96 items...] }
     Each bucket: { bucket_index, start_time, l0_probs, l1_probs, l2_probs, q10, q50, q90 }
     """
     if not user_id:
@@ -250,6 +251,28 @@ async def forecast_due(
         }
     except Exception as exc:
         log.exception("Due list failed")
+        raise HTTPException(status_code=500, detail="Internal error") from exc
+
+
+@app.get("/forecast/seasonal")
+async def forecast_seasonal(
+    user_id: str | None = Query(None, description="User UUID"),
+) -> dict:
+    """Month-of-year occurrence shape for anchor clusters with multi-year evidence."""
+    if not user_id:
+        raise HTTPException(status_code=401, detail="user_id is required")
+
+    import datetime
+
+    from ci.hbpe.pipeline.seasonal import seasonal_forecast
+
+    try:
+        return {
+            "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+            "clusters": seasonal_forecast(user_id),
+        }
+    except Exception as exc:
+        log.exception("Seasonal forecast failed")
         raise HTTPException(status_code=500, detail="Internal error") from exc
 
 

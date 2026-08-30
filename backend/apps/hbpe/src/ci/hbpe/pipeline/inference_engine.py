@@ -1,7 +1,7 @@
 """
 Incremental inference engine for the HMT model (T4.2).
 
-Produces 48-bucket (30-minute) behavioral forecasts by aggregating
+Produces 96-bucket (15-minute) behavioral forecasts by aggregating
 per-day model outputs across a 30-day sliding window, weighted by recency
 and day-of-week similarity to the forecast horizon.
 
@@ -534,7 +534,7 @@ class InferenceEngine:
         force_model: str | None = None,
     ) -> list[dict]:
         """
-        Return a 48-bucket histogram for the 24h window starting at *horizon_start*
+        Return a 96-bucket histogram for the 24h window starting at *horizon_start*
         (default: midnight tonight).
 
         Each element: {bucket_index, start_time, l0_probs, l1_probs, l2_probs,

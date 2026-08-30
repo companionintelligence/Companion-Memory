@@ -6,6 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { ActionEntity } from '@ci/domains/intelligence';
 import { PlacementService } from '@ci/domains/personalization';
+import { HbpeService } from '@ci/domains/predictions';
 import { EventCandidateEntity, CandidateService, SuggestionSyncService } from '@ci/domains/schedule';
 import { SummaryEntity } from '@ci/domains/summaries';
 
@@ -80,6 +81,7 @@ async function main(): Promise<void> {
         : candidateService,
       { getProfile: async () => ({ autoSchedule: false }) } as never,
       new PlacementService(db, null as never),
+      new HbpeService(logger),
       logger,
     );
 

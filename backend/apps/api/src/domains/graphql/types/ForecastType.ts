@@ -4,7 +4,7 @@ import type { ForecastResponse } from '@ci/domains/predictions';
 
 import { ForecastBucketType } from './ForecastBucketType';
 
-@ObjectType({ description: '48-bucket (30-min) HBPE day-ahead forecast' })
+@ObjectType({ description: '96-bucket (15-min) HBPE day-ahead forecast' })
 export class ForecastType {
   @Field(() => String, { description: 'Forecast horizon, e.g. "48h"' })
   horizon!: string;

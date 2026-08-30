@@ -462,12 +462,12 @@ class Summarizer:
 
         if activity_counts.get("total", 0) == 0:
             return {
-                "summary_text": "No activity recorded during this window.",
+                "summary_text": "Nothing new.",
                 "summary_type": "hourly",
                 "key_insights": [],
                 "events": [],
                 "anomalies": [],
-                "embedding": self.generate_embedding("No activity"),
+                "embedding": [],
                 "activity_counts": activity_counts,
                 "tokens_used": 0,
             }

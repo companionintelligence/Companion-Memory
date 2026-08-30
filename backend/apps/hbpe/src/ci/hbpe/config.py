@@ -33,6 +33,33 @@ def _get_database_url() -> str:
     return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 
+def _optional_positive_seconds(raw: str | None) -> float | None:
+    """Parse HBPE_LABEL_HTTP_TIMEOUT. Empty / 0 / none → wait indefinitely."""
+    if raw is None:
+        return None
+    text = raw.strip().lower()
+    if text in ("", "none", "off"):
+        return None
+    seconds = float(text)
+    if seconds <= 0:
+        return None
+    return seconds
+
+
+# One dropped Ollama completion parked a nightly for hours when this was None.
+# Five minutes is well above a healthy 8B label (~5s here) and still lets the
+# drain skip a dead socket and continue. Set HBPE_LABEL_HTTP_TIMEOUT to 0 /
+# none to wait forever.
+_DEFAULT_LABEL_HTTP_TIMEOUT_SECONDS = 300.0
+
+
+def _label_http_timeout_seconds() -> float | None:
+    raw = os.getenv("HBPE_LABEL_HTTP_TIMEOUT")
+    if raw is None:
+        return _DEFAULT_LABEL_HTTP_TIMEOUT_SECONDS
+    return _optional_positive_seconds(raw)
+
+
 class Settings(BaseSettings):
     # ── Database ──────────────────────────────────────────────────────────────
     database_url: str = Field(default_factory=_get_database_url)
@@ -102,17 +129,28 @@ class Settings(BaseSettings):
     qwen_max_tokens_no_think: int = Field(
         default_factory=lambda: int(os.getenv("QWEN_MAX_TOKENS_NO_THINK", "64"))
     )
+    # Per-call HTTP timeout for the chat labeler. Default 5 minutes so a
+    # dropped completion cannot park the nightly. Set
+    # HBPE_LABEL_HTTP_TIMEOUT to 0 / "none" to wait until the server responds.
+    label_http_timeout_seconds: float | None = Field(
+        default_factory=_label_http_timeout_seconds
+    )
 
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────
     cluster_staleness_days: int = Field(
         default_factory=lambda: int(os.getenv("CLUSTER_STALENESS_DAYS", "90"))
     )
+    label_budget_seconds: int = Field(
+        default_factory=lambda: int(os.getenv("HBPE_LABEL_BUDGET_SECONDS", "14400"))
+    )
 
     # ── App GraphQL API ───────────────────────────────────────────────────────
     # Set API_URL to the base URL of the main application service (e.g.
-    # http://api:3000).  graphql_client.py posts to {api_url}/graphql.
+    # http://api:3030).  graphql_client.py posts to {api_url}/graphql.
+    # Function-run callbacks go to {api_url}/function-runs/callback — a wrong
+    # port leaves pg-boss jobs stuck `active`.
     api_url: str = Field(
-        default_factory=lambda: os.getenv("API_URL", "http://api:3000")
+        default_factory=lambda: os.getenv("API_URL", "http://api:3030")
     )
     # Shared JWT secret — must match AUTH_JWT_AUTHTOKENSECRET in the app.
     # HBPE self-signs service JWTs with this secret so the app accepts them.

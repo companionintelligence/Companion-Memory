@@ -2,7 +2,8 @@
 Summary Tokenizer — labels hourly summaries with L0+L1 via Qwen and returns
 token records for inclusion in the HMT token stream.
 
-Hourly summaries from ci.summaries cover 2 × 30-min buckets each.  Where a
+Hourly summaries from ci.summaries cover SUMMARY_BUCKETS_PER_HOUR 15-min
+buckets each.  Where a
 bucket has no event-derived token, a summary-derived token fills the gap,
 giving the model signal for hours that contain no calendar events (sleep,
 leisure, off-calendar work, commutes).
@@ -94,7 +95,15 @@ class SummaryTokenizer:
                 l1_raw_str = get_qwen().generate(
                     l1_msg, system_message=_SYSTEM, max_new_tokens=256
                 )
-                l1_raw = _clean_label(_parse_json(l1_raw_str).get("l1", "General"))
+                l1_raw = _clean_label(_parse_json(l1_raw_str).get("l1", "Activity"))
+
+                from ci.hbpe.tokenizer.label_quality import (
+                    is_displayable_label,
+                    is_unknown_class,
+                )
+
+                if is_unknown_class(l0) or not is_displayable_label(l1_raw):
+                    continue
 
                 l1_id, is_new = get_or_create_l1(user_id, l0, l1_raw)
 

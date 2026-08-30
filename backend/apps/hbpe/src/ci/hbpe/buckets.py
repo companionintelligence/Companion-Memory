@@ -1,6 +1,6 @@
-"""Shared HBPE day-bucketing constants (30-minute resolution)."""
+"""Shared HBPE day-bucketing constants (15-minute resolution)."""
 
-BUCKET_MINUTES = 30
+BUCKET_MINUTES = 15
 BUCKET_SECONDS = BUCKET_MINUTES * 60
 BUCKETS_PER_DAY = (24 * 60) // BUCKET_MINUTES
 BUCKETS_PER_PART = BUCKETS_PER_DAY // 4

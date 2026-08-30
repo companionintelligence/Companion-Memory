@@ -5,6 +5,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { ActionEntity } from '@ci/domains/intelligence';
 import { flexWindow, PersonalizationService, PlacementService } from '@ci/domains/personalization';
+import { HbpeService } from '@ci/domains/predictions';
 import { SummaryEntity } from '@ci/domains/summaries';
 
 import { EventCandidateEntity } from '../../entities/EventCandidateEntity';
@@ -44,14 +45,20 @@ describe('SuggestionSyncService — projecting actions and insights onto the sla
   let candidates: { find: jest.Mock; save: jest.Mock };
   let candidateService: { upsert: jest.Mock };
   let personalization: { getProfile: jest.Mock };
+  let hbpe: { getDueList: jest.Mock };
 
-  async function setup(actionRows: ActionEntity[] = [], summaryRows: SummaryEntity[] = []) {
+  async function setup(
+    actionRows: ActionEntity[] = [],
+    summaryRows: SummaryEntity[] = [],
+    dueRows: unknown[] = [],
+  ) {
     actions = { find: jest.fn(async () => actionRows) };
     summaries = { find: jest.fn(async () => summaryRows) };
     candidates = { find: jest.fn(async () => []), save: jest.fn(async (e) => e) };
     candidateService = { upsert: jest.fn(async (_c, proposals) => proposals) };
     // autoSchedule off keeps the auto-accept leg out of these projection tests.
     personalization = { getProfile: jest.fn(async () => ({ autoSchedule: false })) };
+    hbpe = { getDueList: jest.fn(async () => ({ due: dueRows })) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
@@ -68,6 +75,7 @@ describe('SuggestionSyncService — projecting actions and insights onto the sla
             flexWindow,
           },
         },
+        { provide: HbpeService, useValue: hbpe },
         { provide: LoggerService, useValue: { setContext: jest.fn(), log: jest.fn(), debug: jest.fn() } },
       ],
     }).compile();
@@ -370,6 +378,59 @@ describe('SuggestionSyncService — projecting actions and insights onto the sla
 
     expect(candidates.save).not.toHaveBeenCalled();
   });
+
+  it('projects an unscheduled due cluster onto the slate', async () => {
+    await setup(
+      [],
+      [],
+      [
+        {
+          cluster_id: 'clu-1',
+          name: 'Standup',
+          l0_class: 'WORK',
+          last_seen: '2026-08-20',
+          days_since_last: 8,
+          median_interval_days: 7,
+          due_in_days: -1,
+          overdue: true,
+          scheduled_date: null,
+          confidence: 0.8,
+        },
+        {
+          cluster_id: 'clu-2',
+          name: 'Already booked',
+          l0_class: 'WORK',
+          last_seen: '2026-08-27',
+          days_since_last: 1,
+          median_interval_days: 7,
+          due_in_days: 0,
+          overdue: false,
+          scheduled_date: '2026-08-28',
+          confidence: 0.9,
+        },
+        {
+          cluster_id: 'clu-3',
+          name: 'Low confidence',
+          l0_class: 'WORK',
+          last_seen: '2026-07-01',
+          days_since_last: 50,
+          median_interval_days: 30,
+          due_in_days: -10,
+          overdue: true,
+          scheduled_date: null,
+          confidence: 0.2,
+        },
+      ],
+    );
+
+    await service.sync(ctx);
+
+    const due = proposals().filter((p: { generator: string }) => p.generator === 'hbpe/due');
+    expect(due).toHaveLength(1);
+    expect(due[0].dedupe_key).toBe('due:clu-1:2026-08-20');
+    expect(due[0].title).toBe('Standup');
+    expect(due[0].l1_cluster_id).toBe('clu-1');
+  });
 });
 
 /**
@@ -435,6 +496,7 @@ describe('SuggestionSyncService — tryAutoAccept', () => {
             flexWindow,
           },
         },
+        { provide: HbpeService, useValue: { getDueList: async () => ({ due: [] }) } },
         { provide: LoggerService, useValue: { setContext: jest.fn(), log: jest.fn(), debug: jest.fn() } },
       ],
     }).compile();

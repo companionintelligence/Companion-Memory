@@ -18,6 +18,12 @@ import uuid
 import psycopg2.extras
 
 from ci.hbpe.database import get_conn
+from ci.hbpe.tokenizer.label_quality import (
+    FALLBACK_LABEL,
+    L1_PER_CLASS_MAX,
+    is_displayable_label,
+    nearest_label,
+)
 
 log = logging.getLogger(__name__)
 
@@ -65,18 +71,77 @@ def get_l1_vocab(user_id: str, l0_class: str) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
-def get_or_create_l1(user_id: str, l0_class: str, label: str) -> tuple[str, bool]:
+def get_or_create_l1(
+    user_id: str,
+    l0_class: str,
+    label: str,
+    naming_method: str = "LLM",
+    tier: str = "anchor",
+) -> tuple[str, bool]:
     """
     Return (cluster_id, is_new) for a given L1 label.
 
-    Creates a new cluster with naming_method='LLM' if the label has never
-    been seen before for this (user_id, l0_class) pair.
-
-    is_new=True indicates the HMT vocabulary has grown and a retrain is needed.
+    Junk names and the 50/class cap never mint. Ambient STATIC labels always
+    insert (they are a fixed closed set).
     """
     label = label.strip()
+    if naming_method != "STATIC" and not is_displayable_label(label):
+        existing = [e["label"] for e in get_l1_vocab(user_id, l0_class)]
+        label = nearest_label(label, existing) or FALLBACK_LABEL
+        if existing:
+            found = _find_l1(user_id, l0_class, label)
+            if found:
+                return found, False
 
-    sql_find = """
+    found = _find_l1(user_id, l0_class, label)
+    if found:
+        return found, False
+
+    if naming_method != "STATIC":
+        active = _active_l1_count(user_id, l0_class)
+        if active >= L1_PER_CLASS_MAX:
+            existing = [e["label"] for e in get_l1_vocab(user_id, l0_class)]
+            label = nearest_label(label, existing) or (
+                existing[0] if existing else FALLBACK_LABEL
+            )
+            found = _find_l1(user_id, l0_class, label)
+            if found:
+                return found, False
+
+    cluster_id = str(uuid.uuid4())
+    sql_insert = """
+        INSERT INTO hbpe.l1_clusters
+            (cluster_id, user_id, l0_class, label,
+             naming_method, tier, is_active, member_count, created_at, updated_at)
+        VALUES
+            (%s, %s::uuid, %s, %s, %s, %s, TRUE, 0, NOW(), NOW())
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql_insert,
+                    (cluster_id, str(user_id), l0_class, label, naming_method, tier),
+                )
+        log.info(
+            "New L1 cluster: user=%s l0=%s label=%r method=%s tier=%s → %s",
+            user_id[:8],
+            l0_class,
+            label,
+            naming_method,
+            tier,
+            cluster_id,
+        )
+        return cluster_id, True
+    except Exception:
+        found = _find_l1(user_id, l0_class, label)
+        if found:
+            return found, False
+        raise
+
+
+def _find_l1(user_id: str, l0_class: str, label: str) -> str | None:
+    sql = """
         SELECT cluster_id::text
         FROM   hbpe.l1_clusters
         WHERE  user_id  = %s::uuid
@@ -84,52 +149,23 @@ def get_or_create_l1(user_id: str, l0_class: str, label: str) -> tuple[str, bool
           AND  label    = %s
         LIMIT 1
     """
-
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql_find, (str(user_id), l0_class, label))
+            cur.execute(sql, (str(user_id), l0_class, label))
             row = cur.fetchone()
-            if row:
-                return str(row[0]), False
+    return str(row[0]) if row else None
 
-    # Not found — insert
-    cluster_id = str(uuid.uuid4())
-    sql_insert = """
-        INSERT INTO hbpe.l1_clusters
-            (cluster_id, user_id, l0_class, label,
-             naming_method, is_active, member_count, created_at, updated_at)
-        VALUES
-            (%s, %s::uuid, %s, %s, 'LLM', TRUE, 0, NOW(), NOW())
+
+def _active_l1_count(user_id: str, l0_class: str) -> int:
+    sql = """
+        SELECT COUNT(*)
+        FROM hbpe.l1_clusters
+        WHERE user_id = %s::uuid AND l0_class = %s AND is_active = TRUE
     """
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    sql_insert,
-                    (
-                        cluster_id,
-                        str(user_id),
-                        l0_class,
-                        label,
-                    ),
-                )
-        log.info(
-            "New L1 cluster: user=%s l0=%s label=%r → %s",
-            user_id[:8],
-            l0_class,
-            label,
-            cluster_id,
-        )
-        return cluster_id, True
-    except Exception:
-        # Race condition: another process inserted first
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql_find, (str(user_id), l0_class, label))
-                row = cur.fetchone()
-                if row:
-                    return str(row[0]), False
-        raise
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (str(user_id), l0_class))
+            return int(cur.fetchone()[0] or 0)
 
 
 # ── L2 ─────────────────────────────────────────────────────────────────────────
@@ -169,6 +205,24 @@ def get_or_create_l2(
     centroid column has been removed — embedding-based routing is no longer used.
     """
     label = label.strip()
+    if not is_displayable_label(label):
+        existing = [e["label"] for e in get_l2_vocab(user_id, l0_class, l1_cluster_id)]
+        label = nearest_label(label, existing) or FALLBACK_LABEL
+        if existing:
+            sql_existing = """
+                SELECT cluster_id::text FROM hbpe.l2_clusters
+                WHERE user_id = %s::uuid AND l0_class = %s
+                  AND l1_cluster_id = %s::uuid AND label = %s LIMIT 1
+            """
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        sql_existing,
+                        (str(user_id), l0_class, str(l1_cluster_id), label),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        return str(row[0]), False
 
     sql_find = """
         SELECT cluster_id::text

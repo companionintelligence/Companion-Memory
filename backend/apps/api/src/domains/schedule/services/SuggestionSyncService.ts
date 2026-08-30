@@ -10,6 +10,7 @@ import {
   PersonalizationService,
   PlacementService,
 } from '@ci/domains/personalization';
+import { HbpeService } from '@ci/domains/predictions';
 import { SummaryEntity } from '@ci/domains/summaries';
 
 import { EventCandidateEntity, type RationaleSource } from '../entities/EventCandidateEntity';
@@ -151,6 +152,7 @@ export class SuggestionSyncService {
     private readonly candidateService: CandidateService,
     private readonly personalizationService: PersonalizationService,
     private readonly placement: PlacementService,
+    private readonly hbpe: HbpeService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(SuggestionSyncService.name);
@@ -169,6 +171,7 @@ export class SuggestionSyncService {
     const proposed = [
       ...(await this.fromActions(context, windowStart, windowEnd)),
       ...(await this.fromInsights(context, windowStart, windowEnd)),
+      ...(await this.fromDue(context, windowStart, windowEnd)),
     ];
 
     if (proposed.length === 0) {
@@ -340,6 +343,47 @@ export class SuggestionSyncService {
     }
 
     return proposals;
+  }
+
+  /**
+   * Renewal due-list → slate. Unscheduled, confident, overdue or due within
+   * 3 days. Display names are already anchor-only from HBPE.
+   */
+  private async fromDue(
+    context: UserServiceContext,
+    windowStart: Date,
+    windowEnd: Date,
+  ): Promise<CreateCandidateDto[]> {
+    try {
+      const due = await this.hbpe.getDueList(context);
+
+      return (due.due ?? [])
+        .filter(
+          (item) => item.confidence >= 0.6 && (item.overdue || item.due_in_days <= 3) && !item.scheduled_date,
+        )
+        .slice(0, MAX_PER_SOURCE)
+        .map((item) => ({
+          title: item.name,
+          description: item.overdue
+            ? `Usually every ${item.median_interval_days} days; last seen ${item.days_since_last} days ago.`
+            : `Typically due in about ${item.due_in_days} days.`,
+          rationale: item.overdue
+            ? `Usually happens about now — last seen ${item.days_since_last} days ago.`
+            : `Typically due in ${item.due_in_days} days.`,
+          rationale_sources: [{ kind: 'due' as const, id: item.cluster_id }],
+          window_start: windowStart,
+          window_end: windowEnd,
+          time_flex: 'week' as const,
+          duration_minutes: 30,
+          l0_class: item.l0_class,
+          l1_cluster_id: item.cluster_id,
+          dedupe_key: `due:${item.cluster_id}:${item.last_seen}`,
+          generator: 'hbpe/due',
+          confidence: item.confidence,
+        }));
+    } catch {
+      return [];
+    }
   }
 
   /**

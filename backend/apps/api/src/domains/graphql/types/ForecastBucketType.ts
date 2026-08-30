@@ -11,7 +11,7 @@ export class ProbabilityEntryType {
   probability!: number;
 }
 
-@ObjectType({ description: 'One 30-minute forecast bucket from the HBPE histogram' })
+@ObjectType({ description: 'One 15-minute forecast bucket from the HBPE histogram' })
 export class ForecastBucketType {
   @Field(() => Int)
   bucketIndex!: number;

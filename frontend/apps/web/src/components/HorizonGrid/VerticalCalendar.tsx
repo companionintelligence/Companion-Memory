@@ -46,8 +46,8 @@ const HOUR_HEIGHT_PX = 52;
 const GRID_HEIGHT_PX = HOUR_HEIGHT_PX * HOURS_PER_DAY;
 const AXIS_HOURS = Array.from({ length: HOURS_PER_DAY }, (_, hour) => hour);
 
-/** Gap between rhythm cells, in px — the thing that makes them read as texture. */
-const RHYTHM_CELL_GAP_PX = 2;
+/** Gap between 15-minute rhythm cells, in px — enough to read texture, not so much the strip is mostly gap. */
+const RHYTHM_CELL_GAP_PX = 1;
 
 function formatHour(hour: number): string {
   return new Date(2000, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric' });
@@ -202,7 +202,9 @@ function ClusterBlock({
           borderLeftColor: color,
         }}
       >
-        <span className="px-1.5 font-semibold tabular-nums text-background mix-blend-difference">{count}</span>
+        <span className="px-1.5 font-semibold tabular-nums text-background mix-blend-difference">
+          {count}
+        </span>
       </div>
     </EventPeek>
   );
@@ -374,26 +376,32 @@ interface RhythmStripProps {
   dayStart: Date;
   lookup: (utcDate: string) => RhythmDay | undefined;
   colorMode: ColorMode;
+  /** True while nightly/Predict is in a named step and this day has no ink yet. */
+  waiting?: boolean;
 }
 
 /**
  * Pattern rhythm (HBPE) for one day, stood on end beside the hours.
  *
  * The same reading the horizon draws as a lane, rotated to match this geometry:
- * one cell per local hour, the colour of the behaviour that claims it, the
+ * one cell per 15-minute slot, the colour of the behaviour that claims it, the
  * weight in the ink. It sits immediately LEFT of the time labels rather than
  * behind the day column for two reasons — a wash under committed time is read
  * as a highlight on the chips sitting over it, and a rhythm cell only says
  * something once you can see which o'clock it belongs to.
  *
  * Cells are positioned rather than flexed so every one lands exactly on the
- * hour rule it describes; a gapped flex column drifts by a cell over 24 hours.
+ * 15-minute slot it describes; a gapped flex column drifts by a cell over 96 slots.
  */
-function RhythmStrip({ dayStart, lookup, colorMode }: RhythmStripProps) {
+function RhythmStrip({ dayStart, lookup, colorMode, waiting = false }: RhythmStripProps) {
   const claims = useMemo(() => rhythmClaims(dayStart, lookup), [dayStart, lookup]);
+  const slotCount = claims.length || 1;
   const clusters = useMemo(() => topClusters(lookup(utcDateKey(dayStart))), [dayStart, lookup]);
   const hasRhythm = claims.some((claim) => claim.weight >= RHYTHM_NOISE_FLOOR);
-  const label = rhythmLabel(dayStart, clusters);
+  const waitingForRhythm = waiting && !hasRhythm;
+  const label = waitingForRhythm
+    ? 'Predicted rhythm is still being built. This can take a while.'
+    : rhythmLabel(dayStart, clusters);
 
   const strip = (
     <div
@@ -401,19 +409,27 @@ function RhythmStrip({ dayStart, lookup, colorMode }: RhythmStripProps) {
       className="relative w-2 shrink-0 rounded-[3px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
       style={{ height: GRID_HEIGHT_PX }}
       // The cells carry no text, so collapsing them to one named image loses
-      // nothing and gains a name. A strip with no signal is decoration.
-      {...(hasRhythm ? { role: 'img', 'aria-label': label, tabIndex: 0 } : { 'aria-hidden': true })}
+      // nothing and gains a name. A strip with no signal is decoration unless
+      // Predict is still running — then the shimmer is the only status.
+      {...(hasRhythm || waitingForRhythm
+        ? { role: 'img', 'aria-label': label, tabIndex: 0 }
+        : { 'aria-hidden': true })}
     >
-      {claims.map((claim, hour) => {
+      {claims.map((claim, slot) => {
         const lit = claim.weight >= RHYTHM_NOISE_FLOOR;
 
         return (
           <div
-            key={hour}
-            className={cn('absolute inset-x-0 rounded-[2px]', !lit && 'bg-foreground/[0.06]')}
+            key={slot}
+            className={cn(
+              'absolute inset-x-0 rounded-[1px]',
+              !lit && !waitingForRhythm && 'bg-foreground/[0.06]',
+              !lit && waitingForRhythm && 'rhythm-cell-waiting',
+            )}
             style={{
-              top: `${(hour / HOURS_PER_DAY) * 100}%`,
-              height: `calc(${100 / HOURS_PER_DAY}% - ${RHYTHM_CELL_GAP_PX}px)`,
+              top: `${(slot / slotCount) * 100}%`,
+              height: `calc(${100 / slotCount}% - ${RHYTHM_CELL_GAP_PX}px)`,
+              animationDelay: waitingForRhythm ? `${slot * 12}ms` : undefined,
               ...(lit
                 ? {
                     // Type mode lets the cell wear the class of the behaviour
@@ -671,6 +687,8 @@ interface VerticalCalendarProps {
   selectedDay?: Date;
   onSelectDay?: (dayStart: Date) => void;
   colorMode?: ColorMode;
+  /** Nightly/Predict is in a named step (`NIGHTLY:label`, …). Empty cells shimmer. */
+  pipelineRunning?: boolean;
   footer?: ReactNode;
   className?: string;
 }
@@ -695,6 +713,7 @@ export function VerticalCalendar({
   selectedDay,
   onSelectDay,
   colorMode = 'type',
+  pipelineRunning = false,
   footer,
   className,
 }: VerticalCalendarProps) {
@@ -863,7 +882,12 @@ export function VerticalCalendar({
               is the argument for the order on screen: what you usually do,
               what time it is, what you actually committed to. */}
           <div className="sticky left-0 z-10 flex w-16 shrink-0 gap-1 bg-card pl-1.5">
-            <RhythmStrip dayStart={focusDay} lookup={lookup} colorMode={colorMode} />
+            <RhythmStrip
+              dayStart={focusDay}
+              lookup={lookup}
+              colorMode={colorMode}
+              waiting={pipelineRunning}
+            />
             <div className="relative flex-1" style={{ height: GRID_HEIGHT_PX }}>
               {AXIS_HOURS.map((hour) => (
                 <span

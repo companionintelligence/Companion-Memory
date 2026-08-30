@@ -5,6 +5,7 @@ import { Button, IconButton, cn } from '@ci/shadcn';
 import { CalendarRange, ChevronLeft, ChevronRight, Inbox } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { useForecastService } from '@/api/useForecastService';
 import { useRescheduleEvent } from '@/api/useRescheduleEvent';
 import { type RhythmDay, type ScheduleEvent, useScheduleService } from '@/api/useScheduleService';
 import { useFeatures } from '@/common/feature';
@@ -67,9 +68,19 @@ function formatRange(start: Date, end: Date): string {
  * mean the call failed, never "not started yet". Only once the flag is on and
  * data resolved does `coversWindow` / the success copy apply.
  */
-function rhythmFooter(generatedAt: string | null, coversWindow: boolean, hbpeEnabled: boolean): string {
+function rhythmFooter(
+  generatedAt: string | null,
+  coversWindow: boolean,
+  hbpeEnabled: boolean,
+  pipelineRunning = false,
+  hasRhythmSignal = false,
+): string {
   if (!hbpeEnabled) {
     return 'HBPE rhythm forecast is off — showing committed time only.';
+  }
+
+  if (pipelineRunning && !hasRhythmSignal) {
+    return 'Predict is still running — the boxes on the left will fill in. This can take a while.';
   }
 
   if (!generatedAt) {
@@ -212,6 +223,11 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
 
   const { events, rhythm, generatedAt, rhythmCoversWindow, loading, fetching, error, refetch } =
     useScheduleService(start, end);
+  const [{ data: occupancy, stalled: occupancyStalled }] = useForecastService();
+  const pipelineRunning = Boolean(
+    hbpeEnabled && Boolean(occupancy?.systemStatus?.includes(':')) && !occupancyStalled,
+  );
+  const hasRhythmSignal = rhythm.some((day) => day.clusters.length > 0);
 
   // Placing a backlog task mints a planned block, so the committed lane has to re-read.
   const {
@@ -267,8 +283,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   // `errorPolicy: 'all'` means an error and usable data can arrive together, so
   // the surface is gated on whether anything resolved rather than on `error`.
   const hasAnything = events.length > 0 || rhythm.length > 0 || backlogCount > 0;
-  const isTrulyEmpty =
-    !loading && !fetching && !hasAnything && !error && !planError && weekOffset === 0;
+  const isTrulyEmpty = !loading && !fetching && !hasAnything && !error && !planError && weekOffset === 0;
   const showScheduleSurface = weekOffset !== 0 || hasAnything || planError || fetching;
 
   // Embedded, the host supplies the frame, so this keeps only the column gap
@@ -459,11 +474,18 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                 events={events}
                 rhythm={rhythm}
                 colorMode={colorMode}
+                pipelineRunning={pipelineRunning}
                 selectedDay={selectedDay}
                 onSelectDay={setSelectedDay}
                 onDropCandidate={handleDrop}
                 onMoveEvent={handleMove}
-                footer={rhythmFooter(generatedAt, rhythmCoversWindow, hbpeEnabled)}
+                footer={rhythmFooter(
+                  generatedAt,
+                  rhythmCoversWindow,
+                  hbpeEnabled,
+                  pipelineRunning,
+                  hasRhythmSignal,
+                )}
               />
 
               {/* `=== false` rather than a plain ternary: `isMobile` is

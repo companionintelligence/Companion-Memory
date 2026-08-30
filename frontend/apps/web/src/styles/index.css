@@ -363,3 +363,29 @@ html.ci-native #root {
 .constellation-hydrating-chip {
   animation: constellation-grain 1.6s ease-in-out infinite alternate;
 }
+
+/*
+ * Calendar rhythm strip — empty 15-minute cells while HBPE Predict is still
+ * labeling. The wash travels down the day so the gutter reads as "working",
+ * not as a dead column.
+ */
+@keyframes rhythm-strip-shimmer {
+  0% {
+    background-position: 0 -100%;
+  }
+  100% {
+    background-position: 0 100%;
+  }
+}
+
+.rhythm-cell-waiting {
+  background-color: color-mix(in oklab, var(--primary) 10%, transparent);
+  background-image: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in oklab, var(--primary) 28%, transparent) 45%,
+    transparent 100%
+  );
+  background-size: 100% 220%;
+  animation: rhythm-strip-shimmer 1.8s ease-in-out infinite;
+}

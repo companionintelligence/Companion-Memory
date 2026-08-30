@@ -20,6 +20,7 @@ import json
 import logging
 import re
 
+from ci.hbpe.tokenizer.label_quality import L1_PER_CLASS_MAX
 from ci.hbpe.tokenizer.vocab_registry import (
     L0_CLASSES,
     get_l1_vocab,
@@ -106,7 +107,13 @@ class QwenLabeler:
         # Stage 2: L1 given locked L0
         l1_vocab = self._all_l1_by_l0(user_id).get(l0, [])
         l1_raw_str = get_qwen().generate(
-            _build_l1_event_message(title, description, l0, l1_vocab),
+            _build_l1_event_message(
+                title,
+                description,
+                l0,
+                l1_vocab,
+                closed=len(l1_vocab) >= L1_PER_CLASS_MAX,
+            ),
             system_message=_SYSTEM,
             max_new_tokens=256,
         )
@@ -156,7 +163,14 @@ class QwenLabeler:
         ]
 
         l1l2_raw = get_qwen().generate(
-            _build_l1_content_message(title, content_type, l0, l1_vocab, l2_vocab),
+            _build_l1_content_message(
+                title,
+                content_type,
+                l0,
+                l1_vocab,
+                l2_vocab,
+                closed=len(l1_vocab) >= L1_PER_CLASS_MAX,
+            ),
             system_message=_SYSTEM,
             max_new_tokens=256,
         )
@@ -221,7 +235,11 @@ class QwenLabeler:
         l1_prompts = [
             (
                 _build_l1_event_message(
-                    title, item.get("description"), l0, all_l1.get(l0, [])
+                    title,
+                    item.get("description"),
+                    l0,
+                    all_l1.get(l0, []),
+                    closed=len(all_l1.get(l0, [])) >= L1_PER_CLASS_MAX,
                 ),
                 _SYSTEM,
             )
@@ -381,19 +399,26 @@ def _build_l1_event_message(
     description: str | None,
     l0: str,
     l1_vocab: list[dict],
+    closed: bool = False,
 ) -> str:
     """Stage 2 for events: assign L1 sub-category given locked L0."""
-    labels = [e["label"] for e in l1_vocab[:_MAX_VOCAB_IN_PROMPT]]
+    limit = len(l1_vocab) if closed else _MAX_VOCAB_IN_PROMPT
+    labels = [e["label"] for e in l1_vocab[:limit]]
     vocab_str = (
         f"[{', '.join(repr(label) for label in labels)}]"
         if labels
         else "(none yet — propose one)"
     )
     desc_line = f"\nDescription: {description}" if description else ""
+    choose = (
+        "Choose l1 from this list only. Do not invent a new name.\n\n"
+        if closed
+        else "Use an existing label if it fits, or propose a concise 1-3 word label.\n\n"
+    )
     return (
         f"Assign a sub-category label for this {l0} calendar event.\n\n"
         f"Existing {l0} sub-categories: {vocab_str}\n\n"
-        f"Use an existing label if it fits, or propose a concise 1-3 word label.\n\n"
+        f"{choose}"
         f'Event: "{title}"{desc_line}\n\n'
         f'Output: {{"l1": "LABEL"}}'
     )
@@ -405,9 +430,11 @@ def _build_l1_content_message(
     l0: str,
     l1_vocab: list[dict],
     l2_vocab: list[dict],
+    closed: bool = False,
 ) -> str:
     """Stage 2 for content: assign L1+L2 given locked L0."""
-    l1_labels = [e["label"] for e in l1_vocab[:_MAX_VOCAB_IN_PROMPT]]
+    limit = len(l1_vocab) if closed else _MAX_VOCAB_IN_PROMPT
+    l1_labels = [e["label"] for e in l1_vocab[:limit]]
     l1_str = (
         f"[{', '.join(repr(label) for label in l1_labels)}]"
         if l1_labels
@@ -420,11 +447,16 @@ def _build_l1_content_message(
         else "(none yet — propose one)"
     )
     type_line = f" ({content_type})" if content_type else ""
+    choose = (
+        "Choose l1 from the existing list only. Do not invent a new L1 name.\n\n"
+        if closed
+        else "Use existing labels if they fit, or propose concise 1-3 word labels.\n\n"
+    )
     return (
         f"Assign sub-category and topic labels for this {l0} content item.\n\n"
         f"Existing {l0} sub-categories (L1): {l1_str}\n"
         f"Existing topic labels (L2): {l2_str}\n\n"
-        f"Use existing labels if they fit, or propose concise 1-3 word labels.\n\n"
+        f"{choose}"
         f'Content: "{title}"{type_line}\n\n'
         f'Output: {{"l1": "LABEL", "l2": "LABEL"}}'
     )

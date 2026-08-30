@@ -2,7 +2,7 @@
  * Shared schedule geometry — the maths behind the schedule surface.
  *
  * Clipping events onto a day, resolving a pointer ratio to an instant, and
- * folding HBPE's dayparts into per-hour rhythm all used to live inside
+ * folding HBPE's dayparts into 15-minute rhythm cells all used to live inside
  * `HorizonGrid`, which is gone (#2308: Calendar and Horizon are one view now).
  * They are kept apart from {@link VerticalCalendar} because they are pure
  * date/geometry functions with no React in them — that is what lets them be
@@ -11,6 +11,7 @@
 
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 import { type ActivityClass, normalizeClass } from '@/lib/activityPalette';
+import { weekClusterVisible } from '@/lib/forecastDisplay';
 
 import { addDays, sameLocalDay } from './nowNext';
 import { packItemLanes, type EventSpan } from './scheduleClusters';
@@ -18,14 +19,16 @@ import { packItemLanes, type EventSpan } from './scheduleClusters';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const MINUTES_PER_DAY = 24 * 60;
-const HOURS_PER_DAY = 24;
+/** Matches `ci.hbpe.buckets.BUCKET_MINUTES` — occupancy and the calendar strip share this grain. */
+const BUCKET_MINUTES = 15;
+const BUCKETS_PER_DAY = MINUTES_PER_DAY / BUCKET_MINUTES;
 
 /**
  * HBPE bins behaviour into four 6-hour dayparts anchored at UTC midnight
- * (recurrence.py: BUCKETS_PER_PART = 12). Cells are resolved per local hour by
- * looking up the UTC instant that hour actually falls in, so a viewer far from
- * UTC sees their real rhythm rather than a label that assumes "morning" means
- * their morning.
+ * (recurrence.py: BUCKETS_PER_PART = 24). Cells are resolved per local 15-minute
+ * slot by looking up the UTC instant that slot actually falls in, so a viewer
+ * far from UTC sees their real rhythm rather than a label that assumes
+ * "morning" means their morning.
  */
 const DAYPART_HOURS = 6;
 const DAYPART_NAMES = ['night', 'morning', 'afternoon', 'evening'] as const;
@@ -265,19 +268,19 @@ function daypartWeights(day: RhythmDay | undefined): number[] {
 }
 
 /**
- * Rhythm intensity for each of the 24 local hours of a day.
+ * Rhythm intensity for each 15-minute local slot of a day (96 cells).
  *
- * Rendering per-hour cells rather than four wide bands is what makes the layer
- * legible: 6-hour slabs of near-equal weight fuse into one uniform bar, while
- * a row of discrete cells reads as texture and shows where the day's weight
- * actually sits. It also makes the UTC offset fall out for free — each hour asks
- * which UTC daypart it lands in, so no band has to be split at local midnight.
+ * The week forecast still speaks in four UTC dayparts; painting them at the
+ * occupancy grain keeps the strip on the same clock as Forecast and drop-snap,
+ * and lets a UTC offset split a daypart at the real quarter-hour instead of
+ * the hour. Each slot asks which UTC instant it is, so no band has to be
+ * split at local midnight by hand.
  */
 function rhythmClaims(dayStart: Date, lookup: (utcDate: string) => RhythmDay | undefined): RhythmClaim[] {
   const claimCache = new Map<string, RhythmClaim[]>();
 
-  return Array.from({ length: HOURS_PER_DAY }, (_, hour) => {
-    const instant = new Date(dayStart.getTime() + hour * 3_600_000);
+  return Array.from({ length: BUCKETS_PER_DAY }, (_, slot) => {
+    const instant = atLocalMinutes(dayStart, slot * BUCKET_MINUTES);
     const key = utcDateKey(instant);
 
     if (!claimCache.has(key)) {
@@ -297,13 +300,23 @@ function rhythmCells(dayStart: Date, lookup: (utcDate: string) => RhythmDay | un
 
 /** Top behaviours for a day, for the row tooltip. */
 function topClusters(day: RhythmDay | undefined, limit = 4): RhythmCluster[] {
-  return [...(day?.clusters ?? [])].sort((a, b) => b.pOccur - a.pOccur).slice(0, limit);
+  return [...(day?.clusters ?? [])]
+    .filter((cluster) =>
+      weekClusterVisible({
+        name: cluster.name,
+        l0Class: cluster.l0Class,
+        pOccur: cluster.pOccur,
+        scheduled: Boolean(cluster.scheduled),
+      }),
+    )
+    .sort((a, b) => b.pOccur - a.pOccur)
+    .slice(0, limit);
 }
 
 /**
  * Text equivalent of the rhythm lane.
  *
- * The lane encodes everything it says in hue and opacity across 24 empty cells,
+ * The lane encodes everything it says in hue and opacity across 96 empty cells,
  * with the words only in a hover tooltip. Naming it as an image, with the same
  * behaviours the tooltip lists, is what makes the layer legible to anyone not
  * using a mouse.
@@ -352,6 +365,8 @@ export {
   dropInstant,
   movedStart,
   RHYTHM_NOISE_FLOOR,
+  BUCKET_MINUTES,
+  BUCKETS_PER_DAY,
 };
 
 export type { RhythmClaim, RhythmCluster };

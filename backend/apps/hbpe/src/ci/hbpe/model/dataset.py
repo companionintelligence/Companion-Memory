@@ -100,19 +100,28 @@ class TokenStreamDataset:
             ...
     """
 
-    def __init__(self, user_id: str, dates: list[str]) -> None:
+    def __init__(
+        self,
+        user_id: str,
+        dates: list[str],
+        extra_sequences: list[list[dict]] | None = None,
+    ) -> None:
         self.user_id = user_id
         self.dates = dates
+        self.extra_sequences = extra_sequences or []
 
     def __len__(self) -> int:
-        return len(self.dates)
+        return len(self.dates) + len(self.extra_sequences)
 
     def __getitem__(self, idx: int) -> list[dict]:
-        return _fetch_day(self.user_id, self.dates[idx])
+        if idx < len(self.dates):
+            return _fetch_day(self.user_id, self.dates[idx])
+        return self.extra_sequences[idx - len(self.dates)]
 
     def __iter__(self):
         for date in self.dates:
             yield _fetch_day(self.user_id, date)
+        yield from self.extra_sequences
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────

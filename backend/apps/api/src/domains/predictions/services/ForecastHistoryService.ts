@@ -19,7 +19,7 @@ export interface ForecastHistoryDay {
 }
 
 /**
- * Latest logged forecast per 30-minute bucket from hbpe.prediction_log —
+ * Latest logged forecast per 15-minute bucket from hbpe.prediction_log —
  * the table /histogram already writes and actuals_backfill already fills.
  */
 @Injectable()

@@ -7,6 +7,7 @@ import { ActionEntity } from '@ci/domains/intelligence';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
 import { PersonalizationModule } from '@ci/domains/personalization';
+import { PredictionsModule } from '@ci/domains/predictions';
 import { SummaryEntity } from '@ci/domains/summaries';
 
 import { EventCandidateEntity } from './entities/EventCandidateEntity';
@@ -26,6 +27,7 @@ import { TaskBreakdownService } from './services/TaskBreakdownService';
     AgentModule,
     LLMModule,
     LoggingModule,
+    PredictionsModule,
   ],
   providers: [CandidateService, SuggestionSyncService, TaskBreakdownService],
   exports: [CandidateService, SuggestionSyncService, TaskBreakdownService],

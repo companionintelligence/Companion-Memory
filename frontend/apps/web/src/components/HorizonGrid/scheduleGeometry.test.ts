@@ -304,11 +304,11 @@ describe('daypartWeights — collapsing a day of clusters into four weights', ()
   });
 });
 
-describe('rhythmCells — per-hour intensities across a local day', () => {
+describe('rhythmCells — 15-minute intensities across a local day', () => {
   const lookupFor = (days: RhythmDay[]) => (utcDate: string) => days.find((d) => d.date === utcDate);
 
-  it('emits one cell per hour of the day', () => {
-    expect(rhythmCells(MONDAY, () => undefined)).toHaveLength(24);
+  it('emits one cell per 15-minute slot of the day', () => {
+    expect(rhythmCells(MONDAY, () => undefined)).toHaveLength(96);
   });
 
   it('is all-zero when no forecast covers the day', () => {
@@ -324,8 +324,8 @@ describe('rhythmCells — per-hour intensities across a local day', () => {
       ]),
     );
 
-    // Whatever the viewer's offset, every hour resolves to some real daypart
-    // weight — no hour is left unresolved by the UTC→local mapping.
+    // Whatever the viewer's offset, every slot resolves to some real daypart
+    // weight — no slot is left unresolved by the UTC→local mapping.
     expect(cells.some((c) => c > 0)).toBe(true);
     expect(cells.every((c) => c >= 0 && c <= 1)).toBe(true);
   });
@@ -337,7 +337,7 @@ describe('rhythmCells — per-hour intensities across a local day', () => {
     // The zone is pinned because the assertion is ABOUT the offset: under UTC a
     // local day IS a UTC day, there is no tail reaching past midnight, and the
     // case proves nothing. New York in August is UTC-4, so local 20:00 onward
-    // falls in the next UTC date's `night` daypart — and only those four hours.
+    // falls in the next UTC date's `night` daypart — and only those sixteen slots.
     const cells = withTimeZone('America/New_York', () =>
       rhythmCells(
         startOfLocalDay(new Date(2026, 7, 3)),
@@ -358,12 +358,12 @@ describe('rhythmCells — per-hour intensities across a local day', () => {
       ),
     );
 
-    expect(cells.slice(0, 20)).toEqual(Array.from({ length: 20 }, () => 0));
-    expect(cells.slice(20)).toEqual([1, 1, 1, 1]);
+    expect(cells.slice(0, 80)).toEqual(Array.from({ length: 80 }, () => 0));
+    expect(cells.slice(80)).toEqual(Array.from({ length: 16 }, () => 1));
   });
 
   it('preserves ordering between a strong and a weak daypart', () => {
-    // Pinned for the same reason as the case above: which local hours reach
+    // Pinned for the same reason as the case above: which local slots reach
     // which daypart is exactly what varies by offset. Left to the machine, a
     // far-eastern zone (Chatham is UTC+12:45) slides the whole row off the
     // afternoon band and the strong claim never appears at all.
@@ -402,9 +402,9 @@ describe('rhythmCells — per-hour intensities across a local day', () => {
 
     // At UTC-4 the UTC afternoon band (12:00–17:59Z) is local 08:00–13:59, and
     // UTC night is local 20:00–23:59 plus the 00:00–01:59 tail of the same band
-    // the previous UTC date opened.
-    expect(cells[10]).toBeCloseTo(0.81, 2);
-    expect(cells[22]).toBeCloseTo(0.09, 2);
+    // the previous UTC date opened. Slot 40 is 10:00; slot 88 is 22:00.
+    expect(cells[40]).toBeCloseTo(0.81, 2);
+    expect(cells[88]).toBeCloseTo(0.09, 2);
   });
 });
 
@@ -573,4 +573,3 @@ describe('movedStart — dragging a committed event to a new time', () => {
     expect(movedStart(MONDAY, Number.NaN, 0).getTime()).toBe(MONDAY.getTime());
   });
 });
-
