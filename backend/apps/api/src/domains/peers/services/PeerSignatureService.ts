@@ -1,9 +1,10 @@
 import { createPrivateKey, randomBytes, type KeyObject } from 'node:crypto';
 
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
+import { CONSUMPTION_STORE, type ConsumptionStore } from '@ci/domains/consumption';
 
 import {
   BODY_COMPONENT,
@@ -47,16 +48,6 @@ export const MAX_SIGNATURE_LIFETIME_MS = 300_000;
 /** The window this box asks for on its own outbound requests. */
 const OUTBOUND_LIFETIME_MS = 60_000;
 
-/**
- * Hard cap on remembered nonces.
- *
- * The cache is the replay defence, and an unbounded one is a memory-exhaustion
- * surface reachable by any peer that can reach the route. When it is full the
- * OLDEST entries go, which degrades replay protection for the oldest requests
- * first -- and those are the ones closest to expiring anyway.
- */
-const MAX_REMEMBERED_NONCES = 50_000;
-
 export type SignatureFailure =
   | 'missing'
   | 'malformed'
@@ -70,8 +61,7 @@ export type SignatureFailure =
   | 'bad-signature';
 
 export type VerificationResult =
-  | { ok: true; keyThumbprint: string }
-  | { ok: false; reason: SignatureFailure };
+  { ok: true; keyThumbprint: string } | { ok: false; reason: SignatureFailure };
 
 /**
  * Verifies and produces RFC 9421 signatures on the peer-ask surface.
@@ -94,12 +84,13 @@ export type VerificationResult =
  */
 @Injectable()
 export class PeerSignatureService {
-  /** nonce key -> expiry epoch ms. Insertion-ordered, which is what makes eviction "oldest first". */
-  private readonly seenNonces = new Map<string, number>();
-
   private cachedSigningKey: { key: KeyObject; thumbprint: string } | null | undefined;
 
-  constructor(private readonly logger: LoggerService) {
+  constructor(
+    @Inject(CONSUMPTION_STORE)
+    private readonly store: ConsumptionStore,
+    private readonly logger: LoggerService,
+  ) {
     this.logger.setContext(PeerSignatureService.name);
   }
 
@@ -117,7 +108,7 @@ export class PeerSignatureService {
    * `JSON.stringify` of a parsed object is not guaranteed to reproduce the
    * input byte for byte.
    */
-  verifyInbound(request: {
+  async verifyInbound(request: {
     method: string;
     targetUri: string;
     signatureInput?: string;
@@ -126,7 +117,7 @@ export class PeerSignatureService {
     rawBody?: string;
     peerPublicJwk: unknown;
     now?: Date;
-  }): VerificationResult {
+  }): Promise<VerificationResult> {
     if (!request.signatureInput && !request.signature) {
       return { ok: false, reason: 'missing' };
     }
@@ -211,7 +202,13 @@ export class PeerSignatureService {
     // Checking it earlier would let an attacker burn a victim's nonce by
     // replaying it with a broken signature, denying the honest request that
     // follows. Scoped by thumbprint so one peer cannot burn another's.
-    if (!this.rememberNonce(`${thumbprint} ${parsed.params.nonce}`, expiresMs, now)) {
+    const claimed = await this.store.claimOnce({
+      key: `peer-nonce:${thumbprint} ${parsed.params.nonce}`,
+      now,
+      expiresAtMs: expiresMs,
+    });
+
+    if (!claimed) {
       return { ok: false, reason: 'replayed' };
     }
 
@@ -308,38 +305,5 @@ export class PeerSignatureService {
     }
 
     return this.cachedSigningKey;
-  }
-
-  /** Record a nonce, returning false if it has been seen inside its own window. */
-  private rememberNonce(key: string, expiresMs: number, now: number): boolean {
-    this.pruneNonces(now);
-
-    if (this.seenNonces.has(key)) {
-      return false;
-    }
-
-    if (this.seenNonces.size >= MAX_REMEMBERED_NONCES) {
-      const oldest = this.seenNonces.keys().next();
-      if (!oldest.done) {
-        this.seenNonces.delete(oldest.value);
-      }
-    }
-
-    this.seenNonces.set(key, expiresMs);
-
-    return true;
-  }
-
-  private pruneNonces(now: number): void {
-    for (const [key, expiry] of this.seenNonces) {
-      // Insertion order is not expiry order in general, but every window is
-      // bounded by MAX_SIGNATURE_LIFETIME_MS, so scanning until the first live
-      // entry keeps this amortized without a heap.
-      if (expiry > now) {
-        break;
-      }
-
-      this.seenNonces.delete(key);
-    }
   }
 }

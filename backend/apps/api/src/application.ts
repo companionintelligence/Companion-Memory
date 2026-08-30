@@ -55,6 +55,7 @@ import { ModelRoutingModule } from '@ci/domains/model-routing';
 import { NotesModule } from '@ci/domains/notes';
 import { OnboardingModule } from '@ci/domains/onboarding';
 import { ParsingModule } from '@ci/domains/parsing';
+import { ConsumptionModule } from '@ci/domains/consumption';
 import { PeersModule } from '@ci/domains/peers';
 import { PersonaModule } from '@ci/domains/persona';
 import { PersonalizationModule } from '@ci/domains/personalization';
@@ -107,6 +108,7 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     ActivityModule,
     AgentModule,
     AsksModule,
+    ConsumptionModule,
     PeersModule,
     AuditModule,
     AuthModule,

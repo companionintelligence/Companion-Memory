@@ -1028,6 +1028,21 @@ export const ConfigSchema = z.object({
      */
     signingKeyJwk: z.string().optional(),
   }),
+  /**
+   * Where the abuse-control counters live -- the rate-limit windows and the
+   * signature replay nonces (G8, #2365).
+   *
+   * `postgres` (the default) shares them across every api replica and survives
+   * a restart. `memory` keeps them per-process, which is what shipped three
+   * times and what G8 reports: N replicas means N times the effective limit,
+   * and for the nonce cache it means a REPLAY SUCCEEDS ONCE PER REPLICA.
+   *
+   * Set `memory` only on a single-process box, or in a test that does not want
+   * a database.
+   */
+  consumption: z.object({
+    store: z.enum(['postgres', 'memory']).default('postgres'),
+  }),
   // Geocoding, both directions (address <-> coordinates). Egress normally goes
   // through CI-Portal, which holds the provider key and fronts a cache shared by
   // every appliance; `google` is the direct-key fallback and is the only mode
