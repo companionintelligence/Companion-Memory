@@ -1,4 +1,5 @@
 require_relative '../../node_modules/@capacitor/ios/scripts/pods_helpers'
+require 'set'
 
 platform :ios, '15.5'
 use_frameworks!
@@ -48,37 +49,110 @@ target 'App' do
   # Add your Pods here
 end
 
+# Google's MLKit pods (pulled in via @capacitor-mlkit/barcode-scanning) ship a podspec
+# that unconditionally sets EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64 -- confirmed
+# straight from the published podspec (pod_target_xcconfig / user_target_xcconfig on both
+# GoogleMLKit and every MLKit* pod), not just inferred from `otool`/`lipo`, and true of
+# every version on trunk through the current latest (GoogleMLKit 9.0.0 /
+# MLKitBarcodeScanning 8.0.0 / MLKitCommon 14.0.0, checked 2026-08-29 -- a version bump of
+# @capacitor-mlkit/barcode-scanning would NOT fix this; see the PR description). These
+# pods have only ever shipped an arm64 DEVICE slice packed alongside an x86_64 SIMULATOR
+# slice, never an arm64-simulator slice. So the exclusion is real and correct for pod
+# targets that actually link against these frameworks.
+#
+# It also fights the ARCHS=arm64 override the CI/local iOS-simulator build needs for a
+# different vendored dependency: CLiteRTLM.xcframework (the on-device LLM) ships
+# arm64-simulator but NO x86_64-simulator slice at all (see .github/workflows/mobile-build.yml).
+# With EXCLUDED_ARCHS=arm64 still set anywhere in the chain, ARCHS=arm64 resolves to zero
+# valid archs and things fail opaquely (`ARCHS[@]: unbound variable`), which is not the
+# real problem -- it just hides it. Clearing MLKit's exclusion instead trades that opaque
+# failure for a real linker error (`building for iOS-simulator, but linking in object file
+# ... built for iOS`, from MLImage/GMLImage.o): the App target ends up needing BOTH
+# CLiteRTLM's arm64-simulator-only slice AND MLKit's arm64-device-only slice in the same
+# arm64 build, which no ARCHS value can satisfy.
+#
+# Product call (see PR description for the full tradeoff): CLiteRTLM/on-device chat is the
+# more central, harder-to-replace feature, and barcode scanning already can't exercise a
+# real camera in Simulator -- so MLKit's simulator linking is dropped instead of
+# CLiteRTLM's. `mlkit_family_target_names` walks the Xcode target-dependency graph
+# starting from CapacitorMlkitBarcodeScanning (the only thing in this Podfile that depends
+# on GoogleMLKit) to find every pod that exists solely to support barcode scanning --
+# GoogleMLKit, MLKitBarcodeScanning, MLKitCommon, MLKitVision, MLImage, and their own
+# shared-only dependencies (GoogleDataTransport, GoogleToolboxForMac, GoogleUtilities,
+# GTMSessionFetcher, nanopb, PromisesObjC) -- without hand-listing names that could drift
+# from the next `cap sync` / version bump. None of these are depended on by anything else
+# in this Podfile (verified against Podfile.lock), so nothing else loses its
+# arm64-simulator slice. Below (post_install), those targets keep
+# EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64 while every other pod gets it cleared, so
+# MLKit builds nothing for the arm64 simulator slice; native calls into
+# @capacitor-mlkit/barcode-scanning there reject via Capacitor's normal "no implementation
+# registered" path rather than crashing (verified in Simulator -- see PR description).
+def mlkit_family_target_names(installer)
+  mlkit_root = installer.pods_project.targets.find { |t| t.name == 'CapacitorMlkitBarcodeScanning' }
+  mlkit_family = Set.new
+  return mlkit_family unless mlkit_root
+
+  # installer.pods_project.targets also includes the per-user-target aggregate
+  # ("Pods-App"), which CocoaPods wires as a dependency of literally every pod -- that is
+  # umbrella integration, not a real pod-to-pod dependency, so it must be excluded from
+  # the graph below or every pod would look "shared".
+  aggregate_names = Set.new(installer.aggregate_targets.map(&:name))
+  all_targets = installer.pods_project.targets.reject { |t| aggregate_names.include?(t.name) }
+  dependency_names = {}
+  all_targets.each do |t|
+    dependency_names[t.name] = t.dependencies.map { |dep| dep.target && dep.target.name }.compact
+  end
+
+  queue = [mlkit_root.name]
+  until queue.empty?
+    name = queue.shift
+    next unless mlkit_family.add?(name)
+    (dependency_names[name] || []).each { |dep_name| queue << dep_name }
+  end
+
+  # The forward closure above also sweeps in pods MLKit merely happens to share with
+  # everything else (e.g. every plugin depends on 'Capacitor' itself). Prune anything in
+  # the closure that some pod OUTSIDE the closure also depends on -- iterating to a fixed
+  # point, since pruning a shared pod can cascade (e.g. once 'Capacitor' is pruned,
+  # 'CapacitorCordova', which only the MLKit closure and 'Capacitor' depend on, loses its
+  # last in-family dependent too). What's left is exactly the set of pods that exist ONLY
+  # to support barcode scanning.
+  loop do
+    prune = mlkit_family.select do |name|
+      next false if name == mlkit_root.name
+      all_targets.any? { |t| !mlkit_family.include?(t.name) && (dependency_names[t.name] || []).include?(name) }
+    end
+    break if prune.empty?
+    prune.each { |name| mlkit_family.delete(name) }
+  end
+
+  mlkit_family
+end
+
+# mlkit_family_target_names is keyed by TARGET name, but the linker flags handled in
+# post_integrate below are keyed by each target's PRODUCT name -- they differ for at least
+# one member (the PromisesObjC target produces FBLPromises.framework).
+def mlkit_family_product_names(installer)
+  family = mlkit_family_target_names(installer)
+  Set.new(
+    installer.pods_project.targets
+      .select { |t| family.include?(t.name) }
+      # Vendor-only pods (no source, only a vendored .xcframework -- MLImage,
+      # MLKitBarcodeScanning, MLKitCommon, MLKitVision, GoogleMLKit) show up as a
+      # PBXAggregateTarget with no product_reference, so `product_name` is nil even
+      # though the framework itself is still linked under the pod's own name (they're
+      # not renamed the way PromisesObjC -> FBLPromises is). Fall back to the target
+      # name in that case.
+      .map { |t| (t.respond_to?(:product_name) && t.product_name) || t.name }
+  )
+end
+
 post_install do |installer|
   assertDeploymentTarget(installer)
-  # Xcode 26 / the iOS 26 SDK dropped iOS 14; force every pod target to the App minimum (15.0).
-  #
-  # Google's MLKit pods (pulled in via @capacitor-mlkit/barcode-scanning) ship a podspec
-  # that unconditionally sets EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64. `lipo -info`
-  # on the vendored .framework binaries (MLKitBarcodeScanning/MLKitCommon/MLKitVision/
-  # MLImage/GoogleMLKit) reports both x86_64 and arm64 slices, which looks like this
-  # exclusion is just stale -- it is NOT: `otool -l` on the arm64 slice shows
-  # LC_BUILD_VERSION platform 2 (device iOS), not platform 7 (iOS-simulator). These pods
-  # only ever shipped an arm64 DEVICE slice packed alongside an x86_64 SIMULATOR slice;
-  # there is no arm64-simulator slice in any published version through at least
-  # GoogleMLKit 8.0.0 / MLKitBarcodeScanning 7.0.0 (checked 2026-08-29). So the exclusion
-  # is real and correct for pod targets that actually link against these frameworks.
-  #
-  # Left in place, though, it also fights the ARCHS=arm64 override the CI/local iOS-
-  # simulator build needs for a different vendored dependency: CLiteRTLM.xcframework
-  # (the on-device LLM) ships arm64-simulator but NO x86_64-simulator slice at all (see
-  # .github/workflows/mobile-build.yml). With EXCLUDED_ARCHS=arm64 still set anywhere in
-  # the chain, ARCHS=arm64 resolves to zero valid archs and the "[CP] Embed Pods
-  # Frameworks" phase fails opaquely with `ARCHS[@]: unbound variable`, which is not the
-  # real problem -- it just hides it. Clearing it here does fix that specific symptom
-  # for every OTHER pod target (Capacitor plugins etc. all have real arm64-simulator
-  # slices or compile from source), but for the MLKit family specifically it only trades
-  # the opaque `ARCHS[@]: unbound variable` failure for the accurate one: a link error,
-  # because the App target ends up needing BOTH CLiteRTLM's arm64-simulator-only slice
-  # AND MLKit's arm64-DEVICE-only slice in the same arm64 build. That combination cannot
-  # be satisfied by any Podfile/build-setting change -- see docs/qa/ for the follow-up
-  # (either drop MLKit from the simulator build or gate CLiteRTLM linking) needed to
-  # actually produce a linkable .app. This block is still correct/required groundwork
-  # for that follow-up and fixes the unbound-variable symptom for the rest of the pods.
+  # Xcode 26 / the iOS 26 SDK dropped iOS 14; force every pod target to the App minimum
+  # (15.0). Also clear EXCLUDED_ARCHS[sdk=iphonesimulator*] for every pod -- see the
+  # mlkit_family_target_names comment above for why -- except the MLKit family, which
+  # keeps it (re-applied below) so it builds nothing for the arm64 simulator slice.
   installer.pods_project.targets.each do |t|
     t.build_configurations.each do |c|
       c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
@@ -89,18 +163,108 @@ post_install do |installer|
   # The loop above only clears EXCLUDED_ARCHS on the individual pod targets inside
   # Pods.xcodeproj. The App target doesn't link those targets' build settings directly --
   # it links against the umbrella Pods-App.{debug,release}.xcconfig, which CocoaPods
-  # generates by textually aggregating every linked pod's OWN xcconfig (including
-  # MLKit's EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64) at `pod install` time. That
-  # aggregate file is a separate artifact the build-settings loop above never touches,
-  # so without this the App target itself still inherits EXCLUDED_ARCHS=arm64 from the
-  # umbrella xcconfig -- ARCHS=arm64 still resolves to zero valid archs for the App
-  # target and the "[CP] Embed Pods Frameworks" phase still fails with
-  # `ARCHS[@]: unbound variable`, even though every Pods.xcodeproj target builds fine.
-  # Strip it from the umbrella xcconfig too.
+  # generates by textually aggregating every linked pod's OWN xcconfig (including MLKit's
+  # EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64) at `pod install` time. That aggregate
+  # file is a separate artifact the per-target loop above never touches, so without this
+  # the App target itself still inherits EXCLUDED_ARCHS=arm64 from the umbrella xcconfig
+  # -- ARCHS=arm64 still resolves to zero valid archs for the App target and things fail
+  # with `ARCHS[@]: unbound variable`, even though every Pods.xcodeproj target builds
+  # fine. Strip it from the umbrella xcconfig too -- the App target itself must stay
+  # buildable for arm64 regardless of what individual pod targets do.
+  #
+  # NOTE: unlike EXCLUDED_ARCHS (present on the aggregate xcconfig at this point, verified
+  # empirically), OTHER_LDFLAGS is NOT yet populated in `aggregate_target.xcconfigs` here
+  # -- CocoaPods only fills it in during the later "integrate into the user project" step,
+  # which runs after post_install. Stripping the MLKit family's `-framework "X"` entries
+  # from OTHER_LDFLAGS (and the matching lines from the generated embed-frameworks script)
+  # therefore has to happen in `post_integrate` below, once that step has actually run --
+  # see that hook for why it's needed at all.
   installer.aggregate_targets.each do |aggregate_target|
     aggregate_target.xcconfigs.each do |config_name, config_file|
       config_file.attributes.delete('EXCLUDED_ARCHS[sdk=iphonesimulator*]')
       config_file.save_as(aggregate_target.xcconfig_path(config_name))
     end
+  end
+
+  mlkit_family = mlkit_family_target_names(installer)
+  installer.pods_project.targets.each do |t|
+    next unless mlkit_family.include?(t.name)
+    t.build_configurations.each do |c|
+      c.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64'
+      # CapacitorMlkitBarcodeScanning (the only source-compiled, non-vendored-binary
+      # member of the family) has zero valid archs on this build, so Xcode correctly
+      # skips its normal compile+link -- but Xcode 16+'s "ExtractAppIntentsMetadata"
+      # build step is scheduled for every Swift framework target regardless (it is
+      # deferred/independent of the per-arch compile phases) and unconditionally expects
+      # the compiled binary that step never produced, failing with "Build input file
+      # cannot be found: .../CapacitorMlkitBarcodeScanning". LM_SKIP_METADATA_EXTRACTION
+      # is the documented escape hatch for exactly this -- see
+      # AppIntentsMetadataTaskProducer.generateTasks() in swiftlang/swift-build, which
+      # returns zero tasks (skips the step outright, no binary needed) when this is set.
+      c.build_settings['LM_SKIP_METADATA_EXTRACTION'] = 'YES'
+    end
+  end
+end
+
+post_integrate do |installer|
+  # Runs after CocoaPods integrates Pods.xcodeproj into the user's project and writes the
+  # final files to disk -- see the NOTE in post_install above for why OTHER_LDFLAGS has to
+  # be handled here rather than there.
+  #
+  # The umbrella Pods-App.{debug,release}.xcconfig's OTHER_LDFLAGS unconditionally lists
+  # `-framework "X"` for every pod the Podfile links, including the MLKit family --
+  # computed from the full dependency graph, not filtered by each pod's own
+  # EXCLUDED_ARCHS (that's a per-target *compile* setting; OTHER_LDFLAGS is a separate
+  # aggregate *link* setting CocoaPods computes independently). Since post_install leaves
+  # the MLKit family building nothing for arm64-simulator, those frameworks never exist on
+  # disk for this build, and the App target's own link step -- which does still need to
+  # succeed, unlike the individual MLKit pod targets -- would otherwise fail with
+  # `ld: framework 'CapacitorMlkitBarcodeScanning' not found` (and the same for
+  # MLImage/MLKitBarcodeScanning/MLKitCommon/MLKitVision/GoogleDataTransport/
+  # GoogleToolboxForMac/GoogleUtilities/GTMSessionFetcher/nanopb/FBLPromises). Strip
+  # exactly those `-framework "X"` tokens so the App target only tries to link what
+  # actually got built.
+  #
+  # The generated "[CP] Embed Pods Frameworks" script (Pods-App-frameworks.sh) has the
+  # exact same problem, for the same reason: it unconditionally calls
+  # `install_framework ".../X.framework"` for every linked pod, including the MLKit
+  # family. That helper has `set -u` and never assigns its local `source` var when the
+  # path doesn't exist under any of the locations it checks, so rsync-ing an unbound
+  # `"${source}"` aborts the whole script (the same class of bug as the
+  # `ARCHS[@]: unbound variable` failure #2443/#2463 already fixed, in a different
+  # generated script). Strip exactly the MLKit family's `install_framework` lines.
+  mlkit_product_names = mlkit_family_product_names(installer)
+  next if mlkit_product_names.empty?
+
+  installer.aggregate_targets.each do |aggregate_target|
+    # Read the xcconfig fresh from disk rather than reusing post_install's in-memory
+    # config_file objects, which predate integration and so still lack OTHER_LDFLAGS.
+    #
+    # Xcodeproj::Config parses `-framework "X"` / `-weak_framework "X"` tokens out of
+    # OTHER_LDFLAGS into a dedicated `other_linker_flags[:frameworks]` /
+    # `[:weak_frameworks]` Set, NOT into `.attributes['OTHER_LDFLAGS']` (that generic
+    # `attributes` hash explicitly excludes frameworks/weak_frameworks/libraries --
+    # they're tracked separately so Xcodeproj can de-duplicate them). Removing entries
+    # from those sets before re-serializing is the correct way to drop them.
+    aggregate_target.xcconfigs.each_key do |config_name|
+      xcconfig_path = aggregate_target.xcconfig_path(config_name)
+      next unless File.exist?(xcconfig_path)
+      config = Xcodeproj::Config.new(xcconfig_path)
+      removed = false
+      mlkit_product_names.each do |product_name|
+        removed |= config.other_linker_flags[:frameworks].delete?(product_name) ? true : false
+        removed |= config.other_linker_flags[:weak_frameworks].delete?(product_name) ? true : false
+      end
+      config.save_as(xcconfig_path) if removed
+    end
+
+    script_path = aggregate_target.embed_frameworks_script_path
+    next unless script_path && File.exist?(script_path)
+    original = File.read(script_path)
+    contents = original
+    mlkit_product_names.each do |product_name|
+      contents = contents.gsub(/^[ \t]*install_framework\s+"[^"\n]*\/#{Regexp.escape(product_name)}\.framework"[ \t]*\n/, '')
+    end
+    File.write(script_path, contents) if contents != original
   end
 end
