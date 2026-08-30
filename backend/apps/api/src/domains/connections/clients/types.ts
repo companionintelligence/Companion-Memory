@@ -121,6 +121,18 @@ export interface OutlookMailMessageEntity {
   receivedDateTime: string;
   sentDateTime: string;
   hasAttachments: boolean;
+  conversationId?: string;
+  internetMessageId?: string;
+  webLink?: string;
+  isDraft?: boolean;
+  isRead?: boolean;
+  importance?: string;
+  inferenceClassification?: string;
+  internetMessageHeaders?: Array<{
+    name: string;
+    value: string;
+  }>;
+  bodyPreview?: string;
   body?: {
     contentType: string;
     content: string | null;

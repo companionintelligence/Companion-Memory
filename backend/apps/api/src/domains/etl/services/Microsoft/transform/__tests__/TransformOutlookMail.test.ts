@@ -83,6 +83,44 @@ describe('OutlookMailTransformService.transformOutlookMail', () => {
     expect(dto.source_id).toBeUndefined();
   });
 
+  it('writes Outlook conversationId as thread_id', async () => {
+    const { service, communicationService } = build();
+
+    await service.transformOutlookMail({
+      connection,
+      syncJob: syncJobWith([outlookMessage({ conversationId: 'conv-99' })]),
+    });
+
+    expect(communicationService.create).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({ thread_id: 'conv-99' }),
+    );
+  });
+
+  it('skips junk and List-Unsubscribe mail under bulk_filtered', async () => {
+    const { service, communicationService, promoteService } = build();
+
+    await service.transformOutlookMail({
+      connection,
+      syncJob: syncJobWith([
+        outlookMessage({
+          inferenceClassification: 'junk',
+          internetMessageHeaders: [{ name: 'List-Unsubscribe', value: '<mailto:u@bad.example>' }],
+        }),
+        outlookMessage({
+          id: 'graph-id-2',
+          internetMessageId: '<promo@shop.example>',
+          inferenceClassification: 'other',
+          from: { emailAddress: { name: 'Shop', address: 'news@shop.example' } },
+          internetMessageHeaders: [{ name: 'List-Unsubscribe', value: '<mailto:unsub@shop.example>' }],
+        }),
+      ]),
+    });
+
+    expect(communicationService.create).not.toHaveBeenCalled();
+    expect(promoteService.processParticipants).not.toHaveBeenCalled();
+  });
+
   it('still skips drafts', async () => {
     const { service, communicationService } = build();
 

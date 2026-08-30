@@ -7,6 +7,37 @@ import type {
 
 const MAIL_PAGE_SIZE = 50;
 
+// Default Graph message select does not include internetMessageHeaders.
+// The live bulk gate needs List-Unsubscribe / Precedence / Auto-Submitted,
+// so the list query must ask for them. $select replaces the default set.
+const OUTLOOK_MAIL_SELECT = [
+  'id',
+  'subject',
+  'createdDateTime',
+  'lastModifiedDateTime',
+  'changeKey',
+  'categories',
+  'receivedDateTime',
+  'sentDateTime',
+  'hasAttachments',
+  'body',
+  'bodyPreview',
+  'from',
+  'toRecipients',
+  'ccRecipients',
+  'bccRecipients',
+  'replyTo',
+  'sender',
+  'importance',
+  'isRead',
+  'isDraft',
+  'conversationId',
+  'internetMessageId',
+  'webLink',
+  'inferenceClassification',
+  'internetMessageHeaders',
+].join(',');
+
 export async function syncOutlookMail({
   connection,
   client,
@@ -29,7 +60,7 @@ export async function syncOutlookMail({
 
       const endpoint =
         nextLink ||
-        `/v1.0/me/messages?%24filter=receivedDateTime%20lt%20${connection.createdAt.toISOString()}%20and%20(body%2fcontent+ne+null%20or%20hasAttachments+eq+true)&=orderBy+receivedDateTime+desc&%24top=${MAIL_PAGE_SIZE}`;
+        `/v1.0/me/messages?%24filter=receivedDateTime%20lt%20${connection.createdAt.toISOString()}%20and%20(body%2fcontent+ne+null%20or%20hasAttachments+eq+true)&=orderBy+receivedDateTime+desc&%24top=${MAIL_PAGE_SIZE}&$select=${OUTLOOK_MAIL_SELECT}`;
 
       const response = (await client.request(connection, endpoint)) as Record<string, unknown>;
       const messages = (response.value as OutlookMailMessageEntity[]) || [];
@@ -82,7 +113,7 @@ export async function syncOutlookMail({
         receivedDateTime = connection.createdAt.toISOString();
       }
 
-      const endpoint = `/v1.0/me/messages?%24filter=receivedDateTime%20gt%20${receivedDateTime}%20and%20(body%2fcontent+ne+null%20or%20hasAttachments+eq+true)&orderBy+receivedDateTime+asc&%24top=${MAIL_PAGE_SIZE}`;
+      const endpoint = `/v1.0/me/messages?%24filter=receivedDateTime%20gt%20${receivedDateTime}%20and%20(body%2fcontent+ne+null%20or%20hasAttachments+eq+true)&orderBy+receivedDateTime+asc&%24top=${MAIL_PAGE_SIZE}&$select=${OUTLOOK_MAIL_SELECT}`;
       const response = (await client.request(connection, endpoint)) as Record<string, unknown>;
       const messages = (response.value as OutlookMailMessageEntity[]) || [];
 

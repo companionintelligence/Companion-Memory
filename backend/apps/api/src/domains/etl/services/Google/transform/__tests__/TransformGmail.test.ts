@@ -73,6 +73,43 @@ describe('GmailTransformService.transformGmail', () => {
     expect(dto.source_id).toBeUndefined();
   });
 
+  it('skips a newsletter under bulk_filtered and does not create people or a row', async () => {
+    const { service, communicationService, promoteService, tagService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage({
+          id: 'promo-1',
+          labelIds: ['CATEGORY_PROMOTIONS', 'INBOX'],
+          payload: {
+            headers: [
+              { name: 'Subject', value: '50% off' },
+              { name: 'From', value: 'Shop <news@shop.example>' },
+              { name: 'To', value: 'kyle@example.com' },
+              { name: 'List-Unsubscribe', value: '<mailto:unsub@shop.example>' },
+            ],
+          },
+        }),
+      ]),
+    });
+
+    expect(communicationService.create).not.toHaveBeenCalled();
+    expect(promoteService.processParticipants).not.toHaveBeenCalled();
+    expect(tagService.tagEntities).not.toHaveBeenCalled();
+  });
+
+  it('skips a draft under draft', async () => {
+    const { service, communicationService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([gmailMessage({ id: 'draft-1', labelIds: ['DRAFT'] })]),
+    });
+
+    expect(communicationService.create).not.toHaveBeenCalled();
+  });
+
   it('keeps going past one message whose create fails (the dedup unique-violation path)', async () => {
     const { service, communicationService, tagService } = build();
     communicationService.create.mockRejectedValueOnce(

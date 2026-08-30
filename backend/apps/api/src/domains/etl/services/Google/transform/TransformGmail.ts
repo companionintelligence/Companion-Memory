@@ -2,6 +2,11 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService, GmailMessage, EmailParticipant } from '@ci/domains/connections';
+import {
+  headersFromGmailApi,
+  liveMailDropReason,
+  mailIncludeBulkEnabled,
+} from '@ci/domains/import';
 import { CommunicationDirection, CommunicationService, CommunicationType } from '@ci/domains/memory';
 import { TagService } from '@ci/domains/search-next';
 
@@ -74,6 +79,25 @@ export class GmailTransformService {
   }): Promise<void> {
     try {
       const messageDetails = this.extractMessageDetails(message);
+      const headers = headersFromGmailApi({
+        headers: message.payload?.headers,
+        labelIds: message.labelIds,
+      });
+      const drop = liveMailDropReason({
+        headers,
+        bodyText: messageDetails.body || messageDetails.snippet,
+        isExplicitDraft: message.labelIds?.includes('DRAFT'),
+        includeBulk: mailIncludeBulkEnabled(),
+      });
+      if (drop) {
+        this.logger.log('Skipping Gmail message', {
+          messageId: messageDetails.id,
+          subject: messageDetails.subject,
+          drop,
+        });
+
+        return;
+      }
 
       this.logger.log('Processing Gmail message', {
         messageId: messageDetails.id,
