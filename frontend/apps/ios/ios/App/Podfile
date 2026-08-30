@@ -51,9 +51,56 @@ end
 post_install do |installer|
   assertDeploymentTarget(installer)
   # Xcode 26 / the iOS 26 SDK dropped iOS 14; force every pod target to the App minimum (15.0).
+  #
+  # Google's MLKit pods (pulled in via @capacitor-mlkit/barcode-scanning) ship a podspec
+  # that unconditionally sets EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64. `lipo -info`
+  # on the vendored .framework binaries (MLKitBarcodeScanning/MLKitCommon/MLKitVision/
+  # MLImage/GoogleMLKit) reports both x86_64 and arm64 slices, which looks like this
+  # exclusion is just stale -- it is NOT: `otool -l` on the arm64 slice shows
+  # LC_BUILD_VERSION platform 2 (device iOS), not platform 7 (iOS-simulator). These pods
+  # only ever shipped an arm64 DEVICE slice packed alongside an x86_64 SIMULATOR slice;
+  # there is no arm64-simulator slice in any published version through at least
+  # GoogleMLKit 8.0.0 / MLKitBarcodeScanning 7.0.0 (checked 2026-08-29). So the exclusion
+  # is real and correct for pod targets that actually link against these frameworks.
+  #
+  # Left in place, though, it also fights the ARCHS=arm64 override the CI/local iOS-
+  # simulator build needs for a different vendored dependency: CLiteRTLM.xcframework
+  # (the on-device LLM) ships arm64-simulator but NO x86_64-simulator slice at all (see
+  # .github/workflows/mobile-build.yml). With EXCLUDED_ARCHS=arm64 still set anywhere in
+  # the chain, ARCHS=arm64 resolves to zero valid archs and the "[CP] Embed Pods
+  # Frameworks" phase fails opaquely with `ARCHS[@]: unbound variable`, which is not the
+  # real problem -- it just hides it. Clearing it here does fix that specific symptom
+  # for every OTHER pod target (Capacitor plugins etc. all have real arm64-simulator
+  # slices or compile from source), but for the MLKit family specifically it only trades
+  # the opaque `ARCHS[@]: unbound variable` failure for the accurate one: a link error,
+  # because the App target ends up needing BOTH CLiteRTLM's arm64-simulator-only slice
+  # AND MLKit's arm64-DEVICE-only slice in the same arm64 build. That combination cannot
+  # be satisfied by any Podfile/build-setting change -- see docs/qa/ for the follow-up
+  # (either drop MLKit from the simulator build or gate CLiteRTLM linking) needed to
+  # actually produce a linkable .app. This block is still correct/required groundwork
+  # for that follow-up and fixes the unbound-variable symptom for the rest of the pods.
   installer.pods_project.targets.each do |t|
     t.build_configurations.each do |c|
       c.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      c.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = ''
+    end
+  end
+
+  # The loop above only clears EXCLUDED_ARCHS on the individual pod targets inside
+  # Pods.xcodeproj. The App target doesn't link those targets' build settings directly --
+  # it links against the umbrella Pods-App.{debug,release}.xcconfig, which CocoaPods
+  # generates by textually aggregating every linked pod's OWN xcconfig (including
+  # MLKit's EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64) at `pod install` time. That
+  # aggregate file is a separate artifact the build-settings loop above never touches,
+  # so without this the App target itself still inherits EXCLUDED_ARCHS=arm64 from the
+  # umbrella xcconfig -- ARCHS=arm64 still resolves to zero valid archs for the App
+  # target and the "[CP] Embed Pods Frameworks" phase still fails with
+  # `ARCHS[@]: unbound variable`, even though every Pods.xcodeproj target builds fine.
+  # Strip it from the umbrella xcconfig too.
+  installer.aggregate_targets.each do |aggregate_target|
+    aggregate_target.xcconfigs.each do |config_name, config_file|
+      config_file.attributes.delete('EXCLUDED_ARCHS[sdk=iphonesimulator*]')
+      config_file.save_as(aggregate_target.xcconfig_path(config_name))
     end
   end
 end
