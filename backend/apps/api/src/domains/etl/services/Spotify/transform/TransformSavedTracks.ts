@@ -69,7 +69,7 @@ export class SpotifySavedTracksTransformService {
             description: `Saved ${track.name} by ${track.artists!.map((artist) => artist.name).join(', ')} on Spotify at ${trackItem.added_at}`,
             event_type: 'favorite',
             start_time: new Date(addedAt),
-            duration_minutes: 0,
+            duration_minutes: Math.round(track.duration_ms / 60000),
             // Provenance triple: EventService.createOne find-or-creates on it,
             // so a re-sweep of the saved-tracks list resolves to the existing
             // event instead of minting another. Keyed on the track alone —

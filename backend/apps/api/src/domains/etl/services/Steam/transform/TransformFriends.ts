@@ -12,6 +12,7 @@ interface SteamFriendData {
   personaname: string;
   profileurl: string;
   avatar: string;
+  avatarmedium: string;
   avatarfull: string;
   realname?: string;
   friend_since: number;
@@ -94,6 +95,7 @@ export class SteamFriendsTransformService {
                   profileurl: friend.profileurl,
                   realname: friend.realname,
                   friend_since: friend.friend_since,
+                  avatar_medium_url: friend.avatarmedium,
                   last_synced: new Date().toISOString(),
                 },
               },

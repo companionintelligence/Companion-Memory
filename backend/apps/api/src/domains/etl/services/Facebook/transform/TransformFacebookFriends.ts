@@ -2,22 +2,12 @@ import { Injectable } from '@nestjs/common';
 
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { type Connection } from '@ci/domains/connections';
+import { type Connection, type FacebookFriend } from '@ci/domains/connections';
 import { RelationshipService } from '@ci/domains/graph';
 import { PersonService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
-
-interface FacebookFriend {
-  id: string;
-  name: string;
-  picture?: {
-    data: {
-      url: string;
-    };
-  };
-}
 
 @Injectable()
 export class FacebookFriendsTransformService {

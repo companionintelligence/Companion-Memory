@@ -98,6 +98,30 @@ export class SpotifySavedAudiobooksTransformService {
               }),
             );
           } else {
+            // Unlike Shows/Episodes/Tracks, the /me/audiobooks response carries
+            // no added_at wrapper, so there is no real save timestamp to use —
+            // this event is keyed on the audiobook alone (not a timestamp), so
+            // a later re-sync find-or-creates on it rather than minting a
+            // second "favorite" event once a genuine timestamp is unavailable.
+            await this.eventService.create(context, {
+              connection_id: connection.id,
+              title: `Saved audiobook ${audiobook.name}`,
+              description: `Saved ${audiobook.name} by ${audiobook.authors.map((author) => author.name).join(', ')} on Spotify`,
+              event_type: 'favorite',
+              start_time: new Date(),
+              duration_minutes: 0,
+              source_type: 'ETL',
+              source_system: 'spotify',
+              source_id: `saved_audiobook:${audiobook.id}`,
+              metadata: {
+                audiobook_id: audiobook.id,
+                authors: audiobook.authors.map((author) => author.name),
+                publisher: audiobook.publisher,
+                media_type: audiobook.media_type,
+                uri: audiobook.uri,
+              },
+            });
+
             // Create new content entry for the audiobook
             await this.contentService.create(context, {
               connection_id: connection.id,

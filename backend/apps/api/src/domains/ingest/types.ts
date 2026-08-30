@@ -10,18 +10,25 @@ import { createPositionSchemaRoot } from '@ci/domains/position';
  *
  * Every kind shares ONE request shape — `{ records: [...] }` — mirroring
  * `POST /v1/events`' earlier `{ events: [...] }` batch style (captureEventSchema
- * above), and ONE response shape ({@link BulkIngestResponse}). Record schemas match each destination service's
- * create DTO EXACTLY (field names and casing included), so the controller can
- * hand the parsed records to the service with only type coercions (ISO string →
- * Date) and no field renaming:
+ * above), and ONE response shape ({@link BulkIngestResponse}).
  *
- *   - communications / contents / browser-activity / positions / receipts /
- *     product-models / observations → snake_case (CreateCommunicationDto /
- *     CreateContentDto / CreateBrowserActivityDto / CreatePositionDto /
- *     CreateReceiptDto / CreateProductModelDto / CreateObjectObservationDto);
- *   - things → camelCase (CreateItemDto is the one camelCase ingest DTO,
- *     and stays the only one — the object tables added alongside it are
- *     snake_case like every other kind).
+ * Wire records are snake_case (matching the rest of this envelope) and match
+ * each destination DTO field-for-field in MEANING, but casing is NOT uniform
+ * across DTOs, so the controller's job differs per lane:
+ *
+ *   - communications / contents / browser-activity / positions → the DTO
+ *     (CreateCommunicationDto / CreateContentDto / CreateBrowserActivityDto /
+ *     CreatePositionDto) is ALSO snake_case, so the controller hands the
+ *     parsed records straight through with only type coercions (ISO string →
+ *     Date) and no field renaming;
+ *   - receipts / product-models / observations → the DTO (CreateReceiptDto /
+ *     CreateProductModelDto / CreateObjectObservationDto) is camelCase, so
+ *     the controller renames every field snake_case → camelCase on the way
+ *     in (a lossless 1:1 case conversion, not a semantic reshape);
+ *   - things → camelCase on the wire too (CreateItemDto is the one ingest DTO
+ *     whose wire records are already camelCase, matching the DTO directly —
+ *     the object tables added alongside it stay snake_case like every other
+ *     kind's wire records).
  *
  * The per-request cap reuses {@link MAX_BULK_INPUT_SIZE} (10,000) — the same
  * ceiling MaxArraySizePipe enforces on the GraphQL bulk-create mutations. The
