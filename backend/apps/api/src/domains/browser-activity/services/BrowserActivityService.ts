@@ -164,8 +164,13 @@ export class BrowserActivityService {
       scope: { user_id: context.userId },
       conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
       tripleColumns: ['source_type', 'source_system', 'source_id'],
-      // Centralized refresh contract — currently empty, so conflicts stay
-      // DO NOTHING find-or-return.
+      // Centralized refresh contract — self-heals the capture-derived columns
+      // (action_type, properties, duration_seconds, scroll_depth_percent,
+      // is_incognito, contains_sensitive) on a conflicting re-sync. Excludes
+      // title/url (user-editable via updateBrowserActivity) and the
+      // AI-generated insight columns (page_summary, category,
+      // productivity_score) so enrichment output survives a re-import. See
+      // INGEST_REFRESH_COLUMNS.browser_activity for the full rationale.
       conflictUpdateColumns: INGEST_REFRESH_COLUMNS.browser_activity,
     });
 

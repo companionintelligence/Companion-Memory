@@ -132,9 +132,11 @@ describeWithDatabase(
       expect(first).toHaveLength(1);
       expect(first[0].inserted).toBe(true);
 
-      // Re-ingest: same triple, even with a different `title` — DO NOTHING
-      // means the existing row's data is untouched, only the arbiter match
-      // (the triple) decides idempotency, not the rest of the payload.
+      // Re-ingest: same triple, even with a different `title` — `title` is
+      // deliberately absent from INGEST_REFRESH_COLUMNS.browser_activity (it
+      // is user-editable via updateBrowserActivity), so the DO UPDATE conflict
+      // action refreshes the capture-derived columns but leaves `title` as the
+      // arbiter match found it.
       const second = await service.createManyDetailed({ userId } as never, [
         row({ source_id: 'stable-entry-1', title: 'second sync — should NOT win' }),
       ]);

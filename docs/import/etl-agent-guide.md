@@ -1919,9 +1919,14 @@ If you read nothing else:
   too many is no error and thousands of body-less rows occupying a view. And the
   order matters: **events before content**, or every `ci.content.event_id` is
   NULL.
-- **A re-import does NOT repair `events`, `inventory`, `content` or
-  `browser_activity`.** `INGEST_REFRESH_COLUMNS` is empty for all four. Answer
-  "what happens to the rows already there?" in every PR.
+- **A re-import does NOT repair `events`, `inventory` or `content`.**
+  `INGEST_REFRESH_COLUMNS` is empty for all three (deliberately — each has an
+  update mutation that exposes nearly every plausible column, so a refresh
+  would clobber user edits). `browser_activity` is the one exception:
+  `updateBrowserActivity` only exposes `title`/`url`, so its refresh list
+  self-heals the other capture-derived columns (excluding the AI-generated
+  `page_summary`/`category`/`productivity_score`). Answer "what happens to the
+  rows already there?" in every PR.
 - **Fix the minter, the stored source string, AND the rows** — a backfill alone
   is theatre; 241 deleted people came back in full.
 - **Guard the column structurally, not the producer**, and derive the guard from
