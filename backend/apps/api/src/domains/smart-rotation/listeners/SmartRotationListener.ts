@@ -39,8 +39,13 @@ const FEED_QUEUE_LIMIT = 3;
  * only reaches back a day or so, so a curve past that could not be expressed
  * honestly. What actually bounds a permanently-unanswerable question is the
  * least-recently-attempted ORDER BY, not this number.
+ *
+ * Exported because AnswerInferenceCron's selection
+ * (QuestionService.findUnansweredByUserId) runs the same rotation over the
+ * same pg-boss history; two cooldowns for one attempt record would let the
+ * shorter path re-dispatch inside the longer path's window.
  */
-const INFERENCE_ATTEMPT_COOLDOWN_HOURS = 6;
+export const INFERENCE_ATTEMPT_COOLDOWN_HOURS = 6;
 
 @Injectable()
 export class SmartRotationListener {

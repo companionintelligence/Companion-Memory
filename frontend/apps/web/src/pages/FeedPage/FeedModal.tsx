@@ -162,6 +162,7 @@ export function FeedModal({ onClose }: Props) {
           readable={stream ?? undefined}
           onSubmit={submitChatRequest}
           onStop={stopChatRequest}
+          onStreamError={detachChatStream}
           emptyState={emptyState}
         />
       </InlineModal>
@@ -228,6 +229,7 @@ export function FeedModal({ onClose }: Props) {
             readable={stream ?? undefined}
             onSubmit={submitChatRequest}
             onStop={stopChatRequest}
+            onStreamError={detachChatStream}
             emptyState={emptyState}
           />
         </div>

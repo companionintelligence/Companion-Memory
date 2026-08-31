@@ -320,6 +320,7 @@ function ChatPageContent() {
             onStop={stopChatRequest}
             autoFocus={true}
             onResponseFinished={handleResponseFinished}
+            onStreamError={detachChatStream}
           />
         </div>
       </MemoryHubShell>
