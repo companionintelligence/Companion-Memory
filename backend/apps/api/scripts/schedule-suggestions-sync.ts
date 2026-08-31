@@ -57,7 +57,7 @@ async function main(): Promise<void> {
     // construct them directly (same approach as search-index-cleanup).
     const candidateService = new CandidateService(
       candidateRepo,
-      // EventService is only reached on accept(), which sync never calls.
+      // CalendarEventService is only reached on accept(), which sync never calls.
       null as never,
       db,
       logger,

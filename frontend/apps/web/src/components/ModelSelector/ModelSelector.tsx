@@ -87,9 +87,7 @@ export function ModelSelector({
   const isComposer = variant === 'composer';
   const resolvedTriggerClassName =
     triggerClassName ??
-    (isComposer
-      ? 'h-8 min-w-0 flex-1 border-0 bg-transparent shadow-none px-2 text-xs'
-      : 'w-[150px]');
+    (isComposer ? 'h-8 min-w-0 flex-1 border-0 bg-transparent shadow-none px-2 text-xs' : 'w-[150px]');
 
   // Radix Select.Value clones ItemText into the trigger. Nested flex/div
   // children (capability icons) come through empty on iOS WKWebView, so Chat
@@ -104,7 +102,11 @@ export function ModelSelector({
         : 'No models loaded';
 
   const selector = (
-    <Select value={currentModel ?? undefined} onValueChange={handleSelectModel} disabled={models.length === 0}>
+    <Select
+      value={currentModel ?? undefined}
+      onValueChange={handleSelectModel}
+      disabled={models.length === 0}
+    >
       <Select.Trigger className={cn('min-w-0', resolvedTriggerClassName)} aria-label="Active model">
         <Select.Value placeholder={triggerLabel}>
           <span className="min-w-0 truncate">{triggerLabel}</span>

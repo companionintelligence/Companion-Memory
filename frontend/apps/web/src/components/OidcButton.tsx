@@ -1,6 +1,6 @@
 import type { ComponentProps, MouseEvent } from 'react';
 
-import { buildApiUrl, isNativePlatform, OIDC_NATIVE_CLIENT_FLAG, openExternalUrl } from '@ci/common';
+import { buildApiUrl, isNativePlatform, isTauriPlatform, OIDC_NATIVE_CLIENT_FLAG, openExternalUrl } from '@ci/common';
 import { Button } from '@ci/shadcn';
 
 const OIDC_URL_PATH = '/api/authenticate/oidc';
@@ -9,10 +9,13 @@ type ButtonVariant = ComponentProps<typeof Button>['variant'];
 
 /**
  * "Sign in with CI Portal" button. On web it's a plain anchor: the browser navigates
- * to the API, which 302s to the identity provider. On native, OAuth/OIDC must run in
- * the SYSTEM browser (not the app webview), so the click opens it externally and adds
- * `?client=native` so the backend callback returns the result via the custom URL
- * scheme (`companion://oidc/callback`) — handled by the deep-link listener in useAuth —
+ * to the API, which 302s to the identity provider. On native — Capacitor (iOS/Android)
+ * or Tauri (desktop) — OAuth/OIDC must run in the SYSTEM browser (not the app's own
+ * webview: an embedded browser is both a weaker trust boundary for the user's
+ * credentials and, for the desktop shell specifically, unable to run a real OS-level
+ * OAuth redirect at all), so the click opens it externally and adds `?client=native`
+ * so the backend callback returns the result via the custom URL scheme
+ * (`companion://oidc/callback`) — handled by the deep-link listener in useAuth —
  * instead of setting a browser session cookie.
  */
 export function OidcButton({
@@ -36,7 +39,7 @@ export function OidcButton({
   const webHref = buildApiUrl(`${OIDC_URL_PATH}${params.toString() ? `?${params.toString()}` : ''}`);
 
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
-    if (isNativePlatform()) {
+    if (isNativePlatform() || isTauriPlatform()) {
       event.preventDefault();
       const nativeParams = new URLSearchParams(params);
       nativeParams.set('client', OIDC_NATIVE_CLIENT_FLAG);

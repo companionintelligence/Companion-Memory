@@ -3,13 +3,14 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
+import { HbpeNotifyService } from '@ci/common/hbpe';
 import { bulkInsertIdempotent } from '@ci/common/persistence';
-import { EventService as SignallingEventService } from '@ci/domains/events';
+import { EventService } from '@ci/domains/events';
 
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import type { CreateEventDto } from '../../types';
-import { EventService } from '../EventService';
+import { CalendarEventService } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
@@ -26,11 +27,12 @@ const bulkInsertMock = bulkInsertIdempotent as jest.Mock;
  * must NOT emit a per-row EventCreatedEvent (the pgboss fan-out that dominated
  * import cost) — search indexing for bulk loads is deferred to the post-load
  * sweep (POST /api/maintenance/search-index/backfill). The interactive create()
- * emission is covered by EventService.test.ts; this file pins the bulk side.
+ * emission is covered by CalendarEventService.test.ts; this file pins the bulk side.
  */
-describe('EventService.createMany — no per-row event emission', () => {
-  let service: EventService;
+describe('CalendarEventService.createMany — no per-row event emission', () => {
+  let service: CalendarEventService;
   let signalling: { send: jest.Mock; sendMany: jest.Mock };
+  let hbpeNotify: { notifyEvents: jest.Mock };
 
   const ctx = { userId: 'user-1' } as UserServiceContext;
 
@@ -67,19 +69,21 @@ describe('EventService.createMany — no per-row event emission', () => {
       ),
     };
     signalling = { send: jest.fn(), sendMany: jest.fn() };
+    hbpeNotify = { notifyEvents: jest.fn(async () => undefined) };
 
     const moduleRef = await Test.createTestingModule({
       providers: [
-        EventService,
+        CalendarEventService,
         { provide: getRepositoryToken(EventEntity), useValue: repo },
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
-        { provide: SignallingEventService, useValue: signalling },
+        { provide: EventService, useValue: signalling },
         { provide: DataSource, useValue: {} },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
+        { provide: HbpeNotifyService, useValue: hbpeNotify },
       ],
     }).compile();
 
-    service = moduleRef.get(EventService);
+    service = moduleRef.get(CalendarEventService);
   });
 
   it('bulk-inserts the rows but emits no EventCreatedEvent', async () => {
@@ -109,5 +113,12 @@ describe('EventService.createMany — no per-row event emission', () => {
     // The contract under guard: NO per-row signalling from the bulk path.
     expect(signalling.send).not.toHaveBeenCalled();
     expect(signalling.sendMany).not.toHaveBeenCalled();
+    // One HBPE invalidate for the batch (distinct UTC days), not a pgboss job
+    // per row.
+    expect(hbpeNotify.notifyEvents).toHaveBeenCalledTimes(1);
+    expect(hbpeNotify.notifyEvents).toHaveBeenCalledWith('user-1', [
+      new Date('2026-01-01T00:00:00Z'),
+      new Date('2026-01-02T00:00:00Z'),
+    ]);
   });
 });

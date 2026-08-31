@@ -135,7 +135,7 @@ describe('ContentService CTI aggregate', () => {
 
     expect(content?.title).toBe('Example page');
     // A media row whose event was tombstoned is unreachable, so it must not be
-    // served on its own (see EventService's soft delete).
+    // served on its own (see CalendarEventService's soft delete).
     expect(wheres).toContain('(content.event_id IS NULL OR content_event.is_deleted = false)');
   });
 });

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
@@ -13,14 +13,16 @@ import {
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
+import { HbpeNotifyService } from '@ci/common/hbpe';
 import { type BulkInsertResult, bulkInsertIdempotent, INGEST_REFRESH_COLUMNS } from '@ci/common/persistence';
-import { EventService as SignallingEventService } from '@ci/domains/events';
+import { EventService } from '@ci/domains/events';
 import { EventCreatedEvent, EventUpdatedEvent, EventRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
 
 import { BaseEntity } from '../entities/BaseEntity';
 import { EventBaseEntity } from '../entities/EventBaseEntity';
 import { EventEntity, Event } from '../entities/EventEntity';
+import { PlaceEntity } from '../entities/PlaceEntity';
 import { CreateEventDto, UpdateEventDto, SearchEventDto } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
@@ -61,12 +63,12 @@ interface Options {
   ids?: string[];
 }
 
-/** Filter subset of {@link Options} that {@link EventService.countEntitiesForEvents} accepts —
+/** Filter subset of {@link Options} that {@link CalendarEventService.countEntitiesForEvents} accepts —
  * everything `getEntitiesForEvents` filters *by*, minus the pagination-only fields
  * (`limit`, `order`, `afterTime`, `afterId`), which a total count must not depend on. */
 type CountOptions = Omit<Options, 'limit' | 'order' | 'afterTime' | 'afterId'>;
 
-/** Options for {@link EventService.findMapPins}: the shared filter set plus a hard row cap. */
+/** Options for {@link CalendarEventService.findMapPins}: the shared filter set plus a hard row cap. */
 type MapPinOptions = CountOptions & { limit: number };
 
 /**
@@ -163,7 +165,7 @@ const SCHEDULE_EVENT_TYPES = ['calendar_event', 'meeting', 'appointment', 'plann
  * batched base-row fetch.
  */
 @Injectable()
-export class EventService {
+export class CalendarEventService {
   private readonly aggregate: CtiAggregate<EventEntity, EventBaseEntity>;
 
   constructor(
@@ -171,9 +173,10 @@ export class EventService {
     private readonly eventRepository: Repository<EventEntity>,
     @InjectRepository(EventBaseEntity)
     private readonly eventBaseRepository: Repository<EventBaseEntity>,
-    private readonly signallingEventService: SignallingEventService,
+    private readonly signallingEventService: EventService,
     private readonly dataSource: DataSource,
     private readonly graphDeltaWriter: GraphDeltaWriter,
+    @Optional() private readonly hbpeNotify?: HbpeNotifyService,
   ) {
     this.aggregate = new CtiAggregate({
       detailRepository: this.eventRepository,
@@ -240,6 +243,10 @@ export class EventService {
       toCreate.timePrecision = item.time_precision;
     }
 
+    if (item.observed_at) {
+      toCreate.observedAt = item.observed_at;
+    }
+
     if (item.source_system) {
       toCreate.sourceSystem = item.source_system;
     }
@@ -278,6 +285,10 @@ export class EventService {
 
     if (item.connection_id) {
       toCreate.connectionId = item.connection_id;
+    }
+
+    if (item.capture_tick_id) {
+      toCreate.captureTickId = item.capture_tick_id;
     }
 
     if (item.sharing_level) {
@@ -387,7 +398,7 @@ export class EventService {
           name: item.title,
           description: item.description ?? null,
           ownerUserId: context.userId,
-          changeSource: 'EventService.create',
+          changeSource: 'CalendarEventService.create',
           changedByUserId: typeof context.userId === 'string' ? context.userId : null,
           manager,
         });
@@ -411,6 +422,7 @@ export class EventService {
     await this.signallingEventService.send(EventCreatedEvent, {
       eventId: eventResult.id,
     });
+    await this.hbpeNotify?.notifyEvents(eventResult.userId, eventResult.startTime);
 
     return EventEntity.toEgressType(eventResult, {
       name: item.title,
@@ -537,7 +549,7 @@ export class EventService {
               entityId: entity.id,
               entityType: 'Event',
               ownerUserId: context.userId,
-              changeSource: 'EventService.createMany',
+              changeSource: 'CalendarEventService.createMany',
               changedByUserId: typeof context.userId === 'string' ? context.userId : null,
               changedFields: {
                 name: { new: ingress?.title ?? null },
@@ -566,6 +578,13 @@ export class EventService {
     // bulk-loaded rows is deferred to the post-load batch embed
     // (POST /api/maintenance/search-index/backfill). Single-row create() still
     // emits, so interactive creates index live.
+    // One HBPE notify per distinct UTC day — not per row — so a 90k import
+    // does not flood LISTEN.
+    await this.hbpeNotify?.notifyEvents(
+      context.userId,
+      results.map(({ entity }) => entity.startTime),
+    );
+
     return results.map(({ entity, inserted }) => ({
       entity: EventEntity.toEgressType(entity, bases.get(entity.id)),
       inserted,
@@ -897,7 +916,7 @@ export class EventService {
               ...(Object.keys(updateData).length > 0 ? { detail_updated: { new: true } } : {}),
             },
             ownerUserId: typeof context.userId === 'string' ? context.userId : null,
-            changeSource: 'EventService.update',
+            changeSource: 'CalendarEventService.update',
             changedByUserId: typeof context.userId === 'string' ? context.userId : null,
             manager,
           });
@@ -912,6 +931,7 @@ export class EventService {
     await this.signallingEventService.send(EventUpdatedEvent, {
       eventId: updated.id,
     });
+    await this.hbpeNotify?.notifyEvents(updated.userId, updated.startTime);
 
     // The transaction already reloaded the detail row; one base fetch
     // completes the egress composition.
@@ -929,15 +949,17 @@ export class EventService {
    * back verbatim.
    */
   async remove(context: ServiceContext, id: string): Promise<boolean> {
+    let removedAt: { userId: string; time: Date | null } | undefined;
     const removed = await this.aggregate.remove(context, id, {
-      withinTx: async ({ manager }) => {
+      withinTx: async ({ manager, before }) => {
+        removedAt = { userId: before.userId, time: before.startTime };
         const base = await manager.getRepository(EventBaseEntity).findOne({ where: { id } });
         await this.graphDeltaWriter.entityDeleted({
           entityId: id,
           entityType: 'Event',
           name: base?.name ?? null,
           ownerUserId: typeof context.userId === 'string' ? context.userId : null,
-          changeSource: 'EventService.remove',
+          changeSource: 'CalendarEventService.remove',
           changedByUserId: typeof context.userId === 'string' ? context.userId : null,
           manager,
         });
@@ -951,6 +973,9 @@ export class EventService {
     await this.signallingEventService.send(EventRemovedEvent, {
       eventId: id,
     });
+    if (removedAt) {
+      await this.hbpeNotify?.notifyEvents(removedAt.userId, [removedAt.time]);
+    }
 
     return true;
   }
@@ -972,7 +997,7 @@ export class EventService {
           entityType: 'Event',
           name: base?.name ?? null,
           ownerUserId: typeof context.userId === 'string' ? context.userId : (after?.userId ?? null),
-          changeSource: 'EventService.restore',
+          changeSource: 'CalendarEventService.restore',
           changedByUserId: typeof context.userId === 'string' ? context.userId : null,
           manager,
         });
@@ -987,6 +1012,7 @@ export class EventService {
     await this.signallingEventService.send(EventUpdatedEvent, {
       eventId: id,
     });
+    await this.hbpeNotify?.notifyEvents(restored.userId, restored.startTime);
 
     return this.composeOne(restored);
   }
@@ -1094,9 +1120,38 @@ export class EventService {
       });
     }
 
-    // "Where" (located only): the event must carry geographic coordinates.
+    // "Where" (located only): the event must carry geographic coordinates —
+    // either its own denormalised `location_coordinates` (set directly, e.g. by
+    // EXIF/reverse-geocode ingest) or, when the event is only linked to a known
+    // Place via `location_entity_id`, that Place's `location_point`. An event
+    // can carry either one independently (CreateEventInput/UpdateEventInput
+    // accept `locationCoordinates` and `locationEntityId` as separate, optional
+    // fields — see EventResolver), so a coordinate-only check here missed every
+    // event whose location came from a Place link alone: `locationCoordinates`
+    // stayed null while `location` (the resolved Place) was fully populated,
+    // which made the map render zero pins for such events despite the event
+    // itself being genuinely located and appearing correctly in the explorer
+    // (which resolves the same fallback client-side — see
+    // MapView.getEntityCoordinates).
+    const needsLocationCoordinate =
+      options.hasLocation === true ||
+      (options.bbox != null &&
+        options.bbox.length === 4 &&
+        options.bbox.every((value) => Number.isFinite(value)));
+
+    if (needsLocationCoordinate) {
+      query = query.leftJoin(
+        PlaceEntity,
+        'location_entity',
+        'location_entity.entity_id = event.location_entity_id AND location_entity.entity_type = :locationEntityType',
+        { locationEntityType: 'Location' },
+      );
+    }
+
     if (options.hasLocation) {
-      query = query.andWhere('event.location_coordinates IS NOT NULL');
+      query = query.andWhere(
+        'COALESCE(event.location_coordinates, location_entity.location_point) IS NOT NULL',
+      );
     }
 
     // "Where" (viewport): the event's coordinates fall inside the bounding box
@@ -1109,7 +1164,8 @@ export class EventService {
       const [minLon, minLat, maxLon, maxLat] = options.bbox;
 
       query = query.andWhere(
-        'ST_Within(event.location_coordinates::geometry, ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326))',
+        'ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry, ' +
+          'ST_MakeEnvelope(:minLon, :minLat, :maxLon, :maxLat, 4326))',
         { minLon, minLat, maxLon, maxLat },
       );
     }
@@ -1239,8 +1295,17 @@ export class EventService {
       .addSelect('event.event_type', 'event_type')
       .addSelect('event.location_name', 'location_name')
       .addSelect('event.time_source', 'time_source')
-      .addSelect('ST_Y(event.location_coordinates::geometry)', 'latitude')
-      .addSelect('ST_X(event.location_coordinates::geometry)', 'longitude')
+      // COALESCE with the linked Place's `location_point` — see the comment in
+      // applyEventFilters for why an event's location is not always on the
+      // event row itself.
+      .addSelect(
+        'ST_Y(COALESCE(event.location_coordinates, location_entity.location_point)::geometry)',
+        'latitude',
+      )
+      .addSelect(
+        'ST_X(COALESCE(event.location_coordinates, location_entity.location_point)::geometry)',
+        'longitude',
+      )
       .where('event.user_id = :userId', { userId: context.userId })
       .orderBy('event.start_time', 'DESC')
       .addOrderBy('event.event_id', 'DESC')

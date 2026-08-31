@@ -1123,9 +1123,7 @@ describe('extractForcedChoiceAlternatives', () => {
   });
 
   it('refuses a split that would leave more than four alternatives', () => {
-    expect(
-      extractForcedChoiceAlternatives('Do you prefer red, blue, green, yellow, or purple?'),
-    ).toBeNull();
+    expect(extractForcedChoiceAlternatives('Do you prefer red, blue, green, yellow, or purple?')).toBeNull();
   });
 });
 
@@ -1135,10 +1133,10 @@ describe('enforceForcedChoiceCommitment — the forced-choice commitment gate', 
   }
 
   it('is a no-op for anything other than multiple_choice', () => {
-    const result = enforceForcedChoiceCommitment(
-      answer({ answer: 'It depends on the parties I go to.' }),
-      { text: 'Do you prefer small gatherings or large parties?', questionType: 'yes_no' },
-    );
+    const result = enforceForcedChoiceCommitment(answer({ answer: 'It depends on the parties I go to.' }), {
+      text: 'Do you prefer small gatherings or large parties?',
+      questionType: 'yes_no',
+    });
 
     expect(result.committed).toBe(true);
     expect(result.alternatives).toBeNull();
@@ -1171,10 +1169,10 @@ describe('enforceForcedChoiceCommitment — the forced-choice commitment gate', 
     // "the parties I go to" contains "parties" — one of "large parties"'s two
     // words — without ever saying "large". A single-word check would wave
     // this through; the gate requires ALL of an alternative's own words.
-    const result = enforceForcedChoiceCommitment(
-      answer({ answer: 'It depends on the parties I go to.' }),
-      { text: 'Do you prefer small gatherings or large parties?', questionType: 'multiple_choice' },
-    );
+    const result = enforceForcedChoiceCommitment(answer({ answer: 'It depends on the parties I go to.' }), {
+      text: 'Do you prefer small gatherings or large parties?',
+      questionType: 'multiple_choice',
+    });
 
     expect(result.committed).toBe(false);
   });
@@ -1205,7 +1203,9 @@ describe('enforceForcedChoiceCommitment — the forced-choice commitment gate', 
     );
 
     expect(result.committed).toBe(true);
-    expect(result.inferred).toEqual(answer({ answer: "I'm not sure, but I prefer the beach and nature areas.", confidence: 0.6 }));
+    expect(result.inferred).toEqual(
+      answer({ answer: "I'm not sure, but I prefer the beach and nature areas.", confidence: 0.6 }),
+    );
   });
 
   it('keeps a short, direct commitment', () => {

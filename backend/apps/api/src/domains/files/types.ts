@@ -19,6 +19,15 @@ export interface CreateFileDto extends Partial<Pick<Express.Multer.File, 'path' 
   parentId?: string | null;
   externalCreatedAt?: Date | null;
   externalUpdatedAt?: Date | null;
+  /** Direct link to the ci.events row this file was captured alongside. Wins over `captureTickId`. */
+  eventId?: string | null;
+  /**
+   * Per-tick correlator (see EventEntity.captureTickId) used to resolve
+   * `eventId` when the caller doesn't know it directly — CI-Capture's
+   * screenshot upload sends this, not eventId, since the two capture paths
+   * race independently and the applet never learns the server's event id.
+   */
+  captureTickId?: string | null;
 }
 
 export type UploadFileDto = Omit<

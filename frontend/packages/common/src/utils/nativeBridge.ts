@@ -10,7 +10,7 @@
  * falls back to `localStorage`, and external links fall back to a normal navigation.
  */
 
-import { isIosPlatform, isNativePlatform } from './apiBase';
+import { isIosPlatform, isNativePlatform, isTauriPlatform } from './apiBase';
 import { streamingFetch } from './fetchJson';
 import type { BackgroundGeolocationLocation } from './deviceSources/location';
 
@@ -416,12 +416,38 @@ export async function secureStorageRemove(key: string): Promise<void> {
 }
 
 /**
+ * Call a command registered on the Tauri desktop shell's Rust side
+ * (`frontend/apps/desktop/src-tauri/src/main.rs`). Goes through the raw
+ * `window.__TAURI_INTERNALS__` bridge rather than an `@tauri-apps/api` import, for the
+ * same reason every Capacitor call in this file avoids `@capacitor/*` imports: it keeps
+ * this package's — and therefore the web bundle's — dependency graph free of a
+ * native-shell-only package that only ever does anything inside that shell. Callers
+ * must gate on `isTauriPlatform()` first; outside Tauri this bridge doesn't exist.
+ */
+async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const internals = (
+    window as unknown as { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: unknown) => Promise<T> } }
+  ).__TAURI_INTERNALS__;
+
+  if (!internals) {
+    throw new Error(`tauriInvoke('${command}') called outside the Tauri shell`);
+  }
+
+  return internals.invoke(command, args);
+}
+
+/**
  * Open a URL outside the app's webview: the system browser on native (so OAuth/OIDC
  * runs in Safari / Chrome, not the in-app webview), or a normal navigation on web.
  *
  * iOS prefers LocalHub.openUrl (`UIApplication.shared.open`) over Capacitor Browser.
  * Browser presents SFSafariViewController from the Capacitor bridge VC, which never
  * appears under our UIScene SceneDelegate — Sign in then spins with no Safari window.
+ *
+ * Desktop (Tauri) is a third, distinct native shell — see isTauriPlatform's doc
+ * comment for why it isn't folded into the isNativePlatform() checks above. Same
+ * reasoning as iOS applies here too: OAuth must run in a browser the user already
+ * trusts and may already be signed into, never this app's own embedded webview.
  */
 export async function openExternalUrl(url: string): Promise<void> {
   const hub = plugins()?.LocalHub;
@@ -435,6 +461,12 @@ export async function openExternalUrl(url: string): Promise<void> {
 
   if (isNativePlatform() && browser) {
     await browser.open({ url });
+
+    return;
+  }
+
+  if (isTauriPlatform()) {
+    await tauriInvoke('open_external_url_command', { url });
 
     return;
   }
@@ -692,28 +724,65 @@ export async function addAppStateListener(handler: (isActive: boolean) => void):
 }
 
 /**
- * Subscribe to deep links opened into the app (custom URL scheme / universal links),
- * delivered by `@capacitor/app` as `appUrlOpen`. `handler` receives the full URL string.
- * Used to complete native "Sign in with CI Portal": the system browser redirects to
- * `companion://oidc/callback?...` and that URL surfaces here. Returns an unsubscribe
- * function. No-op on web (the event never fires), where it returns a no-op cleanup.
+ * Subscribe to deep links opened into the app (custom URL scheme / universal links).
+ * `handler` receives the full URL string. Used to complete native "Sign in with CI
+ * Portal": the system browser redirects to `companion://oidc/callback?...` and that
+ * URL surfaces here. Returns an unsubscribe function. No-op on web, where it returns
+ * a no-op cleanup.
+ *
+ * Two shells, two delivery mechanisms:
+ * - Capacitor (iOS/Android): `@capacitor/app`'s `appUrlOpen` event, live only — a
+ *   COLD start's launch URL is a separate call the caller makes itself
+ *   (`getLaunchUrl`, see useAuth.ts), not this function.
+ * - Tauri (desktop): the Rust side (`main.rs`) already unifies cold-start AND
+ *   warm-start delivery into one place, so there is no separate getLaunchUrl-shaped
+ *   call needed here — this function alone covers both. It (a) drains
+ *   `take_pending_deep_link_command` once, for a URL that arrived before this
+ *   listener was up (true cold start, or a warm-start delivery that raced mounting),
+ *   then (b) subscribes to the live `companion-deep-link` DOM event `main.rs`
+ *   dispatches for anything after. A plain `window.addEventListener` — no
+ *   `@tauri-apps/api` import needed, matching this file's Capacitor-free-import
+ *   philosophy, because `main.rs` dispatches a standard DOM CustomEvent rather than a
+ *   Tauri-specific one.
  */
 export async function addAppUrlOpenListener(handler: (url: string) => void): Promise<() => void> {
   const app = plugins()?.App;
 
-  if (!isNativePlatform() || !app) {
-    return noop;
+  if (isNativePlatform() && app) {
+    const handle = await app.addListener('appUrlOpen', (event) => {
+      if (event?.url) {
+        handler(event.url);
+      }
+    });
+
+    return () => {
+      void handle.remove();
+    };
   }
 
-  const handle = await app.addListener('appUrlOpen', (event) => {
-    if (event?.url) {
-      handler(event.url);
-    }
-  });
+  if (isTauriPlatform()) {
+    const pending = await tauriInvoke<string | null>('take_pending_deep_link_command').catch(() => null);
 
-  return () => {
-    void handle.remove();
-  };
+    if (pending) {
+      handler(pending);
+    }
+
+    const onDeepLink = (event: Event) => {
+      const url = (event as CustomEvent<string>).detail;
+
+      if (typeof url === 'string') {
+        handler(url);
+      }
+    };
+
+    window.addEventListener('companion-deep-link', onDeepLink);
+
+    return () => {
+      window.removeEventListener('companion-deep-link', onDeepLink);
+    };
+  }
+
+  return noop;
 }
 
 /** Quit the native app (Android). No-op on web/iOS (iOS has no programmatic exit). */

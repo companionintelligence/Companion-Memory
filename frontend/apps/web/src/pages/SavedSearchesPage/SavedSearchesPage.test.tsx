@@ -117,7 +117,9 @@ describe('SavedSearchesPage', () => {
       ],
     });
 
-    const input = await screen.findByPlaceholderText('Search your saved searches by name, description or tag...');
+    const input = await screen.findByPlaceholderText(
+      'Search your saved searches by name, description or tag...',
+    );
     fireEvent.change(input, { target: { value: 'trip' } });
 
     await waitFor(() => expect(screen.getByText('My trip')).toBeInTheDocument());

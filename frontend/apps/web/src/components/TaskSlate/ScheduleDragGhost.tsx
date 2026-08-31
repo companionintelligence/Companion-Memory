@@ -1,10 +1,8 @@
 import { useSyncExternalStore } from 'react';
+
 import { createPortal } from 'react-dom';
 
-import {
-  getSchedulePointerDrag,
-  subscribeSchedulePointerDrag,
-} from '@/lib/schedulePointerDrag';
+import { getSchedulePointerDrag, subscribeSchedulePointerDrag } from '@/lib/schedulePointerDrag';
 
 function subscribe(onStoreChange: () => void) {
   return subscribeSchedulePointerDrag(onStoreChange);

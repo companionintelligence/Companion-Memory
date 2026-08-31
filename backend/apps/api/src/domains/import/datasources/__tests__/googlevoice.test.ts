@@ -8,7 +8,7 @@ import { hashItem, resolveEntityType } from '../../staging/identity';
 import { GoogleVoiceFileImporter, stripCopyIndex, threadKeyFor } from '../googlevoice';
 import type { Entity, ImportParams, Relationship } from '../timeline';
 
-import type { EmittedGraph } from './support/emitted';
+import { metaAttachments, type EmittedGraph, type TestPipeline } from './support/emitted';
 
 const FIXTURES_DIR = path.join(__dirname, 'fixtures');
 
@@ -1155,5 +1155,514 @@ describe('an export file replicated with a copy index is one record, not two', (
     expect(threadKeyFor('/Calls/Group Conversation - 2019-11-11T23_27_25Z (2).html', undefined)).toBe(
       threadKeyFor('/Calls/Group Conversation - 2019-11-11T23_27_25Z.html', undefined),
     );
+  });
+});
+
+/*
+ * Defect 1: the only attachment scanner in this file was the <img> regex, so
+ * 100% of non-image MMS attachments (video/audio-clip/vcard) were silently
+ * dropped. Confirmed on the reference corpus: 128 files contain
+ * `class="video"` (`grep -rl 'class="video"'`), 6 contain `class="vcard"`,
+ * and an MMS audio-clip reply uses a bare `<audio src>` with no `controls` /
+ * `rel="enclosure"` (distinct from a voicemail recording — see
+ * resolveRecording). The markup shapes below are copied verbatim from real
+ * corpus files (names changed only where noted).
+ */
+describe('Google Voice non-image MMS attachments (video / vCard / audio-clip)', () => {
+  const runImport = async (
+    files: Record<string, string>,
+  ): Promise<{ pipeline: EmittedGraph[]; drops: [string, string?][] }> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-nonimg-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    for (const [filename, body] of Object.entries(files)) {
+      fs.writeFileSync(path.join(dir, 'Calls', filename), body);
+    }
+
+    const pipeline: EmittedGraph[] = [];
+    const drops: [string, string?][] = [];
+    (pipeline as unknown as TestPipeline).drop = (reason: string, detail?: string) =>
+      drops.push([reason, detail]);
+
+    await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return { pipeline, drops };
+  };
+
+  it('resolves and attaches a video-clip MMS attachment (<a class="video">)', async () => {
+    // Copied verbatim from the real corpus file "Brian Swichkow - Text -
+    // 2019-08-15T21_46_58Z.html", whose sibling on disk is
+    // "…-22-1.3gp" (confirmed present).
+    const html = `<html><body><div class="hChatLog hfeed"><div class="message">
+         <abbr class="dt" title="2019-08-15T21:46:58.000Z">Aug 15</abbr>:
+         <cite class="sender vcard"><a class="tel" href="tel:+15551110000"><span class="fn">Brian Swichkow</span></a></cite>:
+         <q></q>
+         <div><a class="video" href="Brian Swichkow - Text - 2019-08-15T21_46_58Z-22-1">Video attachment</a></div>
+       </div></div></body></html>`;
+    const { pipeline, drops } = await runImport({
+      'Brian Swichkow - Text - 2019-08-15T21_46_58Z.html': html,
+      'Brian Swichkow - Text - 2019-08-15T21_46_58Z-22-1.3gp': 'fake-3gp-bytes',
+    });
+
+    const attachment = pipeline.find((p) => p.item?.metadata?.Attachment === 'video');
+    expect(attachment).toBeDefined();
+    expect(attachment!.item.metadata.Sender).toBe('Brian Swichkow');
+    expect(attachment!.item.metadata.Direction).toBe('incoming');
+    const atts = metaAttachments(attachment!.item.metadata.MediaAttachments);
+    expect(atts).toHaveLength(1);
+    expect(atts[0].type).toBe('video');
+    expect(atts[0].mimetype).toBe('video/3gpp');
+    expect(atts[0].filename).toBe('Brian Swichkow - Text - 2019-08-15T21_46_58Z-22-1.3gp');
+    // A resolved attachment is not a drop.
+    expect(drops).toHaveLength(0);
+  });
+
+  it('resolves and attaches a vCard MMS attachment (<a class="vcard">)', async () => {
+    // Copied verbatim (contact renamed) from the real corpus file
+    // "Shiva - Text - 2023-11-16T16_16_00Z.html", sibling
+    // "…-1-1.vcf" confirmed present.
+    const html = `<html><body><div class="hChatLog hfeed"><div class="message">
+         <abbr class="dt" title="2023-11-16T16:16:00.000Z">Nov 16</abbr>:
+         <cite class="sender vcard"><a class="tel" href="tel:+15552220000"><span class="fn">Shiva</span></a></cite>:
+         <q></q>
+         <div><a class="vcard" href="Shiva - Text - 2023-11-16T16_16_00Z-1-1">Contact card attachment</a></div>
+       </div></div></body></html>`;
+    const { pipeline, drops } = await runImport({
+      'Shiva - Text - 2023-11-16T16_16_00Z.html': html,
+      'Shiva - Text - 2023-11-16T16_16_00Z-1-1.vcf': 'BEGIN:VCARD\nEND:VCARD\n',
+    });
+
+    const attachment = pipeline.find((p) => p.item?.metadata?.Attachment === 'file');
+    expect(attachment).toBeDefined();
+    const atts = metaAttachments(attachment!.item.metadata.MediaAttachments);
+    expect(atts).toHaveLength(1);
+    expect(atts[0].mimetype).toBe('text/vcard');
+    expect(atts[0].filename).toBe('Shiva - Text - 2023-11-16T16_16_00Z-1-1.vcf');
+    expect(drops).toHaveLength(0);
+  });
+
+  it('resolves and attaches an audio-clip MMS attachment (bare <audio src>)', async () => {
+    // Copied verbatim from the real corpus file "Scott Vineberg - Text -
+    // 2025-11-19T18_47_18Z.html" — an MMS audio-clip reply, distinct from a
+    // voicemail's <audio controls…><a rel="enclosure"…> shape (resolveRecording),
+    // which only occurs in a <div class="haudio"> call file.
+    const html = `<html><body><div class="hChatLog hfeed"><div class="message">
+         <abbr class="dt" title="2025-11-19T10:47:18.358-08:00">Nov 19</abbr>:
+         <cite class="sender vcard"><a class="tel" href="tel:+13102798163"><span class="fn">Scott Vineberg</span></a></cite>:
+         <q>MMS Received</q>
+         <div><audio src="Scott Vineberg - Text - 2025-11-19T18_47_18Z-1-1"></audio></div></div>
+       </div></body></html>`;
+    const { pipeline, drops } = await runImport({
+      'Scott Vineberg - Text - 2025-11-19T18_47_18Z.html': html,
+      'Scott Vineberg - Text - 2025-11-19T18_47_18Z-1-1.amr': 'fake-amr-bytes',
+    });
+
+    const attachment = pipeline.find((p) => p.item?.metadata?.Attachment === 'audio');
+    expect(attachment).toBeDefined();
+    const atts = metaAttachments(attachment!.item.metadata.MediaAttachments);
+    expect(atts).toHaveLength(1);
+    expect(atts[0].mimetype).toBe('audio/amr');
+    expect(drops).toHaveLength(0);
+  });
+
+  it('reports a drop when a referenced video attachment is not on disk', async () => {
+    const html = `<html><body><div class="hChatLog hfeed"><div class="message">
+         <abbr class="dt" title="2019-08-15T21:46:58.000Z">Aug 15</abbr>:
+         <cite class="sender vcard"><a class="tel" href="tel:+15551110000"><span class="fn">Brian Swichkow</span></a></cite>:
+         <q></q>
+         <div><a class="video" href="Brian Swichkow - Text - 2019-08-15T21_46_58Z-22-1">Video attachment</a></div>
+       </div></div></body></html>`;
+    // No sibling .3gp written — the referenced bytes are simply absent.
+    const { pipeline, drops } = await runImport({
+      'Brian Swichkow - Text - 2019-08-15T21_46_58Z.html': html,
+    });
+
+    expect(pipeline.some((p) => p.item?.metadata?.Attachment === 'video')).toBe(false);
+    expect(drops).toEqual([
+      ['googlevoice_attachment_missing', 'Brian Swichkow - Text - 2019-08-15T21_46_58Z-22-1'],
+    ]);
+  });
+});
+
+/*
+ * Defect 2: resolveAttachment only ever tried the raw stub verbatim plus a
+ * fixed image-extension list via `fs.existsSync`, missing real, present files
+ * two confirmed ways.
+ */
+describe('Google Voice attachment resolution (Defect 2)', () => {
+  const runImport = async (files: Record<string, string | Buffer>): Promise<EmittedGraph[]> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-resolve-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    for (const [filename, body] of Object.entries(files)) {
+      fs.writeFileSync(path.join(dir, 'Calls', filename), body);
+    }
+
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return pipeline;
+  };
+
+  it('decodes an HTML named entity in the stub to match the real (un-encoded) filename', async () => {
+    // Verbatim real example: "Michelle Ju&aacute;rez - Text -
+    // 2019-02-23T09_11_17Z.html" contains
+    // `<img src="Michelle Ju&aacute;rez - Text - 2019-02-23T09_11_17Z-20-1">`,
+    // and the real disk file is "Michelle Juárez - Text - …-20-1.jpg" — a
+    // literal accented character, not the entity.
+    const html = `<html><body>
+         <img src="Michelle Ju&aacute;rez - Text - 2019-02-23T09_11_17Z-20-1">
+       </body></html>`;
+    const pipeline = await runImport({
+      'Michelle Ju&aacute;rez - Text - 2019-02-23T09_11_17Z.html': html,
+      'Michelle Juárez - Text - 2019-02-23T09_11_17Z-20-1.jpg': 'jpeg-bytes',
+    });
+
+    const attachment = pipeline.find((p) => p.item?.metadata?.Attachment === 'image');
+    expect(attachment).toBeDefined();
+    expect(attachment!.item.content?.filename).toBe('Michelle Juárez - Text - 2019-02-23T09_11_17Z-20-1.jpg');
+  });
+
+  it('rebuilds a candidate from the CONTAINING file basename when the stub names a different contact', async () => {
+    // Verbatim real example: the file is named by phone number
+    // ("+13108748112 - Text - 2018-08-03T17_08_26Z.html") because the export
+    // had not yet resolved a contact name, but a LATER message in the same
+    // conversation carries `<img src="Steve Raymond - Text -
+    // 2018-08-03T17_08_26Z-9-1">` — the by-then-resolved name. The real file
+    // on disk keeps the phone-number prefix: "+13108748112 - Text -
+    // …-9-1.jpg".
+    const html = `<html><body>
+         <img src="Steve Raymond - Text - 2018-08-03T17_08_26Z-9-1">
+       </body></html>`;
+    const pipeline = await runImport({
+      '+13108748112 - Text - 2018-08-03T17_08_26Z.html': html,
+      '+13108748112 - Text - 2018-08-03T17_08_26Z-9-1.jpg': 'jpeg-bytes',
+    });
+
+    const attachment = pipeline.find((p) => p.item?.metadata?.Attachment === 'image');
+    expect(attachment).toBeDefined();
+    expect(attachment!.item.content?.filename).toBe('+13108748112 - Text - 2018-08-03T17_08_26Z-9-1.jpg');
+  });
+});
+
+/*
+ * Defect 3: when the conversation's own filename stem is already ~50
+ * characters, EVERY attachment for that conversation truncates to the
+ * IDENTICAL disk filename, and Drive/the filesystem then auto-appends
+ * "(1)", "(2)"… to avoid overwriting — destroying the per-message "-N-M"
+ * correspondence at the source. Verbatim real example: "Alexandra Leonidova -
+ * Text - 2018-07-29T03_31_30Z.html" (a 49-char stem) references five distinct
+ * image stubs, but the corpus holds only "…Z-.jpg" plus "…Z-(1).jpg" through
+ * "…Z-(4).jpg" for the whole conversation — five files, no way to tell which
+ * stub maps to which.
+ */
+describe('Google Voice attachment truncation collision (Defect 3)', () => {
+  const STEM = 'Alexandra Leonidova - Text - 2018-07-29T03_31_30Z';
+
+  it('recovers all distinct collided files, unattributed, and logs once', async () => {
+    expect(STEM.length).toBeGreaterThanOrEqual(45); // guard: this is the case the fallback targets
+
+    const html = `<html><body>
+         <img src="${STEM}-2-1">
+         <img src="${STEM}-16-1">
+         <img src="${STEM}-18-1">
+         <img src="${STEM}-23-1">
+         <img src="${STEM}-31-1">
+       </body></html>`;
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-collision-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    fs.writeFileSync(path.join(dir, 'Calls', `${STEM}.html`), html);
+    // The real corpus shape: one bare "-.jpg" plus "-(1).jpg".."-(4).jpg" —
+    // NOT the "-2-1.jpg" etc. the stubs above name. None of the five stubs
+    // can resolve to any of these.
+    const collided = [`${STEM}-.jpg`, `${STEM}-(1).jpg`, `${STEM}-(2).jpg`, `${STEM}-(3).jpg`, `${STEM}-(4).jpg`];
+    for (const name of collided) {
+      fs.writeFileSync(path.join(dir, 'Calls', name), `bytes-for-${name}`);
+    }
+
+    const logs: [string, string, Record<string, unknown>?][] = [];
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: (level: string, msg: string, meta?: Record<string, unknown>) => logs.push([level, msg, meta]),
+    } as unknown as ImportParams);
+
+    const attachments = pipeline.filter((p) => p.item?.metadata?.Attachment === 'image');
+    // Guard against the vacuous pass: five stubs in, and the fallback must
+    // recover exactly the five distinct files actually on disk — not one per
+    // stub (that would double-count) and not zero.
+    expect(attachments).toHaveLength(5);
+
+    const filenames = attachments.map((a) => a.item.content?.filename).sort();
+    expect(filenames).toEqual(
+      ['-.jpg', '-(1).jpg', '-(2).jpg', '-(3).jpg', '-(4).jpg'].map((suffix) => `${STEM}${suffix}`).sort(),
+    );
+
+    // Unattributed: no Sender/Direction/To/edge, honoring "a filename label
+    // is not evidence of authorship".
+    for (const a of attachments) {
+      expect(a.item.metadata.Sender).toBeUndefined();
+      expect(a.item.metadata.Direction).toBeUndefined();
+      expect(a.item.metadata.To).toBeUndefined();
+      expect(a.edges).toBeUndefined();
+    }
+
+    // Logged once per conversation, discoverable in import logs.
+    const collisionLogs = logs.filter(([, msg]) => msg.includes('truncation collision'));
+    expect(collisionLogs).toHaveLength(1);
+    expect(collisionLogs[0][0]).toBe('warn');
+  });
+
+  it('does not fire the fallback for a short conversation name with one genuinely missing image', async () => {
+    // Guard against the fallback swallowing an ordinary missing-file case: a
+    // short name has no collision, so a stub that just doesn't resolve stays
+    // silently unresolved (pre-existing behaviour for images), not "recovered"
+    // from an unrelated file that happens to share a short prefix.
+    const html = `<html><body><img src="Jane Doe - Text - 2025-03-01T10_00_00Z-1-1"></body></html>`;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-nocollision-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    fs.writeFileSync(path.join(dir, 'Calls', 'Jane Doe - Text - 2025-03-01T10_00_00Z.html'), html);
+
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    expect(pipeline.some((p) => p.item?.metadata?.Attachment != null)).toBe(false);
+  });
+});
+
+/*
+ * Defect 4: `fileImport` only ever walked `path.join(root, 'Calls')`, so the
+ * sibling `Spam/` directory was invisible to every import — not malformed,
+ * never visited. Confirmed on the real reference export
+ * (Voice/Spam/): 1,174 files total, 857 of them .html call-log/message files
+ * in the IDENTICAL "<contact> - <Type> - <timestamp>.html" convention Calls/
+ * already parses (Missed 407, Voicemail 312, Text 133, Placed 3, Received 1,
+ * one "Group Conversation - <timestamp>.html" outlier), plus 312 sibling
+ * voicemail .mp3 recordings and 5 MMS .jpg attachments — every byte
+ * structurally identical to a Calls/ file, just never read. `recognize()`
+ * similarly never looked at Spam/Greetings at all.
+ *
+ * The fixtures below are trimmed real samples pulled from that corpus
+ * (filenames and markup, not invented shapes) — see the corresponding real
+ * path in each test's comment.
+ */
+describe('Google Voice Spam directory (Defect 4)', () => {
+  const importDir = async (dir: string): Promise<EmittedGraph[]> => {
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return pipeline;
+  };
+
+  it('imports a Missed call filed under Spam/, same as one under Calls/', async () => {
+    // Trimmed from the real corpus file
+    // "Spam/+12792214805 - Missed - 2024-10-01T17_06_03Z.html" — a spam caller
+    // has no named contact, only a bare number in the tel anchor, exactly like
+    // an ordinary unknown-caller Missed file already handled under Calls/.
+    // The real file also self-labels via
+    // <a rel="tag" href=".../voice#spam">Spam</a> (confirmed on all 857 Spam
+    // .html files, 0 of 59,748 Calls/ files) — included here for realism, even
+    // though the importer keys off the directory, not this tag.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-spam-missed-'));
+    fs.mkdirSync(path.join(dir, 'Spam'));
+    fs.writeFileSync(
+      path.join(dir, 'Spam', '+12792214805 - Missed - 2024-10-01T17_06_03Z.html'),
+      `<html><body><div class="haudio"><span class="album">Call Log for</span>
+         <span class="fn">Missed call from</span>
+         <div class="contributor vcard">Missed call from
+           <a class="tel" href="tel:+12792214805"><span class="fn"></span></a></div>
+         <abbr class="published" title="2024-10-01T10:06:03.597-07:00">Oct 1, 2024</abbr>
+         <div class="tags">Labels:
+           <a rel="tag" href="http://www.google.com/voice#spam">Spam</a></div>
+       </div></body></html>`,
+    );
+
+    const pipeline = await importDir(dir);
+    const calls = pipeline.filter((p) => p.item?.classification === 'call');
+
+    // Guard against the vacuous pass: before Defect 4's fix, Spam/ was never
+    // walked and this would be zero.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].item.metadata.CallType).toBe('Missed');
+    expect(calls[0].item.metadata.Number).toBe('+12792214805');
+    expect(calls[0].item.metadata.Spam).toBe(true);
+  });
+
+  it('imports a Text filed under Spam/, same message shape Calls/ already produces', async () => {
+    // Trimmed from the real corpus file
+    // "Spam/+18339424396 - Text - 2023-08-14T19_37_28Z.html".
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-spam-text-'));
+    fs.mkdirSync(path.join(dir, 'Spam'));
+    fs.writeFileSync(
+      path.join(dir, 'Spam', '+18339424396 - Text - 2023-08-14T19_37_28Z.html'),
+      `<html><body>
+         <div class="message"><abbr class="dt" title="2023-08-14T12:37:28.816-07:00">Aug 14, 2023</abbr>:
+           <cite class="sender vcard"><a class="tel" href="tel:+18339424396"><span class="fn"></span></a></cite>:
+           <q>Healthcare Notice: ALERT- Changes in your plan # 527545951 may impact benefits.</q>
+         </div>
+       </body></html>`,
+    );
+
+    const pipeline = await importDir(dir);
+    const messages = pipeline.filter((p) => p.item?.classification === 'message');
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0].item.metadata.Text).toContain('Healthcare Notice');
+    expect(messages[0].item.metadata.Spam).toBe(true);
+  });
+
+  it('imports a Voicemail (with sibling .mp3 recording) filed under Spam/', async () => {
+    // Shape confirmed on the real corpus: every one of the 312 Voicemail
+    // .html files under Spam/ has a matching sibling .mp3 (0 missing).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-spam-vm-'));
+    fs.mkdirSync(path.join(dir, 'Spam'));
+    const filename = '+14242847916 - Voicemail - 2017-03-25T20_30_36Z';
+    fs.writeFileSync(
+      path.join(dir, 'Spam', `${filename}.html`),
+      `<html><body><div class="haudio">
+         <audio controls="controls" src="${filename}.mp3">
+           <a rel="enclosure" href="${filename}.mp3">audio</a>
+         </audio>
+         <abbr class="published" title="2017-03-25T13:30:36.000-07:00">Mar 25, 2017</abbr>
+         <span class="description"><span class="full-text">Call me back please.</span></span>
+       </div></body></html>`,
+    );
+    fs.writeFileSync(path.join(dir, 'Spam', `${filename}.mp3`), Buffer.from([0xff, 0xfb]));
+
+    const pipeline = await importDir(dir);
+    const calls = pipeline.filter((p) => p.item?.classification === 'call');
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].item.metadata.CallType).toBe('Voicemail');
+    expect(calls[0].item.metadata.Transcript).toBe('Call me back please.');
+    expect(calls[0].item.metadata.Spam).toBe(true);
+
+    const recording = metaAttachments(calls[0].item.metadata.MediaAttachments);
+    expect(recording).toHaveLength(1);
+    expect(recording[0].filename).toBe(`${filename}.mp3`);
+  });
+
+  it('does not tag an ordinary Calls/ file as spam', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-notspam-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    fs.writeFileSync(
+      path.join(dir, 'Calls', 'Jane Doe - Text - 2025-03-01T10_00_00Z.html'),
+      `<html><body><div class="message">
+         <abbr class="dt" title="2025-03-01T10:00:00.000Z">Mar 1</abbr>:
+         <cite class="sender vcard"><a class="tel" href="tel:+15551230099"><span class="fn">Jane Doe</span></a></cite>:
+         <q>hi</q>
+       </div></body></html>`,
+    );
+
+    const pipeline = await importDir(dir);
+    const message = pipeline.find((p) => p.item?.metadata?.Text === 'hi');
+
+    expect(message).toBeDefined();
+    expect(message!.item.metadata.Spam).toBeUndefined();
+  });
+
+  // The one filename in Spam/ that does NOT follow the standard
+  // "<contact> - <Type> - <timestamp>.html" shape — real corpus file:
+  // "Spam/Group Conversation - 2026-02-04T15_47_53Z.html" (message markup,
+  // not haudio). Must route through the exact same fallback `threadKeyFor`
+  // already uses for a Calls/ Group Conversation file (see 'Google Voice
+  // thread ids' above): Conversation stays undefined (the filename names
+  // nobody), and ThreadId is derived from the file's own name so every
+  // message in the file still shares one thread.
+  it('routes a Group Conversation file under Spam/ the same way Calls/ already does', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-spam-group-'));
+    fs.mkdirSync(path.join(dir, 'Spam'));
+    fs.writeFileSync(
+      path.join(dir, 'Spam', 'Group Conversation - 2026-02-04T15_47_53Z.html'),
+      `<html><body><div class="message">
+         <abbr class="dt" title="2026-02-04T07:47:53.439-08:00">Feb 4, 2026</abbr>
+         <cite class="sender vcard"><a class="tel" href="tel:+15044190585"><span class="fn">+15044190585</span></a></cite>:
+         <q>join the call</q>
+       </div></body></html>`,
+    );
+
+    const pipeline = await importDir(dir);
+    const message = pipeline.find((p) => p.item?.metadata?.Text === 'join the call');
+
+    expect(message).toBeDefined();
+    expect(message!.item.metadata.Conversation).toBeUndefined();
+    expect(message!.item.metadata.ThreadId).toBe(
+      'googlevoice:file:Group Conversation - 2026-02-04T15_47_53Z',
+    );
+    expect(message!.item.metadata.Spam).toBe(true);
+  });
+
+  it('gives extra recognize() confidence for Spam/ and Greetings/ alongside Calls/', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-recognize-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+
+    const fi = new GoogleVoiceFileImporter();
+    const before = await fi.recognize({}, { filename: path.basename(dir), fullPath: dir });
+
+    fs.mkdirSync(path.join(dir, 'Spam'));
+    fs.mkdirSync(path.join(dir, 'Greetings'));
+    const after = await fi.recognize({}, { filename: path.basename(dir), fullPath: dir });
+
+    expect(after.confidence).toBeGreaterThan(before.confidence);
+  });
+
+  // Dedup sanity (see hashItem in staging/identity.ts): the primary hash is
+  // sha1(dataSource, classification, content.filename, isoTimestamp) and
+  // deliberately EXCLUDES intermediateLocation/directory — so two files that
+  // land at the same post-stripCopyIndex basename with the same parsed
+  // timestamp would collide regardless of which directory produced them. On
+  // the real corpus this never happens: comparing every stripCopyIndex'd
+  // basename in Calls/ (62,785 distinct entries after normalization) against
+  // every one in Spam/ (1,167) found zero exact string collisions. This test
+  // pins the narrower, code-level guarantee that motivates that finding: two
+  // conversation files that legitimately share nothing but their directory
+  // still hash to different values as long as their names differ, which is
+  // what keeps Spam/ and Calls/ from ever being asked to merge.
+  it('does not let a Spam/ file collide with a same-named-but-different Calls/ file', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-spam-collision-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    fs.mkdirSync(path.join(dir, 'Spam'));
+
+    const callsFilename = 'Jane Doe - Text - 2025-03-01T10_00_00Z.html';
+    const spamFilename = '+18339424396 - Text - 2023-08-14T19_37_28Z.html';
+    fs.writeFileSync(
+      path.join(dir, 'Calls', callsFilename),
+      `<html><body><div class="message">
+         <abbr class="dt" title="2025-03-01T10:00:00.000Z">Mar 1</abbr>:
+         <cite class="sender vcard"><a class="tel" href="tel:+15551230099"><span class="fn">Jane Doe</span></a></cite>:
+         <q>hi from Jane</q>
+       </div></body></html>`,
+    );
+    fs.writeFileSync(
+      path.join(dir, 'Spam', spamFilename),
+      `<html><body><div class="message">
+         <abbr class="dt" title="2023-08-14T12:37:28.816-07:00">Aug 14, 2023</abbr>:
+         <cite class="sender vcard"><a class="tel" href="tel:+18339424396"><span class="fn"></span></a></cite>:
+         <q>Healthcare Notice</q>
+       </div></body></html>`,
+    );
+
+    const pipeline = await importDir(dir);
+    const messages = pipeline.filter((p) => p.item?.classification === 'message');
+    expect(messages).toHaveLength(2);
+
+    const hashes = messages.map((p) => hashItem(p.item, 'google_voice'));
+    expect(new Set(hashes).size).toBe(2); // distinct filenames -> distinct hashes, no silent merge
   });
 });

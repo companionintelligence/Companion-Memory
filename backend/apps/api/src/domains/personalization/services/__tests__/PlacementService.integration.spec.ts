@@ -3,7 +3,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
-import { BaseEntity, EventBaseEntity, EventEntity, EventService, GraphDeltaWriter } from '@ci/domains/memory';
+import { BaseEntity, EventBaseEntity, EventEntity, CalendarEventService, GraphDeltaWriter } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
@@ -43,7 +43,7 @@ describeWithDatabase(
   () => {
     let dataSource: DataSource;
     let schemaLock: SchemaLock | null = null;
-    let eventService: EventService;
+    let eventService: CalendarEventService;
     let placementService: PlacementService;
 
     const ctx: UserServiceContext = { userId: uuidv7() } as UserServiceContext;
@@ -95,7 +95,7 @@ describeWithDatabase(
         [ctx.userId, `placement.${ctx.userId}@example.test`],
       );
 
-      eventService = new EventService(
+      eventService = new CalendarEventService(
         dataSource.getRepository(EventEntity),
         dataSource.getRepository(EventBaseEntity),
         noopSignalling as never,
@@ -229,9 +229,13 @@ describeWithDatabase(
       expect(row.promoted_event_id).toBe(winnerEventId);
 
       // And the event the LOSER minted before discovering it lost the claim must
-      // not linger as an orphan: `acceptCandidate` deletes it on the way out.
+      // not linger as an orphan. `acceptCandidate` rolls it back via
+      // `EventService.remove`, which is a deliberate soft delete (`ci.events.is_deleted`,
+      // see its doc comment: "restore can bring it back verbatim") rather than a
+      // physical delete, so the row itself still exists — it just must be tombstoned.
       const orphans = await dataSource.query(
-        `SELECT event_id FROM ci.events WHERE user_id = $1 AND inference_sources->>'candidate_id' = $2`,
+        `SELECT event_id FROM ci.events
+          WHERE user_id = $1 AND inference_sources->>'candidate_id' = $2 AND is_deleted = false`,
         [ctx.userId, candidateId],
       );
       expect(orphans).toHaveLength(0);

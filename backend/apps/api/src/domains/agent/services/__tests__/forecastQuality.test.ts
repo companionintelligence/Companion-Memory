@@ -1,9 +1,4 @@
-import {
-  clusterPasses,
-  displayNameFor,
-  isDisplayableLabel,
-  occupancyLabelOk,
-} from '../forecastQuality';
+import { clusterPasses, displayNameFor, isDisplayableLabel, occupancyLabelOk } from '../forecastQuality';
 
 describe('forecastQuality', () => {
   it('rejects UNKNOWN, short crumbs, slug collisions, and news-like tokens', () => {
@@ -27,14 +22,10 @@ describe('forecastQuality', () => {
   });
 
   it('lets booked calendar through the probability floor, not junk names', () => {
-    expect(
-      clusterPasses({ name: 'Dentist', l0_class: 'ERRAND', p_occur: 0.05, scheduled: true }),
-    ).toBe(true);
+    expect(clusterPasses({ name: 'Dentist', l0_class: 'ERRAND', p_occur: 0.05, scheduled: true })).toBe(true);
     expect(clusterPasses({ name: 'Drs', l0_class: 'UNKNOWN', p_occur: 0.9 })).toBe(false);
     expect(clusterPasses({ name: 'No Think', l0_class: 'LEISURE', p_occur: 0.8 })).toBe(false);
     expect(clusterPasses({ name: 'Deep Focus', l0_class: 'WORK', p_occur: 0.2 })).toBe(false);
-    expect(displayNameFor({ name: 'Drs', l0_class: 'WORK', p_occur: 1, scheduled: true })).toBe(
-      'WORK',
-    );
+    expect(displayNameFor({ name: 'Drs', l0_class: 'WORK', p_occur: 1, scheduled: true })).toBe('WORK');
   });
 });

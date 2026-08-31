@@ -68,7 +68,7 @@ export class PeerAskController {
 
     // Rate-limit on the verified peer identity, BEFORE the peer-link lookup, so
     // an unlinked caller cannot hammer the endpoint for free.
-    this.rateLimitService.consume(identity);
+    await this.rateLimitService.consume(identity);
 
     const parsed = peerAskBodySchema.safeParse(body);
     if (!parsed.success) {
@@ -122,7 +122,7 @@ export class PeerAskController {
     // gate is how the poll endpoint would have become the way in.
     await this.assertSignature(request, identity, undefined);
 
-    this.rateLimitService.consumePoll(identity);
+    await this.rateLimitService.consumePoll(identity);
 
     // The same bound `peerAskBodySchema` puts on `askId` — one definition, so
     // the two routes cannot disagree about which ids exist. This route has no
@@ -268,7 +268,7 @@ export class PeerAskController {
       throw new UnauthorizedException(SIGNATURE_REFUSED);
     }
 
-    const verification = this.signatureService.verifyInbound({
+    const verification = await this.signatureService.verifyInbound({
       method: request.method,
       targetUri: `${authority}${request.originalUrl ?? request.url}`,
       signatureInput: header(request, 'signature-input'),

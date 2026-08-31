@@ -121,7 +121,7 @@ describe('AddEventModal — creating the event', () => {
 
     expect(inputs[0]).toMatchObject({ title: 'Dinner with Sam', locationName: 'Zuni Cafe' });
     // Blank means "no kind", which is what keeps a user-made event on the
-    // Schedule (EventService.findInRange serves NULL event_type).
+    // Schedule (CalendarEventService.findInRange serves NULL event_type).
     expect(inputs[0].eventType).toBeUndefined();
     expect(typeof inputs[0].startTime).toBe('string');
   });

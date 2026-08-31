@@ -64,13 +64,7 @@ interface Props {
  * differ. Summarizing them into a single lock would assert something no row
  * says.
  */
-export function DisclosureRelationships({
-  summaries,
-  windowDays,
-  truncated,
-  countedRows,
-  onOpen,
-}: Props) {
+export function DisclosureRelationships({ summaries, windowDays, truncated, countedRows, onOpen }: Props) {
   const note = truncationNote(truncated, countedRows);
 
   return (
@@ -116,8 +110,8 @@ export function DisclosureRelationships({
                   ) : null}
                   {unattributed ? (
                     <p>
-                      These disclosures no longer name who received them — the account or peer link
-                      was removed. They are kept so the totals stay honest.
+                      These disclosures no longer name who received them — the account or peer link was
+                      removed. They are kept so the totals stay honest.
                     </p>
                   ) : null}
                 </div>

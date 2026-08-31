@@ -83,6 +83,16 @@ export class EventEntity {
   @Column({ type: 'text', nullable: true, name: 'time_precision' })
   timePrecision!: string | null;
 
+  /**
+   * WHEN the capture source actually recorded this event, as distinct from
+   * `startTime` (when the event itself occurred). Threaded through from
+   * `ci.capture_events.observed_at` by the /v1/events materialize step
+   * (migration 20260830040124); null for events materialized before that, and
+   * for pathways that never send it (OAuth sync, bulk import).
+   */
+  @Column({ type: 'timestamptz', nullable: true, name: 'observed_at' })
+  observedAt!: Date | null;
+
   @Column({ type: 'integer', nullable: true, insert: false, update: false, name: 'duration_minutes' })
   durationMinutes!: number | null;
 
@@ -123,6 +133,17 @@ export class EventEntity {
    */
   @Column({ type: 'uuid', nullable: true, name: 'connection_id' })
   connectionId!: string | null;
+
+  /**
+   * Per-tick correlator minted by CI-Capture (one UUID per worker tick,
+   * shared with the screenshot uploaded via the same tick — see
+   * `ci.files.capture_tick_id`). NOT a provenance/idempotency key — that
+   * role stays with (source_type, source_system, source_id); this one links
+   * a row on THIS table to a row on `ci.files`, migration
+   * 20260830042159_add_capture_correlation_to_files_and_events.
+   */
+  @Column({ type: 'uuid', nullable: true, name: 'capture_tick_id' })
+  captureTickId!: string | null;
 
   @Column({ type: 'double precision', default: 1.0, name: 'confidence_score' })
   confidenceScore!: number;
@@ -222,6 +243,7 @@ export class EventEntity {
       endTime: entity.endTime,
       timeSource: entity.timeSource,
       timePrecision: entity.timePrecision,
+      observedAt: entity.observedAt,
       durationMinutes: entity.durationMinutes,
       locationName: entity.locationName,
       locationCoordinates: entity.locationCoordinates,
@@ -232,6 +254,7 @@ export class EventEntity {
       sourceSystem: entity.sourceSystem,
       sourceId: entity.sourceId,
       connectionId: entity.connectionId,
+      captureTickId: entity.captureTickId,
       confidenceScore: entity.confidenceScore,
       isRecurring: entity.isRecurring,
       recurrencePattern: entity.recurrencePattern,

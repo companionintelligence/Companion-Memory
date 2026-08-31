@@ -19,7 +19,7 @@
  * the lifecycle endpoints delegate to the maintenance domain's orchestrator /
  * search-index backfill. The events route additionally appends to the
  * ci.capture_events raw log before materializing via the memory domain's
- * EventService. See BulkIngestController and IngestLifecycleController for the
+ * CalendarEventService. See BulkIngestController and IngestLifecycleController for the
  * contract.
  *
  * @module IngestModule

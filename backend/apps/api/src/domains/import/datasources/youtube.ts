@@ -157,7 +157,7 @@ export class YouTubeFileImporter implements FileImporter {
       if (base.endsWith('.html')) {
         this.importHtml(raw, base, params);
       } else {
-        this.importJson(raw, params);
+        this.importJson(raw, base, params);
       }
     }
 
@@ -166,7 +166,7 @@ export class YouTubeFileImporter implements FileImporter {
     }
   }
 
-  private importJson(raw: string, params: ImportParams): void {
+  private importJson(raw: string, base: string, params: ImportParams): void {
     let arr: WatchEntry[];
     try {
       arr = JSON.parse(raw);
@@ -178,6 +178,12 @@ export class YouTubeFileImporter implements FileImporter {
       return;
     }
 
+    // search-history.json shares this exact {header,time,title,titleUrl}
+    // shape with watch-history.json -- with no filename passed in, every
+    // entry was unconditionally classified 'watch' regardless of which file
+    // it actually came from. importHtml already branches on base for the
+    // equivalent HTML export; this mirrors it for JSON.
+    const isSearch = base.startsWith('search');
     let index = 0;
     for (const e of arr) {
       if (e.header !== 'YouTube' && e.header !== 'YouTube Music') {
@@ -190,26 +196,35 @@ export class YouTubeFileImporter implements FileImporter {
         continue;
       }
 
-      const title = (e.title ?? '').replace(/^Watched /, '');
+      const title = (e.title ?? '').replace(/^(Watched|Searched for) /, '');
       const url = e.titleUrl ?? '';
       const channel = e.subtitles?.[0]?.name ?? '';
       const id = 'youtube:' + (url || ts ? sha1(`${url} ${ts?.toISOString() ?? ''}`) : String(i));
       params.pipeline.push({
         item: {
           id,
-          classification: 'watch',
+          classification: isSearch ? 'search' : 'watch',
           timestamp: ts,
           content: {
-            filename: 'watch.txt',
+            filename: isSearch ? 'search.txt' : 'watch.txt',
             mediaType: 'text/plain',
             data: async () => Buffer.from(url || title),
           },
-          metadata: {
-            Title: watchTitle(title, channel, url),
-            URL: url || undefined,
-            Channel: channel || undefined,
-            Source: 'YouTube',
-          },
+          metadata: isSearch
+            ? {
+                Title: title || undefined,
+                Text: title || undefined,
+                Query: title || undefined,
+                URL: url || undefined,
+                Kind: 'search',
+                Source: 'YouTube',
+              }
+            : {
+                Title: watchTitle(title, channel, url),
+                URL: url || undefined,
+                Channel: channel || undefined,
+                Source: 'YouTube',
+              },
         },
       } as Graph);
     }
@@ -358,15 +373,19 @@ export class YouTubeFileImporter implements FileImporter {
     };
 
     walk(dir);
-    // Prefer JSON watch-history when both JSON and HTML exist for the same data,
-    // so a hybrid export isn't double-counted; otherwise import everything found.
-    const hasWatchJson = out.some((f) => path.basename(f).toLowerCase() === 'watch-history.json');
-    const hasWatchHtml = out.some((f) => path.basename(f).toLowerCase() === 'watch-history.html');
-    if (hasWatchJson && hasWatchHtml) {
-      return out.filter((f) => path.basename(f).toLowerCase() !== 'watch-history.html');
+    // Prefer JSON over HTML when both exist for the same data, so a hybrid
+    // export isn't double-counted; otherwise import everything found. Applies
+    // to both the watch-history and search-history pairs.
+    let filtered = out;
+    for (const stem of ['watch-history', 'search-history']) {
+      const hasJson = filtered.some((f) => path.basename(f).toLowerCase() === `${stem}.json`);
+      const hasHtml = filtered.some((f) => path.basename(f).toLowerCase() === `${stem}.html`);
+      if (hasJson && hasHtml) {
+        filtered = filtered.filter((f) => path.basename(f).toLowerCase() !== `${stem}.html`);
+      }
     }
 
-    return out;
+    return filtered;
   }
 }
 

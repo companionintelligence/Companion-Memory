@@ -138,7 +138,7 @@ describeWithDatabase(`bulkInsertIdempotent against real Postgres (${availability
    *
    * `ci.events` and `ci.content` became detail tables of `ci.entities`, and
    * their composite foreign keys are DEFERRABLE INITIALLY DEFERRED — which is
-   * how `EventService` gets away with inserting the detail rows first and the
+   * how `CalendarEventService` gets away with inserting the detail rows first and the
    * bases afterwards inside ONE transaction. This suite calls
    * `bulkInsertIdempotent` directly, so each statement is its own implicit
    * transaction and the deferred check fires at the end of it. Seeding the base

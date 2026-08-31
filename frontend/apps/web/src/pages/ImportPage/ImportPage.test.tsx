@@ -10,9 +10,7 @@ vi.mock('@/components/ImportActivity', () => ({
   ImportActivity: ({ className }: { className?: string }) => <div className={className}>import activity</div>,
 }));
 vi.mock('./wizard/ImportWizard', () => ({
-  ImportWizard: ({ scroll }: { scroll?: string }) => (
-    <div>wizard surface scroll:{scroll ?? 'contained'}</div>
-  ),
+  ImportWizard: ({ scroll }: { scroll?: string }) => <div>wizard surface scroll:{scroll ?? 'contained'}</div>,
 }));
 vi.mock('./InboxPanel', () => ({ InboxPanel: () => <div>inbox surface</div> }));
 vi.mock('./HistoryTab', () => ({ HistoryTab: () => <div>history surface</div> }));

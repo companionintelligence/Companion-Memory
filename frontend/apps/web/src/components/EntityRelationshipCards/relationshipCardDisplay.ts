@@ -99,12 +99,7 @@ const NOISE_TAGS = new Set([
  * Edge types that are residual after import/normalize. Showing "Associated
  * With" next to a name is not more informative than the name itself.
  */
-const LOW_VALUE_RELATIONSHIP_TYPES = new Set([
-  'ASSOCIATED_WITH',
-  'RELATED_TO',
-  'RELATES_TO',
-  'IS',
-]);
+const LOW_VALUE_RELATIONSHIP_TYPES = new Set(['ASSOCIATED_WITH', 'RELATED_TO', 'RELATES_TO', 'IS']);
 
 type DirectedPhrase = {
   /** Focus entity is the edge source (typical write direction). */
@@ -165,13 +160,13 @@ const RELATIONSHIP_PHRASES: Record<string, DirectedPhrase> = {
 };
 
 function normalizeTag(label: string): string {
-  return label.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
 }
 
-function firstNonEmptyString(
-  properties: Record<string, unknown> | undefined,
-  keys: string[],
-): string | null {
+function firstNonEmptyString(properties: Record<string, unknown> | undefined, keys: string[]): string | null {
   if (!properties) {
     return null;
   }
@@ -206,10 +201,7 @@ export function isTechnicalPropertyKey(key: string): boolean {
   return /(_id|Id|ID)$/.test(key);
 }
 
-export function formatNeighborKind(
-  entityType: string,
-  properties?: Record<string, unknown>,
-): string {
+export function formatNeighborKind(entityType: string, properties?: Record<string, unknown>): string {
   const normalized = entityType.toLowerCase().replace(/_/g, '-');
 
   if (normalized === 'communication') {
@@ -318,4 +310,3 @@ export function formatCardWhen(recencyMs: number, now: Date = new Date()): strin
 
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
-

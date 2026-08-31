@@ -76,6 +76,7 @@ export class PendingActionsController {
   /** Refuse it. Terminal; the intent never runs. */
   @Post(':id/decline')
   @HttpCode(200)
+  @RequireCapability(READ_CAPABILITY)
   async decline(
     @Param('id') id: string,
     @Context() context: RequestContext,

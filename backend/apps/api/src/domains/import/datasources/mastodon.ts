@@ -116,7 +116,6 @@ function isMastodonActor(parsed: unknown, outboxId: unknown): boolean {
   return typeof outboxId !== 'string' || a.outbox === outboxId;
 }
 
-
 export class MastodonFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const root = entry.fullPath || entry.fsRoot || entry.filename;
@@ -261,6 +260,8 @@ export class MastodonFileImporter implements FileImporter {
     }
 
     if (act.type !== 'Create') {
+      params.pipeline.drop?.('non_create_activity');
+
       return;
     } // skip "Announce" (boosts) and others
 
@@ -270,6 +271,8 @@ export class MastodonFileImporter implements FileImporter {
     }
 
     if (obj.type !== 'Note') {
+      params.pipeline.drop?.('non_note_object');
+
       return;
     }
 

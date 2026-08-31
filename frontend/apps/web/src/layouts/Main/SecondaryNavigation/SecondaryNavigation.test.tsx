@@ -30,10 +30,9 @@ vi.mock('./usePlanBadgeCount', () => ({ usePlanBadgeCount: () => 0 }));
 const recentThreads = vi.hoisted(() => ({ current: [] as { id: string; name: string | null }[] }));
 
 vi.mock('@/pages/ChatPage/useRecentThreads', async () => {
-  const actual =
-    await vi.importActual<typeof import('@/pages/ChatPage/useRecentThreads')>(
-      '@/pages/ChatPage/useRecentThreads',
-    );
+  const actual = await vi.importActual<typeof import('@/pages/ChatPage/useRecentThreads')>(
+    '@/pages/ChatPage/useRecentThreads',
+  );
 
   return {
     ...actual,
@@ -533,6 +532,8 @@ describe('Self user tile', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand Self sections' }));
 
     expect(screen.getByRole('link', { name: 'Jobs' })).toHaveAttribute('href', '/jobs');
-    expect(within(screen.getByTestId('self-submenu')).queryByRole('link', { name: 'Jobs' })).not.toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('self-submenu')).queryByRole('link', { name: 'Jobs' }),
+    ).not.toBeInTheDocument();
   });
 });

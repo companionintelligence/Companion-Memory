@@ -305,6 +305,7 @@ class FlickrFileImporter implements FileImporter {
       // bytes to attach there is nothing a media item can point at, so this
       // photo is skipped rather than pushed content-less.
       params.log?.('debug', 'No media file for Flickr photo id', { id });
+      params.pipeline.drop?.('media_asset_missing', id);
 
       return;
     }

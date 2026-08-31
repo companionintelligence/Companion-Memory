@@ -237,6 +237,26 @@ describe('VerticalCalendar — the rhythm strip', () => {
     expect(strip.querySelectorAll('.rhythm-cell-waiting')).toHaveLength(96);
   });
 
+  it('names every waiting strip for its own day rather than seven times the same', () => {
+    // #2481 moved the strip from one shared element in the gutter to one per
+    // day column. The waiting name was still a constant, so a week that is
+    // still computing handed a screen reader seven focusable images sharing a
+    // single name — and there is nothing else tabbable in an empty grid.
+    render(<VerticalCalendar start={MONDAY} days={7} events={[]} rhythm={[]} pipelineRunning />);
+
+    const strips = screen.getAllByTestId('vertical-rhythm-strip');
+    const names = strips.map((strip) => strip.getAttribute('aria-label'));
+
+    expect(strips).toHaveLength(7);
+    expect(strips.every((strip) => strip.getAttribute('role') === 'img')).toBe(true);
+    expect(names.every((name) => /still being built/i.test(name ?? ''))).toBe(true);
+    expect(new Set(names).size).toBe(7);
+    // Day-scoped the same way the has-rhythm name is, so both read alike.
+    expect(
+      screen.getByRole('img', { name: /^Predicted rhythm for Monday: still being built/ }),
+    ).toBeInTheDocument();
+  });
+
   it('does not shimmer when the day already has a pattern', () => {
     render(
       <VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={rhythmFor(MONDAY)} pipelineRunning />,
@@ -248,27 +268,33 @@ describe('VerticalCalendar — the rhythm strip', () => {
     expect(screen.getByRole('img', { name: /Morning gym/ })).toBeInTheDocument();
   });
 
-  it('reads the selected day, since one strip serves the whole week', () => {
+  it('draws every day its own pattern, not one strip for the whole week', () => {
     const thursday = addDays(MONDAY, 3);
 
-    const { unmount } = render(
+    const { rerender } = render(
       <VerticalCalendar start={MONDAY} days={7} events={[]} rhythm={rhythmFor(thursday)} />,
     );
 
-    expect(screen.queryByRole('img')).not.toBeInTheDocument();
-    unmount();
+    const withPattern = () =>
+      screen.getAllByTestId('vertical-rhythm-strip').filter((strip) => strip.getAttribute('role') === 'img');
 
-    render(
+    // Thursday's data lights up its own strip without anything being selected.
+    expect(withPattern().length).toBeGreaterThan(0);
+
+    // Selecting a different day used to move the single shared strip's focus.
+    // Each day now draws its own pattern regardless, so selection changes nothing.
+    const before = withPattern().length;
+    rerender(
       <VerticalCalendar
         start={MONDAY}
         days={7}
         events={[]}
         rhythm={rhythmFor(thursday)}
-        selectedDay={thursday}
+        selectedDay={MONDAY}
       />,
     );
 
-    expect(screen.getByRole('img', { name: /Morning gym/ })).toBeInTheDocument();
+    expect(withPattern().length).toBe(before);
   });
 });
 

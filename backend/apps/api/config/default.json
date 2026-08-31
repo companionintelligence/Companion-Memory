@@ -272,6 +272,9 @@
     "provider": "portal",
     "portalBaseUrl": "https://hub.ci.computer"
   },
+  "consumption": {
+    "store": "postgres"
+  },
   "peers": {
     "directoryUrl": "",
     "memoryEndpoint": "",

@@ -304,6 +304,18 @@ export class GoogleVoiceFileImporter implements FileImporter {
         score += 0.6;
       } // conversations root
 
+      // `Spam/` and `Greetings/` are siblings of `Calls/` in the reference
+      // export, so their presence is corroborating evidence, same idea as
+      // Bills.html above — small boosts, since `Calls` alone already clears
+      // `dir_threshold` on a real export.
+      if (entries.includes('Spam')) {
+        score += 0.05;
+      } // spam call/text/voicemail archive, same filename convention as Calls
+
+      if (entries.includes('Greetings')) {
+        score += 0.02;
+      } // standalone greeting recordings only, no structured record
+
       // boost if any HTML conversation files exist under Calls (partial export)
       try {
         const callsPath = path.join(full, 'Calls');
@@ -364,17 +376,43 @@ export class GoogleVoiceFileImporter implements FileImporter {
       params.log?.('warn', 'googlevoice owner parse failed', { error: (e as Error).message });
     }
 
-    const callsDir = path.join(root, 'Calls');
-    if (!fs.existsSync(callsDir)) {
+    // Conversation records live under `Calls/` and its sibling `Spam/` —
+    // IDENTICAL markup and "<contact> - <Type> - <timestamp>.html" filename
+    // convention (confirmed on the reference export: `Spam/` alone holds 857
+    // .html files — Missed 407, Voicemail 312, Text 133, Placed 3, Received 1,
+    // one "Group Conversation" file — plus 312 voicemail .mp3 recordings and 5
+    // MMS .jpg attachments). Before this fix only `Calls/` was ever walked,
+    // so a Google Voice export's entire spam-filtered history was silently
+    // invisible to every import — not malformed, never visited.
+    //
+    // `Greetings/` holds only bare standalone .mp3 recordings (2 on the
+    // reference export) with no companion HTML/timestamp/sender — there is no
+    // structured record to build a communication item from. It is included in
+    // the walk anyway because doing so is free (the `.html`-only filter below
+    // already skips every file in it) and keeps `Greetings/` from silently
+    // falling through if a future export ever ships a sidecar record there;
+    // no item is ever fabricated from a bare audio file.
+    const conversationDirs = ['Calls', 'Spam', 'Greetings']
+      .map((name) => path.join(root, name))
+      .filter((dir) => fs.existsSync(dir));
+
+    if (conversationDirs.length === 0) {
       return;
     }
 
-    for await (const f of this.walkDir(callsDir)) {
-      if (!f.toLowerCase().endsWith('.html')) {
-        continue;
-      }
+    for (const dir of conversationDirs) {
+      // `Spam` is a directory NAME, not a per-message property in the markup
+      // (though every Spam file also happens to self-label via
+      // `<a rel="tag" href=".../voice#spam">`, confirmed on all 857 — this
+      // just reads the cheaper, already-known signal from the walk itself).
+      const fromSpam = path.basename(dir) === 'Spam';
+      for await (const f of this.walkDir(dir)) {
+        if (!f.toLowerCase().endsWith('.html')) {
+          continue;
+        }
 
-      await this.processConversation(f, params);
+        await this.processConversation(f, params, fromSpam);
+      }
     }
   }
 
@@ -394,7 +432,11 @@ export class GoogleVoiceFileImporter implements FileImporter {
     }
   }
 
-  private async processConversation(fpath: string, params: ImportParams): Promise<void> {
+  private async processConversation(
+    fpath: string,
+    params: ImportParams,
+    fromSpam = false,
+  ): Promise<void> {
     let raw: string;
     try {
       raw = await fs.promises.readFile(fpath, 'utf8');
@@ -440,7 +482,7 @@ export class GoogleVoiceFileImporter implements FileImporter {
     // every call/voicemail file silently produced zero items. Route them to a
     // dedicated handler instead of falling into the SMS/MMS message loop.
     if (/<div class="haudio"/i.test(raw)) {
-      this.processCallLog(raw, fpath, conversation, params);
+      this.processCallLog(raw, fpath, conversation, params, fromSpam);
 
       return;
     }
@@ -488,10 +530,11 @@ export class GoogleVoiceFileImporter implements FileImporter {
         }
       }
 
-      let blockImg: RegExpExecArray | null;
-      const blockImgRegex = /<img[^>]*src="([^"]+)"/gi;
-      while ((blockImg = blockImgRegex.exec(block)) !== null) {
-        attachmentSenders.set(blockImg[1], { isOutbound, sender });
+      // Tracks every attachment shape (image/video/vcard/audio-clip; see
+      // attachmentRefsIn), not just `<img>` — an MMS video or vCard is still
+      // a message from somebody, exactly like an MMS image.
+      for (const ref of attachmentRefsIn(block)) {
+        attachmentSenders.set(ref.stub, { isOutbound, sender });
       }
 
       const qHtml = /<q>([\s\S]*?)<\/q>/i.exec(block)?.[1];
@@ -538,6 +581,12 @@ export class GoogleVoiceFileImporter implements FileImporter {
             Text: text || undefined,
             Direction: isOutbound ? 'outgoing' : 'incoming',
             To: to || undefined,
+            // Provenance, not a schema field: this file has no spam/ham
+            // distinction anywhere downstream, so the item is staged exactly
+            // like an ordinary message — this just records where Google
+            // Voice's own filter filed it, in case a future consumer wants to
+            // exclude or specially surface it.
+            ...(fromSpam ? { Spam: true } : {}),
           },
         },
         edges: counterpartEdges(isOutbound, sender, counterpart),
@@ -559,31 +608,68 @@ export class GoogleVoiceFileImporter implements FileImporter {
       });
     }
 
-    // attachments (image inference) - look for <img src="stub"> and attempt .jpg/.gif in same folder
-    const imgStubRegex = /<img[^>]*src="([^"]+)"/gi;
-    let imgMatch: RegExpExecArray | null;
-    while ((imgMatch = imgStubRegex.exec(raw)) !== null) {
-      const stub = imgMatch[1];
-      const filename = resolveAttachment(stub, path.dirname(fpath));
+    // Attachments: image (existing) + video/vcard/audio-clip (see
+    // attachmentRefsIn). `dirEntries` is read ONCE per conversation file and
+    // threaded into every resolveAttachment call — both for the NFC-normalized
+    // comparison resolveRecording already does correctly, and so the
+    // truncation-collision fallback below doesn't re-list the directory.
+    const dir = path.dirname(fpath);
+    const basenameNoExt = basename.replace(/\.[^.]+$/, '');
+    let dirEntries: string[];
+    try {
+      dirEntries = fs.readdirSync(dir);
+    } catch {
+      dirEntries = [];
+    }
+
+    const pushedAttachmentPaths = new Set<string>();
+    // Whether this conversation referenced any image stub at all, and whether
+    // any of them actually resolved — the two facts pushCollapsedAttachments
+    // needs to decide "this is a genuine truncation collision", not merely
+    // "this conversation has no pictures" or "one picture happens to be
+    // missing".
+    let sawImageStub = false;
+    let anyImageResolved = false;
+
+    for (const ref of attachmentRefsIn(raw)) {
+      const filename = resolveAttachment(ref.stub, dir, basenameNoExt, dirEntries);
+      if (ref.kind === 'image') {
+        sawImageStub = true;
+        anyImageResolved = anyImageResolved || Boolean(filename);
+      }
+
       if (!filename) {
+        // Image misses stay silent, as before this fix — the pre-existing
+        // behavior is intentionally preserved, since the truncation-collision
+        // fallback below is what recovers the actual bytes for the case that
+        // matters (a long conversation name). Video/vcard/audio-clip misses
+        // have no such fallback, so an unresolved one is a real, otherwise
+        // invisible loss and must be reported.
+        if (ref.kind !== 'image') {
+          params.pipeline.drop?.('googlevoice_attachment_missing', ref.stub);
+        }
+
         continue;
       }
 
-      // Who this picture was between. `attachmentSenders` has the answer
-      // whenever the <img> sat inside a <div class="message"> block — which is
-      // where Google Voice puts MMS attachments — so an image-only MMS is
-      // attributed exactly the way a text message in the same file is, rather
-      // than landing as a picture from nobody.
+      // Who this attachment was between. `attachmentSenders` has the answer
+      // whenever the reference sat inside a <div class="message"> block —
+      // which is where Google Voice puts every MMS attachment — so an
+      // attachment-only MMS is attributed exactly the way a text message in
+      // the same file is, rather than landing as one from nobody.
       //
       // No entry means the stub was not inside any message block we could
       // parse. `Conversation` still names the thread the file is, but nothing
-      // here says which way the picture travelled, so no Sender / To / edge is
-      // claimed: a filename label is not evidence of authorship.
-      const attributed = attachmentSenders.get(stub);
+      // here says which way the attachment travelled, so no Sender / To / edge
+      // is claimed: a filename label is not evidence of authorship.
+      const attributed = attachmentSenders.get(ref.stub);
       const counterpart: GVEntity = {
         name: contactName || contactPhone || conversation,
         phone: contactPhone,
       };
+      const mimetype = mimeForAttachment(filename);
+      const kind = attachmentMediaKind(mimetype);
+      pushedAttachmentPaths.add(filename);
       const item = {
         classification: 'message',
         timestamp: tsFromAttachmentFilename(filename),
@@ -602,11 +688,11 @@ export class GoogleVoiceFileImporter implements FileImporter {
         // which would mint a separate thread per attachment.
         metadata: {
           Source: 'GoogleVoice',
-          Attachment: 'image',
+          Attachment: kind,
           Conversation: conversation,
           ThreadId: thread,
-          // Attribution from the `<div class="message">` block the `<img>` sat
-          // in. Orthogonal to the thread key above: the thread says WHICH
+          // Attribution from the `<div class="message">` block the reference
+          // sat in. Orthogonal to the thread key above: the thread says WHICH
           // conversation, this says who sent it and which way it travelled.
           ...(attributed
             ? {
@@ -615,19 +701,20 @@ export class GoogleVoiceFileImporter implements FileImporter {
                 To: (attributed.isOutbound ? counterpart.name : owner) || undefined,
               }
             : {}),
+          ...(fromSpam ? { Spam: true } : {}),
           // MediaStage's upload leg never sees this item: `content.mediaType`
           // is deliberately left '' (see below) so `isMediaItem()` stays
           // false and the primary media predicate skips it. Only the
           // ATTACHMENT leg (gated on MediaAttachments, same as a voicemail
           // recording above) uploads the bytes and links them to a message —
           // uploading via BOTH legs would produce two ci.files rows for the
-          // same picture, one of them orphaned.
+          // same bytes, one of them orphaned.
           MediaAttachments: [
             {
               path: filename,
               filename: path.basename(filename),
-              type: attachmentMediaKind(mimeForAttachment(filename)),
-              mimetype: mimeForAttachment(filename),
+              type: kind,
+              mimetype,
             },
           ],
         },
@@ -638,6 +725,24 @@ export class GoogleVoiceFileImporter implements FileImporter {
           ? counterpartEdges(attributed.isOutbound, attributed.sender, counterpart)
           : undefined,
       });
+    }
+
+    // Only reached when EVERY image stub in this conversation failed to
+    // resolve AND the name is long enough to have actually collided (see
+    // pushCollapsedAttachments) — never for a conversation with no pictures,
+    // and never for an ordinary single missing file.
+    if (sawImageStub && !anyImageResolved && basenameNoExt.length >= 45) {
+      pushCollapsedAttachments(
+        params,
+        fpath,
+        dir,
+        dirEntries,
+        basenameNoExt,
+        conversation,
+        thread,
+        pushedAttachmentPaths,
+        fromSpam,
+      );
     }
   }
 
@@ -663,6 +768,7 @@ export class GoogleVoiceFileImporter implements FileImporter {
     fpath: string,
     conversation: string | undefined,
     params: ImportParams,
+    fromSpam = false,
   ): void {
     const publishedMatch = /<abbr class="published"[^>]*\b(?:title|datetime)="([^"]+)"/i.exec(raw);
     const whenStr = publishedMatch?.[1];
@@ -725,6 +831,7 @@ export class GoogleVoiceFileImporter implements FileImporter {
           Transcript: transcript || undefined,
           Description: contentStr,
           ...(recording && { MediaAttachments: [recording] }),
+          ...(fromSpam ? { Spam: true } : {}),
         },
       },
     });
@@ -838,9 +945,40 @@ function messageBlocks(raw: string): string[] {
   return blocks;
 }
 
+// Named entities actually seen in the reference corpus (scanned across all
+// 59,748 HTML files: `grep -ohE '&[a-zA-Z]+;' | sort | uniq -c`) —
+// &aacute; 1,694, &ntilde; 647, &rsquo;/&lsquo; 462 each, &iacute; 66,
+// &eacute; 46, &iuml; 3 — plus the accented-vowel and curly-quote siblings
+// that did not happen to appear in THIS corpus but follow the same Latin-1
+// entity set a name can plausibly carry. Before this, `decodeHtml` handled
+// only numeric refs and the four XML entities, and was never even called on
+// an `<img>`/`<a>` stub (see resolveAttachment) — so every accented filename
+// failed a raw `fs.existsSync` string compare against the un-decoded markup.
+const NAMED_ENTITIES: Readonly<Record<string, string>> = {
+  aacute: 'á',
+  Aacute: 'Á',
+  eacute: 'é',
+  Eacute: 'É',
+  iacute: 'í',
+  Iacute: 'Í',
+  oacute: 'ó',
+  Oacute: 'Ó',
+  uacute: 'ú',
+  Uacute: 'Ú',
+  ntilde: 'ñ',
+  Ntilde: 'Ñ',
+  iuml: 'ï',
+  Iuml: 'Ï',
+  lsquo: '‘',
+  rsquo: '’',
+  ldquo: '“',
+  rdquo: '”',
+};
+
 function decodeHtml(h: string): string {
   return h
     .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
+    .replace(/&([a-zA-Z]+);/g, (m, name) => NAMED_ENTITIES[name] ?? m)
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
@@ -905,28 +1043,246 @@ function parseDurationToSeconds(raw: string): number | undefined {
   return undefined;
 }
 
-function resolveAttachment(stub: string, dir: string): string | undefined {
-  for (const ext of ['.jpg', '.gif', '.png', '.jpeg']) {
-    const candidate = path.join(dir, stub + ext);
-    if (fs.existsSync(candidate)) {
-      return candidate;
+/** Every extension an MMS attachment (image, video clip, audio clip, vCard) resolves to. */
+const ATTACHMENT_EXTENSIONS = ['.jpg', '.gif', '.png', '.jpeg', '.3gp', '.mp4', '.amr', '.vcf'];
+
+// Matches the trailing "T##_##_##Z" + per-message "-N" / "-N-M" index a real
+// export's own attachment stub ends with, e.g. "…2018-08-03T17_08_26Z-9-1" ->
+// captures "-9-1". Used only to REBUILD a candidate from the container's own
+// basename (see resolveAttachment case 3) — never to validate the stub alone,
+// since the date/hour digits before the "T" are not part of this match.
+const ATTACHMENT_SUFFIX_RE = /T\d{2}_\d{2}_\d{2}Z((?:-\d+)*)$/;
+
+/**
+ * Resolve one attachment `stub` (the raw `<img src>` / `<a href>` / `<audio
+ * src>` value) to the real file beside the conversation's HTML. Three
+ * strategies, tried in order, because a single `fs.existsSync(stub + ext)` —
+ * this function's entire body until this fix — missed real, present files in
+ * (at least) two confirmed ways on the reference corpus:
+ *
+ * 1. Verbatim (decoded, NFC-normalized) match. Handles the common case, and
+ *    now also the corpus's 1,694 `&aacute;`-etc. cases (see decodeHtml): the
+ *    stub is HTML-entity-encoded but the file on disk never is, e.g.
+ *    `<img src="Michelle Ju&aacute;rez - Text - …-20-1">` beside the real
+ *    "Michelle Juárez - Text - …-20-1.jpg".
+ *
+ * 2. Rebuilt from the CONTAINING conversation file's own basename
+ *    (`basenameNoExt`, stripped of its copy index by the caller) plus the
+ *    stub's own trailing timestamp+index suffix. Google Voice sometimes
+ *    exports an `<img>` naming the contact by NAME after the export had
+ *    already resolved it, while the HTML FILE itself is still named by the
+ *    phone number it had at export time — confirmed real:
+ *    "+13108748112 - Text - 2018-08-03T17_08_26Z.html" contains
+ *    `<img src="Steve Raymond - Text - 2018-08-03T17_08_26Z-9-1">`, and the
+ *    real file on disk is "+13108748112 - Text - …-9-1.jpg". The stub's own
+ *    name/number prefix is therefore not reliable — only its timestamp+index
+ *    suffix is — so this rebuilds from the file's own name instead.
+ *
+ * Directory comparison is NFC-normalized on both sides via a single
+ * `readdir()` the caller passes in (`dirEntries`), the same pattern
+ * `resolveRecording` already uses correctly: a raw `fs.existsSync` string
+ * concat cannot see past an NFD-vs-NFC composition difference, which is
+ * routine on a macOS/Drive-synced corpus.
+ *
+ * Returns undefined — not a guess — when neither strategy finds a real file.
+ * The caller's truncation-collision fallback (see `pushCollapsedAttachments`)
+ * is what recovers the remaining case, a genuine filename COLLISION at the
+ * export/filesystem level rather than a lookup miss.
+ */
+function resolveAttachment(
+  stub: string,
+  dir: string,
+  basenameNoExt: string,
+  dirEntries: readonly string[],
+): string | undefined {
+  const normalizedEntries = dirEntries.map((name) => ({ name, nfc: name.normalize('NFC') }));
+  const findExact = (base: string): string | undefined => {
+    for (const ext of ATTACHMENT_EXTENSIONS) {
+      const wanted = `${base}${ext}`;
+      const hit = normalizedEntries.find((e) => e.nfc === wanted);
+      if (hit) {
+        return hit.name;
+      }
+    }
+
+    return undefined;
+  };
+
+  const decoded = decodeHtml(stub).normalize('NFC');
+
+  const direct = findExact(decoded);
+  if (direct) {
+    return path.join(dir, direct);
+  }
+
+  const suffixMatch = ATTACHMENT_SUFFIX_RE.exec(decoded);
+  if (suffixMatch) {
+    const rebuilt = `${basenameNoExt}${suffixMatch[1]}`;
+    if (rebuilt !== decoded) {
+      const viaBasename = findExact(rebuilt);
+      if (viaBasename) {
+        return path.join(dir, viaBasename);
+      }
     }
   }
 
   return undefined;
 }
 
-/** MIME for an MMS image attachment, which resolveAttachment names only by extension. */
+/** MIME for an MMS attachment, which resolveAttachment names only by extension. */
 function mimeForAttachment(filename: string): string {
   const ext = path.extname(filename).toLowerCase();
 
-  return ext === '.jpg' || ext === '.jpeg'
-    ? 'image/jpeg'
-    : ext === '.gif'
-      ? 'image/gif'
-      : ext === '.png'
-        ? 'image/png'
-        : '';
+  switch (ext) {
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.gif':
+      return 'image/gif';
+    case '.png':
+      return 'image/png';
+    // Video clip. Confirmed 148 `.3gp` + 13 `.mp4` files in the reference
+    // corpus, referenced via `<a class="video" href="STUB">Video
+    // attachment</a>` — a shape the old `<img>`-only scanner never matched at
+    // all (see attachmentRefsIn).
+    case '.3gp':
+      return 'video/3gpp';
+    case '.mp4':
+      return 'video/mp4';
+    // Voice/audio MMS clip. 3 `.amr` files in the corpus, referenced by a
+    // bare `<audio src="STUB"></audio>` inside the message block — distinct
+    // from a voicemail's `<audio controls… ><a rel="enclosure">` shape (see
+    // resolveRecording), which only occurs in a haudio CALL file and never
+    // reaches this scanner.
+    case '.amr':
+      return 'audio/amr';
+    // Contact-card MMS attachment. 7 `.vcf` files in the corpus, referenced
+    // via `<a class="vcard" href="STUB">Contact card attachment</a>`.
+    case '.vcf':
+      return 'text/vcard';
+    default:
+      return '';
+  }
+}
+
+type AttachmentRefKind = 'image' | 'video' | 'vcard' | 'audio';
+
+/**
+ * Every attachment-reference shape a real Google Voice message body emits,
+ * scanned in one pass so the sender-tracking loop and the resolve-and-push
+ * loop stay in sync (see the two call sites below).
+ *
+ * Before this, the ONLY shape recognized anywhere in this file was
+ * `<img src="STUB">`. Google Voice also emits:
+ *   - `<a class="video" href="STUB">Video attachment</a>`  — 128 files in the
+ *     reference corpus (`grep -rl 'class="video"'`).
+ *   - `<a class="vcard" href="STUB">Contact card attachment</a>` — 6 files.
+ *   - `<audio src="STUB"></audio>` (no `controls`, no `rel="enclosure"`) for
+ *     an MMS voice-clip reply — 3 `.amr` files. This is a DIFFERENT shape
+ *     from a voicemail's recording markup (see resolveRecording) and only
+ *     ever appears inside a `<div class="message">`, never a haudio block —
+ *     fileImport routes haudio files to processCallLog before this scanner
+ *     runs, so there is no ambiguity between the two `<audio>` shapes.
+ * None of the three were scanned for at all — 100% of non-image MMS
+ * attachments (video/audio-clip/vcard) reached neither `attachmentSenders`
+ * nor the resolve-and-push loop, and were silently absent from every export.
+ */
+const ATTACHMENT_REF_RE =
+  /<img[^>]*\ssrc="([^"]+)"|<a class="(video|vcard)"[^>]*\shref="([^"]+)"|<audio[^>]*\ssrc="([^"]+)"/gi;
+
+function attachmentRefsIn(html: string): Array<{ stub: string; kind: AttachmentRefKind }> {
+  const refs: Array<{ stub: string; kind: AttachmentRefKind }> = [];
+  const re = new RegExp(ATTACHMENT_REF_RE.source, 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    if (m[1] !== undefined) {
+      refs.push({ stub: m[1], kind: 'image' });
+    } else if (m[2] !== undefined) {
+      refs.push({ stub: m[3], kind: m[2].toLowerCase() as 'video' | 'vcard' });
+    } else if (m[4] !== undefined) {
+      refs.push({ stub: m[4], kind: 'audio' });
+    }
+  }
+
+  return refs;
+}
+
+/**
+ * Recover attachment BYTES, unattributed, for a conversation whose own
+ * filename stem is long enough that Google Voice's exporter collapsed EVERY
+ * attachment for it onto the identical truncated name — and Drive/the
+ * filesystem then disambiguated with its own "(1)", "(2)"… suffix, destroying
+ * the per-message "-N-M" index at the SOURCE, before this parser ever sees a
+ * byte of it.
+ *
+ * Confirmed real example: "Alexandra Leonidova - Text -
+ * 2018-07-29T03_31_30Z.html" (a 49-char stem) references five distinct image
+ * stubs ("-2-1", "-16-1", "-18-1", "-23-1", "-31-1"), and the corpus holds
+ * exactly five files for the whole conversation: "…Z-.jpg" plus
+ * "…Z-(1).jpg" through "…Z-(4).jpg" — no suffix survives on disk to say which
+ * is which.
+ *
+ * Per this file's standing rule against fabricated attribution (see "a
+ * filename label is not evidence of authorship" in the resolve-and-push loop
+ * below), guessing a mapping here would be worse than admitting there isn't
+ * one. So each distinct collapsed file is pushed exactly once, UNATTRIBUTED
+ * (no Sender/Direction/To/edge) — the same shape that loop already uses when
+ * a stub sits outside every message block.
+ *
+ * Not gated by classifyDrops/`drop()`: the bytes ARE recovered, so this is
+ * not a loss to count — but it is a real thread-level compromise (five
+ * pictures with no per-message home), so it is logged once per conversation
+ * rather than passing silently.
+ */
+function pushCollapsedAttachments(
+  params: ImportParams,
+  fpath: string,
+  dir: string,
+  dirEntries: readonly string[],
+  basenameNoExt: string,
+  conversation: string | undefined,
+  thread: string,
+  alreadyPushed: ReadonlySet<string>,
+  fromSpam = false,
+): void {
+  const escaped = basenameNoExt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const collisionRe = new RegExp(`^${escaped}-(?:\\(\\d+\\))?\\.(jpg|gif|png|jpeg|3gp|mp4|amr)$`, 'i');
+  const matches = dirEntries.filter((name) => collisionRe.test(name) && !alreadyPushed.has(path.join(dir, name)));
+
+  if (matches.length === 0) {
+    return;
+  }
+
+  params.log?.('warn', 'googlevoice: attachment truncation collision, recovered unattributed', {
+    file: path.basename(fpath),
+    recovered: matches.length,
+  });
+
+  for (const name of matches) {
+    const filename = path.join(dir, name);
+    const mimetype = mimeForAttachment(filename);
+    const kind = attachmentMediaKind(mimetype);
+    params.pipeline.push({
+      item: {
+        classification: 'message',
+        timestamp: tsFromAttachmentFilename(filename),
+        intermediateLocation: filename,
+        content: {
+          filename: name,
+          mediaType: '',
+          data: async () => fs.promises.readFile(filename),
+        },
+        metadata: {
+          Source: 'GoogleVoice',
+          Attachment: kind,
+          Conversation: conversation,
+          ThreadId: thread,
+          MediaAttachments: [{ path: filename, filename: name, type: kind, mimetype }],
+          ...(fromSpam ? { Spam: true } : {}),
+        },
+      },
+    });
+  }
 }
 
 // Attachment filenames embed the real send time, e.g.

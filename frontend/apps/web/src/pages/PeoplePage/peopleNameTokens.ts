@@ -96,7 +96,10 @@ export function isGivenNameOnly(name: string | null | undefined): boolean {
   return tokens != null && tokens.values.length === 1 && tokens.given != null;
 }
 
-export function sharedNameTokens(left: string | null | undefined, right: string | null | undefined): Set<string> {
+export function sharedNameTokens(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): Set<string> {
   const a = tokenizeDisplayName(left);
   const b = tokenizeDisplayName(right);
   if (a == null || b == null) {

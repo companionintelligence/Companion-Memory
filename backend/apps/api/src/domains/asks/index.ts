@@ -128,7 +128,6 @@ export { SHARE_DISCLOSURE, applySearchCeiling, ceilingForShare } from './searchC
 export type { ClampableConnection, ShareDisclosure } from './searchCeiling';
 export { evaluateGrant, canonicalDataClass, canonicalQueryType, isGrantActive } from './grantMatch';
 export { TRUST_TIERS } from './types';
-export { checkSlidingWindow } from './rateLimit';
 export {
   DEFAULT_WINDOW_MS,
   UNATTRIBUTED,

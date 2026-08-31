@@ -1,4 +1,4 @@
-import { checkSlidingWindow } from './rateLimit';
+import { checkSlidingWindow } from './slidingWindow';
 
 describe('checkSlidingWindow', () => {
   it('allows attempts under the limit and appends the new timestamp', () => {

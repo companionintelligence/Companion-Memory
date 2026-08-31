@@ -9,7 +9,7 @@ import { TagService } from '@ci/domains/search-next';
 import { GraphNodeEntity } from '../entities/GraphNodeEntity';
 import { RelationshipEntity } from '../entities/RelationshipEntity';
 import { graphNodeSourceRef, graphTypesToExclude } from '../graph.types';
-import { EventService } from '../services/EventService';
+import { CalendarEventService } from '../services/CalendarEventService';
 import { GraphEventService } from '../services/GraphEventService';
 import { GraphQueryService } from '../services/GraphQueryService';
 import { GraphUtilityService } from '../services/GraphUtilityService';
@@ -262,7 +262,7 @@ export class GraphController {
     private readonly graphUtility: GraphUtilityService,
     private readonly userContext: UserContextService,
     private readonly tagService: TagService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly lifeStats: LifeStatsService,
   ) {}
 

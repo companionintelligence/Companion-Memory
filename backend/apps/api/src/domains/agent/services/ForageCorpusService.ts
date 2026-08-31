@@ -6,11 +6,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { EntityResolutionService } from '@ci/domains/entity-resolution';
 import { GraphExpansionService } from '@ci/domains/graph';
-import {
-  HbpeService,
-  PlaceForecastService,
-  type ForageTrialResponse,
-} from '@ci/domains/predictions';
+import { HbpeService, PlaceForecastService, type ForageTrialResponse } from '@ci/domains/predictions';
 import { SearchService } from '@ci/domains/search-next';
 
 import {
@@ -139,14 +135,13 @@ export class ForageCorpusService {
 
     const branches = branchesFromClusters(week?.days.flatMap((day) => day.clusters) ?? [], usedBranches);
     const peopleRows = await this.peopleByIds(context, eventParticipantIds(eventRows));
-    const people: ForageLakePerson[] = peopleLinkedToEvents(
-      peopleRows,
-      eventParticipantIds(eventRows),
-    ).map((row) => ({
-      entityId: row.entity_id,
-      name: row.name,
-      id: slugName(row.name.split(/\s+/)[0] || row.name, usedPeople),
-    }));
+    const people: ForageLakePerson[] = peopleLinkedToEvents(peopleRows, eventParticipantIds(eventRows)).map(
+      (row) => ({
+        entityId: row.entity_id,
+        name: row.name,
+        id: slugName(row.name.split(/\s+/)[0] || row.name, usedPeople),
+      }),
+    );
     const personByEntity = new Map(people.map((person) => [person.entityId, person.id]));
 
     const items: ForageLakeItem[] = [];
@@ -164,10 +159,9 @@ export class ForageCorpusService {
       const text = [event.title, event.location_name, event.category, event.event_type]
         .filter(Boolean)
         .join(' ');
-      const participantIds = [
-        event.organizer_entity_id,
-        ...(event.participant_entity_ids ?? []),
-      ].filter((id): id is string => Boolean(id));
+      const participantIds = [event.organizer_entity_id, ...(event.participant_entity_ids ?? [])].filter(
+        (id): id is string => Boolean(id),
+      );
       add({
         id: `event:${event.event_id}`,
         label: `event: ${event.title}${event.location_name ? ` @ ${event.location_name}` : ''}`,
@@ -247,7 +241,9 @@ export class ForageCorpusService {
           observation: 'none',
           supports_branches: supportingBranches(neighbour.line, branches),
           supports_people: people
-            .filter((person) => neighbour.line.toLowerCase().includes(person.name.toLowerCase().split(' ')[0]))
+            .filter((person) =>
+              neighbour.line.toLowerCase().includes(person.name.toLowerCase().split(' ')[0]),
+            )
             .map((person) => person.id),
           source: 'graph',
         });
@@ -315,7 +311,9 @@ export class ForageCorpusService {
         [context.userId, ids, MAX_PEOPLE],
       );
     } catch (err) {
-      this.logger.warn('Forage people query failed', { err: err instanceof Error ? err.message : String(err) });
+      this.logger.warn('Forage people query failed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
 
       return [];
     }
@@ -343,7 +341,9 @@ export class ForageCorpusService {
         [context.userId],
       );
     } catch (err) {
-      this.logger.warn('Forage events query failed', { err: err instanceof Error ? err.message : String(err) });
+      this.logger.warn('Forage events query failed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
 
       return [];
     }

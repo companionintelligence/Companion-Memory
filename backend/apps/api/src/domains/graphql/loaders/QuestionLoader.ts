@@ -23,7 +23,7 @@ export class QuestionLoader extends Loader<Question | null, string> {
     // `QuestionService.findByIds` is an `IN (...)` lookup that returns the set of
     // questions this caller can see — in the planner's order, and short by one
     // for every id that is missing or private to somebody else. It is the only
-    // findByIds behind a loader here that does not already re-key (EventService,
+    // findByIds behind a loader here that does not already re-key (CalendarEventService,
     // PlaceService, ContentService and ThreadService all do), and DataLoader
     // pairs results with keys by POSITION, so passing it through captioned each
     // answer with a different answer's question — "I follow hockey." under "What

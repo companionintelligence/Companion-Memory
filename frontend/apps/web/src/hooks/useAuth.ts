@@ -12,6 +12,7 @@ import {
   getLaunchUrl,
   isIosPlatform,
   isNativePlatform,
+  isTauriPlatform,
   claimNativeOidcCode,
   parseOidcCallbackUrl,
   secureStorageGet,
@@ -581,13 +582,16 @@ function useAuth(): ReturnValue {
 
   useAutoRefreshToken(accessToken, refresh);
 
-  // Native only: complete "Sign in with CI Portal" when the system browser redirects
-  // back into the app via the `companion://oidc/callback?...` deep link. Unrelated
-  // deep links (other schemes/paths) parse to null and are ignored. iOS often
-  // cold-starts from Safari's "Open with Companion", so we also consume
-  // `getLaunchUrl` there — web and Android keep the live listener only.
+  // Native only — Capacitor (iOS/Android) or Tauri (desktop): complete "Sign in with
+  // CI Portal" when the system browser redirects back into the app via the
+  // `companion://oidc/callback?...` deep link. Unrelated deep links (other
+  // schemes/paths) parse to null and are ignored. iOS often cold-starts from
+  // Safari's "Open with Companion", so we also consume `getLaunchUrl` there — web
+  // and Android keep the live listener only. Desktop's cold-start equivalent is
+  // handled entirely inside addAppUrlOpenListener itself (main.rs unifies cold- and
+  // warm-start delivery on that side), so no separate call is needed here for it.
   useEffect(() => {
-    if (!isNativePlatform()) {
+    if (!isNativePlatform() && !isTauriPlatform()) {
       return;
     }
 

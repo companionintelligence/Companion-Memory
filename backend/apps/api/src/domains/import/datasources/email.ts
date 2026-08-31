@@ -9,6 +9,7 @@ import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extra
 import { mboxFromLineDate, receivedDate } from './email_date';
 import { emailDirection, isDraft } from './email_direction';
 import { decodeHeaderField, parseMime, readableBody, type ParsedMimeResult } from './email_mime';
+import { emailThreadId } from './email_thread';
 import {
   extractReceiptFields,
   isLikelyReceipt,
@@ -212,6 +213,8 @@ export class EmailFileImporter implements FileImporter {
   private processRawMessage(raw: string, location: string, index: number, params: ImportParams) {
     const parts = raw.split(/\n\n/);
     if (parts.length < 2) {
+      params.pipeline.drop?.('non_message');
+
       return;
     }
 
@@ -219,6 +222,8 @@ export class EmailFileImporter implements FileImporter {
     const bodyRaw = parts.slice(1).join('\n\n');
     const headers = parseHeaders(headersRaw);
     if (!headers.Date && !headers.Subject) {
+      params.pipeline.drop?.('non_message');
+
       return;
     } // likely not a real message
 
@@ -373,6 +378,9 @@ export class EmailFileImporter implements FileImporter {
         Cc: headers.Cc,
         Direction: direction,
         MessageID: cleanMsgID,
+        InReplyTo: headers['In-Reply-To']?.replace(/[<>]/g, ''),
+        References: headers.References?.replace(/[<>]/g, ' '),
+        ThreadId: emailThreadId(headers),
         Text: bodyText ? bodyText.slice(0, bodyCap) : undefined,
         MediaAttachments: mediaAttachments.length ? mediaAttachments : undefined,
         // Receipt facts under the CANONICAL commerce keys (push/commerceKeys.ts).

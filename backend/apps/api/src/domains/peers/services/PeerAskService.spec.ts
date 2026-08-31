@@ -376,7 +376,15 @@ describe('PeerAskService.handle', () => {
   });
 
   it('answers an availability ask from the calendar without touching the search index', async () => {
-    const { service, executorService, eventRepository } = makeService();
+    // A FAMILY link, so the answer is unclamped and the busy interval below is
+    // a real assertion about the calendar having been read. The fixture default
+    // is `trusted`, whose calendar ceiling is `redacted` — which now drops the
+    // busy intervals (D2). This test is about the SOURCE of an availability
+    // answer, not its rung; pinning it to a tier that discloses fully keeps it
+    // testing the thing its name claims.
+    const { service, executorService, eventRepository } = makeService({
+      links: [link({ trustTier: 'family' })],
+    });
     eventRepository.find.mockResolvedValue([
       { startTime: new Date('2026-08-07T10:00:00Z'), endTime: new Date('2026-08-07T11:00:00Z') },
     ]);
@@ -516,11 +524,36 @@ describe('PeerAskService — availability is subject to the same ceilings as eve
     expect(answer.summary).toMatch(/have some free time/);
   });
 
-  it('still gives a trusted peer the actual intervals — the ceiling is not a blanket', async () => {
+  /**
+   * Retitled, not rewritten. This asserted `family` behaviour under a `trusted`
+   * name (threat-model D3), and `trusted` is the tier that actually matters
+   * here: its calendar ceiling is `redacted`, which is the rung that used to
+   * return `full`'s answer verbatim. The two now differ, so the misnaming
+   * stopped being cosmetic — it named the one case the suite did not cover.
+   */
+  it('gives a FAMILY peer the actual intervals — the ceiling is not a blanket', async () => {
     const { answer } = await availability({ trustTier: 'family' });
 
     expect(answer.busy).toEqual([{ start: '2026-09-01T12:00:00.000Z', end: '2026-09-01T13:00:00.000Z' }]);
     expect(answer.free).toHaveLength(2);
+  });
+
+  /**
+   * D2, end to end and through a real tier rather than a hand-passed rung.
+   *
+   * `trusted` lands on `redacted` for a calendar, and `redacted` used to share
+   * a switch branch with `full` — so this peer received the owner's real
+   * meeting boundaries, auto-answered, under a ceiling that said otherwise.
+   */
+  it('does NOT give a trusted peer the owner’s meeting times', async () => {
+    const { answer } = await availability({ trustTier: 'trusted' });
+
+    // The busy intervals are the direct answer to "when do you have meetings",
+    // and they are what a ceiling below `full` exists to stop.
+    expect(answer.busy).toEqual([]);
+    // Free slots still cross — `redacted` is not `summary`, and an asker has to
+    // be able to schedule against something.
+    expect(answer.free?.length ?? 0).toBeGreaterThan(0);
   });
 
   it('records what it disclosed — the availability branch wrote no answer row at all', async () => {
@@ -1226,4 +1259,157 @@ describe('toAskQuery — the stated purpose reaches the consent evaluator', () =
     // nothing" from "stated something blank", and only the first is honest.
     expect(query.filters).not.toHaveProperty('purpose');
   });
+});
+
+/**
+ * D2: `redacted` used to share a switch branch with `full`.
+ *
+ * The threat model's argument, which `applyDisclosureCeiling` already applies
+ * to item references and this clamp did not: a rung that clamps nothing is not
+ * a rung, it is a label the owner can pick believing it does something. It is
+ * the `trusted` tier's calendar ceiling, so the peers most likely to hold it
+ * were receiving the owner's real meeting boundaries under a ceiling that said
+ * they would not.
+ */
+describe('clampAvailability — the `redacted` rung', () => {
+  const freeBusy = {
+    busy: [{ start: '2026-09-15T16:00:00.000Z', end: '2026-09-15T16:30:00.000Z' }],
+    free: [
+      // Deliberately off-grid, so quantization has something to do.
+      { start: '2026-09-15T15:07:00.000Z', end: '2026-09-15T15:58:00.000Z' },
+      { start: '2026-09-15T16:30:00.000Z', end: '2026-09-15T19:00:00.000Z' },
+    ],
+  } as never;
+
+  it('drops the busy intervals — the direct answer to “when do you have meetings”', () => {
+    expect(clampAvailability(freeBusy, 'redacted', 'They').busy).toEqual([]);
+    // …while `full` still discloses them, or the rung below would be pointless.
+    expect(clampAvailability(freeBusy, 'full', 'They').busy).toHaveLength(1);
+  });
+
+  it('coarsens free slots to the grid instead of handing over the instants', () => {
+    const clamped = clampAvailability(freeBusy, 'redacted', 'They');
+
+    // 15:07–15:58 spans no half-hour boundary once shrunk inward, so it is
+    // dropped rather than widened: narrower is the safe direction.
+    // 16:30–19:00 is already aligned and survives intact.
+    expect(clamped.free).toEqual([{ start: '2026-09-15T16:30:00.000Z', end: '2026-09-15T19:00:00.000Z' }]);
+  });
+
+  it('reports the magnitude that actually crossed, not the pre-clamp count', () => {
+    // One of the two slots survived quantization. Reporting 2 would over-report
+    // this rung as badly as reading the count off an emptied array under-reports
+    // the ones below it.
+    expect(clampAvailability(freeBusy, 'redacted', 'They').disclosedCount).toBe(1);
+  });
+
+  it('rewrites the summary from the COARSENED set, so it cannot contradict the arrays', () => {
+    const clamped = clampAvailability(freeBusy, 'redacted', 'They');
+
+    expect(clamped.summary).toMatch(/1 free slot\b/);
+    expect(clamped.summary).not.toMatch(/2 free slots/);
+  });
+});
+
+/**
+ * The structural pin, and the reason this defect should not recur.
+ *
+ * All three clamps in this codebase have now shipped a rung that silently
+ * disclosed as much as the rung above it. Asserting each case in isolation is
+ * what allowed that: the bug is never inside one branch, it is in the
+ * RELATIONSHIP between two. This walks the whole ladder and requires each step
+ * to disclose strictly less than the one above.
+ *
+ * ═══ INFORMATION CONTENT IS MEASURED, NOT INSPECTED ═══
+ *
+ * Counting array lengths is not enough, and the first version of this test
+ * failed because of it: `summary` and `count` return identical arrays and
+ * identical `disclosedCount`, as do `boolean` and `none`. What separates them
+ * is what the SENTENCE distinguishes — and a sentence is only disclosive
+ * insofar as it changes when the underlying calendar changes.
+ *
+ * So each axis is measured by DIFFERENTIAL: run the same rung over two
+ * calendars that differ in exactly one property and see whether the output
+ * tells them apart. That is the actual definition of "this rung reveals X",
+ * and unlike a string assertion it keeps working when the wording is reworded.
+ */
+describe('clampAvailability — the ladder narrows monotonically', () => {
+  const slot = (start: string, end: string) => ({ start, end });
+  const D = '2026-09-15T';
+
+  /** No free time at all. */
+  const NONE_FREE = { busy: [slot(`${D}09:00:00.000Z`, `${D}17:00:00.000Z`)], free: [] } as never;
+  /** Two slots. On-grid, so quantization is not what is being measured here. */
+  const TWO = {
+    busy: [slot(`${D}16:00:00.000Z`, `${D}16:30:00.000Z`)],
+    free: [slot(`${D}15:00:00.000Z`, `${D}16:00:00.000Z`), slot(`${D}16:30:00.000Z`, `${D}18:00:00.000Z`)],
+  } as never;
+  /** Three slots — differs from TWO only in COUNT. */
+  const THREE = {
+    busy: [slot(`${D}16:00:00.000Z`, `${D}16:30:00.000Z`)],
+    free: [
+      slot(`${D}15:00:00.000Z`, `${D}16:00:00.000Z`),
+      slot(`${D}16:30:00.000Z`, `${D}18:00:00.000Z`),
+      slot(`${D}19:00:00.000Z`, `${D}20:00:00.000Z`),
+    ],
+  } as never;
+  /** Two slots again, but one is far longer — differs from TWO only in DURATION. */
+  const TWO_LONGER = {
+    busy: [slot(`${D}16:00:00.000Z`, `${D}16:30:00.000Z`)],
+    free: [slot(`${D}15:00:00.000Z`, `${D}16:00:00.000Z`), slot(`${D}16:30:00.000Z`, `${D}22:00:00.000Z`)],
+  } as never;
+
+  type Rung = 'full' | 'redacted' | 'summary' | 'count' | 'boolean' | 'none';
+
+  const summaryOf = (fb: never, rung: Rung) => clampAvailability(fb, rung, 'They').summary;
+
+  /** Everything a rung reveals. Every field is 0/1 or a magnitude; higher is more disclosive. */
+  function revealed(rung: Rung) {
+    const c = clampAvailability(TWO, rung, 'They');
+
+    return {
+      busyIntervals: c.busy.length,
+      freeIntervals: c.free.length,
+      freeMinutes: c.free.reduce((sum, s) => sum + (Date.parse(s.end) - Date.parse(s.start)) / 60_000, 0),
+      reportedCount: c.disclosedCount,
+      // Can the asker tell a calendar with free time from one without?
+      existence: summaryOf(TWO, rung) === summaryOf(NONE_FREE, rung) ? 0 : 1,
+      // Can they tell two slots from three?
+      magnitude: summaryOf(TWO, rung) === summaryOf(THREE, rung) ? 0 : 1,
+      // Can they tell a short opening from a long one, at the same slot count?
+      duration: summaryOf(TWO, rung) === summaryOf(TWO_LONGER, rung) ? 0 : 1,
+    };
+  }
+
+  const LADDER: Rung[] = ['full', 'redacted', 'summary', 'count', 'boolean', 'none'];
+  const AXES = [
+    'busyIntervals',
+    'freeIntervals',
+    'freeMinutes',
+    'reportedCount',
+    'existence',
+    'magnitude',
+    'duration',
+  ] as const;
+
+  it.each(LADDER.slice(0, -1).map((rung, i) => [rung, LADDER[i + 1]] as const))(
+    '`%s` discloses strictly more than `%s`',
+    (higher, lower) => {
+      const a = revealed(higher);
+      const b = revealed(lower);
+
+      // Never MORE on any axis.
+      for (const axis of AXES) {
+        expect({ axis, value: b[axis] }).toEqual({
+          axis,
+          value: Math.min(a[axis], b[axis]),
+        });
+      }
+
+      // And strictly less on at least one. This is the assertion that fails
+      // when a rung is a label rather than a clamp — it is what `redacted`
+      // could not have passed before this change.
+      expect(AXES.some((axis) => b[axis] < a[axis])).toBe(true);
+    },
+  );
 });

@@ -299,7 +299,10 @@ class ApplePhotosFileImporter implements FileImporter {
         params.pipeline.push({
           item: {
             id: 'apple_photos:' + relativePath,
-            classification: 'photo',
+            // 'photo' short-circuits kindFor's MIME-decides branch straight to
+            // capture.photo, misrouting videos; 'media' (google_photos.ts's
+            // classification) lets kindFor branch on the real image/video MIME.
+            classification: 'media',
             timestamp: ts,
             ...(media.location ? { location: media.location } : {}),
             intermediateLocation: fpath,

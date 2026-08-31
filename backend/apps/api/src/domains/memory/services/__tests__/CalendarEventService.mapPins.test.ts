@@ -3,11 +3,11 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import type { ServiceContext } from '@ci/common/context';
-import { EventService as SignallingEventService } from '@ci/domains/events';
+import { EventService } from '@ci/domains/events';
 
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
-import { EventService } from '../EventService';
+import { CalendarEventService } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
@@ -29,6 +29,7 @@ function makeQueryBuilder(rawMany: unknown[]) {
     select: record('select'),
     addSelect: record('addSelect'),
     innerJoin: record('innerJoin'),
+    leftJoin: record('leftJoin'),
     where: record('where'),
     andWhere: record('andWhere'),
     limit: record('limit'),
@@ -41,8 +42,8 @@ function makeQueryBuilder(rawMany: unknown[]) {
   return qb;
 }
 
-describe('EventService.findMapPins', () => {
-  let service: EventService;
+describe('CalendarEventService.findMapPins', () => {
+  let service: CalendarEventService;
   let qb: ReturnType<typeof makeQueryBuilder>;
 
   const ctx = { userId: 'user-1' } as ServiceContext;
@@ -68,17 +69,17 @@ describe('EventService.findMapPins', () => {
 
     return Test.createTestingModule({
       providers: [
-        EventService,
+        CalendarEventService,
         { provide: getRepositoryToken(EventEntity), useValue: {} },
         { provide: getRepositoryToken(EventBaseEntity), useValue: { find: jest.fn(async () => []) } },
-        { provide: SignallingEventService, useValue: { send: jest.fn() } },
+        { provide: EventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: dataSource },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     })
       .compile()
       .then((moduleRef) => {
-        service = moduleRef.get(EventService);
+        service = moduleRef.get(CalendarEventService);
       });
   }
 
@@ -122,7 +123,9 @@ describe('EventService.findMapPins', () => {
 
     await service.findMapPins(ctx, { limit: 100, hasLocation: false });
 
-    expect(clause('event.location_coordinates IS NOT NULL')).toBeDefined();
+    expect(
+      clause('COALESCE(event.location_coordinates, location_entity.location_point) IS NOT NULL'),
+    ).toBeDefined();
   });
 
   it('scopes to the caller and caps the read at `limit`', async () => {
@@ -144,7 +147,9 @@ describe('EventService.findMapPins', () => {
       eventTypes: ['visited'],
     });
 
-    expect(clause('ST_Within(event.location_coordinates::geometry')).toBeDefined();
+    expect(
+      clause('ST_Within(COALESCE(event.location_coordinates, location_entity.location_point)::geometry'),
+    ).toBeDefined();
     expect(clause('event.start_time >= :startTime')).toBeDefined();
     expect(clause('event.event_type IN (:...eventTypes)')).toBeDefined();
   });

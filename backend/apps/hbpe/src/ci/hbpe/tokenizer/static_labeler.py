@@ -1,9 +1,10 @@
 """
 Static-first labeling for structured event kinds.
 
-Ambient streams (media.play, browser view, social.*) never go through the
-chat LLM. Structured anchor kinds (workout, sleep, trip) get a fixed L0/L1
-from hbpe.kind_l0_map. Calendar free-text stays on the two-stage labeler.
+Ambient streams (media.listen/play/watch, social.*) never go through the
+chat LLM. Structured anchor kinds (workout, sleep, trip, place visit) get a
+fixed L0/L1 from hbpe.kind_l0_map. Calendar free-text stays on the two-stage
+labeler.
 """
 
 from __future__ import annotations
@@ -16,6 +17,24 @@ from ci.hbpe.database import get_conn
 from ci.hbpe.tokenizer.vocab_registry import get_or_create_l1
 
 log = logging.getLogger(__name__)
+
+# The column hbpe.kind_l0_map.kind_pattern is actually keyed on.
+#
+# ci.events has TWO kind-ish fields and they speak different vocabularies:
+#
+#   event_type            the importer's coarse, BARE-VERB `classification`
+#                         ('listen', 'watch', 'social', 'workout', 'trip')
+#   metadata->>'kind'     the closed, DOTTED capture-kind taxonomy the unified
+#                         ingest spec defines ('media.listen', 'social.post',
+#                         'fitness.workout', 'travel.trip') — see
+#                         KIND_BY_CLASSIFICATION in
+#                         backend/apps/api/src/domains/import/push/canonical.ts
+#
+# kind_l0_map is seeded with the dotted vocabulary, so joining it against
+# event_type matched 0 of 198,689 events on this appliance: the two
+# vocabularies never overlap. Every consumer of the map must use this
+# expression. It assumes the events table is aliased ``e``.
+KIND_EXPR = "(e.metadata->>'kind')"
 
 
 def load_kind_map() -> list[dict]:
@@ -31,11 +50,14 @@ def load_kind_map() -> list[dict]:
 
 
 def mapped_kind_sql() -> str:
-    """SQL predicate: event_type matches any kind_l0_map pattern."""
-    return """
+    """SQL predicate: the event's capture kind matches any kind_l0_map pattern.
+
+    Requires the events table to be aliased ``e`` (see ``KIND_EXPR``).
+    """
+    return f"""
         EXISTS (
             SELECT 1 FROM hbpe.kind_l0_map m
-            WHERE e.event_type LIKE m.kind_pattern
+            WHERE {KIND_EXPR} LIKE m.kind_pattern
         )
     """
 
@@ -54,14 +76,14 @@ def label_mapped_events(user_id: str) -> dict:
             naming_method="STATIC",
             tier=row["tier"],
         )
-        sql = """
+        sql = f"""
             WITH claimed AS (
                 SELECT e.event_id
                 FROM ci.events e
                 LEFT JOIN hbpe.l1_event_cluster ec ON ec.event_id = e.event_id
                 WHERE e.user_id = %s::uuid
                   AND e.is_deleted = FALSE
-                  AND e.event_type LIKE %s
+                  AND {KIND_EXPR} LIKE %s
                   AND ec.event_id IS NULL
                   AND e.start_time >= '2010-01-01'::timestamptz
             )

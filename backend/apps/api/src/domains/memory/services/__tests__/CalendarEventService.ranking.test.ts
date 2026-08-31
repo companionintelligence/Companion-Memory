@@ -3,18 +3,18 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
-import { EventService as SignallingEventService } from '@ci/domains/events';
+import { EventService } from '@ci/domains/events';
 
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
 import type { CreateEventDto } from '../../types';
-import { EventService } from '../EventService';
+import { CalendarEventService } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
 
-describe('EventService.create — ranking + consent columns', () => {
-  let service: EventService;
+describe('CalendarEventService.create — ranking + consent columns', () => {
+  let service: CalendarEventService;
   let repo: {
     findOne: jest.Mock;
     create: jest.Mock;
@@ -47,15 +47,15 @@ describe('EventService.create — ranking + consent columns', () => {
     };
     const moduleRef = await Test.createTestingModule({
       providers: [
-        EventService,
+        CalendarEventService,
         { provide: getRepositoryToken(EventEntity), useValue: repo },
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
-        { provide: SignallingEventService, useValue: { send: jest.fn() } },
+        { provide: EventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: {} },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();
-    service = moduleRef.get(EventService);
+    service = moduleRef.get(CalendarEventService);
   });
 
   it('persists an explicit sharing_level (consent scope)', async () => {

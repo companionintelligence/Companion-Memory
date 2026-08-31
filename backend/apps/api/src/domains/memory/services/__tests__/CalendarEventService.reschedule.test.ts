@@ -3,11 +3,11 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import type { ServiceContext, UserServiceContext } from '@ci/common/context';
-import { EventService as SignallingEventService } from '@ci/domains/events';
+import { EventService } from '@ci/domains/events';
 
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
-import { EventService } from '../EventService';
+import { CalendarEventService } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
@@ -25,8 +25,8 @@ function existing(overrides: Partial<EventEntity> = {}): EventEntity {
   } as EventEntity;
 }
 
-describe('EventService.reschedule — moving an event on the calendar', () => {
-  let service: EventService;
+describe('CalendarEventService.reschedule — moving an event on the calendar', () => {
+  let service: CalendarEventService;
   let repo: { findOne: jest.Mock; save: jest.Mock; find: jest.Mock };
   let signalling: { send: jest.Mock };
   let saved: EventEntity | undefined;
@@ -46,17 +46,17 @@ describe('EventService.reschedule — moving an event on the calendar', () => {
 
     const moduleRef = await Test.createTestingModule({
       providers: [
-        EventService,
+        CalendarEventService,
         { provide: getRepositoryToken(EventEntity), useValue: repo },
         // The base row owns title/description; the read-back composes it in.
         { provide: getRepositoryToken(EventBaseEntity), useValue: { find: jest.fn(async () => []) } },
-        { provide: SignallingEventService, useValue: signalling },
+        { provide: EventService, useValue: signalling },
         { provide: DataSource, useValue: { getRepository: jest.fn() } },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();
 
-    service = moduleRef.get(EventService);
+    service = moduleRef.get(CalendarEventService);
   }
 
   const newStart = new Date('2026-08-06T10:00:00Z');
@@ -137,8 +137,8 @@ function createLikeTypeorm<T extends object>(plain: T): T {
  * through the mocked EventEntity repository — the create()/toEntityFields half
  * of it, which is where a candidate's provenance is either recorded or lost.
  */
-describe('EventService.create — provenance survives the DTO mapping', () => {
-  let service: EventService;
+describe('CalendarEventService.create — provenance survives the DTO mapping', () => {
+  let service: CalendarEventService;
   let saved: EventEntity | undefined;
   let savedBase: EventBaseEntity | undefined;
 
@@ -178,16 +178,16 @@ describe('EventService.create — provenance survives the DTO mapping', () => {
 
     const moduleRef = await Test.createTestingModule({
       providers: [
-        EventService,
+        CalendarEventService,
         { provide: getRepositoryToken(EventEntity), useValue: repo },
         { provide: getRepositoryToken(EventBaseEntity), useValue: baseRepo },
-        { provide: SignallingEventService, useValue: { send: jest.fn() } },
+        { provide: EventService, useValue: { send: jest.fn() } },
         { provide: DataSource, useValue: { getRepository: jest.fn() } },
         { provide: GraphDeltaWriter, useValue: noopGraphDeltaWriter() },
       ],
     }).compile();
 
-    service = moduleRef.get(EventService);
+    service = moduleRef.get(CalendarEventService);
   }
 
   const start = new Date('2026-08-06T09:00:00Z');

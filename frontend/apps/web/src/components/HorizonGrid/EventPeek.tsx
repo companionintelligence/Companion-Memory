@@ -1,11 +1,4 @@
-import {
-  cloneElement,
-  useEffect,
-  useState,
-  type MouseEvent,
-  type ReactElement,
-  type ReactNode,
-} from 'react';
+import { cloneElement, useEffect, useState, type MouseEvent, type ReactElement, type ReactNode } from 'react';
 
 import { Dialog, Tooltip } from '@ci/shadcn';
 

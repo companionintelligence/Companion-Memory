@@ -349,19 +349,33 @@ describe('ObjectCountService.countsForUser — scoping', () => {
         query: jest.fn(async (sql: string, params: unknown[] = []) => {
           calls.push({ sql, params });
 
-          if (sql.includes('ci.communications')) {return rows.communications ?? [];}
+          if (sql.includes('ci.communications')) {
+            return rows.communications ?? [];
+          }
 
-          if (sql.includes('ci.events')) {return rows.events ?? [];}
+          if (sql.includes('ci.events')) {
+            return rows.events ?? [];
+          }
 
-          if (sql.includes('ci.content')) {return rows.content ?? [];}
+          if (sql.includes('ci.content')) {
+            return rows.content ?? [];
+          }
 
-          if (sql.includes('ci.browser_activity')) {return rows.browserActivity ?? [];}
+          if (sql.includes('ci.browser_activity')) {
+            return rows.browserActivity ?? [];
+          }
 
-          if (sql.includes('ci.receipts')) {return rows.receipts ?? [];}
+          if (sql.includes('ci.receipts')) {
+            return rows.receipts ?? [];
+          }
 
-          if (sql.includes('ci.position')) {return rows.position ?? [];}
+          if (sql.includes('ci.position')) {
+            return rows.position ?? [];
+          }
 
-          if (sql.includes('ci.entities')) {return rows.contacts ?? [{ count: '0' }];}
+          if (sql.includes('ci.entities')) {
+            return rows.contacts ?? [{ count: '0' }];
+          }
 
           throw new Error(`unexpected query: ${sql}`);
         }),

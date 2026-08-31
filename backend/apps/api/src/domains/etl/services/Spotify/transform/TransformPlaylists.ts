@@ -109,8 +109,6 @@ export class SpotifyPlaylistsTransformService {
                   popularity: track.popularity,
                   preview_url: track.preview_url,
                   uri: track.uri,
-                  played_at: trackItem.played_at,
-                  context: trackItem.context,
                 },
               });
 

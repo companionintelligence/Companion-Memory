@@ -2,9 +2,13 @@
 Event stream ingester — async listener for new behavioral events (T4.3).
 
 Listens to PostgreSQL LISTEN/NOTIFY channels for:
-  • ci_events          — calendar/task events (ci.events INSERT trigger)
-  • ci_browser_activity — browser activity (ci.browser_activity INSERT trigger)
-  • ci_communications  — messages/emails (ci.communications INSERT trigger)
+  • ci_events          — calendar/task events (API HbpeNotifyService)
+  • ci_browser_activity — browser activity (API HbpeNotifyService)
+  • ci_communications  — messages/emails (API HbpeNotifyService)
+
+Producers are application code, not SQL triggers: CalendarEventService,
+BrowserActivityService, and CommunicationService call pg_notify after
+create/update/delete so the path is visible in API logs.
 
 On notification:
   1. Parse the payload (JSON with user_id and date).
@@ -29,9 +33,9 @@ from datetime import date, datetime, timedelta
 log = logging.getLogger(__name__)
 
 DEBOUNCE_SEC = 5.0
-# Safety poll runs alongside the LISTEN path. Push-based NOTIFY (if producers
-# are installed) gives instant invalidation; this slower poll guarantees the
-# cache still refreshes even where no NOTIFY trigger exists yet.
+# Safety poll runs alongside the LISTEN path. Application pg_notify gives
+# instant invalidation; this slower poll covers a dropped LISTEN connection
+# or a producer that failed to notify.
 SAFETY_POLL_SEC = 30.0
 RECONNECT_SEC = 5.0
 CHANNELS = ("ci_events", "ci_browser_activity", "ci_communications")

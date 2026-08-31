@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { ContentService, EventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -25,7 +25,7 @@ interface SteamGame {
 export class SteamOwnedGamesTransformService {
   constructor(
     private readonly contentService: ContentService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(SteamOwnedGamesTransformService.name);
@@ -98,6 +98,7 @@ export class SteamOwnedGamesTransformService {
                 playtime_linux_forever: game.playtime_linux_forever,
                 playtime_deck_forever: game.playtime_deck_forever,
                 rtime_last_played: game.rtime_last_played,
+                has_community_visible_stats: game.has_community_visible_stats,
               },
             });
 
@@ -119,7 +120,7 @@ export class SteamOwnedGamesTransformService {
                 description: `Played ${game.name} on Steam`,
                 event_type: 'game_played',
                 category: 'games',
-                // source_type alone did nothing: EventService.createOne needs
+                // source_type alone did nothing: CalendarEventService.createOne needs
                 // source_id too before it find-or-creates, and the unique
                 // index only covers full triples. rtime_last_played is part of
                 // the key on purpose — playing the game again IS a new event.

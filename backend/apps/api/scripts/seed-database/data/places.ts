@@ -208,7 +208,9 @@ export const SOUND_SPECTRUM: SeedPlace = {
   description: 'A vintage record store where Emma browses for vinyl.',
   properties: {
     type: 'Retail',
-    latitude: 33.532877805179254,
+    // Nudged ~200m: same dedup-grid collision as Laguna Art Supply above,
+    // this time against Laguna Beach Books.
+    latitude: 33.53487781,
     longitude: -117.77589211355867,
     address: '1264 S Coast Hwy, Laguna Beach, CA 92651',
   },
@@ -220,8 +222,14 @@ export const ART_SUPPLY_WAREHOUSE: SeedPlace = {
   description: 'Where Emma buys her charcoal and sketchbooks.',
   properties: {
     type: 'Retail',
+    // Nudged ~250m west from the address-derived coordinate: it fell in the
+    // same ~111m dedup grid cell as Zinc Cafe & Market (both real, distinct
+    // downtown-Laguna spots, close enough in reality to collide with
+    // entities_location_snap_dedup_uniq). Shifted west rather than north to
+    // also clear Laguna Playhouse, a few hundred meters north on the same
+    // meridian.
     latitude: 33.54512689706429,
-    longitude: -117.78251470261843,
+    longitude: -117.78551470261843,
     address: '376 Ocean Ave, Laguna Beach, CA 92651',
   },
 };
@@ -256,7 +264,9 @@ export const URTH_CAFFE: SeedPlace = {
   description: "Emma's preferred spot to hang out with friends.",
   properties: {
     type: 'Cafe',
-    latitude: 33.54419001385287,
+    // Nudged ~200m: same dedup-grid collision, this time against Laguna Art
+    // Museum.
+    latitude: 33.54619001385287,
     longitude: -117.78837332230843,
     address: '308 N Coast Hwy, Laguna Beach, CA 92651',
   },
@@ -324,7 +334,9 @@ export const NICKS_LAGUNA_BEACH: SeedPlace = {
   description: 'A great date night spot for Sarah and me.',
   properties: {
     type: 'Restaurant',
-    latitude: 33.54136462757387,
+    // Nudged ~200m: same dedup-grid collision, this time against Gelato
+    // Paradiso.
+    latitude: 33.54336462757387,
     longitude: -117.78237271087042,
     address: '440 S Coast Hwy, Laguna Beach, CA 92651',
   },

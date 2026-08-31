@@ -163,9 +163,7 @@ describe('native chat is cancellable', () => {
     // it. Aborting up front reproduces that ordering deterministically.
     controller.abort();
 
-    await service
-      .chat(context, messages, { model: MODEL, signal: controller.signal })
-      .catch(() => undefined);
+    await service.chat(context, messages, { model: MODEL, signal: controller.signal }).catch(() => undefined);
 
     // Let `runChat` finish walking past validateModel to where the request
     // would be issued, so this asserts the guard rather than just the race.

@@ -2,8 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import R3fForceGraph, { type GraphMethods } from 'r3f-forcegraph';
-import type {
-  Object3D} from 'three';
+import type { Object3D } from 'three';
 import {
   CanvasTexture,
   Group,
