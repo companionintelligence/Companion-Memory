@@ -169,9 +169,12 @@ describe('Google Voice datasource', () => {
     const inbound = msgs.find((m) => m.Sender === 'Bob Smith');
     expect(inbound?.Direction).toBe('incoming');
     expect(inbound?.To).toBe('My Phone');
-    // Outbound: sender 'Me', recipient is the conversation contact.
-    const outbound = msgs.find((m) => m.Sender === 'Me');
-    expect(outbound?.Direction).toBe('outgoing');
+    // Outbound: the recipient is the conversation contact, and the message
+    // names NO sender — the owner is not a correspondent (see the
+    // "the owner is not a contact" block below).
+    const outbound = msgs.find((m) => m.Direction === 'outgoing');
+    expect(outbound).toBeDefined();
+    expect(outbound?.Sender).toBeUndefined();
     expect(outbound?.To).toBe('Bob Smith');
   });
 
@@ -580,8 +583,10 @@ describe('Google Voice participants', () => {
     expect(participantEdges(inbound).map((e) => e.to.entity?.name)).toEqual(['Bob Smith']);
     expect(participantEdges(inbound)[0].metadata?.direction).toBe('incoming');
 
-    // Outbound: the sender is the owner, so the edge names the RECIPIENT.
-    const outbound = graphs.find((g) => g.item.metadata.Sender === 'Me')!;
+    // Outbound: the sender is the owner, so the edge names the RECIPIENT —
+    // and `Sender` is absent, so direction is what identifies the message.
+    const outbound = graphs.find((g) => g.item.metadata.Direction === 'outgoing')!;
+    expect(outbound).toBeDefined();
     expect(participantEdges(outbound).map((e) => e.to.entity?.name)).toEqual(['Bob Smith']);
     expect(participantEdges(outbound)[0].metadata?.direction).toBe('outgoing');
   });
@@ -606,7 +611,8 @@ describe('Google Voice participants', () => {
     const attachment = pipeline.find((p) => p.item?.metadata?.Attachment === 'image')!;
     expect(attachment).toBeDefined();
     expect(attachment.item.metadata.Direction).toBe('outgoing');
-    expect(attachment.item.metadata.Sender).toBe('Me');
+    // The owner token is not a sender name — direction carries the authorship.
+    expect(attachment.item.metadata.Sender).toBeUndefined();
     expect(attachment.item.metadata.To).toBe('Dana Wu');
 
     const edges = participantEdges(attachment);
@@ -850,6 +856,166 @@ describe('a short code is a correspondent, not a person', () => {
     expect(staged.map((e) => e.name)).toEqual(['Ada Lovelace']);
     expect(staged.some((e) => e.attributes?.length)).toBe(false);
     expect(staged.map(graphType)).toEqual(['Person']);
+  });
+});
+
+/*
+ * Google Voice writes the account owner's own side of a conversation as the
+ * literal token `Me`, in the same `<cite class="sender vcard">` slot a real
+ * correspondent occupies. It is the export's spelling of "is_from_me", not a
+ * name — but the parser used to stage it through BOTH minting paths, so both
+ * produced the same node:
+ *
+ *   1. `participants[sender.phone] = sender` ran for every sender, including
+ *      the one the very next line identified as the owner, and the
+ *      per-file participant loop pushed it as a `contact` (→ `Person`).
+ *   2. `metadata.Sender` carried the token into
+ *      `participants_metadata.from`, from which `PersonLinkStage` indexed a
+ *      `name`-kind `ci.entity_identifiers` row for "me" and set the row's
+ *      `from_entity_id`.
+ *
+ * Live, that is ONE `Person` named "Me" holding 133,859
+ * `ci.communications.from_entity_id` — 43% of the Google Voice corpus and 41%
+ * of every communication on the appliance — plus 132,238 `SENT`/`RECEIVED`
+ * relationships. `20260831002948_repair_google_voice_owner_me_person.sql`
+ * removes what already landed.
+ *
+ * Note what this does NOT do: `domains/graph/utils/placeholderPersonName.ts`
+ * deliberately keeps `me` OUT of its generic-placeholder list, because in an
+ * address book "Me" is a label a human really does file a contact under. The
+ * rule below is source-specific on purpose — a protocol token in a fixed
+ * markup slot is different evidence from a name somebody typed.
+ */
+describe('the owner is not a contact', () => {
+  const OWNER_BLOCK =
+    '<cite class="sender vcard"><a class="tel" href="tel:+15551234567">' +
+    '<abbr class="fn" title="">Me</abbr></a></cite>';
+  const CONTACT_BLOCK =
+    '<cite class="sender vcard"><a class="tel" href="tel:+15558887777">' +
+    '<span class="fn">Dana Wu</span></a></cite>';
+
+  const importHtml = async (
+    html: string,
+    filename = 'Dana Wu - Text - 2025-03-01T12_00_00Z.html',
+    attachments: string[] = [],
+  ): Promise<EmittedGraph[]> => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-owner-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    // Phones.vcf is what supplies `owner`, which the inbound `To` uses. Without
+    // it the fixture would exercise a different (owner-less) code path.
+    fs.writeFileSync(
+      path.join(dir, 'Phones.vcf'),
+      'BEGIN:VCARD\nVERSION:3.0\nFN:My Phone\nTEL:+15551234567\nEND:VCARD\n',
+    );
+    fs.writeFileSync(path.join(dir, 'Calls', filename), html);
+    for (const a of attachments) {
+      fs.writeFileSync(path.join(dir, 'Calls', a), 'jpeg-bytes');
+    }
+
+    const pipeline: EmittedGraph[] = [];
+    await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    return pipeline;
+  };
+
+  const conversation = (): string =>
+    `<html><body><div class="hChatLog hfeed">
+       <div class="message">
+         <abbr class="dt" title="2025-03-01T12:00:00.000Z">Mar 1</abbr>:
+         ${CONTACT_BLOCK}:
+         <q>are you there?</q>
+       </div>
+       <div class="message">
+         <abbr class="dt" title="2025-03-01T12:01:00.000Z">Mar 1</abbr>:
+         ${OWNER_BLOCK}:
+         <q>I am</q>
+       </div>
+     </div></body></html>`;
+
+  it('stages no entity for the owner token', async () => {
+    const pipeline = await importHtml(conversation());
+    const staged = pipeline.flatMap((g) => (g.entity ? [g.entity] : []));
+
+    // Guard against the vacuous pass: the real contact MUST still be staged,
+    // or an empty list would satisfy this test with the parser turned off.
+    expect(staged.map((e) => e.name)).toEqual(['Dana Wu']);
+  });
+
+  it('names no sender on the message the owner sent', async () => {
+    const pipeline = await importHtml(conversation());
+    const msgs = pipeline.filter((p) => p.item?.metadata?.Text).map((p) => p.item.metadata);
+
+    expect(msgs).toHaveLength(2);
+    // `push/inputs.ts` copies `Sender` verbatim into
+    // `participants_metadata.from`, which is the string PersonLinkStage turns
+    // into a Person — so the assertion is on the exact value that leaked.
+    const outbound = msgs.find((m) => m.Direction === 'outgoing')!;
+    expect(outbound).toBeDefined();
+    expect(outbound.Sender).toBeUndefined();
+    expect(outbound.To).toBe('Dana Wu');
+
+    // The inbound side is untouched: a real correspondent is still named.
+    const inbound = msgs.find((m) => m.Direction === 'incoming')!;
+    expect(inbound.Sender).toBe('Dana Wu');
+  });
+
+  it('still routes the outbound message to the contact via a participant edge', async () => {
+    // Suppressing the owner must not cost the message its counterpart: this is
+    // what `resolveCorrespondents` reads to fill to_entity_ids, and it is the
+    // reason dropping `Sender` loses nothing.
+    const pipeline = await importHtml(conversation());
+    const outbound = pipeline.find((p) => p.item?.metadata?.Direction === 'outgoing')!;
+    const edges = (outbound.edges ?? []).filter((e) => e.relation === 'participant');
+
+    expect(edges.map((e) => e.to.entity?.name)).toEqual(['Dana Wu']);
+    expect(edges[0].metadata?.direction).toBe('outgoing');
+  });
+
+  it('does not let the owner token reach a call log as the contact', async () => {
+    // `Contact` is read AHEAD of `Sender` by push/inputs.ts, so the call lane
+    // is a second door to the same fake Person. The filename label names the
+    // other end of the call and is the honest answer here.
+    const pipeline = await importHtml(
+      `<html><body><div class="haudio">
+         <span class="fn">Placed call to ${OWNER_BLOCK}</span>
+         <abbr class="published" title="2025-03-02T09:00:00.000Z">Mar 2</abbr>
+       </div></body></html>`,
+      'Dana Wu - Placed - 2025-03-02T09_00_00Z.html',
+    );
+
+    const call = pipeline.find((p) => p.item?.classification === 'call')!;
+    expect(call).toBeDefined();
+    expect(call.item.metadata.Contact).toBe('Dana Wu');
+    // The owner's own number is not this call's Number either.
+    expect(call.item.metadata.Number).toBeUndefined();
+    expect(pipeline.flatMap((g) => (g.entity ? [g.entity.name] : []))).toEqual([]);
+  });
+
+  it('names no sender on an image-only MMS the owner sent', async () => {
+    const pipeline = await importHtml(
+      `<html><body><div class="hChatLog hfeed">
+         <div class="message">
+           <abbr class="dt" title="2025-03-01T12:01:00.000Z">Mar 1</abbr>:
+           ${OWNER_BLOCK}:
+           <div><img src="Dana Wu - Text - 2025-03-01T12_01_00Z-1-1" /></div>
+         </div>
+       </div></body></html>`,
+      'Dana Wu - Text - 2025-03-01T12_00_00Z.html',
+      ['Dana Wu - Text - 2025-03-01T12_01_00Z-1-1.jpg'],
+    );
+
+    const attachment = pipeline.find((p) => p.item?.metadata?.Attachment === 'image')!;
+    // Guard against the vacuous pass: no attachment item means the two
+    // assertions below are comparing `undefined` with `undefined`.
+    expect(attachment).toBeDefined();
+    expect(attachment.item.metadata.Direction).toBe('outgoing');
+    expect(attachment.item.metadata.Sender).toBeUndefined();
+
+    expect(pipeline.flatMap((g) => (g.entity ? [g.entity.name] : []))).toEqual([]);
   });
 });
 

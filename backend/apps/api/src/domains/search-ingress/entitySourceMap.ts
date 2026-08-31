@@ -20,7 +20,7 @@ export interface EntitySource {
   idColumn: string;
   /**
    * For tables that hold MORE than one search entity_type behind a discriminator
-   * column (today only `ci.entities`, shared by concept/person/place/file), the
+   * column (today only `ci.entities`, shared by concept/person/place), the
    * `(column, value)` that selects this entity_type's rows. An embedding is an
    * orphan if no row matches BOTH the id AND this discriminator, so a row whose
    * kind was changed out from under it is correctly reaped.
@@ -35,7 +35,13 @@ export interface EntitySource {
    * (`merged_into_entity_id`), `item` (`ci.objects.merged_into_object_id`) and
    * `product` (`ci.product_models.merged_into_product_id`): a merge deletes the
    * tombstone's embedding+vector, and without this filter the sweep would
-   * re-find and re-index it via PersonCreatedEvent.
+   * re-find and re-index it via PersonCreatedEvent. `file` uses it for the
+   * non-tombstone equivalent — the variant/soft-delete population its pipeline
+   * stage already restricts itself to.
+   *
+   * NOT applied by the ORPHAN sweep: a row excluded here still exists, so it is
+   * not an orphan. Narrowing this can only make the backfill enqueue less; it
+   * can never make the sweep delete more.
    */
   backfillPredicate?: string;
 }
@@ -51,7 +57,7 @@ export interface EntitySource {
  * | concept          | ci.entities          | entity_id   | entity_type = 'Concept'       |
  * | content          | ci.content           | id          | —                             |
  * | event            | ci.events            | event_id    | —                             |
- * | file             | ci.entities          | entity_id   | entity_type = 'File'          |
+ * | file             | ci.files             | id          | — (see below)                 |
  * | file-chunk       | ci.file_chunks       | id          | —                             |
  * | item             | ci.objects         | object_id   | — (live rows only, see below) |
  * | message          | ci.agent_memories    | id          | —                             |
@@ -80,12 +86,35 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
   },
   content: { schema: 'ci', table: 'content', idColumn: 'id' },
   event: { schema: 'ci', table: 'events', idColumn: 'event_id' },
+  // `ci.files`, NOT the `ci.entities` graph node of `entity_type = 'File'`.
+  //
+  // Both exist, they are 1:1, and their ids are DIFFERENT: GraphIngest mints a
+  // fresh `entity_id` for the File node rather than reusing the file's own uuid
+  // (measured on the live appliance: 7,775 File nodes, 12,823 `ci.files` rows,
+  // ZERO id overlap). Every writer of `entity_type = 'file'` index rows keys on
+  // `ci.files.id`:
+  //   - `FileSearchIndexListener` upserts `entityId: file.id` (a `ci.files` row
+  //     loaded by `FileService.findById`), and
+  //   - `FileEmbedStage` / `FileVectorStage` share `INDEX_EMBED_FILE_SOURCE`,
+  //     which is `ci.files` / `id`.
+  // Pointing the map at the graph node made the orphan sweep's EXISTS check miss
+  // EVERY written row, so it deleted the entire `file` index nightly — and made
+  // `SearchIndexBackfillService` re-enqueue graph-node ids the listener then
+  // dropped as "File not found", so nothing ever grew back.
+  //
+  // Deliberately NO discriminator on `variant`: `FileService.update` emits
+  // `FileUpdatedEvent` for any variant, so the listener can legitimately index a
+  // PREVIEW row, and a discriminator here would reap that as an orphan.
   file: {
     schema: 'ci',
-    table: 'entities',
-    idColumn: 'entity_id',
-    discriminator: { column: 'entity_type', value: 'File' },
-    backfillPredicate: 's.merged_into_entity_id IS NULL',
+    table: 'files',
+    idColumn: 'id',
+    // Backfill-only (the sweep never applies this), and an exact mirror of
+    // `INDEX_EMBED_FILE_SOURCE.predicate`: derived variants repeat the
+    // original's filename with no text of their own, and a soft-deleted file
+    // must not be re-indexed. Without it the backfill would re-enqueue the
+    // 5,048 PREVIEW rows the pipeline deliberately excludes.
+    backfillPredicate: "s.variant = 'ORIGINAL' AND s.deleted_at IS NULL",
   },
   'file-chunk': { schema: 'ci', table: 'file_chunks', idColumn: 'id' },
   // Owned units tombstone on merge exactly like the ci.entities-backed types:
