@@ -15,6 +15,15 @@ _proj_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.
 load_dotenv(os.path.join(_proj_root, ".env.default"))
 load_dotenv(os.path.join(_proj_root, ".env"), override=True)
 
+# The endpoint URLs above are written from one machine's point of view and read
+# from two: `localhost` is the host's Ollama to the API process and this
+# container's own loopback to us. Correct them for wherever this process is
+# before anything reads them — see llm_host.py. Loud on every rewrite: a
+# labeler pointed at nothing writes zero labels while reporting healthy.
+from .llm_host import resolve_env as _resolve_llm_host_env
+
+_resolve_llm_host_env()
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
