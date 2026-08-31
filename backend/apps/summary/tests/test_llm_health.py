@@ -114,6 +114,22 @@ def test_the_container_hint_names_the_gateway(monkeypatch, caplog):
     assert "LLM_API_BASE" in caplog.text
 
 
+def test_a_container_hint_matches_the_url_it_is_about(monkeypatch):
+    """
+    Don't explain localhost when the URL does not say localhost — a hint about
+    the wrong thing sends the reader down the wrong path.
+    """
+    monkeypatch.setattr(llm_health.httpx, "get", _refuses)
+    monkeypatch.setattr(llm_health, "running_in_container", lambda: True)
+
+    loopback = llm_health.probe_endpoint("http://localhost:11434/v1", "k").detail
+    routed = llm_health.probe_endpoint("http://host.docker.internal:9/v1", "k").detail
+
+    assert "localhost is the container itself" in loopback
+    assert "localhost is the container itself" not in routed
+    assert "extra_hosts" in routed
+
+
 def test_a_reachable_endpoint_does_not_shout(monkeypatch, caplog):
     monkeypatch.setattr(llm_health.httpx, "get", _answers(200))
 

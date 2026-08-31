@@ -28,11 +28,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import httpx
 
 from .config import settings
-from .llm_host import DEFAULT_HOST_GATEWAY, running_in_container
+from .llm_host import DEFAULT_HOST_GATEWAY, LOOPBACK_HOSTS, running_in_container
 
 logger = logging.getLogger(__name__)
 
@@ -52,19 +53,38 @@ class EndpointStatus:
         return {"url": self.url, "reachable": self.reachable, "detail": self.detail}
 
 
+def _names_loopback(url: str) -> bool:
+    try:
+        host = urlsplit(url).hostname or ""
+    except ValueError:
+        return False
+
+    return host.lower() in LOOPBACK_HOSTS
+
+
 def _hint(url: str) -> str:
     """The one-line explanation that would have saved the nightly run."""
-    if running_in_container():
+    if not running_in_container():
+        return (
+            f"Check that an inference server is listening at {url}, and that "
+            f"LLM_API_BASE in .env names it."
+        )
+
+    if _names_loopback(url):
+        # The original bug, verbatim. Say exactly what is wrong with the URL.
         return (
             f"This process is in a container, where localhost is the container "
             f"itself — an inference server on the machine is reached at "
             f"{DEFAULT_HOST_GATEWAY}. Check LLM_API_BASE in .env; a value set "
-            f"there overrides the correct default compose ships."
+            f"there overrides the correct default compose ships, and "
+            f"CI_LLM_HOST_REWRITE=off disables the correction that would "
+            f"otherwise have fixed this."
         )
 
     return (
-        f"Check that an inference server is listening at {url}, and that "
-        f"LLM_API_BASE in .env names it."
+        f"Check that an inference server is listening at {url}, that "
+        f"LLM_API_BASE in .env names it, and that this container has a route to "
+        f"it (compose: extra_hosts: {DEFAULT_HOST_GATEWAY}:host-gateway)."
     )
 
 
@@ -78,7 +98,9 @@ def probe_endpoint(
     key = api_key if api_key is not None else settings.llm_api_key
 
     if not base:
-        return EndpointStatus(url="", reachable=False, detail="No LLM_API_BASE configured.")
+        return EndpointStatus(
+            url="", reachable=False, detail="No LLM_API_BASE configured."
+        )
 
     models_url = f"{base.rstrip('/')}/models"
 
@@ -103,7 +125,9 @@ def probe_endpoint(
             detail=f"Endpoint answered {response.status_code} on GET /models.",
         )
 
-    return EndpointStatus(url=base, reachable=True, detail="Endpoint answered on GET /models.")
+    return EndpointStatus(
+        url=base, reachable=True, detail="Endpoint answered on GET /models."
+    )
 
 
 def check_endpoint_at_startup() -> EndpointStatus:
@@ -112,7 +136,9 @@ def check_endpoint_at_startup() -> EndpointStatus:
         status = probe_endpoint(timeout=STARTUP_TIMEOUT_SECONDS)
     except Exception as exc:  # pragma: no cover - defensive; probe swallows its own
         logger.exception("LLM endpoint probe failed unexpectedly: %s", exc)
-        return EndpointStatus(url=settings.llm_api_base, reachable=False, detail=str(exc))
+        return EndpointStatus(
+            url=settings.llm_api_base, reachable=False, detail=str(exc)
+        )
 
     if status.reachable:
         logger.info("LLM endpoint %s is reachable. %s", status.url, status.detail)
@@ -132,9 +158,9 @@ def check_endpoint_at_startup() -> EndpointStatus:
 
 
 __all__ = [
-    "EndpointStatus",
     "HEALTH_TIMEOUT_SECONDS",
     "STARTUP_TIMEOUT_SECONDS",
+    "EndpointStatus",
     "check_endpoint_at_startup",
     "probe_endpoint",
 ]

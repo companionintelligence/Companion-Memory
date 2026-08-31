@@ -106,9 +106,7 @@ def test_empty_and_malformed_values_pass_through():
 
 def test_the_escape_hatch_disables_every_rewrite():
     env = {"CI_LLM_HOST_REWRITE": "off"}
-    url, note = llm_host.resolve_url(
-        "http://localhost:11434/v1", env=env, **CONTAINER
-    )
+    url, note = llm_host.resolve_url("http://localhost:11434/v1", env=env, **CONTAINER)
 
     assert (url, note) == ("http://localhost:11434/v1", None)
 

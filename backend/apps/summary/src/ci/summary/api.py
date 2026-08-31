@@ -28,6 +28,7 @@ init_telemetry("ci-server-summary")
 # Allow nested event loops (needed for run_sync() in async FastAPI context)
 nest_asyncio.apply()
 
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """
