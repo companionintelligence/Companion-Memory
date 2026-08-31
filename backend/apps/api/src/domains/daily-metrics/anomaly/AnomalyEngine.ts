@@ -41,7 +41,15 @@ export class AnomalyEngine {
   }
 
   async scan(context: UserServiceContext, timezone = 'UTC'): Promise<MetricAnomaly[]> {
-    const yesterday = shiftIso(todayIsoInTimezone(timezone), -1);
+    // The most recent day the STORE has, not the most recent day the clock
+    // has. `DailyMetricsService.analysisAnchor` documents why; the short
+    // version is that this window used to be positioned on `today - 1` over a
+    // corpus whose newest row was two months old, so it swept 90 days of
+    // all-NULL rows on every run and this table sat at zero. HISTORY_DAYS is
+    // unchanged: the width was never the problem.
+    const yesterday =
+      (await this.metricsService.analysisAnchor(context, timezone)) ??
+      shiftIso(todayIsoInTimezone(timezone), -1);
     const from = shiftIso(yesterday, -(HISTORY_DAYS - 1));
     const rows = await this.metricsService.getRange(context, from, yesterday);
 
@@ -190,6 +198,11 @@ export class AnomalyEngine {
       .filter((row) => row.date === yesterday && !row.actionId)
       .sort((left, right) => right.score * right.coverage - left.score * left.coverage);
 
+    // Deliberately still the WALL CLOCK, unlike the scan window above. This is
+    // a rate limit on how many derived actions the appliance may put in front
+    // of its owner in one real day; the corpus has no opinion about that, and
+    // anchoring it to the corpus would let a stale-corpus appliance re-spend
+    // the same daily allowance on every tick.
     const used = await this.actionService.countDerivedOnLocalDay(
       context,
       todayIsoInTimezone(timezone),
