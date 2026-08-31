@@ -72,6 +72,57 @@ function participantType(participant: GVEntity): 'contact' | 'short_code' {
   return isShortCode(participant.phone) || isShortCode(participant.name) ? 'short_code' : 'contact';
 }
 
+/**
+ * Is this `<cite class="sender vcard">` the account owner rather than a
+ * correspondent?
+ *
+ * Google Voice writes the owner's own side of every conversation as the literal
+ * token `Me` — `<cite class="sender vcard"><a class="tel" href="tel:+1…">
+ * <abbr class="fn" title="">Me</abbr></a></cite>`. It is a ROLE MARKER in a
+ * fixed markup slot, the export's spelling of "is_from_me", not something the
+ * owner is called. `processConversation` already reads it that way to set
+ * `Direction`; this predicate is that same reading, applied to the four places
+ * that were still treating it as a name — the `participants` loop, the
+ * message's `Sender`, an image-only MMS's `Sender`, and a call log's `Contact`.
+ *
+ * ## What it cost to treat it as a name
+ *
+ * The owner was staged as an ordinary participant and stamped as
+ * `metadata.Sender`, so both minting paths produced the same node: the
+ * `participants` loop wrote a `contact` (→ `Person`) named "Me" keyed on the
+ * owner's own Google Voice number, and `push/inputs.ts` copied `Sender` into
+ * `participants_metadata.from`, from which `PersonLinkStage` indexed a
+ * `name`-kind `ci.entity_identifiers` row for "me" and linked it as the sender.
+ * On the live appliance that is ONE `Person` row holding 133,859
+ * `ci.communications.from_entity_id` — 43% of the Google Voice corpus and 41%
+ * of every communication on the box — plus 132,238 `SENT`/`RECEIVED`
+ * relationships. The owner is not their own correspondent, and a `name`
+ * identifier of "me" is an identity ATTRACTOR: it is UNIQUE on
+ * `(owner_user_id, kind, value_normalized)`, so it belongs to exactly one node
+ * and every later participant called "Me", from any source, resolves to it.
+ *
+ * ## Why here and not in `placeholderPersonName.ts`
+ *
+ * That module's `GENERIC_PLACEHOLDERS` list deliberately EXCLUDES `me` — and
+ * says so — because in an ADDRESS BOOK "Me" is a label a human really does file
+ * a contact under, and refusing it there would delete a name a `.vcf` honestly
+ * contained. The evidence is different here: this is not a name field a person
+ * typed, it is a protocol token in a machine-generated markup slot whose
+ * meaning the format fixes. A source-specific rule is the only place that
+ * distinction can be made, so the shared predicate stays as narrow as it is.
+ *
+ * Anchored on the name alone. The owner's number is available from `Phones.vcf`
+ * (`this.owner.phones`), but a sender block carrying that number under a real
+ * display name is not something this corpus contains — every one of the 133,859
+ * rows above came through the `Me` token — and widening the rule to "any block
+ * whose phone is the owner's" would silently suppress a correspondent on any
+ * export where that assumption does not hold. Suppressing too little leaves a
+ * countable row; suppressing too much deletes a real person from the graph.
+ */
+function isOwnerToken(sender: GVEntity): boolean {
+  return (sender.name || '').trim().toLowerCase() === 'me';
+}
+
 /** Prefix marking a Google Voice thread id that names a FILE, not a contact. */
 export const GV_FILE_THREAD_PREFIX = 'googlevoice:file:';
 
@@ -515,11 +566,17 @@ export class GoogleVoiceFileImporter implements FileImporter {
       // a message from somebody, and both `participants` and the contact
       // tracking below are strictly better for knowing about it.
       const sender = extractSender(block);
-      if (sender.phone) {
+      const isOutbound = isOwnerToken(sender);
+      // The owner is NOT a participant in their own conversation. Staging them
+      // here minted a `Person` literally named "Me" (see isOwnerToken), keyed
+      // on the owner's own Google Voice number. `resolveCorrespondents` already
+      // knows how to attribute an outbound message — `direction === 'outbound'`
+      // makes the sender the appliance's `is_self` entity, and NULL until
+      // onboarding declares one — so nothing is lost by staying quiet.
+      if (sender.phone && !isOutbound) {
         participants[sender.phone] = sender;
       }
 
-      const isOutbound = (sender.name || '').trim().toLowerCase() === 'me';
       if (!isOutbound) {
         if (sender.name) {
           contactName = sender.name;
@@ -570,7 +627,14 @@ export class GoogleVoiceFileImporter implements FileImporter {
           },
           metadata: {
             Source: 'GoogleVoice',
-            Sender: sender.name || sender.phone || undefined,
+            // Omitted on outbound, and for the same reason iMessage omits it
+            // there ("On outbound, handle_id is NULL — self has no handle
+            // row"): `push/inputs.ts` copies this straight into
+            // `participants_metadata.from`, which `PersonLinkStage` turns into
+            // a Person. `Direction: 'outgoing'` plus the counterpart edge
+            // already say who sent this; the owner token would only say it
+            // again, wrongly, as a name.
+            Sender: isOutbound ? undefined : sender.name || sender.phone || undefined,
             Conversation: conversation,
             // The grouping key, separate from Conversation because Conversation
             // doubles as the contact NAME and must stay undefined when the
@@ -696,7 +760,12 @@ export class GoogleVoiceFileImporter implements FileImporter {
           // conversation, this says who sent it and which way it travelled.
           ...(attributed
             ? {
-                Sender: attributed.sender.name || attributed.sender.phone || undefined,
+                // Same rule as the message loop above: the owner token is not a
+                // sender name, so an outbound attachment names nobody as `from`
+                // and lets direction carry the authorship.
+                Sender: attributed.isOutbound
+                  ? undefined
+                  : attributed.sender.name || attributed.sender.phone || undefined,
                 Direction: attributed.isOutbound ? 'outgoing' : 'incoming',
                 To: (attributed.isOutbound ? counterpart.name : owner) || undefined,
               }
@@ -791,7 +860,21 @@ export class GoogleVoiceFileImporter implements FileImporter {
     // Contact: prefer a tel/fn pair inside the haudio block (same markup the
     // <q> message path already knows how to read), fall back to the filename
     // label parsed as `conversation` above.
-    const sender = extractSender(raw);
+    //
+    // A "Placed" call's haudio block can name the OWNER rather than the person
+    // called, in the same `Me` token the message path reads (see isOwnerToken).
+    // `Contact` is what `push/inputs.ts` reads FIRST for a communication's
+    // `from`, ahead of `Sender`, so letting the token through here would mint
+    // the same fake Person from the call lane that the message lane used to.
+    // The filename label is the honest answer for such a file — it names the
+    // other end of the call, which is what `Contact` means.
+    //
+    // Nothing on the live corpus has hit this arm (all 133,859 owner-attributed
+    // rows there are `communication_type = 'chat'`), so it is a guard rather
+    // than a repair: one rule for one token, in every markup shape this
+    // importer reads it from, so the two lanes cannot drift.
+    const rawSender = extractSender(raw);
+    const sender: GVEntity = isOwnerToken(rawSender) ? {} : rawSender;
     const contact = sender.name || sender.phone || conversation;
 
     const transcript = extractTranscript(raw);
