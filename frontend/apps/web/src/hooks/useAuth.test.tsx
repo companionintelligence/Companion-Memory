@@ -768,4 +768,31 @@ describe('useAuth', () => {
     expect(getLaunchUrl).not.toHaveBeenCalled();
     expect(result.current[0].authenticated).toBe(false);
   });
+
+  it('refreshes when a backgrounded tab becomes visible after the access token expires', async () => {
+    let refreshCalls = 0;
+
+    setFetch((url) => {
+      if (url.endsWith('/api/authenticate/refresh')) {
+        refreshCalls += 1;
+
+        return jsonResponse({ accessToken: `tok-${refreshCalls}` });
+      }
+
+      return emptyResponse();
+    });
+
+    const { result } = renderHook(() => useAuth(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].authToken).toBe('tok-1'));
+    expect(refreshCalls).toBe(1);
+
+    vi.mocked(jwtDecode).mockReturnValue({ sub: 'u1', iat: 0, exp: pastExp() });
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await waitFor(() => expect(refreshCalls).toBe(2));
+  });
 });
