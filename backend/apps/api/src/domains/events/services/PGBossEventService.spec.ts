@@ -26,10 +26,13 @@ describe('PGBossEventService.sendMany', () => {
       logger as unknown as LoggerService,
       {} as never,
     );
-    // pg-boss's insert() resolves with the ids it actually wrote — a short array
-    // is how a conflict-discarded bulk row reaches the caller, and a stub that
-    // returns `undefined` is a shape the library never produces.
-    insert = jest.fn(async (jobs: unknown[]) => jobs.map((_, i) => `bulk-${i}`));
+    // pg-boss's insert() resolves `null` — ALWAYS. Its bulk plan is
+    // `ON CONFLICT DO NOTHING` with no `RETURNING`, so `manager.insert` sees an
+    // empty `rows` and returns null whether it wrote every row or one. An
+    // earlier stub here returned an id per job, a shape the library never
+    // produces, and that fiction is what kept a dead drop-detection branch in
+    // sendMany looking alive.
+    insert = jest.fn(async () => null);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (service as any).boss = { insert };
 
