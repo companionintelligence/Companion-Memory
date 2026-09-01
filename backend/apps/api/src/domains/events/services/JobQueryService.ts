@@ -8,7 +8,7 @@ import { DEAD_LETTER_QUEUE } from '../constants';
 import { JobMetricEntity } from '../entities/JobMetricEntity';
 import { PgBossArchiveEntity } from '../entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from '../entities/PgBossJobEntity';
-import { describeJob, JOB_TYPES, type JobCategory } from '../taxonomy';
+import { describeJob, jobCategorySelector } from '../taxonomy';
 
 export interface JobListItemDto {
   readonly id: string;
@@ -259,15 +259,35 @@ export class JobQueryService {
     }
 
     if (query.category) {
-      const events = Object.entries(JOB_TYPES)
-        .filter(([, descriptor]) => descriptor.category === (query.category as JobCategory))
-        .map(([event]) => event);
+      // A category is not simply a set of event names: `describeJob` resolves a
+      // row's category from the (event, queue) pair, so the handful of events
+      // that mean different things on different queues have to be moved in and
+      // out here too. Selecting on event alone returned rows this same endpoint
+      // then labelled with a DIFFERENT category — see `jobCategorySelector`.
+      const selector = jobCategorySelector(query.category);
+      // `job.name` is the queue; `data->>'name'` is the event.
+      const queueKey = `(job.data->>'name' || '::' || job.name)`;
 
-      // An unknown category matches nothing rather than everything — a typo in
-      // a query string should return an empty table, not the unfiltered one.
-      builder.andWhere(`job.data->>'name' IN (:...events)`, {
-        events: events.length > 0 ? events : ['__no-such-category__'],
-      });
+      builder.andWhere(
+        new Brackets((where) => {
+          // An unknown category matches nothing rather than everything — a typo
+          // in a query string should return an empty table, not the unfiltered
+          // one — so an empty event list becomes a sentinel, not a no-op.
+          const excludes =
+            selector.excludeQueueKeys.length > 0 ? ` AND ${queueKey} NOT IN (:...excludedQueueKeys)` : '';
+
+          where.where(`job.data->>'name' IN (:...categoryEvents)${excludes}`, {
+            categoryEvents: selector.events.length > 0 ? selector.events : ['__no-such-category__'],
+            excludedQueueKeys: selector.excludeQueueKeys,
+          });
+
+          if (selector.includeQueueKeys.length > 0) {
+            where.orWhere(`${queueKey} IN (:...includedQueueKeys)`, {
+              includedQueueKeys: selector.includeQueueKeys,
+            });
+          }
+        }),
+      );
     }
 
     if (query.search) {

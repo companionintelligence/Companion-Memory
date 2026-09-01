@@ -1,6 +1,7 @@
 import {
   describeJob,
   jobCategoryIndex,
+  jobCategorySelector,
   JOB_CATEGORIES,
   JOB_TYPES,
   SMART_ROTATION_WORK_LABELS,
@@ -184,5 +185,83 @@ describe('job taxonomy', () => {
 
     expect(indexing.category).toBe(JOB_CATEGORIES.search);
     expect(homeConfirm.category).toBe(JOB_CATEGORIES.graph);
+  });
+});
+
+/**
+ * The category filter has to agree with the category LABEL.
+ *
+ * `describeJob` resolves a row's category from the (event, queue) pair, but the
+ * Jobs list used to select a category from `JOB_TYPES` alone. The two disagreed
+ * for every event in `JOB_TYPES_BY_QUEUE`: `GET /jobs?category=search` returned
+ * rows the same response labelled `graph` and `pipeline`, and `category=graph`
+ * could not find them at all. These pin the two halves together — a new
+ * queue-scoped entry that crosses a category boundary breaks a test here rather
+ * than quietly mis-filtering the table.
+ */
+describe('jobCategorySelector', () => {
+  /** Resolve a pair key the way `describeJob` does, for cross-checking. */
+  function categoryOf(key: string): string {
+    const [event = '', queue = ''] = key.split('::');
+
+    return describeJob(event, null, queue).category;
+  }
+
+  it('moves a queue-scoped event OUT of the category its base entry names', () => {
+    const search = jobCategorySelector(JOB_CATEGORIES.search);
+
+    // The base entries are all category `search` …
+    expect(search.events).toContain('communication.created');
+    expect(search.events).toContain('content.created');
+    expect(search.events).toContain('answer.created');
+
+    // … but on these queues they are not, so the filter must subtract them.
+    expect(search.excludeQueueKeys).toContain('communication.created::people-linking');
+    expect(search.excludeQueueKeys).toContain('content.created::pipeline-index');
+    expect(search.excludeQueueKeys).toContain('answer.created::default');
+  });
+
+  it('moves a queue-scoped event INTO the category its queue names', () => {
+    const graph = jobCategorySelector(JOB_CATEGORIES.graph);
+
+    expect(graph.includeQueueKeys).toContain('communication.created::people-linking');
+    expect(graph.includeQueueKeys).toContain('answer.created::default');
+    // `content.created` on pipeline-index belongs to `pipeline`, not `graph`.
+    expect(graph.includeQueueKeys).not.toContain('content.created::pipeline-index');
+
+    expect(jobCategorySelector(JOB_CATEGORIES.pipeline).includeQueueKeys).toContain(
+      'content.created::pipeline-index',
+    );
+  });
+
+  it('agrees with describeJob for every queue-scoped pair, in both directions', () => {
+    for (const category of Object.values(JOB_CATEGORIES)) {
+      const selector = jobCategorySelector(category);
+
+      for (const key of selector.includeQueueKeys) {
+        expect(categoryOf(key)).toBe(category);
+      }
+
+      for (const key of selector.excludeQueueKeys) {
+        expect(categoryOf(key)).not.toBe(category);
+      }
+    }
+  });
+
+  it('never both includes and excludes the same pair', () => {
+    for (const category of Object.values(JOB_CATEGORIES)) {
+      const { includeQueueKeys, excludeQueueKeys } = jobCategorySelector(category);
+      const overlap = includeQueueKeys.filter((key) => excludeQueueKeys.includes(key));
+
+      expect(overlap).toEqual([]);
+    }
+  });
+
+  it('an unknown category selects nothing at all', () => {
+    const selector = jobCategorySelector('not-a-real-category');
+
+    expect(selector.events).toEqual([]);
+    expect(selector.includeQueueKeys).toEqual([]);
+    expect(selector.excludeQueueKeys).toEqual([]);
   });
 });

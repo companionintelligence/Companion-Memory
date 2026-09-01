@@ -516,6 +516,62 @@ export function describeJob(
   return base;
 }
 
+/**
+ * How to select a category, given that a category is not just a set of events.
+ *
+ * `describeJob` resolves a row's category from the (event, queue) PAIR, because
+ * a handful of events mean different things on different queues — see
+ * {@link JOB_TYPES_BY_QUEUE}. A filter built from {@link JOB_TYPES} alone
+ * therefore disagrees with the label the same endpoint puts on the row: asking
+ * for `search` returned jobs the response itself called `graph` and `pipeline`
+ * (`communication.created` on `people-linking`, `content.created` on
+ * `pipeline-index`, `answer.created` on `default`), and asking for `graph`
+ * missed them.
+ *
+ * So a category is its event names, MINUS the pairs a queue moves out of it,
+ * PLUS the pairs a queue moves into it. Returned as three lists rather than a
+ * predicate because the caller filtering by this is SQL over tens of thousands
+ * of rows, not a loop.
+ */
+export interface JobCategorySelector {
+  /** Event names whose base entry is in this category, on any queue. */
+  readonly events: readonly string[];
+  /** `${event}::${queue}` pairs that resolve INTO this category. */
+  readonly includeQueueKeys: readonly string[];
+  /** `${event}::${queue}` pairs that resolve OUT of it, despite {@link events}. */
+  readonly excludeQueueKeys: readonly string[];
+}
+
+export function jobCategorySelector(category: string): JobCategorySelector {
+  const events = Object.entries(JOB_TYPES)
+    .filter(([, descriptor]) => descriptor.category === category)
+    .map(([event]) => event);
+
+  const inCategory = new Set(events);
+  const includeQueueKeys: string[] = [];
+  const excludeQueueKeys: string[] = [];
+
+  for (const [key, descriptor] of Object.entries(JOB_TYPES_BY_QUEUE)) {
+    const [event = ''] = key.split('::');
+
+    if (descriptor.category === category) {
+      // Only worth naming when the base entry would not have matched anyway —
+      // otherwise `events` already covers this pair on every queue.
+      if (!inCategory.has(event)) {
+        includeQueueKeys.push(key);
+      }
+
+      continue;
+    }
+
+    if (inCategory.has(event)) {
+      excludeQueueKeys.push(key);
+    }
+  }
+
+  return { events, includeQueueKeys, excludeQueueKeys };
+}
+
 /** Every category, with the event names in it — used to drive the UI filter. */
 export function jobCategoryIndex(): Record<JobCategory, string[]> {
   const index = Object.fromEntries(
