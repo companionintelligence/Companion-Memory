@@ -592,7 +592,6 @@ name = "ci-hbpe"
 version = "0.1.0"
 source = { editable = "backend/apps/hbpe" }
 dependencies = [
-    { name = "asyncpg" },
     { name = "ci-telemetry" },
     { name = "fastapi" },
     { name = "huggingface-hub" },
@@ -616,7 +615,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "asyncpg", specifier = ">=0.29" },
     { name = "ci-telemetry", editable = "backend/packages/telemetry" },
     { name = "fastapi" },
     { name = "huggingface-hub", specifier = ">=0.22" },

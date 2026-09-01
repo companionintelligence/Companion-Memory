@@ -1,20 +1,48 @@
 """
-Event stream ingester — async listener for new behavioral events (T4.3).
+Token-stream ingester — keeps this process's inference cache coherent (T4.3).
 
-Listens to PostgreSQL LISTEN/NOTIFY channels for:
-  • ci_events          — calendar/task events (ci.events INSERT trigger)
-  • ci_browser_activity — browser activity (ci.browser_activity INSERT trigger)
-  • ci_communications  — messages/emails (ci.communications INSERT trigger)
+``hbpe.token_stream`` is HBPE's tokenised input. It is written by the nightly
+pipeline, the bootstrap run and ``scripts/run_pipeline.py`` — none of which run
+inside this process. When one of them re-serialises a day, this process's
+InferenceEngine output cache for that day is stale. This ingester polls
+``token_stream.serialized_at`` and evicts the affected ``(user, date)`` entries.
 
-On notification:
-  1. Parse the payload (JSON with user_id and date).
-  2. Debounce: batch notifications arriving within DEBOUNCE_SEC seconds.
-  3. Tokenise the affected day (re-run L0/L1/L2 routing + serialiser).
-  4. Invalidate the InferenceEngine output-cache for that date.
+It is invalidation only. It never writes to ``token_stream``, so it can never
+observe its own writes.
 
-The ingester is started by the FastAPI lifespan handler and runs as a
-background asyncio task.  Each HBPE process instance ingests for all
-users whose channels it receives notifications on.
+Why there is no LISTEN/NOTIFY
+-----------------------------
+An earlier revision opened a Postgres ``LISTEN`` on ``ci_events``,
+``ci_browser_activity`` and ``ci_communications``, described as a real-time path
+with this poll as a fallback. That was backwards: the poll was the only path
+that ever ran. Nothing publishes to those channels — ``pg_notify`` appears
+nowhere in this repository, and the entire migration history contains two
+``CREATE TRIGGER`` statements, neither of them a notify. Two of the three
+channels also name tables the tokeniser never reads: it reads ``ci.events``,
+completed tasks and ``ci.summaries``, never ``ci.browser_activity`` or
+``ci.communications``.
+
+Per the [2026-08-07] decision in ``docs/architecture/hypertable-audit.md``
+("no notify triggers, ever"), the repository stays trigger-free by design and
+HBPE invalidation will be driven through the application event system
+(EventService → PGBoss) when that wiring lands. The dormant LISTEN was retired
+with that decision rather than left implying a capability that never existed.
+
+Why there is no re-serialisation
+--------------------------------
+An earlier revision also re-ran ``TokenSerializer.serialize_day()`` for today
+after invalidating. That was a self-feeding loop: ``serialize_day`` is a
+DELETE-then-INSERT and ``token_stream.serialized_at`` defaults to ``NOW()``, so
+the rows it wrote satisfied the very predicate the next poll used
+(``serialized_at > last_check``). The flush re-triggered detection, which
+re-serialised, which re-triggered — once per poll interval, forever, with no new
+source data.
+
+It was also redundant by construction: the poll fires *because* ``token_stream``
+already changed, so a producer had just written the rows being recomputed.
+Re-tokenising new source data intra-day is a real gap, but it belongs on the
+producer side (a cron fan-out alongside ``hbpeNightly``, or the API calling
+``POST /invalidate``), not in the consumer that watches the output table.
 
 Implements T4.3 (CI-Server-32t).
 """
@@ -22,25 +50,34 @@ Implements T4.3 (CI-Server-32t).
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 log = logging.getLogger(__name__)
 
 DEBOUNCE_SEC = 5.0
-# Safety poll runs alongside the LISTEN path. Push-based NOTIFY (if producers
-# are installed) gives instant invalidation; this slower poll guarantees the
-# cache still refreshes even where no NOTIFY trigger exists yet.
-SAFETY_POLL_SEC = 30.0
-RECONNECT_SEC = 5.0
-CHANNELS = ("ci_events", "ci_browser_activity", "ci_communications")
+POLL_SEC = 30.0
+
+# Grouped by (user, date) so one row carries the newest write for that day,
+# which is what advances the watermark.
+_POLL_SQL = """
+    SELECT user_id::text        AS user_id,
+           date::text           AS date,
+           MAX(serialized_at)   AS last_serialized
+    FROM hbpe.token_stream
+    WHERE serialized_at > %s
+    GROUP BY user_id, date
+"""
+
+
+def _as_utc(ts: datetime) -> datetime:
+    """Treat a naive timestamp as UTC so watermark comparisons never raise."""
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
 
 
 class EventIngester:
     """
-    Subscribes to PostgreSQL NOTIFY channels and invalidates the inference
-    cache when new events arrive for a user.
+    Polls ``hbpe.token_stream`` and evicts stale days from the inference cache.
 
     Usage (from FastAPI lifespan):
         ingester = EventIngester(engine_registry)
@@ -55,17 +92,17 @@ class EventIngester:
         # Pending invalidations: user_id → {date_str}
         self._pending: dict[str, set[str]] = {}
         self._debounce_tasks: dict[str, asyncio.Task] = {}
-        # asyncio holds only a weak reference to a running task, so a
-        # fire-and-forget create_task() can be garbage collected mid-flight
-        # and the work silently disappears. Hold a strong reference until
-        # each one finishes.
-        self._background_tasks: set[asyncio.Task] = set()
 
     async def start(self) -> None:
-        self._task = asyncio.create_task(self._listen_loop(), name="hbpe-ingester")
-        log.info("EventIngester started — listening on %s", CHANNELS)
+        self._task = asyncio.create_task(self._polling_loop(), name="hbpe-ingester")
+        log.info("EventIngester started — polling token_stream every %ss", POLL_SEC)
 
     async def stop(self) -> None:
+        for task in list(self._debounce_tasks.values()):
+            if not task.done():
+                task.cancel()
+        self._debounce_tasks.clear()
+
         if self._task:
             self._task.cancel()
             try:
@@ -74,109 +111,46 @@ class EventIngester:
                 pass
         log.info("EventIngester stopped")
 
-    async def _listen_loop(self) -> None:
+    async def _polling_loop(self, interval: float = POLL_SEC) -> None:
         """
-        Main loop: subscribe to PostgreSQL LISTEN/NOTIFY via asyncpg and, in
-        parallel, run a slow safety poll of hbpe.token_stream.
+        Poll for token_stream rows newer than the watermark and invalidate.
 
-        Both paths reconnect on failure instead of dying, so a Postgres restart
-        or a dropped LISTEN connection self-heals. If asyncpg is unavailable the
-        loop degrades to polling only.
-        """
-        try:
-            import asyncpg
-        except ImportError:
-            log.warning("asyncpg not installed — using polling ingester only")
-            await self._polling_loop(DEBOUNCE_SEC)
-            return
+        The watermark only ever advances to a ``serialized_at`` this loop has
+        actually seen. Using the host clock instead (the previous
+        ``datetime.utcnow()``) had two defects: it is naive, so Postgres
+        reinterpreted it in the session time zone when comparing against a
+        TIMESTAMPTZ column, and it was stamped after the query returned, so a
+        producer committing in between was skipped for good.
 
-        await asyncio.gather(
-            self._asyncpg_listen_forever(asyncpg),
-            self._polling_loop(SAFETY_POLL_SEC),
-        )
-
-    async def _asyncpg_listen_forever(self, asyncpg) -> None:
-        """Run the LISTEN loop, reconnecting after any connection failure."""
-        while True:
-            try:
-                await self._asyncpg_loop(asyncpg)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                log.exception(
-                    "asyncpg LISTEN connection dropped — reconnecting in %ss",
-                    RECONNECT_SEC,
-                )
-                await asyncio.sleep(RECONNECT_SEC)
-
-    async def _asyncpg_loop(self, asyncpg) -> None:
-        from ci.hbpe.config import settings
-
-        conn = await asyncpg.connect(settings.database_url)
-        try:
-            for ch in CHANNELS:
-                await conn.add_listener(ch, self._on_notify)
-            log.info("LISTEN active on: %s", ", ".join(CHANNELS))
-            # Periodically check liveness so a server-side drop triggers a
-            # reconnect instead of silently sleeping on a dead connection.
-            while True:
-                await asyncio.sleep(15)
-                if conn.is_closed():
-                    raise ConnectionError("asyncpg LISTEN connection closed")
-        finally:
-            if not conn.is_closed():
-                await conn.close()
-
-    async def _polling_loop(self, interval: float = DEBOUNCE_SEC) -> None:
-        """
-        Poll hbpe.token_stream for rows newer than the last check and invalidate.
-
-        Runs as a safety net alongside the LISTEN path (or as the sole path when
-        asyncpg is unavailable). Errors are logged and the loop continues; the
-        connection pool recycles dead connections so a DB blip self-heals.
+        Errors are logged and the loop continues; the connection pool recycles
+        dead connections so a DB blip self-heals.
         """
         from ci.hbpe.database import get_conn
 
-        last_check: datetime = datetime.utcnow() - timedelta(hours=1)
+        watermark: datetime = datetime.now(UTC) - timedelta(hours=1)
         while True:
             await asyncio.sleep(interval)
             try:
-                # last_check is bound as a default so the closure captures
-                # this iteration's value rather than the loop variable.
-                def _query(last_check=last_check):
+                # `since` is bound as a default so the closure captures this
+                # iteration's value rather than the loop variable.
+                def _query(since=watermark):
                     import psycopg2.extras
 
                     with get_conn() as conn:
                         with conn.cursor(
                             cursor_factory=psycopg2.extras.RealDictCursor
                         ) as cur:
-                            cur.execute(
-                                """
-                                SELECT DISTINCT user_id::text, date
-                                FROM hbpe.token_stream
-                                WHERE serialized_at > %s
-                                """,
-                                (last_check,),
-                            )
+                            cur.execute(_POLL_SQL, (since,))
                             return cur.fetchall()
 
                 rows = await asyncio.get_running_loop().run_in_executor(None, _query)
                 for row in rows:
                     self._dispatch(str(row["user_id"]), str(row["date"]))
-                last_check = datetime.utcnow()
+                    seen = row["last_serialized"]
+                    if seen is not None and _as_utc(seen) > watermark:
+                        watermark = _as_utc(seen)
             except Exception:
-                log.exception("Polling ingester error")
-
-    def _on_notify(self, _conn, _pid, channel: str, payload: str) -> None:
-        """asyncpg notification callback (called from event loop)."""
-        try:
-            data = json.loads(payload)
-            user_id = str(data.get("user_id", ""))
-            date_str = str(data.get("date", ""))
-            if user_id and date_str:
-                self._dispatch(user_id, date_str)
-        except Exception as exc:
-            log.warning("Notify parse error on %s: %s", channel, exc)
+                log.exception("Token-stream poll failed")
 
     def _dispatch(self, user_id: str, date_str: str) -> None:
         """Schedule a debounced invalidation for (user_id, date)."""
@@ -205,34 +179,8 @@ class EventIngester:
         for date_str in dates:
             try:
                 d = date.fromisoformat(date_str)
-                engine.invalidate(d)
-                log.info("Cache invalidated: user=%s date=%s", user_id[:8], d)
             except ValueError:
-                log.warning("Bad date in notify payload: %s", date_str)
-
-        # Re-run serialisation for today to pick up the new token(s)
-        today = date.today()
-        if str(today) in set(dates):
-            task = asyncio.create_task(
-                self._reserialise(user_id, today),
-                name=f"reserialise-{user_id[:8]}",
-            )
-            self._background_tasks.add(task)
-            task.add_done_callback(self._background_tasks.discard)
-
-    async def _reserialise(self, user_id: str, d: date) -> None:
-        """Re-run the tokeniser pipeline for a single day in a thread."""
-
-        def _run():
-            try:
-                from ci.hbpe.tokenizer.serializer import TokenSerializer
-
-                ser = TokenSerializer()
-                n = ser.serialize_day(user_id, d)
-                log.info(
-                    "Re-serialised %d tokens for user=%s date=%s", n, user_id[:8], d
-                )
-            except Exception:
-                log.exception("Re-serialise failed for user=%s date=%s", user_id[:8], d)
-
-        await asyncio.get_running_loop().run_in_executor(None, _run)
+                log.warning("Bad date from token_stream poll: %s", date_str)
+                continue
+            engine.invalidate(d)
+            log.info("Cache invalidated: user=%s date=%s", user_id[:8], d)

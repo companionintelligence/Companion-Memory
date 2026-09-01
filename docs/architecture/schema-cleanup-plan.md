@@ -1351,7 +1351,9 @@ Then hit `POST /api/maintenance/estimate-locations` once. If the `is_predicted` 
 -- BrowserActivityEntity maps 20 columns, none named domain; BrowserActivityType
 -- never exposes it; the only createQueryBuilder (BrowserActivityService.ts:303-304)
 -- selects just id; entitySourceMap.ts:67 uses only idColumn; HBPE references the
--- table only as the NOTIFY channel name 'ci_browser_activity'.
+-- table only as the NOTIFY channel name 'ci_browser_activity' -- and as of
+-- 2026-09-01 not even that: HBPE's LISTEN path was removed, so nothing in
+-- HBPE references this table at all.
 --
 -- NOTE ON DISK: this reclaims NOTHING on existing rows (rule R6). Measured on
 -- 300k rows: 57,155,584 B before -> 57,155,584 B after DROP + VACUUM ANALYZE ->
@@ -1897,7 +1899,7 @@ mutation. See `ZARCHIVED-CI-Import-Tools` for the retired external caller's code
 - **`ThingVisionListener.ts:121`'s `images: [base64Image]`** is an Ollama vision payload, not a `CreateItemDto`.
 - **`memory/types.ts:518`/`:567`'s `tags: z.array(z.string())`** are event schemas (`ci.events.tags TEXT[]`), not inventory.
 - **`ItemType`'s `tags: [EntityTagType!]!`** genuinely resolves through `ci_search.entity_tag` (`item` is in `TAGGABLE_ENTITIES`, `search-next/types.ts:31`) — the canonical tagging path covers inventory in full.
-- **`hbpe/src/ci/pipeline/ingester.py:36`'s `CHANNELS=('ci_events','ci_browser_activity','ci_communications')` is already dead.** There is no trigger on `ci.browser_activity` (`pg_trigger` returns 0 non-internal rows) and `pg_notify` appears in zero of the 188 migrations. The only two triggers in the schema are `communications_source_dedup_after_delete` and `entities_search_vector_trigger`. Do not cite it as a cost of anything.
+- **`hbpe/src/ci/pipeline/ingester.py:36`'s `CHANNELS=('ci_events','ci_browser_activity','ci_communications')` is already dead.** There is no trigger on `ci.browser_activity` (`pg_trigger` returns 0 non-internal rows) and `pg_notify` appears in zero of the 188 migrations. The only two triggers in the schema are `communications_source_dedup_after_delete` and `entities_search_vector_trigger`. Do not cite it as a cost of anything. *[2026-09-01] Now removed outright — the LISTEN path and its `asyncpg` dependency are gone from `ingester.py`; see `hypertable-audit.md`, "The trigger problem".*
 - **`AgentMemoryEntity.ts:3`** is `@Entity({schema:'ci', name:'agent_memories'})` — a different table from `agent_messages`.
 - **`IngestResetService.ts:18-25`'s `INGEST_TABLES`** does not list `agent_messages`.
 - **`log_level` in Python** (`hbpe/config.py:118`, `hbpe/worker.py:100`, `summary/config.py:100`, `summary/worker.py:80`) is app logging config, unrelated to the Postgres enum.

@@ -375,6 +375,33 @@ the dormant LISTEN path in `ingester.py` should be retired with that move. Any
 hand-applied notify trigger found on a live appliance is unsanctioned state and
 should be dropped.
 
+**[2026-09-01] Retired — done.** The LISTEN path is gone from `ingester.py`,
+along with the `asyncpg` dependency it was the only user of. Two of its three
+channels named tables the tokeniser never reads (`ci.browser_activity`,
+`ci.communications`); it reads `ci.events`, completed tasks and `ci.summaries`.
+What remains is a poll of `hbpe.token_stream` (`POLL_SEC`, formerly
+`SAFETY_POLL_SEC`) — no longer a "fallback" but the only path by design,
+watching HBPE's own input table so every producer (nightly, bootstrap,
+`scripts/run_pipeline.py`) drives invalidation. Concern (b) above resolves to
+confirmed: the LISTEN never fired. Note the widely-repeated description
+"real-time via LISTEN/NOTIFY with a 30s poll fallback" was backwards, and still
+reads that way in `CI-Engineering/architecture/HBPE/HBPE_Walkthrough.md` Part 3.
+
+**[2026-09-01] The same pass fixed a self-feeding loop in that poll.** After
+invalidating, the ingester re-ran `TokenSerializer.serialize_day()` for today.
+That is a DELETE-then-INSERT, and `token_stream.serialized_at` defaults to
+`NOW()`, so the rows it wrote satisfied the very predicate the next poll used
+(`serialized_at > last_check`) — detection re-triggered the flush, which
+re-serialised, which re-triggered, once per poll interval with no new source
+data. Measured against the pre-fix code: 6 re-serialisations of one user-day
+across 3 polls. It fired for any user with an InferenceEngine registered (any
+`/histogram` call registers one for the process lifetime) and at least one
+token-producing row for today; a day with no source rows was spared only because
+`serialize_day` returns early without writing. The ingester is now read-only, so
+re-tokenising *new source data* intra-day is a gap owned by the producer side —
+a cron fan-out alongside `hbpeNightly`, or the API calling `POST /invalidate`.
+Regression tests: `backend/apps/hbpe/tests/test_ingester.py`.
+
 If hand-applied triggers are real, the live database holds state that no
 migration can reconstruct, which means a rebuilt appliance behaves differently
 from an existing one and nothing reports the difference.
@@ -485,7 +512,8 @@ sized to real volume. Same reasoning for `ci.graph_deltas`, which
    traceable, preferred architecture for driving HBPE invalidation. No triggers
    land; HBPE's safety poll carries live ingest until that wiring exists, and
    the dormant LISTEN path in `ingester.py` should be retired with it. See "The
-   trigger problem". Hand-applied triggers found on a live appliance are
+   trigger problem". *[2026-09-01] The LISTEN path is now
+   removed; the poll is the sole path by design.* Hand-applied triggers found on a live appliance are
    unsanctioned and should be dropped.*
 5. **De-hypertable `ci.communications`.** The only step with a real data
    migration and real code churn. *[2026-08-07] Implemented on this branch:
