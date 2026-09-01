@@ -266,7 +266,7 @@ export class AppleHealthFileImporter implements FileImporter {
     params.pipeline.push({
       item: {
         id: `apple_health:record:${attrs.type ?? ''}:${attrs.sourceName ?? ''}:${attrs.startDate ?? ''}:${attrs.endDate ?? ''}:${value ?? ''}:${unit ?? ''}:${seen.records}`,
-        classification: 'health',
+        classification: type === 'HKCategoryTypeIdentifierSleepAnalysis' ? 'sleep' : 'health',
         timestamp: ts,
         timespanEnd: parseHealthDate(attrs.endDate),
         content: {

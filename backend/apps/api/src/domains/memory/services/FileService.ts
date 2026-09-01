@@ -10,9 +10,14 @@ import {
   FileService as FileStorageService,
   FileUploadedEvent,
   type FileUploadedPayload,
+  // Aliased — this file's own `File` (below) is the graph-shadow node type,
+  // a different shape entirely from the files domain's stored-file egress
+  // type this alias names.
+  type SignedFile as StoredFile,
 } from '@ci/domains/files';
 import { CreateFileDto } from '@ci/domains/memory/types';
 
+import { EventEntity } from '../entities/EventEntity';
 import { type File, FileEntity } from '../entities/FileEntity';
 
 import { EntityService } from './EntityService';
@@ -33,6 +38,8 @@ export class FileService extends EntityService<FileEntity, File> {
     private readonly fileStorageService: FileStorageService,
     @InjectRepository(FileEntity)
     fileRepository: Repository<FileEntity>,
+    @InjectRepository(EventEntity)
+    private readonly eventRepository: Repository<EventEntity>,
     private readonly logger: LoggerService,
   ) {
     super(fileRepository, FileEntity);
@@ -87,7 +94,45 @@ export class FileService extends EntityService<FileEntity, File> {
       return;
     }
 
+    await this.linkCaptureEvent(payload.userId, file);
     await this.findOrCreateForFile({ userId: payload.userId }, file.id, file.filename);
+  }
+
+  /**
+   * Best-effort: link a file to the `ci.events` row from the same CI-Capture
+   * worker tick, via the `capture_tick_id` correlator CI-Capture stamps on
+   * both (see EventEntity.captureTickId / migration
+   * 20260830042159_add_capture_correlation_to_files_and_events). Lives here
+   * rather than in the files domain — that domain must never import
+   * `EventEntity` (see the note on `FileEntity.eventId` in the files
+   * domain), so this is the one side that CAN resolve the correlator: this
+   * class already sits in the memory domain and already holds a
+   * `FileStorageService` reference to write the answer back.
+   *
+   * A miss (no matching event, or the file already carries an eventId — an
+   * explicit direct link wins and is never overwritten) is not an error: the
+   * screenshot upload and the vizier event ingest race independently, so the
+   * event legitimately may not exist yet when this listener runs.
+   * `captureTickId` stays stamped on the file regardless (see FileService in
+   * the files domain), so a future repair pass — the same shape as
+   * 20260819064129_link_content_to_events_by_triple.sql for content/events —
+   * can still catch it.
+   */
+  private async linkCaptureEvent(userId: string, file: StoredFile): Promise<void> {
+    if (file.eventId || !file.captureTickId) {
+      return;
+    }
+
+    const event = await this.eventRepository.findOne({
+      where: { userId, captureTickId: file.captureTickId },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!event) {
+      return;
+    }
+
+    await this.fileStorageService.linkEvent({ userId }, file.id, event.id);
   }
 
   /**

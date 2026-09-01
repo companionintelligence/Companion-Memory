@@ -11,7 +11,12 @@ import type { TimelineEra, TimelineJsData, TimelineSlide } from '@/components/Ti
 import { isBrowserCapture } from './scheduleClusters';
 
 export { TIMELINE_AXIS_PAD_DAYS };
-export type { TimelineDateParts, TimelineEra, TimelineJsData, TimelineSlide } from '@/components/TimelineJs/types';
+export type {
+  TimelineDateParts,
+  TimelineEra,
+  TimelineJsData,
+  TimelineSlide,
+} from '@/components/TimelineJs/types';
 
 /**
  * TimelineJS3 JSON for "today as a story".

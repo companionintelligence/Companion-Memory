@@ -179,7 +179,8 @@ One per P0 capability. Each step names an expected result; record pass/fail and 
 ### M7 — BlueBubbles and MCP client (P0)
 
 1. Settings → BlueBubbles: save a config. **Expect:** persisted; credentials not echoed back in plaintext.
-2. Settings → MCP servers: add one from the suggested catalog. **Expect:** it connects, tools are listed, and a failure is reported as a failure rather than an empty list.
+2. Sources → Services: the BlueBubbles card. **Expect:** present in the catalogue but not gated behind "Coming soon"; reads "Connected" once step 1's config is `enabled`; opens Settings → BlueBubbles (not a `/providers/:id` OAuth flow) either way.
+3. Settings → MCP servers: add one from the suggested catalog. **Expect:** it connects, tools are listed, and a failure is reported as a failure rather than an empty list.
 
 ## 5. Build targets
 

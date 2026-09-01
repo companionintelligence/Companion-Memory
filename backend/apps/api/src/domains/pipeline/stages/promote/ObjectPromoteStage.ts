@@ -483,7 +483,7 @@ export class ObjectPromoteStage implements Stage {
   /**
    * The slice's events, in one statement.
    *
-   * Raw SQL rather than `EventService`, for the reason `EmbedStage` gives about
+   * Raw SQL rather than `CalendarEventService`, for the reason `EmbedStage` gives about
    * `ContentService`: the columns wanted are a strict subset of a ~40-column row.
    * `metadata` is the exception and it comes back whole, because it IS the
    * commerce record.

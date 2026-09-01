@@ -33,6 +33,44 @@ SELECT pos.time AS time,
  LIMIT $5
 `;
 
+/**
+ * Where the cluster scan window sits: the start of the `$3`-th most recent day
+ * that has a usable fix, plus the newest usable fix itself.
+ * $1 user_id, $2 max accuracy in meters, $3 how many days-with-fixes to span.
+ *
+ * `PlaceClusterService.resolveWindow` documents why the window is positioned
+ * by counting days-with-fixes rather than by subtracting 90 days from `now()`
+ * or from MAX(time). The usability predicates here MUST match
+ * {@link POSITION_PAGE_SQL}'s — a day this counts but that query then filters
+ * out silently shortens the window.
+ *
+ * `oldest_day` comes back as the start of that day minus a microsecond,
+ * because POSITION_PAGE_SQL's lower bound is EXCLUSIVE (`pos.time > $2`) and a
+ * fix landing exactly on local midnight would otherwise be dropped.
+ *
+ * Days are bucketed in UTC. That is a counting device, not a user-facing day
+ * boundary — the value returned is a timestamp, so which side of midnight a
+ * fix falls on can shift the window's far edge by at most one day and nothing
+ * else. `time <= now()` keeps a future-dated fix from stealing slots.
+ */
+export const POSITION_WINDOW_ANCHOR_SQL = `
+WITH usable AS (
+  SELECT pos.time
+    FROM ci.position pos
+   WHERE pos.user_id = $1
+     AND pos.location IS NOT NULL
+     AND (pos.accuracy_meters IS NULL OR pos.accuracy_meters <= $2)
+     AND pos.time <= now()
+), days AS (
+  SELECT DISTINCT date_trunc('day', usable.time AT TIME ZONE 'UTC') AS day
+    FROM usable
+   ORDER BY day DESC
+   LIMIT $3
+)
+SELECT ((SELECT min(day) FROM days) AT TIME ZONE 'UTC') - INTERVAL '1 microsecond' AS oldest_day,
+       (SELECT max(usable.time) FROM usable) AS newest_fix
+`;
+
 export function parsePositionRow(row: Record<string, unknown>): PositionFix {
   return {
     time: row.time instanceof Date ? row.time : new Date(String(row.time)),

@@ -191,6 +191,35 @@ describe('Reddit datasource', () => {
     expect(it0.id).toBe('reddit:message:m1');
   });
 
+  // Regression: a real messages_archive.csv export carries no thread_id,
+  // thread_parent_message_id, channel_url, or channel_name column at all —
+  // those only exist on chat_history.csv. Without a fallback, every private
+  // message lands with ThreadId undefined and thread_id NULL in the
+  // database — 19 rows on the reference corpus, all private messages, each
+  // its own orphan thread instead of grouped with the rest of that
+  // conversation.
+  it('derives a thread key for private messages from the correspondent pair when the export names no thread', () => {
+    const csv =
+      'id,permalink,date,from,to,subject,body\n' +
+      'm1,/message/messages/m1,2020-03-04 12:00:00 UTC,alice,bob,Re: project,First reply.\n' +
+      'm2,/message/messages/m2,2020-03-04 12:05:00 UTC,bob,alice,Re: project,Second reply.\n';
+
+    return importCsv('messages_archive.csv', csv).then((pipeline) => {
+      expect(pipeline.length).toBe(2);
+      const [m1, m2] = pipeline.map((p) => p.item);
+      expect(m1.metadata.ThreadId).toBeTruthy();
+      // Order-independent: alice→bob and bob→alice are the same conversation.
+      expect(m1.metadata.ThreadId).toBe(m2.metadata.ThreadId);
+    });
+  });
+
+  it('does not fabricate a thread key when a private message names no correspondent', async () => {
+    const csv = 'id,permalink,date,from,to,subject,body\nm1,/message/messages/m1,2020-03-04 12:00:00 UTC,,,,Body only.\n';
+    const pipeline = await importCsv('messages_archive.csv', csv);
+    expect(pipeline.length).toBe(1);
+    expect(pipeline[0].item.metadata.ThreadId).toBeUndefined();
+  });
+
   // Regression: announcements.csv ("official communication about your account
   // from Reddit in your inbox" per Reddit's export docs) was missing from
   // REDDIT_FILES entirely, so a real 38-file export's admin notification was

@@ -82,35 +82,35 @@ function ReceiptRowButton({ receipt, onOpen }: { receipt: ReceiptNode; onOpen: (
         sourceId: receipt.id,
       })}
     >
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex w-full items-center gap-3 rounded-md border bg-card p-3 text-left transition hover:bg-accent"
-    >
-      <ReceiptIcon className="shrink-0" />
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex w-full items-center gap-3 rounded-md border bg-card p-3 text-left transition hover:bg-accent"
+      >
+        <ReceiptIcon className="shrink-0" />
 
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate font-medium">{receipt.merchantName || 'Unknown merchant'}</span>
-          {/* A receipt whose extraction never finished has no reliable total or
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-medium">{receipt.merchantName || 'Unknown merchant'}</span>
+            {/* A receipt whose extraction never finished has no reliable total or
               lines; flag it rather than showing an empty one as if it were
               complete. */}
-          {receipt.extractionState !== 'EXTRACTED' && (
-            <Badge variant="secondary">{humanizeEnum(receipt.extractionState)}</Badge>
-          )}
+            {receipt.extractionState !== 'EXTRACTED' && (
+              <Badge variant="secondary">{humanizeEnum(receipt.extractionState)}</Badge>
+            )}
+          </div>
+          <div className="truncate text-sm text-muted-foreground">
+            {[dateLabel, receipt.orderNumber ? `#${receipt.orderNumber}` : null].filter(Boolean).join(' · ')}
+          </div>
         </div>
-        <div className="truncate text-sm text-muted-foreground">
-          {[dateLabel, receipt.orderNumber ? `#${receipt.orderNumber}` : null].filter(Boolean).join(' · ')}
-        </div>
-      </div>
 
-      <div className="shrink-0 text-right">
-        <div className="font-medium tabular-nums">{total ?? '—'}</div>
-        <div className="text-sm text-muted-foreground">
-          {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+        <div className="shrink-0 text-right">
+          <div className="font-medium tabular-nums">{total ?? '—'}</div>
+          <div className="text-sm text-muted-foreground">
+            {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+          </div>
         </div>
-      </div>
-    </button>
+      </button>
     </ChatAbout>
   );
 }
@@ -179,7 +179,10 @@ export function ReceiptsPage() {
           return {
             receipts: {
               ...fetchMoreResult.receipts,
-              edges: [...prevEdges, ...fetchMoreResult.receipts.edges.filter((edge) => !seen.has(edge.cursor))],
+              edges: [
+                ...prevEdges,
+                ...fetchMoreResult.receipts.edges.filter((edge) => !seen.has(edge.cursor)),
+              ],
             },
           };
         },
@@ -208,66 +211,66 @@ export function ReceiptsPage() {
   } else {
     content = (
       <PullToRefresh onRefresh={refetch}>
-      <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
-        <MemoryHubShell>
-          <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
-            <div className="flex flex-col items-start gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-              <Input
-                placeholder="Search by merchant..."
-                value={merchantQuery}
-                onChange={(e) => {
-                  setMerchantQuery(e.target.value);
-                  pagination.reset();
-                }}
-                // Three items (search, extraction-state select, count) never all fit
-                // one row at phone widths — full-width below `sm` lets each wrap to
-                // its own line instead of squeezing into an illegible sliver.
-                className="max-w-xl w-full flex-1 sm:w-auto"
-              />
+        <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
+          <MemoryHubShell>
+            <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
+              <div className="flex flex-col items-start gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                <Input
+                  placeholder="Search by merchant..."
+                  value={merchantQuery}
+                  onChange={(e) => {
+                    setMerchantQuery(e.target.value);
+                    pagination.reset();
+                  }}
+                  // Three items (search, extraction-state select, count) never all fit
+                  // one row at phone widths — full-width below `sm` lets each wrap to
+                  // its own line instead of squeezing into an illegible sliver.
+                  className="max-w-xl w-full flex-1 sm:w-auto"
+                />
 
-              <Select
-                value={extractionState ?? ANY}
-                onValueChange={(next) => {
-                  setExtractionState(next === ANY ? null : (next as ReceiptExtractionState));
-                  pagination.reset();
-                }}
-              >
-                <Select.Trigger className="w-full sm:w-48" aria-label="Extraction state">
-                  <Select.Value placeholder="Any extraction state" />
-                </Select.Trigger>
-                <Select.Content>
-                  <Select.Item value={ANY}>Any extraction state</Select.Item>
-                  {EXTRACTION_STATES.map((option) => (
-                    <Select.Item key={option} value={option}>
-                      {humanizeEnum(option)}
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select>
+                <Select
+                  value={extractionState ?? ANY}
+                  onValueChange={(next) => {
+                    setExtractionState(next === ANY ? null : (next as ReceiptExtractionState));
+                    pagination.reset();
+                  }}
+                >
+                  <Select.Trigger className="w-full sm:w-48" aria-label="Extraction state">
+                    <Select.Value placeholder="Any extraction state" />
+                  </Select.Trigger>
+                  <Select.Content>
+                    <Select.Item value={ANY}>Any extraction state</Select.Item>
+                    {EXTRACTION_STATES.map((option) => (
+                      <Select.Item key={option} value={option}>
+                        {humanizeEnum(option)}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select>
 
-              <div className="text-sm text-muted-foreground">{pagination.totalCount} receipts</div>
+                <div className="text-sm text-muted-foreground">{pagination.totalCount} receipts</div>
+              </div>
+
+              {receipts.length === 0 ? (
+                <EmptyState message="No receipts found" />
+              ) : (
+                <>
+                  <div className="flex flex-col gap-2">
+                    {receipts.map((receipt) => (
+                      <ReceiptRowButton
+                        key={receipt.id}
+                        receipt={receipt}
+                        onOpen={() => navigate(`/receipts/${GlobalUID.parse('receipt', receipt.id)}`)}
+                      />
+                    ))}
+                  </div>
+
+                  <InfiniteListFooter pagination={pagination} noun="receipts" />
+                </>
+              )}
             </div>
-
-            {receipts.length === 0 ? (
-              <EmptyState message="No receipts found" />
-            ) : (
-              <>
-                <div className="flex flex-col gap-2">
-                  {receipts.map((receipt) => (
-                    <ReceiptRowButton
-                      key={receipt.id}
-                      receipt={receipt}
-                      onOpen={() => navigate(`/receipts/${GlobalUID.parse('receipt', receipt.id)}`)}
-                    />
-                  ))}
-                </div>
-
-                <InfiniteListFooter pagination={pagination} noun="receipts" />
-              </>
-            )}
-          </div>
-        </MemoryHubShell>
-      </PageContent>
+          </MemoryHubShell>
+        </PageContent>
       </PullToRefresh>
     );
   }

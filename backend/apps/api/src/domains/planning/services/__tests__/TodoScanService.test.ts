@@ -68,6 +68,7 @@ describe('TodoScanService per-item error isolation', () => {
 
     const created = new Set<string>();
     const taskService = {
+      findAll: jest.fn(async () => []),
       findBySourceRef: jest.fn(async () => null),
       findByTitleMatch: jest.fn(async () => null),
       create: jest.fn(async (_ctx: unknown, dto: { title: string }) => {
@@ -126,6 +127,7 @@ describe('TodoScanService stale proposed sweep', () => {
 
     const service = new TodoScanService(
       {
+        findAll: jest.fn(async () => []),
         findBySourceRef: jest.fn(),
         findByTitleMatch: jest.fn(),
         create: jest.fn(),
@@ -158,6 +160,7 @@ describe('TodoScanService stale proposed sweep', () => {
 
     const service = new TodoScanService(
       {
+        findAll: jest.fn(async () => []),
         findBySourceRef: jest.fn(),
         findByTitleMatch: jest.fn(),
         create: jest.fn(),
@@ -186,6 +189,7 @@ describe('TodoScanService stale proposed sweep', () => {
 
     const service = new TodoScanService(
       {
+        findAll: jest.fn(async () => []),
         findBySourceRef: jest.fn(async () => null),
         findByTitleMatch: jest.fn(async () => null),
         create,
@@ -211,6 +215,35 @@ describe('TodoScanService stale proposed sweep', () => {
         dueAt: new Date('2026-08-26T12:00:00.000Z'),
       }),
     );
+  });
+});
+
+describe('TodoScanService duplicate suppression', () => {
+  it('does not create a near-duplicate of an already proposed task', async () => {
+    const create = jest.fn();
+
+    const service = new TodoScanService(
+      {
+        findAll: jest.fn(async () => [
+          { title: 'Call the vet about Mochi', status: 'proposed', sourceKind: 'memory_scan', metadata: {} },
+        ]),
+        findBySourceRef: jest.fn(async () => null),
+        findByTitleMatch: jest.fn(async () => null),
+        create,
+      } as unknown as TaskService,
+      makeSearchService(),
+      makeOllamaService([{ title: 'Call the vet', confidence: 0.9 }]),
+      { decideAction: jest.fn(async () => 'review') } as unknown as PersonalizationService,
+      { tryPlaceAfterOpen: jest.fn() } as unknown as PlannedBlockService,
+      makeDataSource() as never,
+      makeProposedReconcile(),
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(USER_ID);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(result.proposed).toBe(0);
   });
 });
 

@@ -18,9 +18,20 @@ const CONTEXT: UserServiceContext = { userId: USER };
 
 type FindArg = { where: { userId?: string }; order?: unknown };
 
-function makeRepo() {
+/**
+ * A `query` double that answers the day-selection statement with `days` and
+ * every other statement with no rows.
+ *
+ * `refreshForUser` asks which days the corpus has BEFORE it materializes any
+ * of them, so a double that answers everything with `[]` makes it correctly
+ * decide there is nothing to do — which is the production behaviour on an
+ * empty appliance, not a mock artefact.
+ */
+function makeRepo(days: string[] = ['2026-07-07']) {
   return {
-    query: jest.fn<Promise<Array<Record<string, unknown>>>, [string, unknown[]]>(async () => []),
+    query: jest.fn<Promise<Array<Record<string, unknown>>>, [string, unknown[]]>(async (sql: string) =>
+      sql.includes('WITH days AS') ? days.map((day) => ({ day })) : [],
+    ),
     upsert: jest.fn<Promise<unknown>, [DailyMetricEntity, unknown]>(async () => ({})),
     find: jest.fn<Promise<DailyMetricEntity[]>, [FindArg]>(async () => []),
     findOne: jest.fn<Promise<DailyMetricEntity | null>, [FindArg]>(async () => null),

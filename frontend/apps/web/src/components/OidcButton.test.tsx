@@ -1,19 +1,21 @@
-import { isNativePlatform, openExternalUrl } from '@ci/common';
+import { isNativePlatform, isTauriPlatform, openExternalUrl } from '@ci/common';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OidcButton } from './OidcButton';
 
 // Keep the real helpers (buildApiUrl resolves to same-origin paths on web) but control
-// the platform check and stub the native "open the system browser" bridge.
+// the platform checks and stub the native "open the system browser" bridge.
 vi.mock('@ci/common', async (orig) => ({
   ...(await orig<typeof import('@ci/common')>()),
   isNativePlatform: vi.fn(() => false),
+  isTauriPlatform: vi.fn(() => false),
   openExternalUrl: vi.fn(),
 }));
 
 beforeEach(() => {
   vi.mocked(isNativePlatform).mockReturnValue(false);
+  vi.mocked(isTauriPlatform).mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -33,6 +35,20 @@ describe('OidcButton', () => {
 
   it('native: opens the OIDC route in the system browser with ?client=native', () => {
     vi.mocked(isNativePlatform).mockReturnValue(true);
+
+    render(<OidcButton label="Sign in with Companion account" />);
+    fireEvent.click(screen.getByRole('link', { name: 'Sign in with Companion account' }));
+
+    expect(openExternalUrl).toHaveBeenCalledTimes(1);
+    expect(openExternalUrl).toHaveBeenCalledWith('/api/authenticate/oidc?client=native');
+  });
+
+  it('desktop (Tauri): also opens the OIDC route in the system browser with ?client=native, same as Capacitor native', () => {
+    // isNativePlatform stays false here — Tauri is a distinct native shell (see
+    // isTauriPlatform's doc comment), so this exercises the OR condition
+    // specifically rather than just re-testing the Capacitor branch under a
+    // different mock.
+    vi.mocked(isTauriPlatform).mockReturnValue(true);
 
     render(<OidcButton label="Sign in with Companion account" />);
     fireEvent.click(screen.getByRole('link', { name: 'Sign in with Companion account' }));

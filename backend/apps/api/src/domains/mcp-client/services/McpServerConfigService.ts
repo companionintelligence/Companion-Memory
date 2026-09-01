@@ -55,7 +55,11 @@ export class McpServerConfigService {
 
     // Re-validated independently of whatever the client already showed the user — a request
     // forged (or replayed) without ever rendering the confirmation UI must still be rejected.
-    if (dto.catalogSlug && HIGH_RISK_CATALOG_SLUGS.has(dto.catalogSlug) && dto.acknowledgedHighRisk !== true) {
+    if (
+      dto.catalogSlug &&
+      HIGH_RISK_CATALOG_SLUGS.has(dto.catalogSlug) &&
+      dto.acknowledgedHighRisk !== true
+    ) {
       throw new BadRequestException(
         `"${dto.catalogSlug}" is a high-risk MCP server and requires acknowledgedHighRisk: true to add`,
       );
@@ -109,7 +113,10 @@ export class McpServerConfigService {
         ? dto.auth
           ? this.secretCodec.encryptAuth({
               type: dto.auth.type,
-              fields: this.secretCodec.mergeEntriesForUpdate(existing.auth?.fields ?? [], dto.auth.fields ?? []),
+              fields: this.secretCodec.mergeEntriesForUpdate(
+                existing.auth?.fields ?? [],
+                dto.auth.fields ?? [],
+              ),
             })
           : null
         : existing.auth;
@@ -236,7 +243,11 @@ export class McpServerConfigService {
     return existing;
   }
 
-  private assertTransportFieldsValid(transport: McpTransport, command: string | null, url: string | null): void {
+  private assertTransportFieldsValid(
+    transport: McpTransport,
+    command: string | null,
+    url: string | null,
+  ): void {
     if (transport === 'stdio' && !command) {
       throw new BadRequestException('A stdio MCP server requires a command');
     }

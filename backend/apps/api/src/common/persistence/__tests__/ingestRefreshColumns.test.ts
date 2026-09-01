@@ -26,7 +26,7 @@ describe('INGEST_REFRESH_COLUMNS', () => {
 
   it('matches the versioned snapshot (bump INGEST_SCHEMA_VERSION when a list changes)', () => {
     expect({ version: INGEST_SCHEMA_VERSION, columns: INGEST_REFRESH_COLUMNS }).toEqual({
-      version: 3,
+      version: 4,
       columns: {
         // CommunicationService.createMany self-heal UPDATE binds its VALUES
         // parameters in this order — keep it in lockstep with the service.
@@ -37,7 +37,19 @@ describe('INGEST_REFRESH_COLUMNS', () => {
         // re-sync clobber those edits. See the note on the map.
         item: [],
         content: [],
-        browser_activity: [],
+        // updateBrowserActivity only exposes title/url to direct editing, so
+        // every other capture-derived column self-heals on re-sync. The
+        // AI-generated insight columns (page_summary, category,
+        // productivity_score) stay excluded so enrichment output survives a
+        // re-import. See the note on the map.
+        browser_activity: [
+          'action_type',
+          'properties',
+          'duration_seconds',
+          'scroll_depth_percent',
+          'is_incognito',
+          'contains_sensitive',
+        ],
         product_model: [
           'title',
           'brand',

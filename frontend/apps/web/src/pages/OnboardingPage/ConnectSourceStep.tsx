@@ -8,7 +8,12 @@ import { ServiceIntegrationsSection } from '@/components/connect/ServiceIntegrat
 import { SourceCard } from '@/components/connect/SourceCard';
 import { BROWSER_TRACKS, CAPTURE_TRACKS } from '@/pages/SourcesPage/DevicesPanel';
 
-import { CAPTURE_DOWNLOAD_URL, CHROME_EXTENSION_URL, CI_DOWNLOAD_URL } from './constants';
+import {
+  CAPTURE_DOWNLOAD_URL,
+  CHROME_EXTENSION_URL,
+  CI_DOWNLOAD_URL,
+  FIREFOX_EXTENSION_URL,
+} from './constants';
 import { StepHeader } from './StepHeader';
 
 // The lists are imported from the panels that own them, so setup and
@@ -62,7 +67,12 @@ export function ConnectSourceStep() {
             tracks={BROWSER_TRACKS}
             onSelect={() => window.open(CHROME_EXTENSION_URL, '_blank', 'noopener,noreferrer')}
           />
-          <SourceCard logo="/branding/firefox/logo.svg" name="Firefox" tracks={BROWSER_TRACKS} comingSoon />
+          <SourceCard
+            logo="/branding/firefox/logo.svg"
+            name="Firefox"
+            tracks={BROWSER_TRACKS}
+            onSelect={() => window.open(FIREFOX_EXTENSION_URL, '_blank', 'noopener,noreferrer')}
+          />
           <SourceCard
             logo="/branding/ios/logo.svg"
             name="iPhone & iPad"
@@ -76,12 +86,17 @@ export function ConnectSourceStep() {
         </div>
       </div>
 
-      <ConnectedAccountsSection />
-
-      <ServiceIntegrationsSection
-        variant="onboarding"
-        onProviderSelect={(rawId) => setDialogProviderId(rawId)}
-      />
+      <div className="space-y-4 max-w-5xl mx-auto w-full">
+        <p className="text-lg sm:text-xl leading-snug text-muted-foreground text-center px-2">
+          Connect an account you already use. Email, calendar, photos, and social history come in
+          automatically.
+        </p>
+        <ConnectedAccountsSection />
+        <ServiceIntegrationsSection
+          variant="onboarding"
+          onProviderSelect={(rawId) => setDialogProviderId(rawId)}
+        />
+      </div>
 
       <ProviderConnectDialog
         rawProviderId={dialogProviderId}

@@ -1,6 +1,6 @@
 import type { LoggerService } from '@ci/common/logging';
 import type { OllamaService } from '@ci/domains/llm/services/OllamaService';
-import { EventEntity, type EventService } from '@ci/domains/memory';
+import { EventEntity, type CalendarEventService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 import type { SearchService } from '@ci/domains/search-next';
 
@@ -59,7 +59,7 @@ function makeEventQb(rows: EventEntity[]) {
  * A planned block exactly as PlannedBlockService.placeAt persists one: a real
  * EventEntity (no title column) whose metadata is only `{ generator, taskId }`.
  * The title lives on the CTI base row and must be read back through
- * EventService — a fixture that puts a title in `metadata` invents a shape the
+ * CalendarEventService — a fixture that puts a title in `metadata` invents a shape the
  * writer never produces.
  */
 function makeBlock(overrides: Partial<EventEntity> = {}): EventEntity {
@@ -80,7 +80,7 @@ function makeEventService(events: Array<{ id: string; title: string | null }>) {
     findByIds: jest.fn(async (_context: unknown, ids: string[]) =>
       ids.map((id) => events.find((event) => event.id === id) ?? null),
     ),
-  } as unknown as EventService;
+  } as unknown as CalendarEventService;
 }
 
 /** Real trust-dial arithmetic, so threshold coincidences cannot be mocked away. */

@@ -106,9 +106,7 @@ export function ContentDetails({ entity }: Props) {
       ]}
       rawData={data}
     >
-      {showFileOpen && fileHref && (
-        <DocumentFileActions href={fileHref} filename={data.mediaFilename} />
-      )}
+      {showFileOpen && fileHref && <DocumentFileActions href={fileHref} filename={data.mediaFilename} />}
       {!fileHref && sourceHref && <DocumentFileActions href={sourceHref} label="Open source" />}
     </EntityDetailScaffold>
   );

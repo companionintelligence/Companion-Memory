@@ -25,7 +25,15 @@ function node(id: string, name: string, entityType = 'person') {
 }
 
 function link(id: string, target: string, relationshipType: string) {
-  return { id, relationship_id: id, source: ENTITY_ID, target, relationship_type: relationshipType, strength: 0.5, properties: {} };
+  return {
+    id,
+    relationship_id: id,
+    source: ENTITY_ID,
+    target,
+    relationship_type: relationshipType,
+    strength: 0.5,
+    properties: {},
+  };
 }
 
 const SUBGRAPH: Subgraph = {

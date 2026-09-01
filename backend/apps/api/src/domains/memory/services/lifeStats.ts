@@ -379,8 +379,7 @@ export function buildLifeInsights(series: {
   if (topTime) {
     // Spans are appended, never added in: "3356h + 464d" says a calendar holds
     // both, where "14526h" said the owner spent 605 days in meetings.
-    const spanSuffix =
-      topTime.spanDays > 0 ? ` + ${topTime.spanDays.toLocaleString()}d all-day` : '';
+    const spanSuffix = topTime.spanDays > 0 ? ` + ${topTime.spanDays.toLocaleString()}d all-day` : '';
 
     insights.push({
       id: 'top-time',

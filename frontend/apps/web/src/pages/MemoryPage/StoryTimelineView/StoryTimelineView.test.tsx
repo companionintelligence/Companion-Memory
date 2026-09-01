@@ -48,6 +48,9 @@ vi.mock('@/components/TimelineJs', () => ({
       <button type="button" onClick={() => onSlideChange?.(data.events[0]?.unique_id ?? '')}>
         land
       </button>
+      <button type="button" onClick={() => onSlideChange?.(data.events[1]?.unique_id ?? data.events[0]?.unique_id ?? '')}>
+        next
+      </button>
       {data.events.map((slide) => (
         <button
           key={slide.unique_id}
@@ -99,6 +102,18 @@ describe('StoryTimelineView', () => {
 
     renderTimeline();
     fireEvent.click(screen.getByRole('button', { name: 'land' }));
+
+    expect(setActiveEntityMock).not.toHaveBeenCalled();
+  });
+
+  it('does not open the detail drawer when navigating to the next slide', () => {
+    const drill = eventAt('drill', new Date(2026, 6, 1, 10), 'Drill run');
+    const lamp = eventAt('lamp', new Date(2026, 6, 2, 10), 'Desk lamp');
+    useEntityServiceMock.mockReturnValue(baseService({ data: [drill, lamp] }));
+
+    renderTimeline();
+    fireEvent.click(screen.getByRole('button', { name: 'land' }));
+    fireEvent.click(screen.getByRole('button', { name: 'next' }));
 
     expect(setActiveEntityMock).not.toHaveBeenCalled();
   });

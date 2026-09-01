@@ -4,7 +4,10 @@ FastAPI endpoints for manual summary triggers.
 Simple HTTP layer - delegates to summaries.py for execution logic.
 """
 
+import asyncio
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -16,6 +19,7 @@ from ci.telemetry import init_telemetry
 
 from . import __version__, functions
 from .data_aggregator import aggregator
+from .llm_health import check_endpoint_at_startup, probe_endpoint
 from .runner import router as runner_router
 
 # No-op unless SENTRY_DSN is set — see telemetry.py.
@@ -24,14 +28,52 @@ init_telemetry("ci-server-summary")
 # Allow nested event loops (needed for run_sync() in async FastAPI context)
 nest_asyncio.apply()
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """
+    Say out loud, once, whether the model endpoint is actually there.
+
+    Every summary, insight and action this service produces goes through that
+    endpoint, and a service pointed at nothing used to boot clean and fail one
+    job at a time — see llm_health.py for the run this cost. Off the event loop
+    so a black-holed address delays startup by the probe timeout at worst, and
+    never fatal: a down model is a degraded service, not a crashed one.
+    """
+    await asyncio.to_thread(check_endpoint_at_startup)
+    yield
+
+
 app = FastAPI(
     title="CI Summary API",
     version=__version__,
     description="Manual summary triggers, background function runner, and data aggregation.",
+    lifespan=lifespan,
 )
 
 # pg-boss function runner: POST /functions/run, GET /runs/{id}
 app.include_router(runner_router)
+
+
+@app.get("/health")
+async def health() -> dict[str, Any]:
+    """
+    Liveness, plus the state of the one dependency that silently breaks.
+
+    Always 200: the process is up and its HTTP surface works, which is what a
+    container healthcheck is asking. An unreachable model shows as
+    `status: degraded` with the endpoint and the reason, so nobody has to infer
+    it from a stream of failed jobs. Probed live rather than cached from boot,
+    because "the model came back" is the more common transition.
+    """
+    status = await asyncio.to_thread(probe_endpoint)
+
+    return {
+        "status": "ok" if status.reachable else "degraded",
+        "service": "ci-summary",
+        "version": __version__,
+        "llm": status.as_dict(),
+    }
 
 
 # ============================================================================

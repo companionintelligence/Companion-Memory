@@ -5,7 +5,7 @@ import { RedditSavedTransformService } from '../transform/TransformSaved';
 /**
  * The Reddit transforms deduped only through their racy search-then-create
  * pre-checks: events carried source_system + source_id but no source_type
- * (which disables both EventService.createOne's find-or-create and
+ * (which disables both CalendarEventService.createOne's find-or-create and
  * events_source_triple_uniq — NULLs are distinct to it), and content rows
  * carried no triple at all. These tests pin the full triples that give both
  * writes a database backstop.

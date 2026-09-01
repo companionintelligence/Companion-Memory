@@ -21,6 +21,9 @@ export const ONBOARDING_OAUTH_RESUME_KEY = 'onboarding-resume';
 export const CHROME_EXTENSION_URL =
   'https://chromewebstore.google.com/detail/companion-intelligence/bcocflgkdeimninckpmdifcniajoneih?authuser=3&hl=en';
 
+export const FIREFOX_EXTENSION_URL =
+  'https://addons.mozilla.org/en-US/firefox/addon/companion-intelligence/';
+
 export const CI_DOWNLOAD_URL = 'https://ci.computer/download';
 
 export const CAPTURE_DOWNLOAD_URL = 'https://ci.computer/download#capture';

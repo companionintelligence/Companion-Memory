@@ -198,12 +198,13 @@ export class TelegramFileImporter implements FileImporter {
         continue;
       }
 
-      for (const msg of chat.messages ?? []) {
+      for (const [i, msg] of (chat.messages ?? []).entries()) {
         if (!msg || typeof msg !== 'object') {
           continue;
         }
 
         if (msg.type !== 'message') {
+          params.pipeline.drop?.('non_message_type');
           continue;
         }
 
@@ -219,11 +220,13 @@ export class TelegramFileImporter implements FileImporter {
         }
 
         if (!timeframeContains(params.timeframe, ts)) {
+          params.pipeline.drop?.('outside_timeframe');
           continue;
         }
 
         const text = this.extractText(msg.text);
         if (!text) {
+          params.pipeline.drop?.('empty_after_parse');
           continue;
         }
 
@@ -239,7 +242,7 @@ export class TelegramFileImporter implements FileImporter {
             : undefined;
         params.pipeline.push({
           item: {
-            id: msg.id != null ? `telegram:${chat.id}:${msg.id}` : undefined,
+            id: msg.id != null ? `telegram:${chat.id}:${msg.id}` : `telegram:${chat.id}:${ts?.getTime() ?? 'noTs'}:${i}`,
             classification: 'message',
             timestamp: ts,
             content: {

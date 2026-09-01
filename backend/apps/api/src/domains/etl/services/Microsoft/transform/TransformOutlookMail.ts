@@ -3,6 +3,11 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
+import {
+  headersFromOutlookMessage,
+  liveMailDropReason,
+  mailIncludeBulkEnabled,
+} from '@ci/domains/import';
 import { CommunicationService, CommunicationType, type CreateCommunicationDto } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
@@ -45,9 +50,15 @@ interface OutlookMessage {
   importance?: string;
   isRead?: boolean;
   isDraft?: boolean;
+  categories?: string[];
   conversationId?: string;
   internetMessageId?: string;
   webLink?: string;
+  inferenceClassification?: string;
+  internetMessageHeaders?: Array<{
+    name?: string;
+    value?: string;
+  }>;
   attachments?: Array<{
     id?: string;
     name?: string;
@@ -170,13 +181,27 @@ export class OutlookMailTransformService {
       const messageId = message.id || 'unknown';
       const subject = message.subject || '(No Subject)';
 
-      // Skip drafts
-      if (message.isDraft) {
-        this.logger.debug('Skipping draft message', {
+      const headers = headersFromOutlookMessage({
+        subject: message.subject,
+        from: message.from,
+        inferenceClassification: message.inferenceClassification,
+        importance: message.importance,
+        categories: message.categories,
+        internetMessageHeaders: message.internetMessageHeaders,
+      });
+      const drop = liveMailDropReason({
+        headers,
+        bodyText: message.body?.content || message.bodyPreview,
+        isExplicitDraft: message.isDraft,
+        includeBulk: mailIncludeBulkEnabled(),
+      });
+      if (drop) {
+        this.logger.log('Skipping Outlook Mail message', {
           userId,
           connectionId,
           messageId,
           subject,
+          drop,
         });
 
         return;
@@ -385,6 +410,7 @@ export class OutlookMailTransformService {
       },
       subject: message.subject || '(No Subject)',
       content: message.body?.content || message.bodyPreview || '',
+      thread_id: message.conversationId,
       category: 'personal', // TODO: Classify emails
       connection_id: connectionId,
       attachments: [], // TODO: Handle attachments

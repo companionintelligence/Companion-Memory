@@ -57,6 +57,8 @@ export interface CreateEventDto {
   time_source?: string;
   /** How much of `start_time` is meaningful — `TIME_PRECISIONS` (…|`unknown`). */
   time_precision?: string;
+  /** When the capture source recorded this event, distinct from `start_time` (when it occurred). */
+  observed_at?: Date;
   location_name?: string;
   location_entity_id?: string;
   location_coordinates?: Point;
@@ -67,6 +69,8 @@ export interface CreateEventDto {
   source_id?: string;
   /** The connection whose sync produced this event; null for manual/imported/predicted. */
   connection_id?: string | null;
+  /** Per-tick correlator shared with a ci.files row captured the same tick; see EventEntity.captureTickId. */
+  capture_tick_id?: string;
   confidence_score?: number;
   is_recurring?: boolean;
   recurrence_pattern?: Record<string, unknown>;

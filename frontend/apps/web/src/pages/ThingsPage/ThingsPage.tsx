@@ -770,208 +770,210 @@ export function ThingsPage() {
   } else {
     content = (
       <PullToRefresh onRefresh={refetch}>
-      <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
-        <MemoryHubShell
-          actions={
-            isMobile ? undefined : (
-              <Button type="button" onClick={() => setCreateOpen(true)}>
-                New thing
-              </Button>
-            )
-          }
-        >
-          <Tabs defaultValue="things" className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
-            <Tabs.List className="self-start">
-              <Tabs.Trigger value="things">Things</Tabs.Trigger>
-              <Tabs.Trigger value="review">Review sightings</Tabs.Trigger>
-            </Tabs.List>
+        <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
+          <MemoryHubShell
+            actions={
+              isMobile ? undefined : (
+                <Button type="button" onClick={() => setCreateOpen(true)}>
+                  New thing
+                </Button>
+              )
+            }
+          >
+            <Tabs defaultValue="things" className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
+              <Tabs.List className="self-start">
+                <Tabs.Trigger value="things">Things</Tabs.Trigger>
+                <Tabs.Trigger value="review">Review sightings</Tabs.Trigger>
+              </Tabs.List>
 
-            <Tabs.Content value="things" className="flex flex-col gap-4">
-              <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-                <Input
-                  // The full phrase doesn't fit on one line at phone widths — inputs
-                  // can't wrap a placeholder, so it would just clip mid-word instead.
-                  placeholder={isMobile ? 'Search things...' : 'Search things by name, brand, model or category...'}
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    // New query, new cursor space — a stale failure must not gate it.
-                    pagination.reset();
-                  }}
-                  // Any min-width guess still clips this placeholder at SOME width —
-                  // full-width below `sm` sidesteps that: count + Filters drop to
-                  // their own line instead of squeezing the input for space.
-                  className="max-w-xl w-full flex-1 sm:w-auto"
-                />
-                <div className="text-sm text-muted-foreground">{totalCount} things</div>
-                {isMobile ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    onClick={() => setFiltersOpen(true)}
-                  >
-                    <Filter className="h-4 w-4" />
-                    Filters
-                    {activeFilterChips.length > 0 ? (
-                      <Badge variant="secondary">{activeFilterChips.length}</Badge>
-                    ) : null}
-                  </Button>
+              <Tabs.Content value="things" className="flex flex-col gap-4">
+                <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
+                  <Input
+                    // The full phrase doesn't fit on one line at phone widths — inputs
+                    // can't wrap a placeholder, so it would just clip mid-word instead.
+                    placeholder={
+                      isMobile ? 'Search things...' : 'Search things by name, brand, model or category...'
+                    }
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      // New query, new cursor space — a stale failure must not gate it.
+                      pagination.reset();
+                    }}
+                    // Any min-width guess still clips this placeholder at SOME width —
+                    // full-width below `sm` sidesteps that: count + Filters drop to
+                    // their own line instead of squeezing the input for space.
+                    className="max-w-xl w-full flex-1 sm:w-auto"
+                  />
+                  <div className="text-sm text-muted-foreground">{totalCount} things</div>
+                  {isMobile ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => setFiltersOpen(true)}
+                    >
+                      <Filter className="h-4 w-4" />
+                      Filters
+                      {activeFilterChips.length > 0 ? (
+                        <Badge variant="secondary">{activeFilterChips.length}</Badge>
+                      ) : null}
+                    </Button>
+                  ) : null}
+                </div>
+
+                {isMobile && activeFilterChips.length > 0 ? (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {activeFilterChips.map((chip) => (
+                      <Badge key={chip.id} variant="secondary" className="gap-1 pr-1 font-normal">
+                        {chip.label}
+                        <button
+                          type="button"
+                          aria-label={`Clear ${chip.label}`}
+                          className="rounded-sm p-0.5 hover:bg-muted"
+                          onClick={chip.onClear}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
                 ) : null}
-              </div>
 
-              {isMobile && activeFilterChips.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {activeFilterChips.map((chip) => (
-                    <Badge key={chip.id} variant="secondary" className="gap-1 pr-1 font-normal">
-                      {chip.label}
-                      <button
-                        type="button"
-                        aria-label={`Clear ${chip.label}`}
-                        className="rounded-sm p-0.5 hover:bg-muted"
-                        onClick={chip.onClear}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                </div>
-              ) : null}
-
-              {isMobile ? (
-                <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
-                  <Sheet.Content
-                    side="bottom"
-                    className="bottom-0 max-h-[min(85dvh,var(--vv-height,100dvh))] rounded-b-none pb-[max(1rem,var(--safe-area-bottom),var(--keyboard-inset,0px))] gap-0"
-                  >
-                    <Sheet.Header>
-                      <Sheet.Title>Filter things</Sheet.Title>
-                      <Sheet.Description>
-                        Narrow the list by category, brand, condition, or code.
-                      </Sheet.Description>
-                    </Sheet.Header>
-                    <div className="flex flex-col gap-3 overflow-y-auto px-4 pb-4">
-                      <ThingsFilterFields layout="stack" {...filterFieldProps} />
-                    </div>
-                    <Sheet.Footer className="flex-row justify-between">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        disabled={activeFilterChips.length === 0}
-                        onClick={() => {
-                          setCategory('');
-                          setBrand('');
-                          setCondition(null);
-                          setLifecycleState(null);
-                          setHasIdentifier(null);
-                          setSort('RECENTLY_SEEN');
-                          markFilterChanged();
-                        }}
-                      >
-                        Clear all
-                      </Button>
-                      <Sheet.Close asChild>
-                        <Button type="button">Done</Button>
-                      </Sheet.Close>
-                    </Sheet.Footer>
-                  </Sheet.Content>
-                </Sheet>
-              ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  <ThingsFilterFields layout="row" {...filterFieldProps} />
-                </div>
-              )}
-
-              {duplicatesError && (
-                <div className="text-sm text-muted-foreground">
-                  Duplicate suggestions are unavailable right now ({duplicatesError.message}).
-                </div>
-              )}
-
-              {duplicateGroups.length > 0 && (
-                <Card>
-                  <Card.Header>
-                    <Card.Title className="flex items-center gap-2 text-base">
-                      <Merge className="h-4 w-4" />
-                      Possible duplicates
-                      <Badge variant="secondary">{duplicates?.totalCount ?? 0}</Badge>
-                    </Card.Title>
-                    <Card.Description>
-                      These things share a code, a product, or a brand and model bought the same day.
-                    </Card.Description>
-                  </Card.Header>
-                  {/* The list grows with every "Load more"; capped so the things
-                      list below stays reachable without scrolling past dozens of groups. */}
-                  <Card.Content className="flex max-h-[40em] flex-col gap-3 overflow-y-auto">
-                    {duplicateGroups.map((group) => (
-                      <DuplicateGroupCard
-                        key={`${group.reason}:${group.value}`}
-                        group={group}
-                        onMerged={onMerged}
-                      />
-                    ))}
-
-                    {duplicates?.hasMore && (
-                      <div className="flex justify-center">
-                        <Button variant="outline" size="sm" onClick={loadMoreDuplicates}>
-                          Load more duplicate groups
-                        </Button>
+                {isMobile ? (
+                  <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
+                    <Sheet.Content
+                      side="bottom"
+                      className="bottom-0 max-h-[min(85dvh,var(--vv-height,100dvh))] rounded-b-none pb-[max(1rem,var(--safe-area-bottom),var(--keyboard-inset,0px))] gap-0"
+                    >
+                      <Sheet.Header>
+                        <Sheet.Title>Filter things</Sheet.Title>
+                        <Sheet.Description>
+                          Narrow the list by category, brand, condition, or code.
+                        </Sheet.Description>
+                      </Sheet.Header>
+                      <div className="flex flex-col gap-3 overflow-y-auto px-4 pb-4">
+                        <ThingsFilterFields layout="stack" {...filterFieldProps} />
                       </div>
-                    )}
+                      <Sheet.Footer className="flex-row justify-between">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          disabled={activeFilterChips.length === 0}
+                          onClick={() => {
+                            setCategory('');
+                            setBrand('');
+                            setCondition(null);
+                            setLifecycleState(null);
+                            setHasIdentifier(null);
+                            setSort('RECENTLY_SEEN');
+                            markFilterChanged();
+                          }}
+                        >
+                          Clear all
+                        </Button>
+                        <Sheet.Close asChild>
+                          <Button type="button">Done</Button>
+                        </Sheet.Close>
+                      </Sheet.Footer>
+                    </Sheet.Content>
+                  </Sheet>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <ThingsFilterFields layout="row" {...filterFieldProps} />
+                  </div>
+                )}
 
-                    <div className="text-center text-xs text-muted-foreground">
-                      {duplicateGroups.length} of {duplicates?.totalCount ?? 0} groups shown
-                    </div>
-                  </Card.Content>
-                </Card>
-              )}
+                {duplicatesError && (
+                  <div className="text-sm text-muted-foreground">
+                    Duplicate suggestions are unavailable right now ({duplicatesError.message}).
+                  </div>
+                )}
 
-              {things.length === 0 ? (
-                <div className="relative min-h-[12rem]">
-                  <EmptyState message="No things found" />
-                </div>
-              ) : (
-                <>
-                  <EntityGrid>
-                    {things.map((thing) => (
-                      <ChatAbout
-                        key={thing.id}
-                        className="h-full min-w-0"
-                        context={namedChatContext({
-                          title: thing.name,
-                          body: null,
-                          sourceKind: 'ItemType',
-                          sourceId: thing.id,
-                        })}
-                      >
-                        <ItemGridItem
-                          item={thing}
-                          onClick={() => navigate(`/items/${GlobalUID.parse('item', thing.id)}`)}
+                {duplicateGroups.length > 0 && (
+                  <Card>
+                    <Card.Header>
+                      <Card.Title className="flex items-center gap-2 text-base">
+                        <Merge className="h-4 w-4" />
+                        Possible duplicates
+                        <Badge variant="secondary">{duplicates?.totalCount ?? 0}</Badge>
+                      </Card.Title>
+                      <Card.Description>
+                        These things share a code, a product, or a brand and model bought the same day.
+                      </Card.Description>
+                    </Card.Header>
+                    {/* The list grows with every "Load more"; capped so the things
+                      list below stays reachable without scrolling past dozens of groups. */}
+                    <Card.Content className="flex max-h-[40em] flex-col gap-3 overflow-y-auto">
+                      {duplicateGroups.map((group) => (
+                        <DuplicateGroupCard
+                          key={`${group.reason}:${group.value}`}
+                          group={group}
+                          onMerged={onMerged}
                         />
-                      </ChatAbout>
-                    ))}
-                  </EntityGrid>
+                      ))}
 
-                  <InfiniteListFooter pagination={pagination} noun="things" />
-                </>
-              )}
-            </Tabs.Content>
+                      {duplicates?.hasMore && (
+                        <div className="flex justify-center">
+                          <Button variant="outline" size="sm" onClick={loadMoreDuplicates}>
+                            Load more duplicate groups
+                          </Button>
+                        </div>
+                      )}
 
-            <Tabs.Content value="review">
-              <ObservationReview onResolved={() => refetch()} />
-            </Tabs.Content>
-          </Tabs>
-        </MemoryHubShell>
+                      <div className="text-center text-xs text-muted-foreground">
+                        {duplicateGroups.length} of {duplicates?.totalCount ?? 0} groups shown
+                      </div>
+                    </Card.Content>
+                  </Card>
+                )}
 
-        <ThingModal
-          open={createOpen}
-          onClose={() => setCreateOpen(false)}
-          item={null}
-          create
-          onSaved={() => refetch()}
-        />
-      </PageContent>
+                {things.length === 0 ? (
+                  <div className="relative min-h-[12rem]">
+                    <EmptyState message="No things found" />
+                  </div>
+                ) : (
+                  <>
+                    <EntityGrid>
+                      {things.map((thing) => (
+                        <ChatAbout
+                          key={thing.id}
+                          className="h-full min-w-0"
+                          context={namedChatContext({
+                            title: thing.name,
+                            body: null,
+                            sourceKind: 'ItemType',
+                            sourceId: thing.id,
+                          })}
+                        >
+                          <ItemGridItem
+                            item={thing}
+                            onClick={() => navigate(`/items/${GlobalUID.parse('item', thing.id)}`)}
+                          />
+                        </ChatAbout>
+                      ))}
+                    </EntityGrid>
+
+                    <InfiniteListFooter pagination={pagination} noun="things" />
+                  </>
+                )}
+              </Tabs.Content>
+
+              <Tabs.Content value="review">
+                <ObservationReview onResolved={() => refetch()} />
+              </Tabs.Content>
+            </Tabs>
+          </MemoryHubShell>
+
+          <ThingModal
+            open={createOpen}
+            onClose={() => setCreateOpen(false)}
+            item={null}
+            create
+            onSaved={() => refetch()}
+          />
+        </PageContent>
       </PullToRefresh>
     );
   }

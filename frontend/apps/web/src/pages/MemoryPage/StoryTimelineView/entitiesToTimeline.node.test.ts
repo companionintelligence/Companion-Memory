@@ -30,7 +30,15 @@ describe('buildMemoryTimelineData', () => {
 
   it('returns no slides when nothing is dated', () => {
     const { data } = buildMemoryTimelineData(
-      [entity({ __typename: 'PersonType', id: 'p1' }), entity({ __typename: 'EventType', id: 'ingest', bucketTimeSource: 'ingest', bucketStartTime: now.toISOString() })],
+      [
+        entity({ __typename: 'PersonType', id: 'p1' }),
+        entity({
+          __typename: 'EventType',
+          id: 'ingest',
+          bucketTimeSource: 'ingest',
+          bucketStartTime: now.toISOString(),
+        }),
+      ],
       now,
     );
 

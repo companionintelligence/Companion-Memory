@@ -119,3 +119,36 @@ describe('usePlanTasks — placeOnDay', () => {
     );
   });
 });
+
+describe('usePlanTasks — pending changes', () => {
+  it('does not keep a declined calendar suggestion in Proposed', () => {
+    mockedUseQuery.mockReturnValue({
+      data: {
+        tasks: {
+          edges: [{ node: node({ scheduledFor: '2026-08-29', placedOnCalendar: false }) }],
+          totalCount: 1,
+        },
+        taskPendingChanges: [
+          {
+            id: 'c1',
+            taskId: 't1',
+            kind: 'schedule',
+            rationale: 'Place on the calendar at 2026-08-29T16:00:00.000Z?',
+            confidence: 0.8,
+            status: 'declined',
+          },
+        ],
+      },
+      loading: false,
+      error: undefined,
+      refetch,
+    } as unknown as ReturnType<typeof useQuery>);
+
+    const { result } = renderHook(() => usePlanTasks());
+
+    expect(result.current.nodes[0]?.hasPendingChange).toBe(false);
+    expect(result.current.pendingByTask.size).toBe(0);
+    expect(result.current.sections.find((section) => section.key === 'unscheduled')?.tasks).toHaveLength(1);
+    expect(result.current.sections.find((section) => section.key === 'proposed')).toBeUndefined();
+  });
+});

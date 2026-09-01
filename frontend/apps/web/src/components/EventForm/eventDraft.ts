@@ -168,7 +168,7 @@ export function validateEventDraft(draft: EventDraft): EventDraftProblem | null 
  * stored as an empty string (an event whose category is "" is not an event
  * with no category).
  *
- * `eventType` is deliberately left unset when blank. EventService.findInRange
+ * `eventType` is deliberately left unset when blank. CalendarEventService.findInRange
  * serves the Schedule from a fixed set of calendar event types PLUS rows with
  * a NULL event_type, and unset is how user-created events land on the calendar.
  *

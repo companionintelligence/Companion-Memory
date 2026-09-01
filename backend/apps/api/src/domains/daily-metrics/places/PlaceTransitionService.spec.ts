@@ -61,7 +61,7 @@ function makeMocks() {
   const clusterService = {
     getClusters: jest.fn<Promise<PlaceClusterSnapshot[]>, [UserServiceContext]>(async () => []),
     buildClusters: jest.fn<Promise<BuildClustersResult>, [UserServiceContext, BuildClustersOptions?]>(
-      async () => ({ clusters: [], visits: [] }),
+      async () => ({ clusters: [], visits: [], windowEnd: AT }),
     ),
     getPositionWindow: jest.fn<Promise<PositionFix[]>, [UserServiceContext, Date, Date]>(async () => []),
     detectWindowStays: jest.fn<StayPoint[], [PositionFix[]]>(() => []),
@@ -174,6 +174,7 @@ describe('PlaceTransitionService.rebuild', () => {
           end: new Date('2026-07-08T10:00:00Z'),
         },
       ],
+      windowEnd: AT,
     });
 
     const result = await service.rebuild(CONTEXT, { now: AT });

@@ -8,7 +8,7 @@ import type { AnswerService } from '@ci/domains/intelligence';
 import type {
   CommunicationService,
   ContentService,
-  EventService,
+  CalendarEventService,
   GraphUtilityService,
 } from '@ci/domains/memory';
 import type { NoteService } from '@ci/domains/notes';
@@ -45,7 +45,7 @@ function makeService(
   const service = new ActivityRollupService(
     dataSource as unknown as DataSource,
     provider('communications') as unknown as CommunicationService,
-    provider('events') as unknown as EventService,
+    provider('events') as unknown as CalendarEventService,
     provider('messages') as unknown as MessageService,
     provider('notes') as unknown as NoteService,
     provider('content') as unknown as ContentService,

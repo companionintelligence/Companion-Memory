@@ -1,6 +1,10 @@
 import { Module } from '@nestjs/common';
 
-import { EmbeddingGenerationService } from './services/EmbeddingGenerationService';
+import {
+  EMBED_TIMEOUT_MESSAGE,
+  EMBED_TIMEOUT_MS,
+  EmbeddingGenerationService,
+} from './services/EmbeddingGenerationService';
 
 @Module({
   providers: [EmbeddingGenerationService],
@@ -8,7 +12,7 @@ import { EmbeddingGenerationService } from './services/EmbeddingGenerationServic
 })
 export class EmbeddingModule {}
 
-export { EmbeddingGenerationService };
+export { EmbeddingGenerationService, EMBED_TIMEOUT_MS, EMBED_TIMEOUT_MESSAGE };
 export {
   embedSkipReason,
   isEmbeddable,

@@ -36,7 +36,10 @@ function stripHtml(html: string): string {
     return (doc.body.textContent ?? '').replace(/\s+/g, ' ').trim();
   }
 
-  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return html
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function fallbackTitle(kind: string): string {
@@ -103,11 +106,7 @@ function readWhen(record: Record<string, unknown>): string | null {
   }
 
   return formatWhen(
-    record.startTime ??
-      record.bucketStartTime ??
-      record.time ??
-      record.bucketTime ??
-      record.bucketAppearedAt,
+    record.startTime ?? record.bucketStartTime ?? record.time ?? record.bucketTime ?? record.bucketAppearedAt,
   );
 }
 

@@ -205,12 +205,18 @@ export class GoogleContactsTransformService {
         propsToCheck.phone = primaryPhone;
       }
 
-      const existingEntities = await this.personService.search(
-        { userId },
-        {
-          properties: { ...propsToCheck },
-        },
-      );
+      // A contact with neither email nor phone has no identifying field beyond
+      // owner_user_id, so searching would match (and then update) an unrelated
+      // existing person for this user rather than correctly finding "none".
+      const hasIdentifyingProperty = Boolean(primaryEmail || primaryPhone);
+      const existingEntities = hasIdentifyingProperty
+        ? await this.personService.search(
+            { userId },
+            {
+              properties: { ...propsToCheck },
+            },
+          )
+        : [];
       const existingEntity = existingEntities.length > 0 ? existingEntities[0] : undefined;
 
       let contactEntityId: string;
@@ -267,7 +273,23 @@ export class GoogleContactsTransformService {
         // Add birthday
         if (contact.birthdays && contact.birthdays.length > 0 && contact.birthdays[0].date) {
           const birthday = contact.birthdays[0].date;
-          properties.birthday = `${birthday.year || ''}${birthday.month || ''}${birthday.day || ''}`;
+          const pad = (n: number) => String(n).padStart(2, '0');
+          const birthdayParts: string[] = [];
+          if (birthday.year) {
+            birthdayParts.push(String(birthday.year));
+          }
+
+          if (birthday.month) {
+            birthdayParts.push(pad(birthday.month));
+          }
+
+          if (birthday.day) {
+            birthdayParts.push(pad(birthday.day));
+          }
+
+          if (birthdayParts.length > 0) {
+            properties.birthday = birthdayParts.join('-');
+          }
         }
 
         // Add photo

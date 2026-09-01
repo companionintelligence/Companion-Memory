@@ -1,4 +1,4 @@
-import { computeFreeBusy, summarizeAvailability } from './availability';
+import { computeFreeBusy, summarizeAvailability, coarsenFreeBusy } from './availability';
 
 const WINDOW = { from: new Date('2026-08-07T09:00:00Z'), to: new Date('2026-08-07T17:00:00Z') };
 
@@ -141,5 +141,100 @@ describe('all-day events use UTC day boundaries', () => {
     process.env.TZ = original;
     // All three must agree — a local-time implementation would differ.
     expect(new Set(spans).size).toBe(1);
+  });
+});
+
+describe('coarsenFreeBusy', () => {
+  const D = '2026-09-15T';
+  const slot = (start: string, end: string) => ({ start, end });
+
+  it('drops the busy intervals entirely', () => {
+    const out = coarsenFreeBusy({
+      busy: [slot(`${D}16:00:00.000Z`, `${D}16:30:00.000Z`)],
+      free: [slot(`${D}17:00:00.000Z`, `${D}18:00:00.000Z`)],
+    });
+
+    expect(out.busy).toEqual([]);
+  });
+
+  it('leaves an already-aligned slot untouched', () => {
+    const aligned = slot(`${D}16:30:00.000Z`, `${D}19:00:00.000Z`);
+
+    expect(coarsenFreeBusy({ busy: [], free: [aligned] }).free).toEqual([aligned]);
+  });
+
+  /**
+   * The direction that matters. A coarsened slot must be a SUBSET of the real
+   * one: rounding outward would tell an asker the owner is free at a time they
+   * are in a meeting, and an availability answer that can be wrong in that
+   * direction is worse than one that is merely coarse.
+   */
+  it('shrinks inward, never outward', () => {
+    const out = coarsenFreeBusy({
+      busy: [],
+      free: [slot(`${D}15:07:00.000Z`, `${D}18:53:00.000Z`)],
+    });
+
+    expect(out.free).toEqual([slot(`${D}15:30:00.000Z`, `${D}18:30:00.000Z`)]);
+  });
+
+  it('drops a slot too short to survive the grid rather than widening it', () => {
+    // 15:07–15:58 shrinks to 15:30–15:30. Zero length: dropped.
+    const out = coarsenFreeBusy({
+      busy: [],
+      free: [slot(`${D}15:07:00.000Z`, `${D}15:58:00.000Z`)],
+    });
+
+    expect(out.free).toEqual([]);
+  });
+
+  it('drops an unparseable boundary instead of passing it through', () => {
+    // This function's whole job is to narrow; forwarding a value it cannot
+    // reason about is the one case that would defeat that.
+    const out = coarsenFreeBusy({
+      busy: [],
+      free: [slot('not-a-date', `${D}18:00:00.000Z`)],
+    });
+
+    expect(out.free).toEqual([]);
+  });
+
+  it('honours a caller-supplied granularity', () => {
+    const free = [slot(`${D}15:07:00.000Z`, `${D}17:53:00.000Z`)];
+
+    // The SAME slot lands differently on the two grids, which is what makes
+    // this a test of the parameter rather than of the default.
+    expect(coarsenFreeBusy({ busy: [], free }, 30).free).toEqual([
+      slot(`${D}15:30:00.000Z`, `${D}17:30:00.000Z`),
+    ]);
+    expect(coarsenFreeBusy({ busy: [], free }, 60).free).toEqual([
+      slot(`${D}16:00:00.000Z`, `${D}17:00:00.000Z`),
+    ]);
+  });
+  it('drops a slot too short to survive the grid rather than widening it', () => {
+    // 15:07–15:58 shrinks to 15:30–15:30. Zero length: dropped.
+    const out = coarsenFreeBusy({
+      busy: [],
+      free: [slot(`${D}15:07:00.000Z`, `${D}15:58:00.000Z`)],
+    });
+
+    expect(out.free).toEqual([]);
+  });
+
+  it('drops an unparseable boundary instead of passing it through', () => {
+    // This function's whole job is to narrow; forwarding a value it cannot
+    // reason about is the one case that would defeat that.
+    const out = coarsenFreeBusy({
+      busy: [],
+      free: [slot('not-a-date', `${D}18:00:00.000Z`)],
+    });
+
+    expect(out.free).toEqual([]);
+  });
+
+  it('honours a caller-supplied granularity', () => {
+    const out = coarsenFreeBusy({ busy: [], free: [slot(`${D}15:07:00.000Z`, `${D}16:53:00.000Z`)] }, 60);
+
+    expect(out.free).toEqual([slot(`${D}16:00:00.000Z`, `${D}16:00:00.000Z`)].slice(0, 0));
   });
 });

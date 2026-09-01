@@ -1,27 +1,31 @@
 """
-Regression tests for the token-stream ingester.
+Regression tests for the ingester's two paths.
 
-Two defects are pinned here.
+The ingester has a NOTIFY path (producers are the API's `HbpeNotifyService`,
+added in #2477) and a `hbpe.token_stream` safety poll. They must behave
+differently, and two defects are pinned here.
 
-**The self-feeding poll loop.** The ingester used to re-run
-``TokenSerializer.serialize_day()`` for today after invalidating. That is a
-DELETE-then-INSERT into ``hbpe.token_stream``, and ``serialized_at`` defaults to
-``NOW()``, so the rows it wrote satisfied the very predicate the next poll used
-(``serialized_at > last_check``). Detection re-triggered the flush, which
-re-serialised, which re-triggered — once per poll interval, forever, with no new
-source data. The ingester must stay read-only.
+**The poll must not re-tokenise.** It watches `token_stream` — HBPE's own
+*output* — so a hit means a producer already serialised that day. Re-running
+`TokenSerializer.serialize_day()` there fed itself: it is a DELETE-then-INSERT
+and `serialized_at` defaults to `NOW()`, so the rows it wrote satisfied the very
+predicate the next poll used (`serialized_at > watermark`). Detection
+re-triggered the flush, which re-serialised, which re-triggered, once per poll
+interval with no new source data. The NOTIFY path *does* re-tokenise, because
+there the trigger really is new source data — that split is pinned too, so the
+fix cannot be "read-only everywhere".
 
-**The host-clock watermark.** The high-water mark was ``datetime.utcnow()``:
-naive, so Postgres reinterpreted it in the session time zone when comparing it
-against a TIMESTAMPTZ column, and stamped after the query returned, so a
-producer committing in between was skipped for good. It must advance only to a
-``serialized_at`` the loop actually observed.
+**The poll watermark must come from the observed rows.** It was
+`datetime.utcnow()`: naive, so Postgres reinterpreted it in the session time
+zone when comparing against a TIMESTAMPTZ column, and stamped after the query
+returned, so a producer committing in between was skipped for good.
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, date, datetime
+import json
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -209,7 +213,7 @@ async def test_poll_does_not_retrigger_itself(monkeypatch, fast_debounce):
     await _run_polls(ingester, db, rounds=3)
 
     assert serialize_calls == [], (
-        f"ingester re-serialised its own input: {serialize_calls}"
+        f"poll path re-serialised its own input: {serialize_calls}"
     )
     assert engine.invalidated == [TODAY], (
         f"day re-detected without new source data: {engine.invalidated}"
@@ -306,3 +310,64 @@ async def test_bad_date_does_not_abort_the_flush(monkeypatch, fast_debounce):
     await _run_polls(ingester, db, rounds=1)
 
     assert engine.invalidated == [TODAY]
+
+
+@pytest.mark.asyncio
+async def test_notify_path_still_reserialises(monkeypatch, fast_debounce):
+    """
+    The other half of the split: a NOTIFY means new *source* data, so the day
+    must be re-tokenised. Pins #2477's live-ingest path against a fix that
+    over-corrects the poll loop into "never serialise anywhere".
+    """
+    from ci.hbpe.tokenizer.serializer import TokenSerializer
+
+    db = FakeDb([])
+    monkeypatch.setattr(hbpe_database, "get_conn", lambda: FakeConn(db))
+
+    serialize_calls: list[tuple[str, str]] = []
+
+    def fake_serialize_day(_self, user_id, d):
+        serialize_calls.append((str(user_id), str(d)))
+        return 3
+
+    monkeypatch.setattr(TokenSerializer, "serialize_day", fake_serialize_day)
+
+    engine = FakeEngine()
+    ingester = EventIngester({USER: engine})
+    ingester._on_notify(
+        None, None, "ci_events", json.dumps({"user_id": USER, "date": TODAY})
+    )
+
+    await _wait_for(
+        lambda: serialize_calls == [(USER, TODAY)],
+        "the NOTIFY path to re-tokenise today",
+    )
+    assert engine.invalidated == [TODAY]
+
+
+@pytest.mark.asyncio
+async def test_notify_for_an_older_day_invalidates_without_reserialising(
+    monkeypatch, fast_debounce
+):
+    """Only today is re-tokenised; an older day is a cache eviction alone."""
+    from ci.hbpe.tokenizer.serializer import TokenSerializer
+
+    db = FakeDb([])
+    monkeypatch.setattr(hbpe_database, "get_conn", lambda: FakeConn(db))
+
+    serialize_calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        TokenSerializer,
+        "serialize_day",
+        lambda _self, u, d: serialize_calls.append((str(u), str(d))),
+    )
+
+    older = (date.today() - timedelta(days=3)).isoformat()
+    engine = FakeEngine()
+    ingester = EventIngester({USER: engine})
+    ingester._on_notify(
+        None, None, "ci_events", json.dumps({"user_id": USER, "date": older})
+    )
+
+    await _wait_for(lambda: engine.invalidated == [older], "the older day to evict")
+    assert serialize_calls == []

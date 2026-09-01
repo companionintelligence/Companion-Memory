@@ -4,7 +4,7 @@ import { Args, Float, ID, Int, Mutation, Parent, Query, ResolveField, Resolver }
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { EventService } from '@ci/domains/memory';
+import { CalendarEventService } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
 import { EventContentsLoader } from '../loaders/EventContentsLoader';
@@ -40,7 +40,7 @@ const MAX_RANGE_DAYS = 92;
 @Resolver(() => EventType)
 export class EventResolver {
   constructor(
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly personLoader: PersonLoader,
     private readonly placeLoader: PlaceLoader,
     private readonly tagLoader: TagLoader,
@@ -89,7 +89,7 @@ export class EventResolver {
 
   /**
    * Batch create events in one round-trip. Returns the created-or-existing rows
-   * in input order (EventService.create dedups on the
+   * in input order (CalendarEventService.create dedups on the
    * (source_type, source_system, source_id) triple), so a re-import is a no-op.
    * The clean batch equivalent of N aliased createEvent mutations.
    */

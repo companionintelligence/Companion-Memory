@@ -19,8 +19,10 @@ describe('explorerSearchTypeFilters', () => {
   });
 
   it('prefers an explicit include list (the default events URL)', () => {
-    expect(explorerSearchTypeFilters(new URLSearchParams('includedEntityTypes=Event,Communication'))).toEqual({
-      includeTypes: ['Communication', 'Event'],
-    });
+    expect(explorerSearchTypeFilters(new URLSearchParams('includedEntityTypes=Event,Communication'))).toEqual(
+      {
+        includeTypes: ['Communication', 'Event'],
+      },
+    );
   });
 });

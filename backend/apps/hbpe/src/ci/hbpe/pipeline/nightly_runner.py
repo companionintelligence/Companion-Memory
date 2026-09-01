@@ -5,7 +5,10 @@ Job order (orchestrated by ci.hbpe.functions.nightly, dispatched from the
 NestJS pg-boss scheduler through the function runner):
   1. label_unlabeled      long-running — run QwenLabeler on any events/content
                                          that arrived without labels. CPU-bound;
-                                         a large backlog can drain over hours.
+                                         a large backlog can drain over hours,
+                                         so events are drained recency-window
+                                         first (the window /forecast reads) and
+                                         older history second.
   2. l1_stale_sweep       < 30 sec    — deactivate L1 clusters unused for 90 days.
   3. l2_stale_sweep       < 30 sec    — deactivate L2 clusters unused for 90 days.
   4. lora_fine_tune       <  5 min    — per-user LoRA adapter update.
@@ -25,6 +28,9 @@ does not block subsequent steps.
 from __future__ import annotations
 
 import logging
+import time
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 
 log = logging.getLogger(__name__)
 
@@ -82,6 +88,197 @@ async def _run_inference(fn):
 # ── Step 1 — Label unlabeled events and content ────────────────────────────────
 
 
+@dataclass
+class _DrainCounters:
+    """Mutable tallies shared across both event phases and the content leg."""
+
+    done: int = 0
+    labeled_events: int = 0
+    new_labels: int = 0
+    errors: int = 0
+
+
+def _midnight_utc(day: date) -> datetime:
+    """UTC midnight at the start of ``day`` — the drain's phase boundary."""
+    return datetime(day.year, day.month, day.day, tzinfo=UTC)
+
+
+def _recency_cutoff(user_id: str, recency_days: int) -> datetime:
+    """
+    The instant separating the drain's recency phase from its historical one.
+
+    It is the first day of the window the *next* serialize run will write
+    (``bootstrap.label_recency_start``), not ``today - recency_days``: a label
+    reaches hbpe.pipeline.recurrence — and so /forecast — only once serialize
+    turns it into an hbpe.token_stream row, and serialize only ever rewrites
+    that trailing window. Anchoring on the corpus rather than on the wall clock
+    also keeps the two aligned when ingestion lags (see label_recency_start).
+
+    Note it is NOT recurrence.HISTORY_DAYS. The profiler reads 180 days of
+    token_stream, but nothing writes token_stream for the 90–180-day band, so
+    labeling into it cannot change any forecast.
+    """
+    from ci.hbpe.pipeline.bootstrap import label_recency_start
+
+    return _midnight_utc(label_recency_start(user_id, recency_days))
+
+
+def _drain_events(
+    *,
+    user_id: str,
+    labeler,
+    should_stop,
+    counters: _DrainCounters,
+    deadline: float,
+    since: datetime | None,
+    before: datetime | None,
+    newest_first: bool,
+    fetch=None,
+    progress=None,
+    clock=time.monotonic,
+) -> int:
+    """
+    Label unlabeled events in one window until ``deadline``; return how many
+    events this call labeled.
+
+    ``after_start`` / ``after_id`` are locals, so every call owns its own keyset
+    cursor. That is load-bearing: the two phases scan disjoint windows in
+    opposite directions, and a cursor hoisted out of here (shared between them)
+    would have phase 2 resume from phase 1's newest-first position and skip the
+    entire historical backlog.
+
+    The cursor advances even when ``label_event`` raises, so one poison row
+    cannot wedge the drain into an infinite re-fetch of the same batch.
+    """
+    if fetch is None:
+        from ci.hbpe.data_client import get_unlabeled_events as fetch
+    if progress is None:
+        from ci.hbpe.functions import update_pipeline_progress as progress
+
+    labeled_here = 0
+    after_start = None
+    after_id = None
+
+    while clock() < deadline and not should_stop.is_set():
+        batch = fetch(
+            user_id,
+            after_start=after_start,
+            after_id=after_id,
+            since=since,
+            before=before,
+            newest_first=newest_first,
+        )
+        if not batch:
+            break
+        for row in batch:
+            if should_stop.is_set() or clock() >= deadline:
+                break
+            try:
+                result = labeler.label_event(
+                    event_id=row["event_id"],
+                    user_id=user_id,
+                    title=row.get("title") or "",
+                    description=row.get("description"),
+                )
+                counters.labeled_events += 1
+                labeled_here += 1
+                if result.get("is_new_l1"):
+                    counters.new_labels += 1
+            except Exception:
+                log.exception(
+                    "label_unlabeled event failed: event_id=%s", row["event_id"]
+                )
+                counters.errors += 1
+            counters.done += 1
+            after_start = row.get("start_time")
+            after_id = row["event_id"]
+            if counters.done == 1 or counters.done % 10 == 0:
+                progress(user_id, done=counters.done, total=max(counters.done + 10, 1))
+
+    return labeled_here
+
+
+def _drain_event_phases(
+    *,
+    user_id: str,
+    labeler,
+    should_stop,
+    counters: _DrainCounters,
+    cutoff: datetime,
+    started_at: float,
+    budget_seconds: float,
+    recency_share: float,
+    fetch=None,
+    progress=None,
+    clock=time.monotonic,
+) -> dict:
+    """
+    Run the two-phase event drain and return ``{"recent", "historical", ...}``.
+
+    Phase 1 covers ``[cutoff, +inf)`` newest-first; phase 2 covers
+    ``(-inf, cutoff)`` oldest-first. The bounds are half-open against the same
+    cutoff, so the phases partition the unlabeled set with no overlap and no gap.
+
+    Newest-first inside phase 1 is not cosmetic. A truncated descending drain
+    leaves a contiguous ``[T-k, +inf)`` block — a short but well-formed history
+    whose per-cluster ``last_seen`` is genuinely recent. A truncated *ascending*
+    drain would leave ``[cutoff, cutoff+k]``, i.e. every cluster's last_seen
+    a whole serialize window stale, which makes recurrence's
+    ``since = (start - last_seen)``
+    absorb at the max observed gap and floods the due list with false "overdue"
+    flags. Phase 1 is also intentionally unbounded above so future-dated calendar
+    rows are labeled first — the week-forecast calendar overlay and the due-list
+    reconciliation both join hbpe.l1_event_cluster, so an unlabeled future event
+    is invisible to them.
+
+    Only phase 2's deadline is the hard one: unused phase-1 time rolls straight
+    over, so an empty or already-drained recency window costs a single query
+    rather than 80% of the night.
+    """
+    share = min(max(recency_share, 0.0), 1.0)
+    hard_deadline = started_at + budget_seconds
+    recency_deadline = started_at + budget_seconds * share
+
+    recent = _drain_events(
+        user_id=user_id,
+        labeler=labeler,
+        should_stop=should_stop,
+        counters=counters,
+        deadline=recency_deadline,
+        since=cutoff,
+        before=None,
+        newest_first=True,
+        fetch=fetch,
+        progress=progress,
+        clock=clock,
+    )
+    historical = _drain_events(
+        user_id=user_id,
+        labeler=labeler,
+        should_stop=should_stop,
+        counters=counters,
+        deadline=hard_deadline,
+        since=None,
+        before=cutoff,
+        newest_first=False,
+        fetch=fetch,
+        progress=progress,
+        clock=clock,
+    )
+    log.info(
+        "label drain user=%s cutoff=%s recent=%d historical=%d",
+        user_id[:8],
+        cutoff.date().isoformat(),
+        recent,
+        historical,
+    )
+    return {
+        "recent": recent,
+        "historical": historical,
+        "cutoff": cutoff.date().isoformat(),
+    }
+
+
 async def label_unlabeled(user_id: str) -> dict:
     """
     Step 1: Assign L0/L1 to any events and L0/L1/L2 to any content items
@@ -89,13 +286,29 @@ async def label_unlabeled(user_id: str) -> dict:
 
     Uses QwenLabeler for all assignments.  New vocabulary entries trigger an
     HMT retrain flag (tracked in the return dict).
+
+    Events are drained in two phases (see ``_drain_event_phases``): the window
+    a serialize run can still turn into hbpe.token_stream rows first — the only
+    labels a forecast can ever see — then the older history. The drain used to
+    be a single oldest-first walk of the whole corpus, which is fine on a toy
+    dataset and useless on a real one: a 198k event corpus reaching back to
+    2006 kept the labeling front in 2022 for months, so the profiler's window
+    contained zero labeled tokens, hbpe.recurrence_profiles stayed empty and
+    GET /forecast returned ``clusters: []`` on every day of the week,
+    indefinitely. The historical phase keeps its reserved share of the budget
+    every night, so old data is slowed, never starved.
+
+    The cutoff is computed once per run rather than per batch: recomputing it
+    across a midnight boundary could let a row fall out of phase 1's window
+    after phase 1 finished and into phase 2's only after phase 2 passed it, so
+    it would be labeled by neither. A run that starts just before midnight
+    therefore uses the previous day's cutoff for its whole length; the next
+    run corrects it.
     """
 
     def _run(should_stop) -> dict:
-        import time
-
         from ci.hbpe.config import settings
-        from ci.hbpe.data_client import get_unlabeled_content, get_unlabeled_events
+        from ci.hbpe.data_client import get_unlabeled_content
         from ci.hbpe.functions import update_pipeline_progress
         from ci.hbpe.tokenizer.qwen_labeler import QwenLabeler
         from ci.hbpe.tokenizer.static_labeler import label_mapped_events
@@ -105,46 +318,21 @@ async def label_unlabeled(user_id: str) -> dict:
         static = label_mapped_events(user_id)
 
         labeler = QwenLabeler()
-        new_labels = 0
-        labeled_events = 0
         labeled_content = 0
-        errors = 0
-        deadline = time.monotonic() + settings.label_budget_seconds
-        after_start = None
-        after_id = None
-        done = 0
+        counters = _DrainCounters()
 
-        while time.monotonic() < deadline and not should_stop.is_set():
-            batch = get_unlabeled_events(
-                user_id, after_start=after_start, after_id=after_id
-            )
-            if not batch:
-                break
-            for row in batch:
-                if should_stop.is_set() or time.monotonic() >= deadline:
-                    break
-                try:
-                    result = labeler.label_event(
-                        event_id=row["event_id"],
-                        user_id=user_id,
-                        title=row.get("title") or "",
-                        description=row.get("description"),
-                    )
-                    labeled_events += 1
-                    if result.get("is_new_l1"):
-                        new_labels += 1
-                except Exception:
-                    log.exception(
-                        "label_unlabeled event failed: event_id=%s", row["event_id"]
-                    )
-                    errors += 1
-                done += 1
-                after_start = row.get("start_time")
-                after_id = row["event_id"]
-                if done == 1 or done % 10 == 0:
-                    update_pipeline_progress(
-                        user_id, done=done, total=max(done + 10, 1)
-                    )
+        started_at = time.monotonic()
+        deadline = started_at + settings.label_budget_seconds
+        phases = _drain_event_phases(
+            user_id=user_id,
+            labeler=labeler,
+            should_stop=should_stop,
+            counters=counters,
+            cutoff=_recency_cutoff(user_id, settings.label_recency_days),
+            started_at=started_at,
+            budget_seconds=settings.label_budget_seconds,
+            recency_share=settings.label_recency_budget_share,
+        )
 
         unlabeled_content = get_unlabeled_content(user_id)
         for row in unlabeled_content:
@@ -159,24 +347,27 @@ async def label_unlabeled(user_id: str) -> dict:
                 )
                 labeled_content += 1
                 if result.get("is_new_l1") or result.get("is_new_l2"):
-                    new_labels += 1
+                    counters.new_labels += 1
             except Exception:
                 log.exception(
                     "label_unlabeled content failed: content_id=%s", row["content_id"]
                 )
-                errors += 1
-            done += 1
-            if done == 1 or done % 10 == 0:
-                update_pipeline_progress(user_id, done=done, total=max(done + 10, 1))
+                counters.errors += 1
+            counters.done += 1
+            if counters.done == 1 or counters.done % 10 == 0:
+                update_pipeline_progress(
+                    user_id, done=counters.done, total=max(counters.done + 10, 1)
+                )
 
         return {
             "user_id": user_id,
-            "labeled_events": labeled_events,
+            "labeled_events": counters.labeled_events,
             "labeled_content": labeled_content,
             "static": static,
             "cleanup": cleanup,
-            "new_labels": new_labels,
-            "errors": errors,
+            "new_labels": counters.new_labels,
+            "errors": counters.errors,
+            "phases": phases,
         }
 
     return await _run_inference(_run)

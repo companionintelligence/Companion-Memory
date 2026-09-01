@@ -22,6 +22,7 @@ import { TelemetryConfigController } from '@ci/common/controllers/TelemetryConfi
 import { FeatureModule } from '@ci/common/feature';
 import { GlobalExceptionsFilter } from '@ci/common/filters';
 import { IdFormatGuard } from '@ci/common/guards';
+import { HbpeNotifyModule } from '@ci/common/hbpe';
 import { LoggingModule, LoggerService, RequestLoggerMiddleware } from '@ci/common/logging';
 import { BodyParserMiddleware } from '@ci/common/middleware';
 import { serves } from '@ci/common/roles';
@@ -35,6 +36,7 @@ import { PortalAuthModule } from '@ci/domains/auth/PortalAuthModule';
 import { BlueBubblesModule } from '@ci/domains/bluebubbles';
 import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { ConnectionsModule } from '@ci/domains/connections';
+import { ConsumptionModule } from '@ci/domains/consumption';
 import { DailyMetricsModule } from '@ci/domains/daily-metrics';
 import { DeviceModule } from '@ci/domains/devices';
 import { EtlModule } from '@ci/domains/etl';
@@ -102,11 +104,13 @@ import { flushTelemetry, isTelemetryEnabled } from '@ci/instrument';
     }),
     FeatureModule,
     LoggingModule,
+    HbpeNotifyModule,
     EventEmitterModule.forRoot(),
     NestCronModule.forRoot(),
     ActivityModule,
     AgentModule,
     AsksModule,
+    ConsumptionModule,
     PeersModule,
     AuditModule,
     AuthModule,

@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { ContentService, EventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -23,7 +23,7 @@ interface SteamAchievementData {
 export class SteamAchievementsTransformService {
   constructor(
     private readonly contentService: ContentService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(SteamAchievementsTransformService.name);
@@ -114,7 +114,7 @@ export class SteamAchievementsTransformService {
                 description: `Earned achievement: ${achievementName} in ${gameName}`,
                 event_type: 'achievement_unlocked',
                 category: 'games',
-                // source_type alone did nothing: EventService.createOne needs
+                // source_type alone did nothing: CalendarEventService.createOne needs
                 // source_id too before it find-or-creates, and the unique
                 // index only covers full triples. An achievement unlocks once,
                 // so the key carries no timestamp.

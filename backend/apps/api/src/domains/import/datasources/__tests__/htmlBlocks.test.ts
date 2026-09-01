@@ -12,7 +12,8 @@ describe('matchingDivCloseIndex', () => {
     // The exact Google Voice MMS shape: attachments 2..N each sit in their
     // own sibling div INSIDE the message block. A non-greedy regex stops at
     // the first </div>, right after image 1.
-    const raw = '<div class="message">before<div><img src="a-1"/></div> <div><img src="a-2"/></div>after</div>next';
+    const raw =
+      '<div class="message">before<div><img src="a-1"/></div> <div><img src="a-2"/></div>after</div>next';
     const start = raw.indexOf('>') + 1;
     const end = matchingDivCloseIndex(raw, start);
 

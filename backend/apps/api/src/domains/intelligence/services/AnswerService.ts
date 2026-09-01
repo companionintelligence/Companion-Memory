@@ -428,7 +428,7 @@ export class AnswerService {
   /**
    * True total of answers matching the same filters {@link getEntitiesForAnswers} applies
    * (minus the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`, not
-   * the length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
+   * the length of one `limit`-bounded page of identifiers. See CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForAnswers(
     context: ServiceContext,

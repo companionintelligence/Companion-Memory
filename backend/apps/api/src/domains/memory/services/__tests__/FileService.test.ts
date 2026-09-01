@@ -11,6 +11,13 @@ function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() };
 }
 
+// None of these tests set captureTickId on the file fixture, so
+// linkCaptureEvent short-circuits before ever touching this repository —
+// it only needs to satisfy the constructor injection.
+function eventRepoMock() {
+  return { findOne: jest.fn() };
+}
+
 function repoMock() {
   const repo = {
     findOne: jest.fn(),
@@ -63,7 +70,7 @@ describe('FileService.handleFileUploaded', () => {
     fileStorageService = { findById: jest.fn() };
     logger = makeLogger();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    service = new FileService(fileStorageService as any, repo as any, logger as any);
+    service = new FileService(fileStorageService as any, repo as any, eventRepoMock() as any, logger as any);
   });
 
   it('skips entity creation when the ci.files row is not found', async () => {
@@ -181,6 +188,7 @@ describe('file.uploaded queue bindings', () => {
     const service = new FileService(
       fileStorageService as never,
       repo as never,
+      eventRepoMock() as never,
       logger as unknown as LoggerService,
     );
 

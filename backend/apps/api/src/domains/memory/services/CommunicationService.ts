@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, type FindOptionsOrder } from 'typeorm';
+import { DataSource, Repository, In, IsNull, type FindOptionsOrder, type FindOptionsWhere } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
+import { HbpeNotifyService } from '@ci/common/hbpe';
 import { LoggerService } from '@ci/common/logging';
 import {
   INGEST_REFRESH_COLUMNS,
@@ -29,7 +30,7 @@ interface Options {
   order?: FindOptionsOrder<CommunicationEntity>;
   startTime?: Date;
   endTime?: Date;
-  /** Composite keyset cursor for the timed search path (see EventService). */
+  /** Composite keyset cursor for the timed search path (see CalendarEventService). */
   afterTime?: Date;
   afterId?: string;
 }
@@ -63,6 +64,7 @@ export class CommunicationService {
     private readonly logger: LoggerService,
     private readonly dataSource: DataSource,
     private readonly graphDeltaWriter: GraphDeltaWriter,
+    @Optional() private readonly hbpeNotify?: HbpeNotifyService,
   ) {
     this.logger.setContext(CommunicationService.name);
     this.aggregate = new CtiAggregate({
@@ -105,7 +107,39 @@ export class CommunicationService {
     });
   }
 
+  /**
+   * The provenance-triple lookup shared by the find-before-insert check and
+   * the race-loss fallback below — mirrors EventService.createOne's
+   * sourceWhere. Communications have no soft-delete column, so unlike Event
+   * this doesn't need to special-case tombstoned rows.
+   */
+  private sourceWhereFor(
+    context: UserServiceContext,
+    data: Pick<CreateCommunicationDto, 'source_type' | 'source_system' | 'source_id'>,
+  ): FindOptionsWhere<CommunicationEntity> | null {
+    return data.source_type && data.source_id
+      ? {
+          userId: context.userId,
+          sourceType: data.source_type,
+          sourceSystem: data.source_system ?? IsNull(),
+          sourceId: data.source_id,
+        }
+      : null;
+  }
+
   async create(context: UserServiceContext, data: CreateCommunicationDto): Promise<Communication> {
+    // Idempotency: re-sending an existing (source_type, source_system,
+    // source_id) triple — a flaky-client retry, a webhook re-delivery like
+    // MemoryController.turn() — must return the existing row instead of
+    // hitting communications_source_triple_uniq's unhandled 23505.
+    const sourceWhere = this.sourceWhereFor(context, data);
+    if (sourceWhere) {
+      const existing = await this.communicationRepository.findOne({ where: sourceWhere });
+      if (existing) {
+        return CommunicationEntity.toEgressType(existing);
+      }
+    }
+
     const id = data.id ?? uuidv7();
 
     const communication = this.communicationRepository.create({
@@ -148,27 +182,42 @@ export class CommunicationService {
     //
     // One transaction across both halves of the CTI aggregate: the base row
     // (derived display label) first, then the detail.
-    const communicationResult = await this.communicationRepository.manager.transaction(async (manager) => {
-      await manager.getRepository(CommunicationBaseEntity).save(this.baseRowFor(manager, communication));
+    let communicationResult: CommunicationEntity;
+    try {
+      communicationResult = await this.communicationRepository.manager.transaction(async (manager) => {
+        await manager.getRepository(CommunicationBaseEntity).save(this.baseRowFor(manager, communication));
 
-      const saved = await manager.getRepository(CommunicationEntity).save(communication);
-      await this.graphDeltaWriter.entityCreated({
-        entityId: id,
-        entityType: 'Communication',
-        name: this.labelFor(saved),
-        description: saved.summary ?? null,
-        ownerUserId: context.userId,
-        changeSource: 'CommunicationService.create',
-        changedByUserId: typeof context.userId === 'string' ? context.userId : null,
-        manager,
+        const saved = await manager.getRepository(CommunicationEntity).save(communication);
+        await this.graphDeltaWriter.entityCreated({
+          entityId: id,
+          entityType: 'Communication',
+          name: this.labelFor(saved),
+          description: saved.summary ?? null,
+          ownerUserId: context.userId,
+          changeSource: 'CommunicationService.create',
+          changedByUserId: typeof context.userId === 'string' ? context.userId : null,
+          manager,
+        });
+
+        return saved;
       });
+    } catch (err) {
+      // Lost a race to a concurrent insert of the same triple — fetch and
+      // return the winner rather than surfacing the raw 23505.
+      if (sourceWhere && (err as { code?: string })?.code === '23505') {
+        const existing = await this.communicationRepository.findOne({ where: sourceWhere });
+        if (existing) {
+          return CommunicationEntity.toEgressType(existing);
+        }
+      }
 
-      return saved;
-    });
+      throw err;
+    }
 
     await this.eventService.send(CommunicationCreatedEvent, {
       communicationId: communicationResult.id,
     });
+    await this.hbpeNotify?.notifyCommunications(communicationResult.userId, communicationResult.time);
 
     return CommunicationEntity.toEgressType(communicationResult);
   }
@@ -319,10 +368,16 @@ export class CommunicationService {
       return detailResults;
     });
 
-    return results.map(({ entity, inserted }) => ({
+    const egress = results.map(({ entity, inserted }) => ({
       entity: CommunicationEntity.toEgressType(entity),
       inserted,
     }));
+    await this.hbpeNotify?.notifyCommunications(
+      context.userId,
+      results.map(({ entity }) => entity.time),
+    );
+
+    return egress;
   }
 
   async findAll(context: UserServiceContext): Promise<Communication[]> {
@@ -534,6 +589,7 @@ export class CommunicationService {
     await this.eventService.send(CommunicationUpdatedEvent, {
       communicationId: id,
     });
+    await this.hbpeNotify?.notifyCommunications(updated.userId, updated.time);
 
     // The transaction already reloaded the detail row; the Communication
     // egress composes from it alone.
@@ -543,8 +599,10 @@ export class CommunicationService {
   async remove(context: ServiceContext, id: string): Promise<boolean> {
     // Authorized load + base-row delete — the communications_id_entities_fk
     // ON DELETE CASCADE removes the detail in the same statement.
+    let removedAt: { userId: string; time: Date } | undefined;
     const removed = await this.aggregate.remove(context, id, {
       withinTx: async ({ manager, before }) => {
+        removedAt = { userId: before.userId, time: before.time };
         await this.graphDeltaWriter.entityDeleted({
           entityId: id,
           entityType: 'Communication',
@@ -564,6 +622,9 @@ export class CommunicationService {
     await this.eventService.send(CommunicationRemovedEvent, {
       communicationId: id,
     });
+    if (removedAt) {
+      await this.hbpeNotify?.notifyCommunications(removedAt.userId, removedAt.time);
+    }
 
     return true;
   }
@@ -669,7 +730,7 @@ export class CommunicationService {
   /**
    * True total of communications matching the same filters {@link getEntitiesForCommunications}
    * applies (minus the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`,
-   * not the length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
+   * not the length of one `limit`-bounded page of identifiers. See CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForCommunications(
     context: ServiceContext,

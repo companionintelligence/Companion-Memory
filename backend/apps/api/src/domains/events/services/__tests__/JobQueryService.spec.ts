@@ -33,6 +33,120 @@ describe('JobQueryService — the auth guard (no database required)', () => {
 });
 
 /**
+ * The category filter, without a database.
+ *
+ * A category is not a set of event names: `describeJob` resolves a row's
+ * category from the (event, queue) PAIR, so the four events in
+ * `JOB_TYPES_BY_QUEUE` belong to a different category on their own queue than
+ * their base entry names. Selecting on the event alone made this endpoint
+ * disagree with itself — `?category=search` returned rows it then labelled
+ * `graph` and `pipeline`, and `?category=graph` could not find them at all.
+ *
+ * The integration suite below proves the SQL runs; this proves the SQL is
+ * SHAPED right, and runs everywhere — CI provisions no Postgres, so everything
+ * under `describeWithDatabase` is skipped there.
+ */
+describe('JobQueryService — the category filter (no database required)', () => {
+  /** Run `applyFilters` against a mock and return the SQL it emitted. */
+  function captureCategorySql(category: string): {
+    clauses: string[];
+    parameters: Record<string, unknown>;
+  } {
+    const clauses: string[] = [];
+    const parameters: Record<string, unknown> = {};
+
+    const record = (sql: unknown, params?: Record<string, unknown>) => {
+      if (typeof sql === 'string') {
+        clauses.push(sql);
+      }
+
+      Object.assign(parameters, params ?? {});
+    };
+
+    // Annotated: the mock returns itself, so inference would be circular.
+    interface WhereMock {
+      where: (sql: unknown, params?: Record<string, unknown>) => WhereMock;
+      orWhere: (sql: unknown, params?: Record<string, unknown>) => WhereMock;
+    }
+
+    const builder: Record<string, unknown> = {};
+    const inner: WhereMock = {
+      where: jest.fn((sql: unknown, params?: Record<string, unknown>): WhereMock => {
+        record(sql, params);
+
+        return inner;
+      }),
+      orWhere: jest.fn((sql: unknown, params?: Record<string, unknown>): WhereMock => {
+        record(sql, params);
+
+        return inner;
+      }),
+    };
+
+    Object.assign(builder, {
+      andWhere: jest.fn((sql: unknown, params?: Record<string, unknown>) => {
+        // The category branch passes a Brackets; run its factory to see inside.
+        const factory = (sql as { whereFactory?: (qb: unknown) => void })?.whereFactory;
+
+        if (typeof factory === 'function') {
+          factory(inner);
+        } else {
+          record(sql, params);
+        }
+
+        return builder;
+      }),
+      where: jest.fn(() => builder),
+      orWhere: jest.fn(() => builder),
+    });
+
+    const repo = { createQueryBuilder: jest.fn(() => builder) };
+    const service = new JobQueryService(repo as never, repo as never, repo as never);
+
+    (
+      service as unknown as {
+        applyFilters: (qb: unknown, query: unknown, userId: string) => void;
+      }
+    ).applyFilters(builder, { category }, uuidv7());
+
+    return { clauses, parameters };
+  }
+
+  it('subtracts the pairs a queue-scoped entry moves OUT of the category', () => {
+    const { clauses, parameters } = captureCategorySql('search');
+    const sql = clauses.join(' ');
+
+    expect(sql).toContain("job.data->>'name' IN (:...categoryEvents)");
+    expect(sql).toContain('NOT IN (:...excludedQueueKeys)');
+    // The concatenation is what makes the pair addressable in SQL at all.
+    expect(sql).toContain("job.data->>'name' || '::' || job.name");
+    expect(parameters.excludedQueueKeys).toEqual(
+      expect.arrayContaining([
+        'communication.created::people-linking',
+        'content.created::pipeline-index',
+        'answer.created::default',
+      ]),
+    );
+  });
+
+  it('adds back the pairs a queue-scoped entry moves INTO the category', () => {
+    const { clauses, parameters } = captureCategorySql('graph');
+
+    expect(clauses.join(' ')).toContain('IN (:...includedQueueKeys)');
+    expect(parameters.includedQueueKeys).toEqual(
+      expect.arrayContaining(['communication.created::people-linking', 'answer.created::default']),
+    );
+  });
+
+  it('still fails closed on an unknown category', () => {
+    const { parameters } = captureCategorySql('not-a-real-category');
+
+    // A typo returns an empty table, never the unfiltered one.
+    expect(parameters.categoryEvents).toEqual(['__no-such-category__']);
+  });
+});
+
+/**
  * `list()` / `history()` — real TypeORM QueryBuilder chains over pg-boss's own
  * tables plus `ci.job_metrics`, proved against real Postgres.
  *
@@ -68,6 +182,12 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
   const marker = uuidv7().slice(0, 8);
   const searchTerm = `zzsearch-${marker}`;
   const otherUserId = uuidv7();
+  // Two rows whose category comes from their QUEUE rather than their event
+  // name. They carry real event/queue names because that pairing IS what is
+  // under test — `JOB_TYPES_BY_QUEUE` is keyed on it — so they are tracked by
+  // id and deleted by id.
+  const stagedContentId = uuidv7();
+  const linkedCommunicationId = uuidv7();
   const otherUserTerm = `zzowner-${marker}`;
 
   beforeAll(async () => {
@@ -175,6 +295,23 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
       output: { message: `boom ${searchTerm} exploded` },
     });
 
+    // `content.created` on `pipeline-index` is category `pipeline`, while the
+    // same event on any other queue is `search`; `communication.created` on
+    // `people-linking` is `graph`. Both are seeded so the filter can be shown
+    // to agree with the label the same endpoint puts on them.
+    await seedJob({
+      id: stagedContentId,
+      queue: 'pipeline-index',
+      eventName: 'content.created',
+      createdOn: new Date(base.getTime() + 8000),
+    });
+    await seedJob({
+      id: linkedCommunicationId,
+      queue: 'people-linking',
+      eventName: 'communication.created',
+      createdOn: new Date(base.getTime() + 9000),
+    });
+
     // Owned by a DIFFERENT user, seeded before every other row (so it never
     // shifts the pagination test's ordering) — proves message search is
     // owner-scoped rather than a leak across the whole appliance.
@@ -193,6 +330,9 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
         `DELETE FROM pgboss.job WHERE data->>'name' = 'note.created' AND created_on > $1`,
         [new Date('2026-08-01T00:00:00.000Z')],
       );
+      await dataSource.query('DELETE FROM pgboss.job WHERE id = ANY($1::uuid[])', [
+        [stagedContentId, linkedCommunicationId],
+      ]);
       await dataSource.query('DELETE FROM ci.job_metrics WHERE queue LIKE $1', [`${marker}%`]);
       // Before `destroy()`: the lock is held on a runner from this pool.
       await schemaLock?.release();
@@ -219,6 +359,33 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
     const events = result.items.map((i) => i.event);
     expect(events).toContain('note.created'); // mapped to category 'search'
     expect(events).not.toContain(`${marker}.uncategorized`); // not in JOB_TYPES at all
+  });
+
+  it('never returns a row this same response labels with a DIFFERENT category', async () => {
+    // The invariant the old filter broke: it selected on the event name while
+    // `toListItem` labelled through `describeJob`, which resolves the (event,
+    // queue) pair. Asking for `search` returned rows labelled `graph`.
+    for (const category of ['search', 'graph', 'pipeline']) {
+      const result = await service.list(CTX, { category, limit: 200 });
+      const mislabelled = result.items
+        .filter((i) => i.category !== category)
+        .map((i) => `${i.event}::${i.queue} -> ${i.category}`);
+
+      expect(mislabelled).toEqual([]);
+    }
+  });
+
+  it('files a queue-scoped job under the category its QUEUE names, not its event name', async () => {
+    const pipeline = await service.list(CTX, { category: 'pipeline', queue: 'pipeline-index', limit: 200 });
+    const asSearch = await service.list(CTX, { category: 'search', queue: 'pipeline-index', limit: 200 });
+
+    expect(pipeline.items.map((i) => i.id)).toContain(stagedContentId);
+    // …and is no longer reachable under the category its base entry names.
+    expect(asSearch.items.map((i) => i.id)).not.toContain(stagedContentId);
+
+    const graph = await service.list(CTX, { category: 'graph', queue: 'people-linking', limit: 200 });
+
+    expect(graph.items.map((i) => i.id)).toContain(linkedCommunicationId);
   });
 
   it('an unknown category matches nothing (fails closed, not open)', async () => {

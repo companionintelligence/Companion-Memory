@@ -6,18 +6,34 @@ import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/c
 import { LoggerService } from '@ci/common/logging';
 import { UserService } from '@ci/domains/user';
 
-import { shiftIso, todayIsoInTimezone } from '../dateUtil';
+import { isoDate, shiftIso, todayIsoInTimezone } from '../dateUtil';
 import { DailyMetricEntity } from '../entities/DailyMetricEntity';
 import { assembleDailyMetrics } from '../metrics/assembleDailyMetrics';
-import { DAILY_AGGREGATE_SQL, parseAggregateRow } from '../metrics/dailyAggregateSql';
+import { DAILY_AGGREGATE_SQL, parseAggregateRow, RECENT_DATA_DAYS_SQL } from '../metrics/dailyAggregateSql';
 import type { PositionFix } from '../places/stayPoints';
 import { timeAtHomeFromFixes } from '../places/timeAtHome';
 import type { DailyMetrics } from '../types';
 
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Default backfill / refresh window ending on the user's local "today". */
-export const DEFAULT_REFRESH_WINDOW_DAYS = 30;
+/**
+ * How many days the backfill materializes. NOT which days — see
+ * {@link DailyMetricsService.recentDataDays}.
+ *
+ * 180, not 30, because the store has to be at least as wide as its widest
+ * consumer or that consumer is structurally starved no matter how healthy the
+ * appliance is. `CorrelationEngine` reads a 180-day history and tests
+ * `WINDOWS = [30, 90, 180]`; with a 30-day store its 90- and 180-day windows
+ * could never hold more than 30 points, so two of its three windows could
+ * never be evaluated on their own terms and `robustKeys` (which needs a pair
+ * of surviving windows to agree) had a third of its evidence permanently
+ * missing. `AnomalyEngine` reads 90 days for the same reason.
+ *
+ * This width is only affordable because `DAILY_AGGREGATE_SQL` was made
+ * sargable in the same change: at the 74.7s/day it used to cost, 180 days was
+ * a 3.7-hour backfill. At the measured 78ms/day it is seconds.
+ */
+export const DEFAULT_REFRESH_WINDOW_DAYS = 180;
 
 /**
  * The Daily Feature Store service. Computes ~10 derived scalar metrics per
@@ -77,26 +93,6 @@ export class DailyMetricsService {
     return computed;
   }
 
-  /** Compute and store a contiguous window of `days` ending at `endDate`. */
-  async computeWindow(
-    context: UserServiceContext,
-    endDate: string,
-    days: number,
-    timezone = 'UTC',
-  ): Promise<DailyMetrics[]> {
-    this.assertDay(endDate);
-    if (!Number.isInteger(days) || days < 1 || days > 366) {
-      throw new BadRequestException('days must be an integer between 1 and 366');
-    }
-
-    const out: DailyMetrics[] = [];
-    for (let offset = days - 1; offset >= 0; offset--) {
-      out.push(await this.computeAndStore(context, shiftIso(endDate, -offset), timezone));
-    }
-
-    return out;
-  }
-
   async getDay(context: ServiceContext, date: string): Promise<DailyMetrics | null> {
     this.assertDay(date);
 
@@ -124,17 +120,107 @@ export class DailyMetricsService {
   }
 
   /**
-   * Recompute a trailing window for one user ending on their local today.
-   * Used by the GraphQL refresh mutation.
+   * Recompute the `windowDays` most recent local days that the user's raw
+   * capture tables actually have data for. Used by the cron and by the GraphQL
+   * refresh mutation.
+   *
+   * This used to be `computeWindow(today, windowDays)` — a trailing CALENDAR
+   * window ending on the wall clock. That is empty for any appliance whose
+   * corpus is a static personal-data export, because an export's newest row is
+   * whenever the export was taken and never advances while `now()` does.
+   * Measured live on 2026-08-30: `ci.daily_metrics` held exactly 30 rows,
+   * 2026-08-01..2026-08-30, and every one of the 13 metric columns was NULL in
+   * all 30 — the trailing month contained no communications (newest
+   * 2026-06-17), no browser activity (2026-06-19), no position (2026-01-25)
+   * and no purchases (2026-05-19). The store was running hourly and writing
+   * nothing but holes, and the anomaly/correlation/suggestion engines that
+   * read it were consequently all at zero rows.
+   *
+   * Widening `windowDays` does not fix that; it only moves the cliff to the
+   * day the corpus becomes older than the new number. The ANCHOR was the bug.
+   * See {@link recentDataDays} for why the anchor is a set of days rather than
+   * a single MAX(time), which on this corpus would have been just as empty.
+   *
+   * On an appliance capturing today, the newest `windowDays` days with data
+   * ARE the trailing `windowDays` days, so this is a no-op for the healthy
+   * case and only bites on a stale corpus.
    */
   async refreshForUser(
     context: UserServiceContext,
     windowDays = DEFAULT_REFRESH_WINDOW_DAYS,
     timezone = 'UTC',
   ): Promise<DailyMetrics[]> {
-    const endDate = todayIsoInTimezone(timezone);
+    if (!Number.isInteger(windowDays) || windowDays < 1 || windowDays > 366) {
+      throw new BadRequestException('windowDays must be an integer between 1 and 366');
+    }
 
-    return this.computeWindow(context, endDate, windowDays, timezone);
+    const days = await this.recentDataDays(context.userId, timezone, windowDays);
+
+    if (days.length === 0) {
+      this.logger.warn('No days with capture data; nothing to materialize', {
+        userId: context.userId,
+        timezone,
+      });
+
+      return [];
+    }
+
+    const out: DailyMetrics[] = [];
+    // Oldest first, so a run interrupted part-way leaves the store contiguous
+    // from the back rather than pocked with holes.
+    for (const date of [...days].reverse()) {
+      out.push(await this.computeAndStore(context, date, timezone));
+    }
+
+    return out;
+  }
+
+  /**
+   * The `limit` most recent local days, newest first, on which at least one
+   * raw source could produce a metric. Never returns a day after the user's
+   * local today.
+   *
+   * Why a SET of days and not `MAX(time) - windowDays`, the shape the
+   * analogous planning fix (#2483) used: that works when the window's job is
+   * "the newest N rows of one table", but here a day is a JOIN across five
+   * sources with wildly different extents, and a single anchor is only ever as
+   * good as the source that happens to reach furthest. Measured on this
+   * corpus, MAX() over all five sources was 2026-08-30 08:38 — TODAY — because
+   * two `ci.events` rows are reddit `moderated_subreddit` records that the
+   * importer stamped with the import time. A window anchored there lands
+   * straight back on the empty region the anchor was supposed to escape. Even
+   * restricted to rows that can produce a metric the newest day is 2026-07-27,
+   * a lone calendar entry 38 days past the end of the dense corpus, so a
+   * contiguous 30-day window from it would still have swept mostly nothing.
+   *
+   * Selecting days that have data sidesteps the whole question. There is no N
+   * to outrun and therefore no cliff to move: it degrades to "the trailing N
+   * days" on an appliance capturing daily, and to "the newest N days the owner
+   * actually has" on a historical import, with no configuration between them.
+   *
+   * The gaps this introduces in the stored series are already the contract
+   * downstream. `pairDays` joins by DATE KEY and drops unmatched lags rather
+   * than zero-filling; `robustZSeries` and `cusumChangepoints` slice by
+   * position within the COVERED subset, not by calendar offset. A day with no
+   * usable rows would have been written as an all-NULL row and then filtered
+   * straight back out by every one of them, so skipping it loses no
+   * information and spends the budget on a day that carries some.
+   *
+   * The per-source predicates mirror `DAILY_AGGREGATE_SQL`'s exactly. They
+   * have to: a day this admits but the aggregate rejects burns a slot on an
+   * all-NULL row (harmless, self-limiting), but a day this rejects can never
+   * be materialized at all. When you change a source filter there, change it
+   * here.
+   */
+  async recentDataDays(userId: string, timezone: string, limit: number): Promise<string[]> {
+    const rows = (await this.repository.query(RECENT_DATA_DAYS_SQL, [
+      userId,
+      timezone,
+      todayIsoInTimezone(timezone),
+      limit,
+    ])) as Array<{ day: Date | string }>;
+
+    return rows.map((row) => (row.day instanceof Date ? isoDate(row.day) : String(row.day).slice(0, 10)));
   }
 
   /**
@@ -159,6 +245,72 @@ export class DailyMetricsService {
         );
       }
     }
+  }
+
+  /**
+   * The day the standing scans should treat as "the most recent complete day":
+   * the newest day already in the store, never later than the user's local
+   * yesterday. Null when the store holds nothing for the user.
+   *
+   * The engines that read this store — `AnomalyEngine`, `CorrelationEngine`,
+   * `SuggestionEngine` — each independently computed `today - 1` and hung a
+   * 90 / 180 / 28-day history off it. That is a SECOND wall-clock anchor,
+   * downstream of the one on the writer and not fixed by fixing it: filling
+   * the store with the corpus's real days leaves all three reading a calendar
+   * window that those days are nowhere near. Both layers have to move or
+   * ci_derived stays at zero, which is what it was measured at — 7 of its 8
+   * tables held no rows at all.
+   *
+   * Clamped to yesterday rather than to today because these scans deliberately
+   * exclude the current day: on a live appliance today is still accumulating,
+   * and scoring a partial day against full ones manufactures a low-side
+   * anomaly every morning. On a static corpus the newest stored day is
+   * complete already and the clamp does nothing.
+   *
+   * "Newest day in the store" is not enough on its own — it has to be the
+   * newest day that CARRIES A VALUE. This appliance is the proof: the broken
+   * writer left 30 all-NULL rows dated 2026-08-01..2026-08-30, six weeks newer
+   * than any real day, and a plain `max(date)` anchors every engine onto one of
+   * those fossils. Measured after the writer fix, `max(date)` gave 2026-08-30
+   * and the value-bearing anchor gave 2026-07-27 — which moved
+   * `AnomalyEngine`'s 90-day window off a stretch that was mostly empty and
+   * onto the corpus, and is the difference between `SuggestionEngine` reading
+   * an all-NULL row as its subject day and reading a real one.
+   *
+   * The EXISTS strips the five bookkeeping columns by name and treats whatever
+   * remains as metrics, rather than listing the thirteen metric columns. A
+   * metric added later is then covered automatically; a list would silently
+   * stop seeing it.
+   *
+   * On an appliance capturing daily the newest stored day IS yesterday, so
+   * every caller behaves exactly as before.
+   */
+  async analysisAnchor(context: UserServiceContext, timezone = 'UTC'): Promise<string | null> {
+    const yesterday = shiftIso(todayIsoInTimezone(timezone), -1);
+
+    const rows = (await this.repository.query(
+      `
+      SELECT max(dm.date) AS day
+        FROM ci_derived.daily_metrics dm
+       WHERE dm.user_id = $1::uuid
+         AND dm.date <= $2::date
+         AND EXISTS (
+               SELECT 1
+                 FROM jsonb_each(
+                        to_jsonb(dm) - 'user_id' - 'date' - 'timezone' - 'coverage' - 'computed_at'
+                      ) AS metric(key, value)
+                WHERE metric.value <> 'null'::jsonb
+             )
+      `,
+      [context.userId, yesterday],
+    )) as Array<{ day: Date | string | null }>;
+
+    const day = rows[0]?.day;
+    if (day == null) {
+      return null;
+    }
+
+    return day instanceof Date ? isoDate(day) : String(day).slice(0, 10);
   }
 
   private async computeTimeAtHome(
@@ -226,7 +378,8 @@ export class DailyMetricsService {
         FROM ci.position pos
        WHERE pos.user_id = $1
          AND pos.location IS NOT NULL
-         AND (pos.time AT TIME ZONE $3)::date = $2::date
+         AND pos.time >= ($2::date::timestamp AT TIME ZONE $3::text)
+         AND pos.time < (($2::date + 1)::timestamp AT TIME ZONE $3::text)
        ORDER BY pos.time
       `,
       [userId, date, timezone],

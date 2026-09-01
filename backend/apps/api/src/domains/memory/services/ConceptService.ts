@@ -263,7 +263,7 @@ export class ConceptService extends EntityService<ConceptEntity, Concept> {
   /**
    * True total of concepts matching the same filters {@link getEntitiesForConcepts} applies
    * (minus the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`, not
-   * the length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
+   * the length of one `limit`-bounded page of identifiers. See CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForConcepts(
     context: ServiceContext,

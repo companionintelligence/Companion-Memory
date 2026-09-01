@@ -48,6 +48,30 @@ describe('Generic Email datasource', () => {
     expect(items[0].item.metadata.Subject).toBe('Single Email');
   });
 
+  it('threads a reply onto the References root, not its own Message-ID', async () => {
+    const emlPath = makeTempFile(
+      'reply.eml',
+      'Subject: Re: Single Email\n' +
+        'Date: Fri, 02 Jan 2025 12:00:00 -0000\n' +
+        'From: Bob <bob@example.com>\n' +
+        'To: Alice <alice@example.com>\n' +
+        'Message-ID: <reply@example.com>\n' +
+        'In-Reply-To: <orig@example.com>\n' +
+        'References: <orig@example.com>\n' +
+        '\n' +
+        'Sounds good',
+    );
+    const fi = new EmailFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: path.basename(emlPath), fullPath: emlPath }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+    expect(pipeline[0].item.metadata.ThreadId).toBe('orig@example.com');
+    expect(pipeline[0].item.metadata.MessageID).toBe('reply@example.com');
+  });
+
   it('imports multiple messages from mbox', async () => {
     const mboxContent =
       'From someone@example.com Fri Jan 03 12:00:00 2025\nSubject: First\nDate: Fri, 03 Jan 2025 12:00:00 -0000\nFrom: A <a@example.com>\nTo: B <b@example.com>\n\nFirst body\n\nFrom other@example.com Fri Jan 03 13:00:00 2025\nSubject: Second\nDate: Fri, 03 Jan 2025 13:00:00 -0000\nFrom: C <c@example.com>\nTo: D <d@example.com>\n\nSecond body';
