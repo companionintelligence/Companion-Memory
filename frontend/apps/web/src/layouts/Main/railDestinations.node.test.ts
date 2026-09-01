@@ -13,7 +13,6 @@ describe('visibleRailDestinations', () => {
 
     expect(visible.map((destination) => destination.id)).toEqual([
       'plan',
-      'calendar',
       'memory',
       'saved-searches',
       'sources',
@@ -99,7 +98,7 @@ describe('isRailDestinationActive', () => {
     expect(isRailDestinationActive(byId.memory, '/memory')).toBe(true);
     expect(isRailDestinationActive(byId.memory, '/memory/people')).toBe(true);
     expect(isRailDestinationActive(byId.memory, '/people/abc')).toBe(true);
-    expect(isRailDestinationActive(byId.memory, '/calendar')).toBe(false);
+    expect(isRailDestinationActive(byId.memory, '/plan/calendar')).toBe(false);
   });
 
   // Chat moved under Memory (/memory/chat) — a thread deep-link has to keep
@@ -109,10 +108,15 @@ describe('isRailDestinationActive', () => {
     expect(isRailDestinationActive(byId.memory, '/memory/chat/abc123')).toBe(true);
   });
 
-  it('treats Calendar card deep-links as Calendar', () => {
-    expect(isRailDestinationActive(byId.calendar, '/calendar')).toBe(true);
-    expect(isRailDestinationActive(byId.calendar, '/calendar/a1')).toBe(true);
-    expect(isRailDestinationActive(byId.calendar, '/forecast')).toBe(false);
+  // Planning is one rail destination covering both sub-views — Tasks and
+  // Calendar — plus Calendar's own card deep-links.
+  it('treats both Plan sub-views, and Calendar card deep-links, as Planning', () => {
+    expect(byId.plan.to).toBe('/plan');
+    expect(isRailDestinationActive(byId.plan, '/plan')).toBe(true);
+    expect(isRailDestinationActive(byId.plan, '/plan/tasks')).toBe(true);
+    expect(isRailDestinationActive(byId.plan, '/plan/calendar')).toBe(true);
+    expect(isRailDestinationActive(byId.plan, '/plan/calendar/a1')).toBe(true);
+    expect(isRailDestinationActive(byId.plan, '/forecast')).toBe(false);
   });
 
   it('treats Sources children as Sources', () => {

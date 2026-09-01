@@ -107,7 +107,7 @@ describe('MobileNavigation', () => {
     expect(screen.getByRole('button', { name: 'Open menu' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Search memory' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Plan' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Planning' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'More' })).not.toBeInTheDocument();
     // The wordmark belongs to the drawer, which is off-canvas until opened —
     // the top bar itself stays chevron, search, chips, Add.
@@ -119,7 +119,7 @@ describe('MobileNavigation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
 
-    expect(await screen.findByRole('link', { name: 'Plan' })).toHaveAttribute('href', '/plan');
+    expect(await screen.findByRole('link', { name: 'Planning' })).toHaveAttribute('href', '/plan');
     expect(screen.getByRole('link', { name: 'Memory' })).toHaveAttribute('href', '/memory');
     expect(screen.queryByRole('link', { name: 'System' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Close menu' }).length).toBeGreaterThanOrEqual(1);
@@ -211,7 +211,7 @@ describe('MobileNavigation', () => {
     const nav = await screen.findByRole('navigation');
     const close = nav.querySelector('[aria-label="Close menu"]');
     const capture = screen.getByRole('button', { name: 'Capture' });
-    const plan = screen.getByRole('link', { name: 'Plan' });
+    const plan = screen.getByRole('link', { name: 'Planning' });
     const help = await screen.findByRole('button', { name: 'Help' });
     const account = screen.getByRole('link', { name: 'Test User' });
 
@@ -238,7 +238,9 @@ describe('MobileNavigation', () => {
   });
 
   it('opens on a right swipe from the left edge', async () => {
-    renderMobileNav();
+    // `/plan/calendar` so the Planning submenu auto-opens on the route,
+    // surfacing the Calendar child link without an explicit expand click.
+    renderMobileNav('/plan/calendar');
 
     fireEvent.touchStart(document, { touches: [{ clientX: 8, clientY: 240 }] });
     fireEvent.touchEnd(document, { changedTouches: [{ clientX: 80, clientY: 240 }] });
@@ -268,11 +270,11 @@ describe('MobileNavigation', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
 
-    expect(await screen.findByRole('link', { name: 'Plan' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Planning' })).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 'Escape' });
 
-    expect(screen.queryByRole('link', { name: 'Plan' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Planning' })).not.toBeInTheDocument();
   });
 
   // H4: without this, closing the drawer (by any means) strands keyboard

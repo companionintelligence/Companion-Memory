@@ -4,13 +4,11 @@ import { ErrorPage, LoadingPage } from '@ci/common';
 import { Button } from '@ci/shadcn';
 import { Link, Navigate } from 'react-router-dom';
 
-import { useFeatures } from '@/common/feature';
 import { appHomePath } from '@/lib/appHome';
 
 import { useOnboardService } from './useOnboardService';
 
 export function Submit() {
-  const { isFeatureEnabled } = useFeatures();
   const [{ loading, error }, { onboard }] = useOnboardService();
 
   const onboardSubmitted = useRef<boolean>(false);
@@ -36,7 +34,7 @@ export function Submit() {
       );
     }
 
-    return <Navigate to={appHomePath(isFeatureEnabled('planning.page'))} />;
+    return <Navigate to={appHomePath()} />;
   }
 
   return (

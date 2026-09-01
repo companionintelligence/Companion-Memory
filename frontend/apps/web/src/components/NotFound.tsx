@@ -1,16 +1,14 @@
 import { Button, Card } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
-import { useFeatures } from '@/common/feature';
 import { useAuth, useCurrentUser } from '@/hooks';
 import { appHomePath } from '@/lib/appHome';
 
 export default function NotFoundPage() {
   const [{ expired }] = useAuth();
   const { user } = useCurrentUser();
-  const { isFeatureEnabled } = useFeatures();
 
-  const homePath = !expired && user ? appHomePath(isFeatureEnabled('planning.page')) : '/';
+  const homePath = !expired && user ? appHomePath() : '/';
 
   return (
     <div className="flex h-lvh w-full items-center justify-center p-6 md:p-10">

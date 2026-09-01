@@ -265,7 +265,7 @@ export function OnboardingPage() {
     currentStepKey !== 'people';
 
   if (user?.onboarded) {
-    return <Navigate to={appHomePath(isFeatureEnabled('planning.page'))} replace />;
+    return <Navigate to={appHomePath()} replace />;
   }
 
   if (userLoading || progressLoading || !hydrated) {

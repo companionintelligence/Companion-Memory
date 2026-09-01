@@ -6,7 +6,6 @@ import { Braces, ExternalLink, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { NavLink, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
-import { useFeatures } from '@/common/feature';
 import { appHomePath } from '@/lib/appHome';
 
 import { settingsPathToProfile, visibleSettingsSections } from './settingsNav';
@@ -27,14 +26,13 @@ export function SettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { isMobile } = useDeviceLayout();
-  const { isFeatureEnabled } = useFeatures();
   const backgroundLocation = (
     location.state as { backgroundLocation?: { pathname: string; search: string; hash: string } } | null
   )?.backgroundLocation;
 
   const handleClose = useCallback(() => {
-    navigate(backgroundLocation ?? appHomePath(isFeatureEnabled('planning.page')));
-  }, [backgroundLocation, isFeatureEnabled, navigate]);
+    navigate(backgroundLocation ?? appHomePath());
+  }, [backgroundLocation, navigate]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {

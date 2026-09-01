@@ -55,10 +55,10 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
    * Where this brief lives, so its own links stay inside it.
    *
    * The cards deep-link by action id and the modal writes that id into the URL.
-   * Embedded in Calendar those have to address /calendar, or opening a card
-   * would navigate you off the page you opened it from.
+   * Embedded in Calendar those have to address /plan/calendar, or opening a
+   * card would navigate you off the page you opened it from.
    */
-  const basePath = embedded ? '/calendar' : '/brief';
+  const basePath = embedded ? '/plan/calendar' : '/brief';
 
   // Embedded, the host owns the frame; this keeps the column gap PageContent
   // would have supplied, and none of its padding, height or scrolling. No

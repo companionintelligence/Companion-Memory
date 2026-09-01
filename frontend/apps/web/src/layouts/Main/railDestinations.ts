@@ -3,7 +3,6 @@ import {
   BookOpen,
   Brain,
   Cable,
-  CalendarRange,
   CircleUserRound,
   CloudSun,
   FolderSearch2,
@@ -29,7 +28,6 @@ export interface RailDestination {
   /** When false, a child path of `to` still counts as this destination. */
   readonly end?: boolean;
   readonly match?: (pathname: string) => boolean;
-  readonly badge?: 'feed' | 'plan';
   /**
    * Rows that belong under this one, as one compact group.
    *
@@ -42,8 +40,12 @@ export interface RailDestination {
 }
 
 export const RAIL_DESTINATIONS: readonly RailDestination[] = [
-  { id: 'plan', to: '/plan', label: 'Plan', icon: ListTodo, flag: 'planning.page', badge: 'plan' },
-  { id: 'calendar', to: '/calendar', label: 'Calendar', icon: CalendarRange, badge: 'feed', end: false },
+  // Planning: Tasks (the kanban board) and Calendar (the week grid + brief),
+  // one destination with two sub-views — see PlanningSubmenu, rendered for
+  // this id the same way MemorySubmenu is rendered for 'memory' below. No
+  // `flag` here: Calendar must stay reachable even with `planning.page` off,
+  // so only the Tasks sub-view (inside PlanningSubmenu) rides that flag.
+  { id: 'plan', to: '/plan', label: 'Planning', icon: ListTodo, end: false },
   // Chat moved under Memory (/memory/chat) — it's a bounded view over your
   // own history the same way Events/People/Places are, not a peer place. See
   // MEMORY_HUB_SECTIONS.

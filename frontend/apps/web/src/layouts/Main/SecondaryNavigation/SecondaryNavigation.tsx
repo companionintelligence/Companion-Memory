@@ -15,10 +15,9 @@ import { CaptureRailButton } from './CaptureRailButton';
 import { DestinationWithChildrenSubmenu } from './DestinationWithChildrenSubmenu';
 import { MemorySubmenu } from './MemorySubmenu';
 import { NavLink } from './NavLink';
+import { PlanningSubmenu } from './PlanningSubmenu';
 import { SelfSubmenu } from './SelfSubmenu';
 import { SettingsRailButton } from './SettingsRailButton';
-import { useFeedBadgeCount } from './useFeedBadgeCount';
-import { usePlanBadgeCount } from './usePlanBadgeCount';
 
 interface ExternalNavLinkProps {
   href: string;
@@ -177,8 +176,6 @@ function OverlayRail({
 export function SecondaryNavigation() {
   const { expanded, pinned, setHovered, variant, closeOverlay } = usePowerRail();
   const destinations = useVisibleRailDestinations();
-  const feedBadgeCount = useFeedBadgeCount();
-  const planBadgeCount = usePlanBadgeCount();
   const [{ isOpen: captureOpen }, { close: closeCapture }] = useCaptureModal();
   const overlay = variant === 'overlay';
   const showSelf = destinations.some((destination) => destination.id === 'self');
@@ -195,6 +192,10 @@ export function SecondaryNavigation() {
           return <MemorySubmenu key={destination.id} />;
         }
 
+        if (destination.id === 'plan') {
+          return <PlanningSubmenu key={destination.id} />;
+        }
+
         // Any destination carrying children (currently Saved Searches, with
         // Asks beside it) gets the group treatment: a chevron reveals them.
         // A gated group whose flag is off never reaches here — its children
@@ -207,15 +208,7 @@ export function SecondaryNavigation() {
         const Icon = destination.icon;
 
         return (
-          <NavLink
-            key={destination.id}
-            to={destination.to}
-            label={destination.label}
-            end={destination.end}
-            badgeCount={
-              destination.badge === 'feed' ? feedBadgeCount : destination.badge === 'plan' ? planBadgeCount : 0
-            }
-          >
+          <NavLink key={destination.id} to={destination.to} label={destination.label} end={destination.end}>
             <Icon className="h-6 w-6 shrink-0" strokeWidth={1.25} />
           </NavLink>
         );

@@ -12,7 +12,7 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
   // state needed to attach the server's field errors.
   const [{ expired, authToken, authenticated, initializing }] = useAuth();
   const { user, loading: userLoading } = useCurrentUser();
-  const { isFeatureEnabled, loading: featuresLoading } = useFeatures();
+  const { loading: featuresLoading } = useFeatures();
 
   if (initializing || userLoading || (user?.onboarded && featuresLoading)) {
     return <LoadingPage />;
@@ -30,7 +30,7 @@ export function RedirectKnownUser({ children }: { children: React.ReactNode }) {
 
   if (user) {
     if (user.onboarded) {
-      return <Navigate to={appHomePath(isFeatureEnabled('planning.page'))} />;
+      return <Navigate to={appHomePath()} />;
     }
 
     return <Navigate to="/onboarding" />;

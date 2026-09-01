@@ -88,17 +88,29 @@ function RedirectInsightsSummary() {
 }
 
 /**
- * The brief now lives inside Calendar, so both of its old addresses land there.
+ * The brief now lives inside Calendar, so both of its old addresses — plus
+ * Calendar's own former top-level address — land there.
  *
- * Aimed at /calendar rather than chained through /brief, which would cost a
- * second redirect on every old link. The action id is carried across because
- * the brief's cards deep-link by it — dropping it would open the page but not
- * the card someone was sent.
+ * Aimed at /plan/calendar rather than chained through /calendar or /brief,
+ * which would cost a second redirect on every old link. The action id is
+ * carried across because the brief's cards deep-link by it — dropping it
+ * would open the page but not the card someone was sent.
  */
 function RedirectToCalendar() {
   const { id } = useParams<{ id?: string }>();
 
-  return <Navigate to={id ? `/calendar/${id}` : '/calendar'} replace />;
+  return <Navigate to={id ? `/plan/calendar/${id}` : '/plan/calendar'} replace />;
+}
+
+/**
+ * `/plan` bare picks the sub-view that's actually available: Tasks when
+ * `planning.page` is on, Calendar otherwise — the same fallback
+ * `appHomePath` used to compute at every caller, now resolved once here.
+ */
+function RedirectToPlanningDefault() {
+  const { isFeatureEnabled } = useFeatures();
+
+  return <Navigate to={isFeatureEnabled('planning.page') ? '/plan/tasks' : '/plan/calendar'} replace />;
 }
 
 function RedirectFeedSummaryToBrief() {
@@ -260,14 +272,36 @@ function AppRoutes() {
             }
           />
 
+          {/* Planning: one destination, two sub-views. Tasks rides
+              `planning.page` the same way the standalone /plan route used to;
+              Calendar is unconditional, so it survives that flag being off —
+              see RedirectToPlanningDefault. */}
+          <Route path="/plan" element={<RedirectToPlanningDefault />} />
+
+          {isFeatureEnabled('planning.page') && (
+            <Route
+              path="/plan/tasks"
+              element={
+                <ProtectedRoute>
+                  <PlanPage />
+                </ProtectedRoute>
+              }
+            />
+          )}
+
           <Route
-            path="/calendar/:id?"
+            path="/plan/calendar/:id?"
             element={
               <ProtectedRoute>
                 <TodayPage />
               </ProtectedRoute>
             }
           />
+
+          {/* Calendar's own former top-level address. Kept registered
+              unconditionally, like the redirects below, so old bookmarks and
+              links keep working. */}
+          <Route path="/calendar/:id?" element={<RedirectToCalendar />} />
 
           {isFeatureEnabled('forecast.page') && (
             <Route
@@ -377,7 +411,7 @@ function AppRoutes() {
             </>
           )}
 
-          <Route path="/insights" element={<Navigate to="/calendar" replace />} />
+          <Route path="/insights" element={<Navigate to="/plan/calendar" replace />} />
           <Route
             path="/insights/:id"
             element={
@@ -560,17 +594,6 @@ function AppRoutes() {
               </ProtectedRoute>
             }
           />
-
-          {isFeatureEnabled('planning.page') && (
-            <Route
-              path="/plan"
-              element={
-                <ProtectedRoute>
-                  <PlanPage />
-                </ProtectedRoute>
-              }
-            />
-          )}
 
           {/* Notes used to be write-only from the shell — reachable to create
               (Add ▸ Note) or open from search, but never browsed. Folded into

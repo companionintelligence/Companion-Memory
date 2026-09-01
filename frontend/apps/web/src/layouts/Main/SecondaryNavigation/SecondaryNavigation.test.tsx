@@ -122,17 +122,50 @@ describe('SecondaryNavigation', () => {
     expect(screen.queryByRole('link', { name: 'Notes' })).not.toBeInTheDocument();
   });
 
-  it('carries Plan in the primary rail', () => {
+  it('carries Planning in the primary rail', () => {
     renderRail();
 
-    expect(screen.getByRole('link', { name: 'Plan' })).toHaveAttribute('href', '/plan');
+    expect(screen.getByRole('link', { name: 'Planning' })).toHaveAttribute('href', '/plan');
   });
 
-  it('carries Forecast and Calendar in the primary rail', () => {
+  it('carries Forecast in the primary rail', () => {
     renderRail();
 
     expect(screen.getByRole('link', { name: 'Forecast' })).toHaveAttribute('href', '/forecast');
-    expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/calendar');
+  });
+
+  it('offers Tasks and Calendar as Planning sub-views when expanded', () => {
+    renderRail('/plan', { expanded: true });
+
+    expect(screen.getByRole('link', { name: 'Tasks' })).toHaveAttribute('href', '/plan/tasks');
+    expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
+  });
+
+  it('opens Planning sections on hover when expanded, and closes after leave when not sticky', () => {
+    renderRail('/feed', { expanded: true });
+
+    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+
+    const submenu = screen.getByTestId('planning-submenu');
+    fireEvent.mouseEnter(submenu);
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+
+    fireEvent.mouseLeave(submenu);
+    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+  });
+
+  it('keeps Planning sections open after a sticky chevron open even off /plan routes', () => {
+    renderRail('/feed', { expanded: true });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Planning sections' }));
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+  });
+
+  it('keeps Planning sections open on a /plan/tasks or /plan/calendar route', () => {
+    renderRail('/plan/calendar', { expanded: true });
+
+    expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Tasks' })).not.toHaveAttribute('aria-current');
   });
 
   // Schedule and Brief were folded into Calendar, so the rail must not offer a
@@ -248,7 +281,7 @@ describe('SecondaryNavigation', () => {
     renderRail('/plan', { expanded: true });
 
     expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'expanded');
-    expect(screen.getByText('Plan')).toBeInTheDocument();
+    expect(screen.getByText('Planning')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Connect' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Import' })).not.toBeInTheDocument();
   });
@@ -453,8 +486,7 @@ describe('SecondaryNavigation', () => {
 
     const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
 
-    expect(hrefs.indexOf('/plan')).toBeLessThan(hrefs.indexOf('/calendar'));
-    expect(hrefs.indexOf('/calendar')).toBeLessThan(hrefs.indexOf('/memory'));
+    expect(hrefs.indexOf('/plan')).toBeLessThan(hrefs.indexOf('/memory'));
     expect(hrefs.indexOf('/memory')).toBeLessThan(hrefs.indexOf('/saved-searches'));
     expect(hrefs.indexOf('/saved-searches')).toBeLessThan(hrefs.indexOf('/sources'));
     expect(hrefs.indexOf('/sources')).toBeLessThan(hrefs.indexOf('/jobs'));

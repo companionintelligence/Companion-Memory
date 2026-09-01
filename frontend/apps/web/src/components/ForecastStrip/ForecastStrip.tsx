@@ -182,7 +182,7 @@ function SlotTooltip({
           Top context:{' '}
           {isFeatureEnabled('insights.page') ? (
             <Link
-              to="/calendar"
+              to="/plan/calendar"
               className="underline underline-offset-2 hover:opacity-100 transition-opacity"
             >
               {top1.name.slice(0, 24)}
