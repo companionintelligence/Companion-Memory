@@ -387,6 +387,25 @@ Per-method `JwtOrApiKeyAuthGuard`. Token secrets stripped from all read response
 
 `GET /providers` (`:42`, list OAuth providers), `GET /providers/:id` (`:50`), `POST /providers/:id` (`:58`, create a connection + return `{ authorizationUrl }`). Per-method `JwtOrApiKeyAuthGuard`.
 
+### BlueBubbles
+
+Not part of the `providers`/`connections` OAuth system above — one appliance-wide config row (`BlueBubblesConfigService.getOrCreate`), the same shape the LLM endpoint config uses, since there is one BlueBubbles server per appliance rather than one per account. The web UI surfaces it at Settings → BlueBubbles and as its own card on Sources → Services (`/sources/connect`), outside the `SERVICE_PROVIDERS` catalogue.
+
+#### `BlueBubblesConfigController` — `bluebubbles`  ·  `domains/bluebubbles/controllers/BlueBubblesConfigController.ts:31`
+
+Per-method `JwtOrApiKeyAuthGuard`.
+
+| Verb | Path | Handler | Purpose |
+|------|------|---------|---------|
+| GET | `/bluebubbles/config` | `getConfig` (`:49`) | Masked read: `hasPassword` stands in for the raw `password` column, which never leaves the server. |
+| PUT | `/bluebubbles/config` | `updateConfig` (`:69`) | Update host/port/useHttps/hasPrivateApi/enabled. `password` omitted keeps the existing stored value — the same "blank means unchanged" contract `ApiKeysSection` uses. |
+| POST | `/bluebubbles/test-connection` | `testConnection` (`:95`) | Cheap round trip against the server described in the body (falls back to the saved config for any field omitted). Persists nothing. |
+| POST | `/bluebubbles/sync-now` | `syncNow` (`:120`) | Fire-and-forget: kicks off `BlueBubblesSyncService.runSync()`; progress and failures land on the config row / Import Runs, not in this response. **202**. |
+
+#### `BlueBubblesWebhookController` — `bluebubbles/webhook`  ·  `domains/bluebubbles/controllers/BlueBubblesWebhookController.ts:41`
+
+`POST /bluebubbles/webhook/:secret` (`:52`) — **no guard**. BlueBubbles' own outgoing webhooks carry no header/bearer auth, so the unguessable `:secret` path segment (minted at config-row creation, `BlueBubblesConfigEntity.webhookSecret`) *is* the credential, compared with `timingSafeEqual` via `BlueBubblesConfigService.secretsMatch`. A mismatch is a generic **404**, not 401 — a 401 would confirm to a prober that a BlueBubbles integration exists here at all. Only `new-message`/`updated-message` event types ingest (`INGESTABLE_TYPES`); every other BlueBubbles event type (`typing-indicator`, `hello-world`, …) still gets **200**, just no ingestion work.
+
 ---
 
 ## Agent / intents — `api/agent/intents` + `api/intents` · `domains/agent/controllers/IntentsController.ts:44`
