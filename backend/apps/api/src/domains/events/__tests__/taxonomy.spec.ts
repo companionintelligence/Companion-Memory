@@ -46,8 +46,20 @@ describe('job taxonomy', () => {
   });
 
   it('classifies an unknown event instead of throwing', () => {
-    expect(describeJob('not.a.real.event').label).toBe('Unclassified job');
+    const fingerprinted = describeJob('not.a.real.event', 'nightly', 'search-index');
+
+    expect(fingerprinted.label).toBe('Not a real event · Nightly');
+    expect(fingerprinted.category).toBe(JOB_CATEGORIES.search);
+    expect(fingerprinted.description).toContain('`not.a.real.event`');
+    expect(fingerprinted.description).toContain('`nightly`');
+    expect(fingerprinted.description).toContain('`search-index`');
     expect(describeJob(null).label).toBe('Unclassified job');
+  });
+
+  it('guesses a category from the event prefix when the queue is unknown', () => {
+    expect(describeJob('planning.todo-scan').category).toBe(JOB_CATEGORIES.planning);
+    expect(describeJob('planning.todo-scan').label).toBe('Planning todo scan');
+    expect(describeJob('hbpe.nightly').category).toBe(JOB_CATEGORIES.llm);
   });
 
   it('classifies chat generate as interactive LLM work', () => {

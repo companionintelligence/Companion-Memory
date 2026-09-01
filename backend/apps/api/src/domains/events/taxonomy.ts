@@ -435,8 +435,72 @@ const UNCLASSIFIED: JobTypeDescriptor = {
   label: 'Unclassified job',
   category: JOB_CATEGORIES.maintenance,
   description:
-    'No taxonomy entry for this event name. Either it is new, or it was renamed without updating domains/events/taxonomy.ts.',
+    'This row has no event name, so there is nothing to look up or fingerprint.',
 };
+
+/**
+ * Guess a category from the event prefix or the queue when the taxonomy has
+ * never seen this name. First match wins.
+ */
+const FINGERPRINT_CATEGORY: ReadonlyArray<readonly [RegExp, JobCategory]> = [
+  [/^(note|event|item|place|person|concept|content|answer|thread|message|communication|browseractivity|position|product|receipt|agent-memory)\./, JOB_CATEGORIES.search],
+  [/^file\.|^preview\.|^ingest\./, JOB_CATEGORIES.ingest],
+  [/^infer\.|^chat\.|^hbpe\.|^summary/, JOB_CATEGORIES.llm],
+  [/^task\.|^planning\./, JOB_CATEGORIES.planning],
+  [/^import\.|^sync/, JOB_CATEGORIES.import],
+  [/^graph\.|^visit\./, JOB_CATEGORIES.graph],
+  [/^pipeline\./, JOB_CATEGORIES.pipeline],
+  [/^tool\.|^maintenance\.|^smart\.rotation/, JOB_CATEGORIES.maintenance],
+];
+
+const FINGERPRINT_QUEUE_CATEGORY: Readonly<Record<string, JobCategory>> = {
+  'search-index': JOB_CATEGORIES.search,
+  'people-linking': JOB_CATEGORIES.graph,
+  'pipeline-index': JOB_CATEGORIES.pipeline,
+  'file-preview-generation': JOB_CATEGORIES.ingest,
+  telemetry: JOB_CATEGORIES.maintenance,
+  'import-inbox-provision': JOB_CATEGORIES.import,
+};
+
+function sentenceCaseIdentifier(value: string): string {
+  const words = value
+    .replace(/[._-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim()
+    .toLowerCase();
+
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * A readable name when JOB_TYPES has no entry. Same idea as `describeCron`:
+ * the event / work-type / queue already identify the job; "Unclassified job"
+ * throws that away.
+ */
+function fingerprintJob(
+  event: string,
+  workType?: string | null,
+  queue?: string | null,
+): JobTypeDescriptor {
+  const fromQueue = queue ? FINGERPRINT_QUEUE_CATEGORY[queue] : undefined;
+  const fromPrefix = FINGERPRINT_CATEGORY.find(([pattern]) => pattern.test(event))?.[1];
+  const category = fromQueue ?? fromPrefix ?? JOB_CATEGORIES.maintenance;
+  const label = workType
+    ? `${sentenceCaseIdentifier(event)} · ${sentenceCaseIdentifier(workType)}`
+    : sentenceCaseIdentifier(event);
+  const bits = [
+    `No taxonomy entry for \`${event}\`.`,
+    workType ? `Work type \`${workType}\`.` : null,
+    queue ? `Queue \`${queue}\`.` : null,
+    'Add it to domains/events/taxonomy.ts to give it a real name.',
+  ].filter((bit): bit is string => bit != null);
+
+  return {
+    label,
+    category,
+    description: bits.join(' '),
+  };
+}
 
 /**
  * JOB_TYPES is keyed by event name only, so a name two independent listeners
@@ -500,7 +564,7 @@ export function describeJob(
   const base = (queue != null ? JOB_TYPES_BY_QUEUE[`${event}::${queue}`] : undefined) ?? JOB_TYPES[event];
 
   if (!base) {
-    return UNCLASSIFIED;
+    return fingerprintJob(event, workType, queue);
   }
 
   // The rotation job is one event covering eleven unrelated activities; naming
