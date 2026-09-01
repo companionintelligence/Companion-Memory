@@ -14,6 +14,12 @@ import { type ActivityClass, normalizeClass } from '@/lib/activityPalette';
 import { weekClusterVisible } from '@/lib/forecastDisplay';
 
 import { addDays, sameLocalDay } from './nowNext';
+
+/** An empty place on the calendar the user pointed at. */
+export interface CalendarSlot {
+  instant: Date;
+  allDay: boolean;
+}
 import { packItemLanes, type EventSpan } from './scheduleClusters';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -349,6 +355,70 @@ function rhythmWaitingLabel(dayStart: Date): string {
   return `Predicted rhythm for ${day}: still being built. This can take a while.`;
 }
 
+function visibleClusters(day: RhythmDay | undefined): RhythmCluster[] {
+  return (day?.clusters ?? []).filter((cluster) =>
+    weekClusterVisible({
+      name: cluster.name,
+      l0Class: cluster.l0Class,
+      pOccur: cluster.pOccur,
+      scheduled: Boolean(cluster.scheduled),
+    }),
+  );
+}
+
+/**
+ * One sentence for the slot drawer: what this weekday (and daypart) usually holds.
+ *
+ * Returns null when the model has nothing honest to say — the drawer then shows
+ * the labeled empty state rather than inventing a pattern.
+ */
+function slotForecastLine(
+  slot: CalendarSlot,
+  lookup: (utcDate: string) => RhythmDay | undefined,
+): string | null {
+  const weekday = slot.instant.toLocaleDateString([], { weekday: 'long' });
+
+  if (slot.allDay) {
+    const start = new Date(slot.instant);
+    start.setHours(0, 0, 0, 0);
+    const noon = new Date(start);
+    noon.setHours(12, 0, 0, 0);
+    const merged = new Map<string, RhythmCluster>();
+
+    for (const key of new Set([utcDateKey(start), utcDateKey(noon)])) {
+      for (const cluster of visibleClusters(lookup(key))) {
+        const existing = merged.get(cluster.clusterId);
+
+        if (!existing || cluster.pOccur > existing.pOccur) {
+          merged.set(cluster.clusterId, cluster);
+        }
+      }
+    }
+
+    const top = [...merged.values()].sort((a, b) => b.pOccur - a.pOccur)[0];
+
+    return top ? `${weekday}s you usually have ${top.name}.` : null;
+  }
+
+  const daypart = DAYPART_NAMES[Math.floor(slot.instant.getUTCHours() / DAYPART_HOURS)];
+  let best: { cluster: RhythmCluster; weight: number } | null = null;
+
+  for (const cluster of visibleClusters(lookup(utcDateKey(slot.instant)))) {
+    const probability = cluster.daypartProbs.find((entry) => entry.label === daypart)?.probability ?? 0;
+    const weight = cluster.pOccur * probability;
+
+    if (!best || weight > best.weight) {
+      best = { cluster, weight };
+    }
+  }
+
+  if (!best || best.weight < RHYTHM_NOISE_FLOOR) {
+    return null;
+  }
+
+  return `${weekday} ${daypart}s you usually have ${best.cluster.name}.`;
+}
+
 // ── Lanes ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -381,6 +451,7 @@ export {
   utcDateKey,
   dropInstant,
   movedStart,
+  slotForecastLine,
   RHYTHM_NOISE_FLOOR,
   BUCKET_MINUTES,
   BUCKETS_PER_DAY,

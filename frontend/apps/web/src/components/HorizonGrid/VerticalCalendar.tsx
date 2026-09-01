@@ -26,6 +26,7 @@ import { EventPeek } from './EventPeek';
 import { addDays, formatClock, sameLocalDay, startOfLocalDay } from './nowNext';
 import { foldMicroClusters, packItemLanes, type PackedItem } from './scheduleClusters';
 import {
+  type CalendarSlot,
   RHYTHM_NOISE_FLOOR,
   cellOpacity,
   describes,
@@ -92,6 +93,14 @@ function ratioFor(event: { clientY: number; currentTarget: HTMLElement }): numbe
   const box = event.currentTarget.getBoundingClientRect();
 
   return box.height === 0 ? 0 : (event.clientY - box.top) / box.height;
+}
+
+function isScheduleChip(target: EventTarget | null): boolean {
+  return Boolean((target as HTMLElement | null)?.closest?.('[data-schedule-chip]'));
+}
+
+function slotPct(instant: Date): number {
+  return ((instant.getHours() * 60 + instant.getMinutes()) / MINUTES_PER_DAY) * 100;
 }
 
 interface EventTooltipProps {
@@ -495,6 +504,8 @@ interface DayLaneProps {
   colorMode: ColorMode;
   onDropCandidate?: (candidateId: string, startTime: Date) => void;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
+  selectedSlot?: CalendarSlot | null;
+  onSelectSlot?: (slot: CalendarSlot) => void;
 }
 
 const DayLane = memo(function DayLane({
@@ -505,6 +516,8 @@ const DayLane = memo(function DayLane({
   colorMode,
   onDropCandidate,
   onMoveEvent,
+  selectedSlot,
+  onSelectSlot,
 }: DayLaneProps) {
   const [dropPct, setDropPct] = useState<number | null>(null);
   const timedSpans = useMemo(
@@ -555,6 +568,14 @@ const DayLane = memo(function DayLane({
     return null;
   };
 
+  const selectedPct =
+    selectedSlot && !selectedSlot.allDay && sameLocalDay(selectedSlot.instant, dayStart)
+      ? slotPct(selectedSlot.instant)
+      : null;
+  const markerPct = dropPct ?? selectedPct;
+  const markerAt =
+    dropPct !== null ? dropInstant(dayStart, dropPct / 100) : selectedSlot && !selectedSlot.allDay ? selectedSlot.instant : null;
+
   return (
     <div
       ref={dropRef}
@@ -562,8 +583,22 @@ const DayLane = memo(function DayLane({
       role="listitem"
       aria-label={dayLabel}
       data-testid="vertical-day-lane"
-      className="relative min-w-0 flex-1 border-l border-border/60"
+      className={cn(
+        'relative min-w-0 flex-1 border-l border-border/60',
+        onSelectSlot && 'cursor-cell',
+      )}
       style={{ height: GRID_HEIGHT_PX }}
+      onClick={
+        onSelectSlot
+          ? (click) => {
+              if (isScheduleChip(click.target)) {
+                return;
+              }
+
+              onSelectSlot({ instant: dropInstant(dayStart, ratioFor(click)), allDay: false });
+            }
+          : undefined
+      }
       onDragOver={
         acceptsDrops
           ? (e) => {
@@ -635,19 +670,20 @@ const DayLane = memo(function DayLane({
         </div>
       )}
 
-      {dropPct !== null && (
+      {markerPct !== null && markerAt && (
         <>
           <div
             aria-hidden
+            data-testid="slot-marker"
             className="pointer-events-none absolute inset-x-0 z-20 h-0.5 bg-primary"
-            style={{ top: `${dropPct}%` }}
+            style={{ top: `${markerPct}%` }}
           />
           <div
             aria-hidden
             className="pointer-events-none absolute left-1 z-20 -translate-y-1/2 rounded bg-primary px-1 py-px text-[10px] text-primary-foreground tabular-nums"
-            style={{ top: `${dropPct}%` }}
+            style={{ top: `${markerPct}%` }}
           >
-            {formatClock(dropInstant(dayStart, dropPct / 100))}
+            {formatClock(markerAt)}
           </div>
         </>
       )}
@@ -686,6 +722,8 @@ interface VerticalCalendarProps {
   rhythm: RhythmDay[];
   onDropCandidate?: (candidateId: string, startTime: Date) => void;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
+  selectedSlot?: CalendarSlot | null;
+  onSelectSlot?: (slot: CalendarSlot) => void;
   selectedDay?: Date;
   onSelectDay?: (dayStart: Date) => void;
   colorMode?: ColorMode;
@@ -712,6 +750,8 @@ export function VerticalCalendar({
   rhythm,
   onDropCandidate,
   onMoveEvent,
+  selectedSlot,
+  onSelectSlot,
   selectedDay,
   onSelectDay,
   colorMode = 'type',
@@ -863,7 +903,25 @@ export function VerticalCalendar({
               <div
                 role="list"
                 aria-label={`All day on ${dayLabel}`}
-                className="flex min-h-10 min-w-0 flex-1 flex-col gap-0.5 border-l border-border/60 px-1 py-1"
+                data-testid="vertical-all-day"
+                className={cn(
+                  'flex min-h-10 min-w-0 flex-1 flex-col gap-0.5 border-l border-border/60 px-1 py-1',
+                  onSelectSlot && 'cursor-cell',
+                  selectedSlot?.allDay &&
+                    sameLocalDay(selectedSlot.instant, dayStart) &&
+                    'bg-primary/10 ring-1 ring-inset ring-primary/40',
+                )}
+                onClick={
+                  onSelectSlot
+                    ? (click) => {
+                        if (isScheduleChip(click.target)) {
+                          return;
+                        }
+
+                        onSelectSlot({ instant: dayStart, allDay: true });
+                      }
+                    : undefined
+                }
               >
                 {allDay.map((event) => (
                   <AllDayChip key={event.id} event={event} colorMode={colorMode} />
@@ -920,6 +978,8 @@ export function VerticalCalendar({
                     colorMode={colorMode}
                     onDropCandidate={onDropCandidate ? handleDropCandidate : undefined}
                     onMoveEvent={onMoveEvent ? handleMoveEvent : undefined}
+                    selectedSlot={selectedSlot}
+                    onSelectSlot={onSelectSlot}
                   />
                 </div>
               );

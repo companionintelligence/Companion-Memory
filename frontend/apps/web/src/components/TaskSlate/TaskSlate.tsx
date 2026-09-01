@@ -1,15 +1,41 @@
-import { useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 
+import { useMutation } from '@apollo/client';
 import { useDeviceLayout } from '@ci/common';
 import { Button, cn, Sheet, Tabs, Tooltip } from '@ci/shadcn';
 import { GripVertical, X } from '@ci/shadcn/icons';
 
+import {
+  EventForm,
+  eventDraftAt,
+  eventDraftToInput,
+  validateEventDraft,
+  type EventDraft,
+  type EventDraftProblem,
+} from '@/components/EventForm';
+import type { CalendarSlot } from '@/components/HorizonGrid';
+import { formatClock } from '@/components/HorizonGrid/nowNext';
+import { gql } from '@/graphql';
 import { CANDIDATE_DRAG_TYPE } from '@/lib/scheduleDrag';
 import { type Section, type SectionedTask } from '@/pages/PlanPage/taskSections';
 import type { PlanTask } from '@/pages/PlanPage/usePlanTasks';
 
 import { ScheduleDragGhost } from './ScheduleDragGhost';
 import { useCandidatePointerDrag } from './useCandidatePointerDrag';
+
+const CREATE_EVENT = gql(`
+  mutation CreateEvent($input: CreateEventInput!) {
+    createEvent(input: $input) {
+      id
+      title
+      description
+      startTime
+      endTime
+      eventType
+      locationName
+    }
+  }
+`);
 
 export { CANDIDATE_DRAG_TYPE };
 
@@ -30,14 +56,15 @@ interface CardProps {
   /**
    * Whether this card can be dropped onto a day at all.
    *
-   * False in the phone drawer, which sits over the calendar it would be
-   * dropped on — so a grip handle there would advertise a gesture that cannot
-   * complete.
+   * False in the slot drawer — those cards are clicked onto the selected time
+   * rather than dragged.
    */
   placeable?: boolean;
+  /** Click the card to put it on the selected slot. */
+  onPlace?: (id: string) => void;
 }
 
-function BacklogCard({ task, onDismiss, touchDrag = false, placeable = true }: CardProps) {
+function BacklogCard({ task, onDismiss, touchDrag = false, placeable = true, onPlace }: CardProps) {
   const proposed = task.status === 'proposed' || Boolean(task.hasPendingChange);
   const { onPointerDown, onHandlePointerDown, onContextMenu } = useCandidatePointerDrag(
     task,
@@ -59,10 +86,25 @@ function BacklogCard({ task, onDismiss, touchDrag = false, placeable = true }: C
       }
       onPointerDown={placeable ? onPointerDown : undefined}
       onContextMenu={placeable ? onContextMenu : undefined}
+      onClick={onPlace ? () => onPlace(task.id) : undefined}
+      onKeyDown={
+        onPlace
+          ? (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onPlace(task.id);
+              }
+            }
+          : undefined
+      }
+      role={onPlace ? 'button' : undefined}
+      tabIndex={onPlace ? 0 : undefined}
+      aria-label={onPlace ? `Add ${task.title} at this time` : undefined}
       className={cn(
         'group relative flex flex-col rounded-lg border border-border bg-background',
         'p-2.5 transition-colors',
         placeable ? 'cursor-grab pl-7 hover:border-primary/50 active:cursor-grabbing' : 'pl-2.5 pr-9',
+        onPlace && 'cursor-pointer hover:border-primary/50',
         placeable && touchDrag && 'select-none touch-pan-y [-webkit-touch-callout:none]',
       )}
     >
@@ -105,7 +147,10 @@ function BacklogCard({ task, onDismiss, touchDrag = false, placeable = true }: C
                 size="icon"
                 className="h-6 w-6 pointer-coarse:h-8 pointer-coarse:w-8"
                 aria-label={`Dismiss ${task.title}`}
-                onClick={() => onDismiss(task.id)}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDismiss(task.id);
+                }}
               >
                 <X className="h-3.5 w-3.5" strokeWidth={1.5} />
               </Button>
@@ -140,12 +185,14 @@ function BacklogColumn({
   showHeading = true,
   touchDrag = false,
   placeable = true,
+  onPlace,
 }: {
   section: Section<PlanTask>;
   onDismiss?: (id: string) => void;
   showHeading?: boolean;
   touchDrag?: boolean;
   placeable?: boolean;
+  onPlace?: (id: string) => void;
 }) {
   const overdue = overdueCount(section);
   const dismiss = section.key === 'proposed' ? onDismiss : undefined;
@@ -188,6 +235,7 @@ function BacklogColumn({
                   onDismiss={dismiss}
                   touchDrag={touchDrag}
                   placeable={placeable}
+                  onPlace={onPlace}
                 />
               ))}
             </ul>
@@ -208,6 +256,7 @@ interface TaskSlateProps {
    */
   error?: boolean;
   onDismissProposed?: (id: string) => void;
+  onPlace?: (id: string) => void;
   className?: string;
 }
 
@@ -226,6 +275,7 @@ function SlateBody({
   loading,
   error = false,
   onDismissProposed,
+  onPlace,
   isMobile,
   placeable,
   paneClassName,
@@ -277,6 +327,7 @@ function SlateBody({
                 showHeading={false}
                 touchDrag
                 placeable={placeable}
+                onPlace={onPlace}
               />
             </Tabs.Content>
           ))}
@@ -292,7 +343,12 @@ function SlateBody({
               key={section.key}
               className="flex min-w-[14rem] flex-1 flex-col rounded-lg border border-border bg-muted/30 px-2 py-2"
             >
-              <BacklogColumn section={section} onDismiss={onDismissProposed} placeable={placeable} />
+              <BacklogColumn
+                section={section}
+                onDismiss={onDismissProposed}
+                placeable={placeable}
+                onPlace={onPlace}
+              />
             </div>
           ))}
         </div>
@@ -345,51 +401,157 @@ export function TaskSlate({
   );
 }
 
+function formatSlotHeading(slot: CalendarSlot): string {
+  const day = slot.instant.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' });
+
+  return slot.allDay ? `${day} · All day` : `${day} · ${formatClock(slot.instant)}`;
+}
+
 interface TaskSlateDrawerProps extends Omit<TaskSlateProps, 'className'> {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  slot: CalendarSlot | null;
+  /** HBPE line for this slot, or null when the model has nothing to say. */
+  insight?: string | null;
+  onCreated?: () => void;
 }
 
 /**
- * The same backlog, one tap off the phone calendar instead of stacked under it.
+ * The slot you pointed at on the calendar: add a new event there, pick a
+ * possibility, or read what Thursdays usually look like.
  *
- * On a phone the day column IS the page, so a slate below it is one more thing
- * between the user and the only thing they came for — and a drag from the slate
- * onto a day, which is the whole point of the rail on a desktop, cannot be made
- * on a viewport where the two are never on screen together. Behind a drawer the
- * unscheduled work stays reachable and the calendar stays whole.
- *
- * Cards here are therefore read-only. Plan remains where work gets scheduled;
- * this is the reminder that it is waiting, not a second place to do it.
+ * Overlay is see-through and non-modal so another empty click can move the
+ * line without closing this. Phone uses the bottom edge so the day stays
+ * tappable above it.
  */
 export function TaskSlateDrawer({
   open,
   onOpenChange,
+  slot,
   sections,
   loading,
   error = false,
+  insight = null,
   onDismissProposed,
+  onPlace,
+  onCreated,
 }: TaskSlateDrawerProps) {
+  const { isMobile } = useDeviceLayout();
+  const [composing, setComposing] = useState(false);
+  const [draft, setDraft] = useState<EventDraft>(() => eventDraftAt(slot?.instant ?? new Date(), slot?.allDay));
+  const [problem, setProblem] = useState<EventDraftProblem | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [createEvent, { loading: creating }] = useMutation(CREATE_EVENT);
+
+  useEffect(() => {
+    if (!slot) {
+      setComposing(false);
+      setProblem(null);
+      setSubmitError(null);
+
+      return;
+    }
+
+    setDraft((previous) => ({
+      ...eventDraftAt(slot.instant, slot.allDay),
+      title: previous.title,
+      description: previous.description,
+    }));
+  }, [slot]);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    const invalid = validateEventDraft(draft);
+
+    if (invalid) {
+      setProblem(invalid);
+
+      return;
+    }
+
+    setProblem(null);
+    setSubmitError(null);
+
+    try {
+      await createEvent({ variables: { input: eventDraftToInput(draft) } });
+      onCreated?.();
+      setComposing(false);
+      setDraft(eventDraftAt(slot?.instant ?? new Date(), slot?.allDay));
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : 'Failed to create event.');
+    }
+  };
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <Sheet.Content side="right" className="w-[85vw] gap-0 p-0 sm:max-w-sm">
+    <Sheet open={open && slot !== null} onOpenChange={onOpenChange} modal={false}>
+      <Sheet.Content
+        side={isMobile ? 'bottom' : 'right'}
+        overlayClassName="bg-transparent pointer-events-none"
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
+        className={cn('gap-0 p-0', isMobile ? 'max-h-[70vh] w-full sm:max-w-none' : 'w-[24rem] sm:max-w-md')}
+      >
         <Sheet.Header className="gap-1 pb-1">
-          <Sheet.Title className="text-sm">Possibilities</Sheet.Title>
-          <Sheet.Description className="text-[11px]">
-            Unscheduled work from Plan. Schedule it on the Plan page.
+          <Sheet.Title className="text-sm">Add to calendar</Sheet.Title>
+          <Sheet.Description className="text-[11px] tabular-nums">
+            {slot ? formatSlotHeading(slot) : 'Pick an empty time'}
           </Sheet.Description>
         </Sheet.Header>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4">
-          <SlateBody
-            sections={sections}
-            loading={loading}
-            error={error}
-            onDismissProposed={onDismissProposed}
-            isMobile
-            placeable={false}
-            paneClassName="min-h-0"
-          />
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
+          <section aria-labelledby="slot-predictions-label" className="rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+            <h4
+              id="slot-predictions-label"
+              className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+            >
+              Predictions
+            </h4>
+            <p className={cn('mt-1 text-[13px] leading-snug', insight ? 'text-foreground' : 'text-muted-foreground')}>
+              {insight ?? 'No predictions available'}
+            </p>
+          </section>
+
+          {composing ? (
+            <form onSubmit={handleSubmit} className="flex min-h-0 flex-col gap-4">
+              <EventForm value={draft} onChange={setDraft} problem={problem} disabled={creating} />
+              {submitError ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {submitError}
+                </p>
+              ) : null}
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => setComposing(false)} disabled={creating}>
+                  Cancel
+                </Button>
+                <Button type="submit" size="sm" disabled={creating}>
+                  {creating ? 'Adding…' : 'Add'}
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <>
+              <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setComposing(true)}>
+                New event
+              </Button>
+
+              <div>
+                <h4 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Possibilities
+                </h4>
+                <SlateBody
+                  sections={sections}
+                  loading={loading}
+                  error={error}
+                  onDismissProposed={onDismissProposed}
+                  onPlace={onPlace}
+                  isMobile
+                  placeable={false}
+                  paneClassName="min-h-0"
+                />
+              </div>
+            </>
+          )}
         </div>
       </Sheet.Content>
     </Sheet>

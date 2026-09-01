@@ -197,6 +197,76 @@ describe('VerticalCalendar', () => {
   });
 });
 
+describe('VerticalCalendar — empty-slot selection', () => {
+  function stubLaneHeight(lane: HTMLElement, height = 1440, top = 0) {
+    lane.getBoundingClientRect = () =>
+      ({ height, top, bottom: top + height, width: 100, left: 0, right: 100 }) as DOMRect;
+  }
+
+  it('reports the snapped time when an empty hour is clicked', () => {
+    const onSelectSlot = vi.fn();
+    const { container } = render(
+      <VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} onSelectSlot={onSelectSlot} />,
+    );
+    const lane = container.querySelector('[data-testid="vertical-day-lane"]') as HTMLElement;
+    stubLaneHeight(lane);
+
+    fireEvent.click(lane, { clientY: 720 });
+
+    expect(onSelectSlot).toHaveBeenCalledTimes(1);
+    const slot = onSelectSlot.mock.calls[0][0];
+    expect(slot.allDay).toBe(false);
+    expect(slot.instant.getHours()).toBe(12);
+    expect(slot.instant.getMinutes()).toBe(0);
+  });
+
+  it('does not select a slot when an existing event is clicked', () => {
+    const onSelectSlot = vi.fn();
+    render(
+      <VerticalCalendar
+        start={MONDAY}
+        days={1}
+        events={[event()]}
+        rhythm={[]}
+        onSelectSlot={onSelectSlot}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Standup,/));
+
+    expect(onSelectSlot).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('draws the selection line on the clicked hour', () => {
+    render(
+      <VerticalCalendar
+        start={MONDAY}
+        days={1}
+        events={[]}
+        rhythm={[]}
+        selectedSlot={{ instant: new Date(2026, 7, 3, 16, 15), allDay: false }}
+      />,
+    );
+
+    expect(screen.getByTestId('slot-marker')).toBeInTheDocument();
+  });
+
+  it('selects all-day when the all-day row is clicked', () => {
+    const onSelectSlot = vi.fn();
+    render(
+      <VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} onSelectSlot={onSelectSlot} />,
+    );
+
+    fireEvent.click(screen.getByTestId('vertical-all-day'));
+
+    expect(onSelectSlot).toHaveBeenCalledTimes(1);
+    const slot = onSelectSlot.mock.calls[0][0];
+    expect(slot.allDay).toBe(true);
+    expect(slot.instant.getTime()).toBe(MONDAY.getTime());
+  });
+});
+
 /**
  * Pattern rhythm used to be a wash painted behind the day column, where it read
  * as a highlight on whatever chip sat over it and had no name at all. It is now

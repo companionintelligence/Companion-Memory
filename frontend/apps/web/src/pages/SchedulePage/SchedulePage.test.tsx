@@ -52,12 +52,20 @@ vi.mock('@/components/HorizonGrid', () => ({
     footer,
     onDropCandidate,
     onMoveEvent,
+    onSelectSlot,
   }: {
     footer?: string;
     onDropCandidate: (id: string, at: Date) => void;
     onMoveEvent: (id: string, at: Date) => void;
+    onSelectSlot?: (slot: { instant: Date; allDay: boolean }) => void;
   }) => (
     <div data-testid="vertical-calendar">
+      <button
+        type="button"
+        onClick={() => onSelectSlot?.({ instant: new Date(2026, 7, 6, 16, 15), allDay: false })}
+      >
+        stub-slot
+      </button>
       <button type="button" onClick={() => onDropCandidate('c1', new Date())}>
         stub-drop
       </button>
@@ -70,36 +78,35 @@ vi.mock('@/components/HorizonGrid', () => ({
 }));
 
 vi.mock('@/components/TaskSlate', () => {
-  type SlateProps = {
+  type DrawerProps = {
+    open: boolean;
     sections: { key: string; tasks: { id: string; title: string }[] }[];
     onDismissProposed: (id: string) => void;
+    onPlace?: (id: string) => void;
+    insight?: string | null;
     error?: boolean;
   };
 
-  const Slate = ({ sections, onDismissProposed, error }: SlateProps) => (
-    <>
-      {error && <p>Could not load your plan. Try again shortly.</p>}
-      {sections.flatMap((section) =>
-        section.tasks.map((task) => (
-          <button
-            key={task.id}
-            type="button"
-            aria-label={`Dismiss ${task.title}`}
-            onClick={() => onDismissProposed(task.id)}
-          />
-        )),
-      )}
-    </>
-  );
-
   return {
-    TaskSlate: Slate,
-    // The real drawer is a Sheet; what the page owns is whether it is open, so
-    // the stub renders nothing until it is.
-    TaskSlateDrawer: ({ open, ...rest }: SlateProps & { open: boolean }) =>
+    TaskSlateDrawer: ({ open, sections, onDismissProposed, onPlace, insight, error }: DrawerProps) =>
       open ? (
         <div data-testid="slate-drawer">
-          <Slate {...rest} />
+          <p>{insight ?? 'No predictions available'}</p>
+          {error && <p>Could not load your plan. Try again shortly.</p>}
+          {sections.flatMap((section) =>
+            section.tasks.map((task) => (
+              <div key={task.id}>
+                <button type="button" onClick={() => onPlace?.(task.id)}>
+                  Add {task.title} at this time
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Dismiss ${task.title}`}
+                  onClick={() => onDismissProposed(task.id)}
+                />
+              </div>
+            )),
+          )}
         </div>
       ) : null,
   };
@@ -306,6 +313,7 @@ describe('SchedulePage — mutations that the server refuses', () => {
     });
 
     renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-slot'));
     fireEvent.click(screen.getByLabelText('Dismiss Book the dentist'));
 
     expect(await screen.findByText(/Could not dismiss that task/)).toBeInTheDocument();
@@ -352,11 +360,12 @@ describe('SchedulePage — failed queries', () => {
 
     renderWithProviders(<SchedulePage />);
 
+    expect(screen.queryByText(/Connect a calendar/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('stub-slot'));
+
     expect(screen.getByText(/Could not load your plan/)).toBeInTheDocument();
     expect(screen.queryByText(/Nothing in Proposed or Unscheduled/)).not.toBeInTheDocument();
-    // Not the "connect a calendar" empty state either — nothing is known to be
-    // empty when the request that would have said so failed.
-    expect(screen.queryByText(/Connect a calendar/)).not.toBeInTheDocument();
   });
 
   it('still shows the empty state when everything resolved and there is nothing', () => {
@@ -473,12 +482,7 @@ describe('SchedulePage — week paging', () => {
       expect(screen.getByText('stub-drop')).toBeInTheDocument();
     });
 
-    /**
-     * The regression the walkthrough hit: Possibilities was stacked under the
-     * one column the phone came for, advertising a drag onto a day that is
-     * never on screen at the same time as the card.
-     */
-    it('puts Possibilities behind a drawer instead of under the calendar', () => {
+    it('does not keep a Possibilities button or rail on the phone', () => {
       setViewport(true);
       setPlan({
         backlog: [{ key: 'unscheduled', tasks: [{ id: 't1', title: 'Call the dentist' }] }],
@@ -487,26 +491,34 @@ describe('SchedulePage — week paging', () => {
 
       renderWithProviders(<SchedulePage />);
 
-      expect(screen.queryByTestId('slate-drawer')).not.toBeInTheDocument();
-      expect(screen.queryByLabelText('Dismiss Call the dentist')).not.toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole('button', { name: /Possibilities/ }));
-
-      expect(screen.getByTestId('slate-drawer')).toBeInTheDocument();
-      expect(screen.getByLabelText('Dismiss Call the dentist')).toBeInTheDocument();
-    });
-
-    it('leaves the slate inline on a desktop, where the drag it offers is real', () => {
-      setPlan({
-        backlog: [{ key: 'unscheduled', tasks: [{ id: 't1', title: 'Call the dentist' }] }],
-        backlogCount: 1,
-      });
-
-      renderWithProviders(<SchedulePage />);
-
       expect(screen.queryByRole('button', { name: /Possibilities/ })).not.toBeInTheDocument();
-      expect(screen.getByLabelText('Dismiss Call the dentist')).toBeInTheDocument();
+      expect(screen.queryByTestId('slate-drawer')).not.toBeInTheDocument();
     });
+  });
+
+  it('opens the slot drawer from an empty click and places a possibility there', () => {
+    const placeOnDay = vi.fn().mockResolvedValue(undefined);
+    setPlan({
+      backlog: [{ key: 'unscheduled', tasks: [{ id: 't1', title: 'Call the dentist' }] }],
+      backlogCount: 1,
+      placeOnDay,
+    });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.queryByTestId('slate-drawer')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Dismiss Call the dentist')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('stub-slot'));
+
+    expect(screen.getByTestId('slate-drawer')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add Call the dentist at this time' }));
+
+    expect(placeOnDay).toHaveBeenCalledTimes(1);
+    const at = placeOnDay.mock.calls[0][1] as Date;
+    expect(placeOnDay.mock.calls[0][0]).toBe('t1');
+    expect(at.getHours()).toBe(16);
+    expect(at.getMinutes()).toBe(15);
   });
 
   /**

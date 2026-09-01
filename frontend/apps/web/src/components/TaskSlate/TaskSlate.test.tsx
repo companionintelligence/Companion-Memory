@@ -289,7 +289,9 @@ describe('TaskSlate — phone tabs', () => {
  * — that is the point of the drawer — but it is not a second place to schedule
  * work, because the drawer covers the only day column the phone has.
  */
-describe('TaskSlateDrawer — the phone drawer', () => {
+const SLOT = { instant: new Date(2026, 7, 6, 16, 15), allDay: false };
+
+describe('TaskSlateDrawer — the slot drawer', () => {
   afterEach(() => setViewport(false));
 
   it('stays shut until it is asked for', () => {
@@ -297,6 +299,7 @@ describe('TaskSlateDrawer — the phone drawer', () => {
       <TaskSlateDrawer
         open={false}
         onOpenChange={() => {}}
+        slot={SLOT}
         sections={backlog([task({ status: 'proposed' })])}
         {...NOOP}
       />,
@@ -305,23 +308,29 @@ describe('TaskSlateDrawer — the phone drawer', () => {
     expect(screen.queryByText('Book the dentist')).not.toBeInTheDocument();
   });
 
-  it('lists the backlog without offering a drag onto a calendar it covers', async () => {
+  it('lists the backlog as click-to-place cards, not a drag', async () => {
+    const onPlace = vi.fn();
+
     renderWithProviders(
       <TaskSlateDrawer
         open
         onOpenChange={() => {}}
+        slot={SLOT}
         sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
         {...NOOP}
+        onPlace={onPlace}
       />,
     );
 
-    const card = (await screen.findByText('Try this')).closest('li') as HTMLElement;
+    const card = (await screen.findByRole('button', { name: /Add Try this at this time/ })) as HTMLElement;
 
     expect(card).toHaveAttribute('draggable', 'false');
     expect(
       screen.queryByRole('button', { name: /drag try this onto the calendar/i }),
     ).not.toBeInTheDocument();
-    expect(screen.getByText(/Schedule it on the Plan page/)).toBeInTheDocument();
+
+    fireEvent.click(card);
+    expect(onPlace).toHaveBeenCalledWith('p1');
   });
 
   it('still lets a proposed card be declined', async () => {
@@ -331,6 +340,7 @@ describe('TaskSlateDrawer — the phone drawer', () => {
       <TaskSlateDrawer
         open
         onOpenChange={() => {}}
+        slot={SLOT}
         sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
         {...NOOP}
         onDismissProposed={onDismissProposed}
@@ -342,16 +352,33 @@ describe('TaskSlateDrawer — the phone drawer', () => {
   });
 
   it('says the plan failed rather than that there is nothing waiting', async () => {
-    renderWithProviders(<TaskSlateDrawer open onOpenChange={() => {}} sections={[]} loading={false} error />);
+    renderWithProviders(
+      <TaskSlateDrawer open onOpenChange={() => {}} slot={SLOT} sections={[]} loading={false} error />,
+    );
 
     expect(await screen.findByText(/Could not load your plan/)).toBeInTheDocument();
     expect(screen.queryByText(/Nothing in Proposed or Unscheduled/)).not.toBeInTheDocument();
   });
 
   it('does not tell an empty drawer to drop anything on a day', async () => {
-    renderWithProviders(<TaskSlateDrawer open onOpenChange={() => {}} sections={[]} {...NOOP} />);
+    renderWithProviders(<TaskSlateDrawer open onOpenChange={() => {}} slot={SLOT} sections={[]} {...NOOP} />);
 
     expect(await screen.findByText(/Nothing in Proposed or Unscheduled/)).toBeInTheDocument();
     expect(screen.queryByText(/drop onto a day/)).not.toBeInTheDocument();
+  });
+
+  it('shows the labeled empty prediction when HBPE has nothing to say', async () => {
+    renderWithProviders(<TaskSlateDrawer open onOpenChange={() => {}} slot={SLOT} sections={[]} {...NOOP} />);
+
+    expect(await screen.findByText('No predictions available')).toBeInTheDocument();
+  });
+
+  it('opens the event form in the drawer', async () => {
+    renderWithProviders(<TaskSlateDrawer open onOpenChange={() => {}} slot={SLOT} sections={[]} {...NOOP} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New event' }));
+
+    expect(screen.getByLabelText('Title')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
   });
 });

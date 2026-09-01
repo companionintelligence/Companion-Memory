@@ -11,6 +11,7 @@ import {
   movedStart,
   packLanes,
   rhythmCells,
+  slotForecastLine,
   spanForDay,
 } from './scheduleGeometry';
 
@@ -571,5 +572,45 @@ describe('movedStart — dragging a committed event to a new time', () => {
 
   it('falls back to the start of the day on an unusable coordinate', () => {
     expect(movedStart(MONDAY, Number.NaN, 0).getTime()).toBe(MONDAY.getTime());
+  });
+});
+
+describe('slotForecastLine — what the drawer is allowed to claim', () => {
+  it('names the weekday and daypart when a cluster wins that hour', () => {
+    withTimeZone('UTC', () => {
+      const instant = new Date(Date.UTC(2026, 7, 6, 16, 15));
+      const day: RhythmDay = {
+        date: '2026-08-06',
+        dow: 'Thu',
+        clusters: [
+          {
+            clusterId: 'c1',
+            name: 'Deep Work',
+            l0Class: 'WORK',
+            pOccur: 0.9,
+            scheduled: false,
+            daypartProbs: [
+              { label: 'afternoon', probability: 0.8 },
+              { label: 'morning', probability: 0.1 },
+            ],
+          },
+        ],
+      };
+
+      const line = slotForecastLine({ instant, allDay: false }, (key) =>
+        key === '2026-08-06' ? day : undefined,
+      );
+
+      expect(line).toMatch(/usually have Deep Work/);
+      expect(line).toMatch(/afternoon/);
+    });
+  });
+
+  it('returns null when the model has nothing honest to say', () => {
+    withTimeZone('UTC', () => {
+      const instant = new Date(Date.UTC(2026, 7, 6, 16, 15));
+
+      expect(slotForecastLine({ instant, allDay: false }, () => undefined)).toBeNull();
+    });
   });
 });

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   combineDateAndClock,
   emptyEventDraft,
+  eventDraftAt,
   eventDraftToInput,
   pointFromLatLng,
   validateEventDraft,
@@ -54,6 +55,25 @@ describe('emptyEventDraft', () => {
       longitude: '',
       isAllDay: false,
     });
+  });
+});
+
+describe('eventDraftAt', () => {
+  it('keeps the snapped slot time rather than rounding up', () => {
+    const value = eventDraftAt(new Date(2026, 7, 6, 16, 15, 0));
+
+    expect(value.startDate).toBe('2026-08-06');
+    expect(value.startClock).toBe('16:15');
+    expect(value.endClock).toBe('17:15');
+    expect(value.isAllDay).toBe(false);
+  });
+
+  it('opens an all-day draft on that local date', () => {
+    const value = eventDraftAt(new Date(2026, 7, 6, 16, 15, 0), true);
+
+    expect(value.startDate).toBe('2026-08-06');
+    expect(value.isAllDay).toBe(true);
+    expect(value.startClock).toBe('00:00');
   });
 });
 

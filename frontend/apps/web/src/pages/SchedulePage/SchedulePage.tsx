@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ElementType } from 'rea
 
 import { EmptyState, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
 import { Button, IconButton, cn } from '@ci/shadcn';
-import { CalendarRange, ChevronLeft, ChevronRight, Inbox } from '@ci/shadcn/icons';
+import { CalendarRange, ChevronLeft, ChevronRight } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
 import { useForecastService } from '@/api/useForecastService';
@@ -10,10 +10,15 @@ import { useRescheduleEvent } from '@/api/useRescheduleEvent';
 import { type RhythmDay, type ScheduleEvent, useScheduleService } from '@/api/useScheduleService';
 import { useFeatures } from '@/common/feature';
 import { VerticalCalendar } from '@/components/HorizonGrid';
-import { RHYTHM_NOISE_FLOOR, daypartWeights } from '@/components/HorizonGrid/scheduleGeometry';
+import {
+  type CalendarSlot,
+  RHYTHM_NOISE_FLOOR,
+  daypartWeights,
+  slotForecastLine,
+} from '@/components/HorizonGrid/scheduleGeometry';
 import { TodayNowNext, WeekDayChips } from '@/components/HorizonGrid/TodayNowNext';
 import { PageContent } from '@/components/layout';
-import { TaskSlate, TaskSlateDrawer } from '@/components/TaskSlate';
+import { TaskSlateDrawer } from '@/components/TaskSlate';
 import {
   type ActivityClass,
   type ColorMode,
@@ -216,8 +221,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   const hbpeEnabled = isFeatureEnabled('hbpe');
   const [weekOffset, setWeekOffset] = useState(0);
   const [colorMode, setColorMode] = useState<ColorMode>('type');
-  /** Phone only: Possibilities lives behind a drawer rather than under the day. */
-  const [slateOpen, setSlateOpen] = useState(false);
+  const [slot, setSlot] = useState<CalendarSlot | null>(null);
 
   usePageTitle(embedded ? null : 'Schedule - Companion Intelligence');
 
@@ -278,6 +282,33 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
     },
     [placeOnDay, run],
   );
+
+  const handleSelectSlot = useCallback((next: CalendarSlot) => {
+    setSlot(next);
+    setSelectedDay(startOfLocalDay(next.instant));
+  }, []);
+
+  const handlePlace = useCallback(
+    (taskId: string) => {
+      if (!slot) {
+        return;
+      }
+
+      const at = slot.allDay ? startOfLocalDay(slot.instant) : slot.instant;
+      run(placeOnDay(taskId, at), 'Could not put that on the calendar. Try again shortly.');
+    },
+    [placeOnDay, run, slot],
+  );
+
+  const slotInsight = useMemo(() => {
+    if (!slot || !hbpeEnabled || !rhythmCoversWindow) {
+      return null;
+    }
+
+    const lookup = (key: string) => rhythm.find((day) => day.date === key);
+
+    return slotForecastLine(slot, lookup);
+  }, [hbpeEnabled, rhythm, rhythmCoversWindow, slot]);
 
   const rescheduleEvent = useRescheduleEvent(refetch);
 
@@ -456,20 +487,6 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                         Back to today
                       </Button>
                     )}
-
-                    {/* Possibilities is a drawer here, not a board under the
-                        day — see TaskSlateDrawer. */}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="ml-auto h-8 text-xs"
-                      aria-expanded={slateOpen}
-                      onClick={() => setSlateOpen(true)}
-                    >
-                      <Inbox className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
-                      Possibilities
-                      {backlogCount > 0 && <span className="ml-1 tabular-nums">{backlogCount}</span>}
-                    </Button>
                   </div>
 
                   <WeekDayChips
@@ -496,6 +513,8 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                 pipelineRunning={pipelineRunning}
                 selectedDay={selectedDay}
                 onSelectDay={setSelectedDay}
+                selectedSlot={slot}
+                onSelectSlot={handleSelectSlot}
                 onDropCandidate={handleDrop}
                 onMoveEvent={handleMove}
                 footer={rhythmFooter(
@@ -507,27 +526,22 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                 )}
               />
 
-              {/* `=== false` rather than a plain ternary: `isMobile` is
-                  undefined until the media query resolves, and defaulting to
-                  the closed drawer means a phone never flashes the inline board
-                  this change exists to take off the calendar. */}
-              {isMobile === false ? (
-                <TaskSlate
-                  sections={backlog}
-                  loading={planLoading}
-                  error={planError}
-                  onDismissProposed={handleDismissProposed}
-                />
-              ) : (
-                <TaskSlateDrawer
-                  open={slateOpen}
-                  onOpenChange={setSlateOpen}
-                  sections={backlog}
-                  loading={planLoading}
-                  error={planError}
-                  onDismissProposed={handleDismissProposed}
-                />
-              )}
+              <TaskSlateDrawer
+                open={slot !== null}
+                onOpenChange={(open) => {
+                  if (!open) {
+                    setSlot(null);
+                  }
+                }}
+                slot={slot}
+                insight={slotInsight}
+                sections={backlog}
+                loading={planLoading}
+                error={planError}
+                onDismissProposed={handleDismissProposed}
+                onPlace={handlePlace}
+                onCreated={refetch}
+              />
             </div>
           </>
         )}

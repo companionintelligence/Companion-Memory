@@ -72,6 +72,31 @@ export function emptyEventDraft(now: Date = new Date()): EventDraft {
 }
 
 /**
+ * A blank event already sitting on a calendar slot — the time (or all-day) the
+ * user pointed at, not "now rounded up".
+ */
+export function eventDraftAt(instant: Date, allDay = false): EventDraft {
+  const start = new Date(instant);
+  start.setSeconds(0, 0);
+
+  if (allDay) {
+    start.setHours(0, 0, 0, 0);
+  }
+
+  const end = new Date(start.getTime() + (allDay ? 24 : 1) * 60 * 60 * 1000);
+  const blank = emptyEventDraft(start);
+
+  return {
+    ...blank,
+    startDate: toDateInputValue(start),
+    startClock: toClockInputValue(start),
+    endDate: toDateInputValue(end),
+    endClock: toClockInputValue(end),
+    isAllDay: allDay,
+  };
+}
+
+/**
  * Combine a date field and a clock field into a local-time Date. All-day
  * events start at local midnight; a missing clock on a timed event does the
  * same rather than refusing the date the user did give.
