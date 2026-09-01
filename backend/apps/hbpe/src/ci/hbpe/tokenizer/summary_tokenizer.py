@@ -133,8 +133,8 @@ class SummaryTokenizer:
         Return L0+L1 token records from labeled summaries for this date.
 
         Each hourly summary maps to 2 consecutive 30-min buckets (e.g.
-        period_start 14:00 → buckets 28–29).  Records use the same shape
-        as those returned by _fetch_tokens_for_day() in serializer.py.
+        period_start 14:00 → buckets 28–29).  Records use the same shape as
+        the ones _fetch_tokens_for_day() in serializer.py collects.
         """
         from ci.hbpe.data_client import get_labeled_summaries
 

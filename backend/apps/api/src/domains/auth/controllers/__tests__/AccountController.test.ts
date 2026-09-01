@@ -165,7 +165,10 @@ describe('AccountController — change email', () => {
     const { controller, userService } = makeController(undefined, { emailTaken: true });
 
     await expect(
-      controller.changeEmail(requestContext(), { newEmail: 'taken@example.com', currentPassword: 'correct-password' }),
+      controller.changeEmail(requestContext(), {
+        newEmail: 'taken@example.com',
+        currentPassword: 'correct-password',
+      }),
     ).rejects.toThrow(BadRequestException);
     expect(userService.changeEmail).not.toHaveBeenCalled();
   });

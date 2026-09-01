@@ -359,18 +359,18 @@ describe('buildNameOverlapCandidates', () => {
     );
 
     expect(candidates).toHaveLength(2);
-    expect(candidates.every((candidate) => candidate.evidence.some((item) => item.kind === 'name_cluster'))).toBe(
-      true,
-    );
+    expect(
+      candidates.every((candidate) => candidate.evidence.some((item) => item.kind === 'name_cluster')),
+    ).toBe(true);
   });
 
   it('drops a given name that fits more people than the cluster cap', () => {
     const rows = names(
       [1, 'william'],
-      ...Array.from({ length: MAX_NAME_CLUSTER + 1 }, (_, index) => [index + 2, `William Extra${index}`] as [
-        number,
-        string,
-      ]),
+      ...Array.from(
+        { length: MAX_NAME_CLUSTER + 1 },
+        (_, index) => [index + 2, `William Extra${index}`] as [number, string],
+      ),
     );
 
     const { candidates } = buildNameOverlapCandidates(rows, new Set([personId(1)]));

@@ -122,7 +122,7 @@ export class DocumentChunkService {
    * True total of document chunks matching the same filters {@link getEntitiesForFileChunks}
    * applies (minus the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real
    * `COUNT(*)`, not the length of one `limit`-bounded page of identifiers. See
-   * EventService.countEntitiesForEvents.
+   * CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForFileChunks(
     context: ServiceContext,

@@ -1,7 +1,15 @@
 import { type ComponentType, type ReactNode, useId } from 'react';
 
 import { Button, IconButton, Input, Label, Select, Textarea } from '@ci/shadcn';
-import { Briefcase, Contact as ContactIcon, MapPin, Plus, StickyNote, Trash2, UserRound } from '@ci/shadcn/icons';
+import {
+  Briefcase,
+  Contact as ContactIcon,
+  MapPin,
+  Plus,
+  StickyNote,
+  Trash2,
+  UserRound,
+} from '@ci/shadcn/icons';
 
 import { PersonAvatar } from '@/components/PersonAvatar';
 

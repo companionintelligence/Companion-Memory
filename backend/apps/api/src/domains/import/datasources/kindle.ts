@@ -144,6 +144,7 @@ export class KindleFileImporter implements FileImporter {
 
       const clip = parseClip(trimmed);
       if (!clip) {
+        params.pipeline.drop?.('malformed_clip');
         continue;
       }
 

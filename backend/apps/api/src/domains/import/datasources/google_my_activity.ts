@@ -22,6 +22,7 @@
    Takeout's own watch-history.html would (media.watch with the channel, etc.)
    and dedup against it. Verbs that module does not model (Viewed a post,
    Dismissed a shelf) keep the generic handling below. */
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { open, readdir, stat, type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
@@ -75,6 +76,26 @@ function parseGoogleDate(s: string | undefined): Date | undefined {
   const d = new Date(s.replace(/\u00A0/g, ' ').trim());
 
   return isNaN(d.getTime()) ? undefined : d;
+}
+
+// Sentinel for the (rare) entry whose trailing timestamp didn't parse — kept
+// distinct from any real ISO string so it can never collide with one.
+const NO_TS_SENTINEL = '(no-timestamp)';
+
+// A short, content-derived fingerprint for one activity entry: stable across
+// re-exports regardless of where the entry now sits in the file (see the
+// call site in pushEntry for why that matters), yet still distinguishes
+// entries that merely share a product. 10 hex chars (40 bits) is well past
+// the collision risk for one person's activity history in one product file.
+function entryFingerprint(ts: Date | undefined, title: string, url: string | undefined): string {
+  const hash = createHash('sha1');
+  hash.update(ts?.toISOString() ?? NO_TS_SENTINEL);
+  hash.update('\0');
+  hash.update(title);
+  hash.update('\0');
+  hash.update(url ?? '');
+
+  return hash.digest('hex').slice(0, 10);
 }
 
 // Product folder name from a MyActivity.html path: …/My Activity/<Product>/MyActivity.html
@@ -205,8 +226,10 @@ export class GoogleMyActivityFileImporter implements FileImporter {
     }
 
     const folderProduct = productFor(fpath);
-    // index is the per-file parse order, so the stable id stays deterministic
-    // across re-imports even when entries share an action, target, and second.
+    // Per-file parse order. NOT used as (part of) pushEntry's id — see the
+    // comment there for why a positional id silently loses data on re-export.
+    // Still passed to pushYouTube, whose activityId() only falls back to it
+    // in the degenerate case where an entry has neither a url nor a ts.
     let index = 0;
     // How many body cells this file actually offered the parser — the floor
     // `reconciled` checks every produced/dropped entry against.
@@ -324,9 +347,25 @@ export class GoogleMyActivityFileImporter implements FileImporter {
 
     const g: Graph = {
       item: {
-        // Stable, deterministic per-file id; index keeps near-duplicate entries
-        // distinct so they don't collapse in hashItem (shared filename + bucket).
-        id: `gactivity:${product}:${index}`,
+        // Content-derived, NOT positional: `index` is this entry's position
+        // within a single parse of one file, and MyActivity.html is
+        // newest-first. On a later re-export of a GROWING account, new
+        // activity is prepended, shifting every existing entry to a higher
+        // position — an id keyed on position alone (the previous scheme)
+        // would then compute the id an OLD entry held last time for whatever
+        // entry now happens to sit at position 0. hashItem() short-circuits
+        // to item.id when present (staging/identity.ts), so that collision
+        // makes the push logic (a) treat the genuinely NEW entry at position
+        // 0 as an already-seen duplicate and silently drop it — for good,
+        // since both destination tables are find-or-return, not
+        // upsert-with-overwrite — and (b) mint a fresh, spurious id for the
+        // OLD entry now sitting at that new position, duplicating it. Every
+        // re-export of a growing account would lose its newest rows while
+        // accumulating duplicate old ones. Hashing the (ts, title, url)
+        // tuple instead means the same logical activity gets the same id
+        // regardless of where it now sits in the file, so re-imports
+        // correctly self-heal via upsert instead of drifting.
+        id: `gactivity:${product}:${entryFingerprint(ts, title, url)}`,
         classification,
         timestamp: ts,
         content: { filename: 'activity.txt', mediaType: 'text/plain', data: async () => Buffer.from(title) },

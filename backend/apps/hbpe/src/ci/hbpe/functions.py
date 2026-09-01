@@ -160,6 +160,30 @@ async def nightly(user_id: str, **_: Any) -> dict:
             l2_stale_sweep(user_id), "step3_l2_stale"
         )
 
+        # Publish whatever step 1 just labeled into hbpe.token_stream. This runs
+        # UNCONDITIONALLY, before the bootstrap branch below and before the
+        # recurrence rebuild that reads the table.
+        #
+        # It used to sit inside `if needs_bootstrap`, which broke the only path
+        # a new label has to a forecast: label_unlabeled writes
+        # hbpe.l1_event_cluster, and serialize is the sole writer of
+        # hbpe.token_stream (ingester._reserialise covers today alone), which is
+        # in turn the only thing build_recurrence_profiles reads. On an
+        # established appliance — valid checkpoint, no vocab drift, so
+        # needs_bootstrap returns False — a whole night of labeling therefore
+        # landed nowhere and /forecast kept returning clusters:[]. That is
+        # exactly the state a backlog drain leaves behind: the labels are new,
+        # the L1 vocabulary is not.
+        #
+        # The cost is bounded and idempotent: serialize_range only walks the
+        # trailing SERIALIZE_WINDOW_DAYS, and serialize_day deletes and rewrites
+        # one (user, date) at a time, so re-running it over an unchanged corpus
+        # is a no-op with the same row count.
+        step("serialize")
+        results["steps"]["serialize"] = await _safe(
+            serialize_token_stream(user_id), "serialize"
+        )
+
         # (Re)bootstrap the per-user HMT model when it is missing or its L1
         # vocab has drifted from the saved checkpoint. Without a checkpoint
         # matching the current vocab, lora_fine_tune can't load the model (the
@@ -169,11 +193,6 @@ async def nightly(user_id: str, **_: Any) -> dict:
         results["steps"]["bootstrap_check"] = boot_check
 
         if boot_check.get("result", {}).get("needs"):
-            step("serialize")
-            results["steps"]["serialize"] = await _safe(
-                serialize_token_stream(user_id), "serialize"
-            )
-
             step("train")
             results["steps"]["train"] = await _safe(train_hmt_model(user_id), "train")
 

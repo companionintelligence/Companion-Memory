@@ -748,7 +748,15 @@ export class FacebookFileImporter implements FileImporter {
         }
 
         // Attachments ride ON the message, same as the JSON path above.
-        const attachmentUris = this.htmlMediaUris(section, fpath, root);
+        // Unlike the curated JSON attachment fields, htmlMediaUris is a blind
+        // regex scan of every local src=/href= in the section, so it needs
+        // the same image/video gate pushMediaFile applies for posts (see
+        // htmlMediaUris's own comment) — a message has no such gate today.
+        const attachmentUris = this.htmlMediaUris(section, fpath, root).filter((uri) => {
+          const mt = mimeForFile(path.basename(uri));
+
+          return mt?.startsWith('image/') || mt?.startsWith('video/');
+        });
         if (!text && attachmentUris.length === 0) {
           continue;
         }

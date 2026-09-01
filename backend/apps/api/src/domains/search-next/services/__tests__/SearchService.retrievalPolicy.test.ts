@@ -52,7 +52,10 @@ function makeService(policy: RetrievalPolicy = RETRIEVAL_POLICY_DEFAULTS) {
   } as unknown as RetrievalPolicyService;
   const events = { send: jest.fn().mockResolvedValue([]) } as unknown as EventService;
 
-  return { service: new SearchService(dataSource, embeddingGenerationService, retrievalPolicy, events), query };
+  return {
+    service: new SearchService(dataSource, embeddingGenerationService, retrievalPolicy, events),
+    query,
+  };
 }
 
 describe('SearchService under the fail-open baseline — SQL is unchanged', () => {

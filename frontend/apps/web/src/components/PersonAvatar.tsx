@@ -164,7 +164,7 @@ function resolveAvatarUrl(avatarUrl: string | null | undefined): string | undefi
     return undefined;
   }
 
-  if (/^https?:\/\//.test(trimmed) || /^data:/.test(trimmed)) {
+  if (/^https?:\/\//.test(trimmed) || trimmed.startsWith('data:')) {
     return trimmed;
   }
 

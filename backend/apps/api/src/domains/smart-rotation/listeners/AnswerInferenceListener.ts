@@ -559,17 +559,24 @@ ${evidence.block}`
     const yesNoQualifier = enforceYesNoQualifierIsInformative(inferred, question);
 
     if (!yesNoQualifier.informative) {
-      this.logger.log('Inferred answer discarded — "it depends" restates the question rather than adding a condition', {
-        userId: ownerId,
-        questionId: question.id,
-        question: question.text,
-        askedFor: inferred.askedFor,
-        support: inferred.support,
-        response: inferred.answer,
-        rationale: inferred.rationale,
-      });
+      this.logger.log(
+        'Inferred answer discarded — "it depends" restates the question rather than adding a condition',
+        {
+          userId: ownerId,
+          questionId: question.id,
+          question: question.text,
+          askedFor: inferred.askedFor,
+          support: inferred.support,
+          response: inferred.answer,
+          rationale: inferred.rationale,
+        },
+      );
 
-      return { status: 'discarded', reason: 'yes-no-qualifier-not-informative', inferred: yesNoQualifier.inferred };
+      return {
+        status: 'discarded',
+        reason: 'yes-no-qualifier-not-informative',
+        inferred: yesNoQualifier.inferred,
+      };
     }
 
     // An answer to a NEARBY question is not an answer to this one, and it is the

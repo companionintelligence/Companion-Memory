@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { Button, Input } from '@ci/shadcn';
@@ -27,6 +27,13 @@ export function NewTaskForm({ onCreated }: Props) {
   const [title, setTitle] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [createTask, { loading }] = useMutation(CREATE_TASK);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const restoreFocus = () => {
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  };
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -46,14 +53,17 @@ export function NewTaskForm({ onCreated }: Props) {
       // throwing, so a thrown error and a falsy payload both need handling.
       if (!data?.createTask.success) {
         setError("That task couldn't be saved. Try again.");
+        restoreFocus();
 
         return;
       }
 
       setTitle('');
       onCreated();
+      restoreFocus();
     } catch {
       setError("That task couldn't be saved. Try again.");
+      restoreFocus();
     }
   };
 
@@ -61,6 +71,7 @@ export function NewTaskForm({ onCreated }: Props) {
     <form onSubmit={handleSubmit} className="flex flex-col gap-1">
       <div className="flex items-center gap-2">
         <Input
+          ref={inputRef}
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           placeholder="What needs doing?"

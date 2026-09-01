@@ -155,6 +155,7 @@ export class ContactListFileImporter implements FileImporter {
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       if (row.length !== header.length) {
+        params.pipeline.drop?.('malformed_row', `row ${i}`);
         continue;
       } // skip malformed
 
@@ -196,6 +197,7 @@ export class ContactListFileImporter implements FileImporter {
 
       // minimal usefulness filter: at least 2 attributes or one attribute + name
       if (attributes.length < 2 && !(name && attributes.length === 1)) {
+        params.pipeline.drop?.('insufficient_attributes', `row ${i}`);
         continue;
       }
 

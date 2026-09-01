@@ -9,7 +9,7 @@ import path from 'node:path';
 
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
-import type { ImportParams, Graph } from './timeline';
+import type { ImportParams, Graph, LineItemRecord } from './timeline';
 import { timeframeContains } from './timeline';
 
 // action_<digits>.json — the per-record file Google Takeout emits under
@@ -270,6 +270,13 @@ export class GooglePurchasesFileImporter implements FileImporter {
       numVal(p.amount) ??
       (priceObj ? (numVal(priceObj.amount) ?? numVal(priceObj.value)) : undefined);
     const currency = str(p.currency) || (priceObj ? str(priceObj.currency) : undefined);
+    // canonical.ts routes every commerce.purchase record to a receipt
+    // unconditionally, so with no LineItems this receipt would always have
+    // zero rows in ci.receipt_line_items. One fallback line (matching
+    // paypal.ts's/venmo.ts's identical pattern) is better than none.
+    const lineItems: LineItemRecord[] | undefined = product
+      ? [{ LineNumber: 1, Product: product, Quantity: 1, Total: total, Currency: currency }]
+      : undefined;
     const g: Graph = {
       item: {
         id: `gpurchase:${uid}`,
@@ -287,6 +294,7 @@ export class GooglePurchasesFileImporter implements FileImporter {
           // which no reader looked at — toThingInput reads `Order ID` — so
           // every Google order id was silently dropped on the way to ci.*.
           'Order ID': str(p.orderId) || str(p.orderNumber) || undefined,
+          LineItems: lineItems,
           Kind: 'purchase',
           Source: 'Google',
         },

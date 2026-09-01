@@ -5,7 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
 import { GeocodeService, isUriLocation } from '@ci/domains/geocode';
-import { EventService as MemoryEventService, type CreateEventDto } from '@ci/domains/memory';
+import { CalendarEventService, type CreateEventDto } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
@@ -14,6 +14,7 @@ interface CalendarEvent {
   id?: string;
   summary?: string;
   description?: string;
+  htmlLink?: string;
   start?: {
     dateTime?: string;
     date?: string;
@@ -74,7 +75,7 @@ const CALENDAR_TRANSFORM_BATCH_SIZE = 10;
 @Injectable()
 export class GoogleCalendarTransformService {
   constructor(
-    private readonly eventService: MemoryEventService,
+    private readonly eventService: CalendarEventService,
     private readonly connectionService: ConnectionService,
     private readonly promoteService: PromoteService,
     private readonly geocodeService: GeocodeService,
@@ -276,7 +277,7 @@ export class GoogleCalendarTransformService {
       organizerName: eventDetails.organizerName,
       participantCount: eventDetails.participants.length,
       participants: eventDetails.participants,
-      googleCalendarUrl: `https://calendar.google.com/calendar/event?eid=${eventDetails.id}`,
+      googleCalendarUrl: rawEvent.htmlLink ?? `https://calendar.google.com/calendar/event?eid=${eventDetails.id}`,
       created: eventDetails.created,
       updated: eventDetails.updated,
       rawEventId: rawEvent.id,

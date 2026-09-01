@@ -11,7 +11,7 @@ import logging
 
 from ci.hbpe.database import get_conn
 from ci.hbpe.tokenizer.label_quality import is_displayable_label
-from ci.hbpe.tokenizer.static_labeler import load_kind_map
+from ci.hbpe.tokenizer.static_labeler import KIND_EXPR, load_kind_map
 from ci.hbpe.tokenizer.vocab_registry import get_or_create_l1
 
 log = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ def _relabel_mapped_off_junk(user_id: str) -> int:
                 # The JOIN in UPDATE ... FROM needs ec in the FROM list on some
                 # planners; rewrite as a subquery for portability.
                 cur.execute(
-                    """
+                    f"""
                     UPDATE hbpe.l1_event_cluster
                     SET cluster_id = %s::uuid, similarity = 1.0, assigned_at = NOW()
                     WHERE event_id IN (
@@ -86,7 +86,7 @@ def _relabel_mapped_off_junk(user_id: str) -> int:
                         JOIN hbpe.l1_event_cluster ec ON ec.event_id = e.event_id
                         JOIN hbpe.l1_clusters c ON c.cluster_id = ec.cluster_id
                         WHERE e.user_id = %s::uuid
-                          AND e.event_type LIKE %s
+                          AND {KIND_EXPR} LIKE %s
                           AND (
                                 c.is_active = FALSE
                                 OR c.naming_method IS DISTINCT FROM 'STATIC'

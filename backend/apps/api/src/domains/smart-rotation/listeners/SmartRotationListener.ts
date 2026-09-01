@@ -6,6 +6,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { Events, EventService, OnEvent } from '@ci/domains/events';
 import { excludeForkedOriginsSql, QuestionService } from '@ci/domains/intelligence';
+import { LLM_QUEUE } from '@ci/domains/llm';
 import { GraphEnrichmentService, MaintenanceOrchestratorService } from '@ci/domains/maintenance';
 import {
   ContextPromptGenerateService,
@@ -20,6 +21,26 @@ import { ContextGapQuestionService } from '../services/ContextGapQuestionService
 import { SMART_ROTATION_QUEUE, type SmartRotationWorkType } from '../types';
 
 const FEED_QUEUE_LIMIT = 3;
+
+/**
+ * How long a question sits out of the inference rotation after one has been
+ * DISPATCHED for it — whatever that dispatch went on to produce.
+ *
+ * Six hours against a 20-minute tick (`SMART_ROTATION_CRONS.answer_infer`), so
+ * a question is retried at most four times a day. Short enough that a genuinely
+ * transient failure — an Ollama restart, a model reload, the 60s
+ * `INFERENCE_TIMEOUT_MS` firing under load — costs the question a few hours
+ * rather than its place in the rotation; long enough that re-asking is never
+ * what the appliance spends an inference slot on while something untried is
+ * waiting.
+ *
+ * It is deliberately a flat cooldown rather than exponential backoff: the
+ * attempt history this reads from (see {@link SmartRotationListener.findNextUnansweredQuestionId})
+ * only reaches back a day or so, so a curve past that could not be expressed
+ * honestly. What actually bounds a permanently-unanswerable question is the
+ * least-recently-attempted ORDER BY, not this number.
+ */
+const INFERENCE_ATTEMPT_COOLDOWN_HOURS = 6;
 
 @Injectable()
 export class SmartRotationListener {
@@ -70,10 +91,18 @@ export class SmartRotationListener {
       }
 
       case 'answer_infer': {
-        const questionId = await this.findTopUnansweredQuestionId(userId);
+        const questionId = await this.findNextUnansweredQuestionId(userId);
 
         if (!questionId) {
-          this.logger.log('Smart rotation answer infer skipped — no unanswered questions', { userId });
+          // Two different situations, deliberately reported as one: there is
+          // nothing left unanswered, or everything still unanswered was tried
+          // within the cooldown. Both mean "spend this slot on nothing", and on
+          // a small catalogue the second is the normal steady state rather than
+          // a fault.
+          this.logger.log(
+            'Smart rotation answer infer skipped — nothing unanswered outside the attempt cooldown',
+            { userId, cooldownHours: INFERENCE_ATTEMPT_COOLDOWN_HOURS },
+          );
 
           return;
         }
@@ -256,12 +285,82 @@ export class SmartRotationListener {
     return (Date.now() - new Date(createdAt).getTime()) / 3_600_000;
   }
 
-  private async findTopUnansweredQuestionId(userId: string): Promise<string | null> {
+  /**
+   * The next question to spend an inference slot on: least recently ATTEMPTED
+   * first, never-attempted before ever-attempted, and nothing tried inside
+   * {@link INFERENCE_ATTEMPT_COOLDOWN_HOURS}.
+   *
+   * ═══ WHY THIS IS NOT "THE OLDEST UNANSWERED QUESTION" ═══
+   *
+   * It was, and that is a head-of-line block: the ORDER BY was `q.created_at
+   * ASC` alone, and the only thing that removed a question from the result was
+   * a row appearing in ci.answers. An inference that times out, or that every
+   * gate in AnswerInferenceListener discards, writes nothing — so the same row
+   * came back on the next tick, and the next, forever.
+   *
+   * Measured on the reference appliance: "Which of these places is home?"
+   * (created 06:59:54.327386, uniquely the oldest — the rest of the seed batch
+   * lands at .372079) took 46 of 46 dispatches over 17 hours, produced 24 dead
+   * letters, and left ci.answers EMPTY. The other 1,278 eligible questions were
+   * never offered to the model once.
+   *
+   * ═══ WHERE THE ATTEMPT HISTORY COMES FROM ═══
+   *
+   * pg-boss's own job rows, which are the durable record of what this listener
+   * dispatched: `pgboss.job` while a job is live and `pgboss.archive` after it
+   * completes. No new table and no new column — `SmartRotationService` already
+   * reads `pgboss.job` for its backlog check and `LifeContextService` already
+   * reads `pgboss.archive` for its last-run timestamp, and the rotation's stated
+   * design is that "cadence is enforced by schedule + PGBoss singleton keys, not
+   * a separate state table".
+   *
+   * That history is shallow — `expireInHours: 12` / `deleteAfterHours: 24` in
+   * PGBossEventService, so roughly a day and a half — and that is a FEATURE
+   * here, not a limitation worked around: a question whose attempts have aged
+   * out reads as never-attempted and returns to the front of the rotation. So
+   * nothing is ever permanently silenced, and the standing cost of a
+   * permanently-unanswerable question is one slot per history window (~1 of the
+   * 72 dispatches a day) rather than all of them.
+   *
+   * The queue name is matched as well as the event name so Postgres can prune
+   * to the `llm` partition (`AnswerInferenceListener` binds
+   * `Events.INFER_QUESTION_ANSWER` to `LLM_QUEUE`). If that binding ever moves,
+   * this reads as "no attempt history" and degrades to the old
+   * oldest-unanswered order — which is the safe direction to fail.
+   *
+   * The owner id is bound TWICE, as $1 and $5. Postgres deduces a single type
+   * per parameter, and this query compares the owner both to a uuid column
+   * (`q.is_private_to`) and to a jsonb text field (`data->>'ownerId'`); one
+   * parameter cannot be both. Casting either side instead would either break
+   * the same deduction or run a uuid cast over payloads this query has not yet
+   * filtered down to inference dispatches.
+   */
+  private async findNextUnansweredQuestionId(userId: string): Promise<string | null> {
     type Row = { id: string };
     const rows = (await this.dataSource.query(
       `
+      WITH attempts AS (
+        SELECT
+          dispatched.data->>'questionId' AS question_id,
+          MAX(dispatched.created_on) AS last_attempt_at
+        FROM (
+          SELECT data, created_on
+          FROM pgboss.job
+          WHERE name = $2
+            AND data->>'name' = $3
+            AND data->>'ownerId' = $5
+          UNION ALL
+          SELECT data, created_on
+          FROM pgboss.archive
+          WHERE name = $2
+            AND data->>'name' = $3
+            AND data->>'ownerId' = $5
+        ) dispatched
+        GROUP BY 1
+      )
       SELECT q.question_id AS id
       FROM ci.questions q
+      LEFT JOIN attempts a ON a.question_id = q.question_id::text
       WHERE q.is_active = TRUE
         -- Same guard as QuestionService.findUnansweredByUserId. This is a
         -- SECOND, independent copy of "next unanswered question", and it did
@@ -274,17 +373,29 @@ export class SmartRotationListener {
         AND (q.is_private_to IS NULL OR q.is_private_to = $1)
         ${excludeForkedOriginsSql('q', '$1')}
         AND NOT EXISTS (
-          SELECT 1 FROM ci.answers a
-          WHERE a.question_id = q.question_id
-            AND a.user_id = $1
-            AND a.answer_method IN ('user', 'inferred')
-            AND a.answer_text IS NOT NULL
-            AND TRIM(a.answer_text) <> ''
+          SELECT 1 FROM ci.answers ans
+          WHERE ans.question_id = q.question_id
+            AND ans.user_id = $1
+            AND ans.answer_method IN ('user', 'inferred')
+            AND ans.answer_text IS NOT NULL
+            AND TRIM(ans.answer_text) <> ''
         )
-      ORDER BY q.created_at ASC
+        AND (a.last_attempt_at IS NULL OR a.last_attempt_at < NOW() - make_interval(hours => $4))
+      -- The whole fix, in one line. NULLS FIRST is what puts every untried
+      -- question ahead of every retry; the created_at tiebreak keeps the
+      -- original oldest-first order WITHIN each of those two groups, so the
+      -- rotation still works the backlog in the order it was seeded.
+      --
+      -- question_id last, because created_at alone is not a total order here:
+      -- the seed catalogue was inserted in bulk, so 1,278 of these rows share a
+      -- created_at to the microsecond and Postgres is free to return them in
+      -- any order. Without a deterministic tiebreak the row this returns for a
+      -- tied group could vary run to run, which is the same shape of problem
+      -- the fix is for.
+      ORDER BY a.last_attempt_at ASC NULLS FIRST, q.created_at ASC, q.question_id ASC
       LIMIT 1;
       `,
-      [userId],
+      [userId, LLM_QUEUE, Events.INFER_QUESTION_ANSWER, INFERENCE_ATTEMPT_COOLDOWN_HOURS, userId],
     )) as Row[];
 
     return rows[0]?.id ?? null;

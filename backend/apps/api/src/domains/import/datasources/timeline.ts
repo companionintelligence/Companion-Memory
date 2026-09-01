@@ -207,6 +207,15 @@ const MIME_OVERRIDES: Record<string, string> = {
   '.py': 'text/x-python',
   '.tgz': 'application/gzip',
   '.gpg': 'application/pgp-encrypted',
+  // RAW camera formats: absent from mime-db, so any importer with no local
+  // override table (e.g. google_photos.ts) misclassified these as 'file'
+  // instead of 'media', losing capture-kind routing apple_photos.ts's own
+  // local table already gave the same extensions.
+  '.dng': 'image/x-adobe-dng',
+  '.cr2': 'image/x-canon-cr2',
+  '.cr3': 'image/x-canon-cr3',
+  '.nef': 'image/x-nikon-nef',
+  '.arw': 'image/x-sony-arw',
 };
 
 /** Infer a MIME type from a filename's extension, or undefined if unknown. */

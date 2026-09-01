@@ -6,6 +6,7 @@ import PgBoss, { JobWithMetadata } from 'pg-boss';
 import { DataSource } from 'typeorm';
 
 import { ContextService } from '@ci/common/context';
+import { JobControlStore, type JobMode } from '@ci/common/job-controls';
 import { LoggerService } from '@ci/common/logging';
 import { serves } from '@ci/common/roles';
 import config from '@ci/configuration';
@@ -13,6 +14,12 @@ import config from '@ci/configuration';
 import { DEAD_LETTER_QUEUE, DEFAULT_JOB_PRIORITY } from '../constants';
 import { EventDefinitionRegistry, EventListenerRegistry } from '../event-registration';
 import { type EventPayloads } from '../event-registry';
+import {
+  effectiveQueueConcurrency as computeQueueConcurrency,
+  perProcessGlobalConcurrency,
+  queueWorkerProcesses,
+} from '../jobConcurrency';
+import { queueInventory } from '../queueInventory';
 import { EventRegistry } from '../registry';
 import type { EventSendOptions, QueueOptions } from '../types';
 
@@ -79,11 +86,22 @@ const QUEUE_RETRY_POLICY = {
   retryBackoff: true,
 } as const;
 
+/**
+ * Processes running queue workers on this appliance, resolved once.
+ *
+ * `processRole()` is fixed for the lifetime of a process, so this is too. See
+ * `jobConcurrency.queueWorkerProcesses` for why the operator's appliance-wide
+ * cap has to be divided by it before it reaches a semaphore.
+ */
+const QUEUE_WORKER_PROCESSES = queueWorkerProcesses();
+
 @Injectable()
 export class PGBossEventService extends EventService implements OnModuleInit, OnModuleDestroy {
   // Global in-flight job ceiling across ALL queues (bounds total DB/Ollama load).
   // Configurable (CI_QUEUE_CONCURRENCY) so the decoupled embedding/index workers
-  // can be scaled for bulk imports.
+  // can be scaled for bulk imports, and overridable at runtime from the Jobs page
+  // (`ci.job_settings`, kind `global`) so an operator can cool a hot box without
+  // editing a compose file and restarting the appliance.
   private globalSemaphore = plimit(config.queues.concurrency);
 
   // Per-queue in-flight ceiling — one plimit per queue, created in onModuleInit.
@@ -92,9 +110,42 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   // (the search-index backlog stall behind image-description/embedding jobs).
   private readonly perQueueSemaphores = new Map<string, ReturnType<typeof plimit>>();
 
-  private readonly perQueueConcurrency = config.queues.perQueueConcurrency;
+  // The shipped ceilings, held as instance fields rather than read from
+  // `config` at each use. Not indirection for its own sake: the worker specs
+  // need a 2-slot appliance without mutating process-wide config for every
+  // other suite in the run, and the semaphores are now recomputed from these on
+  // every settings change — so a test that only resized the semaphore would
+  // have it silently reset on the loop's next iteration.
+  private readonly shippedConcurrency = config.queues.concurrency;
+
+  private readonly shippedPerQueueConcurrency = config.queues.perQueueConcurrency;
 
   private readonly fetchBatchSize = config.queues.fetchBatchSize;
+
+  // The `localConcurrency` each queue declared for itself, if any. A hard floor
+  // on what a settings row can ask for: the code that wrote `localConcurrency: 1`
+  // knows something about the workload that the person typing a number does not.
+  private readonly declaredQueueCeilings = new Map<string, number>();
+
+  // Queues carrying at least one event a person is plausibly waiting on. Spared
+  // by the "pause everything non-interactive" switch — see `queueInventory`.
+  private readonly interactiveQueues = new Set<string>();
+
+  // The settings revision the semaphores were last sized for. The store bumps it
+  // only when a setting actually changes, so the work loop's per-iteration check
+  // is an integer compare rather than a re-read of every queue's ceiling.
+  private controlsRevision = -1;
+
+  // Last mode each queue was observed in, so the worker logs a transition once
+  // instead of logging "still paused" every time it wakes up.
+  private readonly loggedQueueModes = new Map<string, JobMode>();
+
+  // Queues whose drops have already been announced, and the settings revision
+  // that announcement belongs to. Keeps a million-row import fan-out onto a
+  // disabled queue to one log line rather than a million identical ones.
+  private readonly loggedQueueDrops = new Set<string>();
+
+  private loggedDropsRevision = -1;
 
   // Shared dead-letter queue. Jobs that exhaust their retries are moved here
   // (payload + failure output preserved) instead of vanishing when pgboss deletes
@@ -196,6 +247,15 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
     this.warnOnOrphanEvents();
 
+    // Which queues the "pause everything non-interactive" switch must spare.
+    // Resolved once here rather than per send: it is a fold over the whole
+    // listener registry against the taxonomy, and neither changes after boot.
+    for (const entry of queueInventory()) {
+      if (entry.interactive) {
+        this.interactiveQueues.add(entry.queue);
+      }
+    }
+
     // Provisioning is serialized appliance-wide: with the web and worker
     // processes booting together, unserialized create_queue calls deadlock
     // intermittently (seen live: 40P01 between the pgboss.queue insert and
@@ -261,12 +321,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
         await this.boss.createQueue(queue, options);
         await this.boss.updateQueue(queue, options);
-        this.perQueueSemaphores.set(
-          queue,
-          plimit(
-            Math.max(1, Math.min(localConcurrency ?? this.perQueueConcurrency, this.perQueueConcurrency)),
-          ),
-        );
+
+        if (localConcurrency != null) {
+          this.declaredQueueCeilings.set(queue, localConcurrency);
+        }
+
+        this.perQueueSemaphores.set(queue, plimit(this.effectiveQueueConcurrency(queue)));
         this.logger.debug(
           `Created queue: ${queue} (role=${role ?? 'web'}, deadLetter=${PGBossEventService.DEAD_LETTER_QUEUE})`,
         );
@@ -278,6 +338,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         await provisionLock.release();
       }
     }
+
+    // Size every semaphore from the persisted settings before any worker starts.
+    // Without this the first seconds after a boot run at the shipped ceiling
+    // regardless of what the operator set — which is exactly the window after a
+    // restart, i.e. the window an operator who just capped a hot box is watching.
+    this.syncConcurrencyLimits();
 
     try {
       this.logger.debug('Initializing work queues...');
@@ -433,6 +499,16 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         return [];
       }
 
+      // The operator's setting, checked in the same place and for the same
+      // reason as the env-var suppression above: naming a queue explicitly is
+      // what a backfill does, and a backfill is precisely the traffic someone
+      // reaches for this switch to stop.
+      if (this.isQueueDisabled(options.queue)) {
+        this.recordQueueDrop(options.queue, 1);
+
+        return [];
+      }
+
       const jobId = await this.sendToQueue(name, options.queue, resolvedData, sendOptions);
 
       return jobId ? [jobId] : [];
@@ -458,6 +534,15 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
     for (const queue of targetQueues) {
       if (this.suppressedQueues.has(queue)) {
+        continue;
+      }
+
+      // A disabled queue drops its share of the fan-out and the event still goes
+      // to every other queue that listens for it — turning off `image-description`
+      // must not also stop the same upload being indexed for search.
+      if (this.isQueueDisabled(queue)) {
+        this.recordQueueDrop(queue, 1);
+
         continue;
       }
 
@@ -568,6 +653,25 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       return;
     }
 
+    // Same reasoning as the suppression check above: a bulk enqueue of one named
+    // queue that silently enqueues nothing is a backfill that reports success
+    // having done nothing. Counted as `events.length` drops, not one, so the
+    // Jobs page's tally is the number of jobs lost rather than the number of
+    // calls that lost them.
+    if (this.isQueueDisabled(queue)) {
+      // Warned unconditionally with its own count, unlike the per-row path
+      // above: this is ONE call that drops a whole backfill, and the number of
+      // jobs it threw away is the thing the operator has to see. Same reasoning
+      // as the CI_QUEUE_SUPPRESS branch it sits beside.
+      JobControlStore.recordSkip('queue', queue, events.length);
+      this.logger.warn(
+        `Queue ${queue} is disabled by an operator setting — dropping ${events.length} bulk-enqueued events. ` +
+          `Re-enable it from the Jobs page and re-run this backfill if the work still matters.`,
+      );
+
+      return;
+    }
+
     const enforcingPolicy = this.enforcingPolicyFor(queue);
 
     if (enforcingPolicy) {
@@ -632,6 +736,185 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     this.logger.debug(`Bulk-enqueued ${jobs.length} events onto queue ${queue}`);
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Operator controls (`ci.job_settings`, surfaced on the Jobs page).
+  //
+  // Every one of these reads a synchronous in-memory snapshot the store keeps
+  // refreshed on a timer. None of them can throw, and when the store has never
+  // been configured — unit tests, CLI scripts, an appliance whose migration has
+  // not run — they all answer "no opinion", which is byte-for-byte the behaviour
+  // this file had before the table existed.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** What this queue is allowed to do right now, global pause included. */
+  private queueMode(queue: string): JobMode {
+    return JobControlStore.queueMode(queue, { interactive: this.interactiveQueues.has(queue) });
+  }
+
+  /**
+   * Whether this queue refuses new work.
+   *
+   * Only `disabled` drops an enqueue. `paused` deliberately does not: the point
+   * of pausing is to stop the box working while losing nothing, so the sends
+   * keep landing and the backlog is what drains when it comes back.
+   */
+  private isQueueDisabled(queue: string): boolean {
+    return this.queueMode(queue) === 'disabled';
+  }
+
+  /**
+   * Note that a disabled queue threw work away.
+   *
+   * Counted, not merely logged, because the alternative is a queue that reads as
+   * quiet on the Jobs page while thousands of jobs a minute evaporate — the
+   * "silent failure" the whole control is supposed to avoid. The counter is
+   * folded into the row in batches, so this stays free on the import fan-out
+   * path that calls it once per row.
+   *
+   * The log line, by contrast, is emitted ONCE per queue per settings revision.
+   * This sits on the same path: an import fan-out reaches it once per imported
+   * row, and a line per dropped job would bury the rest of the log under a
+   * million copies of the same sentence — while telling an operator nothing the
+   * counter does not. It is a `warn` rather than a `debug` because dropping work
+   * deserves to be visible at default log levels; saying it once is what makes
+   * that affordable.
+   */
+  private recordQueueDrop(queue: string, count: number): void {
+    JobControlStore.recordSkip('queue', queue, count);
+
+    // A settings change resets the "already said this" state, so switching a
+    // queue off again after re-enabling it logs again rather than staying silent
+    // for the life of the process.
+    const revision = JobControlStore.revision();
+
+    if (revision !== this.loggedDropsRevision) {
+      this.loggedDropsRevision = revision;
+      this.loggedQueueDrops.clear();
+    }
+
+    if (this.loggedQueueDrops.has(queue)) {
+      return;
+    }
+
+    this.loggedQueueDrops.add(queue);
+    this.logger.warn(
+      `Queue ${queue} is disabled by an operator setting: new work for it is being DROPPED, not queued. ` +
+        `The running total is on the Jobs page. Logged once per queue until the setting changes.`,
+    );
+  }
+
+  /**
+   * The per-process share of the appliance-wide in-flight ceiling.
+   *
+   * The default is `shipped × processes` so that an appliance nobody has
+   * configured computes back to exactly `config.queues.concurrency` per process
+   * on both topologies — the acceptance criterion that defaults change nothing
+   * for anyone who never opens the page.
+   *
+   * `floor`, so the division can only ever undershoot the operator's number;
+   * `max(1, …)` because a process with zero slots is a process that has stopped,
+   * and "cap concurrency at 1" must not silently mean "stop the appliance". On a
+   * split deployment a cap of 1 therefore yields 1 per process, i.e. 2 — the one
+   * place this rounds up, and the only alternative is a dead queue.
+   */
+  private effectiveGlobalConcurrency(): number {
+    return perProcessGlobalConcurrency(
+      JobControlStore.globalConcurrency(),
+      this.shippedConcurrency,
+      QUEUE_WORKER_PROCESSES,
+    );
+  }
+
+  /**
+   * This queue's in-flight ceiling: the tightest of everything that has an
+   * opinion about it.
+   *
+   * Order does not matter — it is a minimum — but the three inputs are different
+   * in kind and worth naming:
+   *
+   * - the global per-queue default (config, or the operator's override);
+   * - this queue's own operator setting, if one exists;
+   * - the `localConcurrency` the queue declared in code.
+   *
+   * The last is why this is a minimum rather than a lookup with fallbacks. A
+   * queue that declared 1 did so because two of its jobs at once break something
+   * — the model thrashes, the event loop stalls — and no number typed into a
+   * settings page should be able to override that. The UI shows the declared
+   * ceiling as the row's maximum, so the constraint is visible rather than
+   * merely enforced.
+   */
+  private effectiveQueueConcurrency(queue: string): number {
+    return computeQueueConcurrency({
+      perQueueDefault: JobControlStore.perQueueConcurrency() ?? this.shippedPerQueueConcurrency,
+      requested: JobControlStore.row('queue', queue)?.concurrency ?? null,
+      declared: this.declaredQueueCeilings.get(queue) ?? null,
+    });
+  }
+
+  /**
+   * Re-size the semaphores to match the current settings.
+   *
+   * `p-limit`'s `concurrency` setter is live in both directions: raising it
+   * releases queued callbacks on the next microtask, and lowering it admits
+   * nothing new while leaving jobs already running to finish. So an operator
+   * dropping a cap sees the queue quiet down as its in-flight jobs complete,
+   * rather than seeing work killed — which is the behaviour you want from a
+   * control you reach for because the machine is already struggling.
+   *
+   * Guarded on the store's revision because each assignment schedules a
+   * microtask; called from every queue's work loop, an unguarded version would
+   * schedule dozens of them per second forever.
+   */
+  private syncConcurrencyLimits(): void {
+    const revision = JobControlStore.revision();
+
+    if (revision === this.controlsRevision) {
+      return;
+    }
+
+    this.controlsRevision = revision;
+
+    const globalConcurrency = this.effectiveGlobalConcurrency();
+
+    if (this.globalSemaphore.concurrency !== globalConcurrency) {
+      this.logger.log(
+        `Global job concurrency set to ${globalConcurrency} in this process ` +
+          `(${QUEUE_WORKER_PROCESSES} queue-serving process(es) on this appliance)`,
+      );
+      this.globalSemaphore.concurrency = globalConcurrency;
+    }
+
+    for (const [queue, semaphore] of this.perQueueSemaphores) {
+      const next = this.effectiveQueueConcurrency(queue);
+
+      if (semaphore.concurrency !== next) {
+        this.logger.log(`Queue ${queue} concurrency set to ${next}`);
+        semaphore.concurrency = next;
+      }
+    }
+  }
+
+  /** One line per mode transition, rather than one per five-second wake-up. */
+  private logQueueMode(queue: string, mode: JobMode): void {
+    if (this.loggedQueueModes.get(queue) === mode) {
+      return;
+    }
+
+    this.loggedQueueModes.set(queue, mode);
+
+    if (mode === 'enabled') {
+      this.logger.log(`Queue ${queue} is running`);
+
+      return;
+    }
+
+    this.logger.warn(
+      mode === 'paused'
+        ? `Queue ${queue} is paused by an operator setting; jobs stay queued and nothing is being worked`
+        : `Queue ${queue} is disabled by an operator setting; new work is dropped and nothing queued is being worked`,
+    );
+  }
+
   private async work(queueName: string): Promise<void> {
     this.running = true;
 
@@ -644,6 +927,34 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     }
 
     while (this.running) {
+      // Re-size the semaphores if — and only if — a setting moved. `revision()`
+      // is an integer the store bumps on a real change, so the steady-state cost
+      // of having runtime-tunable concurrency is one comparison per poll.
+      this.syncConcurrencyLimits();
+
+      // The operator's switch, on the EXECUTE side.
+      //
+      // Not fetching is the whole mechanism, and it is deliberately gentler than
+      // it could be: the jobs stay `created`, pg-boss holds no lease on them,
+      // and they run in order the moment the queue is switched back on. That is
+      // what makes `paused` safe to reach for on a hot box — it costs a backlog,
+      // never work.
+      //
+      // A `disabled` queue lands here too. Its own sends were already dropped at
+      // enqueue, so what this stops is whatever was queued BEFORE the switch —
+      // without which "disabled" would still burn a box down through an existing
+      // backlog of 12,000 jobs.
+      const mode = this.queueMode(queueName);
+
+      if (mode !== 'enabled') {
+        this.logQueueMode(queueName, mode);
+        await new Promise((resolve) => setTimeout(resolve, this.backoffWhenEmpty));
+
+        continue;
+      }
+
+      this.logQueueMode(queueName, mode);
+
       // Available slots are bounded by BOTH this queue's own ceiling and the
       // global ceiling, so one queue can never consume more than its share of the
       // global pool (no cross-queue starvation) nor exceed the total cap.

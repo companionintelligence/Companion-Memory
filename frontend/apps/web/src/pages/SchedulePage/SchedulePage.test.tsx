@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ScheduleEvent } from '@/api/useScheduleService';
+import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { SchedulePage } from './SchedulePage';
@@ -120,6 +120,34 @@ const event = (overrides: Partial<ScheduleEvent> = {}): ScheduleEvent => ({
   ...overrides,
 });
 
+const drawnCluster = {
+  clusterId: 'c1',
+  name: 'Morning gym',
+  l0Class: 'EXERCISE',
+  pOccur: 0.9,
+  scheduled: false,
+  daypartProbs: [
+    { label: 'night', probability: 0.9 },
+    { label: 'morning', probability: 0.9 },
+    { label: 'afternoon', probability: 0.9 },
+    { label: 'evening', probability: 0.9 },
+  ],
+};
+
+/**
+ * A forecast day the grid would actually draw.
+ *
+ * The footer's success copy is gated on the window carrying a pattern above
+ * RHYTHM_NOISE_FLOOR, so a day of empty clusters is the "learned nothing yet"
+ * case, not the happy path — anything asserting the happy path has to seed a
+ * cluster heavy enough to light a cell.
+ */
+const rhythmDay = (date: string, clusters: RhythmDay['clusters'] = [drawnCluster]): RhythmDay => ({
+  date,
+  dow: 'Wed',
+  clusters,
+});
+
 function setSchedule(over: Record<string, unknown> = {}) {
   h.schedule = {
     events: [event()],
@@ -160,13 +188,45 @@ describe('SchedulePage — what the footer is allowed to claim', () => {
   it('says the rhythm is live only when it covers the window on screen', () => {
     setSchedule({
       generatedAt: '2026-08-05T03:00:00.000Z',
-      rhythm: [{ date: '2026-08-05', dow: 'Wed', clusters: [] }],
+      rhythm: [rhythmDay('2026-08-05')],
       rhythmCoversWindow: true,
     });
 
     renderWithProviders(<SchedulePage />);
 
     expect(screen.getByText(/Pattern rhythm \(HBPE\) from your history, updated/)).toBeInTheDocument();
+  });
+
+  it('does not claim a live layer over a week the grid draws no rhythm for', () => {
+    // `week_forecast` answers with a row per day whether or not any recurrence
+    // profile qualified, so a cold or thin model resolves for the right window
+    // carrying nothing to draw. The footer used to read "from your history,
+    // updated <date>" over seven blank strips.
+    setSchedule({
+      generatedAt: '2026-08-05T03:00:00.000Z',
+      rhythm: [rhythmDay('2026-08-05', [])],
+      rhythmCoversWindow: true,
+    });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByText(/No rhythm pattern learned for this week yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/Pattern rhythm \(HBPE\) from your history/)).not.toBeInTheDocument();
+  });
+
+  it('treats clusters too faint for the grid to light as no rhythm at all', () => {
+    // A day whose every daypart weight lands under RHYTHM_NOISE_FLOOR renders
+    // exactly like a day of no clusters, so counting `clusters.length` alone
+    // let the footer claim a layer nothing on screen shows.
+    setSchedule({
+      generatedAt: '2026-08-05T03:00:00.000Z',
+      rhythm: [rhythmDay('2026-08-05', [{ ...drawnCluster, pOccur: 0.04 }])],
+      rhythmCoversWindow: true,
+    });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByText(/No rhythm pattern learned for this week yet/)).toBeInTheDocument();
   });
 
   it('does not claim freshness for a week the forecast horizon cannot reach', () => {

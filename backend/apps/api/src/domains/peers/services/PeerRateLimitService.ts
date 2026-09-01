@@ -1,7 +1,7 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Inject, Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
-import { checkSlidingWindow } from '@ci/domains/asks';
+import { CONSUMPTION_STORE, type ConsumptionStore } from '@ci/domains/consumption';
 
 /**
  * Inbound peer asks are limited more tightly than local ones: a remote box is
@@ -38,40 +38,42 @@ const MAX_POLLS_PER_WINDOW = 30;
  * leave the cheapest attack — hammering the endpoint as an unknown peer —
  * completely unlimited.
  *
- * In-memory per process, matching the local limiter; a shared store can back
- * both when the ask path goes multi-instance.
+ * Backed by {@link ConsumptionStore}, so the budget is shared across replicas
+ * and survives a restart (G8). It was a process-local `Map`, which meant a peer
+ * got the full allowance from every api process independently — the limit that
+ * protects a human's review inbox multiplied by the deployment's replica count.
  */
 @Injectable()
 export class PeerRateLimitService {
-  private readonly windows = new Map<string, number[]>();
-
-  constructor(private readonly logger: LoggerService) {
+  constructor(
+    @Inject(CONSUMPTION_STORE)
+    private readonly store: ConsumptionStore,
+    private readonly logger: LoggerService,
+  ) {
     this.logger.setContext(PeerRateLimitService.name);
   }
 
   /** Throws HTTP 429 when the peer identity exceeds its window. */
-  consume(identity: { issuer: string; subject: string }, now: number = Date.now()): void {
-    this.take('ask', identity, MAX_PER_WINDOW, now);
+  async consume(identity: { issuer: string; subject: string }, now: number = Date.now()): Promise<void> {
+    await this.take('ask', identity, MAX_PER_WINDOW, now);
   }
 
   /**
    * The budget for COLLECTING an answer, kept apart from the budget for asking
    * for one. See {@link MAX_POLLS_PER_WINDOW}.
    */
-  consumePoll(identity: { issuer: string; subject: string }, now: number = Date.now()): void {
-    this.take('poll', identity, MAX_POLLS_PER_WINDOW, now);
+  async consumePoll(identity: { issuer: string; subject: string }, now: number = Date.now()): Promise<void> {
+    await this.take('poll', identity, MAX_POLLS_PER_WINDOW, now);
   }
 
-  private take(
+  private async take(
     bucket: 'ask' | 'poll',
     identity: { issuer: string; subject: string },
     max: number,
     now: number,
-  ): void {
-    const key = `${bucket}\u0000${identity.issuer}\u0000${identity.subject}`;
-    const previous = this.windows.get(key) ?? [];
-    const { kept, decision } = checkSlidingWindow(previous, now, WINDOW_MS, max);
-    this.windows.set(key, kept);
+  ): Promise<void> {
+    const key = `peer:${bucket}\u0000${identity.issuer}\u0000${identity.subject}`;
+    const decision = await this.store.takeWindow({ key, now, windowMs: WINDOW_MS, max });
 
     if (!decision.allowed) {
       this.logger.warn(`peer ask rate limit hit for ${identity.issuer}`);

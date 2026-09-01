@@ -1,6 +1,8 @@
 import {
+  categoryOfEvent,
   describeJob,
   jobCategoryIndex,
+  jobCategorySelector,
   JOB_CATEGORIES,
   JOB_TYPES,
   SMART_ROTATION_WORK_LABELS,
@@ -47,8 +49,20 @@ describe('job taxonomy', () => {
   });
 
   it('classifies an unknown event instead of throwing', () => {
-    expect(describeJob('not.a.real.event').label).toBe('Unclassified job');
+    const fingerprinted = describeJob('not.a.real.event', 'nightly', 'search-index');
+
+    expect(fingerprinted.label).toBe('Not a real event · Nightly');
+    expect(fingerprinted.category).toBe(JOB_CATEGORIES.search);
+    expect(fingerprinted.description).toContain('`not.a.real.event`');
+    expect(fingerprinted.description).toContain('`nightly`');
+    expect(fingerprinted.description).toContain('`search-index`');
     expect(describeJob(null).label).toBe('Unclassified job');
+  });
+
+  it('guesses a category from the event prefix when the queue is unknown', () => {
+    expect(describeJob('planning.todo-scan').category).toBe(JOB_CATEGORIES.planning);
+    expect(describeJob('planning.todo-scan').label).toBe('Planning todo scan');
+    expect(describeJob('hbpe.nightly').category).toBe(JOB_CATEGORIES.llm);
   });
 
   it('classifies chat generate as interactive LLM work', () => {
@@ -122,19 +136,33 @@ describe('job taxonomy', () => {
     }
   });
 
-  it('files an unknown event under `unclassified`, never under a real category', () => {
-    // It used to return `maintenance`, which made the dashboard contradict
-    // itself: 586 live rows displayed "Maintenance" in the Category column,
-    // while selecting Maintenance resolved category -> event names out of
-    // JOB_TYPES and returned none of them. A filter that cannot find its own
-    // rows is worse than an unlabelled row.
-    const descriptor = describeJob('some.brand.new.event');
+  it('counts an event with no taxonomy entry as `unclassified`, whatever the row is labelled', () => {
+    // `describeJob` now FINGERPRINTS an unknown event — it mints a readable
+    // label and GUESSES a category from the prefix or queue, which is a strictly
+    // better row than "Unclassified job". But a guess is not filterable: the
+    // category filter unfolds a category back into event names out of JOB_TYPES,
+    // and a fingerprinted event is by definition not in there.
+    //
+    // So counting must NOT follow the guess. `categoryOfEvent` is the fold the
+    // chips, the category chart and the sampled metrics all share, and it has to
+    // agree with what clicking a chip returns — otherwise a chip reads a number
+    // that selecting it cannot reproduce, which is the bug this bucket exists to
+    // end (measured live: 587 of 9,557 jobs, 54% of the Completed tab).
+    expect(categoryOfEvent('some.brand.new.event')).toBe(UNCLASSIFIED_CATEGORY);
+    expect(categoryOfEvent(null)).toBe(UNCLASSIFIED_CATEGORY);
 
-    expect(descriptor.label).toBe('Unclassified job');
-    expect(descriptor.category).toBe(UNCLASSIFIED_CATEGORY);
-    expect(descriptor.category).not.toBe(JOB_CATEGORIES.maintenance);
+    // The fingerprint is free to guess a real category for DISPLAY…
+    expect(describeJob('some.brand.new.event').label).toBe('Some brand new event');
+    // …and the fold still refuses to follow it.
+    expect(categoryOfEvent('some.brand.new.event')).not.toBe(
+      describeJob('some.brand.new.event').category,
+    );
 
-    // And the sentinel must stay out of the real category enum, or a descriptor
+    // A known event folds to its real category, so the two only diverge where
+    // the taxonomy has nothing to say.
+    expect(categoryOfEvent('chat.generate')).toBe(JOB_CATEGORIES.llm);
+
+    // And the sentinel stays out of the real category enum, or a descriptor
     // could be written against it and the bucket would stop meaning "absent".
     expect(Object.values(JOB_CATEGORIES)).not.toContain(UNCLASSIFIED_CATEGORY);
   });
@@ -226,5 +254,83 @@ describe('job taxonomy', () => {
 
     expect(indexing.category).toBe(JOB_CATEGORIES.search);
     expect(homeConfirm.category).toBe(JOB_CATEGORIES.graph);
+  });
+});
+
+/**
+ * The category filter has to agree with the category LABEL.
+ *
+ * `describeJob` resolves a row's category from the (event, queue) pair, but the
+ * Jobs list used to select a category from `JOB_TYPES` alone. The two disagreed
+ * for every event in `JOB_TYPES_BY_QUEUE`: `GET /jobs?category=search` returned
+ * rows the same response labelled `graph` and `pipeline`, and `category=graph`
+ * could not find them at all. These pin the two halves together — a new
+ * queue-scoped entry that crosses a category boundary breaks a test here rather
+ * than quietly mis-filtering the table.
+ */
+describe('jobCategorySelector', () => {
+  /** Resolve a pair key the way `describeJob` does, for cross-checking. */
+  function categoryOf(key: string): string {
+    const [event = '', queue = ''] = key.split('::');
+
+    return describeJob(event, null, queue).category;
+  }
+
+  it('moves a queue-scoped event OUT of the category its base entry names', () => {
+    const search = jobCategorySelector(JOB_CATEGORIES.search);
+
+    // The base entries are all category `search` …
+    expect(search.events).toContain('communication.created');
+    expect(search.events).toContain('content.created');
+    expect(search.events).toContain('answer.created');
+
+    // … but on these queues they are not, so the filter must subtract them.
+    expect(search.excludeQueueKeys).toContain('communication.created::people-linking');
+    expect(search.excludeQueueKeys).toContain('content.created::pipeline-index');
+    expect(search.excludeQueueKeys).toContain('answer.created::default');
+  });
+
+  it('moves a queue-scoped event INTO the category its queue names', () => {
+    const graph = jobCategorySelector(JOB_CATEGORIES.graph);
+
+    expect(graph.includeQueueKeys).toContain('communication.created::people-linking');
+    expect(graph.includeQueueKeys).toContain('answer.created::default');
+    // `content.created` on pipeline-index belongs to `pipeline`, not `graph`.
+    expect(graph.includeQueueKeys).not.toContain('content.created::pipeline-index');
+
+    expect(jobCategorySelector(JOB_CATEGORIES.pipeline).includeQueueKeys).toContain(
+      'content.created::pipeline-index',
+    );
+  });
+
+  it('agrees with describeJob for every queue-scoped pair, in both directions', () => {
+    for (const category of Object.values(JOB_CATEGORIES)) {
+      const selector = jobCategorySelector(category);
+
+      for (const key of selector.includeQueueKeys) {
+        expect(categoryOf(key)).toBe(category);
+      }
+
+      for (const key of selector.excludeQueueKeys) {
+        expect(categoryOf(key)).not.toBe(category);
+      }
+    }
+  });
+
+  it('never both includes and excludes the same pair', () => {
+    for (const category of Object.values(JOB_CATEGORIES)) {
+      const { includeQueueKeys, excludeQueueKeys } = jobCategorySelector(category);
+      const overlap = includeQueueKeys.filter((key) => excludeQueueKeys.includes(key));
+
+      expect(overlap).toEqual([]);
+    }
+  });
+
+  it('an unknown category selects nothing at all', () => {
+    const selector = jobCategorySelector('not-a-real-category');
+
+    expect(selector.events).toEqual([]);
+    expect(selector.includeQueueKeys).toEqual([]);
+    expect(selector.excludeQueueKeys).toEqual([]);
   });
 });

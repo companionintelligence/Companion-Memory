@@ -8,12 +8,7 @@ import { UserContextService } from '@ci/domains/memory';
 import { HbpeService } from '@ci/domains/predictions';
 import { UserService } from '@ci/domains/user';
 
-import {
-  buildOccupancyTree,
-  emptyOccupancyTree,
-  mergeGuess,
-  type BranchialTree,
-} from './branchialOccupancy';
+import { buildOccupancyTree, emptyOccupancyTree, mergeGuess, type BranchialTree } from './branchialOccupancy';
 import { ForecastContextService } from './ForecastContextService';
 import { RecallService } from './RecallService';
 
@@ -118,9 +113,7 @@ export class BranchialForecastService {
       buckets: forecast?.buckets ?? [],
       week,
       timezone,
-      ready:
-        forecast?.system_status === 'READY' ||
-        Boolean(forecast?.system_status?.includes(':')),
+      ready: forecast?.system_status === 'READY' || Boolean(forecast?.system_status?.includes(':')),
       stillLearning: Boolean(forecast?.still_learning),
     });
   }
@@ -149,7 +142,9 @@ export class BranchialForecastService {
         blocks.push(this.userContextService.formatContextForSystemPrompt(userCtx));
       }
     } catch (err) {
-      this.logger.warn('Branchial persona pack failed', { err: err instanceof Error ? err.message : String(err) });
+      this.logger.warn('Branchial persona pack failed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
 
     try {
@@ -170,11 +165,13 @@ export class BranchialForecastService {
         blocks.push(rest);
       }
     } catch (err) {
-      this.logger.warn('Branchial rest-of-day failed', { err: err instanceof Error ? err.message : String(err) });
+      this.logger.warn('Branchial rest-of-day failed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
 
     const prompt = [
-      'Rename each gated occupancy title into a short named stretch of this person\'s remaining day.',
+      "Rename each gated occupancy title into a short named stretch of this person's remaining day.",
       'Examples: morning standup, beach with Jerry. Keep every step id exactly.',
       'Do not add branches. Do not use UNKNOWN. Do not invent people who are not in memory.',
       'If you cannot name a branch, keep its occupancy title. mass is a probability in 0–1.',

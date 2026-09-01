@@ -165,6 +165,17 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   excluded_retweet: 'filtered',
   outside_timeframe: 'filtered',
   non_message: 'filtered',
+  // telegram.ts: a chat entry whose `type` is not 'message' (a service event —
+  // "X joined the group", a call log) — the telegram-specific spelling of the
+  // same exclusion `non_message` already covers for other sources.
+  non_message_type: 'filtered',
+  // mastodon.ts: an ActivityPub activity whose `type` is not 'Create' — a boost
+  // ("Announce") or other activity kind, not an original post. Same policy as
+  // excluded_retweet.
+  non_create_activity: 'filtered',
+  // mastodon.ts: a Create activity whose `object.type` is not 'Note' — a poll
+  // or other non-post object this build does not treat as a status.
+  non_note_object: 'filtered',
   // A line WhatsApp wrote itself — "X added you", "Y left" — recognised by its
   // U+200E marker plus the system-verb pattern. Policy, not a failure: the
   // conversation is the user's, the announcement around it is not.
@@ -179,6 +190,9 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   cancelled_trip: 'cancelled',
   // A line with zero quantity AND zero total — an order line that never shipped.
   unfulfilled_line: 'cancelled',
+  // instagram.ts: a message the sender unsent before it synced — Instagram's own
+  // `is_unsent` flag. The source itself says the message no longer exists.
+  unsent_message: 'cancelled',
 
   // Parsed and empty.
   empty_after_parse: 'empty_record',
@@ -203,6 +217,9 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   // its id by.
   grok_unknown_conversation: 'no_identity',
   note_tweet_unmatched: 'no_identity',
+  // contactlist.ts: a row with fewer than 2 attributes (or 1 attribute and no
+  // name) — not enough signal to be worth a Person entity.
+  insufficient_attributes: 'no_identity',
 
   // Time.
   invalid_timestamp: 'bad_timestamp',
@@ -219,6 +236,12 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   media_file_missing: 'media_missing',
   missing_media: 'media_missing',
   whatsapp_attachment_missing: 'media_missing',
+  // googlevoice.ts: a video/vCard/audio-clip MMS attachment (<a class="video"|
+  // "vcard" href> or a bare <audio src>) whose referenced file resolveAttachment
+  // could not find on disk. Image misses have no equivalent slug — they stay
+  // silent unless recovered by the truncation-collision fallback, which is not
+  // a loss and does not drop.
+  googlevoice_attachment_missing: 'media_missing',
 
   // Bytes present, not storable / not imported.
   grok_attachment_unsupported: 'media_unsupported',
@@ -237,6 +260,16 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   // Read failures.
   no_end_marker: 'unreadable_source',
   unreadable_file: 'unreadable_source',
+  // contactlist.ts: a CSV row whose column count does not match the header —
+  // structurally broken, not just missing a value.
+  malformed_row: 'unreadable_source',
+  // tiktok.ts: a JSON list entry that is not an object at all.
+  malformed_entry: 'unreadable_source',
+  // kindle.ts: a clipping block that did not match the export's own format.
+  malformed_clip: 'unreadable_source',
+  // applecontacts.ts: the AddressBook SQLite query threw partway through, so
+  // every contact after the failure point was never read.
+  query_failed: 'unreadable_source',
 
   // Minted by StagedWriter rather than a parser. Hyphenated because it predates
   // this vocabulary; classified here rather than renamed, so runs already in

@@ -4,7 +4,7 @@ import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
 import { GraphIngestService } from '@ci/domains/graph';
-import { ContentService, EventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -15,7 +15,7 @@ import type { SpotifyPlaylistTrackItem } from './types';
 export class SpotifyRecentlyPlayedTransformService {
   constructor(
     private readonly contentService: ContentService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly graph: GraphIngestService,
     private readonly logger: LoggerService,
   ) {
@@ -71,7 +71,7 @@ export class SpotifyRecentlyPlayedTransformService {
             start_time: new Date(new Date(playedAt).getTime() - track.duration_ms),
             end_time: new Date(playedAt),
             duration_minutes: Math.round(track.duration_ms / 60000),
-            // Provenance triple: EventService.createOne find-or-creates on it,
+            // Provenance triple: CalendarEventService.createOne find-or-creates on it,
             // so re-sweeps of the rolling recently-played window (the same
             // plays come back every sync) resolve to the existing event. A
             // play is unique per (track, played_at) — Spotify's timestamp is

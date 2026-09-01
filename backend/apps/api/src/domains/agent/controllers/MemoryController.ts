@@ -197,23 +197,37 @@ export class MemoryController {
         continue;
       }
 
-      await this.communicationService.create(serviceContext, {
-        id,
-        time: new Date(Date.now() + created),
-        communication_type: CommunicationType.CHAT,
-        direction: message.role === 'user' ? 'inbound' : 'outbound',
-        thread_id: sessionId,
-        participants_metadata: {
-          platform,
-          role: message.role,
-          sessionId,
-        },
-        subject: `${platform} conversation`,
-        content,
-        preview: content.slice(0, 240),
-        category: TURN_MESSAGE_CATEGORY,
-      });
-      created += 1;
+      try {
+        await this.communicationService.create(serviceContext, {
+          id,
+          time: new Date(Date.now() + created),
+          communication_type: CommunicationType.CHAT,
+          direction: message.role === 'user' ? 'inbound' : 'outbound',
+          thread_id: sessionId,
+          participants_metadata: {
+            platform,
+            role: message.role,
+            sessionId,
+          },
+          subject: `${platform} conversation`,
+          content,
+          preview: content.slice(0, 240),
+          category: TURN_MESSAGE_CATEGORY,
+        });
+        created += 1;
+      } catch (err) {
+        // `id` is content-derived, not a provenance triple, so
+        // CommunicationService.create's triple-based dedup doesn't cover this
+        // call; the `findByIds` check above only catches a sequential retry,
+        // not two concurrent OpenClaw/Hermes deliveries of the same turn
+        // racing each other onto the same primary key.
+        if ((err as { code?: string })?.code === '23505') {
+          skipped += 1;
+          continue;
+        }
+
+        throw err;
+      }
     }
 
     skipped += input.messages.length - persistableMessages.length;

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,12 +7,13 @@ import { ProtectedRoute } from './ProtectedRoute';
 // ProtectedRoute reads useAuth + useCurrentUser from the @/hooks barrel.
 const h = vi.hoisted(() => ({
   auth: { authToken: null as string | null, expired: true, loading: false, error: null },
+  actions: {} as { refresh?: () => Promise<void> },
   user: { user: null as { id: string } | null, loading: false },
   isNative: false,
 }));
 
 vi.mock('@/hooks', () => ({
-  useAuth: () => [h.auth, {}],
+  useAuth: () => [h.auth, h.actions],
   useCurrentUser: () => h.user,
 }));
 
@@ -47,6 +48,7 @@ function renderProtected() {
 describe('ProtectedRoute', () => {
   beforeEach(() => {
     h.isNative = false;
+    h.actions = {};
   });
 
   it('shows a loading state while auth/user resolve', () => {
@@ -94,5 +96,21 @@ describe('ProtectedRoute', () => {
     renderProtected();
 
     expect(screen.getByText('secret content')).toBeInTheDocument();
+  });
+
+  it('tries a silent refresh before sending an expired session to login', async () => {
+    const refresh = vi.fn().mockResolvedValue(undefined);
+
+    h.auth = { authToken: 'stale', expired: true, loading: false, error: null };
+    h.actions = { refresh };
+    h.user = { user: { id: 'u1' }, loading: false };
+
+    renderProtected();
+
+    expect(screen.queryByText('login page')).not.toBeInTheDocument();
+    expect(screen.queryByText('secret content')).not.toBeInTheDocument();
+
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText('login page')).toBeInTheDocument());
   });
 });

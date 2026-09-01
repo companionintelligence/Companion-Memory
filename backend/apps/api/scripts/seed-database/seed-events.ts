@@ -1,13 +1,13 @@
 import { type TestingModule } from '@nestjs/testing';
 import { type MultiBar } from 'cli-progress';
 
-import { EventService } from '@ci/domains/memory';
+import { CalendarEventService } from '@ci/domains/memory';
 
 import { EVENTS } from './data/events';
 import { JOHN_SMITH } from './data/users';
 
 export async function seedEvents(module: TestingModule, multibar: MultiBar) {
-  const eventService = module.get(EventService);
+  const eventService = module.get(CalendarEventService);
 
   const bar = multibar.create(EVENTS.length, 0, { task: 'Events' });
 

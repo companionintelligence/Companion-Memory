@@ -32,6 +32,9 @@ from ci.hbpe.pipeline.kernel import (  # noqa: E402
     recency_weight,
 )
 from ci.hbpe.pipeline.metric_lifts import (  # noqa: E402
+    SLEEP_EVENING,
+    SLEEP_MORNING,
+    WORK_HOURS,
     class_multipliers,
     coverage_ok,
     day_coverage_weight,
@@ -191,9 +194,22 @@ def test_metric_lifts_refuse_below_floor():
 def test_metric_lifts_sleep_morning_when_floor_cleared():
     m = class_multipliers(2, 840, None, 420, 600, floor_cleared=True)
     assert m[SLEEP] == pytest.approx(2.0)
-    m_work = class_multipliers(20, None, 1200, 420, 600, floor_cleared=True)
+    # 10:00 local — work hours on the current 15-minute grid (bucket 40).
+    work_bucket = (10 * 60) // 15
+    m_work = class_multipliers(work_bucket, None, 1200, 420, 600, floor_cleared=True)
     assert m_work[WORK] < 1.0
     assert m_work[LEISURE] > 1.0
+
+
+def test_metric_lifts_windows_track_bucket_minutes():
+    """Sleep/work ranges are wall-clock hours, not leftover 30-minute indices."""
+    assert list(SLEEP_MORNING)[0] == 0
+    assert list(SLEEP_MORNING)[-1] == (8 * 60) // 15 - 1
+    assert 42 not in SLEEP_EVENING  # 10:30 was the old 30-min "evening" start
+    assert (21 * 60) // 15 in SLEEP_EVENING
+    assert (8 * 60) // 15 in WORK_HOURS
+    assert (18 * 60) // 15 - 1 in WORK_HOURS
+    assert (18 * 60) // 15 not in WORK_HOURS
 
 
 def test_hierarchical_mask_blocks_upward_flow():

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useSearchParams } from 'react-router-dom';
 
@@ -38,21 +38,21 @@ export function StoryTimelineView() {
     searchParams.get('sortBy'),
     Boolean(searchParams.get('search')?.trim()),
   );
-  const nextPageDirection: 'older' | 'newer' =
-    searchParams.get('sortOrder') === 'asc' ? 'newer' : 'older';
+  const nextPageDirection: 'older' | 'newer' = searchParams.get('sortOrder') === 'asc' ? 'newer' : 'older';
   const sessionKey = searchParams.toString();
 
   const [{ data, loading, loadingMore, hasNextPage, loadMore, error, refetch }, { setActiveEntity }] =
     useEntityService();
   const [focusId, setFocusId] = useState<string | null>(null);
-  const ignoreLandingChangeRef = useRef(true);
 
   useEffect(() => {
     setFocusId(null);
-    ignoreLandingChangeRef.current = true;
   }, [sessionKey]);
 
-  const datedCount = useMemo(() => data.filter((entity) => getEntityTimestamp(entity) != null).length, [data]);
+  const datedCount = useMemo(
+    () => data.filter((entity) => getEntityTimestamp(entity) != null).length,
+    [data],
+  );
 
   const fetchCap = dateFiltered ? MEMORY_TIMELINE_FILTERED_FETCH_CAP : MEMORY_TIMELINE_FETCH_CAP;
 
@@ -164,27 +164,16 @@ export function StoryTimelineView() {
     [data, setActiveEntity],
   );
 
+  // Next/previous and keyboard only move the axis. Opening the shared detail
+  // drawer is a separate gesture (click the slide or a time-axis marker).
   const handleSlideChange = useCallback(
     (uniqueId: string) => {
       const entityId = slideEntityId(uniqueId);
       if (entityId) {
         setFocusId(entityId);
       }
-
-      // TimelineJS fires `change` as soon as it lands on startAtSlide. Opening
-      // the drawer then covers the host (especially on a phone) before it has
-      // a layout box, which used to leave a blank timeline behind the sheet.
-      if (ignoreLandingChangeRef.current) {
-        ignoreLandingChangeRef.current = false;
-
-        return;
-      }
-
-      if (entityId) {
-        focusEntity(entityId);
-      }
     },
-    [focusEntity, slideEntityId],
+    [slideEntityId],
   );
 
   const handleSlideOpen = useCallback(
@@ -194,7 +183,6 @@ export function StoryTimelineView() {
         return;
       }
 
-      ignoreLandingChangeRef.current = false;
       setFocusId(entityId);
       focusEntity(entityId);
     },
@@ -269,7 +257,11 @@ export function StoryTimelineView() {
             })}
           </span>
           {error && (
-            <button type="button" className="font-medium text-primary hover:underline" onClick={() => refetch()}>
+            <button
+              type="button"
+              className="font-medium text-primary hover:underline"
+              onClick={() => refetch()}
+            >
               Retry
             </button>
           )}

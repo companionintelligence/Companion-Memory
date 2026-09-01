@@ -260,12 +260,54 @@ def get_qwen() -> LabelGenerator:
     return _INSTANCE
 
 
+def _endpoint_reachable(base: str, timeout: float) -> bool:
+    """
+    Can we open a connection to this chat endpoint at all?
+
+    Deliberately treats an HTTP error response as REACHABLE. A 401, 403 or 404
+    means a server answered, which is all this probe is asking; auth and route
+    shape are the caller's problem, and demoting a live endpoint to the GGUF
+    fallback over a missing ``/models`` route would be a worse mistake than the
+    one this function exists to catch.
+    """
+    try:
+        req = urllib.request.Request(f"{base.rstrip('/')}/models", method="GET")
+        with urllib.request.urlopen(req, timeout=timeout):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
 def _build_labeler() -> LabelGenerator:
     base = (settings.label_api_base or "").strip()
     model = (settings.label_chat_model or "").strip()
     if base and model:
-        return OpenAIChatLabeler(base, model, settings.label_api_key)
-    if base and not model:
+        # Probe before committing. This singleton is built once per process and
+        # never rebuilt, so choosing an unreachable endpoint kills labeling for
+        # the life of the service: every label_event raises URLError, the drain
+        # logs a warning per event and burns its whole multi-hour budget writing
+        # nothing, and the forecast can never fill. There is a working GGUF
+        # labeler right here — not using it because one env var points somewhere
+        # unreachable is the worst of the available outcomes.
+        #
+        # Not hypothetical. A localhost URL is correct for the host-run API and
+        # wrong for every containerised consumer, where localhost is the
+        # container itself; .env.default ships host.docker.internal for exactly
+        # this reason, but a local override is invisible until labeling silently
+        # stops. Observed live 2026-08-30: LLM_API_BASE=http://localhost:11434/v1
+        # inside hbpe-service, connection refused on every event, 0 labels
+        # written across a full run.
+        if _endpoint_reachable(base, settings.label_http_timeout_seconds or 10.0):
+            return OpenAIChatLabeler(base, model, settings.label_api_key)
+        log.error(
+            "HBPE label endpoint %s is unreachable — falling back to the GGUF "
+            "labeler. Inside a container, localhost is the container itself; "
+            "use host.docker.internal to reach an LLM on the host.",
+            base,
+        )
+    elif base and not model:
         log.warning(
             "LLM_API_BASE is set but LLM_DEFAULT_CHAT_MODEL is empty — "
             "falling back to GGUF labeler"

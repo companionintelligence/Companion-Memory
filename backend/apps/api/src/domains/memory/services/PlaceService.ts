@@ -933,7 +933,7 @@ export class PlaceService {
   /**
    * True total of places matching the same filters {@link getEntitiesForPlaces} applies (minus
    * the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`, not the
-   * length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
+   * length of one `limit`-bounded page of identifiers. See CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForPlaces(
     context: ServiceContext,

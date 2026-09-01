@@ -33,6 +33,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 
 import { SourceCard, type TrackedObject } from '@/components/connect/SourceCard';
+import { useBlueBubblesStatus } from '@/components/connect/useBlueBubblesStatus';
 import { GET_PROVIDERS, GET_OAUTH_CALLBACK_URL } from '@/queries';
 
 const GET_CONNECTIONS = gql`
@@ -275,6 +276,16 @@ export const SERVICE_PROVIDERS: ServiceProviderConfig[] = [
   },
 ];
 
+/**
+ * Same shape as Signal's tracks — both are text-message history plus who it
+ * was with — since BlueBubbles is also iMessage/SMS, just off a self-hosted
+ * Mac rather than an OAuth account.
+ */
+const BLUEBUBBLES_TRACKS: TrackedObject[] = [
+  { icon: MessageSquare, label: 'Messages' },
+  { icon: Contact, label: 'Contacts' },
+];
+
 interface SetupProviderState {
   name: string;
   appSetupUrl: string | null;
@@ -298,6 +309,7 @@ export function ServiceIntegrationsSection({
     fetchPolicy: 'cache-and-network',
   });
   const { data: oauthData } = useQuery(GET_OAUTH_CALLBACK_URL);
+  const blueBubbles = useBlueBubblesStatus();
 
   const callbackUrl = oauthData?.oAuthCallbackUrl ?? `${window.location.origin}/oauth/callback`;
 
@@ -406,6 +418,24 @@ export function ServiceIntegrationsSection({
             />
           );
         })}
+
+        {/* Not one of the OAuth `providers` above — a single appliance-wide
+            connection configured on its own settings page (see
+            useBlueBubblesStatus) — so it isn't in `SERVICE_PROVIDERS` and
+            can't route through `handleProviderClick`. Onboarding skips it: it
+            needs a self-hosted Mac reachable from this appliance, not a
+            one-click sign-in. */}
+        {variant === 'page' && (
+          <SourceCard
+            icon={<MessageSquare aria-hidden className="h-full w-full" strokeWidth={1.5} />}
+            name="BlueBubbles"
+            tracks={BLUEBUBBLES_TRACKS}
+            count={blueBubbles.enabled ? 1 : 0}
+            lastActivityAt={blueBubbles.lastActivityAt}
+            activityVerb="synced"
+            onSelect={() => navigate('/settings/bluebubbles')}
+          />
+        )}
       </div>
 
       <Dialog open={setupProvider != null} onOpenChange={() => setSetupProvider(null)}>

@@ -2,6 +2,27 @@
 # Fill SafariWebExtension/Resources from CI-Browser-Extension (sibling checkout
 # or a pinned GitHub safari-mobile release). Fail closed so an archive never
 # ships an empty .appex.
+#
+# BOTH CI PATHS ARE CURRENTLY BROKEN, AND NOT FIXABLE FROM THIS REPO ALONE
+# (investigated 2026-08-29, see docs/qa/baseline-2026-08-26.md §6.2(a)):
+#   - No sibling CI_BROWSER_EXTENSION_DIR checkout exists in GitHub Actions,
+#     so every CI run falls to the pinned-release path.
+#   - companionintelligence/CI-Browser-Extension is a PRIVATE repo, and
+#     CI-Server's Actions secrets carry no cross-repo credential for it (only
+#     app-signing/store secrets) — so `mobile-build.yml` cannot even `git
+#     clone` it directly as a workaround without someone provisioning a new
+#     PAT/deploy-key secret in this repo's settings first.
+#   - Its releases (currently only v1.4.0; PINNED_VERSION defaults to the
+#     unreleased 1.5.0) have never shipped a `*safari-mobile.zip` asset, and
+#     its in-tree source has no committed build output either — `.output/`
+#     is gitignored, so even a successful clone would still need to run
+#     `yarn install && yarn build:safari-mobile` (a second JS toolchain) in
+#     that checkout before this script's sync_from_dir() would find anything.
+#   Unblocking CI needs an action in the OTHER repo: publish a v1.5.0 (or
+#   whatever PINNED_VERSION says) release there with a safari-mobile.zip
+#   asset, built via its own already-existing `npm run zip:safari-mobile`.
+#   The CI_BROWSER_EXTENSION_DIR local-dev override below is unaffected and
+#   still works for anyone who sets it.
 set -euo pipefail
 
 # Xcode GUI Run scripts do not load a login shell, so asdf/nvm/Homebrew yarn

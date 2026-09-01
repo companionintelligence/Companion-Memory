@@ -749,7 +749,7 @@ export class MemoryCompactionService {
         return created.id;
       }
 
-      // TODO: EventService.create requires `title` and a real `start_time: Date`,
+      // TODO: CalendarEventService.create requires `title` and a real `start_time: Date`,
       // neither of which the extraction prompt asks for. Either extend the LLM
       // output schema to include those fields, or route events through a
       // separate extraction path.

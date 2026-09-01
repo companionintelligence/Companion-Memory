@@ -71,7 +71,10 @@ Key environment variables:
 # Database (assembled by entrypoint.sh from DATABASE_* when unset)
 DATABASE_URL=postgresql://user:pass@database:5432/companion
 
-# LLM (Ollama default)
+# LLM (Ollama default). The hostname is advisory: llm_host.py corrects it for
+# the namespace this process is in — a loopback host becomes the docker gateway
+# inside a container, and the gateway becomes loopback outside one — and logs
+# whenever it does. CI_LLM_HOST_REWRITE=off to use the URL exactly as written.
 LLM_API_BASE=http://host.docker.internal:11434/v1
 # The chat model is normally injected by CI Hub as LLM_DEFAULT_CHAT_MODEL.
 # SUMMARY_LLM_MODEL overrides it; LLM_MODEL is the legacy spelling. There is

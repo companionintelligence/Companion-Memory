@@ -10,7 +10,7 @@ import type { BrowserActivityService } from '@ci/domains/browser-activity';
 import type {
   CommunicationService,
   ContentService,
-  EventService,
+  CalendarEventService,
   ItemService,
   ObjectObservationService,
   ProductModelService,
@@ -76,7 +76,7 @@ function makeController(opts: { captureInserted?: boolean[]; noteConflicts?: str
         sourceId: (d as Record<string, unknown>).source_id,
       })),
     ),
-  } as unknown as EventService;
+  } as unknown as CalendarEventService;
 
   const dataSource = {
     query: jest.fn(async (sql: string, params: unknown[] = []) => {
@@ -211,7 +211,7 @@ describe('BulkIngestController', () => {
       expect(res.ingested).toBe(2);
       expect(res.duplicate).toBe(0);
       expect(res.rejected).toEqual([]);
-      // The ARRAY form takes EventService's set-based path, which emits no
+      // The ARRAY form takes CalendarEventService's set-based path, which emits no
       // per-row EventCreatedEvent — bulk loads must not trigger live indexing.
       expect(eventService.create).toHaveBeenCalledTimes(1);
       const dtos = (eventService.create as jest.Mock).mock.calls[0][1];
@@ -245,7 +245,7 @@ describe('BulkIngestController', () => {
       expect((eventService.create as jest.Mock).mock.calls[0][1]).toHaveLength(1);
     });
 
-    it('routes capture events to EventService.create with the source triple + kind', async () => {
+    it('routes capture events to CalendarEventService.create with the source triple + kind', async () => {
       const { controller, eventService } = makeController({ captureInserted: [true] });
       await controller.ingest(ctx, { events: [ev('a')] });
       const dto = (eventService.create as jest.Mock).mock.calls[0][1][0];

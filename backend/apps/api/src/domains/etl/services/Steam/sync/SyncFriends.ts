@@ -59,6 +59,7 @@ export async function syncFriends({
       personaname: string;
       profileurl: string;
       avatar: string;
+      avatarmedium: string;
       avatarfull: string;
       realname?: string;
       friend_since: number;
@@ -86,6 +87,7 @@ export async function syncFriends({
             personaname: player?.personaname || 'Unknown',
             profileurl: player?.profileurl || `https://steamcommunity.com/profiles/${friend.steamid}`,
             avatar: player?.avatar || '',
+            avatarmedium: player?.avatarmedium || '',
             avatarfull: player?.avatarfull || '',
             realname: player?.realname,
             friend_since: friend.friend_since,
@@ -104,6 +106,7 @@ export async function syncFriends({
             personaname: 'Unknown',
             profileurl: `https://steamcommunity.com/profiles/${friend.steamid}`,
             avatar: '',
+            avatarmedium: '',
             avatarfull: '',
             friend_since: friend.friend_since,
           });

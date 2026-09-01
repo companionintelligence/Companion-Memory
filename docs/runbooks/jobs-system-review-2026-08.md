@@ -363,10 +363,19 @@ transcript.
 5. **Handlers that swallow transient failures** report success and never retry — `FileDocumentParseListener`, `FileChunkSearchIndexListener`, and all 12 `GraphEventListener` handlers. Safe to land now that failures are visible in the UI; expect dead-letter volume to rise on a broken appliance, which is the point.
 6. **19 declared events remain orphaned** — `send()` on them enqueues nothing. `position.created` is emitted once per GPS fix. (Message update/delete are fixed; the rest are mostly `device.*`, `question.*`, `savedSearch.*`.)
 7. **"Completed (lifetime)" is really a ~36-hour window** — `deleteAfterHours: 24` on top of a 12-hour archive delay. The label is now just "Completed", but the number still means less than it looks like. `ci.job_metrics` is the honest long-run source.
-8. **The `default` queue mixes multi-minute LLM inference with graph writes and new-user seeding** on one 6-slot semaphore at equal priority.
+8. **The `default` queue mixes multi-minute LLM inference with graph writes and new-user seeding** on one 6-slot semaphore at equal priority. (Its ceiling is now settable per queue from the Jobs page — see `docs/operations/job-controls.md` — but that lowers the whole queue, it does not separate the workloads.)
 9. **`ci.pipeline_dead_letters` only grows.** The reaper inserts; nothing purges.
 10. **`PythonFunctionCrons` and `McpController` import `Cron` from `@nestjs/schedule` directly**, bypassing the role gate and the traceId scope.
 11. **20 of 22 work queues declare no per-queue `expireInSeconds`**, inheriting one 12-hour expiry for very different workloads. (Retry policy is now written onto every queue row; expiry still is not.)
+
+### Since closed by the operator controls
+
+Items 4 and 11 above are still open, but the shape of the problem changed: the
+per-queue and appliance-wide ceilings are now persisted settings an operator can
+change from the Jobs page rather than environment variables read once at boot,
+and a queue or schedule can be paused or switched off entirely. See
+`docs/operations/job-controls.md` for the model, where it is enforced, and why
+the Hub's per-app CPU limit does not substitute for it.
 
 ### Closed since the first pass
 

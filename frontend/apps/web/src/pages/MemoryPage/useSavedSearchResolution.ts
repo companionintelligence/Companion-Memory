@@ -9,7 +9,11 @@ import { excludedEntityTypesFor } from '@/components/SearchBox/useDropdown';
 import { gql } from '@/graphql';
 import type { GetSavedSearchQuery } from '@/graphql/graphql';
 
-import { isRollingDatePreset, resolveDatePreset, type DatePreset } from './Components/ExplorerToolbar/datePresets';
+import {
+  isRollingDatePreset,
+  resolveDatePreset,
+  type DatePreset,
+} from './Components/ExplorerToolbar/datePresets';
 
 export const GET_SAVED_SEARCH = gql(`
   query GetSavedSearch($id: ID!) {

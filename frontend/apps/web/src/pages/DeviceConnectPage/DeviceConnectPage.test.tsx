@@ -50,7 +50,8 @@ vi.mock('@/hooks', () => ({
     },
   ],
   useCurrentUser: () => ({
-    user: h.profileUser !== undefined ? h.profileUser : h.authenticated ? { id: 'u1', onboarded: true } : null,
+    user:
+      h.profileUser !== undefined ? h.profileUser : h.authenticated ? { id: 'u1', onboarded: true } : null,
     loading: false,
     error: h.profileError,
   }),
@@ -222,9 +223,7 @@ describe('DeviceConnectPage', () => {
     expect(await screen.findByText('Home')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('memory-row-home'));
 
-    expect(
-      await screen.findByText(/did not accept your Companion Intelligence token/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/did not accept your Companion Intelligence token/i)).toBeInTheDocument();
     expect(screen.getByTestId('memory-password-submit')).toBeInTheDocument();
     expect(navigate).not.toHaveBeenCalledWith('/login', { replace: true });
     expect(navigate).not.toHaveBeenCalledWith('/', { replace: true });

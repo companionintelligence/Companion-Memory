@@ -12,9 +12,9 @@ import { PgBossJobEntity } from '../entities/PgBossJobEntity';
 import {
   categoryOfEvent,
   describeJob,
+  jobCategorySelector,
   JOB_TYPES,
   UNCLASSIFIED_CATEGORY,
-  type JobCategory,
 } from '../taxonomy';
 
 export interface JobListItemDto {
@@ -545,10 +545,16 @@ export class JobQueryService {
 
     if (query.category && !options.skipCategory) {
       if (query.category === UNCLASSIFIED_CATEGORY) {
-        // The complement of the taxonomy: everything the dashboard renders as
-        // "Unclassified job". Without this the chip counts a bucket nobody can
+        // The complement of the taxonomy: every row whose event has no
+        // JOB_TYPES entry. Without this the chip counts a bucket nobody can
         // click into, which is worse than not counting it — it names a problem
         // and then refuses to show you which jobs cause it.
+        //
+        // Note this stays keyed on JOB_TYPES alone, deliberately, even though
+        // the real-category branch below is queue-aware: `jobCategorySelector`
+        // can only move events that HAVE an entry, so the complement is the
+        // same set either way, and matching it queue-aware would exclude
+        // dead-lettered rows whose queue column no longer says where they ran.
         const known = Object.keys(JOB_TYPES);
 
         builder.andWhere(
@@ -561,15 +567,38 @@ export class JobQueryService {
           }),
         );
       } else {
-        const events = Object.entries(JOB_TYPES)
-          .filter(([, descriptor]) => descriptor.category === (query.category as JobCategory))
-          .map(([event]) => event);
+        // A category is not simply a set of event names: `describeJob` resolves
+        // a row's category from the (event, queue) pair, so the handful of
+        // events that mean different things on different queues have to be
+        // moved in and out here too. Selecting on event alone returned rows
+        // this same endpoint then labelled with a DIFFERENT category — see
+        // `jobCategorySelector`.
+        const selector = jobCategorySelector(query.category);
+        // `job.name` is the queue; `data->>'name'` is the event.
+        const queueKey = `(job.data->>'name' || '::' || job.name)`;
 
-        // An unknown category matches nothing rather than everything — a typo in
-        // a query string should return an empty table, not the unfiltered one.
-        builder.andWhere(`job.data->>'name' IN (:...events)`, {
-          events: events.length > 0 ? events : ['__no-such-category__'],
-        });
+        builder.andWhere(
+          new Brackets((where) => {
+            // An unknown category matches nothing rather than everything — a
+            // typo in a query string should return an empty table, not the
+            // unfiltered one — so an empty event list becomes a sentinel.
+            const excludes =
+              selector.excludeQueueKeys.length > 0
+                ? ` AND ${queueKey} NOT IN (:...excludedQueueKeys)`
+                : '';
+
+            where.where(`job.data->>'name' IN (:...categoryEvents)${excludes}`, {
+              categoryEvents: selector.events.length > 0 ? selector.events : ['__no-such-category__'],
+              excludedQueueKeys: selector.excludeQueueKeys,
+            });
+
+            if (selector.includeQueueKeys.length > 0) {
+              where.orWhere(`${queueKey} IN (:...includedQueueKeys)`, {
+                includedQueueKeys: selector.includeQueueKeys,
+              });
+            }
+          }),
+        );
       }
     }
 

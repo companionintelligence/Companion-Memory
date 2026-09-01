@@ -5,7 +5,7 @@ import { DataSource, Not } from 'typeorm';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { EventService } from '@ci/domains/memory';
+import { CalendarEventService } from '@ci/domains/memory';
 
 import { EventCandidateEntity } from '../../entities/EventCandidateEntity';
 import { CandidateService } from '../CandidateService';
@@ -99,7 +99,7 @@ describe('CandidateService', () => {
       providers: [
         CandidateService,
         { provide: getRepositoryToken(EventCandidateEntity), useValue: repo },
-        { provide: EventService, useValue: events },
+        { provide: CalendarEventService, useValue: events },
         {
           provide: DataSource,
           useValue: { getRepository: jest.fn(() => ({ createQueryBuilder: jest.fn(() => qb) })) },

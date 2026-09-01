@@ -567,6 +567,7 @@ export class InstagramFileImporter implements FileImporter {
     const owner = names.length === 2 ? names.find((n) => n !== thread.title) : undefined;
     for (const msg of thread.messages ?? []) {
       if (msg.is_unsent) {
+        params.pipeline.drop?.('unsent_message');
         continue;
       }
 

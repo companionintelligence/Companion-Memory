@@ -82,7 +82,11 @@ test('opening a thing from the browse reaches its detail page', async ({ page })
 
   await expect(page).toHaveURL(/\/items\//);
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-  await expect(page.getByText('Codes')).toBeVisible();
+  // exact: true — getByText matches case-insensitively and by substring by
+  // default, so a loose 'Codes' also catches the empty-state copy "No codes
+  // on this thing yet." on a thing seeded with zero codes, making the
+  // locator ambiguous. The card title is always the exact string "Codes".
+  await expect(page.getByText('Codes', { exact: true })).toBeVisible();
 });
 
 test('a code can be claimed on a thing and shows up in its list', async ({ page }) => {

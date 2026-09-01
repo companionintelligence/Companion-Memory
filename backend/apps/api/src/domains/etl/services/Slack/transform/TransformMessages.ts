@@ -71,6 +71,7 @@ export class SlackMessagesTransformService {
             channel_name: channel?.name,
             slack_user_id: message.user,
             slack_user_name: slackUserName(message.user ? userMap[message.user] : undefined, message.user),
+            bot_id: message.bot_id,
           },
         };
       });

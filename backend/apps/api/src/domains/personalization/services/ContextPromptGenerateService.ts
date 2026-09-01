@@ -836,6 +836,25 @@ export class ContextPromptGenerateService {
     }
 
     try {
+      // DELIBERATELY the wall clock, and the one place in the derivation stack
+      // that stays that way.
+      //
+      // Everything that WRITES ci_derived was moved onto the corpus, because a
+      // stored feature for day D is a fact about day D and is just as true two
+      // months later (see `DailyMetricsService.recentDataDays`). This is not a
+      // writer. It picks the material for a prompt the appliance SPEAKS, and
+      // every label `pickMetricSurprise` can return hardcodes the word
+      // "yesterday" — "You had 3 conversations yesterday vs about 8 most
+      // days", under an instruction to the model not to change the numbers.
+      // Anchoring this to the corpus would make the appliance assert those
+      // numbers about a day two months gone while calling it yesterday: a
+      // grounded prompt that is precisely wrong about the only thing it is
+      // grounded in.
+      //
+      // So on a static corpus this generator correctly falls silent and the
+      // other gap generators carry the turn. Anchoring it would need the
+      // labels to name their date first; that is a copy change, not a window
+      // change, and it is not this fix.
       const today = todayIsoInTimezone(timezone);
       const yesterday = shiftIso(today, -1);
       const from = shiftIso(yesterday, -COLD_START_MIN_DAYS);

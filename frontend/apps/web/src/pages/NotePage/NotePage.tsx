@@ -379,55 +379,58 @@ export function NotePage() {
         <div className="flex h-full flex-col overflow-hidden">
           <Editor.Menu>
             <div className="flex w-full items-center justify-between gap-2">
-            <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground">
-              {saveError ? (
-                <>
-                  <TriangleAlert className="text-destructive h-4 w-4" strokeWidth={1.5} />
-                  <div>{saveError}</div>
-                </>
-              ) : updating || creating ? (
-                <>
-                  <Spinner size={12} variant="circle" color="rgb(6,108,128)" />
-                  <div>Saving</div>
-                </>
-              ) : queuedAt ? (
-                // Queued is a SAVED state, not a pending one: the note is committed to
-                // the sidecar's on-disk queue and survives force-quit. It shows as saved
-                // (with the reason it is not on the appliance yet) rather than as a
-                // warning, because there is nothing for the user to do about it.
-                <>
-                  <CloudOff className="text-amber-400 h-4 w-4" strokeWidth={1.5} />
-                  <div title="Saved on this device. It syncs to your Companion automatically.">
-                    Saved offline
-                  </div>
-                </>
-              ) : isDirty ? (
-                <>
-                  <TriangleAlert className="text-amber-300 h-4 w-4" strokeWidth={1.5} />
-                  {note?.updatedAt ? (
+              <div className="flex items-center gap-2 px-2 text-xs text-muted-foreground">
+                {saveError ? (
+                  <>
+                    <TriangleAlert className="text-destructive h-4 w-4" strokeWidth={1.5} />
+                    <div>{saveError}</div>
+                  </>
+                ) : updating || creating ? (
+                  <>
+                    <Spinner size={12} variant="circle" color="rgb(6,108,128)" />
+                    <div>Saving</div>
+                  </>
+                ) : queuedAt ? (
+                  // Queued is a SAVED state, not a pending one: the note is committed to
+                  // the sidecar's on-disk queue and survives force-quit. It shows as saved
+                  // (with the reason it is not on the appliance yet) rather than as a
+                  // warning, because there is nothing for the user to do about it.
+                  <>
+                    <CloudOff className="text-amber-400 h-4 w-4" strokeWidth={1.5} />
+                    <div title="Saved on this device. It syncs to your Companion automatically.">
+                      Saved offline
+                    </div>
+                  </>
+                ) : isDirty ? (
+                  <>
+                    <TriangleAlert className="text-amber-300 h-4 w-4" strokeWidth={1.5} />
+                    {note?.updatedAt ? (
+                      <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
+                    ) : null}
+                  </>
+                ) : id !== 'new' && note?.updatedAt ? (
+                  <>
+                    <Check className="text-[rgb(6,108,128)] h-4 w-4 -mr-0.5" />
                     <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
-                  ) : null}
-                </>
-              ) : id !== 'new' && note?.updatedAt ? (
-                <>
-                  <Check className="text-[rgb(6,108,128)] h-4 w-4 -mr-0.5" />
-                  <TimeAgo date={note.updatedAt} minPeriod={5} formatter={shortFormatter} />
-                </>
+                  </>
+                ) : null}
+              </div>
+              {note ? (
+                <ChatWithAgentMenu
+                  context={namedChatContext({
+                    title: note.title,
+                    body: note.content
+                      ? note.content
+                          .replace(/<[^>]+>/g, ' ')
+                          .replace(/\s+/g, ' ')
+                          .trim()
+                      : null,
+                    sourceKind: 'NoteType',
+                    sourceId: note.id,
+                  })}
+                  size="sm"
+                />
               ) : null}
-            </div>
-            {note ? (
-              <ChatWithAgentMenu
-                context={namedChatContext({
-                  title: note.title,
-                  body: note.content
-                    ? note.content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
-                    : null,
-                  sourceKind: 'NoteType',
-                  sourceId: note.id,
-                })}
-                size="sm"
-              />
-            ) : null}
             </div>
           </Editor.Menu>
 

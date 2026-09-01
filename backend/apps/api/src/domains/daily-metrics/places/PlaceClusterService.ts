@@ -14,6 +14,7 @@ import {
   parseClusterRow,
   parsePositionRow,
   POSITION_PAGE_SQL,
+  POSITION_WINDOW_ANCHOR_SQL,
   REVERSE_GEOCODE_LABEL_SQL,
   SET_CLUSTER_LABEL_SQL,
   toEwktPoint,
@@ -105,6 +106,72 @@ export class PlaceClusterService {
     }
   }
 
+  /**
+   * Where the scan window sits. `windowDays` says how WIDE it is; this says
+   * how far back the far edge reaches.
+   *
+   * The window used to end at `new Date()`. On the live appliance that swept
+   * ZERO fixes: `ci.position` ends 2026-01-25, 217 days before the wall clock,
+   * so the 90-day window was entirely past the end of the data. With no fixes
+   * there are no stays, with no stays no clusters, and `place_clusters`,
+   * `place_transitions` and (through `predictNext`'s `NO_HISTORY` early
+   * return) `place_forecast_log` were all measured at zero rows.
+   *
+   * Ending it at MAX(time) instead is not enough here, and this is the part
+   * worth reading before "simplifying" it. The position corpus is dense in
+   * 2018-2020 and then a thin tail: the newest 90 CALENDAR days before
+   * MAX(time) contain 6 fixes. Not zero, but nowhere near enough to cluster,
+   * and the cliff would come straight back as soon as the tail thinned again.
+   * So the window is positioned by counting DAYS THAT HAVE FIXES: the 90 most
+   * recent such days span 2020-01-09..2026-01-25 and hold 6,183 fixes.
+   *
+   * Measured on this appliance, the three anchors give 0 / 6 / 6,183 fixes
+   * respectively.
+   *
+   * `detectStays` already splits sessions on capture gaps, so a window with
+   * calendar holes in it is the input that function was written for — a
+   * multi-year gap simply ends one session and starts another, exactly as a
+   * phone left off for a week does.
+   *
+   * On an appliance recording position daily the 90 most recent days with
+   * fixes ARE the last 90 days, so nothing changes for the healthy case.
+   */
+  private async resolveWindow(
+    context: UserServiceContext,
+    options: BuildClustersOptions,
+    windowDays: number,
+  ): Promise<{ start: Date; end: Date }> {
+    if (options.endTime) {
+      return {
+        start: new Date(options.endTime.getTime() - windowDays * MS_PER_DAY),
+        end: options.endTime,
+      };
+    }
+
+    const rows = (await this.clusterRepository.query(POSITION_WINDOW_ANCHOR_SQL, [
+      context.userId,
+      MAX_ACCURACY_M,
+      windowDays,
+    ])) as Array<{ oldest_day: Date | string | null; newest_fix: Date | string | null }>;
+
+    const oldestDay = rows[0]?.oldest_day;
+    const newestFix = rows[0]?.newest_fix;
+    const now = new Date();
+
+    if (oldestDay == null || newestFix == null) {
+      return { start: new Date(now.getTime() - windowDays * MS_PER_DAY), end: now };
+    }
+
+    const end = newestFix instanceof Date ? newestFix : new Date(String(newestFix));
+    const start = oldestDay instanceof Date ? oldestDay : new Date(String(oldestDay));
+
+    if (Number.isNaN(end.getTime()) || Number.isNaN(start.getTime())) {
+      return { start: new Date(now.getTime() - windowDays * MS_PER_DAY), end: now };
+    }
+
+    return { start, end };
+  }
+
   /** Detect stays over a window of fixes, splitting sessions on capture gaps. */
   detectWindowStays(fixes: PositionFix[]): StayPoint[] {
     return detectStays(fixes, { maxGapMs: DEFAULT_MAX_GAP_MS });
@@ -119,9 +186,8 @@ export class PlaceClusterService {
     context: UserServiceContext,
     options: BuildClustersOptions = {},
   ): Promise<BuildClustersResult> {
-    const end = options.endTime ?? new Date();
     const windowDays = options.windowDays ?? DEFAULT_WINDOW_DAYS;
-    const start = new Date(end.getTime() - windowDays * MS_PER_DAY);
+    const { start, end } = await this.resolveWindow(context, options, windowDays);
 
     const existing = await this.getClusters(context);
     const fixes = await this.getPositionWindow(context, start, end);
@@ -193,7 +259,7 @@ export class PlaceClusterService {
       visits: visits.length,
     });
 
-    return { clusters: touched, visits };
+    return { clusters: touched, visits, windowEnd: end };
   }
 
   /**

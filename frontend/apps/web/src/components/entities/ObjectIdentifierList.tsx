@@ -234,44 +234,53 @@ export function ObjectIdentifierList({ itemId, identifiers, onChanged, readOnly 
         <div className="text-sm text-muted-foreground">No codes on this thing yet.</div>
       ) : (
         <ul className="flex flex-col gap-2">
-          {rows.map((row) => (
-            <li
-              key={`${row.namespace}:${row.qualifier}:${row.value}`}
-              className="flex items-center gap-2 rounded-md border p-2"
-            >
-              <Badge variant="secondary" className="shrink-0">
-                {NAMESPACE_LABELS[row.namespace] ?? row.namespace}
-              </Badge>
+          {rows.map((row) => {
+            // The raw form is what is printed on the object; `value` is the
+            // normalized matching key (a GTIN-12 widens to 13 digits), so
+            // showing only the key would not match what the user is holding.
+            // The Remove button's accessible name must track this same
+            // displayed value — an aria-label built off the normalized value
+            // instead diverges from what the user typed/sees whenever
+            // normalization changes the string (e.g. a serial's hyphens are
+            // stripped), which breaks "Label in Name" accessibility and any
+            // lookup by that name.
+            const displayValue = row.rawValue?.trim() || row.value;
 
-              <div className="min-w-0 flex-1">
-                {/* The raw form is what is printed on the object; `value` is the
-                    normalized matching key (a GTIN-12 widens to 13 digits), so
-                    showing only the key would not match what the user is
-                    holding. */}
-                <div className="truncate font-mono text-sm">{row.rawValue?.trim() || row.value}</div>
-                {row.rawValue?.trim() && row.rawValue.trim() !== row.value && (
-                  <div className="truncate text-xs text-muted-foreground">Normalized: {row.value}</div>
+            return (
+              <li
+                key={`${row.namespace}:${row.qualifier}:${row.value}`}
+                className="flex items-center gap-2 rounded-md border p-2"
+              >
+                <Badge variant="secondary" className="shrink-0">
+                  {NAMESPACE_LABELS[row.namespace] ?? row.namespace}
+                </Badge>
+
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-sm">{displayValue}</div>
+                  {row.rawValue?.trim() && row.rawValue.trim() !== row.value && (
+                    <div className="truncate text-xs text-muted-foreground">Normalized: {row.value}</div>
+                  )}
+                </div>
+
+                {row.isPrimary && <Badge className="shrink-0">Primary</Badge>}
+                {row.source && (
+                  <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{row.source}</span>
                 )}
-              </div>
 
-              {row.isPrimary && <Badge className="shrink-0">Primary</Badge>}
-              {row.source && (
-                <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{row.source}</span>
-              )}
-
-              {!readOnly && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Remove ${row.value}`}
-                  disabled={removing}
-                  onClick={() => void remove({ namespace: row.namespace, value: row.value })}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              )}
-            </li>
-          ))}
+                {!readOnly && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Remove ${displayValue}`}
+                    disabled={removing}
+                    onClick={() => void remove({ namespace: row.namespace, value: row.value })}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
 

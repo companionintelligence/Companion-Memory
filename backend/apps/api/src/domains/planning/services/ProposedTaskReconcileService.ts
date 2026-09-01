@@ -4,6 +4,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 
 import { shiftLocalDate } from '../engine/computePlacement';
+import { titlesAreSimilar } from '../engine/taskTitleSimilarity';
 import type { Task } from '../entities/TaskEntity';
 import type { UpdateTaskDto } from '../types';
 
@@ -40,9 +41,7 @@ export class ProposedTaskReconcileService {
   }
 
   /** Owner-local today plus noon, used when a scan stamps a new proposed row. */
-  async windowForToday(
-    context: UserServiceContext,
-  ): Promise<{ scheduledFor: string; dueAt: Date }> {
+  async windowForToday(context: UserServiceContext): Promise<{ scheduledFor: string; dueAt: Date }> {
     const scheduledFor = await this.planningTime.today(context);
 
     return {
@@ -79,6 +78,7 @@ export class ProposedTaskReconcileService {
 
       const stillRelevant =
         titles.has(normalizeTitle(task.title)) ||
+        [...options.relevantTitles].some((title) => titlesAreSimilar(task.title, title)) ||
         (task.sourceRef != null && refs.has(task.sourceRef));
 
       if (stillRelevant) {
@@ -124,11 +124,7 @@ export class ProposedTaskReconcileService {
     return false;
   }
 
-  private async redatePatch(
-    context: UserServiceContext,
-    task: Task,
-    today: string,
-  ): Promise<UpdateTaskDto> {
+  private async redatePatch(context: UserServiceContext, task: Task, today: string): Promise<UpdateTaskDto> {
     if (task.dueAt == null) {
       return {
         scheduledFor: today,

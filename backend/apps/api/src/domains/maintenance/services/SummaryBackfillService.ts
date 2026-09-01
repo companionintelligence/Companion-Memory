@@ -25,6 +25,21 @@ const DEFAULT_DRAIN_POLL_INTERVAL_MS = 3_000;
  * ten. A day whose ONLY content lands in one of the excluded tables is
  * skipped by the pre-check (never dispatched) even though it has real
  * activity — the trade-off documented in {@link SummaryBackfillService}.
+ *
+ * `data_aggregator.py`'s `TABLES` also lists `activities` and `measurements`,
+ * but neither exists anywhere in the `ci` schema (verified directly against
+ * `information_schema.tables` — not merely missing the `ci.` prefix every
+ * other entry here has). The Python aggregator survives this: it introspects
+ * a table's columns before querying and treats "no columns found" as "no
+ * rows", so those two entries have always silently contributed nothing.
+ * This UNION query has no such guard, so including them here made every
+ * single backfill call fail outright with `relation "activities" does not
+ * exist` — not degraded, not partial, a 100% failure of the whole leg,
+ * confirmed live against a real 844,885-record import where `ci.summaries`
+ * stayed completely empty as a result. Left out rather than guessed at:
+ * whatever "activities"/"measurements" were meant to name doesn't exist to
+ * query either way, so dropping them is strictly a bug fix, not a narrowing
+ * of real coverage.
  */
 const ACTIVITY_SOURCES = [
   { table: 'ci.events', column: 'start_time' },
@@ -32,8 +47,6 @@ const ACTIVITY_SOURCES = [
   { table: 'ci.files', column: 'created_at' },
   { table: 'ci.position', column: 'time' },
   { table: 'ci.browser_activity', column: 'time' },
-  { table: 'activities', column: 'start_time' },
-  { table: 'measurements', column: 'time' },
 ] as const;
 
 export interface SummaryBackfillOptions {
@@ -246,7 +259,13 @@ export class SummaryBackfillService {
         }
 
         const hourEnd = new Date(hourStart.getTime() + 60 * 60 * 1000);
-        const enqueued = await this.dispatchWindow(userId, 'hourly_summary', hourStart, hourEnd, hourKeyOf(hourStart));
+        const enqueued = await this.dispatchWindow(
+          userId,
+          'hourly_summary',
+          hourStart,
+          hourEnd,
+          hourKeyOf(hourStart),
+        );
         if (enqueued) {
           hourlyEnqueued += 1;
         } else {
@@ -345,7 +364,13 @@ export class SummaryBackfillService {
         continue;
       }
 
-      const enqueued = await this.dispatchWindow(userId, 'weekly_summary', weekStart, weekEnd, weekKeyOf(weekStart));
+      const enqueued = await this.dispatchWindow(
+        userId,
+        'weekly_summary',
+        weekStart,
+        weekEnd,
+        weekKeyOf(weekStart),
+      );
       if (enqueued) {
         weeklyEnqueued += 1;
       } else {
@@ -437,7 +462,11 @@ export class SummaryBackfillService {
       hourly: { enqueued: hourlyEnqueued, deduped: hourlyDeduped, ...hourlyDrain.result(hourlyExpected) },
       daily: { enqueued: dailyEnqueued, deduped: dailyDeduped, ...dailyDrain.result(dailyExpected) },
       weekly: { enqueued: weeklyEnqueued, deduped: weeklyDeduped, ...weeklyDrain.result(weeklyExpected) },
-      monthly: { enqueued: monthlyEnqueued, deduped: monthlyDeduped, ...monthlyDrain.result(monthlyExpected) },
+      monthly: {
+        enqueued: monthlyEnqueued,
+        deduped: monthlyDeduped,
+        ...monthlyDrain.result(monthlyExpected),
+      },
     };
 
     this.logger.log('Summary backfill complete', {
@@ -475,9 +504,9 @@ export class SummaryBackfillService {
       return startTime < end ? { start: startTime, end } : null;
     }
 
-    const union = ACTIVITY_SOURCES.map((s) => `SELECT ${s.column} AS t FROM ${s.table} WHERE user_id = $1`).join(
-      '\n      UNION ALL\n      ',
-    );
+    const union = ACTIVITY_SOURCES.map(
+      (s) => `SELECT ${s.column} AS t FROM ${s.table} WHERE user_id = $1`,
+    ).join('\n      UNION ALL\n      ');
 
     const rows = await this.dataSource.query<Array<{ min_t: Date | null; max_t: Date | null }>>(
       `SELECT MIN(t) AS min_t, MAX(t) AS max_t FROM (\n      ${union}\n    ) sources`,
@@ -500,7 +529,8 @@ export class SummaryBackfillService {
   /** UTC day-starts in [start, end) with at least one row across {@link ACTIVITY_SOURCES}. */
   private async daysWithActivity(userId: string, start: Date, end: Date): Promise<Date[]> {
     const union = ACTIVITY_SOURCES.map(
-      (s) => `SELECT ${s.column} AS t FROM ${s.table} WHERE user_id = $1 AND ${s.column} >= $2 AND ${s.column} < $3`,
+      (s) =>
+        `SELECT ${s.column} AS t FROM ${s.table} WHERE user_id = $1 AND ${s.column} >= $2 AND ${s.column} < $3`,
     ).join('\n      UNION ALL\n      ');
 
     const rows = await this.dataSource.query<Array<{ day: Date }>>(

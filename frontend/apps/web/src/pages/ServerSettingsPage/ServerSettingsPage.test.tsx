@@ -215,7 +215,9 @@ describe('ServerSettingsPage', () => {
       fireEvent.click(screen.getByRole('button', { name: /scan qr code/i }));
 
       // Path/query are stripped by the same `toOrigin` the typed-URL path uses.
-      await waitFor(() => expect(screen.getByLabelText('Memory Server URL')).toHaveValue('https://scanned.example.com'));
+      await waitFor(() =>
+        expect(screen.getByLabelText('Memory Server URL')).toHaveValue('https://scanned.example.com'),
+      );
       expect(fetchMock).not.toHaveBeenCalled();
       expect(h.persistApiBaseUrl).not.toHaveBeenCalled();
       expect(navigate).not.toHaveBeenCalled();
@@ -247,7 +249,9 @@ describe('ServerSettingsPage', () => {
 
     it('shows a clear message on camera-permission denial, distinct from a plain cancel', async () => {
       h.isNativePlatform.mockReturnValue(true);
-      h.scanQrCode.mockRejectedValue(new BarcodeScanError('Camera access is needed to scan a QR code.', 'denied'));
+      h.scanQrCode.mockRejectedValue(
+        new BarcodeScanError('Camera access is needed to scan a QR code.', 'denied'),
+      );
 
       render(<ServerSettingsPage />);
       fireEvent.click(screen.getByRole('button', { name: /scan qr code/i }));
