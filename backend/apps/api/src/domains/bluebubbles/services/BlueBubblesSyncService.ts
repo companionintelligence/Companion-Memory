@@ -46,6 +46,27 @@ const BLUEBUBBLES_STAGES: readonly ImportStageKindName[] = IMPORT_STAGE_KINDS.fi
 );
 
 /**
+ * Every stage kind this service knows how to actually RUN.
+ *
+ * Deriving `BLUEBUBBLES_STAGES` from the spine means a kind added there joins
+ * every BlueBubbles run automatically — the property that list is for. On its
+ * own that is a trap: `runIngest` executes parse, media and push by name, so a
+ * fourth kind would be declared onto the run, never executed, and `finishRun`
+ * would still mark the run `completed` with a `queued` stage row hanging off
+ * it — a run that reports success while a stage of it never happened.
+ *
+ * This closes the loop. It is a compile-time exhaustiveness check, not a
+ * comment asking the next person to remember: adding a kind to
+ * IMPORT_STAGE_KINDS makes `satisfies` fail here until it is either given a
+ * handler in `runIngest` or explicitly excluded from BLUEBUBBLES_STAGES.
+ */
+const RUNNABLE_STAGES = {
+  parse: true,
+  media: true,
+  push: true,
+} as const satisfies Record<Exclude<ImportStageKindName, 'unpack'>, true>;
+
+/**
  * How often a running pass samples what it has staged.
  *
  * Two jobs in one write. It is the PROGRESS the Import Runs UI shows — nothing
@@ -424,6 +445,19 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
 
       await this.runStage(this.mediaStage, { userId, runId, stageId: stageIdByKind.get('media')!, scratchDir });
       await this.runStage(this.pushStage, { userId, runId, stageId: stageIdByKind.get('push')!, scratchDir });
+
+      // Belt to the compile-time brace above: a stage that was declared onto
+      // this run but has no handler must not reach `finishRun`, which would
+      // stamp `completed` over a `queued` row. Fails the run instead, where
+      // the Import Runs UI shows it and the retry action can drive the stage.
+      const unhandled = [...stageIdByKind.keys()].filter((kind) => !(kind in RUNNABLE_STAGES));
+
+      if (unhandled.length > 0) {
+        throw new Error(
+          `BlueBubbles run declared stage(s) it cannot run: ${unhandled.join(', ')}. ` +
+            `Add a handler in runIngest or exclude the kind from BLUEBUBBLES_STAGES.`,
+        );
+      }
 
       // Only now: the rows are in `ci.*`.
       if (options.advanceCursor) {

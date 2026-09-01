@@ -203,7 +203,7 @@ def test_metric_lifts_sleep_morning_when_floor_cleared():
 
 def test_metric_lifts_windows_track_bucket_minutes():
     """Sleep/work ranges are wall-clock hours, not leftover 30-minute indices."""
-    assert list(SLEEP_MORNING)[0] == 0
+    assert next(iter(SLEEP_MORNING)) == 0
     assert list(SLEEP_MORNING)[-1] == (8 * 60) // 15 - 1
     assert 42 not in SLEEP_EVENING  # 10:30 was the old 30-min "evening" start
     assert (21 * 60) // 15 in SLEEP_EVENING
