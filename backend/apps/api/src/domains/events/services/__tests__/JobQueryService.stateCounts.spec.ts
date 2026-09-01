@@ -19,9 +19,9 @@ import { JobQueryService } from '../JobQueryService';
  * query builder, so the SQL is never executed and a mocked test cannot catch it.
  * Asserting on the emitted expression is the cheapest guard that actually binds.
  */
-describe('JobQueryService.stateCounts — bucket expression', () => {
-  function captureSelect(): { select: string } {
-    const captured = { select: '' };
+describe('JobQueryService.facetCounts — bucket expression', () => {
+  function captureSelect(): { select: string; addSelects: string[]; groupBy: string } {
+    const captured = { select: '', addSelects: [] as string[], groupBy: '' };
 
     const builder: Record<string, unknown> = {};
     const chain = () => builder;
@@ -32,9 +32,17 @@ describe('JobQueryService.stateCounts — bucket expression', () => {
 
         return builder;
       }),
-      addSelect: jest.fn(chain),
+      addSelect: jest.fn((expression: string) => {
+        captured.addSelects.push(expression);
+
+        return builder;
+      }),
       setParameter: jest.fn(chain),
-      groupBy: jest.fn(chain),
+      groupBy: jest.fn((expression: string) => {
+        captured.groupBy = expression;
+
+        return builder;
+      }),
       andWhere: jest.fn(chain),
       where: jest.fn(chain),
       orWhere: jest.fn(chain),
@@ -42,11 +50,14 @@ describe('JobQueryService.stateCounts — bucket expression', () => {
     });
 
     const repo = { createQueryBuilder: jest.fn(() => builder) };
-    const service = new JobQueryService(repo as never, repo as never, repo as never);
+    const service = new JobQueryService(repo as never, repo as never, repo as never, repo as never);
 
-    // stateCounts is private; exercising it through the public shape keeps the
+    // facetCounts is private; exercising it through the public shape keeps the
     // test honest about what it is guarding.
-    (service as unknown as { stateCounts: (q: unknown) => Promise<unknown> }).stateCounts({});
+    (service as unknown as { facetCounts: (q: unknown, u: string) => Promise<unknown> }).facetCounts(
+      {},
+      'user-1',
+    );
 
     return captured;
   }
@@ -65,5 +76,23 @@ describe('JobQueryService.stateCounts — bucket expression', () => {
 
     expect(select).toContain("'dead-letter'");
     expect(select).toContain('job.name');
+  });
+
+  /**
+   * The category half of the same scan, and the reason it cannot group by queue.
+   *
+   * pg-boss copies a job's `data` verbatim onto the dead-letter row but rewrites
+   * the queue column to the literal `dead-letter`, so the queue a job died on is
+   * gone. On a live appliance 88% of rows are dead-lettered — grouping the
+   * category counts on `job.name` would file almost the entire table under one
+   * meaningless bucket and every category chip would read ~0.
+   */
+  it('groups the category counts on the event in the payload, never on the queue', () => {
+    const { addSelects, groupBy } = captureSelect();
+
+    expect(addSelects).toContain("job.data->>'name'");
+    // Both grouped columns in one call: the mock builder above implements
+    // `groupBy` but not `addGroupBy`, and so does this service on purpose.
+    expect(groupBy).toBe('1, 2');
   });
 });
