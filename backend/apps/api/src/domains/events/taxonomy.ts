@@ -55,7 +55,13 @@ export type JobCategory = (typeof JOB_CATEGORIES)[keyof typeof JOB_CATEGORIES];
 export interface JobTypeDescriptor {
   /** Short human name for a table cell. */
   readonly label: string;
-  readonly category: JobCategory;
+  /**
+   * A real category for every entry in {@link JOB_TYPES}; `'unclassified'` only
+   * for the fallback descriptor an unknown event resolves to. The union is what
+   * stops that fallback from having to borrow a real category and then lie about
+   * it — see {@link UNCLASSIFIED_CATEGORY}.
+   */
+  readonly category: JobCategory | 'unclassified';
   /** One sentence: what this job does, and why it exists. */
   readonly description: string;
   /**
@@ -415,6 +421,40 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     category: JOB_CATEGORIES.maintenance,
     description: 'Record that an agent tool ran, for usage reporting.',
   },
+  'retrieval.query': {
+    label: 'Retrieval telemetry',
+    category: JOB_CATEGORIES.maintenance,
+    description:
+      'Record one search or recall — its query, mode and result count — so retrieval health can be measured over time. Fires once per real retrieval, so it is the highest-volume job on an idle appliance.',
+  },
+
+  // ── Sweep requests ──────────────────────────────────────────────────────
+  //
+  // Each of these is a one-shot "go and start a sweep" job: it validates a
+  // request, resolves it to pipeline stages, and enqueues `pipeline.sweep`.
+  // They are pipeline control, not the work itself — the work lands as
+  // `pipeline.slice`. Their two siblings (`maintenance.search-index-backfill-request`
+  // and `maintenance.graph-edge-backfill-request`) are already classified up in
+  // the Pipeline block; these three were missed, which is why they rendered as
+  // "Unclassified job" on the dashboard.
+  'embed.unfurl-sweep-request': {
+    label: 'Kick unfurl sweep',
+    category: JOB_CATEGORIES.pipeline,
+    description:
+      "Start an immediate enrich.unfurl sweep for the requesting user, so a bulk load's links get their titles and posters without waiting for the next scheduled sweep.",
+  },
+  'file.preview-sweep-request': {
+    label: 'Kick preview sweep',
+    category: JOB_CATEGORIES.pipeline,
+    description:
+      'Start an immediate enrich.file_preview sweep for the requesting user, regenerating thumbnails for originals that have none.',
+  },
+  'maintenance.derivation-run-request': {
+    label: 'Nightly graph derivation',
+    category: JOB_CATEGORIES.graph,
+    description:
+      "One user's nightly graph aggregate — set-based SQL over the relationship table that derives connection strength and household structure. Skipped while an operator orchestration is already running for that user.",
+  },
 } as const;
 
 /** Human labels for the `smart.rotation.work` work types. */
@@ -431,9 +471,29 @@ export const SMART_ROTATION_WORK_LABELS: Readonly<Record<string, string>> = {
   hydrate_things: 'Hydrate things',
 };
 
+/**
+ * The bucket for an event with no {@link JOB_TYPES} entry.
+ *
+ * Deliberately NOT a member of {@link JOB_CATEGORIES}: it is not a part of the
+ * appliance, it is the absence of a classification, and putting it in the enum
+ * would let a descriptor be written against it. It exists as a shared sentinel
+ * because the dashboard has to be able to COUNT and FILTER these jobs — on a
+ * live appliance they were 587 of 9,557, and 54% of everything not
+ * dead-lettered, all rendering as "Unclassified job" with no way to select them.
+ *
+ * A non-zero count here is a gap in this file, not a category of work.
+ */
+export const UNCLASSIFIED_CATEGORY = 'unclassified';
+
 const UNCLASSIFIED: JobTypeDescriptor = {
   label: 'Unclassified job',
-  category: JOB_CATEGORIES.maintenance,
+  // NOT `maintenance`. It used to be, and that made the dashboard contradict
+  // itself: an unknown event rendered "Maintenance" in the Category column,
+  // while selecting Maintenance resolved category -> event names out of
+  // JOB_TYPES and so returned none of them. Measured live as 586 rows claiming
+  // a category whose filter could never find them. A residue bucket has to
+  // read as a residue bucket.
+  category: UNCLASSIFIED_CATEGORY,
   description:
     'No taxonomy entry for this event name. Either it is new, or it was renamed without updating domains/events/taxonomy.ts.',
 };
@@ -516,6 +576,29 @@ export function describeJob(
   return base;
 }
 
+/**
+ * The category an event belongs to, for COUNTING and GROUPING.
+ *
+ * Deliberately NOT {@link describeJob}`(event).category`, even though the
+ * fallback descriptor now reports {@link UNCLASSIFIED_CATEGORY} and the two
+ * agree for most events. describeJob resolves {@link JOB_TYPES_BY_QUEUE} first,
+ * so it answers "what is this ROW", and the same event on two queues gets two
+ * categories from it. The category FILTER cannot: `applyFilters` turns a
+ * category back into a set of event names out of JOB_TYPES alone, because the
+ * queue a dead-lettered row came from no longer exists on it. Anything that
+ * counts categories has to fold the way the filter unfolds, or a chip reads a
+ * number that clicking it will not reproduce — which is the bug
+ * UNCLASSIFIED_CATEGORY itself was introduced to end.
+ *
+ * One exported function rather than the same two-line expression in each
+ * caller: the aggregates that must agree (the list's category chips, the
+ * category chart, and the sampled `ci.job_category_metrics` rows behind it) are
+ * written in three different files and computed at three different times.
+ */
+export function categoryOfEvent(event: string | null | undefined): string {
+  return (event ? JOB_TYPES[event]?.category : undefined) ?? UNCLASSIFIED_CATEGORY;
+}
+
 /** Every category, with the event names in it — used to drive the UI filter. */
 export function jobCategoryIndex(): Record<JobCategory, string[]> {
   const index = Object.fromEntries(
@@ -523,7 +606,15 @@ export function jobCategoryIndex(): Record<JobCategory, string[]> {
   ) as Record<JobCategory, string[]>;
 
   for (const [event, descriptor] of Object.entries(JOB_TYPES)) {
-    index[descriptor.category].push(event);
+    // `JobTypeDescriptor.category` is widened to allow `'unclassified'` for the
+    // fallback descriptor, but nothing IN this table may use it — the bucket
+    // exists precisely for events that are absent here. Skipping rather than
+    // asserting keeps the index total if one ever slips in.
+    const bucket = index[descriptor.category as JobCategory];
+
+    if (bucket) {
+      bucket.push(event);
+    }
   }
 
   return index;

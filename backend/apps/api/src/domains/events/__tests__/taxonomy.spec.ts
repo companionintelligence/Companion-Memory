@@ -4,6 +4,7 @@ import {
   JOB_CATEGORIES,
   JOB_TYPES,
   SMART_ROTATION_WORK_LABELS,
+  UNCLASSIFIED_CATEGORY,
 } from '../taxonomy';
 
 /**
@@ -118,6 +119,47 @@ describe('job taxonomy', () => {
       'ingest.coalesce',
     ]) {
       expect(describeJob(event).label).not.toBe('Unclassified job');
+    }
+  });
+
+  it('files an unknown event under `unclassified`, never under a real category', () => {
+    // It used to return `maintenance`, which made the dashboard contradict
+    // itself: 586 live rows displayed "Maintenance" in the Category column,
+    // while selecting Maintenance resolved category -> event names out of
+    // JOB_TYPES and returned none of them. A filter that cannot find its own
+    // rows is worse than an unlabelled row.
+    const descriptor = describeJob('some.brand.new.event');
+
+    expect(descriptor.label).toBe('Unclassified job');
+    expect(descriptor.category).toBe(UNCLASSIFIED_CATEGORY);
+    expect(descriptor.category).not.toBe(JOB_CATEGORIES.maintenance);
+
+    // And the sentinel must stay out of the real category enum, or a descriptor
+    // could be written against it and the bucket would stop meaning "absent".
+    expect(Object.values(JOB_CATEGORIES)).not.toContain(UNCLASSIFIED_CATEGORY);
+  });
+
+  it('classifies the events a live appliance was rendering as "Unclassified job"', () => {
+    // Measured on the running box: 587 of 9,557 jobs — and 54% of everything on
+    // the Completed tab — carried no category, so they were unreachable from the
+    // category filter entirely. `retrieval.query` alone was 586 of them.
+    // Each entry below is an event with a real listener AND a real producer that
+    // simply had no descriptor here.
+    const cases: ReadonlyArray<[string, string]> = [
+      ['retrieval.query', JOB_CATEGORIES.maintenance],
+      ['embed.unfurl-sweep-request', JOB_CATEGORIES.pipeline],
+      ['file.preview-sweep-request', JOB_CATEGORIES.pipeline],
+      ['maintenance.derivation-run-request', JOB_CATEGORIES.graph],
+    ];
+
+    for (const [event, category] of cases) {
+      const descriptor = describeJob(event);
+
+      expect(descriptor.label).not.toBe('Unclassified job');
+      expect(descriptor.category).toBe(category);
+      // A label with no description is only half a classification — the
+      // dashboard shows the description in the expanded row.
+      expect(descriptor.description.length).toBeGreaterThan(20);
     }
   });
 
