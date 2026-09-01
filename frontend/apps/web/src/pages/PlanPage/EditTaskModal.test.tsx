@@ -48,7 +48,10 @@ describe('EditTaskModal', () => {
     renderWithProviders(<EditTaskModal task={TASK} onClose={vi.fn()} />, { mocks: [] });
 
     expect(screen.getByRole('dialog', { name: /edit task/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/^title$/i)).toHaveValue('Write the migration');
+    const titleField = screen.getByLabelText(/^title$/i);
+
+    expect(titleField.tagName).toBe('TEXTAREA');
+    expect(titleField).toHaveValue('Write the migration');
     expect(screen.getByLabelText(/^notes$/i)).toHaveValue('First draft');
     expect(screen.getByLabelText(/^minutes$/i)).toHaveValue(30);
   });

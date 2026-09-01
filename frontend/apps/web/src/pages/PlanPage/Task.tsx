@@ -267,7 +267,7 @@ export function Task({
               <button
                 type="button"
                 className={cn(
-                  'min-w-0 flex-1 break-words text-left font-medium',
+                  'min-w-0 flex-1 break-words text-left font-medium line-clamp-5',
                   done ? 'text-muted-foreground line-through' : '',
                 )}
                 onClick={activateBody}
@@ -277,7 +277,7 @@ export function Task({
               </button>
             ) : (
               <span
-                className={`min-w-0 flex-1 truncate font-medium ${done ? 'text-muted-foreground line-through' : ''}`}
+                className={`min-w-0 flex-1 break-words line-clamp-5 font-medium ${done ? 'text-muted-foreground line-through' : ''}`}
               >
                 {task.title}
               </span>

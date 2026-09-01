@@ -133,12 +133,14 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="edit-task-title">Title</Label>
-            <Input
+            <Textarea
               id="edit-task-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               disabled={loading}
               autoFocus
+              rows={4}
+              className="min-h-20 resize-y"
             />
           </div>
 

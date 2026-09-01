@@ -142,4 +142,16 @@ describe('Task actions', () => {
 
     expect(onSchedule).toHaveBeenCalledWith('dGFzazoxMTE=');
   });
+
+  it('lets a long unscheduled title wrap to five lines before ellipsis', () => {
+    renderTask({
+      title:
+        'Write the migration notes for the planning board so a long unscheduled title is not cut to a single line',
+    });
+
+    const title = screen.getByText(/write the migration notes/i);
+
+    expect(title).toHaveClass('line-clamp-5');
+    expect(title).not.toHaveClass('truncate');
+  });
 });
