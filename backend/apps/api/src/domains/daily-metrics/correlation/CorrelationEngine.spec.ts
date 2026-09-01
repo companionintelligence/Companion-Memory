@@ -84,6 +84,9 @@ describe('CorrelationEngine.scan', () => {
     const yesterday = shiftIso(todayIsoInTimezone('UTC'), -1);
     const repo = memoryRepo();
     const metricsService = {
+      // Null = "the store has nothing"; the engine then falls back to the
+      // wall clock, which is the behaviour these fixtures were written against.
+      analysisAnchor: jest.fn(async () => null),
       getRange: jest.fn(async (_context: UserServiceContext, from: string, to: string) => {
         const rows: DailyMetrics[] = [];
         let date = from;
@@ -125,7 +128,11 @@ describe('CorrelationEngine.scan', () => {
   });
 
   it('scanAround is reserved and persists nothing', async () => {
-    const engine = new CorrelationEngine(memoryRepo() as never, { getRange: jest.fn() } as never, logger());
+    const engine = new CorrelationEngine(
+      memoryRepo() as never,
+      { getRange: jest.fn(), analysisAnchor: jest.fn(async () => null) } as never,
+      logger(),
+    );
 
     await expect(engine.scanAround(CONTEXT, { date: '2026-08-01', kind: 'trip' })).resolves.toEqual([]);
   });

@@ -5,7 +5,7 @@ import { DataSource } from 'typeorm';
 import { type UserServiceContext } from '@ci/common/context';
 import { isValidTimezone, localDateInTZ, todayInTZ, zonedWallTimeToUTC } from '@ci/common/time/zoned';
 import { isHomeConfirmSourceId } from '@ci/domains/daily-metrics';
-import { EventService } from '@ci/domains/memory';
+import { CalendarEventService } from '@ci/domains/memory';
 // These pure timezone functions live in common/, not domains/planning/, on
 // purpose: importing them via the `@ci/domains/planning` barrel pulled in
 // PlanningModule, which imports PersonalizationModule, which imports this
@@ -219,7 +219,7 @@ export function nightOffsetFromSource(source: ContextPromptSource): number {
 export class PlacementService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
   ) {}
 
   async timezoneFor(userId: string): Promise<string> {

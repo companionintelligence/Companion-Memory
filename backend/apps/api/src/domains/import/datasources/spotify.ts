@@ -258,6 +258,7 @@ export class SpotifyFileImporter implements FileImporter {
         URI: e.spotify_episode_uri || undefined,
         URL: spotifyUrl(e.spotify_episode_uri),
         'ms Played': e.ms_played,
+        Shuffle: e.shuffle,
         Skipped: e.skipped ?? undefined,
       };
     } else if (e.audiobook_title || e.audiobook_chapter_uri) {
@@ -273,6 +274,7 @@ export class SpotifyFileImporter implements FileImporter {
         URI: e.audiobook_chapter_uri || e.audiobook_uri || undefined,
         URL: spotifyUrl(e.audiobook_chapter_uri) ?? spotifyUrl(e.audiobook_uri),
         'ms Played': e.ms_played,
+        Shuffle: e.shuffle,
         Skipped: e.skipped ?? undefined,
       };
     } else {

@@ -232,7 +232,11 @@ export class OuraFileImporter implements FileImporter {
       }
 
       const num = Number(value);
-      metadata[key] = !isNaN(num) && /^[-+]?[0-9.]+$/.test(value) ? num : value;
+      // Coerce to a number only when the value round-trips losslessly (mirrors
+      // withings.ts's identical guard), so a zero-padded string-id column like
+      // "007" isn't silently corrupted into 7.
+      const numeric = !isNaN(num) && /^[-+]?[0-9.]+$/.test(value) && String(num) === value;
+      metadata[key] = numeric ? num : value;
     }
 
     metadata.Source = 'Oura';

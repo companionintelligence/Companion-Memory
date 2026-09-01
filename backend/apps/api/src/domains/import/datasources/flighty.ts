@@ -94,6 +94,7 @@ class FlightyImporter implements FileImporter {
       };
       params.pipeline.push({
         item: {
+          classification: 'trip',
           timestamp: takeoffTs,
           timespanEnd: landingTs,
           metadata,

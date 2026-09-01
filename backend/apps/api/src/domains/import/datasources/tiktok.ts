@@ -158,11 +158,15 @@ export class TikTokFileImporter implements FileImporter {
     list.forEach((rawEntry, index) => {
       const e = asRecord(rawEntry);
       if (!e) {
+        params.pipeline.drop?.('malformed_entry');
+
         return;
       }
 
       const ts = parseTikTokDate(asString(e.Date));
       if (!timeframeContains(params.timeframe, ts)) {
+        params.pipeline.drop?.('outside_timeframe');
+
         return;
       }
 
@@ -200,11 +204,15 @@ export class TikTokFileImporter implements FileImporter {
     list.forEach((rawEntry, index) => {
       const e = asRecord(rawEntry);
       if (!e) {
+        params.pipeline.drop?.('malformed_entry');
+
         return;
       }
 
       const ts = parseTikTokDate(asString(e.Date));
       if (!timeframeContains(params.timeframe, ts)) {
+        params.pipeline.drop?.('outside_timeframe');
+
         return;
       }
 
@@ -239,11 +247,15 @@ export class TikTokFileImporter implements FileImporter {
     list.forEach((rawEntry, index) => {
       const e = asRecord(rawEntry);
       if (!e) {
+        params.pipeline.drop?.('malformed_entry');
+
         return;
       }
 
       const ts = parseTikTokDate(asString(e.Date));
       if (!timeframeContains(params.timeframe, ts)) {
+        params.pipeline.drop?.('outside_timeframe');
+
         return;
       }
 
@@ -278,11 +290,15 @@ export class TikTokFileImporter implements FileImporter {
     list.forEach((rawEntry, index) => {
       const e = asRecord(rawEntry);
       if (!e) {
+        params.pipeline.drop?.('malformed_entry');
+
         return;
       }
 
       const ts = parseTikTokDate(asString(e.Date));
       if (!timeframeContains(params.timeframe, ts)) {
+        params.pipeline.drop?.('outside_timeframe');
+
         return;
       }
 
@@ -311,11 +327,15 @@ export class TikTokFileImporter implements FileImporter {
     list.forEach((rawEntry, index) => {
       const e = asRecord(rawEntry);
       if (!e) {
+        params.pipeline.drop?.('malformed_entry');
+
         return;
       }
 
       const ts = parseTikTokDate(asString(e.Date));
       if (!timeframeContains(params.timeframe, ts)) {
+        params.pipeline.drop?.('outside_timeframe');
+
         return;
       }
 
@@ -359,11 +379,15 @@ export class TikTokFileImporter implements FileImporter {
       arr.forEach((rawMsg, index) => {
         const msg = asRecord(rawMsg);
         if (!msg) {
+          params.pipeline.drop?.('malformed_entry');
+
           return;
         }
 
         const ts = parseTikTokDate(asString(msg.Date));
         if (!timeframeContains(params.timeframe, ts)) {
+          params.pipeline.drop?.('outside_timeframe');
+
           return;
         }
 

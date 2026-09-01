@@ -28,7 +28,7 @@ interface TimelineJsHostProps {
    */
   sessionKey?: string;
   onSlideChange?: (uniqueId: string) => void;
-  /** User tapped a slide or marker — distinct from TimelineJS's landing `change`. */
+  /** User tapped a slide or marker — not next/previous, zoom, or landing `change`. */
   onSlideOpen?: (uniqueId: string) => void;
 }
 
@@ -288,7 +288,7 @@ export function TimelineJsHost({
                 return;
               }
 
-              if (event.target.closest('.tl-menubar-button')) {
+              if (event.target.closest('.tl-menubar-button, .tl-slidenav-next, .tl-slidenav-previous')) {
                 requestAnimationFrame(syncAxis);
 
                 return;

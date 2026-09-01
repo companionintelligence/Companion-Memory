@@ -91,55 +91,55 @@ export function ContentTile({
         sourceId: content.id,
       })}
     >
-    <Tooltip delayDuration={600}>
-      <Tooltip.Content>{name}</Tooltip.Content>
-      <Tooltip.Trigger asChild>
-        <button
-          type="button"
-          onClick={() => onSelect(content.id)}
-          className="relative group aspect-square rounded-lg overflow-hidden border border-border bg-muted transition-transform hover:shadow-md w-full cursor-pointer text-left"
-          aria-label={name}
-        >
-          {imageUrl ? (
-            <>
-              <img
-                src={imageUrl}
-                alt={content.title || ''}
-                className="w-full h-full object-cover"
-                loading="lazy"
-              />
-              {content.title && (
-                <div className="absolute bottom-0 w-full truncate bg-gradient-to-t from-black/70 to-transparent p-2 px-3 text-sm text-white">
-                  {content.title}
+      <Tooltip delayDuration={600}>
+        <Tooltip.Content>{name}</Tooltip.Content>
+        <Tooltip.Trigger asChild>
+          <button
+            type="button"
+            onClick={() => onSelect(content.id)}
+            className="relative group aspect-square rounded-lg overflow-hidden border border-border bg-muted transition-transform hover:shadow-md w-full cursor-pointer text-left"
+            aria-label={name}
+          >
+            {imageUrl ? (
+              <>
+                <img
+                  src={imageUrl}
+                  alt={content.title || ''}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
+                {content.title && (
+                  <div className="absolute bottom-0 w-full truncate bg-gradient-to-t from-black/70 to-transparent p-2 px-3 text-sm text-white">
+                    {content.title}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex h-full w-full flex-col gap-2 p-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Icon className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
+                  <div className="truncate text-sm font-medium">{name}</div>
                 </div>
-              )}
-            </>
-          ) : (
-            <div className="flex h-full w-full flex-col gap-2 p-3">
-              <div className="flex items-center gap-2 min-w-0">
-                <Icon className="h-5 w-5 shrink-0 text-muted-foreground" aria-hidden />
-                <div className="truncate text-sm font-medium">{name}</div>
-              </div>
 
-              {content.text ? (
-                <p className="line-clamp-5 text-xs leading-snug text-muted-foreground break-words">
-                  {content.text}
-                </p>
-              ) : (
-                <div className="flex grow items-center justify-center">
-                  <Icon className="h-10 w-10 text-muted-foreground/60" aria-hidden />
+                {content.text ? (
+                  <p className="line-clamp-5 text-xs leading-snug text-muted-foreground break-words">
+                    {content.text}
+                  </p>
+                ) : (
+                  <div className="flex grow items-center justify-center">
+                    <Icon className="h-10 w-10 text-muted-foreground/60" aria-hidden />
+                  </div>
+                )}
+
+                <div className="mt-auto truncate text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                  {label}
+                  {content.mimetype ? ` · ${content.mimetype}` : ''}
                 </div>
-              )}
-
-              <div className="mt-auto truncate text-[11px] uppercase tracking-wide text-muted-foreground/80">
-                {label}
-                {content.mimetype ? ` · ${content.mimetype}` : ''}
               </div>
-            </div>
-          )}
-        </button>
-      </Tooltip.Trigger>
-    </Tooltip>
+            )}
+          </button>
+        </Tooltip.Trigger>
+      </Tooltip>
     </ChatAbout>
   );
 }

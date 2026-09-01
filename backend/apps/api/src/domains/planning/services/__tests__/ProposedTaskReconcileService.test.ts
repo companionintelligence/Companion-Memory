@@ -103,6 +103,24 @@ describe('ProposedTaskReconcileService', () => {
     });
   });
 
+  it('keeps a past proposal when this scan resurfaces a near-duplicate title', async () => {
+    taskService.findAll.mockResolvedValue([
+      makeTask({
+        title: "Register for 'Network On Zoom'",
+        scheduledFor: '2026-08-20',
+        dueAt: new Date('2026-08-20T12:00:00.000Z'),
+      }),
+    ]);
+
+    await service.reconcileStaleProposed(CTX, {
+      sourceKind: 'memory_scan',
+      relevantTitles: ['Register for Network On Zoom'],
+    });
+
+    expect(taskService.update).toHaveBeenCalled();
+    expect(taskService.declineProposed).not.toHaveBeenCalled();
+  });
+
   it('matches resurfaced titles case-insensitively', async () => {
     taskService.findAll.mockResolvedValue([
       makeTask({ scheduledFor: '2026-08-20', dueAt: new Date('2026-08-20T12:00:00.000Z') }),

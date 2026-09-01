@@ -3,7 +3,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import type { ServiceContext, UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
-import type { EventService as SignallingEventService } from '@ci/domains/events';
+import type { EventService } from '@ci/domains/events';
 import { UserEntity } from '@ci/domains/user';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
@@ -17,9 +17,9 @@ import { EventEntity } from '../../entities/EventEntity';
 import { ItemBaseEntity } from '../../entities/ItemBaseEntity';
 import { ItemEntity } from '../../entities/ItemEntity';
 import { CommunicationDirection, CommunicationType } from '../../types';
+import { CalendarEventService } from '../CalendarEventService';
 import { CommunicationService } from '../CommunicationService';
 import { ConceptService } from '../ConceptService';
-import { EventService } from '../EventService';
 import { ItemService } from '../ItemService';
 
 import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
@@ -30,7 +30,7 @@ import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
  *
  * `EntityService.scopeToUser` (the generic base every simple entity service
  * composes) and `CtiAggregate`'s three inline `scopedWhere` closures
- * (ItemService, EventService, CommunicationService — one per composing
+ * (ItemService, CalendarEventService, CommunicationService — one per composing
  * service, see each constructor) are what turn a plain `findOne`/`update`/
  * `delete` into a user-scoped one. Every unit spec in this slice mocks
  * `findOne` unconditionally, so none of them can tell a correctly-scoped
@@ -44,7 +44,7 @@ import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
  * untouched, for all four composing services — the generic `EntityService`
  * path (via `ConceptService`, whose `update`/`remove` call
  * `applyUpdate`/`delete` straight through with no override) and the three
- * `CtiAggregate` closures, including `EventService`'s, which scopes through a
+ * `CtiAggregate` closures, including `CalendarEventService`'s, which scopes through a
  * `user: { id }` RELATION rather than a flat `userId` column and so exercises
  * a structurally different join than the other two.
  *
@@ -85,11 +85,11 @@ describeWithDb(
 
     // The domain event bus is not under test here; every service gets a stub.
     const send = jest.fn<Promise<string[]>, [unknown, unknown]>(async () => []);
-    const signalling = { send } as unknown as SignallingEventService;
+    const signalling = { send } as unknown as EventService;
 
     let conceptService: ConceptService;
     let itemService: ItemService;
-    let eventService: EventService;
+    let eventService: CalendarEventService;
     let communicationService: CommunicationService;
 
     beforeAll(async () => {
@@ -152,7 +152,7 @@ describeWithDb(
         noopGraphDeltaWriter() as any,
       );
 
-      eventService = new EventService(
+      eventService = new CalendarEventService(
         dataSource.getRepository(EventEntity),
         dataSource.getRepository(EventBaseEntity),
         signalling,
@@ -236,7 +236,7 @@ describeWithDb(
       expect(await readEntityName(item.id)).toBeNull();
     });
 
-    it("EventService (CtiAggregate, RELATIONAL user:{id} scoping) rejects a stranger's write and accepts the owner's", async () => {
+    it("CalendarEventService (CtiAggregate, RELATIONAL user:{id} scoping) rejects a stranger's write and accepts the owner's", async () => {
       const [event] = await eventService.create(owner, {
         title: 'Original Event',
         start_time: new Date('2026-08-01T10:00:00.000Z'),

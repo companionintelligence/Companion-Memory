@@ -21,6 +21,8 @@ export interface SectionedTask {
   priority: number;
   dueAt?: string | Date | null;
   scheduledFor?: string | null;
+  /** True when a planned calendar block exists. `scheduledFor` alone is a hint. */
+  placedOnCalendar?: boolean;
   deferUntil?: string | null;
   completedAt?: string | Date | null;
   parentId?: string | null;
@@ -101,9 +103,10 @@ export function localDateOf(instant: Date, timeZone?: string): string {
  *
  * Mapping from the previous flat sections:
  *   proposed + needs confirmation → Proposed / inbox
- *   someday (undated or still-deferred) → Proposed / Proposed upcoming
- *   overdue / today / upcoming without scheduledFor → Unscheduled / Overdue or Upcoming
- *   those same date buckets with scheduledFor → Scheduled on calendar
+ *   still-deferred → Proposed / Proposed upcoming
+ *   accepted work without a calendar block (dated or not) → Unscheduled
+ *   those same date buckets with a placed calendar block → Scheduled on calendar
+ *   `scheduledFor` without a block is a preferred date, not a placement.
  *   done / skipped / archived → Done
  *
  * `dueAt` is an instant and is compared by local date; `scheduledFor` and
@@ -128,11 +131,14 @@ export function sectionFor(task: SectionedTask, today: string, timeZone?: string
   const dates = [dueDate, task.scheduledFor].filter((d): d is string => d != null);
 
   if (dates.length === 0) {
-    return { column: 'proposed', lane: 'proposed_upcoming' };
+    // Plan accepts a proposal into the open backlog. No date is still
+    // accepted work — Unscheduled — not a second Proposed pile the inbox
+    // just hid the card in.
+    return { column: 'unscheduled', lane: 'upcoming' };
   }
 
   const earliest = dates.reduce((a, b) => (a < b ? a : b));
-  const column: ColumnKey = task.scheduledFor ? 'scheduled' : 'unscheduled';
+  const column: ColumnKey = task.placedOnCalendar ? 'scheduled' : 'unscheduled';
   const lane: LaneKey = earliest < today ? 'overdue' : 'upcoming';
 
   return { column, lane };

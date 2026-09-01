@@ -12,7 +12,7 @@ import { BrowserActivityService } from '@ci/domains/browser-activity';
 import {
   CommunicationService,
   ContentService,
-  EventService,
+  CalendarEventService,
   ItemService,
   ObjectObservationService,
   ProductModelService,
@@ -133,7 +133,7 @@ describe('Bulk ingest routes (/v1/*)', () => {
         { provide: ItemService, useValue: itemService },
         { provide: BrowserActivityService, useValue: browserActivityService },
         { provide: PositionService, useValue: positionService },
-        { provide: EventService, useValue: eventService },
+        { provide: CalendarEventService, useValue: eventService },
         { provide: NoteService, useValue: noteService },
         { provide: ReceiptService, useValue: receiptService },
         { provide: ProductModelService, useValue: productModelService },

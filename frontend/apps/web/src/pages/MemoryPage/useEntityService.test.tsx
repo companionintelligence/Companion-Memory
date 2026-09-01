@@ -301,7 +301,11 @@ describe('useEntityService', () => {
   it('does not leave an unhandled rejection when fetchMore fails', async () => {
     setResult({
       data: {
-        search: { totalCount: 2, pageInfo: { hasNextPage: true, endCursor: 'c1' }, edges: [edge('e1', 'c1')] },
+        search: {
+          totalCount: 2,
+          pageInfo: { hasNextPage: true, endCursor: 'c1' },
+          edges: [edge('e1', 'c1')],
+        },
       },
     });
     fetchMore.mockRejectedValueOnce(new Error('network'));

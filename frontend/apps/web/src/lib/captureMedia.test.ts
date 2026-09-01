@@ -1,7 +1,13 @@
 import { takeNativePhoto } from '@ci/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { captureFromCamera, capturePhoto, captureVideo, chooseFiles, chooseFromLibrary } from './captureMedia';
+import {
+  captureFromCamera,
+  capturePhoto,
+  captureVideo,
+  chooseFiles,
+  chooseFromLibrary,
+} from './captureMedia';
 import {
   captureWithSystemCamera,
   pickDocuments,

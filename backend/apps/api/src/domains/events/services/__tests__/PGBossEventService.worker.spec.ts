@@ -79,6 +79,12 @@ interface WorkerInternals {
   boss: StubBoss;
   globalSemaphore: LimitFunction;
   perQueueSemaphores: Map<string, LimitFunction>;
+  // The shipped ceilings the loop re-derives its semaphore sizes from on every
+  // settings change. Sizing the semaphores alone is not enough any more: the
+  // first loop iteration re-applies these, so a harness that only replaced the
+  // `plimit` instances would watch them snap back to the config values.
+  shippedConcurrency: number;
+  shippedPerQueueConcurrency: number;
   fetchBatchSize: number;
   running: boolean;
   stopTasks: Promise<void>[];
@@ -172,6 +178,8 @@ function makeHarness(options: {
 
   worker.boss = boss;
   worker.globalSemaphore = plimit(globalConcurrency);
+  worker.shippedConcurrency = globalConcurrency;
+  worker.shippedPerQueueConcurrency = perQueueConcurrency;
   worker.fetchBatchSize = fetchBatchSize;
 
   for (const queue of queues) {

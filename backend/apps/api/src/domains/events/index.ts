@@ -25,12 +25,15 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { JobsController } from './controllers/JobsController';
 import { CronRunEntity } from './entities/CronRunEntity';
 import { JobMetricEntity } from './entities/JobMetricEntity';
+import { JobSettingEntity } from './entities/JobSettingEntity';
 import { PgBossArchiveEntity } from './entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from './entities/PgBossJobEntity';
 import { PgBossQueueEntity } from './entities/PgBossQueueEntity';
 import { PgBossScheduleEntity } from './entities/PgBossScheduleEntity';
 import { CronRunTracker } from './services/CronRunTracker';
 import { EventService } from './services/EventService';
+import { JobControlsService } from './services/JobControlsService';
+import { JobControlTracker } from './services/JobControlTracker';
 import { JobMetricsCollector } from './services/JobMetricsCollector';
 import { JobMonitorService } from './services/JobMonitorService';
 import { JobQueryService } from './services/JobQueryService';
@@ -49,6 +52,7 @@ import { PGBossEventService } from './services/PGBossEventService';
       PgBossQueueEntity,
       JobMetricEntity,
       CronRunEntity,
+      JobSettingEntity,
     ]),
   ],
   providers: [
@@ -58,8 +62,10 @@ import { PGBossEventService } from './services/PGBossEventService';
     },
     JobMonitorService,
     JobQueryService,
+    JobControlsService,
     JobMetricsCollector,
     CronRunTracker,
+    JobControlTracker,
   ],
   controllers: [JobsController],
   exports: [EventService],
@@ -84,3 +90,8 @@ export { DEFAULT_JOB_PRIORITY, INTERACTIVE_JOB_PRIORITY, BACKFILL_JOB_PRIORITY }
 // Other domains' tests assert policy/role off it; exporting here keeps them
 // off `events/event-registration` internals (no-cross-domain-internals).
 export { defineEvent, EventListenerRegistry } from './event-registration';
+// The queue inventory folds the listener registry together with the taxonomy —
+// which events are on a queue, which process serves it, whether anything on it
+// is interactive. Exported because the Jobs surface and its tests need it and
+// must not reach into `events/queueInventory` directly (no-cross-domain-internals).
+export { queueInventory, type QueueInventoryEntry } from './queueInventory';

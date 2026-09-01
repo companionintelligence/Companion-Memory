@@ -2,15 +2,7 @@ import { useState, useEffect } from 'react';
 
 import { apiKeyHeaders, buildApiUrl, usePageTitle } from '@ci/common';
 import { Button, IconButton, Table, Card, Tabs, ToggleGroup, Tooltip } from '@ci/shadcn';
-import {
-  AlertCircle,
-  RefreshCw,
-  Grid3X3,
-  List,
-  Edit,
-  ChevronDown,
-  ChevronUp,
-} from '@ci/shadcn/icons';
+import { AlertCircle, RefreshCw, Grid3X3, List, Edit, ChevronDown, ChevronUp } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
 import type { AnswerEvidenceWire } from '@/components/AnswerDetails';

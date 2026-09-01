@@ -170,7 +170,7 @@ export class AskResolver {
     }
 
     const serviceContext = toServiceContext(context);
-    this.rateLimitService.consume(serviceContext.userId);
+    await this.rateLimitService.consume(serviceContext.userId);
     const responderUserId = GlobalUID.parse('user', input.responderId);
 
     const { ask, decision } = await this.askService.submit(serviceContext, {
@@ -699,7 +699,7 @@ export class AskResolver {
     const serviceContext = toServiceContext(context);
     // Outbound asks consume the same per-user budget as local ones, so a
     // compromised client cannot use the peer path to bypass the limit.
-    this.rateLimitService.consume(serviceContext.userId);
+    await this.rateLimitService.consume(serviceContext.userId);
 
     const request = toPeerAskRequest(input);
 
@@ -860,7 +860,7 @@ export class AskResolver {
     // Rate-limited as ONE ask, because it is one request — and then bounded
     // again by MAX_BROADCAST_RECIPIENTS, which is what actually stops one
     // request filling N inboxes. See that constant.
-    this.rateLimitService.consume(serviceContext.userId);
+    await this.rateLimitService.consume(serviceContext.userId);
 
     const { broadcast, members } = await this.broadcastService.create(serviceContext, {
       responderUserIds: input.responderIds.map((id) => GlobalUID.parse('user', id)),

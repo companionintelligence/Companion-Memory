@@ -8,7 +8,8 @@ import { UPDATE_TASK } from './EditTaskModal';
 import { PlanPage } from './PlanPage';
 import { SELECT_HOLD_MS } from './Task';
 import { addLocalDays, dueAtFromLocalDate, localDateOf } from './taskSections';
-import { GET_TASKS, SCHEDULE_TASK } from './usePlanTasks';
+import { DELETE_TASK } from './useDeleteTasks';
+import { GET_TASKS, PLAN_TASK, SCHEDULE_TASK } from './usePlanTasks';
 
 const featureState = vi.hoisted(() => ({ emptyState: false }));
 const toastError = vi.hoisted(() => vi.fn());
@@ -50,6 +51,7 @@ function node(overrides: Record<string, unknown> = {}) {
     parentId: null,
     dueAt: null,
     scheduledFor: null,
+    placedOnCalendar: false,
     deferUntil: null,
     estimatedMinutes: null,
     completedAt: null,
@@ -57,7 +59,20 @@ function node(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function tasksMock(nodes: ReturnType<typeof node>[]) {
+function pendingChange(overrides: Record<string, unknown> = {}) {
+  return {
+    __typename: 'TaskPendingChangeType',
+    id: 'change-1',
+    taskId: 'dGFzazoxMTE=',
+    kind: 'schedule',
+    rationale: 'Place on the calendar at 2026-08-29T16:00:00.000Z?',
+    confidence: 0.8,
+    status: 'pending',
+    ...overrides,
+  };
+}
+
+function tasksMock(nodes: ReturnType<typeof node>[], changes: ReturnType<typeof pendingChange>[] = []) {
   return {
     request: { query: GET_TASKS, variables: { first: 200 } },
     result: {
@@ -67,7 +82,7 @@ function tasksMock(nodes: ReturnType<typeof node>[]) {
           edges: nodes.map((n) => ({ __typename: 'TaskEdge', node: n })),
           totalCount: nodes.length,
         },
-        taskPendingChanges: [],
+        taskPendingChanges: changes,
       },
     },
     // `cache-and-network` issues the query again on mount in the test
@@ -145,6 +160,7 @@ describe('PlanPage', () => {
           node({ id: 'a', title: 'Overdue thing', dueAt: yesterday.toISOString() }),
           node({ id: 'b', title: 'Someday thing' }),
           node({ id: 'c', title: 'Finished thing', status: 'done' }),
+          node({ id: 'p', title: 'Proposed thing', status: 'proposed' }),
         ]),
       ],
     });
@@ -153,10 +169,10 @@ describe('PlanPage', () => {
     expect(screen.getByRole('heading', { name: /^unscheduled/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^overdue/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^proposed \d/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /proposed upcoming/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^done/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^scheduled on calendar/i })).toBeInTheDocument();
     expect(screen.getByText('Someday thing')).toBeInTheDocument();
+    expect(screen.getByText('Proposed thing')).toBeInTheDocument();
     expect(screen.getByText('Finished thing')).toBeInTheDocument();
     expect(screen.getByText('1 overdue')).toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
@@ -272,7 +288,14 @@ describe('PlanPage', () => {
         {
           request: { query: SCHEDULE_TASK, variables: { id: 'dGFzazoxMTE=' } },
           result: {
-            data: { scheduleTask: { __typename: 'ScheduleTaskPayload', success: false, status: 'no_gap', task: null } },
+            data: {
+              scheduleTask: {
+                __typename: 'ScheduleTaskPayload',
+                success: false,
+                status: 'no_gap',
+                task: null,
+              },
+            },
           },
         },
         tasksMock([node()]),
@@ -281,9 +304,7 @@ describe('PlanPage', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /^schedule$/i }));
 
-    await waitFor(() =>
-      expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/no free slot/i)),
-    );
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/no free slot/i)));
   });
 
   it('says nothing when Schedule actually succeeds', async () => {
@@ -298,18 +319,20 @@ describe('PlanPage', () => {
                 __typename: 'ScheduleTaskPayload',
                 success: true,
                 status: 'placed',
-                task: node({ scheduledFor: localDateOf(new Date()) }),
+                task: node({ scheduledFor: localDateOf(new Date()), placedOnCalendar: true }),
               },
             },
           },
         },
-        tasksMock([node({ scheduledFor: localDateOf(new Date()) })]),
+        tasksMock([node({ scheduledFor: localDateOf(new Date()), placedOnCalendar: true })]),
       ],
     });
 
     fireEvent.click(await screen.findByRole('button', { name: /^schedule$/i }));
 
-    await waitFor(() => expect(screen.queryByRole('button', { name: /^schedule$/i })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /^schedule$/i })).not.toBeInTheDocument(),
+    );
     expect(toastError).not.toHaveBeenCalled();
   });
 
@@ -386,6 +409,133 @@ describe('PlanPage', () => {
     });
   });
 
+  it('moves a yellow-date pending schedule into Unscheduled when Plan is clicked', async () => {
+    const dated = node({ scheduledFor: '2026-08-29', placedOnCalendar: true });
+    const planned = node({ status: 'open', scheduledFor: null, placedOnCalendar: false });
+    let afterPlan = false;
+
+    const board = (nodes: ReturnType<typeof node>[], changes: ReturnType<typeof pendingChange>[] = []) => ({
+      tasks: {
+        __typename: 'TaskConnection',
+        edges: nodes.map((item) => ({ __typename: 'TaskEdge', node: item })),
+        totalCount: nodes.length,
+      },
+      taskPendingChanges: changes,
+    });
+
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        {
+          request: { query: GET_TASKS, variables: { first: 200 } },
+          maxUsageCount: Number.POSITIVE_INFINITY,
+          result: () => ({
+            data: afterPlan ? board([planned]) : board([dated], [pendingChange()]),
+          }),
+          newData: () => ({
+            data: afterPlan ? board([planned]) : board([dated], [pendingChange()]),
+          }),
+        },
+        {
+          request: { query: PLAN_TASK, variables: { id: dated.id } },
+          result: () => {
+            afterPlan = true;
+
+            return {
+              data: {
+                planTask: {
+                  __typename: 'TaskType',
+                  id: dated.id,
+                  status: 'open',
+                  dueAt: null,
+                  scheduledFor: null,
+                  placedOnCalendar: false,
+                },
+              },
+            };
+          },
+        },
+      ],
+    });
+
+    expect(await screen.findByText(/place on the calendar at/i)).toBeInTheDocument();
+    expect(screen.getByTestId('pending-schedule-actions')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^plan$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('pending-schedule-actions')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText(/place on the calendar at/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Write the migration')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^unscheduled/i })).toBeInTheDocument();
+  });
+
+  it('Plans a proposed card with a past suggested time into undated Unscheduled', async () => {
+    const yesterday = addLocalDays(localDateOf(new Date()), -1);
+    const proposed = node({
+      status: 'proposed',
+      scheduledFor: yesterday,
+      dueAt: dueAtFromLocalDate(yesterday),
+    });
+    const planned = node({ status: 'open', scheduledFor: null, dueAt: null, placedOnCalendar: false });
+    let afterPlan = false;
+
+    const board = (nodes: ReturnType<typeof node>[]) => ({
+      tasks: {
+        __typename: 'TaskConnection',
+        edges: nodes.map((item) => ({ __typename: 'TaskEdge', node: item })),
+        totalCount: nodes.length,
+      },
+      taskPendingChanges: [],
+    });
+
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        {
+          request: { query: GET_TASKS, variables: { first: 200 } },
+          maxUsageCount: Number.POSITIVE_INFINITY,
+          result: () => ({
+            data: afterPlan ? board([planned]) : board([proposed]),
+          }),
+          newData: () => ({
+            data: afterPlan ? board([planned]) : board([proposed]),
+          }),
+        },
+        {
+          request: { query: PLAN_TASK, variables: { id: proposed.id } },
+          result: () => {
+            afterPlan = true;
+
+            return {
+              data: {
+                planTask: {
+                  __typename: 'TaskType',
+                  id: proposed.id,
+                  status: 'open',
+                  dueAt: null,
+                  scheduledFor: null,
+                  placedOnCalendar: false,
+                },
+              },
+            };
+          },
+        },
+      ],
+    });
+
+    expect(await screen.findByText(/suggested/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^plan$/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('proposed-actions')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText(/suggested/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^due /i)).not.toBeInTheDocument();
+    expect(screen.getByText('Write the migration')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^unscheduled/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^overdue/i })).not.toBeInTheDocument();
+  });
+
   it('lets an overdue missed block be moved with the same when chips', async () => {
     const today = new Date();
     const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
@@ -400,6 +550,7 @@ describe('PlanPage', () => {
             title: 'Missed block',
             dueAt: yesterday.toISOString(),
             scheduledFor: yesterdayDay,
+            placedOnCalendar: true,
           }),
         ]),
       ],
@@ -446,9 +597,11 @@ describe('PlanPage mobile tabs', () => {
             title: 'Missed block',
             dueAt: yesterday.toISOString(),
             scheduledFor: yesterdayDay,
+            placedOnCalendar: true,
           }),
           node({ id: 'b', title: 'Someday thing' }),
           node({ id: 'c', title: 'Finished thing', status: 'done' }),
+          node({ id: 'p', title: 'Proposed thing', status: 'proposed' }),
         ]),
       ],
     });
@@ -458,15 +611,16 @@ describe('PlanPage mobile tabs', () => {
     expect(screen.getByRole('tab', { name: /unscheduled/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /scheduled on calendar/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^done/i })).toBeInTheDocument();
-    expect(screen.getByText('Someday thing')).toBeInTheDocument();
+    expect(screen.getByText('Proposed thing')).toBeInTheDocument();
+    expect(screen.queryByText('Someday thing')).not.toBeInTheDocument();
     expect(screen.queryByText('Overdue thing')).not.toBeInTheDocument();
     expect(screen.queryByText('Finished thing')).not.toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /proposed upcoming/i })).toBeInTheDocument();
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: /unscheduled/i }), { button: 0 });
 
     expect(await screen.findByText('Overdue thing')).toBeInTheDocument();
-    expect(screen.queryByText('Someday thing')).not.toBeInTheDocument();
+    expect(screen.getByText('Someday thing')).toBeInTheDocument();
+    expect(screen.queryByText('Proposed thing')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /unscheduled/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('heading', { name: /^overdue/i })).toBeInTheDocument();
     expect(screen.getByText('1 overdue')).toBeInTheDocument();
@@ -491,28 +645,30 @@ describe('PlanPage mobile tabs', () => {
 
     fireEvent.mouseDown(screen.getByRole('tab', { name: /^proposed 0$/i }), { button: 0 });
 
-    expect(await screen.findByRole('tab', { name: /^proposed 0$/i })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByRole('tab', { name: /^proposed 0$/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     expect(screen.queryByText('Overdue thing')).not.toBeInTheDocument();
   });
 
   it('keeps edit and delete off the title row, and opens edit from the card body', async () => {
     setViewport(true);
 
-    renderWithProviders(
-      <PlanPage />,
-      {
-        mocks: [
-          tasksMock([
-            node({
-              title: 'Write the migration',
-              description: 'A long note that should not open edit by itself.',
-            }),
-          ]),
-        ],
-      },
-    );
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([
+          node({
+            title: 'Write the migration',
+            description: 'A long note that should not open edit by itself.',
+          }),
+        ]),
+      ],
+    });
 
-    expect(await screen.findByRole('button', { name: /more actions for write the migration/i })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: /more actions for write the migration/i }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /edit write the migration/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /delete write the migration/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/a long note/i)).not.toBeInTheDocument();
@@ -525,20 +681,26 @@ describe('PlanPage mobile tabs', () => {
     expect(await screen.findByRole('dialog', { name: /edit task/i })).toBeInTheDocument();
   });
 
-  it('enters selection on a long-press and bulk-deletes with confirmation', async () => {
+  it('enters selection on a long-press and bulk-deletes without a confirm dialog', async () => {
     setViewport(true);
 
-    renderWithProviders(
-      <PlanPage />,
-      {
-        mocks: [
-          tasksMock([
-            node({ id: 'a', title: 'First thing' }),
-            node({ id: 'b', title: 'Second thing' }),
-          ]),
-        ],
-      },
-    );
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([node({ id: 'a', title: 'First thing' }), node({ id: 'b', title: 'Second thing' })]),
+        {
+          request: { query: DELETE_TASK, variables: { input: { id: 'a' } } },
+          result: {
+            data: { deleteTask: { __typename: 'DeleteTaskPayload', success: true, deletedId: 'a' } },
+          },
+        },
+        {
+          request: { query: DELETE_TASK, variables: { input: { id: 'b' } } },
+          result: {
+            data: { deleteTask: { __typename: 'DeleteTaskPayload', success: true, deletedId: 'b' } },
+          },
+        },
+      ],
+    });
 
     const first = await screen.findByRole('button', { name: /^first thing$/i });
     vi.useFakeTimers();
@@ -560,6 +722,7 @@ describe('PlanPage mobile tabs', () => {
     expect(screen.getByTestId('plan-selection-bar')).toHaveTextContent('2 selected');
 
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
-    expect(await screen.findByText('Delete 2 tasks')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId('plan-selection-bar')).not.toBeInTheDocument());
   });
 });

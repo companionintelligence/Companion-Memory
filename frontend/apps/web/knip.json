@@ -3,6 +3,7 @@
 
   "entry": [
     "src/main.tsx",
+    "src/preview/**/main.tsx",
     "scripts/**/*.{ts,tsx}"
   ],
 
@@ -13,6 +14,7 @@
 
   "ignore": [
     "vite.config.ts",
+    "vite.preview.config.ts",
     "tailwind.config.mjs",
     "src/graphql/**/*"
   ],

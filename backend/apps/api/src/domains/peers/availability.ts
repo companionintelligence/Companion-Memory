@@ -143,3 +143,104 @@ function clamp(start: number, end: number, windowStart: number, windowEnd: numbe
 function toInterval(span: { start: number; end: number }): BusyInterval {
   return { start: new Date(span.start).toISOString(), end: new Date(span.end).toISOString() };
 }
+
+/**
+ * The granularity a `redacted` availability answer is coarsened to.
+ *
+ * Thirty minutes rather than sixty: an hour-aligned quantization that shrinks
+ * INWARD (see {@link coarsenFreeBusy}) destroys most real gaps outright — a
+ * 14:07–15:53 slot spans only the 15:00 boundary, so both edges land on 15:00
+ * and a genuine 106-minute opening disappears. That is safe in the disclosure
+ * direction and useless in the product direction, which would retire FR4
+ * ("are you free the weekend of the 21st?") rather than bound it.
+ *
+ * Thirty minutes rather than five: the point is to stop handing over the
+ * INSTANTS a meeting started and ended at, which is the presence signal T2 is
+ * about. A five-minute grid still reports them.
+ *
+ * This bounds PRECISION, not FREQUENCY. A peer who asks every minute for a
+ * month still accumulates a detailed picture from coarse answers; that is a
+ * cumulative-disclosure problem and it belongs to the budget work (#2364), not
+ * to a rung.
+ */
+export const REDACTED_SLOT_GRANULARITY_MINUTES = 30;
+
+/**
+ * Coarsen a free/busy result for the `redacted` rung.
+ *
+ * ═══ WHY THIS EXISTS: `redacted` USED TO CLAMP NOTHING ═══
+ *
+ * `clampAvailability` read `case 'full': case 'redacted':` and returned the
+ * intervals as computed for both. But `redacted` sits BELOW `full` on the
+ * ladder, and it is where the `trusted` tier's ceiling lands — so a `trusted`
+ * peer received the owner's real calendar boundaries, auto-answered under a
+ * standing grant, exactly as if no ceiling applied at all.
+ *
+ * That is the defect logged as D2 in docs/asks-threat-model.md, and it is the
+ * same one `applyDisclosureCeiling` fixed for item references with the argument
+ * that a rung which clamps nothing is not a rung, it is a label the owner can
+ * pick believing it does something. The argument was never ported to this,
+ * the third clamp in the codebase.
+ *
+ * ═══ WHAT `redacted` MEANS FOR A CALENDAR ═══
+ *
+ * Elsewhere `redacted` is "the references the owner kept, and nothing about the
+ * rest". Availability has no per-item redaction to inherit — nothing is picked
+ * over — so the analogue is the coarse SHAPE of the owner's availability rather
+ * than their actual schedule:
+ *
+ *   - `busy` is dropped entirely. Busy boundaries are the direct answer to
+ *     "when does this person have meetings", which is the one thing a ceiling
+ *     below `full` must stop. Nothing needs them: an asker schedules against
+ *     free time.
+ *   - `free` survives, quantized to {@link REDACTED_SLOT_GRANULARITY_MINUTES}.
+ *
+ * ═══ QUANTIZATION SHRINKS, NEVER GROWS ═══
+ *
+ * The start rounds UP and the end rounds DOWN, so a coarsened slot is always a
+ * SUBSET of a real one. Rounding outward would be the disclosure-safe direction
+ * for boundaries but the wrong direction for truth: it would tell an asker the
+ * owner is free at a time they are in a meeting, and an availability answer
+ * that can be wrong in that direction is worse than one that is merely coarse.
+ *
+ * A slot too short to survive is DROPPED rather than widened. It discloses
+ * strictly less, which is the safe direction, and the summary is recomputed
+ * from the surviving set so the sentence cannot state a count the arrays
+ * contradict.
+ *
+ * Pure.
+ */
+export function coarsenFreeBusy(
+  freeBusy: FreeBusy,
+  granularityMinutes: number = REDACTED_SLOT_GRANULARITY_MINUTES,
+): FreeBusy {
+  const step = Math.max(1, Math.round(granularityMinutes)) * 60_000;
+
+  const free: BusyInterval[] = [];
+
+  for (const slot of freeBusy.free) {
+    const start = Date.parse(slot.start);
+    const end = Date.parse(slot.end);
+
+    // An unparseable boundary is dropped, not passed through. This function's
+    // whole job is to narrow, and a value it cannot reason about is the one
+    // case where forwarding the original would defeat that.
+    if (Number.isNaN(start) || Number.isNaN(end)) {
+      continue;
+    }
+
+    const coarseStart = Math.ceil(start / step) * step;
+    const coarseEnd = Math.floor(end / step) * step;
+
+    if (coarseEnd <= coarseStart) {
+      continue;
+    }
+
+    free.push({
+      start: new Date(coarseStart).toISOString(),
+      end: new Date(coarseEnd).toISOString(),
+    });
+  }
+
+  return { busy: [], free };
+}

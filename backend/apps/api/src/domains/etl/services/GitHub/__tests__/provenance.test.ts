@@ -2,7 +2,7 @@ import { GitHubEventsTransformService } from '../transform/TransformEvents';
 
 /**
  * GitHub events carried source_system + source_id but no source_type, which
- * disables both EventService.createOne's find-or-create and
+ * disables both CalendarEventService.createOne's find-or-create and
  * events_source_triple_uniq (NULLs are distinct to it); content rows carried
  * no triple, and the issue-comment pre-check searched a bare numeric
  * external_id with no type scope — able to false-match another provider's

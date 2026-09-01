@@ -356,20 +356,20 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
             sourceId: card.action.id,
           })}
         >
-        <BentoCard
-          title={card.action.title}
-          description={
-            <div className="prose dark:prose-invert">
-              <Markdown>{card.action.text}</Markdown>
-            </div>
-          }
-          tags={card.action.tags}
-          imageUrl={card.action.imageUrl}
-          onClick={() => void handleCardClick(card.action.id)}
-          onDismiss={() => void handleActionDismiss(card.action.id)}
-          dismissLabel={t('FEED_CARD_DISMISS_ACTION')}
-          showUnseenIndicator={!card.action.seen}
-        />
+          <BentoCard
+            title={card.action.title}
+            description={
+              <div className="prose dark:prose-invert">
+                <Markdown>{card.action.text}</Markdown>
+              </div>
+            }
+            tags={card.action.tags}
+            imageUrl={card.action.imageUrl}
+            onClick={() => void handleCardClick(card.action.id)}
+            onDismiss={() => void handleActionDismiss(card.action.id)}
+            dismissLabel={t('FEED_CARD_DISMISS_ACTION')}
+            showUnseenIndicator={!card.action.seen}
+          />
         </ChatAbout>
       ),
     );
@@ -487,21 +487,21 @@ export function FeedPage({ embedded = false }: FeedPageProps = {}) {
                         sourceId: card.action.id,
                       })}
                     >
-                    <BentoCard
-                      title={card.action.title}
-                      description={
-                        <div className="prose dark:prose-invert">
-                          <Markdown>{card.action.text}</Markdown>
-                        </div>
-                      }
-                      tags={card.action.tags}
-                      imageUrl={card.action.imageUrl}
-                      onClick={() => void handleCardClick(card.action.id)}
-                      onDismiss={() => void handleActionDismiss(card.action.id)}
-                      dismissLabel={t('FEED_CARD_DISMISS_ACTION')}
-                      showUnseenIndicator={!card.action.seen}
-                      className="hover:shadow-lg transition-shadow duration-200"
-                    />
+                      <BentoCard
+                        title={card.action.title}
+                        description={
+                          <div className="prose dark:prose-invert">
+                            <Markdown>{card.action.text}</Markdown>
+                          </div>
+                        }
+                        tags={card.action.tags}
+                        imageUrl={card.action.imageUrl}
+                        onClick={() => void handleCardClick(card.action.id)}
+                        onDismiss={() => void handleActionDismiss(card.action.id)}
+                        dismissLabel={t('FEED_CARD_DISMISS_ACTION')}
+                        showUnseenIndicator={!card.action.seen}
+                        className="hover:shadow-lg transition-shadow duration-200"
+                      />
                     </ChatAbout>
                   ),
                 )}

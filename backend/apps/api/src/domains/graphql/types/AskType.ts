@@ -257,8 +257,7 @@ export class AskType {
       // responder-only. `isResponder` is not simply negated: a viewer who is
       // neither party gets null from both branches, which is the safe default
       // an omitted `viewerUserId` must always land on.
-      broadcastId:
-        viewerUserId != null && viewerUserId === ask.askerUserId ? ask.broadcastId : null,
+      broadcastId: viewerUserId != null && viewerUserId === ask.askerUserId ? ask.broadcastId : null,
     };
   }
 }

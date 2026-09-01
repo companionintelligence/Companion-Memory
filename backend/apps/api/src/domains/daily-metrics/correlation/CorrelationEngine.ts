@@ -34,7 +34,12 @@ export class CorrelationEngine {
   }
 
   async scan(context: UserServiceContext, timezone = 'UTC'): Promise<MetricCorrelation[]> {
-    const yesterday = shiftIso(todayIsoInTimezone(timezone), -1);
+    // Anchored to the newest stored day, not to the wall clock — see
+    // `DailyMetricsService.analysisAnchor`. HISTORY_DAYS and WINDOWS are
+    // unchanged; only where the window sits moved.
+    const yesterday =
+      (await this.metricsService.analysisAnchor(context, timezone)) ??
+      shiftIso(todayIsoInTimezone(timezone), -1);
     const from = shiftIso(yesterday, -(HISTORY_DAYS - 1));
     const rows = await this.metricsService.getRange(context, from, yesterday);
 

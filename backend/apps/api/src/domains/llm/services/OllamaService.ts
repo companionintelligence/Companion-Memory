@@ -497,8 +497,7 @@ export class OllamaService implements OnModuleInit {
       ...(format && { format }),
       ...(tools && tools.length > 0 && { tools }),
       ...(keepAlive != null && { keep_alive: keepAlive }),
-      ...(maxOutputTokens != null &&
-        maxOutputTokens > 0 && { options: { num_predict: maxOutputTokens } }),
+      ...(maxOutputTokens != null && maxOutputTokens > 0 && { options: { num_predict: maxOutputTokens } }),
     });
   }
 
@@ -730,12 +729,10 @@ export class OllamaService implements OnModuleInit {
               // streaming path while the OpenAI branch above honored it as
               // `maxTokens`. ChatTurnService passes one, so the primary
               // interactive chat path was the one losing it.
-              ...(((numCtx != null && numCtx > 0) ||
-                (maxOutputTokens != null && maxOutputTokens > 0)) && {
+              ...(((numCtx != null && numCtx > 0) || (maxOutputTokens != null && maxOutputTokens > 0)) && {
                 options: {
                   ...(numCtx != null && numCtx > 0 && { num_ctx: numCtx }),
-                  ...(maxOutputTokens != null &&
-                    maxOutputTokens > 0 && { num_predict: maxOutputTokens }),
+                  ...(maxOutputTokens != null && maxOutputTokens > 0 && { num_predict: maxOutputTokens }),
                 },
               }),
             });

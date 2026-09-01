@@ -18,7 +18,7 @@ export async function syncPhotos({
         nextCursor,
       });
 
-      const fieldsList = 'id,name,created_time,images,link,picture,place';
+      const fieldsList = 'id,name,created_time,images,link,place';
 
       const params = new URLSearchParams({
         type: 'uploaded',
@@ -57,7 +57,7 @@ export async function syncPhotos({
         nextCursor,
       });
 
-      const fieldsList = 'id,name,created_time,images,link,picture,place';
+      const fieldsList = 'id,name,created_time,images,link,place';
 
       const since = nextCursor.since ? (nextCursor.since as string) : connection.createdAt.toISOString();
       const params = new URLSearchParams({

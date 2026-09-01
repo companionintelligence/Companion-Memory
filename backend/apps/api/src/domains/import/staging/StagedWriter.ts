@@ -6,6 +6,7 @@ import type { Entity, Graph, ImportPipeline, Item, Metadata } from '../datasourc
 
 import { digestFile, type ContentDigest } from './contentDigest';
 import {
+  dateToIso,
   entityIdentityKey,
   entityKey,
   hashItem,
@@ -370,8 +371,12 @@ export class StagedWriter implements ImportPipeline {
         dataSource,
         item.classification ?? null,
         contentHash,
-        item.timestamp ?? null,
-        item.timespanEnd ?? null,
+        // dateToIso rejects an Invalid Date (NaN getTime()) rather than
+        // letting it reach the pg driver's timestamptz bind serialization --
+        // hashItem already applies this same normalization to these fields,
+        // this reuses it at the actual insert site.
+        dateToIso(item.timestamp),
+        dateToIso(item.timespanEnd),
         item.location?.latitude ?? null,
         item.location?.longitude ?? null,
         item.content?.filename ?? null,

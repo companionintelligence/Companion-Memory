@@ -574,7 +574,7 @@ export class PlacePromoteStage implements Stage {
   /**
    * The slice's events, in one statement.
    *
-   * Raw SQL rather than `EventService`, for the reason `EmbedStage` gives about
+   * Raw SQL rather than `CalendarEventService`, for the reason `EmbedStage` gives about
    * `ContentService`: the columns wanted are a strict subset of a ~40-column row
    * carrying jsonb blobs, at 200 rows a slice.
    *

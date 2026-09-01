@@ -7,7 +7,6 @@ import {
   isToolApproved,
 } from '../mcpToolDigest';
 
-
 const tool = (
   name: string,
   inputSchema: Record<string, unknown>,

@@ -121,21 +121,43 @@ describe('OrphanCleanupService.cleanOrphans', () => {
     const query = jest.fn().mockResolvedValue([[], 0]);
     const { service } = makeService(query);
 
-    await service.cleanOrphans({ entityTypes: ['place', 'file', 'concept'], batchSize: 500 });
+    await service.cleanOrphans({ entityTypes: ['place', 'person', 'concept'], batchSize: 500 });
 
     // 3 types x 3 tables = 9 statements; collect the discriminator (last) param.
     const discriminators = sweepCalls(query).map((c) => c[1][1]);
     expect(discriminators).toEqual([
       'Location',
-      'File',
+      'Person',
       'Concept',
       'Location',
-      'File',
+      'Person',
       'Concept',
       'Location',
-      'File',
+      'Person',
       'Concept',
     ]);
+  });
+
+  /**
+   * `file` is NOT one of them, however plausible `ci.entities` /
+   * `entity_type = 'File'` looks: that row is the file's GRAPH NODE, whose
+   * `entity_id` is a different uuid from the `ci.files.id` every writer indexes.
+   * Sweeping against it matched nothing and deleted the whole `file` index
+   * nightly. See `__tests__/entitySourceMap.spec.ts`.
+   */
+  it('sweeps file against ci.files with no discriminator param', async () => {
+    const query = jest.fn().mockResolvedValue([[], 0]);
+    const { service } = makeService(query);
+
+    await service.cleanOrphans({ entityTypes: ['file'], batchSize: 500 });
+
+    for (const [sql, params] of sweepCalls(query)) {
+      expect(flat(sql)).toContain('FROM "ci"."files" src');
+      expect(flat(sql)).toContain('src."id" = s.entity_id');
+      expect(flat(sql)).not.toContain('"ci"."entities"');
+      // Only the entity_type filter — no discriminator value.
+      expect(params).toEqual(['file']);
+    }
   });
 
   it('loops in batches until a statement deletes fewer than batchSize rows', async () => {

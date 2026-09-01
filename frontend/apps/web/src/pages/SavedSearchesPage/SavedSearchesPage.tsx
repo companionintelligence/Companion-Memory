@@ -319,7 +319,11 @@ export function SavedSearchesPage() {
               size="sm"
               className="h-8 gap-1.5 px-2 text-sm text-muted-foreground hover:text-foreground"
             >
-              <ChevronRight className={starterOpen ? 'h-4 w-4 rotate-90 transition-transform' : 'h-4 w-4 transition-transform'} />
+              <ChevronRight
+                className={
+                  starterOpen ? 'h-4 w-4 rotate-90 transition-transform' : 'h-4 w-4 transition-transform'
+                }
+              />
               Starter searches
             </Button>
           </Collapsible.Trigger>

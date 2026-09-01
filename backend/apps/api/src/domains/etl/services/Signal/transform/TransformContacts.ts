@@ -63,6 +63,7 @@ export class SignalContactsTransformService {
           description: `Signal contact ${displayName}`,
           properties: {
             signal_number: contactNumber,
+            ...(contact.uuid && contact.uuid !== contactNumber ? { signal_uuid: contact.uuid } : {}),
             owner_user_id: userId,
             connection_id: connection.id,
             sources: ['signal'],

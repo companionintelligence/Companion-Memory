@@ -16,6 +16,9 @@ import { useDevices, type RegisteredDevice } from './useDevices';
 export const CHROME_EXTENSION_URL =
   'https://chromewebstore.google.com/detail/companion-intelligence/bcocflgkdeimninckpmdifcniajoneih?authuser=3&hl=en';
 
+export const FIREFOX_EXTENSION_URL =
+  'https://addons.mozilla.org/en-US/firefox/addon/companion-intelligence/';
+
 export const CAPTURE_DOWNLOAD_URL = 'https://ci.computer/download#capture';
 
 /** Every browser extension hands over the same three things. */
@@ -77,7 +80,12 @@ export function DevicesPanel() {
             tracks={BROWSER_TRACKS}
             onSelect={() => window.open(CHROME_EXTENSION_URL, '_blank', 'noopener,noreferrer')}
           />
-          <SourceCard logo="/branding/firefox/logo.svg" name="Firefox" tracks={BROWSER_TRACKS} comingSoon />
+          <SourceCard
+            logo="/branding/firefox/logo.svg"
+            name="Firefox"
+            tracks={BROWSER_TRACKS}
+            onSelect={() => window.open(FIREFOX_EXTENSION_URL, '_blank', 'noopener,noreferrer')}
+          />
           <SourceCard logo="/branding/safari/logo.svg" name="Safari" tracks={BROWSER_TRACKS} comingSoon />
         </div>
       </section>

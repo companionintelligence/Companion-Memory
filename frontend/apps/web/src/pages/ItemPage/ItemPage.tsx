@@ -120,7 +120,9 @@ export function ItemPage() {
             <ChatWithAgentMenu
               context={namedChatContext({
                 title: item.name,
-                body: [item.description, item.brand, item.model, item.category].filter(Boolean).join(' · ') || null,
+                body:
+                  [item.description, item.brand, item.model, item.category].filter(Boolean).join(' · ') ||
+                  null,
                 sourceKind: 'ItemType',
                 sourceId: item.id,
               })}

@@ -99,9 +99,7 @@ export class AskBroadcastService {
     }
 
     if (recipients.length > MAX_BROADCAST_RECIPIENTS) {
-      throw new BadRequestException(
-        `A broadcast may not exceed ${MAX_BROADCAST_RECIPIENTS} recipients`,
-      );
+      throw new BadRequestException(`A broadcast may not exceed ${MAX_BROADCAST_RECIPIENTS} recipients`);
     }
 
     // The deadline is decided ONCE and stamped on every child, so recipients

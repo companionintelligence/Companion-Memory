@@ -102,6 +102,15 @@ How much an answer may reveal, coarsest first
 
 ```
 none  <  boolean  <  count  <  summary  <  redacted  <  full
+
+> **Three clamps implement this ladder, and all three have shipped a rung that
+> clamped nothing.** `applyDisclosureCeiling` (item references),
+> `applySearchCeiling` (shared-search results) and `clampAvailability`
+> (free/busy). In each case `redacted` returned what `full` returned. The rule
+> the third fix added, and the one to apply to any future clamp: a rung is only
+> a rung if it discloses strictly less than the one above it on **some** axis —
+> and that is a property of the RELATIONSHIP between two branches, so it has to
+> be tested by walking the whole ladder, not by asserting each branch alone.
 ```
 
 | Rung | What the asker receives |

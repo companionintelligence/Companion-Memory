@@ -5,6 +5,8 @@ import path from 'node:path';
 import config from 'config';
 import { z } from 'zod';
 
+import { resolveLlmUrlForRuntime } from './domains/llm/services/llmEndpointShared';
+
 /**
  * The chat model an appliance uses when nothing overrides it.
  *
@@ -1028,6 +1030,21 @@ export const ConfigSchema = z.object({
      */
     signingKeyJwk: z.string().optional(),
   }),
+  /**
+   * Where the abuse-control counters live -- the rate-limit windows and the
+   * signature replay nonces (G8, #2365).
+   *
+   * `postgres` (the default) shares them across every api replica and survives
+   * a restart. `memory` keeps them per-process, which is what shipped three
+   * times and what G8 reports: N replicas means N times the effective limit,
+   * and for the nonce cache it means a REPLAY SUCCEEDS ONCE PER REPLICA.
+   *
+   * Set `memory` only on a single-process box, or in a test that does not want
+   * a database.
+   */
+  consumption: z.object({
+    store: z.enum(['postgres', 'memory']).default('postgres'),
+  }),
   // Geocoding, both directions (address <-> coordinates). Egress normally goes
   // through CI-Portal, which holds the provider key and fronts a cache shared by
   // every appliance; `google` is the direct-key fallback and is the only mode
@@ -1077,9 +1094,47 @@ export const ConfigSchema = z.object({
 
 const parsed = ConfigSchema.parse(config);
 
+/**
+ * Point an inference URL at the right side of the container boundary.
+ *
+ * The same `.env` is read by this process on the host (`make dev` runs api and
+ * worker under overmind) and by this process in a container (staging and
+ * production compose), and by the two python sidecars, which are always
+ * containers. `localhost` names the container itself from inside one, and
+ * `host.docker.internal` resolves nowhere on a macOS or linux host, so no single
+ * spelling is correct for every reader — and because compose interpolates
+ * `${LLM_API_BASE:-<good default>}`, a set-but-wrong value in `.env` beats the
+ * correct default the repo ships. Correcting it here, once, means every consumer
+ * downstream (LlmEndpointService, OllamaService, the OpenAI driver, the embedder)
+ * gets a URL that works from where it is, and none of them has to know why.
+ *
+ * Never silent: a rewrite prints, because moving where inference goes without
+ * saying so is how the original bug stayed invisible for a full nightly run.
+ */
+function llmUrlForThisRuntime(label: string, value: string): string;
+function llmUrlForThisRuntime(label: string, value: string | undefined): string | undefined;
+function llmUrlForThisRuntime(label: string, value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const { url, note } = resolveLlmUrlForRuntime(value);
+
+  if (note) {
+    console.warn(`[config] ${label}: ${note}`);
+  }
+
+  return url;
+}
+
+parsed.services.ollama.host = llmUrlForThisRuntime('OLLAMA_HOST', parsed.services.ollama.host);
+parsed.llm.apiBase = llmUrlForThisRuntime('LLM_API_BASE', parsed.llm.apiBase);
+parsed.embedding.host = llmUrlForThisRuntime('OLLAMA_EMBED_HOST', parsed.embedding.host);
+
 // The embedder follows the main Ollama host unless an explicit embedding host is
 // configured (OLLAMA_EMBED_HOST), so a GPU/alternate-host Ollama can be pointed
-// at for embeddings only without touching the prompt/inference host.
+// at for embeddings only without touching the prompt/inference host. Corrected
+// above first, so an inherited host arrives already right for this runtime.
 if (!parsed.embedding.host) {
   parsed.embedding.host = parsed.services.ollama.host;
 }

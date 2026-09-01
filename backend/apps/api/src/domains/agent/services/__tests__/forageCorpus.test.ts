@@ -17,7 +17,13 @@ describe('forageCorpus', () => {
 
   it('maps an event onto week-ahead branches by token overlap', () => {
     const branches = [
-      { id: 'beach_trip', name: 'beach trip', l0: 'LEISURE', prior: 0.6, tokens: tokensOf('beach trip LEISURE') },
+      {
+        id: 'beach_trip',
+        name: 'beach trip',
+        l0: 'LEISURE',
+        prior: 0.6,
+        tokens: tokensOf('beach trip LEISURE'),
+      },
       { id: 'office', name: 'office', l0: 'WORK', prior: 0.3, tokens: tokensOf('office WORK') },
     ];
 
@@ -32,16 +38,18 @@ describe('forageCorpus', () => {
     expect(observationCue({ supports_branches: [], supports_people: ['jerry'], source: 'person' })).toBe(
       'jerry_mention',
     );
-    expect(observationCue({ supports_branches: [], supports_people: [], source: 'place' })).toBe('place_mention');
+    expect(observationCue({ supports_branches: [], supports_people: [], source: 'place' })).toBe(
+      'place_mention',
+    );
   });
 
   it('builds an index query from the current joint', () => {
-    expect(expandQuery({ question: 'What happens next', branch: 'beach_trip', people: ['jerry', 'solo'] })).toContain(
-      'jerry',
-    );
-    expect(expandQuery({ question: 'What happens next', branch: 'beach_trip', people: ['jerry', 'solo'] })).toContain(
-      'where they live',
-    );
+    expect(
+      expandQuery({ question: 'What happens next', branch: 'beach_trip', people: ['jerry', 'solo'] }),
+    ).toContain('jerry');
+    expect(
+      expandQuery({ question: 'What happens next', branch: 'beach_trip', people: ['jerry', 'solo'] }),
+    ).toContain('where they live');
   });
 
   it('seeds only high-confidence named clusters, not Drs / No Think', () => {

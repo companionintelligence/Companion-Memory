@@ -185,6 +185,77 @@ describe('SmartRotationListener', () => {
       const [sql] = dataSource.query.mock.calls[0] as [string];
       expect(sql.replace(/\s+/g, ' ')).toContain("q.evidence_class <> 'hand_entry'");
     });
+
+    // ═══ HEAD-OF-LINE BLOCKING ═══
+    //
+    // These three assert the SHAPE of the selection, because a mocked
+    // DataSource cannot rank rows. The behaviour they stand in for — that a
+    // question dispatched an hour ago loses to one never dispatched — is
+    // proved against a real Postgres in
+    // SmartRotationListener.answerInfer.integration.spec.ts.
+    //
+    // Without them, the query that shipped ("ORDER BY q.created_at ASC" and
+    // nothing else) sent 46 of 46 dispatches to a single question over 17
+    // hours while 1,278 others were never offered to the model at all.
+    it('ranks candidates by when inference was last dispatched, untried questions first', async () => {
+      const eventService = { send: jest.fn() } as unknown as EventService;
+      const dataSource = { query: jest.fn().mockResolvedValue([{ id: 'q-1' }]) };
+
+      const listener = buildListener({ eventService, dataSource });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'answer_infer' });
+
+      const [sql] = dataSource.query.mock.calls[0] as [string];
+      const flattened = sql.replace(/\s+/g, ' ');
+
+      expect(flattened).toContain(
+        'ORDER BY a.last_attempt_at ASC NULLS FIRST, q.created_at ASC, q.question_id ASC',
+      );
+    });
+
+    it('reads the attempt history from both the live and the archived pg-boss job rows', async () => {
+      const eventService = { send: jest.fn() } as unknown as EventService;
+      const dataSource = { query: jest.fn().mockResolvedValue([{ id: 'q-1' }]) };
+
+      const listener = buildListener({ eventService, dataSource });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'answer_infer' });
+
+      const [sql, params] = dataSource.query.mock.calls[0] as [string, unknown[]];
+      const flattened = sql.replace(/\s+/g, ' ');
+
+      // Live rows alone would forget an attempt the moment its job completed,
+      // which is most of them.
+      expect(flattened).toContain('FROM pgboss.job');
+      expect(flattened).toContain('FROM pgboss.archive');
+      // Bound, not interpolated: the queue name is what prunes the partition
+      // and the event name is what identifies an inference dispatch.
+      // The owner is bound twice — Postgres deduces one type per parameter and
+      // this query needs the owner as a uuid AND as jsonb text.
+      expect(params).toEqual(['user-1', 'llm', Events.INFER_QUESTION_ANSWER, expect.any(Number), 'user-1']);
+    });
+
+    it('holds a question out of the rotation for a cooldown after it was dispatched', async () => {
+      const eventService = { send: jest.fn() } as unknown as EventService;
+      const dataSource = { query: jest.fn().mockResolvedValue([{ id: 'q-1' }]) };
+
+      const listener = buildListener({ eventService, dataSource });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'answer_infer' });
+
+      const [sql, params] = dataSource.query.mock.calls[0] as [string, unknown[]];
+      const flattened = sql.replace(/\s+/g, ' ');
+
+      expect(flattened).toContain(
+        'AND (a.last_attempt_at IS NULL OR a.last_attempt_at < NOW() - make_interval(hours => $4))',
+      );
+
+      // Finite, so nothing is ever silenced for good — an LLM outage costs a
+      // question a few hours, not its place in the rotation.
+      const cooldownHours = params[3] as number;
+      expect(cooldownHours).toBeGreaterThan(0);
+      expect(cooldownHours).toBeLessThanOrEqual(24);
+    });
   });
 
   describe('insights', () => {

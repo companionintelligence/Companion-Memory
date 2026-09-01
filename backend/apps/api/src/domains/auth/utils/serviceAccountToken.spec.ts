@@ -25,10 +25,7 @@ describe('parseAllowedServiceClients', () => {
 
 describe('parseScopes', () => {
   it('splits a space-delimited scope claim and de-duplicates', () => {
-    expect(parseScopes('memory:read memory:write memory:read')).toEqual([
-      'memory:read',
-      'memory:write',
-    ]);
+    expect(parseScopes('memory:read memory:write memory:read')).toEqual(['memory:read', 'memory:write']);
   });
 
   it('collapses arbitrary whitespace and ignores non-strings', () => {
@@ -55,9 +52,7 @@ describe('extractServiceClientId', () => {
     expect(extractServiceClientId({ client_id: '   ' })).toBeNull();
     expect(extractServiceClientId({ client_id: 123 })).toBeNull();
     expect(extractServiceClientId({})).toBeNull();
-    expect(extractServiceClientId({ act: { sub: '' }, client_id: 'hbpe-sidecar' })).toBe(
-      'hbpe-sidecar',
-    );
+    expect(extractServiceClientId({ act: { sub: '' }, client_id: 'hbpe-sidecar' })).toBe('hbpe-sidecar');
   });
 });
 
@@ -76,15 +71,15 @@ describe('resolveServiceAccount', () => {
   });
 
   it('resolves via the act.sub actor claim from token exchange', () => {
-    expect(
-      resolveServiceAccount({ sub: 'user-9', act: { sub: 'summary-sidecar' } }, ALLOWED),
-    ).toEqual({ clientId: 'summary-sidecar', onBehalfOfUserId: 'user-9', scopes: [] });
+    expect(resolveServiceAccount({ sub: 'user-9', act: { sub: 'summary-sidecar' } }, ALLOWED)).toEqual({
+      clientId: 'summary-sidecar',
+      onBehalfOfUserId: 'user-9',
+      scopes: [],
+    });
   });
 
   it('returns null for a client id that is not allow-listed (a human login)', () => {
-    expect(
-      resolveServiceAccount({ sub: 'user-1', client_id: 'ci-browser-extension' }, ALLOWED),
-    ).toBeNull();
+    expect(resolveServiceAccount({ sub: 'user-1', client_id: 'ci-browser-extension' }, ALLOWED)).toBeNull();
     expect(resolveServiceAccount({ sub: 'user-1', email: 'a@b.com' }, ALLOWED)).toBeNull();
   });
 
@@ -98,8 +93,10 @@ describe('resolveServiceAccount', () => {
   });
 
   it('trims the resolved on-behalf-of user id', () => {
-    expect(
-      resolveServiceAccount({ sub: '  user-123  ', client_id: 'hbpe-sidecar' }, ALLOWED),
-    ).toEqual({ clientId: 'hbpe-sidecar', onBehalfOfUserId: 'user-123', scopes: [] });
+    expect(resolveServiceAccount({ sub: '  user-123  ', client_id: 'hbpe-sidecar' }, ALLOWED)).toEqual({
+      clientId: 'hbpe-sidecar',
+      onBehalfOfUserId: 'user-123',
+      scopes: [],
+    });
   });
 });

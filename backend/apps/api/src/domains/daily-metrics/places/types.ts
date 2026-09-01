@@ -21,6 +21,14 @@ export interface BuildClustersResult {
   clusters: PlaceClusterSnapshot[];
   /** The cluster-assigned stays, chronological — the transition model's input. */
   visits: ClusterVisit[];
+  /**
+   * Inclusive end of the window that was actually scanned. Usually ~now(), but
+   * on a stale corpus it is the newest usable fix — see
+   * `PlaceClusterService.resolveWindow`. `PlaceTransitionService.rebuild` dates
+   * its recency decay from this rather than from the wall clock, so the two
+   * cannot drift apart.
+   */
+  windowEnd: Date;
 }
 
 /** One candidate next place with its probability. */

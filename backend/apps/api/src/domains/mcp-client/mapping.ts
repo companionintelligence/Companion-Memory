@@ -8,7 +8,10 @@ import type { McpServerConfigDraft } from './types';
  * (test-connection on a saved config) and {@link McpClientManagerService} (every real
  * connect/reconnect) so the two never drift on what "decrypted" means.
  */
-export function decryptedDraftFromEntity(entity: McpServerConfigEntity, codec: McpSecretCodec): McpServerConfigDraft {
+export function decryptedDraftFromEntity(
+  entity: McpServerConfigEntity,
+  codec: McpSecretCodec,
+): McpServerConfigDraft {
   return {
     name: entity.name,
     transport: entity.transport,

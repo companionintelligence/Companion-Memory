@@ -1,11 +1,6 @@
 import { Field, Float, ObjectType } from '@nestjs/graphql';
 
-import type {
-  BranchialBranch,
-  BranchialPermutation,
-  BranchialStep,
-  BranchialTree,
-} from '@ci/domains/agent';
+import type { BranchialBranch, BranchialPermutation, BranchialStep, BranchialTree } from '@ci/domains/agent';
 
 @ObjectType({ description: 'Who or what under a named future (slider 2, laid out in time)' })
 export class BranchialPermutationType {
@@ -87,7 +82,9 @@ export class BranchialTreeType {
   @Field(() => String)
   question!: string;
 
-  @Field(() => Boolean, { description: 'True when branch titles came from the memory guess, not raw L0 labels' })
+  @Field(() => Boolean, {
+    description: 'True when branch titles came from the memory guess, not raw L0 labels',
+  })
   guessed!: boolean;
 
   @Field(() => [BranchialStepType!]!)

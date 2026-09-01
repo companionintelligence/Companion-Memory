@@ -9,7 +9,7 @@ import type { EventDraft, EventDraftProblem } from './eventDraft';
  * carry kinds no dropdown would predict), so the common ones are offered
  * through a `datalist` and the user can always type their own.
  *
- * Blank is the meaningful default and is NOT in this list: EventService only
+ * Blank is the meaningful default and is NOT in this list: CalendarEventService only
  * puts calendar kinds and rows with no `event_type` on the Schedule, so an
  * untyped event is the one that shows up there.
  */

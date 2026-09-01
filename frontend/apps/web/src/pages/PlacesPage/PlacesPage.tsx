@@ -133,40 +133,40 @@ function PlaceRow({ place, onOpen }: { place: PlaceNode; onOpen: () => void }) {
         sourceId: place.id,
       })}
     >
-    <button
-      type="button"
-      onClick={onOpen}
-      className="flex w-full items-center gap-3 rounded-md border bg-card p-3 text-left transition hover:bg-accent"
-    >
-      <MapPin className="h-5 w-5 shrink-0 text-muted-foreground" />
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex w-full items-center gap-3 rounded-md border bg-card p-3 text-left transition hover:bg-accent"
+      >
+        <MapPin className="h-5 w-5 shrink-0 text-muted-foreground" />
 
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate font-medium">{place.name || 'Unnamed place'}</span>
-          {place.placeKind && (
-            <Badge variant="secondary">{PLACE_KIND_LABELS[place.placeKind] ?? place.placeKind}</Badge>
-          )}
-        </div>
-
-        <div className="truncate text-sm text-muted-foreground">
-          {[place.parent?.name, place.description].filter(Boolean).join(' · ') || '—'}
-        </div>
-      </div>
-
-      <div className="hidden shrink-0 text-right text-sm text-muted-foreground sm:block">
-        {place.visitStats.visitCount === 0 && place.visitStats.status === 'pending_enrichment' ? (
-          // A zero here isn't yet a measurement (geocoding unconfigured, or
-          // this place's events haven't finished linking) — distinct from a
-          // place that is genuinely never visited, which reads "0 visits".
-          <div title="Geocoding isn't finished linking events to this place yet">Visits pending</div>
-        ) : (
-          <div>
-            {place.visitStats.visitCount} {place.visitStats.visitCount === 1 ? 'visit' : 'visits'}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate font-medium">{place.name || 'Unnamed place'}</span>
+            {place.placeKind && (
+              <Badge variant="secondary">{PLACE_KIND_LABELS[place.placeKind] ?? place.placeKind}</Badge>
+            )}
           </div>
-        )}
-        {lastVisit && <div>Last {lastVisit}</div>}
-      </div>
-    </button>
+
+          <div className="truncate text-sm text-muted-foreground">
+            {[place.parent?.name, place.description].filter(Boolean).join(' · ') || '—'}
+          </div>
+        </div>
+
+        <div className="hidden shrink-0 text-right text-sm text-muted-foreground sm:block">
+          {place.visitStats.visitCount === 0 && place.visitStats.status === 'pending_enrichment' ? (
+            // A zero here isn't yet a measurement (geocoding unconfigured, or
+            // this place's events haven't finished linking) — distinct from a
+            // place that is genuinely never visited, which reads "0 visits".
+            <div title="Geocoding isn't finished linking events to this place yet">Visits pending</div>
+          ) : (
+            <div>
+              {place.visitStats.visitCount} {place.visitStats.visitCount === 1 ? 'visit' : 'visits'}
+            </div>
+          )}
+          {lastVisit && <div>Last {lastVisit}</div>}
+        </div>
+      </button>
     </ChatAbout>
   );
 }
@@ -566,90 +566,91 @@ export function PlacesPage() {
   } else {
     content = (
       <PullToRefresh onRefresh={refetch}>
-      <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
-        <MemoryHubShell
-          actions={
-            isMobile ? undefined : (
-              <Button size="sm" onClick={openAddPlace}>
-                <Plus className="h-4 w-4" />
-                New place
-              </Button>
-            )
-          }
-        >
-          <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
-            <div className="flex items-center gap-2">
-              <Input
-                placeholder="Search places by name..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  // New query, new cursor space — a stale failure must not gate it.
-                  pagination.reset();
-                }}
-                className="max-w-xl flex-1"
-              />
-              <div className="text-sm text-muted-foreground">{pagination.totalCount} places</div>
-            </div>
+        <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
+          <MemoryHubShell
+            actions={
+              isMobile ? undefined : (
+                <Button size="sm" onClick={openAddPlace}>
+                  <Plus className="h-4 w-4" />
+                  New place
+                </Button>
+              )
+            }
+          >
+            <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
+              <div className="flex items-center gap-2">
+                <Input
+                  placeholder="Search places by name..."
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    // New query, new cursor space — a stale failure must not gate it.
+                    pagination.reset();
+                  }}
+                  className="max-w-xl flex-1"
+                />
+                <div className="text-sm text-muted-foreground">{pagination.totalCount} places</div>
+              </div>
 
-            <KnownPlacesCard located={locatedCandidate} onLocate={setLocatedCandidate} />
+              <KnownPlacesCard located={locatedCandidate} onLocate={setLocatedCandidate} />
 
-            <PlaceDuplicatesCard onMerged={handleChanged} />
+              <PlaceDuplicatesCard onMerged={handleChanged} />
 
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
-              {(locatedPlaces.length > 0 || locatedCandidate != null) && (
-                <div ref={mapRef} className="flex-1 lg:sticky lg:top-4">
-                  <div className="h-72 overflow-hidden rounded-md border lg:h-[calc(100vh-14rem)] lg:min-h-72">
-                    <Map center={mapCenter} zoom={locatedPlaces.length === 1 ? 13 : 3}>
-                      <FlyToLocated target={locatedCandidate} />
-                      {locatedCandidate && (
-                        <Map.Marker
-                          key={`located:${locatedCandidate.lat}:${locatedCandidate.lng}`}
-                          variant="default"
-                          position={[locatedCandidate.lat, locatedCandidate.lng]}
-                          zIndexOffset={1000}
-                        >
-                          <Tooltip permanent direction="top" offset={[0, -56]}>
-                            {locatedCandidate.label} · {locatedCandidate.eventCount} events
-                          </Tooltip>
-                        </Map.Marker>
-                      )}
-                      {locatedPlaces.slice(0, MAX_MAP_MARKERS).map((place) => (
-                        <Map.Marker
-                          key={place.id}
-                          variant="place"
-                          position={[place.latitude, place.longitude]}
-                          onClick={() => openPlace(place.id)}
-                        />
-                      ))}
-                    </Map>
-                  </div>
-
-                  {locatedPlaces.length > MAX_MAP_MARKERS && (
-                    <div className="pt-1 text-xs text-muted-foreground">
-                      Map shows the first {MAX_MAP_MARKERS} of {locatedPlaces.length} places with coordinates.
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+                {(locatedPlaces.length > 0 || locatedCandidate != null) && (
+                  <div ref={mapRef} className="flex-1 lg:sticky lg:top-4">
+                    <div className="h-72 overflow-hidden rounded-md border lg:h-[calc(100vh-14rem)] lg:min-h-72">
+                      <Map center={mapCenter} zoom={locatedPlaces.length === 1 ? 13 : 3}>
+                        <FlyToLocated target={locatedCandidate} />
+                        {locatedCandidate && (
+                          <Map.Marker
+                            key={`located:${locatedCandidate.lat}:${locatedCandidate.lng}`}
+                            variant="default"
+                            position={[locatedCandidate.lat, locatedCandidate.lng]}
+                            zIndexOffset={1000}
+                          >
+                            <Tooltip permanent direction="top" offset={[0, -56]}>
+                              {locatedCandidate.label} · {locatedCandidate.eventCount} events
+                            </Tooltip>
+                          </Map.Marker>
+                        )}
+                        {locatedPlaces.slice(0, MAX_MAP_MARKERS).map((place) => (
+                          <Map.Marker
+                            key={place.id}
+                            variant="place"
+                            position={[place.latitude, place.longitude]}
+                            onClick={() => openPlace(place.id)}
+                          />
+                        ))}
+                      </Map>
                     </div>
+
+                    {locatedPlaces.length > MAX_MAP_MARKERS && (
+                      <div className="pt-1 text-xs text-muted-foreground">
+                        Map shows the first {MAX_MAP_MARKERS} of {locatedPlaces.length} places with
+                        coordinates.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                  {places.length === 0 ? (
+                    <EmptyState message="No places found" />
+                  ) : (
+                    <>
+                      {places.map((place) => (
+                        <PlaceRow key={place.id} place={place} onOpen={() => openPlace(place.id)} />
+                      ))}
+
+                      <InfiniteListFooter pagination={pagination} noun="places" />
+                    </>
                   )}
                 </div>
-              )}
-
-              <div className="flex min-w-0 flex-1 flex-col gap-2">
-                {places.length === 0 ? (
-                  <EmptyState message="No places found" />
-                ) : (
-                  <>
-                    {places.map((place) => (
-                      <PlaceRow key={place.id} place={place} onOpen={() => openPlace(place.id)} />
-                    ))}
-
-                    <InfiniteListFooter pagination={pagination} noun="places" />
-                  </>
-                )}
               </div>
             </div>
-          </div>
-        </MemoryHubShell>
-      </PageContent>
+          </MemoryHubShell>
+        </PageContent>
       </PullToRefresh>
     );
   }

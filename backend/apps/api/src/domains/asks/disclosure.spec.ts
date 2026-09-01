@@ -46,9 +46,7 @@ describe('inferAnswerForm', () => {
   // happens to open with "do you know" is still a content ask, and reading the
   // ASKER's prose to pick a form is how the form becomes their choice.
   it('prefers the archetype over the prompt heuristic', () => {
-    expect(inferAnswerForm(query({ queryType: 'content', prompt: 'Do you know Carol?' }))).toBe(
-      'existence',
-    );
+    expect(inferAnswerForm(query({ queryType: 'content', prompt: 'Do you know Carol?' }))).toBe('existence');
   });
 });
 

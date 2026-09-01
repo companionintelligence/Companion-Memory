@@ -12,6 +12,7 @@ export {
   isIosPlatform,
   isLocalApplianceOrigin,
   isNativePlatform,
+  isTauriPlatform,
   needsNativeCloudConnect,
   persistApiBaseUrl,
   resolveHttpOrigin,

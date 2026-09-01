@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
+from ci.hbpe.buckets import BUCKET_MINUTES, BUCKETS_PER_DAY
 from ci.hbpe.tokenizer.vocab_registry import L0_CLASSES
 
 COLD_START_MIN_DAYS = 14
@@ -19,10 +20,19 @@ HOME_MEDIAN_FALLBACK = 600.0  # 10h
 LIFT_LO = 0.5
 LIFT_HI = 2.0
 
-# 30-min buckets: 00:00–08:00, 21:00–24:00, 08:00–18:00
-SLEEP_MORNING = range(0, 16)
-SLEEP_EVENING = range(42, 48)
-WORK_HOURS = range(16, 36)
+def _hour_range(start_hour: int, end_hour: int) -> range:
+    """Wall-clock hours → bucket indices at the current `BUCKET_MINUTES` grid."""
+    start = (start_hour * 60) // BUCKET_MINUTES
+    end = (end_hour * 60) // BUCKET_MINUTES
+    return range(start, min(end, BUCKETS_PER_DAY))
+
+
+# Temporary fallbacks until sleep/work windows are learned from token_stream.
+# These must track BUCKET_MINUTES (currently 15): the old literals assumed 30-min
+# buckets and applied "evening sleep" to 10:30–12:00.
+SLEEP_MORNING = _hour_range(0, 8)
+SLEEP_EVENING = _hour_range(21, 24)
+WORK_HOURS = _hour_range(8, 18)
 
 
 def _clip(value: float, lo: float = LIFT_LO, hi: float = LIFT_HI) -> float:

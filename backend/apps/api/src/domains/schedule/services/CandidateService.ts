@@ -5,7 +5,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { type Event, EventService } from '@ci/domains/memory';
+import { type Event, CalendarEventService } from '@ci/domains/memory';
 
 import { EventCandidateEntity, type EventCandidate } from '../entities/EventCandidateEntity';
 import { type CreateCandidateDto, type DeclineReason, USER_AUTHORED_GENERATOR_PREFIX } from '../types';
@@ -49,7 +49,7 @@ export class CandidateService {
   constructor(
     @InjectRepository(EventCandidateEntity)
     private readonly candidateRepository: Repository<EventCandidateEntity>,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly dataSource: DataSource,
     private readonly logger: LoggerService,
   ) {

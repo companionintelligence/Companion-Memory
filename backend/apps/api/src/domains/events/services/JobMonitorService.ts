@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { RequestContext } from '@ci/common/context';
+import { JobControlStore } from '@ci/common/job-controls';
 import { CronRunStore } from '@ci/common/schedule';
 
 import { DEAD_LETTER_QUEUE } from '../constants';
@@ -129,8 +130,22 @@ export interface CronScheduleDto {
    * cannot tell "never fired in three weeks" from "booted a minute ago", and
    * lighting up all 40 rows on first boot would teach operators to ignore the
    * column.
+   *
+   * Also false when {@link disabled} — a schedule the operator switched off is
+   * not late, and reporting it as overdue would turn every deliberate choice
+   * into an alarm.
    */
   readonly overdue: boolean;
+  /**
+   * The operator switched this schedule off (`ci.job_settings`, kind `cron`).
+   *
+   * The scheduler still has it registered and still ticks it — the gate is
+   * inside the `@Cron` wrapper — so `running` stays true and `nextRunAt` keeps
+   * advancing. Without this flag the row would look perfectly healthy while
+   * doing nothing, which is precisely the "silent failure" a disable is
+   * supposed not to be.
+   */
+  readonly disabled: boolean;
 }
 
 export interface JobQueueDto {
@@ -381,6 +396,8 @@ export class JobMonitorService {
 
       const lastRunAt = times.length > 0 ? Math.max(...times) : null;
 
+      const disabled = JobControlStore.cronMode(name) === 'disabled';
+
       schedules.push({
         name,
         cron: String(job.cronTime?.source ?? ''),
@@ -389,7 +406,8 @@ export class JobMonitorService {
         nextRunAt,
         lastRunAt: lastRunAt == null ? null : new Date(lastRunAt).toISOString(),
         lastSuccessAt: durable?.lastSuccessAt?.toISOString() ?? null,
-        overdue: isOverdue(job.cronTime, lastRunAt, now),
+        overdue: !disabled && isOverdue(job.cronTime, lastRunAt, now),
+        disabled,
       });
     }
 

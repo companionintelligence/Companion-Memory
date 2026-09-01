@@ -389,7 +389,7 @@ describe('bulkInsertIdempotent', () => {
   });
 
   // Covers the `options.manager` branch (bulkUpsert.ts:208-213): when a caller
-  // is already inside its own transaction (e.g. ContentService/EventService
+  // is already inside its own transaction (e.g. ContentService/CalendarEventService
   // wrapping a detail-row insert + CTI base-row write in one
   // `manager.transaction(...)`), passing that manager in must make the WHOLE
   // pre-check/insert/hydrate sequence join it via `manager.withRepository(...)`
