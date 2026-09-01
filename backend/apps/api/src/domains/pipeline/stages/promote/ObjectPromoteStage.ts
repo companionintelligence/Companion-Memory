@@ -4,6 +4,7 @@ import { DataSource } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { appendRecordSources } from '@ci/common/persistence';
 // The graph domain's PUBLIC barrel — `no-cross-domain-internals` allows
 // `index.ts` and nothing else. PURE FUNCTIONS only, so nothing is injected and
 // this stage's module wiring stays empty. `normalizeObjectIdentifier` is the one
@@ -559,7 +560,7 @@ export class ObjectPromoteStage implements Stage {
     // until the detail rows exist. Splitting these across two transactions
     // would commit detail rows with no base row and fail the constraint.
     return this.dataSource.transaction(async (manager) => {
-      const rows = await manager.query<Array<{ object_id: string; source_id: string }>>(
+      const rows = await manager.query<Array<{ object_id: string; source_id: string; source_system: string | null }>>(
         `INSERT INTO ci.objects AS inv (
          user_id, owner_user_id, brand, model, identifier_codes,
          purchase_price, currency, acquired_at, is_digital, condition,
@@ -610,7 +611,7 @@ export class ObjectPromoteStage implements Stage {
                   (inv.metadata->'${PROMOTE_PROVENANCE_KEY}'->>'at')::timestamptz,
                   inv.updated_at
                 ) + interval '1 second'
-       RETURNING inv.object_id, inv.source_id`,
+       RETURNING inv.object_id, inv.source_id, inv.source_system`,
         [
           userId,
           PROMOTED_LIFECYCLE_STATE,
@@ -676,6 +677,22 @@ export class ObjectPromoteStage implements Stage {
           ],
         );
       }
+
+      // Ledger every arrival — inserts and refresh-hits alike evidence the
+      // unit (ci.record_sources; docs/design/cross-pipeline-identity.md §5).
+      // Inside the same transaction as the rows it evidences.
+      await appendRecordSources(
+        manager,
+        { table: 'objects', userId },
+        rows
+          .filter((row) => row.source_system != null)
+          .map((row) => ({
+            recordId: row.object_id,
+            sourceType: PROMOTED_SOURCE_TYPE,
+            sourceSystem: row.source_system!,
+            sourceId: row.source_id,
+          })),
+      );
 
       return new Map(rows.map((row) => [row.source_id, row.object_id]));
     });

@@ -395,7 +395,7 @@ export class ItemService {
         scope: { ownerUserId: context.userId },
         conflictTarget: '(owner_user_id, source_system, source_id) WHERE source_id IS NOT NULL',
         identityColumns: ['source_system', 'source_id'],
-        sourceLedger: { table: 'objects', userId: context.userId },
+        sourceLedger: { table: 'objects', userId: context.userId, importRunId: context.importRunId ?? null },
         // Centralized refresh contract — currently empty, so conflicts stay
         // DO NOTHING find-or-return.
         conflictUpdateColumns: INGEST_REFRESH_COLUMNS.item,

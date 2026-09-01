@@ -220,7 +220,7 @@ export class ProductModelService {
       scope: { ownerUserId: context.userId },
       conflictTarget: SOURCE_IDENTITY_CONFLICT_TARGET,
       identityColumns: ['source_system', 'source_id'],
-      sourceLedger: { table: 'product_models', userId: context.userId },
+      sourceLedger: { table: 'product_models', userId: context.userId, importRunId: context.importRunId ?? null },
     });
   }
 

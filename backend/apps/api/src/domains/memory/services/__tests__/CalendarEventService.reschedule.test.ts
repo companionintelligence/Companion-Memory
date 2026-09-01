@@ -168,6 +168,8 @@ describe('CalendarEventService.create — provenance survives the DTO mapping', 
       // create() writes both halves of the CTI aggregate in one transaction, so
       // the mock hands back the same repositories through a manager.
       manager: {
+        // ci.record_sources ledger writes go through manager.query.
+        query: jest.fn(async () => []),
         transaction: (run: (manager: unknown) => unknown) =>
           Promise.resolve(
             run({

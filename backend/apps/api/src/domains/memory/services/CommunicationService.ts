@@ -151,6 +151,7 @@ export class CommunicationService {
         sourceSystem: data.source_system,
         sourceId: data.source_id,
         connectionId: data.connection_id ?? null,
+        importRunId: context.importRunId ?? null,
       },
     ]);
   }
@@ -361,6 +362,7 @@ export class CommunicationService {
         sourceLedger: {
           table: 'communications',
           userId: context.userId,
+          importRunId: context.importRunId ?? null,
           getConnectionId: (entity) => entity.connectionId,
         },
       });

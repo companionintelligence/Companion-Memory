@@ -69,6 +69,11 @@ export const USER_OWNED_TABLES: readonly UserOwnedTable[] = [
   // --- ETL / sync bookkeeping. ---
   { schema: 'ci_etl', table: 'connection_sync_jobs', userColumn: 'user_id' },
 
+  // --- Multi-provenance ledger (docs/design/cross-pipeline-identity.md §5).
+  // References records only logically (no FK), so position is flexible; it
+  // goes before the record tables so their deletes never race its reads. ---
+  { schema: 'ci', table: 'record_sources', userColumn: 'user_id' },
+
   // --- Graph audit + derived graph. graph_deltas references entities/
   // relationships, so delete it before them. entities/relationships use
   // owner_user_id and would otherwise be SET NULL (orphaned). ---
@@ -118,11 +123,45 @@ export interface ConnectionScopedTable {
   table: string;
   /** Column holding the connection id (uuid or text). */
   connectionColumn: string;
+  /**
+   * Set for tables whose rows carry the cross-pipeline identity and are
+   * ledgered in ci.record_sources (docs/design/cross-pipeline-identity.md §5).
+   * A disconnect then deletes ONLY rows with no remaining ledger evidence
+   * from another arrival — a row the Takeout import also delivered survives
+   * the disconnect (with its connection_id unlinked) instead of vanishing.
+   * `recordTable` is the ledger's record_table value; `pkColumn` the row's
+   * primary-key column the ledger's record_id points at.
+   */
+  recordTable?: string;
+  pkColumn?: string;
+  /** The table's user-scope column, needed to join the ledger. */
+  userColumn?: string;
 }
 
 export const CONNECTION_SCOPED_TABLES: readonly ConnectionScopedTable[] = [
   { schema: 'ci_etl', table: 'connection_sync_jobs', connectionColumn: 'connection_id' },
-  { schema: 'ci', table: 'communications', connectionColumn: 'connection_id' },
-  { schema: 'ci', table: 'content', connectionColumn: 'connection_id' },
-  { schema: 'ci', table: 'events', connectionColumn: 'connection_id' },
+  {
+    schema: 'ci',
+    table: 'communications',
+    connectionColumn: 'connection_id',
+    recordTable: 'communications',
+    pkColumn: 'id',
+    userColumn: 'user_id',
+  },
+  {
+    schema: 'ci',
+    table: 'content',
+    connectionColumn: 'connection_id',
+    recordTable: 'content',
+    pkColumn: 'id',
+    userColumn: 'user_id',
+  },
+  {
+    schema: 'ci',
+    table: 'events',
+    connectionColumn: 'connection_id',
+    recordTable: 'events',
+    pkColumn: 'event_id',
+    userColumn: 'user_id',
+  },
 ];

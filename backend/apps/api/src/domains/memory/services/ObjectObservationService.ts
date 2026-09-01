@@ -6,7 +6,7 @@ import { Between, DataSource, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not,
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { computeChunkSize } from '@ci/common/persistence';
+import { appendRecordSources, computeChunkSize } from '@ci/common/persistence';
 
 import {
   type ObjectObservation,
@@ -403,7 +403,7 @@ export class ObjectObservationService {
       }
 
       attempted += rows.length;
-      writtenIds.push(...(await this.writeRows(context.userId, rows, conflictTarget)));
+      writtenIds.push(...(await this.writeRows(context, rows, conflictTarget)));
     }
 
     const written = await this.hydrate(context, writtenIds);
@@ -582,7 +582,12 @@ export class ObjectObservationService {
    * multi-thousand-detection scan — the same reason `chunkedConflictInsert`
    * exists.
    */
-  private async writeRows(userId: string, rows: WritableRow[], conflictTarget: string): Promise<string[]> {
+  private async writeRows(
+    context: UserServiceContext,
+    rows: WritableRow[],
+    conflictTarget: string,
+  ): Promise<string[]> {
+    const userId = context.userId;
     const chunkSize = computeChunkSize(this.observationRepository.metadata.columns.length);
     const ids: string[] = [];
 
@@ -593,7 +598,14 @@ export class ObjectObservationService {
     for (let offset = 0; offset < rows.length; offset += chunkSize) {
       const chunk = rows.slice(offset, offset + chunkSize);
 
-      const returned = await this.dataSource.query<Array<{ observation_id: string }>>(
+      const returned = await this.dataSource.query<
+        Array<{
+          observation_id: string;
+          source_type: string | null;
+          source_system: string | null;
+          source_id: string | null;
+        }>
+      >(
         `INSERT INTO ci.object_observations AS o (
            observation_id, user_id, owner_user_id, observed_at, source_kind,
            content_id, file_id, event_id, place_entity_id, location_coordinates,
@@ -644,7 +656,7 @@ export class ObjectObservationService {
           -- has looked at it and said yes, the label they agreed to is not the
           -- next model's to overwrite.
           WHERE NOT o.confirmed_by_user
-         RETURNING o.observation_id`,
+         RETURNING o.observation_id, o.source_type, o.source_system, o.source_id`,
         [
           userId,
           chunk.map((row) => row.id),
@@ -673,6 +685,25 @@ export class ObjectObservationService {
       );
 
       ids.push(...returned.map((row) => row.observation_id));
+
+
+      // Ledger the arrivals that carried a full triple (detection-key rows
+
+      // have none) — inserts AND refresh-hits alike evidence the record.
+
+      await appendRecordSources(
+        this.dataSource.manager,
+        { table: 'object_observations', userId },
+        returned
+          .filter((row) => row.source_type != null && row.source_system != null && row.source_id != null)
+          .map((row) => ({
+            recordId: row.observation_id,
+            sourceType: row.source_type!,
+            sourceSystem: row.source_system!,
+            sourceId: row.source_id!,
+            importRunId: context.importRunId ?? null,
+          })),
+      );
     }
 
     return ids;

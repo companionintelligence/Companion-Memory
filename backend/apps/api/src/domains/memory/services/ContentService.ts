@@ -14,6 +14,7 @@ import { v7 as uuidv7 } from 'uuid';
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import {
   type BulkInsertResult,
+  appendRecordSources,
   bulkInsertIdempotent,
   INGEST_REFRESH_COLUMNS,
   keysetPaginate,
@@ -188,6 +189,8 @@ export class ContentService {
         if (sourceWhere) {
           const existing = await this.contentRepository.findOne({ where: sourceWhere });
           if (existing) {
+            await this.ledgerArrival(context, existing.id, item);
+
             return this.composeOneExisting(existing);
           }
         }
@@ -227,12 +230,16 @@ export class ContentService {
           if (sourceWhere && (err as { code?: string })?.code === '23505') {
             const existing = await this.contentRepository.findOne({ where: sourceWhere });
             if (existing) {
+              await this.ledgerArrival(context, existing.id, item);
+
               return this.composeOneExisting(existing);
             }
           }
 
           throw err;
         }
+
+        await this.ledgerArrival(context, contentResult.id, item);
 
         if (emitCreated) {
           await this.eventService.send(ContentCreatedEvent, {
@@ -246,6 +253,32 @@ export class ContentService {
         });
       }),
     );
+  }
+
+  /**
+   * Ledger one arrival of a content row (insert, dedup hit, or lost race —
+   * all three evidence the record; see ci.record_sources). No-op on an
+   * incomplete triple. Mirrors CommunicationService.ledgerArrival.
+   */
+  private async ledgerArrival(
+    context: UserServiceContext,
+    recordId: string,
+    item: Pick<CreateContentDto, 'source_type' | 'source_system' | 'source_id' | 'connection_id'>,
+  ): Promise<void> {
+    if (!item.source_type || !item.source_system || !item.source_id) {
+      return;
+    }
+
+    await appendRecordSources(this.contentRepository.manager, { table: 'content', userId: context.userId }, [
+      {
+        recordId,
+        sourceType: item.source_type,
+        sourceSystem: item.source_system,
+        sourceId: item.source_id,
+        connectionId: item.connection_id ?? null,
+        importRunId: context.importRunId ?? null,
+      },
+    ]);
   }
 
   /** Composes one existing detail row's egress Content, for the dedup-hit paths in {@link create}. */
@@ -366,6 +399,7 @@ export class ContentService {
         sourceLedger: {
           table: 'content',
           userId: context.userId,
+          importRunId: context.importRunId ?? null,
           getConnectionId: (entity) => entity.connectionId,
         },
         // Centralized refresh contract — currently empty, so conflicts stay

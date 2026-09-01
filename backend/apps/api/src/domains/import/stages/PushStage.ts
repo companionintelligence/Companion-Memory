@@ -1169,7 +1169,7 @@ export class PushStage implements ImportStageRunner {
    * without a place, which is what it had before.
    */
   private async receiptPlacesFor(
-    ctx: { userId: string },
+    ctx: { userId: string; importRunId?: string },
     rows: ReadonlyArray<{ record: CanonicalRecord; participants: Map<string, string[]> }>,
   ): Promise<ReceiptEntityLinks[]> {
     const links: ReceiptEntityLinks[] = rows.map(() => ({}));
@@ -1564,7 +1564,9 @@ export class PushStage implements ImportStageRunner {
     isSelf: IsSelf,
     selfEntityId: string | null,
   ): Promise<{ pushed: number; failed: number; deduped: number; unrouted: number; contentHandled: number }> {
-    const ctx = { userId: context.userId };
+    // importRunId rides the context so every ledger row this push writes is
+    // attributed to this run (ci.record_sources.import_run_id).
+    const ctx = { userId: context.userId, importRunId: context.runId };
 
     // ONE query for the batch's edges, not one per row.
     const participantsByItem = await this.participantsForMany(batch.map((row) => row.id));
@@ -1616,7 +1618,7 @@ export class PushStage implements ImportStageRunner {
    * exists to catch.
    */
   private async linkSharedContent(
-    ctx: { userId: string },
+    ctx: { userId: string; importRunId?: string },
     plans: RowPlan[],
     context: StageRunContext,
   ): Promise<void> {
@@ -1665,7 +1667,7 @@ export class PushStage implements ImportStageRunner {
    * avoids it, and 500 more attempts only delay the stage failing with a cause.
    */
   private async sendGroup(
-    ctx: { userId: string },
+    ctx: { userId: string; importRunId?: string },
     destination: Destination,
     group: RowPlan[],
     counts: DestinationCounts,
@@ -1935,7 +1937,7 @@ export class PushStage implements ImportStageRunner {
    * a ROW here, not a staged record: one message can produce several.
    */
   private async catalogueLinkAttachments(
-    ctx: { userId: string },
+    ctx: { userId: string; importRunId?: string },
     records: CanonicalRecord[],
     counts: DestinationCounts,
   ): Promise<void> {
@@ -2006,7 +2008,7 @@ export class PushStage implements ImportStageRunner {
    * not-written, so the length is checked rather than trusted.
    */
   private async sendMany(
-    ctx: { userId: string },
+    ctx: { userId: string; importRunId?: string },
     destination: Destination,
     group: RowPlan[],
     counts: DestinationCounts,
@@ -2240,7 +2242,7 @@ export class PushStage implements ImportStageRunner {
    * the two apart.
    */
   private async send(
-    ctx: { userId: string },
+    ctx: { userId: string; importRunId?: string },
     destination: Destination,
     record: CanonicalRecord,
     participants: Map<string, string[]>,

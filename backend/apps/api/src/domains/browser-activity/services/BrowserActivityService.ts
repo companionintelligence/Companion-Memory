@@ -167,7 +167,7 @@ export class BrowserActivityService {
       scope: { user_id: context.userId },
       conflictTarget: '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
       identityColumns: ['source_system', 'source_id'],
-      sourceLedger: { table: 'browser_activity', userId: context.userId },
+      sourceLedger: { table: 'browser_activity', userId: context.userId, importRunId: context.importRunId ?? null },
       // Centralized refresh contract — self-heals the capture-derived columns
       // (action_type, properties, duration_seconds, scroll_depth_percent,
       // is_incognito, contains_sensitive) on a conflicting re-sync. Excludes

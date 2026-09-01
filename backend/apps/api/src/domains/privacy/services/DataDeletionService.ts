@@ -16,7 +16,12 @@ import {
 } from '@ci/domains/connections';
 import { OrphanCleanupService } from '@ci/domains/search-ingress';
 
-import { CONNECTION_SCOPED_TABLES, USER_OWNED_TABLES, type UserOwnedTable } from '../dataDeletionPlan';
+import {
+  CONNECTION_SCOPED_TABLES,
+  USER_OWNED_TABLES,
+  type ConnectionScopedTable,
+  type UserOwnedTable,
+} from '../dataDeletionPlan';
 import { DataDeletionAuditEntity } from '../entities/DataDeletionAuditEntity';
 
 /** Result of a single per-connection disconnect + purge. */
@@ -27,6 +32,13 @@ export interface DisconnectResult {
   tokenRevoked: boolean;
   /** Per-table row counts purged (e.g. { "ci.communications": 42 }). */
   deletedCounts: Record<string, number>;
+  /**
+   * Rows this connection delivered that SURVIVED the purge because
+   * ci.record_sources shows another arrival still evidences them (e.g. the
+   * same email also came from a Takeout import). Their connection_id link is
+   * cleared; the records stay.
+   */
+  retainedCounts: Record<string, number>;
   totalDeleted: number;
   auditId: string;
 }
@@ -107,8 +119,37 @@ export class DataDeletionService {
 
     // 2) Purge data DERIVED from this connection (top-level connection_id links).
     const deletedCounts: Record<string, number> = {};
+    const retainedCounts: Record<string, number> = {};
+
+    // 2a) This connection's own arrivals leave the multi-provenance ledger
+    // FIRST, so they cannot count as "evidence" protecting their own rows in
+    // the guarded deletes below (docs/design/cross-pipeline-identity.md §5).
+    const ledgerDeleted = await this.deleteConnectionArrivals(context.userId, connectionId);
+    if (ledgerDeleted > 0) {
+      deletedCounts['ci.record_sources'] = ledgerDeleted;
+    }
 
     for (const scoped of CONNECTION_SCOPED_TABLES) {
+      if (scoped.recordTable != null && scoped.pkColumn != null && scoped.userColumn != null) {
+        // Ledgered table: delete only rows with NO remaining arrival from any
+        // other source — a record the import (or another connection) also
+        // delivered survives the disconnect. Rows that predate the ledger
+        // (no arrivals at all) keep the old behavior and are purged.
+        const deleted = await this.deleteConnectionRowsWithoutOtherEvidence(scoped, connectionId);
+        if (deleted > 0) {
+          deletedCounts[`${scoped.schema}.${scoped.table}`] = deleted;
+        }
+
+        // Survivors keep their data but must not dangle a link to a
+        // connection row deleted below.
+        const retained = await this.unlinkSurvivors(scoped, connectionId);
+        if (retained > 0) {
+          retainedCounts[`${scoped.schema}.${scoped.table}`] = retained;
+        }
+
+        continue;
+      }
+
       const count = await this.deleteWhere(
         scoped.schema,
         scoped.table,
@@ -164,9 +205,10 @@ export class DataDeletionService {
       providerId,
       tokenRevoked,
       totalDeleted,
+      retainedCounts,
     });
 
-    return { connectionId, providerId, tokenRevoked, deletedCounts, totalDeleted, auditId };
+    return { connectionId, providerId, tokenRevoked, deletedCounts, retainedCounts, totalDeleted, auditId };
   }
 
   /**
@@ -367,6 +409,55 @@ export class DataDeletionService {
 
       return false;
     }
+  }
+
+  /** Remove one connection's arrivals from the multi-provenance ledger. */
+  private async deleteConnectionArrivals(userId: string, connectionId: string): Promise<number> {
+    const result = await this.dataSource.query(
+      `DELETE FROM ci.record_sources WHERE user_id = $1 AND connection_id = $2`,
+      [userId, connectionId],
+    );
+
+    return affectedRows(result);
+  }
+
+  /**
+   * Delete a ledgered table's connection-scoped rows ONLY where no arrival
+   * from any other source remains in ci.record_sources (this connection's own
+   * arrivals were removed first). A row with zero ledger arrivals — written
+   * before the ledger existed, or by a path that does not ledger — has no
+   * counter-evidence and is purged, matching the pre-ledger behavior.
+   */
+  private async deleteConnectionRowsWithoutOtherEvidence(
+    scoped: ConnectionScopedTable,
+    connectionId: string,
+  ): Promise<number> {
+    // Identifiers come from the trusted internal deletion plan; the value is
+    // always a bound parameter (same contract as deleteWhere).
+    const result = await this.dataSource.query(
+      `DELETE FROM "${scoped.schema}"."${scoped.table}" t
+        WHERE t."${scoped.connectionColumn}" = $1
+          AND NOT EXISTS (
+            SELECT 1 FROM ci.record_sources rs
+             WHERE rs.user_id = t."${scoped.userColumn}"
+               AND rs.record_table = '${scoped.recordTable}'
+               AND rs.record_id = t."${scoped.pkColumn}"
+          )`,
+      [connectionId],
+    );
+
+    return affectedRows(result);
+  }
+
+  /** Clear the connection link on rows that survived the guarded delete. */
+  private async unlinkSurvivors(scoped: ConnectionScopedTable, connectionId: string): Promise<number> {
+    const result = await this.dataSource.query(
+      `UPDATE "${scoped.schema}"."${scoped.table}" SET "${scoped.connectionColumn}" = NULL
+        WHERE "${scoped.connectionColumn}" = $1`,
+      [connectionId],
+    );
+
+    return affectedRows(result);
   }
 
   /** DELETE ... WHERE <column> = <value>, returning the affected row count. */

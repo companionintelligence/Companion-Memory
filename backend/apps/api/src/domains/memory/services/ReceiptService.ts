@@ -5,7 +5,8 @@ import { v7 as uuid7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { type BulkInsertResult, bulkInsertIdempotent, computeChunkSize } from '@ci/common/persistence';
+import {
+  appendRecordSources, type BulkInsertResult, bulkInsertIdempotent, computeChunkSize } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
 import type {
@@ -258,7 +259,7 @@ export class ReceiptService {
       scope: { ownerUserId: context.userId },
       conflictTarget: SOURCE_IDENTITY_CONFLICT_TARGET,
       identityColumns: ['source_system', 'source_id'],
-      sourceLedger: { table: 'receipts', userId: context.userId },
+      sourceLedger: { table: 'receipts', userId: context.userId, importRunId: context.importRunId ?? null },
     });
   }
 
@@ -974,13 +975,41 @@ export class ReceiptService {
     // that just processed it.
     const extractionState = extraction.extractionState ?? 'extracted';
 
+    // Either outcome is one arrival of this receipt — ledger it (insert AND
+    // match; a match from the other pipeline is exactly the evidence
+    // ci.record_sources exists to keep). Joins the caller's transaction via
+    // `em`, so the ledger row commits or rolls back with the receipt.
+    const ledger = async (recordId: string) => {
+      if (!extraction.sourceType || !extraction.sourceSystem || !extraction.sourceId) {
+        return;
+      }
+
+      await appendRecordSources(em, { table: 'receipts', userId: context.userId }, [
+        {
+          recordId,
+          sourceType: extraction.sourceType,
+          sourceSystem: extraction.sourceSystem,
+          sourceId: extraction.sourceId,
+          importRunId: context.importRunId ?? null,
+        },
+      ]);
+    };
+
     if (existing == null) {
-      return repository.save(this.toEntity(context, { ...extraction, extractionState }));
+      const saved = await repository.save(this.toEntity(context, { ...extraction, extractionState }));
+
+      await ledger(saved.id);
+
+      return saved;
     }
 
     repository.merge(existing, this.headerPatch(extraction), { extractionState });
 
-    return repository.save(existing);
+    const saved = await repository.save(existing);
+
+    await ledger(saved.id);
+
+    return saved;
   }
 
   /**

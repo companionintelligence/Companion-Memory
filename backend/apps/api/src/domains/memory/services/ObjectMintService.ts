@@ -5,7 +5,7 @@ import { v7 as uuid7 } from 'uuid';
 
 import type { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { computeChunkSize } from '@ci/common/persistence';
+import { appendRecordSources, computeChunkSize } from '@ci/common/persistence';
 
 import { minorUnitsToDecimal } from '../entities/minorUnits';
 
@@ -384,7 +384,7 @@ export class ObjectMintService {
     for (let offset = 0; offset < rows.length; offset += chunkSize) {
       const chunk = rows.slice(offset, offset + chunkSize);
 
-      const returned = await em.query<Array<{ object_id: string; inserted: boolean }>>(
+      const returned = await em.query<Array<{ object_id: string; source_id: string | null; inserted: boolean }>>(
         `INSERT INTO ci.objects AS inv (
            object_id, user_id, owner_user_id, category, brand, model,
            identifier_codes, purchase_price, currency, acquired_at,
@@ -431,7 +431,7 @@ export class ObjectMintService {
             -- Only rows THIS service minted are refreshable. A unit the user
             -- has since edited, or one another writer owns, is left alone.
             WHERE inv.metadata->'${MINT_PROVENANCE_KEY}'->>'service' = 'ObjectMintService'
-         RETURNING inv.object_id, (xmax = 0) AS inserted`,
+         RETURNING inv.object_id, inv.source_id, (xmax = 0) AS inserted`,
         [
           userId,
           receipt.receiptId,
@@ -466,6 +466,22 @@ export class ObjectMintService {
           inserted.add(row.object_id);
         }
       }
+
+      // Ledger every arrival — inserts and refreshes alike evidence the unit
+      // (ci.record_sources; docs/design/cross-pipeline-identity.md §5). Joins
+      // the caller's transaction via `em`.
+      await appendRecordSources(
+        em,
+        { table: 'objects', userId },
+        returned
+          .filter((row) => row.source_id != null && receipt.sourceSystem != null)
+          .map((row) => ({
+            recordId: row.object_id,
+            sourceType: MINT_SOURCE_TYPE,
+            sourceSystem: receipt.sourceSystem!,
+            sourceId: row.source_id!,
+          })),
+      );
 
       // A row that came back from the DO UPDATE branch keeps the id it already
       // had, which is NOT the uuid we generated for it. Re-point the in-memory

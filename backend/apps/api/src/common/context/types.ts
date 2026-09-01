@@ -52,4 +52,12 @@ export interface UserServiceContext {
    * The unique identifier of the user performing the operation.
    */
   userId: string;
+  /**
+   * Set ONLY by the importer's PushStage: the ci_import.import_runs id whose
+   * push this write belongs to. The memory services thread it into
+   * ci.record_sources so an import run's arrivals are attributable (and an
+   * undo-a-run flow can key on it) — docs/design/cross-pipeline-identity.md §5.
+   * Absent everywhere else; never used for authorization.
+   */
+  importRunId?: string;
 }

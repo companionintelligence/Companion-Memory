@@ -14,7 +14,12 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import { HbpeNotifyService } from '@ci/common/hbpe';
-import { type BulkInsertResult, bulkInsertIdempotent, INGEST_REFRESH_COLUMNS } from '@ci/common/persistence';
+import {
+  type BulkInsertResult,
+  appendRecordSources,
+  bulkInsertIdempotent,
+  INGEST_REFRESH_COLUMNS,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { EventCreatedEvent, EventUpdatedEvent, EventRemovedEvent } from '@ci/domains/memory/events';
 import type { EntityIdentifier, IndexableEntity } from '@ci/domains/search-next';
@@ -365,6 +370,8 @@ export class CalendarEventService {
     if (sourceWhere) {
       const existing = await this.eventRepository.findOne({ where: sourceWhere });
       if (existing) {
+        await this.ledgerArrival(context, existing.id, item);
+
         return this.composeOne(existing);
       }
     }
@@ -414,6 +421,8 @@ export class CalendarEventService {
       if (sourceWhere && (err as { code?: string })?.code === '23505') {
         const existing = await this.eventRepository.findOne({ where: sourceWhere });
         if (existing) {
+          await this.ledgerArrival(context, existing.id, item);
+
           return this.composeOne(existing);
         }
       }
@@ -421,6 +430,7 @@ export class CalendarEventService {
       throw err;
     }
 
+    await this.ledgerArrival(context, eventResult.id, item);
     await this.signallingEventService.send(EventCreatedEvent, {
       eventId: eventResult.id,
     });
@@ -430,6 +440,32 @@ export class CalendarEventService {
       name: item.title,
       description: item.description ?? null,
     });
+  }
+
+  /**
+   * Ledger one arrival of an event (insert, dedup hit, or lost race — all
+   * three evidence the record; see ci.record_sources). No-op on an incomplete
+   * triple. Mirrors CommunicationService.ledgerArrival.
+   */
+  private async ledgerArrival(
+    context: UserServiceContext,
+    recordId: string,
+    item: Pick<CreateEventDto, 'source_type' | 'source_system' | 'source_id' | 'connection_id'>,
+  ): Promise<void> {
+    if (!item.source_type || !item.source_system || !item.source_id) {
+      return;
+    }
+
+    await appendRecordSources(this.eventRepository.manager, { table: 'events', userId: context.userId }, [
+      {
+        recordId,
+        sourceType: item.source_type,
+        sourceSystem: item.source_system,
+        sourceId: item.source_id,
+        connectionId: item.connection_id ?? null,
+        importRunId: context.importRunId ?? null,
+      },
+    ]);
   }
 
   async create(context: UserServiceContext, data: CreateEventDto | CreateEventDto[]): Promise<Event[]> {
@@ -514,6 +550,7 @@ export class CalendarEventService {
         sourceLedger: {
           table: 'events',
           userId: context.userId,
+          importRunId: context.importRunId ?? null,
           getConnectionId: (entity) => entity.connectionId,
         },
         // Centralized refresh contract — currently empty, so conflicts stay

@@ -35,7 +35,7 @@ describe('CalendarEventService — timestamp provenance reaches the entity', () 
     findOne: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
-    manager: { transaction: jest.Mock };
+    manager: { transaction: jest.Mock; query: jest.Mock };
   };
 
   const ctx = { userId: 'user-1' } as UserServiceContext;
@@ -51,6 +51,8 @@ describe('CalendarEventService — timestamp provenance reaches the entity', () 
       create: jest.fn((x: Partial<EventEntity>) => x),
       save: jest.fn(async (x: Partial<EventEntity>) => ({ ...x, id: x.id ?? 'inserted-id' })),
       manager: {
+        // ci.record_sources ledger writes go through manager.query.
+        query: jest.fn(async () => []),
         transaction: jest.fn(async (cb: (m: unknown) => unknown) =>
           cb({
             getRepository: (cls: unknown): unknown => (cls === EventBaseEntity ? baseRepo : repo),

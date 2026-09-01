@@ -17,6 +17,11 @@ interface Row {
   connection?: string;
   graphConnection?: string;
   tagUser?: string; // for ci_search.entity_tag join-delete
+  /** Primary key, for rows the ci.record_sources ledger references. */
+  id?: string;
+  /** Ledger rows only: which record this arrival evidences. */
+  recordTable?: string;
+  recordId?: string;
 }
 
 function makeDataSource(initial: Record<string, Row[]>) {
@@ -27,6 +32,52 @@ function makeDataSource(initial: Record<string, Row[]>) {
 
   const query = jest.fn(async (sql: string, params: unknown[] = []) => {
     const value = params[0] as string;
+
+    // Ledger arrival removal: DELETE FROM ci.record_sources WHERE user_id = $1 AND connection_id = $2
+    if (sql.includes('ci.record_sources WHERE user_id')) {
+      const key = 'ci.record_sources';
+      const before = store[key]?.length ?? 0;
+      store[key] = (store[key] ?? []).filter((r) => !(r.user === params[0] && r.connection === params[1]));
+
+      return [[], before - (store[key]?.length ?? 0)];
+    }
+
+    // Guarded connection delete: only rows with NO remaining ledger evidence go.
+    const guarded = /DELETE FROM "(\w+)"\."(\w+)" t\s+WHERE t\."connection_id" = \$1\s+AND NOT EXISTS/.exec(
+      sql,
+    );
+    if (guarded) {
+      const key = `${guarded[1]}.${guarded[2]}`;
+      const recordTable = /rs\.record_table = '(\w+)'/.exec(sql)?.[1];
+      const ledger = store['ci.record_sources'] ?? [];
+      const before = store[key]?.length ?? 0;
+      store[key] = (store[key] ?? []).filter((r) => {
+        if (r.connection !== value) {
+          return true;
+        }
+
+        return ledger.some(
+          (rs) => rs.user === r.user && rs.recordTable === recordTable && rs.recordId === r.id,
+        );
+      });
+
+      return [[], before - (store[key]?.length ?? 0)];
+    }
+
+    // Survivor unlink: UPDATE ... SET "connection_id" = NULL WHERE "connection_id" = $1
+    const unlink = /UPDATE "(\w+)"\."(\w+)" SET "connection_id" = NULL/.exec(sql);
+    if (unlink) {
+      const key = `${unlink[1]}.${unlink[2]}`;
+      let count = 0;
+      for (const r of store[key] ?? []) {
+        if (r.connection === value) {
+          delete r.connection;
+          count += 1;
+        }
+      }
+
+      return [[], count];
+    }
 
     // ci_search.entity_tag join-delete: remove rows whose tagUser matches.
     if (sql.includes('"ci_search"."entity_tag"')) {
@@ -211,6 +262,43 @@ function makeService(opts: {
 }
 
 describe('DataDeletionService.disconnectConnection', () => {
+  it('keeps a record the import also delivered: ledger-evidenced rows survive with their connection link cleared', async () => {
+    const { service, store } = makeService({
+      connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'google' }],
+      store: {
+        'ci.connections': [{ user: 'user-1', connection: 'conn-1' }],
+        'ci.communications': [
+          // Same email, delivered by BOTH the connection and a Takeout import
+          // (one converged row; the ledger holds both arrivals).
+          { user: 'user-1', connection: 'conn-1', id: 'comm-both' },
+          // Connection-only email: no other evidence, purged as before.
+          { user: 'user-1', connection: 'conn-1', id: 'comm-etl-only' },
+        ],
+        'ci.record_sources': [
+          // The connection's own arrival — removed first, so it cannot
+          // protect its own rows.
+          { user: 'user-1', connection: 'conn-1', recordTable: 'communications', recordId: 'comm-both' },
+          // The import's arrival — the evidence that keeps the row alive.
+          { user: 'user-1', recordTable: 'communications', recordId: 'comm-both' },
+          { user: 'user-1', connection: 'conn-1', recordTable: 'communications', recordId: 'comm-etl-only' },
+        ],
+      },
+    });
+
+    const result = await service.disconnectConnection({ userId: 'user-1' }, 'conn-1');
+
+    // The converged row survives, unlinked; the connection-only row is gone.
+    expect(store['ci.communications']).toEqual([{ user: 'user-1', id: 'comm-both' }]);
+    expect(result.deletedCounts['ci.communications']).toBe(1);
+    expect(result.retainedCounts['ci.communications']).toBe(1);
+
+    // The connection's ledger arrivals are gone; the import's remains.
+    expect(store['ci.record_sources']).toEqual([
+      { user: 'user-1', recordTable: 'communications', recordId: 'comm-both' },
+    ]);
+    expect(result.deletedCounts['ci.record_sources']).toBe(2);
+  });
+
   it('revokes the grant, hard-deletes the connection + its derived data, cleans the index, and audits', async () => {
     const { service, store, savedAudits, cleanOrphans, client } = makeService({
       connections: [{ id: 'conn-1', userId: 'user-1', providerId: 'google' }],
