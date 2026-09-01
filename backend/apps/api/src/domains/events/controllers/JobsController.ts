@@ -1,12 +1,65 @@
-import { Controller, ForbiddenException, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
+import { z } from 'zod';
 
 import { Context, type RequestContext } from '@ci/common/context/';
+import { READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { MAX_CONCURRENCY } from '@ci/common/job-controls';
+import { ValidationPipe } from '@ci/common/pipes';
 
+import { JobControlsDto, JobControlsService } from '../services/JobControlsService';
 import { JobDashboardDto, JobMonitorService } from '../services/JobMonitorService';
 import { JobHistoryDto, JobListDto, JobQueryService } from '../services/JobQueryService';
 import { JOB_CATEGORIES, JOB_TYPES } from '../taxonomy';
+
+/**
+ * A concurrency field, where `null` is a real value and absence is a different
+ * one.
+ *
+ * `null` means "reset this to the shipped default"; omitting the key means
+ * "leave whatever is there alone". Collapsing the two would make it impossible
+ * to change a queue's mode without also wiping its cap, and impossible to undo a
+ * cap at all. `.nullable()` accepts the first; the schema being non-strict about
+ * missing keys gives the second.
+ */
+const concurrencyField = z.number().int().min(1).max(MAX_CONCURRENCY).nullable().optional();
+
+const jobControlsSchema = z.object({
+  global: z
+    .object({
+      concurrency: concurrencyField,
+      perQueueConcurrency: concurrencyField,
+      // No `disabled`: a global switch that DROPPED every non-interactive job
+      // would put a silent, appliance-wide hole in the memory system, and heat
+      // — the reason anyone reaches for this — is solved by pausing.
+      nonInteractive: z.enum(['enabled', 'paused']).optional(),
+    })
+    .optional(),
+  queues: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(128),
+        mode: z.enum(['enabled', 'paused', 'disabled']).optional(),
+        concurrency: concurrencyField,
+      }),
+    )
+    .max(200)
+    .optional(),
+  crons: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(256),
+        // `paused` is deliberately absent: a tick that is not taken is simply
+        // not taken, so there is nothing for a schedule to be paused INTO.
+        mode: z.enum(['enabled', 'disabled']),
+      }),
+    )
+    .max(200)
+    .optional(),
+});
+
+type JobControlsBody = z.infer<typeof jobControlsSchema>;
 
 function isLoopback(request: Request): boolean {
   const ip = request.socket.remoteAddress ?? '';
@@ -19,6 +72,7 @@ export class JobsController {
   constructor(
     private readonly jobMonitorService: JobMonitorService,
     private readonly jobQueryService: JobQueryService,
+    private readonly jobControlsService: JobControlsService,
   ) {}
 
   @UseGuards(JwtOrApiKeyAuthGuard)
@@ -100,6 +154,50 @@ export class JobsController {
       windowHours: hours ? Number(hours) : undefined,
       queue,
     });
+  }
+
+  /**
+   * The persisted operator controls, and everything needed to render them
+   * honestly: current mode and cap per queue and per schedule, the shipped
+   * defaults, the ceiling each cap is bounded by, what is on each queue, and
+   * which handful of jobs refuse to be switched off.
+   *
+   * Appliance-wide, not per-user — the worker loop and the `@Cron` wrapper that
+   * enforce these have no user in scope, and a per-user cap could not shrink a
+   * semaphore that is shared by everyone's work anyway.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
+  @Get('controls')
+  controls(): Promise<JobControlsDto> {
+    return this.jobControlsService.get();
+  }
+
+  /**
+   * Change them.
+   *
+   * A PUT that behaves like a PATCH, deliberately: the body names only the
+   * controls it wants to change, because a true replace would mean the Jobs page
+   * had to send every one of ~90 rows to toggle one switch — and would silently
+   * reset anything a second operator changed in between.
+   *
+   * `write`, not `full`: nothing here deletes anything, and everything is
+   * reversible by sending the opposite value. Validation is total before the
+   * first write, so a body naming one unknown queue changes nothing rather than
+   * applying the valid half of itself.
+   *
+   * Returns the recomputed state rather than an ack — see `JobControlsService`
+   * for why "what you asked for" and "what the appliance will do" are routinely
+   * different numbers.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(WRITE_CAPABILITY)
+  @Put('controls')
+  updateControls(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(jobControlsSchema)) body: JobControlsBody,
+  ): Promise<JobControlsDto> {
+    return this.jobControlsService.update(body, context.userId ?? null);
   }
 
   /**

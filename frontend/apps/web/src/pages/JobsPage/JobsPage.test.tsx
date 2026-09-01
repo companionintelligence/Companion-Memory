@@ -5,6 +5,7 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { JobsPage } from './JobsPage';
 import type { DeadLetterGroup } from './useDeadLetters';
+import type { JobControlsResponse } from './useJobControls';
 import type { JobHistoryResponse } from './useJobHistory';
 import type { JobsDashboardResponse } from './useJobsDashboard';
 import type { JobListItem, JobListResponse } from './useJobsList';
@@ -41,6 +42,18 @@ const historyState = {
   loading: false,
   error: null as string | null,
   refresh: vi.fn(),
+};
+
+// Same as `useDeadLetters` below: `useJobControls` reads the auth context that
+// `renderWithProviders` deliberately does not supply. The card has its own test
+// file; what the PAGE owes is mounting it and refreshing it with the rest.
+const controlsState = {
+  data: null as JobControlsResponse | null,
+  loading: false,
+  saving: false,
+  error: null as string | null,
+  refresh: vi.fn(),
+  save: vi.fn(async () => true),
 };
 
 // `useDeadLetters` reads the auth context, which `renderWithProviders`
@@ -114,6 +127,12 @@ vi.mock('./useDeadLetters', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./useDeadLetters')>();
 
   return { ...actual, useDeadLetters: () => deadLetterState };
+});
+
+vi.mock('./useJobControls', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./useJobControls')>();
+
+  return { ...actual, useJobControls: () => controlsState };
 });
 
 vi.mock('./useJobHistory', async (importOriginal) => {
@@ -636,6 +655,63 @@ describe('JobsPage dead letters', () => {
     fireEvent.click(screen.getByRole('button', { name: /Refresh/ }));
 
     expect(deadLetterState.refresh).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The controls the page grew: turn a job off, cap how hard the box works.
+ *
+ * The card has its own test file. What the PAGE owes it is being findable from
+ * the counts that send someone looking for it — "something is pegging this box"
+ * is answered by the tiles and acted on in Controls, and a control four cards
+ * further down is one an operator reaches for after they have already restarted
+ * the appliance.
+ */
+describe('JobsPage controls', () => {
+  it('mounts the controls card under the summary', () => {
+    render();
+
+    const controls = screen.getByText('Controls');
+    const summary = screen.getByText('Queue Activity');
+
+    expect(controls).toBeInTheDocument();
+    // DOCUMENT_POSITION_FOLLOWING: the summary comes before the controls.
+    expect(summary.compareDocumentPosition(controls) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('refreshes the controls along with everything else', () => {
+    render();
+
+    controlsState.refresh.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /Refresh/ }));
+
+    expect(controlsState.refresh).toHaveBeenCalled();
+  });
+
+  it('reports a schedule the operator switched off as off, not as scheduled', () => {
+    render({
+      dashboard: dashboard({
+        crons: [
+          {
+            name: 'PythonFunctionCrons.hbpeNightly',
+            cron: '0 0 3 * * *',
+            timezone: null,
+            running: true,
+            nextRunAt: '2026-08-18T03:00:00.000Z',
+            lastRunAt: '2026-08-17T03:00:00.000Z',
+            lastSuccessAt: '2026-08-17T03:00:00.000Z',
+            overdue: false,
+            disabled: true,
+          },
+        ],
+      }),
+    });
+
+    // The scheduler still holds it and `nextRunAt` still advances, so without
+    // this the row would say "scheduled" for a job that will not run — exactly
+    // the silent failure the Controls card must not be able to create.
+    expect(screen.getByText('off')).toBeInTheDocument();
+    expect(screen.queryByText('scheduled')).not.toBeInTheDocument();
   });
 });
 

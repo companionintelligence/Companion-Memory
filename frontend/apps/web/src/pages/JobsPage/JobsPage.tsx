@@ -12,10 +12,12 @@ import { describeCronExpression } from './cronSchedule';
 import { DeadLettersCard } from './DeadLettersCard';
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
 import { categoryDot, categoryLabel, CATEGORY_LABELS } from './jobCategories';
+import { JobControlsCard } from './JobControlsCard';
 import { JobHistoryCharts } from './JobHistoryCharts';
 import { JobsImportActivity } from './JobsImportActivity';
 import { JobsTable } from './JobsTable';
 import { useDeadLetters } from './useDeadLetters';
+import { useJobControls } from './useJobControls';
 import { useJobHistory } from './useJobHistory';
 import { useJobsDashboard, type JobsDashboardResponse } from './useJobsDashboard';
 import {
@@ -63,6 +65,7 @@ export function JobsPage() {
   const { types: jobTypes } = useJobTypes();
   const history = useJobHistory(windowHours, filters.queue);
   const deadLetters = useDeadLetters();
+  const controls = useJobControls();
 
   const onFilterChange = useCallback((next: Partial<JobFilters>) => {
     setFilters((current) => ({ ...current, ...next }));
@@ -89,8 +92,9 @@ export function JobsPage() {
       list.refresh(),
       history.refresh(),
       deadLetters.refresh(),
+      controls.refresh(),
     ]).finally(() => setRefreshing(false));
-  }, [dashboard.refresh, list.refresh, history.refresh, deadLetters.refresh]);
+  }, [dashboard.refresh, list.refresh, history.refresh, deadLetters.refresh, controls.refresh]);
 
   const jobsTable = (
     <JobsTable
@@ -115,6 +119,16 @@ export function JobsPage() {
   );
   const schedules = (
     <SchedulesCard crons={dashboard.data?.crons ?? []} loading={dashboard.loading} jobTypes={jobTypes} />
+  );
+  const controlsCard = (
+    <JobControlsCard
+      controls={controls.data}
+      loading={controls.loading}
+      saving={controls.saving}
+      error={controls.error}
+      jobTypes={jobTypes}
+      onSave={controls.save}
+    />
   );
   const deadLettersCard = (
     <DeadLettersCard
@@ -164,6 +178,14 @@ export function JobsPage() {
           {/* Phone: live work first (jobs), reference last (history, schedules,
               dead letters). Desktop keeps history above the table and dead
               letters next to the tab that points at them. */}
+          {/* Controls sit directly under the counts on both form factors.
+              "Something is pegging this box" is answered by the tiles and acted
+              on here, and a control an operator has to scroll past four cards to
+              find is one they reach for after they have already restarted the
+              appliance. Folded closed by default, so the page it sits on is
+              still a monitoring page. */}
+          {controlsCard}
+
           {phone ? (
             <>
               {jobsTable}
@@ -402,9 +424,28 @@ function UnnamedCronWarning() {
  * server's `overdue` (its own expression, evaluated against the last recorded
  * attempt) is the only one of the three that can say something has gone wrong,
  * so it takes the badge whenever it is set.
+ *
+ * `disabled` outranks all of them, because it is the only one that is somebody's
+ * decision rather than a symptom.
  */
 function ScheduleStatus({ cron, className }: { cron: ScheduleRow['cron']; className?: string }) {
   const badge = cn('text-[10px] uppercase', className);
+
+  // Outranks every other status. The scheduler still holds a disabled schedule
+  // and `nextRunAt` still advances, so without this the row reads "scheduled" —
+  // a job that says it will run at 03:00 and then does not is the exact failure
+  // the Controls card exists to avoid creating.
+  if (cron.disabled) {
+    return (
+      <Badge
+        variant="secondary"
+        className={badge}
+        title="Switched off in Controls. The schedule is still registered, but its body does not run."
+      >
+        off
+      </Badge>
+    );
+  }
 
   if (!cron.running) {
     return (
