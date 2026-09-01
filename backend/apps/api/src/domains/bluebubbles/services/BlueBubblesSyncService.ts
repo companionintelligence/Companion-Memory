@@ -169,6 +169,7 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
     await this.withSyncClaim(config, 'BlueBubbles sync', () =>
       this.runIngest(config, 'BlueBubbles sync', {
         advanceCursor: true,
+        recordsConnectionHealth: true,
         populate: (writer, scratchDir) =>
           new BlueBubblesAPIImporter().apiImport(this.settingsFor(config), {
             pipeline: writer,
@@ -270,6 +271,9 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
           // pin it at "now" and skip the whole history behind it, forever, under
           // a `completed` run with no error. See recordSyncCursor.
           advanceCursor: false,
+          // Never: this path does not authenticate outbound, so it has no
+          // standing to say the connection is healthy. See the option's doc.
+          recordsConnectionHealth: false,
           populate: async (writer, scratchDir) => {
             for (const message of batch) {
               const graph = mapBlueBubblesMessageToGraph(message, message.chats?.[0]);
@@ -365,6 +369,19 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
     label: string,
     options: {
       advanceCursor: boolean;
+      /**
+       * Whether this pass's outcome is evidence about the OUTBOUND connection.
+       *
+       * Only a pass that actually authenticated against the BlueBubbles server
+       * may touch `connection_status` / `last_error`. A webhook flush never
+       * does — the payload arrives in hand, and the one call it does make
+       * (`downloadAttachments`) swallows its own failures — so letting it
+       * report health re-opened exactly the hole C2 closed: one inbound text
+       * after a 401'd backfill stamped `connected` and cleared the error,
+       * leaving the config row claiming a working sync that was in fact
+       * rejected. Inbound liveness has its own field, `last_webhook_received_at`.
+       */
+      recordsConnectionHealth: boolean;
       populate: (writer: StagedWriter, scratchDir: string) => Promise<void>;
     },
   ): Promise<void> {
@@ -397,6 +414,7 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
         userId,
         label,
         scratchDir,
+        recordsConnectionHealth: options.recordsConnectionHealth,
         populate: options.populate,
       });
 
@@ -413,15 +431,21 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
       }
 
       await this.importRunService.finishRun(runId);
-      await this.configService.recordConnectionResult(
-        config.id,
-        parseError == null ? 'connected' : 'error',
-        parseError,
-      );
+
+      if (options.recordsConnectionHealth) {
+        await this.configService.recordConnectionResult(
+          config.id,
+          parseError == null ? 'connected' : 'error',
+          parseError,
+        );
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
-      await this.configService.recordConnectionResult(config.id, 'error', message);
+      if (options.recordsConnectionHealth) {
+        await this.configService.recordConnectionResult(config.id, 'error', message);
+      }
+
       this.logger.error(`${label} failed`, { error: message, runId });
     } finally {
       await this.reclaimScratch(userId, runId);
@@ -450,8 +474,12 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
    *    300 of 434. Those rows are real and are pushed; the stage is `partial`
    *    (so the run rolls up `partial`, not `completed`) and the connection
    *    records the error. The cursor then advances only over what actually
-   *    landed, and because pages arrive in ascending order that is a contiguous
-   *    prefix — so the next pass resumes exactly where this one stopped.
+   *    landed, which is safe because the fetch loop ENFORCES ascending order
+   *    rather than assuming it: `apiImport` throws the moment the server hands
+   *    back a message older than the previous one, so whatever is staged is
+   *    always a contiguous prefix. Without that check this branch would be a
+   *    fresh instance of the C1 hazard — a ratcheting cursor moved past rows
+   *    that were never fetched. The next pass resumes where this one stopped.
    */
   private async runParse(
     config: BlueBubblesConfigEntity,
@@ -461,6 +489,7 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
       userId: string;
       label: string;
       scratchDir: string;
+      recordsConnectionHealth: boolean;
       populate: (writer: StagedWriter, scratchDir: string) => Promise<void>;
     },
   ): Promise<string | 'fatal' | null> {
@@ -505,7 +534,11 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
 
     if (failure != null && processed === 0) {
       await this.importRunService.failStage(stageId, failure.message);
-      await this.configService.recordConnectionResult(config.id, 'error', failure.message);
+
+      if (context.recordsConnectionHealth) {
+        await this.configService.recordConnectionResult(config.id, 'error', failure.message);
+      }
+
       this.logger.error(`${context.label}: fetch failed before anything was staged`, {
         error: failure.message,
         runId,

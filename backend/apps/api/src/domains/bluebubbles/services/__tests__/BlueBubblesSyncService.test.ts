@@ -384,6 +384,30 @@ describe('BlueBubblesSyncService.ingestWebhookMessage', () => {
     expect(importRunService.createInProcessRun).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * The webhook path never authenticates OUTBOUND — the payload arrives in
+   * hand, and the one call it does make (`downloadAttachments`) swallows its
+   * own failures. Letting it report connection health re-opened exactly the
+   * hole C2 closed: after a 401'd backfill left `error` + a reason on the
+   * config row, a single inbound text stamped `connected` and cleared it, so
+   * the UI claimed a working sync that was in fact being rejected. Rotate the
+   * server password and that is the symptom you get.
+   *
+   * Inbound liveness is not lost — it has its own field,
+   * `last_webhook_received_at`, written by the controller.
+   */
+  it('leaves the outbound connection status alone, having never tested it', async () => {
+    stubStaged({ items: 1 });
+
+    const errored = config({ connectionStatus: 'error', lastError: '401 Unauthorized' });
+    const { service, configService } = harness({ stored: errored });
+
+    await service.ingestWebhookMessage({ guid: 'live-1', dateCreated: Date.now(), text: 'hi' });
+    await jest.advanceTimersByTimeAsync(5_000);
+
+    expect(configService.recordConnectionResult).not.toHaveBeenCalled();
+  });
+
   it('never lets a live message move the backfill cursor', async () => {
     // M7: recordSyncCursor is a ratchet, so one live text arriving before the
     // backfill has caught up would pin it at "now" and skip the entire history

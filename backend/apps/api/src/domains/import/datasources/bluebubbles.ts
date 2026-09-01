@@ -468,6 +468,17 @@ export class BlueBubblesAPIImporter implements APIImporter {
     // cursor does not and resets the moment it does.
     let offset = 0;
     let seen = 0;
+    // The ascending order this pass is ALLOWED to assume, checked instead of
+    // assumed. A partial pass — the Mac sleeps at page 300 of 434 — still
+    // pushes what it staged, and the caller then advances its ratcheting
+    // cursor to MAX(occurred_at) over those rows. That is safe if and only if
+    // what was staged is a contiguous ascending PREFIX of the history: if the
+    // server ever answered out of order, the max could sit beyond messages
+    // that were never fetched, and the ratchet would skip them permanently and
+    // silently. `sort: 'ASC'` is requested, but a request is not a guarantee,
+    // so a violation stops the pass right there — which leaves the staged rows
+    // a verified prefix, and makes the cursor safe to advance either way.
+    let previousDateCreated: number | null = null;
 
     for (;;) {
       const page = await client.queryMessages({ after: cursor, limit: PAGE_LIMIT, offset });
@@ -481,6 +492,19 @@ export class BlueBubblesAPIImporter implements APIImporter {
           params.pipeline.drop?.('invalid_timestamp');
           continue;
         }
+
+        // Checked against what the SERVER returned, before any of this pass's
+        // own filtering — the invariant is about the order rows arrive in, not
+        // the subset that survives a timeframe.
+        if (previousDateCreated != null && message.dateCreated < previousDateCreated) {
+          throw new Error(
+            `bluebubbles: server returned messages out of order despite sort:'ASC' ` +
+              `(${message.dateCreated} after ${previousDateCreated}, message ${message.guid}). ` +
+              `Stopping this pass so the sync cursor only ever advances over a contiguous prefix.`,
+          );
+        }
+
+        previousDateCreated = message.dateCreated;
 
         const timestamp = new Date(message.dateCreated);
         if (!timeframeContains(params.timeframe, timestamp)) {

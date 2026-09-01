@@ -244,6 +244,58 @@ describe('BlueBubblesAPIImporter.apiImport', () => {
     await expect(new BlueBubblesAPIImporter().apiImport(SETTINGS, params)).rejects.toThrow('401');
   });
 
+  /**
+   * The caller advances a RATCHETING sync cursor to MAX(occurred_at) over what
+   * a pass staged, including a pass that died part-way. That is only safe while
+   * the staged rows are a contiguous ascending prefix — otherwise the max sits
+   * beyond messages that were never fetched, and they are skipped permanently
+   * and silently. `sort: 'ASC'` is requested but not guaranteed, so the pass
+   * stops at the first violation and keeps whatever it already staged.
+   */
+  it('stops the pass when the server answers out of order, keeping the staged rows a prefix', async () => {
+    jest.spyOn(BlueBubblesApiClient.prototype, 'queryChats').mockResolvedValue([]);
+    jest
+      .spyOn(BlueBubblesApiClient.prototype, 'queryMessages')
+      .mockResolvedValue([
+        message({ guid: 'a', dateCreated: 1_700_000_000_000 }),
+        message({ guid: 'b', dateCreated: 1_700_000_005_000 }),
+        // Older than the one before it — the ordering contract broken.
+        message({ guid: 'c', dateCreated: 1_700_000_001_000 }),
+        message({ guid: 'd', dateCreated: 1_700_000_009_000 }),
+      ]);
+
+    const { pipeline, params } = collector();
+
+    await expect(new BlueBubblesAPIImporter().apiImport(SETTINGS, params)).rejects.toThrow(
+      /out of order/,
+    );
+
+    // Everything before the violation is kept and is still a prefix; nothing at
+    // or after it is staged, so the cursor cannot be advanced past 'c'.
+    expect(pipeline).toHaveLength(2);
+    expect(pipeline.map((g) => g.item.id)).toEqual(['a', 'b']);
+  });
+
+  it('accepts equal adjacent timestamps, which a real burst produces constantly', async () => {
+    // Ascending is not STRICTLY ascending: chat.db routinely holds runs of
+    // messages sharing one timestamp, and rejecting those would fail every
+    // real pass.
+    jest.spyOn(BlueBubblesApiClient.prototype, 'queryChats').mockResolvedValue([]);
+    jest
+      .spyOn(BlueBubblesApiClient.prototype, 'queryMessages')
+      .mockResolvedValueOnce([
+        message({ guid: 'a', dateCreated: 1_700_000_000_000 }),
+        message({ guid: 'b', dateCreated: 1_700_000_000_000 }),
+        message({ guid: 'c', dateCreated: 1_700_000_000_000 }),
+      ])
+      .mockResolvedValue([]);
+
+    const { pipeline, params } = collector();
+
+    await expect(new BlueBubblesAPIImporter().apiImport(SETTINGS, params)).resolves.toBeUndefined();
+    expect(pipeline).toHaveLength(3);
+  });
+
   it('resolves over an empty server, so "nothing new" stays distinguishable from "rejected"', async () => {
     jest.spyOn(BlueBubblesApiClient.prototype, 'queryChats').mockResolvedValue([]);
     jest.spyOn(BlueBubblesApiClient.prototype, 'queryMessages').mockResolvedValue([]);
