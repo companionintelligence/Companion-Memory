@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { Button, Dialog, Input, Label, Textarea } from '@ci/shadcn';
@@ -30,6 +30,15 @@ export const UPDATE_TASK = gql(`
     }
   }
 `);
+
+const SAVE_MS = 450;
+
+type Draft = {
+  title: string;
+  description: string;
+  dueDate: string;
+  estimated: string;
+};
 
 function toDateInput(iso: string | null | undefined): string {
   if (!iso) {
@@ -63,81 +72,157 @@ function dueAtFromInput(value: string): string | null {
   return new Date(year, month - 1, day, 12).toISOString();
 }
 
-export function EditTaskModal({ task, onClose, onSaved }: Props) {
-  const [title, setTitle] = useState(task.title);
-  const [description, setDescription] = useState(task.description ?? '');
-  const [dueDate, setDueDate] = useState(toDateInput(task.dueAt));
-  const [estimated, setEstimated] = useState(
-    task.estimatedMinutes != null ? String(task.estimatedMinutes) : '',
+function draftFromTask(task: EditableTask): Draft {
+  return {
+    title: task.title,
+    description: task.description ?? '',
+    dueDate: toDateInput(task.dueAt),
+    estimated: task.estimatedMinutes != null ? String(task.estimatedMinutes) : '',
+  };
+}
+
+function draftsEqual(left: Draft, right: Draft): boolean {
+  return (
+    left.title === right.title &&
+    left.description === right.description &&
+    left.dueDate === right.dueDate &&
+    left.estimated === right.estimated
   );
+}
+
+function validateDraft(draft: Draft): string | null {
+  if (!draft.title.trim()) {
+    return 'A title is required.';
+  }
+
+  const minutes = draft.estimated.trim() ? Number(draft.estimated) : null;
+
+  if (minutes != null && (!Number.isFinite(minutes) || minutes < 1)) {
+    return 'Estimated minutes must be a positive number.';
+  }
+
+  return null;
+}
+
+function inputFromDraft(id: string, draft: Draft) {
+  const minutes = draft.estimated.trim() ? Number(draft.estimated) : null;
+
+  return {
+    id,
+    title: draft.title.trim(),
+    description: draft.description.trim() || null,
+    dueAt: dueAtFromInput(draft.dueDate),
+    estimatedMinutes: minutes,
+  };
+}
+
+export function EditTaskModal({ task, onClose, onSaved }: Props) {
+  const [draft, setDraft] = useState<Draft>(() => draftFromTask(task));
   const [error, setError] = useState<string | null>(null);
-  const [updateTask, { loading }] = useMutation(UPDATE_TASK);
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [updateTask] = useMutation(UPDATE_TASK, { errorPolicy: 'all' });
+  const lastSaved = useRef<Draft>(draftFromTask(task));
+  const persistRef = useRef<(next: Draft) => Promise<boolean>>(async () => false);
 
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
+  const persist = useCallback(
+    async (next: Draft): Promise<boolean> => {
+      const invalid = validateDraft(next);
 
-    const trimmed = title.trim();
+      if (invalid) {
+        setError(invalid);
+        setStatus('idle');
 
-    if (!trimmed) {
-      setError('A title is required.');
+        return false;
+      }
+
+      if (draftsEqual(next, lastSaved.current)) {
+        return true;
+      }
+
+      setError(null);
+      setStatus('saving');
+
+      try {
+        const { data } = await updateTask({
+          variables: { input: inputFromDraft(task.id, next) },
+        });
+
+        // The write is the source of truth. Apollo can still throw field errors
+        // on the returned task; those used to surface as "couldn't be saved"
+        // after the title was already on the server.
+        if (!data?.updateTask.success) {
+          setError("That task couldn't be saved. Try again.");
+          setStatus('idle');
+
+          return false;
+        }
+
+        lastSaved.current = next;
+        setStatus('saved');
+        onSaved?.();
+
+        return true;
+      } catch {
+        setError("That task couldn't be saved. Try again.");
+        setStatus('idle');
+
+        return false;
+      }
+    },
+    [onSaved, task.id, updateTask],
+  );
+
+  persistRef.current = persist;
+
+  useEffect(() => {
+    const invalid = validateDraft(draft);
+
+    if (invalid) {
+      setError(invalid);
+      setStatus('idle');
 
       return;
     }
 
-    const minutes = estimated.trim() ? Number(estimated) : null;
-
-    if (minutes != null && (!Number.isFinite(minutes) || minutes < 1)) {
-      setError('Estimated minutes must be a positive number.');
-
+    if (draftsEqual(draft, lastSaved.current)) {
       return;
     }
 
     setError(null);
+    const timer = window.setTimeout(() => {
+      void persistRef.current(draft);
+    }, SAVE_MS);
 
-    try {
-      const { data } = await updateTask({
-        variables: {
-          input: {
-            id: task.id,
-            title: trimmed,
-            description: description.trim() || null,
-            dueAt: dueAtFromInput(dueDate),
-            estimatedMinutes: minutes,
-          },
-        },
-      });
+    return () => window.clearTimeout(timer);
+  }, [draft]);
 
-      if (!data?.updateTask.success) {
-        setError("That task couldn't be saved. Try again.");
+  const handleClose = async () => {
+    await persistRef.current(draft);
+    onClose();
+  };
 
-        return;
-      }
-
-      onSaved?.();
-      onClose();
-    } catch {
-      setError("That task couldn't be saved. Try again.");
-    }
+  const patch = (partial: Partial<Draft>) => {
+    setDraft((current) => ({ ...current, ...partial }));
+    setStatus('idle');
   };
 
   return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
+    <Dialog open onOpenChange={(open) => !open && void handleClose()}>
       <Dialog.Content className="sm:max-w-[425px]">
         <Dialog.Header>
           <Dialog.Title>Edit task</Dialog.Title>
           <Dialog.Description>
-            Change the title, notes, due date, or how long it should take.
+            Changes save as you type. Close when you are done.
           </Dialog.Description>
         </Dialog.Header>
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="edit-task-title">Title</Label>
             <Textarea
               id="edit-task-title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              disabled={loading}
+              value={draft.title}
+              onChange={(e) => patch({ title: e.target.value })}
               autoFocus
               rows={4}
               className="min-h-20 resize-y"
@@ -148,9 +233,8 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
             <Label htmlFor="edit-task-description">Notes</Label>
             <Textarea
               id="edit-task-description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              disabled={loading}
+              value={draft.description}
+              onChange={(e) => patch({ description: e.target.value })}
               rows={3}
             />
           </div>
@@ -161,9 +245,8 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
               <Input
                 id="edit-task-due"
                 type="date"
-                value={dueDate}
-                onChange={(e) => setDueDate(e.target.value)}
-                disabled={loading}
+                value={draft.dueDate}
+                onChange={(e) => patch({ dueDate: e.target.value })}
               />
             </div>
             <div className="flex flex-col gap-2">
@@ -173,9 +256,8 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
                 type="number"
                 min={1}
                 inputMode="numeric"
-                value={estimated}
-                onChange={(e) => setEstimated(e.target.value)}
-                disabled={loading}
+                value={draft.estimated}
+                onChange={(e) => patch({ estimated: e.target.value })}
               />
             </div>
           </div>
@@ -184,17 +266,18 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
             <p role="alert" className="text-sm text-destructive">
               {error}
             </p>
-          ) : null}
+          ) : (
+            <p className="text-sm text-muted-foreground" aria-live="polite">
+              {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : ' '}
+            </p>
+          )}
 
           <Dialog.Footer>
-            <Button type="button" variant="outline" onClick={onClose} disabled={loading}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={loading || title.trim().length === 0}>
-              {loading ? 'Saving…' : 'Save'}
+            <Button type="button" onClick={() => void handleClose()}>
+              Done
             </Button>
           </Dialog.Footer>
-        </form>
+        </div>
       </Dialog.Content>
     </Dialog>
   );

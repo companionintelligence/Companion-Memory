@@ -1,22 +1,10 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { GraphQLError } from 'graphql';
 import { describe, expect, it, vi } from 'vitest';
 
-import { gql } from '@/graphql';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
-import { EditTaskModal } from './EditTaskModal';
-
-const UPDATE_TASK = gql(`
-  mutation UpdateTask($input: UpdateTaskInput!) {
-    updateTask(input: $input) {
-      success
-      task {
-        id
-        ...TaskRowFragment
-      }
-    }
-  }
-`);
+import { EditTaskModal, UPDATE_TASK } from './EditTaskModal';
 
 const TASK = {
   id: 'dGFzazoxMTE=',
@@ -26,20 +14,48 @@ const TASK = {
   estimatedMinutes: 30,
 };
 
-function updatedNode() {
+function updatedTask(title = 'Write the migration notes') {
   return {
     __typename: 'TaskType' as const,
     id: TASK.id,
-    title: 'Write the migration notes',
+    title,
     description: 'First draft',
     status: 'open',
     priority: 3,
     parentId: null,
     dueAt: null,
     scheduledFor: null,
+    placedOnCalendar: false,
     deferUntil: null,
     estimatedMinutes: 45,
     completedAt: null,
+  };
+}
+
+function updateMock(title: string, extra: { errors?: GraphQLError[] } = {}) {
+  return {
+    request: {
+      query: UPDATE_TASK,
+      variables: {
+        input: {
+          id: TASK.id,
+          title,
+          description: 'First draft',
+          dueAt: null,
+          estimatedMinutes: 45,
+        },
+      },
+    },
+    result: {
+      errors: extra.errors,
+      data: {
+        updateTask: {
+          __typename: 'UpdateTaskPayload',
+          success: true,
+          task: updatedTask(title),
+        },
+      },
+    },
   };
 }
 
@@ -56,60 +72,62 @@ describe('EditTaskModal', () => {
     expect(screen.getByLabelText(/^minutes$/i)).toHaveValue(30);
   });
 
-  it('cancels without sending an update', () => {
+  it('closes without sending when nothing changed', async () => {
     const onClose = vi.fn();
-    renderWithProviders(<EditTaskModal task={TASK} onClose={onClose} />, { mocks: [] });
+    const onSaved = vi.fn();
 
-    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    renderWithProviders(<EditTaskModal task={TASK} onClose={onClose} onSaved={onSaved} />, { mocks: [] });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: /^done$/i }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(onSaved).not.toHaveBeenCalled();
   });
 
-  it('saves a new title and estimate', async () => {
+  it('autosaves a title change without closing', async () => {
     const onClose = vi.fn();
     const onSaved = vi.fn();
 
     renderWithProviders(<EditTaskModal task={TASK} onClose={onClose} onSaved={onSaved} />, {
+      mocks: [updateMock('Write the migration notes')],
+    });
+
+    fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: 'Write the migration notes' } });
+    fireEvent.change(screen.getByLabelText(/^minutes$/i), { target: { value: '45' } });
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled(), { timeout: 2000 });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(/^saved$/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('treats a successful write as saved even when Apollo reports field errors', async () => {
+    const onSaved = vi.fn();
+
+    renderWithProviders(<EditTaskModal task={TASK} onClose={vi.fn()} onSaved={onSaved} />, {
       mocks: [
-        {
-          request: {
-            query: UPDATE_TASK,
-            variables: {
-              input: {
-                id: TASK.id,
-                title: 'Write the migration notes',
-                description: 'First draft',
-                dueAt: null,
-                estimatedMinutes: 45,
-              },
-            },
-          },
-          result: {
-            data: {
-              updateTask: {
-                __typename: 'UpdateTaskPayload',
-                success: true,
-                task: updatedNode(),
-              },
-            },
-          },
-        },
+        updateMock('Write the migration notes', {
+          errors: [new GraphQLError('Cannot query field placedOnCalendar')],
+        }),
       ],
     });
 
     fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: 'Write the migration notes' } });
     fireEvent.change(screen.getByLabelText(/^minutes$/i), { target: { value: '45' } });
-    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
-    expect(onSaved).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onSaved).toHaveBeenCalled(), { timeout: 2000 });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText(/^saved$/i)).toBeInTheDocument();
   });
 
-  it('refuses a blank title', () => {
-    renderWithProviders(<EditTaskModal task={TASK} onClose={vi.fn()} />, { mocks: [] });
+  it('does not save a blank title', async () => {
+    const onSaved = vi.fn();
+
+    renderWithProviders(<EditTaskModal task={TASK} onClose={vi.fn()} onSaved={onSaved} />, { mocks: [] });
 
     fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: '   ' } });
 
-    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/title is required/i);
+    expect(onSaved).not.toHaveBeenCalled();
   });
 });
