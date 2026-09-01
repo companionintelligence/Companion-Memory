@@ -20,7 +20,20 @@ import { LoggerService } from '../services/LoggerService';
  * logger's, not the controller's: a future route that puts a token in its path
  * must be added here, and nowhere else, to stop leaking it.
  */
-const SECRET_PATH_SEGMENTS: readonly RegExp[] = [/^(\/api\/bluebubbles\/webhook\/)[^/?#]+/];
+/**
+ * The `/api` prefix is OPTIONAL here, and that is the whole point: there is no
+ * `setGlobalPrefix` on this server (see `docs/api/auth-and-conventions.md`), and
+ * every edge that fronts it strips `/api` before forwarding — Caddy in dev
+ * (`scripts/dev-stack/index.ts`), nginx in production
+ * (`rewrite ^/api/(.*)$ /$1 break`). So the string this middleware actually
+ * receives is `/bluebubbles/webhook/<secret>`, and a pattern anchored on the
+ * browser-facing `/api/...` form matched nothing in any deployment — the
+ * credential went to the log in plaintext on every delivery while a test
+ * feeding the prefixed form passed.
+ */
+const SECRET_PATH_SEGMENTS: readonly RegExp[] = [
+  /^((?:\/api)?\/bluebubbles\/webhook\/)[^/?#]+/,
+];
 
 /**
  * The request path as it is safe to write down.

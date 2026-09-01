@@ -14,6 +14,24 @@ describe('redactRequestPath', () => {
     );
   });
 
+  /**
+   * The case every real deployment actually produces, and the one the first
+   * version of this redaction missed: there is no `setGlobalPrefix`, and both
+   * the dev Caddy and the production nginx strip `/api` before forwarding, so
+   * what this middleware receives is the BARE path. A pattern anchored on the
+   * browser-facing `/api/...` form therefore matched nothing anywhere — while
+   * a test that only fed it the prefixed form passed, and the credential kept
+   * going to the log on every delivery.
+   */
+  it('redacts the bare path the server actually receives behind the proxy', () => {
+    expect(redactRequestPath('/bluebubbles/webhook/deadbeefcafe0123')).toBe(
+      '/bluebubbles/webhook/REDACTED',
+    );
+    expect(redactRequestPath('/bluebubbles/webhook/abc123?retry=1')).toBe(
+      '/bluebubbles/webhook/REDACTED?retry=1',
+    );
+  });
+
   it('keeps the route recognizable, and survives a query string', () => {
     // "A webhook was delivered" is what the log line exists to say; dropping the
     // segment entirely would make it indistinguishable from a request that never
