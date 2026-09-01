@@ -2,7 +2,6 @@ import { GlobalUID } from '@ci/common';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { ConnectionPage, GET_CONNECTION, UPDATE_CONNECTION } from './ConnectionPage';

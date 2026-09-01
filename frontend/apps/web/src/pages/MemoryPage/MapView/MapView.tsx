@@ -448,22 +448,22 @@ function ClusterPopupContent({
       <div className="max-h-72 overflow-y-auto py-2">
         {cluster.items.map((pin) => (
           <ChatAbout key={pin.id} context={pinChatContext(pin)}>
-          <button
-            type="button"
-            className="flex w-full items-start gap-2 px-3 py-2 text-left text-card-foreground transition-colors duration-150 hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            onClick={() => onSelect(pin)}
-          >
-            <Calendar className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium">{pin.title}</span>
-              {pin.timeLabel && (
-                <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                  <Clock className="h-3 w-3" />
-                  {pin.timeLabel}
-                </span>
-              )}
-            </span>
-          </button>
+            <button
+              type="button"
+              className="flex w-full items-start gap-2 px-3 py-2 text-left text-card-foreground transition-colors duration-150 hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              onClick={() => onSelect(pin)}
+            >
+              <Calendar className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium">{pin.title}</span>
+                {pin.timeLabel && (
+                  <span className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                    <Clock className="h-3 w-3" />
+                    {pin.timeLabel}
+                  </span>
+                )}
+              </span>
+            </button>
           </ChatAbout>
         ))}
       </div>

@@ -3,6 +3,7 @@ import { Cron as NestCron, type CronOptions } from '@nestjs/schedule';
 import { v4 as uuidv4 } from 'uuid';
 
 import { ContextService } from '@ci/common/context';
+import { JobControlStore } from '@ci/common/job-controls';
 import { serves, type ServedRole } from '@ci/common/roles';
 
 import { CronRunStore } from '../CronRunStore';
@@ -31,6 +32,12 @@ import { CronRunStore } from '../CronRunStore';
  * throwing tick still counts as fired, and the success lands after it returns.
  * A schedule that fails every tick is otherwise indistinguishable from a
  * healthy one on the dashboard.
+ *
+ * This wrapper is also the ONE place a recurring job can be turned off. All 53
+ * scheduled methods on the appliance go through it, so gating here is the whole
+ * of "the user disabled this schedule" — there is no second path to a `@Cron`
+ * body, and the raw `@nestjs/schedule` import that would bypass it is an eslint
+ * error everywhere but this file's own directory.
  */
 const cronLogger = new Logger('Cron');
 
@@ -56,6 +63,26 @@ export function Cron(expression: string, options?: CiCronOptions) {
       typeof cronOptions.name === 'string' && cronOptions.name.length > 0 ? cronOptions.name : label;
 
     descriptor.value = async function (...args: unknown[]) {
+      // The operator's switch, checked before anything else this tick would do.
+      //
+      // Ahead of the `ci.cron_runs` stamp on purpose: a disabled schedule did
+      // NOT run, and recording a fire for it would leave the Jobs page showing a
+      // healthy "last run" two minutes old for a job the appliance is
+      // deliberately not doing. The dashboard reads the same setting and renders
+      // the row as disabled instead — which is the difference between a control
+      // an operator can trust and a job that has quietly stopped.
+      //
+      // The lookup is a synchronous Map hit against a snapshot refreshed on a
+      // timer, so it costs nothing per tick and cannot make a schedule fail by
+      // being unable to reach the database. When the store has never been
+      // configured — every unit test, any CLI script — it answers `enabled` and
+      // this branch is dead code.
+      if (JobControlStore.cronMode(runName) === 'disabled') {
+        JobControlStore.recordSkip('cron', runName);
+
+        return undefined;
+      }
+
       const traceId = uuidv4();
       // Stamp before the body so a long or failing tick still counts as "ran"
       // — matching SchedulerRegistry lastDate() semantics.

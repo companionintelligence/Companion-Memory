@@ -574,7 +574,7 @@ export class EstimateLocationStage implements Stage {
   /**
    * The slice's rows, in one statement.
    *
-   * Raw SQL rather than `EventService`, for the reason `EmbedStage` gives about
+   * Raw SQL rather than `CalendarEventService`, for the reason `EmbedStage` gives about
    * `ContentService`: the columns wanted are a strict subset of ~40, and going
    * through the memory domain's barrel from inside `domains/pipeline` would couple
    * the pipeline's module graph to it for a projection.

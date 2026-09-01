@@ -9,9 +9,9 @@ import { BaseEntity } from './BaseEntity';
  * `events_event_id_entities_fk` foreign key). The base row is the SOLE owner of
  * the event's title (stored as `name`) and `description` — the detail table
  * carries only event-specific data — so every egress read composes the pair
- * (see {@link EventService}).
+ * (see {@link CalendarEventService}).
  *
- * This class has no egress type of its own; {@link EventService} is its only
+ * This class has no egress type of its own; {@link CalendarEventService} is its only
  * surface. No decorated `@OneToOne` to `EventEntity` (the double-mapped-PK
  * footgun); the service composes the aggregate by shared id.
  */

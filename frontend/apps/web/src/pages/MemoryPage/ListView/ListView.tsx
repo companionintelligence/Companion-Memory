@@ -89,15 +89,11 @@ export function ListView() {
         break;
 
       case 'BrowserActivityType':
-        row = (
-          <BrowserActivityRow browserActivity={item} time={time} onClick={() => setActiveEntity(item)} />
-        );
+        row = <BrowserActivityRow browserActivity={item} time={time} onClick={() => setActiveEntity(item)} />;
         break;
 
       case 'CommunicationType':
-        row = (
-          <CommunicationRow communication={item} time={time} onClick={() => setActiveEntity(item)} />
-        );
+        row = <CommunicationRow communication={item} time={time} onClick={() => setActiveEntity(item)} />;
         break;
 
       case 'ConceptType':

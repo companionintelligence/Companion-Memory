@@ -10,6 +10,7 @@ import { useRescheduleEvent } from '@/api/useRescheduleEvent';
 import { type RhythmDay, type ScheduleEvent, useScheduleService } from '@/api/useScheduleService';
 import { useFeatures } from '@/common/feature';
 import { VerticalCalendar } from '@/components/HorizonGrid';
+import { RHYTHM_NOISE_FLOOR, daypartWeights } from '@/components/HorizonGrid/scheduleGeometry';
 import { TodayNowNext, WeekDayChips } from '@/components/HorizonGrid/TodayNowNext';
 import { PageContent } from '@/components/layout';
 import { TaskSlate, TaskSlateDrawer } from '@/components/TaskSlate';
@@ -65,8 +66,9 @@ function formatRange(start: Date, end: Date): string {
  * resolver's try/catch (ForecastResolver.ts) swallowed a real HBPE failure —
  * a genuinely untrained model returns real data with
  * systemStatus: 'COLD_START' instead, so a null `weekForecast` here can only
- * mean the call failed, never "not started yet". Only once the flag is on and
- * data resolved does `coversWindow` / the success copy apply.
+ * mean the call failed, never "not started yet". Only once the flag is on, the
+ * data resolved, `coversWindow` holds AND the window actually contains a
+ * pattern the grid will draw does the success copy apply.
  */
 function rhythmFooter(
   generatedAt: string | null,
@@ -89,6 +91,16 @@ function rhythmFooter(
 
   if (!coversWindow) {
     return 'HBPE rhythm only covers the next seven days — this week shows committed time only.';
+  }
+
+  // A forecast that resolved for the right window can still carry nothing the
+  // grid will draw: `week_forecast` returns a row per day whether or not any
+  // recurrence profile qualified, so a cold or thin model answers with seven
+  // empty days. Claiming "from your history, updated <date>" over strips that
+  // are all decoration is the same lie the `coversWindow` branch above exists
+  // to prevent — the footer has to follow the ink, not the envelope.
+  if (!hasRhythmSignal) {
+    return 'No rhythm pattern learned for this week yet — showing committed time only.';
   }
 
   const updated = new Date(generatedAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
@@ -227,7 +239,14 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   const pipelineRunning = Boolean(
     hbpeEnabled && Boolean(occupancy?.systemStatus?.includes(':')) && !occupancyStalled,
   );
-  const hasRhythmSignal = rhythm.some((day) => day.clusters.length > 0);
+  // "Has signal" has to mean what the grid draws, not what the payload holds:
+  // the strip lights a cell only at or above RHYTHM_NOISE_FLOOR, so a day of
+  // clusters that all fall under it renders exactly like a day of no clusters
+  // at all. Measuring the same weights the strip does keeps the footer from
+  // announcing a layer the user cannot see.
+  const hasRhythmSignal = rhythm.some((day) =>
+    daypartWeights(day).some((weight) => weight >= RHYTHM_NOISE_FLOOR),
+  );
 
   // Placing a backlog task mints a planned block, so the committed lane has to re-read.
   const {

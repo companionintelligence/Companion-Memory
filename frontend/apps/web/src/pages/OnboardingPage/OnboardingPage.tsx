@@ -274,8 +274,7 @@ export function OnboardingPage() {
 
   const isFinalStep = currentStepKey === 'run-first-sync';
   const showNav = !isFinalStep;
-  const navInScroll =
-    currentStepKey === 'connect-source' || currentStepKey === 'import-archives';
+  const navInScroll = currentStepKey === 'connect-source' || currentStepKey === 'import-archives';
 
   const navRow = showNav ? (
     <div

@@ -4,12 +4,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 
-import type {
-  DueResponse,
-  ForecastResponse,
-  ForageTrialResponse,
-  WeekForecastResponse,
-} from '../types';
+import type { DueResponse, ForecastResponse, ForageTrialResponse, WeekForecastResponse } from '../types';
 
 type ForageLakeSpec = Record<string, unknown>;
 

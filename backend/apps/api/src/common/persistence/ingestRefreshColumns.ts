@@ -18,7 +18,7 @@ export type IngestEntityKind =
  * self-heals (the cross-repo handshake itself is out of scope here — nothing
  * reads this over the wire yet).
  */
-export const INGEST_SCHEMA_VERSION = 3;
+export const INGEST_SCHEMA_VERSION = 4;
 
 /**
  * Central, per-entity list of the DB columns a bulk re-ingest of an existing
@@ -82,7 +82,27 @@ export const INGEST_REFRESH_COLUMNS: Record<IngestEntityKind, readonly string[]>
   // importer's to refresh either.
   item: [],
   content: [],
-  browser_activity: [],
+  // BrowserActivityResolver.updateBrowserActivity exposes exactly two
+  // user-editable fields — `title`, `url` — nothing else on the entity is
+  // reachable from a direct edit. That makes every other capture-derived
+  // column a safe self-heal candidate, unlike event/item/content, whose
+  // update mutations already expose nearly every plausible column (a refresh
+  // there would routinely clobber a user's edit).
+  //
+  // `page_summary` / `category` / `productivity_score` are excluded even
+  // though they are not user-editable: BrowserActivityEntity comments them as
+  // "AI-generated insights" — enrichment output, not something the importer
+  // ever populates from the source. Refreshing them on a bulk re-sync would
+  // overwrite whatever an enrichment listener already computed with
+  // whatever (usually null) the importer sends.
+  browser_activity: [
+    'action_type',
+    'properties',
+    'duration_seconds',
+    'scroll_depth_percent',
+    'is_incognito',
+    'contains_sensitive',
+  ],
   // The catalog data a product feed owns. Excluded: the resolved links
   // (product_entity_id, image_content_id, manual_content_ids) and
   // identity_confidence, which say what the SERVER concluded — a re-sync that

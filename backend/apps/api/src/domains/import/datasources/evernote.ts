@@ -291,6 +291,7 @@ export class EvernoteFileImporter implements FileImporter {
         metadata: {
           Title: title,
           Tags: tags.length > 0 ? tags : undefined,
+          Updated: parseEnexDate(firstString(note.updated))?.toISOString(),
           Source: 'Evernote',
         },
       },

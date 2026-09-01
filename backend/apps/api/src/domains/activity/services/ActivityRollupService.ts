@@ -7,7 +7,7 @@ import { LoggerService } from '@ci/common/logging';
 import { MessageService } from '@ci/domains/conversations';
 import { FileService } from '@ci/domains/files';
 import { AnswerService } from '@ci/domains/intelligence';
-import { CommunicationService, ContentService, EventService, GraphUtilityService } from '@ci/domains/memory';
+import { CommunicationService, ContentService, CalendarEventService, GraphUtilityService } from '@ci/domains/memory';
 import { NoteService } from '@ci/domains/notes';
 import { UserService } from '@ci/domains/user';
 
@@ -70,7 +70,7 @@ export class ActivityRollupService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     communicationService: CommunicationService,
-    eventService: EventService,
+    eventService: CalendarEventService,
     messageService: MessageService,
     noteService: NoteService,
     contentService: ContentService,

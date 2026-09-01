@@ -14,7 +14,7 @@ import {
   CommunicationService,
   ConceptService,
   ContentService,
-  EventService,
+  CalendarEventService,
   EventEntity,
   CommunicationEntity,
   ItemService,
@@ -242,7 +242,7 @@ export class SearchResolver {
     private readonly conceptService: ConceptService,
     private readonly contentService: ContentService,
     private readonly entityResolutionService: EntityResolutionService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly fileService: FileService,
     private readonly fileChunkService: FileChunkService,
     private readonly itemService: ItemService,
@@ -298,7 +298,7 @@ export class SearchResolver {
    * Filter parity with `search` is deliberate and is why this lives on the
    * search resolver rather than growing its own filter language:
    *   - who / where / connector / when / activity go straight down to SQL
-   *     through the same {@link EventService} filters the timed search path uses;
+   *     through the same {@link CalendarEventService} filters the timed search path uses;
    *   - a free-text query and tags are resolved by the same search/tag services
    *     `search` uses, then intersected in SQL via the `ids` filter.
    * `hasLocation` is forced on regardless of input — an unlocated event has no

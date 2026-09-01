@@ -76,57 +76,69 @@ export default function MobileMemoryPage() {
   return (
     <>
       <PullToRefresh onRefresh={refetch}>
-      <PageContent className="gap-2 p-0">
-        <div className="flex min-h-0 flex-1 flex-col gap-2 px-2">
-          {/* Search and Add live in MobileTopBar — same unified header as
+        <PageContent className="gap-2 p-0">
+          <div className="flex min-h-0 flex-1 flex-col gap-2 px-2">
+            {/* Search and Add live in MobileTopBar — same unified header as
               desktop, so this page does not render a second search box or
               a type-specific create button. */}
-          <MemoryHubShell fillHeight>
-            <div className="space-y-2">
-              <ExplorerToolbar open />
+            <MemoryHubShell fillHeight>
+              <div className="space-y-2">
+                <ExplorerToolbar open />
 
-              {/* Tab Navigation */}
-              <Tabs defaultValue="list" onValueChange={setActiveTab} value={activeTab}>
-                <Tabs.List className="grid w-full grid-cols-5">
-                  <Tabs.Trigger value="list" className="flex items-center gap-1 px-1 text-[11px] sm:text-sm">
-                    <List className="h-4 w-4" />
-                    List
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="map" className="flex items-center gap-1 px-1 text-[11px] sm:text-sm">
-                    <MapIcon className="h-4 w-4" />
-                    Map
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="timeline" className="flex items-center gap-1 px-1 text-[11px] sm:text-sm">
-                    <GanttChart className="h-4 w-4" />
-                    Timeline
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="gallery" className="flex items-center gap-1 px-1 text-[11px] sm:text-sm">
-                    <Images className="h-4 w-4" />
-                    Gallery
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="graph" className="flex items-center gap-1 px-1 text-[11px] sm:text-sm">
-                    <ChartNetwork className="h-4 w-4" />
-                    Graph
-                  </Tabs.Trigger>
-                </Tabs.List>
-              </Tabs>
-            </div>
+                {/* Tab Navigation */}
+                <Tabs defaultValue="list" onValueChange={setActiveTab} value={activeTab}>
+                  <Tabs.List className="grid w-full grid-cols-5">
+                    <Tabs.Trigger
+                      value="list"
+                      className="flex items-center gap-1 px-1 text-[11px] sm:text-sm"
+                    >
+                      <List className="h-4 w-4" />
+                      List
+                    </Tabs.Trigger>
+                    <Tabs.Trigger value="map" className="flex items-center gap-1 px-1 text-[11px] sm:text-sm">
+                      <MapIcon className="h-4 w-4" />
+                      Map
+                    </Tabs.Trigger>
+                    <Tabs.Trigger
+                      value="timeline"
+                      className="flex items-center gap-1 px-1 text-[11px] sm:text-sm"
+                    >
+                      <GanttChart className="h-4 w-4" />
+                      Timeline
+                    </Tabs.Trigger>
+                    <Tabs.Trigger
+                      value="gallery"
+                      className="flex items-center gap-1 px-1 text-[11px] sm:text-sm"
+                    >
+                      <Images className="h-4 w-4" />
+                      Gallery
+                    </Tabs.Trigger>
+                    <Tabs.Trigger
+                      value="graph"
+                      className="flex items-center gap-1 px-1 text-[11px] sm:text-sm"
+                    >
+                      <ChartNetwork className="h-4 w-4" />
+                      Graph
+                    </Tabs.Trigger>
+                  </Tabs.List>
+                </Tabs>
+              </div>
 
-            {/* Content */}
-            <>
-              {activeTab === 'list' && <ListView />}
+              {/* Content */}
+              <>
+                {activeTab === 'list' && <ListView />}
 
-              {activeTab === 'map' && <MobileMapView />}
+                {activeTab === 'map' && <MobileMapView />}
 
-              {activeTab === 'timeline' && <StoryTimelineView />}
+                {activeTab === 'timeline' && <StoryTimelineView />}
 
-              {activeTab === 'gallery' && <GalleryView />}
+                {activeTab === 'gallery' && <GalleryView />}
 
-              {activeTab === 'graph' && <GraphView variant="mobile" />}
-            </>
-          </MemoryHubShell>
-        </div>
-      </PageContent>
+                {activeTab === 'graph' && <GraphView variant="mobile" />}
+              </>
+            </MemoryHubShell>
+          </div>
+        </PageContent>
       </PullToRefresh>
       {activeSheetEntity && (
         <Sheet open={detailsOpen} onOpenChange={toggleactiveEntity}>

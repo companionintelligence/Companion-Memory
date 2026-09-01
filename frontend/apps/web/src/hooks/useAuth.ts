@@ -12,6 +12,7 @@ import {
   getLaunchUrl,
   isIosPlatform,
   isNativePlatform,
+  isTauriPlatform,
   claimNativeOidcCode,
   parseOidcCallbackUrl,
   secureStorageGet,
@@ -310,6 +311,12 @@ type ReturnValue = [
       password: string,
       memoryOrigin: string,
     ) => Promise<boolean>;
+    /**
+     * Re-mint the access JWT from the 7-day session cookie. Safe to call when
+     * a background tab missed the scheduled refresh and the short-lived token
+     * has already expired.
+     */
+    refresh: () => Promise<void>;
   },
 ];
 
@@ -581,13 +588,16 @@ function useAuth(): ReturnValue {
 
   useAutoRefreshToken(accessToken, refresh);
 
-  // Native only: complete "Sign in with CI Portal" when the system browser redirects
-  // back into the app via the `companion://oidc/callback?...` deep link. Unrelated
-  // deep links (other schemes/paths) parse to null and are ignored. iOS often
-  // cold-starts from Safari's "Open with Companion", so we also consume
-  // `getLaunchUrl` there — web and Android keep the live listener only.
+  // Native only — Capacitor (iOS/Android) or Tauri (desktop): complete "Sign in with
+  // CI Portal" when the system browser redirects back into the app via the
+  // `companion://oidc/callback?...` deep link. Unrelated deep links (other
+  // schemes/paths) parse to null and are ignored. iOS often cold-starts from
+  // Safari's "Open with Companion", so we also consume `getLaunchUrl` there — web
+  // and Android keep the live listener only. Desktop's cold-start equivalent is
+  // handled entirely inside addAppUrlOpenListener itself (main.rs unifies cold- and
+  // warm-start delivery on that side), so no separate call is needed here for it.
   useEffect(() => {
-    if (!isNativePlatform()) {
+    if (!isNativePlatform() && !isTauriPlatform()) {
       return;
     }
 
@@ -733,38 +743,70 @@ function useAuth(): ReturnValue {
       signup,
       completePortalMemoryConnect,
       completeMemoryPasswordConnect,
+      refresh,
     },
   ];
 }
 
+function tokenRefreshAt(accessToken: string): number {
+  const decoded = jwtDecode<JwtPayload>(accessToken);
+  return ((decoded.exp || 0) * 1000) - 60 * 1000;
+}
+
 function useAutoRefreshToken(accessToken: string | null | undefined, onRefresh: () => Promise<void>) {
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onRefreshRef = useRef(onRefresh);
+
+  onRefreshRef.current = onRefresh;
 
   useEffect(() => {
     if (!accessToken) {
       return;
     }
 
-    const decoded = jwtDecode<JwtPayload>(accessToken);
-    const exp = (decoded.exp || 0) * 1000;
-    const now = Date.now();
-    const refreshAt = exp - 60 * 1000;
-    const delay = Math.max(refreshAt - now, 0);
+    const schedule = () => {
+      const delay = Math.max(tokenRefreshAt(accessToken) - Date.now(), 0);
 
-    if (timeoutRef.current) {
-      clearTimeout(timeoutRef.current);
-    }
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
 
-    timeoutRef.current = setTimeout(() => {
-      onRefresh();
-    }, delay);
+      timeoutRef.current = setTimeout(() => {
+        void onRefreshRef.current();
+      }, delay);
+    };
+
+    // Background tabs throttle setTimeout. When the user comes back, recover
+    // immediately if the access JWT is inside (or past) the refresh window.
+    const recoverIfDue = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return;
+      }
+
+      if (Date.now() >= tokenRefreshAt(accessToken)) {
+        void onRefreshRef.current();
+
+        return;
+      }
+
+      schedule();
+    };
+
+    schedule();
+    document.addEventListener('visibilitychange', recoverIfDue);
+    window.addEventListener('focus', recoverIfDue);
+    window.addEventListener('pageshow', recoverIfDue);
 
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
+
+      document.removeEventListener('visibilitychange', recoverIfDue);
+      window.removeEventListener('focus', recoverIfDue);
+      window.removeEventListener('pageshow', recoverIfDue);
     };
-  }, [accessToken, onRefresh]);
+  }, [accessToken]);
 }
 
 const { Provider, useHookContext } = createHookContext(useAuth);

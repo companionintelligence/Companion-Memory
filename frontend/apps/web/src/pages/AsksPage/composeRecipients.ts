@@ -190,13 +190,7 @@ export function unreachablePeers(
  * assert every shape below names one. That assertion is the whole point of the
  * constant — see the block comment on {@link COMPOSER_SHAPES}.
  */
-export const ASK_ARCHETYPES = [
-  'relationship',
-  'content',
-  'availability',
-  'attribute',
-  'identity',
-] as const;
+export const ASK_ARCHETYPES = ['relationship', 'content', 'availability', 'attribute', 'identity'] as const;
 
 export type AskArchetype = (typeof ASK_ARCHETYPES)[number];
 

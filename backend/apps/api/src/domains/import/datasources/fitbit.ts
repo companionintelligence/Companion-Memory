@@ -313,6 +313,14 @@ export class FitbitFileImporter implements FileImporter {
       return;
     }
 
+    let tsEnd: Date | undefined;
+    if (rec.endTime) {
+      const d = new Date(rec.endTime);
+      if (!isNaN(d.getTime())) {
+        tsEnd = d;
+      }
+    }
+
     const minutesAsleep = typeof rec.minutesAsleep === 'number' ? rec.minutesAsleep : undefined;
     const minutesAwake = typeof rec.minutesAwake === 'number' ? rec.minutesAwake : undefined;
     const efficiency = typeof rec.efficiency === 'number' ? rec.efficiency : undefined;
@@ -332,12 +340,14 @@ export class FitbitFileImporter implements FileImporter {
         id: `fitbit:sleep:${rec.logId ?? `${base}:${index}`}`,
         classification: 'sleep',
         timestamp: ts,
+        timespanEnd: tsEnd,
         content: { filename: 'sleep.txt', mediaType: 'text/plain', data: async () => Buffer.from(summary) },
         metadata: {
           Title: summary,
           'Minutes Asleep': minutesAsleep,
           'Minutes Awake': minutesAwake,
           Efficiency: efficiency,
+          'Duration (min)': typeof rec.duration === 'number' ? rec.duration / 60000 : undefined,
           'Date Of Sleep': rec.dateOfSleep || undefined,
           Source: 'Fitbit',
         },

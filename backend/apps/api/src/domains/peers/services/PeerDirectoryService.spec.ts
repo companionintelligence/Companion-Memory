@@ -35,7 +35,13 @@ const mockFetch = undiciFetch as unknown as jest.Mock;
 const peers = (config as unknown as { peers: { directoryUrl?: string } }).peers;
 
 function service(): PeerDirectoryService {
-  const logger = { setContext: jest.fn(), warn: jest.fn(), log: jest.fn(), error: jest.fn(), debug: jest.fn() };
+  const logger = {
+    setContext: jest.fn(),
+    warn: jest.fn(),
+    log: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  };
 
   return new PeerDirectoryService(logger as never);
 }

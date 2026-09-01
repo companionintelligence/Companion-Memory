@@ -67,7 +67,16 @@ export class UserService {
    * no-op; `findAll()` includes those rows and is the wrong list to fan out on.
    */
   async findAllOnboarded(): Promise<User[]> {
-    const result = await this.userRepository.find({ where: { onboarded: true } });
+    // Ordered, because one caller reads position rather than the whole list:
+    // `BlueBubblesSyncService` attributes an appliance-wide connector's corpus
+    // to the FIRST onboarded account. Postgres row order is unspecified without
+    // an ORDER BY, so on a two-account appliance consecutive syncs could file
+    // the same messages under different users. Oldest-first is also the only
+    // stable meaning "first account" can have.
+    const result = await this.userRepository.find({
+      where: { onboarded: true },
+      order: { createdAt: 'ASC' },
+    });
 
     return result.map((entity) => UserEntity.toEgressType(entity));
   }

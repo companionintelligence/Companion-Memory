@@ -55,9 +55,7 @@ describe('ChatWithAgentMenu', () => {
   it('offers a connected Hermes even when it is not marked running', async () => {
     h.harnesses = [hermes];
 
-    renderWithProviders(
-      <ChatWithAgentMenu context={{ title: 'Picnic', body: 'Bring snacks' }} size="sm" />,
-    );
+    renderWithProviders(<ChatWithAgentMenu context={{ title: 'Picnic', body: 'Bring snacks' }} size="sm" />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Hermes' }));
     expect(window.open).toHaveBeenCalled();

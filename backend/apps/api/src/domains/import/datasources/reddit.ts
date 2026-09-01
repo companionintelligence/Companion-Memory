@@ -442,8 +442,25 @@ export class RedditFileImporter implements FileImporter {
     const subreddit = row.subreddit || subredditFromPermalink(row.permalink);
     const title = subject || snippet(body, 80) || (from ? `Message from ${from}` : 'Reddit message');
     // Thread/channel identity keeps a conversation's messages grouped server-side.
+    //
+    // messages_archive.csv (private messages) carries none of the four
+    // export columns above at all -- only chat_history.csv has a channel.
+    // Without a fallback, every private message between the same two people
+    // lands as its own orphan thread (19 rows on the reference corpus, all
+    // messages_archive.csv). `from`/`to` ARE reliable for a private message
+    // -- that is what makes it one -- so a normalized, order-independent
+    // pair recovers the real conversation the export never named. Skipped
+    // when either side is unknown: a key built from a blank correspondent
+    // would merge unrelated messages into one meaningless bucket, worse
+    // than leaving them unthreaded.
+    const correspondentKey = from && to ? [from, to].sort().join('␟') : undefined;
     const thread =
-      row.thread_id || row.thread_parent_message_id || row.channel_url || row.channel_name || undefined;
+      row.thread_id ||
+      row.thread_parent_message_id ||
+      row.channel_url ||
+      row.channel_name ||
+      correspondentKey ||
+      undefined;
     const key =
       row.id?.trim() ||
       row.message_id?.trim() ||

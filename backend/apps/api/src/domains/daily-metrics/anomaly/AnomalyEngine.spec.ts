@@ -76,6 +76,9 @@ describe('AnomalyEngine.scan', () => {
     const repo = memoryRepo();
     const create = jest.fn();
     const metricsService = {
+      // Null = "the store has nothing"; the engine then falls back to the
+      // wall clock, which is the behaviour these fixtures were written against.
+      analysisAnchor: jest.fn(async () => null),
       getRange: jest.fn(async (_context: UserServiceContext, from: string, to: string) => {
         const rows: DailyMetrics[] = [];
         let date = from;
@@ -118,6 +121,9 @@ describe('AnomalyEngine.scan', () => {
       id: `action-${data.title}`,
     }));
     const metricsService = {
+      // Null = "the store has nothing"; the engine then falls back to the
+      // wall clock, which is the behaviour these fixtures were written against.
+      analysisAnchor: jest.fn(async () => null),
       getRange: jest.fn(async (_context: UserServiceContext, from: string, to: string) => {
         const rows: DailyMetrics[] = [];
         let date = from;
@@ -161,6 +167,9 @@ describe('AnomalyEngine.scan', () => {
     const repo = memoryRepo();
     const create = jest.fn().mockResolvedValue({ id: 'action-1' });
     const metricsService = {
+      // Null = "the store has nothing"; the engine then falls back to the
+      // wall clock, which is the behaviour these fixtures were written against.
+      analysisAnchor: jest.fn(async () => null),
       getRange: jest.fn(async (_context: UserServiceContext, from: string, to: string) => {
         const rows: DailyMetrics[] = [];
         let date = from;

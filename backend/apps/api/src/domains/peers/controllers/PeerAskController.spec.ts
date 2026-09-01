@@ -2,9 +2,12 @@ import { generateKeyPairSync } from 'node:crypto';
 
 import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 
+import { InMemoryConsumptionStore } from '@ci/domains/consumption';
+
 import { PeerSignatureService } from '../services/PeerSignatureService';
 
 import { PeerAskController } from './PeerAskController';
+
 
 const peersConfig: Record<string, unknown> = {};
 
@@ -52,7 +55,7 @@ function logger() {
 function signAs(rawBody: string | undefined, method: string, targetUri: string) {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519');
   peersConfig.signingKeyJwk = JSON.stringify(privateKey.export({ format: 'jwk' }));
-  const signer = new PeerSignatureService(logger() as never);
+  const signer = new PeerSignatureService(new InMemoryConsumptionStore(), logger() as never);
   const headers = signer.signOutbound({ method, targetUri, body: rawBody }) as Record<string, string>;
   delete peersConfig.signingKeyJwk;
 
@@ -68,7 +71,7 @@ function makeController(links: unknown[] = []) {
   const peerLinkService = { findActiveByKeyThumbprint: jest.fn().mockResolvedValue(links) };
   const rateLimitService = { consume: jest.fn(), consumePoll: jest.fn() };
   const featureService = { isFeatureEnabled: jest.fn().mockResolvedValue(true) };
-  const signatureService = new PeerSignatureService(logger() as never);
+  const signatureService = new PeerSignatureService(new InMemoryConsumptionStore(), logger() as never);
 
   const controller = new PeerAskController(
     portalTokenVerifier as never,

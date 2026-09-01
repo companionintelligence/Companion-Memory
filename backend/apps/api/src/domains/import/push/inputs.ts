@@ -1556,7 +1556,12 @@ export function toFacebookMessengerCommunicationInput(
   isSelf: (name: string) => boolean,
 ): CreateCommunicationDto {
   const m = rec.metadata;
-  const content = rec.description ?? rec.title ?? '';
+  // rec.title's only fallback for a Messenger record is the synthesized
+  // "Message — <sender>" display label (push/canonical.ts titleFor's sender
+  // branch) — never real message text. Falling back to it here contradicted
+  // facebook.ts's own contract ("Media-only messages persist with empty
+  // content — the message IS its attachments").
+  const content = rec.description ?? '';
   const { sender, recipients } = messengerParticipantsOf(rec);
   const input: CreateCommunicationDto = {
     communication_type: CommunicationType.CHAT,

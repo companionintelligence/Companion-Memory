@@ -645,7 +645,7 @@ export class ItemService {
   /**
    * True total of items matching the same filters {@link getEntitiesForItems} applies (minus
    * the pagination-only `limit`/`order`/`afterTime`/`afterId`) — a real `COUNT(*)`, not the
-   * length of one `limit`-bounded page of identifiers. See EventService.countEntitiesForEvents.
+   * length of one `limit`-bounded page of identifiers. See CalendarEventService.countEntitiesForEvents.
    */
   async countEntitiesForItems(
     context: ServiceContext,

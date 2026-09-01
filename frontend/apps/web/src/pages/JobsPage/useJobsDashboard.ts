@@ -100,9 +100,18 @@ export interface CronSchedule {
    * The schedule's own expression says it should have fired by now and no
    * attempt was recorded for that fire. Computed server-side, where the cron
    * expression can actually be evaluated; false while nothing has ever run, so
-   * a fresh appliance does not light up every row.
+   * a fresh appliance does not light up every row. Also false when `disabled` —
+   * a schedule someone switched off is not late.
    */
   readonly overdue: boolean;
+  /**
+   * An operator switched this schedule off from the Controls card.
+   *
+   * The scheduler still holds it and `nextRunAt` still advances — the gate is
+   * inside the `@Cron` wrapper — so without this flag the row would read as
+   * perfectly healthy while doing nothing at all.
+   */
+  readonly disabled?: boolean;
 }
 
 export interface JobsDashboardResponse {

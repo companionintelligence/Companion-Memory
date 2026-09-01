@@ -2,7 +2,15 @@ import { useState, useEffect, useRef } from 'react';
 
 import { Portal } from '@ci/common';
 import { Button, Sheet, Tooltip } from '@ci/shadcn';
-import { ChartNetwork, GanttChart, Images, List, Map as MapIcon, Plus, type LucideIcon } from '@ci/shadcn/icons';
+import {
+  ChartNetwork,
+  GanttChart,
+  Images,
+  List,
+  Map as MapIcon,
+  Plus,
+  type LucideIcon,
+} from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 

@@ -119,6 +119,9 @@ describe('SuggestionEngine.propose', () => {
       suggestions as never,
       memoryRepo() as never,
       {
+        // Null = "the store has nothing"; the engine then falls back to the
+        // wall clock, which is the behaviour these fixtures were written against.
+        analysisAnchor: jest.fn(async () => null),
         getRange: jest.fn(async (_context: UserServiceContext, from: string, to: string) =>
           quietConversationRows(yesterday, from, to),
         ),
@@ -145,6 +148,9 @@ describe('SuggestionEngine.propose', () => {
       suggestions as never,
       memoryRepo() as never,
       {
+        // Null = "the store has nothing"; the engine then falls back to the
+        // wall clock, which is the behaviour these fixtures were written against.
+        analysisAnchor: jest.fn(async () => null),
         getRange: jest.fn(async (_context: UserServiceContext, from: string, to: string) =>
           quietConversationRows(yesterday, from, to),
         ),
@@ -193,6 +199,9 @@ describe('SuggestionEngine.propose', () => {
       suggestions as never,
       memoryRepo() as never,
       {
+        // Null = "the store has nothing"; the engine then falls back to the
+        // wall clock, which is the behaviour these fixtures were written against.
+        analysisAnchor: jest.fn(async () => null),
         getRange: jest.fn(async (_context: UserServiceContext, from: string, to: string) =>
           quietConversationRows(yesterday, from, to),
         ),

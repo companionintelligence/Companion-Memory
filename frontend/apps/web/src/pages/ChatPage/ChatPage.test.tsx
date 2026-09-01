@@ -115,9 +115,7 @@ vi.mock('@/components/Chat', () => ({
         Stop
       </button>
       <ul data-testid="thread-messages">
-        {messages?.map((message) => (
-          <li key={message.id}>{`${message.role}: ${message.content}`}</li>
-        ))}
+        {messages?.map((message) => <li key={message.id}>{`${message.role}: ${message.content}`}</li>)}
       </ul>
       {emptyState}
     </>
@@ -238,7 +236,8 @@ describe('ChatPage', () => {
    * route ChatPage is showing a thread, not the starting screen.
    */
   describe('empty state', () => {
-    const renderEmpty = () => renderWithProviders(<ChatPage />, { route: '/memory/chat', path: '/memory/chat' });
+    const renderEmpty = () =>
+      renderWithProviders(<ChatPage />, { route: '/memory/chat', path: '/memory/chat' });
 
     /** Chat is the outer chat — it must not embed a second composer. */
     it('no longer embeds the How you’d do it composer', () => {

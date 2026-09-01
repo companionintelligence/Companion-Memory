@@ -111,7 +111,7 @@ declare module '@ci/domains/events/registry' {
 /**
  * Event emitted when creating a new event.
  *
- * @see {@link EventService.create} - The method that emits this event
+ * @see {@link CalendarEventService.create} - The method that emits this event
  */
 export const EventCreatedEvent = 'event.created';
 export const EventUpdatedEvent = 'event.updated';
@@ -121,7 +121,7 @@ export const EventRemovedEvent = 'event.deleted';
  * Event payload of the event {@link EventCreatedEvent}.
  *
  * @see {@link EventCreatedEvent} - The event this payload is associated with
- * @see {@link EventService.create} - The method that emits this event payload
+ * @see {@link CalendarEventService.create} - The method that emits this event payload
  */
 export type EventCreatedPayload = {
   /** The identifier of the newly created event */
@@ -132,7 +132,7 @@ export type EventCreatedPayload = {
  * Event payload of the event {@link EventUpdatedEvent}.
  *
  * @see {@link EventUpdatedEvent} - The event this payload is associated with
- * @see {@link EventService.update} - The method that emits this event payload
+ * @see {@link CalendarEventService.update} - The method that emits this event payload
  */
 export type EventUpdatedPayload = {
   /** The identifier of the newly created event */
@@ -143,7 +143,7 @@ export type EventUpdatedPayload = {
  * Event payload of the event {@link EventRemovedEvent}.
  *
  * @see {@link EventRemovedEvent} - The event this payload is associated with
- * @see {@link EventService.remove} - The method that emits this event payload
+ * @see {@link CalendarEventService.remove} - The method that emits this event payload
  */
 export type EventDeletedPayload = {
   /** The identifier of the newly created event */

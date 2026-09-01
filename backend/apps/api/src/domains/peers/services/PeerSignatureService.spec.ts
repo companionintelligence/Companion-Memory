@@ -1,5 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto';
 
+import { InMemoryConsumptionStore } from '@ci/domains/consumption';
+
 import { contentDigest } from '../httpSignature';
 
 import {
@@ -8,6 +10,7 @@ import {
   PeerSignatureService,
   type SignatureFailure,
 } from './PeerSignatureService';
+
 
 const peersConfig: Record<string, unknown> = {};
 
@@ -34,7 +37,7 @@ const BODY = JSON.stringify({ askId: 'abc12345', prompt: 'do you know David Mill
 function makeService() {
   const logger = { setContext: jest.fn(), warn: jest.fn(), debug: jest.fn() };
 
-  return { service: new PeerSignatureService(logger as never), logger };
+  return { service: new PeerSignatureService(new InMemoryConsumptionStore(), logger as never), logger };
 }
 
 /** A peer box: its own key, and a signer configured with it. */
@@ -50,7 +53,7 @@ function makePeer() {
   return { publicJwk, headers: headers as Record<string, string>, signer: service };
 }
 
-function verify(
+async function verify(
   service: PeerSignatureService,
   peer: { publicJwk: Record<string, unknown>; headers: Record<string, string> },
   overrides: Partial<{
@@ -77,8 +80,11 @@ function verify(
   });
 }
 
-function expectRefusal(result: ReturnType<PeerSignatureService['verifyInbound']>, reason: SignatureFailure) {
-  expect(result).toEqual({ ok: false, reason });
+type Verification = Awaited<ReturnType<PeerSignatureService['verifyInbound']>>;
+
+/** Accepts the promise or the already-awaited result, so call sites can do either. */
+async function expectRefusal(result: Verification | Promise<Verification>, reason: SignatureFailure) {
+  expect(await result).toEqual({ ok: false, reason });
 }
 
 beforeEach(() => {
@@ -154,16 +160,16 @@ describe('signOutbound', () => {
 });
 
 describe('verifyInbound — the happy path', () => {
-  it('accepts a request this box would itself have produced, and reports the key', () => {
+  it('accepts a request this box would itself have produced, and reports the key', async () => {
     const peer = makePeer();
     const { service } = makeService();
 
-    const result = verify(service, peer);
+    const result = await verify(service, peer);
 
     expect(result).toEqual({ ok: true, keyThumbprint: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/) });
   });
 
-  it('accepts a bodyless GET', () => {
+  it('accepts a bodyless GET', async () => {
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
     peersConfig.signingKeyJwk = JSON.stringify(privateKey.export({ format: 'jwk' }));
     const { service: signer } = makeService();
@@ -174,7 +180,7 @@ describe('verifyInbound — the happy path', () => {
     >;
 
     const { service } = makeService();
-    const result = service.verifyInbound({
+    const result = await service.verifyInbound({
       method: 'GET',
       targetUri: url,
       signatureInput: headers['signature-input'],
@@ -188,26 +194,29 @@ describe('verifyInbound — the happy path', () => {
 });
 
 describe('verifyInbound — refusals', () => {
-  it('reports a missing signature distinctly from a broken one', () => {
+  it('reports a missing signature distinctly from a broken one', async () => {
     const { service } = makeService();
     const peer = makePeer();
 
-    expectRefusal(verify(service, peer, { signatureInput: undefined, signature: undefined }), 'missing');
-    expectRefusal(verify(service, peer, { signatureInput: 'garbage' }), 'malformed');
+    await expectRefusal(
+      verify(service, peer, { signatureInput: undefined, signature: undefined }),
+      'missing',
+    );
+    await expectRefusal(verify(service, peer, { signatureInput: 'garbage' }), 'malformed');
   });
 
-  it('refuses a body that was rewritten in flight', () => {
+  it('refuses a body that was rewritten in flight', async () => {
     const { service } = makeService();
     const peer = makePeer();
 
-    expectRefusal(verify(service, peer, { rawBody: `${BODY} ` }), 'bad-digest');
+    await expectRefusal(verify(service, peer, { rawBody: `${BODY} ` }), 'bad-digest');
   });
 
-  it('refuses when the digest header is absent but the request has a body', () => {
+  it('refuses when the digest header is absent but the request has a body', async () => {
     const { service } = makeService();
     const peer = makePeer();
 
-    expectRefusal(verify(service, peer, { contentDigestHeader: undefined }), 'bad-digest');
+    await expectRefusal(verify(service, peer, { contentDigestHeader: undefined }), 'bad-digest');
   });
 
   /**
@@ -215,7 +224,7 @@ describe('verifyInbound — refusals', () => {
    * from the REQUEST, so a sender cannot escape the body binding by signing a
    * bodyless base and then attaching a body.
    */
-  it('refuses a body request whose signature does not cover content-digest', () => {
+  it('refuses a body request whose signature does not cover content-digest', async () => {
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
     peersConfig.signingKeyJwk = JSON.stringify(privateKey.export({ format: 'jwk' }));
     const { service: signer } = makeService();
@@ -227,7 +236,7 @@ describe('verifyInbound — refusals', () => {
 
     const { service } = makeService();
     // ...then presented WITH one.
-    const result = service.verifyInbound({
+    const result = await service.verifyInbound({
       method: 'POST',
       targetUri: TARGET,
       rawBody: BODY,
@@ -238,59 +247,62 @@ describe('verifyInbound — refusals', () => {
       now: NOW,
     });
 
-    expectRefusal(result, 'unsupported-components');
+    await expectRefusal(result, 'unsupported-components');
   });
 
-  it('refuses a signature from a key the link does not hold', () => {
+  it('refuses a signature from a key the link does not hold', async () => {
     const { service } = makeService();
     const peer = makePeer();
     const stranger = generateKeyPairSync('ed25519').publicKey.export({ format: 'jwk' });
 
     // `keyid` names the peer's key, but the link holds a different one — so the
     // keyid check fires before any signature maths.
-    expectRefusal(verify(service, peer, { peerPublicJwk: stranger }), 'unknown-key');
+    await expectRefusal(verify(service, peer, { peerPublicJwk: stranger }), 'unknown-key');
   });
 
-  it('refuses when the link holds an unusable key', () => {
+  it('refuses when the link holds an unusable key', async () => {
     const { service } = makeService();
     const peer = makePeer();
 
-    expectRefusal(verify(service, peer, { peerPublicJwk: { kty: 'RSA' } }), 'unknown-key');
-    expectRefusal(verify(service, peer, { peerPublicJwk: null }), 'unknown-key');
+    await expectRefusal(verify(service, peer, { peerPublicJwk: { kty: 'RSA' } }), 'unknown-key');
+    await expectRefusal(verify(service, peer, { peerPublicJwk: null }), 'unknown-key');
   });
 
-  it('refuses a replay onto a different route', () => {
+  it('refuses a replay onto a different route', async () => {
     const { service } = makeService();
     const peer = makePeer();
 
-    expectRefusal(verify(service, peer, { method: 'GET' }), 'bad-signature');
-    expectRefusal(verify(service, peer, { targetUri: 'https://us.example/agent/v1/other' }), 'bad-signature');
+    await expectRefusal(verify(service, peer, { method: 'GET' }), 'bad-signature');
+    await expectRefusal(
+      verify(service, peer, { targetUri: 'https://us.example/agent/v1/other' }),
+      'bad-signature',
+    );
   });
 
-  it('refuses an expired signature', () => {
+  it('refuses an expired signature', async () => {
     const { service } = makeService();
     const peer = makePeer();
 
-    expectRefusal(verify(service, peer, { now: new Date(NOW.getTime() + 120_000) }), 'expired');
+    await expectRefusal(verify(service, peer, { now: new Date(NOW.getTime() + 120_000) }), 'expired');
   });
 
-  it('tolerates modest clock skew but refuses a wildly future `created`', () => {
+  it('tolerates modest clock skew but refuses a wildly future `created`', async () => {
     const { service } = makeService();
     const peer = makePeer();
 
     const slightlyBehind = new Date(NOW.getTime() - (MAX_CLOCK_SKEW_MS - 5_000));
-    expect(verify(service, peer, { now: slightlyBehind }).ok).toBe(true);
+    expect((await verify(service, peer, { now: slightlyBehind })).ok).toBe(true);
 
     const { service: fresh } = makeService();
     const wayBehind = new Date(NOW.getTime() - (MAX_CLOCK_SKEW_MS + 5_000));
-    expectRefusal(verify(fresh, peer, { now: wayBehind }), 'clock-skew');
+    await expectRefusal(verify(fresh, peer, { now: wayBehind }), 'clock-skew');
   });
 
   /**
    * `expires` is the SENDER's choice, so without a ceiling a peer signs one
    * request with a year-long window and has a bearer token again.
    */
-  it('refuses a validity window longer than this box will honour', () => {
+  it('refuses a validity window longer than this box will honour', async () => {
     const { service } = makeService();
     const peer = makePeer();
     const created = Math.floor(NOW.getTime() / 1000);
@@ -298,31 +310,31 @@ describe('verifyInbound — refusals', () => {
 
     const widened = peer.headers['signature-input'].replace(/expires=\d+/, `expires=${tooLong}`);
 
-    expectRefusal(verify(service, peer, { signatureInput: widened }), 'window-too-long');
+    await expectRefusal(verify(service, peer, { signatureInput: widened }), 'window-too-long');
   });
 });
 
 describe('verifyInbound — replay', () => {
-  it('accepts a request once and refuses the identical one', () => {
+  it('accepts a request once and refuses the identical one', async () => {
     const { service } = makeService();
     const peer = makePeer();
 
-    expect(verify(service, peer).ok).toBe(true);
-    expectRefusal(verify(service, peer), 'replayed');
+    expect((await verify(service, peer)).ok).toBe(true);
+    await expectRefusal(verify(service, peer), 'replayed');
   });
 
-  it('does not let a peer burn its own nonce with a BROKEN signature', () => {
+  it('does not let a peer burn its own nonce with a BROKEN signature', async () => {
     const { service } = makeService();
     const peer = makePeer();
 
     // Replay is checked last, and only for an otherwise-valid signature —
     // otherwise an attacker denies the honest request by racing it with a
     // corrupted copy carrying the same nonce.
-    expectRefusal(verify(service, peer, { rawBody: 'tampered' }), 'bad-digest');
-    expect(verify(service, peer).ok).toBe(true);
+    await expectRefusal(verify(service, peer, { rawBody: 'tampered' }), 'bad-digest');
+    expect((await verify(service, peer)).ok).toBe(true);
   });
 
-  it('scopes nonces per key, so one peer cannot burn another one', () => {
+  it('scopes nonces per key, so one peer cannot burn another one', async () => {
     const { service } = makeService();
     const alice = makePeer();
 
@@ -341,8 +353,8 @@ describe('verifyInbound — replay', () => {
       headers: bobHeaders,
     };
 
-    expect(verify(service, alice).ok).toBe(true);
-    expect(verify(service, bob).ok).toBe(true);
+    expect((await verify(service, alice)).ok).toBe(true);
+    expect((await verify(service, bob)).ok).toBe(true);
   });
 });
 

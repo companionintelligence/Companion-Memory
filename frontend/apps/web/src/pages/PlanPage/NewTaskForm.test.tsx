@@ -66,6 +66,7 @@ describe('NewTaskForm', () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
     expect(screen.getByLabelText(/new task title/i)).toHaveValue('');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText(/new task title/i)).toHaveFocus());
   });
 
   it('does not submit a blank or whitespace-only title', () => {

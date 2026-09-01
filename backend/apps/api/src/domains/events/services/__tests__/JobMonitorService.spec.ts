@@ -1,7 +1,8 @@
 import { UnauthorizedException } from '@nestjs/common';
 import type { SchedulerRegistry } from '@nestjs/schedule';
-import type { Repository } from 'typeorm';
+import type { DataSource, Repository } from 'typeorm';
 
+import { JobControlStore } from '@ci/common/job-controls';
 import { CronRunStore } from '@ci/common/schedule';
 
 import type { PgBossArchiveEntity } from '../../entities/PgBossArchiveEntity';
@@ -462,6 +463,7 @@ describe('JobMonitorService.getDashboard', () => {
         lastRunAt: null,
         lastSuccessAt: null,
         overdue: false,
+        disabled: false,
       },
       {
         name: 'PipelineTickCron.tick',
@@ -472,6 +474,7 @@ describe('JobMonitorService.getDashboard', () => {
         lastRunAt: '2026-08-17T00:00:00.000Z',
         lastSuccessAt: null,
         overdue: false,
+        disabled: false,
       },
     ]);
   });
@@ -514,6 +517,7 @@ describe('JobMonitorService.getDashboard', () => {
           lastRunAt: '2026-08-01T12:00:00.000Z',
           lastSuccessAt: null,
           overdue: false,
+          disabled: false,
         },
       ]);
     } finally {
@@ -665,6 +669,38 @@ describe('JobMonitorService cron overdue detection', () => {
     const cron = await cronRow(weekdaysAtNine, new Date(wednesdayNine));
 
     expect(cron.overdue).toBe(true);
+  });
+
+  it('reports a schedule the operator switched off as disabled, not overdue', async () => {
+    jest.useFakeTimers({ now: saturdayNoon });
+
+    await JobControlStore.configure({
+      query: (sql: string) =>
+        sql.includes('UPDATE ci.job_settings')
+          ? Promise.resolve([])
+          : Promise.resolve([
+              {
+                kind: 'cron',
+                key: 'Probe.tick',
+                mode: 'disabled',
+                concurrency: null,
+                skipped_count: '0',
+                last_skipped_at: null,
+                updated_at: new Date(),
+              },
+            ]),
+    } as unknown as DataSource);
+
+    try {
+      // A disabled schedule is not late — it is doing exactly what it was told.
+      // Reporting it as overdue would turn every deliberate choice into an alarm
+      // and teach operators to ignore the column that catches real failures.
+      const cron = await cronRow(everyTwoMinutes, new Date(saturdayNoon - 30 * MINUTE));
+
+      expect(cron).toMatchObject({ disabled: true, overdue: false });
+    } finally {
+      await JobControlStore.configure(null);
+    }
   });
 
   it('stays quiet when nothing has ever been recorded', async () => {

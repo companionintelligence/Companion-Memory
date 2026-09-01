@@ -86,9 +86,9 @@ class CronRunStoreImpl {
           'ci.cron_runs.last_success_at is missing — serving last_run_at only until that migration is applied',
         );
         try {
-          const rows = await dataSource.query<
-            { name: string; last_run_at: Date | string }[]
-          >(`SELECT name, last_run_at FROM ci.cron_runs`);
+          const rows = await dataSource.query<{ name: string; last_run_at: Date | string }[]>(
+            `SELECT name, last_run_at FROM ci.cron_runs`,
+          );
 
           return mapCronRows(rows);
         } catch (fallbackErr: unknown) {
@@ -101,10 +101,7 @@ class CronRunStoreImpl {
         }
       }
 
-      this.logger.warn(
-        'Failed to read ci.cron_runs',
-        err instanceof Error ? err.stack : String(err),
-      );
+      this.logger.warn('Failed to read ci.cron_runs', err instanceof Error ? err.stack : String(err));
 
       return new Map();
     }

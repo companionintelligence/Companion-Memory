@@ -298,6 +298,9 @@ export class CalendarFileImporter implements FileImporter {
       raw = await fs.promises.readFile(fpath, 'utf8');
     } catch (e) {
       params.log?.('error', 'read ics failed', { file: path.basename(fpath), error: (e as Error).message });
+      // A file we cannot read is a whole export lost; the ledger has to say
+      // so (same convention as vcard.ts/applecontacts.ts/google_my_activity.ts).
+      params.pipeline.drop?.('unreadable_file', path.basename(fpath));
 
       return;
     }

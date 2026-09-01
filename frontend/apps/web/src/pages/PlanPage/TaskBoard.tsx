@@ -82,11 +82,20 @@ function TaskColumn<T extends SectionedTask>({
 interface Props<T extends SectionedTask> {
   sections: Section<T>[];
   renderTask: (task: T) => ReactNode;
+  tab?: string | null;
+  onTabChange?: (tab: string) => void;
 }
 
-export function TaskBoard<T extends SectionedTask>({ sections, renderTask }: Props<T>) {
+export function TaskBoard<T extends SectionedTask>({
+  sections,
+  renderTask,
+  tab: tabProp,
+  onTabChange,
+}: Props<T>) {
   const { isMobile } = useDeviceLayout();
-  const [tab, setTab] = useState<string | null>(null);
+  const [uncontrolledTab, setUncontrolledTab] = useState<string | null>(null);
+  const tab = tabProp !== undefined ? tabProp : uncontrolledTab;
+  const setTab = onTabChange ?? setUncontrolledTab;
   const columns = withAllColumns(sections);
 
   // First paint is SSR-safe (`isMobile` is undefined). Wait rather than

@@ -140,7 +140,10 @@ describe('resolveEntityType', () => {
     // gmail.ts's addParticipants stages exactly this shape: no `type`, one
     // `{name: 'from'|'to'|'cc', value, identity: true}` attribute — the kind
     // name carries no 'email'/'phone' signal, only `identity: true` does.
-    const entity: Entity = { name: 'Support', attributes: [{ name: 'from', value: 'noreply@stripe.com', identity: true }] };
+    const entity: Entity = {
+      name: 'Support',
+      attributes: [{ name: 'from', value: 'noreply@stripe.com', identity: true }],
+    };
 
     expect(resolveEntityType(entity)).toBe(ORGANIZATIONAL_STAGED_TYPE);
   });

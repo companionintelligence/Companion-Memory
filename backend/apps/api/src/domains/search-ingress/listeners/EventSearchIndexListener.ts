@@ -4,7 +4,7 @@ import { ServiceContext, SYSTEM_USER } from '@ci/common/context';
 import { EmbeddingGenerationService, embedSkipReason, shouldEmbedType } from '@ci/common/embeddings';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent } from '@ci/domains/events';
-import { type Event, EventService } from '@ci/domains/memory';
+import { type Event, CalendarEventService } from '@ci/domains/memory';
 import {
   EventCreatedEvent,
   EventRemovedEvent,
@@ -25,7 +25,7 @@ import { type WeightedText } from '@ci/domains/search-ingress/types';
 @Injectable()
 export class EventSearchIndexListener {
   constructor(
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly embeddingGenerationService: EmbeddingGenerationService,
     private readonly embeddingService: EmbeddingService,
     private readonly vectorService: VectorService,

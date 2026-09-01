@@ -26,6 +26,15 @@ export const ATTACHMENTS_DIRNAME = '.attachments';
  * Strip path separators / control chars and clip length so an RFC-2047 monster
  * or a `../../evil` filename can't escape the extraction dir. Clips from the
  * front so the extension survives.
+ *
+ * `.` and `..` are rejected outright rather than passed through. `basename`
+ * leaves them intact — `path.basename('../../x/..')` is `'..'` — and none of
+ * the characters below touch them, so the sanitizer's one job silently failed
+ * for exactly the two names that are not filenames at all: joined onto an
+ * extraction directory they name that directory itself, or its PARENT. As a
+ * filename the write then fails with EISDIR rather than escaping, but callers
+ * that use this for a DIRECTORY component (the BlueBubbles attachment store)
+ * get a real escape from it.
  */
 export function sanitizeAttachmentFilename(name: string | undefined): string {
   const base = path
@@ -37,7 +46,7 @@ export function sanitizeAttachmentFilename(name: string | undefined): string {
     .trim();
   const clipped = base.length > 128 ? base.slice(-128) : base;
 
-  return clipped || 'attachment';
+  return clipped === '.' || clipped === '..' ? 'attachment' : clipped || 'attachment';
 }
 
 /**

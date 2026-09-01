@@ -1,4 +1,4 @@
-import { Suspense } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 
 import { isNativePlatform, LoadingPage } from '@ci/common';
 import { Navigate, useLocation } from 'react-router-dom';
@@ -7,10 +7,36 @@ import { useAuth, useCurrentUser } from '@/hooks';
 
 export function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  const [{ expired, loading: authLoading }] = useAuth();
+  const [{ expired, loading: authLoading }, { refresh }] = useAuth();
   const { user, loading: userLoading } = useCurrentUser();
+  const [triedRecover, setTriedRecover] = useState(false);
+  const canRecover = typeof refresh === 'function';
 
-  if (authLoading || userLoading) {
+  useEffect(() => {
+    if (!expired) {
+      setTriedRecover(false);
+    }
+  }, [expired]);
+
+  useEffect(() => {
+    if (authLoading || userLoading || !expired || !canRecover || triedRecover) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void refresh().finally(() => {
+      if (!cancelled) {
+        setTriedRecover(true);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [expired, canRecover, triedRecover, refresh, authLoading, userLoading]);
+
+  if (authLoading || userLoading || (expired && canRecover && !triedRecover)) {
     return <LoadingPage />;
   }
 

@@ -7,7 +7,7 @@ import {
   GraphIngestService,
   type GraphRelationshipInputDto,
 } from '@ci/domains/graph';
-import { ContentService, EventService } from '@ci/domains/memory';
+import { ContentService, CalendarEventService } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import { FACEBOOK_SOURCE_SYSTEM, FACEBOOK_SOURCE_TYPE } from '../FacebookMediaService';
@@ -40,13 +40,13 @@ export function pageEntityKey(pageId: string): string {
  * for their Person/Organization/Concept nodes: keyed on
  * `facebook:organization:<page-id>`, so a re-sync updates the node rather
  * than minting another. The event is keyed on the provenance triple
- * `ETL / facebook / like:<page-id>`, which `EventService.create` already
+ * `ETL / facebook / like:<page-id>`, which `CalendarEventService.create` already
  * treats as find-or-create.
  */
 @Injectable()
 export class FacebookLikesTransformService {
   constructor(
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly contentService: ContentService,
     private readonly graphIngestService: GraphIngestService,
     private readonly logger: LoggerService,

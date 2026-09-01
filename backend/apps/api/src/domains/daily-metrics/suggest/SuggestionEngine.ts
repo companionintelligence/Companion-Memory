@@ -47,7 +47,14 @@ export class SuggestionEngine {
     anomalies: MetricAnomaly[],
     timezone = 'UTC',
   ): Promise<MetricSuggestion[]> {
-    const yesterday = shiftIso(todayIsoInTimezone(timezone), -1);
+    // Anchored to the newest stored day, not to the wall clock — see
+    // `DailyMetricsService.analysisAnchor`. This must resolve to the SAME day
+    // `AnomalyEngine.scan` used, or the `anomalies` argument it is handed (all
+    // dated at that day) matches nothing here and every suggestion that
+    // requires anomaly evidence is silently dropped.
+    const yesterday =
+      (await this.metricsService.analysisAnchor(context, timezone)) ??
+      shiftIso(todayIsoInTimezone(timezone), -1);
     const from = shiftIso(yesterday, -(SUGGESTION_BASELINE_DAYS - 1));
     const rows = await this.metricsService.getRange(context, from, yesterday);
     const todayRow = rows.find((row) => row.date === yesterday) ?? null;

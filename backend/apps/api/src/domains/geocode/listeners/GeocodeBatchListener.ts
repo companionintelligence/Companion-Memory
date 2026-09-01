@@ -7,7 +7,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { OnEvent } from '@ci/domains/events';
-import { EventEntity, EventService, PlaceService } from '@ci/domains/memory';
+import { EventEntity, CalendarEventService, PlaceService } from '@ci/domains/memory';
 import { GeocodeBatchRequestEvent, type GeocodeBatchRequestPayload } from '@ci/domains/memory/events';
 
 import {
@@ -51,10 +51,10 @@ interface ReverseCandidateRow {
  * Consumes {@link GeocodeBatchRequestEvent}: selects events carrying a
  * location_name but no location_coordinates (the backfill set), forward-geocodes
  * each via {@link GeocodeService}, and writes location_coordinates +
- * confidence_score back through {@link EventService.update}.
+ * confidence_score back through {@link CalendarEventService.update}.
  *
  * Idempotent: the candidate query excludes already-geocoded events, and a
- * re-run updates in place (EventService.update is keyed on event_id), so it can
+ * re-run updates in place (CalendarEventService.update is keyed on event_id), so it can
  * be enqueued repeatedly without duplicating work.
  */
 @Injectable()
@@ -68,7 +68,7 @@ export class GeocodeBatchListener {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly geocodeService: GeocodeService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly placeService: PlaceService,
     private readonly logger: LoggerService,
   ) {

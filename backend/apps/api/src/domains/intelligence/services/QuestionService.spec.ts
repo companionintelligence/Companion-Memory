@@ -699,6 +699,15 @@ describe('QuestionService.enqueueNextFeedQueueQuestion', () => {
   });
 });
 
+// The attempt-history keying every findUnansweredByUserId caller supplies:
+// which pg-boss queue/event to read past dispatches from, and how long a
+// tried question sits out. Values mirror AnswerInferenceCron's production call.
+const ATTEMPT_HISTORY = {
+  queue: 'llm',
+  eventName: 'infer.question.answer',
+  cooldownHours: 6,
+} as const;
+
 describe('QuestionService.findUnansweredByUserId', () => {
   it('groups unanswered question ids by user id', async () => {
     const dataSource = {
@@ -715,7 +724,7 @@ describe('QuestionService.findUnansweredByUserId', () => {
       { send: jest.fn() } as never,
     );
 
-    const result = await service.findUnansweredByUserId();
+    const result = await service.findUnansweredByUserId(ATTEMPT_HISTORY);
 
     expect(result.get('user-1')).toEqual(['q-1', 'q-2']);
     expect(result.get('user-2')).toEqual(['q-3']);
@@ -730,7 +739,7 @@ describe('QuestionService.findUnansweredByUserId', () => {
       { send: jest.fn() } as never,
     );
 
-    const result = await service.findUnansweredByUserId();
+    const result = await service.findUnansweredByUserId(ATTEMPT_HISTORY);
 
     expect(result.size).toBe(0);
   });
@@ -770,7 +779,7 @@ describe('QuestionService asks the functional questions first', () => {
 
   it('ranks factual before preference before narrative, and untiered last', async () => {
     const service = makeService();
-    const [sql] = await capturedSql(service, () => service.findUnansweredByUserId());
+    const [sql] = await capturedSql(service, () => service.findUnansweredByUserId(ATTEMPT_HISTORY));
 
     expect(sql).toMatch(TIER_RANK);
     // NULL (pre-catalogue) must sort AFTER narrative, not before it.
@@ -779,7 +788,7 @@ describe('QuestionService asks the functional questions first', () => {
 
   it('never offers a hand-entry question to the inference job', async () => {
     const service = makeService();
-    const [sql] = await capturedSql(service, () => service.findUnansweredByUserId());
+    const [sql] = await capturedSql(service, () => service.findUnansweredByUserId(ATTEMPT_HISTORY));
 
     // Body measurements, medical facts and household config cannot be grounded
     // in an email/browser/receipt corpus. Without this filter the model returns
@@ -791,7 +800,7 @@ describe('QuestionService asks the functional questions first', () => {
 
   it('sorts by tier before it sorts by age', async () => {
     const service = makeService();
-    const [sql] = await capturedSql(service, () => service.findUnansweredByUserId());
+    const [sql] = await capturedSql(service, () => service.findUnansweredByUserId(ATTEMPT_HISTORY));
 
     const order = sql.slice(sql.indexOf('ROW_NUMBER'));
     const tierAt = order.search(/CASE\s+q\.answer_tier/);
@@ -800,6 +809,35 @@ describe('QuestionService asks the functional questions first', () => {
     expect(tierAt).toBeGreaterThan(-1);
     expect(createdAt).toBeGreaterThan(-1);
     expect(tierAt).toBeLessThan(createdAt);
+  });
+
+  it('rotates by attempt history: cooldown filter, and never-attempted ahead of every retry', async () => {
+    // An inference that every gate discards writes nothing to ci.answers, so
+    // without these two clauses the same question is re-dispatched every tick
+    // forever — measured live at one dispatch per minute for hours, starving
+    // both the other questions and the interactive chat sharing the llm queue.
+    const service = makeService();
+    const ds = (service as unknown as { dataSource: { query: jest.Mock } }).dataSource;
+
+    await service.findUnansweredByUserId(ATTEMPT_HISTORY);
+
+    const [sql, params] = ds.query.mock.calls[0] as [string, unknown[]];
+
+    // The attempt history is read back from the same queue/event the caller
+    // dispatches on, and the cooldown rides in as a bound parameter.
+    expect(params).toEqual(['llm', 'infer.question.answer', 6]);
+    expect(sql).toMatch(/pgboss\.job/);
+    expect(sql).toMatch(/pgboss\.archive/);
+    expect(sql).toMatch(/last_attempt_at IS NULL OR att\.last_attempt_at < NOW\(\)/);
+    // Attempt recency must outrank tier: a question the model already failed
+    // goes behind every never-attempted question, whatever its tier.
+    const order = sql.slice(sql.indexOf('ROW_NUMBER'));
+    const attemptAt = order.indexOf('att.last_attempt_at ASC NULLS FIRST');
+    const tierAt = order.search(/CASE\s+q\.answer_tier/);
+
+    expect(attemptAt).toBeGreaterThan(-1);
+    expect(tierAt).toBeGreaterThan(-1);
+    expect(attemptAt).toBeLessThan(tierAt);
   });
 });
 

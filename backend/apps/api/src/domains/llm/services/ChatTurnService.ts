@@ -56,6 +56,18 @@ export function persistedAssistantContent(thinking: string, text: string): strin
 }
 
 /**
+ * Published and persisted when a turn otherwise ends with no user-visible
+ * text — the model spent every round on thinking and tool calls, or the
+ * backend swallowed a stream failure after emitting nothing. Without it the
+ * viewer's stream just closes on a blank bubble, which is indistinguishable
+ * from a hang (measured live: two empty tool rounds, then silence, read as
+ * "the chat froze"). A turn must always resolve to something readable.
+ * Exported so the guarantee is testable by name.
+ */
+export const EMPTY_TURN_FALLBACK_TEXT =
+  "I wasn't able to put together an answer this turn. Please try again, or rephrase the question.";
+
+/**
  * Runs one queued chat turn: hydrate messages, call the model, fan tokens to
  * attached viewers, persist the assistant row. Closing the HTTP stream must
  * not stop this — only the broker abort signal does.
@@ -212,6 +224,27 @@ export class ChatTurnService {
         throw err;
       }
     } finally {
+      // The empty-turn guarantee. `latestText` is every TEXT chunk the model
+      // streamed; when it is blank and the turn neither failed nor was
+      // stopped, whatever happened above produced nothing a person can read.
+      // Publish the fallback to live viewers and ride it into persistTurn —
+      // as an extra assistant row when the stream accumulated messages, as
+      // the assistant row's own content when it accumulated none.
+      if (!failed && !signal.aborted && latestText.trim() === '') {
+        this.logger.warn('Chat turn ended with no user-visible text; substituting the fallback reply', {
+          threadId: payload.threadId,
+          model,
+          generatedMessages: generated.length,
+        });
+        this.broker.publish(payload.threadId, { channel: Channel.TEXT, text: EMPTY_TURN_FALLBACK_TEXT });
+
+        if (generated.length === 0) {
+          latestText = EMPTY_TURN_FALLBACK_TEXT;
+        } else {
+          generated = [...generated, { role: 'assistant', content: EMPTY_TURN_FALLBACK_TEXT }];
+        }
+      }
+
       await this.persistTurn(
         serviceContext,
         payload,

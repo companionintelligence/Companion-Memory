@@ -14,7 +14,8 @@ describe('parseMime charset-aware body decoding', () => {
 
   it('decodes an ISO-8859-1 quoted-printable body using the declared charset, not UTF-8', () => {
     // 'é' is the single byte 0xE9 in ISO-8859-1/Latin-1.
-    const headers = 'Content-Type: text/plain; charset=ISO-8859-1\nContent-Transfer-Encoding: quoted-printable';
+    const headers =
+      'Content-Type: text/plain; charset=ISO-8859-1\nContent-Transfer-Encoding: quoted-printable';
     const result = parseMime(headers, 'caf=E9');
 
     expect(result.textBody).toBe('café');
@@ -31,7 +32,8 @@ describe('parseMime charset-aware body decoding', () => {
   });
 
   it('decodes an ISO-8859-1 HTML body using the declared charset', () => {
-    const headers = 'Content-Type: text/html; charset=ISO-8859-1\nContent-Transfer-Encoding: quoted-printable';
+    const headers =
+      'Content-Type: text/html; charset=ISO-8859-1\nContent-Transfer-Encoding: quoted-printable';
     const result = parseMime(headers, '<p>caf=E9</p>');
 
     expect(result.htmlBody).toBe('<p>café</p>');
@@ -82,7 +84,7 @@ describe('parseMime RFC 2231 extended-notation attachment filenames', () => {
 
   it('prefers the extended form over a plain fallback when both are present', () => {
     const { headers, body } = multipartWithAttachment(
-      "Content-Disposition: attachment; filename=\"cafe.pdf\"; filename*=UTF-8''caf%C3%A9.pdf",
+      'Content-Disposition: attachment; filename="cafe.pdf"; filename*=UTF-8\'\'caf%C3%A9.pdf',
     );
     const result = parseMime(headers, body);
 
@@ -90,7 +92,9 @@ describe('parseMime RFC 2231 extended-notation attachment filenames', () => {
   });
 
   it('still resolves a plain ASCII filename when there is no extended form', () => {
-    const { headers, body } = multipartWithAttachment('Content-Disposition: attachment; filename="report.pdf"');
+    const { headers, body } = multipartWithAttachment(
+      'Content-Disposition: attachment; filename="report.pdf"',
+    );
     const result = parseMime(headers, body);
 
     expect(result.attachments[0].filename).toBe('report.pdf');

@@ -51,6 +51,14 @@ export function useUnsyncedImportsNotice(): void {
           // prompt most people never see.
           duration: Infinity,
           closeButton: true,
+          // Off the default bottom-right corner deliberately: every other
+          // toast in the app is ephemeral and bottom-right is fine for those,
+          // but a duration:Infinity notice can sit there for as long as the
+          // user has an unsynced import — long enough to permanently cover a
+          // fixed bottom-right action, which is exactly where the import
+          // wizard's own "Continue" button lives (confirmed: it silently ate
+          // every click, since a covering toast intercepts pointer events).
+          position: 'top-right',
           action: {
             label: 'Sync now',
             onClick: () => {

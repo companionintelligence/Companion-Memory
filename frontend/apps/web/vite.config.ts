@@ -96,8 +96,16 @@ export default defineConfig({
               },
             },
             {
-              // Match API requests, excluding OIDC auth redirects which cross origins
-              urlPattern: /\/api\/(?!authenticate\/oidc)/,
+              // Match API requests, excluding OIDC auth redirects which cross
+              // origins — and excluding every STREAMING endpoint. A response
+              // proxied through a service worker dies when the browser
+              // terminates the idle worker (Chrome's hard cap is ~30s), so a
+              // chat turn intercepted here collapsed at ~28s with a bare
+              // "TypeError: network error" while the server streamed on:
+              // measured live against /api/llm/generate. Requests matching no
+              // rule are not intercepted at all, which is exactly what a
+              // long-lived stream needs.
+              urlPattern: /\/api\/(?!authenticate\/oidc|llm\/generate|llm\/threads\/[^/]+\/stream|mcp\b)/,
               handler: 'NetworkOnly',
               options: {
                 backgroundSync: {

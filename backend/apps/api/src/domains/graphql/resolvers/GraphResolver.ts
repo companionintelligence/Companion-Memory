@@ -38,24 +38,28 @@ export class GraphResolver {
     const edges = relationships.filter((rel) => idSet.has(rel.from_entity_id) && idSet.has(rel.to_entity_id));
 
     return {
-      nodes: nodes.map((node): GraphNodeType => ({
-        id: node.entity_id,
-        entityType: node.entity_type,
-        name: node.name,
-        description: node.description,
-        linkedTable: node.linked_table,
-        linkedId: node.linked_id,
-        properties: node.properties ?? null,
-      })),
-      edges: edges.map((rel): GraphEdgeType => ({
-        id: rel.relationship_id,
-        type: rel.relationship_type,
-        fromEntityId: rel.from_entity_id,
-        toEntityId: rel.to_entity_id,
-        strength: rel.strength ?? null,
-        isActive: rel.is_active,
-        properties: rel.properties ?? null,
-      })),
+      nodes: nodes.map(
+        (node): GraphNodeType => ({
+          id: node.entity_id,
+          entityType: node.entity_type,
+          name: node.name,
+          description: node.description,
+          linkedTable: node.linked_table,
+          linkedId: node.linked_id,
+          properties: node.properties ?? null,
+        }),
+      ),
+      edges: edges.map(
+        (rel): GraphEdgeType => ({
+          id: rel.relationship_id,
+          type: rel.relationship_type,
+          fromEntityId: rel.from_entity_id,
+          toEntityId: rel.to_entity_id,
+          strength: rel.strength ?? null,
+          isActive: rel.is_active,
+          properties: rel.properties ?? null,
+        }),
+      ),
     };
   }
 }

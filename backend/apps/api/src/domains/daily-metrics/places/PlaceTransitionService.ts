@@ -72,8 +72,17 @@ export class PlaceTransitionService {
     context: UserServiceContext,
     options: RebuildTransitionsOptions = {},
   ): Promise<{ clusters: number; transitions: number }> {
-    const now = options.now ?? new Date();
-    const { clusters, visits } = await this.clusterService.buildClusters(context, options);
+    const { clusters, visits, windowEnd } = await this.clusterService.buildClusters(context, options);
+    // The decay reference is the END OF THE SCAN WINDOW, not the wall clock.
+    // `decayWeight` is 0.5^(age/30d), so measuring a corpus-anchored window's
+    // ages against `new Date()` would multiply every bucket in it by the same
+    // vanishing constant — 0.5^(217/30) here — which is not wrong in ranking
+    // terms but drives the stored `decayed_count` toward the `<= 0` guard in
+    // `backoffNextPlace` and makes the persisted numbers meaningless to read.
+    // Dating recency from the newest fix keeps the freshest visit at weight
+    // 1.0, which is what the column is documented to mean. On a live appliance
+    // windowEnd is ~now(), so this is unchanged for the healthy case.
+    const now = options.now ?? windowEnd;
     const buckets = buildTransitionBuckets(visits, { now, timezone: options.timezone ?? 'UTC' });
 
     await this.transitionRepository.delete({ userId: context.userId });

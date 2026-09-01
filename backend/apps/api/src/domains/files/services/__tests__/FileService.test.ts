@@ -44,7 +44,6 @@ function makeService(repo: ReturnType<typeof makeRepo>) {
     debug: jest.fn(),
     error: jest.fn(),
   };
-
   const service = new FileService(repo as never, eventService as never, logger as never);
 
   // The S3 clients are constructed inline (`new S3Client(...)`) rather than

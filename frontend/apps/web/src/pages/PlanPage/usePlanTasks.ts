@@ -17,6 +17,7 @@ export const GET_TASKS = gql(`
           parentId
           dueAt
           scheduledFor
+          placedOnCalendar
           deferUntil
           title
           ...TaskRowFragment
@@ -40,6 +41,8 @@ export const ACCEPT_PROPOSED = gql(`
     acceptProposedTask(id: $id) {
       id
       status
+      scheduledFor
+      placedOnCalendar
     }
   }
 `);
@@ -53,6 +56,18 @@ export const DECLINE_PROPOSED = gql(`
   }
 `);
 
+export const PLAN_TASK = gql(`
+  mutation PlanTask($id: ID!) {
+    planTask(id: $id) {
+      id
+      status
+      dueAt
+      scheduledFor
+      placedOnCalendar
+    }
+  }
+`);
+
 export const SCHEDULE_TASK = gql(`
   mutation ScheduleTask($id: ID!, $date: String) {
     scheduleTask(id: $id, date: $date) {
@@ -61,6 +76,7 @@ export const SCHEDULE_TASK = gql(`
       task {
         id
         scheduledFor
+        placedOnCalendar
         estimatedMinutes
       }
     }
@@ -87,6 +103,7 @@ export const SCHEDULE_TASK_AT = gql(`
       task {
         id
         scheduledFor
+        placedOnCalendar
         estimatedMinutes
       }
       event {
@@ -129,6 +146,10 @@ export function usePlanTasks(onPlaced?: () => void) {
     const map = new Map<string, PendingChange>();
 
     for (const change of data?.taskPendingChanges ?? []) {
+      if (change.status && change.status !== 'pending') {
+        continue;
+      }
+
       if (!map.has(change.taskId)) {
         map.set(change.taskId, {
           id: change.id,
@@ -155,10 +176,7 @@ export function usePlanTasks(onPlaced?: () => void) {
 
   // "Today" is the viewer's local day, not the server's. Recomputed per render
   // rather than memoised on [] so an open tab rolls over at local midnight.
-  const sections = useMemo(
-    () => groupIntoSections(nodes, localDateOf(new Date())),
-    [nodes],
-  );
+  const sections = useMemo(() => groupIntoSections(nodes, localDateOf(new Date())), [nodes]);
 
   const backlog = useMemo(
     () => sections.filter((section): section is Section<PlanTask> => BACKLOG_KEYS.has(section.key)),

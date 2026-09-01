@@ -333,6 +333,22 @@ function rhythmLabel(dayStart: Date, clusters: RhythmCluster[]): string {
   return `Predicted rhythm for ${day}: ${listed}.`;
 }
 
+/**
+ * Waiting twin of {@link rhythmLabel}.
+ *
+ * The week draws one strip per day, and every one of them is waiting at the
+ * same time, so a name that says only "still being built" announces itself
+ * seven times over — seven tab stops that a screen reader cannot tell apart.
+ * Day-scoping it the way `rhythmLabel` already does keeps each strip's name
+ * its own. Same seven-day (or single-day) window, so a weekday alone is unique
+ * here for exactly the reason it is unique there.
+ */
+function rhythmWaitingLabel(dayStart: Date): string {
+  const day = dayStart.toLocaleDateString([], { weekday: 'long' });
+
+  return `Predicted rhythm for ${day}: still being built. This can take a while.`;
+}
+
 // ── Lanes ─────────────────────────────────────────────────────────────────────
 
 /**
@@ -359,6 +375,7 @@ export {
   rhythmCells,
   rhythmClaims,
   rhythmLabel,
+  rhythmWaitingLabel,
   topClusters,
   cellOpacity,
   utcDateKey,

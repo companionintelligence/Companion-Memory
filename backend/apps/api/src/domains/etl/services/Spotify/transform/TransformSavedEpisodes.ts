@@ -4,7 +4,7 @@ import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
 import { GraphIngestService } from '@ci/domains/graph';
-import { ContentService, EventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -15,7 +15,7 @@ import type { SpotifyEpisode } from './types';
 export class SpotifySavedEpisodesTransformService {
   constructor(
     private readonly contentService: ContentService,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly graph: GraphIngestService,
     private readonly logger: LoggerService,
   ) {
@@ -70,7 +70,7 @@ export class SpotifySavedEpisodesTransformService {
                 event_type: 'favorite',
                 start_time: new Date(episodeItem.added_at),
                 duration_minutes: Math.floor(episode.duration_ms / 60000),
-                // Provenance triple: EventService.createOne find-or-creates on
+                // Provenance triple: CalendarEventService.createOne find-or-creates on
                 // it, so a re-sweep of the saved-episodes list resolves to the
                 // existing event instead of minting another.
                 source_type: 'ETL',

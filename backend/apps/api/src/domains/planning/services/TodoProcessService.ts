@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
-import { EventEntity, EventService } from '@ci/domains/memory';
+import { EventEntity, CalendarEventService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
@@ -462,7 +462,7 @@ export class EventNowService {
   constructor(
     @InjectRepository(EventEntity)
     private readonly eventRepository: Repository<EventEntity>,
-    private readonly eventService: EventService,
+    private readonly eventService: CalendarEventService,
     private readonly taskService: TaskService,
     private readonly searchService: SearchService,
     private readonly personalizationService: PersonalizationService,

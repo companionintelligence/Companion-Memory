@@ -25,11 +25,20 @@ const BLUEBUBBLES_SYNC_CRON = '0 */10 * * * *';
  * or `enabled`, so this cron ticks unconditionally — the cheap read that
  * decides whether there is anything to do lives there, once, rather than
  * being duplicated here.
+ *
+ * There is no in-flight guard here any more, and its absence is the fix rather
+ * than an omission. It was a `private running` INSTANCE field, which cannot
+ * guard anything that spans processes: this cron is registered in the api and
+ * the worker, each with its own copy of the flag, so every tick started two
+ * full passes — a live appliance logged 25 runs in two hours. The guard now
+ * lives where it can be shared, as a claim on the config row
+ * (`BlueBubblesConfigService.claimSync`), which also covers the "Sync now"
+ * button the flag never saw at all. A field here would only re-introduce a
+ * second, weaker opinion about the same question — and a hung pass could pin
+ * it forever, which is what the claim's heartbeat exists to avoid.
  */
 @Injectable()
 export class BlueBubblesSyncCron {
-  private running = false;
-
   constructor(
     private readonly syncService: BlueBubblesSyncService,
     private readonly logger: LoggerService,
@@ -37,19 +46,12 @@ export class BlueBubblesSyncCron {
     this.logger.setContext(BlueBubblesSyncCron.name);
   }
 
-  @Cron(BLUEBUBBLES_SYNC_CRON, { name: 'BlueBubblesSyncCron.runOnSchedule' })
+  // `role: 'worker'` because a pass is a full-history parse plus a push into
+  // `ci.*` — a job of the same shape as every import stage queue, all of which
+  // are `role: 'worker'`. Defaulting to 'web' (see Cron.ts) ran a multi-hour
+  // backfill inside the process that serves HTTP.
+  @Cron(BLUEBUBBLES_SYNC_CRON, { name: 'BlueBubblesSyncCron.runOnSchedule', role: 'worker' })
   async runOnSchedule(): Promise<void> {
-    // A sync pass is a handful of sequential REST calls; ten minutes is
-    // normally more than enough, but a slow/unreachable BlueBubbles server
-    // should not stack a second pass on top of one still running.
-    if (this.running) {
-      this.logger.warn('Skipping BlueBubbles sync; previous run still in progress');
-
-      return;
-    }
-
-    this.running = true;
-
     try {
       await this.syncService.runSync();
     } catch (err) {
@@ -60,8 +62,6 @@ export class BlueBubblesSyncCron {
         'BlueBubbles sync tick failed; will retry on the next tick',
         err instanceof Error ? err : new Error(String(err)),
       );
-    } finally {
-      this.running = false;
     }
   }
 }

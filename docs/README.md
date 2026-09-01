@@ -145,12 +145,19 @@ How a personal archive becomes rows in `ci.*`, and how to work on that safely.
 - [runbooks/jobs-system-review-2026-08.md](runbooks/jobs-system-review-2026-08.md) — how
   pg-boss actually behaves here, verified against the pg-boss source and a live appliance
   database on 2026-08-17, and the Jobs-dashboard changes that came out of it.
+- [operations/job-controls.md](operations/job-controls.md) — the **persisted operator
+  controls**: on / pause / off per queue and per schedule, concurrency ceilings, why the
+  appliance-wide number is divided by the worker-process count, which seven jobs refuse to
+  be switched off, and why the Hub's per-app CPU limit and these queue caps are different
+  ceilings that do not substitute for each other.
 
 ## Operations — [`docs/operations/`](operations/)
 
 - [operations/error-reporting.md](operations/error-reporting.md) — Sentry: opt-out by design,
   what a missing DSN means (nothing initialises), and the `CI_TELEMETRY` / `CI_LOCAL_ONLY`
   switches.
+- [operations/job-controls.md](operations/job-controls.md) — turning Memory's work down
+  without turning it off. See [Jobs & background work](#jobs--background-work) above.
 - [CI.md](CI.md) — **running CI for this repo.** Every workflow is gated to
   `workflow_dispatch`; this is how to dispatch one and how to run the same checks locally.
   Generated from `CI-Local-CICD` — do not hand-edit.

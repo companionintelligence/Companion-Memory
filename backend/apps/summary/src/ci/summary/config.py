@@ -12,8 +12,16 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .llm_endpoint_env import apply_persisted_llm_endpoint
+from .llm_host import resolve_env as resolve_llm_host_env
+from .llm_host import resolve_url as resolve_llm_url
 
 apply_persisted_llm_endpoint()
+
+# Then correct the host for this namespace. `LLM_API_BASE` is written once and
+# read from both sides of a container boundary, so the hostname in it is right
+# for at most one of them — see llm_host.py. Runs after the shared-config load
+# above so it also corrects whatever that wrote. Every rewrite is logged.
+resolve_llm_host_env()
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +69,32 @@ def resolve_embedding_api_key() -> str:
     return os.getenv("EMBEDDING_API_KEY", "").strip() or "ollama"
 
 
+# Where an unconfigured service looks for chat. Written for the container this
+# normally runs in; _default_llm_api_base corrects it when it is not.
+DEFAULT_LLM_API_BASE = "http://host.docker.internal:11434/v1"
+
+
+def _default_llm_api_base() -> str:
+    """
+    LLM_API_BASE, or the compiled-in fallback corrected for this runtime.
+
+    resolve_llm_host_env() above has already fixed the env var, so the only case
+    left is the fallback below — which names the docker host and therefore
+    resolves nowhere when this service is run directly on a laptop.
+    """
+    configured = os.getenv("LLM_API_BASE", "")
+
+    if configured.strip():
+        return configured
+
+    fixed, note = resolve_llm_url(DEFAULT_LLM_API_BASE)
+
+    if note:
+        logger.warning("LLM_API_BASE (default): %s", note)
+
+    return fixed
+
+
 def _default_output_mode() -> str:
     explicit = os.getenv("SUMMARY_OUTPUT_MODE")
     if explicit:
@@ -104,11 +138,7 @@ class Settings(BaseSettings):
     database_url: str = Field(default_factory=lambda: _require_env("DATABASE_URL"))
 
     # LLM Configuration
-    llm_api_base: str = Field(
-        default_factory=lambda: os.getenv(
-            "LLM_API_BASE", "http://host.docker.internal:11434/v1"
-        )
-    )
+    llm_api_base: str = Field(default_factory=_default_llm_api_base)
     llm_api_key: str = Field(default_factory=lambda: os.getenv("LLM_API_KEY", "ollama"))
     llm_model: str = Field(default_factory=_llm_model_from_env)
     llm_temperature: float = 0.3

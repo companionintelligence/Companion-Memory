@@ -51,6 +51,11 @@ export class FilesController {
     @Body('inventoryCapture') inventoryCapture?: string | boolean,
     @Body('skipDescription') skipDescription?: string | boolean,
     @Body('model') model?: string,
+    // Companion Capture screenshot correlation (see FileService.create): a
+    // direct eventId wins when the caller has one; captureTickId is the one
+    // CI-Capture actually sends, resolved server-side against ci.events.
+    @Body('eventId') eventId?: string,
+    @Body('captureTickId') captureTickId?: string,
   ) {
     if (!files || files.length === 0) {
       throw new BadRequestException('At least one file is required');
@@ -63,6 +68,9 @@ export class FilesController {
       inventoryCapture === 'true';
     const shouldSkipDescription = skipDescription === true || skipDescription === 'true';
     const selectedModel = typeof model === 'string' && model.trim().length > 0 ? model.trim() : undefined;
+    const linkedEventId = typeof eventId === 'string' && eventId.trim().length > 0 ? eventId.trim() : undefined;
+    const linkedCaptureTickId =
+      typeof captureTickId === 'string' && captureTickId.trim().length > 0 ? captureTickId.trim() : undefined;
 
     const serviceContext = toServiceContext(context);
 
@@ -98,6 +106,8 @@ export class FilesController {
             thingCapture: shouldCaptureThing,
             skipDescription: shouldSkipDescription,
             model: selectedModel,
+            eventId: linkedEventId,
+            captureTickId: linkedCaptureTickId,
           });
         }),
       );
