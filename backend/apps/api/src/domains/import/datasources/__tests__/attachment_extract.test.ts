@@ -161,6 +161,12 @@ describe('email attachment extraction (container-copy incident fix)', () => {
     expect(sanitizeAttachmentFilename('we<i>rd:"na|me?*.png')).toBe('we_i_rd__na_me__.png');
     expect(sanitizeAttachmentFilename(undefined)).toBe('attachment');
     expect(sanitizeAttachmentFilename('   ')).toBe('attachment');
+    // `basename` leaves these intact and no character class touches them, so
+    // the sanitizer used to return a traversal segment — harmless as a filename
+    // (EISDIR) and a real escape for a caller that uses this for a DIRECTORY.
+    expect(sanitizeAttachmentFilename('..')).toBe('attachment');
+    expect(sanitizeAttachmentFilename('.')).toBe('attachment');
+    expect(sanitizeAttachmentFilename('../../x/..')).toBe('attachment');
 
     const monster = `${'a'.repeat(300)}.png`;
     const out = sanitizeAttachmentFilename(monster);
