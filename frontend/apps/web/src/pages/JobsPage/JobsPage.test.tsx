@@ -5,6 +5,7 @@ import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { JobsPage } from './JobsPage';
 import type { DeadLetterGroup } from './useDeadLetters';
+import type { JobCategoryHistoryResponse } from './useJobCategoryHistory';
 import type { JobHistoryResponse } from './useJobHistory';
 import type { JobsDashboardResponse } from './useJobsDashboard';
 import type { JobListItem, JobListResponse } from './useJobsList';
@@ -38,6 +39,13 @@ const listState = {
 
 const historyState = {
   data: null as JobHistoryResponse | null,
+  loading: false,
+  error: null as string | null,
+  refresh: vi.fn(),
+};
+
+const categoryHistoryState = {
+  data: null as JobCategoryHistoryResponse | null,
   loading: false,
   error: null as string | null,
   refresh: vi.fn(),
@@ -129,6 +137,23 @@ vi.mock('./useJobHistory', async (importOriginal) => {
   };
 });
 
+// The category chart fetches on its own rather than taking a prop, so it needs
+// its own stub — unmocked, it reaches the real `useJobsAuth`/`useAuth` and every
+// test in this file dies on a missing provider, pointing at the summary card
+// rather than at the chart that actually pulled it in.
+//
+// Spread from importOriginal(): an allow-list mock blanks the module's other
+// exports for everything that reaches them transitively, which is how a type-only
+// re-export goes missing in a way the failure message never mentions.
+vi.mock('./useJobCategoryHistory', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./useJobCategoryHistory')>();
+
+  return {
+    ...actual,
+    useJobCategoryHistory: () => categoryHistoryState,
+  };
+});
+
 // Recharts measures its container, which jsdom reports as 0x0.
 vi.mock('recharts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('recharts')>();
@@ -173,6 +198,10 @@ function list(overrides: Partial<JobListResponse> = {}): JobListResponse {
     offset: 0,
     queues: ['search-index', 'image-description'],
     stateCounts: { created: 12716, failed: 821, 'dead-letter': 1191 },
+    // Shaped like a real appliance: heavily skewed, several categories at zero,
+    // and a non-empty `unclassified` bucket — the three cases the chip row has
+    // to render sensibly.
+    categoryCounts: { ingest: 5977, search: 2270, llm: 262, maintenance: 113, unclassified: 587 },
     ...overrides,
   };
 }
@@ -320,11 +349,89 @@ describe('JobsPage table', () => {
     fireEvent.change(screen.getByLabelText('Search jobs'), { target: { value: 'ffmpeg' } });
     expect(lastFilters).toMatchObject({ search: 'ffmpeg', offset: 0 });
 
-    fireEvent.change(screen.getByLabelText('Category'), { target: { value: 'llm' } });
+    // Category is a chip row, not a select. Scoped to its own tablist because
+    // "Model" is a short word and the page is full of buttons.
+    const categoryRow = screen.getByRole('tablist', { name: 'Job category' });
+    fireEvent.click(within(categoryRow).getByRole('tab', { name: /Model/ }));
     expect(lastFilters).toMatchObject({ category: 'llm', offset: 0 });
 
     fireEvent.change(screen.getByLabelText('Queue'), { target: { value: 'image-description' } });
     expect(lastFilters).toMatchObject({ queue: 'image-description' });
+  });
+
+  it('offers every category as a toggle, carrying the count that picking it would yield', () => {
+    render();
+
+    const categoryRow = screen.getByRole('tablist', { name: 'Job category' });
+
+    // All ten, plus the "All" reset and the unclassified bucket. A category with
+    // no jobs still gets a chip — dropping it would make the row's shape shift
+    // under the operator as work arrives, and "nothing here" is also an answer.
+    for (const label of [
+      'All',
+      'Ingest',
+      'Import / sync',
+      'Pipeline',
+      'Enrichment',
+      'Search index',
+      'Life graph',
+      'Model',
+      'Personalization',
+      'Planning',
+      'Maintenance',
+      'Unclassified',
+    ]) {
+      expect(within(categoryRow).getByRole('tab', { name: new RegExp(label) })).toBeInTheDocument();
+    }
+
+    // The count comes from `categoryCounts`, which drops the category and type
+    // filters — so it answers "what would picking this give me?".
+    expect(within(categoryRow).getByRole('tab', { name: /Ingest/ })).toHaveTextContent('5,977');
+
+    // The unclassified bucket is the taxonomy's own gap made visible and
+    // clickable, rather than a silent shortfall between the chips and All.
+    const unclassified = within(categoryRow).getByRole('tab', { name: /Unclassified/ });
+    expect(unclassified).toHaveTextContent('587');
+
+    fireEvent.click(unclassified);
+    expect(lastFilters).toMatchObject({ category: 'unclassified', offset: 0 });
+  });
+
+  it('counts the category row\'s "All" over categories, not over the selected category', () => {
+    render();
+
+    const categoryRow = screen.getByRole('tablist', { name: 'Job category' });
+    const stateRow = screen.getByRole('tablist', { name: 'Job state' });
+
+    // The two rows answer different questions, so their "All" chips carry
+    // different totals: the state row sums stateCounts (12,716 + 821 + 1,191),
+    // the category row sums categoryCounts (5,977 + 2,270 + 262 + 113 + 587).
+    // Using the state total here made the category row read "All 268 … Ingest
+    // 5,977" once a category was picked — the part larger than the whole.
+    expect(within(categoryRow).getByRole('tab', { name: /^All/ })).toHaveTextContent('9,209');
+    expect(within(stateRow).getByRole('tab', { name: /^All/ })).toHaveTextContent('14,728');
+  });
+
+  it('labels each filter row so two rows of pills are not just two rows of pills', () => {
+    render();
+
+    // Both chip rows start with a chip called "All", so without a label the
+    // only way to tell state from category is to recognise the words in them.
+    for (const label of ['State', 'Category', 'Find']) {
+      expect(screen.getByText(label, { selector: 'span' })).toBeInTheDocument();
+    }
+  });
+
+  it('clears a job type when the category changes, so the pair cannot match nothing', () => {
+    render();
+
+    const categoryRow = screen.getByRole('tablist', { name: 'Job category' });
+
+    fireEvent.change(screen.getByLabelText('Job type'), { target: { value: 'file.uploaded' } });
+    expect(lastFilters).toMatchObject({ type: 'file.uploaded' });
+
+    fireEvent.click(within(categoryRow).getByRole('tab', { name: /Planning/ }));
+    expect(lastFilters).toMatchObject({ category: 'planning', type: '', offset: 0 });
   });
 
   it('labels a dead-lettered row as such rather than as waiting work', () => {

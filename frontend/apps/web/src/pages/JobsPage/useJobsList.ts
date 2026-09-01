@@ -34,6 +34,12 @@ export interface JobListResponse {
   readonly offset: number;
   readonly queues: readonly string[];
   readonly stateCounts: Readonly<Record<string, number>>;
+  /**
+   * Per-category counts under the current filter, minus the category and type
+   * filters — so a chip shows what selecting it would yield. Includes an
+   * `unclassified` key for events with no taxonomy entry.
+   */
+  readonly categoryCounts: Readonly<Record<string, number>>;
 }
 
 export interface JobFilters {

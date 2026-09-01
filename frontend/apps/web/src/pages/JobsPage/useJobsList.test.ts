@@ -31,6 +31,7 @@ const EMPTY_RESPONSE: JobListResponse = {
   offset: 0,
   queues: [],
   stateCounts: {},
+  categoryCounts: {},
 };
 
 beforeEach(() => {

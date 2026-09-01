@@ -475,9 +475,13 @@ function AppRoutes() {
           )}
 
           {/* Admin / System */}
+          {/* One page, five addresses. The section (and, for a category
+              deep-link, the category) is read from the pathname inside
+              JobsPage — see pages/JobsPage/jobsSections.ts, which is the single
+              list the Power Rail submenu renders from too. */}
           {isFeatureEnabled('jobs.page') && (
             <Route
-              path="/jobs"
+              path="/jobs/*"
               element={
                 <ProtectedRoute>
                   <JobsPage />

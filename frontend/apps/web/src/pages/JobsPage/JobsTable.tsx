@@ -1,10 +1,17 @@
-import { useState, type ReactNode } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 
 import { Badge, Button, Card, Collapsible, Input, Skeleton, cn } from '@ci/shadcn';
-import { AlertTriangle, ChevronDown, ChevronRight } from '@ci/shadcn/icons';
+import { AlertTriangle, ChevronDown, ChevronRight, type LucideIcon } from '@ci/shadcn/icons';
 
 import { FoldCard, cardPad, usePhone } from './Fold';
-import { categoryDot, categoryLabel, categoryStyle } from './jobCategories';
+import {
+  JOB_SYSTEMS,
+  UNCLASSIFIED_CATEGORY,
+  categoryDot,
+  categoryIcon,
+  categoryLabel,
+  categoryStyle,
+} from './jobCategories';
 import type { JobFilters, JobListItem, JobListResponse } from './useJobsList';
 import type { JobTypesResponse } from './useJobTypes';
 
@@ -13,7 +20,6 @@ type Props = {
   loading: boolean;
   error: string | null;
   filters: JobFilters;
-  categories: readonly string[];
   /** The job taxonomy, for the type filter. Null while it loads. */
   jobTypes: JobTypesResponse | null;
   onChange: (next: Partial<JobFilters>) => void;
@@ -46,7 +52,7 @@ const STATE_TABS = [
  * query: filtering and paging over `pgboss.job` cannot be done in the browser
  * when the table routinely holds tens of thousands of rows.
  */
-export function JobsTable({ data, loading, error, filters, categories, jobTypes, onChange }: Props) {
+export function JobsTable({ data, loading, error, filters, jobTypes, onChange }: Props) {
   const phone = usePhone();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -66,7 +72,94 @@ export function JobsTable({ data, loading, error, filters, categories, jobTypes,
   // Every state bucket added up — what "All" means under the non-state filters.
   const allStatesTotal = Object.values(data?.stateCounts ?? {}).reduce((sum, count) => sum + count, 0);
 
-  const extraFilterCount = [filters.category, filters.type, filters.queue].filter(Boolean).length;
+  // `categoryCounts` deliberately ignores the category AND type filters, so each
+  // chip shows what picking it would yield rather than collapsing to the one
+  // already picked — the same contract `stateCounts` gives the state tabs.
+  const categoryCounts = data?.categoryCounts ?? {};
+  const unclassifiedCount = categoryCounts[UNCLASSIFIED_CATEGORY] ?? 0;
+
+  // What "All" means in the CATEGORY row: every category bucket added up.
+  //
+  // Not `allStatesTotal`. That one honours the category filter, so with a
+  // category selected the All chip collapsed to the current selection — the row
+  // read "All 268 … Ingest 5,977", which says the part is bigger than the whole.
+  // Same bug the state tabs' own comment describes, one row down.
+  const allCategoriesTotal = Object.values(categoryCounts).reduce((sum, count) => sum + count, 0);
+
+  // Category is a chip row of its own now, always visible above the rail — so it
+  // is NOT counted here. Leaving it in made the collapsed "Filters (n)" badge
+  // claim a hidden filter that is in fact the most visible control on the card.
+  const extraFilterCount = [filters.type, filters.queue].filter(Boolean).length;
+
+  /**
+   * The category row: one toggle per category, grouped by system.
+   *
+   * Single-select with an "All" chip, exactly like the state tabs above it —
+   * same interaction, same visual language, and the wire format stays one flat
+   * `category` string. Multi-select would need a new query encoding on both
+   * sides for a filter an operator uses one at a time.
+   *
+   * `role="tab"`, not a bare button, for two reasons. It matches the state row,
+   * and an implicit `button` role here would collide with the phone schedules
+   * accordion, which is queried by `getByRole('button', { name: /Maintenance/ })`
+   * — a category chip with the same label would make that query ambiguous and
+   * fail in a way that points at the wrong component.
+   */
+  const categoryChips = (
+    <div
+      className={
+        phone
+          ? 'scrollbar-none flex gap-1 overflow-x-auto overscroll-x-contain pb-0.5'
+          : 'flex flex-wrap items-center gap-1'
+      }
+      role="tablist"
+      aria-label="Job category"
+    >
+      <CategoryChip
+        label="All"
+        count={allCategoriesTotal}
+        selected={filters.category === ''}
+        onSelect={() => onChange({ category: '', type: '', offset: 0 })}
+      />
+      {JOB_SYSTEMS.map((system) => (
+        <Fragment key={system.key}>
+          {/* A hairline, not a heading: the systems order and separate the row
+              without spending a line of vertical space on five more labels. */}
+          <span aria-hidden className="mx-0.5 hidden h-5 w-px shrink-0 bg-border/70 device:block" />
+          {system.categories.map((category) => (
+            <CategoryChip
+              key={category}
+              label={categoryLabel(category)}
+              title={`${system.label} · ${categoryLabel(category)}`}
+              icon={categoryIcon(category)}
+              dot={categoryDot(category)}
+              count={categoryCounts[category] ?? 0}
+              selected={filters.category === category}
+              // Changing category invalidates a type from a different category,
+              // so clear it rather than leaving a pair that matches nothing.
+              onSelect={() => onChange({ category, type: '', offset: 0 })}
+            />
+          ))}
+        </Fragment>
+      ))}
+      {/* The taxonomy's own gap, made selectable — and only while it exists.
+          A zero here means every event the appliance emits has a descriptor,
+          which is worth saying by the chip's absence rather than by a 0. */}
+      {unclassifiedCount > 0 || filters.category === UNCLASSIFIED_CATEGORY ? (
+        <>
+          <span aria-hidden className="mx-0.5 hidden h-5 w-px shrink-0 bg-border/70 device:block" />
+          <CategoryChip
+            label={categoryLabel(UNCLASSIFIED_CATEGORY)}
+            title="No taxonomy entry — a gap in domains/events/taxonomy.ts, not a kind of work"
+            icon={categoryIcon(UNCLASSIFIED_CATEGORY)}
+            count={unclassifiedCount}
+            selected={filters.category === UNCLASSIFIED_CATEGORY}
+            onSelect={() => onChange({ category: UNCLASSIFIED_CATEGORY, type: '', offset: 0 })}
+          />
+        </>
+      ) : null}
+    </div>
+  );
 
   const stateTabs = (
     <div
@@ -123,20 +216,6 @@ export function JobsTable({ data, loading, error, filters, categories, jobTypes,
   const filterSelects = (
     <>
       <FilterSelect
-        label="Category"
-        value={filters.category}
-        options={categories.map((category) => ({
-          value: category,
-          label: categoryLabel(category),
-        }))}
-        stacked={phone}
-        onChange={(category) =>
-          // Changing category invalidates a type from a different category,
-          // so clear it rather than leaving a filter pair that matches nothing.
-          onChange({ category, type: '', offset: 0 })
-        }
-      />
-      <FilterSelect
         label="Job type"
         value={filters.type}
         options={visibleTypes}
@@ -176,53 +255,72 @@ export function JobsTable({ data, loading, error, filters, categories, jobTypes,
           </Card.Description>
         </div>
 
-        {stateTabs}
+        {/* One tinted panel holding all three filter rows, each with its own
+            label in a shared left column.
 
-        {/* Filters sit on their own tinted rail so they read as controls rather
-            than as part of the table chrome — the old row blended into the
-            header and was easy to miss entirely. */}
-        {phone ? (
-          <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/30 p-2">
-            <Input
-              value={filters.search}
-              onChange={(event) => onChange({ search: event.target.value, offset: 0 })}
-              placeholder="Search event, queue or error…"
-              aria-label="Search jobs"
-            />
-            <Collapsible open={filtersOpen} onOpenChange={setFiltersOpen}>
-              <Collapsible.Trigger asChild>
-                <Button size="sm" variant="ghost" className="w-full justify-between">
-                  <span>
-                    Filters
-                    {extraFilterCount > 0 ? (
-                      <span className="ml-1.5 tabular-nums text-muted-foreground">({extraFilterCount})</span>
-                    ) : null}
-                  </span>
-                  <ChevronDown
-                    className={cn(
-                      'h-4 w-4 text-muted-foreground transition-transform',
-                      filtersOpen && 'rotate-180',
-                    )}
-                  />
-                </Button>
-              </Collapsible.Trigger>
-              <Collapsible.Content>
-                <div className="flex flex-col gap-2 pt-2">{filterSelects}</div>
-              </Collapsible.Content>
-            </Collapsible>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/30 p-2 md:flex-row md:flex-wrap md:items-center">
-            <Input
-              value={filters.search}
-              onChange={(event) => onChange({ search: event.target.value, offset: 0 })}
-              placeholder="Search event, queue or error message…"
-              aria-label="Search jobs"
-              className="md:max-w-xs"
-            />
-            {filterSelects}
-          </div>
-        )}
+            The two chip rows used to sit bare above the rail, so nothing said
+            what either was filtering BY — two adjacent rows of pills, both
+            starting with a chip called "All", and the only way to tell state
+            from category was to recognise the words. Naming them and aligning
+            them under one surface makes the card read as "narrow the table by
+            state, then by category, then by these three" instead of as three
+            unrelated control strips. */}
+        <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/30 p-2">
+          <FilterRow label="State" phone={phone}>
+            {stateTabs}
+          </FilterRow>
+
+          <FilterRow label="Category" phone={phone}>
+            {categoryChips}
+          </FilterRow>
+
+          <FilterRow label="Find" phone={phone}>
+            {phone ? (
+              <div className="flex flex-col gap-2">
+                <Input
+                  value={filters.search}
+                  onChange={(event) => onChange({ search: event.target.value, offset: 0 })}
+                  placeholder="Search event, queue or error…"
+                  aria-label="Search jobs"
+                />
+                <Collapsible open={filtersOpen} onOpenChange={setFiltersOpen}>
+                  <Collapsible.Trigger asChild>
+                    <Button size="sm" variant="ghost" className="w-full justify-between">
+                      <span>
+                        More filters
+                        {extraFilterCount > 0 ? (
+                          <span className="ml-1.5 tabular-nums text-muted-foreground">
+                            ({extraFilterCount})
+                          </span>
+                        ) : null}
+                      </span>
+                      <ChevronDown
+                        className={cn(
+                          'h-4 w-4 text-muted-foreground transition-transform',
+                          filtersOpen && 'rotate-180',
+                        )}
+                      />
+                    </Button>
+                  </Collapsible.Trigger>
+                  <Collapsible.Content>
+                    <div className="flex flex-col gap-2 pt-2">{filterSelects}</div>
+                  </Collapsible.Content>
+                </Collapsible>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={filters.search}
+                  onChange={(event) => onChange({ search: event.target.value, offset: 0 })}
+                  placeholder="Search event, queue or error message…"
+                  aria-label="Search jobs"
+                  className="h-9 w-full min-w-0 sm:w-72"
+                />
+                {filterSelects}
+              </div>
+            )}
+          </FilterRow>
+        </div>
       </Card.Header>
 
       <Card.Content className={cn('space-y-2', cardPad(phone))}>
@@ -501,6 +599,107 @@ function Detail({ label, value, mono }: { label: string; value: ReactNode; mono?
         {value}
       </dd>
     </div>
+  );
+}
+
+/**
+ * One labelled row of the filter panel.
+ *
+ * The label sits in a fixed column on desktop so State, Category and Find line
+ * up down the left edge and the panel reads as one control surface rather than
+ * three stacked strips. On a phone there is no room for a label column, so it
+ * goes above its row instead.
+ *
+ * Presentational only — each row keeps its own `aria-label`, so the label here
+ * is a visible echo of what assistive tech was already being told, not the only
+ * copy of it.
+ */
+function FilterRow({ label, phone, children }: { label: string; phone: boolean; children: ReactNode }) {
+  return (
+    <div
+      className={cn(
+        phone ? 'flex flex-col gap-1' : 'grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-x-3',
+      )}
+    >
+      <span
+        className={cn(
+          'font-medium uppercase tracking-wider text-muted-foreground',
+          phone ? 'text-[10px]' : 'pt-2 text-[11px]',
+        )}
+      >
+        {label}
+      </span>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * One category toggle.
+ *
+ * Three channels, deliberately: the written label, the category hue (as an icon
+ * tint plus a dot), and the icon glyph. Colour is never alone — the row stays
+ * readable in greyscale and to a screen reader, which is the contract stated at
+ * the top of `jobCategories.ts`.
+ *
+ * A zero count is dimmed rather than hidden. On a real appliance four of the ten
+ * categories are usually empty, and dropping them would make the row's shape
+ * change under the operator as work arrives; "there is nothing here" is also an
+ * answer worth showing.
+ */
+function CategoryChip({
+  label,
+  title,
+  icon: Icon,
+  dot,
+  count,
+  selected,
+  onSelect,
+}: {
+  label: string;
+  title?: string;
+  icon?: LucideIcon;
+  dot?: string;
+  count: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const empty = count === 0 && !selected;
+
+  return (
+    <Button
+      role="tab"
+      aria-selected={selected}
+      title={title ?? label}
+      size="sm"
+      variant="ghost"
+      onClick={onSelect}
+      className={cn(
+        'shrink-0',
+        selected
+          ? 'border border-primary/60 bg-primary/15 text-foreground ring-1 ring-primary/40'
+          : 'border border-border/70 text-muted-foreground hover:text-foreground',
+        empty && 'opacity-55',
+      )}
+    >
+      {Icon ? (
+        <Icon
+          aria-hidden
+          className={cn('size-3.5', selected ? 'text-foreground' : 'text-muted-foreground')}
+        />
+      ) : dot ? (
+        <span aria-hidden className={cn('size-2 rounded-full', dot)} />
+      ) : null}
+      {label}
+      <span
+        className={cn(
+          'ml-0.5 rounded px-1 tabular-nums text-xs',
+          selected ? 'bg-primary/20 text-foreground' : 'text-muted-foreground',
+        )}
+      >
+        {count.toLocaleString()}
+      </span>
+    </Button>
   );
 }
 

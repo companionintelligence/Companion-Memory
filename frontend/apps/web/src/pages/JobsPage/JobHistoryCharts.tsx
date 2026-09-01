@@ -17,6 +17,8 @@ import {
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
+import { categoryChartColor, categoryLabel } from './jobCategories';
+import { useJobCategoryHistory, type JobCategoryHistoryResponse } from './useJobCategoryHistory';
 import { HISTORY_WINDOWS, type JobHistoryPoint, type JobHistoryResponse } from './useJobHistory';
 
 type Props = {
@@ -247,10 +249,106 @@ export function JobHistoryCharts({ data, loading, error, windowHours, onWindowCh
               {durationChart}
             </div>
           )}
+
+          {/* Full width and taller than the three above it, because it carries
+              up to eleven series rather than three — and because it answers the
+              question the other three cannot: not "is the queue coping" but
+              "WHAT has the appliance been doing". A stacked area over the same
+              buckets, so the x-axis lines up with the row above. */}
+          <CategoryVolumeChart windowHours={windowHours} />
         </Card.Content>
       </FoldBody>
     </FoldCard>
   );
+}
+
+/**
+ * Job arrivals per category over time.
+ *
+ * The three charts above are about the queue's HEALTH — is it draining, what
+ * settled, how long it took — and none of them says what kind of work any of it
+ * was. On a live appliance that matters more than it sounds: 62% of everything
+ * is one category (ingest) and four categories are permanently empty, which is
+ * invisible in an undifferentiated backlog curve.
+ *
+ * ARRIVALS, not completions. A queued job has no completion time, so the live
+ * half of the series could only ever count arrivals — plotting completions
+ * would make the two halves measure different quantities and meet at the ~36h
+ * seam with no visible reason for the step. Dead-letter copies are excluded on
+ * both sides: pg-boss stamps the copy with a fresh `created_on`, so counting
+ * them would draw a burst of new work at the exact moment work started failing.
+ */
+function CategoryVolumeChart({ windowHours }: { windowHours: number }) {
+  const { data, loading, error } = useJobCategoryHistory(windowHours);
+
+  const categories = data?.categories ?? [];
+  const points = useMemo(
+    () =>
+      (data?.points ?? []).map((point) => ({
+        label: bucketLabel(point.at),
+        ...point.counts,
+      })),
+    [data?.points],
+  );
+
+  // Summed off the response rather than the flattened chart rows: those carry a
+  // string `label` alongside the numeric series, so counting them would mean
+  // casting a mixed record to Record<string, number> and lying to the compiler.
+  const total = (data?.points ?? []).reduce(
+    (sum, point) => sum + Object.values(point.counts).reduce((inner, count) => inner + count, 0),
+    0,
+  );
+
+  return (
+    <ChartPanel
+      title="Job types over time"
+      hint={
+        data
+          ? `Jobs arriving in each ${data.bucketMinutes}-minute bucket, by category.${sourceNote(data.source)}`
+          : 'Jobs arriving in each bucket, by category.'
+      }
+      empty={!loading && total === 0}
+      emptyMessage={
+        error
+          ? `Could not load category history: ${error}`
+          : 'No jobs arrived in this window. Longer ranges rely on the 5-minute sampler, which only has history from when it first ran.'
+      }
+      heightClass="h-[300px]"
+    >
+      <AreaChart data={points} margin={CHART_MARGIN}>
+        <CartesianGrid vertical={false} strokeDasharray="3 3" stroke="var(--border)" />
+        <XAxis dataKey="label" {...AXIS_PROPS} />
+        <YAxis {...AXIS_PROPS} width={52} allowDecimals={false} />
+        <ChartTooltip content={<ChartTooltipContent />} />
+        <Legend {...LEGEND_PROPS} />
+        {categories.map((category) => (
+          <Area
+            key={category}
+            type="monotone"
+            dataKey={category}
+            name={categoryLabel(category)}
+            stackId="categories"
+            stroke={categoryChartColor(category)}
+            fill={categoryChartColor(category)}
+            fillOpacity={0.35}
+          />
+        ))}
+      </AreaChart>
+    </ChartPanel>
+  );
+}
+
+/** Says which store answered, because exact and sampled differ in kind. */
+function sourceNote(source: JobCategoryHistoryResponse['source']): string {
+  if (source === 'live') {
+    return ' Counted directly from the queue.';
+  }
+
+  if (source === 'metrics') {
+    return ' From 5-minute samples — only as complete as the collector’s uptime.';
+  }
+
+  return ' Recent buckets counted directly; older ones from 5-minute samples.';
 }
 
 const CHART_MARGIN = { top: 8, right: 8, bottom: 0, left: 0 };
@@ -273,23 +371,32 @@ function ChartPanel({
   empty,
   emptyMessage,
   children,
+  // Default matches the three side-by-side charts. The category chart overrides
+  // it: eleven stacked series in 170px is a band of colour, not a reading.
+  heightClass = 'h-[170px]',
 }: {
   title: string;
   hint: string;
   empty: boolean;
   emptyMessage: string;
   children: React.ReactElement;
+  heightClass?: string;
 }) {
   return (
     <div className="min-w-0">
       <h3 className="text-sm font-medium leading-tight">{title}</h3>
       <p className="mb-1.5 text-xs leading-snug text-muted-foreground">{hint}</p>
       {empty ? (
-        <div className="flex h-[170px] items-center justify-center rounded-lg border border-dashed border-border/60">
+        <div
+          className={cn(
+            'flex items-center justify-center rounded-lg border border-dashed border-border/60',
+            heightClass,
+          )}
+        >
           <p className="text-xs text-muted-foreground">{emptyMessage}</p>
         </div>
       ) : (
-        <ChartContainer config={{}} className="h-[170px] w-full">
+        <ChartContainer config={{}} className={cn('w-full', heightClass)}>
           {children}
         </ChartContainer>
       )}
@@ -309,18 +416,23 @@ type ChartPoint = {
   p95Seconds: number | null;
 };
 
-function toChartPoint(point: JobHistoryPoint): ChartPoint {
-  const at = new Date(point.at);
+/** One bucket's x-axis label. Shared, so the two charts' axes cannot disagree. */
+function bucketLabel(at: string): string {
+  const date = new Date(at);
 
+  return Number.isNaN(date.getTime())
+    ? '—'
+    : new Intl.DateTimeFormat(undefined, {
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(date);
+}
+
+function toChartPoint(point: JobHistoryPoint): ChartPoint {
   return {
-    label: Number.isNaN(at.getTime())
-      ? '—'
-      : new Intl.DateTimeFormat(undefined, {
-          month: 'short',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-        }).format(at),
+    label: bucketLabel(point.at),
     pending: point.pending,
     active: point.active,
     retry: point.retry,

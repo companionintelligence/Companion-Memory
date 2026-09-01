@@ -15,6 +15,7 @@ import {
 
 import { useFeatures } from '@/common/feature';
 import { isMemoryHubPath } from '@/components/MemoryHub/memoryHubSections';
+import { isJobsPath, JOBS_CATEGORY_SECTIONS, JOBS_SECTIONS } from '@/pages/JobsPage/jobsSections';
 
 /**
  * Destinations in the Power Rail, top to bottom (and on the phone, the same
@@ -68,7 +69,44 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
     ],
   },
   { id: 'sources', to: '/sources', label: 'Sources', icon: Cable, end: false },
-  { id: 'jobs', to: '/jobs', label: 'Jobs', icon: Workflow, flag: 'jobs.page' },
+  // Jobs carries its own sections the way Memory does — everything the page
+  // shows used to be one scroll (summary, charts, the table, dead letters and
+  // 53 schedules on a single route), which is fine to read once and miserable
+  // to return to: the thing you came back for is never at the top and there is
+  // no way to link a colleague to it.
+  //
+  // The category rows underneath are the same ten buckets the table's chip row
+  // uses, in the same system order, so the submenu and the page agree about how
+  // the appliance is arranged. They are ROUTES rather than `/jobs?category=…`
+  // because `isRailDestinationActive` only ever sees the pathname — query-param
+  // children would leave all ten rows lit on every visit to /jobs.
+  {
+    id: 'jobs',
+    to: '/jobs',
+    label: 'Jobs',
+    icon: Workflow,
+    flag: 'jobs.page',
+    end: false,
+    match: isJobsPath,
+    children: [
+      ...JOBS_SECTIONS.filter((section) => section.id !== 'overview').map((section) => ({
+        id: section.id,
+        to: section.to,
+        label: section.label,
+        icon: section.icon,
+        flag: 'jobs.page',
+        match: section.match,
+      })),
+      ...JOBS_CATEGORY_SECTIONS.map((section) => ({
+        id: section.id,
+        to: section.to,
+        label: section.label,
+        icon: section.icon,
+        flag: 'jobs.page',
+        match: section.match,
+      })),
+    ],
+  },
   // Below Jobs, off the primary six, while its flag ships false — turning it
   // on later should not disturb the places you actually work.
   { id: 'forecast', to: '/forecast', label: 'Forecast', icon: CloudSun, flag: 'forecast.page' },

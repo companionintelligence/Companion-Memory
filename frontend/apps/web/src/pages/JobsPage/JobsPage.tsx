@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+
 import { usePageTitle } from '@ci/common';
 import { Accordion, Badge, Button, Card, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, RefreshCcw } from '@ci/shadcn/icons';
+import { useLocation } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -14,6 +16,7 @@ import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
 import { categoryDot, categoryLabel, CATEGORY_LABELS } from './jobCategories';
 import { JobHistoryCharts } from './JobHistoryCharts';
 import { JobsImportActivity } from './JobsImportActivity';
+import { categoryFromPath, JOBS_SECTIONS } from './jobsSections';
 import { JobsTable } from './JobsTable';
 import { useDeadLetters } from './useDeadLetters';
 import { useJobHistory } from './useJobHistory';
@@ -27,24 +30,11 @@ import {
 } from './useJobsList';
 import { useJobTypes, type JobTypesResponse } from './useJobTypes';
 
-/** Category keys the API's taxonomy exposes, in the order the filter lists them. */
-const CATEGORIES = [
-  'search',
-  'ingest',
-  'enrich',
-  'graph',
-  'pipeline',
-  'import',
-  'llm',
-  'personalization',
-  'planning',
-  'maintenance',
-] as const;
-
 export function JobsPage() {
   usePageTitle('Jobs - Companion Intelligence');
 
   const phone = usePhone();
+  const { pathname } = useLocation();
 
   const [filters, setFilters] = useState<JobFilters>(DEFAULT_JOB_FILTERS);
   const [windowHours, setWindowHours] = useState(24);
@@ -67,6 +57,30 @@ export function JobsPage() {
   const onFilterChange = useCallback((next: Partial<JobFilters>) => {
     setFilters((current) => ({ ...current, ...next }));
   }, []);
+
+  // The URL owns the category on a `/jobs/category/:category` deep-link, and
+  // only there. Everywhere else the chip row owns it, as before — so this
+  // pushes the route's choice into the filter rather than making every chip
+  // click a navigation, which would put ten entries in the back stack for what
+  // is one act of narrowing a table.
+  useEffect(() => {
+    const routeCategory = categoryFromPath(pathname);
+
+    if (routeCategory == null) {
+      return;
+    }
+
+    setFilters((current) =>
+      current.category === routeCategory
+        ? current
+        : { ...current, category: routeCategory, type: '', offset: 0 },
+    );
+  }, [pathname]);
+
+  // Which surface this address shows. A category deep-link is the table, so it
+  // falls through to the same branch Overview's table lives in.
+  const section = JOBS_SECTIONS.find((candidate) => candidate.match(pathname))?.id ?? 'overview';
+  const isCategoryRoute = categoryFromPath(pathname) != null;
 
   /**
    * Refetch every card, and RESOLVE when they have all answered.
@@ -99,7 +113,6 @@ export function JobsPage() {
       error={list.error}
       jobTypes={jobTypes}
       filters={filters}
-      categories={CATEGORIES}
       onChange={onFilterChange}
     />
   );
@@ -161,10 +174,22 @@ export function JobsPage() {
             onSelectState={(state) => onFilterChange({ state, offset: 0 })}
           />
 
-          {/* Phone: live work first (jobs), reference last (history, schedules,
-              dead letters). Desktop keeps history above the table and dead
-              letters next to the tab that points at them. */}
-          {phone ? (
+          {/* A focused section shows one surface. Overview keeps the whole
+              stack, because "what is the queue doing right now" is a question
+              you answer by scanning several cards at once, and that is the
+              address someone lands on from the rail's Jobs row. */}
+          {section === 'jobs-history' ? (
+            historyCharts
+          ) : section === 'jobs-schedules' ? (
+            schedules
+          ) : section === 'jobs-dead-letters' ? (
+            deadLettersCard
+          ) : isCategoryRoute ? (
+            jobsTable
+          ) : phone ? (
+            /* Phone: live work first (jobs), reference last (history, schedules,
+               dead letters). Desktop keeps history above the table and dead
+               letters next to the tab that points at them. */
             <>
               {jobsTable}
               {historyCharts}
@@ -256,9 +281,7 @@ function SummaryCard({
           aria-busy={refreshing || undefined}
           className={phone ? 'shrink-0' : 'w-full md:w-auto'}
         >
-          <RefreshCcw
-            className={cn(phone ? 'h-4 w-4' : 'mr-2 h-4 w-4', refreshing && 'animate-spin')}
-          />
+          <RefreshCcw className={cn(phone ? 'h-4 w-4' : 'mr-2 h-4 w-4', refreshing && 'animate-spin')} />
           {phone ? (
             <span className="sr-only">{refreshing ? 'Refreshing' : 'Refresh'}</span>
           ) : refreshing ? (

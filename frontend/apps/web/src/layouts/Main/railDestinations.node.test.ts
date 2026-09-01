@@ -86,8 +86,20 @@ describe('visibleRailDestinations', () => {
 
     expect(asks?.flag).toBe('ask');
     expect(asks?.to).toBe('/asks');
-    expect(visibleRailDestinations((flag) => flag !== 'ask').flatMap((d) => d.children ?? [])).toEqual([]);
-    expect(visibleRailDestinations((flag) => flag !== 'ask').map((d) => d.id)).not.toContain('asks');
+    // Scoped to Asks by id. This used to assert the rail had NO children at all
+    // once `ask` was off, which only held while Asks was the single child in the
+    // whole rail — Jobs now carries its sections and categories the same way, so
+    // the broad form failed on an unrelated change instead of on this contract.
+    const withoutAsk = visibleRailDestinations((flag) => flag !== 'ask');
+
+    expect(withoutAsk.flatMap((d) => d.children ?? []).map((child) => child.id)).not.toContain('asks');
+    expect(withoutAsk.map((d) => d.id)).not.toContain('asks');
+    // Still proves the gate is real: with every flag on, Asks IS a child.
+    expect(
+      visibleRailDestinations(() => true)
+        .flatMap((d) => d.children ?? [])
+        .map((child) => child.id),
+    ).toContain('asks');
   });
 });
 
