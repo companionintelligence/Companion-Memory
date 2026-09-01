@@ -23,9 +23,28 @@ import {
   type ToolSchema,
 } from '@ci/domains/tools';
 
+import { boundToolResultForPrompt, toolResultByteBudget } from '../toolResultBudget';
 import type { OllamaModel } from '../types';
 
 import { LlmEndpointService } from './LlmEndpointService';
+
+/**
+ * Appended to the REQUEST (never stored) for the forced prose round — the one
+ * extra generation granted when the tool-round cap lands on tool calls.
+ * Withholding the tools alone does not stop the loop on the native path:
+ * Ollama parses the model's tool-call template tokens whether or not tools
+ * were advertised, so an eager model keeps searching until the cap kills the
+ * turn with no prose (measured live: three knowledge_search rounds, then the
+ * empty-turn fallback). The instruction is what turns the final round into an
+ * answer; the discard in the round's `finally` is what makes it final either way.
+ */
+const FORCED_PROSE_NUDGE: OllamaMessage = {
+  role: 'system',
+  content:
+    'Tool use for this turn is over — do not call any more tools. Answer the user now in plain prose, ' +
+    'grounded in the tool results above. If the results do not fully answer the question, summarize ' +
+    'what was found and say what is missing.',
+};
 
 /**
  * The model a PERSON is talking to.
@@ -648,6 +667,15 @@ export class OllamaService implements OnModuleInit {
     // advertised-tool generate.
     const maxToolRounds = 2;
     let generateRounds = 0;
+    // When the follow-up round ALSO comes back as tool calls (salvage can
+    // produce them even with no tools advertised), the loop used to execute
+    // those calls and then break at the round cap — ending the whole turn with
+    // a role:'tool' row as its last message and no prose anywhere. Measured
+    // live: two knowledge_search rounds that both returned [], then silence;
+    // the viewer saw a chat that never answered. This flag buys exactly one
+    // more generation, with tools neither advertised nor salvaged, so the
+    // model has to speak to the results it already has.
+    let forcedProseRound = false;
     // A backend failure inside the generator is logged and the stream ends
     // quietly (an empty assistant row) rather than throwing at the consumer —
     // long-standing behavior the SSE controller depends on. Recording it here
@@ -669,26 +697,45 @@ export class OllamaService implements OnModuleInit {
         thinkChunks.splice(0, thinkChunks.length);
 
         const iterationToolCalls = toolCalls.splice(0, toolCalls.length);
-        const toolEvaluations = await self.handleToolCalls(context, iterationToolCalls);
+        const toolEvaluations = await self.handleToolCalls(
+          context,
+          iterationToolCalls,
+          toolResultByteBudget(numCtx),
+        );
 
         accumulatedMessages.push(...toolEvaluations);
 
         if (generateRounds >= maxToolRounds) {
-          break;
+          if (iterationToolCalls.length === 0 || forcedProseRound) {
+            break;
+          }
+
+          forcedProseRound = true;
         }
 
         generateRounds += 1;
-        const iterationWillCallTools = enableTools && ollamaTools.length > 0 && generateRounds === 1;
+        const iterationWillCallTools =
+          enableTools && ollamaTools.length > 0 && generateRounds === 1 && !forcedProseRound;
+        // Withholding the tools is not enough to end the tool loop on the
+        // native path: Ollama parses the model's tool-call template tokens
+        // whether or not tools were advertised, so an eager model just keeps
+        // searching (measured live: three knowledge_search rounds, no prose,
+        // fallback shown). Request-only, never pushed onto
+        // accumulatedMessages — persistTurn writes those as thread rows and a
+        // stored system row would replay into every later turn.
+        const requestMessages = forcedProseRound
+          ? inputMessages.concat(accumulatedMessages, [FORCED_PROSE_NUDGE])
+          : inputMessages.concat(accumulatedMessages);
 
         try {
           if (openAiDriver) {
             const iterator = openAiDriver.chatStream({
               model,
-              messages: inputMessages.concat(accumulatedMessages),
+              messages: requestMessages,
               tools: iterationWillCallTools ? ollamaTools : undefined,
               signal,
               enableThinking,
-              salvageTools: enableTools,
+              salvageTools: enableTools && !forcedProseRound,
               maxTokens: maxOutputTokens,
             });
 
@@ -712,7 +759,7 @@ export class OllamaService implements OnModuleInit {
           } else {
             const iterator = await self.ollama.chat({
               model,
-              messages: inputMessages.concat(accumulatedMessages),
+              messages: requestMessages,
               stream: true,
               // Native Ollama: `think` is a first-class flag. vLLM is the other
               // branch above and uses chat_template_kwargs.enable_thinking.
@@ -789,6 +836,19 @@ export class OllamaService implements OnModuleInit {
             break;
           }
         } finally {
+          // The forced round's answer is final whatever the model wanted:
+          // executing yet another tool call here would hand the turn back to
+          // the loop this round exists to end, so any calls it emitted are
+          // dropped — from the loop condition below AND from the stored
+          // message, where they would misrepresent the turn as still open.
+          if (forcedProseRound && toolCalls.length > 0) {
+            self.logger.log('Discarding tool calls emitted in the forced prose round', {
+              model: lastChunk?.model ?? model,
+              discarded: toolCalls.map((call) => call.function.name),
+            });
+            toolCalls.splice(0, toolCalls.length);
+          }
+
           const think = thinkChunks.join('');
           const content = textChunks.join('');
 
@@ -913,7 +973,11 @@ export class OllamaService implements OnModuleInit {
       return response;
     }
 
-    const toolEvaluations = await this.handleToolCalls(context, response.message.tool_calls ?? []);
+    const toolEvaluations = await this.handleToolCalls(
+      context,
+      response.message.tool_calls ?? [],
+      toolResultByteBudget(null),
+    );
 
     accumulatedMessages.push(...toolEvaluations);
 
@@ -1155,6 +1219,7 @@ export class OllamaService implements OnModuleInit {
   private async handleToolCalls(
     context: ChatRequestContext,
     toolCalls: ToolCall[],
+    resultByteBudget: number,
   ): Promise<OllamaMessage[]> {
     if (toolCalls.length === 0) {
       this.logger.debug('No tool calls to evaluate, skipping handling', {
@@ -1207,11 +1272,15 @@ export class OllamaService implements OnModuleInit {
       }),
     );
 
+    // Bounded, never raw-stringified: tool results are the one prompt block
+    // the context budget does not admit, and an unbounded one loses the whole
+    // follow-up turn to window truncation. See toolResultBudget.ts for the
+    // measured incident.
     return toolResults.map(
       ({ result }) =>
         ({
           role: 'tool' as const,
-          content: JSON.stringify(result),
+          content: boundToolResultForPrompt(result, resultByteBudget),
         }) satisfies OllamaMessage,
     );
   }

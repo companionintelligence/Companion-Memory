@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { type UserServiceContext, toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { BrowserActivityService, type BrowserActivity } from '@ci/domains/browser-activity';
 import { ThreadService, type Thread } from '@ci/domains/conversations';
 import { FileService, type File } from '@ci/domains/files';
 import { AnswerService, type Answer } from '@ci/domains/intelligence';
@@ -14,6 +15,8 @@ import {
   ItemService,
   PersonService,
   PlaceService,
+  ProductModelService,
+  ReceiptService,
   type Communication,
   type Concept,
   type Content,
@@ -21,7 +24,10 @@ import {
   type Item,
   type Person,
   type Place,
+  type ProductModel,
+  type Receipt,
 } from '@ci/domains/memory';
+import { NoteService, type Note } from '@ci/domains/notes';
 import { FileChunkService, type FileChunk } from '@ci/domains/parsing';
 import {
   INDEXABLE_ENTITIES,
@@ -46,6 +52,7 @@ export type DatabaseSearchInput = z.infer<typeof DatabaseSearchInputSchema>;
 
 export type SearchResult =
   | Answer
+  | BrowserActivity
   | Communication
   | Concept
   | Content
@@ -53,8 +60,11 @@ export type SearchResult =
   | File
   | FileChunk
   | Item
+  | Note
   | Person
   | Place
+  | ProductModel
+  | Receipt
   | Thread;
 
 @Injectable()
@@ -119,6 +129,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
 
   constructor(
     private readonly answerService: AnswerService,
+    private readonly browserActivityService: BrowserActivityService,
     private readonly communicationService: CommunicationService,
     private readonly conceptService: ConceptService,
     private readonly contentService: ContentService,
@@ -126,8 +137,11 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
     private readonly fileChunkService: FileChunkService,
     private readonly fileService: FileService,
     private readonly itemService: ItemService,
+    private readonly noteService: NoteService,
     private readonly personService: PersonService,
     private readonly placeService: PlaceService,
+    private readonly productModelService: ProductModelService,
+    private readonly receiptService: ReceiptService,
     private readonly threadService: ThreadService,
     private readonly searchService: SearchService,
     protected readonly logger: LoggerService,
@@ -182,6 +196,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
     }, new Map());
 
     const answerIds = groupedByType.get('answer') || [];
+    const browserActivityIds = groupedByType.get('browser-activity') || [];
     const communicationIds = groupedByType.get('communication') || [];
     const conceptIds = groupedByType.get('concept') || [];
     const contentIds = groupedByType.get('content') || [];
@@ -189,12 +204,16 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
     const fileChunkIds = groupedByType.get('file-chunk') || [];
     const fileIds = groupedByType.get('file') || [];
     const itemIds = groupedByType.get('item') || [];
+    const noteIds = groupedByType.get('note') || [];
     const peopleIds = groupedByType.get('person') || [];
     const placeIds = groupedByType.get('place') || [];
+    const productIds = groupedByType.get('product') || [];
+    const receiptIds = groupedByType.get('receipt') || [];
     const threadIds = groupedByType.get('thread') || [];
 
     const [
       answers,
+      browserActivities,
       communications,
       concepts,
       content,
@@ -202,11 +221,15 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
       fileChunks,
       files,
       items,
+      notes,
       people,
       places,
+      products,
+      receipts,
       threads,
     ] = await Promise.all([
       this.answerService.findByIds(context, answerIds),
+      this.browserActivityService.findByIds(context, browserActivityIds),
       this.communicationService.findByIds(context, communicationIds),
       this.conceptService.findByIds(context, conceptIds),
       this.contentService.findByIds(context, contentIds),
@@ -214,14 +237,21 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
       this.fileChunkService.findByIds(fileChunkIds),
       this.fileService.findByIds(context, fileIds),
       this.itemService.findByIds(context, itemIds),
+      this.noteService.findByIds(context, noteIds),
       this.personService.findByIds(context, peopleIds),
       this.placeService.findByIds(context, placeIds),
+      this.productModelService.findByIds(context, productIds),
+      this.receiptService.findByIds(context, receiptIds),
       this.threadService.findByIds(context, threadIds),
     ]);
 
     const resultMap = new Map<string, SearchResult>();
 
     answers.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('answer', d.id), d));
+
+    browserActivities
+      .filter((d) => d != null)
+      .forEach((d) => resultMap.set(makeCompositeKey('browser-activity', d.id), d));
 
     communications
       .filter((d) => d != null)
@@ -235,13 +265,34 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
       .forEach((d) => resultMap.set(makeCompositeKey('file-chunk', d.id), d));
     files.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('file', d.id), d));
     items.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('item', d.id), d));
+    notes.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('note', d.id), d));
     people.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('person', d.id), d));
     places.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('place', d.id), d));
+    products.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('product', d.id), d));
+    receipts.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('receipt', d.id), d));
     threads.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('thread', d.id), d));
 
     const orderedResults = results
       .map((result) => resultMap.get(makeCompositeKey(result.type, result.id)))
       .filter((entity): entity is SearchResult => entity != null);
+
+    // A hit the resolvers above cannot hydrate vanishes from the answer, and
+    // the caller cannot tell "nothing matched" from "everything matched was
+    // dropped here" — measured live: a 25-hit browser-activity page returned
+    // [] to the model before that resolver existed. Every indexable type must
+    // have a resolver; this trips when the next one is added without it.
+    if (orderedResults.length === 0 && results.length > 0) {
+      const droppedByType: Record<string, number> = {};
+
+      for (const result of results) {
+        droppedByType[result.type] = (droppedByType[result.type] ?? 0) + 1;
+      }
+
+      this.logger.warn('Search matched entities but every hit was dropped during resolution', {
+        matches: results.length,
+        droppedByType,
+      });
+    }
 
     return orderedResults;
   }

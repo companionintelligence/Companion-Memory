@@ -66,6 +66,13 @@ export interface BlueBubblesAttachment {
 export interface BlueBubblesMessage {
   guid: string;
   text?: string | null;
+  /**
+   * The NSAttributedString body, when `text` is NULL — which recent macOS
+   * increasingly leaves it. `unknown` because BlueBubbles has shipped it in
+   * more than one shape across versions (its own decoded `[{ string, runs }]`
+   * projection, and the raw typedstream bytes as base64 or a JSON Buffer);
+   * `blueBubblesBodyText` in `bluebubbles.ts` narrows all of them.
+   */
   attributedBody?: unknown;
   handle?: BlueBubblesHandle | null;
   handleId?: number | null;
@@ -77,8 +84,10 @@ export interface BlueBubblesMessage {
   dateRead?: number | null;
   dateDelivered?: number | null;
   dateEdited?: number | null;
+  /** Set when the sender UNSENT this message: the body must not be staged as live text. */
   dateRetracted?: number | null;
   isFromMe?: boolean | null;
+  /** 0 for an ordinary message; non-zero for a group action row (rename, join, leave). */
   itemType?: number | null;
   groupActionType?: number | null;
   /** Tapback / edit reference: the message this one reacts to or replaces. */
@@ -97,6 +106,30 @@ interface BlueBubblesEnvelope<T> {
 
 /** BlueBubbles paginates `/message/query` and `/chat/query` at up to this many rows. */
 export const BLUEBUBBLES_PAGE_LIMIT = 1000;
+
+/**
+ * How long any one BlueBubbles call may take before it is abandoned.
+ *
+ * Every call here used to be a bare `fetch`, which has no timeout of its own:
+ * a Mac that completes the TCP handshake and then stops answering — asleep,
+ * swapping, a stalled AppleScript — leaves the promise pending for as long as
+ * the OS keeps the socket, which is hours. The sync pass then never returns,
+ * so `BlueBubblesSyncCron`'s in-flight guard is never cleared and EVERY later
+ * tick logs "previous run still in progress" until the process restarts.
+ *
+ * Generous rather than tight: a `/message/query` page is a thousand rows with
+ * their chats, participants and attachment records, joined out of a sqlite
+ * database on a machine that may also be running Messages. A minute is far
+ * beyond a healthy answer and far short of "the appliance is stuck".
+ */
+const REQUEST_TIMEOUT_MS = 60_000;
+
+/**
+ * The same, for an attachment download — a longer ceiling because the unit is
+ * bytes over a LAN rather than a database query, and a full-quality video is a
+ * legitimately slow transfer where a query never is.
+ */
+const DOWNLOAD_TIMEOUT_MS = 180_000;
 
 /**
  * Strip the `password` query param out of a URL before it is ever logged.
@@ -141,7 +174,7 @@ export class BlueBubblesApiClient {
     // a variable `method` union ('GET' | 'POST') is exactly what a static
     // "body is not allowed when method is GET" lint rule cannot see through
     // from a fixed literal shape.
-    const init: RequestInit = { method };
+    const init: RequestInit = { method, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
 
     if (options.body !== undefined) {
       init.headers = { 'Content-Type': 'application/json' };
@@ -153,7 +186,9 @@ export class BlueBubblesApiClient {
     try {
       response = await fetch(url, init);
     } catch (err) {
-      throw new Error(`BlueBubbles request failed (${redactUrl(url.toString())}): ${(err as Error).message}`);
+      throw new Error(
+        `BlueBubbles request failed (${redactUrl(url.toString())}): ${describeFetchFailure(err, REQUEST_TIMEOUT_MS)}`,
+      );
     }
 
     if (!response.ok) {
@@ -175,9 +210,21 @@ export class BlueBubblesApiClient {
   }
 
   /**
-   * One page of messages, ascending by `dateCreated`, strictly after `after`
-   * (ms epoch) when given. The caller advances by re-calling with the highest
-   * `dateCreated` it has seen once a page comes back shorter than `limit`.
+   * One page of messages, ascending by `dateCreated`, at or after `after` (ms
+   * epoch) when given.
+   *
+   * "At or after", NOT "strictly after": BlueBubbles' own handler compares
+   * `date >= :after`, so the message that set the caller's cursor comes back as
+   * the first row of the next page. That is one duplicate per page (deduped
+   * downstream on the message guid), and it is also why the caller must never
+   * treat "the cursor did not move" as "the server has nothing new" — see the
+   * offset guard in `bluebubbles.ts`'s paging loop, which is what keeps an
+   * inclusive `after` from re-issuing an identical request forever.
+   *
+   * `attributedBody` is requested explicitly. Recent macOS leaves `text` NULL
+   * on a growing share of messages and keeps the body only there; it was
+   * declared on {@link BlueBubblesMessage} but never asked for, so 9.7% of a
+   * 433,398-message corpus (42,170 rows) ingested completely empty.
    */
   async queryMessages(options: {
     after?: number;
@@ -190,7 +237,7 @@ export class BlueBubblesApiClient {
         sort: 'ASC',
         limit: options.limit ?? BLUEBUBBLES_PAGE_LIMIT,
         offset: options.offset ?? 0,
-        with: ['chats', 'chats.participants', 'handle', 'attachments'],
+        with: ['chats', 'chats.participants', 'handle', 'attachments', 'attributedBody'],
       },
     });
   }
@@ -250,7 +297,7 @@ export class BlueBubblesApiClient {
     const url = this.urlFor(`attachment/${encodeURIComponent(guid)}/download`);
 
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
 
       if (!response.ok) {
         return null;
@@ -258,7 +305,29 @@ export class BlueBubblesApiClient {
 
       return Buffer.from(await response.arrayBuffer());
     } catch {
+      // Deliberately still null rather than a throw: a purged or unreadable
+      // attachment must not fail the message that carried it (the descriptor
+      // survives without bytes — see `downloadAttachments`). The timeout is
+      // what makes this branch reachable at all instead of hanging forever.
       return null;
     }
   }
+}
+
+/**
+ * Name a `fetch` rejection in terms of what happened to the request.
+ *
+ * `AbortSignal.timeout` rejects with a bare "The operation was aborted", which
+ * in a log line is indistinguishable from a caller cancelling — and the two
+ * have opposite diagnoses (the Mac stalled vs. the appliance moved on). The
+ * timeout is the only abort this client issues, so naming it is unambiguous.
+ */
+function describeFetchFailure(err: unknown, timeoutMs: number): string {
+  const error = err as { name?: string; message?: string } | undefined;
+
+  if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+    return `no response within ${Math.round(timeoutMs / 1000)}s`;
+  }
+
+  return error?.message ?? String(err);
 }

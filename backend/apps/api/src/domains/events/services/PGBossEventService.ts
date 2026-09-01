@@ -717,20 +717,37 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     for (let i = 0; i < jobs.length; i += PGBOSS_INSERT_CHUNK) {
       const chunk = jobs.slice(i, i + PGBOSS_INSERT_CHUNK);
 
-      // pg-boss's typings say insert() resolves to void; the implementation
-      // resolves with the ids it actually wrote (`manager.insert` →
-      // `rows.map(i => i.id)`), and its INSERT is ON CONFLICT DO NOTHING — so a
-      // short array is rows that were DISCARDED, reported as success. Read the
-      // ids when they are there, and stay quiet if a future version stops
-      // returning them rather than inventing a drop out of `undefined`.
-      const inserted = (await this.boss.insert(chunk)) as unknown as string[] | null | undefined;
-
-      if (Array.isArray(inserted) && inserted.length < chunk.length) {
-        this.logger.error(
-          `Bulk enqueue onto queue ${queue} lost ${chunk.length - inserted.length} of ${chunk.length} jobs: ` +
-            `pg-boss discarded them on insert conflict.`,
-        );
-      }
+      // Conflict loss is NOT observable on this path, so nothing here pretends
+      // to check for it. pg-boss's BULK plan (`insertJobs`, plans.js) ends
+      // `ON CONFLICT DO NOTHING` with no `RETURNING` clause, so `manager.insert`
+      // evaluates `rows.length ? rows.map(i => i.id) : null` over an
+      // always-empty `rows` and resolves `null` — identically whether it wrote
+      // every row or one. (Measured on the pinned 10.3.2: a 3-row insert onto a
+      // `short` queue leaves 1 row on the queue and still resolves `null`.) The
+      // SINGLE-job plan `insertJob` does carry `RETURNING id`, which is why
+      // sendToQueue's null-check above is real work; that intuition does not
+      // transfer here, and a previous revision of this loop read `insert()`'s
+      // return as an id array and logged a drop — code that could never run.
+      //
+      // Not checking costs nothing, because the enforcing-policy throw above
+      // makes a conflict unreachable. The `ON CONFLICT` has no target, so it
+      // absorbs any unique constraint on pgboss.job, and there are five:
+      //   - PK (name, id) — `id` is COALESCE(id, gen_random_uuid()) and the map
+      //     above never sets one.
+      //   - job_i1 / job_i2 / job_i3 — partial on policy short / singleton /
+      //     stately, which is precisely what the throw refuses. The registry
+      //     behind `enforcingPolicyFor` is the same one onModuleInit provisions
+      //     from, and it calls `updateQueue` on every boot — which writes
+      //     `policy = COALESCE($2, policy)` with $2 defaulted to 'standard' —
+      //     so the declared policy and the queue row's `q.policy` cannot drift.
+      //   - job_i4 — partial on `singleton_on IS NOT NULL`, which requires a
+      //     per-job `singletonSeconds`. EventSendOptions has no such field, so
+      //     this path cannot produce one.
+      // The other way rows vanish is not a conflict at all: `insertJobs` INNER
+      // JOINs pgboss.queue, so an unprovisioned queue silently swallows the
+      // whole batch. That is what the getRegisteredQueues() check at the top of
+      // sendMany is for.
+      await this.boss.insert(chunk);
     }
 
     this.logger.debug(`Bulk-enqueued ${jobs.length} events onto queue ${queue}`);

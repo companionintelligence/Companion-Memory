@@ -965,7 +965,28 @@ export class QuestionService {
     return true;
   }
 
-  async findUnansweredByUserId(): Promise<Map<string | null, string[]>> {
+  /**
+   * The next question per user worth spending an inference slot on.
+   *
+   * `attemptHistory` names the pg-boss queue and event the caller dispatches
+   * inference on; it is how this method sees attempts that produced no answer.
+   * An inference that times out, or that every gate in AnswerInferenceListener
+   * discards, writes nothing to ci.answers — so before this filter existed the
+   * same question came back every tick, forever. Measured live: one question
+   * re-dispatched every 60 seconds for hours, monopolizing both the single-slot
+   * `llm` queue and the GPU under it, while every other unanswered question
+   * starved. SmartRotationListener.findNextUnansweredQuestionId fixed the same
+   * head-of-line block the same way (see its doc comment for the design: the
+   * shallow pgboss.job/pgboss.archive history is a feature — a permanently
+   * unanswerable question ages back in at one attempt per retention window
+   * rather than being silenced for good, and if the queue binding ever moves,
+   * this degrades to the old order, which is the safe direction to fail).
+   */
+  async findUnansweredByUserId(attemptHistory: {
+    queue: string;
+    eventName: string;
+    cooldownHours: number;
+  }): Promise<Map<string | null, string[]>> {
     // TODO: We need to refine how we're selecting "unanswered questions".
     //
     // This first cut gets the fundamentals roughly nailed down.
@@ -989,18 +1010,44 @@ export class QuestionService {
       user_id: string | null;
     };
 
-    const rows = (await this.dataSource.query(`
-      WITH unanswered AS (
+    const rows = (await this.dataSource.query(
+      `
+      WITH attempts AS (
+        SELECT
+          dispatched.data->>'ownerId' AS user_id,
+          dispatched.data->>'questionId' AS question_id,
+          MAX(dispatched.created_on) AS last_attempt_at
+        FROM (
+          SELECT data, created_on
+          FROM pgboss.job
+          WHERE name = $1
+            AND data->>'name' = $2
+          UNION ALL
+          SELECT data, created_on
+          FROM pgboss.archive
+          WHERE name = $1
+            AND data->>'name' = $2
+        ) dispatched
+        GROUP BY 1, 2
+      ),
+      unanswered AS (
         SELECT
           q.question_id AS id,
           COALESCE(q.is_private_to, u.user_id) AS user_id,
           q.created_at,
           ROW_NUMBER() OVER (
             PARTITION BY COALESCE(q.is_private_to, u.user_id)
-            ORDER BY ${TIER_RANK_SQL} ASC, q.created_at ASC
+            -- Never-attempted before ever-attempted, least recently attempted
+            -- first among retries; tier and age order WITHIN those groups, so
+            -- the catalogue's factual-first preference still decides what a
+            -- fresh appliance asks about first.
+            ORDER BY att.last_attempt_at ASC NULLS FIRST, ${TIER_RANK_SQL} ASC, q.created_at ASC, q.question_id ASC
           ) AS rn
         FROM ci.questions q
         CROSS JOIN (SELECT DISTINCT id AS user_id FROM ci.users WHERE id IS NOT NULL) u
+        LEFT JOIN attempts att
+          ON att.question_id = q.question_id::text
+         AND att.user_id = COALESCE(q.is_private_to, u.user_id)::text
         WHERE q.is_active = TRUE
           -- Never spend an inference slot on a question the corpus cannot
           -- ground (body measurements, medical facts, the make of the boiler).
@@ -1019,11 +1066,18 @@ export class QuestionService {
               AND a.answer_text IS NOT NULL
               AND TRIM(a.answer_text) <> ''
           )
+          -- The cooldown. A question tried inside the window is not offered
+          -- again, whatever became of the attempt; with every candidate inside
+          -- the window this returns nothing for that user and the caller's
+          -- tick enqueues nothing, which is the intended idle state.
+          AND (att.last_attempt_at IS NULL OR att.last_attempt_at < NOW() - make_interval(hours => $3))
       )
       SELECT id, user_id
       FROM unanswered
       WHERE rn <= 1;
-    `)) satisfies Array<Row>;
+    `,
+      [attemptHistory.queue, attemptHistory.eventName, attemptHistory.cooldownHours],
+    )) satisfies Array<Row>;
 
     const groupedByUserId = new Map<string | null, string[]>();
 

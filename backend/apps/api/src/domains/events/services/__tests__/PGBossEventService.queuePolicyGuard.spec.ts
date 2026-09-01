@@ -19,8 +19,16 @@ import { PGBossEventService } from '../PGBossEventService';
  * These tests drive the real `PGBossEventService.send`/`sendMany` against the
  * real `EventListenerRegistry` (the same source `onModuleInit` creates queues
  * from); only the pg-boss client is stubbed, and it is stubbed to pg-boss's own
- * return shapes — `string | null` from `send()`, the written ids from
- * `insert()`.
+ * return shapes — `string | null` from `send()`, and `null` from `insert()`.
+ *
+ * The asymmetry is the point. `send()` routes through the SINGLE-job plan,
+ * which ends `ON CONFLICT DO NOTHING ... RETURNING id`, so a discarded job is
+ * visible as a null id. `sendMany` routes through the BULK plan, which has the
+ * same `ON CONFLICT DO NOTHING` and NO `RETURNING`, so `manager.insert` always
+ * resolves `null` and a bulk drop leaves no trace at all. Bulk conflict loss is
+ * therefore undetectable after the fact, and the throw in `sendMany` — which
+ * refuses the only call shape that can cause it — is the entire defence rather
+ * than a first line of one.
  */
 
 // The send() overloads are keyed to the real EventRegistry, which is beside the
@@ -55,8 +63,8 @@ describe('PGBossEventService de-duplication guard', () => {
     );
 
     bossSend = jest.fn(async (queue: string) => `job-${queue}`);
-    // pg-boss's insert() resolves with the ids it actually wrote.
-    bossInsert = jest.fn(async (jobs: unknown[]) => jobs.map((_, i) => `bulk-${i}`));
+    // insert() resolves `null` unconditionally — see the file header.
+    bossInsert = jest.fn(async () => null);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (service as any).boss = { send: bossSend, insert: bossInsert };
 
@@ -239,12 +247,13 @@ describe('PGBossEventService de-duplication guard', () => {
       expect(logger.error).not.toHaveBeenCalled();
     });
 
-    it('reports the jobs pg-boss discarded when insert() writes fewer rows than it was given', async () => {
+    it('reports no loss from the null insert() resolves with, having no way to know of one', async () => {
       EventListenerRegistry.register('thing.happened', 'ThingListener', 'onThing', 'plain');
       const service = makeService();
-      // insert() returns the ids it wrote; a short array is the only trace a
-      // conflict-discarded bulk row ever leaves.
-      bossInsert.mockResolvedValue(['bulk-0']);
+      // The real return, and the one a silently-truncated insert also gives.
+      // Nothing may be inferred from it — an earlier revision read it as an id
+      // array and logged a fabricated "lost N of M jobs" if it ever were one.
+      bossInsert.mockResolvedValue(null);
 
       await service.sendMany('plain', [
         { name: 'thing.happened', data: { id: 'a' } },
@@ -252,7 +261,43 @@ describe('PGBossEventService de-duplication guard', () => {
         { name: 'thing.happened', data: { id: 'c' } },
       ]);
 
-      expect(errorsMentioning('lost 2 of 3 jobs')).toHaveLength(1);
+      expect(errorsMentioning('lost')).toHaveLength(0);
+      expect(bossInsert).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * The guard is only airtight because the bulk insert cannot collide with
+     * pgboss.job's unique constraints in the first place. Two of those five
+     * constraints are held off not by the throw but by what this map omits:
+     * the PK is (name, id) and `id` defaults to gen_random_uuid() when absent,
+     * and job_i4 is partial on `singleton_on IS NOT NULL`, which only a
+     * per-job `singletonSeconds` can set. Threading either field through here
+     * — from a widened EventSendOptions, say — silently reopens conflict loss
+     * on a path that has no way to report it. Fail loudly instead.
+     */
+    it('never stamps an id or singletonSeconds onto a bulk job, which is what keeps the PK and job_i4 unreachable', async () => {
+      EventListenerRegistry.register('thing.happened', 'ThingListener', 'onThing', 'plain');
+      const service = makeService();
+
+      await service.sendMany(
+        'plain',
+        [
+          { name: 'thing.happened', data: { id: 'a' } },
+          { name: 'thing.happened', data: { id: 'b' } },
+        ],
+        // Every option this path accepts, so a future field that gets mapped
+        // onto the job is caught rather than sailing past an empty options bag.
+        { singletonKey: 'batch', startAfter: 30, priority: 5 },
+      );
+
+      const [inserted] = bossInsert.mock.calls[0] as [Array<Record<string, unknown>>];
+
+      expect(inserted).toHaveLength(2);
+
+      for (const job of inserted) {
+        expect(job).not.toHaveProperty('id');
+        expect(job).not.toHaveProperty('singletonSeconds');
+      }
     });
   });
 });

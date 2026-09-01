@@ -53,14 +53,20 @@ export class BlueBubblesWebhookController {
     @Param('secret') secret: string,
     @Body(new ValidationPipe(webhookBodySchema)) body: z.infer<typeof webhookBodySchema>,
   ): Promise<{ ok: true }> {
-    const config = await this.configService.getOrCreate();
+    // `find`, not `getOrCreate`: this route is UNAUTHENTICATED until the
+    // comparison below succeeds, so it must not be able to write anything.
+    // Minting the row here let an outsider probing the path create it — and the
+    // creation is what mints the webhook secret, so a probe that raced a
+    // legitimate first save could decide which secret the appliance ends up
+    // with. No row at all is answered exactly like a wrong secret.
+    const config = await this.configService.find();
 
     // `timingSafeEqual` throws on mismatched buffer lengths rather than
     // returning false, and `secret` comes straight off the URL — an
     // attacker-controlled length. `secretsMatch` hashes both sides to a fixed
     // digest first specifically so this compare is safe to call with an
     // arbitrary path segment.
-    if (!BlueBubblesConfigService.secretsMatch(secret, config.webhookSecret)) {
+    if (config == null || !BlueBubblesConfigService.secretsMatch(secret, config.webhookSecret)) {
       throw new NotFoundException();
     }
 
@@ -70,10 +76,13 @@ export class BlueBubblesWebhookController {
       try {
         await this.syncService.ingestWebhookMessage(body.data as BlueBubblesMessage);
       } catch (err) {
-        // A malformed or unmappable payload should not make BlueBubbles think
-        // the webhook endpoint is down and start retrying/backing off — the
-        // backstop cron (BlueBubblesSyncCron) will pick up whatever this
-        // delivery failed to land.
+        // This awaits only the QUEUEING of the message — the run that ingests it
+        // is a coalesced flush a couple of seconds later (see
+        // BlueBubblesSyncService), which reports its own failures onto the run
+        // and the config row. So the only thing that reaches here is a failure
+        // to accept the delivery at all, and even that must not make BlueBubbles
+        // think the endpoint is down and start retrying/backing off: the
+        // backstop cron picks up whatever a delivery failed to land.
         this.logger.error(
           'BlueBubbles webhook: failed to ingest message',
           err instanceof Error ? err : new Error(String(err)),

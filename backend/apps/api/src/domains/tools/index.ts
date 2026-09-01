@@ -24,6 +24,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import { BlueBubblesModule } from '@ci/domains/bluebubbles';
+import { BrowserActivityModule } from '@ci/domains/browser-activity';
 import { ConversationModule } from '@ci/domains/conversations';
 import { DailyMetricsModule } from '@ci/domains/daily-metrics';
 import { EventsModule } from '@ci/domains/events';
@@ -31,6 +32,7 @@ import { FilesModule } from '@ci/domains/files';
 import { ImportModule } from '@ci/domains/import';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
+import { NotesModule } from '@ci/domains/notes';
 import { ParsingModule } from '@ci/domains/parsing';
 import { PersonalizationService } from '@ci/domains/personalization/services/PersonalizationService';
 import { PredictionsModule } from '@ci/domains/predictions';
@@ -128,6 +130,10 @@ const nativeToolInstances = [
 @Module({
   imports: [
     EventsModule,
+    // DatabaseSearchTool resolves browser-activity and note hits — every
+    // indexable type needs a resolver or its hits silently vanish from results.
+    BrowserActivityModule,
+    NotesModule,
     ConversationModule,
     FilesModule,
     MemoryModule,

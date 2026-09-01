@@ -25,6 +25,7 @@ import path from 'node:path';
 import { isShortCode } from '../staging/identity';
 
 import { attachmentMediaKind, sanitizeAttachmentFilename } from './attachment_extract';
+import { decodeAttributedBody } from './attributed_body';
 import { BlueBubblesApiClient, type BlueBubblesChat, type BlueBubblesMessage } from './bluebubblesApiClient';
 import type { APIImporter, SettingsAccess } from './registry';
 import { registerDataSource } from './registry';
@@ -33,6 +34,25 @@ import { timeframeContains } from './timeline';
 
 /** Rows requested per `/message/query` page. A short page is the drain signal. */
 const PAGE_LIMIT = 1000;
+
+/**
+ * Attempts at the chat directory before the run gives up.
+ *
+ * One failed `queryChats()` used to fall through with an EMPTY map, and the
+ * cost of that is not a degraded field or two: every message in the run then
+ * loses its participants, `ChatId`, `ThreadId` and `GroupName`, and every
+ * OUTBOUND message loses its participant edges entirely — the exact bug
+ * `imessage.ts` documents fixing, quantified there at 16,325 messages that
+ * reached `ci.communications` naming nobody. A directory fetch is one HTTP
+ * call at the very start of a pass, so a retry costs nothing and covers the
+ * failure that actually happens (a Mac mid-wake); anything that survives three
+ * attempts is a real outage, and a real outage must fail the run rather than
+ * quietly import a corpus with no people in it.
+ */
+const CHAT_DIRECTORY_ATTEMPTS = 3;
+
+/** Backoff between chat-directory attempts. Short: this is a wake-up, not a queue. */
+const CHAT_DIRECTORY_RETRY_MS = 2_000;
 
 /**
  * The conversation-partner entity for one BlueBubbles handle address — a phone
@@ -84,6 +104,72 @@ function attachmentDescriptor(att: {
 }
 
 /**
+ * The plain-text body of one message.
+ *
+ * `message.text` first, then `attributedBody`. Recent macOS leaves `text` NULL
+ * and writes the body ONLY into the binary NSAttributedString — the switch
+ * documented in `attributed_body.ts` (0.3% of 2023–24 messages, 33% of 2025,
+ * 64% of 2026) — and reading `text` alone therefore loses most of the current
+ * year. On the live 433,398-message corpus that is 42,170 rows (9.7%) that
+ * ingested completely empty.
+ *
+ * Three shapes, because BlueBubbles has shipped the field as all three:
+ *
+ *  - its own decoded projection, `[{ string, runs }]` (or the bare object),
+ *    which needs no decoder at all;
+ *  - base64 of the raw typedstream blob;
+ *  - a JSON-serialized Buffer, `{ type: 'Buffer', data: [...] }`.
+ *
+ * The last two are the chat.db bytes verbatim, which is why `imessage.ts`'s
+ * `decodeAttributedBody` is reused rather than reimplemented: same blob, same
+ * typedstream format, and it is framework-free so a datasource may import it.
+ */
+export function blueBubblesBodyText(message: BlueBubblesMessage): string | undefined {
+  if (message.text) {
+    return message.text;
+  }
+
+  const body = message.attributedBody;
+
+  if (body == null) {
+    return undefined;
+  }
+
+  // BlueBubbles' own decoded form. `runs` (the style spans) are deliberately
+  // discarded: staging keeps a plain body, and nothing downstream renders them.
+  const decoded = Array.isArray(body) ? body[0] : body;
+  const stringField = (decoded as { string?: unknown } | null)?.string;
+
+  if (typeof stringField === 'string') {
+    return stringField || undefined;
+  }
+
+  if (typeof body === 'string') {
+    return decodeAttributedBody(Buffer.from(body, 'base64'));
+  }
+
+  const bufferData = (body as { type?: unknown; data?: unknown }).data;
+
+  if (Array.isArray(bufferData)) {
+    return decodeAttributedBody(Buffer.from(bufferData as number[]));
+  }
+
+  return undefined;
+}
+
+/** Options the BULK importer can supply that a single webhook delivery cannot. */
+export interface BlueBubblesMapOptions {
+  /**
+   * Handles BlueBubbles itself uses as the identifier of a 1:1 chat — the same
+   * evidence `imessage.ts`'s `oneToOneChatIdentifiers` collects, and used for
+   * the same fallback: a message with no resolvable chat still belongs to a
+   * conversation that demonstrably exists when its correspondent IS such an
+   * identifier. Absent for a webhook delivery, which carries its own chat.
+   */
+  oneToOneChatIdentifiers?: ReadonlySet<string>;
+}
+
+/**
  * Map one BlueBubbles message (with its resolved chat, when known) to a
  * {@link Graph}: the Item plus its participant edges.
  *
@@ -100,6 +186,7 @@ function attachmentDescriptor(att: {
 export function mapBlueBubblesMessageToGraph(
   message: BlueBubblesMessage,
   chat: BlueBubblesChat | undefined,
+  options: BlueBubblesMapOptions = {},
 ): Graph {
   const timestamp = message.dateCreated != null ? new Date(message.dateCreated) : new Date();
   const isFromMe = message.isFromMe === true;
@@ -113,9 +200,28 @@ export function mapBlueBubblesMessageToGraph(
     ? participantAddresses.filter((address) => address !== senderHandle)
     : participantAddresses;
 
-  const bodyText = message.text ?? undefined;
-  const service = message.service ?? message.handle?.service ?? 'iMessage';
+  // A message the sender UNSENT. Its text is still in the database (Apple keeps
+  // the row and stamps the retraction), and staging it would republish a body
+  // its author explicitly withdrew — so the retraction is recorded and the body
+  // is not. The row itself stays: "a message was unsent here" is a real fact
+  // about the conversation, and dropping it would leave a hole in a thread.
+  const retracted = message.dateRetracted != null;
+  const bodyText = retracted ? undefined : blueBubblesBodyText(message);
+  // Passed through, never invented. This used to fall back to the literal
+  // 'iMessage', which mislabels every SMS whose row happens to omit the field —
+  // `imessage.ts` passes `message.service` through unchanged for that reason.
+  const service = message.service ?? message.handle?.service ?? null;
   const isGroup = chat?.style === GROUP_CHAT_STYLE;
+  // The conversation grouping key. `chat_identifier`, NOT `chat.guid`, so the
+  // same conversation imported from a chat.db export and from BlueBubbles lands
+  // in ONE thread: `imessage.ts` keys on `chat.chat_identifier`, and BlueBubbles'
+  // guid is a different string for the same chat (`iMessage;-;+15551234567`).
+  // The 1:1 fallback is the second half of the same alignment — see
+  // BlueBubblesMapOptions.oneToOneChatIdentifiers.
+  const correspondent = message.handle?.address ?? null;
+  const threadIdentifier =
+    chat?.chatIdentifier ??
+    (correspondent && options.oneToOneChatIdentifiers?.has(correspondent) ? correspondent : undefined);
 
   const item: Item = {
     // hashItem() short-circuits to item.id when present, so the message's own
@@ -128,7 +234,7 @@ export function mapBlueBubblesMessageToGraph(
       Source: 'BlueBubbles',
       ...(bodyText && { Text: bodyText }),
       'From Me': isFromMe,
-      Service: service,
+      ...(service && { Service: service }),
       ...(senderHandle && { Sender: senderHandle }),
       // Same mutual-exclusion rule as imessage.ts: `Recipients` when the chat
       // told us the participant list, `To` as the 1:1 fallback when it did not.
@@ -138,10 +244,21 @@ export function mapBlueBubblesMessageToGraph(
           ? { To: message.handle.address }
           : {}),
       ...(chat?.chatIdentifier && { ChatId: chat.chatIdentifier }),
-      ...(chat?.guid && { ThreadId: chat.guid }),
+      ...(threadIdentifier && { ThreadId: threadIdentifier }),
       ...(isGroup && chat?.displayName && { GroupName: chat.displayName }),
       ...(message.dateRead != null && { ReadAt: new Date(message.dateRead).toISOString() }),
       ...(message.dateDelivered != null && { DeliveredAt: new Date(message.dateDelivered).toISOString() }),
+      // An edit rewrites `text` in place, so without this the row reads as if
+      // the current wording was always what was sent.
+      ...(message.dateEdited != null && { EditedAt: new Date(message.dateEdited).toISOString() }),
+      ...(retracted && { RetractedAt: new Date(message.dateRetracted!).toISOString() }),
+      // A group ACTION (rename, join, leave) rather than a message. Recorded as
+      // metadata and no further: neither this importer nor `imessage.ts` models
+      // membership changes as their own record type, and inventing one here
+      // would give BlueBubbles a vocabulary its sibling does not share. Marking
+      // them at least makes a body-less row explicable instead of looking lost.
+      ...(message.itemType ? { ItemType: message.itemType } : {}),
+      ...(message.groupActionType ? { GroupActionType: message.groupActionType } : {}),
     },
   };
 
@@ -172,7 +289,23 @@ export function mapBlueBubblesMessageToGraph(
   // Participant edges, mirroring imessage.ts: outbound fans out to every
   // recipient, inbound points at the sender alone (resolveCorrespondents reads
   // the first participant edge as the sender on inbound rows).
-  const counterparts = isFromMe ? recipients : senderHandle ? [senderHandle] : [];
+  //
+  // On outbound the recipients are UNIONED with the row's own handle, deduped —
+  // the fix `imessage.ts` documents at length, ported here because this file
+  // re-opened the bug it closed. When the chat directory yields no participants
+  // (a chat BlueBubbles returned as a summary, a directory fetch that came back
+  // thin) `recipients` is empty, and edges built from it alone leave every
+  // message the owner ever sent pointing at nobody — 16,325 such rows in the
+  // corpus that motivated the sibling's fix. Neither list invents a
+  // participant: both are handles the server stated, which is why the union is
+  // safe rather than merely convenient. The metadata half of this already used
+  // `message.handle.address` on exactly this branch (the `To` key above); only
+  // the edges were missing it.
+  const counterparts = isFromMe
+    ? Array.from(new Set([...recipients, ...(correspondent ? [correspondent] : [])]))
+    : senderHandle
+      ? [senderHandle]
+      : [];
 
   for (const address of counterparts) {
     graph.edges!.push({
@@ -183,6 +316,42 @@ export function mapBlueBubblesMessageToGraph(
   }
 
   return graph;
+}
+
+/**
+ * Where one attachment's bytes go under the media store, or `null` when the
+ * server named a path that would leave it.
+ *
+ * BOTH segments are sanitized. The filename always was; the guid — which is the
+ * DIRECTORY component — was interpolated raw, so a hostile or MITM'd server
+ * answering `/message/query` with a guid of `../../../../home/node/.ssh` wrote
+ * attacker-chosen bytes to an attacker-chosen path as the API process. That is
+ * not a theoretical peer: `use_https` defaults to FALSE, so plain-HTTP over a
+ * LAN is the expected deployment. The same guid was already treated as
+ * untrusted one line away (`encodeURIComponent` on the download URL); this is
+ * the same value, and now the same rule.
+ *
+ * The containment re-check after the join is deliberate belt-and-braces, the
+ * same shape `MediaStage.withinScratch` applies before it opens a parser's
+ * path: sanitizing and then PROVING containment means a future change to
+ * either half cannot silently reintroduce an escape.
+ */
+export function attachmentDestination(
+  mediaStoreDir: string,
+  guid: string,
+  transferName: string | undefined,
+): string | null {
+  const dest = path.resolve(
+    path.join(
+      mediaStoreDir,
+      'bluebubbles-attachments',
+      sanitizeAttachmentFilename(guid),
+      sanitizeAttachmentFilename(transferName),
+    ),
+  );
+  const relative = path.relative(path.resolve(mediaStoreDir), dest);
+
+  return relative === '' || relative.startsWith('..') || path.isAbsolute(relative) ? null : dest;
 }
 
 /**
@@ -224,10 +393,16 @@ export async function downloadAttachments(
         continue;
       }
 
-      const name = sanitizeAttachmentFilename(att.transferName ?? undefined);
-      const dir = path.join(mediaStoreDir, 'bluebubbles-attachments', att.guid);
-      fs.mkdirSync(dir, { recursive: true });
-      const dest = path.join(dir, name);
+      const dest = attachmentDestination(mediaStoreDir, att.guid, att.transferName ?? undefined);
+
+      if (dest == null) {
+        log?.('warn', 'bluebubbles: attachment path escaped the media store; skipping', {
+          guid: att.guid,
+        });
+        continue;
+      }
+
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, bytes);
       descriptor.path = dest;
     } catch (err) {
@@ -251,10 +426,15 @@ export class BlueBubblesAPIImporter implements APIImporter {
     const portRaw = settings.getSetting('port');
     const password = settings.getSetting('password');
 
+    // A throw, not a log-and-return. An importer invoked without credentials
+    // cannot import anything, and returning normally makes the run that called
+    // it report `completed` over zero messages — indistinguishable from a
+    // successful sync of a quiet week. Whether BlueBubbles is CONFIGURED is a
+    // question its caller can answer before spending a run at all, and
+    // `BlueBubblesSyncService.runSync` now does; reaching here means something
+    // drove this importer past that gate.
     if (!host || !portRaw || !password) {
-      params.log?.('error', 'bluebubbles: host/port/password not configured; skipping sync');
-
-      return;
+      throw new Error('bluebubbles: host, port and password must all be configured');
     }
 
     const port = Number.parseInt(portRaw, 10);
@@ -273,30 +453,36 @@ export class BlueBubblesAPIImporter implements APIImporter {
     // than per message — `/message/query`'s embedded `chats[]` entries are
     // often summaries with no participant list, and a message's participants
     // are needed for every row it produces.
-    let chatsByGuid = new Map<string, BlueBubblesChat>();
-    try {
-      const chats = await client.queryChats();
-      chatsByGuid = new Map(chats.map((c) => [c.guid, c]));
-    } catch (err) {
-      params.log?.('error', 'bluebubbles: failed to fetch chat directory', {
-        error: (err as Error).message,
-      });
-    }
+    const chats = await fetchChatDirectory(client, params.log);
+    const chatsByGuid = new Map(chats.map((c) => [c.guid, c]));
+    const oneToOneChatIdentifiers = oneToOneIdentifiers(chats);
 
     let cursor = after;
+    // Paired with `cursor`, and the reason the loop cannot spin. BlueBubbles
+    // applies `date >= after`, so the highest-timestamped message of a page
+    // comes back as the first row of the next one — and a page whose rows ALL
+    // share the cursor's timestamp (a burst, a bulk-imported thread) leaves the
+    // cursor exactly where it was, which re-issues a byte-identical request
+    // forever. Skipping past what has already been read is the only exit that
+    // works under BOTH readings of `after`, so the offset grows whenever the
+    // cursor does not and resets the moment it does.
+    let offset = 0;
     let seen = 0;
+    // The ascending order this pass is ALLOWED to assume, checked instead of
+    // assumed. A partial pass — the Mac sleeps at page 300 of 434 — still
+    // pushes what it staged, and the caller then advances its ratcheting
+    // cursor to MAX(occurred_at) over those rows. That is safe if and only if
+    // what was staged is a contiguous ascending PREFIX of the history: if the
+    // server ever answered out of order, the max could sit beyond messages
+    // that were never fetched, and the ratchet would skip them permanently and
+    // silently. `sort: 'ASC'` is requested, but a request is not a guarantee,
+    // so a violation stops the pass right there — which leaves the staged rows
+    // a verified prefix, and makes the cursor safe to advance either way.
+    let previousDateCreated: number | null = null;
 
     for (;;) {
-      let page: BlueBubblesMessage[];
-
-      try {
-        page = await client.queryMessages({ after: cursor, limit: PAGE_LIMIT });
-      } catch (err) {
-        params.log?.('error', 'bluebubbles: message page fetch failed', {
-          error: (err as Error).message,
-        });
-        break;
-      }
+      const page = await client.queryMessages({ after: cursor, limit: PAGE_LIMIT, offset });
+      const cursorBefore = cursor;
 
       for (const message of page) {
         const inlineChat = message.chats?.[0];
@@ -307,12 +493,25 @@ export class BlueBubblesAPIImporter implements APIImporter {
           continue;
         }
 
+        // Checked against what the SERVER returned, before any of this pass's
+        // own filtering — the invariant is about the order rows arrive in, not
+        // the subset that survives a timeframe.
+        if (previousDateCreated != null && message.dateCreated < previousDateCreated) {
+          throw new Error(
+            `bluebubbles: server returned messages out of order despite sort:'ASC' ` +
+              `(${message.dateCreated} after ${previousDateCreated}, message ${message.guid}). ` +
+              `Stopping this pass so the sync cursor only ever advances over a contiguous prefix.`,
+          );
+        }
+
+        previousDateCreated = message.dateCreated;
+
         const timestamp = new Date(message.dateCreated);
         if (!timeframeContains(params.timeframe, timestamp)) {
           continue;
         }
 
-        const graph = mapBlueBubblesMessageToGraph(message, chat);
+        const graph = mapBlueBubblesMessageToGraph(message, chat, { oneToOneChatIdentifiers });
         await downloadAttachments(graph, message, client, params.mediaStoreDir, params.log);
         params.pipeline.push(graph);
         seen += 1;
@@ -323,10 +522,71 @@ export class BlueBubblesAPIImporter implements APIImporter {
       if (page.length < PAGE_LIMIT) {
         break;
       }
+
+      offset = cursor === cursorBefore ? offset + page.length : 0;
     }
 
     params.log?.('info', 'bluebubbles: sync pass complete', { messages: seen, cursor });
   }
+}
+
+/**
+ * The chat directory, retried, and FATAL when it cannot be had.
+ *
+ * See {@link CHAT_DIRECTORY_ATTEMPTS} for why an empty directory is not an
+ * acceptable degraded mode.
+ */
+async function fetchChatDirectory(
+  client: BlueBubblesApiClient,
+  log: ImportParams['log'],
+): Promise<BlueBubblesChat[]> {
+  let lastError: Error | undefined;
+
+  for (let attempt = 1; attempt <= CHAT_DIRECTORY_ATTEMPTS; attempt += 1) {
+    try {
+      return await client.queryChats();
+    } catch (err) {
+      lastError = err as Error;
+      log?.('warn', 'bluebubbles: chat directory fetch failed; retrying', {
+        attempt,
+        of: CHAT_DIRECTORY_ATTEMPTS,
+        error: lastError.message,
+      });
+
+      if (attempt < CHAT_DIRECTORY_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, CHAT_DIRECTORY_RETRY_MS));
+      }
+    }
+  }
+
+  throw new Error(
+    `bluebubbles: could not fetch the chat directory after ${CHAT_DIRECTORY_ATTEMPTS} attempts ` +
+      `(${lastError?.message ?? 'unknown error'}); refusing to import messages with no participants`,
+  );
+}
+
+/**
+ * Handles BlueBubbles itself uses as the identifier of a 1:1 chat.
+ *
+ * Lifted from `imessage.ts`'s `oneToOneChatIdentifiers`, which explains what
+ * makes this evidence rather than a guess: a message with no resolvable chat
+ * belongs to a conversation that DEMONSTRABLY exists when its correspondent is
+ * already the identifier of a one-participant chat in this same directory.
+ * When it is not, the message might equally be an orphaned group message, so
+ * nothing is invented and its thread stays empty.
+ */
+function oneToOneIdentifiers(chats: readonly BlueBubblesChat[]): Set<string> {
+  const identifiers = new Set<string>();
+
+  for (const chat of chats) {
+    const participants = chat.participants ?? [];
+
+    if (chat.chatIdentifier && participants.length === 1 && participants[0].address === chat.chatIdentifier) {
+      identifiers.add(chat.chatIdentifier);
+    }
+  }
+
+  return identifiers;
 }
 
 registerDataSource({

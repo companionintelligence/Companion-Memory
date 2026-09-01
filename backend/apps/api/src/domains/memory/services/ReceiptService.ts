@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { type EntityManager, IsNull, Repository } from 'typeorm';
+import { type EntityManager, In, IsNull, Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
@@ -265,6 +265,31 @@ export class ReceiptService {
     const repository = manager ? manager.withRepository(this.receiptRepository) : this.receiptRepository;
 
     return repository.findOne({ where: { id, ...this.userScope(context) } });
+  }
+
+  /** Batched read, preserving input order and holding `null` for misses. */
+  async findByIds(context: ServiceContext, ids: string[]): Promise<Array<Receipt | null>> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const unique = [...new Set(ids)];
+    const found: ReceiptEntity[] = [];
+    // One bind parameter per id, so the IN-list is chunked like every other
+    // batched read in this domain.
+    const chunkSize = computeChunkSize(1);
+
+    for (let offset = 0; offset < unique.length; offset += chunkSize) {
+      const slice = unique.slice(offset, offset + chunkSize);
+
+      found.push(
+        ...(await this.receiptRepository.find({ where: { id: In(slice), ...this.userScope(context) } })),
+      );
+    }
+
+    const byId = new Map(found.map((row) => [row.id, row]));
+
+    return ids.map((id) => byId.get(id) ?? null);
   }
 
   /** The receipt with its lines in `line_number` order — the shape a detail page wants. */

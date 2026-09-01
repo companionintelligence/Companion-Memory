@@ -34,6 +34,25 @@ if (typeof window !== 'undefined' && window.location.hash === '#_=_') {
   window.history.replaceState(null, '', window.location.pathname + window.location.search);
 }
 
+// Dev never registers the PWA service worker (`devOptions.enabled: false`),
+// but a worker installed by an earlier production/preview build on the same
+// origin persists and keeps intercepting `/api/*`. A response streaming
+// through a service worker dies when the browser terminates the idle worker
+// (~30s in Chrome), so every chat turn on a dev origin with a stale worker
+// collapsed mid-stream with "TypeError: network error". Evict them here; the
+// current page stays controlled until its next reload, so the second load
+// after this ships is the clean one.
+if (import.meta.env.DEV && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+  void navigator.serviceWorker
+    .getRegistrations()
+    .then((registrations) => {
+      for (const registration of registrations) {
+        void registration.unregister();
+      }
+    })
+    .catch(() => undefined);
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />

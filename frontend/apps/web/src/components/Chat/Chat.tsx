@@ -43,6 +43,14 @@ interface Props extends ChatInputProps {
   emptyState?: ReactNode;
   children?: ReactNode;
   onResponseFinished?: (text: string) => void;
+  /**
+   * Fired when stream processing fails fatally. The owner of the request state
+   * must detach here: the `streaming` flag it holds is what keeps the loader
+   * bouncing and the input disabled, and nothing else resets it once the
+   * processor is dead — observed live as a chat stuck "thinking" forever
+   * behind the interruption notice.
+   */
+  onStreamError?: () => void;
   initialDraft?: string;
 }
 
@@ -60,6 +68,7 @@ export function Chat({
   onSubmit,
   children,
   onResponseFinished,
+  onStreamError,
   initialDraft,
   ...chatInputProps
 }: Props) {
@@ -309,6 +318,51 @@ export function Chat({
     }
   }, [flushStream, autoFocus, onResponseFinished]);
 
+  // Without this handler a decode failure or exhausted chunk retry was
+  // swallowed by createStreamProcessor's catch: the request stayed open, the
+  // UI froze mid-bubble, and nothing anywhere said why. The stream still
+  // cannot be resumed, but the failure has to be visible where the reply was
+  // supposed to appear — and the request owner has to detach (onStreamError),
+  // or its `streaming` flag keeps the loader bouncing over a dead stream.
+  const handleStreamError = useCallback(
+    (err: unknown) => {
+      console.error('Chat stream processing failed', err);
+
+      flushStream(
+        <div
+          key={uuid7()}
+          className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          The response stream was interrupted, so this reply may be incomplete. Try sending your message
+          again.
+        </div>,
+      );
+
+      onStreamError?.();
+    },
+    [flushStream, onStreamError],
+  );
+
+  // The processor's handlers, dereferenced at call time. The effect below must
+  // run once per stream: a ReadableStream can be piped exactly once, so
+  // re-running it re-piped a locked stream and threw immediately. That is not
+  // hypothetical — submitting on a fresh thread refetches the thread list,
+  // which changes `onResponseFinished`'s identity, which rebuilt
+  // `handleFinished` mid-stream and killed the turn a few seconds in.
+  const streamHandlersRef = useRef({
+    onChunk: handleFrameChunk,
+    onFinished: handleFinished,
+    onError: handleStreamError,
+  });
+
+  useEffect(() => {
+    streamHandlersRef.current = {
+      onChunk: handleFrameChunk,
+      onFinished: handleFinished,
+      onError: handleStreamError,
+    };
+  }, [handleFrameChunk, handleFinished, handleStreamError]);
+
   useEffect(() => {
     if (!readable) {
       return;
@@ -316,8 +370,9 @@ export function Chat({
 
     const processor = createStreamProcessor({
       stream: readable,
-      onChunk: handleFrameChunk,
-      onFinished: handleFinished,
+      onChunk: (chunk) => streamHandlersRef.current.onChunk(chunk),
+      onFinished: () => streamHandlersRef.current.onFinished(),
+      onError: (err) => streamHandlersRef.current.onError(err),
     });
 
     processor.start();
@@ -325,7 +380,7 @@ export function Chat({
     return () => {
       processor.cancel();
     };
-  }, [readable, handleFinished, handleFrameChunk]);
+  }, [readable]);
 
   useEffect(() => {
     const el = scrollRef.current;

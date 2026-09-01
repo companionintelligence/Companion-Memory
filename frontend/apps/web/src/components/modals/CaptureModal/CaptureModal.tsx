@@ -395,6 +395,7 @@ function DesktopCaptureModal({ open = false, onClose }: Props) {
           readable={stream ?? undefined}
           onSubmit={handleSubmit}
           onStop={stopChatRequest}
+          onStreamError={detachChatStream}
           showModelControls={false}
         >
           <Files files={files} />
@@ -463,6 +464,7 @@ function DesktopCaptureModal({ open = false, onClose }: Props) {
                 readable={stream ?? undefined}
                 onSubmit={handleSubmit}
                 onStop={stopChatRequest}
+                onStreamError={detachChatStream}
                 showModelControls={false}
                 placeholder="Ask about this content..."
                 emptyState={

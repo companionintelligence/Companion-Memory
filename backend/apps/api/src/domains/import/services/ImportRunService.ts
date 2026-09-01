@@ -403,6 +403,52 @@ export class ImportRunService {
   }
 
   /**
+   * Create a run whose stages the CALLER executes, in-process.
+   *
+   * The connector path (`BlueBubblesSyncService`) — a handful of REST calls
+   * rather than a 40GB tree — deliberately does not go through {@link startRun}:
+   * there is no drop or inbox unit to claim, and nothing to enqueue, because it
+   * runs its own stages synchronously. What it DOES need is identical: a run
+   * row, and one correctly-weighted stage row per kind.
+   *
+   * It exists so that stage materialization has ONE implementation. The
+   * connector hand-rolled its own inserts and restated its own stage list, and
+   * that is the precise failure {@link DEFAULT_STAGES} is documented to
+   * prevent: its copy said `['parse', 'push']`, so `media` never ran, and every
+   * BlueBubbles attachment was downloaded, written to disk, and then never
+   * uploaded or catalogued. A caller may still choose a subset — that is what
+   * `stages` is for — but it now chooses from the same list, with the same
+   * weights, through the same idempotent insert.
+   *
+   * No claim and no enqueue, unlike `startRun`. Both belong to a run whose work
+   * is dispatched to a worker; this run's work is already in the caller's hand.
+   */
+  async createInProcessRun(input: {
+    userId: string;
+    label: string;
+    source: ImportRunSource;
+    stages: readonly ImportStageKindName[];
+    declaredSources?: readonly string[];
+  }): Promise<{ runId: string; stages: ImportStage[] }> {
+    if (input.stages.length === 0) {
+      throw new ConflictException('A run needs at least one stage');
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const runRows = await manager.query<Array<{ id: string }>>(
+        `INSERT INTO ci_import.import_runs (user_id, label, source, status, requested_stages, declared_sources)
+              VALUES ($1::uuid, $2, $3, 'queued', $4::text[], $5::text[])
+           RETURNING id`,
+        [input.userId, input.label, input.source, [...input.stages], input.declaredSources ?? null],
+      );
+
+      const runId = runRows[0].id;
+
+      return { runId, stages: await this.materializeStages(manager, runId, input.stages) };
+    });
+  }
+
+  /**
    * Write one `import_stages` row per requested kind.
    *
    * `ON CONFLICT (run_id, seq) DO NOTHING` so materializing is idempotent: a

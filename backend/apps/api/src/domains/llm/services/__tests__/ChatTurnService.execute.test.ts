@@ -1,7 +1,7 @@
 import { Channel } from '@ci/common/rpc';
 
 import { ChatGenerationBroker } from '../ChatGenerationBroker';
-import { ChatTurnService, persistedAssistantContent } from '../ChatTurnService';
+import { ChatTurnService, EMPTY_TURN_FALLBACK_TEXT, persistedAssistantContent } from '../ChatTurnService';
 
 const payload = {
   ownerId: 'user-1',
@@ -153,5 +153,56 @@ describe('ChatTurnService.execute providers', () => {
       'assistant-msg',
       expect.objectContaining({ content: '<think>a</think>b' }),
     );
+  });
+
+  // The measured incident: two tool rounds, both returning [], then the stream
+  // ended — all thinking and tool traffic, not one visible character. The
+  // viewer's stream closed on a blank bubble, indistinguishable from a hang.
+  it('publishes and persists the fallback reply when a turn ends with no visible text', async () => {
+    const accumulated = [
+      { role: 'assistant', content: '<think>searching</think>' },
+      { role: 'tool', content: '[]' },
+      { role: 'assistant', content: '<think>retrying</think>' },
+      { role: 'tool', content: '[]' },
+    ];
+    const chatStream = jest.fn(async () =>
+      streamFrom([{ message: { thinking: 'searching' } }, { message: { thinking: 'retrying' } }], accumulated),
+    );
+    const messageService = {
+      findByThreadId: jest.fn(),
+      update: jest.fn(),
+      create: jest.fn(async () => ({})),
+    };
+    const { service, broker } = buildService(chatStream, messageService);
+    const published: Array<{ channel: Channel; text: string }> = [];
+    const original = broker.publish.bind(broker);
+    broker.publish = (threadId, chunk) => {
+      published.push(chunk);
+      original(threadId, chunk);
+    };
+
+    await service.execute(payload);
+
+    expect(published).toContainEqual({ channel: Channel.TEXT, text: EMPTY_TURN_FALLBACK_TEXT });
+    expect(messageService.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ role: 'assistant', content: EMPTY_TURN_FALLBACK_TEXT }),
+    );
+  });
+
+  it('does not substitute the fallback when the model streamed real text', async () => {
+    const accumulated = [{ role: 'assistant', content: 'Hello' }];
+    const chatStream = jest.fn(async () => streamFrom([{ message: { content: 'Hello' } }], accumulated));
+    const { service, broker } = buildService(chatStream);
+    const published: Array<{ channel: Channel; text: string }> = [];
+    const original = broker.publish.bind(broker);
+    broker.publish = (threadId, chunk) => {
+      published.push(chunk);
+      original(threadId, chunk);
+    };
+
+    await service.execute(payload);
+
+    expect(published).not.toContainEqual({ channel: Channel.TEXT, text: EMPTY_TURN_FALLBACK_TEXT });
   });
 });

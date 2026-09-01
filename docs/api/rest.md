@@ -397,14 +397,18 @@ Per-method `JwtOrApiKeyAuthGuard`.
 
 | Verb | Path | Handler | Purpose |
 |------|------|---------|---------|
-| GET | `/bluebubbles/config` | `getConfig` (`:49`) | Masked read: `hasPassword` stands in for the raw `password` column, which never leaves the server. |
-| PUT | `/bluebubbles/config` | `updateConfig` (`:69`) | Update host/port/useHttps/hasPrivateApi/enabled. `password` omitted keeps the existing stored value — the same "blank means unchanged" contract `ApiKeysSection` uses. |
-| POST | `/bluebubbles/test-connection` | `testConnection` (`:95`) | Cheap round trip against the server described in the body (falls back to the saved config for any field omitted). Persists nothing. |
-| POST | `/bluebubbles/sync-now` | `syncNow` (`:120`) | Fire-and-forget: kicks off `BlueBubblesSyncService.runSync()`; progress and failures land on the config row / Import Runs, not in this response. **202**. |
+| GET | `/bluebubbles/config` | `getConfig` (`:65`) | Masked read: `hasPassword` stands in for the raw `password` column, which never leaves the server. `webhookPath` is the deliberate exception and *is* a credential — without it the webhook URL was unconstructible outside Postgres, so the whole live-ingestion half of the feature was unreachable. A path rather than an absolute URL: the browser's own origin is prepended client-side, because the appliance is reached at whatever address the caller used. |
+| PUT | `/bluebubbles/config` | `updateConfig` (`:72`) | Update host/port/useHttps/hasPrivateApi/enabled. `password` omitted keeps the existing stored value — the same "blank means unchanged" contract `ApiKeysSection` uses. **400** when `enabled: true` is saved with no password on either side, which would otherwise be a connector that can never authenticate. |
+| POST | `/bluebubbles/test-connection` | `testConnection` (`:102`) | Cheap round trip against the server described in the body (falls back to the saved config for any field omitted). Persists nothing. |
+| POST | `/bluebubbles/sync-now` | `syncNow` (`:127`) | Fire-and-forget: kicks off `BlueBubblesSyncService.runSync()`; progress and failures land on the config row / Import Runs, not in this response. **202**. Concurrency-safe: the pass takes the appliance-wide claim on the config row (`claimSync`), so repeated clicks — and the cron ticking in both the api and worker processes — produce one pass, not four. |
 
 #### `BlueBubblesWebhookController` — `bluebubbles/webhook`  ·  `domains/bluebubbles/controllers/BlueBubblesWebhookController.ts:41`
 
 `POST /bluebubbles/webhook/:secret` (`:52`) — **no guard**. BlueBubbles' own outgoing webhooks carry no header/bearer auth, so the unguessable `:secret` path segment (minted at config-row creation, `BlueBubblesConfigEntity.webhookSecret`) *is* the credential, compared with `timingSafeEqual` via `BlueBubblesConfigService.secretsMatch`. A mismatch is a generic **404**, not 401 — a 401 would confirm to a prober that a BlueBubbles integration exists here at all. Only `new-message`/`updated-message` event types ingest (`INGESTABLE_TYPES`); every other BlueBubbles event type (`typing-indicator`, `hello-world`, …) still gets **200**, just no ingestion work.
+
+Because the secret rides in the path, two things follow. `RequestLoggerMiddleware` redacts that segment (`redactRequestPath`) — it is mounted `forRoutes('*')` and logs `req.originalUrl`, so every delivery used to write the credential in plaintext to the app log. And the handler reads the config row with `find()` rather than `getOrCreate()`, so an unauthenticated prober cannot cause the row — and with it the webhook secret — to be minted.
+
+Deliveries are **coalesced**, not ingested one at a time: a delivery joins an in-memory queue that flushes as a single import run a couple of seconds later. One run per inbound text meant a run row, a stage row per kind, a `PushStage.run` (`pg_database_size` included) and three pg-boss sweep enqueues *per message*. A live message never advances `last_sync_cursor`; that cursor belongs to the backfill alone, or one new text arriving mid-backfill would ratchet it to "now" and skip the history behind it.
 
 ---
 

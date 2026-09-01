@@ -140,9 +140,13 @@ import { UnpackStage } from './stages/UnpackStage';
     ImportScratchService,
     StagedSourceService,
     // Exported so a small, non-archive API sync (BlueBubblesSyncService) can
-    // drive the same push machinery in-process, without the full pg-boss
+    // drive the same stage machinery in-process, without the full pg-boss
     // claim/heartbeat stage graph archive imports use. See
-    // domains/bluebubbles/services/BlueBubblesSyncService.ts.
+    // domains/bluebubbles/services/BlueBubblesSyncService.ts. MediaStage comes
+    // with it because a connector's attachments need storing exactly like an
+    // archive's: it is the only writer of `AttachmentFileIds`, so a run without
+    // it downloads every attachment and then catalogues none of them.
+    MediaStage,
     PushStage,
   ],
 })
@@ -195,10 +199,13 @@ export type { PathRecognition, PathRecognitionMatch } from './datasources/recogn
 // controller drive this framework-free importer's mapping logic and must reach it
 // through this barrel rather than into its internals.
 export {
+  attachmentDestination,
   BlueBubblesAPIImporter,
+  blueBubblesBodyText,
   downloadAttachments,
   mapBlueBubblesMessageToGraph,
 } from './datasources/bluebubbles';
+export type { BlueBubblesMapOptions } from './datasources/bluebubbles';
 export { BlueBubblesApiClient, BLUEBUBBLES_PAGE_LIMIT, redactUrl } from './datasources/bluebubblesApiClient';
 // Shared mail policy for live Gmail/Outlook ETL. Leaf files, not the
 // datasources barrel — importing that barrel would register every parser.
@@ -219,6 +226,7 @@ export type {
   BlueBubblesMessage,
 } from './datasources/bluebubblesApiClient';
 
+export { MediaStage } from './stages/MediaStage';
 export { ParseStage } from './stages/ParseStage';
 export { PushStage } from './stages/PushStage';
 export { UnpackStage } from './stages/UnpackStage';
