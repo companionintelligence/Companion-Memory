@@ -8,6 +8,7 @@ import { databaseAvailability, resolveConnection } from '../../../__tests__/supp
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { ReceiptEntity } from '../../entities/ReceiptEntity';
 import { ReceiptLineItemEntity } from '../../entities/ReceiptLineItemEntity';
+import { adoptIngestIdentity, platformIdentity } from '../../identity';
 import { ReceiptService } from '../ReceiptService';
 
 /**
@@ -22,7 +23,7 @@ import { ReceiptService } from '../ReceiptService';
  *     override — so `sourceSystem: extraction.sourceSystem ?? undefined` did
  *     not mean "match NULL", it meant "do not constrain source_system". A mock
  *     repository returns whatever the test told it to and never notices. The
- *     live arbiter is `receipts_source_triple_uniq (owner_user_id, source_type,
+ *     live arbiter is `receipts_source_identity_uniq (owner_user_id, source_type,
  *     source_system, source_id) NULLS NOT DISTINCT`, so NULL is a real key
  *     value and the lookup has to say so.
  *  2. WHAT SURVIVES a save on a matched row. `toEntity` materialises every
@@ -127,21 +128,21 @@ describeWithDb(`ReceiptService — provenance and line upserts, in Postgres (${a
   // ── F4, first half: the dropped predicate ───────────────────────────────
 
   it('does NOT match a receipt imported under a source_system when the extraction carries none', async () => {
-    const sourceId = `order-${uuidv7()}`;
+    const identity = platformIdentity('amazon', `order-${uuidv7()}`);
 
     const imported = await service.create(owner, {
       merchantName: 'Amazon',
       sourceType: 'order',
-      sourceSystem: 'amazon',
-      sourceId,
+      sourceSystem: identity.system,
+      sourceId: identity.id,
     });
 
     // Same source_type and source_id, NO source_system — a different row under
-    // `receipts_source_triple_uniq`, because NULLS NOT DISTINCT makes NULL a key
+    // `receipts_source_identity_uniq`, because NULLS NOT DISTINCT makes NULL a key
     // value rather than a wildcard.
     const result = await service.upsertFromExtraction(owner, {
       sourceType: 'order',
-      sourceId,
+      sourceId: identity.id,
       merchantName: 'Some other importer',
       lines: [],
       skipMint: true,
@@ -163,12 +164,12 @@ describeWithDb(`ReceiptService — provenance and line upserts, in Postgres (${a
   });
 
   it('DOES match the same triple on a re-extraction, rather than forking a second row', async () => {
-    const sourceId = `order-${uuidv7()}`;
+    const identity = platformIdentity('amazon', `order-${uuidv7()}`);
 
     const first = await service.upsertFromExtraction(owner, {
       sourceType: 'order',
-      sourceSystem: 'amazon',
-      sourceId,
+      sourceSystem: identity.system,
+      sourceId: identity.id,
       merchantName: 'Amazon',
       lines: [{ lineNumber: 1, description: 'USB-C cable' }],
       skipMint: true,
@@ -176,8 +177,8 @@ describeWithDb(`ReceiptService — provenance and line upserts, in Postgres (${a
 
     const second = await service.upsertFromExtraction(owner, {
       sourceType: 'order',
-      sourceSystem: 'amazon',
-      sourceId,
+      sourceSystem: identity.system,
+      sourceId: identity.id,
       lines: [{ lineNumber: 1, description: 'USB-C cable, 2m' }],
       skipMint: true,
     });
@@ -186,13 +187,13 @@ describeWithDb(`ReceiptService — provenance and line upserts, in Postgres (${a
 
     const [{ count }] = await dataSource.query(
       `SELECT COUNT(*)::int AS count FROM ci.receipts WHERE user_id = $1 AND source_id = $2`,
-      [owner.userId, sourceId],
+      [owner.userId, identity.id],
     );
     expect(count).toBe(1);
   });
 
   it('matches a NULL-source_system row on re-extraction (the predicate is present, not absent)', async () => {
-    const sourceId = `scan-${uuidv7()}`;
+    const sourceId = adoptIngestIdentity(undefined, `scan-${uuidv7()}`).id;
 
     const first = await service.upsertFromExtraction(owner, {
       sourceType: 'scan',
@@ -215,12 +216,12 @@ describeWithDb(`ReceiptService — provenance and line upserts, in Postgres (${a
   // ── F4, second half: the unconditional overwrite ────────────────────────
 
   it('leaves every header field the re-extraction did not mention exactly as it was', async () => {
-    const sourceId = `order-${uuidv7()}`;
+    const identity = platformIdentity('amazon', `order-${uuidv7()}`);
 
     const first = await service.upsertFromExtraction(owner, {
       sourceType: 'order',
-      sourceSystem: 'amazon',
-      sourceId,
+      sourceSystem: identity.system,
+      sourceId: identity.id,
       merchantName: 'Amazon',
       purchasedAt: new Date('2026-03-04T12:00:00.000Z'),
       currency: 'USD',
@@ -238,8 +239,8 @@ describeWithDb(`ReceiptService — provenance and line upserts, in Postgres (${a
     // nothing else. Every other header column is silent, not cleared.
     await service.upsertFromExtraction(owner, {
       sourceType: 'order',
-      sourceSystem: 'amazon',
-      sourceId,
+      sourceSystem: identity.system,
+      sourceId: identity.id,
       merchantName: 'Amazon.com',
       lines: [{ lineNumber: 1, description: 'USB-C cable, 2m' }],
       skipMint: true,
@@ -265,12 +266,12 @@ describeWithDb(`ReceiptService — provenance and line upserts, in Postgres (${a
   });
 
   it('still clears a field the re-extraction explicitly nulls', async () => {
-    const sourceId = `order-${uuidv7()}`;
+    const identity = platformIdentity('amazon', `order-${uuidv7()}`);
 
     const first = await service.upsertFromExtraction(owner, {
       sourceType: 'order',
-      sourceSystem: 'amazon',
-      sourceId,
+      sourceSystem: identity.system,
+      sourceId: identity.id,
       merchantName: 'Amazon',
       orderNumber: '112-3456789-0000000',
       lines: [],
@@ -279,8 +280,8 @@ describeWithDb(`ReceiptService — provenance and line upserts, in Postgres (${a
 
     await service.upsertFromExtraction(owner, {
       sourceType: 'order',
-      sourceSystem: 'amazon',
-      sourceId,
+      sourceSystem: identity.system,
+      sourceId: identity.id,
       orderNumber: null,
       lines: [],
       skipMint: true,

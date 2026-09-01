@@ -7,7 +7,14 @@ import {
   liveMailDropReason,
   mailIncludeBulkEnabled,
 } from '@ci/domains/import';
-import { CommunicationDirection, CommunicationService, CommunicationType } from '@ci/domains/memory';
+import {
+  CommunicationDirection,
+  CommunicationService,
+  CommunicationType,
+  canonicalSystem,
+  emailFallbackIdentity,
+  emailIdentity,
+} from '@ci/domains/memory';
 import { TagService } from '@ci/domains/search-next';
 
 import { ConnectionSyncJob } from '../../../types';
@@ -184,14 +191,28 @@ export class GmailTransformService {
           category: 'personal', // TODO: Classify emails
           connection_id: connectionId,
           preview: messageDetails.snippet || null,
-          // Provenance triple: communications_source_triple_uniq rejects a
-          // re-synced message (the sent/inbox sweeps overlap, and history
-          // replays re-send whole pages). A missing id leaves source_id NULL —
-          // uncovered by the partial index — rather than collapsing every
-          // id-less message onto one 'unknown' row.
+          // Identity: the RFC Message-ID under the federated `email` system,
+          // so the same message converges with a Takeout mbox import (or an
+          // Outlook fetch of the same mail) — docs/design/
+          // cross-pipeline-identity.md. Message-ID-less mail falls back to a
+          // gmail-scoped id derived from the API message id (stable across
+          // re-syncs, not expected to converge cross-pipeline). A message
+          // with neither leaves source_id NULL — uncovered by the partial
+          // index — rather than collapsing onto one 'unknown' row.
+          // communications_source_identity_uniq still rejects a re-synced
+          // message either way (the sent/inbox sweeps overlap, and history
+          // replays re-send whole pages). source_type stays 'ETL': provenance,
+          // not identity.
           source_type: 'ETL',
-          source_system: 'gmail',
-          source_id: message.id || undefined,
+          ...(() => {
+            const identity =
+              emailIdentity(messageDetails.rfcMessageId) ??
+              (message.id ? emailFallbackIdentity('gmail', `gmail-api:${message.id}`) : null);
+
+            return identity
+              ? { source_system: identity.system, source_id: identity.id }
+              : { source_system: canonicalSystem('gmail'), source_id: undefined };
+          })(),
         },
       );
 
@@ -296,6 +317,10 @@ export class GmailTransformService {
       snippet: message.snippet || '',
       participants,
       labels: message.labelIds || [],
+      // RFC 5322 Message-ID — the email's cross-pipeline identity key. The
+      // API's own `message.id` is Gmail-only and stays as the fallback (and
+      // in the ledger via record_sources).
+      rfcMessageId: getHeader('Message-ID') || getHeader('Message-Id') || undefined,
     };
   }
 

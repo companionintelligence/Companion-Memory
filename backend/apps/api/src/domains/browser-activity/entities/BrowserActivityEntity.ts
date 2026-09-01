@@ -69,7 +69,7 @@ export class BrowserActivityEntity {
 
   // Provenance triple — the stable key capture sources carry. Lets the importer
   // write browser activity and re-ingest idempotently (paired with the
-  // browser_activity_source_triple_uniq partial unique index).
+  // browser_activity_source_identity_uniq partial unique index).
   @Column({ type: 'text', nullable: true })
   source_type?: string | null;
 

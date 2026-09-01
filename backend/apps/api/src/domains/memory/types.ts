@@ -10,6 +10,7 @@ import type {
 } from './entities/ObjectObservationEntity';
 import type { PlaceKind } from './entities/PlaceEntity';
 import type { ReceiptChannel, ReceiptExtractionState } from './entities/ReceiptEntity';
+import type { SourceId, SourceSystem } from './identity';
 import { type NormalizedFieldMap, type PropertiesBag } from './normalizedProperties';
 import type { AcquisitionMethod, UnitSystem } from './physicalProperties';
 
@@ -65,8 +66,8 @@ export interface CreateEventDto {
   participant_entity_ids?: string[];
   organizer_entity_id?: string;
   source_type?: string;
-  source_system?: string;
-  source_id?: string;
+  source_system?: SourceSystem;
+  source_id?: SourceId;
   /** The connection whose sync produced this event; null for manual/imported/predicted. */
   connection_id?: string | null;
   /** Per-tick correlator shared with a ci.files row captured the same tick; see EventEntity.captureTickId. */
@@ -116,8 +117,8 @@ export interface UpdateEventDto {
   participant_entity_ids?: string[];
   organizer_entity_id?: string;
   source_type?: string;
-  source_system?: string;
-  source_id?: string;
+  source_system?: SourceSystem;
+  source_id?: SourceId;
   /** The connection whose sync produced this event; null for manual/imported/predicted. */
   connection_id?: string | null;
   confidence_score?: number;
@@ -157,8 +158,8 @@ export interface SearchEventDto {
   locationCoordinates?: Point;
   organizerEntityId?: string;
   sourceType?: string;
-  sourceSystem?: string;
-  sourceId?: string;
+  sourceSystem?: SourceSystem;
+  sourceId?: SourceId;
   confidenceScore?: number;
   isRecurring?: boolean;
   recurrencePattern?: object;
@@ -197,10 +198,10 @@ export interface CreateContentDto {
   user_id?: string;
   event_id?: string;
   // Provenance triple for idempotent batch ingest and event auto-linking. See
-  // content_source_triple_uniq and ContentService.createMany.
+  // content_source_identity_uniq and ContentService.createMany.
   source_type?: string;
-  source_system?: string;
-  source_id?: string;
+  source_system?: SourceSystem;
+  source_id?: SourceId;
   /** The connection whose sync produced this row; null for uploads/imports. */
   connection_id?: string | null;
   event?: {
@@ -226,8 +227,8 @@ export interface UpdateContentDto {
   // the Facebook transforms migrate their pre-triple photo/video rows this way
   // rather than minting a second row per object.
   source_type?: string;
-  source_system?: string;
-  source_id?: string;
+  source_system?: SourceSystem;
+  source_id?: SourceId;
   /** The connection whose sync produced this row; null for uploads/imports. */
   connection_id?: string | null;
   event?: {
@@ -385,10 +386,10 @@ export interface CreateItemDto extends PhysicalItemPropertiesDto {
   lastSeenAt?: Date | null;
   lastSeenPlaceEntityId?: string | null;
 
-  // Provenance triple for idempotent re-ingest (see objects_source_triple_uniq).
+  // Provenance triple for idempotent re-ingest (see objects_source_identity_uniq).
   sourceType?: string;
-  sourceSystem?: string;
-  sourceId?: string;
+  sourceSystem?: SourceSystem;
+  sourceId?: SourceId;
 }
 
 export interface UpdateItemDto extends PhysicalItemPropertiesDto {
@@ -484,8 +485,8 @@ export interface CreateObjectObservationDto {
    * one arbiter or the other, never both.
    */
   sourceType?: string | null;
-  sourceSystem?: string | null;
-  sourceId?: string | null;
+  sourceSystem?: SourceSystem | null;
+  sourceId?: SourceId | null;
 }
 
 /**
@@ -555,10 +556,10 @@ export interface CreateProductModelDto {
   identityConfidence?: number;
   productEntityId?: string | null;
   metadata?: Record<string, unknown>;
-  // Provenance triple for idempotent re-ingest (product_models_source_triple_uniq).
+  // Provenance triple for idempotent re-ingest (product_models_source_identity_uniq).
   sourceType?: string | null;
-  sourceSystem?: string | null;
-  sourceId?: string | null;
+  sourceSystem?: SourceSystem | null;
+  sourceId?: SourceId | null;
 }
 
 /** A patch to a catalog model. Absent keys are left alone; explicit null clears. */
@@ -612,8 +613,8 @@ export interface CreateReceiptDto {
   eventId?: string | null;
   metadata?: Record<string, unknown>;
   sourceType?: string | null;
-  sourceSystem?: string | null;
-  sourceId?: string | null;
+  sourceSystem?: SourceSystem | null;
+  sourceId?: SourceId | null;
 }
 
 /** A patch to a receipt header. */
@@ -1010,10 +1011,10 @@ export interface CreateCommunicationDto {
   is_encrypted?: boolean;
   is_archived?: boolean;
   preview?: string | null;
-  // Provenance triple for idempotent re-ingest (see communications_source_triple_uniq).
+  // Provenance triple for idempotent re-ingest (see communications_source_identity_uniq).
   source_type?: string;
-  source_system?: string;
-  source_id?: string;
+  source_system?: SourceSystem;
+  source_id?: SourceId;
 }
 
 export const createCommunicationSchema = z.object({

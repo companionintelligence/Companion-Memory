@@ -314,6 +314,10 @@ export type {
   PlaceDuplicateReason,
 } from './services/PlaceDuplicateService';
 export type { CreateEventDto, UpdateEventDto, CreateContentDto, UpdateContentDto } from './types';
+// Cross-pipeline identity: the ONLY constructors of source_system/source_id.
+// Every domain that stamps a provenance pair imports the builders from here —
+// see docs/design/cross-pipeline-identity.md.
+export * from './identity';
 // The `content.external_id_kind` vocabulary and the value-shaped test behind
 // it. Exported because every domain that writes a content row (import, etl,
 // ingest, graphql) has to agree on what the column means — a second

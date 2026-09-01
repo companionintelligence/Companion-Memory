@@ -6,7 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { derivePlayer, resolveTargetFor } from '@ci/domains/embed';
 import { CreateContentInput } from '@ci/domains/graphql/types/CreateContentInput';
 import { UpdateContentInput } from '@ci/domains/graphql/types/UpdateContentInput';
-import { ContentService, classifyExternalId } from '@ci/domains/memory';
+import { ContentService, classifyExternalId, adoptIngestIdentity } from '@ci/domains/memory';
 
 import { type ContentFileMedia, ContentFileLoader } from '../loaders/ContentFileLoader';
 import { EventLoader } from '../loaders/EventLoader';
@@ -93,8 +93,8 @@ export class ContentResolver {
           source_url: input.sourceUrl,
           source_data: input.sourceData,
           source_type: input.sourceType,
-          source_system: input.sourceSystem,
-          source_id: input.sourceId,
+          source_system: adoptIngestIdentity(input.sourceSystem, input.sourceId).system,
+          source_id: adoptIngestIdentity(input.sourceSystem, input.sourceId).id,
           event: input.eventId ? { id: resolveEventId(input.eventId) } : undefined,
         },
       ],
@@ -137,8 +137,8 @@ export class ContentResolver {
         source_url: item.sourceUrl,
         source_data: item.sourceData,
         source_type: item.sourceType,
-        source_system: item.sourceSystem,
-        source_id: item.sourceId,
+        source_system: adoptIngestIdentity(item.sourceSystem, item.sourceId).system,
+        source_id: adoptIngestIdentity(item.sourceSystem, item.sourceId).id,
         event: item.eventId ? { id: resolveEventId(item.eventId) } : undefined,
       })),
     );

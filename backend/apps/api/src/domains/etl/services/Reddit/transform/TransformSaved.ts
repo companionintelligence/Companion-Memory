@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  ContentService,
+  CalendarEventService,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import type { RedditSavedItem } from '../sync/redditListing';
@@ -71,7 +76,7 @@ export class RedditSavedTransformService {
     const isComment = item.name.startsWith('t1_');
     const contentType = isComment ? 'reddit_comment' : 'reddit_post';
     const eventType = isComment ? 'reddit_saved_comment' : 'reddit_saved_post';
-    const sourceSystem = 'reddit_saved';
+    const eventIdentity = platformIdentity('reddit_saved', item.name);
     const title = isComment
       ? `Saved comment on "${item.link_title}" in r/${item.subreddit}`
       : `Saved post in r/${item.subreddit}: ${item.title || item.name}`;
@@ -90,13 +95,16 @@ export class RedditSavedTransformService {
           url: permalink,
           external_id: item.name,
           external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-          // content_source_triple_uniq backstops the racy search-then-create
+          // content_source_identity_uniq backstops the racy search-then-create
           // above. source_system is 'reddit' (matching the posts/comments
           // transforms) because the content row IS the post or comment —
           // whichever transform writes it first owns the key.
           source_type: 'ETL',
-          source_system: 'reddit',
-          source_id: item.name,
+          ...(() => {
+            const identity = platformIdentity('reddit', item.name);
+
+            return { source_system: identity.system, source_id: identity.id };
+          })(),
           source_url: permalink,
           source_data: {
             reddit_item_id: item.id,
@@ -116,8 +124,8 @@ export class RedditSavedTransformService {
     const existingEvent = await this.eventService.search(
       { userId },
       {
-        sourceSystem,
-        sourceId: item.name,
+        sourceSystem: eventIdentity.system,
+        sourceId: eventIdentity.id,
       },
     );
 
@@ -128,15 +136,15 @@ export class RedditSavedTransformService {
           connection_id: connection.id,
           event_type: eventType,
           // Without source_type, CalendarEventService.createOne skips its
-          // find-or-create AND events_source_triple_uniq treats the row as
+          // find-or-create AND events_source_identity_uniq treats the row as
           // NULL-distinct — only the search above stood between a replay
           // and a duplicate.
           source_type: 'ETL',
-          source_id: item.name,
+          source_id: eventIdentity.id,
           start_time: new Date(item.created_utc * 1000),
           title,
           description: text,
-          source_system: sourceSystem,
+          source_system: eventIdentity.system,
         },
       );
     }

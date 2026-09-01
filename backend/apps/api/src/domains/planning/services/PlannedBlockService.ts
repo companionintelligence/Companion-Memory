@@ -4,7 +4,9 @@ import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { EventEntity, CalendarEventService, PersonService, UserContextService, type Event } from '@ci/domains/memory';
+import { EventEntity, CalendarEventService, PersonService, UserContextService, type Event,
+  platformIdentity,
+} from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
 import {
@@ -398,8 +400,11 @@ export class PlannedBlockService {
       is_predicted: false,
       created_by: 'planning.placer',
       source_type: 'planning',
-      source_system: 'planning',
-      source_id: `task:${task.id}`,
+      ...(() => {
+        const identity = platformIdentity('planning', 'task', task.id);
+
+        return { source_system: identity.system, source_id: identity.id };
+      })(),
       task_id: task.id,
       planned_minutes: minutes,
       metadata: { generator: 'planning.placer', taskId: task.id },

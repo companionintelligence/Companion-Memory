@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
 import { BrowserActivityService, type CreateBrowserActivityDto } from '@ci/domains/browser-activity';
+import { adoptIngestIdentity } from '@ci/domains/memory';
 
 import { TagLoader } from '../loaders/TagLoader';
 import { BrowserActivityConnection } from '../types/BrowserActivityConnection';
@@ -111,8 +112,11 @@ export class BrowserActivityResolver {
         contains_sensitive: item.containsSensitive,
         device_id: item.deviceId,
         source_type: item.sourceType,
-        source_system: item.sourceSystem,
-        source_id: item.sourceId,
+        // Canonicalize the extension's system spelling (e.g. chrome ->
+        // chromium) so browser rows share a namespace with the history
+        // importers — docs/design/cross-pipeline-identity.md.
+        source_system: adoptIngestIdentity(item.sourceSystem, item.sourceId).system,
+        source_id: adoptIngestIdentity(item.sourceSystem, item.sourceId).id,
       })),
     );
 

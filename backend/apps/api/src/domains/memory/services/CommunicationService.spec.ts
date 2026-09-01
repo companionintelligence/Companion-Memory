@@ -3,6 +3,7 @@ import { INGEST_REFRESH_COLUMNS, bulkInsertIdempotent } from '@ci/common/persist
 
 import { CommunicationBaseEntity } from '../entities/CommunicationBaseEntity';
 import { CommunicationEntity } from '../entities/CommunicationEntity';
+import { platformIdentity } from '../identity';
 import { CommunicationType } from '../types';
 
 import { makeInsertBuilder } from './__tests__/harness/insertBuilder';
@@ -75,16 +76,20 @@ function makeService() {
 }
 
 const makeInput = (n: number) =>
-  Array.from({ length: n }, (_, i) => ({
-    communication_type: CommunicationType.EMAIL,
-    time: new Date('2024-01-01T00:00:00.000Z'),
-    content: `body ${i}`,
-    direction: 'inbound' as const,
-    id: `c-${i}`,
-    source_type: 'email',
-    source_system: 'gmail',
-    source_id: `msg-${i}`,
-  }));
+  Array.from({ length: n }, (_, i) => {
+    const identity = platformIdentity('gmail', `msg-${i}`);
+
+    return {
+      communication_type: CommunicationType.EMAIL,
+      time: new Date('2024-01-01T00:00:00.000Z'),
+      content: `body ${i}`,
+      direction: 'inbound' as const,
+      id: `c-${i}`,
+      source_type: 'email',
+      source_system: identity.system,
+      source_id: identity.id,
+    };
+  });
 
 /**
  * Contract for the bulk ingest path after 20260807072321 de-hypertabled
@@ -118,8 +123,10 @@ describe('CommunicationService bulk createMany', () => {
     expect(options.primaryKey).toBe('id');
     expect(options.scope).toEqual({ userId: USER });
     // The clean key the de-hypertabling restored: no `time` in the arbiter.
+    // Identity is the (source_system, source_id) pair — source_type is
+    // provenance and stays out of the key (docs/design/cross-pipeline-identity.md).
     expect(options.conflictTarget).toBe(
-      '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
+      '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
     );
     expect(options.conflictTarget).not.toContain('time');
     // No hypertable, no chunk-exclusion bound — and time is not stable across

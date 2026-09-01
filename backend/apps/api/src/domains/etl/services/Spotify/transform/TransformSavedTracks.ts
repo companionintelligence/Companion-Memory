@@ -4,7 +4,12 @@ import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
 import { GraphIngestService } from '@ci/domains/graph';
-import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  ContentService,
+  CalendarEventService,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -75,8 +80,11 @@ export class SpotifySavedTracksTransformService {
             // event instead of minting another. Keyed on the track alone —
             // an unsave/re-save keeps the original save event.
             source_type: 'ETL',
-            source_system: 'spotify',
-            source_id: `saved_track:${track.id}`,
+            ...(() => {
+              const identity = platformIdentity('spotify', `saved_track:${track.id}`);
+
+              return { source_system: identity.system, source_id: identity.id };
+            })(),
             metadata: {
               track_id: track.id,
               album: track.album?.name,

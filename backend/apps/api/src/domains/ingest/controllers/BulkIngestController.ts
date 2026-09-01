@@ -22,6 +22,7 @@ import {
   type CreateProductModelDto,
   type CreateReceiptDto,
   type ReceiptLineItemInput,
+  adoptIngestIdentity,
 } from '@ci/domains/memory';
 import { NoteService } from '@ci/domains/notes';
 import { PositionService } from '@ci/domains/position';
@@ -300,8 +301,11 @@ export class BulkIngestController {
               ...(e.observed_at ? { observed_at: new Date(e.observed_at) } : {}),
               event_type: e.kind,
               source_type: e.source_type ?? 'capture',
-              source_system: e.source_system,
-              source_id: e.source_id,
+              // Adopted, not minted: capture sources own their namespace; the
+              // registry canonicalizes the system spelling
+              // (docs/design/cross-pipeline-identity.md).
+              source_system: adoptIngestIdentity(e.source_system, e.source_id).system,
+              source_id: adoptIngestIdentity(e.source_system, e.source_id).id,
               confidence_score: e.confidence_score,
               capture_tick_id: e.capture_tick_id,
               metadata: { kind: e.kind, ...e.payload },
@@ -783,6 +787,8 @@ export class BulkIngestController {
             // Stored verbatim; default to 'inbound' when omitted — mirrors the
             // GraphQL createCommunications resolver.
             direction: record.direction ?? 'inbound',
+            source_system: adoptIngestIdentity(record.source_system, record.source_id).system,
+            source_id: adoptIngestIdentity(record.source_system, record.source_id).id,
           })),
         ),
     });
@@ -807,6 +813,8 @@ export class BulkIngestController {
           serviceContext,
           recs.map(({ event_id, ...record }) => ({
             ...record,
+            source_system: adoptIngestIdentity(record.source_system, record.source_id).system,
+            source_id: adoptIngestIdentity(record.source_system, record.source_id).id,
             // ContentEntity carries the event FK only via the relation, so a flat
             // event_id maps to `event: { id }` (same as the GraphQL resolver). An
             // explicit event wins; otherwise rows auto-link by provenance triple.
@@ -851,6 +859,8 @@ export class BulkIngestController {
 
             return {
               ...item,
+              sourceSystem: adoptIngestIdentity(item.sourceSystem, item.sourceId).system,
+              sourceId: adoptIngestIdentity(item.sourceSystem, item.sourceId).id,
               // The three item timestamps arrive as ISO strings and the DTO takes
               // Dates. Units are NOT converted here — ItemService owns that, once.
               acquiredAt: record.acquiredAt !== undefined ? new Date(record.acquiredAt) : undefined,
@@ -1061,8 +1071,8 @@ export class BulkIngestController {
             eventId: record.event_id,
             metadata: record.metadata,
             sourceType: record.source_type,
-            sourceSystem: record.source_system,
-            sourceId: record.source_id,
+            sourceSystem: adoptIngestIdentity(record.source_system, record.source_id).system,
+            sourceId: adoptIngestIdentity(record.source_system, record.source_id).id,
           })),
         );
 
@@ -1156,8 +1166,8 @@ export class BulkIngestController {
             productEntityId: record.product_entity_id,
             metadata: record.metadata,
             sourceType: record.source_type,
-            sourceSystem: record.source_system,
-            sourceId: record.source_id,
+            sourceSystem: adoptIngestIdentity(record.source_system, record.source_id).system,
+            sourceId: adoptIngestIdentity(record.source_system, record.source_id).id,
           })),
         ),
     });
@@ -1204,8 +1214,8 @@ export class BulkIngestController {
               attributes: record.attributes,
               metadata: record.metadata,
               sourceType: record.source_type,
-              sourceSystem: record.source_system,
-              sourceId: record.source_id,
+              sourceSystem: adoptIngestIdentity(record.source_system, record.source_id).system,
+              sourceId: adoptIngestIdentity(record.source_system, record.source_id).id,
             })),
           )
         ).written,

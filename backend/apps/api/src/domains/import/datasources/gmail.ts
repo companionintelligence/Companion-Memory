@@ -5,6 +5,8 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 
+import { normalizeMessageId } from '@ci/domains/memory';
+
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
 import { mboxFromLineDate, receivedDate } from './email_date';
 import { emailDirection, isDraft } from './email_direction';
@@ -374,7 +376,10 @@ export class GmailFileImporter implements FileImporter {
     addParticipants(to, 'to');
     addParticipants(cc, 'cc');
 
-    const cleanMsgID = msgID ? msgID.replace(/[<>]/g, '') : undefined;
+    // One copy of Message-ID normalization, shared with the ETL transforms —
+    // identity depends on both pipelines producing identical bytes
+    // (docs/design/cross-pipeline-identity.md).
+    const cleanMsgID = msgID ? normalizeMessageId(msgID) : undefined;
     // Direction: outbound when this is the user's own mail — Gmail tags it with
     // a `Sent` label, and a submission-filed copy carries no receiving-MTA
     // delivery-trace headers (see email_direction.ts); else inbound. The

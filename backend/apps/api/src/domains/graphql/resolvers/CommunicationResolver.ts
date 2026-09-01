@@ -4,7 +4,7 @@ import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { CommunicationService, CommunicationType as CommunicationTypeEnum } from '@ci/domains/memory';
+import { CommunicationService, CommunicationType as CommunicationTypeEnum, adoptIngestIdentity } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
 import { AttachmentFileLoader } from '../loaders/AttachmentFileLoader';
@@ -123,8 +123,8 @@ export class CommunicationResolver {
         attachments: item.attachments,
         duration_seconds: item.durationSeconds,
         source_type: item.sourceType,
-        source_system: item.sourceSystem,
-        source_id: item.sourceId,
+        source_system: adoptIngestIdentity(item.sourceSystem, item.sourceId).system,
+        source_id: adoptIngestIdentity(item.sourceSystem, item.sourceId).id,
       })),
     );
 

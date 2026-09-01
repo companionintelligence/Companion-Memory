@@ -8,7 +8,14 @@ import {
   liveMailDropReason,
   mailIncludeBulkEnabled,
 } from '@ci/domains/import';
-import { CommunicationService, CommunicationType, type CreateCommunicationDto } from '@ci/domains/memory';
+import {
+  CommunicationService,
+  CommunicationType,
+  type CreateCommunicationDto,
+  canonicalSystem,
+  emailFallbackIdentity,
+  emailIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
@@ -415,15 +422,26 @@ export class OutlookMailTransformService {
       connection_id: connectionId,
       attachments: [], // TODO: Handle attachments
       preview: message.bodyPreview ?? null,
-      // Provenance triple: communications_source_triple_uniq rejects a
-      // re-synced message. Prefer internetMessageId — the Graph `id` is not
-      // stable across folder moves, so keying on it would re-duplicate a
-      // message the user refiles. A message with neither leaves source_id
-      // NULL (uncovered by the partial index) rather than collapsing every
-      // id-less message onto one shared row.
+      // Identity: the RFC Message-ID (Graph `internetMessageId`) under the
+      // federated `email` system, so the same message converges with a
+      // Takeout/mbox import or a Gmail fetch of the same mail
+      // (docs/design/cross-pipeline-identity.md). The Graph `id` stays the
+      // fallback only — it is not stable across folder moves, so keying on it
+      // would re-duplicate a message the user refiles; the fallback hashes it
+      // into an outlook_mail-scoped id instead. A message with neither leaves
+      // source_id NULL (uncovered by the partial index) rather than
+      // collapsing every id-less message onto one shared row.
+      // communications_source_identity_uniq still rejects a re-synced message.
       source_type: 'ETL',
-      source_system: 'outlook_mail',
-      source_id: message.internetMessageId || message.id || undefined,
+      ...(() => {
+        const identity =
+          emailIdentity(message.internetMessageId) ??
+          (message.id ? emailFallbackIdentity('outlook_mail', `graph:${message.id}`) : null);
+
+        return identity
+          ? { source_system: identity.system, source_id: identity.id }
+          : { source_system: canonicalSystem('outlook_mail'), source_id: undefined };
+      })(),
     };
   }
 

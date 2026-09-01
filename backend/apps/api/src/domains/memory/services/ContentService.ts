@@ -143,18 +143,20 @@ export class ContentService {
   }
 
   /**
-   * The provenance-triple lookup shared by the find-before-insert check and
+   * The identity-pair lookup shared by the find-before-insert check and
    * the race-loss fallback in {@link create} — mirrors
-   * EventService.createOne's sourceWhere / CommunicationService's.
+   * EventService.createOne's sourceWhere / CommunicationService's. Matches
+   * (source_system, source_id) only: source_type is provenance, and a row
+   * written by the other pipeline is a hit
+   * (docs/design/cross-pipeline-identity.md).
    */
   private sourceWhereFor(
     context: UserServiceContext,
     item: Pick<CreateContentDto, 'source_type' | 'source_system' | 'source_id'>,
   ): FindOptionsWhere<ContentEntity> | null {
-    return item.source_type && item.source_id
+    return item.source_id
       ? {
           userId: context.userId,
-          sourceType: item.source_type,
           sourceSystem: item.source_system ?? IsNull(),
           sourceId: item.source_id,
         }
@@ -179,7 +181,7 @@ export class ContentService {
       dataArray.map(async (item) => {
         // Idempotency: re-sending an existing (source_type, source_system,
         // source_id) triple must return the existing row instead of hitting
-        // content_source_triple_uniq's unhandled 23505 — this per-row path
+        // content_source_identity_uniq's unhandled 23505 — this per-row path
         // (GitHub/Reddit ETL transforms, MemoryController) has no ON CONFLICT
         // handling of its own, unlike createMany's set-based upsert.
         const sourceWhere = this.sourceWhereFor(context, item);
@@ -262,7 +264,7 @@ export class ContentService {
    * lookup) and 1 INSERT, fanned out unbounded — ~2M+ round trips at 1M rows.
    * This path is a fixed handful of statements per batch: one event-link SELECT,
    * one existence SELECT, one multi-row INSERT, one hydrate SELECT (see
-   * {@link bulkInsertIdempotent}). Paired with the content_source_triple_uniq
+   * {@link bulkInsertIdempotent}). Paired with the content_source_identity_uniq
    * partial unique index, which also absorbs a lost insert race (23505).
    * No fields are refreshed on a re-sync — INGEST_REFRESH_COLUMNS.content is
    * intentionally empty (find-or-return).
@@ -356,11 +358,16 @@ export class ContentService {
           sourceSystem: entity.sourceSystem,
           sourceId: entity.sourceId,
         }),
-        // content_source_triple_uniq is user-scoped (see migration
-        // 20260623120300); scope the existence + hydrate reads to the same user.
+        // content_source_identity_uniq is user-scoped; scope the existence +
+        // hydrate reads to the same user.
         scope: { userId: context.userId },
-        conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
-        tripleColumns: ['source_type', 'source_system', 'source_id'],
+        conflictTarget: '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
+        identityColumns: ['source_system', 'source_id'],
+        sourceLedger: {
+          table: 'content',
+          userId: context.userId,
+          getConnectionId: (entity) => entity.connectionId,
+        },
         // Centralized refresh contract — currently empty, so conflicts stay
         // DO NOTHING find-or-return.
         conflictUpdateColumns: INGEST_REFRESH_COLUMNS.content,
@@ -443,7 +450,7 @@ export class ContentService {
    * system equals a NULL system, preserving the prior `sourceSystem ?? IsNull()`
    * semantics) via a two-armed `= :val` / `IS NULL` condition rather than
    * `IS NOT DISTINCT FROM` — Postgres cannot use a btree index (including
-   * events_source_triple_uniq, the index this exact lookup is meant to hit) to
+   * events_source_identity_uniq, the index this exact lookup is meant to hit) to
    * satisfy an `IS NOT DISTINCT FROM` qual, which turns this into a full scan of
    * the user's events once the table is large (see the identical fix + EXPLAIN
    * ANALYZE writeup in common/persistence/bulkUpsert.ts's tripleBrackets).
@@ -519,7 +526,7 @@ export class ContentService {
         sourceId: event.sourceId,
       });
       // First match wins — the triple is unique per user via
-      // events_source_triple_uniq, so there is at most one anyway.
+      // events_source_identity_uniq, so there is at most one anyway.
       if (!result.has(key)) {
         result.set(key, event.id);
       }

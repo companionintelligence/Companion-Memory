@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { FileService } from '@ci/domains/files';
-import { type Content, ContentService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  type Content,
+  ContentService,
+  platformIdentity,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+} from '@ci/domains/memory';
 
 /** Provenance triple every Facebook connector row carries. */
 export const FACEBOOK_SOURCE_TYPE = 'ETL';
@@ -132,8 +137,11 @@ export class FacebookMediaService {
     const context = { userId };
     const source = {
       source_type: FACEBOOK_SOURCE_TYPE,
-      source_system: FACEBOOK_SOURCE_SYSTEM,
-      source_id: sourceIdFor(media.kind, media.id),
+      ...(() => {
+        const identity = platformIdentity(FACEBOOK_SOURCE_SYSTEM, sourceIdFor(media.kind, media.id));
+
+        return { source_system: identity.system, source_id: identity.id };
+      })(),
     };
 
     const existing =

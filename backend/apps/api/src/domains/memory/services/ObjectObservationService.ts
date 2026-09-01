@@ -377,10 +377,10 @@ export class ObjectObservationService {
       };
 
       const target = sourceId != null ? byTriple : byDetectionKey;
-      const key =
-        sourceId != null
-          ? `${row.sourceType ?? ''}\0${row.sourceSystem ?? ''}\0${sourceId}`
-          : (detectionKey as string);
+      // Identity is the (source_system, source_id) pair — source_type is
+      // provenance and stays out of the key, matching
+      // object_observations_source_identity_uniq.
+      const key = sourceId != null ? `${row.sourceSystem ?? ''}\0${sourceId}` : (detectionKey as string);
 
       if (target.has(key)) {
         duplicatesInBatch += 1;
@@ -393,10 +393,7 @@ export class ObjectObservationService {
     let attempted = 0;
 
     const partitions: Array<[WritableRow[], string]> = [
-      [
-        [...byTriple.values()],
-        '(owner_user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
-      ],
+      [[...byTriple.values()], '(owner_user_id, source_system, source_id) WHERE source_id IS NOT NULL'],
       [[...byDetectionKey.values()], '(owner_user_id, detection_key) WHERE detection_key IS NOT NULL'],
     ];
 

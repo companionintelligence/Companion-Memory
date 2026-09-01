@@ -9,7 +9,7 @@ import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import { FileService } from '@ci/domains/files';
-import { ContentService, type CreateContentDto } from '@ci/domains/memory';
+import { ContentService, type CreateContentDto, platformIdentity } from '@ci/domains/memory';
 
 import type { MediaAttachment } from '../datasources/timeline';
 import {
@@ -1154,8 +1154,11 @@ function attachmentContentInput(
     external_id: plan.fileId,
     external_id_kind: 'file',
     source_type: SOURCE_TYPE,
-    source_system: row.dataSource,
-    source_id: `${row.contentHash}:attachment:${plan.index}`,
+    ...(() => {
+      const identity = platformIdentity(row.dataSource, row.contentHash, 'attachment', String(plan.index));
+
+      return { source_system: identity.system, source_id: identity.id };
+    })(),
   };
 
   if (plan.descriptor.filename) {

@@ -7,15 +7,39 @@ import type {
 } from 'typeorm';
 import { Brackets } from 'typeorm';
 
+import { appendRecordSources, type RecordSourceRow } from './recordSources';
+
 /**
- * The (source_type, source_system, source_id) provenance triple a capture source
- * carries. Re-ingesting the same triple must be a no-op (find-or-return), which is
- * what the *_source_triple_uniq partial unique indexes enforce.
+ * The (source_type, source_system, source_id) provenance values a capture
+ * source carries. IDENTITY is the (source_system, source_id) pair — what the
+ * *_source_identity_uniq partial unique indexes key on, so the same datum
+ * arriving via two pipelines converges on one row (see
+ * docs/design/cross-pipeline-identity.md). `source_type` records which
+ * pipeline delivered the row (provenance); it is stored, ledgered, and never
+ * matched on.
  */
 export interface SourceTriple {
   sourceType: string | null | undefined;
   sourceSystem: string | null | undefined;
   sourceId: string | null | undefined;
+}
+
+/**
+ * Opt-in multi-provenance ledger: one ci.record_sources row per (record,
+ * arrival), appended for every dedupable input row — inserts AND dedup hits —
+ * inside the same transaction. This is what makes deletion answerable after
+ * convergence (a record evidenced by a connection and an import must survive
+ * either being removed) and gives the import doctor its convergence metric.
+ */
+export interface SourceLedgerOptions<Entity> {
+  /** ci.record_sources.record_table value, e.g. 'communications'. */
+  table: string;
+  /** The owning user (scope value; entities spell the column two ways). */
+  userId: string;
+  /** The producing connection, when the caller is a connection sync. */
+  getConnectionId?: (entity: Entity) => string | null | undefined;
+  /** The producing import run, when the caller is the importer. */
+  importRunId?: string | null;
 }
 
 /** One result row plus whether THIS call inserted it (vs. found it pre-existing). */
@@ -46,13 +70,15 @@ interface BulkInsertOptions<Entity extends ObjectLiteral> {
   scope: Record<string, unknown>;
   /**
    * The ON CONFLICT arbiter: the EXACT target-and-predicate of the partial unique
-   * index, e.g. `(user_id, source_type, source_system, source_id) WHERE source_id
-   * IS NOT NULL`. Postgres infers the partial index only when both the columns and
+   * index, e.g. `(user_id, source_system, source_id) WHERE source_id IS NOT
+   * NULL`. Postgres infers the partial index only when both the columns and
    * the predicate match, so this is emitted verbatim (DO NOTHING is appended).
    */
   conflictTarget: string;
-  /** DB column names of the triple, in (type, system, id) order, for the match SQL. */
-  tripleColumns: [string, string, string];
+  /** DB column names of the identity pair, in (system, id) order, for the match SQL. */
+  identityColumns: [string, string];
+  /** Append ci.record_sources rows for this batch (see SourceLedgerOptions). */
+  sourceLedger?: SourceLedgerOptions<Entity>;
   /**
    * Optional list of DB column names to refresh on conflict (an empty list is
    * the same as omitting it — see INGEST_REFRESH_COLUMNS, the central per-entity
@@ -266,9 +292,10 @@ async function executeChunk<Entity extends ObjectLiteral>(
     primaryKey,
     scope,
     conflictTarget,
-    tripleColumns,
+    identityColumns,
     timeColumn,
     conflictUpdateColumns,
+    sourceLedger,
   } = options;
 
   // When refresh columns are requested we DO UPDATE on conflict; otherwise the
@@ -277,15 +304,17 @@ async function executeChunk<Entity extends ObjectLiteral>(
 
   const meta = repository.metadata;
   const alias = meta.tableName;
-  const [typeCol, systemCol, idCol] = tripleColumns;
+  const [systemCol, idCol] = identityColumns;
 
-  // A row is dedupable only when it carries a (source_type, source_id) pair — the
-  // partial unique index is `WHERE source_id IS NOT NULL`, and the prior code only
-  // looked up the triple when both were present.
-  const isDedupable = (triple: SourceTriple): boolean => triple.sourceType != null && triple.sourceId != null;
+  // A row is dedupable when it carries a source_id — the partial unique index
+  // is `WHERE source_id IS NOT NULL`. source_type is provenance, not identity:
+  // the same (source_system, source_id) arriving from a different pipeline
+  // MUST match the existing row (that convergence is the whole point — see
+  // docs/design/cross-pipeline-identity.md).
+  const isDedupable = (triple: SourceTriple): boolean => triple.sourceId != null;
 
   const tripleKey = (triple: SourceTriple): string =>
-    `${triple.sourceType ?? ''} ${triple.sourceSystem ?? ''} ${triple.sourceId ?? ''}`;
+    `${triple.sourceSystem ?? ''} ${triple.sourceId ?? ''}`;
 
   const applyScope = (qb: SelectQueryBuilder<Entity>): void => {
     for (const [property, value] of Object.entries(scope)) {
@@ -329,8 +358,9 @@ async function executeChunk<Entity extends ObjectLiteral>(
     }
   };
 
-  // OR-list (inside a Brackets) matching the given triples, NULLs-compare-equal
-  // on sourceSystem (matching the prior `?? IsNull()` find semantics).
+  // OR-list (inside a Brackets) matching the given identity pairs,
+  // NULLs-compare-equal on sourceSystem (matching the prior `?? IsNull()` find
+  // semantics).
   //
   // This used to emit `col IS NOT DISTINCT FROM :param` for all three columns.
   // That is semantically right but Postgres CANNOT use a btree index — including
@@ -346,16 +376,18 @@ async function executeChunk<Entity extends ObjectLiteral>(
   // table fills" symptom from a large bulk sync, despite the correct index
   // existing the whole time.
   //
-  // typeCol and idCol are guaranteed NOT NULL for every triple reaching this
-  // function (both call sites pre-filter with isDedupable()), so a plain `=` is
-  // always correct for them and IS indexable. systemCol is the only column that
-  // can legitimately be NULL, so it alone needs the two-armed NULL-safe form
-  // (`= :param` when non-null, else a literal `IS NULL` — never bind NULL
-  // through `=`, which would never match). With plain `=`, Postgres's OR/IN
-  // transformation lets a whole chunk's worth of triples resolve to one Index
-  // Scan (confirmed via EXPLAIN ANALYZE: ~1.7s -> ~0.2ms on a 200k-row table).
-  // Distinct parameter prefixes keep multiple invocations on one query from
-  // colliding.
+  // idCol is guaranteed NOT NULL for every triple reaching this function (both
+  // call sites pre-filter with isDedupable()), so a plain `=` is always correct
+  // for it and IS indexable. systemCol is the only column that can legitimately
+  // be NULL, so it alone needs the two-armed NULL-safe form (`= :param` when
+  // non-null, else a literal `IS NULL` — never bind NULL through `=`, which
+  // would never match). With plain `=`, Postgres's OR/IN transformation lets a
+  // whole chunk's worth of pairs resolve to one Index Scan (confirmed via
+  // EXPLAIN ANALYZE: ~1.7s -> ~0.2ms on a 200k-row table). Distinct parameter
+  // prefixes keep multiple invocations on one query from colliding.
+  //
+  // source_type is deliberately absent: identity is the (system, id) pair, and
+  // a match from the OTHER pipeline (different source_type) is a hit.
   const tripleBrackets = (triples: SourceTriple[], prefix: string): Brackets =>
     new Brackets((b: WhereExpressionBuilder) => {
       triples.forEach((triple, i) => {
@@ -365,16 +397,10 @@ async function executeChunk<Entity extends ObjectLiteral>(
             ? `${alias}.${systemCol} IS NULL`
             : `${alias}.${systemCol} = :${systemParam}`;
 
-        b.orWhere(
-          `(${alias}.${typeCol} = :${prefix}_type_${i}` +
-            ` AND ${systemCond}` +
-            ` AND ${alias}.${idCol} = :${prefix}_id_${i})`,
-          {
-            [`${prefix}_type_${i}`]: triple.sourceType,
-            ...(triple.sourceSystem != null ? { [systemParam]: triple.sourceSystem } : {}),
-            [`${prefix}_id_${i}`]: triple.sourceId,
-          },
-        );
+        b.orWhere(`(${systemCond} AND ${alias}.${idCol} = :${prefix}_id_${i})`, {
+          ...(triple.sourceSystem != null ? { [systemParam]: triple.sourceSystem } : {}),
+          [`${prefix}_id_${i}`]: triple.sourceId,
+        });
       });
     });
 
@@ -521,6 +547,38 @@ async function executeChunk<Entity extends ObjectLiteral>(
 
       hydratedByPk.set(row[primaryKey], row);
     }
+  }
+
+  // --- 3b. Multi-provenance ledger (opt-in). One ci.record_sources row per
+  // dedupable input arrival — inserts AND dedup hits alike, because a hit from
+  // the OTHER pipeline is exactly the evidence the ledger exists to keep. Same
+  // transaction as the record writes. Rows missing a type or system are
+  // skipped (nothing to ledger them under).
+  if (sourceLedger) {
+    const ledgerRows: RecordSourceRow[] = [];
+    for (const entity of entities) {
+      const triple = getTriple(entity);
+      if (!isDedupable(triple) || triple.sourceType == null || triple.sourceSystem == null) {
+        continue;
+      }
+
+      const hydrated = hydratedByKey.get(tripleKey(triple));
+      const pk: unknown = hydrated?.[primaryKey];
+      if (typeof pk !== 'string') {
+        continue;
+      }
+
+      ledgerRows.push({
+        recordId: pk,
+        sourceType: triple.sourceType,
+        sourceSystem: triple.sourceSystem,
+        sourceId: triple.sourceId as string,
+        connectionId: sourceLedger.getConnectionId?.(entity) ?? null,
+        importRunId: sourceLedger.importRunId ?? null,
+      });
+    }
+
+    await appendRecordSources(repository.manager, { table: sourceLedger.table, userId: sourceLedger.userId }, ledgerRows);
   }
 
   // --- Reassemble in input order, flagging which rows this call inserted. --------

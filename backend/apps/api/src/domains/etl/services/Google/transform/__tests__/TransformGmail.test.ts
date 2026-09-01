@@ -38,6 +38,7 @@ function gmailMessage(overrides: Record<string, unknown> = {}) {
         { name: 'From', value: 'Alice <alice@example.com>' },
         { name: 'To', value: 'kyle@example.com' },
         { name: 'Date', value: 'Tue, 18 Aug 2026 10:00:00 -0700' },
+        { name: 'Message-ID', value: '<msg-1-rfc@mail.gmail.com>' },
       ],
     },
     ...overrides,
@@ -45,7 +46,7 @@ function gmailMessage(overrides: Record<string, unknown> = {}) {
 }
 
 describe('GmailTransformService.transformGmail', () => {
-  it('stamps the provenance triple so a re-synced message dedupes on communications_source_triple_uniq', async () => {
+  it('keys the message on (email, <RFC Message-ID>) so it converges with a Takeout import of the same mail', async () => {
     const { service, communicationService } = build();
 
     await service.transformGmail({ connection, syncJob: syncJobWith([gmailMessage()]) });
@@ -57,16 +58,40 @@ describe('GmailTransformService.transformGmail', () => {
         thread_id: 'thread-1',
         connection_id: 'conn-1',
         source_type: 'ETL',
-        source_system: 'gmail',
-        source_id: 'msg-1',
+        // Federated email identity — docs/design/cross-pipeline-identity.md.
+        source_system: 'email',
+        source_id: 'msg-1-rfc@mail.gmail.com',
       }),
     );
   });
 
-  it('leaves source_id unset for a message without an id instead of collapsing them onto one row', async () => {
+  it('falls back to a gmail-scoped hash id for Message-ID-less mail (stable, never converging)', async () => {
     const { service, communicationService } = build();
+    const noMid = gmailMessage();
+    (noMid.payload as { headers: { name: string; value: string }[] }).headers = (
+      noMid.payload as { headers: { name: string; value: string }[] }
+    ).headers.filter((h) => h.name !== 'Message-ID');
 
-    await service.transformGmail({ connection, syncJob: syncJobWith([gmailMessage({ id: undefined })]) });
+    await service.transformGmail({ connection, syncJob: syncJobWith([noMid]) });
+
+    expect(communicationService.create).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({
+        source_type: 'ETL',
+        source_system: 'gmail',
+        source_id: expect.stringMatching(/^fallback:[0-9a-f]{64}$/),
+      }),
+    );
+  });
+
+  it('leaves source_id unset for a message with neither Message-ID nor API id instead of collapsing them onto one row', async () => {
+    const { service, communicationService } = build();
+    const bare = gmailMessage({ id: undefined });
+    (bare.payload as { headers: { name: string; value: string }[] }).headers = (
+      bare.payload as { headers: { name: string; value: string }[] }
+    ).headers.filter((h) => h.name !== 'Message-ID');
+
+    await service.transformGmail({ connection, syncJob: syncJobWith([bare]) });
 
     expect(communicationService.create).toHaveBeenCalledTimes(1);
     const [, dto] = communicationService.create.mock.calls[0] as unknown as [unknown, { source_id?: string }];

@@ -3,7 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  ContentService,
+  CalendarEventService,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -83,12 +88,15 @@ export class SteamOwnedGamesTransformService {
               ...(iconUrl ? { source_url: iconUrl } : {}),
               external_id: String(game.appid),
               external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-              // content_source_triple_uniq backstops the racy
+              // content_source_identity_uniq backstops the racy
               // search-then-create above; the prefix keeps the bare numeric
               // appid distinct inside 'steam'.
               source_type: 'ETL',
-              source_system: 'steam',
-              source_id: `game:${game.appid}`,
+              ...(() => {
+                const identity = platformIdentity('steam', `game:${game.appid}`);
+
+                return { source_system: identity.system, source_id: identity.id };
+              })(),
               source_data: {
                 appid: game.appid,
                 playtime_forever: game.playtime_forever,
@@ -125,8 +133,11 @@ export class SteamOwnedGamesTransformService {
                 // index only covers full triples. rtime_last_played is part of
                 // the key on purpose — playing the game again IS a new event.
                 source_type: 'ETL',
-                source_system: 'steam',
-                source_id: `played:${game.appid}:${game.rtime_last_played}`,
+                ...(() => {
+                  const identity = platformIdentity('steam', `played:${game.appid}:${game.rtime_last_played}`);
+
+                  return { source_system: identity.system, source_id: identity.id };
+                })(),
                 start_time: new Date(game.rtime_last_played * 1000),
                 metadata: {
                   appid: game.appid,

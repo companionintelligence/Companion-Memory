@@ -9,6 +9,7 @@ import { LoggerService } from '@ci/common/logging';
 import {
   INGEST_REFRESH_COLUMNS,
   type BulkInsertResult,
+  appendRecordSources,
   bulkInsertIdempotent,
   keysetPaginate,
   type KeysetPageArgs,
@@ -108,34 +109,63 @@ export class CommunicationService {
   }
 
   /**
-   * The provenance-triple lookup shared by the find-before-insert check and
+   * The identity-pair lookup shared by the find-before-insert check and
    * the race-loss fallback below — mirrors EventService.createOne's
-   * sourceWhere. Communications have no soft-delete column, so unlike Event
-   * this doesn't need to special-case tombstoned rows.
+   * sourceWhere. Matches (source_system, source_id) only: source_type is
+   * provenance, and an existing row written by the OTHER pipeline is a hit
+   * (docs/design/cross-pipeline-identity.md). Communications have no
+   * soft-delete column, so unlike Event this doesn't need to special-case
+   * tombstoned rows.
    */
   private sourceWhereFor(
     context: UserServiceContext,
     data: Pick<CreateCommunicationDto, 'source_type' | 'source_system' | 'source_id'>,
   ): FindOptionsWhere<CommunicationEntity> | null {
-    return data.source_type && data.source_id
+    return data.source_id
       ? {
           userId: context.userId,
-          sourceType: data.source_type,
           sourceSystem: data.source_system ?? IsNull(),
           sourceId: data.source_id,
         }
       : null;
   }
 
+  /**
+   * Ledger one arrival of a communication (insert, dedup hit, or lost race —
+   * all three evidence the record; see ci.record_sources). No-op when the
+   * arrival carries an incomplete triple.
+   */
+  private async ledgerArrival(
+    context: UserServiceContext,
+    recordId: string,
+    data: Pick<CreateCommunicationDto, 'source_type' | 'source_system' | 'source_id' | 'connection_id'>,
+  ): Promise<void> {
+    if (!data.source_type || !data.source_system || !data.source_id) {
+      return;
+    }
+
+    await appendRecordSources(this.communicationRepository.manager, { table: 'communications', userId: context.userId }, [
+      {
+        recordId,
+        sourceType: data.source_type,
+        sourceSystem: data.source_system,
+        sourceId: data.source_id,
+        connectionId: data.connection_id ?? null,
+      },
+    ]);
+  }
+
   async create(context: UserServiceContext, data: CreateCommunicationDto): Promise<Communication> {
     // Idempotency: re-sending an existing (source_type, source_system,
     // source_id) triple — a flaky-client retry, a webhook re-delivery like
     // MemoryController.turn() — must return the existing row instead of
-    // hitting communications_source_triple_uniq's unhandled 23505.
+    // hitting communications_source_identity_uniq's unhandled 23505.
     const sourceWhere = this.sourceWhereFor(context, data);
     if (sourceWhere) {
       const existing = await this.communicationRepository.findOne({ where: sourceWhere });
       if (existing) {
+        await this.ledgerArrival(context, existing.id, data);
+
         return CommunicationEntity.toEgressType(existing);
       }
     }
@@ -207,6 +237,8 @@ export class CommunicationService {
       if (sourceWhere && (err as { code?: string })?.code === '23505') {
         const existing = await this.communicationRepository.findOne({ where: sourceWhere });
         if (existing) {
+          await this.ledgerArrival(context, existing.id, data);
+
           return CommunicationEntity.toEgressType(existing);
         }
       }
@@ -214,6 +246,7 @@ export class CommunicationService {
       throw err;
     }
 
+    await this.ledgerArrival(context, communicationResult.id, data);
     await this.eventService.send(CommunicationCreatedEvent, {
       communicationId: communicationResult.id,
     });
@@ -224,10 +257,10 @@ export class CommunicationService {
 
   /**
    * Batch, idempotent communication ingest for the importer, keyed on the
-   * provenance triple via {@link bulkInsertIdempotent} — the same set-based
+   * identity pair via {@link bulkInsertIdempotent} — the same set-based
    * INSERT ... ON CONFLICT path as content/events/items/browser_activity.
-   * The arbiter is communications_source_triple_uniq, the pure
-   * `(user_id, source_type, source_system, source_id)` partial unique index:
+   * The arbiter is communications_source_identity_uniq, the
+   * `(user_id, source_system, source_id)` partial unique index:
    * `time` is deliberately NOT part of the key, because the importer cannot
    * keep it stable across re-syncs for sources whose row body lacks a usable
    * timestamp (iMessage attachment-only entries fall back to import
@@ -322,9 +355,14 @@ export class CommunicationService {
           sourceId: entity.sourceId,
         }),
         scope: { userId: context.userId },
-        conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
-        tripleColumns: ['source_type', 'source_system', 'source_id'],
+        conflictTarget: '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
+        identityColumns: ['source_system', 'source_id'],
         conflictUpdateColumns: INGEST_REFRESH_COLUMNS.communication,
+        sourceLedger: {
+          table: 'communications',
+          userId: context.userId,
+          getConnectionId: (entity) => entity.connectionId,
+        },
       });
 
       // One base row per distinct id: intra-batch duplicate triples resolve to
@@ -635,21 +673,23 @@ export class CommunicationService {
    * The per-row ETL transforms use `create()` (so the row is indexed live —
    * see the note in Slack's TransformMessages) and therefore cannot use the
    * ON CONFLICT path `createMany` has. Until this existed, a re-synced row's
-   * only signal was the 23505 from communications_source_triple_uniq, which
+   * only signal was the 23505 from communications_source_identity_uniq, which
    * every connector swallowed — fine for a chat message that never changes,
    * useless for a post whose attachments are catalogued after the row exists.
    * This is the read half of "find, then update" for those callers.
    */
   async findBySource(
     context: ServiceContext,
-    source: { source_type: string; source_system: string; source_id: string },
+    source: { source_type?: string; source_system: string; source_id: string },
   ): Promise<Communication | null> {
+    // Identity is (source_system, source_id); source_type is provenance and
+    // deliberately not matched — the row may have been written by the other
+    // pipeline (docs/design/cross-pipeline-identity.md).
     const entity = await this.communicationRepository.findOne({
       where: {
         ...(context.userId !== SYSTEM_USER && {
           userId: context.userId,
         }),
-        sourceType: source.source_type,
         sourceSystem: source.source_system,
         sourceId: source.source_id,
       },

@@ -1223,7 +1223,7 @@ describe('an export file replicated with a copy index is one record, not two', (
    * them on `sha1(dataSource, classification, content.filename, isoTimestamp)`
    * — the filename IS half the identity. A Drive/Takeout copy suffix therefore
    * minted a second provenance triple for one call, and the
-   * `communications_source_triple_uniq` arbiter cannot collapse two different
+   * `communications_source_identity_uniq` arbiter cannot collapse two different
    * triples: on the QA appliance one 2013-06-14T15:07:34 call from Chris
    * Spagnuolo sat in ci.communications three times, once per copy of its file.
    *

@@ -310,7 +310,7 @@ type DestinationCounts = Partial<Record<Destination, number>>;
  *
  * Nothing here checks whether a record already exists. Every input carries the
  * `(source_type, source_system, source_id)` triple, and each destination table
- * has a `*_source_triple_uniq` index over it, so a re-push is a no-op decided by
+ * has a `*_source_identity_uniq` index over it, so a re-push is a no-op decided by
  * the database. Re-implementing that check here would be a second answer to a
  * question `ci.*` already answers — and the two would drift.
  *

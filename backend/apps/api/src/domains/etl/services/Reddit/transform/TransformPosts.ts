@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  ContentService,
+  CalendarEventService,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import type { RedditPost } from '../sync/redditListing';
@@ -81,13 +86,16 @@ export class RedditPostsTransformService {
           url: permalink,
           external_id: post.name,
           external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-          // content_source_triple_uniq backstops the racy search-then-create
+          // content_source_identity_uniq backstops the racy search-then-create
           // above. source_system is 'reddit' (not 'reddit_posts') so the
           // saved-items transform, which writes the same underlying thing,
           // lands on the same key.
           source_type: 'ETL',
-          source_system: 'reddit',
-          source_id: post.name,
+          ...(() => {
+            const identity = platformIdentity('reddit', post.name);
+
+            return { source_system: identity.system, source_id: identity.id };
+          })(),
           source_url: permalink,
           source_data: {
             reddit_post_id: post.id,
@@ -102,11 +110,13 @@ export class RedditPostsTransformService {
       );
     }
 
+    const eventIdentity = platformIdentity('reddit_posts', post.name);
+
     const existingEvent = await this.eventService.search(
       { userId },
       {
-        sourceSystem: 'reddit_posts',
-        sourceId: post.name,
+        sourceSystem: eventIdentity.system,
+        sourceId: eventIdentity.id,
       },
     );
 
@@ -117,15 +127,15 @@ export class RedditPostsTransformService {
           connection_id: connection.id,
           event_type: 'reddit_post',
           // Without source_type, CalendarEventService.createOne skips its
-          // find-or-create AND events_source_triple_uniq treats the row as
+          // find-or-create AND events_source_identity_uniq treats the row as
           // NULL-distinct — only the search above stood between a replay
           // and a duplicate.
           source_type: 'ETL',
-          source_id: post.name,
+          source_id: eventIdentity.id,
           start_time: new Date(post.created_utc * 1000),
           title: `Posted in r/${post.subreddit}: ${post.title}`,
           description: post.selftext || post.title,
-          source_system: 'reddit_posts',
+          source_system: eventIdentity.system,
         },
       );
     }

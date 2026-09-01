@@ -3,7 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  ContentService,
+  CalendarEventService,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -111,8 +116,11 @@ export class SpotifySavedAudiobooksTransformService {
               start_time: new Date(),
               duration_minutes: 0,
               source_type: 'ETL',
-              source_system: 'spotify',
-              source_id: `saved_audiobook:${audiobook.id}`,
+              ...(() => {
+                const identity = platformIdentity('spotify', `saved_audiobook:${audiobook.id}`);
+
+                return { source_system: identity.system, source_id: identity.id };
+              })(),
               metadata: {
                 audiobook_id: audiobook.id,
                 authors: audiobook.authors.map((author) => author.name),

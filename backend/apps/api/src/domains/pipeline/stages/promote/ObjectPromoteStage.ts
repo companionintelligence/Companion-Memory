@@ -146,7 +146,7 @@ const PROMOTE_PROVENANCE_KEY = 'promote';
  * The row's source triple is `(promote.object, <the event's source_system>,
  * <the event id>)`, which does three jobs at once:
  *
- *  1. **Idempotency.** `objects_source_triple_uniq` is UNIQUE on
+ *  1. **Idempotency.** `objects_source_identity_uniq` is UNIQUE on
  *     `(owner_user_id, source_type, source_system, source_id)`, so re-promoting
  *     an event updates its object instead of minting a second one. The stage
  *     needs no anti-join and no "have I done this?" query — see
@@ -380,7 +380,7 @@ export class ObjectPromoteStage implements Stage {
    * Promote one slice of commerce events.
    *
    * Idempotent by the source triple rather than by a guard: the INSERT is
-   * `ON CONFLICT (owner_user_id, source_type, source_system, source_id)
+   * `ON CONFLICT (owner_user_id, source_system, source_id)
    * DO UPDATE`, so two dispatchers racing the same id produce one object and one
    * redundant UPDATE.
    *
@@ -517,7 +517,7 @@ export class ObjectPromoteStage implements Stage {
    * Write every promotable object in ONE statement, and report which ones landed.
    *
    * `unnest()` over parallel arrays into a single INSERT, upserted on
-   * `objects_source_triple_uniq`. Both `user_id` and `owner_user_id` are set:
+   * `objects_source_identity_uniq`. Both `user_id` and `owner_user_id` are set:
    * the unique index is keyed on `owner_user_id`, so leaving it NULL would make
    * the whole idempotency argument false.
    *
@@ -587,7 +587,7 @@ export class ObjectPromoteStage implements Stage {
                      purchase_price, currency, acquired_at, is_digital,
                      condition, quantity, identity_confidence, source_system,
                      commerce)
-       ON CONFLICT (owner_user_id, source_type, source_system, source_id)
+       ON CONFLICT (owner_user_id, source_system, source_id)
          WHERE source_id IS NOT NULL
        DO UPDATE SET
             brand               = excluded.brand,

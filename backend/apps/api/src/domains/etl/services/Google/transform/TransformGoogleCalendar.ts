@@ -5,7 +5,13 @@ import { v7 as uuidv7 } from 'uuid';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
 import { GeocodeService, isUriLocation } from '@ci/domains/geocode';
-import { CalendarEventService, type CreateEventDto } from '@ci/domains/memory';
+import {
+  CalendarEventService,
+  type CreateEventDto,
+  calendarEventIdentity,
+  icsRecurrenceInstant,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
@@ -43,6 +49,13 @@ interface CalendarEvent {
   updated?: string;
   recurringEventId?: string;
   recurrence?: string[];
+  /** RFC 5545 UID — the event's cross-pipeline identity key; shared by every instance of a series. */
+  iCalUID?: string;
+  /** Instance-only: the slot this override replaces (the RECURRENCE-ID equivalent). */
+  originalStartTime?: {
+    dateTime?: string;
+    date?: string;
+  };
 }
 
 interface EventDetails {
@@ -306,9 +319,31 @@ export class GoogleCalendarTransformService {
       // ground truth; leave the default 1.0 when there are no coordinates.
       ...(location_confidence !== null ? { confidence_score: location_confidence } : {}),
       source_type: 'ETL',
-      source_system: 'google_calendar',
+      // Identity: iCalUID under the federated `calendar` system (with the
+      // override's original-start instant as the RECURRENCE-ID suffix), so the
+      // same event converges with a Takeout/exported .ics import —
+      // docs/design/cross-pipeline-identity.md. UID-less events fall back to
+      // the Google event id under the platform system (stable across
+      // re-syncs, not expected to converge cross-pipeline).
+      ...(() => {
+        const identity = calendarEventIdentity(
+          rawEvent.iCalUID,
+          rawEvent.originalStartTime?.date
+            ? rawEvent.originalStartTime.date.replace(/-/g, '')
+            : rawEvent.originalStartTime?.dateTime
+              ? icsRecurrenceInstant(new Date(rawEvent.originalStartTime.dateTime))
+              : undefined,
+        );
+
+        return identity
+          ? { source_system: identity.system, source_id: identity.id }
+          : (() => {
+              const fallback = platformIdentity('google_calendar', eventDetails.id);
+
+              return { source_system: fallback.system, source_id: fallback.id };
+            })();
+      })(),
       connection_id: connectionId,
-      source_id: eventDetails.id,
       is_recurring: eventDetails.isRecurring,
       is_all_day: isAllDay,
       status: this.normalizeStatus(eventDetails.status),

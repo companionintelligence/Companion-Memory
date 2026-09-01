@@ -120,7 +120,6 @@ describe('CalendarEventService.create — source idempotency', () => {
 
     const where = repo.findOne.mock.calls[0][0].where;
     expect(where).toMatchObject({
-      sourceType: 'ci-import-tools',
       sourceSystem: 'gmail',
       sourceId: 'gmail:abc-123',
       user: { id: 'user-1' },

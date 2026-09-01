@@ -17,7 +17,7 @@ import { GraphDeltaWriter } from './GraphDeltaWriter';
  * The triple is `('receipt-line', <the receipt's source_system>,
  * <line_item_id>)`, which does three jobs at once:
  *
- *  1. **Idempotency.** `objects_source_triple_uniq` is UNIQUE on
+ *  1. **Idempotency.** `objects_source_identity_uniq` is UNIQUE on
  *     `(owner_user_id, source_type, source_system, source_id)`, so re-extracting
  *     a receipt re-mints onto the SAME row instead of adding a second copy of a
  *     possession. No anti-join, no "have I minted this?" query.
@@ -406,7 +406,7 @@ export class ObjectMintService {
                 ) AS u(object_id, line_item_id, source_id, brand, model,
                        category, identifier_codes, purchase_price, currency, acquired_at,
                        product_id, quantity, acquired_from, acquired_from_entity_id, metadata)
-         ON CONFLICT (owner_user_id, source_type, source_system, source_id)
+         ON CONFLICT (owner_user_id, source_system, source_id)
            WHERE source_id IS NOT NULL
          DO UPDATE SET
               brand                    = excluded.brand,

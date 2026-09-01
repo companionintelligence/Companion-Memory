@@ -5,13 +5,24 @@ import { v7 as uuidv7 } from 'uuid';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
 import { isUriLocation } from '@ci/domains/geocode';
-import { CalendarEventService, type CreateEventDto } from '@ci/domains/memory';
+import {
+  CalendarEventService,
+  type CreateEventDto,
+  calendarEventIdentity,
+  canonicalSystem,
+  icsRecurrenceInstant,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import { PromoteService } from '../../PromoteService';
 
 interface OutlookCalendarEvent {
   id?: string;
+  /** RFC 5545 UID (Graph spells it iCalUId) — the event's cross-pipeline identity key. */
+  iCalUId?: string;
+  /** Instance-only: the slot an override replaces (the RECURRENCE-ID equivalent). */
+  originalStart?: string;
   subject?: string;
   bodyPreview?: string;
   body?: {
@@ -308,9 +319,25 @@ export class OutlookCalendarTransformService {
       location_name: location_name || undefined,
       location_coordinates: location_coordinates || undefined,
       source_type: 'ETL',
-      source_system: 'outlook_calendar',
+      // Identity: iCalUId under the federated `calendar` system (override
+      // instants as the RECURRENCE-ID suffix), converging with an exported
+      // .ics or a Google fetch of the same invite —
+      // docs/design/cross-pipeline-identity.md. UID-less events fall back to
+      // the Graph id under the platform system.
+      ...(() => {
+        const identity = calendarEventIdentity(
+          event.iCalUId,
+          event.originalStart ? icsRecurrenceInstant(new Date(event.originalStart)) : undefined,
+        );
+
+        return identity
+          ? { source_system: identity.system, source_id: identity.id }
+          : {
+              source_system: canonicalSystem('outlook_calendar'),
+              source_id: event.id ? platformIdentity('outlook_calendar', event.id).id : undefined,
+            };
+      })(),
       connection_id: connectionId,
-      source_id: event.id || undefined,
       is_recurring: !!event.recurrence || !!event.seriesMasterId,
       is_all_day: event.isAllDay || false,
       status: this.normalizeStatus(event.isCancelled),

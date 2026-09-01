@@ -739,7 +739,7 @@ export class ObjectMergeService {
       //
       // `mergeObjects` has no equivalent hazard and needs no equivalent
       // reordering: `ci.objects`'s only unique indexes are `objects_pkey`
-      // and `objects_source_triple_uniq` (owner + provenance triple), and
+      // and `objects_source_identity_uniq` (owner + provenance triple), and
       // `foldObjectScalars` writes NEITHER a primary key nor any of
       // `source_type`/`source_system`/`source_id`.
       await em.query(

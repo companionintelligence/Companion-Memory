@@ -189,7 +189,7 @@ describe('ObjectMintService', () => {
     await harness.service.mintFromLines(CONTEXT, RECEIPT_CONTEXT, [line()]);
 
     const insert = objectInsert(harness);
-    expect(insert.sql).toContain('ON CONFLICT (owner_user_id, source_type, source_system, source_id)');
+    expect(insert.sql).toContain('ON CONFLICT (owner_user_id, source_system, source_id)');
     expect(insert.sql).toContain('WHERE source_id IS NOT NULL');
     expect(insert.params[6]).toBe('amazon');
   });

@@ -21,7 +21,7 @@ export const createBrowserActivitySchemaRoot = z.object({
   productivity_score: z.number().min(0).max(1).optional(),
   is_incognito: z.boolean().optional(),
   contains_sensitive: z.boolean().optional(),
-  // Provenance triple for idempotent re-ingest (see browser_activity_source_triple_uniq).
+  // Provenance triple for idempotent re-ingest (see browser_activity_source_identity_uniq).
   source_type: z.string().optional(),
   source_system: z.string().optional(),
   source_id: z.string().optional(),
@@ -50,7 +50,7 @@ export interface CreateBrowserActivityDto {
   productivity_score?: number;
   is_incognito?: boolean;
   contains_sensitive?: boolean;
-  // Provenance triple for idempotent re-ingest (see browser_activity_source_triple_uniq).
+  // Provenance triple for idempotent re-ingest (see browser_activity_source_identity_uniq).
   source_type?: string;
   source_system?: string;
   source_id?: string;

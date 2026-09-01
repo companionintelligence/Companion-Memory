@@ -870,7 +870,7 @@ describeWithDatabase(`the push stage (${importDatabase.target})`, () => {
     // method is an upsert on the provenance triple. Two audiobook listens are
     // two events but ONE content row, because content is keyed on the work's
     // URI — so the single-row path raised
-    // "duplicate key value violates content_source_triple_uniq" on the second.
+    // "duplicate key value violates content_source_identity_uniq" on the second.
     const runId = await harness.startRun();
 
     await harness.dataSource.query(

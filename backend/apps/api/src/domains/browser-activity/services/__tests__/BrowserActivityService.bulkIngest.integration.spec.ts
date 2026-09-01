@@ -16,7 +16,7 @@ import { BrowserActivityService } from '../BrowserActivityService';
  *
  * `createManyDetailed` names its ON CONFLICT target as a literal string —
  * `(user_id, source_type, source_system, source_id) WHERE source_id IS NOT
- * NULL` — that has to match `browser_activity_source_triple_uniq`
+ * NULL` — that has to match `browser_activity_source_identity_uniq`
  * (20260623120200_add_browser_activity_provenance.sql) column-for-column and
  * predicate-for-predicate, or Postgres rejects the statement outright
  * ("there is no unique or exclusion constraint matching the ON CONFLICT

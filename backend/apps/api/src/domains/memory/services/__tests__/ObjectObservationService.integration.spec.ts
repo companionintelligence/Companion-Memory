@@ -6,6 +6,7 @@ import type { LoggerService } from '@ci/common/logging';
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { ObjectObservationEntity } from '../../entities/ObjectObservationEntity';
+import { platformIdentity } from '../../identity';
 import { ObjectObservationService } from '../ObjectObservationService';
 
 /**
@@ -156,6 +157,7 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
 
   it('GUARD 1 (triple arbiter) — a re-detection with the same source triple UPDATES the row, never inserts a second one', async () => {
     const contentId = uuidv7();
+    const identity = platformIdentity('cv-server', `det-${contentId}`);
 
     const [first] = (
       await service.createMany(owner, [
@@ -164,8 +166,8 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
           label: 'coffee mug',
           contentId,
           sourceType: 'cv_detection',
-          sourceSystem: 'cv-server',
-          sourceId: `det-${contentId}`,
+          sourceSystem: identity.system,
+          sourceId: identity.id,
         },
       ])
     ).written;
@@ -176,8 +178,8 @@ describeWithDb(`ObjectObservationService — the write statement, in Postgres ($
         label: 'ceramic mug',
         contentId,
         sourceType: 'cv_detection',
-        sourceSystem: 'cv-server',
-        sourceId: `det-${contentId}`,
+        sourceSystem: identity.system,
+        sourceId: identity.id,
       },
     ]);
 

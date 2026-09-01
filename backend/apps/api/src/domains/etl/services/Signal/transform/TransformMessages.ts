@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { CommunicationDirection, CommunicationService, CommunicationType } from '@ci/domains/memory';
+import {
+  CommunicationDirection,
+  CommunicationService,
+  CommunicationType,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import type { SignalEnvelope } from '../sync/signalApi';
@@ -52,8 +57,11 @@ export class SignalMessagesTransformService {
             content: text,
             connection_id: connection.id,
             source_type: 'ETL',
-            source_system: 'signal',
-            source_id: sourceId,
+            ...(() => {
+              const identity = platformIdentity('signal', sourceId);
+
+              return { source_system: identity.system, source_id: identity.id };
+            })(),
             participants_metadata: {
               source: envelope.source,
               source_number: envelope.sourceNumber,

@@ -2,6 +2,7 @@ import { bulkInsertIdempotent } from '@ci/common/persistence';
 
 import { ItemBaseEntity } from '../../entities/ItemBaseEntity';
 import { ItemEntity } from '../../entities/ItemEntity';
+import { adoptIngestIdentity } from '../../identity';
 
 import { ITEM_HARNESS_CONTEXT, ITEM_HARNESS_USER, makeItemHarness } from './harness/itemServiceHarness';
 
@@ -156,8 +157,8 @@ describe('ItemService CTI createMany', () => {
     ]);
 
     const result = await service.createMany(CONTEXT, [
-      { id: 'i1', name: 'Camera', sourceType: 'scan', sourceId: 's1' },
-      { id: 'i2', name: 'Lens', sourceType: 'scan', sourceId: 's2' },
+      { id: 'i1', name: 'Camera', sourceType: 'scan', sourceId: adoptIngestIdentity(undefined, 's1').id },
+      { id: 'i2', name: 'Lens', sourceType: 'scan', sourceId: adoptIngestIdentity(undefined, 's2').id },
     ]);
 
     // The bulk detail phase joined the spanning transaction.

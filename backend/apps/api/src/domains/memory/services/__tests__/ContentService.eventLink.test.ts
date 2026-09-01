@@ -114,7 +114,7 @@ describe('ContentService.create — event link (single, per-row path)', () => {
  *   - ONE bulkInsertIdempotent call (existence pre-check + INSERT..ON CONFLICT +
  *     hydrate) keyed on the provenance triple.
  * These tests pin that contract: the triple dedup is delegated to
- * bulkInsertIdempotent (arbiter matches content_source_triple_uniq), the event
+ * bulkInsertIdempotent (arbiter matches content_source_identity_uniq), the event
  * auto-link is a single set-based lookup, and a mixed linkable/non-linkable batch
  * behaves exactly as before (only exact triple matches link; others stay null).
  */
@@ -210,10 +210,10 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
     const opts = bulkInsertMock.mock.calls[0][0];
     // Arbiter is the exact partial unique index (user-scoped, WHERE source_id NOT NULL).
     expect(opts.conflictTarget).toBe(
-      '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
+      '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
     );
     expect(opts.scope).toEqual({ userId: 'user-1' });
-    expect(opts.tripleColumns).toEqual(['source_type', 'source_system', 'source_id']);
+    expect(opts.identityColumns).toEqual(['source_system', 'source_id']);
     // The row carries its triple + owner for the set-based insert.
     expect(opts.entities).toHaveLength(1);
     expect(opts.getTriple(opts.entities[0])).toEqual({

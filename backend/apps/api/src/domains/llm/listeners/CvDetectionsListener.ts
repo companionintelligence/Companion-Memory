@@ -9,6 +9,7 @@ import {
   type ObjectObservationWriteResult,
   ObjectObservationService,
   PersonService,
+  platformIdentity,
 } from '@ci/domains/memory';
 
 import { CvDetectionsCapturedEvent, type CvDetection, type CvDetectionsCapturedPayload } from '../events';
@@ -24,7 +25,7 @@ export const CV_DETECTION_LINKED_TABLE = 'files';
  * `source_type` on every `ci.object_observations` row this listener writes.
  *
  * Together with the detection's originating pipeline and `<fileId>:<detectionId>`
- * it forms the provenance triple `object_observations_source_triple_uniq` is
+ * it forms the provenance triple `object_observations_source_identity_uniq` is
  * keyed on, so a re-run of the same CV pass updates its sightings in place. It
  * is the SAME identity `materializePerson` uses for its `linkedId`, which is
  * what keeps a detection's person and its sighting talking about one detection.
@@ -236,8 +237,11 @@ export class CvDetectionsListener {
               }
             : null,
         sourceType: CV_OBSERVATION_SOURCE_TYPE,
-        sourceSystem: detector,
-        sourceId: `${fileId}:${detection.detectionId}`,
+        ...(() => {
+          const identity = platformIdentity(detector, fileId, detection.detectionId);
+
+          return { sourceSystem: identity.system, sourceId: identity.id };
+        })(),
         metadata: {
           detection_id: detection.detectionId,
           detection_label: detection.label,

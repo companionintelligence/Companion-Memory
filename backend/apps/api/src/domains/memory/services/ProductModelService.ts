@@ -35,15 +35,15 @@ const BRAND_MODEL_CONFLICT_TARGET =
 /** The index name Postgres reports in the 23505 raised by {@link BRAND_MODEL_CONFLICT_TARGET}. */
 const BRAND_MODEL_CONSTRAINT = 'product_models_brand_model_uniq';
 
-/** The `product_models_source_triple_uniq` arbiter, same shape as every other ci.* ingest table. */
-const SOURCE_TRIPLE_CONFLICT_TARGET =
-  '(owner_user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL';
+/** The `product_models_source_identity_uniq` arbiter, same shape as every other ci.* ingest table. */
+const SOURCE_IDENTITY_CONFLICT_TARGET =
+  '(owner_user_id, source_system, source_id) WHERE source_id IS NOT NULL';
 
 /**
  * Was this a violation of the brand+model uniqueness index?
  *
  * Checked BY NAME rather than on the bare SQLSTATE, because `ci.product_models`
- * carries a second unique index (`product_models_source_triple_uniq`) and
+ * carries a second unique index (`product_models_source_identity_uniq`) and
  * reporting "some unique constraint broke" as "that brand and model number are
  * already taken" would be a lie that survives every test.
  *
@@ -218,8 +218,9 @@ export class ProductModelService {
         sourceId: entity.sourceId,
       }),
       scope: { ownerUserId: context.userId },
-      conflictTarget: SOURCE_TRIPLE_CONFLICT_TARGET,
-      tripleColumns: ['source_type', 'source_system', 'source_id'],
+      conflictTarget: SOURCE_IDENTITY_CONFLICT_TARGET,
+      identityColumns: ['source_system', 'source_id'],
+      sourceLedger: { table: 'product_models', userId: context.userId },
     });
   }
 

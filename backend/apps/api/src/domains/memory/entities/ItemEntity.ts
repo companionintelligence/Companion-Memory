@@ -134,7 +134,7 @@ export class ItemEntity {
 
   // Provenance triple — the stable key capture sources carry. Lets the importer
   // route timeline items into ci.objects and re-ingest idempotently (paired with
-  // the objects_source_triple_uniq partial unique index).
+  // the objects_source_identity_uniq partial unique index).
   @Column('text', { name: 'source_type', nullable: true })
   sourceType!: string | null;
 

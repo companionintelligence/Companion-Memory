@@ -17,7 +17,12 @@ import {
   GithubPushEvent,
   GithubReleaseEvent,
 } from '@ci/domains/etl/services/GitHub/sync/SyncEvents';
-import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  ContentService,
+  CalendarEventService,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -84,14 +89,18 @@ export class GitHubEventsTransformService {
     // This search is the legacy-row guard; the real idempotency is the full
     // (source_type, source_system, source_id) triple every create below now
     // carries — without source_type, CalendarEventService.createOne skipped its
-    // find-or-create and events_source_triple_uniq treated the rows as
+    // find-or-create and events_source_identity_uniq treated the rows as
     // NULL-distinct, so this racy pre-check was all that prevented replays
     // from duplicating.
+    // Every branch below stamps the same native key — the event's own id — so
+    // mint the canonical identity once for the search and each create.
+    const eventIdentity = platformIdentity('github_events', event.id.toString());
+
     const existingEvent = await this.eventService.search(
       { userId },
       {
-        sourceSystem: 'github_events',
-        sourceId: event.id.toString(),
+        sourceSystem: eventIdentity.system,
+        sourceId: eventIdentity.id,
       },
     );
 
@@ -124,11 +133,14 @@ export class GitHubEventsTransformService {
               url: comment.html_url,
               external_id: contentExternalId,
               external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-              // content_source_triple_uniq backstops the racy
+              // content_source_identity_uniq backstops the racy
               // search-then-create above.
               source_type: 'ETL',
-              source_system: 'github',
-              source_id: `commit_comment:${contentExternalId}`,
+              ...(() => {
+                const identity = platformIdentity('github', `commit_comment:${contentExternalId}`);
+
+                return { source_system: identity.system, source_id: identity.id };
+              })(),
             },
           );
         }
@@ -139,11 +151,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: 'github_comment',
-              source_id: event.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(event.created_at),
               title: `Commented on commit in repo ${event.repo.name}`,
               description: comment.body,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -161,11 +173,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: 'github_branch_creation',
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `Created branch ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
               description: thisEvent.payload.description,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -176,11 +188,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: 'github_tag_creation',
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `Created tag ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
               description: thisEvent.payload.description,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -191,11 +203,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: 'github_repository_creation',
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `Created repository ${thisEvent.repo.name}`,
               description: thisEvent.payload.description,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -213,10 +225,10 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: 'github_branch_deletion',
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `Deleted branch ${thisEvent.payload.ref}`,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -227,10 +239,10 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: 'github_tag_deletion',
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `Deleted tag ${thisEvent.payload.ref} in repository ${thisEvent.repo.name}`,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -248,11 +260,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: 'github_discussion_creation',
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `Created discussion  ${thisEvent.payload.discussion.title}`,
               description: thisEvent.payload.discussion.body_text,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -269,10 +281,10 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: 'github_repo_fork',
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `Forked repo  ${thisEvent.payload.forkee.full_name}`,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -301,12 +313,18 @@ export class GitHubEventsTransformService {
               url: thisEvent.payload.comment.html_url,
               external_id: thisEvent.payload.comment.id.toString(),
               external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-              // content_source_triple_uniq backstops the racy
+              // content_source_identity_uniq backstops the racy
               // search-then-create above. The 'issue_comment:' prefix keeps
               // the bare numeric id from colliding inside 'github' too.
               source_type: 'ETL',
-              source_system: 'github',
-              source_id: `issue_comment:${thisEvent.payload.comment.id.toString()}`,
+              ...(() => {
+                const identity = platformIdentity(
+                  'github',
+                  `issue_comment:${thisEvent.payload.comment.id.toString()}`,
+                );
+
+                return { source_system: identity.system, source_id: identity.id };
+              })(),
             },
           );
         }
@@ -317,11 +335,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: 'github_comment',
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `Commented on issue ${thisEvent.payload.issue.number} in repo ${thisEvent.repo.name}`,
               description: thisEvent.payload.comment.body,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -342,11 +360,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: `github_issue_${thisEvent.payload.action}`,
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `${actionCapitalized} issue ${thisEvent.payload.issue.number} in repo ${thisEvent.repo.name}`,
               description: thisEvent.payload.issue.body,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -366,11 +384,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: `github_pull_request_${thisEvent.payload.action}`,
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.payload.pull_request.updated_at),
               title: `${actionCapitalized} pull request #${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
               description: thisEvent.payload.pull_request.title,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -390,11 +408,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: `github_pull_request_review_${thisEvent.payload.action}`,
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `${actionCapitalized} pull request review for ${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
               description: thisEvent.payload.review.body,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -414,11 +432,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: `github_pull_request_review_comment_${thisEvent.payload.action}`,
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `${actionCapitalized} pull request review comment for ${thisEvent.payload.pull_request.number} in repo ${thisEvent.repo.name}`,
               description: thisEvent.payload.comment.body,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -435,10 +453,10 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: `github_push`,
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `Pushed commits to branch ${thisEvent.payload.ref.replace('refs/heads/', '')} in repo ${thisEvent.repo.name}`,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },
@@ -459,11 +477,11 @@ export class GitHubEventsTransformService {
             {
               connection_id: connection.id,
               event_type: `github_release_${thisEvent.payload.action}`,
-              source_id: thisEvent.id.toString(),
+              source_id: eventIdentity.id,
               start_time: new Date(thisEvent.created_at),
               title: `${actionCapitalized} release ${thisEvent.payload.release.name} in repo ${thisEvent.repo.name}`,
               description: thisEvent.payload.release.body,
-              source_system: 'github_events',
+              source_system: eventIdentity.system,
               source_type: 'ETL',
               metadata: actorRepoMetadata,
             },

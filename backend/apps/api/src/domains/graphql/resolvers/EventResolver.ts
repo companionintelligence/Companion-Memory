@@ -4,7 +4,7 @@ import { Args, Float, ID, Int, Mutation, Parent, Query, ResolveField, Resolver }
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { CalendarEventService } from '@ci/domains/memory';
+import { CalendarEventService, adoptIngestIdentity } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
 import { EventContentsLoader } from '../loaders/EventContentsLoader';
@@ -64,8 +64,11 @@ export class EventResolver {
       participant_entity_ids: input.participantEntityIds,
       organizer_entity_id: input.organizerEntityId,
       source_type: input.sourceType,
-      source_id: input.sourceId,
-      source_system: input.sourceSystem,
+      // External identities are adopted, not minted: the caller owns its
+      // namespace; the registry canonicalizes the system spelling
+      // (docs/design/cross-pipeline-identity.md).
+      source_id: adoptIngestIdentity(input.sourceSystem, input.sourceId).id,
+      source_system: adoptIngestIdentity(input.sourceSystem, input.sourceId).system,
       confidence_score: input.confidenceScore,
       is_recurring: input.isRecurring,
       is_all_day: input.isAllDay,
@@ -132,8 +135,11 @@ export class EventResolver {
       participant_entity_ids: input.participantEntityIds,
       organizer_entity_id: input.organizerEntityId,
       source_type: input.sourceType,
-      source_id: input.sourceId,
-      source_system: input.sourceSystem,
+      // External identities are adopted, not minted: the caller owns its
+      // namespace; the registry canonicalizes the system spelling
+      // (docs/design/cross-pipeline-identity.md).
+      source_id: adoptIngestIdentity(input.sourceSystem, input.sourceId).id,
+      source_system: adoptIngestIdentity(input.sourceSystem, input.sourceId).system,
       confidence_score: input.confidenceScore,
       is_recurring: input.isRecurring,
       is_all_day: input.isAllDay,

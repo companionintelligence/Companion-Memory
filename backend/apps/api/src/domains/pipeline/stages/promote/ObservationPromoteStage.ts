@@ -12,7 +12,9 @@ import { LoggerService } from '@ci/common/logging';
 // owns the PostGIS nearest-place read. Re-implementing either here would give
 // the sighting table a second writer with its own opinion about identity, which
 // is the thing that made `ci.objects` hard.
-import { ObjectObservationService, PlaceService, type CreateObjectObservationDto } from '@ci/domains/memory';
+import { ObjectObservationService, PlaceService, type CreateObjectObservationDto,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { PIPELINE_QUEUES } from '../../constants';
 import type { Stage, StageResult, StageSource } from '../../types';
@@ -108,7 +110,7 @@ const UNKNOWN_SOURCE_SYSTEM = 'unknown';
  * `source_type` on every observation this stage writes.
  *
  * With the event's `source_system` and a per-object id it forms the provenance
- * triple `object_observations_source_triple_uniq` is keyed on, so re-promoting
+ * triple `object_observations_source_identity_uniq` is keyed on, so re-promoting
  * a scan updates its sightings rather than minting a second set. Naming it
  * after the stage also isolates these rows from any other writer's, exactly as
  * `promote.object` does for `ci.objects`.
@@ -468,8 +470,11 @@ export class ObservationPromoteStage implements Stage {
         promoted_by: PROMOTE_OBSERVATION_STAGE_ID,
       },
       sourceType: PROMOTED_SOURCE_TYPE,
-      sourceSystem,
-      sourceId: `${row.id}:${object.objectKey}`,
+      ...(() => {
+        const identity = platformIdentity(sourceSystem, row.id, object.objectKey);
+
+        return { sourceSystem: identity.system, sourceId: identity.id };
+      })(),
     }));
 
     const result = await this.observationService.createMany(ctx, dtos);

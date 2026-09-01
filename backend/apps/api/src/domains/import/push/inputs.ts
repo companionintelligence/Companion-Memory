@@ -13,21 +13,26 @@
  *
  * Every input carries the (source_type, source_system, source_id) triple, which
  * is what makes a re-import a no-op: each destination table has a
- * `*_source_triple_uniq` index over it.
+ * `*_source_identity_uniq` index over it.
  */
 import type { CreateBrowserActivityDto } from '@ci/domains/browser-activity';
 import { isUriLocation } from '@ci/domains/geocode';
 import { isGloballyUniqueNamespace, type ObjectIdentifierNamespace } from '@ci/domains/graph';
-import { CommunicationType, minorUnitExponent } from '@ci/domains/memory';
-import type {
-  CreateCommunicationDto,
-  CreateContentDto,
-  CreateEventDto,
-  CreateItemDto,
-  CreateObjectObservationDto,
-  CreateProductModelDto,
-  ReceiptExtraction,
-  ReceiptLineItemInput,
+import {
+  CommunicationType,
+  emailIdentity,
+  minorUnitExponent,
+  platformIdentity,
+  type CreateCommunicationDto,
+  type CreateContentDto,
+  type CreateEventDto,
+  type CreateItemDto,
+  type CreateObjectObservationDto,
+  type CreateProductModelDto,
+  type ReceiptExtraction,
+  type ReceiptLineItemInput,
+  type SourceId,
+  type SourceSystem,
 } from '@ci/domains/memory';
 import type { CreatePositionDto } from '@ci/domains/position';
 
@@ -82,12 +87,14 @@ export const UNDATED_TIME_PRECISION = 'unknown';
 /**
  * The provenance triple, snake_case — the spelling every ingest DTO uses except
  * things. It is what makes a re-import a no-op: each destination has a
- * `*_source_triple_uniq` index over it.
+ * `*_source_identity_uniq` index over it.
  */
 function sourceTriple(
   rec: CanonicalRecord,
 ): Pick<CreateContentDto, 'source_type' | 'source_system' | 'source_id'> {
-  return { source_type: rec.sourceType, source_system: rec.sourceSystem, source_id: rec.sourceId };
+  const identity = platformIdentity(rec.sourceSystem, rec.sourceId);
+
+  return { source_type: rec.sourceType, source_system: identity.system, source_id: identity.id };
 }
 
 /**
@@ -98,7 +105,9 @@ function sourceTriple(
 function sourceTripleCamel(
   rec: CanonicalRecord,
 ): Pick<CreateItemDto, 'sourceType' | 'sourceSystem' | 'sourceId'> {
-  return { sourceType: rec.sourceType, sourceSystem: rec.sourceSystem, sourceId: rec.sourceId };
+  const identity = platformIdentity(rec.sourceSystem, rec.sourceId);
+
+  return { sourceType: rec.sourceType, sourceSystem: identity.system, sourceId: identity.id };
 }
 
 /**
@@ -112,10 +121,12 @@ function sourceTripleCamel(
  */
 function sourceTripleCamelNullable(rec: CanonicalRecord): {
   sourceType: string | null;
-  sourceSystem: string | null;
-  sourceId: string | null;
+  sourceSystem: SourceSystem | null;
+  sourceId: SourceId | null;
 } {
-  return { sourceType: rec.sourceType, sourceSystem: rec.sourceSystem, sourceId: rec.sourceId };
+  const identity = platformIdentity(rec.sourceSystem, rec.sourceId);
+
+  return { sourceType: rec.sourceType, sourceSystem: identity.system, sourceId: identity.id };
 }
 
 /**
@@ -287,7 +298,7 @@ export function toContentInput(rec: CanonicalRecord): CreateContentDto {
   // the row's external_id so consumers can key on it without digging into
   // source_data — and REPLACES the per-item sourceId as the content row's
   // identity. Content rows dedup server-side on the provenance triple
-  // (content_source_triple_uniq); with the per-play item id in the triple,
+  // (content_source_identity_uniq); with the per-play item id in the triple,
   // every play of the same track created another copy of the same content.
   // Keying on the URI collapses them to one row per track/episode/chapter,
   // across batches and re-imports. The EVENT keeps the per-play item id, so
@@ -297,7 +308,7 @@ export function toContentInput(rec: CanonicalRecord): CreateContentDto {
   if (uri) {
     input.external_id = uri;
     input.external_id_kind = 'external_uri';
-    input.source_id = uri;
+    input.source_id = platformIdentity(rec.sourceSystem, uri).id;
   }
 
   // A file-bearing record that reached content WITHOUT an events leg (an undated
@@ -1159,8 +1170,11 @@ export function toProductModelInput(rec: CanonicalRecord): CreateProductModelDto
       identifiers: rec.identifiers ?? [],
     },
     sourceType: rec.sourceType,
-    sourceSystem: PRODUCT_MODEL_SOURCE_SYSTEM,
-    sourceId: `${identity.namespace}:${identity.value}`,
+    ...(() => {
+      const productIdentity = platformIdentity(PRODUCT_MODEL_SOURCE_SYSTEM, identity.namespace, identity.value);
+
+      return { sourceSystem: productIdentity.system, sourceId: productIdentity.id };
+    })(),
   };
 
   const brand = str(m.Brand) ?? str(readCommerceField(m, 'MERCHANT'));
@@ -1259,9 +1273,7 @@ export function toObservationInput(rec: CanonicalRecord): CreateObjectObservatio
       ...(str(readCommerceField(m, 'MERCHANT')) ? { merchant: str(readCommerceField(m, 'MERCHANT')) } : {}),
       ...(rec.locationName ? { locationName: rec.locationName } : {}),
     },
-    sourceType: rec.sourceType,
-    sourceSystem: rec.sourceSystem,
-    sourceId: rec.sourceId,
+    ...sourceTripleCamel(rec),
   };
 
   const quantity = num(readCommerceField(m, 'QUANTITY'));
@@ -1352,6 +1364,23 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
     metadata: { ...m },
     ...sourceTriple(rec),
   };
+
+  // Cross-pipeline identity: an email keys on its RFC Message-ID under the
+  // federated `email` system, so the archived copy converges with the same
+  // message fetched live by the Gmail/Outlook connection
+  // (docs/design/cross-pipeline-identity.md). Message-ID-less mail keeps the
+  // datasource-scoped triple from sourceTriple(rec) — the `gmail:nomid:` hash
+  // lane — which stays idempotent per pipeline but is not expected to
+  // converge across them.
+  const rfcMessageId = str(m.MessageID);
+  if (rfcMessageId) {
+    const identity = emailIdentity(rfcMessageId);
+    if (identity) {
+      input.source_system = identity.system;
+      input.source_id = identity.id;
+    }
+  }
+
   // Pass call duration through so the server stores it on the Communication entity.
   if (m.Duration != null) {
     input.duration_seconds = Number(m.Duration);
@@ -1569,8 +1598,11 @@ export function toFacebookMessengerCommunicationInput(
     content,
     direction: sender && isSelf(sender) ? 'outbound' : 'inbound',
     source_type: FACEBOOK_MESSENGER_SOURCE_TYPE,
-    source_system: FACEBOOK_MESSENGER_SOURCE_SYSTEM,
-    source_id: rec.sourceId,
+    ...(() => {
+      const identity = platformIdentity(FACEBOOK_MESSENGER_SOURCE_SYSTEM, rec.sourceId);
+
+      return { source_system: identity.system, source_id: identity.id };
+    })(),
   };
   const preview = content ? clip(content, 140) : null;
   if (preview && preview !== content) {
@@ -2066,8 +2098,11 @@ export function discordAttachmentContentInputs(rec: CanonicalRecord): CreateCont
       type: isMediaType(mimetype ?? null) ? 'media' : 'file',
       url,
       source_type: rec.sourceType,
-      source_system: rec.sourceSystem,
-      source_id: `${rec.sourceId}:attachment:${i}`,
+      ...(() => {
+        const identity = platformIdentity(rec.sourceSystem, rec.sourceId, 'attachment', String(i));
+
+        return { source_system: identity.system, source_id: identity.id };
+      })(),
     };
     if (filename) {
       input.title = filename;

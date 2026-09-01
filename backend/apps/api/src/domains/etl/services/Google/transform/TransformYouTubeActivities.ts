@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { type CreateContentDto, ContentService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  type CreateContentDto,
+  ContentService,
+  platformIdentity,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -179,8 +184,11 @@ export class YouTubeActivitiesTransformService {
       external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
       source_url: url,
       source_type: 'ETL',
-      source_system: YOUTUBE_SOURCE_SYSTEM,
-      source_id: `upload:${videoId}`,
+      ...(() => {
+        const identity = platformIdentity(YOUTUBE_SOURCE_SYSTEM, `upload:${videoId}`);
+
+        return { source_system: identity.system, source_id: identity.id };
+      })(),
       connection_id: connectionId,
       source_data: {
         connectionId,

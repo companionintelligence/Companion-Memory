@@ -4,7 +4,12 @@ import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
 import { GraphIngestService } from '@ci/domains/graph';
-import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  ContentService,
+  CalendarEventService,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -74,8 +79,11 @@ export class SpotifySavedEpisodesTransformService {
                 // it, so a re-sweep of the saved-episodes list resolves to the
                 // existing event instead of minting another.
                 source_type: 'ETL',
-                source_system: 'spotify',
-                source_id: `saved_episode:${episode.id}`,
+                ...(() => {
+                  const identity = platformIdentity('spotify', `saved_episode:${episode.id}`);
+
+                  return { source_system: identity.system, source_id: identity.id };
+                })(),
                 metadata: {
                   episode_id: episode.id,
                   show_name: episode.show?.name,

@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import { type CreateContentDto, ContentService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  type CreateContentDto,
+  ContentService,
+  platformIdentity,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -79,7 +84,7 @@ export class YouTubeLikesTransformService {
         .filter((dto): dto is CreateContentDto => dto !== null);
 
       // createMany, not create: create() is a plain save and a re-sync of the same
-      // liked video raises 23505 against content_source_triple_uniq. createMany is
+      // liked video raises 23505 against content_source_identity_uniq. createMany is
       // one set-based INSERT ... ON CONFLICT DO NOTHING keyed on the provenance
       // triple, so re-running a sync inserts zero rows. emitCreated stays true so
       // these stay search-indexed (createMany defaults it to false for bulk import).
@@ -172,8 +177,11 @@ export class YouTubeLikesTransformService {
       external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
       source_url: url,
       source_type: 'ETL',
-      source_system: YOUTUBE_SOURCE_SYSTEM,
-      source_id: `like:${videoId}`,
+      ...(() => {
+        const identity = platformIdentity(YOUTUBE_SOURCE_SYSTEM, `like:${videoId}`);
+
+        return { source_system: identity.system, source_id: identity.id };
+      })(),
       connection_id: connectionId,
       source_data: {
         connectionId,

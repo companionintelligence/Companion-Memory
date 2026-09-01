@@ -36,7 +36,7 @@ export class CreateContentInput {
   // Provenance triple. When present, both the single createContent and the
   // batch createContents mutations dedupe on (userId, sourceType, sourceSystem,
   // sourceId) and, if no explicit eventId is given, auto-link the content to
-  // the event sharing the same triple. See content_source_triple_uniq and
+  // the event sharing the same triple. See content_source_identity_uniq and
   // ContentService.createMany.
   @Field(() => String, { nullable: true })
   sourceType?: string;

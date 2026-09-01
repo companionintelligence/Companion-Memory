@@ -3,7 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
 import { FileService } from '@ci/domains/files';
-import { ContentService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  canonicalSystem,
+  ContentService,
+  platformIdentity,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -223,7 +228,7 @@ export class OneDriveTransformService {
 
       // If it's a document type, also create a content entity
       if (this.isDocumentType(mimeType)) {
-        // Find-or-skip on the provenance triple: content_source_triple_uniq
+        // Find-or-skip on the provenance triple: content_source_identity_uniq
         // only covers rows with a source_id, and ContentService.create is a
         // plain insert — without this, every re-sync appended another
         // placeholder row per document.
@@ -255,8 +260,8 @@ export class OneDriveTransformService {
               external_id: itemId,
               external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
               source_type: graphItemId ? 'ETL' : undefined,
-              source_system: graphItemId ? 'onedrive' : undefined,
-              source_id: graphItemId ?? undefined,
+              source_system: graphItemId ? canonicalSystem('onedrive') : undefined,
+              source_id: graphItemId ? platformIdentity('onedrive', graphItemId).id : undefined,
               user: {
                 id: userId,
               },

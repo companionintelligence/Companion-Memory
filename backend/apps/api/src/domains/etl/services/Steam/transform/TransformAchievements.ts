@@ -3,7 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  ContentService,
+  CalendarEventService,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -83,11 +88,14 @@ export class SteamAchievementsTransformService {
               text: achievementDescription,
               external_id: externalId,
               external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-              // content_source_triple_uniq backstops the racy
+              // content_source_identity_uniq backstops the racy
               // search-then-create above.
               source_type: 'ETL',
-              source_system: 'steam',
-              source_id: `achievement:${externalId}`,
+              ...(() => {
+                const identity = platformIdentity('steam', `achievement:${externalId}`);
+
+                return { source_system: identity.system, source_id: identity.id };
+              })(),
               source_data: {
                 appid: item.appid,
                 gameName,
@@ -119,8 +127,11 @@ export class SteamAchievementsTransformService {
                 // index only covers full triples. An achievement unlocks once,
                 // so the key carries no timestamp.
                 source_type: 'ETL',
-                source_system: 'steam',
-                source_id: `achievement_unlocked:${externalId}`,
+                ...(() => {
+                  const identity = platformIdentity('steam', `achievement_unlocked:${externalId}`);
+
+                  return { source_system: identity.system, source_id: identity.id };
+                })(),
                 start_time: new Date(item.achievement.unlocktime * 1000),
                 metadata: {
                   appid: item.appid,

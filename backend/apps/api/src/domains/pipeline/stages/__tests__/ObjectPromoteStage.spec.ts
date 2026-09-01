@@ -831,7 +831,7 @@ describeIfDb(`ObjectPromoteStage — against real Postgres (${availability.reaso
 
     expect(first.get(eventA)).toMatchObject({ outcome: 'done' });
     expect(second.get(eventA)).toMatchObject({ outcome: 'done' });
-    // Same object id both times, which is `objects_source_triple_uniq` doing
+    // Same object id both times, which is `objects_source_identity_uniq` doing
     // the work — no anti-join, no "have I done this?" query.
     const firstDetail = first.get(eventA)?.detail as { objectId: string } | undefined;
     const secondDetail = second.get(eventA)?.detail as { objectId: string } | undefined;

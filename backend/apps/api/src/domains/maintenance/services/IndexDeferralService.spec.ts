@@ -56,7 +56,7 @@ describe('DEFERRABLE_INDEXES registry', () => {
 
   it('never lists a provenance-unique or primary-key index', () => {
     for (const { name } of DEFERRABLE_INDEXES) {
-      expect(name).not.toMatch(/_source_triple_uniq$/);
+      expect(name).not.toMatch(/_source_identity_uniq$/);
       expect(name).not.toMatch(/_pkey$/);
     }
   });

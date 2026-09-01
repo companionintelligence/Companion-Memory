@@ -50,8 +50,10 @@ describe('OutlookMailTransformService.transformOutlookMail', () => {
       expect.objectContaining({
         connection_id: 'conn-1',
         source_type: 'ETL',
-        source_system: 'outlook_mail',
-        source_id: '<abc@mail.example.com>',
+        // Federated email identity, normalized Message-ID —
+        // docs/design/cross-pipeline-identity.md.
+        source_system: 'email',
+        source_id: 'abc@mail.example.com',
       }),
     );
   });
@@ -66,7 +68,10 @@ describe('OutlookMailTransformService.transformOutlookMail', () => {
 
     expect(communicationService.create).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      expect.objectContaining({ source_id: 'graph-id-1' }),
+      expect.objectContaining({
+        source_system: 'outlook_mail',
+        source_id: expect.stringMatching(/^fallback:[0-9a-f]{64}$/),
+      }),
     );
   });
 

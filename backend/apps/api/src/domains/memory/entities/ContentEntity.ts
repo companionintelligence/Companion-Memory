@@ -17,7 +17,7 @@ import { EventEntity, Event } from './EventEntity';
 // Idempotency key for captured/imported content. Created by migration
 // 20260623120300_add_content_provenance; declared here so TypeORM is aware of it
 // (schema sync stays off — the migration is the source of truth).
-@Index('content_source_triple_uniq', ['userId', 'sourceType', 'sourceSystem', 'sourceId'], {
+@Index('content_source_identity_uniq', ['userId', 'sourceSystem', 'sourceId'], {
   unique: true,
   where: '"source_id" IS NOT NULL',
 })

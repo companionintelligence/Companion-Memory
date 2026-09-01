@@ -148,7 +148,7 @@ export const bulkCommunicationRecordSchema = z.object({
   is_encrypted: z.boolean().optional(),
   is_archived: z.boolean().optional(),
   preview: z.string().optional(),
-  // Provenance triple for idempotent re-ingest (communications_source_triple_uniq).
+  // Provenance triple for idempotent re-ingest (communications_source_identity_uniq).
   source_type: z.string().optional(),
   source_system: z.string().optional(),
   source_id: z.string().optional(),
@@ -189,7 +189,7 @@ export const bulkContentRecordSchema = z.object({
   source_data: z.record(z.unknown()).optional(),
   event_id: z.string().uuid().optional(),
   // Provenance triple for idempotent re-ingest + event auto-linking
-  // (content_source_triple_uniq).
+  // (content_source_identity_uniq).
   source_type: z.string().optional(),
   source_system: z.string().optional(),
   source_id: z.string().optional(),
@@ -360,7 +360,7 @@ export const bulkThingRecordSchema = z.object({
     .enum(['active', 'stored', 'lent_out', 'lost', 'disposed', 'consumed', 'returned', 'archived'])
     .optional(),
 
-  // Provenance triple for idempotent re-ingest (objects_source_triple_uniq).
+  // Provenance triple for idempotent re-ingest (objects_source_identity_uniq).
   sourceType: z.string().optional(),
   sourceSystem: z.string().optional(),
   sourceId: z.string().optional(),
@@ -473,7 +473,7 @@ export const bulkReceiptRecordSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
   /** Absent and `[]` mean different things: absent leaves the stored lines alone. */
   line_items: z.array(bulkReceiptLineItemRecordSchema).optional(),
-  // Provenance triple for idempotent re-ingest (receipts_source_triple_uniq).
+  // Provenance triple for idempotent re-ingest (receipts_source_identity_uniq).
   source_type: z.string().optional(),
   source_system: z.string().optional(),
   source_id: z.string().optional(),
@@ -521,7 +521,7 @@ export const bulkProductModelRecordSchema = z.object({
   identity_confidence: z.number().gt(0).max(1).optional(),
   product_entity_id: z.string().uuid().nullable().optional(),
   metadata: z.record(z.unknown()).optional(),
-  // Provenance triple for idempotent re-ingest (product_models_source_triple_uniq).
+  // Provenance triple for idempotent re-ingest (product_models_source_identity_uniq).
   source_type: z.string().optional(),
   source_system: z.string().optional(),
   source_id: z.string().optional(),

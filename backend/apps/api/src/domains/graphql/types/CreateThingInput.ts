@@ -7,7 +7,7 @@ import { PhysicalItemPropertiesInput } from './PhysicalItemProperties';
 /**
  * Batch things ingest input for the importer. Carries the provenance triple
  * (sourceType, sourceSystem, sourceId) so re-ingest is idempotent — see the
- * objects_source_triple_uniq partial unique index and ItemService.createMany.
+ * objects_source_identity_uniq partial unique index and ItemService.createMany.
  *
  * Inherits the physical half from {@link PhysicalItemPropertiesInput}: an
  * importer that knows a product's size and weight (most product feeds do) has

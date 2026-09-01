@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  ContentService,
+  CalendarEventService,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import type { RedditComment } from '../sync/redditListing';
@@ -81,13 +86,16 @@ export class RedditCommentsTransformService {
           url: permalink,
           external_id: comment.name,
           external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-          // content_source_triple_uniq backstops the racy search-then-create
+          // content_source_identity_uniq backstops the racy search-then-create
           // above. source_system is 'reddit' (not 'reddit_comments') so the
           // saved-items transform, which writes the same underlying thing,
           // lands on the same key.
           source_type: 'ETL',
-          source_system: 'reddit',
-          source_id: comment.name,
+          ...(() => {
+            const identity = platformIdentity('reddit', comment.name);
+
+            return { source_system: identity.system, source_id: identity.id };
+          })(),
           source_url: permalink,
           source_data: {
             reddit_comment_id: comment.id,
@@ -100,11 +108,13 @@ export class RedditCommentsTransformService {
       );
     }
 
+    const eventIdentity = platformIdentity('reddit_comments', comment.name);
+
     const existingEvent = await this.eventService.search(
       { userId },
       {
-        sourceSystem: 'reddit_comments',
-        sourceId: comment.name,
+        sourceSystem: eventIdentity.system,
+        sourceId: eventIdentity.id,
       },
     );
 
@@ -115,15 +125,15 @@ export class RedditCommentsTransformService {
           connection_id: connection.id,
           event_type: 'reddit_comment',
           // Without source_type, CalendarEventService.createOne skips its
-          // find-or-create AND events_source_triple_uniq treats the row as
+          // find-or-create AND events_source_identity_uniq treats the row as
           // NULL-distinct — only the search above stood between a replay
           // and a duplicate.
           source_type: 'ETL',
-          source_id: comment.name,
+          source_id: eventIdentity.id,
           start_time: new Date(comment.created_utc * 1000),
           title: `Commented on "${comment.link_title}" in r/${comment.subreddit}`,
           description: comment.body,
-          source_system: 'reddit_comments',
+          source_system: eventIdentity.system,
         },
       );
     }

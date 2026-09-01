@@ -7,7 +7,7 @@ import {
   GraphIngestService,
   type GraphRelationshipInputDto,
 } from '@ci/domains/graph';
-import { ContentService, CalendarEventService } from '@ci/domains/memory';
+import { ContentService, CalendarEventService, platformIdentity } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import { FACEBOOK_SOURCE_SYSTEM, FACEBOOK_SOURCE_TYPE } from '../FacebookMediaService';
@@ -97,8 +97,11 @@ export class FacebookLikesTransformService {
             time_source: likedAt ? 'source' : 'ingest',
             participant_entity_ids: organizationId ? [organizationId] : undefined,
             source_type: FACEBOOK_SOURCE_TYPE,
-            source_system: FACEBOOK_SOURCE_SYSTEM,
-            source_id: `like:${like.id}`,
+            ...(() => {
+              const identity = platformIdentity(FACEBOOK_SOURCE_SYSTEM, `like:${like.id}`);
+
+              return { source_system: identity.system, source_id: identity.id };
+            })(),
             metadata: {
               facebook_page_id: like.id,
               page_name: name,

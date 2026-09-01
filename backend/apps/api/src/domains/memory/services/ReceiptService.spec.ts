@@ -2,6 +2,7 @@ import type { UserServiceContext } from '@ci/common/context';
 import { ReceiptUpdatedEvent } from '@ci/domains/memory/events';
 
 import type { ReceiptLineItem } from '../entities/ReceiptLineItemEntity';
+import { platformIdentity } from '../identity';
 import type { ReceiptExtraction } from '../types';
 
 import {
@@ -220,8 +221,11 @@ describe('ReceiptService.replaceLineItems', () => {
 describe('ReceiptService.upsertFromExtraction', () => {
   const extraction = (overrides: Partial<ReceiptExtraction> = {}): ReceiptExtraction => ({
     sourceType: 'importer',
-    sourceSystem: 'amazon',
-    sourceId: 'order-1',
+    ...(() => {
+      const identity = platformIdentity('amazon', 'order-1');
+
+      return { sourceSystem: identity.system, sourceId: identity.id };
+    })(),
     merchantName: 'Amazon',
     lines: [
       {

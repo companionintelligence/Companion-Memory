@@ -4,7 +4,12 @@ import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
 import { GraphIngestService } from '@ci/domains/graph';
-import { ContentService, CalendarEventService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  ContentService,
+  CalendarEventService,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -77,8 +82,11 @@ export class SpotifyRecentlyPlayedTransformService {
             // play is unique per (track, played_at) — Spotify's timestamp is
             // stable across sweeps.
             source_type: 'ETL',
-            source_system: 'spotify',
-            source_id: `play:${track.id}:${playedAt}`,
+            ...(() => {
+              const identity = platformIdentity('spotify', `play:${track.id}:${playedAt}`);
+
+              return { source_system: identity.system, source_id: identity.id };
+            })(),
             metadata: {
               track_id: track.id,
               album: track.album?.name,

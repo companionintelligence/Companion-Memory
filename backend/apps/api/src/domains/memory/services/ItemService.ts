@@ -314,7 +314,7 @@ export class ItemService {
    * triple (source_type, source_system, source_id), scoped to owner_user_id, via
    * one set-based INSERT ... ON CONFLICT DO NOTHING instead of a per-row findOne +
    * save loop. Re-syncing the same triple returns the existing row instead of
-   * inserting a duplicate. Paired with the objects_source_triple_uniq partial
+   * inserting a duplicate. Paired with the objects_source_identity_uniq partial
    * unique index, which also absorbs a lost insert race.
    */
   async createMany(context: UserServiceContext, data: CreateItemDto[]): Promise<Item[]> {
@@ -393,8 +393,9 @@ export class ItemService {
           sourceId: entity.sourceId,
         }),
         scope: { ownerUserId: context.userId },
-        conflictTarget: '(owner_user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
-        tripleColumns: ['source_type', 'source_system', 'source_id'],
+        conflictTarget: '(owner_user_id, source_system, source_id) WHERE source_id IS NOT NULL',
+        identityColumns: ['source_system', 'source_id'],
+        sourceLedger: { table: 'objects', userId: context.userId },
         // Centralized refresh contract — currently empty, so conflicts stay
         // DO NOTHING find-or-return.
         conflictUpdateColumns: INGEST_REFRESH_COLUMNS.item,

@@ -4,7 +4,7 @@ import GraphQLJSONObject from 'graphql-type-json';
 /**
  * Batch communication ingest input for the importer (net-new write path outside
  * ETL). Carries the provenance triple (sourceType, sourceSystem, sourceId) so
- * re-ingest is idempotent — see the communications_source_triple_uniq partial
+ * re-ingest is idempotent — see the communications_source_identity_uniq partial
  * unique index and CommunicationService.createMany.
  */
 @InputType()

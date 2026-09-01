@@ -7,6 +7,7 @@ import {
   CommunicationService,
   CommunicationType,
   type CreateCommunicationDto,
+  platformIdentity,
 } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
@@ -64,8 +65,11 @@ export class SlackMessagesTransformService {
           content: message.text || '',
           connection_id: connection.id,
           source_type: 'ETL',
-          source_system: 'slack',
-          source_id: `${channelId}:${message.ts}`,
+          ...(() => {
+            const identity = platformIdentity('slack', `${channelId}:${message.ts}`);
+
+            return { source_system: identity.system, source_id: identity.id };
+          })(),
           participants_metadata: {
             channel_id: channelId,
             channel_name: channel?.name,
@@ -91,7 +95,7 @@ export class SlackMessagesTransformService {
       // Signal) ingests per-row for the same reason.
       //
       // The cost is that a re-synced message raises a unique violation on
-      // communications_source_triple_uniq, logged and swallowed below. That is
+      // communications_source_identity_uniq, logged and swallowed below. That is
       // noisy but harmless, and is the same behaviour those siblings have.
       for (const row of rows) {
         try {

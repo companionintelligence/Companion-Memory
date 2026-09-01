@@ -34,12 +34,11 @@ import type { StagedItem } from '../entities/StagedItemEntity';
 import { readCommerceField } from './commerceKeys';
 
 /**
- * The integration that produced these records.
- *
- * Deliberately unchanged from upstream. It is one third of the dedup triple, so
- * a row this appliance imports must carry the same `sourceType` the standalone
- * importer wrote historically, or every previously-imported record duplicates
- * the first time someone re-imports the same export here.
+ * The pipeline that produced these records — pure provenance since the
+ * cross-pipeline identity change (docs/design/cross-pipeline-identity.md):
+ * `source_type` is stored on the row and in ci.record_sources but is no
+ * longer part of any unique index, so this constant no longer participates in
+ * dedup. Kept as the stable name of the import pipeline in ledgers and logs.
  */
 export const SOURCE_TYPE = 'ci-import-tools';
 

@@ -6,7 +6,7 @@ import { RedditSavedTransformService } from '../transform/TransformSaved';
  * The Reddit transforms deduped only through their racy search-then-create
  * pre-checks: events carried source_system + source_id but no source_type
  * (which disables both CalendarEventService.createOne's find-or-create and
- * events_source_triple_uniq — NULLs are distinct to it), and content rows
+ * events_source_identity_uniq — NULLs are distinct to it), and content rows
  * carried no triple at all. These tests pin the full triples that give both
  * writes a database backstop.
  */
@@ -70,7 +70,7 @@ describe('Reddit provenance triples', () => {
     );
     expect(deps.eventService.create).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      expect.objectContaining({ source_type: 'ETL', source_system: 'reddit_posts', source_id: 't3_abc' }),
+      expect.objectContaining({ source_type: 'ETL', source_system: 'reddit', source_id: 't3_abc' }),
     );
   });
 
@@ -108,7 +108,7 @@ describe('Reddit provenance triples', () => {
       { userId: 'user-1' },
       expect.objectContaining({
         source_type: 'ETL',
-        source_system: 'reddit_comments',
+        source_system: 'reddit',
         source_id: 't1_def',
       }),
     );
@@ -146,7 +146,7 @@ describe('Reddit provenance triples', () => {
     );
     expect(deps.eventService.create).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      expect.objectContaining({ source_type: 'ETL', source_system: 'reddit_saved', source_id: 't3_abc' }),
+      expect.objectContaining({ source_type: 'ETL', source_system: 'reddit', source_id: 't3_abc' }),
     );
   });
 });

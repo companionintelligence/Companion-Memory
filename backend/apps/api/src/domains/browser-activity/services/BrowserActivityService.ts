@@ -103,7 +103,7 @@ export class BrowserActivityService {
    * via one set-based INSERT ... ON CONFLICT DO NOTHING instead of a per-row
    * findOne + save loop. Re-syncing the same triple returns the existing row
    * instead of inserting a duplicate. Paired with the
-   * browser_activity_source_triple_uniq partial unique index, which also absorbs a
+   * browser_activity_source_identity_uniq partial unique index, which also absorbs a
    * lost insert race. Bulk ingest does NOT emit a per-row BrowserActivityCreatedEvent
    * — search indexing is deferred to the post-load batch embed
    * (POST /api/maintenance/search-index/backfill); single-row create() still emits.
@@ -165,8 +165,9 @@ export class BrowserActivityService {
         sourceId: entity.source_id,
       }),
       scope: { user_id: context.userId },
-      conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
-      tripleColumns: ['source_type', 'source_system', 'source_id'],
+      conflictTarget: '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
+      identityColumns: ['source_system', 'source_id'],
+      sourceLedger: { table: 'browser_activity', userId: context.userId },
       // Centralized refresh contract — self-heals the capture-derived columns
       // (action_type, properties, duration_seconds, scroll_depth_percent,
       // is_incognito, contains_sensitive) on a conflicting re-sync. Excludes

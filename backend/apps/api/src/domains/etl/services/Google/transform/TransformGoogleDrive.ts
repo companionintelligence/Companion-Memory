@@ -3,7 +3,12 @@ import { Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
 import { FileService } from '@ci/domains/files';
-import { ContentService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import {
+  canonicalSystem,
+  ContentService,
+  platformIdentity,
+  SOURCE_NATIVE_EXTERNAL_ID_KIND,
+} from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import { CloudFileIngestService } from '../../CloudFileIngestService';
@@ -286,7 +291,7 @@ export class GoogleDriveTransformService {
     // which as a dedup key would collapse every id-less file onto one row.
     const sourceId = fileId !== 'unknown' ? fileId : undefined;
 
-    // Find-or-skip on the provenance triple: content_source_triple_uniq only
+    // Find-or-skip on the provenance triple: content_source_identity_uniq only
     // covers rows with a source_id, and ContentService.create is a plain
     // insert — without this, every re-sync appended another placeholder row
     // per document.
@@ -321,8 +326,8 @@ export class GoogleDriveTransformService {
         external_id: fileId,
         external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
         source_type: sourceId ? 'ETL' : undefined,
-        source_system: sourceId ? 'google_drive' : undefined,
-        source_id: sourceId,
+        source_system: sourceId ? canonicalSystem('google_drive') : undefined,
+        source_id: sourceId ? platformIdentity('google_drive', sourceId).id : undefined,
         user: {
           id: userId,
         },

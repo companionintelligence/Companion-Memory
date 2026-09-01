@@ -8,6 +8,7 @@ import {
   CommunicationType,
   ContentService,
   type CreateCommunicationDto,
+  platformIdentity,
 } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
@@ -230,8 +231,11 @@ export class FacebookPostsTransformService {
 
     const source = {
       source_type: FACEBOOK_SOURCE_TYPE,
-      source_system: FACEBOOK_SOURCE_SYSTEM,
-      source_id: `post:${post.id}`,
+      ...(() => {
+        const identity = platformIdentity(FACEBOOK_SOURCE_SYSTEM, `post:${post.id}`);
+
+        return { source_system: identity.system, source_id: identity.id };
+      })(),
     };
     const permalink = facebookUrl(post.permalink_url) ?? derivedPostUrl(post.id);
     const text = post.message?.trim() || post.story?.trim() || post.link || '';

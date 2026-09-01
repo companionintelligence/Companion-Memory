@@ -4,7 +4,7 @@ import GraphQLJSONObject from 'graphql-type-json';
 /**
  * Batch browser-activity ingest input for the importer. Carries the provenance
  * triple (sourceType, sourceSystem, sourceId) so re-ingest is idempotent — see
- * the browser_activity_source_triple_uniq partial unique index and
+ * the browser_activity_source_identity_uniq partial unique index and
  * BrowserActivityService.createMany.
  */
 @InputType()

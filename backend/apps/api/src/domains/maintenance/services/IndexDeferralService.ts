@@ -16,7 +16,7 @@ import { LoggerService } from '@ci/common/logging';
 //
 // Safety rules baked in:
 //   - We DROP only the named "deferrable" secondary indexes below.
-//   - We NEVER touch provenance unique indexes (*_source_triple_uniq) —
+//   - We NEVER touch provenance unique indexes (*_source_identity_uniq) —
 //     dropping them would break the ON CONFLICT idempotency the bulk path
 //     relies on — nor primary keys, nor any UNIQUE constraint.
 //   - Drop captures each index's exact CREATE statement first, so recreate
@@ -27,7 +27,7 @@ import { LoggerService } from '@ci/common/logging';
  * Grepped from db/postgres/migrations (the source of truth) as of 2026-06.
  *
  * Deliberately EXCLUDED (do not add):
- *   - *_source_triple_uniq  → provenance idempotency (ON CONFLICT target)
+ *   - *_source_identity_uniq  → provenance idempotency (ON CONFLICT target)
  *   - *_pkey / PRIMARY KEY   → identity + hypertable partition constraints
  *   - ci_search.embeddings / ci_search.vectors UNIQUE (entity_type, entity_id)
  *
@@ -67,7 +67,7 @@ export const DEFERRABLE_INDEXES: ReadonlyArray<{ schema: string; name: string; n
   { schema: 'ci', name: 'events_status_idx', note: 'btree(status) on ci.events' },
   { schema: 'ci', name: 'events_source_idx', note: 'btree(source_type, source_system) on ci.events' },
   // events_user_time_idx is the main read path; kept (cheap, helps the fold's
-  // post-load queries). events_source_triple_uniq is EXCLUDED on purpose.
+  // post-load queries). events_source_identity_uniq is EXCLUDED on purpose.
 ];
 
 export interface DroppedIndex {

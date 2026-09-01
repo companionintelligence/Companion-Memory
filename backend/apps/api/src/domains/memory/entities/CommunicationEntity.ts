@@ -28,7 +28,7 @@ export function previewFromContent(content: string | null | undefined): string |
 @Entity({ schema: 'ci', name: 'communications' })
 export class CommunicationEntity {
   // Surrogate primary key, so distinct messages sharing a timestamp + type
-  // coexist; idempotent re-sync dedupes on communications_source_triple_uniq
+  // coexist; idempotent re-sync dedupes on communications_source_identity_uniq
   // (the pure provenance triple — the table stopped being a hypertable in
   // 20260807072321, so the partition columns are out of the key).
   @PrimaryColumn({ type: 'uuid' })
@@ -131,7 +131,7 @@ export class CommunicationEntity {
 
   // Provenance triple — the stable key capture sources carry. Lets the importer
   // write communications and re-ingest idempotently (paired with the
-  // communications_source_triple_uniq partial unique index).
+  // communications_source_identity_uniq partial unique index).
   @Column({ type: 'text', nullable: true, name: 'source_type' })
   sourceType!: string | null;
 

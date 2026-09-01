@@ -269,7 +269,7 @@ describe('Calendar datasource', () => {
     // UID and is told apart only by RECURRENCE-ID. Until the nested-component
     // fix the ids happened to differ because each block was keyed on its own
     // alarm's UID; keying on the (now correct) VEVENT UID alone would collapse
-    // the master and both overrides onto one id, and `events_source_triple_uniq`
+    // the master and both overrides onto one id, and `events_source_identity_uniq`
     // would let the last push overwrite the other two. The reference Apple
     // export carries 10 such overrides across 2 series.
     const pipeline = await importIcs(path.join(FIXTURES_DIR, 'apple-calendar-valarm.ics'));

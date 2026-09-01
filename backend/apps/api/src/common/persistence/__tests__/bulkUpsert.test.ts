@@ -17,8 +17,10 @@ interface Row {
   participantsMetadata?: Record<string, unknown>;
 }
 
-const tripleKey = (r: { sourceType: string | null; sourceSystem: string | null; sourceId: string | null }) =>
-  `${r.sourceType ?? ''}|${r.sourceSystem ?? ''}|${r.sourceId ?? ''}`;
+// Identity is the (source_system, source_id) pair — source_type is provenance
+// and deliberately not part of the key (docs/design/cross-pipeline-identity.md).
+const tripleKey = (r: { sourceSystem: string | null; sourceId: string | null }) =>
+  `${r.sourceSystem ?? ''}|${r.sourceId ?? ''}`;
 
 /**
  * A fake TypeORM repository backed by an in-memory table that enforces the partial
@@ -92,13 +94,13 @@ function makeFakeRepository(initial: Row[] = []) {
       const triples: { sourceType: string | null; sourceSystem: string | null; sourceId: string | null }[] =
         [];
       for (const key of Object.keys(params)) {
-        const m = key.match(/^(pre|post)_type_(\d+)$/);
+        const m = key.match(/^(pre|post)_id_(\d+)$/);
         if (m) {
           const i = m[2];
           const prefix = m[1];
           triples.push({
-            sourceType: params[`${prefix}_type_${i}`] as string | null,
-            sourceSystem: params[`${prefix}_system_${i}`] as string | null,
+            sourceType: null,
+            sourceSystem: (params[`${prefix}_system_${i}`] as string | undefined) ?? null,
             sourceId: params[`${prefix}_id_${i}`] as string | null,
           });
         }
@@ -283,8 +285,8 @@ const opts = (
     sourceId: e.sourceId,
   }),
   scope: { userId: entities[0]?.userId ?? 'user-1' },
-  conflictTarget: '(source_type, source_system, source_id) WHERE source_id IS NOT NULL',
-  tripleColumns: ['source_type', 'source_system', 'source_id'] as [string, string, string],
+  conflictTarget: '(source_system, source_id) WHERE source_id IS NOT NULL',
+  identityColumns: ['source_system', 'source_id'] as [string, string],
   ...(conflictUpdateColumns ? { conflictUpdateColumns } : {}),
   ...(maxRowsPerChunk != null ? { maxRowsPerChunk } : {}),
 });
@@ -842,11 +844,11 @@ function makeReturningAwareRepository(pkColumn: PkColumn, initial: Row[] = []) {
       const triples: { sourceType: string | null; sourceSystem: string | null; sourceId: string | null }[] =
         [];
       for (const key of Object.keys(params)) {
-        const m = key.match(/^(pre|post)_type_(\d+)$/);
+        const m = key.match(/^(pre|post)_id_(\d+)$/);
         if (m) {
           triples.push({
-            sourceType: params[`${m[1]}_type_${m[2]}`] as string | null,
-            sourceSystem: params[`${m[1]}_system_${m[2]}`] as string | null,
+            sourceType: null,
+            sourceSystem: (params[`${m[1]}_system_${m[2]}`] as string | undefined) ?? null,
             sourceId: params[`${m[1]}_id_${m[2]}`] as string | null,
           });
         }

@@ -1,6 +1,7 @@
 import type { DataSource, Repository } from 'typeorm';
 
 import type { ObjectObservationEntity } from '../../entities/ObjectObservationEntity';
+import { platformIdentity } from '../../identity';
 import type { CreateObjectObservationDto } from '../../types';
 import { ObjectObservationService, detectionKeyFor } from '../ObjectObservationService';
 
@@ -238,13 +239,22 @@ describe('ObjectObservationService.createMany — every row has an arbiter or it
     const { service, inserts } = makeService();
 
     await service.createMany(ctx(), [
-      sighting({ sourceType: 'cv_detection', sourceSystem: 'cv-server', sourceId: 'file-1:det-1' }),
+      sighting({
+        sourceType: 'cv_detection',
+        ...(() => {
+          const identity = platformIdentity('cv-server', 'file-1:det-1');
+
+          return { sourceSystem: identity.system, sourceId: identity.id };
+        })(),
+      }),
     ]);
 
     const [insert] = inserts();
 
+    // Identity is the (source_system, source_id) pair — source_type is
+    // provenance and stays out of the key (docs/design/cross-pipeline-identity.md).
     expect(insert.sql).toContain(
-      'ON CONFLICT (owner_user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
+      'ON CONFLICT (owner_user_id, source_system, source_id) WHERE source_id IS NOT NULL',
     );
     // $19 is the detection_key array; a triple-keyed row carries no key.
     expect(insert.params[18]).toEqual([null]);
@@ -269,7 +279,13 @@ describe('ObjectObservationService.createMany — every row has an arbiter or it
     const { service, inserts } = makeService();
 
     await service.createMany(ctx(), [
-      sighting({ sourceId: 'triple-1', sourceSystem: 'cv-server' }),
+      sighting({
+        ...(() => {
+          const identity = platformIdentity('cv-server', 'triple-1');
+
+          return { sourceSystem: identity.system, sourceId: identity.id };
+        })(),
+      }),
       sighting({ label: 'desk lamp' }),
     ]);
 

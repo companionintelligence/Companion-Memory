@@ -212,7 +212,7 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
     // master's UID and is distinguished only by RECURRENCE-ID. Keying on UID
     // alone would collapse a series onto one row — 12 blocks across 2 series in
     // the reference export, of which 10 would be lost to
-    // `events_source_triple_uniq`. The old parser hid this because each block
+    // `events_source_identity_uniq`. The old parser hid this because each block
     // was keyed on its own alarm's UID. The master keeps the bare UID, so a
     // calendar that never had an override is not re-keyed a second time.
     const recurrenceId = (map['RECURRENCE-ID'] || '').trim();

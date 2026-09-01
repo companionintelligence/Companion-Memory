@@ -3,7 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { toServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { CalendarEventService, PersonService } from '@ci/domains/memory';
+import { CalendarEventService, PersonService, platformIdentity } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
@@ -118,8 +118,11 @@ export class SteamFriendsTransformService {
               // duplicate the event (source_type alone engages neither
               // CalendarEventService.createOne's find-or-create nor the unique index).
               source_type: 'ETL',
-              source_system: 'steam',
-              source_id: `friend_added:${friend.steamid}`,
+              ...(() => {
+                const identity = platformIdentity('steam', `friend_added:${friend.steamid}`);
+
+                return { source_system: identity.system, source_id: identity.id };
+              })(),
               start_time: new Date(friend.friend_since * 1000),
               metadata: {
                 steamid: friend.steamid,

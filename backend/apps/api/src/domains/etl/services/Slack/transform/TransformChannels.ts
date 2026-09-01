@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection } from '@ci/domains/connections';
-import { ContentService, SOURCE_NATIVE_EXTERNAL_ID_KIND } from '@ci/domains/memory';
+import { ContentService, SOURCE_NATIVE_EXTERNAL_ID_KIND, platformIdentity } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import type { SlackConversation } from '../sync/slackApi';
@@ -30,7 +30,7 @@ export class SlackChannelsTransformService {
 
       // Per-row try/catch, matching TransformMessages: if the search below
       // races another worker, the insert raises 23505 against
-      // content_source_triple_uniq — that must skip this channel, not abort
+      // content_source_identity_uniq — that must skip this channel, not abort
       // the whole transform.
       try {
         const existingContent = await this.contentService.search(
@@ -52,8 +52,11 @@ export class SlackChannelsTransformService {
             external_id: channel.id,
             external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
             source_type: 'ETL',
-            source_system: 'slack',
-            source_id: channel.id,
+            ...(() => {
+              const identity = platformIdentity('slack', channel.id);
+
+              return { source_system: identity.system, source_id: identity.id };
+            })(),
             source_data: {
               slack_channel_id: channel.id,
               is_private: channel.is_private,

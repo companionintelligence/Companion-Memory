@@ -3,6 +3,7 @@ import { bulkInsertIdempotent } from '@ci/common/persistence';
 
 import { CommunicationBaseEntity } from '../../entities/CommunicationBaseEntity';
 import { CommunicationEntity } from '../../entities/CommunicationEntity';
+import { platformIdentity } from '../../identity';
 import { CommunicationType } from '../../types';
 import { CommunicationService } from '../CommunicationService';
 
@@ -193,6 +194,9 @@ describe('CommunicationService CTI createMany', () => {
       { entity: rowA, inserted: false }, // intra-batch duplicate triple
     ]);
 
+    const mailIdentity = platformIdentity('gmail', 'm1');
+    const chatIdentity = platformIdentity('imessage', 'm2');
+
     await service.createMany(CONTEXT, [
       {
         id: 'c1',
@@ -201,8 +205,8 @@ describe('CommunicationService CTI createMany', () => {
         direction: 'inbound',
         content: 'body',
         source_type: 'email',
-        source_system: 'gmail',
-        source_id: 'm1',
+        source_system: mailIdentity.system,
+        source_id: mailIdentity.id,
       },
       {
         id: 'c2',
@@ -211,8 +215,8 @@ describe('CommunicationService CTI createMany', () => {
         direction: 'inbound',
         content: 'chat line',
         source_type: 'sms',
-        source_system: 'imessage',
-        source_id: 'm2',
+        source_system: chatIdentity.system,
+        source_id: chatIdentity.id,
       },
       {
         id: 'c1-dup',
@@ -221,8 +225,8 @@ describe('CommunicationService CTI createMany', () => {
         direction: 'inbound',
         content: 'body',
         source_type: 'email',
-        source_system: 'gmail',
-        source_id: 'm1',
+        source_system: mailIdentity.system,
+        source_id: mailIdentity.id,
       },
     ]);
 

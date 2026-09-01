@@ -16,7 +16,7 @@ import { UserEntity, User } from '@ci/domains/user';
 // Idempotency key for captured/imported events. Created by migration
 // 20260620213807_add_events_source_idempotency; declared here so TypeORM is
 // aware of it (schema sync stays off — the migration is the source of truth).
-@Index('events_source_triple_uniq', ['userId', 'sourceType', 'sourceSystem', 'sourceId'], {
+@Index('events_source_identity_uniq', ['userId', 'sourceSystem', 'sourceId'], {
   unique: true,
   where: '"source_id" IS NOT NULL',
 })

@@ -3,7 +3,7 @@ import { GitHubEventsTransformService } from '../transform/TransformEvents';
 /**
  * GitHub events carried source_system + source_id but no source_type, which
  * disables both CalendarEventService.createOne's find-or-create and
- * events_source_triple_uniq (NULLs are distinct to it); content rows carried
+ * events_source_identity_uniq (NULLs are distinct to it); content rows carried
  * no triple, and the issue-comment pre-check searched a bare numeric
  * external_id with no type scope — able to false-match another provider's
  * numeric id. These tests pin the hardened triples and the scoped search.
@@ -70,7 +70,8 @@ describe('GitHub provenance triples', () => {
       { userId: 'user-1' },
       expect.objectContaining({
         source_type: 'ETL',
-        source_system: 'github_events',
+        // Canonicalized by the identity registry ('github_events' is an alias).
+        source_system: 'github',
         source_id: '111',
       }),
     );

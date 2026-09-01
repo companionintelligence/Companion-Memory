@@ -19,6 +19,7 @@ import {
   ObjectMergeService,
   type PhysicalItemPropertiesDto,
   ProductModelService,
+  adoptIngestIdentity,
 } from '@ci/domains/memory';
 
 import { ItemAcquisitionLoader } from '../loaders/ItemAcquisitionLoader';
@@ -615,8 +616,8 @@ export class ItemResolver {
         identifierCodes: item.identifierCodes,
         metadata: item.metadata,
         sourceType: item.sourceType,
-        sourceSystem: item.sourceSystem,
-        sourceId: item.sourceId,
+        sourceSystem: adoptIngestIdentity(item.sourceSystem, item.sourceId).system,
+        sourceId: adoptIngestIdentity(item.sourceSystem, item.sourceId).id,
         ...physicalProperties(item),
       })),
     );

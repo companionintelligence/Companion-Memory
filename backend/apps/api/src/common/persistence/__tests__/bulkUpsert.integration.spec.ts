@@ -189,8 +189,8 @@ describeWithDatabase(`bulkInsertIdempotent against real Postgres (${availability
       primaryKey: 'id',
       getTriple: triple,
       scope: { userId },
-      conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
-      tripleColumns: ['source_type', 'source_system', 'source_id'],
+      conflictTarget: '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
+      identityColumns: ['source_system', 'source_id'],
       conflictUpdateColumns: [],
     });
   }
@@ -214,8 +214,8 @@ describeWithDatabase(`bulkInsertIdempotent against real Postgres (${availability
       primaryKey: 'id',
       getTriple: triple,
       scope: { userId },
-      conflictTarget: '(user_id, source_type, source_system, source_id) WHERE source_id IS NOT NULL',
-      tripleColumns: ['source_type', 'source_system', 'source_id'],
+      conflictTarget: '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
+      identityColumns: ['source_system', 'source_id'],
       conflictUpdateColumns: [],
     });
   }
