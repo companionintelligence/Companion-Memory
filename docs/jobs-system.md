@@ -155,14 +155,38 @@ stack as an identical 90 jobs per queue, ~93 % pure waste.
 
 `sendMany(queue, events)` bulk-inserts through pg-boss's own `insert()` in chunks
 of **2000** and **throws outright** if the target queue declares an enforcing
-policy (one `singletonKey` for a whole batch would keep exactly one job).
+policy (one `singletonKey` for a whole batch would keep exactly one job). That
+throw is the *whole* defence, not the first line of one — the second line cannot
+exist.
 
-> ⚠️ It also *attempts* to detect silently-discarded `ON CONFLICT DO NOTHING`
-> rows by reading back an id array — but that guard can never fire. pg-boss
-> 10.3.2's bulk `insertJobs` plan has **no `RETURNING` clause**, so
-> `manager.insert()` always resolves `null`, never an array, and the
-> `Array.isArray(inserted)` check is dead. A bulk enqueue that loses rows to a
-> conflict still reports success.
+> ⚠️ **Silent conflict loss is undetectable on the bulk path**, so nothing there
+> tries to detect it. pg-boss 10.3.2's bulk `insertJobs` plan ends
+> `ON CONFLICT DO NOTHING` with **no `RETURNING` clause**, so `manager.insert()`
+> evaluates `rows.length ? rows.map(i => i.id) : null` over an always-empty
+> `rows` and resolves `null` — identically whether it wrote every row or one.
+> The *single*-job plan `insertJob` does carry `RETURNING id`, which is why the
+> null-check in `sendToQueue` is real work; that intuition does not transfer to
+> `insert()`. An earlier revision of the loop read `insert()`'s return as an id
+> array and logged a drop — code that could never run — and has been removed.
+
+Not checking costs nothing, because the throw makes a conflict unreachable. The
+`ON CONFLICT` has no target, so it absorbs any of the five unique constraints on
+`pgboss.job` — and every one of them is out of reach here:
+
+- **PK `(name, id)`** — `id` is `COALESCE(id, gen_random_uuid())` and `sendMany`
+  never sets one.
+- **`job_i1` / `job_i2` / `job_i3`** — partial on policy `short` / `singleton` /
+  `stately`, which is precisely what the throw refuses. `enforcingPolicyFor`
+  reads the same registry `onModuleInit` provisions from, and boot calls
+  `updateQueue` (`policy = COALESCE($2, policy)`, `$2` defaulted to `standard`),
+  so the declared policy and the queue row cannot drift.
+- **`job_i4`** — partial on `singleton_on IS NOT NULL`, which requires a per-job
+  `singletonSeconds`. `EventSendOptions` has no such field, so this path cannot
+  produce one.
+
+The other way rows vanish is not a conflict at all: `insertJobs` INNER JOINs
+`pgboss.queue`, so an unprovisioned queue silently swallows the whole batch. That
+is what the `getRegisteredQueues()` check at the top of `sendMany` is for.
 
 **Priorities.** pg-boss fetches `ORDER BY priority DESC, created_on, id`, so
 higher runs sooner — but only among jobs already waiting on the *same* queue, and
