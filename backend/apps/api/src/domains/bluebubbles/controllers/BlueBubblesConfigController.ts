@@ -21,6 +21,11 @@ const updateSchema = z.object({
   enabled: z.boolean(),
 });
 
+/** The route `BlueBubblesWebhookController` serves, as the user must type it into BlueBubbles. */
+function webhookPathFor(secret: string): string {
+  return `/api/bluebubbles/webhook/${secret}`;
+}
+
 /**
  * Settings-page backend for the single appliance-wide BlueBubbles connection.
  * Guarded the same way `LlmEndpointController` is: any authenticated caller
@@ -42,33 +47,34 @@ export class BlueBubblesConfigController {
    * Masked view: `hasPassword` stands in for the raw `password` column, which
    * never leaves the server — mirrors ApiKeysSection's prefix-only-never-
    * full-secret convention (see BlueBubblesConfigEntity's password field doc).
+   *
+   * `webhookPath` is the deliberate exception, and it is a credential: the
+   * secret IS the webhook's auth. It has to leave the server because the whole
+   * live-ingestion half of this feature is unreachable without it — no endpoint
+   * returned it and no frontend read it, so constructing the URL BlueBubbles
+   * must be pointed at required a query against Postgres, which in practice
+   * means nobody configured a webhook and the "backstop, not the primary
+   * ingestion path" cron was the only path. A PATH rather than an absolute URL:
+   * the appliance is reached at whatever address the browser used (LAN IP,
+   * `.localhost`, a tailnet name), and guessing that server-side is how a user
+   * gets handed a URL their Mac cannot resolve.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Get('config')
   @HttpCode(200)
   async getConfig() {
-    const config = await this.configService.getOrCreate();
-
-    return {
-      host: config.host,
-      port: config.port,
-      useHttps: config.useHttps,
-      hasPassword: config.password.length > 0,
-      hasPrivateApi: config.hasPrivateApi,
-      enabled: config.enabled,
-      connectionStatus: config.connectionStatus,
-      lastError: config.lastError,
-      lastSyncCursor: config.lastSyncCursor,
-      lastWebhookReceivedAt: config.lastWebhookReceivedAt,
-    };
+    return this.projectConfig(await this.configService.getOrCreate());
   }
 
   @UseGuards(JwtOrApiKeyAuthGuard)
   @Put('config')
   @HttpCode(200)
   async updateConfig(@Body(new ValidationPipe(updateSchema)) body: z.infer<typeof updateSchema>) {
-    const config = await this.configService.update(body);
+    return this.projectConfig(await this.configService.update(body));
+  }
 
+  /** The one masked projection both config routes answer with. */
+  private projectConfig(config: Awaited<ReturnType<BlueBubblesConfigService['getOrCreate']>>) {
     return {
       host: config.host,
       port: config.port,
@@ -76,6 +82,7 @@ export class BlueBubblesConfigController {
       hasPassword: config.password.length > 0,
       hasPrivateApi: config.hasPrivateApi,
       enabled: config.enabled,
+      webhookPath: webhookPathFor(config.webhookSecret),
       connectionStatus: config.connectionStatus,
       lastError: config.lastError,
       lastSyncCursor: config.lastSyncCursor,

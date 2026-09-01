@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 import { Button, Card, Checkbox, Input, Label, Switch } from '@ci/shadcn';
-import { AlertCircle, CheckCircle2, Clock, MessageSquare, Pencil } from '@ci/shadcn/icons';
+import { AlertCircle, Check, CheckCircle2, ClipboardCopy, Clock, MessageSquare, Pencil } from '@ci/shadcn/icons';
 
 import { useAuth } from '@/hooks';
 
@@ -14,6 +14,13 @@ interface BlueBubblesConfigResponse {
   hasPassword: boolean;
   hasPrivateApi: boolean;
   enabled: boolean;
+  /**
+   * Path (not a full URL) of this appliance's webhook endpoint, secret segment
+   * included — the address the user pastes into BlueBubbles Server. The origin
+   * is added here rather than server-side because the appliance is reached at
+   * whatever address this browser used, which the server cannot know.
+   */
+  webhookPath: string;
   connectionStatus: 'connected' | 'error' | 'unknown';
   lastError: string | null;
   lastSyncCursor: string | null;
@@ -79,6 +86,8 @@ export function BlueBubblesSection() {
 
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
+  const [webhookCopied, setWebhookCopied] = useState(false);
 
   const authHeaders = useMemo<Record<string, string>>(() => {
     const headers: Record<string, string> = {};
@@ -217,6 +226,18 @@ export function BlueBubblesSection() {
       setSyncing(false);
       window.setTimeout(() => setSyncMessage(null), 5000);
     }
+  };
+
+  const webhookUrl = config?.webhookPath ? `${window.location.origin}${config.webhookPath}` : null;
+
+  const handleCopyWebhookUrl = async () => {
+    if (!webhookUrl) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(webhookUrl);
+    setWebhookCopied(true);
+    window.setTimeout(() => setWebhookCopied(false), 2000);
   };
 
   const statusIcon = () => {
@@ -403,6 +424,41 @@ export function BlueBubblesSection() {
           )}
         </Card.Content>
       </Card>
+
+      {webhookUrl && !loading ? (
+        <Card className="mb-6">
+          <Card.Content className="space-y-3 pt-6">
+            <h3 className="text-base font-semibold text-foreground">Live updates</h3>
+            <p className="text-sm text-muted-foreground leading-snug">
+              Paste this into BlueBubbles Server under Settings → Webhooks, subscribed to{' '}
+              <span className="font-mono">new-message</span> and{' '}
+              <span className="font-mono">updated-message</span>. Without it, new messages only arrive on
+              the ten-minute backstop poll.
+            </p>
+            <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
+              <span className="min-w-0 flex-1 truncate font-mono text-sm">{webhookUrl}</span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label="Copy webhook URL"
+                onClick={() => void handleCopyWebhookUrl()}
+              >
+                {webhookCopied ? (
+                  <Check className="h-4 w-4 text-green-600" />
+                ) : (
+                  <ClipboardCopy className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The URL contains this appliance&apos;s webhook secret — treat it like a password. The Mac must
+              be able to reach this address; if you are viewing this over a different hostname than the Mac
+              would use, substitute that one.
+            </p>
+          </Card.Content>
+        </Card>
+      ) : null}
 
       {config && !loading ? (
         <Card>
