@@ -15,6 +15,8 @@
  */
 import crypto from 'node:crypto';
 
+import { youtubeLikeIdentity, youtubeSubscriptionIdentity, youtubeVideoIdFromUrl } from '@ci/domains/memory';
+
 import type { Graph } from './timeline';
 
 const ANCHOR_RE = /<a [^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g;
@@ -176,10 +178,22 @@ export function youtubeActivityGraph(cell: ActivityCell, opts: YouTubeActivityOp
     const title = video.text && video.text !== video.url ? video.text : '';
     const url = video.url;
 
+    // A like keys on the VIDEO id when the URL carries one — the identity the
+    // YouTube Data API connection mints for the same liked video, so the two
+    // pipelines converge on one row (docs/design/cross-pipeline-identity.md;
+    // a real run duplicated 100% of the overlap on hashed URLs). Re-likes of
+    // one video collapse deliberately: the API side is a liked-videos LIST,
+    // one row per video. URL-less likes (removed/private videos) keep the
+    // per-pipeline hash lane. Watches stay hash-keyed — the API exposes no
+    // watch history, so there is nothing to converge with.
+    const likedVideoId = liked ? youtubeVideoIdFromUrl(url) : null;
+
     return {
       item: {
         ...stamp,
-        id: activityId(url, ts, opts.index, liked ? 'youtube:like:' : 'youtube:'),
+        id: likedVideoId
+          ? youtubeLikeIdentity(likedVideoId).id
+          : activityId(url, ts, opts.index, liked ? 'youtube:like:' : 'youtube:'),
         classification: liked ? 'like' : 'watch',
         timestamp: ts,
         content: {
@@ -209,7 +223,9 @@ export function youtubeActivityGraph(cell: ActivityCell, opts: YouTubeActivityOp
         ...stamp,
         // Same id subscriptions.csv mints, so the dated action and the
         // undated library row collapse onto one subscription.
-        id: channelId ? `youtube:sub:${channelId}` : activityId(channel.url, ts, opts.index),
+        // Same identity subscriptions.csv (youtube.ts) and the connection's
+        // subscriptions sync mint for this channel, so all three collapse.
+        id: channelId ? youtubeSubscriptionIdentity(channelId).id : activityId(channel.url, ts, opts.index),
         classification: 'subscription',
         timestamp: ts,
         content: {

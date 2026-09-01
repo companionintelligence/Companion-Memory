@@ -5,7 +5,7 @@ import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 
-import { normalizeMessageId } from '@ci/domains/memory';
+import { messageIdFromHeaders, normalizeMessageId } from '@ci/domains/memory';
 
 import { extractAttachmentToFile, attachmentMediaKind } from './attachment_extract';
 import { mboxFromLineDate, receivedDate } from './email_date';
@@ -329,7 +329,11 @@ export class GmailFileImporter implements FileImporter {
     const from = headersMap.From;
     const to = headersMap.To;
     const cc = headersMap.Cc;
-    const msgID = headersMap['Message-ID'];
+    // Case-insensitive: senders spell the header 'Message-ID', 'Message-Id',
+    // or 'message-id', and an exact-key miss silently dropped the message into
+    // the nomid hash lane — which can never converge with the connection's
+    // copy of the same mail (docs/design/cross-pipeline-identity.md).
+    const msgID = messageIdFromHeaders(headersMap);
     const refs = headersMap.References;
     const inReply = headersMap['In-Reply-To'];
     // Participants hang off the email graph as edges (relation 'from'/'to'/'cc')

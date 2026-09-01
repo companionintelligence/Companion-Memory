@@ -287,9 +287,13 @@ describe('Calendar datasource', () => {
     ]);
 
     // The master keeps the bare UID; only an override carries the suffix, so
-    // ids minted before overrides existed in a calendar stay stable.
+    // ids minted before overrides existed in a calendar stay stable. The
+    // suffix is the TZID-local RECURRENCE-ID normalized to UTC basic
+    // (identity/calendar.ts normalizeIcsRecurrenceId), matching what the
+    // Calendar connection derives for the same override — this fixture's
+    // 14:00 America/Los_Angeles override is the 21:00Z instant.
     expect(series.map((item) => item.id)).toContain(seriesUid);
-    expect(series.map((item) => item.id)).toContain(`${seriesUid}#20210330T140000`);
+    expect(series.map((item) => item.id)).toContain(`${seriesUid}#20210330T210000Z`);
   });
 
   it('keeps UID-less same-date events distinct and idempotent', async () => {

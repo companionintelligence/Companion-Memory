@@ -58,25 +58,28 @@ function mockStep(stepKey: OnboardingStepKey) {
 }
 
 describe('OnboardingPage source-step navigation', () => {
-  it('puts Next inside the page scroller on connect-source', async () => {
+  // Back/Skip/Next are ALWAYS pinned below the scroller — a step tall enough
+  // to scroll must not push them below the fold. The source steps used to
+  // append the nav to the scrolling content; that was reverted deliberately.
+  it('keeps Next in the pinned footer on connect-source', async () => {
     mockStep('connect-source');
     render(<OnboardingPage />);
 
     expect(await screen.findByTestId('connect-source-body')).toBeInTheDocument();
     const scroll = screen.getByTestId('onboarding-scroll');
-    expect(scroll).toContainElement(screen.getByTestId('onboarding-nav'));
+    expect(scroll).not.toContainElement(screen.getByTestId('onboarding-nav'));
   });
 
-  it('puts Next inside the page scroller on import-archives', async () => {
+  it('keeps Next in the pinned footer on import-archives', async () => {
     mockStep('import-archives');
     render(<OnboardingPage />);
 
     expect(await screen.findByTestId('import-archives-body')).toBeInTheDocument();
     const scroll = screen.getByTestId('onboarding-scroll');
-    expect(scroll).toContainElement(screen.getByTestId('onboarding-nav'));
+    expect(scroll).not.toContainElement(screen.getByTestId('onboarding-nav'));
   });
 
-  it('keeps Next in the sticky footer on other steps', async () => {
+  it('keeps Next in the pinned footer on other steps', async () => {
     mockStep('trust-dial');
     render(<OnboardingPage />);
 

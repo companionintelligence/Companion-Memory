@@ -240,12 +240,12 @@ describe('ExportStep', () => {
       declaredSources: ['spotify'],
     });
     // Reported after EVERY finished file — the first part's pipeline renders
-    // while the second is still on the wire — so the last call carries both.
+    // while the second is still on the wire — and each report carries ONLY
+    // that file's run: the host appends, so a cumulative list here re-added
+    // every earlier run once per later file (the "duplicated dozens of
+    // times" progress list).
     expect(onRunsStarted).toHaveBeenCalledWith('spotify', ['run-drop-spotify.zip']);
-    expect(onRunsStarted).toHaveBeenLastCalledWith('spotify', [
-      'run-drop-spotify.zip',
-      'run-drop-spotify-extended.zip',
-    ]);
+    expect(onRunsStarted).toHaveBeenLastCalledWith('spotify', ['run-drop-spotify-extended.zip']);
   });
 
   it('packs a dropped folder into ONE zip, uploads it with progress, and starts one run', async () => {

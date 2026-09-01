@@ -1,5 +1,6 @@
-import { calendarEventIdentity, icsRecurrenceInstant } from '../calendar';
+import { calendarEventIdentity, icsRecurrenceInstant, normalizeIcsRecurrenceId } from '../calendar';
 import { emailAttachmentIdentity, emailFallbackIdentity, emailIdentity, messageIdFromHeaders, normalizeMessageId } from '../email';
+import { facebookPostIdentity } from '../facebook';
 import { fileIdentity } from '../file';
 import {
   FEDERATED_SYSTEMS,
@@ -10,6 +11,11 @@ import {
   isRegisteredSystem,
   platformIdentity,
 } from '../registry';
+import {
+  youtubeLikeIdentity,
+  youtubeSubscriptionIdentity,
+  youtubeVideoIdFromUrl,
+} from '../youtube';
 
 describe('identity registry', () => {
   it('registers every federated kind', () => {
@@ -143,6 +149,80 @@ describe('calendar identity (federated on iCalUID)', () => {
 
   it('formats instants as ICS UTC basic', () => {
     expect(icsRecurrenceInstant(new Date('2026-09-01T17:00:00.000Z'))).toBe('20260901T170000Z');
+  });
+
+  // Real pairs off a Takeout + connection run: the .ics wrote local-with-TZID,
+  // the API wrote UTC, and 42 overrides duplicated. One fixture per DST phase.
+  it('CONFORMANCE: normalizes a TZID-local RECURRENCE-ID to the UTC spelling (PDT)', () => {
+    expect(normalizeIcsRecurrenceId('20221006T010000', 'America/Los_Angeles')).toBe('20221006T080000Z');
+  });
+
+  it('CONFORMANCE: normalizes across the DST boundary (PST)', () => {
+    expect(normalizeIcsRecurrenceId('20251114T130000', 'America/Los_Angeles')).toBe('20251114T210000Z');
+  });
+
+  it('the normalized suffix keys the same identity the ETL derives', () => {
+    const fromIcs = calendarEventIdentity(
+      'abc@google.com',
+      normalizeIcsRecurrenceId('20221006T010000', 'America/Los_Angeles'),
+    );
+    const fromApi = calendarEventIdentity(
+      'abc@google.com',
+      icsRecurrenceInstant(new Date('2022-10-06T08:00:00.000Z')),
+    );
+
+    expect(fromIcs).toEqual(fromApi);
+  });
+
+  it('leaves already-UTC, date-only, floating, and unknown-TZID values untouched', () => {
+    expect(normalizeIcsRecurrenceId('20221006T080000Z', 'America/Los_Angeles')).toBe('20221006T080000Z');
+    expect(normalizeIcsRecurrenceId('20221006', 'America/Los_Angeles')).toBe('20221006');
+    // Floating time: RFC 5545 gives it no zone; converting would be a guess.
+    expect(normalizeIcsRecurrenceId('20221006T010000', null)).toBe('20221006T010000');
+    // A custom VTIMEZONE id the runtime cannot resolve: local beats wrong.
+    expect(normalizeIcsRecurrenceId('20221006T010000', 'Custom/Office_Zone')).toBe('20221006T010000');
+  });
+});
+
+describe('youtube identity (platform kind)', () => {
+  it('extracts the video id from every URL shape YouTube uses', () => {
+    expect(youtubeVideoIdFromUrl('https://www.youtube.com/watch?v=dRt-DNXCti8')).toBe('dRt-DNXCti8');
+    expect(youtubeVideoIdFromUrl('https://music.youtube.com/watch?v=abc123DEF45&list=x')).toBe('abc123DEF45');
+    expect(youtubeVideoIdFromUrl('https://youtu.be/u5ozNRUW7Kw')).toBe('u5ozNRUW7Kw');
+    expect(youtubeVideoIdFromUrl('https://www.youtube.com/shorts/TibXnvtziRI')).toBe('TibXnvtziRI');
+    expect(youtubeVideoIdFromUrl('https://www.youtube.com/results?search_query=x')).toBeNull();
+    expect(youtubeVideoIdFromUrl(undefined)).toBeNull();
+  });
+
+  // CONFORMANCE: the exact duplication observed on a real Takeout +
+  // connection run — ETL minted `like:<videoId>` / `subscription:<id>` while
+  // the importer hashed the URL / spelled `youtube:sub:`. One constructor
+  // now serves both pipelines.
+  it('CONFORMANCE: like and subscription identities are the connection formats', () => {
+    expect(youtubeLikeIdentity('u5ozNRUW7Kw')).toEqual({ system: 'youtube', id: 'like:u5ozNRUW7Kw' });
+    expect(youtubeSubscriptionIdentity('UC6IxnFzHofFJ5X2PycSMsww')).toEqual({
+      system: 'youtube',
+      id: 'subscription:UC6IxnFzHofFJ5X2PycSMsww',
+    });
+  });
+});
+
+describe('facebook post identity (fallback-tier tuple)', () => {
+  const at = new Date('2018-07-06T17:30:00Z');
+
+  it('keys on posting second + normalized text hash, deterministically', () => {
+    const a = facebookPostIdentity(at, 'Check this feed out.');
+    const b = facebookPostIdentity(new Date(at), '  Check   this\nfeed out. ');
+
+    expect(a.system).toBe('facebook');
+    expect(a.id).toMatch(/^post:1530898200:[0-9a-f]{16}$/);
+    // Whitespace differences between the API's and the export's rendering of
+    // one post must not split the identity.
+    expect(b).toEqual(a);
+  });
+
+  it('keeps same-second posts with different text distinct', () => {
+    expect(facebookPostIdentity(at, 'one').id).not.toBe(facebookPostIdentity(at, 'two').id);
   });
 });
 

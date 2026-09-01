@@ -70,7 +70,9 @@ describe('FacebookPostsTransformService.transform', () => {
         connection_id: 'conn-1',
         source_type: 'ETL',
         source_system: 'facebook',
-        source_id: 'post:4410495569178178_2195886703972420',
+        // Tuple identity (posting second + text hash) — the key the archive
+        // import mints for the same post; the Graph id lives in metadata.
+        source_id: 'post:1530915059:eb90a10800e7e7bf',
         participants_metadata: { facebook_user_id: '4410495569178178', facebook_user_name: 'Kyle Baran' },
         metadata: expect.objectContaining({
           facebook_post_id: '4410495569178178_2195886703972420',
@@ -213,7 +215,7 @@ describe('FacebookPostsTransformService.transform', () => {
 
     expect(communicationService.findBySource).toHaveBeenCalledWith(
       { userId: 'user-1' },
-      { source_type: 'ETL', source_system: 'facebook', source_id: 'post:4410495569178178_2195886703972420' },
+      { source_type: 'ETL', source_system: 'facebook', source_id: 'post:1530915059:eb90a10800e7e7bf' },
     );
     expect(communicationService.create).not.toHaveBeenCalled();
     expect(communicationService.update).toHaveBeenCalledWith(

@@ -234,7 +234,7 @@ export function PickStep({ catalog, picked, onToggle, onContinue, pinContinue = 
         {catalog.length === 0 && <p className="text-sm text-muted-foreground">Loading services…</p>}
       </div>
 
-      {/* OUTSIDE the scroll region, deliberately.
+      {/* Always reachable, deliberately.
 
           The service list is ~100 entries — 2,300px against a 290px viewport
           when this surface is embedded in onboarding. With the button at the
@@ -244,8 +244,18 @@ export function PickStep({ catalog, picked, onToggle, onContinue, pinContinue = 
           surface and did the opposite thing: skip the step. Two buttons, and
           the reachable one was wrong.
 
-          Pinned, it is always the nearest control to the choice being made. */}
-      <div className="flex shrink-0 justify-end border-t pt-4">
+          Contained hosts pin it outside their own scroll region via the flex
+          split above. Page hosts (/sources/import) scroll this whole surface
+          in one column, so there the row is sticky to the bottom of that
+          scrollport instead — same guarantee, the host's scroll model.
+          Translucent-blurred like the onboarding banner so catalog tiles
+          sliding beneath it read as "more below", not a hard cut. */}
+      <div
+        className={cn(
+          'flex shrink-0 justify-end border-t pt-4',
+          !pinContinue && 'sticky bottom-0 z-10 bg-background/95 pb-3 backdrop-blur-sm',
+        )}
+      >
         <Button disabled={picked.size === 0} onClick={onContinue}>
           Continue → {picked.size} selected
         </Button>

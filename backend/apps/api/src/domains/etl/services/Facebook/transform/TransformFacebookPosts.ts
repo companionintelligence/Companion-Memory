@@ -8,12 +8,11 @@ import {
   CommunicationType,
   ContentService,
   type CreateCommunicationDto,
-  platformIdentity,
+  facebookPostIdentity,
 } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 import {
-  FACEBOOK_SOURCE_SYSTEM,
   FACEBOOK_SOURCE_TYPE,
   FacebookMediaService,
   type FacebookMediaRef,
@@ -229,16 +228,21 @@ export class FacebookPostsTransformService {
       attachments.push({ type: 'content', id: contentId });
     }
 
+    const permalink = facebookUrl(post.permalink_url) ?? derivedPostUrl(post.id);
+    const text = post.message?.trim() || post.story?.trim() || post.link || '';
+    // Tuple identity (posted-at second + text hash), NOT the Graph post id:
+    // the Meta archive carries no Graph ids, so this is the only key both
+    // pipelines can compute for the same post — the archive import mints the
+    // identical one (docs/design/cross-pipeline-identity.md §3.5). The Graph
+    // id stays in metadata below for lookups.
     const source = {
       source_type: FACEBOOK_SOURCE_TYPE,
       ...(() => {
-        const identity = platformIdentity(FACEBOOK_SOURCE_SYSTEM, `post:${post.id}`);
+        const identity = facebookPostIdentity(new Date(post.created_time), text);
 
         return { source_system: identity.system, source_id: identity.id };
       })(),
     };
-    const permalink = facebookUrl(post.permalink_url) ?? derivedPostUrl(post.id);
-    const text = post.message?.trim() || post.story?.trim() || post.link || '';
 
     const row: CreateCommunicationDto = {
       time: new Date(post.created_time),

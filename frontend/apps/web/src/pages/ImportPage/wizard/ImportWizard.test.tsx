@@ -274,4 +274,25 @@ describe('ImportWizard runsByEntry', () => {
 
     expect(runs).toEqual([['spotify', ['run-a', 'run-b']]]);
   });
+
+  it('a re-reported run id is not appended twice (each run renders once, ever)', async () => {
+    render(<ImportWizard />);
+
+    await waitFor(() => expect(screen.getByTestId('pick-catalog-count')).toHaveTextContent('2'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'toggle spotify' }));
+    fireEvent.click(screen.getByRole('button', { name: 'pick continue' }));
+
+    // ExportStep once reported the CUMULATIVE list per finished unit; combined
+    // with append-on-report here, file 1's run rendered once per remaining
+    // file ("duplicated dozens of times" on a real Takeout). The store must
+    // absorb a repeated id no matter what the reporter sends.
+    fireEvent.click(screen.getByRole('button', { name: 'record spotify run a' }));
+    fireEvent.click(screen.getByRole('button', { name: 'record spotify run a' }));
+    fireEvent.click(screen.getByRole('button', { name: 'record spotify run b' }));
+
+    const runs = JSON.parse(screen.getByTestId('export-runs').textContent ?? '[]') as [string, string[]][];
+
+    expect(runs).toEqual([['spotify', ['run-a', 'run-b']]]);
+  });
 });

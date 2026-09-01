@@ -321,5 +321,19 @@ describe('PickStep', () => {
 
     expect(catalog.className).not.toMatch(/overflow-y-auto/);
     expect(catalog.compareDocumentPosition(continueButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Page hosts scroll the whole surface, so the row must stick to the bottom
+    // of that scrollport — a 2,300px catalog cannot bury the control that acts
+    // on the pick.
+    expect(continueButton.parentElement?.className).toMatch(/sticky/);
+    expect(continueButton.parentElement?.className).toMatch(/bottom-0/);
+  });
+
+  it('does not make the pinned-variant row sticky (the flex split already pins it)', () => {
+    render(
+      <PickStep catalog={CATALOG} picked={new Set()} onToggle={vi.fn()} onContinue={vi.fn()} />,
+    );
+
+    const continueButton = screen.getByRole('button', { name: /continue/i });
+    expect(continueButton.parentElement?.className).not.toMatch(/sticky/);
   });
 });

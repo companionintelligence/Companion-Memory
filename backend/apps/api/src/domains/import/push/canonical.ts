@@ -675,6 +675,18 @@ export function isRedditPost(rec: CanonicalRecord): boolean {
 }
 
 /**
+ * A Facebook post from the Meta archive. Routed to /communications like
+ * Reddit posts (and like the Facebook CONNECTION, whose TransformFacebookPosts
+ * writes posts as communications) — the two pipelines must land the same post
+ * in the same table before any identity can converge them
+ * (docs/design/cross-pipeline-identity.md). Other Facebook social records
+ * (likes, reactions) keep the generic social.* routing.
+ */
+export function isFacebookPost(rec: CanonicalRecord): boolean {
+  return rec.sourceSystem === 'facebook' && rec.kind === 'social.post';
+}
+
+/**
  * The attachment links a Discord message carries. A Discord package ships NO
  * attachment bytes — every upload survives only as a signed
  * cdn.discordapp.com URL in the message's `Attachments` field, space-separated
@@ -1028,6 +1040,14 @@ function baseDestinationsFor(rec: CanonicalRecord): Destination[] {
     }
 
     return redditMediaUrl(rec) ? ['communications', 'content'] : ['communications'];
+  }
+
+  // Facebook posts: same shape as Reddit above, same reasons — an authored
+  // communication, not a timeline event, and the same table the connection
+  // uses so the tuple identity can converge the two copies. Undated posts
+  // keep content-only for the same NOT NULL `communications.time` reason.
+  if (isFacebookPost(rec)) {
+    return rec.dated ? ['communications'] : ['content'];
   }
 
   if (kind === 'commerce.purchase') {

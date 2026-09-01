@@ -274,16 +274,15 @@ export function OnboardingPage() {
 
   const isFinalStep = currentStepKey === 'run-first-sync';
   const showNav = !isFinalStep;
-  const navInScroll = currentStepKey === 'connect-source' || currentStepKey === 'import-archives';
 
+  // Always pinned below the scroller — never inside it. The source steps used
+  // to append the nav to the scrolling content ("one page scroller",
+  // 037d0e9b0), which put Back/Skip/Next below the fold on any step tall
+  // enough to scroll; the step content scrolls, the nav does not.
   const navRow = showNav ? (
     <div
       data-testid="onboarding-nav"
-      className={
-        navInScroll
-          ? 'mt-6 mb-2 flex items-center justify-center gap-2 px-4 sm:gap-3'
-          : 'mb-5 flex items-center gap-2 px-4 sm:mb-6 sm:gap-3'
-      }
+      className="mb-5 flex items-center gap-2 px-4 sm:mb-6 sm:gap-3"
     >
       {stepIndex > 0 && (
         <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleBack}>
@@ -348,11 +347,10 @@ export function OnboardingPage() {
               )}
             >
               {stepContent}
-              {navInScroll ? navRow : null}
             </div>
           </div>
 
-          {!navInScroll ? navRow : null}
+          {navRow}
 
           <div className="flex flex-col items-center gap-1 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
             <div className="flex justify-center items-center gap-1.5">

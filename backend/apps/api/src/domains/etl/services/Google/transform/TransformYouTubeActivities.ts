@@ -5,13 +5,13 @@ import { type Connection, ConnectionService } from '@ci/domains/connections';
 import {
   type CreateContentDto,
   ContentService,
-  platformIdentity,
+  youtubeUploadIdentity,
   SOURCE_NATIVE_EXTERNAL_ID_KIND,
 } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
-import { bestThumbnail, YOUTUBE_SOURCE_SYSTEM, type YouTubeThumbnailSet } from './youtubeMedia';
+import { bestThumbnail, type YouTubeThumbnailSet } from './youtubeMedia';
 
 interface YouTubeActivity {
   id?: string;
@@ -185,7 +185,7 @@ export class YouTubeActivitiesTransformService {
       source_url: url,
       source_type: 'ETL',
       ...(() => {
-        const identity = platformIdentity(YOUTUBE_SOURCE_SYSTEM, `upload:${videoId}`);
+        const identity = youtubeUploadIdentity(videoId);
 
         return { source_system: identity.system, source_id: identity.id };
       })(),

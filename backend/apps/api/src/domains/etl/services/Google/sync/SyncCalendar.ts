@@ -30,7 +30,13 @@ export async function syncCalendar({
       const params = new URLSearchParams({
         maxResults: '200',
         showDeleted: 'true',
-        singleEvents: 'true',
+        // Masters + genuine RFC 5545 overrides, NOT per-occurrence expansion:
+        // the ICS importer keeps one row per series master, and identity
+        // converges only when both pipelines represent a series the same way
+        // (docs/design/cross-pipeline-identity.md). singleEvents=true minted
+        // one `uid#instant` row per occurrence and duplicated every recurring
+        // series against its imported master.
+        singleEvents: 'false',
         timeMax: connection.createdAt.toISOString(),
       });
 
@@ -66,7 +72,8 @@ export async function syncCalendar({
       const params = new URLSearchParams({
         maxResults: '200',
         showDeleted: 'true',
-        singleEvents: 'true',
+        // Masters + overrides only — see the historical branch above.
+        singleEvents: 'false',
       });
 
       if (nextCursor.syncToken) {

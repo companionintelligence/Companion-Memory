@@ -252,9 +252,12 @@ export function ExportStep({
 
         runIds.push(run.id);
         patchUpload(index, { status: 'uploaded', loadedBytes: toSend.size });
-        // Report incrementally, so the live pipeline for part 1 renders while
-        // part 2 is still on the wire.
-        onRunsStarted(entry.key, [...runIds]);
+        // Report incrementally — ONLY the run this unit just started, so the
+        // live pipeline for part 1 renders while part 2 is still on the wire.
+        // The host APPENDS reports; sending the cumulative list here re-added
+        // every earlier run per unit (triangular duplication: file 1's run
+        // rendered once per remaining file).
+        onRunsStarted(entry.key, [run.id]);
       } catch (err: unknown) {
         patchUpload(index, {
           status: 'failed',

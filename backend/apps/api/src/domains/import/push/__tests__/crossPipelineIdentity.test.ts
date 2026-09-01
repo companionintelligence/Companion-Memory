@@ -1,8 +1,15 @@
-import { emailIdentity, messageIdFromHeaders } from '@ci/domains/memory';
+import {
+  emailIdentity,
+  facebookPostIdentity,
+  messageIdFromHeaders,
+  youtubeLikeIdentity,
+  youtubeSubscriptionIdentity,
+} from '@ci/domains/memory';
 
 import { headersFromGmailApi } from '../../datasources/human_correspondence';
 import type { StagedItem } from '../../entities/StagedItemEntity';
 import { toCanonical, type CanonicalRecord } from '../canonical';
+import { destinationsFor } from '../canonical';
 import { toCommunicationInput, toEventInput } from '../inputs';
 
 /**
@@ -114,5 +121,76 @@ describe('calendar: .ics import vs Google Calendar API connection', () => {
     const input = toEventInput(record);
     expect(input.source_system).toBe('calendar');
     expect(input.source_id).toBe('abc123@google.com');
+  });
+});
+
+describe('youtube: Takeout import vs Data API connection', () => {
+  // The importer datasources mint canonical ids at stage time (the video id
+  // off the watch URL, the channel id off subscriptions.csv), so the push
+  // mapping passes them through verbatim; the ETL transforms mint the same
+  // ids from the API's native ids via the shared builders.
+  it('a liked video converges on (youtube, like:<videoId>)', () => {
+    const record = recordFor({
+      dataSource: 'youtube',
+      classification: 'like',
+      contentHash: 'like:u5ozNRUW7Kw', // datasources/_youtube_activity.ts, from watch?v=
+      metadata: { URL: 'https://www.youtube.com/watch?v=u5ozNRUW7Kw', Kind: 'like' },
+    });
+
+    const input = toEventInput(record);
+    const etl = youtubeLikeIdentity('u5ozNRUW7Kw');
+
+    expect(input.source_system).toBe(etl.system);
+    expect(input.source_id).toBe(etl.id);
+  });
+
+  it('a subscription converges on (youtube, subscription:<channelId>)', () => {
+    const record = recordFor({
+      dataSource: 'youtube',
+      classification: 'subscription',
+      contentHash: 'subscription:UC6IxnFzHofFJ5X2PycSMsww', // datasources/youtube.ts, from Channel Id
+      metadata: { Channel: 'Some Channel' },
+    });
+
+    const input = toEventInput(record);
+    const etl = youtubeSubscriptionIdentity('UC6IxnFzHofFJ5X2PycSMsww');
+
+    expect(input.source_system).toBe(etl.system);
+    expect(input.source_id).toBe(etl.id);
+  });
+});
+
+describe('facebook posts: Meta archive import vs Graph connection', () => {
+  const postRecord = () =>
+    recordFor({
+      dataSource: 'facebook',
+      classification: 'social',
+      occurredAt: new Date('2018-07-06T17:30:00Z'),
+      metadata: { Text: 'Check this feed out.', Source: 'Facebook' },
+    });
+
+  it('routes an archived post to /communications — the connection\'s table', () => {
+    expect(destinationsFor(postRecord())).toEqual(['communications']);
+  });
+
+  it('CONVERGES on the tuple identity the connection mints for the same post', () => {
+    const input = toCommunicationInput(postRecord());
+    const etl = facebookPostIdentity(new Date('2018-07-06T17:30:00Z'), 'Check this feed out.');
+
+    expect(input.communication_type).toBe('post');
+    expect(input.direction).toBe('outbound');
+    expect(input.source_system).toBe(etl.system);
+    expect(input.source_id).toBe(etl.id);
+  });
+
+  it('an undated post stays content-only (communications.time is NOT NULL)', () => {
+    const undated = recordFor({
+      dataSource: 'facebook',
+      classification: 'social',
+      occurredAt: null as unknown as Date,
+      metadata: { Text: 'no date on this one', Source: 'Facebook' },
+    });
+
+    expect(destinationsFor(undated)).toEqual(['content']);
   });
 });

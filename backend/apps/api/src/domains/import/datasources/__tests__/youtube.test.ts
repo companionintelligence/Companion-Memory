@@ -312,7 +312,14 @@ describe('YouTube datasource', () => {
       const ids = pipeline.map((p) => p.item.id!);
       expect(ids.every(Boolean)).toBe(true);
       expect(new Set(ids).size).toBe(ids.length);
-      expect(ids.every((id: string) => id.startsWith('youtube:sub:'))).toBe(true);
+      // Channel-id rows carry the canonical `subscription:<channelId>` —
+      // the identity the connection's subscriptions sync mints, so the two
+      // pipelines converge (docs/design/cross-pipeline-identity.md); only a
+      // row with no Channel Id keeps the per-pipeline hash lane.
+      expect(ids.every((id: string) => id.startsWith('subscription:') || id.startsWith('youtube:sub:'))).toBe(
+        true,
+      );
+      expect(ids.some((id: string) => id.startsWith('subscription:'))).toBe(true);
     });
   });
 

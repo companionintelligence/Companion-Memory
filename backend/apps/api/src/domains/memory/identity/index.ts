@@ -23,5 +23,13 @@ export {
   messageIdFromHeaders,
   normalizeMessageId,
 } from './email';
-export { calendarEventIdentity, icsRecurrenceInstant } from './calendar';
+export { calendarEventIdentity, icsRecurrenceInstant, normalizeIcsRecurrenceId } from './calendar';
+export { facebookPostIdentity } from './facebook';
 export { fileIdentity } from './file';
+export {
+  youtubeLikeIdentity,
+  youtubePlaylistIdentity,
+  youtubeSubscriptionIdentity,
+  youtubeUploadIdentity,
+  youtubeVideoIdFromUrl,
+} from './youtube';

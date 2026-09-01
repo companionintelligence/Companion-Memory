@@ -21,6 +21,7 @@ import { isGloballyUniqueNamespace, type ObjectIdentifierNamespace } from '@ci/d
 import {
   CommunicationType,
   emailIdentity,
+  facebookPostIdentity,
   minorUnitExponent,
   platformIdentity,
   type CreateCommunicationDto,
@@ -44,11 +45,13 @@ import {
   discordAttachmentFilename,
   discordAttachmentUrls,
   identifiersFrom,
+  SOURCE_TYPE,
   isDigitalGood,
   isMediaType,
   contentFileRef,
   isAttachmentPlaceholderOnly,
   isDiscordAttachmentOnly,
+  isFacebookPost,
   isRedditComment,
   isRedditPost,
   mintsProductModel,
@@ -1391,6 +1394,24 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
     input.preview = preview;
   }
 
+  // Facebook posts: authored (outbound), typed as posts, and keyed on the
+  // shared tuple identity (posting second + text hash) — the same key
+  // TransformFacebookPosts mints for the connection's copy of this post, and
+  // the only key both pipelines can compute (the Meta archive carries no
+  // Graph ids) — docs/design/cross-pipeline-identity.md §3.5. The
+  // messaging-specific participant/direction derivation below doesn't apply.
+  if (isFacebookPost(rec)) {
+    input.communication_type = CommunicationType.POST;
+    input.direction = 'outbound';
+
+    const identity = facebookPostIdentity(new Date(rec.startTime), str(m.Text) ?? content);
+
+    input.source_system = identity.system;
+    input.source_id = identity.id;
+
+    return input;
+  }
+
   // Reddit posts and comments: the post title is the subject (comments have
   // none), the subreddit is the thread, and direction reads as authored
   // (outbound) vs saved-from-someone (inbound). The messaging-specific
@@ -1554,8 +1575,14 @@ function recipientsFrom(m: Record<string, unknown>): string[] {
 
 /** source_system for Messenger communications (distinct from posts/media). */
 export const FACEBOOK_MESSENGER_SOURCE_SYSTEM = 'facebook_messenger';
-/** source_type for Messenger communications. */
-export const FACEBOOK_MESSENGER_SOURCE_TYPE = 'import';
+/**
+ * source_type for Messenger communications — the import pipeline's canonical
+ * name. This was 'import' historically, a drifted spelling that made
+ * Messenger rows look like a third pipeline in ci.record_sources; source_type
+ * is pure provenance now (docs/design/cross-pipeline-identity.md), so it
+ * simply aliases the pipeline constant.
+ */
+export const FACEBOOK_MESSENGER_SOURCE_TYPE = SOURCE_TYPE;
 
 /** Is this canonical record a Facebook Messenger message? */
 export function isFacebookMessengerRecord(rec: CanonicalRecord): boolean {

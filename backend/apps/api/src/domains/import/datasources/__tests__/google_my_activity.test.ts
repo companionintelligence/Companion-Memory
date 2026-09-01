@@ -275,16 +275,20 @@ describe('Google My Activity — standalone file with YouTube entries', () => {
     expect(search.metadata).toMatchObject({ Query: 'companion intelligence', Kind: 'search' });
 
     const like = items.find((i) => i.classification === 'like')!;
-    expect(like.id).toMatch(/^youtube:like:[0-9a-f]{40}$/);
+    // The video id off the watch URL, under the canonical `like:` prefix —
+    // the identity the connection's liked-videos sync mints for the same
+    // video (docs/design/cross-pipeline-identity.md).
+    expect(like.id).toBe('like:dRt-DNXCti8');
     expect(like.metadata).toMatchObject({
       Title: 'Pompeii: Out of Time - Official Trailer (2026)',
       Channel: 'IGN',
       Kind: 'like',
     });
 
-    // Same id subscriptions.csv mints for this channel, so the two collapse.
+    // Same id subscriptions.csv AND the connection mint for this channel,
+    // so all three collapse.
     const sub = items.find((i) => i.classification === 'subscription')!;
-    expect(sub.id).toBe('youtube:sub:UC6IxnFzHofFJ5X2PycSMsww');
+    expect(sub.id).toBe('subscription:UC6IxnFzHofFJ5X2PycSMsww');
     expect(sub.metadata).toMatchObject({ Channel: 'Some Channel', ChannelId: 'UC6IxnFzHofFJ5X2PycSMsww' });
   });
 

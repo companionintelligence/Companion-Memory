@@ -5,13 +5,13 @@ import { type Connection, ConnectionService } from '@ci/domains/connections';
 import {
   type CreateContentDto,
   ContentService,
-  platformIdentity,
+  youtubeLikeIdentity,
   SOURCE_NATIVE_EXTERNAL_ID_KIND,
 } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
 
-import { bestThumbnail, parseIso8601DurationSeconds, YOUTUBE_SOURCE_SYSTEM } from './youtubeMedia';
+import { bestThumbnail, parseIso8601DurationSeconds } from './youtubeMedia';
 
 interface YouTubePlaylistItem {
   id?: string;
@@ -178,7 +178,7 @@ export class YouTubeLikesTransformService {
       source_url: url,
       source_type: 'ETL',
       ...(() => {
-        const identity = platformIdentity(YOUTUBE_SOURCE_SYSTEM, `like:${videoId}`);
+        const identity = youtubeLikeIdentity(videoId);
 
         return { source_system: identity.system, source_id: identity.id };
       })(),

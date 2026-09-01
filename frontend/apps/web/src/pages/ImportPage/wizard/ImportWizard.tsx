@@ -119,8 +119,14 @@ export function ImportWizard({
   const recordRuns = useCallback((entryKey: string, runIds: readonly string[]) => {
     setRunsByEntry((previous) => {
       const next = new Map(previous);
+      // Idempotent append: a re-reported run id must not become a second row
+      // (and a second React key) in the live run list — reporting is
+      // per-unit-incremental, but dedup here means a repeated report can
+      // never multiply the display again.
+      const existing = previous.get(entryKey) ?? [];
+      const merged = [...existing, ...runIds.filter((id) => !existing.includes(id))];
 
-      next.set(entryKey, [...(previous.get(entryKey) ?? []), ...runIds]);
+      next.set(entryKey, merged);
 
       return next;
     });

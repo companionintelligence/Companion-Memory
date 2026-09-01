@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { normalizeIcsRecurrenceId } from '@ci/domains/memory';
+
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams } from './timeline';
@@ -215,7 +217,15 @@ export function parseIcsEvents(raw: string, fpath: string): ParsedIcsEvent[] {
     // `events_source_identity_uniq`. The old parser hid this because each block
     // was keyed on its own alarm's UID. The master keeps the bare UID, so a
     // calendar that never had an override is not re-keyed a second time.
-    const recurrenceId = (map['RECURRENCE-ID'] || '').trim();
+    // Normalized to the canonical UTC-basic suffix so a TZID-local override
+    // (`RECURRENCE-ID;TZID=America/Los_Angeles:20221006T010000`) converges
+    // with the API-synced copy of the same override, which keys on the UTC
+    // instant — docs/design/cross-pipeline-identity.md §3.5.
+    const rawRecurrenceId = (map['RECURRENCE-ID'] || '').trim();
+    const recurrenceTzid = (paramsMap['RECURRENCE-ID'] || '').match(/(?:^|;)TZID=([^;]+)/)?.[1];
+    const recurrenceId = rawRecurrenceId
+      ? normalizeIcsRecurrenceId(rawRecurrenceId, recurrenceTzid ?? null)
+      : '';
     const id = recurrenceId ? `${baseId}#${recurrenceId}` : baseId;
     out.push({
       id,

@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+import { youtubeSubscriptionIdentity } from '@ci/domains/memory';
+
 import { parseActivityCell, sha1, watchTitle, youtubeActivityGraph } from './_youtube_activity';
 import { parseCSV } from './csv';
 import { matchingDivCloseIndex } from './htmlBlocks';
@@ -283,7 +285,12 @@ export class YouTubeFileImporter implements FileImporter {
         continue;
       }
 
-      const id = 'youtube:sub:' + (channelId || sha1(channelUrl || channelTitle));
+      // Key on the channel id — the same identity the connection mints for
+      // this subscription (docs/design/cross-pipeline-identity.md); rows
+      // without one keep the per-pipeline hash lane.
+      const id = channelId
+        ? youtubeSubscriptionIdentity(channelId).id
+        : 'youtube:sub:' + sha1(channelUrl || channelTitle);
       params.pipeline.push({
         item: {
           id,
