@@ -9,6 +9,8 @@ import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/events';
 import { TaskService } from '@ci/domains/planning';
 
+import { AGENT_DISPATCH_QUEUE } from '../constants';
+
 import { buildDispatchPacket } from '../dispatchPacket';
 import {
   AgentTaskBlockedEvent,
@@ -115,6 +117,7 @@ export class AgentDispatchService {
         packet,
         status: 'queued',
         failCount: 0,
+        eventJobId: null,
       }),
     );
 
@@ -126,7 +129,7 @@ export class AgentDispatchService {
       content: packet.turns[3]?.content ?? title,
     });
 
-    await this.eventService.send(
+    const [eventJobId] = await this.eventService.send(
       AgentTaskDispatchEvent,
       {
         userId: context.userId,
@@ -137,7 +140,10 @@ export class AgentDispatchService {
       { singletonKey: jobId, priority: INTERACTIVE_JOB_PRIORITY },
     );
 
-    await this.doorbell.wakeOpenClaw(jobId);
+    if (eventJobId) {
+      await this.jobRepository.update({ id: jobId }, { eventJobId } as QueryDeepPartialEntity<AgentJobEntity>);
+      entity.eventJobId = eventJobId;
+    }
 
     return AgentJobEntity.toEgressType(entity);
   }
@@ -315,6 +321,7 @@ export class AgentDispatchService {
       status: 'blocked',
       reason,
     });
+    await this.completeEventJob(job, { status: 'blocked', reason });
   }
 
   private async finishCompleted(context: UserServiceContext, job: AgentJob): Promise<void> {
@@ -347,6 +354,15 @@ export class AgentDispatchService {
       taskId: job.taskId,
       status: 'completed',
     });
+    await this.completeEventJob(job, { status: 'completed' });
+  }
+
+  private async completeEventJob(job: AgentJob, output: Record<string, unknown>): Promise<void> {
+    if (!job.eventJobId) {
+      return;
+    }
+
+    await this.eventService.completeJob(AGENT_DISPATCH_QUEUE, job.eventJobId, output);
   }
 
   private async requireJob(context: UserServiceContext, id: string): Promise<AgentJob> {

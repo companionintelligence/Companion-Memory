@@ -20,6 +20,16 @@ export const OPENCLAW_APP_URN = 'ci-openclaw:ci-marketplace';
  * `ci.messages` plus one INSERT per turn: cheap, but pointless to run six
  * abreast against a 25-connection pool when the cadence is minutes.
  */
+/** Long-running OpenClaw dispatch. Stays `active` until checkpoint/complete. */
+export const AGENT_DISPATCH_QUEUE = 'agent';
+
+export const AGENT_DISPATCH_QUEUE_OPTIONS: QueueOptions = {
+  policy: 'short',
+  expireInSeconds: 2 * 60 * 60,
+  retryLimit: 3,
+  retryDelay: 30,
+};
+
 export const AGENT_MEMORY_QUEUE = 'agent-memory';
 
 export const AGENT_MEMORY_QUEUE_OPTIONS: QueueOptions = {

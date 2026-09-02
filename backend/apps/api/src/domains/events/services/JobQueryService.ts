@@ -605,19 +605,20 @@ export class JobQueryService {
     if (query.search) {
       const term = `%${query.search.trim()}%`;
 
-      // Event name, queue name and the failure message — the three things an
-      // operator actually types. NOT the payload: that is user content, and the
-      // whole point of the projection is that it never leaves the server.
-      //
-      // Event/queue names are taxonomy values, the same for every user, so they
-      // stay unscoped. The failure message is a different user's job output —
-      // this is a multi-user appliance with no admin role, so matching it is
-      // restricted to jobs `data->>'userId'` says the caller owns.
+      // Event name, queue name, the caller's own job id, and their failure
+      // message. NOT free-form payload: that is user content. `jobId` is the
+      // Memory-owned dispatch id operators paste from a Chat thread — scoped
+      // to `data->>'userId'` the same way failure text is.
       builder.andWhere(
         new Brackets((where) => {
           where
             .where(`job.data->>'name' ILIKE :term`, { term })
             .orWhere('job.name ILIKE :term', { term })
+            .orWhere(`job.id::text ILIKE :term AND job.data->>'userId' = :userId`, { term, userId })
+            .orWhere(`job.data->>'jobId' ILIKE :term AND job.data->>'userId' = :userId`, {
+              term,
+              userId,
+            })
             .orWhere(`job.output->>'message' ILIKE :term AND job.data->>'userId' = :userId`, {
               term,
               userId,

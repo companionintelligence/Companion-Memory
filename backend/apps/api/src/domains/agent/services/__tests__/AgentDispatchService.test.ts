@@ -16,6 +16,7 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
       failStep: null as string | null,
       failCount: 0,
       result: null,
+      eventJobId: 'pg-job-1',
       createdAt: new Date(),
       updatedAt: new Date(),
       completedAt: null,
@@ -29,7 +30,7 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
     };
     const messageService = { create: jest.fn() };
     const taskService = { update: jest.fn() };
-    const eventService = { send: jest.fn() };
+    const eventService = { send: jest.fn(), completeJob: jest.fn() };
     const doorbell = { wakeOpenClaw: jest.fn() };
     const logger = { setContext: jest.fn(), debug: jest.fn(), warn: jest.fn() };
 
@@ -69,7 +70,7 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
   });
 
   it('closes the task when the job completes', async () => {
-    const { service, taskService } = setup();
+    const { service, taskService, eventService } = setup();
 
     const updated = await service.checkpoint(context, 'job-1', {
       status: 'completed',
@@ -78,5 +79,6 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
 
     expect(updated.status).toBe('completed');
     expect(taskService.update).toHaveBeenCalledWith(context, 'task-1', { status: 'done' });
+    expect(eventService.completeJob).toHaveBeenCalledWith('agent', 'pg-job-1', { status: 'completed' });
   });
 });

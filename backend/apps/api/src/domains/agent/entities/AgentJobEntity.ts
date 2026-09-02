@@ -70,6 +70,10 @@ export class AgentJobEntity {
   @Column({ type: 'timestamptz', name: 'completed_at', nullable: true })
   completedAt!: Date | null;
 
+  /** pg-boss row for this dispatch — the Jobs page stays on this until OpenClaw finishes. */
+  @Column({ type: 'uuid', name: 'event_job_id', nullable: true })
+  eventJobId!: string | null;
+
   static toEgressType(entity: AgentJobEntity): AgentJob {
     return {
       id: entity.id,
@@ -86,6 +90,7 @@ export class AgentJobEntity {
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
       completedAt: entity.completedAt,
+      eventJobId: entity.eventJobId,
     };
   }
 }

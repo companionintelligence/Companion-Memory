@@ -357,13 +357,21 @@ function ChatPageContent() {
             onResponseFinished={handleResponseFinished}
             onStreamError={detachChatStream}
           >
-            {dispatchJob && (dispatchJob.status === 'completed' || dispatchJob.status === 'blocked') ? (
+            {dispatchJob &&
+            (dispatchJob.status === 'queued' ||
+              dispatchJob.status === 'running' ||
+              dispatchJob.status === 'completed' ||
+              dispatchJob.status === 'blocked') ? (
               <Card className="mx-auto mb-3 w-full max-w-xl border-border/80">
                 <Card.Content className="flex items-center justify-between gap-3 p-3 text-sm">
                   <span>
                     {dispatchJob.status === 'completed'
                       ? `OpenClaw finished “${dispatchJob.packet?.source?.title ?? thread?.name ?? 'this'}”.`
-                      : 'OpenClaw stopped and needs you.'}
+                      : dispatchJob.status === 'blocked'
+                        ? 'OpenClaw stopped and needs you.'
+                        : dispatchJob.status === 'running'
+                          ? 'OpenClaw is working this.'
+                          : 'Waiting on OpenClaw. The Jobs page shows this as Dispatch to OpenClaw.'}
                   </span>
                   {dispatchJob.taskId ? (
                     <Button variant="outline" size="sm" onClick={() => navigate('/memory/plan')}>

@@ -533,7 +533,7 @@ const FINGERPRINT_CATEGORY: ReadonlyArray<readonly [RegExp, JobCategory]> = [
   [/^(note|event|item|place|person|concept|content|answer|thread|message|communication|browseractivity|position|product|receipt|agent-memory)\./, JOB_CATEGORIES.search],
   [/^file\.|^preview\.|^ingest\./, JOB_CATEGORIES.ingest],
   [/^infer\.|^chat\.|^hbpe\.|^summary/, JOB_CATEGORIES.llm],
-  [/^task\.|^planning\./, JOB_CATEGORIES.planning],
+  [/^task\.|^planning\.|^agent\./, JOB_CATEGORIES.planning],
   [/^import\.|^sync/, JOB_CATEGORIES.import],
   [/^graph\.|^visit\./, JOB_CATEGORIES.graph],
   [/^pipeline\./, JOB_CATEGORIES.pipeline],
