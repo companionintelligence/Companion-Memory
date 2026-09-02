@@ -934,7 +934,7 @@ export function VerticalCalendar({
 
       <div
         ref={scrollRef}
-        className="max-h-[min(70vh,calc(100vh-12rem))] overflow-auto"
+        className="min-h-0 flex-1 overflow-auto"
         data-testid="vertical-calendar-scroll"
         {...{ [SCHEDULE_SCROLL_ATTR]: '' }}
       >

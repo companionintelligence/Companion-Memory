@@ -336,24 +336,15 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   const isTrulyEmpty = !loading && !fetching && !hasAnything && !error && !planError && weekOffset === 0;
   const showScheduleSurface = weekOffset !== 0 || hasAnything || planError || fetching;
 
-  // Embedded, the host supplies the frame, so this keeps only the column gap
-  // and drops the safe-area top padding, which belongs to whatever is actually
-  // at the top of the page.
+  // Embedded, the host (Calendar) supplies the frame and is otherwise empty —
+  // this is the whole page now, not one block in a taller scrolling column —
+  // so it takes the host's full height (`flex-1 min-h-0`) rather than sizing
+  // to its own content, and the calendar grid inside gets a real, bounded
+  // height to fill and scroll within instead of a viewport-fraction cap.
   //
   // `relative` is not decoration: LoadingPage is `absolute inset-0 z-10`, so
   // without a positioned boundary here it anchors to the HOST's PageContent
-  // and blankets the whole composed page — the schedule's spinner would cover
-  // the brief below it. `min-h-60` gives that spinner somewhere to be, since
-  // while it shows there is nothing else in this column to give the box height.
-  //
-  // `shrink-0` is what makes `min-h-60` safe. The host is a definite-height
-  // flex column, and a flex item's default `min-height: auto` — its
-  // content-based automatic minimum — is the only reason pages overflow and
-  // scroll instead of squashing. Setting min-height REPLACES that automatic
-  // minimum, which would re-enable shrinking: schedule and brief together
-  // exceed any normal viewport, so both would be compressed below their
-  // content, painting over each other and putting part of the page out of
-  // scroll range. Refusing to shrink restores overflow-and-scroll.
+  // and blankets the page.
   //
   // `PageContent` is a stable module-level reference and `'div'` is a string,
   // so `Frame` keeps the same element type across renders — no remounting, and
@@ -434,7 +425,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
 
   return (
     <>
-      <Frame className={embedded ? 'relative flex min-h-60 w-full min-w-0 shrink-0 flex-col gap-3' : 'gap-3'}>
+      <Frame className={embedded ? 'relative flex min-h-0 w-full min-w-0 flex-1 flex-col gap-3' : 'gap-3'}>
         {fetching && !hasAnything && <LoadingPage />}
 
         {actionError && (
@@ -466,7 +457,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
             {/* One schedule, one geometry. Week chrome, then the week — where
                 what a day usually holds rides in beside the hours rather than
                 as a second tab of the same seven days. */}
-            <div className={cn('flex flex-col', isMobile ? 'gap-3' : 'gap-4')}>
+            <div className={cn('flex min-h-0 flex-1 flex-col', isMobile ? 'gap-3' : 'gap-4')}>
               {isMobile ? (
                 <div className="flex flex-col gap-2">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -505,6 +496,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
               {isMobile && <TodayNowNext events={events} day={selectedDay} />}
 
               <VerticalCalendar
+                className="min-h-0 flex-1"
                 start={isMobile ? selectedDay : start}
                 days={isMobile ? 1 : DAYS_IN_VIEW}
                 events={events}

@@ -77,7 +77,7 @@ const SharedSearchPage = lazy(() => import('@/pages/SharedSearchPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 const SelfPage = lazy(() => import('@/pages/SelfPage'));
 const TagsPage = lazy(() => import('@/pages/TagsPage'));
-// Pulls SchedulePage and FeedPage in with it — neither is routed on its own.
+// Pulls SchedulePage in with it — SchedulePage is not routed on its own.
 const TodayPage = lazy(() => import('@/pages/TodayPage'));
 const SummaryDetailPage = lazy(() => import('@/pages/SummaryDetailPage'));
 

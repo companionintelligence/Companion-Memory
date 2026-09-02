@@ -546,7 +546,7 @@ describe('SchedulePage — week paging', () => {
       setSchedule({ fetching: true, events: [], rhythm: [] });
 
       const { container } = renderWithProviders(<SchedulePage embedded />);
-      const surface = container.querySelector('.min-h-60');
+      const surface = container.querySelector('.relative.flex-1');
 
       expect(surface).not.toBeNull();
       expect(surface).toHaveClass('relative');
