@@ -91,7 +91,6 @@ function renderCard(
       saving={false}
       error={failure.error ?? null}
       errorStatus={failure.errorStatus ?? null}
-      jobTypes={null}
       onSave={onSave}
     />,
   );
@@ -288,48 +287,6 @@ describe('JobControlsCard queues', () => {
     openSection(/Queues/);
 
     expect(screen.getByText(/Running at 6 — a lower ceiling applies/)).toBeInTheDocument();
-  });
-});
-
-describe('JobControlsCard schedules', () => {
-  it('switches a schedule off by name', async () => {
-    const { onSave } = renderCard(controls());
-
-    openSection(/Schedules/);
-    // The switch is identified by the schedule's human label, which
-    // `describeCron` derives from the registry key `PlanningJobsCron.todoScan`.
-    fireEvent.click(screen.getByRole('switch', { name: /Todo scan/i }));
-
-    await waitFor(() =>
-      expect(onSave).toHaveBeenCalledWith({
-        crons: [{ name: 'PlanningJobsCron.todoScan', mode: 'disabled' }],
-      }),
-    );
-  });
-
-  it('says a disabled schedule does not run, and how many ticks it has skipped', () => {
-    renderCard(controls({ crons: [cron({ mode: 'disabled', skippedCount: 42 })] }));
-    openSection(/Schedules/);
-
-    expect(screen.getByText(/this schedule does not run/i)).toBeInTheDocument();
-    expect(screen.getByText(/42 ticks skipped/)).toBeInTheDocument();
-  });
-
-  it('will not let a protected schedule be switched off', () => {
-    renderCard(
-      controls({
-        crons: [
-          cron({
-            name: 'JobMetricsCollector.sampleOnSchedule',
-            locked: true,
-            lockedReason: 'Samples the queue depths this page charts.',
-          }),
-        ],
-      }),
-    );
-    openSection(/Schedules/);
-
-    expect(screen.getByRole('switch', { name: /Job metrics sample/i })).toBeDisabled();
   });
 });
 

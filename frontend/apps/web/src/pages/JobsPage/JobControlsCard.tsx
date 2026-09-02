@@ -3,18 +3,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { Accordion, Badge, Card, Input, Skeleton, Switch, cn } from '@ci/shadcn';
 import { AlertTriangle, Lock } from '@ci/shadcn/icons';
 
-import { describeCron } from './cronDescriptor';
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
 import { categoryDot, categoryLabel, CATEGORY_LABELS } from './jobCategories';
 import type {
-  CronMode,
   JobControlsPatch,
   JobControlsResponse,
-  JobCronControl,
   JobMode,
   JobQueueControl,
 } from './useJobControls';
-import type { JobTypesResponse } from './useJobTypes';
 
 /**
  * The operator's controls over the job system.
@@ -43,7 +39,6 @@ export function JobControlsCard({
   saving,
   error,
   errorStatus,
-  jobTypes,
   onSave,
 }: {
   controls: JobControlsResponse | null;
@@ -52,19 +47,13 @@ export function JobControlsCard({
   error: string | null;
   /** HTTP status behind `error`, when there was one. Decides the explanation. */
   errorStatus?: number | null;
-  jobTypes: JobTypesResponse | null;
   onSave: (patch: JobControlsPatch) => Promise<boolean>;
 }) {
   const phone = usePhone();
 
   const queueGroups = useMemo(() => groupQueues(controls?.queues ?? []), [controls?.queues]);
-  const cronRows = useMemo(
-    () => (controls?.crons ?? []).map((cron) => ({ cron, descriptor: describeCron(cron.name, jobTypes) })),
-    [controls?.crons, jobTypes],
-  );
 
   const offQueues = (controls?.queues ?? []).filter((queue) => queue.mode !== 'enabled').length;
-  const offCrons = (controls?.crons ?? []).filter((cron) => cron.mode === 'disabled').length;
 
   return (
     <FoldCard fold>
@@ -155,35 +144,6 @@ export function JobControlsCard({
                   </Accordion.Content>
                 </Accordion.Item>
 
-                <Accordion.Item value="schedules">
-                  <Accordion.Trigger className="py-2.5 text-sm hover:no-underline">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="truncate">Schedules</span>
-                      <span className="text-xs font-normal text-muted-foreground tabular-nums">
-                        {controls.crons.length}
-                      </span>
-                      {offCrons > 0 ? (
-                        <Badge variant="secondary" className="text-[10px] uppercase">
-                          {offCrons} off
-                        </Badge>
-                      ) : null}
-                    </span>
-                  </Accordion.Trigger>
-                  <Accordion.Content>
-                    <ul className="pb-2">
-                      {cronRows.map(({ cron, descriptor }) => (
-                        <CronRow
-                          key={cron.name}
-                          cron={cron}
-                          label={descriptor.label}
-                          category={descriptor.category}
-                          saving={saving}
-                          onSave={onSave}
-                        />
-                      ))}
-                    </ul>
-                  </Accordion.Content>
-                </Accordion.Item>
               </Accordion>
             </>
           )}
@@ -393,58 +353,6 @@ function QueueStatusLine({ queue, globallyPaused }: { queue: JobQueueControl; gl
   }
 
   return dropped ? <p className="mt-0.5 text-xs text-muted-foreground">Running.{dropped}</p> : null;
-}
-
-function CronRow({
-  cron,
-  label,
-  category,
-  saving,
-  onSave,
-}: {
-  cron: JobCronControl;
-  label: string;
-  category: string;
-  saving: boolean;
-  onSave: (patch: JobControlsPatch) => Promise<boolean>;
-}) {
-  const disabled = cron.mode === 'disabled';
-  const inputId = `cron-${cron.name.replace(/[^\w-]/g, '-')}`;
-
-  return (
-    <li className="flex items-start justify-between gap-3 border-t border-border/40 py-2 first:border-t-0">
-      {/* Only the schedule's name is inside the label — the cadence and the
-          off-notice are described-by instead, so the switch is identified by
-          "Planning jobs todo scan" rather than by that plus a cron expression. */}
-      <div className="min-w-0 flex-1">
-        <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
-          <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${categoryDot(category)}`} />
-          <label htmlFor={inputId}>{label}</label>
-          {cron.locked ? <LockedBadge reason={cron.lockedReason} /> : null}
-        </span>
-        <p id={`${inputId}-cadence`} className="mt-0.5 text-xs text-muted-foreground" title={cron.name}>
-          {cron.cron}
-        </p>
-        {disabled ? (
-          <p className="mt-0.5 text-xs text-destructive">
-            Off — this schedule does not run.
-            {cron.skippedCount > 0
-              ? ` ${cron.skippedCount.toLocaleString()} tick${cron.skippedCount === 1 ? '' : 's'} skipped.`
-              : ''}
-          </p>
-        ) : null}
-      </div>
-      <Switch
-        id={inputId}
-        aria-describedby={`${inputId}-cadence`}
-        checked={!disabled}
-        disabled={saving || cron.locked}
-        onCheckedChange={(next) =>
-          void onSave({ crons: [{ name: cron.name, mode: (next ? 'enabled' : 'disabled') as CronMode }] })
-        }
-      />
-    </li>
-  );
 }
 
 function LockedBadge({ reason }: { reason: string | null }) {

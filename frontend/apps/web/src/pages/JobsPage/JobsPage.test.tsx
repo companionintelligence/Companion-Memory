@@ -651,6 +651,99 @@ describe('JobsPage schedules', () => {
     expect(scheduleRow('JobMetricsCollector.purgeOnSchedule')).toHaveTextContent('Job metrics purge');
   });
 
+  /**
+   * The switch used to live in the Controls card, in a second list of all 53
+   * schedules with its own copy of each name and cadence — so the page rendered
+   * every schedule twice, and "is this on, and when does it next run?" was split
+   * across two cards. These three cases moved here with the switch.
+   */
+  describe('the on/off switch beside the schedule', () => {
+    /** The controls payload the switch reads, joined to the dashboard by name. */
+    function withControl(name: string, overrides: Record<string, unknown> = {}) {
+      controlsState.data = {
+        global: {
+          concurrency: { value: 10, effective: 10, source: 'default' },
+          perQueueConcurrency: { value: 6, effective: 6, source: 'default' },
+          nonInteractive: 'enabled',
+        },
+        topology: { role: 'all', queueWorkerProcesses: 1, perProcessConcurrency: 6 },
+        maxConcurrency: 64,
+        queues: [],
+        crons: [
+          {
+            name,
+            cron: '0 0 * * * *',
+            mode: 'enabled',
+            locked: false,
+            lockedReason: null,
+            skippedCount: 0,
+            lastSkippedAt: null,
+            ...overrides,
+          },
+        ],
+      } as unknown as JobControlsResponse;
+    }
+
+    afterEach(() => {
+      controlsState.data = null;
+      controlsState.save.mockClear();
+    });
+
+    it('switches a schedule off from its own row', async () => {
+      withControl('PlanningJobsCron.todoScan');
+      render({ dashboard: dashboard({ crons: [cron('PlanningJobsCron.todoScan')] }) });
+
+      const row = scheduleRow('PlanningJobsCron.todoScan');
+      fireEvent.click(within(row).getByRole('switch'));
+
+      await waitFor(() =>
+        expect(controlsState.save).toHaveBeenCalledWith({
+          crons: [{ name: 'PlanningJobsCron.todoScan', mode: 'disabled' }],
+        }),
+      );
+    });
+
+    it('says a disabled schedule does not run, and how many ticks it skipped', () => {
+      withControl('PlanningJobsCron.todoScan', { mode: 'disabled', skippedCount: 42 });
+      render({ dashboard: dashboard({ crons: [cron('PlanningJobsCron.todoScan')] }) });
+
+      const toggle = within(scheduleRow('PlanningJobsCron.todoScan')).getByRole('switch');
+
+      expect(toggle).not.toBeChecked();
+      expect(toggle).toHaveAttribute('title', expect.stringMatching(/does not run/i));
+      expect(toggle).toHaveAttribute('title', expect.stringMatching(/42 ticks skipped/));
+    });
+
+    it('will not let a protected schedule be switched off', () => {
+      withControl('JobMetricsCollector.sampleOnSchedule', {
+        locked: true,
+        lockedReason: 'Samples the queue depths this page charts.',
+      });
+      render({
+        dashboard: dashboard({ crons: [cron('JobMetricsCollector.sampleOnSchedule')] }),
+      });
+
+      expect(
+        within(scheduleRow('JobMetricsCollector.sampleOnSchedule')).getByRole('switch'),
+      ).toBeDisabled();
+    });
+
+    /**
+     * The table is the record of what is REGISTERED. A schedule the controls
+     * endpoint does not know about — an older server, or one registered since
+     * the controls were read — keeps its row and loses only its switch.
+     */
+    it('still lists a schedule the controls endpoint has never heard of', () => {
+      controlsState.data = null;
+      render({ dashboard: dashboard({ crons: [cron('PlanningJobsCron.todoScan')] }) });
+
+      const row = scheduleRow('PlanningJobsCron.todoScan');
+
+      expect(row).toHaveTextContent('Todo scan');
+      expect(within(row).queryByRole('switch')).not.toBeInTheDocument();
+    });
+  });
+
   it('marks a scheduler-minted name as the backend bug it is', () => {
     const uuid = '007c9ac0-fb23-4203-809b-c2d100b373e4';
 
