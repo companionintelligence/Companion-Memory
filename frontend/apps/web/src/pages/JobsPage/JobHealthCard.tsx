@@ -118,7 +118,9 @@ export function JobHealthCard({
               ))}
               {rest > 0 ? <span className="tabular-nums">Other {rest.toLocaleString()}</span> : null}
               {emptyCategories > 0 ? (
-                <span className="text-muted-foreground/70">· {emptyCategories} categories empty</span>
+                <span className="text-muted-foreground/70">
+                  · {emptyCategories} {emptyCategories === 1 ? 'category' : 'categories'} empty
+                </span>
               ) : null}
             </div>
           </div>
