@@ -1,12 +1,9 @@
-import { Collapsible, cn } from '@ci/shadcn';
-import { CalendarRange, ChevronRight, ListTodo } from '@ci/shadcn/icons';
-import { Link, useLocation } from 'react-router-dom';
+import { CalendarRange, ListTodo } from '@ci/shadcn/icons';
+import { useLocation } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
 
-import { usePowerRail } from '../PowerRailContext';
-
-import { NavLink } from './NavLink';
+import { RailSubmenuHead, RailSubmenuRow, RailSubmenuShell } from './RailSubmenuShell';
 import { useFeedBadgeCount } from './useFeedBadgeCount';
 import { usePlanBadgeCount } from './usePlanBadgeCount';
 import { useRailSubmenuOpen } from './useRailSubmenuOpen';
@@ -34,26 +31,18 @@ function badgePill(count: number) {
 /**
  * Power Rail Planning entry with two sub-views: Tasks and Calendar.
  *
- * Modeled on MemorySubmenu — same head-row-plus-chevron shape, same
- * sticky/hover/route-driven open state — but with two static children
- * instead of a shared sections module, since nothing else in the app
+ * Static children, not a shared sections module — nothing else in the app
  * consumes a "Planning sections" list the way MemoryHubNav also consumes
  * MEMORY_HUB_SECTIONS.
  */
 export function PlanningSubmenu() {
-  const { expanded } = usePowerRail();
   const { pathname } = useLocation();
   const { isFeatureEnabled } = useFeatures();
-  const routeOpen = pathname.startsWith('/plan');
-  const { open, onMouseEnter, onMouseLeave, onOpenChange, onHeadClick } = useRailSubmenuOpen(
-    'plan',
-    routeOpen,
-  );
+  const routeOpen = pathname === '/plan' || pathname.startsWith('/plan/');
+  const { open, onOpenChange, onHeadClick } = useRailSubmenuOpen('plan', routeOpen);
 
   const planBadgeCount = usePlanBadgeCount();
   const feedBadgeCount = useFeedBadgeCount();
-
-  const planningRootActive = pathname === '/plan';
 
   const sections: PlanningSection[] = [
     { to: '/plan/tasks', label: 'Tasks', icon: ListTodo, flag: 'planning.page', badgeCount: planBadgeCount },
@@ -62,84 +51,37 @@ export function PlanningSubmenu() {
 
   const visible = sections.filter((section) => !section.flag || isFeatureEnabled(section.flag));
   const combinedBadgeCount = visible.reduce((total, section) => total + section.badgeCount, 0);
-
-  if (!expanded) {
-    return (
-      <NavLink to="/plan" label="Planning" badgeCount={combinedBadgeCount}>
-        <ListTodo className="h-6 w-6 shrink-0" strokeWidth={1.25} />
-      </NavLink>
-    );
-  }
+  const planningIcon = <ListTodo className="h-6 w-6 shrink-0" strokeWidth={1.25} />;
 
   return (
-    <div
-      data-testid="planning-submenu"
-      className="min-w-0 w-full overflow-hidden"
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
+    <RailSubmenuShell
+      to="/plan"
+      ariaLabel="Planning"
+      chevronLabel="Planning"
+      routeOpen={routeOpen}
+      open={open}
+      onOpenChange={onOpenChange}
+      onHeadClick={onHeadClick}
+      testId="planning-submenu"
+      collapsedIcon={planningIcon}
+      collapsedBadge={badgePill(combinedBadgeCount)}
+      head={<RailSubmenuHead icon={planningIcon} label="Planning" badge={badgePill(combinedBadgeCount)} />}
     >
-      <Collapsible
-        open={open}
-        onOpenChange={onOpenChange}
-        className="min-w-0 w-full"
-      >
-        {/* One row: Planning + chevron share the same box (same geometry as NavLink). */}
-        <div
-          className={cn(
-            'flex min-w-0 w-full items-center rounded-md border-l-2 border-transparent',
-            planningRootActive && 'border-l-primary text-primary',
-          )}
-        >
-          <Link
-            to="/plan"
-            aria-label="Planning"
-            aria-current={planningRootActive ? 'page' : undefined}
-            onClick={onHeadClick}
-            className={cn(
-              'flex min-w-0 flex-1 items-center gap-3 rounded-l-md px-2 py-2 transition hover:bg-accent hover:text-accent-foreground',
-              planningRootActive && 'text-primary hover:text-primary',
-            )}
-          >
-            <ListTodo className="h-6 w-6 shrink-0" strokeWidth={1.25} />
-            <span className="truncate text-sm">Planning</span>
-            {badgePill(combinedBadgeCount)}
-          </Link>
-          <Collapsible.Trigger
-            className="flex shrink-0 items-center self-stretch rounded-r-md px-2 transition hover:bg-accent hover:text-accent-foreground [&[data-state=open]>svg]:rotate-90"
-            aria-label={open ? 'Collapse Planning sections' : 'Expand Planning sections'}
-          >
-            <ChevronRight className="h-4 w-4 shrink-0 transition-transform" />
-          </Collapsible.Trigger>
-        </div>
+      {visible.map((section) => {
+        const Icon = section.icon;
+        const active = pathname === section.to || pathname.startsWith(`${section.to}/`);
 
-        <Collapsible.Content className="min-w-0 overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
-          <div className="flex min-w-0 flex-col">
-            {visible.map((section) => {
-              const Icon = section.icon;
-              const active = pathname === section.to || pathname.startsWith(`${section.to}/`);
-
-              return (
-                <Link
-                  key={section.to}
-                  to={section.to}
-                  aria-label={section.label}
-                  aria-current={active ? 'page' : undefined}
-                  className={cn(
-                    'flex min-w-0 items-center gap-2 rounded-md border-l-2 border-transparent px-2 py-1.5 text-sm leading-tight transition hover:bg-accent hover:text-accent-foreground',
-                    active && 'border-l-primary text-primary hover:text-primary',
-                  )}
-                >
-                  <span className="grid size-6 shrink-0 place-items-center" aria-hidden>
-                    <Icon className="h-4 w-4 text-muted-foreground" strokeWidth={1.25} />
-                  </span>
-                  <span className="truncate">{section.label}</span>
-                  {badgePill(section.badgeCount)}
-                </Link>
-              );
-            })}
-          </div>
-        </Collapsible.Content>
-      </Collapsible>
-    </div>
+        return (
+          <RailSubmenuRow
+            key={section.to}
+            to={section.to}
+            label={section.label}
+            active={active}
+            icon={<Icon className="h-4 w-4 text-muted-foreground" strokeWidth={1.25} />}
+            badge={badgePill(section.badgeCount)}
+          />
+        );
+      })}
+    </RailSubmenuShell>
   );
 }
