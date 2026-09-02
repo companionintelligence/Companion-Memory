@@ -370,8 +370,8 @@ function ChatPageContent() {
                       : dispatchJob.status === 'blocked'
                         ? 'OpenClaw stopped and needs you.'
                         : dispatchJob.status === 'running'
-                          ? 'OpenClaw is working this.'
-                          : 'Waiting on OpenClaw. The Jobs page shows this as Dispatch to OpenClaw.'}
+                          ? 'OpenClaw is working this. You can leave. Replies land here.'
+                          : 'OpenClaw has this. You can leave. Replies land here when it checks in.'}
                   </span>
                   {dispatchJob.taskId ? (
                     <Button variant="outline" size="sm" onClick={() => navigate('/memory/plan')}>

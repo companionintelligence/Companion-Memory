@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from 'react';
 
+import { useToast } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
 import { useAgentHarnesses, type AgentHarnessStatus } from '@/api/useAgentHarnesses';
@@ -19,6 +20,7 @@ export function isChatableHarness(harness: AgentHarnessStatus): boolean {
 
 export function useChatAboutActions(context: AgentChatContext) {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [{ authToken }] = useAuth();
   const { harnesses, loading } = useAgentHarnesses();
 
@@ -59,15 +61,24 @@ export function useChatAboutActions(context: AgentChatContext) {
       return;
     }
 
-    const job = await createDispatchJob(authToken, {
-      sourceKind: context.sourceKind ?? 'GenericEntity',
-      sourceId: context.sourceId ?? context.title,
-      title: context.title,
-      body: context.body,
-    });
+    try {
+      const job = await createDispatchJob(authToken, {
+        sourceKind: context.sourceKind ?? 'GenericEntity',
+        sourceId: context.sourceId ?? context.title,
+        title: context.title,
+        body: context.body,
+      });
 
-    navigate(chatThreadPath(job.threadId));
-  }, [authToken, context, navigate, openclaw]);
+      toast.success('Handed to OpenClaw. It writes back into the thread when it has something.', {
+        action: {
+          label: 'Open thread',
+          onClick: () => navigate(chatThreadPath(job.threadId)),
+        },
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Dispatch did not start.');
+    }
+  }, [authToken, context, navigate, openclaw, toast]);
 
   return {
     harnesses: installedHarnesses,
