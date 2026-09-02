@@ -5,12 +5,10 @@ const STORAGE_KEY = 'ci-power-rail-expanded';
 export type PowerRailVariant = 'dock' | 'overlay';
 
 interface PowerRailContextValue {
-  /** Showing labels right now — pinned open, hovered open, or held by a popover. */
+  /** Showing labels right now — pinned open, or held open by a popover. */
   expanded: boolean;
   /** Pinned open by a deliberate choice. Persisted; survives the pointer leaving. */
   pinned: boolean;
-  /** Open only because the pointer (or focus) is in it. */
-  hovered: boolean;
   /**
    * Held open by an interaction that lives outside the rail DOM (e.g. a
    * portaled colour picker). Without this, moving into the portal fires
@@ -23,7 +21,12 @@ interface PowerRailContextValue {
   toggle: () => void;
   openOverlay: () => void;
   closeOverlay: () => void;
-  setHovered: (hovered: boolean) => void;
+  /**
+   * Whether the pointer/focus is inside the rail. No longer widens anything —
+   * it exists only so leaving closes a submenu that hover opened. See the
+   * note on `expanded` in the provider for why width stopped following it.
+   */
+  setPointerWithin: (within: boolean) => void;
   setHoldOpen: (holdOpen: boolean) => void;
   /**
    * Which rail submenu the pointer is in. Hover is exclusive: opening Jobs
@@ -61,27 +64,33 @@ export function PowerRailProvider({
   children: ReactNode;
   variant?: PowerRailVariant;
 }) {
-  // Two reasons the rail is open, and they must not fight. `pinned` is a
-  // decision: it survives the pointer leaving, and a reload. `hovered` is a
-  // passing intention that expires the moment you move away. Pinned wins, so
-  // brushing across a pinned rail never collapses it, and a mouse passing
-  // through never overwrites the stored preference.
+  // The rail opens because someone asked it to, and for no other reason.
   //
-  // `holdOpen` is a third reason: a portaled popover (Colours) is open, so the
-  // pointer left the rail on purpose and must not collapse it underneath.
+  // `pinned` is that decision: persisted, and it survives both the pointer
+  // leaving and a reload. It used to be one of two reasons, the other being
+  // hover — brushing past the rail on the way to something else widened a
+  // drawer over the page. That is now gone: passing a pointer near an edge is
+  // not a request, and the cost of guessing wrong was paid on every stray
+  // mouse movement.
   //
-  // Overlay (phone) is a fourth: a swipe or the edge control opens a glass
-  // drawer. It is not pinned, not stored, and never hover-driven.
+  // `holdOpen` is the one remaining involuntary reason, and it only ever keeps
+  // an already-open rail open: a portaled popover (Colours) has taken the
+  // pointer outside the rail's DOM, which fires mouseleave, and collapsing
+  // underneath an open picker would be a bug rather than a preference.
+  //
+  // Overlay (phone) is separate: a swipe or the edge control opens a glass
+  // drawer. It is not pinned, not stored, and never pointer-driven.
   const [pinned, setPinned] = useState(variant === 'dock' ? readStoredExpanded : false);
-  const [hovered, setHoveredState] = useState(false);
   const [holdOpen, setHoldOpen] = useState(false);
   const [overlayOpen, setOverlayOpen] = useState(false);
   const [hoveredSubmenuId, setHoveredSubmenuId] = useState<string | null>(null);
   const [stickySubmenuId, setStickySubmenuId] = useState<string | null>(null);
 
-  const setHovered = useCallback((next: boolean) => {
-    setHoveredState(next);
-    if (!next) {
+  // Leaving the rail still closes whatever submenu hover opened inside it —
+  // that hover is between the groups in the rail, not the rail and the page,
+  // and it is unaffected by the width change.
+  const setPointerWithin = useCallback((within: boolean) => {
+    if (!within) {
       setHoveredSubmenuId(null);
     }
   }, []);
@@ -106,16 +115,15 @@ export function PowerRailProvider({
 
   const value = useMemo(
     () => ({
-      expanded: variant === 'overlay' ? overlayOpen : pinned || hovered || holdOpen,
+      expanded: variant === 'overlay' ? overlayOpen : pinned || holdOpen,
       // Overlay is always a floating drawer, never a pinned column.
       pinned: variant === 'overlay' ? false : pinned,
-      hovered: variant === 'overlay' ? overlayOpen : hovered,
       holdOpen,
       variant,
       toggle,
       openOverlay,
       closeOverlay,
-      setHovered,
+      setPointerWithin,
       setHoldOpen,
       hoveredSubmenuId,
       setHoveredSubmenuId,
@@ -126,12 +134,11 @@ export function PowerRailProvider({
       variant,
       overlayOpen,
       pinned,
-      hovered,
       holdOpen,
       toggle,
       openOverlay,
       closeOverlay,
-      setHovered,
+      setPointerWithin,
       hoveredSubmenuId,
       stickySubmenuId,
     ],

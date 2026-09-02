@@ -549,29 +549,37 @@ describe('PowerRailToggle', () => {
     expect(localStorage.getItem(STORAGE_KEY)).toBe('false');
   });
 
-  // H4: hovering the rail open is a passing intention, not a decision — it
-  // must not tell assistive tech the menu was deliberately expanded. Only a
-  // pin (persisted, survives the pointer leaving) should.
-  it('reports aria-expanded from pinned, not from a hover-only expansion', () => {
+  // The rail opens because someone asked it to. Moving a pointer near an edge
+  // on the way somewhere else is not asking — it used to widen a drawer over
+  // the page anyway, on every stray movement. This pins that it no longer does,
+  // and that pinning is still the thing that opens it.
+  it('does not open on hover — only a deliberate pin opens it', () => {
     const { container } = renderToggleAndRail();
 
     const toggle = container.querySelector('button[aria-controls="power-rail"]');
     const lane = container.querySelector('div.relative');
+    const nav = screen.getByRole('navigation');
 
+    expect(nav).toHaveAttribute('data-state', 'collapsed');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
     fireEvent.mouseEnter(lane as Element);
 
-    // Hover really did open the rail...
-    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'expanded');
-    // ...but the toggle must not claim it as "expanded".
+    // The whole point: hovering changes nothing.
+    expect(nav).toHaveAttribute('data-state', 'collapsed');
+    expect(nav).toHaveClass('w-14');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
     fireEvent.mouseLeave(lane as Element);
+    expect(nav).toHaveAttribute('data-state', 'collapsed');
 
-    // A deliberate pin is what flips it.
+    // A pin is what opens it, and it stays open with the pointer elsewhere.
     fireEvent.click(toggle as Element);
+    expect(nav).toHaveAttribute('data-state', 'expanded');
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.mouseLeave(lane as Element);
+    expect(nav).toHaveAttribute('data-state', 'expanded');
   });
 });
 

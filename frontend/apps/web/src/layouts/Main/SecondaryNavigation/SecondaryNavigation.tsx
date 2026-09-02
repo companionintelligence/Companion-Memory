@@ -174,7 +174,7 @@ function OverlayRail({
 }
 
 export function SecondaryNavigation() {
-  const { expanded, pinned, setHovered, variant, closeOverlay } = usePowerRail();
+  const { expanded, pinned, setPointerWithin, variant, closeOverlay } = usePowerRail();
   const destinations = useVisibleRailDestinations();
   const [{ isOpen: captureOpen }, { close: closeCapture }] = useCaptureModal();
   const overlay = variant === 'overlay';
@@ -247,12 +247,13 @@ export function SecondaryNavigation() {
       {captureModal}
       <div
         className={cn('relative h-full shrink-0 transition-[width] duration-200', pinned ? 'w-56' : 'w-14')}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        onFocusCapture={() => setHovered(true)}
+        // Leave only, and it no longer widens anything: the rail opens when
+        // pinned, not when a pointer passes by. What this still does is close a
+        // submenu that hover opened between the groups inside it.
+        onMouseLeave={() => setPointerWithin(false)}
         onBlurCapture={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            setHovered(false);
+            setPointerWithin(false);
           }
         }}
       >
