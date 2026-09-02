@@ -208,7 +208,7 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
 
   return (
     <Dialog open onOpenChange={(open) => !open && void handleClose()}>
-      <Dialog.Content className="sm:max-w-[425px]">
+      <Dialog.Content className="overflow-x-hidden sm:max-w-[425px]">
         <Dialog.Header>
           <Dialog.Title>Edit task</Dialog.Title>
           <Dialog.Description>
@@ -216,8 +216,8 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
           </Dialog.Description>
         </Dialog.Header>
 
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
+        <div className="flex min-w-0 flex-col gap-4">
+          <div className="flex min-w-0 flex-col gap-2">
             <Label htmlFor="edit-task-title">Title</Label>
             <Textarea
               id="edit-task-title"
@@ -225,17 +225,18 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
               onChange={(e) => patch({ title: e.target.value })}
               autoFocus
               rows={4}
-              className="min-h-20 resize-y"
+              className="field-sizing-fixed min-h-20 min-w-0 resize-y break-all"
             />
           </div>
 
-          <div className="flex flex-col gap-2">
+          <div className="flex min-w-0 flex-col gap-2">
             <Label htmlFor="edit-task-description">Notes</Label>
             <Textarea
               id="edit-task-description"
               value={draft.description}
               onChange={(e) => patch({ description: e.target.value })}
               rows={3}
+              className="field-sizing-fixed min-w-0 break-all"
             />
           </div>
 

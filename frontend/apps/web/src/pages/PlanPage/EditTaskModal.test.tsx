@@ -68,6 +68,8 @@ describe('EditTaskModal', () => {
 
     expect(titleField.tagName).toBe('TEXTAREA');
     expect(titleField).toHaveValue('Write the migration');
+    expect(titleField).toHaveClass('break-all');
+    expect(titleField).toHaveClass('field-sizing-fixed');
     expect(screen.getByLabelText(/^notes$/i)).toHaveValue('First draft');
     expect(screen.getByLabelText(/^minutes$/i)).toHaveValue(30);
   });
