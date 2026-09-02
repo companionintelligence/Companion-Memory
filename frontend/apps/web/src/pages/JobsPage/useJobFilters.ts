@@ -1,8 +1,8 @@
 import { useCallback, useMemo } from 'react';
 
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
-import { categoryFromPath } from './jobsSections';
+import { categoryFromPath, JOBS_CATEGORY_BASE } from './jobsSections';
 import { DEFAULT_JOB_FILTERS, type JobFilters } from './useJobsList';
 
 /**
@@ -59,6 +59,7 @@ function readNumber(raw: string | null, fallback: number): number {
 export function useJobFilters(limit: number): JobFilterState {
   const [params, setParams] = useSearchParams();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
 
   // `/jobs/category/:category` names the category in the PATH, so the path wins
   // there. Everywhere else the query string owns it. Without this precedence a
@@ -81,6 +82,35 @@ export function useJobFilters(limit: number): JobFilterState {
 
   const setFilters = useCallback(
     (next: Partial<JobFilters>, options: { push?: boolean } = {}) => {
+      // On `/jobs/category/:category` the PATH owns the category, so a chip that
+      // writes `?category=` writes to the losing channel: the next render puts
+      // `routeCategory` back and nothing moves. That made the entire category
+      // row — ten rail destinations' worth — plus Clear into dead controls, on
+      // the one route where the table is all there is.
+      //
+      // Changing the category there is a NAVIGATION, not a query edit. Every
+      // other filter still rides the query string, and is carried across so
+      // switching category does not silently drop a state or search filter.
+      if (routeCategory != null && next.category !== undefined && next.category !== routeCategory) {
+        const carried = new URLSearchParams(params);
+
+        carried.delete('category');
+        carried.delete('offset');
+
+        if (next.type != null && next.type !== '') {
+          carried.set('type', next.type);
+        } else {
+          carried.delete('type');
+        }
+
+        const query = carried.toString();
+        const base = next.category === '' ? '/jobs' : `${JOBS_CATEGORY_BASE}/${next.category}`;
+
+        navigate(query ? `${base}?${query}` : base, { replace: options.push !== true });
+
+        return;
+      }
+
       setParams(
         (current) => {
           const merged = { ...filters, ...next };
@@ -116,10 +146,19 @@ export function useJobFilters(limit: number): JobFilterState {
         { replace: options.push !== true },
       );
     },
-    [filters, setParams],
+    [filters, setParams, routeCategory, params, navigate],
   );
 
   const clear = useCallback(() => {
+    // A category route's filter lives in the path, so clearing has to leave the
+    // route. Without this, Clear stripped state/type/queue/search, left the
+    // category in place, and stayed on screen having visibly done nothing.
+    if (routeCategory != null) {
+      navigate('/jobs', { replace: true });
+
+      return;
+    }
+
     setParams(
       (current) => {
         const updated = new URLSearchParams(current);
@@ -132,7 +171,7 @@ export function useJobFilters(limit: number): JobFilterState {
       },
       { replace: true },
     );
-  }, [setParams]);
+  }, [setParams, routeCategory, navigate]);
 
   const isFiltered = Boolean(
     filters.state || filters.category || filters.type || filters.queue || filters.search,

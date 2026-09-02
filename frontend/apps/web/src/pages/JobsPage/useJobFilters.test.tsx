@@ -74,6 +74,59 @@ describe('useJobFilters', () => {
     expect(result.current.filters.filters.category).toBe('ingest');
   });
 
+  // ── The category route: the path owns the category ──────────────────────
+  //
+  // These are the regression. On /jobs/category/:category the chips used to
+  // write `?category=`, which the path then overrode on the next render — so
+  // the whole category row plus Clear were dead controls on ten rail
+  // destinations, and the address bar ended up self-contradicting.
+
+  it('navigates when the category changes on a category route', () => {
+    const { result } = renderHook(() => useProbe(), {
+      wrapper: wrapper('/jobs/category/ingest?state=failed'),
+    });
+
+    act(() => result.current.filters.setFilters({ category: 'llm', type: '' }));
+
+    expect(result.current.location.pathname).toBe('/jobs/category/llm');
+    expect(result.current.filters.filters.category).toBe('llm');
+    // Other filters are carried, not silently dropped.
+    expect(result.current.location.search).toContain('state=failed');
+  });
+
+  it('the All chip leaves the category route entirely', () => {
+    const { result } = renderHook(() => useProbe(), {
+      wrapper: wrapper('/jobs/category/ingest?state=failed'),
+    });
+
+    act(() => result.current.filters.setFilters({ category: '', type: '' }));
+
+    expect(result.current.location.pathname).toBe('/jobs');
+    expect(result.current.filters.filters.category).toBe('');
+    expect(result.current.location.search).toContain('state=failed');
+  });
+
+  it('clear() leaves a category route, instead of stripping everything except the category', () => {
+    const { result } = renderHook(() => useProbe(), {
+      wrapper: wrapper('/jobs/category/ingest?state=failed&search=boom'),
+    });
+
+    act(() => result.current.filters.clear());
+
+    expect(result.current.location.pathname).toBe('/jobs');
+    expect(result.current.location.search).toBe('');
+    expect(result.current.filters.isFiltered).toBe(false);
+  });
+
+  it('still writes the query string when NOT on a category route', () => {
+    const { result } = renderHook(() => useProbe(), { wrapper: wrapper('/jobs') });
+
+    act(() => result.current.filters.setFilters({ category: 'llm' }));
+
+    expect(result.current.location.pathname).toBe('/jobs');
+    expect(result.current.location.search).toBe('?category=llm');
+  });
+
   it('clear() drops the filters and leaves the route alone', () => {
     const { result } = renderHook(() => useProbe(), {
       wrapper: wrapper('/jobs?state=failed&category=llm'),
