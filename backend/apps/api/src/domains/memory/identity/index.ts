@@ -11,17 +11,26 @@ export {
   PLATFORM_SYSTEMS,
   SYSTEM_ALIASES,
   adoptIngestIdentity,
+  attachmentIdentity,
   canonicalSystem,
   fallbackId,
+  isFederatedSystem,
   isRegisteredSystem,
+  ledgerPlatform,
   platformIdentity,
 } from './registry';
 export {
+  GMAIL_THREAD_HEADER,
+  cleanMessageId,
   emailAttachmentIdentity,
   emailFallbackIdentity,
   emailIdentity,
+  emailThreadKey,
+  gmailThreadKeyFromApi,
+  gmailThreadKeyFromImap,
   messageIdFromHeaders,
   normalizeMessageId,
+  parseMessageIds,
 } from './email';
 export {
   CHROMIUM_EPOCH_OFFSET_MS,

@@ -161,6 +161,39 @@ export const SYSTEM_ALIASES: Readonly<Record<string, string>> = {
 };
 
 const REGISTERED: ReadonlySet<string> = new Set([...Object.values(FEDERATED_SYSTEMS), ...PLATFORM_SYSTEMS]);
+const FEDERATED: ReadonlySet<string> = new Set(Object.values(FEDERATED_SYSTEMS));
+
+/** Is this system a federated KIND (`email`, `calendar`, `file`) rather than a platform? */
+export function isFederatedSystem(value: string | null | undefined): boolean {
+  return value != null && FEDERATED.has(value);
+}
+
+/**
+ * The platform to ledger an arrival under (ci.record_sources.platform — design
+ * doc §5). For a platform kind the system IS the platform. For a federated
+ * kind the system says nothing about where the datum came from, so the
+ * producer must say (`explicit`: the connection's platform, the importer's
+ * platform-specific datasource) — and when it cannot (a generic mbox or .ics
+ * reader, an external ingest that named none) the answer is null, which pairs
+ * with nothing. Never guess: a wrong platform makes two mailboxes look like
+ * one, which is exactly the false signal the column exists to remove.
+ */
+export function ledgerPlatform(
+  system: string | null | undefined,
+  explicit?: string | null,
+): SourceSystem | null {
+  if (explicit) {
+    const platform = canonicalSystem(explicit);
+
+    return isFederatedSystem(platform) ? null : platform;
+  }
+
+  if (!system || isFederatedSystem(system)) {
+    return null;
+  }
+
+  return canonicalSystem(system);
+}
 
 /** Is this exact string a registry-canonical `source_system`? */
 export function isRegisteredSystem(value: string): boolean {
@@ -204,6 +237,18 @@ export function adoptIngestIdentity(
     system: system != null ? canonicalSystem(system) : undefined,
     id: id != null ? asSourceId(id) : undefined,
   };
+}
+
+/**
+ * Identity for an attachment of an identified parent record (a mail message,
+ * a chat message): the parent's identity plus the SHA-256 of the attachment
+ * bytes, under the parent's system. Never the attachment INDEX — part order
+ * is not stable across producers (Gmail API vs MIME), and an index-keyed row
+ * would silently fork on a re-import that ordered them differently. The
+ * same bytes attached twice to one message are one row, which is the truth.
+ */
+export function attachmentIdentity(parent: SourceIdentity, bytesSha256Hex: string): SourceIdentity {
+  return { system: parent.system, id: asSourceId(`attachment:${parent.id}:${bytesSha256Hex.toLowerCase()}`) };
 }
 
 /**

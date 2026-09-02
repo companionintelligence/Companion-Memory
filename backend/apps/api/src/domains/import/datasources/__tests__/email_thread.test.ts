@@ -1,6 +1,19 @@
 import { cleanMessageId, emailThreadId, parseMessageIds } from '../email_thread';
 
 describe('emailThreadId', () => {
+  it('prefers the Gmail thread id a Takeout mbox carries, in the API’s hex spelling', () => {
+    // X-GM-THRID is the same 64-bit number the Gmail API reports as `threadId`
+    // in hex, so a connection sync and an archive import of one message agree
+    // on thread_id (registry: emailThreadKey / gmailThreadKeyFromApi).
+    expect(
+      emailThreadId({
+        'X-GM-THRID': '1783885820400625399',
+        'Message-ID': '<reply@mx.example.com>',
+        References: '<root@mx.example.com>',
+      }),
+    ).toBe('18c1a2b3c4d5e6f7');
+  });
+
   it('uses the first References id as the conversation root', () => {
     expect(
       emailThreadId({

@@ -1,4 +1,4 @@
-import type { ConflictMergeKind } from './bulkUpsert';
+import type { ConflictMergeKind, ProducerPreference } from './bulkUpsert';
 
 /** The entities the importer's bulk-ingest paths write. */
 export type IngestEntityKind =
@@ -20,7 +20,7 @@ export type IngestEntityKind =
  * self-heals (the cross-repo handshake itself is out of scope here — nothing
  * reads this over the wire yet).
  */
-export const INGEST_SCHEMA_VERSION = 5;
+export const INGEST_SCHEMA_VERSION = 6;
 
 /**
  * Central, per-entity list of the DB columns a bulk re-ingest of an existing
@@ -42,7 +42,9 @@ export const INGEST_SCHEMA_VERSION = 5;
  * i.e. last producer wins — measured on a real Brave history, the extension's
  * 30-second default dwell overwrote the History file's real visit durations.
  * {@link INGEST_MERGE_KINDS} declares the columns for which "unless null" is
- * the wrong test.
+ * the wrong test, and {@link INGEST_PRODUCER_PREFERENCE} (version 6) the
+ * columns where "first arrival keeps it" is the wrong tie-break between two
+ * producers that both have a value.
  *
  * List ONLY source-derived mutable columns — never the identity/arbiter
  * columns (id, time, user_id, source_*), and never columns a user may edit
@@ -212,6 +214,46 @@ export const INGEST_MERGE_KINDS: Record<IngestEntityKind, Readonly<Record<string
   // privacy flags are NOT NULL DEFAULT false, so a producer that defaulted them
   // must not out-vote one that knows: OR across producers.
   browser_activity: { properties: 'json', is_incognito: 'flag', contains_sensitive: 'flag' },
+  product_model: {},
+  receipt: {},
+  receipt_line_item: {},
+  object_observation: {},
+};
+
+/**
+ * Which producer wins a refreshed column when two DIFFERENT producers both
+ * hold a value — see `ProducerPreference` in bulkUpsert.ts. Without an entry
+ * the first arrival keeps its value and the other only fills gaps, which is
+ * order-DEPENDENT: the same two arrivals in the other order leave a different
+ * row. An entry makes the column order-independent for the producers it
+ * names. Every column listed here MUST be in the entity's
+ * INGEST_REFRESH_COLUMNS list (the snapshot test checks), and a 'flag' column
+ * cannot be listed (OR is symmetric; there is nothing to prefer).
+ *
+ * The `source_type` values are the producers' own pipeline constants:
+ * `'ci-import-tools'` is the importer (import/push/canonical.ts SOURCE_TYPE),
+ * `'capture'` the browser extension, `'ETL'` a connection sync. Spelled as
+ * literals because this module sits below the domains that define them; the
+ * snapshot test pins the spelling.
+ *
+ * Keep this SHORT. A preference is a claim that one producer's reading of a
+ * column is better than another's whatever the row — add one only for a
+ * measured case, and say what was measured.
+ */
+export const INGEST_PRODUCER_PREFERENCE: Record<IngestEntityKind, ProducerPreference> = {
+  // Both a Gmail fetch and a Takeout mbox carry the whole message; neither
+  // reading is better across the board, so arrival order stands.
+  communication: {},
+  event: {},
+  item: {},
+  content: {},
+  // Measured on a real Brave history after the browser pair converged: the
+  // History file records the dwell Chrome itself measured (visit_duration),
+  // while the extension's history re-sync sends a 30-second DEFAULT for every
+  // visit it did not observe live. Whichever arrived second stood. The
+  // importer's value now stands in either order; the extension still fills a
+  // duration the file lacks (a visit still open when it was copied).
+  browser_activity: { duration_seconds: ['ci-import-tools', 'capture'] },
   product_model: {},
   receipt: {},
   receipt_line_item: {},

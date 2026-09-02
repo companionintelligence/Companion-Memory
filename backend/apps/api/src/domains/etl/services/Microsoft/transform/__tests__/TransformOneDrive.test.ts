@@ -58,6 +58,38 @@ describe('OneDriveTransformService.transformOneDrive', () => {
     );
   });
 
+  it('keys the document on (file, sha256:<hash>) when Graph reports the bytes’ SHA-256', async () => {
+    // The `file` federated kind: the same pair the import pipeline mints when
+    // it uploads these bytes out of a microsoft_account export, so the two
+    // arrivals land one row (docs/design/cross-pipeline-identity.md §3.2).
+    const { service, contentService } = build();
+    const sha256 = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+    await service.transformOneDrive({
+      connection,
+      syncJob: syncJobWithItem(
+        docItem({
+          content: { id: 'item-1', name: 'report.pdf', size: 9, file: { mimeType: 'application/pdf', hashes: { sha256Hash: sha256 } } },
+        }),
+      ),
+    });
+
+    expect(contentService.findBySource).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      { source_type: 'ETL', source_system: 'file', source_id: `sha256:${sha256.toLowerCase()}` },
+    );
+    expect(contentService.create).toHaveBeenCalledWith(
+      { userId: 'user-1' },
+      expect.objectContaining({
+        source_type: 'ETL',
+        source_system: 'file',
+        source_id: `sha256:${sha256.toLowerCase()}`,
+        // The Graph id still rides as the source-native external id.
+        external_id: 'item-1',
+      }),
+    );
+  });
+
   it('skips the content row when the triple already resolves to one', async () => {
     const { service, contentService, fileService } = build();
     contentService.findBySource.mockResolvedValue({ id: 'content-9' });

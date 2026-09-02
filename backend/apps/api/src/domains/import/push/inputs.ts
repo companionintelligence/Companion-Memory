@@ -19,17 +19,20 @@ import type { CreateBrowserActivityDto } from '@ci/domains/browser-activity';
 import { isUriLocation } from '@ci/domains/geocode';
 import { isGloballyUniqueNamespace, type ObjectIdentifierNamespace } from '@ci/domains/graph';
 import {
+  canonicalSystem,
   CommunicationType,
-  emailIdentity,
-  facebookPostIdentity,
-  minorUnitExponent,
-  platformIdentity,
   type CreateCommunicationDto,
   type CreateContentDto,
   type CreateEventDto,
   type CreateItemDto,
   type CreateObjectObservationDto,
   type CreateProductModelDto,
+  emailIdentity,
+  facebookPostIdentity,
+  fileIdentity,
+  ledgerPlatform,
+  minorUnitExponent,
+  platformIdentity,
   type ReceiptExtraction,
   type ReceiptLineItemInput,
   type SourceId,
@@ -49,6 +52,7 @@ import {
   isDigitalGood,
   isMediaType,
   contentFileRef,
+  fileSha256Ref,
   isAttachmentPlaceholderOnly,
   isDiscordAttachmentOnly,
   isFacebookPost,
@@ -98,6 +102,20 @@ function sourceTriple(
   const identity = platformIdentity(rec.sourceSystem, rec.sourceId);
 
   return { source_type: rec.sourceType, source_system: identity.system, source_id: identity.id };
+}
+
+/**
+ * The platform to ledger an import arrival under, for the three destinations
+ * whose identity can be a federated kind (communications, events, content).
+ * The datasource name IS the platform when it is platform-specific (`gmail`
+ * for a Takeout mbox, `google_photos`, `microsoft_account`); a generic reader
+ * (`email` for any mbox/eml tree, `calendar` for any .ics) yields undefined —
+ * the ledger stores NULL, and NULL pairs with nothing, which is the truth: a
+ * Thunderbird export of a Yahoo mailbox must not look like a second producer
+ * for the Gmail connection. See docs/design/cross-pipeline-identity.md §5.
+ */
+function importPlatform(rec: CanonicalRecord): SourceSystem | undefined {
+  return ledgerPlatform(canonicalSystem(rec.sourceSystem)) ?? undefined;
 }
 
 /**
@@ -278,6 +296,7 @@ export function toContentInput(rec: CanonicalRecord): CreateContentDto {
     type: contentTypeFor(rec.kind, rec.mediaType),
     source_data: m,
     ...sourceTriple(rec),
+    source_platform: importPlatform(rec),
   };
   const title = rec.title || str(m.Product) || str(m.Title);
   if (title) {
@@ -324,6 +343,25 @@ export function toContentInput(rec: CanonicalRecord): CreateContentDto {
   if (file.id) {
     input.external_id = file.id;
     input.external_id_kind = 'file';
+  }
+
+  // A row that IS its bytes keys on them: the `file` federated kind
+  // (docs/design/cross-pipeline-identity.md §3.2), `sha256:<hash>` under the
+  // system `file`, which is the SAME pair a OneDrive listing mints from the
+  // Graph `sha256Hash`, a Drive document download minted when its bytes came
+  // back through this pipeline, and any second archive carrying the same
+  // photo. MediaStage stamps the hash the object store computed (`FileSha256`)
+  // beside the file id. Like the URI case above, this REPLACES the per-item
+  // staged triple, and forfeits the content→event triple auto-link the same
+  // way; the batched push passes the event explicitly (`withEvent`), so only
+  // the per-row retry loses it, and the edge sweep covers that. Provenance
+  // (which importer, which archive) is unchanged: source_type stays, the
+  // platform rides in source_data, and the ledger records the arrival.
+  const sha256 = fileSha256Ref(rec);
+  if (file.id && sha256) {
+    const identity = fileIdentity(sha256);
+    input.source_system = identity.system;
+    input.source_id = identity.id;
   }
 
   if (file.url && !input.url) {
@@ -1366,6 +1404,7 @@ export function toCommunicationInput(rec: CanonicalRecord): CreateCommunicationD
     // toEventInput keeps them.
     metadata: { ...m },
     ...sourceTriple(rec),
+    source_platform: importPlatform(rec),
   };
 
   // Cross-pipeline identity: an email keys on its RFC Message-ID under the
@@ -2236,6 +2275,7 @@ export function toEventInput(rec: CanonicalRecord): CreateEventDto {
     ...(rec.dated ? {} : { time_source: UNDATED_TIME_SOURCE, time_precision: UNDATED_TIME_PRECISION }),
     metadata,
     ...sourceTriple(rec),
+    source_platform: importPlatform(rec),
   };
 
   if (rec.endTime) {

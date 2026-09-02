@@ -67,6 +67,18 @@ export interface CreateEventDto {
   organizer_entity_id?: string;
   source_type?: string;
   source_system?: SourceSystem;
+  /**
+   * The PLATFORM that delivered this arrival, for the provenance ledger
+   * (ci.record_sources.platform) — a registry-canonical platform name such as
+   * `gmail` / `outlook_mail` / `google_calendar`. Only meaningful when
+   * `source_system` is a federated kind (`email`, `calendar`, `file`), where
+   * the system no longer says where the datum came from; for a platform kind
+   * the ledger uses `source_system` itself. Omit when the producer cannot say
+   * (a generic mbox/eml or .ics import): the ledger stores NULL, which pairs
+   * with nothing. Never stored on the record row — one row can have several
+   * arrivals. See docs/design/cross-pipeline-identity.md §5.
+   */
+  source_platform?: SourceSystem;
   source_id?: SourceId;
   /** The connection whose sync produced this event; null for manual/imported/predicted. */
   connection_id?: string | null;
@@ -201,6 +213,18 @@ export interface CreateContentDto {
   // content_source_identity_uniq and ContentService.createMany.
   source_type?: string;
   source_system?: SourceSystem;
+  /**
+   * The PLATFORM that delivered this arrival, for the provenance ledger
+   * (ci.record_sources.platform) — a registry-canonical platform name such as
+   * `gmail` / `outlook_mail` / `google_calendar`. Only meaningful when
+   * `source_system` is a federated kind (`email`, `calendar`, `file`), where
+   * the system no longer says where the datum came from; for a platform kind
+   * the ledger uses `source_system` itself. Omit when the producer cannot say
+   * (a generic mbox/eml or .ics import): the ledger stores NULL, which pairs
+   * with nothing. Never stored on the record row — one row can have several
+   * arrivals. See docs/design/cross-pipeline-identity.md §5.
+   */
+  source_platform?: SourceSystem;
   source_id?: SourceId;
   /** The connection whose sync produced this row; null for uploads/imports. */
   connection_id?: string | null;
@@ -1014,6 +1038,18 @@ export interface CreateCommunicationDto {
   // Provenance triple for idempotent re-ingest (see communications_source_identity_uniq).
   source_type?: string;
   source_system?: SourceSystem;
+  /**
+   * The PLATFORM that delivered this arrival, for the provenance ledger
+   * (ci.record_sources.platform) — a registry-canonical platform name such as
+   * `gmail` / `outlook_mail` / `google_calendar`. Only meaningful when
+   * `source_system` is a federated kind (`email`, `calendar`, `file`), where
+   * the system no longer says where the datum came from; for a platform kind
+   * the ledger uses `source_system` itself. Omit when the producer cannot say
+   * (a generic mbox/eml or .ics import): the ledger stores NULL, which pairs
+   * with nothing. Never stored on the record row — one row can have several
+   * arrivals. See docs/design/cross-pipeline-identity.md §5.
+   */
+  source_platform?: SourceSystem;
   source_id?: SourceId;
 }
 

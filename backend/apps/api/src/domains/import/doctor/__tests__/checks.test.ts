@@ -109,6 +109,23 @@ describe('doctor check registry', () => {
     }
   });
 
+  it('carries the cross-pipeline identity acceptance metric as two medium checks', () => {
+    // docs/design/cross-pipeline-identity.md §5: after an archive import and a
+    // connection sync of one account, records in the overlap window carry two
+    // arrivals. Medium on both, because each has an honest non-zero floor
+    // (the fallback lane is designed; a mailbox loses mail the archive kept).
+    expect(findCheck('identity-fallback-lane-rows')?.severity).toBe('medium');
+    expect(findCheck('identity-unconverged-in-overlap')?.severity).toBe('medium');
+    expect(findCheck('identity-fallback-lane-rows')?.sql).toContain("LIKE 'fallback:%'");
+    expect(findCheck('identity-unconverged-in-overlap')?.sql).toContain('ci.record_sources');
+    // Pairs per PLATFORM, and an arrival with no platform pairs with nothing.
+    expect(findCheck('identity-unconverged-in-overlap')?.sql).toContain('w.platform = a.platform');
+    expect(findCheck('identity-unconverged-in-overlap')?.sql).toContain('rs.platform IS NOT NULL');
+    // The overlap check excludes what the fallback check counts, so the two
+    // numbers add up rather than double-count.
+    expect(findCheck('identity-unconverged-in-overlap')?.sql).toContain("NOT LIKE 'fallback:%'");
+  });
+
   it('promises a re-import heal only for columns a re-ingest actually refreshes', () => {
     // The remedy is the field an agent acts on, and for the communications
     // checks it makes a claim the ingest contract either backs or contradicts.

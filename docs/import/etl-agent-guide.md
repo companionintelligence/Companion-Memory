@@ -17,7 +17,7 @@ because the next agent will act on it.
 
 > **Code re-verified against `ead9fb425` later on 2026-08-19** (tree only — the
 > measured counts below are still the earlier readings and are labelled as
-> such). What moved: the doctor registry is **21** checks, not nineteen, and
+> such). What moved: the doctor registry is **23** checks, not nineteen, and
 > `comms-missing-thread-id` is now `medium`; every check that named a backfill
 > migration was repointed off it — to the guard it copies where one exists, to
 > `null` where none does (five of the ten `mirrors` values `75ecc6c7a` touched
@@ -59,7 +59,7 @@ this document.
 
 | Question | Answer lives in | Get it with |
 |---|---|---|
-| **Is the data it wrote sound?** | 21 checks over `ci.*`, `ci_search.*`, `ci.pipeline_*` | `ci-import doctor` — see [§6](#6-what-to-measure--ci-import-doctor). Ask this first; the four below are the drill-downs |
+| **Is the data it wrote sound?** | 23 checks over `ci.*`, `ci_search.*`, `ci.pipeline_*` | `ci-import doctor` — see [§6](#6-what-to-measure--ci-import-doctor). Ask this first; the four below are the drill-downs |
 | What ran? | `ci_import.import_runs.data_sources`, `ci_import.import_stages.kind` | `select label, status, percent, data_sources from ci_import.import_runs order by started_at;` |
 | How long? | `import_stages.duration_ms`, `.items_per_sec`, `.started_at/.finished_at` | `select kind, processed, total, round(duration_ms/1000.0,1) secs, items_per_sec from ci_import.import_stages where run_id = '…' order by seq;` |
 | What did it produce? | `import_stages.detail` (per stage), then the `ci.*` tables | `select jsonb_pretty(detail) from ci_import.import_stages where kind='push' and run_id='…';` |
@@ -1204,7 +1204,7 @@ yarn workspace @ci/be-api ci-import <command>
 | `runs [runId] [--wait]` | Runs and their stage bars |
 | `push [--run <id>] [--dry-run]` | Appends a `push` stage to every run whose rows are staged and uncommitted |
 | `stats` | `ci.*` row counts, search-index coverage, queue depth, run rollup |
-| **`doctor [--list] [--check <id>] [--failures-only] [--timeout <ms>] [--json]`** | **The twenty-one data-quality checks over what the import actually wrote. See [§6](#6-what-to-measure--ci-import-doctor)** |
+| **`doctor [--list] [--check <id>] [--failures-only] [--timeout <ms>] [--json]`** | **The twenty-three data-quality checks over what the import actually wrote. See [§6](#6-what-to-measure--ci-import-doctor)** |
 | `backfill [stages…] [--list]` | The post-import enrichment chain via `POST /api/maintenance/orchestrate` (NDJSON-streamed, because a `search_index` backfill outlives undici's 300s headers timeout) |
 
 Exit codes: **0** success, **2** a failure you can fix (bad path, missing key,
@@ -1258,7 +1258,7 @@ select n.nspname, t.typname from pg_type t
 **Start here. Do not hand-type a baseline.**
 [#2105](https://github.com/companionintelligence/CI-Server/pull/2105) shipped the
 audit that used to live in a scratch `psql` buffer as a nineteen-check suite; the
-registry holds **21** today. Each check is a regression detector for a defect
+registry holds **23** today. Each check is a regression detector for a defect
 that really shipped (the ones in §3, mostly), and where a live predicate exists
 the check **mirrors** it, so the two are maintained together. `ci-import doctor
 --list` is the authoritative count — do not trust the number in this file, or in
@@ -1320,7 +1320,7 @@ taken and holds 21 now, and `comms-missing-thread-id` — one of the four
   "durationMs": 631,                 // whole suite; 631 ms is the figure checks.ts measured
   "statementTimeoutMs": 15000,       // the cap in force, so a TIMEOUT is interpretable
   "totals": { "checks": 19, "clean": 11, "found": 8, "timeout": 0, "error": 0,
-              "highFindings": 4, "highUnresolved": 0 },   // the 2026-08-19 reading; 21 checks today
+              "highFindings": 4, "highUnresolved": 0 },   // the 2026-08-19 reading; 23 checks today
   "findings": [{
     "id": "capture-events-without-content",
     "severity": "high",
@@ -1406,9 +1406,11 @@ one exists, to `null` where none does (five of the ten values it touched became
 `null`). The backfills those checks used to name still exist, but they are
 one-time corrections that a future migration squash will delete; the guard is
 what stays, so that is what the check is now kept in lockstep with. `null` means
-no twin exists — which is the majority: six of the 21 checks name a guard, one
-(`events-timestamped-at-import`) still names a migration, and the remaining
-fourteen watch a shape or a control plane with nothing to stay in step with.
+no twin exists — which is the majority: six of the 23 checks name a guard, one
+(`events-timestamped-at-import`) still names a migration, the two `identity-*`
+checks name the registry's fallback marker and the cross-pipeline conformance
+suite, and the remaining fourteen watch a shape or a control plane with nothing
+to stay in step with.
 
 The second column is the same checks on the FINISHED run (1,393,402
 records: 325,145 communications, 325,849 browser_activity, 127,700 events,
@@ -1949,7 +1951,7 @@ folders (§5.2, §5.3); the inbox budget table lost a constant that no longer
 exists (§3.5)._
 
 _**Third pass, 2026-08-19, against `ead9fb425` — code only, no re-measurement.**
-Re-checked against the tree and corrected: the doctor registry (21 checks, the
+Re-checked against the tree and corrected: the doctor registry (23 checks, the
 two new ones, `comms-missing-thread-id` at `medium`, every `mirrors` value)
 in §0/§5.4/§6/§6.0.1/§8; `DESTINATION_ORDER` in §2.1 and §8, which said content
 landed before events and has been exactly backwards since commit `a02540179`;
