@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { DataSource } from 'typeorm';
 
+import { BrowserActivityEntity } from '@ci/domains/browser-activity';
 import { ContentEntity } from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
@@ -78,7 +79,7 @@ describeWithDatabase(`bulkInsertIdempotent against real Postgres (${availability
             password: connection.password,
             database: connection.database,
           }),
-      entities: [EventEntity, ContentEntity, UserEntity],
+      entities: [EventEntity, ContentEntity, BrowserActivityEntity, UserEntity],
       synchronize: false,
       extra: { options: '-c search_path=ci,public' },
     });
@@ -112,6 +113,7 @@ describeWithDatabase(`bulkInsertIdempotent against real Postgres (${availability
       const failures: unknown[] = [];
 
       for (const [sql, params] of [
+        [`DELETE FROM ci.browser_activity WHERE user_id = $1::uuid`, [userId]],
         [`DELETE FROM ci.events WHERE user_id = $1::uuid`, [userId]],
         [`DELETE FROM ci.content WHERE user_id = $1::uuid`, [userId]],
         [`DELETE FROM ci.entities WHERE owner_user_id = $1::uuid`, [userId]],
@@ -244,6 +246,165 @@ describeWithDatabase(`bulkInsertIdempotent against real Postgres (${availability
 
     expect((await insertContent(sourceId))[0].inserted).toBe(true);
     expect((await insertContent(sourceId))[0].inserted).toBe(false);
+  });
+
+  /**
+   * ═══════════════════════════════════════════════════════════════════════════
+   * THE CONFLICT ACTION, AGAINST REAL POSTGRES.
+   * ═══════════════════════════════════════════════════════════════════════════
+   *
+   * conflictUpdateSetClause emits a CASE per column that only Postgres can
+   * evaluate — EXCLUDED, jsonb `||`, the target-table reference inside
+   * ON CONFLICT DO UPDATE. The unit fake mimics the policy; this proves it.
+   * ci.browser_activity is the subject because it is the table where the
+   * policy was measured to matter (a Brave history delivered by both the
+   * History-file importer and the browser extension) and it has one column of
+   * each merge kind: nullable scalars, NOT NULL flags, an object jsonb bag.
+   */
+  describe('same producer refreshes, another producer fills gaps', () => {
+    const REFRESH = [
+      'action_type',
+      'properties',
+      'duration_seconds',
+      'scroll_depth_percent',
+      'is_incognito',
+      'contains_sensitive',
+    ];
+    const KINDS = { properties: 'json', is_incognito: 'flag', contains_sensitive: 'flag' } as const;
+
+    async function writeVisit(
+      sourceId: string,
+      sourceType: 'ci-import-tools' | 'capture',
+      fields: Partial<BrowserActivityEntity>,
+    ) {
+      const repository = dataSource.getRepository(BrowserActivityEntity);
+
+      return bulkInsertIdempotent({
+        repository,
+        entities: [
+          repository.create({
+            id: randomUUID(),
+            user_id: userId,
+            time: new Date('2026-06-10T12:00:00.123Z'),
+            url: 'https://example.com/',
+            action_type: 'visit',
+            properties: {},
+            source_type: sourceType,
+            source_system: 'chromium',
+            source_id: sourceId,
+            ...fields,
+          }),
+        ],
+        primaryKey: 'id',
+        getTriple: (e) => ({
+          sourceType: e.source_type,
+          sourceSystem: e.source_system,
+          sourceId: e.source_id,
+        }),
+        scope: { user_id: userId },
+        conflictTarget: '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
+        identityColumns: ['source_system', 'source_id'],
+        conflictUpdateColumns: REFRESH,
+        conflictMergeKinds: KINDS,
+      });
+    }
+
+    async function readVisit(sourceId: string) {
+      const [row] = await dataSource.query<
+        Array<{
+          duration_seconds: number | null;
+          scroll_depth_percent: number | null;
+          properties: Record<string, unknown>;
+          is_incognito: boolean;
+          contains_sensitive: boolean;
+          source_type: string;
+        }>
+      >(
+        `SELECT duration_seconds, scroll_depth_percent, properties, is_incognito, contains_sensitive, source_type
+           FROM ci.browser_activity WHERE user_id = $1::uuid AND source_id = $2`,
+        [userId, sourceId],
+      );
+
+      return row;
+    }
+
+    it('another producer keeps the existing values, fills the nulls, merges the bag and ORs the flags', async () => {
+      const sourceId = `visit:${randomUUID()}`;
+
+      // The History file first: Chrome's own dwell time, the importer's bag.
+      await writeVisit(sourceId, 'ci-import-tools', {
+        duration_seconds: 12,
+        properties: { Title: 'Example', Source: 'Chromium' },
+      });
+      // Then the extension: its 30-second default dwell, a measured scroll
+      // depth, its own bag (one shared key, one new), and it KNOWS incognito.
+      const [second] = await writeVisit(sourceId, 'capture', {
+        duration_seconds: 30,
+        scroll_depth_percent: 80,
+        properties: { Title: 'Example (tab title)', observed_at: '2026-06-10T12:00:05Z' },
+        is_incognito: true,
+      });
+
+      expect(second.inserted).toBe(false);
+      const row = await readVisit(sourceId);
+      expect(row.duration_seconds).toBe(12); // first writer's value stands
+      expect(row.scroll_depth_percent).toBe(80); // gap filled
+      expect(row.properties).toEqual({
+        Title: 'Example', // shared key: existing wins
+        Source: 'Chromium',
+        observed_at: '2026-06-10T12:00:05Z', // new key merged in
+      });
+      expect(row.is_incognito).toBe(true); // OR across producers
+      expect(row.contains_sensitive).toBe(false);
+      expect(row.source_type).toBe('ci-import-tools'); // provenance columns never refreshed
+    });
+
+    it('the same producer refreshes its values but never nulls what another producer filled', async () => {
+      const sourceId = `visit:${randomUUID()}`;
+
+      await writeVisit(sourceId, 'ci-import-tools', {
+        duration_seconds: 0,
+        properties: { Title: 'Example' },
+      });
+      await writeVisit(sourceId, 'capture', { scroll_depth_percent: 80, properties: { observed_at: 'x' } });
+      // The History file copied again after the tab closed: real dwell now,
+      // still no scroll depth (the importer never has one).
+      await writeVisit(sourceId, 'ci-import-tools', {
+        duration_seconds: 45,
+        scroll_depth_percent: null as unknown as undefined,
+        properties: { Title: 'Example, retitled' },
+      });
+
+      const row = await readVisit(sourceId);
+      expect(row.duration_seconds).toBe(45); // refreshed
+      expect(row.scroll_depth_percent).toBe(80); // the extension's fill-in survives
+      expect(row.properties).toEqual({ Title: 'Example, retitled', observed_at: 'x' }); // own key refreshed, other kept
+    });
+
+    it('a flag set by the same producer can be cleared by it, but not by another producer', async () => {
+      const sourceId = `visit:${randomUUID()}`;
+
+      await writeVisit(sourceId, 'capture', { is_incognito: true });
+      await writeVisit(sourceId, 'ci-import-tools', { is_incognito: false });
+      expect((await readVisit(sourceId)).is_incognito).toBe(true); // OR: the importer cannot unsay it
+
+      await writeVisit(sourceId, 'capture', { is_incognito: false });
+      expect((await readVisit(sourceId)).is_incognito).toBe(false); // same producer: its new word stands
+    });
+
+    it('writes one row however many producers deliver the visit', async () => {
+      const sourceId = `visit:${randomUUID()}`;
+
+      await writeVisit(sourceId, 'capture', {});
+      await writeVisit(sourceId, 'ci-import-tools', {});
+      await writeVisit(sourceId, 'capture', {});
+
+      const [{ count }] = await dataSource.query<Array<{ count: string }>>(
+        `SELECT count(*) AS count FROM ci.browser_activity WHERE user_id = $1::uuid AND source_id = $2`,
+        [userId, sourceId],
+      );
+      expect(Number(count)).toBe(1);
+    });
   });
 
   it('writes exactly one row for a repeated triple', async () => {

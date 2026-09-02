@@ -1,3 +1,5 @@
+import type { ConflictMergeKind } from './bulkUpsert';
+
 /** The entities the importer's bulk-ingest paths write. */
 export type IngestEntityKind =
   | 'communication'
@@ -18,16 +20,29 @@ export type IngestEntityKind =
  * self-heals (the cross-repo handshake itself is out of scope here — nothing
  * reads this over the wire yet).
  */
-export const INGEST_SCHEMA_VERSION = 4;
+export const INGEST_SCHEMA_VERSION = 5;
 
 /**
  * Central, per-entity list of the DB columns a bulk re-ingest of an existing
- * provenance triple refreshes (the ON CONFLICT DO UPDATE SET / self-heal
- * list). The ingest services reference these instead of inline arrays so the
- * refresh contract lives in exactly one place.
+ * identity pair refreshes (the ON CONFLICT DO UPDATE SET list). The ingest
+ * services reference these instead of inline arrays so the refresh contract
+ * lives in exactly one place.
  *
  * An EMPTY list means conflicts are DO NOTHING find-or-return: the existing
  * row is left untouched.
+ *
+ * WHO WINS is not "the newest write". Since the identity index dropped
+ * `source_type` (cross-pipeline identity, 2026-09-01) a conflict can come from
+ * a DIFFERENT producer delivering the same datum — the browser extension after
+ * a Takeout import — not only from the same producer re-syncing. The conflict
+ * action (bulkUpsert.ts `conflictUpdateSetClause`) tells them apart by
+ * `source_type`: the same producer's re-sync refreshes a listed column (new
+ * value unless null); another producer only fills a listed column that is
+ * still empty. Version 4 of this contract was a plain `col = EXCLUDED.col`,
+ * i.e. last producer wins — measured on a real Brave history, the extension's
+ * 30-second default dwell overwrote the History file's real visit durations.
+ * {@link INGEST_MERGE_KINDS} declares the columns for which "unless null" is
+ * the wrong test.
  *
  * List ONLY source-derived mutable columns — never the identity/arbiter
  * columns (id, time, user_id, source_*), and never columns a user may edit
@@ -62,10 +77,11 @@ export const INGEST_REFRESH_COLUMNS: Record<IngestEntityKind, readonly string[]>
   //    `chat` / `chat_handle_join`, and CATCHES the failure to read them — an
   //    older or partial chat.db degrades to "no thread key at all" rather than
   //    aborting. Refreshing on that import would null every repaired row.
-  //    A heal that can only run in the safe direction (COALESCE the existing
-  //    value) is a different conflict action than this map can express, so
-  //    until bulkUpsert grows one, thread_id is repaired by migration only —
-  //    which is what the `comms-missing-thread-id` doctor remedy now says.
+  //    Version 5 made the same-producer refresh null-guarded (a re-import
+  //    that cannot derive a thread key no longer nulls a repaired one), but a
+  //    re-import that derives a DIFFERENT, worse key would still overwrite the
+  //    repair — so thread_id stays out and is repaired by migration only,
+  //    which is what the `comms-missing-thread-id` doctor remedy says.
   //  * `from_entity_id` / `to_entity_ids` are RESOLVED server-side by the
   //    enrich.person_link leg from `participants_metadata` (which IS refreshed,
   //    so the raw handles still self-heal and re-linking still improves the
@@ -170,4 +186,34 @@ export const INGEST_REFRESH_COLUMNS: Record<IngestEntityKind, readonly string[]>
   // sighting survives re-detection with whatever it was resolved to. A refresh
   // list here would be a second, weaker copy of that rule.
   object_observation: [],
+};
+
+/**
+ * Merge kind per refreshed column where the default 'value' rule ("the other
+ * side wins only when this side is null") cannot express the right answer —
+ * see `ConflictMergeKind` in bulkUpsert.ts. Every column listed here MUST be
+ * in the entity's INGEST_REFRESH_COLUMNS list (the snapshot test checks), and
+ * a 'json' column must be object-valued jsonb, never an array.
+ *
+ * Declarative-only lists (product_model, receipt, receipt_line_item) declare
+ * nothing until their services are wired; classify their booleans and bags
+ * then, not now.
+ */
+export const INGEST_MERGE_KINDS: Record<IngestEntityKind, Readonly<Record<string, ConflictMergeKind>>> = {
+  // Both bags are object-valued: participants_metadata is `{ from, to, ... }`
+  // (the shared contract shape), metadata the parser's catch-all. Merged so a
+  // connection's labels and an archive's headers end up on one row.
+  communication: { participants_metadata: 'json', metadata: 'json' },
+  event: {},
+  item: {},
+  content: {},
+  // properties is the capture bag (the importer's metadata, the extension's
+  // observed_at / description / scroll data) — merge, do not replace. The two
+  // privacy flags are NOT NULL DEFAULT false, so a producer that defaulted them
+  // must not out-vote one that knows: OR across producers.
+  browser_activity: { properties: 'json', is_incognito: 'flag', contains_sensitive: 'flag' },
+  product_model: {},
+  receipt: {},
+  receipt_line_item: {},
+  object_observation: {},
 };

@@ -1,9 +1,10 @@
-import crypto from 'crypto';
 import fs from 'fs';
 import { readdir, stat } from 'fs/promises';
 import path from 'path';
 
 import Database from 'better-sqlite3';
+
+import { browserBookmarkIdentity, browserVisitIdentity } from '@ci/domains/memory';
 
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
@@ -216,14 +217,10 @@ class FirefoxFileImporter implements FileImporter {
           continue;
         }
 
-        // Stable id per (url, visit_date): distinct same-ms visits stay distinct, and a
-        // re-import of the same database dedups via INSERT OR IGNORE.
-        const id =
-          'firefox:' +
-          crypto
-            .createHash('sha1')
-            .update(`${row.url || ''} ${row.visit_date}`)
-            .digest('hex');
+        // Cross-producer key on (url, visit ms) under `firefox` — the same
+        // visit captured by the Firefox build of the browser extension is the
+        // same row (identity/browser.ts).
+        const id = browserVisitIdentity('firefox', row.url || '', ts?.getTime()).id;
         const item = {
           id,
           classification: 'page_view',
@@ -302,14 +299,10 @@ class FirefoxFileImporter implements FileImporter {
 
         const url = row.url || '';
         const title = row.title || '';
-        // Key on (url, dateAdded) so re-saving the same page stays distinct and a
-        // re-import of the same database dedups via INSERT OR IGNORE.
-        const id =
-          'firefox:bookmark:' +
-          crypto
-            .createHash('sha1')
-            .update(`${url} ${row.date_added ?? ''}`)
-            .digest('hex');
+        // Key on (url, added second) so re-saving the same page stays distinct,
+        // a re-import dedups, and the extension's bookmark for the same link
+        // lands on the same content row.
+        const id = browserBookmarkIdentity('firefox', url, ts?.getTime()).id;
         params.pipeline.push({
           item: {
             id,

@@ -23,6 +23,16 @@ export {
   messageIdFromHeaders,
   normalizeMessageId,
 } from './email';
+export {
+  CHROMIUM_EPOCH_OFFSET_MS,
+  browserBookmarkIdentity,
+  browserDownloadIdentity,
+  browserVisitIdentity,
+  unixMsFromApiMillis,
+  unixMsFromChromiumMicros,
+  unixMsFromMicros,
+  type BrowserSystem,
+} from './browser';
 export { calendarEventIdentity, icsRecurrenceInstant, normalizeIcsRecurrenceId } from './calendar';
 export { facebookPostIdentity } from './facebook';
 export { fileIdentity } from './file';

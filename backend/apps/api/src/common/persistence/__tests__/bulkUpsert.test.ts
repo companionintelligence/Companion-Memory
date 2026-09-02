@@ -1,6 +1,11 @@
 import type { EntityManager, Repository } from 'typeorm';
 
-import { bulkInsertIdempotent, chunkedConflictInsert, computeChunkSize } from '../bulkUpsert';
+import {
+  conflictUpdateSetClause,
+  bulkInsertIdempotent,
+  chunkedConflictInsert,
+  computeChunkSize,
+} from '../bulkUpsert';
 
 /**
  * Minimal row used by the fake repository. Mirrors the shape the ingest services
@@ -149,10 +154,14 @@ function makeFakeRepository(initial: Row[] = []) {
     return qb;
   }
 
-  // Source-derived columns the DO UPDATE path refreshes; the fake copies these
-  // from the incoming (EXCLUDED) row onto the existing row to mimic
-  // `SET col = EXCLUDED.col`. (The helper only emits these for the columns the
-  // caller lists; the fake refreshing the superset is sufficient for the tests.)
+  // Source-derived columns the DO UPDATE path refreshes. The fake mimics the
+  // conflict action conflictUpdateSetClause emits (its SQL text is asserted
+  // separately below; the integration spec proves it against Postgres):
+  //   same producer (source_type equal)  → incoming value unless null
+  //   other producer                      → existing value unless null
+  // with participantsMetadata treated as a 'json' bag (key merge, the same
+  // side winning on a shared key). (The helper only emits these for the
+  // columns the caller lists; the fake refreshing the superset is sufficient.)
   const REFRESHABLE: (keyof Row)[] = ['direction', 'participantsMetadata'];
 
   function makeInsertQB(viaTxRepo: boolean, viaExternalManager = false) {
@@ -185,10 +194,21 @@ function makeFakeRepository(initial: Row[] = []) {
 
         if (existing) {
           if (doUpdate) {
-            // ON CONFLICT DO UPDATE SET col = EXCLUDED.col — refresh on existing.
+            const target = existing as Record<keyof Row, unknown>;
+            const sameProducer = row.sourceType === existing.sourceType;
             for (const col of REFRESHABLE) {
-              if (col in row) {
-                (existing as Record<keyof Row, unknown>)[col] = row[col];
+              if (!(col in row)) {
+                continue;
+              }
+
+              const incoming = row[col];
+              const current = target[col];
+              if (col === 'participantsMetadata') {
+                const a = (current ?? {}) as Record<string, unknown>;
+                const b = (incoming ?? {}) as Record<string, unknown>;
+                target[col] = sameProducer ? { ...a, ...b } : { ...b, ...a };
+              } else {
+                target[col] = sameProducer ? (incoming ?? current) : (current ?? incoming);
               }
             }
 
@@ -572,6 +592,141 @@ describe('bulkInsertIdempotent — DO UPDATE (conflictUpdateColumns) self-heal p
     expect(tx.count).toBe(1);
     expect(statements.map((s) => s.kind)).toEqual(['insert', 'select']);
     expect(statements.every((s) => s.insideTx && s.viaTxRepo)).toBe(true);
+  });
+});
+
+describe('bulkInsertIdempotent — a DIFFERENT producer only fills what is empty', () => {
+  const REFRESH = ['direction', 'participants_metadata'];
+
+  it("keeps the first producer's value and fills its nulls from the second", async () => {
+    // Imported first: direction known, participants unknown.
+    const existing = row({
+      id: 'existing',
+      sourceType: 'ci-import-tools',
+      sourceId: 's1',
+      direction: 'inbound',
+      participantsMetadata: undefined,
+    });
+    const { repo, table } = makeFakeRepository([existing]);
+
+    // A connection delivers the same message with the opposite direction and
+    // the participants the archive lacked.
+    const results = await bulkInsertIdempotent(
+      opts(
+        repo,
+        [
+          row({
+            id: 'new-attempt',
+            sourceType: 'connection',
+            sourceId: 's1',
+            direction: 'outbound',
+            participantsMetadata: { to: ['alice@example.com'] },
+          }),
+        ],
+        REFRESH,
+      ),
+    );
+
+    expect(results[0].entity.id).toBe('existing');
+    expect(results[0].inserted).toBe(false);
+    expect(table.size).toBe(1);
+    // First writer keeps its value; the gap is filled.
+    expect(table.get('existing')?.direction).toBe('inbound');
+    expect(table.get('existing')?.participantsMetadata).toEqual({ to: ['alice@example.com'] });
+  });
+
+  it('merges a json bag without letting the second producer overwrite shared keys', async () => {
+    const existing = row({
+      id: 'existing',
+      sourceType: 'ci-import-tools',
+      sourceId: 's1',
+      participantsMetadata: { from: 'archive@example.com' },
+    });
+    const { repo, table } = makeFakeRepository([existing]);
+
+    await bulkInsertIdempotent(
+      opts(
+        repo,
+        [
+          row({
+            id: 'new-attempt',
+            sourceType: 'connection',
+            sourceId: 's1',
+            participantsMetadata: { from: 'api@example.com', to: ['bob@example.com'] },
+          }),
+        ],
+        REFRESH,
+      ),
+    );
+
+    expect(table.get('existing')?.participantsMetadata).toEqual({
+      from: 'archive@example.com',
+      to: ['bob@example.com'],
+    });
+  });
+
+  // The interaction the null guard exists for: producer A re-syncs AFTER
+  // producer B filled a gap, and A still has nothing for that column.
+  it('a same-producer re-sync does not null out what another producer filled in', async () => {
+    const existing = row({
+      id: 'existing',
+      sourceType: 'ci-import-tools',
+      sourceId: 's1',
+      direction: 'inbound',
+      participantsMetadata: { to: ['from-the-connection@example.com'] },
+    });
+    const { repo, table } = makeFakeRepository([existing]);
+
+    await bulkInsertIdempotent(
+      opts(
+        repo,
+        [
+          row({
+            id: 'new-attempt',
+            sourceType: 'ci-import-tools',
+            sourceId: 's1',
+            direction: 'outbound',
+            participantsMetadata: undefined,
+          }),
+        ],
+        REFRESH,
+      ),
+    );
+
+    expect(table.get('existing')?.direction).toBe('outbound'); // refreshed
+    expect(table.get('existing')?.participantsMetadata).toEqual({ to: ['from-the-connection@example.com'] }); // kept
+  });
+});
+
+describe('conflictUpdateSetClause', () => {
+  const same = 'EXCLUDED."source_type" IS NOT DISTINCT FROM "t"."source_type"';
+
+  it('emits the null-guarded same/other CASE for a value column', () => {
+    expect(conflictUpdateSetClause('t', ['direction'])).toBe(
+      `"direction" = CASE WHEN ${same} THEN COALESCE(EXCLUDED."direction", "t"."direction") ELSE COALESCE("t"."direction", EXCLUDED."direction") END`,
+    );
+  });
+
+  it("ORs a flag across producers and takes the same producer's value", () => {
+    expect(conflictUpdateSetClause('t', ['is_incognito'], { is_incognito: 'flag' })).toBe(
+      `"is_incognito" = CASE WHEN ${same} THEN COALESCE(EXCLUDED."is_incognito", "t"."is_incognito") ` +
+        `ELSE (COALESCE("t"."is_incognito", false) OR COALESCE(EXCLUDED."is_incognito", false)) END`,
+    );
+  });
+
+  it('merges a json bag with the right side winning on shared keys', () => {
+    expect(conflictUpdateSetClause('t', ['properties'], { properties: 'json' })).toBe(
+      `"properties" = CASE WHEN ${same} ` +
+        `THEN (COALESCE("t"."properties", '{}'::jsonb) || COALESCE(EXCLUDED."properties", '{}'::jsonb)) ` +
+        `ELSE (COALESCE(EXCLUDED."properties", '{}'::jsonb) || COALESCE("t"."properties", '{}'::jsonb)) END`,
+    );
+  });
+
+  it('joins one assignment per column, in list order', () => {
+    const clause = conflictUpdateSetClause('t', ['a', 'b']);
+    expect(clause.startsWith('"a" = CASE')).toBe(true);
+    expect(clause).toContain(' END, "b" = CASE');
+    expect(clause.endsWith(' END')).toBe(true);
   });
 });
 

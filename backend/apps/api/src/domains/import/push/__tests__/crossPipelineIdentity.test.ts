@@ -1,7 +1,11 @@
 import {
+  adoptIngestIdentity,
+  browserBookmarkIdentity,
+  browserVisitIdentity,
   emailIdentity,
   facebookPostIdentity,
   messageIdFromHeaders,
+  unixMsFromApiMillis,
   youtubeLikeIdentity,
   youtubeSubscriptionIdentity,
 } from '@ci/domains/memory';
@@ -10,7 +14,7 @@ import { headersFromGmailApi } from '../../datasources/human_correspondence';
 import type { StagedItem } from '../../entities/StagedItemEntity';
 import { toCanonical, type CanonicalRecord } from '../canonical';
 import { destinationsFor } from '../canonical';
-import { toCommunicationInput, toEventInput } from '../inputs';
+import { toBrowserActivityInput, toCommunicationInput, toContentInput, toEventInput } from '../inputs';
 
 /**
  * Cross-pipeline conformance (docs/design/cross-pipeline-identity.md §7): the
@@ -83,9 +87,7 @@ describe('email: Takeout mbox import vs Gmail API connection', () => {
       recordFor({ metadata: { MessageID: 'CAF+QMz-AbC123@mail.gmail.com' } }),
     );
     const etlIdentity = emailIdentity(
-      messageIdFromHeaders(
-        headersFromGmailApi({ headers: [{ name: 'Message-Id', value: RFC_MESSAGE_ID }] }),
-      ),
+      messageIdFromHeaders(headersFromGmailApi({ headers: [{ name: 'Message-Id', value: RFC_MESSAGE_ID }] })),
     )!;
 
     expect(importInput.source_system).toBe(etlIdentity.system);
@@ -169,7 +171,7 @@ describe('facebook posts: Meta archive import vs Graph connection', () => {
       metadata: { Text: 'Check this feed out.', Source: 'Facebook' },
     });
 
-  it('routes an archived post to /communications — the connection\'s table', () => {
+  it("routes an archived post to /communications — the connection's table", () => {
     expect(destinationsFor(postRecord())).toEqual(['communications']);
   });
 
@@ -192,5 +194,82 @@ describe('facebook posts: Meta archive import vs Graph connection', () => {
     });
 
     expect(destinationsFor(undated)).toEqual(['content']);
+  });
+});
+
+describe('browser: Takeout Chrome / History SQLite import vs the browser extension', () => {
+  // One visit, three producers. The importer datasources (google_chrome.ts,
+  // chromium.ts) stamp the builder's id as the item id, which becomes the
+  // staged content_hash and so the source_id; the datasource NAME is the
+  // system, aliased to `chromium`. The extension POSTs the pair it computed
+  // itself to /v1/browser-activity, where adoptIngestIdentity takes it as is.
+  const URL = 'https://example.com/article';
+  const VISIT_MS = Date.parse('2026-06-10T12:00:00.123Z');
+  const importerId = browserVisitIdentity('chromium', URL, VISIT_MS).id;
+
+  const visitRecord = (dataSource: 'google_chrome' | 'chromium') =>
+    recordFor({
+      dataSource,
+      classification: 'page_view',
+      contentHash: importerId,
+      occurredAt: new Date(VISIT_MS),
+      metadata: {
+        URL,
+        Title: 'An article',
+        Source: dataSource === 'chromium' ? 'Chromium' : 'Google Chrome',
+      },
+    });
+
+  it('both importers land the visit in ci.browser_activity under (chromium, visit:<ms>:<url>)', () => {
+    for (const dataSource of ['google_chrome', 'chromium'] as const) {
+      const record = visitRecord(dataSource);
+      expect(destinationsFor(record)).toEqual(['browser_activity']);
+
+      const input = toBrowserActivityInput(record);
+      expect(input.source_system).toBe('chromium');
+      expect(input.source_id).toBe(`visit:${VISIT_MS}:${URL}`);
+      expect(input.action_type).toBe('visit');
+    }
+  });
+
+  it('CONVERGES with the pair the extension sends from chrome.history (a double of ms)', () => {
+    // What CI-Browser-Extension's toBrowserActivityRecord puts on the wire for
+    // this visit: system from the browser engine, id from the truncated ms.
+    const wire = {
+      source_system: 'chromium',
+      source_id: `visit:${unixMsFromApiMillis(VISIT_MS + 0.7)}:${URL}`,
+    };
+    const adopted = adoptIngestIdentity(wire.source_system, wire.source_id);
+
+    const imported = toBrowserActivityInput(visitRecord('google_chrome'));
+    expect(adopted.system).toBe(imported.source_system);
+    expect(adopted.id).toBe(imported.source_id);
+  });
+
+  it('a Brave/Edge/Arc extension build naming its brand still converges on chromium', () => {
+    for (const brand of ['brave', 'edge', 'arc', 'chrome']) {
+      expect(adoptIngestIdentity(brand, importerId).system).toBe('chromium');
+    }
+  });
+
+  it('bookmarks converge on (chromium, bookmark:<s>:<url>) in ci.content', () => {
+    const ADDED_S = 1749556800;
+    const id = browserBookmarkIdentity('chromium', URL, ADDED_S * 1000).id;
+    const record = recordFor({
+      dataSource: 'google_chrome',
+      classification: 'bookmark',
+      contentHash: id,
+      occurredAt: new Date(ADDED_S * 1000),
+      metadata: { URL, Title: 'Saved', Source: 'Google Chrome' },
+    });
+
+    expect(destinationsFor(record)).toEqual(['content']);
+    const input = toContentInput(record);
+    expect(input.source_system).toBe('chromium');
+    expect(input.source_id).toBe(`bookmark:${ADDED_S}:${URL}`);
+    // The extension's bookmarks API gives dateAdded in ms; same second, same key.
+    expect(
+      adoptIngestIdentity('chromium', `bookmark:${Math.floor((ADDED_S * 1000 + 999) / 1000)}:${URL}`).id,
+    ).toBe(input.source_id);
   });
 });

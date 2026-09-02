@@ -116,6 +116,40 @@ describe('Chromium datasource', () => {
     expect(ids.every(Boolean)).toBe(true);
     expect(second.map((i) => i.id!)).toEqual(ids); // deterministic across runs
   });
+
+  // The cross-producer contract (identity/browser.ts): `visit:<unix ms>:<url>`,
+  // the same key Takeout's History.json and the browser extension mint for
+  // this visit. A WebKit-epoch microsecond stamp must come out as the plain
+  // Unix millisecond it denotes.
+  // Chromium stamps are above 2^53: read as a Number, `...999999` µs rounds to
+  // the next millisecond and the visit lands on a key Takeout never mints.
+  it('keeps the exact microsecond so a .999999 visit truncates to .999, not .000', async () => {
+    const dir = tmpdir();
+    const p = path.join(dir, 'History');
+    const db = new Database(p);
+    db.exec(`
+      CREATE TABLE urls (id INTEGER PRIMARY KEY, url TEXT, title TEXT, last_visit_time INTEGER);
+      CREATE TABLE visits (id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER);
+    `);
+    db.prepare('INSERT INTO urls (id, url, title) VALUES (?, ?, ?)').run(1, 'https://example.com', 'Example');
+    // 2025-06-10T12:00:00.999999Z as 1601-epoch microseconds — not a safe integer.
+    db.prepare('INSERT INTO visits (id, url, visit_time) VALUES (?, ?, ?)').run(1, 1, 13394030400999999n);
+    db.close();
+
+    const items = await runImport(p);
+    expect(items[0].timestamp?.toISOString()).toBe('2025-06-10T12:00:00.999Z');
+    expect(items[0].id).toBe(`visit:${Date.parse('2025-06-10T12:00:00.999Z')}:https://example.com`);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('keys each visit on visit:<unix ms>:<url> — the key shared with Takeout and the extension', async () => {
+    const ids = (await runImport(makeHistoryDb(tmpdir()))).map((i) => i.id!);
+    expect(ids).toEqual([
+      `visit:${Date.parse('2025-02-14T00:00:00Z')}:https://example.com`,
+      `visit:${Date.parse('2025-02-15T12:00:00Z')}:https://news.example.org`,
+      `visit:${Date.parse('2025-06-01T08:30:00Z')}:https://example.com`,
+    ]);
+  });
 });
 
 // Bookmarks ship in a separate `Bookmarks` JSON file (no extension) beside the
@@ -262,7 +296,12 @@ describe('Chromium bookmarks', () => {
     const p = makeBookmarksFile(dir);
     const first = (await importBookmarks(p)).map((i) => i.id!);
     expect(new Set(first).size).toBe(3);
-    expect(first.every((id: string) => id.startsWith('chromium:bookmark:'))).toBe(true);
+    // `bookmark:<unix s>:<url>` — seconds, because Takeout's Bookmarks.html
+    // only has seconds; an undated bookmark keys on 0.
+    expect(
+      first.filter((id: string) => id.startsWith(`bookmark:${Date.parse('2025-03-01T12:00:00Z') / 1000}:`)),
+    ).toHaveLength(2);
+    expect(first).toContain('bookmark:0:https://undated.example.com');
     expect((await importBookmarks(p)).map((i) => i.id!)).toEqual(first);
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -576,11 +615,16 @@ describe('downloads', () => {
     expect(got).toHaveLength(0);
   });
 
-  it('keys on the guid so a re-import of the same profile dedups', async () => {
+  // (final url, start ms), not the guid: the extension's downloads API never
+  // sees a guid, and both sides see the URL the bytes came from and the start
+  // instant. The guid still rides in metadata for anyone who wants it.
+  it('keys on download:<start ms>:<final url> so a re-import AND the extension dedup', async () => {
     const got = await downloadsFrom([
       { guid: 'stable-guid', target: '/d/a.pdf', chainUrl: 'https://files.example/a.pdf' },
     ]);
-    expect(got[0].id).toContain('stable-guid');
+    expect(got[0].id).toMatch(/^download:\d+:https:\/\/files\.example\/a\.pdf$/);
+    expect(got[0].id).toBe(`download:${got[0].timestamp!.getTime()}:https://files.example/a.pdf`);
+    expect(got[0].metadata.Guid).toBe('stable-guid');
   });
 
   it('imports visits normally on a profile with no downloads table', async () => {

@@ -1,5 +1,20 @@
+import {
+  CHROMIUM_EPOCH_OFFSET_MS,
+  browserBookmarkIdentity,
+  browserDownloadIdentity,
+  browserVisitIdentity,
+  unixMsFromApiMillis,
+  unixMsFromChromiumMicros,
+  unixMsFromMicros,
+} from '../browser';
 import { calendarEventIdentity, icsRecurrenceInstant, normalizeIcsRecurrenceId } from '../calendar';
-import { emailAttachmentIdentity, emailFallbackIdentity, emailIdentity, messageIdFromHeaders, normalizeMessageId } from '../email';
+import {
+  emailAttachmentIdentity,
+  emailFallbackIdentity,
+  emailIdentity,
+  messageIdFromHeaders,
+  normalizeMessageId,
+} from '../email';
 import { facebookPostIdentity } from '../facebook';
 import { fileIdentity } from '../file';
 import {
@@ -11,11 +26,7 @@ import {
   isRegisteredSystem,
   platformIdentity,
 } from '../registry';
-import {
-  youtubeLikeIdentity,
-  youtubeSubscriptionIdentity,
-  youtubeVideoIdFromUrl,
-} from '../youtube';
+import { youtubeLikeIdentity, youtubeSubscriptionIdentity, youtubeVideoIdFromUrl } from '../youtube';
 
 describe('identity registry', () => {
   it('registers every federated kind', () => {
@@ -229,5 +240,91 @@ describe('facebook post identity (fallback-tier tuple)', () => {
 describe('file identity (federated on content hash)', () => {
   it('keys on lowercased sha256', () => {
     expect(fileIdentity('ABCDEF')).toEqual({ system: 'file', id: 'sha256:abcdef' });
+  });
+});
+
+describe("browser identity (platform-scoped on the browser's own visit instant)", () => {
+  // One Chrome visit, three arrival shapes. The fixture is deliberately NOT on
+  // a whole millisecond: the sub-ms fraction is where the producers differ, and
+  // the key has to truncate it identically on every side.
+  //
+  //   Takeout History.json   time_usec   = Unix microseconds
+  //   History SQLite         visit_time  = microseconds since 1601-01-01
+  //   chrome.history API     visitTime   = double of Unix milliseconds
+  //
+  // The extension's test suite (CI-Browser-Extension,
+  // src/services/browserActivity.test.ts) pins these SAME fixtures — that is
+  // the conformance contract across the repo boundary.
+  const URL = 'https://example.com/path?q=1#frag';
+  const UNIX_MS = 1749556800123; // 2025-06-10T12:00:00.123Z
+  const TAKEOUT_USEC = UNIX_MS * 1000 + 456;
+  const WEBKIT_USEC = TAKEOUT_USEC + CHROMIUM_EPOCH_OFFSET_MS * 1000;
+  const API_MS = UNIX_MS + 0.456;
+
+  it('CONFORMANCE: Takeout, History SQLite and the extension yield identical visit identity', () => {
+    const fromTakeout = browserVisitIdentity('chromium', URL, unixMsFromMicros(TAKEOUT_USEC));
+    const fromSqlite = browserVisitIdentity('chromium', URL, unixMsFromChromiumMicros(WEBKIT_USEC));
+    const fromExtension = browserVisitIdentity('chromium', URL, unixMsFromApiMillis(API_MS));
+
+    expect(fromTakeout).toEqual({ system: 'chromium', id: `visit:${UNIX_MS}:${URL}` });
+    expect(fromSqlite).toEqual(fromTakeout);
+    expect(fromExtension).toEqual(fromTakeout);
+  });
+
+  it('truncates, never rounds, so a .9995 instant agrees on every side', () => {
+    const ms = 1749556800999;
+    expect(unixMsFromMicros(ms * 1000 + 999)).toBe(ms);
+    expect(
+      unixMsFromChromiumMicros(BigInt(ms) * 1000n + 999n + BigInt(CHROMIUM_EPOCH_OFFSET_MS) * 1000n),
+    ).toBe(ms);
+    expect(unixMsFromApiMillis(ms + 0.999)).toBe(ms);
+  });
+
+  // Chromium stamps are above 2^53. As a JS number the `...999999` below has
+  // already become `...000000` — one millisecond late, a different key. The
+  // exact forms (BigInt from safeIntegers, the Bookmarks JSON's string) hold.
+  it('reads a Chromium stamp exactly from a BigInt or decimal string, where a Number cannot', () => {
+    const exact = 13394030400999999n; // 2025-06-10T12:00:00.999999Z in 1601-epoch µs
+    expect(exact > BigInt(Number.MAX_SAFE_INTEGER)).toBe(true);
+    expect(unixMsFromChromiumMicros(exact)).toBe(1749556800999);
+    expect(unixMsFromChromiumMicros('13394030400999999')).toBe(1749556800999);
+    expect(unixMsFromChromiumMicros(' 13394030400999999 ')).toBe(1749556800999);
+    // The lossy path, documented rather than hidden: the Number is already off.
+    expect(unixMsFromChromiumMicros(Number(exact))).toBe(1749556801000);
+    expect(unixMsFromChromiumMicros('not-a-stamp')).toBeUndefined();
+    expect(unixMsFromChromiumMicros('')).toBeUndefined();
+  });
+
+  it("keys bookmarks on whole seconds — Takeout's Bookmarks.html only has ADD_DATE seconds", () => {
+    const takeoutAddDateSeconds = 1749556800;
+    const fromTakeout = browserBookmarkIdentity('chromium', URL, takeoutAddDateSeconds * 1000);
+    const fromSqlite = browserBookmarkIdentity('chromium', URL, unixMsFromChromiumMicros(WEBKIT_USEC));
+    const fromExtension = browserBookmarkIdentity('chromium', URL, unixMsFromApiMillis(API_MS));
+
+    expect(fromTakeout.id).toBe(`bookmark:${takeoutAddDateSeconds}:${URL}`);
+    expect(fromSqlite).toEqual(fromTakeout);
+    expect(fromExtension).toEqual(fromTakeout);
+  });
+
+  it('keys downloads on (start ms, final url)', () => {
+    expect(browserDownloadIdentity('chromium', URL, UNIX_MS).id).toBe(`download:${UNIX_MS}:${URL}`);
+  });
+
+  it('keeps undated records unique per url instead of inventing an instant', () => {
+    expect(browserVisitIdentity('firefox', URL, undefined).id).toBe(`visit:0:${URL}`);
+    expect(browserBookmarkIdentity('firefox', URL, undefined).id).toBe(`bookmark:0:${URL}`);
+    expect(unixMsFromMicros(0)).toBeUndefined();
+    expect(unixMsFromChromiumMicros(0)).toBeUndefined();
+    expect(unixMsFromApiMillis(NaN)).toBeUndefined();
+  });
+
+  it('folds every Chromium-family brand into one system, and Firefox stays its own', () => {
+    for (const brand of ['chrome', 'google_chrome', 'brave', 'edge', 'arc', 'opera']) {
+      expect(canonicalSystem(brand)).toBe('chromium');
+    }
+
+    expect(canonicalSystem('firefox')).toBe('firefox');
+    expect(browserVisitIdentity('firefox', URL, UNIX_MS).system).toBe('firefox');
+    expect(isRegisteredSystem('safari')).toBe(true);
   });
 });

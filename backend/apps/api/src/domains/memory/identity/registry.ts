@@ -59,13 +59,13 @@ export const PLATFORM_SYSTEMS: readonly string[] = [
   'audible',
   'bluebubbles',
   'chatgpt',
-  'chromium',
+  'chromium', // every Chromium-family browser (Chrome/Brave/Edge/Arc/Opera): History SQLite, Takeout Chrome, AND the browser extension — see identity/browser.ts
   'claude',
   'coinbase',
   'contact_list',
   'discord',
   'evernote',
-  'firefox',
+  'firefox', // places.sqlite importer AND the Firefox build of the browser extension — see identity/browser.ts
   'fitbit',
   'flickr',
   'flighty',
@@ -118,6 +118,8 @@ export const PLATFORM_SYSTEMS: readonly string[] = [
   'venmo',
   'whatsapp',
   'withings',
+  // Browser extension only (external ingest; no importer reads Safari history)
+  'safari',
   // Internal producers (not user-facing platforms, but they mint rows too)
   'attachment_extract',
   'capture',
@@ -150,14 +152,15 @@ export const SYSTEM_ALIASES: Readonly<Record<string, string>> = {
   chrome: 'chromium',
   chrome_history: 'chromium',
   google_chrome: 'chromium',
+  brave: 'chromium',
+  edge: 'chromium',
+  arc: 'chromium',
+  opera: 'chromium',
   x: 'twitter',
   Amazon: 'amazon',
 };
 
-const REGISTERED: ReadonlySet<string> = new Set([
-  ...Object.values(FEDERATED_SYSTEMS),
-  ...PLATFORM_SYSTEMS,
-]);
+const REGISTERED: ReadonlySet<string> = new Set([...Object.values(FEDERATED_SYSTEMS), ...PLATFORM_SYSTEMS]);
 
 /** Is this exact string a registry-canonical `source_system`? */
 export function isRegisteredSystem(value: string): boolean {
@@ -193,7 +196,10 @@ export function platformIdentity(system: string, ...parts: [string, ...string[]]
  * This is the ONE constructor for out-of-process input — internal code calls
  * a specific builder instead.
  */
-export function adoptIngestIdentity(system: string | null | undefined, id: string | null | undefined): Partial<SourceIdentity> {
+export function adoptIngestIdentity(
+  system: string | null | undefined,
+  id: string | null | undefined,
+): Partial<SourceIdentity> {
   return {
     system: system != null ? canonicalSystem(system) : undefined,
     id: id != null ? asSourceId(id) : undefined,
