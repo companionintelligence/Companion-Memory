@@ -46,10 +46,12 @@ import type { Connect, Plugin } from 'vite';
 // without dragging Nest in. This is dev-server code; nothing here is bundled
 // into the browser.
 import {
+  categoryOfEvent,
   describeJob,
   jobCategorySelector,
   JOB_CATEGORIES,
   JOB_TYPES,
+  UNCLASSIFIED_CATEGORY,
 } from '../../../../../../backend/apps/api/src/domains/events/taxonomy';
 
 import {
@@ -174,7 +176,11 @@ function categorySetsFor(category: string): CategorySets {
  * `skipState` is what the state tabs are counted with — see the docblock at the
  * head of this file.
  */
-function matches(row: PreviewJobRow, filters: Filters, options: { skipState?: boolean } = {}): boolean {
+function matches(
+  row: PreviewJobRow,
+  filters: Filters,
+  options: { skipState?: boolean; skipCategory?: boolean; skipType?: boolean } = {},
+): boolean {
   if (filters.state && !options.skipState) {
     if (filters.state === 'dead-letter') {
       if (row.name !== DEAD_LETTER_QUEUE) {
@@ -191,11 +197,11 @@ function matches(row: PreviewJobRow, filters: Filters, options: { skipState?: bo
 
   const event = eventOf(row);
 
-  if (filters.type && event !== filters.type) {
+  if (filters.type && !options.skipType && event !== filters.type) {
     return false;
   }
 
-  if (filters.category) {
+  if (filters.category && !options.skipCategory) {
     // An unknown category matches nothing rather than everything: a typo in a
     // query string should empty the table, not un-filter it.
     const sets = categorySetsFor(filters.category);
@@ -294,6 +300,153 @@ function byNewest(a: PreviewJobRow, b: PreviewJobRow): number {
   return byTime !== 0 ? byTime : b.id.localeCompare(a.id);
 }
 
+/**
+ * Arrivals per category over time, for the "Job types over time" chart.
+ *
+ * Bucketed off the corpus's own `createdOn`, so the chart lines up with the
+ * table beside it rather than being a second, unrelated invention. `source` is
+ * reported as `live` because that is what this is — the preview has no sampled
+ * `ci.job_category_metrics` to fall back to, and claiming `mixed` would be
+ * showing an operator a seam that does not exist here.
+ */
+function categoryHistory(now: number, params: URLSearchParams): Record<string, unknown> {
+  const { jobs } = getCorpus();
+  const windowHours = Math.min(Math.max(Number(params.get('hours')) || 24, 1), 24 * 30);
+  const bucketMinutes = windowHours <= 24 ? 30 : windowHours <= 24 * 7 ? 180 : 720;
+  const bucketMs = bucketMinutes * 60_000;
+  const from = now - windowHours * 3_600_000;
+
+  const buckets = new Map<number, Record<string, number>>();
+  const seen = new Set<string>();
+
+  for (const row of jobs) {
+    // A dead-letter copy carries a FRESH created_on, so counting it would draw
+    // a burst of new work at the exact moment work started failing. The failed
+    // original supplies the real arrival.
+    if (row.name === DEAD_LETTER_QUEUE) {
+      continue;
+    }
+
+    const at = row.createdOn.getTime();
+
+    if (!Number.isFinite(at) || at < from) {
+      continue;
+    }
+
+    const key = Math.floor(at / bucketMs) * bucketMs;
+    const bucket = buckets.get(key) ?? {};
+    const category = categoryOfEvent(eventOf(row));
+
+    bucket[category] = (bucket[category] ?? 0) + 1;
+    seen.add(category);
+    buckets.set(key, bucket);
+  }
+
+  const categories = [...seen].sort();
+  const points = [...buckets.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([at, counts]) => ({
+      at: new Date(at).toISOString(),
+      // Zero-filled across every series, or the chart draws gaps where a
+      // category simply had nothing that half-hour.
+      counts: Object.fromEntries(categories.map((category) => [category, counts[category] ?? 0])),
+    }));
+
+  return { points, categories, bucketMinutes, windowHours, source: 'live' };
+}
+
+/**
+ * The operator controls, derived from the corpus rather than invented.
+ *
+ * Modes are held in a module-level map so a toggle in the preview STICKS for the
+ * life of the dev server — a switch that snaps back on the next poll teaches the
+ * wrong thing about a control whose whole point is that it persists. It is
+ * deliberately not written to disk: the preview corpus is regenerated from a
+ * seed on every boot, and a control surviving into a different corpus would
+ * point at queues that no longer exist.
+ */
+const previewModes = new Map<string, string>();
+
+function controls(now: number): Record<string, unknown> {
+  const { jobs } = getCorpus();
+  const crons = buildCrons({ now });
+  const queueNames = [...new Set(jobs.map((row) => row.name))].filter((n) => n !== DEAD_LETTER_QUEUE).sort();
+
+  const num = (value: number | null, def: number, max: number) => ({
+    value,
+    default: def,
+    max,
+    effective: value ?? def,
+  });
+
+  return {
+    global: {
+      concurrency: num(null, 10, 64),
+      perQueueConcurrency: num(null, 6, 64),
+      nonInteractive: previewModes.get('__global__') ?? 'enabled',
+    },
+    topology: { role: 'all', queueWorkerProcesses: 1, perProcessConcurrency: 10 },
+    queues: queueNames.map((name) => {
+      // Which categories ride this queue, read off the jobs actually on it —
+      // so the grouping in the card matches the table on the same page.
+      const categories = [
+        ...new Set(jobs.filter((row) => row.name === name).map((row) => categoryOfEvent(eventOf(row)))),
+      ].sort();
+
+      return {
+        name,
+        mode: previewModes.get(`queue:${name}`) ?? 'enabled',
+        pausedByGlobal: (previewModes.get('__global__') ?? 'enabled') === 'paused',
+        concurrency: num(null, 6, 64),
+        declaredConcurrency: null,
+        role: name.startsWith('import-') || name === 'derivation-run' ? 'worker' : 'web',
+        interactive: name === 'llm',
+        categories,
+        jobTypes: [],
+        // A queue carrying work a person is waiting on refuses to be switched
+        // off, and says why rather than rendering a dead switch.
+        locked: name === 'llm',
+        lockedReason: name === 'llm' ? 'Chat runs on this queue — turning it off would break replies.' : null,
+        skippedCount: 0,
+        lastSkippedAt: null,
+      };
+    }),
+    crons: crons.map((cron: { name: string; cron: string }) => ({
+      name: cron.name,
+      cron: cron.cron ?? '',
+      mode: previewModes.get(`cron:${cron.name}`) ?? 'enabled',
+      locked: false,
+      lockedReason: null,
+      skippedCount: 0,
+      lastSkippedAt: null,
+    })),
+    maxConcurrency: 64,
+  };
+}
+
+/** Apply a patch the way the real endpoint does: merge, never replace. */
+function updateControls(body: Record<string, unknown>, now: number): Record<string, unknown> {
+  const global = body['global'] as { nonInteractive?: string } | undefined;
+
+  if (global?.nonInteractive) {
+    previewModes.set('__global__', global.nonInteractive);
+  }
+
+  for (const queue of (body['queues'] as Array<{ name: string; mode?: string }>) ?? []) {
+    if (queue.mode) {
+      previewModes.set(`queue:${queue.name}`, queue.mode);
+    }
+  }
+
+  for (const cron of (body['crons'] as Array<{ name: string; mode?: string }>) ?? []) {
+    if (cron.mode) {
+      previewModes.set(`cron:${cron.name}`, cron.mode);
+    }
+  }
+
+  return controls(now);
+}
+
 function listJobs(params: URLSearchParams): Record<string, unknown> {
   const { jobs } = getCorpus();
 
@@ -325,11 +478,38 @@ function listJobs(params: URLSearchParams): Record<string, unknown> {
     stateCounts[bucket] = (stateCounts[bucket] ?? 0) + 1;
   }
 
+  // Counts under every filter EXCEPT category and type, so each chip says what
+  // picking IT would yield — the same contract stateCounts gives the tabs.
+  //
+  // Folded from the EVENT NAME alone, never the queue: pg-boss rewrites the
+  // queue column on a dead-letter copy, so a queue-keyed fold would lose every
+  // dead-lettered row into one bucket. Same reason the real endpoint does it
+  // this way, and the reason the preview corpus is worth having a dead-letter
+  // pile in at all.
+  const categoryCounts: Record<string, number> = {};
+
+  for (const category of Object.values(JOB_CATEGORIES)) {
+    categoryCounts[category] = 0;
+  }
+
+  categoryCounts[UNCLASSIFIED_CATEGORY] = 0;
+
+  for (const row of jobs) {
+    if (!matches(row, filters, { skipCategory: true, skipType: true })) {
+      continue;
+    }
+
+    const bucket = categoryOfEvent(eventOf(row));
+
+    categoryCounts[bucket] = (categoryCounts[bucket] ?? 0) + 1;
+  }
+
   return {
     items: page.map(toListItem),
     total: matched.length,
     limit,
     offset,
+    categoryCounts,
     // Distinct queues across the WHOLE table, not the filtered set — otherwise
     // picking a queue would empty the queue filter of every other option.
     queues: [...new Set(jobs.map((row) => row.name))].sort(),
@@ -615,6 +795,21 @@ export function jobsPreviewApi(): Plugin {
 
             case 'GET /api/jobs/history':
               send(res, 200, history(now, searchParams));
+
+              return;
+
+            case 'GET /api/jobs/controls':
+              send(res, 200, controls(now));
+
+              return;
+
+            case 'PUT /api/jobs/controls':
+              send(res, 200, updateControls((await readBody(req)) as Record<string, unknown>, now));
+
+              return;
+
+            case 'GET /api/jobs/history/categories':
+              send(res, 200, categoryHistory(now, searchParams));
 
               return;
 

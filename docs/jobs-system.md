@@ -4,7 +4,8 @@
 
 What every background job on this appliance is, what it does, and how the machine
 that runs it works. Read against the worktree at the time of writing; every claim
-carries a `path:line`. Companion documents: [`jobs-schedule-review.md`](jobs-schedule-review.md)
+carries a `path:line`. **Counts re-verified against `main` after #2514, #2519,
+#2522, #2523, #2524 and #2525 landed.** Companion documents: [`jobs-schedule-review.md`](jobs-schedule-review.md)
 (a point-in-time critique of the schedule), [`jobs-system-rebuild-plan.md`](jobs-system-rebuild-plan.md)
 (the pipeline design), [`runbooks/jobs-system-review-2026-08.md`](runbooks/jobs-system-review-2026-08.md).
 
@@ -13,11 +14,11 @@ carries a `path:line`. Companion documents: [`jobs-schedule-review.md`](jobs-sch
 | | |
 |---|---|
 | Queue engine | pg-boss 10, schema `pgboss`, **its own cron scheduler disabled** (`schedule: false`) |
-| Listener bindings | **108** `@OnEvent` methods across 55 files |
+| Listener bindings | **109** `@OnEvent` methods across 56 files |
 | Distinct event names consumed | **89** |
-| pg-boss queues created at boot | **38** (37 from listeners + `dead-letter`) |
+| pg-boss queues created at boot | **39** (38 from listeners + `dead-letter`) |
 | Scheduled methods | **53** `@Cron` methods across 29 files — all via the `@ci/common/schedule` wrapper |
-| Crons pinned to the worker role | **10** |
+| Crons pinned to the worker role | **11** |
 | Queues pinned to the worker role | **6** (5 import + `derivation-run`) |
 | Pipeline stages behind one `pipeline.slice` event | **43** |
 | Global in-flight ceiling | 10 jobs **per process**; 6 per queue |

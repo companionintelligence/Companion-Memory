@@ -121,9 +121,18 @@ describe('Firefox datasource', () => {
 
     const first = await run();
     expect(first.length).toBe(2);
+    expect(first.every((i) => i.metadata.browser === 'firefox')).toBe(true);
     const ids = first.map((i) => i.id!);
     expect(ids.every(Boolean)).toBe(true); // every id truthy
     expect(new Set(ids).size).toBe(2); // distinct visits -> distinct ids
+    // The cross-producer contract (identity/browser.ts): the Firefox build of
+    // the browser extension mints this exact key for the same visit.
+    expect(new Set(ids)).toEqual(
+      new Set([
+        `visit:${Date.parse('2025-02-14T00:00:00Z')}:https://a.example.com`,
+        `visit:${Date.parse('2025-02-14T00:00:00Z')}:https://b.example.com`,
+      ]),
+    );
     const second = await run();
     expect(second.map((i) => i.id!)).toEqual(ids); // idempotent across re-imports
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -216,7 +225,11 @@ describe('Firefox datasource', () => {
         .filter((i) => i.classification === 'bookmark')
         .map((i) => i.id!);
       expect(new Set(first).size).toBe(first.length);
-      expect(first.every((id: string) => id.startsWith('firefox:bookmark:'))).toBe(true);
+      // `bookmark:<unix s>:<url>`; the undated one keys on 0.
+      expect(first).toContain(
+        `bookmark:${Date.parse('2025-03-01T12:00:00Z') / 1000}:https://saved.example.com`,
+      );
+      expect(first).toContain('bookmark:0:https://undated.example.com');
       const second = (await importAll(dbPath))
         .filter((i) => i.classification === 'bookmark')
         .map((i) => i.id!);

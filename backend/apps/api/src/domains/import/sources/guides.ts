@@ -716,7 +716,7 @@ export const WIZARD_SOURCES: WizardSource[] = [
     ],
     inboxPath: 'browser',
     expectedFormat:
-      "A Chromium-family `History` SQLite file (Chrome/Brave/Edge/Arc) with `urls` + `visits` tables, and/or the profile's `Bookmarks` JSON file. One `page_view` per visit, one `bookmark` per saved link. Rename per browser (e.g. `History-chrome`) to import several.",
+      "A Chromium-family `History` SQLite file (Chrome/Brave/Edge/Arc) with `urls` + `visits` tables, and/or the profile's `Bookmarks` JSON file. One `page_view` per visit, one `bookmark` per saved link. The file itself does not say which browser wrote it, so rename it per browser (e.g. `History-brave`, `History-chrome`) — the suffix is recorded as the browser on every visit, and lets several browsers import side by side.",
     whatImported: [
       'Every URL visited, with title and timestamp',
       'Saved bookmarks, with their folder and the date added',

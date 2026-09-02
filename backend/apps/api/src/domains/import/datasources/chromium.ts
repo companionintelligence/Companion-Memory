@@ -14,23 +14,29 @@
  * timestamp epoch: Chromium stores visit_time (and a bookmark's date_added) as
  * microseconds since 1601-01-01 UTC, so we offset by the 1601->1970 gap before
  * constructing a Date.
+ *
+ * Identities come from the registry's browser builders (identity/browser.ts)
+ * under the `chromium` system, shared with the Takeout Chrome importer and the
+ * browser extension: one visit, one row, however many of the three deliver it.
  */
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import Database from 'better-sqlite3';
 
+import {
+  browserBookmarkIdentity,
+  browserDownloadIdentity,
+  browserVisitIdentity,
+  unixMsFromChromiumMicros,
+} from '@ci/domains/memory';
+
 import { asRecord } from './json';
 import type { FileImporter, Recognition, DirEntry } from './registry';
 import { registerDataSource } from './registry';
 import type { ImportParams, Graph } from './timeline';
 import { timeframeContains } from './timeline';
-
-// Milliseconds between 1601-01-01 (Chromium/Windows FILETIME epoch) and the
-// Unix epoch (1970-01-01).
-const CHROME_EPOCH_OFFSET_MS = 11644473600000;
 
 // Filenames a Chromium-based browser uses for its history database.
 const HISTORY_FILENAMES = new Set([
@@ -56,12 +62,15 @@ const BOOKMARK_FILENAMES = new Set([
 
 // A bookmark's date_added arrives as a STRING of microseconds, so isFinite also
 // rejects the unparseable rather than letting NaN through to an Invalid Date.
-function chromeTimeToDate(micros: number): Date | undefined {
-  if (typeof micros !== 'number' || !Number.isFinite(micros) || micros <= 0) {
-    return undefined;
-  }
+// Pass the exact integer — a BigInt from a `.safeIntegers(true)` statement, or
+// the JSON's decimal string — never a Number: Chromium stamps sit above 2^53
+// and a Number has already dropped the last microsecond (see the registry).
+function chromeTimeToDate(micros: bigint | string | number | null | undefined): Date | undefined {
+  // The registry owns the epoch shift so the identity and the timestamp are
+  // computed from one truncation.
+  const ms = unixMsFromChromiumMicros(micros);
 
-  return new Date(Math.floor(micros / 1000) - CHROME_EPOCH_OFFSET_MS);
+  return ms === undefined ? undefined : new Date(ms);
 }
 
 interface ChromiumBookmarkNode {
@@ -180,6 +189,68 @@ function dwellSeconds(microseconds: number | null | undefined): number | undefin
   return seconds > 0 && seconds <= MAX_PLAUSIBLE_DWELL_S ? seconds : undefined;
 }
 
+/**
+ * Path segments that name a Chromium-family brand, compared whole (lowercased,
+ * spaces/dashes/underscores stripped) so `operations/` is not Opera. Profile
+ * directories: `BraveSoftware/Brave-Browser`, `Google/Chrome`, `Microsoft Edge`,
+ * `Arc/User Data`, `Opera Software/Opera Stable`, `Vivaldi`, `Chromium`.
+ */
+const BRAND_BY_SEGMENT: Readonly<Record<string, string>> = {
+  brave: 'brave',
+  bravesoftware: 'brave',
+  bravebrowser: 'brave',
+  chrome: 'chrome',
+  googlechrome: 'chrome',
+  edge: 'edge',
+  microsoftedge: 'edge',
+  arc: 'arc',
+  opera: 'opera',
+  operasoftware: 'opera',
+  operastable: 'opera',
+  vivaldi: 'vivaldi',
+  chromium: 'chromium',
+};
+
+/**
+ * The brand that wrote a History / Bookmarks file, when its NAME or PATH says
+ * — the file itself never does: every Chromium-family browser writes the
+ * identical schema with no brand marker inside. Two signals, in order:
+ *
+ *   1. the rename the import guide asks for (`History-brave`, `Bookmarks-edge`)
+ *   2. a profile-directory segment on the way to the file, when a folder was
+ *      dropped rather than the bare file
+ *
+ * Undefined when neither says, never guessed: the value lands on the row as
+ * `properties.browser`, where the browser extension writes the brand it can
+ * detect at runtime, and a wrong guess here would out-vote a right answer
+ * there. This is a FACT ABOUT THE ARRIVAL, deliberately kept off the identity:
+ * `source_system` stays `chromium` for every brand so a Brave visit delivered
+ * by this importer and by the extension is one row (identity/browser.ts).
+ */
+export function browserBrandFromPath(...paths: Array<string | undefined>): string | undefined {
+  for (const raw of paths) {
+    if (!raw) {
+      continue;
+    }
+
+    const segments = raw.replace(/\\/g, '/').toLowerCase().split('/').filter(Boolean);
+    const base = segments[segments.length - 1] ?? '';
+    const suffix = /^(?:history|bookmarks)(?:\.sqlite|\.json)?-([a-z]+)$/.exec(base);
+    if (suffix) {
+      return BRAND_BY_SEGMENT[suffix[1]] ?? suffix[1];
+    }
+
+    for (const segment of segments.slice(0, -1)) {
+      const brand = BRAND_BY_SEGMENT[segment.replace(/[\s_-]/g, '')];
+      if (brand) {
+        return brand;
+      }
+    }
+  }
+
+  return undefined;
+}
+
 class ChromiumFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const full = entry.fullPath || entry.fsRoot || entry.filename;
@@ -238,13 +309,17 @@ class ChromiumFileImporter implements FileImporter {
       return;
     }
 
+    // The archive-relative name first: it keeps the profile folders the user
+    // dropped, where fullPath may be an Inbox location that lost them.
+    const browser = browserBrandFromPath(entry.filename, entry.fullPath, entry.fsRoot);
+
     if (BOOKMARK_FILENAMES.has(path.basename(fpath).toLowerCase())) {
-      await this.importBookmarks(fpath, params);
+      await this.importBookmarks(fpath, params, browser);
 
       return;
     }
 
-    this.importHistory(fpath, params);
+    this.importHistory(fpath, params, browser);
   }
 
   /**
@@ -271,7 +346,12 @@ class ChromiumFileImporter implements FileImporter {
    * keeps stable, so re-importing the same profile dedups on the provenance
    * triple exactly as visits do.
    */
-  private importDownloads(db: Database.Database, dbPath: string, params: ImportParams): void {
+  private importDownloads(
+    db: Database.Database,
+    dbPath: string,
+    params: ImportParams,
+    browser?: string,
+  ): void {
     // `downloads` postdates `urls`/`visits` and a stripped or very old profile
     // may not carry it. Probing keeps its absence from failing the whole file,
     // which the caller's catch would turn into zero imported VISITS too.
@@ -297,13 +377,17 @@ class ChromiumFileImporter implements FileImporter {
       FROM downloads d
       ORDER BY d.start_time ASC`);
 
+    // safeIntegers: start_time must arrive exact (above 2^53 as a Number).
+    // Every other integer column comes as a BigInt too and is narrowed below.
+    stmt.safeIntegers(true);
+
     for (const row of stmt.iterate() as Iterable<{
       guid: string | null;
       target_path: string | null;
-      start_time: number;
-      received_bytes: number | null;
-      total_bytes: number | null;
-      state: number | null;
+      start_time: bigint;
+      received_bytes: bigint | null;
+      total_bytes: bigint | null;
+      state: bigint | null;
       mime_type: string | null;
       referrer: string | null;
       tab_url: string | null;
@@ -324,28 +408,34 @@ class ChromiumFileImporter implements FileImporter {
       const filename = row.target_path ? path.basename(row.target_path) : undefined;
       params.pipeline.push({
         item: {
-          id:
-            'chromium:download:' +
-            (row.guid || crypto.createHash('sha1').update(`${url} ${row.start_time}`).digest('hex')),
+          // (url, start ms), not the row's guid: the extension's downloads API
+          // never sees the guid, but both sides see the final URL and the start
+          // instant. The guid rides along in metadata.
+          id: browserDownloadIdentity('chromium', url, ts?.getTime()).id,
           classification: 'download',
           timestamp: ts,
           intermediateLocation: dbPath,
           content: { filename: 'download.txt', data: async () => Buffer.from(url) },
           metadata: {
             Source: 'Chromium',
+            // Lowercase key on purpose: the browser extension writes the same
+            // fact as `properties.browser`, and metadata IS the row's
+            // properties bag — one key, whichever producer knew.
+            browser,
             URL: url,
             Title: filename,
             Filename: filename,
             MimeType: row.mime_type || undefined,
+            Guid: row.guid || undefined,
             // `total_bytes` is what the server promised, `received_bytes` what
             // arrived; they differ for an interrupted download, and the second
             // is the only one that describes the file on disk.
-            SizeBytes: row.received_bytes || undefined,
-            ExpectedBytes: row.total_bytes || undefined,
+            SizeBytes: row.received_bytes ? Number(row.received_bytes) : undefined,
+            ExpectedBytes: row.total_bytes ? Number(row.total_bytes) : undefined,
             // Chrome's DownloadState: 1 is complete. Anything else was
             // interrupted or cancelled, and saying so is the point — an
             // interrupted download is a different fact, not a missing one.
-            Completed: row.state === 1,
+            Completed: row.state === 1n,
             Referrer: row.referrer || undefined,
             TabURL: row.tab_url || undefined,
             'Visit Date': ts?.toISOString(),
@@ -355,7 +445,7 @@ class ChromiumFileImporter implements FileImporter {
     }
   }
 
-  private async importBookmarks(fpath: string, params: ImportParams): Promise<void> {
+  private async importBookmarks(fpath: string, params: ImportParams, browser?: string): Promise<void> {
     const bookmarks = await readBookmarksFile(fpath);
     if (!bookmarks) {
       params.log?.('error', 'parse chromium Bookmarks failed', { path: fpath });
@@ -364,19 +454,16 @@ class ChromiumFileImporter implements FileImporter {
     }
 
     for (const b of bookmarks) {
-      const ts = chromeTimeToDate(Number(b.dateAdded));
+      // The raw string, not Number(): see chromeTimeToDate.
+      const ts = chromeTimeToDate(b.dateAdded);
       if (!timeframeContains(params.timeframe, ts)) {
         continue;
       }
 
-      // Key on (url, date_added) so re-saving the same page stays distinct and a
-      // re-import of the same file dedups via INSERT OR IGNORE.
-      const id =
-        'chromium:bookmark:' +
-        crypto
-          .createHash('sha1')
-          .update(`${b.url} ${b.dateAdded ?? ''}`)
-          .digest('hex');
+      // Key on (url, added second) so re-saving the same page stays distinct,
+      // a re-import dedups, and the extension's bookmark for the same link
+      // lands on the same content row.
+      const id = browserBookmarkIdentity('chromium', b.url, ts?.getTime()).id;
       params.pipeline.push({
         item: {
           id,
@@ -402,13 +489,17 @@ class ChromiumFileImporter implements FileImporter {
             Folder: b.folder || undefined,
             'Added Date': ts?.toISOString(),
             Source: 'Chromium',
+            // Lowercase key on purpose: the browser extension writes the same
+            // fact as `properties.browser`, and metadata IS the row's
+            // properties bag — one key, whichever producer knew.
+            browser,
           },
         },
       } as Graph);
     }
   }
 
-  private importHistory(dbPath: string, params: ImportParams): void {
+  private importHistory(dbPath: string, params: ImportParams, browser?: string): void {
     let db: Database.Database | undefined;
     try {
       db = new Database(dbPath, { readonly: true, fileMustExist: true });
@@ -435,11 +526,16 @@ class ChromiumFileImporter implements FileImporter {
         INNER JOIN urls u ON u.id = v.url
         ORDER BY v.visit_time ASC`);
 
+      // safeIntegers: visit_time must arrive exact — as a Number it is above
+      // 2^53 and the last microsecond is gone, which puts a `...999999` visit
+      // one millisecond late and on a different key from Takeout's.
+      stmt.safeIntegers(true);
+
       for (const row of stmt.iterate() as Iterable<{
         url: string;
         title: string | null;
-        visit_time: number;
-        visit_duration: number | null;
+        visit_time: bigint;
+        visit_duration: bigint | null;
       }>) {
         const ts = chromeTimeToDate(row.visit_time);
         if (!timeframeContains(params.timeframe, ts)) {
@@ -447,9 +543,10 @@ class ChromiumFileImporter implements FileImporter {
         }
 
         const url = row.url || '';
-        // Stable id per (url, visit_time): distinct visits stay distinct, and a
-        // re-import of the same database dedups via INSERT OR IGNORE.
-        const id = 'chromium:' + crypto.createHash('sha1').update(`${url} ${row.visit_time}`).digest('hex');
+        // Cross-producer key on (url, visit ms): a re-import of the same
+        // database dedups, and so does the same visit arriving from Takeout or
+        // the browser extension.
+        const id = browserVisitIdentity('chromium', url, ts?.getTime()).id;
 
         const item = {
           id,
@@ -459,16 +556,22 @@ class ChromiumFileImporter implements FileImporter {
           content: { filename: 'url.txt', data: async () => Buffer.from(url) },
           metadata: {
             Source: 'Chromium',
+            // Lowercase key on purpose: the browser extension writes the same
+            // fact as `properties.browser`, and metadata IS the row's
+            // properties bag — one key, whichever producer knew.
+            browser,
             URL: url,
             Title: row.title || undefined,
             'Visit Date': ts?.toISOString(),
-            DurationSeconds: dwellSeconds(row.visit_duration),
+            DurationSeconds: dwellSeconds(
+              row.visit_duration == null ? undefined : Number(row.visit_duration),
+            ),
           },
         };
         params.pipeline.push({ item } as Graph);
       }
 
-      this.importDownloads(db, dbPath, params);
+      this.importDownloads(db, dbPath, params, browser);
     } catch (e) {
       params.log?.('error', 'chromium query failed', { error: (e as Error).message });
     } finally {

@@ -1,10 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-
+import { useCallback, useMemo, useState } from 'react';
 
 import { usePageTitle } from '@ci/common';
 import { Accordion, Badge, Button, Card, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, RefreshCcw } from '@ci/shadcn/icons';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
 import { PullToRefresh } from '@/components/PullToRefresh';
@@ -15,21 +14,17 @@ import { DeadLettersCard } from './DeadLettersCard';
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
 import { categoryDot, categoryLabel, CATEGORY_LABELS } from './jobCategories';
 import { JobControlsCard } from './JobControlsCard';
+import { JobHealthCard } from './JobHealthCard';
 import { JobHistoryCharts } from './JobHistoryCharts';
 import { JobsImportActivity } from './JobsImportActivity';
 import { categoryFromPath, JOBS_SECTIONS } from './jobsSections';
 import { JobsTable } from './JobsTable';
 import { useDeadLetters } from './useDeadLetters';
 import { useJobControls } from './useJobControls';
+import { useHistoryWindow, useJobFilters } from './useJobFilters';
 import { useJobHistory } from './useJobHistory';
 import { useJobsDashboard, type JobsDashboardResponse } from './useJobsDashboard';
-import {
-  DEFAULT_JOB_FILTERS,
-  DESKTOP_JOB_PAGE_SIZE,
-  MOBILE_JOB_PAGE_SIZE,
-  useJobsList,
-  type JobFilters,
-} from './useJobsList';
+import { DESKTOP_JOB_PAGE_SIZE, MOBILE_JOB_PAGE_SIZE, useJobsList, type JobFilters } from './useJobsList';
 import { useJobTypes, type JobTypesResponse } from './useJobTypes';
 
 export function JobsPage() {
@@ -37,18 +32,21 @@ export function JobsPage() {
 
   const phone = usePhone();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
 
-  const [filters, setFilters] = useState<JobFilters>(DEFAULT_JOB_FILTERS);
-  const [windowHours, setWindowHours] = useState(24);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Phone pages of 50 cards are unreadable; desktop stays at 50. The limit is
-  // a server page size, so it has to live on the filters the list hook sends.
-  useEffect(() => {
-    const limit = phone ? MOBILE_JOB_PAGE_SIZE : DESKTOP_JOB_PAGE_SIZE;
+  // Phone pages of 50 cards are unreadable; desktop stays at 50. Derived rather
+  // than stored: it is a property of the device, not of the view, so it must not
+  // travel in a shared link — a phone-sized URL opened on a desktop should not
+  // stay phone-sized.
+  const limit = phone ? MOBILE_JOB_PAGE_SIZE : DESKTOP_JOB_PAGE_SIZE;
 
-    setFilters((current) => (current.limit === limit ? current : { ...current, limit, offset: 0 }));
-  }, [phone]);
+  // The query string is the source of truth for every filter. See useJobFilters
+  // for why: a reload used to drop you back to "everything, page 1", and there
+  // was no way to hand anyone a view except a screenshot and directions.
+  const { filters, setFilters, isFiltered, clear } = useJobFilters(limit);
+  const [windowHours, setWindowHours] = useHistoryWindow(24);
 
   const dashboard = useJobsDashboard();
   const list = useJobsList(filters);
@@ -57,28 +55,7 @@ export function JobsPage() {
   const deadLetters = useDeadLetters();
   const controls = useJobControls();
 
-  const onFilterChange = useCallback((next: Partial<JobFilters>) => {
-    setFilters((current) => ({ ...current, ...next }));
-  }, []);
-
-  // The URL owns the category on a `/jobs/category/:category` deep-link, and
-  // only there. Everywhere else the chip row owns it, as before — so this
-  // pushes the route's choice into the filter rather than making every chip
-  // click a navigation, which would put ten entries in the back stack for what
-  // is one act of narrowing a table.
-  useEffect(() => {
-    const routeCategory = categoryFromPath(pathname);
-
-    if (routeCategory == null) {
-      return;
-    }
-
-    setFilters((current) =>
-      current.category === routeCategory
-        ? current
-        : { ...current, category: routeCategory, type: '', offset: 0 },
-    );
-  }, [pathname]);
+  const onFilterChange = useCallback((next: Partial<JobFilters>) => setFilters(next), [setFilters]);
 
   // Which surface this address shows. A category deep-link is the table, so it
   // falls through to the same branch Overview's table lives in.
@@ -118,6 +95,8 @@ export function JobsPage() {
       jobTypes={jobTypes}
       filters={filters}
       onChange={onFilterChange}
+      onClear={clear}
+      isFiltered={isFiltered}
     />
   );
   const historyCharts = (
@@ -139,6 +118,7 @@ export function JobsPage() {
       loading={controls.loading}
       saving={controls.saving}
       error={controls.error}
+      errorStatus={controls.errorStatus}
       jobTypes={jobTypes}
       onSave={controls.save}
     />
@@ -176,6 +156,21 @@ export function JobsPage() {
               is looking at is the one that rots. Renders nothing when no import
               is in flight, so the page is unchanged the rest of the time. */}
           <JobsImportActivity />
+
+          {/* The verdict first. The tiles that used to be here were accurate
+              and mute — "Dead-lettered 8,431" carried the same weight as
+              "Retrying 2", and on a real appliance the first number was 43% of
+              every job on the box. The counts survive as the proportional bar
+              inside this card; what is new is that the page now says what it
+              thinks before showing its working. */}
+          <JobHealthCard
+            stateCounts={list.data?.stateCounts ?? {}}
+            categoryCounts={list.data?.categoryCounts ?? {}}
+            crons={dashboard.data?.crons ?? []}
+            loading={list.loading || dashboard.loading}
+            onSelect={(filter) => onFilterChange(filter)}
+            onOpenSchedules={() => navigate('/jobs/schedules')}
+          />
 
           <SummaryCard
             summary={dashboard.data?.summary}
@@ -609,44 +604,49 @@ function SchedulesPhoneList({ rows }: { rows: readonly ScheduleRow[] }) {
   }, [rows]);
 
   return (
-    <Accordion type="multiple" className="w-full">
-      {groups.map(([category, items]) => (
-        <Accordion.Item key={category} value={category}>
-          <Accordion.Trigger className="py-2.5 text-sm hover:no-underline">
-            <span className="flex min-w-0 items-center gap-2">
-              <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${categoryDot(category)}`} />
-              <span className="truncate">{categoryLabel(category)}</span>
-              <span className="text-xs font-normal text-muted-foreground tabular-nums">{items.length}</span>
-            </span>
-          </Accordion.Trigger>
-          <Accordion.Content>
-            <ul className="pb-1">
-              {items.map(({ cron, descriptor, schedule }) => (
-                <li key={cron.name} className="border-t border-border/40 py-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <span
-                      className="flex min-w-0 flex-wrap items-center gap-1.5 font-medium"
-                      title={cron.name}
-                    >
-                      {descriptor.label}
-                      {descriptor.unnamed && <UnnamedCronWarning />}
-                    </span>
-                    <ScheduleStatus cron={cron} className="shrink-0" />
-                  </div>
-                  <p className="mt-0.5 text-xs text-muted-foreground" title={schedule.raw}>
-                    {schedule.frequency}
-                    {schedule.when ? ` · ${schedule.when}` : ''}
-                    {' · next '}
-                    {cron.nextRunAt ? new Date(cron.nextRunAt).toLocaleTimeString() : '—'}
-                    {' · succeeded '}
-                    {lastSucceeded(cron)}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </Accordion.Content>
-        </Accordion.Item>
-      ))}
-    </Accordion>
+    // Labelled group, so "the schedules list" is addressable — by a screen
+    // reader, and by a test that wants THIS Maintenance row rather than any
+    // element on the page whose name happens to contain the word.
+    <div role="group" aria-label="Schedules by category">
+      <Accordion type="multiple" className="w-full">
+        {groups.map(([category, items]) => (
+          <Accordion.Item key={category} value={category}>
+            <Accordion.Trigger className="py-2.5 text-sm hover:no-underline">
+              <span className="flex min-w-0 items-center gap-2">
+                <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${categoryDot(category)}`} />
+                <span className="truncate">{categoryLabel(category)}</span>
+                <span className="text-xs font-normal text-muted-foreground tabular-nums">{items.length}</span>
+              </span>
+            </Accordion.Trigger>
+            <Accordion.Content>
+              <ul className="pb-1">
+                {items.map(({ cron, descriptor, schedule }) => (
+                  <li key={cron.name} className="border-t border-border/40 py-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <span
+                        className="flex min-w-0 flex-wrap items-center gap-1.5 font-medium"
+                        title={cron.name}
+                      >
+                        {descriptor.label}
+                        {descriptor.unnamed && <UnnamedCronWarning />}
+                      </span>
+                      <ScheduleStatus cron={cron} className="shrink-0" />
+                    </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground" title={schedule.raw}>
+                      {schedule.frequency}
+                      {schedule.when ? ` · ${schedule.when}` : ''}
+                      {' · next '}
+                      {cron.nextRunAt ? new Date(cron.nextRunAt).toLocaleTimeString() : '—'}
+                      {' · succeeded '}
+                      {lastSucceeded(cron)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </Accordion.Content>
+          </Accordion.Item>
+        ))}
+      </Accordion>
+    </div>
   );
 }

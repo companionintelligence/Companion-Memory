@@ -23,6 +23,10 @@ type Props = {
   /** The job taxonomy, for the type filter. Null while it loads. */
   jobTypes: JobTypesResponse | null;
   onChange: (next: Partial<JobFilters>) => void;
+  /** Drops every filter from the URL. Passed in so the query string stays the
+      single source of truth rather than being reconstructed from defaults. */
+  onClear: () => void;
+  isFiltered: boolean;
 };
 
 /**
@@ -52,7 +56,7 @@ const STATE_TABS = [
  * query: filtering and paging over `pgboss.job` cannot be done in the browser
  * when the table routinely holds tens of thousands of rows.
  */
-export function JobsTable({ data, loading, error, filters, jobTypes, onChange }: Props) {
+export function JobsTable({ data, loading, error, filters, jobTypes, onChange, onClear, isFiltered }: Props) {
   const phone = usePhone();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -229,12 +233,8 @@ export function JobsTable({ data, loading, error, filters, jobTypes, onChange }:
         stacked={phone}
         onChange={(queue) => onChange({ queue, offset: 0 })}
       />
-      {(filters.state || filters.queue || filters.category || filters.type || filters.search) && (
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => onChange({ state: '', queue: '', category: '', type: '', search: '', offset: 0 })}
-        >
+      {isFiltered && (
+        <Button size="sm" variant="ghost" onClick={onClear}>
           Clear
         </Button>
       )}

@@ -7,6 +7,7 @@ import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/c
 import { HbpeNotifyService } from '@ci/common/hbpe';
 import { LoggerService } from '@ci/common/logging';
 import {
+  INGEST_MERGE_KINDS,
   INGEST_REFRESH_COLUMNS,
   type BulkInsertResult,
   appendRecordSources,
@@ -144,16 +145,20 @@ export class CommunicationService {
       return;
     }
 
-    await appendRecordSources(this.communicationRepository.manager, { table: 'communications', userId: context.userId }, [
-      {
-        recordId,
-        sourceType: data.source_type,
-        sourceSystem: data.source_system,
-        sourceId: data.source_id,
-        connectionId: data.connection_id ?? null,
-        importRunId: context.importRunId ?? null,
-      },
-    ]);
+    await appendRecordSources(
+      this.communicationRepository.manager,
+      { table: 'communications', userId: context.userId },
+      [
+        {
+          recordId,
+          sourceType: data.source_type,
+          sourceSystem: data.source_system,
+          sourceId: data.source_id,
+          connectionId: data.connection_id ?? null,
+          importRunId: context.importRunId ?? null,
+        },
+      ],
+    );
   }
 
   async create(context: UserServiceContext, data: CreateCommunicationDto): Promise<Communication> {
@@ -359,6 +364,7 @@ export class CommunicationService {
         conflictTarget: '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
         identityColumns: ['source_system', 'source_id'],
         conflictUpdateColumns: INGEST_REFRESH_COLUMNS.communication,
+        conflictMergeKinds: INGEST_MERGE_KINDS.communication,
         sourceLedger: {
           table: 'communications',
           userId: context.userId,

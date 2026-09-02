@@ -1,4 +1,4 @@
-import { INGEST_REFRESH_COLUMNS, INGEST_SCHEMA_VERSION } from '../ingestRefreshColumns';
+import { INGEST_MERGE_KINDS, INGEST_REFRESH_COLUMNS, INGEST_SCHEMA_VERSION } from '../ingestRefreshColumns';
 
 /**
  * Guards the centralized ingest conflict-refresh contract. The services import
@@ -25,8 +25,11 @@ describe('INGEST_REFRESH_COLUMNS', () => {
   });
 
   it('matches the versioned snapshot (bump INGEST_SCHEMA_VERSION when a list changes)', () => {
+    // Version 5 changed WHAT a refresh does, not the lists: same producer
+    // refreshes (null-guarded), another producer fills gaps — see the map's
+    // doc and INGEST_MERGE_KINDS below.
     expect({ version: INGEST_SCHEMA_VERSION, columns: INGEST_REFRESH_COLUMNS }).toEqual({
-      version: 4,
+      version: 5,
       columns: {
         // CommunicationService.createMany self-heal UPDATE binds its VALUES
         // parameters in this order — keep it in lockstep with the service.
@@ -134,6 +137,33 @@ describe('INGEST_REFRESH_COLUMNS', () => {
     for (const columns of Object.values(INGEST_REFRESH_COLUMNS)) {
       for (const column of columns) {
         expect(forbidden).not.toContain(column);
+      }
+    }
+  });
+});
+
+describe('INGEST_MERGE_KINDS', () => {
+  it('matches the versioned snapshot', () => {
+    expect(INGEST_MERGE_KINDS).toEqual({
+      communication: { participants_metadata: 'json', metadata: 'json' },
+      event: {},
+      item: {},
+      content: {},
+      browser_activity: { properties: 'json', is_incognito: 'flag', contains_sensitive: 'flag' },
+      product_model: {},
+      receipt: {},
+      receipt_line_item: {},
+      object_observation: {},
+    });
+  });
+
+  // A kind for a column that is not refreshed would be dead configuration —
+  // and, worse, would look like the column IS merged.
+  it('only classifies columns that are actually refreshed', () => {
+    for (const [entity, kinds] of Object.entries(INGEST_MERGE_KINDS)) {
+      const refreshed = INGEST_REFRESH_COLUMNS[entity as keyof typeof INGEST_REFRESH_COLUMNS];
+      for (const column of Object.keys(kinds)) {
+        expect(refreshed).toContain(column);
       }
     }
   });
