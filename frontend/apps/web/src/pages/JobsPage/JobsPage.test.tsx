@@ -258,6 +258,8 @@ function render(
     staleSince?: Date | null;
     error?: string | null;
     deadLetters?: DeadLetterGroup[];
+    /** Initial URL, so a test can assert that a link restores a view. */
+    routerEntries?: string[];
   } = {},
 ) {
   Object.assign(dashboardState, {
@@ -278,7 +280,7 @@ function render(
     error: null,
   });
 
-  return renderWithProviders(<JobsPage />);
+  return renderWithProviders(<JobsPage />, { routerEntries: options.routerEntries ?? ['/jobs'] });
 }
 
 describe('JobsPage summary', () => {
@@ -376,6 +378,40 @@ describe('JobsPage table', () => {
 
     fireEvent.change(screen.getByLabelText('Queue'), { target: { value: 'image-description' } });
     expect(lastFilters).toMatchObject({ queue: 'image-description' });
+  });
+
+  it('restores a whole view from the URL, so a link is a place', () => {
+    // Filters used to live in useState: a reload dropped you back to
+    // "everything, page 1", and there was no way to hand anyone a view except a
+    // screenshot and directions.
+    render({ routerEntries: ['/jobs?state=failed&category=llm&queue=image-description&search=ffmpeg'] });
+
+    expect(lastFilters).toMatchObject({
+      state: 'failed',
+      category: 'llm',
+      queue: 'image-description',
+      search: 'ffmpeg',
+    });
+  });
+
+  it('writes a picked filter back into the query string', () => {
+    render();
+
+    const categoryRow = screen.getByRole('tablist', { name: 'Job category' });
+    fireEvent.click(within(categoryRow).getByRole('tab', { name: /Planning/ }));
+
+    // The URL mechanics themselves are covered in useJobFilters.test.tsx — the
+    // harness runs a MemoryRouter, so window.location never moves. What this
+    // asserts is that the page routes a chip click through the same state the
+    // URL owns, rather than keeping a second copy beside it.
+    expect(lastFilters).toMatchObject({ category: 'planning' });
+  });
+
+  it('keeps the page size out of the URL — it is a property of the device, not the view', () => {
+    // A phone-sized link opened on a desktop must not stay phone-sized.
+    render({ routerEntries: ['/jobs?state=failed'] });
+
+    expect(lastFilters).toMatchObject({ limit: 50 });
   });
 
   it('offers every category as a toggle, carrying the count that picking it would yield', () => {
@@ -1102,8 +1138,16 @@ describe('JobsPage phone layout', () => {
 
     // The phone list is a separate renderer from the table, so it gets the same
     // assertion rather than being assumed to have kept up.
-    fireEvent.click(screen.getByRole('button', { name: /Schedules/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Unclassified/ }));
+    // Scoped: the Health card can also offer a "View schedules" action, and an
+    // unscoped getByRole('button') would find both and fail pointing at the
+    // wrong component.
+    fireEvent.click(screen.getByRole('button', { name: /^Schedules/ }));
+
+    // Scoped to the schedules list. The Health card also names categories (its
+    // legend filters by them), so an unscoped getByRole would match both and
+    // fail pointing at the wrong component.
+    const scheduleList = screen.getByRole('group', { name: 'Schedules by category' });
+    fireEvent.click(within(scheduleList).getByRole('button', { name: /Unclassified/ }));
 
     expect(screen.getByText('needs a name')).toBeInTheDocument();
   });
@@ -1131,8 +1175,10 @@ describe('JobsPage phone layout', () => {
       expect(screen.queryByRole('columnheader', { name: 'Duration' })).not.toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Schedules/ }));
-    fireEvent.click(screen.getByRole('button', { name: /Maintenance/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Schedules/ }));
+
+    const scheduleList = screen.getByRole('group', { name: 'Schedules by category' });
+    fireEvent.click(within(scheduleList).getByRole('button', { name: /Maintenance/ }));
 
     expect(screen.getByText('overdue')).toBeInTheDocument();
     expect(screen.queryByText('scheduled')).not.toBeInTheDocument();
