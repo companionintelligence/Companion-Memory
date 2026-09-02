@@ -4,12 +4,11 @@ import path from 'node:path';
 
 import Database from 'better-sqlite3';
 
+import { browserBrandFromPath } from '../chromium';
 import { allDataSources, dataSourcesRecognize } from '../registry';
 import type { ImportParams, Timeframe } from '../timeline';
 
 import type { EmittedGraph } from './support/emitted';
-
-import '../chromium';
 
 function getImporter(name: string) {
   const ds = allDataSources().find((d) => d.name === name);
@@ -64,6 +63,35 @@ async function runImport(dbPath: string, timeframe: Timeframe = {}) {
   return pipeline.filter((p) => p.item).map((p) => p.item);
 }
 
+describe('browserBrandFromPath', () => {
+  // The rename the import guide asks for.
+  it('reads the brand off a History-<brand> / Bookmarks-<brand> rename', () => {
+    expect(browserBrandFromPath('History-brave')).toBe('brave');
+    expect(browserBrandFromPath('/inbox/History-edge')).toBe('edge');
+    expect(browserBrandFromPath('Bookmarks-arc')).toBe('arc');
+    expect(browserBrandFromPath('history.sqlite-chrome')).toBe('chrome');
+  });
+
+  it('reads the brand off a profile directory on the way to the file', () => {
+    expect(browserBrandFromPath('BraveSoftware/Brave-Browser/Default/History')).toBe('brave');
+    expect(browserBrandFromPath('/home/u/.config/google-chrome/Default/History')).toBe('chrome');
+    expect(
+      browserBrandFromPath('C:\\Users\\u\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\History'),
+    ).toBe('edge');
+    expect(browserBrandFromPath('Library/Application Support/Arc/User Data/Default/History')).toBe('arc');
+    expect(browserBrandFromPath('Opera Software/Opera Stable/History')).toBe('opera');
+  });
+
+  it('prefers the first path that says anything, and never guesses', () => {
+    // The archive-relative name keeps the dropped folders; fullPath may not.
+    expect(browserBrandFromPath('Brave-Browser/Default/History', '/var/inbox/abc/History')).toBe('brave');
+    expect(browserBrandFromPath(undefined, '/var/inbox/abc/History')).toBeUndefined();
+    expect(browserBrandFromPath('History')).toBeUndefined();
+    // Whole-segment match: an unrelated folder that CONTAINS a brand name is not it.
+    expect(browserBrandFromPath('operations/History')).toBeUndefined();
+  });
+});
+
 describe('Chromium datasource', () => {
   it('recognizes a real History database', async () => {
     const dbPath = makeHistoryDb(tmpdir());
@@ -98,6 +126,43 @@ describe('Chromium datasource', () => {
     const items = await runImport(makeHistoryDb(tmpdir()));
     expect(items[0].timestamp?.toISOString()).toBe('2025-02-14T00:00:00.000Z');
     expect(items[2].timestamp?.toISOString()).toBe('2025-06-01T08:30:00.000Z');
+  });
+
+  // The brand is a fact about the arrival, carried as `metadata.browser` (the
+  // row's properties bag, same key the extension writes) — never on the
+  // identity, which stays `chromium` for every brand.
+  it('stamps metadata.browser from a History-<brand> rename, and leaves it absent for a bare History', async () => {
+    const dir = tmpdir();
+    const bare = makeHistoryDb(dir);
+    const brave = path.join(dir, 'History-brave');
+    fs.copyFileSync(bare, brave);
+
+    const importer = getImporter('chromium');
+    async function run(fullPath: string, filename: string) {
+      const pipeline: EmittedGraph[] = [];
+      await importer.fileImport({}, { filename, fullPath }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      return pipeline.filter((p) => p.item).map((p) => p.item);
+    }
+
+    const fromBrave = await run(brave, 'History-brave');
+    expect(fromBrave.length).toBeGreaterThan(0);
+    expect(fromBrave.every((i) => i.metadata.browser === 'brave')).toBe(true);
+    // Same visits, same identities: the brand did not touch the key.
+    expect(fromBrave.map((i) => i.id)).toEqual((await run(bare, 'History')).map((i) => i.id));
+
+    const fromBare = await run(bare, 'History');
+    expect(fromBare.every((i) => i.metadata.browser === undefined)).toBe(true);
+
+    // The archive-relative filename carries the dropped profile folder even
+    // when fullPath is an anonymous Inbox location.
+    const fromFolder = await run(bare, 'Brave-Browser/Default/History');
+    expect(fromFolder.every((i) => i.metadata.browser === 'brave')).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it('respects the timeframe filter', async () => {

@@ -342,6 +342,9 @@ export class GoogleChromeFileImporter implements FileImporter {
             Transition:
               typeof v.page_transition_qualifier === 'string' ? v.page_transition_qualifier : undefined,
             Source: 'Google Chrome',
+            // Takeout is Chrome Sync, so the brand is always Chrome. Same key
+            // the extension writes (`properties.browser`).
+            browser: 'chrome',
           },
         },
       });
@@ -395,6 +398,9 @@ export class GoogleChromeFileImporter implements FileImporter {
             Folder: b.folder,
             'Added Date': ts?.toISOString(),
             Source: 'Google Chrome',
+            // Takeout is Chrome Sync, so the brand is always Chrome. Same key
+            // the extension writes (`properties.browser`).
+            browser: 'chrome',
           },
         },
       });

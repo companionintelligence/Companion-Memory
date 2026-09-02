@@ -229,6 +229,7 @@ class FirefoxFileImporter implements FileImporter {
           content: { filename: 'url.txt', data: async () => Buffer.from(row.url || '') },
           metadata: {
             Source: 'Firefox',
+            browser: 'firefox',
             URL: row.url,
             Title: row.title,
             Description: row.description,
@@ -320,6 +321,7 @@ class FirefoxFileImporter implements FileImporter {
               Folder: row.folder || undefined,
               'Added Date': ts?.toISOString(),
               Source: 'Firefox',
+              browser: 'firefox',
             },
           },
         } as Graph);

@@ -112,6 +112,9 @@ describe('google_chrome (Takeout export)', () => {
     // browser extension sends live, so all three arrivals of this visit are
     // one ci.browser_activity row.
     expect(a!.id).toBe(`visit:${Date.UTC(2026, 5, 10, 12, 0, 0)}:https://example.com/a`);
+    // Takeout is Chrome Sync: the brand is known and rides in the properties
+    // bag under the key the extension uses, off the identity.
+    expect(a!.metadata.browser).toBe('chrome');
   });
 
   it('imports Bookmarks.html as bookmark items', async () => {

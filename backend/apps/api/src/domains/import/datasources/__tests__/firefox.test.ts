@@ -121,6 +121,7 @@ describe('Firefox datasource', () => {
 
     const first = await run();
     expect(first.length).toBe(2);
+    expect(first.every((i) => i.metadata.browser === 'firefox')).toBe(true);
     const ids = first.map((i) => i.id!);
     expect(ids.every(Boolean)).toBe(true); // every id truthy
     expect(new Set(ids).size).toBe(2); // distinct visits -> distinct ids

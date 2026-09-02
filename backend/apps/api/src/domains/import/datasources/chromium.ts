@@ -189,6 +189,68 @@ function dwellSeconds(microseconds: number | null | undefined): number | undefin
   return seconds > 0 && seconds <= MAX_PLAUSIBLE_DWELL_S ? seconds : undefined;
 }
 
+/**
+ * Path segments that name a Chromium-family brand, compared whole (lowercased,
+ * spaces/dashes/underscores stripped) so `operations/` is not Opera. Profile
+ * directories: `BraveSoftware/Brave-Browser`, `Google/Chrome`, `Microsoft Edge`,
+ * `Arc/User Data`, `Opera Software/Opera Stable`, `Vivaldi`, `Chromium`.
+ */
+const BRAND_BY_SEGMENT: Readonly<Record<string, string>> = {
+  brave: 'brave',
+  bravesoftware: 'brave',
+  bravebrowser: 'brave',
+  chrome: 'chrome',
+  googlechrome: 'chrome',
+  edge: 'edge',
+  microsoftedge: 'edge',
+  arc: 'arc',
+  opera: 'opera',
+  operasoftware: 'opera',
+  operastable: 'opera',
+  vivaldi: 'vivaldi',
+  chromium: 'chromium',
+};
+
+/**
+ * The brand that wrote a History / Bookmarks file, when its NAME or PATH says
+ * — the file itself never does: every Chromium-family browser writes the
+ * identical schema with no brand marker inside. Two signals, in order:
+ *
+ *   1. the rename the import guide asks for (`History-brave`, `Bookmarks-edge`)
+ *   2. a profile-directory segment on the way to the file, when a folder was
+ *      dropped rather than the bare file
+ *
+ * Undefined when neither says, never guessed: the value lands on the row as
+ * `properties.browser`, where the browser extension writes the brand it can
+ * detect at runtime, and a wrong guess here would out-vote a right answer
+ * there. This is a FACT ABOUT THE ARRIVAL, deliberately kept off the identity:
+ * `source_system` stays `chromium` for every brand so a Brave visit delivered
+ * by this importer and by the extension is one row (identity/browser.ts).
+ */
+export function browserBrandFromPath(...paths: Array<string | undefined>): string | undefined {
+  for (const raw of paths) {
+    if (!raw) {
+      continue;
+    }
+
+    const segments = raw.replace(/\\/g, '/').toLowerCase().split('/').filter(Boolean);
+    const base = segments[segments.length - 1] ?? '';
+    const suffix = /^(?:history|bookmarks)(?:\.sqlite|\.json)?-([a-z]+)$/.exec(base);
+    if (suffix) {
+      return BRAND_BY_SEGMENT[suffix[1]] ?? suffix[1];
+    }
+
+    for (const segment of segments.slice(0, -1)) {
+      const brand = BRAND_BY_SEGMENT[segment.replace(/[\s_-]/g, '')];
+      if (brand) {
+        return brand;
+      }
+    }
+  }
+
+  return undefined;
+}
+
 class ChromiumFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const full = entry.fullPath || entry.fsRoot || entry.filename;
@@ -247,13 +309,17 @@ class ChromiumFileImporter implements FileImporter {
       return;
     }
 
+    // The archive-relative name first: it keeps the profile folders the user
+    // dropped, where fullPath may be an Inbox location that lost them.
+    const browser = browserBrandFromPath(entry.filename, entry.fullPath, entry.fsRoot);
+
     if (BOOKMARK_FILENAMES.has(path.basename(fpath).toLowerCase())) {
-      await this.importBookmarks(fpath, params);
+      await this.importBookmarks(fpath, params, browser);
 
       return;
     }
 
-    this.importHistory(fpath, params);
+    this.importHistory(fpath, params, browser);
   }
 
   /**
@@ -280,7 +346,12 @@ class ChromiumFileImporter implements FileImporter {
    * keeps stable, so re-importing the same profile dedups on the provenance
    * triple exactly as visits do.
    */
-  private importDownloads(db: Database.Database, dbPath: string, params: ImportParams): void {
+  private importDownloads(
+    db: Database.Database,
+    dbPath: string,
+    params: ImportParams,
+    browser?: string,
+  ): void {
     // `downloads` postdates `urls`/`visits` and a stripped or very old profile
     // may not carry it. Probing keeps its absence from failing the whole file,
     // which the caller's catch would turn into zero imported VISITS too.
@@ -347,6 +418,10 @@ class ChromiumFileImporter implements FileImporter {
           content: { filename: 'download.txt', data: async () => Buffer.from(url) },
           metadata: {
             Source: 'Chromium',
+            // Lowercase key on purpose: the browser extension writes the same
+            // fact as `properties.browser`, and metadata IS the row's
+            // properties bag — one key, whichever producer knew.
+            browser,
             URL: url,
             Title: filename,
             Filename: filename,
@@ -370,7 +445,7 @@ class ChromiumFileImporter implements FileImporter {
     }
   }
 
-  private async importBookmarks(fpath: string, params: ImportParams): Promise<void> {
+  private async importBookmarks(fpath: string, params: ImportParams, browser?: string): Promise<void> {
     const bookmarks = await readBookmarksFile(fpath);
     if (!bookmarks) {
       params.log?.('error', 'parse chromium Bookmarks failed', { path: fpath });
@@ -414,13 +489,17 @@ class ChromiumFileImporter implements FileImporter {
             Folder: b.folder || undefined,
             'Added Date': ts?.toISOString(),
             Source: 'Chromium',
+            // Lowercase key on purpose: the browser extension writes the same
+            // fact as `properties.browser`, and metadata IS the row's
+            // properties bag — one key, whichever producer knew.
+            browser,
           },
         },
       } as Graph);
     }
   }
 
-  private importHistory(dbPath: string, params: ImportParams): void {
+  private importHistory(dbPath: string, params: ImportParams, browser?: string): void {
     let db: Database.Database | undefined;
     try {
       db = new Database(dbPath, { readonly: true, fileMustExist: true });
@@ -477,16 +556,22 @@ class ChromiumFileImporter implements FileImporter {
           content: { filename: 'url.txt', data: async () => Buffer.from(url) },
           metadata: {
             Source: 'Chromium',
+            // Lowercase key on purpose: the browser extension writes the same
+            // fact as `properties.browser`, and metadata IS the row's
+            // properties bag — one key, whichever producer knew.
+            browser,
             URL: url,
             Title: row.title || undefined,
             'Visit Date': ts?.toISOString(),
-            DurationSeconds: dwellSeconds(row.visit_duration == null ? undefined : Number(row.visit_duration)),
+            DurationSeconds: dwellSeconds(
+              row.visit_duration == null ? undefined : Number(row.visit_duration),
+            ),
           },
         };
         params.pipeline.push({ item } as Graph);
       }
 
-      this.importDownloads(db, dbPath, params);
+      this.importDownloads(db, dbPath, params, browser);
     } catch (e) {
       params.log?.('error', 'chromium query failed', { error: (e as Error).message });
     } finally {
