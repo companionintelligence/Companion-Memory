@@ -29,7 +29,7 @@ export function MemorySubmenu() {
   const { pathname } = useLocation();
   const { isFeatureEnabled } = useFeatures();
   const routeOpen = isMemoryHubPath(pathname);
-  const { open, onMouseEnter, onMouseLeave, onOpenChange, onHeadClick } = useRailSubmenuOpen(
+  const { open, groupProps, onOpenChange, onHeadClick } = useRailSubmenuOpen(
     'memory',
     routeOpen,
   );
@@ -68,8 +68,7 @@ export function MemorySubmenu() {
     <div
       data-testid="memory-submenu"
       className="min-w-0 w-full overflow-hidden"
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
+      {...groupProps}
     >
       <Collapsible
         open={open}

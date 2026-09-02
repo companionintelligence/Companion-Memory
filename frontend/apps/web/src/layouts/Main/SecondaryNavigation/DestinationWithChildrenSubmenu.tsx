@@ -27,7 +27,7 @@ export function DestinationWithChildrenSubmenu({ destination }: { destination: R
   const routeOpen =
     isRailDestinationActive(destination, pathname) ||
     children.some((child) => isRailDestinationActive(child, pathname));
-  const { open, onMouseEnter, onMouseLeave, onOpenChange, onHeadClick } = useRailSubmenuOpen(
+  const { open, groupProps, onOpenChange, onHeadClick } = useRailSubmenuOpen(
     destination.id,
     routeOpen,
   );
@@ -61,8 +61,7 @@ export function DestinationWithChildrenSubmenu({ destination }: { destination: R
     <div
       data-testid={`${destination.id}-submenu`}
       className="min-w-0 w-full overflow-hidden"
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
+      {...groupProps}
     >
       <Collapsible
         open={open}

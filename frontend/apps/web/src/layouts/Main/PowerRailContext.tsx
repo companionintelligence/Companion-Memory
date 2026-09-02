@@ -2,6 +2,9 @@ import { createContext, useCallback, useContext, useMemo, useState, type ReactNo
 
 const STORAGE_KEY = 'ci-power-rail-expanded';
 
+/** One stable empty list, so clearing held groups never re-renders for nothing. */
+export const NO_SUBMENUS: readonly string[] = [];
+
 export type PowerRailVariant = 'dock' | 'overlay';
 
 interface PowerRailContextValue {
@@ -26,11 +29,19 @@ interface PowerRailContextValue {
   setHovered: (hovered: boolean) => void;
   setHoldOpen: (holdOpen: boolean) => void;
   /**
-   * Which rail submenu the pointer is in. Hover is exclusive: opening Jobs
-   * must close Planning, not stack both.
+   * Which rail submenu the pointer travelled into (see useRailSubmenuPointer).
+   * Hover is exclusive: opening Jobs must close Planning, not stack both. It
+   * survives the pointer wandering into the gaps between groups and clears
+   * only when the pointer leaves the rail.
    */
   hoveredSubmenuId: string | null;
   setHoveredSubmenuId: (id: string | null) => void;
+  /**
+   * Groups above the hovered one that were open when the pointer arrived,
+   * kept open so the rows under the pointer do not jump. Cleared with hover.
+   */
+  heldOpenSubmenuIds: readonly string[];
+  setHeldOpenSubmenuIds: (ids: readonly string[]) => void;
   /** Chevron-pinned submenu. One at a time; a peer pin replaces it. */
   stickySubmenuId: string | null;
   setStickySubmenuId: (id: string | null) => void;
@@ -77,12 +88,14 @@ export function PowerRailProvider({
   const [holdOpen, setHoldOpen] = useState(false);
   const [overlayOpen, setOverlayOpen] = useState(false);
   const [hoveredSubmenuId, setHoveredSubmenuId] = useState<string | null>(null);
+  const [heldOpenSubmenuIds, setHeldOpenSubmenuIds] = useState<readonly string[]>(NO_SUBMENUS);
   const [stickySubmenuId, setStickySubmenuId] = useState<string | null>(null);
 
   const setHovered = useCallback((next: boolean) => {
     setHoveredState(next);
     if (!next) {
       setHoveredSubmenuId(null);
+      setHeldOpenSubmenuIds(NO_SUBMENUS);
     }
   }, []);
 
@@ -119,6 +132,8 @@ export function PowerRailProvider({
       setHoldOpen,
       hoveredSubmenuId,
       setHoveredSubmenuId,
+      heldOpenSubmenuIds,
+      setHeldOpenSubmenuIds,
       stickySubmenuId,
       setStickySubmenuId,
     }),
@@ -133,6 +148,7 @@ export function PowerRailProvider({
       closeOverlay,
       setHovered,
       hoveredSubmenuId,
+      heldOpenSubmenuIds,
       stickySubmenuId,
     ],
   );

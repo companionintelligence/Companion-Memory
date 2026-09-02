@@ -18,6 +18,7 @@ import { NavLink } from './NavLink';
 import { PlanningSubmenu } from './PlanningSubmenu';
 import { SelfSubmenu } from './SelfSubmenu';
 import { SettingsRailButton } from './SettingsRailButton';
+import { useRailSubmenuPointer } from './useRailSubmenuPointer';
 
 interface ExternalNavLinkProps {
   href: string;
@@ -141,12 +142,15 @@ function OverlayRail({
   expanded: boolean;
   showSelf: boolean;
 }) {
+  const submenuPointer = useRailSubmenuPointer();
+
   return (
     <nav
       id="power-rail"
       aria-label="Main navigation drawer"
       data-state={expanded ? 'expanded' : 'collapsed'}
       aria-hidden={!expanded}
+      {...submenuPointer}
       onClick={(event) => {
         if ((event.target as HTMLElement).closest('a')) {
           closeOverlay();
@@ -178,6 +182,7 @@ export function SecondaryNavigation() {
   const destinations = useVisibleRailDestinations();
   const [{ isOpen: captureOpen }, { close: closeCapture }] = useCaptureModal();
   const overlay = variant === 'overlay';
+  const submenuPointer = useRailSubmenuPointer();
   const showSelf = destinations.some((destination) => destination.id === 'self');
 
   const destinationsList = (
@@ -249,6 +254,10 @@ export function SecondaryNavigation() {
         className={cn('relative h-full shrink-0 transition-[width] duration-200', pinned ? 'w-56' : 'w-14')}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        // Which submenu is hovered is decided here, for the whole rail, from
+        // pointer travel — not per group from mouseenter, which also fires
+        // when an accordion closing moves a group under a still pointer.
+        {...submenuPointer}
         onFocusCapture={() => setHovered(true)}
         onBlurCapture={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {

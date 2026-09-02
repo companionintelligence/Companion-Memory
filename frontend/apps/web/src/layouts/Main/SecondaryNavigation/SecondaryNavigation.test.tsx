@@ -102,6 +102,16 @@ function renderToggleAndRail(route = '/plan') {
   );
 }
 
+/** The hover surface: leaving it is what clears a hover-opened group. */
+function railLane(container: HTMLElement) {
+  return container.querySelector('div.relative') as Element;
+}
+
+/** Hover is read from pointer travel, not mouseenter — see useRailSubmenuPointer. */
+function hoverGroup(group: Element, init?: { clientX: number; clientY: number }) {
+  fireEvent.pointerMove(group, init);
+}
+
 describe('SecondaryNavigation', () => {
   it('carries Sources in the primary rail', () => {
     renderRail();
@@ -140,43 +150,137 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
   });
 
-  it('opens Planning sections on hover when expanded, and closes after leave when not sticky', () => {
+  it('opens Planning sections on hover when expanded, and closes after leaving the rail when not sticky', () => {
+    const { container } = renderRail('/feed', { expanded: true });
+
+    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+
+    hoverGroup(screen.getByTestId('planning-submenu'));
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+
+    fireEvent.mouseLeave(railLane(container));
+    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+  });
+
+  it('closes a route-open submenu when a group above it is hovered, then restores it', () => {
+    const { container } = renderRail('/self/stats', { expanded: true });
+
+    expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
+
+    hoverGroup(screen.getByTestId('jobs-submenu'));
+    expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
+
+    fireEvent.mouseLeave(railLane(container));
+    expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
+  });
+
+  // Closing a group above the pointer drags every row up under the cursor,
+  // leaving it below whatever it was reaching for. So an open group above the
+  // one just entered stays open until the pointer leaves the rail; a group
+  // below it closes at once, since nothing under the pointer moves.
+  it('holds an open group above the hovered one, and closes one below it', () => {
+    const { container } = renderRail('/feed', { expanded: true });
+
+    // Planning sits above Jobs in the rail.
+    const planning = screen.getByTestId('planning-submenu');
+    const jobs = screen.getByTestId('jobs-submenu');
+    expect(planning.compareDocumentPosition(jobs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    hoverGroup(planning);
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+
+    // Moving down into Jobs keeps Planning where it is.
+    hoverGroup(jobs);
+    expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+
+    // Moving back up into Planning closes Jobs — it is below the pointer.
+    hoverGroup(planning);
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
+
+    // Leaving the rail restores the one-group rule: nothing is on /feed.
+    hoverGroup(jobs);
+    fireEvent.mouseLeave(railLane(container));
+    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a route-open group above the pointer open while a lower group is hovered', () => {
+    renderRail('/plan', { expanded: true });
+
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+
+    hoverGroup(screen.getByTestId('memory-submenu'));
+    expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+  });
+
+  it('closes Jobs after leaving the rail when not on a jobs route', () => {
+    const { container } = renderRail('/plan', { expanded: true });
+
+    hoverGroup(screen.getByTestId('jobs-submenu'));
+    expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
+
+    fireEvent.mouseLeave(railLane(container));
+    expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
+  });
+
+  // Leaving a group for the gap under it used to collapse it, which moved the
+  // next group up under the still pointer, which opened that one, which…
+  // The group now stays open until the pointer leaves the rail.
+  it('keeps a hovered group open while the pointer is in the rail but outside every group', () => {
     renderRail('/feed', { expanded: true });
 
-    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
-
-    const submenu = screen.getByTestId('planning-submenu');
-    fireEvent.mouseEnter(submenu);
+    const planning = screen.getByTestId('planning-submenu');
+    hoverGroup(planning);
     expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
 
-    fireEvent.mouseLeave(submenu);
-    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+    // mouseout with a relatedTarget is a move between rows; a bare mouseLeave
+    // would read as the pointer leaving the window, lane and all.
+    const sources = screen.getByRole('link', { name: 'Sources' });
+    fireEvent.mouseOut(planning, { relatedTarget: sources });
+    hoverGroup(sources);
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
   });
 
-  it('closes a route-open submenu when another group is hovered, then restores it', () => {
-    renderRail('/plan', { expanded: true });
+  // The other half of the same loop: Memory closing shifts Planning up under
+  // a pointer that never moved. The browser fires mouseenter for it anyway.
+  // Hover is read from pointer travel across a boundary — both the previous
+  // and the current position are hit-tested in the *current* layout — so a
+  // group that merely arrived under the pointer does not count as hovered.
+  it('does not hover a group that slid under a still pointer when a peer collapsed', () => {
+    const originalFromPoint = document.elementFromPoint;
+    const { container } = renderRail('/feed', { expanded: true });
 
-    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+    try {
+      const memory = screen.getByTestId('memory-submenu');
+      const planning = screen.getByTestId('planning-submenu');
 
-    const jobs = screen.getByTestId('jobs-submenu');
-    fireEvent.mouseEnter(jobs);
-    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
+      document.elementFromPoint = () => memory;
+      hoverGroup(memory, { clientX: 20, clientY: 40 });
+      expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
 
-    fireEvent.mouseLeave(jobs);
-    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
-  });
+      // Layout shifted: the spot the pointer was on is now Planning too, so a
+      // one-pixel twitch inside Planning crossed nothing.
+      document.elementFromPoint = () => planning;
+      hoverGroup(planning, { clientX: 20, clientY: 41 });
+      expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
 
-  it('closes Jobs after hover leave when not on a jobs route', () => {
-    renderRail('/plan', { expanded: true });
+      // A real move out of Memory into Planning does switch.
+      document.elementFromPoint = () => memory;
+      hoverGroup(planning, { clientX: 20, clientY: 120 });
+      expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
 
-    const jobs = screen.getByTestId('jobs-submenu');
-    fireEvent.mouseEnter(jobs);
-    expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
-
-    fireEvent.mouseLeave(jobs);
-    expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
+      fireEvent.mouseLeave(railLane(container));
+      expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+    } finally {
+      document.elementFromPoint = originalFromPoint;
+    }
   });
 
   it('keeps Planning sections open after a sticky chevron open even off /plan routes', () => {
@@ -343,16 +447,15 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Stats' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('opens Self sections on hover when expanded, and closes after leave when not sticky', () => {
-    renderRail('/plan', { expanded: true });
+  it('opens Self sections on hover when expanded, and closes after leaving the rail when not sticky', () => {
+    const { container } = renderRail('/plan', { expanded: true });
 
     expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
 
-    const submenu = screen.getByTestId('self-submenu');
-    fireEvent.mouseEnter(submenu);
+    hoverGroup(screen.getByTestId('self-submenu'));
     expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
 
-    fireEvent.mouseLeave(submenu);
+    fireEvent.mouseLeave(railLane(container));
     expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
   });
 
@@ -366,8 +469,7 @@ describe('SecondaryNavigation', () => {
   it('closes Self sections when the chevron is clicked, even while hovered', () => {
     renderRail('/plan', { expanded: true });
 
-    const submenu = screen.getByTestId('self-submenu');
-    fireEvent.mouseEnter(submenu);
+    hoverGroup(screen.getByTestId('self-submenu'));
     expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse Self sections' }));
@@ -386,20 +488,19 @@ describe('SecondaryNavigation', () => {
     fireEvent.mouseLeave(submenu);
     expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
 
-    fireEvent.mouseEnter(submenu);
+    hoverGroup(submenu);
     expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
   });
 
-  it('opens Memory sections on hover when expanded, and closes after leave when not sticky', () => {
-    renderRail('/plan', { expanded: true });
+  it('opens Memory sections on hover when expanded, and closes after leaving the rail when not sticky', () => {
+    const { container } = renderRail('/plan', { expanded: true });
 
     expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
 
-    const submenu = screen.getByTestId('memory-submenu');
-    fireEvent.mouseEnter(submenu);
+    hoverGroup(screen.getByTestId('memory-submenu'));
     expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
 
-    fireEvent.mouseLeave(submenu);
+    fireEvent.mouseLeave(railLane(container));
     expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
   });
 
@@ -413,8 +514,7 @@ describe('SecondaryNavigation', () => {
   it('closes Memory sections when the chevron is clicked, even while hovered', () => {
     renderRail('/plan', { expanded: true });
 
-    const submenu = screen.getByTestId('memory-submenu');
-    fireEvent.mouseEnter(submenu);
+    hoverGroup(screen.getByTestId('memory-submenu'));
     expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse Memory sections' }));
@@ -556,18 +656,18 @@ describe('PowerRailToggle', () => {
     const { container } = renderToggleAndRail();
 
     const toggle = container.querySelector('button[aria-controls="power-rail"]');
-    const lane = container.querySelector('div.relative');
+    const lane = railLane(container);
 
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
-    fireEvent.mouseEnter(lane as Element);
+    fireEvent.mouseEnter(lane);
 
     // Hover really did open the rail...
     expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'expanded');
     // ...but the toggle must not claim it as "expanded".
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
-    fireEvent.mouseLeave(lane as Element);
+    fireEvent.mouseLeave(lane);
 
     // A deliberate pin is what flips it.
     fireEvent.click(toggle as Element);

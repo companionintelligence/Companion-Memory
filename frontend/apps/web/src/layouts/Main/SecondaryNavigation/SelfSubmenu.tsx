@@ -8,8 +8,8 @@ import { useFeatures } from '@/common/feature';
 import { PersonAvatar } from '@/components/PersonAvatar';
 import { useCurrentUser } from '@/hooks';
 
-import { NavUserMenu } from '../PrimaryNavigation/NavUser';
 import { usePowerRail } from '../PowerRailContext';
+import { NavUserMenu } from '../PrimaryNavigation/NavUser';
 
 import { SELF_SECTIONS, isSelfPath } from './selfSections';
 import { useRailSubmenuOpen } from './useRailSubmenuOpen';
@@ -25,7 +25,7 @@ export function SelfSubmenu() {
   const { isFeatureEnabled } = useFeatures();
   const { user } = useCurrentUser();
   const routeOpen = isSelfPath(pathname);
-  const { open, onMouseEnter, onMouseLeave, onOpenChange, onHeadClick } = useRailSubmenuOpen(
+  const { open, groupProps, onOpenChange, onHeadClick } = useRailSubmenuOpen(
     'self',
     routeOpen,
     { persistDismissedOnLeave: true },
@@ -69,8 +69,7 @@ export function SelfSubmenu() {
     <div
       data-testid="self-submenu"
       className="min-w-0 w-full overflow-hidden"
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
+      {...groupProps}
     >
       <Collapsible
         open={open}

@@ -45,7 +45,7 @@ export function PlanningSubmenu() {
   const { pathname } = useLocation();
   const { isFeatureEnabled } = useFeatures();
   const routeOpen = pathname.startsWith('/plan');
-  const { open, onMouseEnter, onMouseLeave, onOpenChange, onHeadClick } = useRailSubmenuOpen(
+  const { open, groupProps, onOpenChange, onHeadClick } = useRailSubmenuOpen(
     'plan',
     routeOpen,
   );
@@ -75,8 +75,7 @@ export function PlanningSubmenu() {
     <div
       data-testid="planning-submenu"
       className="min-w-0 w-full overflow-hidden"
-      onMouseEnter={onMouseEnter}
-      onMouseLeave={onMouseLeave}
+      {...groupProps}
     >
       <Collapsible
         open={open}
