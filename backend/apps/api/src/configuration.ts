@@ -229,6 +229,10 @@ export const ConfigSchema = z.object({
     // CI_HUB_ORIGINS at install. Empty disables the connect redirect entirely.
     connect: z.object({
       hubOrigins: z.string().optional().default(''),
+      // Docker-network origin Memory uses to ring Hub's targeted wake. The
+      // public CI_HUB_ORIGINS list is for browser redirects; this is the
+      // appliance-local hop. Override with CI_HUB_INTERNAL_URL.
+      hubInternalUrl: z.string().optional().default('http://ci-os-hub:3000'),
     }),
   }),
   db: z.object({

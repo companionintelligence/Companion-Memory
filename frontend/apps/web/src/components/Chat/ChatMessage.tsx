@@ -8,9 +8,10 @@ interface Props {
   role: string;
   content: string;
   createdAt?: string;
+  source?: 'openclaw' | 'memory' | 'user';
 }
 
-export function ChatMessage({ role, content, createdAt }: Props) {
+export function ChatMessage({ role, content, createdAt, source }: Props) {
   if (role === 'tool') {
     return null;
   }
@@ -30,7 +31,9 @@ export function ChatMessage({ role, content, createdAt }: Props) {
       {segments.map((segment) => {
         switch (segment.type) {
           case 'text':
-            return <AssistantMessage content={segment.content} createdAt={createdAt} />;
+            return (
+              <AssistantMessage content={segment.content} createdAt={createdAt} source={source} />
+            );
           case 'think':
             return <ThinkBlock content={segment.content} defaultExpanded={false} />;
           case 'tool':

@@ -1,6 +1,14 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
-export const TASK_STATUSES = ['proposed', 'open', 'in_progress', 'done', 'skipped', 'archived'] as const;
+export const TASK_STATUSES = [
+  'proposed',
+  'open',
+  'in_progress',
+  'delegated',
+  'done',
+  'skipped',
+  'archived',
+] as const;
 
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 

@@ -36,7 +36,8 @@
       "nativeRedirectScheme": "OIDC_NATIVE_REDIRECT_SCHEME"
     },
     "connect": {
-      "hubOrigins": "CI_HUB_ORIGINS"
+      "hubOrigins": "CI_HUB_ORIGINS",
+      "hubInternalUrl": "CI_HUB_INTERNAL_URL"
     },
     "portal": {
       "enabled": {

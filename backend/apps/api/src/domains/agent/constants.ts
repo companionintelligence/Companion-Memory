@@ -1,5 +1,8 @@
 import type { QueueOptions } from '@ci/domains/events';
 
+/** Hub URN for the official OpenClaw app. Dispatch doorbells this one only. */
+export const OPENCLAW_APP_URN = 'ci-openclaw:ci-marketplace';
+
 /**
  * Per-user chat-turn distillation. One queue, one event
  * (`AgentTurnFragmentsEvent`), one producer (`TurnFragmentCron`).

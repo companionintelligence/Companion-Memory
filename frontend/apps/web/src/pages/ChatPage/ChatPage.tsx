@@ -7,10 +7,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { v7 as uuid7 } from 'uuid';
 
 import { useThreadService } from '@/api';
+import { steerDispatchJob, useDispatchJob } from '@/api/useDispatchJob';
 import { Chat, type FormData } from '@/components/Chat';
 import { ErrorState } from '@/components/ErrorState';
 import { MemoryHubShell } from '@/components/MemoryHub';
-import { useChatRequester, useCounter, useModel } from '@/hooks';
+import { useAuth, useChatRequester, useCounter, useModel } from '@/hooks';
 import { clearAgentChatContext, formatAgentChatDraft, readAgentChatContext } from '@/lib/agentChat';
 
 import { CHAT_BASE, chatThreadPath } from './chatPaths';
@@ -37,8 +38,11 @@ function ChatPageContent() {
     { refetch: refetchThreads, delete: deleteThread },
   ] = useThreadListService();
 
+  const [{ authToken }] = useAuth();
   const [{ thread, loading: threadLoading, error: threadError }, { refetch: refetchThread }] =
     useThreadService(resolvedThreadId.current);
+  const isDispatch = thread?.kind === 'dispatch';
+  const { job: dispatchJob } = useDispatchJob(thread?.id ?? null, Boolean(isDispatch));
 
   const [{ count: newThreadCount }, { increment: incrementNewThreadCount }] = useCounter();
 
@@ -96,7 +100,9 @@ function ChatPageContent() {
 
   useEffect(() => {
     if (thread && !hasSetInitialMessages.current) {
-      const generating = thread.generationStatus === 'queued' || thread.generationStatus === 'running';
+      const generating =
+        thread.kind !== 'dispatch' &&
+        (thread.generationStatus === 'queued' || thread.generationStatus === 'running');
       const loaded = thread.messages ?? [];
       const last = loaded[loaded.length - 1];
       const messages = generating && last?.role === 'assistant' ? loaded.slice(0, -1) : loaded;
@@ -136,13 +142,42 @@ function ChatPageContent() {
     [cancelGeneration, deleteThread, navigateToChatList],
   );
 
+  useEffect(() => {
+    if (!isDispatch || !thread?.messages) {
+      return;
+    }
+
+    setInitialMessages(thread.messages);
+  }, [isDispatch, thread?.messages]);
+
+  useEffect(() => {
+    if (!isDispatch || !thread?.id) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void refetchThread();
+    }, 4000);
+
+    return () => window.clearInterval(timer);
+  }, [isDispatch, refetchThread, thread?.id]);
+
   const handleSubmit = useCallback(
     async (data: FormData, e?: FormEvent) => {
       e?.preventDefault();
 
+      if (isDispatch && dispatchJob && authToken) {
+        await steerDispatchJob(authToken, dispatchJob.id, {
+          action: 'continue',
+          message: data.message,
+        });
+        await refetchThread();
+        return true;
+      }
+
       return submitChatRequest(data);
     },
-    [submitChatRequest],
+    [authToken, dispatchJob, isDispatch, refetchThread, submitChatRequest],
   );
 
   useEffect(() => {
@@ -315,13 +350,30 @@ function ChatPageContent() {
             initialDraft={chatDraft}
             messages={initialMessages}
             emptyState={emptyState}
-            readable={stream ?? undefined}
+            readable={isDispatch ? undefined : (stream ?? undefined)}
             onSubmit={handleSubmit}
             onStop={stopChatRequest}
             autoFocus={true}
             onResponseFinished={handleResponseFinished}
             onStreamError={detachChatStream}
-          />
+          >
+            {dispatchJob && (dispatchJob.status === 'completed' || dispatchJob.status === 'blocked') ? (
+              <Card className="mx-auto mb-3 w-full max-w-xl border-border/80">
+                <Card.Content className="flex items-center justify-between gap-3 p-3 text-sm">
+                  <span>
+                    {dispatchJob.status === 'completed'
+                      ? `OpenClaw finished “${dispatchJob.packet?.source?.title ?? thread?.name ?? 'this'}”.`
+                      : 'OpenClaw stopped and needs you.'}
+                  </span>
+                  {dispatchJob.taskId ? (
+                    <Button variant="outline" size="sm" onClick={() => navigate('/memory/plan')}>
+                      Open task
+                    </Button>
+                  ) : null}
+                </Card.Content>
+              </Card>
+            ) : null}
+          </Chat>
         </div>
       </MemoryHubShell>
     </div>

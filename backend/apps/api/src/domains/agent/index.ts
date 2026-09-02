@@ -23,21 +23,28 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
-import { MessageEntity } from '@ci/domains/conversations';
+import { ConversationModule, MessageEntity } from '@ci/domains/conversations';
 import { EntityResolutionModule } from '@ci/domains/entity-resolution';
 import { EventsModule } from '@ci/domains/events';
 import { GraphModule } from '@ci/domains/graph';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { LLMModule } from '@ci/domains/llm';
 import { MemoryModule } from '@ci/domains/memory';
+import { PlanningModule } from '@ci/domains/planning';
 import { PredictionsModule } from '@ci/domains/predictions';
 import { RetrievalPolicyModule } from '@ci/domains/retrieval-policy';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { ToolsModule } from '@ci/domains/tools';
 import { UserModule } from '@ci/domains/user';
 
+import { AgentJobsController } from './controllers/AgentJobsController';
 import { IntentsController } from './controllers/IntentsController';
 import { MemoryController } from './controllers/MemoryController';
+import { AgentJobEntity } from './entities/AgentJobEntity';
+import './events';
+import { AgentDispatchListener } from './listeners/AgentDispatchListener';
+import { AgentDispatchService } from './services/AgentDispatchService';
+import { HubDoorbellService } from './services/HubDoorbellService';
 import { AgentMemoryRetentionCron } from './cron/AgentMemoryRetentionCron';
 import { MemoryCompactionCron } from './cron/MemoryCompactionCron';
 import { TurnFragmentCron } from './cron/TurnFragmentCron';
@@ -55,11 +62,9 @@ import { TurnFragmentService } from './services/TurnFragmentService';
 
 @Module({
   imports: [
-    // MessageEntity comes in as a repository rather than by importing
-    // ConversationModule: TurnFragmentService only reads chat rows, and the
-    // agent domain already depends on LLMModule, which depends on
-    // conversations — a module import here would close that circle.
-    TypeOrmModule.forFeature([AgentMemoryEntity, MessageEntity]),
+    TypeOrmModule.forFeature([AgentMemoryEntity, AgentJobEntity, MessageEntity]),
+    ConversationModule,
+    PlanningModule,
     EntityResolutionModule,
     EventsModule,
     GraphModule,
@@ -84,6 +89,9 @@ import { TurnFragmentService } from './services/TurnFragmentService';
     ForageCorpusService,
   ],
   providers: [
+    AgentDispatchListener,
+    AgentDispatchService,
+    HubDoorbellService,
     AgentMemoryRetentionCron,
     AgentMemoryRetentionService,
     AgentMemoryService,
@@ -98,7 +106,7 @@ import { TurnFragmentService } from './services/TurnFragmentService';
     TurnFragmentListener,
     TurnFragmentService,
   ],
-  controllers: [IntentsController, MemoryController],
+  controllers: [AgentJobsController, IntentsController, MemoryController],
 })
 export class AgentModule {}
 

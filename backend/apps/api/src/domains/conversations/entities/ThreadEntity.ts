@@ -37,6 +37,10 @@ export class ThreadEntity {
   @Column({ type: 'text', default: 'idle', name: 'generation_status' })
   generationStatus!: 'idle' | 'queued' | 'running' | 'failed';
 
+  /** `chat` is Memory's Ollama thread. `dispatch` is an OpenClaw job thread. */
+  @Column({ type: 'text', default: 'chat', name: 'kind' })
+  kind!: 'chat' | 'dispatch';
+
   static toEgressType(entity: ThreadEntity): Thread {
     return {
       id: entity.id,
@@ -44,6 +48,7 @@ export class ThreadEntity {
       description: entity.description ?? null,
       isArchived: entity.isArchived,
       generationStatus: entity.generationStatus ?? 'idle',
+      kind: entity.kind ?? 'chat',
       createdAt: entity.createdAt,
       updatedAt: entity.updatedAt,
       user: entity.user ? UserEntity.toEgressType(entity.user) : undefined,

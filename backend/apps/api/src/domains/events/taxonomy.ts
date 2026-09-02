@@ -402,6 +402,38 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
     category: JOB_CATEGORIES.planning,
     description: 'A planning task was deleted.',
   },
+  'agent.task.dispatch': {
+    label: 'Dispatch to OpenClaw',
+    category: JOB_CATEGORIES.planning,
+    description:
+      'Memory handed a task to OpenClaw: packet snapshot, dispatch thread, and a doorbell through Hub.',
+    interactive: true,
+  },
+  'agent.task.checkpoint': {
+    label: 'OpenClaw checkpoint',
+    category: JOB_CATEGORIES.planning,
+    description: 'OpenClaw pushed a batch of turns and thoughts back onto the dispatch job.',
+    interactive: true,
+  },
+  'agent.task.completed': {
+    label: 'OpenClaw dispatch done',
+    category: JOB_CATEGORIES.planning,
+    description: 'OpenClaw finished the delegated task. Memory closes the job and the task row.',
+    interactive: true,
+  },
+  'agent.task.blocked': {
+    label: 'OpenClaw dispatch blocked',
+    category: JOB_CATEGORIES.planning,
+    description:
+      'OpenClaw stopped: two hard fails on the same step, or it needs the user. Memory counters.',
+    interactive: true,
+  },
+  'planning.task_result': {
+    label: 'Delegated task result',
+    category: JOB_CATEGORIES.planning,
+    description: 'A dispatch job completed or blocked, and Memory recorded the outcome on the task.',
+    interactive: true,
+  },
 
   // ── Maintenance ─────────────────────────────────────────────────────────
   'smart.rotation.work': {

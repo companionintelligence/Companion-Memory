@@ -3435,6 +3435,7 @@ type TaskPendingChangeType implements Node {
 """Lifecycle state of a planning task."""
 enum TaskStatus {
   archived
+  delegated
   done
   in_progress
   open

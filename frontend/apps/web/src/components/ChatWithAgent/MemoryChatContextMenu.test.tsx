@@ -39,6 +39,12 @@ vi.mock('@/api/useAgentHarnesses', () => ({
   }),
 }));
 
+vi.mock('@/hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/hooks')>();
+
+  return { ...actual, useAuth: () => [{ authToken: 'test-token' }] };
+});
+
 const note = {
   __typename: 'NoteType',
   id: 'note-1',
@@ -54,6 +60,10 @@ const openclaw: AgentHarnessStatus = {
   running: true,
   openUrl: 'https://openclaw.example/chat',
   accessible: true,
+  wakeable: true,
+  dispatchReady: true,
+  dispatchBlocker: null,
+  connectUrl: 'https://hub.example.com/api/memory-connect/start?app=ci-openclaw%3Aci-marketplace',
 };
 
 describe('MemoryChatAbout', () => {
@@ -111,7 +121,8 @@ describe('MemoryChatAbout', () => {
     );
 
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Picnic note' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Open in OpenClaw' }));
+    expect(await screen.findByRole('menuitem', { name: 'Dispatch to OpenClaw' })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Chat in OpenClaw' }));
 
     await waitFor(() => expect(window.open).toHaveBeenCalled());
     const opened = new URL(String(vi.mocked(window.open).mock.calls[0]?.[0]));

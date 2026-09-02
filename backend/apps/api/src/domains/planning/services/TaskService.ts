@@ -136,7 +136,7 @@ export class TaskService {
       .createQueryBuilder('task')
       .where('task.user_id = :userId', { userId: context.userId })
       .andWhere('task.status IN (:...statuses)', {
-        statuses: ['proposed', 'open', 'in_progress', 'done'],
+        statuses: ['proposed', 'open', 'in_progress', 'delegated', 'done'],
       })
       .andWhere('lower(trim(task.title)) = :title', { title: normalized })
       .orderBy('task.updated_at', 'DESC')

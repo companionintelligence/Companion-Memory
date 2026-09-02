@@ -4486,6 +4486,7 @@ export type TaskPendingChangeType = Node & {
 /** Lifecycle state of a planning task. */
 export type TaskStatus =
   | 'archived'
+  | 'delegated'
   | 'done'
   | 'in_progress'
   | 'open'

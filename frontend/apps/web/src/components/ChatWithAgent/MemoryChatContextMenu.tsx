@@ -9,14 +9,14 @@ import {
 } from 'react';
 
 import { useDeviceLayout } from '@ci/common';
-import { Button, ContextMenu, Sheet, cn } from '@ci/shadcn';
+import { ContextMenu, Sheet, cn } from '@ci/shadcn';
 import { useTranslation } from 'react-i18next';
 
 import type { AgentChatContext } from '@/lib/agentChat';
 import { entityToAgentChatContext } from '@/lib/entityToAgentChatContext';
 import type { MemoryEntity } from '@/pages/MemoryPage/useEntityService';
 
-import { useChatAboutActions } from './useChatAboutActions';
+import { AgentActionItems } from './AgentActionItems';
 
 const LONG_PRESS_MS = 500;
 const MOVE_THRESHOLD_PX = 8;
@@ -140,52 +140,11 @@ function MobileChatAbout({
 }
 
 function ChatAboutContextItems({ context }: { context: AgentChatContext }) {
-  const { t } = useTranslation();
-  const { chatHere, chatableHarnesses, openHarness } = useChatAboutActions(context);
-
-  return (
-    <>
-      <ContextMenu.Item onSelect={chatHere}>{t('CHAT_WITH_AGENT_HERE')}</ContextMenu.Item>
-      {chatableHarnesses.map((harness) => (
-        <ContextMenu.Item key={harness.id} onSelect={() => openHarness(harness)}>
-          {t('CHAT_WITH_AGENT_OPEN_IN', { name: harness.name })}
-        </ContextMenu.Item>
-      ))}
-    </>
-  );
+  return <AgentActionItems context={context} surface="context" />;
 }
 
 function ChatAboutSheetItems({ context, onAction }: { context: AgentChatContext; onAction: () => void }) {
-  const { t } = useTranslation();
-  const { chatHere, chatableHarnesses, openHarness } = useChatAboutActions(context);
-
-  return (
-    <>
-      <Button
-        variant="ghost"
-        className="h-11 justify-start"
-        onClick={() => {
-          chatHere();
-          onAction();
-        }}
-      >
-        {t('CHAT_WITH_AGENT_HERE')}
-      </Button>
-      {chatableHarnesses.map((harness) => (
-        <Button
-          key={harness.id}
-          variant="ghost"
-          className="h-11 justify-start"
-          onClick={() => {
-            openHarness(harness);
-            onAction();
-          }}
-        >
-          {t('CHAT_WITH_AGENT_OPEN_IN', { name: harness.name })}
-        </Button>
-      ))}
-    </>
-  );
+  return <AgentActionItems context={context} surface="sheet" onAction={onAction} />;
 }
 
 function useLongPress(onLongPress: () => void) {

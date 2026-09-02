@@ -263,6 +263,7 @@ export function openCount(tasks: readonly SectionedTask[]): number {
     (task) =>
       task.status === 'open' ||
       task.status === 'in_progress' ||
+      task.status === 'delegated' ||
       task.status === 'proposed' ||
       task.hasPendingChange,
   ).length;

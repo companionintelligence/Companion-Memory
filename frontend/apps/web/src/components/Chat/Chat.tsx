@@ -33,6 +33,7 @@ interface Message {
   role: string;
   content: string;
   createdAt?: string;
+  source?: 'openclaw' | 'memory' | 'user';
 }
 
 interface Props extends ChatInputProps {

@@ -9,6 +9,7 @@ export enum TaskStatusEnum {
   proposed = 'proposed',
   open = 'open',
   in_progress = 'in_progress',
+  delegated = 'delegated',
   done = 'done',
   skipped = 'skipped',
   archived = 'archived',

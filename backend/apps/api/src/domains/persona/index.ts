@@ -56,7 +56,8 @@ import { PersonaComposeTool } from './tools/PersonaComposeTool';
 export class PersonaModule {}
 
 export { PersonaComposeService, PersonaContextPackService, AboutYouService, AgentHarnessService };
-export type { AgentHarnessId, AgentHarnessStatus } from './services/AgentHarnessService';
+export type { AgentHarnessId, AgentHarnessStatus, DispatchBlocker } from './services/AgentHarnessService';
+export { OPENCLAW_APP_URN, HERMES_APP_URN } from './services/AgentHarnessService';
 export type { HowYoudDoItResult, HowYoudDoItStep } from './services/PersonaComposeService';
 export type { AboutYouView } from './services/AboutYouService';
 export type { PersonaContextPack, PersonaEvidence } from './services/PersonaContextPackService';

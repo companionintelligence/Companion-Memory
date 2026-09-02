@@ -6,6 +6,14 @@ import { useAuth } from '@/hooks';
 
 export type AgentHarnessId = 'hermes' | 'openclaw';
 
+export type DispatchBlocker =
+  | 'not_installed'
+  | 'not_connected'
+  | 'not_running'
+  | 'not_wakeable'
+  | 'chat_only'
+  | null;
+
 export interface AgentHarnessStatus {
   id: AgentHarnessId;
   name: string;
@@ -14,6 +22,10 @@ export interface AgentHarnessStatus {
   running: boolean;
   openUrl: string | null;
   accessible: boolean;
+  wakeable: boolean;
+  dispatchReady: boolean;
+  dispatchBlocker: DispatchBlocker;
+  connectUrl: string | null;
 }
 
 interface AgentHarnessesResponse {
@@ -134,7 +146,14 @@ export function useAgentHarnesses() {
     [harnesses],
   );
   const chatableHarnesses = useMemo(
-    () => harnesses.filter((harness) => harness.openUrl && (harness.connectedToMemory || harness.running)),
+    () =>
+      harnesses.filter((harness) => {
+        if (!harness.openUrl || !harness.running) {
+          return false;
+        }
+
+        return harness.id === 'openclaw' ? harness.connectedToMemory : true;
+      }),
     [harnesses],
   );
 

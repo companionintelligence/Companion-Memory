@@ -5,8 +5,11 @@ import { Button, Checkbox, DropdownMenu, IconButton, cn } from '@ci/shadcn';
 import { CalendarRange, ChevronDown, MoreHorizontal, Pencil, Trash } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
+import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
+import { AgentActionItems } from '@/components/ChatWithAgent/AgentActionItems';
 import { gql } from '@/graphql';
 import { type FragmentType, useFragment } from '@/graphql/fragment-masking';
+import { namedChatContext } from '@/lib/agentChat';
 
 import { isOverdue, localDateOf } from './taskSections';
 import { WhenSelector } from './WhenSelector';
@@ -131,6 +134,12 @@ export function Task({
     dueAt: task.dueAt as string | null,
     estimatedMinutes: task.estimatedMinutes,
   };
+  const chatContext = namedChatContext({
+    title: task.title,
+    body: task.description,
+    sourceKind: 'Task',
+    sourceId: task.id,
+  });
 
   const activateBody = () => {
     if (suppressTap.current) {
@@ -411,6 +420,7 @@ export function Task({
               </Button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Content align="end">
+              <AgentActionItems context={chatContext} surface="dropdown" />
               {onEdit ? (
                 <DropdownMenu.Item
                   onSelect={() => {
@@ -429,6 +439,7 @@ export function Task({
 
         {!phone ? (
           <div className="flex shrink-0 items-center gap-0.5">
+            <ChatWithAgentMenu context={chatContext} />
             {onEdit ? (
               <IconButton
                 onClick={(event) => {
