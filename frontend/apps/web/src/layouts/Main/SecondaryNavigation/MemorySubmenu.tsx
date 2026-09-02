@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment } from 'react';
 
 import { Collapsible, Tooltip, cn } from '@ci/shadcn';
 import { Brain, ChevronRight, MessageSquare } from '@ci/shadcn/icons';
@@ -11,11 +11,13 @@ import { threadLabel, useRecentThreads } from '@/pages/ChatPage/useRecentThreads
 
 import { usePowerRail } from '../PowerRailContext';
 
+import { useRailSubmenuOpen } from './useRailSubmenuOpen';
+
 /**
  * Power Rail Memory entry with hub section children.
  *
- * Open = sticky click, hub route, or hover — unless the user explicitly closed
- * it (chevron), which suppresses hover/route until they leave or reopen.
+ * Open rules live in {@link useRailSubmenuOpen} — exclusive with the other
+ * rail groups, so hovering Jobs closes this instead of stacking both.
  *
  * Chat's recent threads render nested under its own row here (moved from the
  * old, now-removed ChatSubmenu) — the phone drawer is the only way to change
@@ -26,14 +28,12 @@ export function MemorySubmenu() {
   const { expanded } = usePowerRail();
   const { pathname } = useLocation();
   const { isFeatureEnabled } = useFeatures();
-  const [stickyOpen, setStickyOpen] = useState(false);
-  const [hoverOpen, setHoverOpen] = useState(false);
-  /** User closed via chevron — ignore hover/route until mouse leave or reopen. */
-  const [dismissed, setDismissed] = useState(false);
-
   const routeOpen = isMemoryHubPath(pathname);
+  const { open, onMouseEnter, onMouseLeave, onOpenChange, onHeadClick } = useRailSubmenuOpen(
+    'memory',
+    routeOpen,
+  );
   const memoryRootActive = pathname === '/memory';
-  const open = dismissed ? false : stickyOpen || routeOpen || hoverOpen;
 
   // Idle until the group is actually showing its contents — same reasoning
   // ChatSubmenu had: the rail renders on every page, so an eager thread list
@@ -41,11 +41,6 @@ export function MemorySubmenu() {
   const { threads, loading: threadsLoading } = useRecentThreads({ enabled: open && expanded });
 
   const visible = MEMORY_HUB_SECTIONS.filter((section) => !section.flag || isFeatureEnabled(section.flag));
-
-  // New hub page → allow auto-open again.
-  useEffect(() => {
-    setDismissed(false);
-  }, [pathname]);
 
   if (!expanded) {
     const collapsed = (
@@ -73,23 +68,12 @@ export function MemorySubmenu() {
     <div
       data-testid="memory-submenu"
       className="min-w-0 w-full overflow-hidden"
-      onMouseEnter={() => setHoverOpen(true)}
-      onMouseLeave={() => {
-        setHoverOpen(false);
-        setDismissed(false);
-      }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <Collapsible
         open={open}
-        onOpenChange={(next) => {
-          if (next) {
-            setStickyOpen(true);
-            setDismissed(false);
-          } else {
-            setStickyOpen(false);
-            setDismissed(true);
-          }
-        }}
+        onOpenChange={onOpenChange}
         className="min-w-0 w-full"
       >
         {/* One row: Memory + chevron share the same box (same geometry as NavLink). */}
@@ -103,10 +87,7 @@ export function MemorySubmenu() {
             to="/memory"
             aria-label="Memory"
             aria-current={memoryRootActive ? 'page' : undefined}
-            onClick={() => {
-              setStickyOpen(true);
-              setDismissed(false);
-            }}
+            onClick={onHeadClick}
             className={cn(
               'flex min-w-0 flex-1 items-center gap-3 rounded-l-md px-2 py-2 transition hover:bg-accent hover:text-accent-foreground',
               memoryRootActive && 'text-primary hover:text-primary',

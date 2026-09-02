@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 
 import { Collapsible, Tooltip, cn } from '@ci/shadcn';
 import { ChevronRight } from '@ci/shadcn/icons';
@@ -12,21 +12,24 @@ import { NavUserMenu } from '../PrimaryNavigation/NavUser';
 import { usePowerRail } from '../PowerRailContext';
 
 import { SELF_SECTIONS, isSelfPath } from './selfSections';
+import { useRailSubmenuOpen } from './useRailSubmenuOpen';
 
 /**
  * Self is the user-info tile — avatar, name, email — not a "Self" label.
- * Same open rules as {@link MemorySubmenu}: sticky click, self route, or
- * hover, unless the user closed it (chevron).
+ * Same exclusive open rules as the other rail groups
+ * ({@link useRailSubmenuOpen}). A chevron close stays closed through leave.
  */
 export function SelfSubmenu() {
   const { expanded } = usePowerRail();
   const { pathname } = useLocation();
   const { isFeatureEnabled } = useFeatures();
   const { user } = useCurrentUser();
-  const [stickyOpen, setStickyOpen] = useState(false);
-  const [hoverOpen, setHoverOpen] = useState(false);
-  /** User closed via chevron — stay closed until they reopen, even on a Self route. */
-  const [dismissed, setDismissed] = useState(false);
+  const routeOpen = isSelfPath(pathname);
+  const { open, onMouseEnter, onMouseLeave, onOpenChange, onHeadClick } = useRailSubmenuOpen(
+    'self',
+    routeOpen,
+    { persistDismissedOnLeave: true },
+  );
 
   const currentUser = useMemo(
     () => ({
@@ -37,14 +40,8 @@ export function SelfSubmenu() {
     [user],
   );
 
-  const routeOpen = isSelfPath(pathname);
-  const open = dismissed ? false : stickyOpen || routeOpen || hoverOpen;
   const visible = SELF_SECTIONS.filter((section) => !section.flag || isFeatureEnabled(section.flag));
   const avatar = <PersonAvatar name={currentUser.name} avatarUrl={currentUser.avatarUrl} size="sm" />;
-
-  useEffect(() => {
-    setDismissed(false);
-  }, [pathname]);
 
   if (!expanded) {
     const collapsed = (
@@ -72,22 +69,12 @@ export function SelfSubmenu() {
     <div
       data-testid="self-submenu"
       className="min-w-0 w-full overflow-hidden"
-      onMouseEnter={() => setHoverOpen(true)}
-      onMouseLeave={() => {
-        setHoverOpen(false);
-      }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <Collapsible
         open={open}
-        onOpenChange={(next) => {
-          if (next) {
-            setStickyOpen(true);
-            setDismissed(false);
-          } else {
-            setStickyOpen(false);
-            setDismissed(true);
-          }
-        }}
+        onOpenChange={onOpenChange}
         className="min-w-0 w-full"
       >
         <div
@@ -100,10 +87,7 @@ export function SelfSubmenu() {
             to="/self"
             aria-label={currentUser.name}
             aria-current={pathname === '/self' ? 'page' : undefined}
-            onClick={() => {
-              setStickyOpen(true);
-              setDismissed(false);
-            }}
+            onClick={onHeadClick}
             className="flex min-w-0 flex-1 items-center gap-3 rounded-l-md px-2 py-1.5 transition hover:bg-accent hover:text-accent-foreground"
           >
             {avatar}

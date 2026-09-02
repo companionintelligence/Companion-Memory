@@ -25,6 +25,15 @@ interface PowerRailContextValue {
   closeOverlay: () => void;
   setHovered: (hovered: boolean) => void;
   setHoldOpen: (holdOpen: boolean) => void;
+  /**
+   * Which rail submenu the pointer is in. Hover is exclusive: opening Jobs
+   * must close Planning, not stack both.
+   */
+  hoveredSubmenuId: string | null;
+  setHoveredSubmenuId: (id: string | null) => void;
+  /** Chevron-pinned submenu. One at a time; a peer pin replaces it. */
+  stickySubmenuId: string | null;
+  setStickySubmenuId: (id: string | null) => void;
 }
 
 const PowerRailContext = createContext<PowerRailContextValue | null>(null);
@@ -64,9 +73,18 @@ export function PowerRailProvider({
   // Overlay (phone) is a fourth: a swipe or the edge control opens a glass
   // drawer. It is not pinned, not stored, and never hover-driven.
   const [pinned, setPinned] = useState(variant === 'dock' ? readStoredExpanded : false);
-  const [hovered, setHovered] = useState(false);
+  const [hovered, setHoveredState] = useState(false);
   const [holdOpen, setHoldOpen] = useState(false);
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [hoveredSubmenuId, setHoveredSubmenuId] = useState<string | null>(null);
+  const [stickySubmenuId, setStickySubmenuId] = useState<string | null>(null);
+
+  const setHovered = useCallback((next: boolean) => {
+    setHoveredState(next);
+    if (!next) {
+      setHoveredSubmenuId(null);
+    }
+  }, []);
 
   const toggle = useCallback(() => {
     if (variant === 'overlay') {
@@ -99,8 +117,24 @@ export function PowerRailProvider({
       closeOverlay,
       setHovered,
       setHoldOpen,
+      hoveredSubmenuId,
+      setHoveredSubmenuId,
+      stickySubmenuId,
+      setStickySubmenuId,
     }),
-    [variant, overlayOpen, pinned, hovered, holdOpen, toggle, openOverlay, closeOverlay],
+    [
+      variant,
+      overlayOpen,
+      pinned,
+      hovered,
+      holdOpen,
+      toggle,
+      openOverlay,
+      closeOverlay,
+      setHovered,
+      hoveredSubmenuId,
+      stickySubmenuId,
+    ],
   );
 
   return <PowerRailContext.Provider value={value}>{children}</PowerRailContext.Provider>;

@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
-
 import { Collapsible, Tooltip, cn } from '@ci/shadcn';
 import { ChevronRight } from '@ci/shadcn/icons';
 import { Link, useLocation } from 'react-router-dom';
 
 import { usePowerRail } from '../PowerRailContext';
 import { type RailDestination, isRailDestinationActive } from '../railDestinations';
+
+import { useRailSubmenuOpen } from './useRailSubmenuOpen';
 
 /**
  * Any rail destination that carries `children` (currently: Saved Searches,
@@ -17,28 +17,21 @@ import { type RailDestination, isRailDestinationActive } from '../railDestinatio
  * with it, into `MemorySubmenu`), and this generic shell is what remained:
  * any destination with `children` uses it, not one hardcoded id at a time.
  *
- * Open rules match {@link MemorySubmenu}: sticky click, a route in the group,
- * or hover — unless the user closed it with the chevron.
+ * Open rules live in {@link useRailSubmenuOpen} — exclusive with Planning,
+ * Memory, and Self, so a hover here closes those instead of stacking.
  */
 export function DestinationWithChildrenSubmenu({ destination }: { destination: RailDestination }) {
   const { expanded } = usePowerRail();
   const { pathname } = useLocation();
-  const [stickyOpen, setStickyOpen] = useState(false);
-  const [hoverOpen, setHoverOpen] = useState(false);
-  /** User closed via chevron — ignore hover/route until mouse leave or reopen. */
-  const [dismissed, setDismissed] = useState(false);
-
   const children = destination.children ?? [];
   const routeOpen =
     isRailDestinationActive(destination, pathname) ||
     children.some((child) => isRailDestinationActive(child, pathname));
+  const { open, onMouseEnter, onMouseLeave, onOpenChange, onHeadClick } = useRailSubmenuOpen(
+    destination.id,
+    routeOpen,
+  );
   const rootActive = pathname === destination.to;
-  const open = dismissed ? false : stickyOpen || routeOpen || hoverOpen;
-
-  // New page in the group → allow auto-open again.
-  useEffect(() => {
-    setDismissed(false);
-  }, [pathname]);
 
   const Icon = destination.icon;
 
@@ -68,23 +61,12 @@ export function DestinationWithChildrenSubmenu({ destination }: { destination: R
     <div
       data-testid={`${destination.id}-submenu`}
       className="min-w-0 w-full overflow-hidden"
-      onMouseEnter={() => setHoverOpen(true)}
-      onMouseLeave={() => {
-        setHoverOpen(false);
-        setDismissed(false);
-      }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <Collapsible
         open={open}
-        onOpenChange={(next) => {
-          if (next) {
-            setStickyOpen(true);
-            setDismissed(false);
-          } else {
-            setStickyOpen(false);
-            setDismissed(true);
-          }
-        }}
+        onOpenChange={onOpenChange}
         className="min-w-0 w-full"
       >
         {/* One row: the head + chevron share the same box (same geometry as NavLink). */}
@@ -98,10 +80,7 @@ export function DestinationWithChildrenSubmenu({ destination }: { destination: R
             to={destination.to}
             aria-label={destination.label}
             aria-current={rootActive ? 'page' : undefined}
-            onClick={() => {
-              setStickyOpen(true);
-              setDismissed(false);
-            }}
+            onClick={onHeadClick}
             className={cn(
               'flex min-w-0 flex-1 items-center gap-3 rounded-l-md px-2 py-2 transition hover:bg-accent hover:text-accent-foreground',
               rootActive && 'text-primary hover:text-primary',

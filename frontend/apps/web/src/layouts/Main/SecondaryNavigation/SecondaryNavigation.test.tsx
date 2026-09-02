@@ -153,6 +153,32 @@ describe('SecondaryNavigation', () => {
     expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
   });
 
+  it('closes a route-open submenu when another group is hovered, then restores it', () => {
+    renderRail('/plan', { expanded: true });
+
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+
+    const jobs = screen.getByTestId('jobs-submenu');
+    fireEvent.mouseEnter(jobs);
+    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
+
+    fireEvent.mouseLeave(jobs);
+    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
+  });
+
+  it('closes Jobs after hover leave when not on a jobs route', () => {
+    renderRail('/plan', { expanded: true });
+
+    const jobs = screen.getByTestId('jobs-submenu');
+    fireEvent.mouseEnter(jobs);
+    expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
+
+    fireEvent.mouseLeave(jobs);
+    expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
+  });
+
   it('keeps Planning sections open after a sticky chevron open even off /plan routes', () => {
     renderRail('/feed', { expanded: true });
 

@@ -1,5 +1,3 @@
-import { useState, useEffect } from 'react';
-
 import { Collapsible, cn } from '@ci/shadcn';
 import { CalendarRange, ChevronRight, ListTodo } from '@ci/shadcn/icons';
 import { Link, useLocation } from 'react-router-dom';
@@ -11,6 +9,7 @@ import { usePowerRail } from '../PowerRailContext';
 import { NavLink } from './NavLink';
 import { useFeedBadgeCount } from './useFeedBadgeCount';
 import { usePlanBadgeCount } from './usePlanBadgeCount';
+import { useRailSubmenuOpen } from './useRailSubmenuOpen';
 
 interface PlanningSection {
   readonly to: string;
@@ -45,17 +44,16 @@ export function PlanningSubmenu() {
   const { expanded } = usePowerRail();
   const { pathname } = useLocation();
   const { isFeatureEnabled } = useFeatures();
-  const [stickyOpen, setStickyOpen] = useState(false);
-  const [hoverOpen, setHoverOpen] = useState(false);
-  /** User closed via chevron — ignore hover/route until mouse leave or reopen. */
-  const [dismissed, setDismissed] = useState(false);
+  const routeOpen = pathname.startsWith('/plan');
+  const { open, onMouseEnter, onMouseLeave, onOpenChange, onHeadClick } = useRailSubmenuOpen(
+    'plan',
+    routeOpen,
+  );
 
   const planBadgeCount = usePlanBadgeCount();
   const feedBadgeCount = useFeedBadgeCount();
 
-  const routeOpen = pathname.startsWith('/plan');
   const planningRootActive = pathname === '/plan';
-  const open = dismissed ? false : stickyOpen || routeOpen || hoverOpen;
 
   const sections: PlanningSection[] = [
     { to: '/plan/tasks', label: 'Tasks', icon: ListTodo, flag: 'planning.page', badgeCount: planBadgeCount },
@@ -64,11 +62,6 @@ export function PlanningSubmenu() {
 
   const visible = sections.filter((section) => !section.flag || isFeatureEnabled(section.flag));
   const combinedBadgeCount = visible.reduce((total, section) => total + section.badgeCount, 0);
-
-  // New hub page → allow auto-open again.
-  useEffect(() => {
-    setDismissed(false);
-  }, [pathname]);
 
   if (!expanded) {
     return (
@@ -82,23 +75,12 @@ export function PlanningSubmenu() {
     <div
       data-testid="planning-submenu"
       className="min-w-0 w-full overflow-hidden"
-      onMouseEnter={() => setHoverOpen(true)}
-      onMouseLeave={() => {
-        setHoverOpen(false);
-        setDismissed(false);
-      }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <Collapsible
         open={open}
-        onOpenChange={(next) => {
-          if (next) {
-            setStickyOpen(true);
-            setDismissed(false);
-          } else {
-            setStickyOpen(false);
-            setDismissed(true);
-          }
-        }}
+        onOpenChange={onOpenChange}
         className="min-w-0 w-full"
       >
         {/* One row: Planning + chevron share the same box (same geometry as NavLink). */}
@@ -112,10 +94,7 @@ export function PlanningSubmenu() {
             to="/plan"
             aria-label="Planning"
             aria-current={planningRootActive ? 'page' : undefined}
-            onClick={() => {
-              setStickyOpen(true);
-              setDismissed(false);
-            }}
+            onClick={onHeadClick}
             className={cn(
               'flex min-w-0 flex-1 items-center gap-3 rounded-l-md px-2 py-2 transition hover:bg-accent hover:text-accent-foreground',
               planningRootActive && 'text-primary hover:text-primary',
