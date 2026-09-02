@@ -45,7 +45,7 @@ export async function steerDispatchJob(
   jobId: string,
   input: { action: 'continue' | 'redirect' | 'halt'; message?: string },
 ): Promise<DispatchJob> {
-  return fetchJson<DispatchJob>(`/api/v1/agent/jobs/${jobId}/steer`, {
+  const job = await fetchJson<DispatchJob>(`/api/v1/agent/jobs/${jobId}/steer`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${authToken}`,
@@ -53,6 +53,12 @@ export async function steerDispatchJob(
     },
     body: JSON.stringify(input),
   });
+
+  if (!job?.id) {
+    throw new Error('Steer did not return a job');
+  }
+
+  return job;
 }
 
 export function useDispatchJob(threadId: string | null, enabled: boolean) {
