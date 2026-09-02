@@ -79,13 +79,18 @@ function controls(overrides: Partial<JobControlsResponse> = {}): JobControlsResp
   };
 }
 
-function renderCard(response: JobControlsResponse | null, onSave = vi.fn(async () => true)) {
+function renderCard(
+  response: JobControlsResponse | null,
+  onSave = vi.fn(async () => true),
+  failure: { error?: string | null; errorStatus?: number | null } = {},
+) {
   renderWithProviders(
     <JobControlsCard
       controls={response}
       loading={false}
       saving={false}
-      error={null}
+      error={failure.error ?? null}
+      errorStatus={failure.errorStatus ?? null}
       jobTypes={null}
       onSave={onSave}
     />,
@@ -329,10 +334,60 @@ describe('JobControlsCard schedules', () => {
 });
 
 describe('JobControlsCard degradation', () => {
-  it('says the controls are unavailable rather than rendering an empty form', () => {
+  it('explains itself rather than rendering an empty form', () => {
     renderCard(null);
 
-    expect(screen.getByText(/Job controls are unavailable/)).toBeInTheDocument();
+    expect(screen.getByText(/could not be loaded/i)).toBeInTheDocument();
     expect(screen.getByText(/shipped defaults/)).toBeInTheDocument();
+  });
+
+  // The card used to print ONE fixed sentence blaming an unmigrated settings
+  // table, whatever had actually gone wrong — so an appliance running a build
+  // from before job controls shipped was told to go and check its migrations.
+  // A 404 and a 500 need opposite actions.
+  it('blames the build, not the migrations, when the endpoint is not there', () => {
+    renderCard(
+      null,
+      vi.fn(async () => true),
+      {
+        error: 'Cannot GET /jobs/controls',
+        errorStatus: 404,
+      },
+    );
+
+    expect(screen.getByText(/before job controls shipped/i)).toBeInTheDocument();
+    expect(screen.getByText(/Update the server and restart it/i)).toBeInTheDocument();
+    expect(screen.queryByText(/may not have been migrated/i)).not.toBeInTheDocument();
+  });
+
+  it('blames the migration only when the endpoint answered and failed', () => {
+    renderCard(
+      null,
+      vi.fn(async () => true),
+      {
+        error: 'relation "ci.job_settings" does not exist',
+        errorStatus: 500,
+      },
+    );
+
+    expect(screen.getByText(/may not have been migrated/i)).toBeInTheDocument();
+    expect(screen.queryByText(/before job controls shipped/i)).not.toBeInTheDocument();
+  });
+
+  // A raw server string in a red alert reads as "you broke something". The
+  // section being empty is a STATE; the alert is reserved for a save that
+  // failed, which is the only thing here the operator actually did.
+  it('keeps the server text as a detail rather than a red alert when nothing loaded', () => {
+    renderCard(
+      null,
+      vi.fn(async () => true),
+      {
+        error: 'Cannot GET /jobs/controls',
+        errorStatus: 404,
+      },
+    );
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText(/404 · Cannot GET \/jobs\/controls/)).toBeInTheDocument();
   });
 });

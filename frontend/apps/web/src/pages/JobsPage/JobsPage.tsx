@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-
 import { usePageTitle } from '@ci/common';
 import { Accordion, Badge, Button, Card, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, RefreshCcw } from '@ci/shadcn/icons';
@@ -139,6 +138,7 @@ export function JobsPage() {
       loading={controls.loading}
       saving={controls.saving}
       error={controls.error}
+      errorStatus={controls.errorStatus}
       jobTypes={jobTypes}
       onSave={controls.save}
     />

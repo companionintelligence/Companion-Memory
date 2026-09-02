@@ -42,6 +42,7 @@ export function JobControlsCard({
   loading,
   saving,
   error,
+  errorStatus,
   jobTypes,
   onSave,
 }: {
@@ -49,6 +50,8 @@ export function JobControlsCard({
   loading: boolean;
   saving: boolean;
   error: string | null;
+  /** HTTP status behind `error`, when there was one. Decides the explanation. */
+  errorStatus?: number | null;
   jobTypes: JobTypesResponse | null;
   onSave: (patch: JobControlsPatch) => Promise<boolean>;
 }) {
@@ -76,7 +79,17 @@ export function JobControlsCard({
       </Card.Header>
       <FoldBody>
         <Card.Content className={cn('space-y-4', cardPad(phone))}>
-          {error ? (
+          {/* A red alert means SOMETHING YOU DID FAILED — a save that did not
+              stick. It is not the right shape for "this section has nothing in
+              it", which is a state, not a failure, and which the paragraph
+              below explains in words an operator can act on.
+
+              The card used to raise the alert for both, so an appliance that
+              simply predates job controls greeted you with a raw Express string
+              in red — `Cannot GET /jobs/controls` — stacked on a diagnosis of an
+              unrelated problem. The server's own words are still worth keeping,
+              but as a detail under the explanation, not as the headline. */}
+          {error && controls ? (
             <div
               role="alert"
               className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
@@ -89,10 +102,15 @@ export function JobControlsCard({
           {loading && !controls ? (
             <Skeleton className="h-40 w-full" />
           ) : !controls ? (
-            <p className="text-sm text-muted-foreground">
-              Job controls are unavailable. The settings table may not have been migrated yet — until it is,
-              every queue and schedule runs with its shipped defaults.
-            </p>
+            <div className="space-y-1.5">
+              <p className="text-sm text-muted-foreground">{explainUnavailable(errorStatus)}</p>
+              {error ? (
+                <p className="break-words font-mono text-xs text-muted-foreground/70">
+                  {errorStatus != null ? `${errorStatus} · ` : ''}
+                  {error}
+                </p>
+              ) : null}
+            </div>
           ) : (
             <>
               <GlobalControls controls={controls} saving={saving} onSave={onSave} />
@@ -173,6 +191,39 @@ export function JobControlsCard({
       </FoldBody>
     </FoldCard>
   );
+}
+
+/**
+ * Why the controls are not here — from the STATUS, not a guess.
+ *
+ * This used to be one fixed sentence blaming an unmigrated settings table,
+ * printed under whatever the server said. On an appliance running a build from
+ * before job controls existed that read:
+ *
+ *     Cannot GET /jobs/controls
+ *     Job controls are unavailable. The settings table may not have been migrated yet…
+ *
+ * — a raw Express 404 stacked on a diagnosis of a completely different problem,
+ * sending the reader to check migrations when the endpoint simply is not in the
+ * build they are running. The two need opposite actions, so the copy has to
+ * distinguish them.
+ */
+function explainUnavailable(status?: number | null): string {
+  if (status === 404) {
+    return 'This appliance is running a build from before job controls shipped — the endpoint is not there. Update the server and restart it; nothing is wrong with the settings. Until then every queue and schedule runs with its shipped defaults.';
+  }
+
+  if (status === 401 || status === 403) {
+    return 'You are not signed in to this appliance, or this account cannot read job controls. Everything keeps running on its shipped defaults meanwhile.';
+  }
+
+  if (status != null && status >= 500) {
+    return 'The server has the controls endpoint but could not answer it — the settings table may not have been migrated yet. Until it is, every queue and schedule runs with its shipped defaults.';
+  }
+
+  // No status at all: the request never reached a server (offline, wrong host,
+  // proxy down). Claiming a migration problem here would be a guess.
+  return 'Job controls could not be loaded. Every queue and schedule is running with its shipped defaults meanwhile.';
 }
 
 function GlobalControls({
