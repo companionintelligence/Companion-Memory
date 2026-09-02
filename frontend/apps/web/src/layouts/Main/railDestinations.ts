@@ -15,6 +15,7 @@ import {
 import { useFeatures } from '@/common/feature';
 import { isMemoryHubPath } from '@/components/MemoryHub/memoryHubSections';
 import { isJobsPath, JOBS_CATEGORY_SECTIONS, JOBS_SECTIONS } from '@/pages/JobsPage/jobsSections';
+import { isSourcesPath, SOURCES_SECTIONS } from '@/pages/SourcesPage/sourcesSections';
 
 /**
  * Destinations in the Power Rail, top to bottom (and on the phone, the same
@@ -70,7 +71,30 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
       { id: 'asks', to: '/asks', label: 'Asks', icon: MessageCircleQuestion, flag: 'ask' },
     ],
   },
-  { id: 'sources', to: '/sources', label: 'Sources', icon: Cable, end: false },
+  // Sources carries its own halves the way Jobs and Memory do. The page has
+  // always had three — Services, Import, Devices — but the rail offered only
+  // the question, so reaching Devices meant landing on Services first and
+  // knowing a switch existed above the fold.
+  //
+  // Derived from SOURCES_SECTIONS rather than restated, so the rail and the
+  // page's own tiles cannot drift. Import rides its flag: gated off, the row
+  // goes with it rather than pointing at a route that redirects away.
+  {
+    id: 'sources',
+    to: '/sources',
+    label: 'Sources',
+    icon: Cable,
+    end: false,
+    match: isSourcesPath,
+    children: SOURCES_SECTIONS.map((section) => ({
+      id: section.id,
+      to: section.to,
+      label: section.label,
+      icon: section.icon,
+      flag: section.flag,
+      match: section.match,
+    })),
+  },
   // Jobs carries its own sections the way Memory does — everything the page
   // shows used to be one scroll (summary, charts, the table, dead letters and
   // 53 schedules on a single route), which is fine to read once and miserable

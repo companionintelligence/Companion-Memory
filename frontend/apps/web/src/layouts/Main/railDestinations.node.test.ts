@@ -136,3 +136,63 @@ describe('isRailDestinationActive', () => {
     expect(isRailDestinationActive(byId.sources, '/plan')).toBe(false);
   });
 });
+
+/**
+ * Sources has always had three halves — Services, Import, Devices — and the
+ * rail offered only the question. Reaching Devices meant landing on Services
+ * and knowing a switch existed above the fold.
+ */
+describe('Sources submenu', () => {
+  const sources = () => allRailDestinations().find((d) => d.id === 'sources');
+
+  it('carries the three halves the page has, in the page order', () => {
+    expect(sources()?.children?.map((child) => child.label)).toEqual(['Services', 'Import', 'Devices']);
+  });
+
+  it('points each row at the route the page actually serves', () => {
+    expect(sources()?.children?.map((child) => child.to)).toEqual([
+      '/sources/connect',
+      '/sources/import',
+      '/sources/devices',
+    ]);
+  });
+
+  /**
+   * A gated ROUTE in this app is never registered rather than blocked, so with
+   * `import.page` off `/sources/import` redirects back to Services. A row that
+   * survived the flag would be a link that silently lands somewhere else.
+   */
+  it('drops the Import row when its flag is off, keeping the other two', () => {
+    const visible = visibleRailDestinations((flag) => flag !== 'import.page');
+    const labels = visible.find((d) => d.id === 'sources')?.children?.map((c) => c.label);
+
+    expect(labels).toEqual(['Services', 'Devices']);
+  });
+
+  it('keeps Import when the flag is on', () => {
+    const visible = visibleRailDestinations(() => true);
+
+    expect(visible.find((d) => d.id === 'sources')?.children?.map((c) => c.label)).toContain('Import');
+  });
+
+  /**
+   * `/sources` normalises to the connect half (SourcesPage redirects), so the
+   * bare route must light Services up — otherwise landing on /sources shows a
+   * rail with nothing selected while Services is plainly on screen.
+   */
+  it('lights Services up on the bare /sources route as well as its own', () => {
+    const services = sources()?.children?.find((child) => child.label === 'Services');
+
+    expect(services?.match?.('/sources')).toBe(true);
+    expect(services?.match?.('/sources/connect')).toBe(true);
+    expect(services?.match?.('/sources/devices')).toBe(false);
+  });
+
+  it('does not light one half up on another half’s route', () => {
+    const [services, importRow, devices] = sources()?.children ?? [];
+
+    expect(importRow?.match?.('/sources/devices')).toBe(false);
+    expect(devices?.match?.('/sources/import')).toBe(false);
+    expect(services?.match?.('/sources/import')).toBe(false);
+  });
+});
