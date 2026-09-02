@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, type QueryDeepPartialEntity } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
@@ -220,7 +220,7 @@ export class AgentDispatchService {
         failCount,
         result: input.result ?? job.result,
         completedAt: completed ? new Date() : job.completedAt,
-      },
+      } as QueryDeepPartialEntity<AgentJobEntity>,
     );
 
     const updated = await this.requireJob(context, id);
@@ -248,7 +248,11 @@ export class AgentDispatchService {
     if (input.action === 'halt') {
       await this.jobRepository.update(
         { id, userId: context.userId },
-        { status: 'blocked', completedAt: new Date(), result: { ...(job.result ?? {}), halted: true } },
+        {
+          status: 'blocked',
+          completedAt: new Date(),
+          result: { ...(job.result ?? {}), halted: true },
+        } as QueryDeepPartialEntity<AgentJobEntity>,
       );
 
       if (message) {

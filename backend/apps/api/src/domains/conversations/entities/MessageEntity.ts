@@ -28,7 +28,7 @@ export class MessageEntity {
 
   /** Who authored the bubble. Default `memory` keeps existing Ollama turns unmarked. */
   @Column({ type: 'text', default: 'memory', name: 'source' })
-  source!: 'openclaw' | 'memory' | 'user';
+  source?: 'openclaw' | 'memory' | 'user';
 
   @Column({ type: 'text', nullable: false, name: 'content' })
   content!: string;
