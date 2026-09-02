@@ -21,7 +21,7 @@ export interface AgentHarnessStatus {
   name: string;
   /** Hub connect flow minted a memory key for this agent app. */
   connectedToMemory: boolean;
-  /** Portal listed the app with a browser-reachable URL. */
+  /** Portal listed the app, or Hub already minted a connect key for it. */
   installed: boolean;
   /** HTTP probe against {@link openUrl} succeeded (when probed). */
   running: boolean;
@@ -86,12 +86,11 @@ export class AgentHarnessService {
 
     await Promise.all(
       statuses.map(async (status) => {
-        if (!status.openUrl) {
-          return;
+        if (status.openUrl) {
+          status.running = await this.probeOpenUrl(status.openUrl);
+          status.accessible = status.running;
         }
 
-        status.running = await this.probeOpenUrl(status.openUrl);
-        status.accessible = status.running;
         Object.assign(
           status,
           resolveReadiness(status.id, {
@@ -116,9 +115,12 @@ export class AgentHarnessService {
     );
 
     const portalApp = portalApps.find((app) => definition.appNames.includes(app.name));
-    const openUrl = portalApp ? resolvePortalOpenUrl(portalApp) : null;
+    const openUrl =
+      (portalApp ? resolvePortalOpenUrl(portalApp) : null) ?? fallbackHubAppUrl(definition.appNames[0]);
 
-    const installed = portalApp != null;
+    // Portal 401s look like "not installed". A connect key means Hub already
+    // wired the app — treat that as installed so Dispatch does not vanish.
+    const installed = portalApp != null || connectedToMemory;
     const readiness = resolveReadiness(definition.id, {
       installed,
       connectedToMemory,
@@ -177,6 +179,37 @@ function firstHubOrigin(): string | null {
   }
 
   return null;
+}
+
+/**
+ * Fleet Hub hostnames are `hub-<box>.…`. The app's public host is the same
+ * suffix with the app name, e.g. `hub-core3-bc` → `ci-openclaw-core3-bc`.
+ * Used when Portal's device-app list is down (401) but the app is connected.
+ */
+function fallbackHubAppUrl(appName: string | undefined): string | null {
+  if (!appName) {
+    return null;
+  }
+
+  const origin = firstHubOrigin();
+
+  if (!origin) {
+    return null;
+  }
+
+  try {
+    const url = new URL(origin);
+
+    if (!url.hostname.startsWith('hub-')) {
+      return null;
+    }
+
+    url.hostname = `${appName}-${url.hostname.slice('hub-'.length)}`;
+
+    return url.origin;
+  } catch {
+    return null;
+  }
 }
 
 function buildConnectUrl(appUrn: string): string | null {

@@ -23,7 +23,7 @@ export function useChatAboutActions(context: AgentChatContext) {
   const { harnesses, loading } = useAgentHarnesses();
 
   const installedHarnesses = useMemo(
-    () => harnesses.filter((harness) => harness.installed),
+    () => harnesses.filter((harness) => harness.installed || harness.connectedToMemory),
     [harnesses],
   );
   const chatableHarnesses = useMemo(

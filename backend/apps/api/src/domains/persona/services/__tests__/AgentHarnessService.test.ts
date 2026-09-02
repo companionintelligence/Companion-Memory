@@ -41,6 +41,7 @@ describe('AgentHarnessService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    connect.hubOrigins = 'https://hub.example.com';
     service = new AgentHarnessService(apiKeyService, cloudOAuthProxyService, logger);
   });
 
@@ -134,6 +135,31 @@ describe('AgentHarnessService', () => {
       connectedToMemory: true,
       installed: true,
       running: true,
+      wakeable: true,
+      dispatchReady: true,
+      dispatchBlocker: null,
+    });
+  });
+
+  it('treats a connect key as installed when Portal lists nothing', async () => {
+    connect.hubOrigins = 'https://hub-core3-bc.companionintelligence.com';
+    apiKeyService.findAllByUser = jest.fn().mockResolvedValue([
+      {
+        name: 'app:ci-openclaw:ci-marketplace',
+        managed_by: 'connect',
+      },
+    ]);
+    cloudOAuthProxyService.getDeviceApplications = jest.fn().mockResolvedValue([]);
+    jest.spyOn(global, 'fetch').mockResolvedValue(new Response(null, { status: 200 }));
+
+    const harnesses = await service.getHarnesses({ userId: 'user-1' } as never);
+    const openclaw = harnesses.find((harness) => harness.id === 'openclaw');
+
+    expect(openclaw).toMatchObject({
+      connectedToMemory: true,
+      installed: true,
+      running: true,
+      openUrl: 'https://ci-openclaw-core3-bc.companionintelligence.com',
       wakeable: true,
       dispatchReady: true,
       dispatchBlocker: null,

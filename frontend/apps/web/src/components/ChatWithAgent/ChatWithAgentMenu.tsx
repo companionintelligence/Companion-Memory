@@ -15,7 +15,7 @@ interface Props {
 
 export function ChatWithAgentMenu({ context, size = 'icon', className }: Props) {
   const { t } = useTranslation();
-  const { harnesses, loading, chatHere } = useChatAboutActions(context);
+  const { chatHere } = useChatAboutActions(context);
 
   if (size === 'sm') {
     return (
@@ -24,34 +24,17 @@ export function ChatWithAgentMenu({ context, size = 'icon', className }: Props) 
           <MessagesSquare className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.5} />
           {t('CHAT_WITH_AGENT_HERE')}
         </Button>
-        {!loading && harnesses.length > 0 ? (
-          <DropdownMenu modal={false}>
-            <DropdownMenu.Trigger asChild>
-              <Button variant="outline" size="sm" className={className}>
-                {t('CHAT_WITH_AGENT_OPEN_MENU')}
-              </Button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Content align="end" className="z-[1100]">
-              <AgentActionItems context={context} surface="dropdown" />
-            </DropdownMenu.Content>
-          </DropdownMenu>
-        ) : null}
+        <DropdownMenu modal={false}>
+          <DropdownMenu.Trigger asChild>
+            <Button variant="outline" size="sm" className={className}>
+              {t('CHAT_WITH_AGENT_OPEN_MENU')}
+            </Button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content align="end" className="z-[1100]">
+            <AgentActionItems context={context} surface="dropdown" />
+          </DropdownMenu.Content>
+        </DropdownMenu>
       </div>
-    );
-  }
-
-  const hasHarnesses = !loading && harnesses.length > 0;
-
-  if (!hasHarnesses) {
-    return (
-      <IconButton
-        variant="ghost"
-        className={className}
-        label={t('CHAT_WITH_AGENT_ABOUT', { title: context.title })}
-        onClick={chatHere}
-      >
-        <MessagesSquare className="h-3.5 w-3.5" strokeWidth={1.5} />
-      </IconButton>
     );
   }
 

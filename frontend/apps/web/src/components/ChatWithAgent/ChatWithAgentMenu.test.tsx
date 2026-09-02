@@ -55,11 +55,13 @@ describe('ChatWithAgentMenu', () => {
     vi.restoreAllMocks();
   });
 
-  it('chats here immediately when no harness is connected', () => {
+  it('opens a menu even when no harness is connected', () => {
     renderWithProviders(<ChatWithAgentMenu context={{ title: 'Picnic', body: 'Bring snacks' }} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Chat about “Picnic”' }));
-    expect(h.navigate).toHaveBeenCalledWith('/memory/chat');
+    const button = screen.getByRole('button', { name: 'Chat about “Picnic”' });
+    expect(button).toHaveAttribute('aria-haspopup', 'menu');
+    fireEvent.click(button);
+    expect(h.navigate).not.toHaveBeenCalled();
   });
 
   it('offers a menu when Hermes is installed', () => {
