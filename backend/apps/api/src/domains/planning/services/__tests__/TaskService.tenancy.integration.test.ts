@@ -15,7 +15,7 @@ import { UserEntity } from '@ci/domains/user';
 
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
-import { TaskEntity } from '../../entities/TaskEntity';
+import { TASK_STATUSES, TaskEntity } from '../../entities/TaskEntity';
 import { TaskPendingChangeEntity } from '../../entities/TaskPendingChangeEntity';
 import { PlannedBlockService } from '../PlannedBlockService';
 import { PlanningTimeService } from '../PlanningTimeService';
@@ -172,6 +172,45 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
 
   it('rejects an out-of-range priority at the database, not just in the app', async () => {
     await expect(service.create(alice, { title: 'Bad', priority: 99 })).rejects.toThrow();
+  });
+
+  /**
+   * ═══ THE VOCABULARY LIVED IN FIVE PLACES AND AGREED IN FOUR ═══
+   *
+   * #2558 added `delegated` to `TASK_STATUSES`, the entity, the GraphQL enum
+   * and the web client — and to no migration. `tasks_status_check` did not know
+   * the word, so the one line that writes it (`AgentDispatchService.dispatch`)
+   * failed at the database on every dispatch, while a fully green unit suite
+   * said otherwise: every other planning test mocks the repository, and a mock
+   * has no CHECK constraint.
+   *
+   * Iterating `TASK_STATUSES` rather than listing values is the whole point.
+   * The next status added to that array without a migration fails here on the
+   * day it is added, not on the day a user presses the button.
+   */
+  it('round-trips every declared status through the tasks_status_check constraint', async () => {
+    const task = await service.create(alice, { title: 'Every status' });
+
+    for (const status of TASK_STATUSES) {
+      const updated = await service.update(alice, task!.id, { status });
+
+      expect(updated?.status).toBe(status);
+
+      // Through SQL, not the ORM's in-memory copy: `save()` returns the object
+      // it was handed, so only a re-read proves Postgres accepted the value.
+      const [row] = await dataSource.query<Array<{ status: string }>>(
+        'SELECT status FROM ci.tasks WHERE id = $1',
+        [task!.id],
+      );
+
+      expect(row.status).toBe(status);
+    }
+  });
+
+  it('still refuses a status outside the vocabulary', async () => {
+    const task = await service.create(alice, { title: 'Not a status' });
+
+    await expect(service.update(alice, task!.id, { status: 'delegatd' as never })).rejects.toThrow();
   });
 
   it("will not let one user parent a task onto another user's task", async () => {
