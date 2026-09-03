@@ -134,8 +134,14 @@ export class KMLGXFileImporter implements FileImporter {
         }
 
         for (let i = 0; i < whens.length; i++) {
+          // U-22: one coord read, and every exit below names itself. This
+          // parser called neither `consumed()` nor `drop()`, so a KML whose
+          // whole track fell outside the timeframe reported a perfectly
+          // reconciled 0 = 0 + 0 — the same ledger as a file never opened.
+          params.pipeline.consumed?.(1);
           const fields = coords[i].trim().split(/\s+/);
           if (fields.length < 2) {
+            params.pipeline.drop?.('position_without_fix');
             continue;
           }
 
@@ -143,6 +149,7 @@ export class KMLGXFileImporter implements FileImporter {
           const lat = parseFloat(fields[1]);
           const alt = fields.length >= 3 ? parseFloat(fields[2]) : undefined;
           if (isNaN(lat) || isNaN(lon)) {
+            params.pipeline.drop?.('position_without_fix');
             continue;
           }
 
@@ -165,9 +172,12 @@ export class KMLGXFileImporter implements FileImporter {
               ...(alt !== undefined && !isNaN(alt) && { Altitude: alt }),
             },
           };
-          if (timeframeContains(params.timeframe, item.timestamp)) {
-            params.pipeline.push({ item });
+          if (!timeframeContains(params.timeframe, item.timestamp)) {
+            params.pipeline.drop?.('outside_timeframe');
+            continue;
           }
+
+          params.pipeline.push({ item });
         }
       }
     } catch (e) {
