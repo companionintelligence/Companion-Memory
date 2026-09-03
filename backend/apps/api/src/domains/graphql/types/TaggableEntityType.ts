@@ -15,6 +15,7 @@ import { PersonType } from './PersonType';
 import { PlaceType } from './PlaceType';
 import { ProductModelType } from './ProductModelType';
 import { ReceiptType } from './ReceiptType';
+import { TaskType } from './TaskType';
 import { ThreadType } from './ThreadType';
 
 export const TaggableEntityType = createUnionType({
@@ -34,6 +35,7 @@ export const TaggableEntityType = createUnionType({
       PlaceType,
       ProductModelType,
       ReceiptType,
+      TaskType,
       ThreadType,
     ] as const,
   resolveType(instance): typeof Node {
@@ -66,6 +68,8 @@ export const TaggableEntityType = createUnionType({
         return ProductModelType;
       case 'receipt':
         return ReceiptType;
+      case 'task':
+        return TaskType;
       case 'thread':
         return ThreadType;
       default:

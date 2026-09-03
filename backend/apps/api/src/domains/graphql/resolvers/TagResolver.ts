@@ -17,6 +17,7 @@ import {
   PlaceService,
 } from '@ci/domains/memory';
 import { NoteService } from '@ci/domains/notes';
+import { TaskService } from '@ci/domains/planning';
 import {
   TAGGABLE_ENTITIES,
   type EntityIdentifier,
@@ -47,6 +48,7 @@ import { TaggableEntityConnection } from '../types/TaggableEntityConnection';
 import { TaggableEntityEdge } from '../types/TaggableEntityEdge';
 import { TaggableEntityType } from '../types/TaggableEntityType';
 import { TagType } from '../types/TagType';
+import { TaskType } from '../types/TaskType';
 import { ThreadType } from '../types/ThreadType';
 import { UpdateTagInput } from '../types/UpdateTagInput';
 import { UpdateTagPayload } from '../types/UpdateTagPayload';
@@ -70,6 +72,7 @@ export class TagResolver {
     private readonly savedSearchService: SavedSearchService,
     private readonly tagAssignmentCountLoader: TagAssignmentCountLoader,
     private readonly tagService: TagService,
+    private readonly taskService: TaskService,
     private readonly threadService: ThreadService,
   ) {}
 
@@ -335,6 +338,7 @@ export class TagResolver {
     const noteIds = groupedByType.get('note') || [];
     const personIds = groupedByType.get('person') || [];
     const placeIds = groupedByType.get('place') || [];
+    const taskIds = groupedByType.get('task') || [];
     const threadIds = groupedByType.get('thread') || [];
 
     const [
@@ -349,6 +353,7 @@ export class TagResolver {
       notes,
       people,
       places,
+      tasks,
       threads,
     ] = await Promise.all([
       this.actionService.findByIds(context, actionIds),
@@ -362,6 +367,13 @@ export class TagResolver {
       this.noteService.findByIds(context, noteIds),
       this.personService.findByIds(context, personIds),
       this.placeService.findByIds(context, placeIds),
+      // TaskService is tenant-scoped by type and has no SYSTEM_USER escape, so a
+      // system-context tag resolution cannot read tasks at all. Resolving none is
+      // the honest outcome: the alternative is widening a service whose tenancy
+      // has a dedicated regression test.
+      typeof context.userId === 'string'
+        ? this.taskService.findByIds({ userId: context.userId }, taskIds)
+        : Promise.resolve([]),
       this.threadService.findByIds(context, threadIds),
     ]);
 
@@ -399,6 +411,8 @@ export class TagResolver {
 
     const placeResults = places.filter((entity) => entity != null).map((entity) => PlaceType.toType(entity));
 
+    const taskResults = tasks.filter((entity) => entity != null).map((entity) => TaskType.toType(entity));
+
     const threadResults = threads
       .filter((entity) => entity != null)
       .map((entity) => ThreadType.toType(entity));
@@ -429,6 +443,7 @@ export class TagResolver {
     noteResults.forEach((note) => resultMap.set(makeCompositeKey('note', note.__source.id), note));
     personResults.forEach((person) => resultMap.set(makeCompositeKey('person', person.__source.id), person));
     placeResults.forEach((place) => resultMap.set(makeCompositeKey('place', place.__source.id), place));
+    taskResults.forEach((task) => resultMap.set(makeCompositeKey('task', task.__source.id), task));
     threadResults.forEach((thread) => resultMap.set(makeCompositeKey('thread', thread.__source.id), thread));
 
     const orderedResults = entities

@@ -33,12 +33,19 @@ function makeResolver(enabled = true) {
     applyPendingEventRevision: jest.fn(),
   };
   const featureService = { isFeatureEnabled: jest.fn().mockResolvedValue(enabled) };
+  const tagLoader = { load: jest.fn().mockResolvedValue([]) };
 
   return {
-    resolver: new TaskResolver(taskService as never, plannedBlockService as never, featureService as never),
+    resolver: new TaskResolver(
+      taskService as never,
+      plannedBlockService as never,
+      featureService as never,
+      tagLoader as never,
+    ),
     taskService,
     plannedBlockService,
     featureService,
+    tagLoader,
   };
 }
 
@@ -236,5 +243,35 @@ describe('TaskResolver planTask', () => {
     expect(result?.placedOnCalendar).toBe(false);
     expect(result?.scheduledFor).toBeNull();
     expect(result?.status).toBe('open');
+  });
+});
+
+describe('TaskResolver.tags', () => {
+  // Tags are how a task inherits its direction and life-balance categories, so
+  // this edge is what the placement and balance work will read from. It must go
+  // through TagLoader: a Plan board renders dozens of tasks in one query, and a
+  // per-task query here is the N+1 the loader exists to prevent.
+  it('hydrates tags for the task through the batching loader', async () => {
+    const { resolver, tagLoader } = makeResolver();
+
+    tagLoader.load.mockResolvedValue([
+      { id: 'tag-1', label: 'work', entityType: 'task', entityId: 'task-1' },
+    ]);
+
+    const parent = { __source: { id: 'task-1' } } as never;
+    const tags = await resolver.tags(ownerCtx, parent);
+
+    expect(tagLoader.load).toHaveBeenCalledWith({ userId: 'owner-1' }, { type: 'task', id: 'task-1' });
+    expect(tags).toHaveLength(1);
+  });
+
+  it('returns an empty list for an untagged task rather than throwing', async () => {
+    const { resolver, tagLoader } = makeResolver();
+
+    tagLoader.load.mockResolvedValue([]);
+
+    const tags = await resolver.tags(ownerCtx, { __source: { id: 'task-2' } } as never);
+
+    expect(tags).toEqual([]);
   });
 });

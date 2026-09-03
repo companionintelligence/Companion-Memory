@@ -6,10 +6,12 @@ import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { TaskService, PlannedBlockService, type Task, type TaskStatus } from '@ci/domains/planning';
 
+import { TagLoader } from '../loaders/TagLoader';
 import { CreateTaskInput } from '../types/CreateTaskInput';
 import { CreateTaskPayload } from '../types/CreateTaskPayload';
 import { DeleteByIdInput } from '../types/DeleteByIdInput';
 import { DeleteByIdPayload } from '../types/DeleteByIdPayload';
+import { EntityTagType } from '../types/EntityTagType';
 import { EventType } from '../types/EventType';
 import { GlobalUID } from '../types/GlobalUID';
 import { PaginationArgs } from '../types/PaginationArgs';
@@ -30,6 +32,7 @@ export class TaskResolver {
     private readonly taskService: TaskService,
     private readonly plannedBlockService: PlannedBlockService,
     private readonly featureService: FeatureService,
+    private readonly tagLoader: TagLoader,
   ) {}
 
   /**
@@ -494,5 +497,23 @@ export class TaskResolver {
     const placed = (await this.plannedBlockService.findActiveForTask(serviceContext, task.id)) != null;
 
     return this.toTaskType(task, placed);
+  }
+
+  /**
+   * Tags carry a task's direction and life-balance categories, so this is the
+   * edge the placement and balance work reads from. Batched through TagLoader
+   * for the same reason every other taggable type is: a Plan board renders
+   * dozens of tasks in one query.
+   */
+  @ResolveField(() => [EntityTagType])
+  async tags(@Context() context: RequestContext, @Parent() parent: TaskType): Promise<EntityTagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const tags = await this.tagLoader.load(serviceContext, {
+      type: 'task',
+      id: parent.__source.id,
+    });
+
+    return tags.map((tag) => EntityTagType.toType(tag));
   }
 }

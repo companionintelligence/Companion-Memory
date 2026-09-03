@@ -3393,7 +3393,7 @@ type TaggableEntityEdge {
   node: TaggableEntityType!
 }
 
-union TaggableEntityType = ActionType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ProductModelType | ReceiptType | ThreadType
+union TaggableEntityType = ActionType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileType | ItemType | NoteType | PersonType | PlaceType | ProductModelType | ReceiptType | TaskType | ThreadType
 
 type TaskConnection implements Connection {
   edges: [TaskEdge!]!
@@ -3442,7 +3442,7 @@ enum TaskStatus {
   skipped
 }
 
-type TaskType implements Node {
+type TaskType implements Node & Taggable {
   actualMinutes: Int!
 
   """
@@ -3484,6 +3484,7 @@ type TaskType implements Node {
   """Where the task came from: `manual`, or an ingest source."""
   sourceKind: String!
   status: TaskStatus!
+  tags: [EntityTagType!]!
 
   """
   Wall-clock time of day, `HH:MM:SS`, in the user timezone. Zoneless by design.

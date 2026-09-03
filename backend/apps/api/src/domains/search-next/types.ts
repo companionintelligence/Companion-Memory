@@ -47,6 +47,10 @@ export const TAGGABLE_ENTITIES = [
   'place',
   'product',
   'receipt',
+  // Planning work items. Tags are how a task inherits a direction and the
+  // life-balance categories that placement and balance bias read, so tasks
+  // must share the one tag vocabulary rather than growing a parallel one.
+  'task',
   'thread',
 ] as const;
 
