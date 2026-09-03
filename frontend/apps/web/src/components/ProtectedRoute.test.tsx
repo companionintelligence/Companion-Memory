@@ -1,3 +1,4 @@
+import { FetchJsonError } from '@ci/common';
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -112,5 +113,18 @@ describe('ProtectedRoute', () => {
 
     await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByText('login page')).toBeInTheDocument());
+  });
+
+  it('does not attempt a silent refresh (or surface an error) for a visitor who never had a session', async () => {
+    const refresh = vi.fn().mockRejectedValue(new FetchJsonError(401, 'Unauthorized'));
+
+    h.auth = { authToken: null, expired: true, loading: false, error: null };
+    h.actions = { refresh };
+    h.user = { user: null, loading: false };
+
+    renderProtected();
+
+    await waitFor(() => expect(screen.getByText('login page')).toBeInTheDocument());
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
