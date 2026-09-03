@@ -451,19 +451,79 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
   },
 } as const;
 
-/** Human labels for the `smart.rotation.work` work types. */
-export const SMART_ROTATION_WORK_LABELS: Readonly<Record<string, string>> = {
-  question_feed: 'Refresh feed questions',
-  answer_infer: 'Infer answers',
-  schedule_sync: 'Sync schedule',
-  insights: 'Generate insights',
-  summaries: 'Summaries / dossier',
-  graph_link: 'Link graph entities',
-  graph_enrich: 'Enrich graph entities',
-  context_prompt: 'Rebuild context prompt',
-  hydrate_answers: 'Hydrate answers',
-  hydrate_things: 'Hydrate things',
+/**
+ * What each `smart.rotation.work` activity IS.
+ *
+ * One event covers ten unrelated activities, so the event name explains
+ * nothing: a row called "Infer answers" used to expand to the parent's generic
+ * sentence plus a restatement of its own label — "…depends on its work type.
+ * This run: Infer answers." That is the complaint in #2509, in the issue's own
+ * words: you cannot act on the page because you do not know what a job IS.
+ *
+ * Each description says what the activity does and, where there is one, which
+ * surface it fills — because "what did this populate?" is the question that
+ * makes a background job worth understanding.
+ */
+export const SMART_ROTATION_WORK: Readonly<Record<string, { label: string; description: string }>> = {
+  question_feed: {
+    label: 'Refresh feed questions',
+    description:
+      'Retire feed questions that have gone stale, top the queue back up from the curated catalogue, and — only if that runs dry — have the model write a new one about a gap in what the appliance knows. Fills the question cards on your feed.',
+  },
+  answer_infer: {
+    label: 'Infer answers',
+    description:
+      'Take one still-unanswered question about you and try to answer it from what the appliance already knows, instead of asking. Nothing to do is the normal steady state on a small catalogue, not a fault.',
+  },
+  schedule_sync: {
+    label: 'Sync schedule',
+    description:
+      'Reconcile suggested calendar blocks against what is actually on the calendar, writing the slate that Planning reads.',
+  },
+  insights: {
+    label: 'Generate insights',
+    description:
+      'If anything new has happened since the last run, hand the Python summary sidecar your life context and let it write proactive insights. Skipped outright when nothing changed, so an idle appliance spends nothing.',
+  },
+  summaries: {
+    label: 'Summaries / dossier',
+    description:
+      'Dispatch an activity summary to the Python summary sidecar, rate-limited by how long it has been since the last one. Feeds the brief and the dossier the companion uses to sound like it knows you.',
+  },
+  graph_link: {
+    label: 'Link graph entities',
+    description:
+      'Run the maintenance orchestrator over the life graph: resolve entities that are probably the same, and connect the ones that are related but unlinked.',
+  },
+  graph_enrich: {
+    label: 'Enrich graph entities',
+    description:
+      'Fill in what is missing on graph entities already present — again only when something new has arrived since the last pass.',
+  },
+  context_prompt: {
+    label: 'Rebuild context prompt',
+    description:
+      'Generate the dossier prompt the companion is given about you, but only when there is not one already. This is what makes chat sound like it has met you before.',
+  },
+  hydrate_answers: {
+    label: 'Hydrate answers',
+    description:
+      'Cross-reference answers you have given against the rest of the appliance, so a fact stated once is usable everywhere rather than stranded on the question that captured it.',
+  },
+  hydrate_things: {
+    label: 'Hydrate things',
+    description:
+      'The same cross-referencing for physical things — receipts, products, objects — so a thing known from one source is recognised in another.',
+  },
 };
+
+/**
+ * Labels alone, kept as a derived view because callers that only need a name
+ * should not have to know the shape above.
+ */
+export const SMART_ROTATION_WORK_LABELS: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(SMART_ROTATION_WORK).map(([workType, entry]) => [workType, entry.label]),
+);
 
 /**
  * The bucket for an event with no {@link JOB_TYPES} entry.
@@ -489,8 +549,7 @@ const UNCLASSIFIED: JobTypeDescriptor = {
   // exists, but as the COUNTING and FILTERING bucket — see
   // {@link categoryOfEvent} — where it does the work this field cannot.
   category: JOB_CATEGORIES.maintenance,
-  description:
-    'This row has no event name, so there is nothing to look up or fingerprint.',
+  description: 'This row has no event name, so there is nothing to look up or fingerprint.',
 };
 
 /**
@@ -498,7 +557,10 @@ const UNCLASSIFIED: JobTypeDescriptor = {
  * never seen this name. First match wins.
  */
 const FINGERPRINT_CATEGORY: ReadonlyArray<readonly [RegExp, JobCategory]> = [
-  [/^(note|event|item|place|person|concept|content|answer|thread|message|communication|browseractivity|position|product|receipt|agent-memory)\./, JOB_CATEGORIES.search],
+  [
+    /^(note|event|item|place|person|concept|content|answer|thread|message|communication|browseractivity|position|product|receipt|agent-memory)\./,
+    JOB_CATEGORIES.search,
+  ],
   [/^file\.|^preview\.|^ingest\./, JOB_CATEGORIES.ingest],
   [/^infer\.|^chat\.|^hbpe\.|^summary/, JOB_CATEGORIES.llm],
   [/^task\.|^planning\./, JOB_CATEGORIES.planning],
@@ -532,11 +594,7 @@ function sentenceCaseIdentifier(value: string): string {
  * the event / work-type / queue already identify the job; "Unclassified job"
  * throws that away.
  */
-function fingerprintJob(
-  event: string,
-  workType?: string | null,
-  queue?: string | null,
-): JobTypeDescriptor {
+function fingerprintJob(event: string, workType?: string | null, queue?: string | null): JobTypeDescriptor {
   const fromQueue = queue ? FINGERPRINT_QUEUE_CATEGORY[queue] : undefined;
   const fromPrefix = FINGERPRINT_CATEGORY.find(([pattern]) => pattern.test(event))?.[1];
   const category = fromQueue ?? fromPrefix ?? JOB_CATEGORIES.maintenance;
@@ -627,8 +685,11 @@ export function describeJob(
   if (event === 'smart.rotation.work' && workType) {
     return {
       ...base,
-      label: SMART_ROTATION_WORK_LABELS[workType] ?? workType,
-      description: `${base.description} This run: ${SMART_ROTATION_WORK_LABELS[workType] ?? workType}.`,
+      label: SMART_ROTATION_WORK[workType]?.label ?? workType,
+      // The activity's OWN description, not the parent's generic sentence with
+      // the label appended. An unknown work type still falls back to the parent
+      // rather than inventing one.
+      description: SMART_ROTATION_WORK[workType]?.description ?? base.description,
     };
   }
 
