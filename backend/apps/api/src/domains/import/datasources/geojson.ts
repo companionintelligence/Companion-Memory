@@ -128,6 +128,12 @@ export class GeoJSONFileImporter implements FileImporter {
     let featureIdx = 0;
     for (const feat of doc.features) {
       if (!feat || !feat.geometry) {
+        // U-22: a feature with no geometry is one record read that produced
+        // nothing. Counted at feature granularity here and at POSITION
+        // granularity in emitPosition, because that is the unit each of them
+        // actually loses — one LineString feature is N candidate fixes.
+        params.pipeline.consumed?.(1);
+        params.pipeline.drop?.('position_without_fix');
         featureIdx++;
         continue;
       }
@@ -186,13 +192,22 @@ export class GeoJSONFileImporter implements FileImporter {
     featureIdx: number,
     posIdx: number,
   ): void {
+    // One candidate fix read. Every path below either pushes it or drops it, so
+    // this is what makes `consumed = produced + dropped` a real equality rather
+    // than the 0 = 0 + 0 the parser used to report (U-22).
+    params.pipeline.consumed?.(1);
+
     if (!Array.isArray(pos) || pos.length < 2) {
+      params.pipeline.drop?.('position_without_fix');
+
       return;
     }
 
     const lon = parseFloat(String(pos[0]));
     const lat = parseFloat(String(pos[1]));
     if (isNaN(lat) || isNaN(lon)) {
+      params.pipeline.drop?.('position_without_fix');
+
       return;
     }
 
@@ -208,6 +223,8 @@ export class GeoJSONFileImporter implements FileImporter {
     }
 
     if (!timeframeContains(params.timeframe, ts)) {
+      params.pipeline.drop?.('outside_timeframe');
+
       return;
     }
 
