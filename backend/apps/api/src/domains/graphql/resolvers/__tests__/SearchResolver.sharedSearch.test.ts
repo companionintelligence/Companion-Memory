@@ -350,6 +350,50 @@ describe('SearchResolver — shared search (runSharedSearch)', () => {
     expect(result.pageInfo.hasNextPage).toBe(false);
   });
 
+  it('never forwards the viewer-supplied `after` cursor when the ceiling forbids paging', async () => {
+    const { resolver, savedSearchService, sharedSearchConsentService, execSpy } = makeResolver();
+    savedSearchService.findByShareToken.mockResolvedValue({
+      id: 'saved-7',
+      userId: 'owner-9',
+      query: 'q',
+      entityTypes: [],
+      tags: [],
+    });
+    // `redacted` discloses items but its whole point (vs `full`) is that
+    // `paging` is false — see searchCeiling.ts.
+    sharedSearchConsentService.authorize.mockResolvedValue({ grantId: 'grant-1', ceiling: 'redacted' });
+    execSpy.mockResolvedValue({
+      edges: [{ cursor: 'c1', node: { id: 'note-1' } }],
+      pageInfo: { hasNextPage: true, hasPreviousPage: false, startCursor: 'c1', endCursor: 'c1' },
+      totalCount: 1,
+      matchingTags: [],
+    } as unknown as SearchResultConnection);
+
+    await resolver.search(viewerCtx, { shareToken: 'tok', after: 'anything' } as SearchInput);
+
+    // A reader with a `redacted` grant must never be able to walk past their
+    // first window, no matter what cursor they supply.
+    const [, input] = execSpy.mock.calls[0];
+    expect(input.after).toBeUndefined();
+  });
+
+  it('still forwards `after` when the ceiling permits paging (`full`)', async () => {
+    const { resolver, savedSearchService, sharedSearchConsentService, execSpy } = makeResolver();
+    savedSearchService.findByShareToken.mockResolvedValue({
+      id: 'saved-7',
+      userId: 'owner-9',
+      query: 'q',
+      entityTypes: [],
+      tags: [],
+    });
+    sharedSearchConsentService.authorize.mockResolvedValue({ grantId: 'grant-1', ceiling: 'full' });
+
+    await resolver.search(viewerCtx, { shareToken: 'tok', after: 'cur-2' } as SearchInput);
+
+    const [, input] = execSpy.mock.calls[0];
+    expect(input.after).toBe('cur-2');
+  });
+
   it('audits what CROSSED separately from what the answer was computed over', async () => {
     const { resolver, savedSearchService, sharedSearchConsentService, execSpy } = makeResolver();
     savedSearchService.findByShareToken.mockResolvedValue({

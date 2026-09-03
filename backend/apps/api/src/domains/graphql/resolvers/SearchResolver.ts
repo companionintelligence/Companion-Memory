@@ -5,7 +5,7 @@ import { type FindOptionsOrder } from 'typeorm';
 import { Context, type RequestContext, type UserServiceContext, toServiceContext } from '@ci/common/context';
 import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { SharedSearchConsentService, applySearchCeiling } from '@ci/domains/asks';
+import { SHARE_DISCLOSURE, SharedSearchConsentService, applySearchCeiling } from '@ci/domains/asks';
 import { BrowserActivityEntity, BrowserActivityService } from '@ci/domains/browser-activity';
 import { EntityResolutionService, type ResolvedEntity } from '@ci/domains/entity-resolution';
 import { FileService, SavedSearchService, resolveSavedSearchDateRange } from '@ci/domains/files';
@@ -446,6 +446,16 @@ export class SearchResolver {
     const filters = saved.filters ?? {};
     const dateRange = resolveSavedSearchDateRange(filters);
 
+    // A ceiling whose `paging` axis is false must never let the viewer walk
+    // past their first window — `applySearchCeiling` only seals `pageInfo` on
+    // the RESPONSE, so a viewer-supplied `after` cursor has to be dropped
+    // BEFORE it reaches executeSearch, or a reader who already knows a valid
+    // cursor (e.g. from page 1) can page straight through a `redacted` grant.
+    // `undefined` reads the same as it does in `applySearchCeiling`: no
+    // ceiling from this source (the owner previewing their own share) means
+    // no restriction.
+    const canPage = authorization.ceiling == null || SHARE_DISCLOSURE[authorization.ceiling].paging;
+
     const unclamped = await this.executeSearch(
       { userId: saved.userId },
       {
@@ -460,12 +470,12 @@ export class SearchResolver {
         places: filters.places,
         hasLocation: filters.hasLocation,
         semantic: filters.semantic,
-        // Viewer paging carries over; sort prefers the viewer's choice, falling
-        // back to the owner's saved sort.
+        // Viewer paging carries over only when the ceiling permits it; sort
+        // prefers the viewer's choice, falling back to the owner's saved sort.
         sortBy: input.sortBy ?? filters.sortBy,
         sortOrder: input.sortOrder ?? filters.sortOrder,
         first: input.first,
-        after: input.after,
+        after: canPage ? input.after : undefined,
       },
     );
 
