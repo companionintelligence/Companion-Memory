@@ -17,6 +17,7 @@ import { type EventPayloads } from '../event-registry';
 import {
   effectiveQueueConcurrency as computeQueueConcurrency,
   perProcessGlobalConcurrency,
+  perQueueDefaultConcurrency,
   queueWorkerProcesses,
 } from '../jobConcurrency';
 import { queueInventory } from '../queueInventory';
@@ -862,7 +863,10 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
    */
   private effectiveQueueConcurrency(queue: string): number {
     return computeQueueConcurrency({
-      perQueueDefault: JobControlStore.perQueueConcurrency() ?? this.shippedPerQueueConcurrency,
+      perQueueDefault: perQueueDefaultConcurrency(
+        JobControlStore.perQueueConcurrency(),
+        this.shippedPerQueueConcurrency,
+      ),
       requested: JobControlStore.row('queue', queue)?.concurrency ?? null,
       declared: this.declaredQueueCeilings.get(queue) ?? null,
     });

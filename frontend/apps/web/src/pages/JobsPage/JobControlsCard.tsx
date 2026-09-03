@@ -65,6 +65,9 @@ export function JobControlsCard({
 
   const offQueues = (controls?.queues ?? []).filter((queue) => queue.mode !== 'enabled').length;
   const offCrons = (controls?.crons ?? []).filter((cron) => cron.mode === 'disabled').length;
+  // Zero on a single-process appliance (CI_ROLE=all), which is the default and
+  // every test, so the note below is silent unless the split is actually in use.
+  const elsewhereCount = (controls?.crons ?? []).filter((cron) => !cron.servedHere).length;
 
   return (
     <FoldCard fold>
@@ -170,6 +173,22 @@ export function JobControlsCard({
                     </span>
                   </Accordion.Trigger>
                   <Accordion.Content>
+                    {/* Said once at the top rather than repeated per row. The
+                        list used to come from THIS process's scheduler, which
+                        under CI_ROLE=web omits the eleven schedules the worker
+                        runs — presented under a plain count, so a schedule an
+                        operator came here to switch off was absent with nothing
+                        to say it existed. The list is now every @Cron in the
+                        build; this sentence covers the one thing that is still
+                        true and worth knowing. */}
+                    {elsewhereCount > 0 ? (
+                      <p className="pb-2 text-xs text-muted-foreground">
+                        {elsewhereCount} of these run in the worker process rather than this one. They are
+                        listed and switchable from here — the setting is stored on the appliance and every
+                        process reads it. The Schedules card above still covers only this process, so it has
+                        no last-run time for them.
+                      </p>
+                    ) : null}
                     <ul className="pb-2">
                       {cronRows.map(({ cron, descriptor }) => (
                         <CronRow
@@ -286,6 +305,20 @@ function GlobalControls({
         />
       </div>
 
+      {/* Said once, above both boxes, rather than implied by two `max`
+          attributes nobody reads until the field refuses a keystroke.
+
+          Both numbers used to accept 64 against a shipped 10 and 6, which made
+          this page a way to take the appliance six times past what the build
+          allows — on the page you opened *because* the machine was hot. They
+          now clamp at the shipped figure, so the direction of travel is the
+          same as every other control here: this makes the box quieter. */}
+      <p className="text-xs text-muted-foreground">
+        Both numbers only go <strong>down</strong>. {shippedSummary(controls)} is what this build ships with
+        and the most either box will take — more throughput than that is a{' '}
+        <code className="font-mono">CI_QUEUE_CONCURRENCY</code> change and a restart, not a setting.
+      </p>
+
       {/* The single most common way to be wrong about this page: assuming one of
           the two limits covers the other. They do not overlap at all — the Hub's
           limit is how much CPU the container may use, this is how many jobs
@@ -298,6 +331,16 @@ function GlobalControls({
       </p>
     </div>
   );
+}
+
+/**
+ * "10 appliance-wide, 6 per queue" — the shipped pair, read off the DTO rather
+ * than hardcoded, because an appliance whose compose file already raised
+ * `CI_QUEUE_CONCURRENCY` ships with different numbers and this sentence has to
+ * name the ones that are actually binding.
+ */
+function shippedSummary(controls: JobControlsResponse): string {
+  return `${controls.global.concurrency.max} appliance-wide and ${controls.global.perQueueConcurrency.max} per queue`;
 }
 
 function QueueRow({
@@ -421,6 +464,17 @@ function CronRow({
           <span aria-hidden className={`h-2 w-2 shrink-0 rounded-full ${categoryDot(category)}`} />
           <label htmlFor={inputId}>{label}</label>
           {cron.locked ? <LockedBadge reason={cron.lockedReason} /> : null}
+          {/* Only when it is NOT this process. On a single-process appliance
+              every row would carry the badge, which says nothing. */}
+          {!cron.servedHere ? (
+            <Badge
+              variant="outline"
+              className="text-[10px] uppercase"
+              title={`Runs in the ${cron.role} process, not the one serving this page. The switch still applies — it is stored on the appliance and read by every process.`}
+            >
+              {cron.role}
+            </Badge>
+          ) : null}
         </span>
         <p id={`${inputId}-cadence`} className="mt-0.5 text-xs text-muted-foreground" title={cron.name}>
           {cron.cron}
