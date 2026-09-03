@@ -3,6 +3,7 @@ import { ForbiddenException } from '@nestjs/common';
 import { type RequestContext } from '@ci/common/context';
 
 import { GlobalUID } from '../../types/GlobalUID';
+import { TaskType } from '../../types/TaskType';
 import { TaskResolver } from '../TaskResolver';
 
 const ownerCtx = { userId: 'owner-1' } as unknown as RequestContext;
@@ -69,6 +70,59 @@ describe('TaskResolver feature gating', () => {
       ForbiddenException,
     );
     expect(taskService.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('TaskResolver placedOnCalendar field resolver', () => {
+  const TASK_ID = '11111111-1111-1111-1111-111111111111';
+
+  const task = {
+    id: TASK_ID,
+    userId: 'owner-1',
+    title: 'Dentist appointment',
+    description: null,
+    notes: null,
+    status: 'open',
+    priority: 3,
+    parentId: null,
+    dueAt: null,
+    taskTime: null,
+    scheduledFor: '2026-08-29',
+    deferUntil: null,
+    deferCount: 0,
+    estimatedMinutes: 30,
+    actualMinutes: 0,
+    completedAt: null,
+    sourceKind: 'inbox',
+    sourceRef: null,
+    l0Class: null,
+    l1ClusterId: null,
+    metadata: {},
+    createdAt: new Date('2026-08-29T00:00:00.000Z'),
+    updatedAt: new Date('2026-08-29T00:00:00.000Z'),
+  };
+
+  it('runs the fallback lookup for a bare TaskType.toType(...) parent, instead of short-circuiting on a hardcoded false', async () => {
+    const { resolver, plannedBlockService } = makeResolver();
+    const event = { id: '22222222-2222-2222-2222-222222222222' };
+    plannedBlockService.findActiveForTask.mockResolvedValue(event);
+
+    const placed = await resolver.placedOnCalendar(ownerCtx, TaskType.toType(task as never));
+
+    expect(plannedBlockService.findActiveForTask).toHaveBeenCalled();
+    expect(placed).toBe(true);
+  });
+
+  it('reports a scheduled task as placed after updateTask, which returns a bare TaskType.toType(...)', async () => {
+    const { resolver, taskService, plannedBlockService } = makeResolver();
+    const event = { id: '22222222-2222-2222-2222-222222222222' };
+    taskService.update.mockResolvedValue(task);
+    plannedBlockService.findActiveForTask.mockResolvedValue(event);
+
+    const payload = await resolver.updateTask(ownerCtx, { id: GlobalUID.encode('task', TASK_ID), title: 'x' });
+    const placed = await resolver.placedOnCalendar(ownerCtx, payload.task!);
+
+    expect(placed).toBe(true);
   });
 });
 
