@@ -44,10 +44,18 @@ export const PROTECTED_CRONS: Readonly<Record<string, string>> = {
  * `llm` queue is left switchable even though disabling it breaks chat, because
  * "stop the model" is one of the most legitimate reasons to open this page at
  * all, and the UI is explicit about what it costs.
+ *
+ * **This entry is currently unreachable, and deliberately kept.** `dead-letter`
+ * has no `@OnEvent` handler — registering one would silently destroy the dead
+ * letters of every event but the one subscribed, which `DeadLetterReaperListener`
+ * explains — so it never enters `queueInventory()`, never appears on the card,
+ * and is rejected as an unknown queue before this list is consulted. It stays so
+ * that the day somebody does register a handler there, the queue arrives already
+ * protected rather than switchable.
  */
 export const PROTECTED_QUEUES: Readonly<Record<string, string>> = {
   [DEAD_LETTER_QUEUE]:
-    'Where jobs that exhausted their retries are kept so a failure stays diagnosable. Its worker is the reaper that harvests them; stopping it loses the failures rather than the work.',
+    'Where jobs that exhausted their retries are kept so a failure stays diagnosable. Nothing works this queue by design — the reaper polls it instead — so there is nothing here to stop.',
 };
 
 export function protectedCronReason(name: string): string | null {

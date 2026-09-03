@@ -3,7 +3,7 @@ import type { SchedulerRegistry } from '@nestjs/schedule';
 import type { DataSource, Repository } from 'typeorm';
 
 import { JobControlStore } from '@ci/common/job-controls';
-import { CronRunStore } from '@ci/common/schedule';
+import { CronRegistry, CronRunStore } from '@ci/common/schedule';
 
 import type { PgBossArchiveEntity } from '../../entities/PgBossArchiveEntity';
 import type { PgBossJobEntity } from '../../entities/PgBossJobEntity';
@@ -172,6 +172,17 @@ function makeService(options: {
 }
 
 const context = { userId: 'user-1' };
+
+// The registry is a module-level singleton filled by `@Cron` at import time.
+// Nothing here imports a cron class, so it is already empty — cleared anyway so
+// a test that declares into it cannot leak rows into the next one's dashboard.
+beforeEach(() => {
+  CronRegistry.clear();
+});
+
+afterEach(() => {
+  CronRegistry.clear();
+});
 
 describe('JobMonitorService.getDashboard', () => {
   it('refuses to report anything without a user context', async () => {
@@ -464,6 +475,8 @@ describe('JobMonitorService.getDashboard', () => {
         lastSuccessAt: null,
         overdue: false,
         disabled: false,
+        role: 'web',
+        servedHere: true,
       },
       {
         name: 'PipelineTickCron.tick',
@@ -475,6 +488,8 @@ describe('JobMonitorService.getDashboard', () => {
         lastSuccessAt: null,
         overdue: false,
         disabled: false,
+        role: 'web',
+        servedHere: true,
       },
     ]);
   });
@@ -518,6 +533,8 @@ describe('JobMonitorService.getDashboard', () => {
           lastSuccessAt: null,
           overdue: false,
           disabled: false,
+          role: 'web',
+          servedHere: true,
         },
       ]);
     } finally {
@@ -765,6 +782,135 @@ describe('JobMonitorService cron overdue detection', () => {
   });
 });
 
+describe('JobMonitorService schedules the answering process does not run', () => {
+  it('lists a worker schedule with its durable history and no invented live state', async () => {
+    // Under CI_ROLE=web the 11 `role: 'worker'` schedules never register, so this
+    // card reported 42 of 53 — leaving no health signal at all for the derivation
+    // pass or the import retention purge. The durable half was already in hand:
+    // `ci.cron_runs` is written by whichever process ticks, and these rows were
+    // being loaded and thrown away for want of a registry entry.
+    const lastRunAt = new Date('2026-09-01T03:00:00.000Z');
+    const spy = jest
+      .spyOn(CronRunStore, 'runsByName')
+      .mockResolvedValue(new Map([['DerivationCron.deriveNightly', { lastRunAt, lastSuccessAt: null }]]));
+
+    try {
+      CronRegistry.declare({
+        name: 'DerivationCron.deriveNightly',
+        cron: '0 0 3 * * *',
+        role: 'worker',
+        servedHere: false,
+      });
+
+      const cronJobs = new Map<string, unknown>([
+        [
+          'PipelineTickCron.tick',
+          {
+            cronTime: { source: '0 */2 * * * *', timeZone: 'UTC' },
+            isActive: true,
+            nextDate: () => null,
+            lastDate: () => null,
+          },
+        ],
+      ]);
+
+      const { service } = makeService({ cronJobs });
+      const { crons } = await service.getDashboard(context);
+
+      expect(crons.map((cron) => cron.name)).toEqual([
+        'DerivationCron.deriveNightly',
+        'PipelineTickCron.tick',
+      ]);
+
+      const derivation = crons.find((cron) => cron.name === 'DerivationCron.deriveNightly');
+
+      // Durable state: real, and the same whichever process reads it.
+      expect(derivation).toMatchObject({
+        cron: '0 0 3 * * *',
+        role: 'worker',
+        servedHere: false,
+        lastRunAt: lastRunAt.toISOString(),
+        lastSuccessAt: null,
+      });
+
+      // Live state: not this process's to claim. `running` is null rather than
+      // false — false renders as "stopped", and a schedule ticking perfectly
+      // well in the worker is the last thing that should read as stopped here.
+      expect(derivation?.running).toBeNull();
+      expect(derivation?.nextRunAt).toBeNull();
+      expect(derivation?.overdue).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('lets the "run and never succeeded" signal reach a worker schedule', async () => {
+    // The page's own critical verdict reads this list, so while the 11 were
+    // missing it could not fire for any of them however long one had been
+    // failing. `lastRunAt` set with `lastSuccessAt` null is exactly that shape.
+    const spy = jest
+      .spyOn(CronRunStore, 'runsByName')
+      .mockResolvedValue(
+        new Map([['OrphanCleanupCron.sweepOnSchedule', { lastRunAt: new Date(), lastSuccessAt: null }]]),
+      );
+
+    try {
+      CronRegistry.declare({
+        name: 'OrphanCleanupCron.sweepOnSchedule',
+        cron: '0 30 4 * * *',
+        role: 'worker',
+        servedHere: false,
+      });
+
+      const { service } = makeService({ cronJobs: new Map() });
+      const { crons } = await service.getDashboard(context);
+      const orphan = crons.find((cron) => cron.name === 'OrphanCleanupCron.sweepOnSchedule');
+
+      expect(orphan?.lastRunAt).not.toBeNull();
+      expect(orphan?.lastSuccessAt).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('reports the operator switch for a schedule it does not run', async () => {
+    CronRegistry.declare({
+      name: 'ImportRetentionCron.runOnSchedule',
+      cron: '0 0 5 * * 0',
+      role: 'worker',
+      servedHere: false,
+    });
+
+    await JobControlStore.configure({
+      query: (sql: string) =>
+        sql.includes('UPDATE ci.job_settings')
+          ? Promise.resolve([])
+          : Promise.resolve([
+              {
+                kind: 'cron',
+                key: 'ImportRetentionCron.runOnSchedule',
+                mode: 'disabled',
+                concurrency: null,
+                skipped_count: '0',
+                last_skipped_at: null,
+                updated_at: new Date(),
+              },
+            ]),
+    } as unknown as DataSource);
+
+    try {
+      const { service } = makeService({ cronJobs: new Map() });
+      const { crons } = await service.getDashboard(context);
+
+      // The setting is appliance-wide, so "off" is as true here as in the
+      // process that would have ticked it.
+      expect(crons[0]).toMatchObject({ name: 'ImportRetentionCron.runOnSchedule', disabled: true });
+    } finally {
+      await JobControlStore.configure(null);
+    }
+  });
+});
+
 describe('JobMonitorService.fireCronJobs', () => {
   it('fires every registered cron once', () => {
     const ticks: string[] = [];
@@ -796,6 +942,42 @@ describe('JobMonitorService.fireCronJobs', () => {
       errors: [],
     });
     expect(ticks).toEqual(['B.run']);
+  });
+
+  it('reports a name it cannot fire instead of returning an empty success', () => {
+    // The endpoint is documented as "docker exec into the api container and curl
+    // localhost", and under the split that container is CI_ROLE=web, which holds
+    // none of the 11 worker schedules. Asking it for one walked a registry the
+    // name was not in and answered {fired: [], skipped: [], errors: []} — a
+    // success-shaped reply to a request that did nothing.
+    CronRegistry.declare({
+      name: 'DerivationCron.deriveNightly',
+      cron: '0 0 3 * * *',
+      role: 'worker',
+      servedHere: false,
+    });
+
+    const cronJobs = new Map<string, unknown>([['A.run', { fireOnTick: () => undefined }]]);
+    const { service } = makeService({ cronJobs });
+
+    const result = service.fireCronJobs(['DerivationCron.deriveNightly']);
+
+    expect(result.fired).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.name).toBe('DerivationCron.deriveNightly');
+    // Naming the process that CAN fire it is the actionable half — firing across
+    // processes is not possible, `fireOnTick` being a handle on a live job.
+    expect(result.errors[0]?.error).toMatch(/worker process/);
+  });
+
+  it('distinguishes a schedule that is elsewhere from one that does not exist', () => {
+    const cronJobs = new Map<string, unknown>([['A.run', { fireOnTick: () => undefined }]]);
+    const { service } = makeService({ cronJobs });
+
+    const result = service.fireCronJobs(['NoSuchCron.tick']);
+
+    expect(result.fired).toEqual([]);
+    expect(result.errors[0]?.error).toMatch(/not a schedule in this build/);
   });
 
   it('records a fireOnTick throw without stopping the sweep', () => {

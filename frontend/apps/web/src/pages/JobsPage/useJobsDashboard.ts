@@ -90,7 +90,16 @@ export interface CronSchedule {
    * on every tick stays started forever. Read with `lastSuccessAt` and
    * `overdue`, never alone.
    */
-  readonly running: boolean;
+  /**
+   * Whether the scheduler holding this job has it started — `null` when
+   * {@link servedHere} is false, because that scheduler is in the other process
+   * and this one cannot see it. Distinct from `false`, which means stopped.
+   */
+  readonly running: boolean | null;
+  /** Which process runs it. */
+  readonly role: 'web' | 'worker';
+  /** Whether the process that answered is the one whose scheduler holds it. */
+  readonly servedHere: boolean;
   readonly nextRunAt: string | null;
   /** Last *attempt*: stamped before the body, so a tick that threw still counts. */
   readonly lastRunAt: string | null;

@@ -741,7 +741,9 @@ export function buildCrons({ now }: BuildOptions): ReadonlyArray<{
   name: string;
   cron: string;
   timezone: string | null;
-  running: boolean;
+  running: boolean | null;
+  role: 'web' | 'worker';
+  servedHere: boolean;
   nextRunAt: string | null;
   lastRunAt: string | null;
   lastSuccessAt: string | null;
@@ -912,12 +914,27 @@ export function buildCrons({ now }: BuildOptions): ReadonlyArray<{
     },
   ];
 
+  // The preview is a single-process appliance (`CI_ROLE=all`, matching the
+  // topology its controls fixture reports), so every schedule is served here and
+  // carries live state. `role` still tracks the real declaration, since that is
+  // a fact about the build rather than about the topology.
+  const workerRoles = new Set([
+    'DerivationCron.deriveNightly',
+    'OrphanCleanupCron.sweepOnSchedule',
+    'ImportRetentionCron.runOnSchedule',
+    'AgentMemoryRetentionCron.runOnSchedule',
+    'EntityTypeAuditCron.auditEntityTypes',
+    'ImportStageListener.sweepOnSchedule',
+  ]);
+
   return rows
     .map((row) => ({
       name: row.name,
       cron: row.cron,
       timezone: 'UTC',
       running: true,
+      role: workerRoles.has(row.name) ? ('worker' as const) : ('web' as const),
+      servedHere: true,
       nextRunAt: new Date(now + (row.everyMs - ((row.ranAgoMs ?? 0) % row.everyMs))).toISOString(),
       lastRunAt: row.ranAgoMs == null ? null : new Date(now - row.ranAgoMs).toISOString(),
       lastSuccessAt: row.succeededAgoMs == null ? null : new Date(now - row.succeededAgoMs).toISOString(),
