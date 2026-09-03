@@ -150,20 +150,17 @@ export class GeoJSONFileImporter implements FileImporter {
           }
 
           case 'MultiLineString': {
-            // A running counter across every constituent line collapsed
-            // "point 0 of line 1" and "point 0 of line 2" onto colliding ids.
-            // Fold a per-line reset into a collision-safe compound index
-            // instead (note: re-importing a previously-imported
-            // MultiLineString file mints new ids for its points under this
-            // scheme, a one-time side effect, not a migration).
-            let lineIdx = 0;
+            // One running counter across every constituent line of this
+            // feature — never reset per line — so each position gets a
+            // strictly increasing, never-colliding index. A per-line reset
+            // combined with a `lineIdx * 100000 + i` compound index looks
+            // collision-safe but isn't: it collides as soon as any single
+            // line carries 100,000 or more positions.
+            let i = 0;
             for (const line of geom.coordinates as Position[][]) {
-              let i = 0;
               for (const pos of line) {
-                this.emitPosition(params, fpath, pos, props, featureIdx, lineIdx * 100000 + i++);
+                this.emitPosition(params, fpath, pos, props, featureIdx, i++);
               }
-
-              lineIdx++;
             }
 
             break;

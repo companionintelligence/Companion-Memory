@@ -1832,3 +1832,38 @@ describe('Google Voice Spam directory (Defect 4)', () => {
     expect(new Set(hashes).size).toBe(2); // distinct filenames -> distinct hashes, no silent merge
   });
 });
+
+// `Calls/` is a flat directory holding the whole export, so listing it once
+// per conversation FILE (rather than once per directory, or only when a
+// file actually references an attachment) is an O(files²) cost across a
+// large export. Most conversation files reference no attachment at all, so
+// skipping the listing in that case is the cheap fix.
+describe('Google Voice attachment directory listing is skipped when unneeded', () => {
+  it('does not call fs.readdirSync for a conversation file with no image/video/vcard/audio reference', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gv-no-attach-'));
+    fs.mkdirSync(path.join(dir, 'Calls'));
+    fs.writeFileSync(
+      path.join(dir, 'Calls', 'Jane Doe - Text - 2025-03-01T10_00_00Z.html'),
+      `<html><body><div class="message">
+         <abbr class="dt" title="2025-03-01T10:00:00.000Z">Mar 1</abbr>:
+         <cite class="sender vcard"><a class="tel" href="tel:+15551230099"><span class="fn">Jane Doe</span></a></cite>:
+         <q>hi from Jane, no attachments here</q>
+       </div></body></html>`,
+    );
+
+    const spy = jest.spyOn(fs, 'readdirSync');
+    try {
+      const pipeline: EmittedGraph[] = [];
+      await new GoogleVoiceFileImporter().fileImport({}, { filename: path.basename(dir), fullPath: dir }, {
+        pipeline,
+        timeframe: {},
+        log: () => {},
+      } as unknown as ImportParams);
+
+      expect(pipeline.filter((p) => p.item?.classification === 'message')).toHaveLength(1);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

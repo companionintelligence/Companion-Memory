@@ -58,12 +58,20 @@ export function parseMime(rawHeaders: string, body: string): ParsedMimeResult {
       }
 
       if (ct.startsWith('text/plain') && !result.textBody) {
-        result.textBody = decodeWithCharset(data, extractCharset(partContentTypeHeader));
+        result.textBody = decodeTextBody(
+          bodyRaw,
+          partHeaders['content-transfer-encoding'],
+          extractCharset(partContentTypeHeader),
+        );
         continue;
       }
 
       if (ct.startsWith('text/html') && !result.htmlBody) {
-        result.htmlBody = decodeWithCharset(data, extractCharset(partContentTypeHeader));
+        result.htmlBody = decodeTextBody(
+          bodyRaw,
+          partHeaders['content-transfer-encoding'],
+          extractCharset(partContentTypeHeader),
+        );
         continue;
       }
 
@@ -78,13 +86,12 @@ export function parseMime(rawHeaders: string, body: string): ParsedMimeResult {
   }
 
   // Single part
-  const decoded = decodeBody(body, transferEncoding);
   const charset = extractCharset(contentTypeHeader);
   if (contentType.startsWith('text/html')) {
-    return { htmlBody: decodeWithCharset(decoded, charset), attachments: [] };
+    return { htmlBody: decodeTextBody(body, transferEncoding, charset), attachments: [] };
   }
 
-  return { textBody: decodeWithCharset(decoded, charset), attachments: [] };
+  return { textBody: decodeTextBody(body, transferEncoding, charset), attachments: [] };
 }
 
 /** The `charset` parameter of a Content-Type header, if any. */
@@ -100,7 +107,56 @@ function extractCharset(contentTypeHeader: string): string | undefined {
  * as UTF-8 silently corrupts every non-ASCII character. `TextDecoder` covers
  * the labels IANA actually assigns (Node ships full ICU by default), so this
  * costs nothing beyond the charset lookup itself.
+ *
+ * One label needs a manual patch on top: Node's `TextDecoder('windows-1252')`
+ * (and its `cp1252`/`x-cp1252` aliases) decodes bytes 0x80-0x9F as the raw
+ * ISO-8859-1 C1 control codepoints (U+0080-U+009F) instead of the windows-1252
+ * table's actual mapping for that range — the Euro sign, curly quotes, en/em
+ * dash, etc. That range is the ONE place the two charsets legitimately
+ * disagree (every other byte is identical), which is why the bug is invisible
+ * outside it: `new TextDecoder('windows-1252').decode(Buffer.from([0x80]))`
+ * returns `''`, not `'€'` (€), on Node 22.15.1. Real windows-1252
+ * mail regularly uses this range for exactly those characters (a curly quote
+ * from Word/Outlook is the single most common case), so silently mis-decoding
+ * it is not a corner case. Verified directly against this runtime's
+ * TextDecoder before writing the table below — see the sibling test.
  */
+const WINDOWS_1252_C1_OVERRIDE: Readonly<Record<string, string>> = {
+  '': '€', // €
+  '': '‚', // ‚
+  '': 'ƒ', // ƒ
+  '': '„', // „
+  '': '…', // …
+  '': '†', // †
+  '': '‡', // ‡
+  '': 'ˆ', // ˆ
+  '': '‰', // ‰
+  '': 'Š', // Š
+  '': '‹', // ‹
+  '': 'Œ', // Œ
+  '': 'Ž', // Ž
+  '': '‘', // '
+  '': '’', // '
+  '': '“', // "
+  '': '”', // "
+  '': '•', // •
+  '': '–', // –
+  '': '—', // —
+  '': '˜', // ˜
+  '': '™', // ™
+  '': 'š', // š
+  '': '›', // ›
+  '': 'œ', // œ
+  '': 'ž', // ž
+  '': 'Ÿ', // Ÿ
+  // 0x81, 0x8D, 0x8F, 0x90, 0x9D are unassigned in windows-1252 too — Node's
+  // (wrong-for-this-charset-but-harmless-here) raw-C1 fallback already
+  // matches the WHATWG spec's own fallback for an unassigned byte, so those
+  // five codepoints are deliberately absent from this table.
+};
+
+const WINDOWS_1252_LABELS = new Set(['windows-1252', 'cp1252', 'x-cp1252']);
+
 function decodeWithCharset(bytes: Buffer, charset: string | undefined): string {
   const label = (charset ?? '').trim().toLowerCase();
   if (!label || label === 'utf-8' || label === 'utf8' || label === 'us-ascii') {
@@ -108,10 +164,36 @@ function decodeWithCharset(bytes: Buffer, charset: string | undefined): string {
   }
 
   try {
-    return new TextDecoder(label).decode(bytes);
+    const decoded = new TextDecoder(label).decode(bytes);
+
+    return WINDOWS_1252_LABELS.has(label)
+      ? Array.from(decoded, (ch) => WINDOWS_1252_C1_OVERRIDE[ch] ?? ch).join('')
+      : decoded;
   } catch {
     return bytes.toString('utf8');
   }
+}
+
+/**
+ * Decode a MIME text part's body to a string, applying the declared charset
+ * only when `decodeBody` actually produced transport bytes to convert.
+ *
+ * A part with no content-transfer-encoding (or 7bit/8bit/binary) is passed
+ * straight through by `decodeBody` as `Buffer.from(body, 'utf8')` — a
+ * re-encoding of `body`, which is already a decoded JS string (the mbox/eml
+ * source is read from disk with encoding 'utf8'). Running THAT through
+ * `decodeWithCharset` with the part's declared legacy charset decodes the
+ * wrong byte sequence and corrupts every non-ASCII character. Only base64
+ * and quoted-printable actually hand back the part's real wire bytes, so
+ * charset conversion is meaningful only on those two lanes.
+ */
+function decodeTextBody(rawBody: string, cte: string | undefined, charset: string | undefined): string {
+  const enc = (cte || '').toLowerCase();
+  if (enc === 'base64' || enc === 'quoted-printable') {
+    return decodeWithCharset(decodeBody(rawBody, cte), charset);
+  }
+
+  return rawBody;
 }
 
 // Flatten an HTML mail body to readable plain text — re-exported from the

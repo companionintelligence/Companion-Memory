@@ -673,17 +673,24 @@ export class GoogleVoiceFileImporter implements FileImporter {
     }
 
     // Attachments: image (existing) + video/vcard/audio-clip (see
-    // attachmentRefsIn). `dirEntries` is read ONCE per conversation file and
-    // threaded into every resolveAttachment call — both for the NFC-normalized
-    // comparison resolveRecording already does correctly, and so the
-    // truncation-collision fallback below doesn't re-list the directory.
+    // attachmentRefsIn). `dirEntries` is read AT MOST ONCE per conversation
+    // file and threaded into every resolveAttachment call — both for the
+    // NFC-normalized comparison resolveRecording already does correctly, and
+    // so the truncation-collision fallback below doesn't re-list the
+    // directory. `Calls/` is a flat directory holding an entire export, so
+    // this listing is skipped whenever the file references no attachment at
+    // all (the common case) rather than paying an O(files) readdir for every
+    // one of them — an O(files²) cost across a whole conversation dir.
     const dir = path.dirname(fpath);
     const basenameNoExt = basename.replace(/\.[^.]+$/, '');
-    let dirEntries: string[];
-    try {
-      dirEntries = fs.readdirSync(dir);
-    } catch {
-      dirEntries = [];
+    const refs = attachmentRefsIn(raw);
+    let dirEntries: string[] = [];
+    if (refs.length > 0) {
+      try {
+        dirEntries = fs.readdirSync(dir);
+      } catch {
+        dirEntries = [];
+      }
     }
 
     const pushedAttachmentPaths = new Set<string>();
@@ -695,7 +702,7 @@ export class GoogleVoiceFileImporter implements FileImporter {
     let sawImageStub = false;
     let anyImageResolved = false;
 
-    for (const ref of attachmentRefsIn(raw)) {
+    for (const ref of refs) {
       const filename = resolveAttachment(ref.stub, dir, basenameNoExt, dirEntries);
       if (ref.kind === 'image') {
         sawImageStub = true;

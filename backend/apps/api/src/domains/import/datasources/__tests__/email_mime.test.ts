@@ -31,6 +31,18 @@ describe('parseMime charset-aware body decoding', () => {
     expect(result.textBody).toBe('€100');
   });
 
+  it('leaves the same byte as a raw C1 control under true ISO-8859-1, not the windows-1252 substitution', () => {
+    // Byte 0x80 is unassigned in real ISO-8859-1 (it decodes to the C1
+    // control U+0080, not a printable character) — the two labels must not
+    // be folded together, or ISO-8859-1 mail would start rendering Euro
+    // signs it never declared.
+    const bytes = Buffer.concat([Buffer.from([0x80]), Buffer.from('100', 'ascii')]);
+    const headers = 'Content-Type: text/plain; charset=ISO-8859-1\nContent-Transfer-Encoding: base64';
+    const result = parseMime(headers, bytes.toString('base64'));
+
+    expect(result.textBody).toBe('100');
+  });
+
   it('decodes an ISO-8859-1 HTML body using the declared charset', () => {
     const headers =
       'Content-Type: text/html; charset=ISO-8859-1\nContent-Transfer-Encoding: quoted-printable';
@@ -51,6 +63,17 @@ describe('parseMime charset-aware body decoding', () => {
     const result = parseMime(headers, 'plain ascii body');
 
     expect(result.textBody).toBe('plain ascii body');
+  });
+
+  it('leaves an already-decoded 7bit/8bit body untouched instead of re-decoding it as the declared legacy charset', () => {
+    // No Content-Transfer-Encoding (defaults to 7bit/8bit): `body` here is
+    // already a real JS string (the mbox source is read from disk as
+    // UTF-8), NOT raw bytes in the declared charset — applying `charset`
+    // conversion to it corrupts non-ASCII characters instead of fixing them.
+    const headers = 'Content-Type: text/plain; charset=ISO-8859-1';
+    const result = parseMime(headers, 'Don’t forget');
+
+    expect(result.textBody).toBe('Don’t forget');
   });
 });
 
