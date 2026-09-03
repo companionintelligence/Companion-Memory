@@ -60,6 +60,19 @@ describe('boundToolResultForPrompt', () => {
     expect(parsed).toEqual(result);
   });
 
+  it('falls back to a truncated first item when even it alone exceeds the budget', () => {
+    // Each item alone is bigger than the whole budget — the old code broke
+    // out of the keep-loop immediately and returned only the omission
+    // marker, handing the model none of the data it asked for.
+    const big = {
+      id: '1',
+      metadata: Object.fromEntries(Array.from({ length: 12 }, (_, k) => [`h${k}`, 'v'.repeat(200)])),
+    };
+    const parsed = JSON.parse(boundToolResultForPrompt([big, big], 2_048)) as unknown[];
+
+    expect(parsed.some((e) => typeof e === 'object')).toBe(true);
+  });
+
   it('hard-truncates a non-array result that still exceeds the budget', () => {
     // Many short fields: survives the per-string cap, dies at the total cap.
     const wide = Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`k${i}`, 'v'.repeat(20)]));

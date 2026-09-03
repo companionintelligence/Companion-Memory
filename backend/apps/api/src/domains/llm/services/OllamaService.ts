@@ -949,6 +949,8 @@ export class OllamaService implements OnModuleInit {
           tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
           format: openAiFormat,
           enableThinking,
+          signal,
+          maxTokens: maxOutputTokens,
         })
       : await this.runNativeChat({
           model,
@@ -988,6 +990,8 @@ export class OllamaService implements OnModuleInit {
         tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
         format: openAiFormat,
         enableThinking,
+        signal,
+        maxTokens: maxOutputTokens,
       });
     }
 
@@ -1276,11 +1280,18 @@ export class OllamaService implements OnModuleInit {
     // the context budget does not admit, and an unbounded one loses the whole
     // follow-up turn to window truncation. See toolResultBudget.ts for the
     // measured incident.
+    //
+    // `resultByteBudget` is the ROUND's share of the context window (see
+    // toolResultByteBudget's own doc), not each individual call's — a round
+    // with N tool calls must split it N ways, or the round's actual total is
+    // N times the intended budget.
+    const perCallByteBudget = Math.max(1, Math.floor(resultByteBudget / toolResults.length));
+
     return toolResults.map(
       ({ result }) =>
         ({
           role: 'tool' as const,
-          content: boundToolResultForPrompt(result, resultByteBudget),
+          content: boundToolResultForPrompt(result, perCallByteBudget),
         }) satisfies OllamaMessage,
     );
   }

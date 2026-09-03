@@ -107,7 +107,23 @@ export function boundToolResultForPrompt(value: unknown, budgetBytes: number): s
       spent += cost;
     }
 
-    const omitted = compact.length - kept.length;
+    let consumed = kept.length;
+
+    // The first item alone can exceed the whole budget (one oversized
+    // result) — the loop above then keeps nothing, and the caller used to
+    // get back only the omission marker: none of the data it asked for.
+    // Hard-truncate that first item the same way the non-array branch below
+    // does, wrapped so the result stays valid, parseable JSON, and push it
+    // instead so a partial version of the data reaches the model.
+    if (kept.length === 0 && compact.length > 0) {
+      const firstSerialized = JSON.stringify(compact[0]) ?? 'null';
+      const previewBudget = Math.max(0, budgetBytes - markerReserve - 40);
+
+      kept.push({ truncated: true, preview: `${firstSerialized.slice(0, previewBudget)}…[truncated]` });
+      consumed = 1;
+    }
+
+    const omitted = compact.length - consumed;
 
     if (omitted > 0) {
       kept.push(`[${omitted} more results omitted — refine the query to narrow them down]`);

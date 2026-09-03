@@ -28,6 +28,7 @@
 import { ModelTierRouter } from '@ci/domains/model-routing';
 import { ToolRegistry } from '@ci/domains/tools';
 
+import { toolResultByteBudget } from '../../toolResultBudget';
 import { OllamaService, type ChatRequestContext } from '../OllamaService';
 
 const MODEL = 'test-model';
@@ -208,5 +209,190 @@ describe('native chat generation bounds', () => {
     await service.chat(context, messages, { model: MODEL, maxOutputTokens: 0 });
 
     expect(chatMock.mock.calls[0]![0]).not.toHaveProperty('options');
+  });
+});
+
+/**
+ * Same bounds, on the OpenAI-compat transport. This path used to drop
+ * `signal`/`maxOutputTokens`/`keepAlive` entirely: `openAiDriver.chat(...)`
+ * was called with only `model`/`messages`/`tools`/`format`/`enableThinking`,
+ * so every appliance whose LLM endpoint is `openai_compatible` got none of
+ * the cancellation or output-cap work above — only the native driver did.
+ */
+describe('openai-compat chat generation bounds', () => {
+  function makeOpenAiService(openAiChat: jest.Mock) {
+    // getOpenAiDriver returning a driver is what selects the OpenAI-compat path.
+    const llmEndpointService = {
+      getOpenAiDriver: () => ({
+        chat: openAiChat,
+        listModels: jest.fn().mockResolvedValue([MODEL]),
+      }),
+      getOllamaHost: () => 'http://localhost:11434',
+    } as any;
+
+    return new OllamaService(
+      llmEndpointService,
+      new ToolRegistry(
+        makeLogger(),
+        { send: jest.fn().mockResolvedValue([]) } as any,
+        { evaluate: jest.fn(), propose: jest.fn() } as any,
+      ),
+      makeLogger(),
+      { isFeatureEnabled: jest.fn(async () => false) } as any,
+      new ModelTierRouter(),
+    );
+  }
+
+  it('threads signal and maxOutputTokens through to the OpenAI-compat driver', async () => {
+    const controller = new AbortController();
+    const openAiChat = jest.fn().mockResolvedValue({ model: MODEL, message: { role: 'assistant', content: '{}' } });
+    const service = makeOpenAiService(openAiChat);
+
+    await service.chat(context, messages, {
+      model: MODEL,
+      signal: controller.signal,
+      maxOutputTokens: 800,
+      keepAlive: '1h',
+    });
+
+    expect(openAiChat).toHaveBeenCalledTimes(1);
+    expect(openAiChat.mock.calls[0]![0]).toMatchObject({ signal: controller.signal, maxTokens: 800 });
+  });
+
+  it('threads signal and maxOutputTokens through the tool-call follow-up turn too', async () => {
+    const controller = new AbortController();
+    const openAiChat = jest
+      .fn()
+      .mockResolvedValueOnce({
+        model: MODEL,
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ function: { name: 'knowledge_search', arguments: {} } }],
+        },
+      })
+      .mockResolvedValueOnce({ model: MODEL, message: { role: 'assistant', content: 'done' } });
+    const service = makeOpenAiService(openAiChat);
+
+    await service.chat(context, messages, {
+      model: MODEL,
+      enableTools: true,
+      signal: controller.signal,
+      maxOutputTokens: 800,
+    });
+
+    expect(openAiChat).toHaveBeenCalledTimes(2);
+    expect(openAiChat.mock.calls[1]![0]).toMatchObject({ signal: controller.signal, maxTokens: 800 });
+  });
+});
+
+/**
+ * `toolResultByteBudget(numCtx)` is documented as one ROUND's share of the
+ * context window, computed once per round. `handleToolCalls` used to apply
+ * that same number independently to each tool result in the round instead of
+ * splitting it across them, so a round with N tool calls spent N times the
+ * intended budget — 5 tool calls could put ~5x the window's tool-result share
+ * into the follow-up prompt.
+ */
+describe('multi-tool-call round budget', () => {
+  const READ = { access: 'read', sensitivity: 'personal', destructive: false, external: false };
+  const TOOL_COUNT = 5;
+
+  function fakeTool(name: string, data: unknown) {
+    return {
+      schema: {
+        name,
+        domain: 'knowledge',
+        title: name,
+        description: name,
+        parameters: { type: 'object' },
+        privacy: READ,
+        localCapable: false,
+      },
+      execute: jest.fn(async () => ({ success: true, data, executionTimeMs: 1 })),
+    } as any;
+  }
+
+  function fakeProvider(tools: any[]) {
+    const map = new Map(tools.map((tool) => [tool.schema.name, tool]));
+
+    return {
+      name: 'fake',
+      initialize: jest.fn(async () => {}),
+      shutdown: jest.fn(async () => {}),
+      getAvailableTools: jest.fn(async () => [...map.values()].map((t) => t.schema)),
+      getTool: (n: string) => map.get(n),
+      canHandle: (n: string) => map.has(n),
+      getHealthStatus: jest.fn(async () => ({
+        name: 'fake',
+        status: 'healthy',
+        toolCount: map.size,
+        lastCheck: new Date(),
+      })),
+    } as any;
+  }
+
+  it("splits the round's tool-result byte budget across all of that round's tool calls", async () => {
+    // Each tool returns a result well over the FULL per-round budget on its
+    // own, so the old per-call application would let every one of the 5 keep
+    // (roughly) the whole 2048-byte budget for itself.
+    const bigArray = Array.from({ length: 50 }, (_, i) => ({ id: `${i}`, text: 'y'.repeat(200) }));
+    const tools = Array.from({ length: TOOL_COUNT }, (_, i) => fakeTool(`tool_${i}`, bigArray));
+    const registry = new ToolRegistry(
+      makeLogger(),
+      { send: jest.fn().mockResolvedValue([]) } as any,
+      {
+        evaluate: jest.fn().mockResolvedValue({ decision: 'execute', reason: 'allowed', explanation: 'open' }),
+        propose: jest.fn(),
+      } as any,
+    );
+    await registry.registerProvider(fakeProvider(tools));
+
+    const toolCalls = tools.map((tool) => ({ function: { name: tool.schema.name, arguments: {} } }));
+    let round = 0;
+    const chatStream = jest.fn(() => {
+      round += 1;
+
+      const chunk =
+        round === 1
+          ? { model: MODEL, message: { role: 'assistant', content: '', tool_calls: toolCalls } }
+          : { model: MODEL, message: { role: 'assistant', content: 'done' } };
+
+      return (async function* () {
+        yield chunk;
+      })();
+    });
+
+    const llmEndpointService = {
+      getOpenAiDriver: () => ({ chatStream, listModels: jest.fn(async () => [MODEL]) }),
+    } as any;
+    const service = new OllamaService(
+      llmEndpointService,
+      registry,
+      makeLogger(),
+      { isFeatureEnabled: jest.fn(async () => false) } as any,
+      new ModelTierRouter(),
+    );
+
+    const stream = await service.chatStream(context, messages, { model: MODEL, enableTools: true });
+
+    let iteration = await stream.next();
+
+    while (!iteration.done) {
+      iteration = await stream.next();
+    }
+
+    const toolMessages = stream.messages.filter((m) => m.role === 'tool');
+
+    expect(toolMessages).toHaveLength(TOOL_COUNT);
+
+    const totalBytes = toolMessages.reduce(
+      (sum, m) => sum + Buffer.byteLength(m.content ?? '', 'utf8'),
+      0,
+    );
+
+    // The bug this guards: with the budget applied per call instead of per
+    // round, this would be roughly TOOL_COUNT times the round budget.
+    expect(totalBytes).toBeLessThanOrEqual(toolResultByteBudget(undefined));
   });
 });

@@ -69,6 +69,13 @@ export class OpenAiCompatChatDriver {
     tools?: Tool[];
     format?: string;
     enableThinking?: boolean;
+    signal?: AbortSignal;
+    /**
+     * Cap on the completion, in tokens (OpenAI's `max_tokens`). Absent leaves
+     * the server's default alone. Named to match `chatStream`'s `maxTokens`,
+     * which is what `OllamaService` already threads through on that path.
+     */
+    maxTokens?: number;
   }): Promise<ChatResponse> {
     const extraBody = vllmThinkingExtraBody(request.enableThinking);
     const response = await this.client.chat.completions.create(
@@ -78,9 +85,10 @@ export class OpenAiCompatChatDriver {
         ...(request.tools && request.tools.length > 0 && { tools: toOpenAiTools(request.tools) }),
         // Ollama's `format: 'json'` maps onto the OpenAI json_object response format.
         ...(request.format === 'json' && { response_format: { type: 'json_object' as const } }),
+        ...(request.maxTokens != null && request.maxTokens > 0 && { max_tokens: request.maxTokens }),
         ...extraBody,
       },
-      { timeout: 180_000, maxRetries: 0 },
+      { signal: request.signal, timeout: 180_000, maxRetries: 0 },
     );
 
     const choice = response.choices[0];
