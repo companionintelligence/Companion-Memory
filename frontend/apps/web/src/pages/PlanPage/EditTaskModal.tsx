@@ -229,6 +229,11 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
     if (draftsEqual(draft, lastSaved.current)) {
       // Typing the original values back leaves the failed save nothing to
       // protect, so the notice — and the close it holds up — goes with it.
+      // Bump the supersession counter too, the same as persist()'s own
+      // nothing-to-send path: this retires any attempt still in flight so a
+      // late failure can't land `saveFailed` over a draft that already
+      // matches the server.
+      attempt.current += 1;
       setSaveFailed(false);
       setCloseRefused(false);
 

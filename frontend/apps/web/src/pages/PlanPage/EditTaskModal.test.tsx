@@ -374,6 +374,34 @@ describe('EditTaskModal', () => {
     expect(screen.getByText(/^saved$/i)).toBeInTheDocument();
   }, 10000);
 
+  // Reverting the draft to its saved values has to retire an in-flight save
+  // the same way persist()'s own nothing-to-send path does — the autosave
+  // effect's draftsEqual early return used to skip past persist() entirely,
+  // so attempt.current was never bumped there and a late failure could land
+  // `saveFailed` over a draft that already matched the server.
+  it('ignores a stale failure that lands after reverting to the saved values', async () => {
+    renderWithProviders(<EditTaskModal task={TASK} onClose={vi.fn()} />, {
+      mocks: [
+        {
+          request: { query: UPDATE_TASK, variables: { input: RETITLE_INPUT } },
+          error: new Error('offline'),
+          delay: 900,
+        },
+      ],
+    });
+
+    fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: RETITLE_INPUT.title } });
+    // Wait until the save is actually on the wire, then revert it.
+    await screen.findByText(/^saving…$/i, undefined, { timeout: 2000 });
+    fireEvent.change(screen.getByLabelText(/^title$/i), { target: { value: TASK.title } });
+
+    // Long enough for the in-flight rejection to arrive after the revert.
+    await new Promise((resolve) => setTimeout(resolve, 900));
+
+    expect(screen.queryByText(/couldn't be saved/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^done$/i })).toBeInTheDocument();
+  }, 10000);
+
   // Escape must not be swallowed while the save is failing — a dialog that
   // ignores the key reads as broken, and the user never learns why it will not
   // close or that discarding is right there.
