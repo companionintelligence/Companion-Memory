@@ -3279,7 +3279,7 @@ type SearchResultEdge {
   node: SearchResultType!
 }
 
-union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileChunkType | FileType | ItemType | NoteType | PersonType | PlaceType | ProductModelType | ReceiptType | ThreadType
+union SearchResultType = ActionType | AnswerType | BrowserActivityType | CommunicationType | ConceptType | ContentType | EventType | FileChunkType | FileType | ItemType | NoteType | PersonType | PlaceType | ProductModelType | ReceiptType | TaskType | ThreadType
 
 input SendPeerAskInput {
   archetype: String!

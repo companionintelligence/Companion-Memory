@@ -29,6 +29,7 @@ import {
 } from '@ci/domains/memory';
 import { type Note, NoteService } from '@ci/domains/notes';
 import { type FileChunk, FileChunkService } from '@ci/domains/parsing';
+import { type Task, TaskService } from '@ci/domains/planning';
 import { type EntityIdentifier, type IndexableEntity, type TaggableEntity } from '@ci/domains/search-next';
 
 type EntityType = IndexableEntity | TaggableEntity;
@@ -51,6 +52,7 @@ export type ResolvedEntity =
   | { type: 'place'; id: string; entity: Place }
   | { type: 'product'; id: string; entity: ProductModel }
   | { type: 'receipt'; id: string; entity: Receipt }
+  | { type: 'task'; id: string; entity: Task }
   | { type: 'thread'; id: string; entity: Thread };
 
 @Injectable()
@@ -75,6 +77,7 @@ export class EntityResolutionService {
     // exists to prevent. Scoped on user_id here exactly as the service would.
     @InjectRepository(ReceiptEntity)
     private readonly receiptRepository: Repository<ReceiptEntity>,
+    private readonly taskService: TaskService,
     private readonly threadService: ThreadService,
   ) {}
 
@@ -106,6 +109,7 @@ export class EntityResolutionService {
       places,
       products,
       receipts,
+      tasks,
       threads,
     ] = await Promise.all([
       this.actionService.findByIds(context, grouped.get('action') ?? []),
@@ -123,6 +127,7 @@ export class EntityResolutionService {
       this.placeService.findByIds(context, grouped.get('place') ?? []),
       this.productModelService.findByIds(context, grouped.get('product') ?? []),
       this.findReceiptsByIds(context.userId, grouped.get('receipt') ?? []),
+      this.taskService.findByIds(context, grouped.get('task') ?? []),
       this.threadService.findByIds(context, grouped.get('thread') ?? []),
     ]);
 
@@ -142,6 +147,7 @@ export class EntityResolutionService {
     this.addToMap(map, 'place', places);
     this.addToMap(map, 'product', products);
     this.addToMap(map, 'receipt', receipts);
+    this.addToMap(map, 'task', tasks);
     this.addToMap(map, 'thread', threads);
 
     // File chunks join their parent file so results can link back to the source

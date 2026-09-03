@@ -80,7 +80,7 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
-    await this.eventService.send(TaskCreatedEvent, { taskId: entity.id });
+    await this.eventService.send(TaskCreatedEvent, { taskId: entity.id, userId: entity.userId });
 
     return TaskEntity.toEgressType(entity);
   }
@@ -207,7 +207,7 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
-    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id });
+    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
     return TaskEntity.toEgressType(entity);
   }
@@ -237,7 +237,7 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
-    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id });
+    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
     return TaskEntity.toEgressType(entity);
   }
@@ -265,7 +265,7 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
-    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id });
+    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
     return TaskEntity.toEgressType(entity);
   }
@@ -284,7 +284,7 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
-    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id });
+    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
     return TaskEntity.toEgressType(entity);
   }
@@ -303,7 +303,7 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
-    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id });
+    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
     return TaskEntity.toEgressType(entity);
   }
@@ -322,7 +322,7 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
-    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id });
+    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
     return TaskEntity.toEgressType(entity);
   }
@@ -345,7 +345,7 @@ export class TaskService {
 
     const entity = await this.taskRepository.save(record);
 
-    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id });
+    await this.eventService.send(TaskUpdatedEvent, { taskId: entity.id, userId: entity.userId });
 
     return TaskEntity.toEgressType(entity);
   }
@@ -354,7 +354,7 @@ export class TaskService {
     const result = await this.taskRepository.delete({ id, userId: context.userId });
 
     if (result.affected != null && result.affected > 0) {
-      await this.eventService.send(TaskRemovedEvent, { taskId: id });
+      await this.eventService.send(TaskRemovedEvent, { taskId: id, userId: context.userId });
 
       return true;
     }

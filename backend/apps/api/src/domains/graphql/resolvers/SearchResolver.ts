@@ -54,6 +54,7 @@ import { SearchInput } from '../types/SearchInput';
 import { SearchResultConnection } from '../types/SearchResultConnection';
 import { type SearchResult } from '../types/SearchResultType';
 import { TagType } from '../types/TagType';
+import { TaskType } from '../types/TaskType';
 import { ThreadType } from '../types/ThreadType';
 import { Paginator } from '../utils/Paginator';
 
@@ -1319,6 +1320,8 @@ export class SearchResolver {
         return ProductModelType.toType(resolved.entity);
       case 'receipt':
         return ReceiptType.toType(resolved.entity);
+      case 'task':
+        return TaskType.toType(resolved.entity);
       case 'thread':
         return ThreadType.toType(resolved.entity);
     }

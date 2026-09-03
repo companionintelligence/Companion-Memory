@@ -238,7 +238,10 @@ describe('TaskService', () => {
     it('emits TaskCreatedEvent', async () => {
       await service.create(ALICE, { title: 'New' } as never);
 
-      expect(signalling.send).toHaveBeenCalledWith(TaskCreatedEvent, { taskId: expect.any(String) });
+      expect(signalling.send).toHaveBeenCalledWith(TaskCreatedEvent, {
+        taskId: expect.any(String),
+        userId: ALICE.userId,
+      });
     });
 
     it("rejects a parentId that isn't one of the caller's own tasks", async () => {
@@ -301,7 +304,10 @@ describe('TaskService', () => {
 
       expect(result?.status).toBe('done');
       expect(result?.completedAt).toBeInstanceOf(Date);
-      expect(signalling.send).toHaveBeenCalledWith(TaskUpdatedEvent, { taskId: 'task-1' });
+      expect(signalling.send).toHaveBeenCalledWith(TaskUpdatedEvent, {
+        taskId: 'task-1',
+        userId: ALICE.userId,
+      });
     });
 
     it('records actual minutes when supplied', async () => {
@@ -357,7 +363,10 @@ describe('TaskService', () => {
       const result = await service.appendNotes(ALICE, 'task-1', 'second note');
 
       expect(result?.notes).toBe('first note\n\nsecond note');
-      expect(signalling.send).toHaveBeenCalledWith(TaskUpdatedEvent, { taskId: 'task-1' });
+      expect(signalling.send).toHaveBeenCalledWith(TaskUpdatedEvent, {
+        taskId: 'task-1',
+        userId: ALICE.userId,
+      });
     });
 
     it('is idempotent — redelivering the same fragment does not duplicate it', async () => {
@@ -400,7 +409,10 @@ describe('TaskService', () => {
     it('emits TaskRemovedEvent when a row was deleted', async () => {
       await service.remove(ALICE, 'task-1');
 
-      expect(signalling.send).toHaveBeenCalledWith(TaskRemovedEvent, { taskId: 'task-1' });
+      expect(signalling.send).toHaveBeenCalledWith(TaskRemovedEvent, {
+        taskId: 'task-1',
+        userId: ALICE.userId,
+      });
     });
 
     it('reports failure and emits nothing when no row matched', async () => {

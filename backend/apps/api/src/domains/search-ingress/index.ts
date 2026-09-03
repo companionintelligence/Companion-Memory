@@ -16,6 +16,7 @@ import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
 import { ParsingModule } from '@ci/domains/parsing';
+import { PlanningModule } from '@ci/domains/planning';
 import { PositionModule } from '@ci/domains/position';
 
 import { EmbeddingEntity } from './entities/EmbeddingEntity';
@@ -38,6 +39,7 @@ import { PlaceSearchIndexListener } from './listeners/PlaceSearchIndexListener';
 import { PositionSearchIndexListener } from './listeners/PositionSearchIndexListener';
 import { ProductSearchIndexListener } from './listeners/ProductSearchIndexListener';
 import { ReceiptSearchIndexListener } from './listeners/ReceiptSearchIndexListener';
+import { TaskSearchIndexListener } from './listeners/TaskSearchIndexListener';
 import { ThreadSearchIndexListener } from './listeners/ThreadSearchIndexListener';
 import { EmbeddingService } from './services/EmbeddingService';
 import { IndexSkipService } from './services/IndexSkipService';
@@ -58,6 +60,7 @@ import { VectorService } from './services/VectorService';
     MemoryModule,
     NotesModule,
     ParsingModule,
+    PlanningModule,
     PositionModule,
   ],
   providers: [
@@ -81,6 +84,7 @@ import { VectorService } from './services/VectorService';
     PositionSearchIndexListener,
     ProductSearchIndexListener,
     ReceiptSearchIndexListener,
+    TaskSearchIndexListener,
     ThreadSearchIndexListener,
     VectorService,
   ],

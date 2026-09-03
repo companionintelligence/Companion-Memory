@@ -174,6 +174,16 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
     backfillPredicate: 's.merged_into_product_id IS NULL',
   },
   receipt: { schema: 'ci', table: 'receipts', idColumn: 'receipt_id' },
+  // Archived tasks are excluded from the sweep rather than skipped by the
+  // listener: an archived row is not going to be re-embedded, so re-finding it
+  // on every pass is the same non-convergence ci_search.index_skips was created
+  // to end. Live statuses stay eligible so a reopened task is re-indexed.
+  task: {
+    schema: 'ci',
+    table: 'tasks',
+    idColumn: 'id',
+    backfillPredicate: "s.status <> 'archived'",
+  },
   thread: { schema: 'ci', table: 'threads', idColumn: 'thread_id' },
 };
 
