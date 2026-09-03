@@ -13,7 +13,11 @@ import { INDEXABLE_ENTITIES, type IndexableEntity } from '@ci/domains/search-nex
  * "covered" rather than a divide-by-zero NaN).
  */
 export interface EntityCoverage {
-  /** Source rows for this entity type (with the source map's discriminator applied). */
+  /**
+   * Source rows for this entity type, with the source map's discriminator and
+   * `backfillPredicate` applied (so rows the pipeline never indexes, e.g. `file`
+   * PREVIEW variants and soft-deletes, don't count toward the denominator).
+   */
   total: number;
   /** `ci_search.embeddings` rows for this entity type. */
   embedded: number;
@@ -369,15 +373,32 @@ export class EmbedCoverageTelemetryService {
     }
   }
 
-  /** Source rows for this type, honouring the source map's discriminator. */
+  /**
+   * Source rows for this type, honouring both the source map's discriminator
+   * AND its `backfillPredicate` — the same restriction the backfill sweep
+   * applies (see {@link EntitySource.backfillPredicate}) so rows the pipeline
+   * deliberately never indexes (e.g. `file`'s PREVIEW variants and
+   * soft-deleted rows) don't inflate the denominator below a reachable 100%.
+   */
   private async countSource(source: EntitySource, query: Executor): Promise<number> {
     const sourceRef = `"${source.schema}"."${source.table}"`;
 
-    const discriminatorClause = source.discriminator ? `WHERE "${source.discriminator.column}" = $1` : '';
-    const params = source.discriminator ? [source.discriminator.value] : [];
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+
+    if (source.discriminator) {
+      params.push(source.discriminator.value);
+      clauses.push(`s."${source.discriminator.column}" = $${params.length}`);
+    }
+
+    if (source.backfillPredicate) {
+      clauses.push(source.backfillPredicate);
+    }
+
+    const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
 
     const rows = await query(
-      `SELECT COUNT(*)::bigint AS count FROM ${sourceRef} ${discriminatorClause}`,
+      `SELECT COUNT(*)::bigint AS count FROM ${sourceRef} s ${whereClause}`,
       params,
     );
 

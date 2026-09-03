@@ -1,3 +1,4 @@
+import { ENTITY_SOURCE_MAP } from '@ci/domains/search-ingress';
 import { INDEXABLE_ENTITIES } from '@ci/domains/search-next';
 
 import {
@@ -329,6 +330,60 @@ describe('EmbedCoverageTelemetryService', () => {
   it('defaults to a budget an HTTP caller could still be waiting on', () => {
     expect(DEFAULT_COVERAGE_BUDGET_MS).toBeGreaterThan(0);
     expect(DEFAULT_COVERAGE_BUDGET_MS).toBeLessThan(DEFAULT_HEALTH_SWEEP_BUDGET_MS);
+  });
+
+  /**
+   * `file`'s source total must apply `backfillPredicate`, not just
+   * `discriminator` (it has none) — otherwise the denominator includes the
+   * derived PREVIEW variants and soft-deleted rows the pipeline/backfill
+   * deliberately never index, capping the ratio below a reachable 100%.
+   */
+  it("applies the source map's backfillPredicate to the file total, excluding PREVIEW/soft-deleted rows", async () => {
+    const logger = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+
+    // ci.files holds 10 rows: 6 ORIGINAL+live (indexable) and 4 PREVIEW/soft-deleted
+    // (must be excluded by backfillPredicate). All 6 indexable rows are embedded.
+    const runner = {
+      connect: jest.fn(async () => undefined),
+      release: jest.fn(async () => undefined),
+      query: jest.fn(async (sql: string) => {
+        if (sql.startsWith('SET ') || sql.startsWith('RESET ')) {
+          return [];
+        }
+
+        if (sql.includes('ci_search.embeddings')) {
+          return [{ count: '6' }];
+        }
+
+        // Source-total query for `file`: assert the backfill predicate is
+        // actually part of the WHERE clause, then answer as a real DB would
+        // with it applied (6 of the 10 rows survive the filter).
+        expect(sql).toContain('"ci"."files"');
+        expect(sql).toContain(ENTITY_SOURCE_MAP.file.backfillPredicate);
+
+        return [{ count: '6' }];
+      }),
+    };
+
+    const dataSource = {
+      createQueryRunner: jest.fn(() => runner),
+      query: jest.fn(async () => {
+        throw new Error('the coverage sweep must run on its own pinned connection');
+      }),
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new EmbedCoverageTelemetryService(dataSource as any, logger as any);
+
+    const report = await service.computeCoverage(['file']);
+
+    expect(report.perType.file).toEqual({
+      total: 6,
+      embedded: 6,
+      ratio: 1,
+      alarm: false,
+      underThreshold: false,
+    });
   });
 });
 
