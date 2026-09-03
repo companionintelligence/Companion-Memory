@@ -6,8 +6,10 @@ import { FileService } from '@ci/domains/files';
 import {
   canonicalSystem,
   ContentService,
+  fileIdentity,
   platformIdentity,
   SOURCE_NATIVE_EXTERNAL_ID_KIND,
+  type SourceIdentity,
 } from '@ci/domains/memory';
 
 import { ConnectionSyncJob } from '../../../types';
@@ -228,14 +230,31 @@ export class OneDriveTransformService {
 
       // If it's a document type, also create a content entity
       if (this.isDocumentType(mimeType)) {
-        // Find-or-skip on the provenance triple: content_source_identity_uniq
+        // Identity: the Graph API reports the bytes' SHA-256 for a stored
+        // file (`file.hashes.sha256Hash`), so the row keys on the `file`
+        // federated kind — the same pair the import pipeline mints when it
+        // uploads those bytes out of a `microsoft_account` export, or any
+        // other archive carrying the same document
+        // (docs/design/cross-pipeline-identity.md §3.2). Only when Graph gave
+        // no hash does the row fall back to the platform item id, which
+        // converges with nothing but a re-sync of this connection.
+        const identity: SourceIdentity | null = (() => {
+          const sha256 = item.content?.file?.hashes?.sha256Hash;
+          if (sha256 && /^[0-9a-fA-F]{64}$/.test(sha256)) {
+            return fileIdentity(sha256);
+          }
+
+          return graphItemId ? platformIdentity('onedrive', graphItemId) : null;
+        })();
+
+        // Find-or-skip on the identity pair: content_source_identity_uniq
         // only covers rows with a source_id, and ContentService.create is a
         // plain insert — without this, every re-sync appended another
         // placeholder row per document.
-        const existing = graphItemId
+        const existing = identity
           ? await this.contentService.findBySource(
               { userId },
-              { source_type: 'ETL', source_system: 'onedrive', source_id: graphItemId },
+              { source_type: 'ETL', source_system: identity.system, source_id: identity.id },
             )
           : null;
 
@@ -259,9 +278,11 @@ export class OneDriveTransformService {
               // ci.files would find nothing.
               external_id: itemId,
               external_id_kind: SOURCE_NATIVE_EXTERNAL_ID_KIND,
-              source_type: graphItemId ? 'ETL' : undefined,
-              source_system: graphItemId ? canonicalSystem('onedrive') : undefined,
-              source_id: graphItemId ? platformIdentity('onedrive', graphItemId).id : undefined,
+              source_type: identity ? 'ETL' : undefined,
+              // Ledger platform: the row may key on the federated `file` kind.
+              source_platform: canonicalSystem('onedrive'),
+              source_system: identity?.system ?? canonicalSystem('onedrive'),
+              source_id: identity?.id,
               user: {
                 id: userId,
               },

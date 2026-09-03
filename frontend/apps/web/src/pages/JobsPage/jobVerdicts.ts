@@ -39,8 +39,6 @@ export interface JobVerdict {
 export interface VerdictInput {
   readonly stateCounts: Readonly<Record<string, number>>;
   readonly categoryCounts: Readonly<Record<string, number>>;
-  /** Label for a category key, injected so this file stays free of presentation. */
-  readonly categoryLabel: (category: string) => string;
   /** Schedules, for the "fired and never succeeded" signal. */
   readonly crons?: ReadonlyArray<{
     readonly name: string;
@@ -48,28 +46,6 @@ export interface VerdictInput {
     readonly lastRunAt?: string | null;
     readonly lastSuccessAt?: string | null;
   }>;
-}
-
-/** The category with the largest share of `total`, or null when there is no clear one. */
-function dominant(
-  counts: Readonly<Record<string, number>>,
-  total: number,
-): { key: string; share: number } | null {
-  if (total <= 0) {
-    return null;
-  }
-
-  let best: { key: string; share: number } | null = null;
-
-  for (const [key, count] of Object.entries(counts)) {
-    const share = count / total;
-
-    if (!best || share > best.share) {
-      best = { key, share };
-    }
-  }
-
-  return best && best.share >= 0.35 ? best : null;
 }
 
 /**
@@ -80,7 +56,7 @@ function dominant(
  * lied once and cannot be trusted afterwards.
  */
 export function jobVerdicts(input: VerdictInput): JobVerdict[] {
-  const { stateCounts, categoryCounts, categoryLabel, crons = [] } = input;
+  const { stateCounts, categoryCounts, crons = [] } = input;
 
   const total = Object.values(stateCounts).reduce((sum, n) => sum + n, 0);
 
@@ -101,18 +77,29 @@ export function jobVerdicts(input: VerdictInput): JobVerdict[] {
   // The single most important thing this page can tell anyone, and the thing it
   // used to render as a tab label.
   if (deadLettered > 0) {
-    const lead = dominant(categoryCounts, total);
-    const share = Math.round((deadLettered / total) * 100);
-
     verdicts.push({
       id: 'dead-lettered',
       tone: deadLettered / total >= 0.1 ? 'critical' : 'warning',
       headline: `${deadLettered.toLocaleString()} ${deadLettered === 1 ? 'job has' : 'jobs have'} given up.`,
-      detail:
-        lead && lead.share >= 0.35
-          ? `${share}% of everything on this appliance. Most of it is ${categoryLabel(lead.key).toLowerCase()}. Nothing retries a dead letter on its own.`
-          : `${share}% of everything on this appliance. Nothing retries a dead letter on its own.`,
-      filter: { state: 'dead-letter', category: '', type: '', offset: 0 },
+      // No percentage, and no cause.
+      //
+      // The percentage used to read "N% of everything on this appliance" over
+      // `sum(stateCounts)`. That denominator is not comparable to the numerator:
+      // the dead-letter queue keeps 30 days while pg-boss deletes completed and
+      // failed rows after `deleteAfterHours`, and a job that exhausted its
+      // retries is counted TWICE in it — once as the `failed` origin, once as
+      // the dead-letter copy. The ratio was a 30-day pile over a half-day
+      // window, understating worst exactly during the mass failure this verdict
+      // exists to announce.
+      //
+      // The cause used to read "Most of it is <category>", taken from the
+      // largest bucket in `categoryCounts` — which counts EVERY state, so it
+      // named the busiest category on the box, not the one that was failing. On
+      // an appliance that is 70% ingest and failing entirely on llm, it blamed
+      // ingest. Naming the real one needs category counts scoped to
+      // dead-lettered rows, which the API does not return yet.
+      detail: 'Retries are exhausted — nothing retries a dead letter on its own.',
+      filter: { state: 'dead-letter', offset: 0 },
       action: 'Show them',
     });
   }
@@ -134,21 +121,36 @@ export function jobVerdicts(input: VerdictInput): JobVerdict[] {
       id: 'backlog',
       tone: 'warning',
       headline: `${pending.toLocaleString()} ${pending === 1 ? 'job is' : 'jobs are'} waiting.`,
-      detail: `${active.toLocaleString()} running, ${retry.toLocaleString()} retrying.`,
+      detail: `${active.toLocaleString()} running.`,
       filter: { state: 'created', offset: 0 },
       action: 'Show them',
     });
   }
 
-  // ── Recent failures, distinct from the dead-letter pile ─────────────────
-  // A failed job still has retries left. It is a different situation from one
-  // that has run out of them, and merging the two hides which way it is going.
+  // ── Retrying, and failed ────────────────────────────────────────────────
+  // These were one verdict that said the opposite of the truth. pg-boss parks a
+  // job with attempts LEFT in state `retry`; `failed` is the terminal state it
+  // reaches when they run out, and is the state that mints the dead-letter copy.
+  // The old sentence counted `failed` and called it "failing but still retrying
+  // … these have attempts left", which is exactly backwards, and on a box in the
+  // middle of a mass failure it reassured about the very jobs that had died.
+  if (retry > 0) {
+    verdicts.push({
+      id: 'retrying',
+      tone: 'warning',
+      headline: `${retry.toLocaleString()} ${retry === 1 ? 'job is' : 'jobs are'} retrying.`,
+      detail: 'These still have attempts left. They become dead letters if they run out.',
+      filter: { state: 'retry', offset: 0 },
+      action: 'Show them',
+    });
+  }
+
   if (failed > 0) {
     verdicts.push({
-      id: 'failing',
+      id: 'failed',
       tone: 'warning',
-      headline: `${failed.toLocaleString()} ${failed === 1 ? 'job is' : 'jobs are'} failing but still retrying.`,
-      detail: 'These have attempts left. They become dead letters if they run out.',
+      headline: `${failed.toLocaleString()} ${failed === 1 ? 'job has' : 'jobs have'} failed outright.`,
+      detail: 'Retries are spent. Each of these has a dead-letter copy holding its payload.',
       filter: { state: 'failed', offset: 0 },
       action: 'Show them',
     });

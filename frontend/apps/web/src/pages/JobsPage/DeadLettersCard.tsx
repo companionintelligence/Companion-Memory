@@ -4,6 +4,7 @@ import { Badge, Button, Card, Checkbox, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, RotateCcw } from '@ci/shadcn/icons';
 
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
+import { DEAD_LETTER_PAGE } from './useDeadLetters';
 import type { DeadLetterGroup, DeadLetterReplayResponse } from './useDeadLetters';
 
 type Props = {
@@ -161,9 +162,17 @@ export function DeadLettersCard({ groups, total, loading, error, onReplay }: Pro
               ? 'Loading…'
               : total === 0
                 ? 'Nothing has been dead-lettered.'
-                : `${total.toLocaleString()} un-replayed across ${groups.length.toLocaleString()} ${
+                : // `total` is the length of ONE page, and the request asks for
+                  // at most DEAD_LETTER_PAGE of them — so on an appliance with
+                  // thousands it read exactly "200 un-replayed", which looks
+                  // like a count and is really the ceiling. Next to a Health
+                  // card saying "8,535 jobs have given up", that is two
+                  // unexplained numbers for the same thing.
+                  `${
+                    total >= DEAD_LETTER_PAGE ? `First ${DEAD_LETTER_PAGE.toLocaleString()}` : total.toLocaleString()
+                  } un-replayed across ${groups.length.toLocaleString()} ${
                     groups.length === 1 ? 'cause' : 'causes'
-                  }`}
+                  }${total >= DEAD_LETTER_PAGE ? ' — there are more' : ''}`}
           </Card.Description>
         </FoldTrigger>
         {phone ? null : replayButton}

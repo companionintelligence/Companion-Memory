@@ -88,6 +88,8 @@ interface StubLogger {
 interface Internals {
   boss: { send: jest.Mock; insert: jest.Mock; fetch: jest.Mock; complete: jest.Mock; fail: jest.Mock };
   globalSemaphore: LimitFunction;
+  shippedConcurrency: number;
+  shippedPerQueueConcurrency: number;
   perQueueSemaphores: Map<string, LimitFunction>;
   declaredQueueCeilings: Map<string, number>;
   interactiveQueues: Set<string>;
@@ -421,6 +423,54 @@ describe('live concurrency', () => {
     worker.syncConcurrencyLimits();
 
     expect(worker.perQueueSemaphores.get('llm')?.concurrency).toBe(1);
+  });
+
+  it('will not size the global semaphore above what the build ships with', async () => {
+    // `MAX_CONCURRENCY` is 64 and the API accepts it, so this is a value an
+    // operator could really have stored. The control exists because an
+    // unattended appliance already pegs the machine; a text box on that page
+    // that multiplies the load by six inverts the whole feature.
+    const settings = fakeSettings([setting({ kind: 'global', key: 'concurrency', concurrency: 64 })]);
+
+    await JobControlStore.configure(settings.dataSource);
+
+    const { service } = makeService();
+    const worker = internals(service);
+    const shipped = worker.shippedConcurrency;
+
+    worker.controlsRevision = -1;
+    worker.syncConcurrencyLimits();
+
+    expect(worker.globalSemaphore.concurrency).toBe(shipped);
+
+    // …and a genuine reduction still lands, so the clamp is a ceiling rather
+    // than the control being ignored.
+    settings.rows.length = 0;
+    settings.rows.push(setting({ kind: 'global', key: 'concurrency', concurrency: 2 }));
+    await JobControlStore.refresh();
+    worker.syncConcurrencyLimits();
+
+    expect(worker.globalSemaphore.concurrency).toBe(2);
+  });
+
+  it('will not lift every queue at once through the global per-queue default', async () => {
+    const settings = fakeSettings([
+      setting({ kind: 'global', key: 'per_queue_concurrency', concurrency: 64 }),
+    ]);
+
+    await JobControlStore.configure(settings.dataSource);
+
+    const { service } = makeService();
+    const worker = internals(service);
+    const shipped = worker.shippedPerQueueConcurrency;
+
+    worker.perQueueSemaphores.set('search-index', plimit(shipped));
+    worker.controlsRevision = -1;
+    worker.syncConcurrencyLimits();
+
+    // No queue names this number and each clamps to it faithfully, which is
+    // exactly why raising it went unnoticed — every row stayed self-consistent.
+    expect(worker.perQueueSemaphores.get('search-index')?.concurrency).toBe(shipped);
   });
 
   it('does no work when nothing has changed', async () => {

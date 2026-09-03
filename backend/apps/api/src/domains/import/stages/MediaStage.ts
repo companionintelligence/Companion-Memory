@@ -9,7 +9,14 @@ import { DataSource } from 'typeorm';
 
 import { LoggerService } from '@ci/common/logging';
 import { FileService } from '@ci/domains/files';
-import { ContentService, type CreateContentDto, platformIdentity } from '@ci/domains/memory';
+import {
+  ContentService,
+  type CreateContentDto,
+  type SourceIdentity,
+  attachmentIdentity,
+  emailIdentity,
+  platformIdentity,
+} from '@ci/domains/memory';
 
 import type { MediaAttachment } from '../datasources/timeline';
 import {
@@ -486,17 +493,17 @@ export class MediaStage implements ImportStageRunner {
     // Index into the DESCRIPTOR list, not into the successful subset: it is half
     // of each content row's provenance triple, so it has to name the same
     // attachment on a re-run where a previously unreadable sibling now works.
-    const stored: Array<{ index: number; fileId: string; descriptor: MediaAttachment }> = [];
+    const stored: StoredAttachment[] = [];
 
     for (const [index, descriptor] of descriptors.entries()) {
-      const fileId = await this.storeAttachment(context, descriptor, decline);
+      const storedFile = await this.storeAttachment(context, descriptor, decline);
 
-      if (fileId == null) {
+      if (storedFile == null) {
         continue;
       }
 
-      outcome.fileIds.push(fileId);
-      stored.push({ index, fileId, descriptor });
+      outcome.fileIds.push(storedFile.fileId);
+      stored.push({ index, descriptor, ...storedFile });
     }
 
     // The lane split: Messenger opts in because a shared photo is a thing you
@@ -537,7 +544,7 @@ export class MediaStage implements ImportStageRunner {
     context: StageRunContext,
     descriptor: MediaAttachment,
     decline: (slug: string, detail: string) => void,
-  ): Promise<string | null> {
+  ): Promise<{ fileId: string; sha256: string | null } | null> {
     const resolved = path.resolve(descriptor.path);
 
     if (!withinScratch(context.scratchDir, resolved)) {
@@ -573,7 +580,10 @@ export class MediaStage implements ImportStageRunner {
         },
       );
 
-      return file.id;
+      // The store's SHA-256 of the bytes, which is the attachment's identity
+      // (attachmentContentInput). Null only if the store did not hash — it
+      // always does for a path upload — and then the row keys on its index.
+      return { fileId: file.id, sha256: file.hash ?? null };
     } catch (err) {
       const message = (err as Error).message;
 
@@ -860,7 +870,7 @@ export class MediaStage implements ImportStageRunner {
         },
       );
 
-      await this.markUploaded(row.id, file.id);
+      await this.markUploaded(row.id, file.id, file.hash ?? null);
       await this.reclaimScratchCopy(context, row, resolved, attachmentPaths);
 
       return deduped ? 'deduped' : 'uploaded';
@@ -1051,13 +1061,21 @@ export class MediaStage implements ImportStageRunner {
    * Written into `metadata` rather than a new column because that is the seam
    * the push already reads: `toCanonical` carries metadata through and
    * `contentFileRef` looks for exactly this key.
+   *
+   * `FileSha256` rides alongside: the store's hash of the bytes, which
+   * `toContentInput` promotes to the row's identity (the `file` federated
+   * kind — docs/design/cross-pipeline-identity.md §3.2) so the same photo or
+   * document converges whichever archive or connection delivered it. Absent
+   * when the store did not hash, and then the row keys on its staged triple
+   * as before.
    */
-  private async markUploaded(id: string, fileId: string): Promise<void> {
+  private async markUploaded(id: string, fileId: string, sha256: string | null): Promise<void> {
     await this.dataSource.query(
       `UPDATE ci_import.staged_items
           SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{FileId}', to_jsonb($2::text), true)
+                      || CASE WHEN $3::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('FileSha256', $3::text) END
         WHERE id = $1::uuid`,
-      [id, fileId],
+      [id, fileId, sha256],
     );
   }
 
@@ -1133,20 +1151,51 @@ function pathlessAttachmentCount(metadata: Record<string, unknown>): number {
   return count;
 }
 
+/** One attachment this pass put in the store, with what the store said about it. */
+interface StoredAttachment {
+  /** Index into the DESCRIPTOR list — see settleAttachments. */
+  index: number;
+  fileId: string;
+  /** The store's SHA-256 of the bytes; null only if it did not hash. */
+  sha256: string | null;
+  descriptor: MediaAttachment;
+}
+
+/**
+ * The identity of the message this attachment hangs off — the SAME pair the
+ * push will key the communication on, so the attachment's id is a suffix of
+ * its parent's. Mail keys on the federated `(email, <Message-ID>)` pair
+ * (`toCommunicationInput` does the identical mapping from `metadata.MessageID`);
+ * everything else on the staged row's platform triple.
+ */
+function attachmentParentIdentity(row: AttachmentRow): SourceIdentity {
+  const messageId = row.metadata?.MessageID;
+
+  return (
+    emailIdentity(typeof messageId === 'string' ? messageId : undefined) ??
+    platformIdentity(row.dataSource, row.contentHash)
+  );
+}
+
 /**
  * The `ci.content` row that catalogues one stored attachment.
  *
- * Identity follows the convention `discordAttachmentContentInputs` already set:
- * the message's provenance triple with an `:attachment:<n>` suffix on the
- * sourceId, so the row dedups server-side across re-imports and keeps a stable
- * identity per attachment. `external_id` is the stored file — that is what a
- * consumer of this row actually needs, and it is what `contentFileRef`/
- * `EventMediaLoader` resolve media through everywhere else.
+ * Identity is the parent message's identity plus the SHA-256 of the bytes
+ * (`attachmentIdentity`, docs/design/cross-pipeline-identity.md §3.3) — NOT
+ * the attachment's index, which is what this used to be. Part order is not
+ * stable across producers (a Gmail API fetch and a MIME parse of the same
+ * message need not agree), so an index-keyed row could not converge with a
+ * connection that catalogues the same attachment, and even a re-import of the
+ * same archive forked a row whenever a previously unreadable sibling started
+ * working. The bytes hash names the attachment whoever delivered it. The
+ * index lane survives only for a store that returned no hash, so the row is
+ * still stable per re-import rather than duplicated.
+ *
+ * `external_id` is the stored file — that is what a consumer of this row
+ * actually needs, and it is what `contentFileRef`/`EventMediaLoader` resolve
+ * media through everywhere else.
  */
-function attachmentContentInput(
-  row: AttachmentRow,
-  plan: { index: number; fileId: string; descriptor: MediaAttachment },
-): CreateContentDto {
+function attachmentContentInput(row: AttachmentRow, plan: StoredAttachment): CreateContentDto {
   const input: CreateContentDto = {
     // 'file' passes through for a non-media attachment (an email's PDF); every
     // other descriptor type is media. Same rule the descriptor lane applies.
@@ -1155,7 +1204,9 @@ function attachmentContentInput(
     external_id_kind: 'file',
     source_type: SOURCE_TYPE,
     ...(() => {
-      const identity = platformIdentity(row.dataSource, row.contentHash, 'attachment', String(plan.index));
+      const identity = plan.sha256
+        ? attachmentIdentity(attachmentParentIdentity(row), plan.sha256)
+        : platformIdentity(row.dataSource, row.contentHash, 'attachment', String(plan.index));
 
       return { source_system: identity.system, source_id: identity.id };
     })(),

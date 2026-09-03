@@ -13,7 +13,7 @@ import {
 } from '../../../domains/__tests__/support/databaseConnection';
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../domains/__tests__/support/schemaLock';
 import { EventEntity } from '../../../domains/memory/entities/EventEntity';
-import { bulkInsertIdempotent } from '../bulkUpsert';
+import { bulkInsertIdempotent, type ProducerPreference } from '../bulkUpsert';
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -276,6 +276,7 @@ describeWithDatabase(`bulkInsertIdempotent against real Postgres (${availability
       sourceId: string,
       sourceType: 'ci-import-tools' | 'capture',
       fields: Partial<BrowserActivityEntity>,
+      preference?: ProducerPreference,
     ) {
       const repository = dataSource.getRepository(BrowserActivityEntity);
 
@@ -306,6 +307,7 @@ describeWithDatabase(`bulkInsertIdempotent against real Postgres (${availability
         identityColumns: ['source_system', 'source_id'],
         conflictUpdateColumns: REFRESH,
         conflictMergeKinds: KINDS,
+        conflictProducerPreference: preference,
       });
     }
 
@@ -390,6 +392,58 @@ describeWithDatabase(`bulkInsertIdempotent against real Postgres (${availability
 
       await writeVisit(sourceId, 'capture', { is_incognito: false });
       expect((await readVisit(sourceId)).is_incognito).toBe(false); // same producer: its new word stands
+    });
+
+    // The producer preference (INGEST_PRODUCER_PREFERENCE): with both sides
+    // holding a value, the more trusted producer's stands in EITHER order.
+    describe('a preferred producer wins the column whichever order the two arrive in', () => {
+      const PREFER = { duration_seconds: ['ci-import-tools', 'capture'] } as const;
+
+      it('the trusted producer arriving SECOND overwrites the other’s value', async () => {
+        const sourceId = `visit:${randomUUID()}`;
+
+        await writeVisit(sourceId, 'capture', { duration_seconds: 30 }, PREFER);
+        await writeVisit(sourceId, 'ci-import-tools', { duration_seconds: 12 }, PREFER);
+
+        expect((await readVisit(sourceId)).duration_seconds).toBe(12);
+      });
+
+      it('the trusted producer arriving FIRST is not overwritten by the other', async () => {
+        const sourceId = `visit:${randomUUID()}`;
+
+        await writeVisit(sourceId, 'ci-import-tools', { duration_seconds: 12 }, PREFER);
+        await writeVisit(sourceId, 'capture', { duration_seconds: 30 }, PREFER);
+
+        expect((await readVisit(sourceId)).duration_seconds).toBe(12);
+      });
+
+      it('the less trusted producer still fills a value the trusted one lacked', async () => {
+        const sourceId = `visit:${randomUUID()}`;
+
+        // undefined → the column is not in the VALUES list → NULL on the wire.
+        await writeVisit(sourceId, 'ci-import-tools', { duration_seconds: undefined }, PREFER);
+        await writeVisit(sourceId, 'capture', { duration_seconds: 30 }, PREFER);
+
+        expect((await readVisit(sourceId)).duration_seconds).toBe(30);
+      });
+
+      it('a trusted producer’s null never erases the other’s value', async () => {
+        const sourceId = `visit:${randomUUID()}`;
+
+        await writeVisit(sourceId, 'capture', { duration_seconds: 30 }, PREFER);
+        await writeVisit(sourceId, 'ci-import-tools', { duration_seconds: undefined }, PREFER);
+
+        expect((await readVisit(sourceId)).duration_seconds).toBe(30);
+      });
+
+      it('columns without a preference keep the arrival-order rule', async () => {
+        const sourceId = `visit:${randomUUID()}`;
+
+        await writeVisit(sourceId, 'capture', { scroll_depth_percent: 80 }, PREFER);
+        await writeVisit(sourceId, 'ci-import-tools', { scroll_depth_percent: 10 }, PREFER);
+
+        expect((await readVisit(sourceId)).scroll_depth_percent).toBe(80);
+      });
     });
 
     it('writes one row however many producers deliver the visit', async () => {

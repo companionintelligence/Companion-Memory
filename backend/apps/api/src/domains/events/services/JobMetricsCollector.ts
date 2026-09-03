@@ -7,7 +7,7 @@ import { Cron } from '@ci/common/schedule';
 
 import { DEAD_LETTER_QUEUE } from '../constants';
 import { JobMetricEntity } from '../entities/JobMetricEntity';
-import { categoryOfEvent } from '../taxonomy';
+import { categoryOfJob } from '../taxonomy';
 
 /**
  * How often a sample is taken. Also the width of the `completed`/`failed`
@@ -410,6 +410,12 @@ export class JobMetricsCollector {
    * `pending` still excludes the DLQ by name — its rows are inserted in state
    * `created`, exactly like work that is waiting to run, which is the bug this
    * dashboard already had once (see DEAD_LETTER_QUEUE).
+   *
+   * Grouped on the (event, queue) PAIR because `categoryOfJob` folds on it, and
+   * this table has to agree with the Jobs list's chips — the two are read side
+   * by side on the same page. The queue is a grouping column, not the category
+   * key: a dead-lettered row's queue reads `dead-letter` and folds through its
+   * event name alone, exactly as the list's filter resolves the same row.
    */
   private async readCategoryGauges(): Promise<
     Map<string, { pending: number; active: number; retry: number; deadLettered: number }>
@@ -417,16 +423,18 @@ export class JobMetricsCollector {
     const rows = (await this.metricRepository.manager.query(
       `
       SELECT data->>'name' AS event,
+             name           AS queue,
              COUNT(*) FILTER (WHERE state = 'created' AND name <> $1)::int AS pending,
              COUNT(*) FILTER (WHERE state = 'active')::int                 AS active,
              COUNT(*) FILTER (WHERE state = 'retry')::int                  AS retry,
              COUNT(*) FILTER (WHERE name = $1)::int                        AS dead_lettered
         FROM pgboss.job
-       GROUP BY 1
+       GROUP BY 1, 2
       `,
       [DEAD_LETTER_QUEUE],
     )) as Array<{
       event: string | null;
+      queue: string | null;
       pending: number;
       active: number;
       retry: number;
@@ -439,7 +447,7 @@ export class JobMetricsCollector {
     >();
 
     for (const row of rows) {
-      const category = categoryOfEvent(row.event);
+      const category = categoryOfJob(row.event, row.queue);
       const bucket = folded.get(category) ?? { pending: 0, active: 0, retry: 0, deadLettered: 0 };
 
       bucket.pending += Number(row.pending) || 0;
@@ -487,19 +495,26 @@ export class JobMetricsCollector {
          WHERE created_on >= $1 OR completed_on >= $1
       )
       SELECT data->>'name' AS event,
+             name           AS queue,
              COUNT(*) FILTER (WHERE created_on >= $1 AND name <> $2)::int          AS arrived,
              COUNT(*) FILTER (WHERE completed_on >= $1 AND state = 'completed')::int AS completed,
              COUNT(*) FILTER (WHERE completed_on >= $1 AND state = 'failed')::int    AS failed
         FROM recent
-       GROUP BY 1
+       GROUP BY 1, 2
       `,
       [since, DEAD_LETTER_QUEUE],
-    )) as Array<{ event: string | null; arrived: number; completed: number; failed: number }>;
+    )) as Array<{
+      event: string | null;
+      queue: string | null;
+      arrived: number;
+      completed: number;
+      failed: number;
+    }>;
 
     const folded = new Map<string, { arrived: number; completed: number; failed: number }>();
 
     for (const row of rows) {
-      const category = categoryOfEvent(row.event);
+      const category = categoryOfJob(row.event, row.queue);
       const bucket = folded.get(category) ?? { arrived: 0, completed: 0, failed: 0 };
 
       bucket.arrived += Number(row.arrived) || 0;

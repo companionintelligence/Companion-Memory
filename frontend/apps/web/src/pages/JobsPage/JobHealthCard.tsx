@@ -1,5 +1,5 @@
 import { Button, Card, Skeleton, cn } from '@ci/shadcn';
-import { AlertTriangle, CheckCircle2, Info } from '@ci/shadcn/icons';
+import { AlertTriangle, CheckCircle2, Info, RefreshCcw } from '@ci/shadcn/icons';
 
 import { cardPad, usePhone } from './Fold';
 import { categoryChartColor, categoryLabel } from './jobCategories';
@@ -18,7 +18,38 @@ type Props = {
   loading: boolean;
   onSelect: (filter: Partial<JobFilters>) => void;
   onOpenSchedules: () => void;
+  /** Live queue counts — the same six the page used to print in its own card. */
+  summary: JobsSummary | undefined;
+  refreshing: boolean;
+  error: string | null;
+  staleSince: Date | null;
+  updatedAt: Date | null;
+  onRefresh: () => void;
+  onSelectState: (state: string) => void;
 };
+
+/** The six states, as `GET /jobs/dashboard` reports them. */
+export type JobsSummary = {
+  readonly pending: number;
+  readonly active: number;
+  readonly retry: number;
+  readonly completed: number;
+  readonly failed: number;
+  readonly deadLettered: number;
+};
+
+/**
+ * The six queue states, in the order work moves through them. `key` reads the
+ * dashboard summary; `state` is what the jobs table filters on.
+ */
+const STATE_TILES: ReadonlyArray<{ label: string; key: keyof JobsSummary; state: string }> = [
+  { label: 'Pending', key: 'pending', state: 'created' },
+  { label: 'Running', key: 'active', state: 'active' },
+  { label: 'Retrying', key: 'retry', state: 'retry' },
+  { label: 'Completed', key: 'completed', state: 'completed' },
+  { label: 'Failed', key: 'failed', state: 'failed' },
+  { label: 'Dead-lettered', key: 'deadLettered', state: 'dead-letter' },
+];
 
 /**
  * What is wrong right now, in sentences.
@@ -40,11 +71,28 @@ export function JobHealthCard({
   loading,
   onSelect,
   onOpenSchedules,
+  summary,
+  refreshing,
+  error,
+  staleSince,
+  updatedAt,
+  onRefresh,
+  onSelectState,
 }: Props) {
   const phone = usePhone();
-  const verdicts = jobVerdicts({ stateCounts, categoryCounts, categoryLabel, crons });
+  const verdicts = jobVerdicts({ stateCounts, categoryCounts, crons });
 
   const total = Object.values(stateCounts).reduce((sum, n) => sum + n, 0);
+
+  // The bar's denominator is the CATEGORY total, not the state total.
+  //
+  // They are different sets. `stateCounts` honours the category and type
+  // filters; `categoryCounts` deliberately ignores them so each chip can show
+  // what picking it would yield. Dividing an unfiltered slice by a filtered
+  // total made the segments overflow their track the moment any category was
+  // selected — on `/jobs?category=llm` the total was 262 while the ingest slice
+  // alone was 5,977, i.e. a segment 22x the width of the bar.
+  const categoryTotal = Object.values(categoryCounts).reduce((sum, n) => sum + n, 0);
   const slices = Object.entries(categoryCounts)
     .filter(([, count]) => count > 0)
     .sort((a, b) => b[1] - a[1]);
@@ -54,12 +102,69 @@ export function JobHealthCard({
 
   return (
     <Card>
-      <Card.Header className={cardPad(phone)}>
-        <Card.Title className="text-base">Health</Card.Title>
-        <Card.Description>What the job system is doing, and whether any of it needs you.</Card.Description>
+      <Card.Header
+        className={cn(
+          'flex gap-2',
+          phone
+            ? 'flex-row items-center justify-between'
+            : 'flex-col md:flex-row md:items-center md:justify-between',
+          cardPad(phone),
+        )}
+      >
+        <div className="min-w-0">
+          <Card.Title className="text-base">Health</Card.Title>
+          <Card.Description>
+            {updatedAt
+              ? `What the job system is doing, and whether any of it needs you — as of ${new Intl.DateTimeFormat(
+                  undefined,
+                  { hour: '2-digit', minute: '2-digit', second: '2-digit' },
+                ).format(updatedAt)}`
+              : 'What the job system is doing, and whether any of it needs you.'}
+          </Card.Description>
+        </div>
+        {/* Spins in place. The figures below stay exactly where they are — a
+            refresh that blanked the card is what sent an operator to a page
+            with nothing on it every time they asked it a question. */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onRefresh}
+          aria-busy={refreshing || undefined}
+          className={phone ? 'shrink-0' : 'w-full md:w-auto'}
+        >
+          <RefreshCcw className={cn(phone ? 'h-4 w-4' : 'mr-2 h-4 w-4', refreshing && 'animate-spin')} />
+          {phone ? (
+            <span className="sr-only">{refreshing ? 'Refreshing' : 'Refresh'}</span>
+          ) : refreshing ? (
+            'Refreshing'
+          ) : (
+            'Refresh'
+          )}
+        </Button>
       </Card.Header>
 
       <Card.Content className={cn('space-y-4', cardPad(phone))}>
+        {staleSince ? (
+          <div
+            role="status"
+            className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400"
+          >
+            <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+            <span className="min-w-0 break-words">
+              Showing data from {staleSince.toLocaleTimeString()} — refreshes have been failing since then
+              {error ? ` (${error})` : ''}.
+            </span>
+          </div>
+        ) : error ? (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+          >
+            <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+            <span className="min-w-0 break-words">{error}</span>
+          </div>
+        ) : null}
+
         {loading && total === 0 ? (
           <Skeleton className="h-24 w-full" />
         ) : verdicts.length === 0 ? (
@@ -81,20 +186,61 @@ export function JobHealthCard({
           </ul>
         )}
 
-        {slices.length > 0 ? (
+        {/* The six live counts, under the verdicts rather than in a card of
+            their own. They were six equal boxes above this one, which put
+            "Dead-lettered 8,535" at exactly the weight of "Retrying 0" and
+            repeated, in tiles, the two figures the sentences above had already
+            called out. Kept because they are the working set an operator
+            filters by, and each is still a shortcut into the table — a number
+            you cannot click is one you have to go hunting for. */}
+        {loading && !summary ? (
+          <Skeleton className="h-10 w-full" />
+        ) : (
+          <div className="flex flex-wrap gap-x-1 gap-y-1.5 border-t border-border/60 pt-3">
+            {STATE_TILES.map((tile) => {
+              const value = summary?.[tile.key] ?? 0;
+
+              return (
+                <button
+                  key={tile.state}
+                  type="button"
+                  onClick={() => onSelectState(tile.state)}
+                  className={cn(
+                    'rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-muted/60',
+                    // Zero is not worth the ink of a live count: it stays
+                    // readable and clickable, it just stops competing.
+                    value === 0 && 'text-muted-foreground',
+                  )}
+                >
+                  <span className="block text-[11px] uppercase tracking-wide text-muted-foreground">
+                    {tile.label}
+                  </span>
+                  <span className="mt-0.5 block text-base font-semibold tabular-nums">
+                    {value.toLocaleString()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {slices.length > 0 && categoryTotal > 0 ? (
           <div>
             <div className="flex h-[7px] overflow-hidden rounded-full bg-muted" role="presentation">
               {shown.map(([category, count]) => (
                 <span
                   key={category}
                   className="h-full"
-                  style={{ width: `${(count / total) * 100}%`, background: categoryChartColor(category) }}
+                  style={{
+                    width: `${(count / categoryTotal) * 100}%`,
+                    background: categoryChartColor(category),
+                  }}
                 />
               ))}
               {rest > 0 ? (
                 <span
                   className="h-full bg-muted-foreground/50"
-                  style={{ width: `${(rest / total) * 100}%` }}
+                  style={{ width: `${(rest / categoryTotal) * 100}%` }}
                 />
               ) : null}
             </div>

@@ -9,6 +9,7 @@ import {
   CalendarEventService,
   type CreateEventDto,
   calendarEventIdentity,
+  canonicalSystem,
   icsRecurrenceInstant,
   platformIdentity,
 } from '@ci/domains/memory';
@@ -319,6 +320,8 @@ export class GoogleCalendarTransformService {
       // ground truth; leave the default 1.0 when there are no coordinates.
       ...(location_confidence !== null ? { confidence_score: location_confidence } : {}),
       source_type: 'ETL',
+      // Ledger platform: the Google Calendar connection delivered it.
+      source_platform: canonicalSystem('google_calendar'),
       // Identity: iCalUID under the federated `calendar` system (with the
       // override's original-start instant as the RECURRENCE-ID suffix), so the
       // same event converges with a Takeout/exported .ics import —

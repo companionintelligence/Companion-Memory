@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
 
 import { usePageTitle } from '@ci/common';
-import { Accordion, Badge, Button, Card, Skeleton, cn } from '@ci/shadcn';
-import { AlertTriangle, RefreshCcw } from '@ci/shadcn/icons';
+import { Accordion, Badge, Card, Skeleton, Switch, cn } from '@ci/shadcn';
+import { AlertTriangle } from '@ci/shadcn/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
@@ -20,7 +20,11 @@ import { JobsImportActivity } from './JobsImportActivity';
 import { categoryFromPath, JOBS_SECTIONS } from './jobsSections';
 import { JobsTable } from './JobsTable';
 import { useDeadLetters } from './useDeadLetters';
-import { useJobControls } from './useJobControls';
+import {
+  useJobControls,
+  type JobControlsPatch,
+  type JobCronControl,
+} from './useJobControls';
 import { useHistoryWindow, useJobFilters } from './useJobFilters';
 import { useJobHistory } from './useJobHistory';
 import { useJobsDashboard, type JobsDashboardResponse } from './useJobsDashboard';
@@ -110,7 +114,17 @@ export function JobsPage() {
     />
   );
   const schedules = (
-    <SchedulesCard crons={dashboard.data?.crons ?? []} loading={dashboard.loading} jobTypes={jobTypes} />
+    <SchedulesCard
+      crons={dashboard.data?.crons ?? []}
+      loading={dashboard.loading}
+      jobTypes={jobTypes}
+      // The on/off state lives in the controls payload, not the dashboard one,
+      // so the table joins them by cron name. Absent (older server, or controls
+      // still loading) the column simply does not render — see SchedulesTable.
+      cronControls={controls.data?.crons ?? null}
+      saving={controls.saving}
+      onSave={controls.save}
+    />
   );
   const controlsCard = (
     <JobControlsCard
@@ -119,7 +133,6 @@ export function JobsPage() {
       saving={controls.saving}
       error={controls.error}
       errorStatus={controls.errorStatus}
-      jobTypes={jobTypes}
       onSave={controls.save}
     />
   );
@@ -157,12 +170,16 @@ export function JobsPage() {
               is in flight, so the page is unchanged the rest of the time. */}
           <JobsImportActivity />
 
-          {/* The verdict first. The tiles that used to be here were accurate
-              and mute — "Dead-lettered 8,431" carried the same weight as
-              "Retrying 2", and on a real appliance the first number was 43% of
-              every job on the box. The counts survive as the proportional bar
-              inside this card; what is new is that the page now says what it
-              thinks before showing its working. */}
+          {/* One card, not two. This and "Queue Activity" sat next to each
+              other answering the same question in two registers: the sentences
+              here already said "8,535 jobs have given up" and "36 are failing
+              but still retrying", and the six tiles below repeated both figures
+              at the weight of "Retrying 0".
+
+              Now the card says what it thinks, then shows its working — the six
+              live counts, then the proportional split by category. The counts
+              stayed clickable, because they are how an operator filters the
+              table underneath. */}
           <JobHealthCard
             stateCounts={list.data?.stateCounts ?? {}}
             categoryCounts={list.data?.categoryCounts ?? {}}
@@ -170,17 +187,13 @@ export function JobsPage() {
             loading={list.loading || dashboard.loading}
             onSelect={(filter) => onFilterChange(filter)}
             onOpenSchedules={() => navigate('/jobs/schedules')}
-          />
-
-          <SummaryCard
             summary={dashboard.data?.summary}
-            loading={dashboard.loading}
             refreshing={refreshing || dashboard.refreshing}
             error={dashboard.error}
             staleSince={dashboard.staleSince}
             updatedAt={dashboard.updatedAt}
             onRefresh={refreshAll}
-            onSelectState={(state) => onFilterChange({ state, offset: 0 })}
+            onSelectState={(state: string) => onFilterChange({ state, offset: 0 })}
           />
 
           {/* Controls sit directly under the counts on both form factors.
@@ -232,180 +245,123 @@ export function JobsPage() {
   );
 }
 
-type SummaryCardProps = {
-  summary?: JobsDashboardResponse['summary'];
-  loading: boolean;
-  /** A refetch is running over figures that are still on screen. */
-  refreshing: boolean;
-  error: string | null;
-  staleSince: Date | null;
-  updatedAt: Date | null;
-  onRefresh: () => void;
-  onSelectState: (state: string) => void;
-};
-
-function SummaryCard({
-  summary,
-  loading,
-  refreshing,
-  error,
-  staleSince,
-  updatedAt,
-  onRefresh,
-  onSelectState,
-}: SummaryCardProps) {
-  const phone = usePhone();
-
-  // Each tile is a shortcut into the table below it — a number an operator
-  // cannot click is a number they have to go hunting for.
-  const tiles = useMemo(
-    () => [
-      { label: 'Pending', value: summary?.pending ?? 0, state: 'created' },
-      { label: 'Running', value: summary?.active ?? 0, state: 'active' },
-      { label: 'Retrying', value: summary?.retry ?? 0, state: 'retry' },
-      { label: 'Completed', value: summary?.completed ?? 0, state: 'completed' },
-      { label: 'Failed', value: summary?.failed ?? 0, state: 'failed' },
-      { label: 'Dead-lettered', value: summary?.deadLettered ?? 0, state: 'dead-letter' },
-    ],
-    [summary],
-  );
-
-  return (
-    <FoldCard>
-      <Card.Header
-        className={cn(
-          'flex gap-2',
-          phone
-            ? 'flex-row items-center justify-between'
-            : 'flex-col md:flex-row md:items-center md:justify-between',
-          cardPad(phone),
-        )}
-      >
-        <div>
-          <Card.Title className="text-lg">Queue Activity</Card.Title>
-          <Card.Description>
-            {updatedAt
-              ? `Updated ${new Intl.DateTimeFormat(undefined, {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                }).format(updatedAt)}`
-              : 'Current job workload'}
-          </Card.Description>
-        </div>
-        {/* Spins in place. The figures below it stay exactly where they are —
-            a refresh that blanked the card is what sent an operator to a page
-            with nothing on it every time they asked it a question. */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRefresh}
-          aria-busy={refreshing || undefined}
-          className={phone ? 'shrink-0' : 'w-full md:w-auto'}
-        >
-          <RefreshCcw className={cn(phone ? 'h-4 w-4' : 'mr-2 h-4 w-4', refreshing && 'animate-spin')} />
-          {phone ? (
-            <span className="sr-only">{refreshing ? 'Refreshing' : 'Refresh'}</span>
-          ) : refreshing ? (
-            'Refreshing'
-          ) : (
-            'Refresh'
-          )}
-        </Button>
-      </Card.Header>
-      <Card.Content className={cn('space-y-3', cardPad(phone))}>
-        {staleSince ? (
-          <div
-            role="status"
-            className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400"
-          >
-            <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="min-w-0 break-words">
-              Showing data from {staleSince.toLocaleTimeString()} — refreshes have been failing since then
-              {error ? ` (${error})` : ''}.
-            </span>
-          </div>
-        ) : error ? (
-          <div
-            role="alert"
-            className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-          >
-            <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="min-w-0 break-words">{error}</span>
-          </div>
-        ) : null}
-
-        {loading && !summary ? (
-          <Skeleton className="h-24 w-full" />
-        ) : (
-          <div className={phone ? 'grid grid-cols-2 gap-2' : 'grid gap-3 sm:grid-cols-3 lg:grid-cols-6'}>
-            {tiles.map((tile) => (
-              <button
-                key={tile.label}
-                type="button"
-                onClick={() => onSelectState(tile.state)}
-                className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-left transition-colors hover:border-border hover:bg-muted/60"
-              >
-                <p className="text-xs uppercase text-muted-foreground">{tile.label}</p>
-                <p className="mt-0.5 text-xl font-semibold tabular-nums">{tile.value.toLocaleString()}</p>
-              </button>
-            ))}
-          </div>
-        )}
-      </Card.Content>
-    </FoldCard>
-  );
-}
-
-/**
- * The recurring jobs, from Nest's live scheduler registry.
- *
- * The column this replaces rendered `pgboss.schedule`, which nothing in this
- * codebase writes — so it was empty on every appliance ever shipped while ~34
- * `@Cron` methods ran beside it, invisible.
- */
 function SchedulesCard({
   crons,
   loading,
   jobTypes,
+  cronControls,
+  saving,
+  onSave,
 }: {
   crons: JobsDashboardResponse['crons'];
   loading: boolean;
   jobTypes: JobTypesResponse | null;
+  cronControls: readonly JobCronControl[] | null;
+  saving: boolean;
+  onSave: (patch: JobControlsPatch) => Promise<boolean>;
 }) {
   const phone = usePhone();
-  const rows = useMemo(
-    () =>
-      crons.map((cron) => ({
-        cron,
-        descriptor: describeCron(cron.name, jobTypes),
-        schedule: describeCronExpression(cron.cron),
-      })),
-    [crons, jobTypes],
+  // Joined by name, which is the key both payloads agree on. A schedule the
+  // controls endpoint does not know about (older server, or one registered
+  // since the controls were read) keeps its row and loses only its switch —
+  // the table is the record of what is registered, not of what is switchable.
+  const controlByName = useMemo(
+    () => new Map((cronControls ?? []).map((control) => [control.name, control])),
+    [cronControls],
   );
+
+  /**
+   * Every schedule in the build, not every schedule THIS process registered.
+   *
+   * `crons` comes from JobMonitorService, which can only see what reached its
+   * own SchedulerRegistry — under `CI_ROLE=web` that omits the eleven
+   * `role: 'worker'` schedules (of 53). Listing only those left a schedule an
+   * operator came to switch off simply absent, with nothing to say it existed;
+   * #2546 fixed that for the controls list, and this table has to hold the same
+   * line now that the switches live here.
+   *
+   * The controls payload IS complete (CronRegistry is filled by the decorator
+   * before the role gate), so anything it knows about and the monitor does not
+   * is appended with no timings — which is honest: this process has no
+   * nextDate/lastDate for a job it never registered.
+   */
+  const rows = useMemo(() => {
+    const seen = new Set(crons.map((cron) => cron.name));
+    const registered = crons.map((cron) => ({
+      cron,
+      descriptor: describeCron(cron.name, jobTypes),
+      schedule: describeCronExpression(cron.cron),
+      control: controlByName.get(cron.name) ?? null,
+    }));
+    const elsewhere = (cronControls ?? [])
+      .filter((control) => !seen.has(control.name))
+      .map((control) => ({
+        cron: {
+          name: control.name,
+          cron: control.cron,
+          timezone: null,
+          running: false,
+          nextRunAt: null,
+          lastRunAt: null,
+          lastSuccessAt: null,
+          overdue: false,
+        } as JobsDashboardResponse['crons'][number],
+        descriptor: describeCron(control.name, jobTypes),
+        schedule: describeCronExpression(control.cron),
+        control,
+      }));
+
+    return [...registered, ...elsewhere];
+  }, [crons, jobTypes, controlByName, cronControls]);
+
+  // Zero on a single-process appliance (CI_ROLE=all), which is the default, so
+  // the note stays silent unless the split is actually in use.
+  const elsewhereCount = (cronControls ?? []).filter((control) => !control.servedHere).length;
 
   return (
     <FoldCard fold>
       <Card.Header className={cardPad(phone)}>
         <FoldTrigger>
           <Card.Title className="text-base">Schedules</Card.Title>
-          <Card.Description>Recurring jobs registered in this process ({crons.length})</Card.Description>
+          <Card.Description>
+            {elsewhereCount > 0
+              ? `Every schedule in this build (${rows.length})`
+              : `Recurring jobs registered in this process (${rows.length})`}
+          </Card.Description>
         </FoldTrigger>
       </Card.Header>
       <FoldBody>
         <Card.Content className={cardPad(phone)}>
-          {loading && !crons.length ? (
+          {/* `rows`, not `crons`: under CI_ROLE=web the dashboard reports no
+              schedules at all while the controls payload still has all 53, and
+              keying the empty state off the raw prop printed "nothing is
+              registered here" over a full table. */}
+          {loading && !rows.length ? (
             <Skeleton className="h-32 w-full" />
-          ) : !crons.length ? (
+          ) : !rows.length ? (
             <p className="text-sm text-muted-foreground">No recurring jobs are registered here.</p>
-          ) : phone ? (
-            <SchedulesPhoneList rows={rows} />
           ) : (
+            <>
+              {/* Said once, not per row. These schedules are listed and
+                  switchable from here because the mode is a ci.job_settings row
+                  every process reads — but their run times come from the
+                  scheduler that registered them, which is not this one. */}
+              {elsewhereCount > 0 ? (
+                <p className="pb-2 text-xs text-muted-foreground">
+                  {elsewhereCount} of these run in the worker process rather than this one. They are
+                  switchable from here, but this process has no run times for them.
+                </p>
+              ) : null}
+              {phone ? (
+                <SchedulesPhoneList rows={rows} saving={saving} onSave={onSave} />
+              ) : (
             // A table, like the Jobs list — same columns-and-rows shape, so the two
             // cards read as one system rather than two unrelated widgets. The grid
             // of cards it replaced could not be scanned down a column (every
             // schedule's cron sat at a different x-position).
-            <SchedulesTable rows={rows} />
+                <SchedulesTable rows={rows} saving={saving} onSave={onSave} />
+              )}
+            </>
           )}
         </Card.Content>
       </FoldBody>
@@ -417,6 +373,8 @@ type ScheduleRow = {
   cron: JobsDashboardResponse['crons'][number];
   descriptor: ReturnType<typeof describeCron>;
   schedule: ReturnType<typeof describeCronExpression>;
+  /** Null when the controls payload has no row for this schedule. */
+  control: JobCronControl | null;
 };
 
 /**
@@ -513,12 +471,82 @@ function lastSucceeded(cron: ScheduleRow['cron']): string {
   return cron.lastRunAt ? 'never' : '—';
 }
 
-function SchedulesTable({ rows }: { rows: readonly ScheduleRow[] }) {
+/**
+ * The on/off switch for one schedule, in the row that already describes it.
+ *
+ * This used to live in the Controls card, as a second list of all 53 schedules
+ * with its own name and cadence beside each switch — so the page rendered every
+ * schedule twice, and the answer to "is this one on, and when does it next
+ * run?" was split across two cards that had to be read together. The switch
+ * belongs next to the thing it switches.
+ *
+ * A locked schedule renders a disabled switch rather than nothing: the state is
+ * still worth showing, and the title says who locked it.
+ */
+function ScheduleSwitch({
+  cron,
+  control,
+  saving,
+  onSave,
+}: {
+  cron: string;
+  control: JobCronControl | null;
+  saving: boolean;
+  onSave: (patch: JobControlsPatch) => Promise<boolean>;
+}) {
+  if (!control) {
+    return null;
+  }
+
+  const enabled = control.mode !== 'disabled';
+
+  return (
+    <Switch
+      checked={enabled}
+      disabled={saving || control.locked}
+      aria-label={`${cron} enabled`}
+      title={
+        control.locked
+          ? (control.lockedReason ?? 'This schedule is locked on.')
+          : enabled
+            ? 'Running on its schedule. Switch off to stop it.'
+            : `Off — this schedule does not run.${
+                control.skippedCount > 0
+                  ? ` ${control.skippedCount.toLocaleString()} tick${control.skippedCount === 1 ? '' : 's'} skipped.`
+                  : ''
+              }`
+      }
+      onCheckedChange={(next) =>
+        void onSave({ crons: [{ name: cron, mode: next ? 'enabled' : 'disabled' }] })
+      }
+    />
+  );
+}
+
+function SchedulesTable({
+  rows,
+  saving,
+  onSave,
+}: {
+  rows: readonly ScheduleRow[];
+  saving: boolean;
+  onSave: (patch: JobControlsPatch) => Promise<boolean>;
+}) {
+  // Only offer the column when something in it can actually be switched.
+  const switchable = rows.some((row) => row.control != null);
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr className="border-b border-border/60 text-left text-xs uppercase text-muted-foreground">
+            {switchable ? (
+              <th scope="col" className="w-10 py-1.5 pr-3 font-medium">
+                {/* The switches identify themselves; a visible "On" here would
+                    be read out again for every row. */}
+                <span className="sr-only">Enabled</span>
+              </th>
+            ) : null}
             <th scope="col" className="py-1.5 pr-3 font-medium">
               Schedule
             </th>
@@ -546,8 +574,13 @@ function SchedulesTable({ rows }: { rows: readonly ScheduleRow[] }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ cron, descriptor, schedule }) => (
+          {rows.map(({ cron, descriptor, schedule, control }) => (
             <tr key={cron.name} className="border-b border-border/40 last:border-0">
+              {switchable ? (
+                <td className="py-1.5 pr-3">
+                  <ScheduleSwitch cron={cron.name} control={control} saving={saving} onSave={onSave} />
+                </td>
+              ) : null}
               <td className="py-1.5 pr-3">
                 <span className="flex items-center gap-1.5 font-medium" title={cron.name}>
                   <span
@@ -583,7 +616,15 @@ function SchedulesTable({ rows }: { rows: readonly ScheduleRow[] }) {
   );
 }
 
-function SchedulesPhoneList({ rows }: { rows: readonly ScheduleRow[] }) {
+function SchedulesPhoneList({
+  rows,
+  saving,
+  onSave,
+}: {
+  rows: readonly ScheduleRow[];
+  saving: boolean;
+  onSave: (patch: JobControlsPatch) => Promise<boolean>;
+}) {
   const groups = useMemo(() => {
     const map = new Map<string, ScheduleRow[]>();
 
@@ -620,7 +661,7 @@ function SchedulesPhoneList({ rows }: { rows: readonly ScheduleRow[] }) {
             </Accordion.Trigger>
             <Accordion.Content>
               <ul className="pb-1">
-                {items.map(({ cron, descriptor, schedule }) => (
+                {items.map(({ cron, descriptor, schedule, control }) => (
                   <li key={cron.name} className="border-t border-border/40 py-2">
                     <div className="flex items-start justify-between gap-2">
                       <span
@@ -630,7 +671,15 @@ function SchedulesPhoneList({ rows }: { rows: readonly ScheduleRow[] }) {
                         {descriptor.label}
                         {descriptor.unnamed && <UnnamedCronWarning />}
                       </span>
-                      <ScheduleStatus cron={cron} className="shrink-0" />
+                      <span className="flex shrink-0 items-center gap-2">
+                        <ScheduleStatus cron={cron} />
+                        <ScheduleSwitch
+                          cron={cron.name}
+                          control={control}
+                          saving={saving}
+                          onSave={onSave}
+                        />
+                      </span>
                     </div>
                     <p className="mt-0.5 text-xs text-muted-foreground" title={schedule.raw}>
                       {schedule.frequency}

@@ -222,8 +222,29 @@ describe('MediaStage', () => {
     // The whole point: the row now carries the id the push reads as FileId.
     expect(updates).toHaveLength(1);
     expect(updates[0].sql).toContain('FileId');
-    expect(updates[0].params).toEqual(['row-1', 'file-1']);
+    // No hash from the store in this fixture, so no FileSha256 either.
+    expect(updates[0].params).toEqual(['row-1', 'file-1', null]);
     expect(outcome.detail).toMatchObject({ uploaded: 1, failed: 0 });
+  });
+
+  it('stamps the store’s SHA-256 beside the file id so the content row can key on its bytes', async () => {
+    // The `file` federated kind (docs/design/cross-pipeline-identity.md §3.2):
+    // toContentInput promotes FileSha256 to (file, sha256:<hash>), so the
+    // same photo converges whichever archive delivered it.
+    const photo = path.join(scratchDir, 'photo.jpg');
+    fs.writeFileSync(photo, 'jpegbytes');
+    const sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+    const { stage, updates } = makeStage(
+      [{ id: 'row-1', filename: 'photo.jpg', mediaType: 'image/jpeg', sizeBytes: 9, localPath: photo }],
+      { upload: jest.fn(async () => ({ file: { id: 'file-1', hash: sha256 }, deduped: false })) },
+    );
+
+    await stage.run(contextFor(scratchDir));
+
+    expect(updates).toHaveLength(1);
+    expect(updates[0].sql).toContain('FileSha256');
+    expect(updates[0].params).toEqual(['row-1', 'file-1', sha256]);
   });
 
   it('counts an already-stored file as deduped rather than uploaded', async () => {
@@ -302,7 +323,7 @@ describe('MediaStage', () => {
 
     expect(outcome.detail).toMatchObject({ uploaded: 1, failed: 0 });
     // The row points at the stored file, and the scratch bytes are gone.
-    expect(updates[0].params).toEqual(['row-5', 'file-1']);
+    expect(updates[0].params).toEqual(['row-5', 'file-1', null]);
     expect(fs.existsSync(photo)).toBe(false);
   });
 
@@ -522,6 +543,56 @@ describe('MediaStage', () => {
         AttachmentContentIds: ['content-1', 'content-2'],
       });
       expect(outcome.detail).toMatchObject({ attachments: { files: 2, contents: 2 } });
+    });
+
+    it('keys a catalogued attachment on its parent’s identity plus the bytes hash, not its index', async () => {
+      // Part order is not stable across producers (or across two reads of one
+      // archive when a previously unreadable sibling starts working), so the
+      // store's SHA-256 names the attachment instead — attachmentIdentity in
+      // the registry. The index lane above survives only for a store that
+      // returned no hash.
+      const sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const attachment = messageWith(scratchDir, [{ name: 'a.jpg' }], { AttachmentContent: true });
+      const { stage, contents } = makeStage([], {
+        attachments: [attachment],
+        upload: jest.fn(async () => ({ file: { id: 'file-1', hash: sha256 }, deduped: false })),
+      });
+
+      await stage.run(contextFor(scratchDir));
+
+      const [, inputs] = contents.createManyDetailed.mock.calls[0];
+      expect(inputs[0]).toMatchObject({
+        source_system: 'twitter',
+        source_id: `attachment:twitter:dm:9:${sha256}`,
+      });
+    });
+
+    it('hangs a mail attachment off the federated (email, <Message-ID>) identity the message itself lands under', async () => {
+      // toCommunicationInput keys the message on its RFC Message-ID, so the
+      // attachment's parent prefix is that pair — the same one a connection
+      // cataloguing the same attachment would mint.
+      const sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const attachment: AttachmentStub = {
+        ...messageWith(scratchDir, [{ name: 'invoice.pdf', type: 'file', mimetype: 'application/pdf' }], {
+          AttachmentContent: true,
+          MessageID: 'CAF+QMz-AbC@mail.gmail.com',
+        }),
+        dataSource: 'gmail',
+        contentHash: 'staged-sha1-of-the-message',
+      };
+      const { stage, contents } = makeStage([], {
+        attachments: [attachment],
+        upload: jest.fn(async () => ({ file: { id: 'file-1', hash: sha256 }, deduped: false })),
+      });
+
+      await stage.run(contextFor(scratchDir));
+
+      const [, inputs] = contents.createManyDetailed.mock.calls[0];
+      expect(inputs[0]).toMatchObject({
+        type: 'file',
+        source_system: 'email',
+        source_id: `attachment:CAF+QMz-AbC@mail.gmail.com:${sha256}`,
+      });
     });
 
     it('writes no content rows for a source that did not opt in', async () => {

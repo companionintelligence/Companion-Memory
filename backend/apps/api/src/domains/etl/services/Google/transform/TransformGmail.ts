@@ -14,6 +14,7 @@ import {
   canonicalSystem,
   emailFallbackIdentity,
   emailIdentity,
+  gmailThreadKeyFromApi,
 } from '@ci/domains/memory';
 import { TagService } from '@ci/domains/search-next';
 
@@ -177,7 +178,12 @@ export class GmailTransformService {
           time: messageDetails.date ? new Date(messageDetails.date) : new Date(),
           communication_type: CommunicationType.EMAIL,
           direction,
-          thread_id: message.threadId,
+          // The API's hex threadId, normalized to the registry's one spelling
+          // so a Takeout mbox import of the same message (X-GM-THRID, the same
+          // number in decimal) lands the same thread_id. A non-hex value —
+          // nothing the API sends, but a replayed fixture might — is dropped
+          // rather than stored as a key nothing else can produce.
+          thread_id: gmailThreadKeyFromApi(message.threadId),
           from_entity_id: fromEntityIds[0] || undefined,
           to_entity_ids: toEntityIdsCombined,
           participants_metadata: {
@@ -204,6 +210,9 @@ export class GmailTransformService {
           // replays re-send whole pages). source_type stays 'ETL': provenance,
           // not identity.
           source_type: 'ETL',
+          // Ledger platform: the Gmail connection delivered it (the row's
+          // system is the federated `email`, which says nothing about where).
+          source_platform: canonicalSystem('gmail'),
           ...(() => {
             const identity =
               emailIdentity(messageDetails.rfcMessageId) ??

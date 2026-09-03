@@ -381,8 +381,10 @@ function controls(now: number): Record<string, unknown> {
 
   return {
     global: {
-      concurrency: num(null, 10, 64),
-      perQueueConcurrency: num(null, 6, 64),
+      // `max` mirrors `default`: the two global numbers only go down, so the
+      // shipped figure is also the ceiling the API will honour.
+      concurrency: num(null, 10, 10),
+      perQueueConcurrency: num(null, 6, 6),
       nonInteractive: previewModes.get('__global__') ?? 'enabled',
     },
     topology: { role: 'all', queueWorkerProcesses: 1, perProcessConcurrency: 10 },
@@ -415,6 +417,10 @@ function controls(now: number): Record<string, unknown> {
       name: cron.name,
       cron: cron.cron ?? '',
       mode: previewModes.get(`cron:${cron.name}`) ?? 'enabled',
+      role: 'web' as const,
+      // The preview is a single-process appliance, so nothing runs elsewhere and
+      // the card's "N run in the worker process" note stays silent.
+      servedHere: true,
       locked: false,
       lockedReason: null,
       skippedCount: 0,

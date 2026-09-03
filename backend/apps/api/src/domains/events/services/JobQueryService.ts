@@ -10,7 +10,7 @@ import { JobMetricEntity } from '../entities/JobMetricEntity';
 import { PgBossArchiveEntity } from '../entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from '../entities/PgBossJobEntity';
 import {
-  categoryOfEvent,
+  categoryOfJob,
   describeJob,
   jobCategorySelector,
   JOB_TYPES,
@@ -367,39 +367,40 @@ export class JobQueryService {
       // expresses. `JobMetricsCollector.readThroughput` unions the same pair for
       // the same reason.
       //
-      // GROUPED ON `data->>'name'` — THE EVENT — NEVER ON `name`, the queue. A
-      // dead-lettered row's queue column is the literal `dead-letter`: pg-boss
-      // copies `data` verbatim onto the DLQ row and rewrites the queue, so the
-      // queue is gone for 8,431 of 19,606 rows (43%) on a live appliance. A
-      // queue-keyed grouping would file all of them under one bucket that maps
-      // to no category at all.
+      // Grouped on the (event, queue) PAIR, which is what `categoryOfJob` folds
+      // and what the category filter selects on. The queue is a grouping COLUMN
+      // here, never the category key on its own: an event with no queue-scoped
+      // entry still resolves through its own name.
       //
-      // Those DLQ copies are excluded outright, because the copy carries a
-      // FRESH `created_on` — the instant the job was dead-lettered, not the
-      // instant the work arrived. Counting it would draw a surge of new work at
-      // exactly the moment work started failing. The original row survives in
-      // its own partition with `state = 'failed'` and is what supplies the
-      // arrival.
+      // DLQ copies are excluded outright, because the copy carries a FRESH
+      // `created_on` — the instant the job was dead-lettered, not the instant
+      // the work arrived. Counting it would draw a surge of new work at exactly
+      // the moment work started failing. The original row survives in its own
+      // partition with `state = 'failed'` and is what supplies the arrival.
+      // That exclusion is also why every row this query returns still HAS its
+      // origin queue: `name = 'dead-letter'`, the one value that would make the
+      // pair unrecoverable, is the one value it never sees.
       const liveRows = (await this.jobRepository.manager.query(
         `
         SELECT to_timestamp(floor(extract(epoch from live.created_on) / $2) * $2) AS at,
                live.data->>'name' AS event,
+               live.name AS queue,
                COUNT(*)::int AS count
           FROM (
-            SELECT data, created_on FROM pgboss.job     WHERE created_on >= $1 AND name <> $3
+            SELECT name, data, created_on FROM pgboss.job     WHERE created_on >= $1 AND name <> $3
             UNION ALL
-            SELECT data, created_on FROM pgboss.archive WHERE created_on >= $1 AND name <> $3
+            SELECT name, data, created_on FROM pgboss.archive WHERE created_on >= $1 AND name <> $3
           ) AS live
-         GROUP BY 1, 2
+         GROUP BY 1, 2, 3
         `,
         [liveSince, bucketSeconds, DEAD_LETTER_QUEUE],
-      )) as Array<{ at: Date; event: string | null; count: number }>;
+      )) as Array<{ at: Date; event: string | null; queue: string | null; count: number }>;
 
       for (const row of liveRows) {
-        // categoryOfEvent, the same fold facetCounts uses for the chips —
-        // never describeJob(), whose per-queue overrides would put an event
-        // under a category its own filter resolves somewhere else.
-        add(row.at, categoryOfEvent(row.event), Number(row.count) || 0);
+        // categoryOfJob, the same fold facetCounts uses for the chips — never
+        // describeJob(), which fingerprints an unknown event into a category
+        // guess that no chip counts and no filter can select.
+        add(row.at, categoryOfJob(row.event, row.queue), Number(row.count) || 0);
       }
 
       usedLive = liveRows.length > 0;
@@ -643,12 +644,23 @@ export class JobQueryService {
    * by construction: they cannot disagree about a job, because they are counting
    * the same job.
    *
-   * GROUPING IS ON `data->>'name'` — THE EVENT — NEVER ON `job.name`. A
-   * dead-lettered row's `job.name` is the literal `dead-letter`: pg-boss copies
-   * `data` verbatim onto the DLQ row but rewrites the queue column, so the queue
-   * it died on is gone forever. On a live appliance 88% of rows are
-   * dead-lettered, which would make any queue-keyed grouping report almost
-   * nothing.
+   * GROUPED ON THE (event, queue) PAIR, and folded through `categoryOfJob` —
+   * the same rule `applyFilters` selects with, which is the only reason a chip's
+   * number and the table under it agree. The fold used to be `categoryOfEvent`,
+   * on the event alone, and for the handful of events two listeners share on
+   * different queues the chip counted one thing and clicking it returned
+   * another: every `content.created` on `pipeline-index` was added to Search
+   * index, while the Pipeline filter was what actually returned it.
+   *
+   * The queue is a grouping COLUMN, not the category key. That distinction is
+   * what makes this safe: pg-boss copies `data` verbatim onto a dead-letter row
+   * but REWRITES the queue column, so for the 88% of rows sitting on
+   * `dead-letter` the pair is unrecoverable — and `categoryOfJob` falls back to
+   * the event alone for exactly those, as does the filter, whose include/exclude
+   * lists hold no `::dead-letter` key to match. Keying the category ON the queue
+   * would file all of them under one meaningless bucket; grouping BY it does
+   * not, because the fold still resolves the ones it cannot pair through their
+   * event name.
    */
   private async facetCounts(
     query: JobQuery,
@@ -663,26 +675,33 @@ export class JobQueryService {
       // QUEUE, never a state, so the bucket column has to be text.
       .select(`CASE WHEN job.name = :deadLetter THEN 'dead-letter' ELSE job.state::text END`, 'bucket')
       .addSelect(`job.data->>'name'`, 'event')
+      .addSelect('job.name', 'queue')
       .addSelect('COUNT(*)::int', 'count')
       .setParameter('deadLetter', DEAD_LETTER_QUEUE)
       // One `groupBy` call, not `groupBy().addGroupBy()` — the unit suite drives
       // this through a hand-rolled mock builder that implements neither.
-      .groupBy('1, 2');
+      .groupBy('1, 2, 3');
 
     this.applyFilters(builder, query, userId, { skipState: true, skipCategory: true, skipType: true });
 
-    const rows = await builder.getRawMany<{ bucket: string; event: string | null; count: number }>();
+    const rows = await builder.getRawMany<{
+      bucket: string;
+      event: string | null;
+      queue: string | null;
+      count: number;
+    }>();
 
     const stateCounts: Record<string, number> = {};
     const categoryCounts: Record<string, number> = {};
 
     for (const row of rows) {
       const count = Number(row.count) || 0;
-      // JOB_TYPES, NOT describeJob() — see categoryOfEvent for why, and why the
-      // expression is shared rather than repeated: the category chart samples
+      // The taxonomy's own fold, NOT describeJob() — describeJob fingerprints an
+      // unknown event into a category guess, and counting must never follow a
+      // guess. Shared rather than repeated because the category chart samples
       // and aggregates through the same function, so a chip and a series can
       // never put the same job in two different buckets.
-      const categoryKey = categoryOfEvent(row.event);
+      const categoryKey = categoryOfJob(row.event, row.queue);
 
       // Each fold re-applies the filter the OTHER one dropped, so both sets keep
       // the "what would selecting this yield" contract. `bucket` has already

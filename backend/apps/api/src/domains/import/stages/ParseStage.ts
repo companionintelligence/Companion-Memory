@@ -38,6 +38,15 @@ import type { ImportStageRunner, StageOutcome, StageRunContext } from '../types'
 const GENERIC_DATA_SOURCE = 'generic';
 
 /**
+ * The generic mail reader (`datasources/email.ts`: any .mbox / .eml) and the
+ * specialised readers it must yield to on a path they both claim. Only Gmail
+ * Takeout today; a future platform-specific mbox reader (an Outlook PST
+ * converter, say) joins the list.
+ */
+const GENERIC_MAIL_DATA_SOURCE = 'email';
+const SPECIALISED_MAIL_DATA_SOURCES: ReadonlySet<string> = new Set(['gmail']);
+
+/**
  * How often a long-running source's staged count is sampled.
  *
  * Below the listener's 1s progress throttle would only produce writes it
@@ -251,7 +260,7 @@ export class ParseStage implements ImportStageRunner {
       },
     );
 
-    return dropGenericWhenSpecialised(matches);
+    return dropGenericMailWhenSpecialised(dropGenericWhenSpecialised(matches));
   }
 
   /** Run one importer, staging everything it emits. */
@@ -479,6 +488,46 @@ export function dropGenericWhenSpecialised(matches: DataSourceRecognition[]): Da
   }
 
   return [...specialised, { ...generic, excludePaths }];
+}
+
+/**
+ * The same rule for mail: `email` is the generic form of what `gmail` reads.
+ *
+ * Both recognizers claim a Takeout's `All mail Including Spam and Trash.mbox`
+ * — gmail at 1.0 (the path says Takeout), email at 0.95 (it is an .mbox) — and
+ * because this stage runs EVERY recognized source, both parsed it. Measured on
+ * a real Takeout: 2,053 rows from gmail (after its human-correspondence gate)
+ * beside 3,933 from email (no gate) for ONE file, so the file was read twice
+ * end to end, the bulk gate was bypassed for it, and the email-only rows
+ * carried no ledger platform (a generic reader cannot name a mailbox), which
+ * kept them out of the doctor's per-platform convergence pair.
+ *
+ * `email` yields wherever a specialised mail reader's claim is NESTED with its
+ * own — the same file, or one path inside the other — or where path info is
+ * missing (the "unknown means nested" fallback `dropGenericWhenSpecialised`
+ * and `isAncestorPath` both take). A sibling claim elsewhere in the tree — a
+ * loose Yahoo mbox dropped next to a Takeout — is not nested and stays, so
+ * the generic reader still imports what nothing specialised covers.
+ * Containment in EITHER direction, deliberately: `email`'s walker reads every
+ * mbox under a directory claim and does not honour `excludePaths`, so an
+ * `email` match ABOVE a gmail file would re-read that file too.
+ */
+export function dropGenericMailWhenSpecialised(matches: DataSourceRecognition[]): DataSourceRecognition[] {
+  const specialisedMail = matches.filter((match) => SPECIALISED_MAIL_DATA_SOURCES.has(match.data_source.name));
+
+  if (specialisedMail.length === 0) {
+    return matches;
+  }
+
+  return matches.filter((match) => {
+    if (match.data_source.name !== GENERIC_MAIL_DATA_SOURCE) {
+      return true;
+    }
+
+    return !specialisedMail.some(
+      (claim) => pathCoveredBy(match.matchedPath, claim.matchedPath) || pathCoveredBy(claim.matchedPath, match.matchedPath),
+    );
+  });
 }
 
 /**

@@ -83,7 +83,7 @@ let lastWindowHours = 0;
 
 // Same reason as `useDeadLetters` above: the pinned import region reads the
 // auth context that `renderWithProviders` deliberately does not supply. It has
-// its own test file; what the PAGE owes is mounting it, above Queue Activity.
+// its own test file; what the PAGE owes is mounting it, above the Health card.
 vi.mock('@/components/ImportActivity', () => ({
   ImportActivity: ({ className }: { className?: string }) => <div className={className}>import activity</div>,
 }));
@@ -291,7 +291,7 @@ describe('JobsPage summary', () => {
   function tile(label: string): HTMLElement {
     const heading = screen
       .getAllByText(label)
-      .find((node) => node.className.includes('uppercase') && node.tagName === 'P');
+      .find((node) => node.className.includes('uppercase') && node.tagName === 'SPAN');
 
     const button = heading?.closest('button');
 
@@ -651,6 +651,143 @@ describe('JobsPage schedules', () => {
     expect(scheduleRow('JobMetricsCollector.purgeOnSchedule')).toHaveTextContent('Job metrics purge');
   });
 
+  /**
+   * The switch used to live in the Controls card, in a second list of all 53
+   * schedules with its own copy of each name and cadence — so the page rendered
+   * every schedule twice, and "is this on, and when does it next run?" was split
+   * across two cards. These three cases moved here with the switch.
+   */
+  describe('the on/off switch beside the schedule', () => {
+    /** The controls payload the switch reads, joined to the dashboard by name. */
+    function withControl(name: string, overrides: Record<string, unknown> = {}) {
+      controlsState.data = {
+        global: {
+          concurrency: { value: 10, effective: 10, source: 'default' },
+          perQueueConcurrency: { value: 6, effective: 6, source: 'default' },
+          nonInteractive: 'enabled',
+        },
+        topology: { role: 'all', queueWorkerProcesses: 1, perProcessConcurrency: 6 },
+        maxConcurrency: 64,
+        queues: [],
+        crons: [
+          {
+            name,
+            cron: '0 0 * * * *',
+            mode: 'enabled',
+            locked: false,
+            lockedReason: null,
+            skippedCount: 0,
+            lastSkippedAt: null,
+            ...overrides,
+          },
+        ],
+      } as unknown as JobControlsResponse;
+    }
+
+    afterEach(() => {
+      controlsState.data = null;
+      controlsState.save.mockClear();
+    });
+
+    it('switches a schedule off from its own row', async () => {
+      withControl('PlanningJobsCron.todoScan');
+      render({ dashboard: dashboard({ crons: [cron('PlanningJobsCron.todoScan')] }) });
+
+      const row = scheduleRow('PlanningJobsCron.todoScan');
+      fireEvent.click(within(row).getByRole('switch'));
+
+      await waitFor(() =>
+        expect(controlsState.save).toHaveBeenCalledWith({
+          crons: [{ name: 'PlanningJobsCron.todoScan', mode: 'disabled' }],
+        }),
+      );
+    });
+
+    it('says a disabled schedule does not run, and how many ticks it skipped', () => {
+      withControl('PlanningJobsCron.todoScan', { mode: 'disabled', skippedCount: 42 });
+      render({ dashboard: dashboard({ crons: [cron('PlanningJobsCron.todoScan')] }) });
+
+      const toggle = within(scheduleRow('PlanningJobsCron.todoScan')).getByRole('switch');
+
+      expect(toggle).not.toBeChecked();
+      expect(toggle).toHaveAttribute('title', expect.stringMatching(/does not run/i));
+      expect(toggle).toHaveAttribute('title', expect.stringMatching(/42 ticks skipped/));
+    });
+
+    it('will not let a protected schedule be switched off', () => {
+      withControl('JobMetricsCollector.sampleOnSchedule', {
+        locked: true,
+        lockedReason: 'Samples the queue depths this page charts.',
+      });
+      render({
+        dashboard: dashboard({ crons: [cron('JobMetricsCollector.sampleOnSchedule')] }),
+      });
+
+      expect(
+        within(scheduleRow('JobMetricsCollector.sampleOnSchedule')).getByRole('switch'),
+      ).toBeDisabled();
+    });
+
+    /**
+     * The 11 `role: 'worker'` schedules (of 53) never reach a CI_ROLE=web
+     * process's SchedulerRegistry, so the dashboard payload omits them. #2546
+     * fixed that for the controls list; moving the switches into this table
+     * would have re-hidden them, which is the same defect wearing a different
+     * card. The controls payload IS complete, so anything only it knows about
+     * is appended — switchable, with no run times, because this process never
+     * registered it.
+     */
+    it('lists a worker schedule the dashboard never saw, and says why it has no times', () => {
+      controlsState.data = {
+        global: {
+          concurrency: { value: 10, effective: 10, source: 'default' },
+          perQueueConcurrency: { value: 6, effective: 6, source: 'default' },
+          nonInteractive: 'enabled',
+        },
+        topology: { role: 'web', queueWorkerProcesses: 1, perProcessConcurrency: 6 },
+        maxConcurrency: 64,
+        queues: [],
+        crons: [
+          {
+            name: 'WorkerOnlyCron.sweep',
+            cron: '0 0 * * * *',
+            mode: 'enabled',
+            role: 'worker',
+            servedHere: false,
+            locked: false,
+            lockedReason: null,
+            skippedCount: 0,
+            lastSkippedAt: null,
+          },
+        ],
+      } as unknown as JobControlsResponse;
+
+      // The dashboard knows nothing about it — this is the CI_ROLE=web case.
+      render({ dashboard: dashboard({ crons: [] }) });
+
+      const row = scheduleRow('WorkerOnlyCron.sweep');
+
+      expect(row).toBeInTheDocument();
+      expect(within(row).getByRole('switch')).toBeInTheDocument();
+      expect(screen.getByText(/run in the worker process rather than this one/i)).toBeInTheDocument();
+    });
+
+    /**
+     * The table is the record of what is REGISTERED. A schedule the controls
+     * endpoint does not know about — an older server, or one registered since
+     * the controls were read — keeps its row and loses only its switch.
+     */
+    it('still lists a schedule the controls endpoint has never heard of', () => {
+      controlsState.data = null;
+      render({ dashboard: dashboard({ crons: [cron('PlanningJobsCron.todoScan')] }) });
+
+      const row = scheduleRow('PlanningJobsCron.todoScan');
+
+      expect(row).toHaveTextContent('Todo scan');
+      expect(within(row).queryByRole('switch')).not.toBeInTheDocument();
+    });
+  });
+
   it('marks a scheduler-minted name as the backend bug it is', () => {
     const uuid = '007c9ac0-fb23-4203-809b-c2d100b373e4';
 
@@ -815,7 +952,10 @@ describe('JobsPage controls', () => {
     render();
 
     const controls = screen.getByText('Controls');
-    const summary = screen.getByText('Queue Activity');
+    // The counts live in the Health card now — it and "Queue Activity" were two
+    // cards answering one question, and the tiles repeated figures the verdicts
+    // above them had already called out.
+    const summary = screen.getByText('Health');
 
     expect(controls).toBeInTheDocument();
     // DOCUMENT_POSITION_FOLLOWING: the summary comes before the controls.
@@ -1003,10 +1143,11 @@ describe('JobsPage live imports', () => {
     const activity = screen.getByText('import activity');
 
     expect(activity).toBeInTheDocument();
-    // Above Queue Activity: while an import is in flight it outranks the raw
-    // queue, which is the thing an operator came here unable to interpret.
+    // Above the Health card, which now carries the queue counts: while an
+    // import is in flight it outranks the raw queue, which is the thing an
+    // operator came here unable to interpret.
     expect(
-      activity.compareDocumentPosition(screen.getByText('Queue Activity')) & Node.DOCUMENT_POSITION_FOLLOWING,
+      activity.compareDocumentPosition(screen.getByText('Health')) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 

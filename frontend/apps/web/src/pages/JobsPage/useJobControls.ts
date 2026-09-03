@@ -51,6 +51,14 @@ export interface JobCronControl {
   readonly name: string;
   readonly cron: string;
   readonly mode: CronMode;
+  /** Which process runs it. Every schedule in the build is listed, both roles. */
+  readonly role: 'web' | 'worker';
+  /**
+   * Whether the process that answered is the one that runs it. False only on a
+   * split deployment, and it does not mean uncontrollable — the switch writes a
+   * setting every process polls.
+   */
+  readonly servedHere: boolean;
   readonly locked: boolean;
   readonly lockedReason: string | null;
   readonly skippedCount: number;

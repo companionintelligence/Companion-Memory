@@ -1857,6 +1857,18 @@ export function contentFileRef(rec: CanonicalRecord): { id?: string; url?: strin
 }
 
 /**
+ * The SHA-256 the object store computed for the bytes {@link contentFileRef}
+ * points at (MediaStage.markUploaded stamps `FileSha256` beside `FileId`), or
+ * undefined when nothing was uploaded or the store did not hash. Validated as
+ * 64 hex characters so a stray value cannot become a `file` identity.
+ */
+export function fileSha256Ref(rec: CanonicalRecord): string | undefined {
+  const value = str((rec.metadata as Record<string, unknown>).FileSha256);
+
+  return value && /^[0-9a-fA-F]{64}$/.test(value) ? value.toLowerCase() : undefined;
+}
+
+/**
  * Should this record's attachments (see {@link mmsMediaFilePaths}) also get a
  * ci.content row each, or are the stored files enough? Set by the importer as
  * metadata.AttachmentContent — Messenger opts in (a shared photo is a thing you

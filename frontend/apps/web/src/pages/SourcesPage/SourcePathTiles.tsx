@@ -1,14 +1,15 @@
 import type { ReactNode } from 'react';
 
 import { cn } from '@ci/shadcn';
-import { ArrowRight, Cable, MonitorSmartphone, PackageOpen } from '@ci/shadcn/icons';
+import { ArrowRight } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
+import { SOURCES_SECTIONS, type SourcePath } from './sourcesSections';
 import type { SourceCounts } from './useSourceCounts';
 
-export type SourcePath = 'connect' | 'import' | 'devices';
+export type { SourcePath };
 
-export const SOURCE_PATHS: readonly SourcePath[] = ['connect', 'import', 'devices'];
+export const SOURCE_PATHS: readonly SourcePath[] = SOURCES_SECTIONS.map((section) => section.path);
 
 export interface PathDefinition {
   readonly path: SourcePath;
@@ -30,35 +31,46 @@ export interface PathDefinition {
  * is the answer to "what am I looking at" in the one place someone is already
  * looking, and every path reads the same way.
  */
-export const SOURCE_PATH_INFO: Record<SourcePath, PathDefinition> = {
+/**
+ * The pitch for each path. Route, label and icon are NOT restated here — they
+ * come from {@link SOURCES_SECTIONS}, which the Power Rail's Sources submenu
+ * reads from the same module. Two copies of a route is how a rail row and the
+ * tile it duplicates end up pointing at different places.
+ */
+const PATH_PITCH: Record<SourcePath, Pick<PathDefinition, 'effort' | 'gets' | 'cta'>> = {
   connect: {
-    path: 'connect',
-    to: '/sources/connect',
-    icon: <Cable aria-hidden className="h-7 w-7" strokeWidth={1.25} />,
-    title: 'Services',
     effort: 'About a minute, once.',
     gets: 'Everything from now on, plus whatever recent history the service hands over.',
     cta: 'Browse services',
   },
   import: {
-    path: 'import',
-    to: '/sources/import',
-    icon: <PackageOpen aria-hidden className="h-7 w-7" strokeWidth={1.25} />,
-    title: 'Import',
     effort: 'You request it from the service and wait hours or days, then it takes minutes.',
     gets: 'Your whole history, as far back as the service keeps it.',
     cta: 'Start an import',
   },
   devices: {
-    path: 'devices',
-    to: '/sources/devices',
-    icon: <MonitorSmartphone aria-hidden className="h-7 w-7" strokeWidth={1.25} />,
-    title: 'Devices',
     effort: 'Install once, on each browser and machine you use.',
     gets: 'What you read, and what you do on your own computer — neither of which any export contains.',
     cta: 'Add a device',
   },
 };
+
+export const SOURCE_PATH_INFO: Record<SourcePath, PathDefinition> = Object.fromEntries(
+  SOURCES_SECTIONS.map((section) => {
+    const Icon = section.icon;
+
+    return [
+      section.path,
+      {
+        path: section.path,
+        to: section.to,
+        icon: <Icon aria-hidden className="h-7 w-7" strokeWidth={1.25} />,
+        title: section.label,
+        ...PATH_PITCH[section.path],
+      },
+    ];
+  }),
+) as Record<SourcePath, PathDefinition>;
 
 interface Props {
   /** Which path is on screen, so the switch can say so. */
