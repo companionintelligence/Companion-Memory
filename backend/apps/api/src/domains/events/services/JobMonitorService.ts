@@ -336,6 +336,15 @@ export class JobMonitorService {
    * operation whose whole purpose is making something happen now. Firing across
    * processes is not possible (`fireOnTick` is a handle on a live job), so the
    * honest outcome is an error naming the process that can.
+   *
+   * **A schedule the operator disabled is skipped, not fired.** `job.fireOnTick()`
+   * invokes the same `@Cron`-wrapped body the scheduler ticks, which already
+   * checks `JobControlStore` and no-ops (recording its own skip) when the cron
+   * is disabled — but that happens inside a promise this method does not await,
+   * so without a check here the name still lands in `fired` before the body
+   * gets a chance to bail. That reports success for a run that did nothing, and
+   * double-counts the manual attempt against the setting's drop tally on top of
+   * the skip the wrapper itself already records.
    */
   fireCronJobs(names?: readonly string[]): {
     fired: string[];
@@ -376,6 +385,11 @@ export class JobMonitorService {
 
     for (const [name, job] of jobs) {
       if (allow && !allow.has(name)) {
+        skipped.push(name);
+        continue;
+      }
+
+      if (JobControlStore.cronMode(name) === 'disabled') {
         skipped.push(name);
         continue;
       }

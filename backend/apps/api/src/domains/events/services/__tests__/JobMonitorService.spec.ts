@@ -980,6 +980,48 @@ describe('JobMonitorService.fireCronJobs', () => {
     expect(result.errors[0]?.error).toMatch(/not a schedule in this build/);
   });
 
+  it('skips a schedule the operator disabled instead of reporting it fired', async () => {
+    // Manually firing a disabled cron must not report success for a run that
+    // did nothing, and must not double-count the attempt against the
+    // setting's drop tally on top of the skip the `@Cron` wrapper itself
+    // records when the (unawaited) body actually runs.
+    await JobControlStore.configure({
+      query: (sql: string) =>
+        sql.includes('UPDATE ci.job_settings')
+          ? Promise.resolve([])
+          : Promise.resolve([
+              {
+                kind: 'cron',
+                key: 'X',
+                mode: 'disabled',
+                concurrency: null,
+                skipped_count: '0',
+                last_skipped_at: null,
+                updated_at: new Date(),
+              },
+            ]),
+    } as unknown as DataSource);
+
+    try {
+      const ticks: string[] = [];
+      const cronJobs = new Map<string, unknown>([
+        ['X', { fireOnTick: () => ticks.push('X') }],
+        ['Y', { fireOnTick: () => ticks.push('Y') }],
+      ]);
+      const { service } = makeService({ cronJobs });
+
+      const result = service.fireCronJobs();
+
+      expect(result.fired).toEqual(['Y']);
+      expect(result.skipped).toEqual(['X']);
+      expect(result.errors).toEqual([]);
+      // Never invoked — a disabled schedule must not run even the no-op path.
+      expect(ticks).toEqual(['Y']);
+    } finally {
+      await JobControlStore.configure(null);
+    }
+  });
+
   it('records a fireOnTick throw without stopping the sweep', () => {
     const cronJobs = new Map<string, unknown>([
       [
