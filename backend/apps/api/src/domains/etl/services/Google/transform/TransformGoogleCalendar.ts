@@ -297,6 +297,14 @@ export class GoogleCalendarTransformService {
       rawEventId: rawEvent.id,
       rawEventSummary: rawEvent.summary,
       rawEventStatus: rawEvent.status,
+      // singleEvents=false (see SyncCalendar.ts) returns series masters rather
+      // than per-occurrence instances, and nothing in this codebase expands an
+      // RRULE yet. Persist it losslessly on the stored row — the one column
+      // that survives create() unmodified (see CalendarEventService.toEntityFields,
+      // which only renames a handful of DTO fields onto EventEntity's camelCase
+      // columns; `recurrence_pattern` is not one of them and would be silently
+      // dropped on insert) — so a future expansion pass has something to expand.
+      ...(rawEvent.recurrence && rawEvent.recurrence.length > 0 ? { recurrenceRule: rawEvent.recurrence } : {}),
     };
 
     const isAllDay = this.isAllDayEvent(eventDetails.startTime);

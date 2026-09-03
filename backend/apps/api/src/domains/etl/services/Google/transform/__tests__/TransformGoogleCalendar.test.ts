@@ -61,10 +61,10 @@ function eventDetails(location: string | null) {
 function callTransformToEventDto(
   service: GoogleCalendarTransformService,
   details: ReturnType<typeof eventDetails>,
-  rawEvent: { id: string; summary: string; status: string },
+  rawEvent: { id: string; summary: string; status: string; recurrence?: string[] },
   userId: string,
   connectionId: string,
-): Promise<{ location_name?: string }> {
+): Promise<{ location_name?: string; metadata?: Record<string, unknown> }> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (service as any).transformToEventDto(details, rawEvent, userId, connectionId);
 }
@@ -125,5 +125,38 @@ describe('GoogleCalendarTransformService.transformToEventDto — location_name',
     );
 
     expect(dto.location_name).toBeUndefined();
+  });
+});
+
+describe('GoogleCalendarTransformService.transformToEventDto — recurrence', () => {
+  it('persists the RRULE on metadata.recurrenceRule for a recurring series master (singleEvents=false)', async () => {
+    const { service } = makeService();
+    const dto = await callTransformToEventDto(
+      service,
+      { ...eventDetails(null), isRecurring: true },
+      { id: 'evt-1', summary: 'Weekly sync', status: 'confirmed', recurrence: ['RRULE:FREQ=WEEKLY;COUNT=10'] },
+      'user-1',
+      'conn-1',
+    );
+
+    // Nothing in this codebase expands an RRULE yet (see SyncCalendar.ts), so
+    // the rule must survive losslessly on the stored row instead of being
+    // discarded — `recurrence_pattern` is silently dropped by
+    // CalendarEventService on create(), so `metadata` (a plain pass-through
+    // column) is where it has to live.
+    expect(dto.metadata?.recurrenceRule).toEqual(['RRULE:FREQ=WEEKLY;COUNT=10']);
+  });
+
+  it('omits recurrenceRule for a non-recurring event', async () => {
+    const { service } = makeService();
+    const dto = await callTransformToEventDto(
+      service,
+      eventDetails(null),
+      { id: 'evt-1', summary: 'One-off', status: 'confirmed' },
+      'user-1',
+      'conn-1',
+    );
+
+    expect(dto.metadata?.recurrenceRule).toBeUndefined();
   });
 });
