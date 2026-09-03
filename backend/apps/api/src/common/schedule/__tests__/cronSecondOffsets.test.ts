@@ -1,6 +1,7 @@
 import { SCHEDULE_CRON_OPTIONS } from '@nestjs/schedule/dist/schedule.constants';
 
 import { ActivityRollupCron } from '@ci/domains/activity/cron/ActivityRollupCron';
+import { AgentDispatchStaleCron } from '@ci/domains/agent/cron/AgentDispatchStaleCron';
 import { MemoryCompactionCron } from '@ci/domains/agent/cron/MemoryCompactionCron';
 import { TurnFragmentCron } from '@ci/domains/agent/cron/TurnFragmentCron';
 import { SyncOrchestrator } from '@ci/domains/etl/listeners/SyncOrchestrator';
@@ -32,9 +33,9 @@ import { AnswerInferenceCron } from '@ci/domains/smart-rotation/cron/AnswerInfer
  * this table and the subjects below — so the next cron to want a second takes
  * an off-grid one. 8, 18, 28, 38 and 48 are claimed below, as are 13
  * (`RecallProbeCron`) and 23 (`EntityTypeAuditCron`); 3 is claimed below by
- * `TurnFragmentCron`, and 33 is claimed by `AgentMemoryRetentionCron`
- * (02:20:33, `role: 'worker'`), leaving 43, 53 and 58 as the next tidy ones
- * free.
+ * `TurnFragmentCron`, 33 is claimed by `AgentMemoryRetentionCron`
+ * (02:20:33, `role: 'worker'`), and 43 is claimed by `AgentDispatchStaleCron`,
+ * leaving 53 and 58 as the next tidy ones free.
  *
  * Not listed, deliberately: `DerivationCron.deriveNightly` (`25 40 4 * * *`)
  * and `OrphanCleanupCron.sweepOnSchedule` (`35 50 2 * * *`) reuse seconds 25
@@ -96,6 +97,11 @@ const SUBJECTS = [
     name: 'TurnFragmentCron.cronWriteTurnFragments',
     method: TurnFragmentCron.prototype.cronWriteTurnFragments,
     cadence: '*/10 * * * *',
+  },
+  {
+    name: 'AgentDispatchStaleCron.failStale',
+    method: AgentDispatchStaleCron.prototype.failStale,
+    cadence: '* * * * *',
   },
   {
     name: 'InitialActionsCron.initializeEligibleUsers',

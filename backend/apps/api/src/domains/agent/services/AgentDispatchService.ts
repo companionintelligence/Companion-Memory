@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, type QueryDeepPartialEntity } from 'typeorm';
+import { LessThan, Repository, type QueryDeepPartialEntity } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { type UserServiceContext } from '@ci/common/context';
@@ -9,7 +9,11 @@ import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/events';
 import { TaskService } from '@ci/domains/planning';
 
-import { AGENT_DISPATCH_QUEUE } from '../constants';
+import {
+  AGENT_DISPATCH_QUEUE,
+  DISPATCH_QUEUED_STALE_MS,
+  DISPATCH_RUNNING_STALE_MS,
+} from '../constants';
 
 import { buildDispatchPacket } from '../dispatchPacket';
 import {
@@ -193,7 +197,10 @@ export class AgentDispatchService {
     let failCount = job.failCount;
     let reason: string | null = null;
 
-    if (input.needsUser) {
+    if (input.status === 'failed') {
+      status = 'failed';
+      reason = input.step ?? 'failed';
+    } else if (input.needsUser) {
       status = 'blocked';
       reason = 'needs_user';
     } else if (input.failed && input.step) {
@@ -242,9 +249,54 @@ export class AgentDispatchService {
       await this.finishBlocked(context, updated, reason ?? 'blocked');
     } else if (status === 'completed') {
       await this.finishCompleted(context, updated);
+    } else if (status === 'failed') {
+      await this.finishFailed(context, updated, reason ?? 'failed');
     }
 
     return updated;
+  }
+
+  async failStale(now = new Date()): Promise<number> {
+    const queuedCutoff = new Date(now.getTime() - DISPATCH_QUEUED_STALE_MS);
+    const runningCutoff = new Date(now.getTime() - DISPATCH_RUNNING_STALE_MS);
+    const stale = [
+      ...(await this.jobRepository.find({
+        where: { status: 'queued', createdAt: LessThan(queuedCutoff) },
+      })),
+      ...(await this.jobRepository.find({
+        where: { status: 'running', updatedAt: LessThan(runningCutoff) },
+      })),
+    ];
+
+    let closed = 0;
+
+    for (const entity of stale) {
+      try {
+        const context = { userId: entity.userId } as UserServiceContext;
+
+        await this.checkpoint(context, entity.id, {
+          status: 'failed',
+          failed: true,
+          step: 'stale',
+          turns: [
+            {
+              role: 'assistant',
+              content:
+                'OpenClaw did not check in. Memory closed the job so it would not hang.',
+            },
+          ],
+          result: { summary: 'Timed out waiting for OpenClaw' },
+        });
+        closed += 1;
+      } catch (error) {
+        this.logger.warn('Could not close stale dispatch', {
+          jobId: entity.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return closed;
   }
 
   async steer(context: UserServiceContext, id: string, input: SteerInput): Promise<AgentJob> {
@@ -322,6 +374,25 @@ export class AgentDispatchService {
       reason,
     });
     await this.completeEventJob(job, { status: 'blocked', reason });
+  }
+
+  private async finishFailed(context: UserServiceContext, job: AgentJob, reason: string): Promise<void> {
+    await this.messageService.create(context, {
+      threadId: job.threadId,
+      role: 'assistant',
+      model: 'memory',
+      source: 'memory',
+      content: `Dispatch failed. ${reason}`,
+    });
+
+    await this.eventService.send(PlanningTaskResultEvent, {
+      userId: context.userId,
+      jobId: job.id,
+      taskId: job.taskId,
+      status: 'failed',
+      reason,
+    });
+    await this.completeEventJob(job, { status: 'failed', reason });
   }
 
   private async finishCompleted(context: UserServiceContext, job: AgentJob): Promise<void> {

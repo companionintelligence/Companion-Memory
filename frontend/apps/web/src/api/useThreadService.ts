@@ -13,7 +13,7 @@ type ReturnType = [
     error: unknown;
   },
   {
-    refetch: () => void;
+    refetch: (opts?: { silent?: boolean }) => void;
   },
 ];
 
@@ -24,7 +24,7 @@ export function useThreadService(id: string | null): ReturnType {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
 
-  const fetchThread = useCallback(async () => {
+  const fetchThread = useCallback(async (opts?: { silent?: boolean }) => {
     if (id == null || !ready) {
       setThread(null);
       setError(null);
@@ -33,7 +33,9 @@ export function useThreadService(id: string | null): ReturnType {
       return;
     }
 
-    setLoading(true);
+    if (!opts?.silent) {
+      setLoading(true);
+    }
 
     try {
       const thread = await fetchJson<Thread>(`/api/threads/${id}?includeMessages=true`, {

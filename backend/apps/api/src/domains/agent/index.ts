@@ -45,6 +45,7 @@ import './events';
 import { AgentDispatchListener } from './listeners/AgentDispatchListener';
 import { AgentDispatchService } from './services/AgentDispatchService';
 import { HubDoorbellService } from './services/HubDoorbellService';
+import { AgentDispatchStaleCron } from './cron/AgentDispatchStaleCron';
 import { AgentMemoryRetentionCron } from './cron/AgentMemoryRetentionCron';
 import { MemoryCompactionCron } from './cron/MemoryCompactionCron';
 import { TurnFragmentCron } from './cron/TurnFragmentCron';
@@ -91,6 +92,7 @@ import { TurnFragmentService } from './services/TurnFragmentService';
   providers: [
     AgentDispatchListener,
     AgentDispatchService,
+    AgentDispatchStaleCron,
     HubDoorbellService,
     AgentMemoryRetentionCron,
     AgentMemoryRetentionService,

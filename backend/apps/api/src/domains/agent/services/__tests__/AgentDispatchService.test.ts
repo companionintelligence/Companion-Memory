@@ -44,7 +44,7 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
       logger as never,
     );
 
-    return { job, service, messageService, eventService, taskService };
+    return { job, service, jobRepository, messageService, eventService, taskService };
   }
 
   it('blocks after two hard fails on the same step', async () => {
@@ -67,6 +67,36 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
     const updated = await service.checkpoint(context, 'job-1', { needsUser: true });
 
     expect(updated.status).toBe('blocked');
+  });
+
+  it('closes the pgboss row when the job fails', async () => {
+    const { service, eventService } = setup();
+
+    const updated = await service.checkpoint(context, 'job-1', {
+      status: 'failed',
+      step: 'inference',
+      turns: [{ role: 'assistant', content: 'Context overflow' }],
+    });
+
+    expect(updated.status).toBe('failed');
+    expect(eventService.completeJob).toHaveBeenCalledWith('agent', 'pg-job-1', {
+      status: 'failed',
+      reason: 'inference',
+    });
+  });
+
+  it('fails queued jobs that never checked in', async () => {
+    const { job, service, jobRepository } = setup();
+    job.status = 'queued';
+    job.createdAt = new Date(Date.now() - 3 * 60 * 1000);
+    jobRepository.find = jest.fn(async ({ where }: { where: { status: string } }) =>
+      where.status === 'queued' ? [job] : [],
+    );
+
+    const closed = await service.failStale();
+
+    expect(closed).toBe(1);
+    expect(job.status).toBe('failed');
   });
 
   it('closes the task when the job completes', async () => {

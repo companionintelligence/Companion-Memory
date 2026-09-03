@@ -156,7 +156,7 @@ function ChatPageContent() {
     }
 
     const timer = window.setInterval(() => {
-      void refetchThread();
+      void refetchThread({ silent: true });
     }, 4000);
 
     return () => window.clearInterval(timer);

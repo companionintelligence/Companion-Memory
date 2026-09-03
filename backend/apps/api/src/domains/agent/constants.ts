@@ -30,6 +30,12 @@ export const AGENT_DISPATCH_QUEUE_OPTIONS: QueueOptions = {
   retryDelay: 30,
 };
 
+/** Still queued after this: OpenClaw never fetched the packet. */
+export const DISPATCH_QUEUED_STALE_MS = 2 * 60 * 1000;
+
+/** Running this long with no terminal checkpoint: treat as hung. */
+export const DISPATCH_RUNNING_STALE_MS = 15 * 60 * 1000;
+
 export const AGENT_MEMORY_QUEUE = 'agent-memory';
 
 export const AGENT_MEMORY_QUEUE_OPTIONS: QueueOptions = {

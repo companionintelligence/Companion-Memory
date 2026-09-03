@@ -117,7 +117,7 @@ export type PlanningTaskResultPayload = {
   userId: string;
   jobId: string;
   taskId?: string | null;
-  status: 'blocked' | 'completed';
+  status: 'blocked' | 'completed' | 'failed';
   reason?: string;
 };
 
