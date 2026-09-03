@@ -206,24 +206,20 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
       return;
     }
 
-    let idx = 0;
     for (const feat of doc.features as Feature[]) {
       if (!feat || typeof feat !== 'object') {
-        idx++;
         continue;
       }
 
       if (base === REVIEWS_FILE) {
-        this.pushReview(feat, idx, params);
+        this.pushReview(feat, params);
       } else {
-        this.pushPlace(feat, idx, params, base === LABELED_FILE);
+        this.pushPlace(feat, params, base === LABELED_FILE);
       }
-
-      idx++;
     }
   }
 
-  private pushPlace(feat: Feature, idx: number, params: ImportParams, labeled = false): void {
+  private pushPlace(feat: Feature, params: ImportParams, labeled = false): void {
     const props = feat.properties || {};
     const ts = parseDate(props.date);
     if (!timeframeContains(params.timeframe, ts)) {
@@ -241,18 +237,23 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
     // bare filename, which is the same for every feature).
     const title = name || address || 'Saved place';
     const c = coords(feat);
-    // Stable id: the place cid from the maps url when present, else the parse
-    // index. Saved Places share the "Saved Places.json" filename and many have
-    // the [0,0] placeholder coordinate + no distinguishing timestamp, so without
-    // a per-record key they would collapse in hashItem (persistence.ts).
+    // Stable id: the place cid from the maps url when present, else a hash of
+    // what identifies the pin. Saved Places share the "Saved Places.json"
+    // filename and many have the [0,0] placeholder coordinate + no
+    // distinguishing timestamp, so without a per-record key they would collapse
+    // in hashItem (persistence.ts).
+    //
+    // SRC-06: the fallback used to be the PARSE INDEX for a non-labeled place,
+    // which is not an identity — `source_id` is the destination's unique key,
+    // and Takeout reorders. Content-derived on both lanes now.
     const cid = cidFromUrl(url);
-    const labeledKey = crypto
+    const contentKey = crypto
       .createHash('sha1')
       .update([name, address, c?.lat ?? '', c?.lon ?? ''].join('\0'))
       .digest('hex');
     params.pipeline.push({
       item: {
-        id: `gmaps:place:${cid || (labeled ? labeledKey : idx)}`,
+        id: `gmaps:place:${cid || contentKey}`,
         classification: 'place',
         timestamp: ts,
         ...(c && { location: { latitude: c.lat, longitude: c.lon } }),
@@ -274,7 +275,7 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
     });
   }
 
-  private pushReview(feat: Feature, idx: number, params: ImportParams): void {
+  private pushReview(feat: Feature, params: ImportParams): void {
     const props = feat.properties || {};
     const ts = parseDate(props.date);
     if (!timeframeContains(params.timeframe, ts)) {
@@ -287,13 +288,32 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
     const url = props.google_maps_url;
     const rating = props.five_star_rating_published;
     const text = (asString(props.review_text_published) || '').trim();
-    // Title is the reviewed place; reviews carry no place cid in the url so key
-    // on the parse index to keep each review a distinct, idempotent row.
     const title = name || address || 'Map review';
     const c = coords(feat);
+    // SRC-06. Reviews carry no place cid in the url, so this key is hashed from
+    // what the review IS. It used to be the parse index, which is a POSITION,
+    // not an identity: `source_id` is the destination's unique key (all eight
+    // destination indexes are `(user_id, source_system, source_id)`), and
+    // Takeout writes reviews newest-first — one new review shifts every id by
+    // one and each row silently overwrites its neighbour on the next import.
+    //
+    // Two reviews of the same place on the same day with the same rating and
+    // the same words are one review as far as this key is concerned; that
+    // collapse is deliberate (they are indistinguishable in the export) and,
+    // unlike the index, it does not move when the file grows. `date` is the
+    // RAW property, not the parsed Date, so the key does not shift if the
+    // parser's date handling ever changes.
+    const reviewKey = crypto
+      .createHash('sha1')
+      .update(
+        [name, address, asString(props.date) ?? '', typeof rating === 'number' ? rating : '', text].join(
+          '\0',
+        ),
+      )
+      .digest('hex');
     params.pipeline.push({
       item: {
-        id: `gmaps:review:${idx}`,
+        id: `gmaps:review:${reviewKey}`,
         classification: 'annotation',
         timestamp: ts,
         ...(c && { location: { latitude: c.lat, longitude: c.lon } }),
