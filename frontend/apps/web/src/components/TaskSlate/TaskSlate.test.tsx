@@ -215,13 +215,15 @@ describe('TaskSlateDrawer — Plan backlog', () => {
   });
 
   /**
-   * The slate and the Plan board read the same `Section`, so they have to
-   * report the same size. The slate used to count `section.tasks.length` —
-   * roots only — while the board counts the subtree, so a column of one parent
-   * with two live subtasks read "3" on Plan and "1" here, and an overdue
-   * subtask went unmentioned on this surface entirely.
+   * ═══ WHAT THIS TEST USED TO CHECK ═══
+   * That the slate borrowed the Plan board's subtree-aware `section.count`, so
+   * both surfaces printed the same number. They did — over lists of different
+   * lengths. The board renders every child nested under its root; this rail
+   * renders roots only, so "3" sat above a single card. A badge answers for
+   * the surface it is on: the slate counts what it lists, and the subtree work
+   * it does not list is named rather than silently folded into the badge.
    */
-  it('counts nested work the way the Plan board does, not just the roots', async () => {
+  it('counts the cards it lists, not the subtree hidden behind them', async () => {
     renderWithProviders(
       <TaskSlateDrawer
         open
@@ -238,11 +240,154 @@ describe('TaskSlateDrawer — Plan backlog', () => {
 
     const tab = await screen.findByRole('tab', { name: /unscheduled/i });
 
-    expect(within(tab).getByText('3')).toBeInTheDocument();
-    expect(within(tab).getByText('1 overdue')).toBeInTheDocument();
-    // Cards are still roots only — the badge describes the column, not the list.
+    expect(within(tab).getByText('1')).toBeInTheDocument();
+    expect(within(tab).queryByText('3')).not.toBeInTheDocument();
+    // The two children are overdue-carrying work on the board, not on this
+    // list — so the tab claims no overdue of its own.
+    expect(within(tab).queryByText(/overdue/i)).not.toBeInTheDocument();
+
+    // One card, and the hidden pair accounted for where the reader can see it.
     expect(screen.getByText('Plan the trip')).toBeInTheDocument();
     expect(screen.queryByText('Book flights')).not.toBeInTheDocument();
+    expect(screen.getByText(/Plan nests 2 subtasks under these/)).toBeInTheDocument();
+    expect(screen.getByText(/1 overdue/)).toBeInTheDocument();
+  });
+
+  /**
+   * The disclosure is sized by `section.count - section.tasks.length`, and
+   * `count` spans the whole subtree at every status — a `Section` hands this
+   * rail the subtree's size, never its rows, so a ticked-off child cannot be
+   * subtracted out from here. It therefore has to say what it spans: a rail
+   * called Possibilities that reports "1 nested subtask" over a finished one
+   * is claiming work that nobody has left to do.
+   */
+  it('does not sell a finished subtask as outstanding nested work', async () => {
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([
+          task({ id: 'u1', title: 'Plan the trip', dueAt: '2026-08-25T17:00:00.000Z' }),
+          task({ id: 'u2', title: 'Book flights', parentId: 'u1', status: 'done' }),
+        ])}
+        {...NOOP}
+      />,
+    );
+
+    expect(await screen.findByText('Plan the trip')).toBeInTheDocument();
+    expect(screen.queryByText(/1 nested subtask, on Plan/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Plan nests 1 subtask under these, done or not/)).toBeInTheDocument();
+    // Nothing here is overdue, and the done child must not make it look so.
+    expect(screen.queryByText(/overdue/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The overdue hint is a badge like any other: it has to describe the cards
+   * under it. Counting the subtree put "2 overdue" above a single overdue
+   * card, with the second overdue row nested inside an upcoming one.
+   */
+  it('warns about overdue cards it shows, and names nested overdue separately', async () => {
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([
+          task({ id: 'u1', title: 'Plan the trip', dueAt: '2026-08-25T17:00:00.000Z' }),
+          task({ id: 'u2', title: 'Renew passport', parentId: 'u1', dueAt: '2026-08-20T17:00:00.000Z' }),
+          task({ id: 'o1', title: 'Pay the bill', dueAt: '2026-08-20T17:00:00.000Z' }),
+        ])}
+        {...NOOP}
+      />,
+    );
+
+    const tab = await screen.findByRole('tab', { name: /unscheduled/i });
+
+    expect(within(tab).getByText('2')).toBeInTheDocument();
+    expect(within(tab).getByText('1 overdue')).toBeInTheDocument();
+    expect(within(tab).queryByText('2 overdue')).not.toBeInTheDocument();
+
+    const overdueLane = screen.getByRole('heading', { name: /^overdue/i });
+
+    expect(within(overdueLane).getByText('1')).toBeInTheDocument();
+    expect(screen.getByText(/Plan nests 1 subtask under these/)).toBeInTheDocument();
+  });
+
+  /**
+   * Proposed has no Overdue lane at all (`LANE_ORDER.proposed`), so the lane
+   * lookup in `listedInSlate` falls through to `?? 0` and every overdue row the
+   * section counts is, by construction, a hidden child. Nothing on this tab may
+   * claim overdue of its own — a proposed root is never overdue itself — but the
+   * child still has to be named somewhere, and the nested line is that place.
+   */
+  it('keeps a proposed root free of an overdue badge and names the overdue child instead', async () => {
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([
+          task({ id: 'p1', title: 'Try this', status: 'proposed' }),
+          task({ id: 'p2', title: 'Renew passport', parentId: 'p1', dueAt: '2026-08-20T17:00:00.000Z' }),
+        ])}
+        {...NOOP}
+      />,
+    );
+
+    const tab = await screen.findByRole('tab', { name: /^proposed/i });
+
+    expect(within(tab).getByText('1')).toBeInTheDocument();
+    expect(within(tab).queryByText(/overdue/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /^overdue/i })).not.toBeInTheDocument();
+
+    expect(screen.getByText(/Plan nests 1 subtask under these, done or not/)).toBeInTheDocument();
+    expect(screen.getByText(/· 1 overdue/)).toBeInTheDocument();
+  });
+
+  /**
+   * The empty copy is a claim about the rail, so it has to follow what the rail
+   * lists. `section.count` is subtree-aware and this surface renders roots only,
+   * so counting it would open a tab strip over a column with no cards in it and
+   * swallow the "nothing waiting" line that belongs there.
+   */
+  it('calls a section with no roots empty, however big its subtree count is', async () => {
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={[
+          { key: 'unscheduled', label: 'Unscheduled', lanes: [], tasks: [], count: 2, overdueCount: 1 },
+        ]}
+        {...NOOP}
+      />,
+    );
+
+    expect(await screen.findByText(/Nothing in Proposed or Unscheduled/)).toBeInTheDocument();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+  });
+
+  /** Lane headings carry the same kind of number, so they answer the same way. */
+  it('sizes each lane heading by the cards in that lane', async () => {
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([
+          task({ id: 'u1', title: 'Plan the trip', dueAt: '2026-08-25T17:00:00.000Z' }),
+          task({ id: 'u2', title: 'Book flights', parentId: 'u1', dueAt: '2026-08-25T17:00:00.000Z' }),
+          task({ id: 'u3', title: 'Call Mum', dueAt: '2026-08-26T17:00:00.000Z' }),
+        ])}
+        {...NOOP}
+      />,
+    );
+
+    const upcoming = await screen.findByRole('heading', { name: /^upcoming/i });
+
+    expect(within(upcoming).getByText('2')).toBeInTheDocument();
+    expect(within(upcoming).queryByText('3')).not.toBeInTheDocument();
   });
 
   it('lists overdue after upcoming instead of pinning it to the column foot', async () => {

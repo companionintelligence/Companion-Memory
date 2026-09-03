@@ -35,11 +35,16 @@ const SAVE_MS = 450;
 
 /**
  * Why closing needs three answers and not two: a refusal to save is not one
- * thing. `invalid` is the user's own draft asking to be fixed and is worth
- * holding the dialog open for; `failed` is the network or the server, which no
- * amount of staying open can fix, so it must never be what keeps the user in.
+ * thing. `invalid` is the user's own draft asking to be fixed, and the inline
+ * error is the whole reason to hold the dialog open. `failed` is the network or
+ * the server — the draft is fine, so closing would destroy good work, but the
+ * user still has to be able to leave, which is why that state grows its own
+ * pair of exits rather than just refusing.
  */
 type PersistResult = 'saved' | 'invalid' | 'failed';
+
+const SAVE_FAILED = "That task couldn't be saved. Your changes are still here.";
+const RETRY_REFUSED = 'Nothing was sent — fix the problem above, then try again.';
 
 type Draft = {
   title: string;
@@ -127,10 +132,15 @@ function inputFromDraft(id: string, draft: Draft) {
 export function EditTaskModal({ task, onClose, onSaved }: Props) {
   const [draft, setDraft] = useState<Draft>(() => draftFromTask(task));
   const [error, setError] = useState<string | null>(null);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [closeRefused, setCloseRefused] = useState(false);
+  const [retryRefused, setRetryRefused] = useState(false);
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [updateTask] = useMutation(UPDATE_TASK, { errorPolicy: 'all' });
   const { toast } = useToast();
   const lastSaved = useRef<Draft>(draftFromTask(task));
+  const discardRef = useRef<HTMLButtonElement>(null);
+  const attempt = useRef(0);
   const persistRef = useRef<(next: Draft) => Promise<PersistResult>>(async () => 'failed');
 
   const persist = useCallback(
@@ -144,11 +154,24 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
         return 'invalid';
       }
 
+      // Only the newest attempt may report an outcome. Two persists overlap
+      // whenever the user presses Done with an autosave still in flight, and
+      // the older one resolving last used to leave `saveFailed` describing a
+      // save nobody is waiting on any more. The counter is bumped on the
+      // nothing-to-send path too, so reverting to the saved values also retires
+      // whatever is in flight — otherwise its failure would raise the panel
+      // over a draft that already matches the server.
+      const seq = ++attempt.current;
+      const isCurrent = () => seq === attempt.current;
+
+      setError(null);
+      setSaveFailed(false);
+      setCloseRefused(false);
+
       if (draftsEqual(next, lastSaved.current)) {
         return 'saved';
       }
 
-      setError(null);
       setStatus('saving');
 
       try {
@@ -160,10 +183,18 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
         // on the returned task; those used to surface as "couldn't be saved"
         // after the title was already on the server.
         if (!data?.updateTask.success) {
-          setError("That task couldn't be saved. Try again.");
-          setStatus('idle');
+          if (isCurrent()) {
+            setSaveFailed(true);
+            setStatus('idle');
+          }
 
           return 'failed';
+        }
+
+        if (!isCurrent()) {
+          // Superseded: reporting now would clear a newer attempt's failure and
+          // rewind `lastSaved` to this attempt's older draft.
+          return 'saved';
         }
 
         lastSaved.current = next;
@@ -172,8 +203,10 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
 
         return 'saved';
       } catch {
-        setError("That task couldn't be saved. Try again.");
-        setStatus('idle');
+        if (isCurrent()) {
+          setSaveFailed(true);
+          setStatus('idle');
+        }
 
         return 'failed';
       }
@@ -194,6 +227,11 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
     }
 
     if (draftsEqual(draft, lastSaved.current)) {
+      // Typing the original values back leaves the failed save nothing to
+      // protect, so the notice — and the close it holds up — goes with it.
+      setSaveFailed(false);
+      setCloseRefused(false);
+
       return;
     }
 
@@ -206,39 +244,58 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
   }, [draft]);
 
   /**
-   * ═══ CLOSING USED TO THROW THE EDIT AWAY, THEN USED TO TRAP THE USER ═══
+   * ═══ CLOSING THREW THE EDIT AWAY; THEN IT TRAPPED THE USER ═══
    *
-   * `persist` refuses an invalid draft without touching the network — it only
-   * calls `setError`. Closing regardless unmounted the dialog with the error
-   * still inside it, so a blank title silently discarded every unsaved change
-   * and said nothing. Staying open on ANY refusal then over-corrected: Done,
-   * Escape, the backdrop and shadcn's X all funnel through here, so an offline
-   * user whose save kept failing had no exit but a page reload.
+   * Two earlier shapes, both wrong. Closing on any refusal unmounted the dialog
+   * with the user's work inside it. Holding it open on any refusal then locked
+   * an offline user in — Done, Escape, the backdrop and shadcn's X all funnel
+   * through this one handler, so a failing network became a dialog with no exit
+   * but a page reload.
    *
-   * So the two refusals part ways. An invalid draft holds the dialog open —
-   * the inline error is the whole point of it, and the fix is one keystroke
-   * away. A failed save lets the close through and says so in a toast that
-   * outlives the dialog: staying open cannot repair a dead network, and the
-   * user must never be locked in a box whose only key is the thing that just
-   * broke.
+   * The way out of both is that a failed save is a state, not a verdict on the
+   * close. It keeps the dialog open with the draft intact, and it puts the
+   * decision the user actually has — retry, or throw this away — on screen as
+   * two labelled buttons. A close attempt made while that state is up must not
+   * be swallowed in silence, or the dialog just looks broken: it points the
+   * user at those two exits instead.
    */
   const handleClose = async () => {
-    const result = await persistRef.current(draft);
+    if (saveFailed) {
+      setCloseRefused(true);
+      discardRef.current?.focus();
 
-    if (result === 'invalid') {
       return;
     }
 
-    if (result === 'failed') {
-      toast.error("Those changes couldn't be saved — the task is unchanged.");
+    const result = await persistRef.current(draft);
+
+    // 'invalid' holds open behind its inline error; 'failed' holds open behind
+    // the retry/discard pair `persist` just raised.
+    if (result !== 'saved') {
+      return;
     }
 
+    onClose();
+  };
+
+  // A retry the draft's own contents refuse has to say so, or the button reads
+  // as dead: the failure panel is already on screen and clicking changes
+  // nothing visible without this.
+  const handleRetry = async () => {
+    const result = await persistRef.current(draft);
+
+    setRetryRefused(result === 'invalid');
+  };
+
+  const handleDiscard = () => {
+    toast.error('Those changes were discarded — the task is unchanged.');
     onClose();
   };
 
   const patch = (partial: Partial<Draft>) => {
     setDraft((current) => ({ ...current, ...partial }));
     setStatus('idle');
+    setRetryRefused(false);
   };
 
   return (
@@ -296,10 +353,23 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
             </div>
           </div>
 
-          {error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
+          {/*
+            Both refusals can be live at once — the last save failed AND the
+            draft has since gone invalid — so the panel states both rather than
+            letting the failure hide the validation error, which used to leave a
+            retry refusing for a reason that was never on screen. The validation
+            line comes first: it is the one blocking the retry, so it is the one
+            the user can act on.
+          */}
+          {saveFailed || error ? (
+            <div role="alert" className="flex flex-col gap-1 text-sm text-destructive">
+              {error ? <p>{error}</p> : null}
+              {saveFailed ? <p>{SAVE_FAILED}</p> : null}
+              {saveFailed && closeRefused ? (
+                <p>Nothing is saved yet — try again, or discard your changes to close.</p>
+              ) : null}
+              {error && retryRefused ? <p>{RETRY_REFUSED}</p> : null}
+            </div>
           ) : (
             <p className="text-sm text-muted-foreground" aria-live="polite">
               {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved' : ' '}
@@ -307,9 +377,20 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
           )}
 
           <Dialog.Footer>
-            <Button type="button" onClick={() => void handleClose()}>
-              Done
-            </Button>
+            {saveFailed ? (
+              <>
+                <Button ref={discardRef} type="button" variant="outline" onClick={handleDiscard}>
+                  Discard changes and close
+                </Button>
+                <Button type="button" onClick={() => void handleRetry()}>
+                  Try again
+                </Button>
+              </>
+            ) : (
+              <Button type="button" onClick={() => void handleClose()}>
+                Done
+              </Button>
+            )}
           </Dialog.Footer>
         </div>
       </Dialog.Content>

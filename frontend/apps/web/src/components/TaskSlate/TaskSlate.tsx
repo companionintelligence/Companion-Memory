@@ -132,6 +132,56 @@ function BacklogCard({ task, onDismiss, onPlace }: CardProps) {
   );
 }
 
+/**
+ * What this rail actually puts on screen, and what it leaves to Plan.
+ *
+ * `section.count` / `section.overdueCount` are subtree-aware: right for the
+ * Plan board, which renders every child nested under its root, wrong here,
+ * where only roots get a card. Borrowing them printed a "3" over a list of
+ * one. Roots are all this surface can attribute — a `Section` carries the
+ * subtree's size but not its rows — so the badge counts the cards and the
+ * remainder is named (see `NestedNote`) rather than left looking like a bug.
+ *
+ * A root sits in the Overdue lane exactly when `isOverdue` holds for it, so
+ * whatever overdue the section counts beyond that lane is a hidden child.
+ */
+function listedInSlate(section: Section<PlanTask>) {
+  const count = section.tasks.length;
+  const overdueCount = section.lanes.find((lane) => lane.key === 'overdue')?.tasks.length ?? 0;
+
+  return {
+    count,
+    overdueCount,
+    nested: section.count - count,
+    nestedOverdue: section.overdueCount - overdueCount,
+  };
+}
+
+/**
+ * "Plan nests 2 subtasks under these" — the board's number, minus this list.
+ *
+ * `nested` counts finished descendants too, and it has to: a `Section` carries
+ * the subtree's size but not its rows, so a done child is indistinguishable
+ * from a live one from here. "2 nested subtasks" therefore promised
+ * outstanding work in a rail titled Possibilities even when the only child was
+ * ticked off, so the line says what the number actually spans instead.
+ *
+ * `nestedOverdue` comes from `overdueCount`, which is status-aware — finished
+ * work is never overdue — so that clause can still be stated flatly.
+ */
+function NestedNote({ nested, nestedOverdue }: { nested: number; nestedOverdue: number }) {
+  if (nested <= 0) {
+    return null;
+  }
+
+  return (
+    <p className="px-1 pb-2 text-[11px] leading-snug text-muted-foreground">
+      Plan nests {nested} {nested === 1 ? 'subtask' : 'subtasks'} under these, done or not
+      {nestedOverdue > 0 ? <span className="text-destructive"> · {nestedOverdue} overdue</span> : null}
+    </p>
+  );
+}
+
 function BacklogColumn({
   section,
   onDismiss,
@@ -143,10 +193,7 @@ function BacklogColumn({
   showHeading?: boolean;
   onPlace?: (id: string) => void;
 }) {
-  // Subtree-aware, straight off the section — the same numbers the Plan board
-  // shows. A local roots-only count made the same column read differently
-  // depending on which surface you were looking at it from.
-  const overdue = section.overdueCount;
+  const { count, overdueCount: overdue, nested, nestedOverdue } = listedInSlate(section);
   const dismiss = section.key === 'proposed' ? onDismiss : undefined;
 
   return (
@@ -154,7 +201,7 @@ function BacklogColumn({
       {showHeading ? (
         <h4 className="shrink-0 px-1 pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {section.label}
-          <span className="ml-2 font-normal">{section.count}</span>
+          <span className="ml-2 font-normal">{count}</span>
           {overdue > 0 ? (
             <span className="ml-2 font-normal normal-case tracking-normal text-destructive">
               {overdue} overdue
@@ -164,6 +211,8 @@ function BacklogColumn({
       ) : overdue > 0 ? (
         <p className="px-1 pb-2 text-xs text-destructive">{overdue} overdue</p>
       ) : null}
+
+      <NestedNote nested={nested} nestedOverdue={nestedOverdue} />
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto" data-list-scroll="">
         {section.lanes.map((lane) => (
@@ -176,7 +225,7 @@ function BacklogColumn({
                 )}
               >
                 {lane.label}
-                <span className="ml-2 font-normal">{lane.count}</span>
+                <span className="ml-2 font-normal">{lane.tasks.length}</span>
               </h5>
             ) : null}
             <ul className="flex flex-col gap-2">
@@ -207,7 +256,7 @@ interface SlateBodyProps {
 /** The empty/loading/error copy and the backlog columns, behind a tablist. */
 function SlateBody({ sections, loading, error = false, onDismissProposed, onPlace }: SlateBodyProps) {
   const [tab, setTab] = useState<string | null>(null);
-  const hasCards = sections.some((section) => section.count > 0);
+  const hasCards = sections.some((section) => section.tasks.length > 0);
   const firstKey = sections[0]?.key;
   const activeTab = sections.some((section) => section.key === tab) ? tab! : firstKey;
 
@@ -232,15 +281,19 @@ function SlateBody({ sections, loading, error = false, onDismissProposed, onPlac
       {hasCards && activeTab ? (
         <Tabs value={activeTab} onValueChange={setTab} className="flex min-h-0 flex-col gap-3">
           <Tabs.List className="h-auto max-w-full justify-start overflow-x-auto">
-            {sections.map((section) => (
-              <Tabs.Trigger key={section.key} value={section.key} className="shrink-0">
-                {section.label}
-                <span className="ml-2 font-normal">{section.count}</span>
-                {section.overdueCount > 0 ? (
-                  <span className="ml-2 font-normal text-destructive">{section.overdueCount} overdue</span>
-                ) : null}
-              </Tabs.Trigger>
-            ))}
+            {sections.map((section) => {
+              const listed = listedInSlate(section);
+
+              return (
+                <Tabs.Trigger key={section.key} value={section.key} className="shrink-0">
+                  {section.label}
+                  <span className="ml-2 font-normal">{listed.count}</span>
+                  {listed.overdueCount > 0 ? (
+                    <span className="ml-2 font-normal text-destructive">{listed.overdueCount} overdue</span>
+                  ) : null}
+                </Tabs.Trigger>
+              );
+            })}
           </Tabs.List>
 
           {sections.map((section) => (
@@ -296,7 +349,9 @@ export function TaskSlateDrawer({
 }: TaskSlateDrawerProps) {
   const { isMobile } = useDeviceLayout();
   const [composing, setComposing] = useState(false);
-  const [draft, setDraft] = useState<EventDraft>(() => eventDraftAt(slot?.instant ?? new Date(), slot?.allDay));
+  const [draft, setDraft] = useState<EventDraft>(() =>
+    eventDraftAt(slot?.instant ?? new Date(), slot?.allDay),
+  );
   const [problem, setProblem] = useState<EventDraftProblem | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [createEvent, { loading: creating }] = useMutation(CREATE_EVENT);
@@ -377,14 +432,22 @@ export function TaskSlateDrawer({
         </Sheet.Header>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4">
-          <section aria-labelledby="slot-predictions-label" className="rounded-lg border border-border bg-muted/30 px-3 py-2.5">
+          <section
+            aria-labelledby="slot-predictions-label"
+            className="rounded-lg border border-border bg-muted/30 px-3 py-2.5"
+          >
             <h4
               id="slot-predictions-label"
               className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
             >
               Predictions
             </h4>
-            <p className={cn('mt-1 text-[13px] leading-snug', insight ? 'text-foreground' : 'text-muted-foreground')}>
+            <p
+              className={cn(
+                'mt-1 text-[13px] leading-snug',
+                insight ? 'text-foreground' : 'text-muted-foreground',
+              )}
+            >
               {insight ?? 'No predictions available'}
             </p>
           </section>
