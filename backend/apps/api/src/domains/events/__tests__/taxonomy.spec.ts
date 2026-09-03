@@ -1,10 +1,13 @@
+import { DEAD_LETTER_QUEUE } from '../constants';
 import {
   categoryOfEvent,
+  categoryOfJob,
   describeJob,
   jobCategoryIndex,
   jobCategorySelector,
   JOB_CATEGORIES,
   JOB_TYPES,
+  JOB_TYPES_BY_QUEUE,
   SMART_ROTATION_WORK,
   SMART_ROTATION_WORK_LABELS,
   UNCLASSIFIED_CATEGORY,
@@ -83,21 +86,36 @@ describe('job taxonomy', () => {
     expect(describeJob('smart.rotation.work', 'brand_new_thing').label).toBe('brand_new_thing');
   });
 
-  it('classifies an unknown event instead of throwing', () => {
+  it('names an unknown event instead of throwing', () => {
     const fingerprinted = describeJob('not.a.real.event', 'nightly', 'search-index');
 
     expect(fingerprinted.label).toBe('Not a real event · Nightly');
-    expect(fingerprinted.category).toBe(JOB_CATEGORIES.search);
     expect(fingerprinted.description).toContain('`not.a.real.event`');
     expect(fingerprinted.description).toContain('`nightly`');
     expect(fingerprinted.description).toContain('`search-index`');
+    // The queue's guess reaches the operator as prose, not as a category — see
+    // 'keeps the fingerprint's guess' below for why that distinction matters.
+    expect(fingerprinted.description).toContain('`search`');
+    expect(fingerprinted.category).toBe(UNCLASSIFIED_CATEGORY);
     expect(describeJob(null).label).toBe('Unclassified job');
   });
 
-  it('guesses a category from the event prefix when the queue is unknown', () => {
-    expect(describeJob('planning.todo-scan').category).toBe(JOB_CATEGORIES.planning);
-    expect(describeJob('planning.todo-scan').label).toBe('Planning todo scan');
-    expect(describeJob('hbpe.nightly').category).toBe(JOB_CATEGORIES.llm);
+  it('guesses from the event prefix when the queue is unknown, in the prose', () => {
+    // Neither of these exists in JOB_TYPES — they are stand-ins for whatever
+    // event ships next without an entry. The prefix rule still gives an
+    // operator a readable name and a hint at which block of this file it
+    // belongs in…
+    const planning = describeJob('planning.todo-scan');
+    const model = describeJob('hbpe.nightly');
+
+    expect(planning.label).toBe('Planning todo scan');
+    expect(planning.description).toContain('`planning`');
+    expect(model.description).toContain('`llm`');
+
+    // …and the category stays `unclassified`, because that is the only bucket
+    // the chips count them in and the filter can return them from.
+    expect(planning.category).toBe(UNCLASSIFIED_CATEGORY);
+    expect(model.category).toBe(UNCLASSIFIED_CATEGORY);
   });
 
   it('classifies chat generate as interactive LLM work', () => {
@@ -171,33 +189,55 @@ describe('job taxonomy', () => {
     }
   });
 
-  it('counts an event with no taxonomy entry as `unclassified`, whatever the row is labelled', () => {
-    // `describeJob` now FINGERPRINTS an unknown event — it mints a readable
-    // label and GUESSES a category from the prefix or queue, which is a strictly
-    // better row than "Unclassified job". But a guess is not filterable: the
-    // category filter unfolds a category back into event names out of JOB_TYPES,
-    // and a fingerprinted event is by definition not in there.
-    //
-    // So counting must NOT follow the guess. `categoryOfEvent` is the fold the
-    // chips, the category chart and the sampled metrics all share, and it has to
-    // agree with what clicking a chip returns — otherwise a chip reads a number
-    // that selecting it cannot reproduce, which is the bug this bucket exists to
-    // end (measured live: 587 of 9,557 jobs, 54% of the Completed tab).
+  it('counts an event with no taxonomy entry as `unclassified`, and LABELS it that way too', () => {
+    // `describeJob` FINGERPRINTS an unknown event — it mints a readable label
+    // from the event/work-type/queue, which is a strictly better row than
+    // "Unclassified job". It used to fingerprint the CATEGORY as well, and that
+    // was the bug: a category is a filterable fact, `jobCategorySelector`
+    // unfolds one back into event names out of JOB_TYPES, and a fingerprinted
+    // event is by definition not in there. So the table rendered "Search index"
+    // on a row the Search index chip neither counted nor returned — the same
+    // contradiction UNCLASSIFIED_CATEGORY was introduced to end, one layer up
+    // (measured live: 587 of 9,557 jobs, 54% of the Completed tab).
     expect(categoryOfEvent('some.brand.new.event')).toBe(UNCLASSIFIED_CATEGORY);
     expect(categoryOfEvent(null)).toBe(UNCLASSIFIED_CATEGORY);
 
-    // The fingerprint is free to guess a real category for DISPLAY…
+    // The label is still fingerprinted…
     expect(describeJob('some.brand.new.event').label).toBe('Some brand new event');
-    // …and the fold still refuses to follow it.
-    expect(categoryOfEvent('some.brand.new.event')).not.toBe(describeJob('some.brand.new.event').category);
+    // …and the category the row DISPLAYS is now the one that counts and selects
+    // it. Display, fold and filter are three views of one answer.
+    //
+    // This assertion used to be its own inverse — `categoryOfEvent(...)` had to
+    // NOT equal `describeJob(...).category`, with the divergence written down as
+    // deliberate. It was the bug: the guess was rendered in the Category cell of
+    // a row no chip counted and no filter returned.
+    expect(describeJob('some.brand.new.event').category).toBe(UNCLASSIFIED_CATEGORY);
+    expect(describeJob(null).category).toBe(UNCLASSIFIED_CATEGORY);
 
     // A known event folds to its real category, so the two only diverge where
-    // the taxonomy has nothing to say.
+    // the taxonomy has nothing to say — and now they do not diverge even there.
     expect(categoryOfEvent('chat.generate')).toBe(JOB_CATEGORIES.llm);
 
     // And the sentinel stays out of the real category enum, or a descriptor
     // could be written against it and the bucket would stop meaning "absent".
     expect(Object.values(JOB_CATEGORIES)).not.toContain(UNCLASSIFIED_CATEGORY);
+  });
+
+  it('keeps the fingerprint\u2019s guess, but as prose rather than as a category', () => {
+    // The guess is worth showing — it is the fastest pointer at which entry
+    // someone should write — it just may not sit in the one field the filter
+    // treats as a fact. `search-index` is a FINGERPRINT_QUEUE_CATEGORY key and
+    // `file.` a FINGERPRINT_CATEGORY prefix, so both arms are covered.
+    const fromQueue = describeJob('zz.no-such-event', null, 'search-index');
+    const fromPrefix = describeJob('file.zz-no-such-event', null, 'some-unknown-queue');
+
+    expect(fromQueue.description).toContain('`search`');
+    expect(fromQueue.category).toBe(UNCLASSIFIED_CATEGORY);
+    expect(fromPrefix.description).toContain('`ingest`');
+    expect(fromPrefix.category).toBe(UNCLASSIFIED_CATEGORY);
+
+    // And it still says what to do about it.
+    expect(fromQueue.description).toContain('taxonomy.ts');
   });
 
   it('classifies the events a live appliance was rendering as "Unclassified job"', () => {
@@ -277,6 +317,30 @@ describe('job taxonomy', () => {
     expect(seeded.category).toBe(JOB_CATEGORIES.personalization);
     expect(provisioned.category).toBe(JOB_CATEGORIES.import);
     expect(provisioned.label).not.toBe(seeded.label);
+  });
+
+  it('files the per-visit browser classification under the model, not the search index', () => {
+    // `browseractivity.created` has TWO listeners: BrowserActivitySearchIndexListener
+    // on `search-index`, and BrowserActivityInsightListener on its own 1-slot
+    // `browser-activity-insight` queue, which runs an Ollama classification per
+    // browsed page. Only the generated search-index descriptor existed, so an
+    // operator filtering by Model to see what is queued against a saturated
+    // Ollama did not see the highest-frequency model call on the box.
+    const indexing = describeJob('browseractivity.created', null, 'search-index');
+    const insight = describeJob('browseractivity.created', null, 'browser-activity-insight');
+
+    expect(indexing.category).toBe(JOB_CATEGORIES.search);
+    expect(insight.category).toBe(JOB_CATEGORIES.llm);
+    expect(insight.label).not.toBe(indexing.label);
+
+    // …and the Model filter can actually reach it, which the label alone does
+    // not guarantee — see the invariant suite at the bottom of this file.
+    expect(jobCategorySelector(JOB_CATEGORIES.llm).includeQueueKeys).toContain(
+      'browseractivity.created::browser-activity-insight',
+    );
+    expect(jobCategorySelector(JOB_CATEGORIES.search).excludeQueueKeys).toContain(
+      'browseractivity.created::browser-activity-insight',
+    );
   });
 
   it('disambiguates answer.created between search-indexing and home confirmation', () => {
@@ -365,5 +429,123 @@ describe('jobCategorySelector', () => {
     expect(selector.events).toEqual([]);
     expect(selector.includeQueueKeys).toEqual([]);
     expect(selector.excludeQueueKeys).toEqual([]);
+  });
+
+  it('never carries a queue-scoped entry for an event with no base entry', () => {
+    // The `unclassified` filter branch is the complement of JOB_TYPES' KEYS, so
+    // an event that exists only in JOB_TYPES_BY_QUEUE would be selected both by
+    // `unclassified` (no base entry) and by the pair's own category — the one
+    // shape that breaks the one-category-per-row invariant proved below.
+    for (const key of Object.keys(JOB_TYPES_BY_QUEUE)) {
+      const [event = ''] = key.split('::');
+
+      expect(JOB_TYPES[event]).toBeDefined();
+    }
+  });
+});
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * DISPLAY = FOLD = FILTER, for every row.
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Three pieces of code answer "what category is this job?", in three places and
+ * three languages: `describeJob` labels the row, `categoryOfJob` counts it into
+ * a chip, and `jobCategorySelector` builds the SQL that returns it when the chip
+ * is clicked. A row is only honest when all three say the same thing, and this
+ * codebase has now had the same class of bug three times over from them not:
+ *
+ *   1. An unknown event rendered "Maintenance"; Maintenance did not return it.
+ *   2. A fingerprinted event rendered "Search index"; Search index neither
+ *      counted nor returned it.
+ *   3. `content.created` on `pipeline-index` rendered "Pipeline" and Pipeline
+ *      returned it, while the SEARCH chip was the one that counted it.
+ *
+ * Rather than a regression test per incident, this pins the invariant itself.
+ */
+describe('the category of a row is one answer, not three', () => {
+  /**
+   * `applyFilters`' category predicate, transcribed into JS.
+   *
+   * For a real category it emits
+   *   (event IN selector.events AND `event::queue` NOT IN excludeQueueKeys)
+   *   OR `event::queue` IN includeQueueKeys
+   * and for `unclassified`, the complement of JOB_TYPES' keys. Keeping the
+   * transcription here — rather than reaching into the service — is what lets
+   * this run without a database; `JobQueryService.spec.ts` proves the SQL
+   * actually emitted matches it.
+   */
+  function filterSelects(category: string, event: string | null, queue: string): boolean {
+    if (category === UNCLASSIFIED_CATEGORY) {
+      return event == null || JOB_TYPES[event] === undefined;
+    }
+
+    if (event == null) {
+      return false;
+    }
+
+    const { events, includeQueueKeys, excludeQueueKeys } = jobCategorySelector(category);
+    const key = `${event}::${queue}`;
+
+    return (events.includes(event) && !excludeQueueKeys.includes(key)) || includeQueueKeys.includes(key);
+  }
+
+  /**
+   * Rows that between them cover every branch: a plain single-listener event,
+   * every queue-scoped pair on BOTH its queues, an unknown event on a queue the
+   * fingerprint recognises and on one it does not, a row with no event name at
+   * all, and — the case that forces the fallback — the dead-letter copy of a
+   * pair event, whose queue column no longer says where it ran.
+   */
+  const ROWS: ReadonlyArray<readonly [event: string | null, queue: string]> = [
+    ['note.created', 'search-index'],
+    ['chat.generate', 'llm'],
+    ['content.created', 'search-index'],
+    ['content.created', 'pipeline-index'],
+    ['communication.created', 'search-index'],
+    ['communication.created', 'people-linking'],
+    ['answer.created', 'search-index'],
+    ['answer.created', 'default'],
+    ['user.created', 'default'],
+    ['user.created', 'import-inbox-provision'],
+    ['browseractivity.created', 'search-index'],
+    ['browseractivity.created', 'browser-activity-insight'],
+    // The queue is gone: pg-boss rewrote it on the dead-letter copy.
+    ['content.created', DEAD_LETTER_QUEUE],
+    ['browseractivity.created', DEAD_LETTER_QUEUE],
+    ['zz.no-such-event', 'search-index'],
+    ['zz.no-such-event', 'a-queue-nobody-has-heard-of'],
+    ['file.zz-no-such-event', 'default'],
+    [null, DEAD_LETTER_QUEUE],
+  ];
+
+  const ALL_BUCKETS = [...Object.values(JOB_CATEGORIES), UNCLASSIFIED_CATEGORY];
+
+  it.each(ROWS)('%s on %s is counted, labelled and returned as one category', (event, queue) => {
+    const selecting = ALL_BUCKETS.filter((bucket) => filterSelects(bucket, event, queue));
+
+    // Exactly one chip returns this row. Two would double-count it in the
+    // totals; none would make it unreachable from the filter row entirely.
+    expect(selecting).toHaveLength(1);
+
+    const [category] = selecting;
+
+    // The chip that returns it is the chip that counted it…
+    expect(categoryOfJob(event, queue)).toBe(category);
+    // …and is what the row's own Category cell says.
+    expect(describeJob(event, null, queue).category).toBe(category);
+  });
+
+  it('resolves a dead-lettered row by its event alone, exactly as the filter does', () => {
+    // The one place fold and filter must BOTH degrade rather than both resolve.
+    // `content.created` means `pipeline` on `pipeline-index`, but the copy on
+    // the dead-letter queue has lost that, and no amount of taxonomy can get it
+    // back — so both sides answer from the event, and the row stays selectable
+    // under the category it is shown as. 43% of rows on a live appliance are in
+    // this state, which is why it is the fallback and not an edge case.
+    expect(categoryOfJob('content.created', 'pipeline-index')).toBe(JOB_CATEGORIES.pipeline);
+    expect(categoryOfJob('content.created', DEAD_LETTER_QUEUE)).toBe(JOB_CATEGORIES.search);
+    expect(categoryOfJob('content.created', null)).toBe(JOB_CATEGORIES.search);
+    expect(categoryOfJob('content.created', DEAD_LETTER_QUEUE)).toBe(categoryOfEvent('content.created'));
   });
 });

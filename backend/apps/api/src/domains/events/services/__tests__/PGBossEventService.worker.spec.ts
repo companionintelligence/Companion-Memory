@@ -6,6 +6,7 @@ import type { LoggerService } from '@ci/common/logging';
 // Sibling import, not the `@ci/domains/events` barrel: a file inside a domain
 // reaching back through its own index is `no-intra-domain-via-barrel`, and it
 // would make this spec depend on the module's whole boot graph to read one type.
+import type { JobSlotPool } from '../../jobSlotPool';
 import type { Acknowledgement } from '../../types';
 import { PGBossEventService } from '../PGBossEventService';
 
@@ -78,6 +79,10 @@ interface FetchCall {
 interface WorkerInternals {
   boss: StubBoss;
   globalSemaphore: LimitFunction;
+  // The fetch-side budget. Read back only to assert it is EMPTY once the work
+  // is done: a slot that is never returned is invisible from the outside until
+  // enough of them have leaked that the queue quietly stops fetching at all.
+  globalSlots: JobSlotPool;
   perQueueSemaphores: Map<string, LimitFunction>;
   // The shipped ceilings the loop re-derives its semaphore sizes from on every
   // settings change. Sizing the semaphores alone is not enough any more: the
@@ -132,6 +137,10 @@ interface Harness {
   peakFor(queue: string): number;
   /** Peak number of listeners executing simultaneously across all queues. */
   peakTotal(): number;
+  /** Peak number of rows leased from pg-boss (fetched, not yet acked) at once. */
+  peakLeased(): number;
+  /** Global slots currently claimed — zero whenever nothing is in flight. */
+  reservedSlots(): number;
   /** Job ids whose listener ran to completion, in order. */
   executed: string[];
   shutdown(): Promise<void>;
@@ -161,16 +170,35 @@ function makeHarness(options: {
   const backlogs = new Map<string, QueuedJob[]>();
   const fetchCalls: FetchCall[] = [];
 
+  // Rows handed out by fetch() and not yet acked — i.e. what pg-boss would be
+  // holding in state `active`, and what the Jobs console's "Running" tile counts.
+  // Distinct from the peak listener overlap below: a leased row is one this
+  // process has taken the lease on, whether or not it is being worked.
+  let leased = 0;
+  let peakLeased = 0;
+
+  const release = () => {
+    leased = Math.max(leased - 1, 0);
+  };
+
   const boss: StubBoss = {
     fetch: jest.fn(async (queue: string, fetchOptions: { batchSize: number }) => {
       fetchCalls.push({ queue, batchSize: fetchOptions.batchSize });
 
       const backlog = backlogs.get(queue) ?? [];
+      const batch = backlog.splice(0, fetchOptions.batchSize);
 
-      return backlog.splice(0, fetchOptions.batchSize);
+      leased += batch.length;
+      peakLeased = Math.max(peakLeased, leased);
+
+      return batch;
     }),
-    complete: jest.fn(async () => undefined),
-    fail: jest.fn(async () => undefined),
+    complete: jest.fn(async () => {
+      release();
+    }),
+    fail: jest.fn(async () => {
+      release();
+    }),
     stop: jest.fn(async () => undefined),
   };
 
@@ -283,6 +311,14 @@ function makeHarness(options: {
 
     peakTotal() {
       return totalPeak;
+    },
+
+    peakLeased() {
+      return peakLeased;
+    },
+
+    reservedSlots() {
+      return worker.globalSlots.reservedCount;
     },
 
     async shutdown() {
@@ -513,6 +549,116 @@ describe('PGBossEventService work loop', () => {
       // Exactly the ceiling: below it would mean the pool is under-used, above it
       // means the global cap leaks.
       expect(harness.peakTotal()).toBe(3);
+    });
+
+    it('does not let concurrent queues collectively lease more jobs than the global ceiling', async () => {
+      // The capacity arithmetic is a READ of the global limiter, and every queue
+      // reads it before any of them dispatches: `onModuleInit` starts one
+      // un-awaited `work()` per queue, each runs synchronously as far as its
+      // first `fetch`, so all of them see the same untouched budget and fetch
+      // against it. On the appliance that is ~38 loops each claiming
+      // `min(perQueue, global, batch)` rows against a ceiling of 10.
+      //
+      // The rows are not merely counted wrong. Every one of them is `active` in
+      // pg-boss — on its lease clock, and counted by the Jobs console's
+      // "Running" tile — while it sits in a semaphore waiting for a slot the box
+      // will not have for minutes.
+      const queues = Array.from({ length: 12 }, (_, index) => `queue-${index}`);
+      const harness = makeHarness({
+        queues,
+        globalConcurrency: 3,
+        perQueueConcurrency: 2,
+        fetchBatchSize: 10,
+      });
+
+      for (const queue of queues) {
+        harness.listen(queue, 'file.uploaded');
+        harness.enqueue(
+          queue,
+          'file.uploaded',
+          Array.from({ length: 3 }, () => 100),
+        );
+      }
+
+      // Started in one synchronous pass, exactly as onModuleInit starts them.
+      for (const queue of queues) {
+        harness.start(queue);
+      }
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(harness.peakLeased()).toBeLessThanOrEqual(3);
+
+      await runUntilSettled(
+        (async () => {
+          while (harness.executed.length < 36) {
+            await jest.advanceTimersByTimeAsync(50);
+          }
+        })(),
+      );
+
+      // Bounding the lease must not cost throughput: every job still runs, and
+      // the pool still runs at its ceiling rather than one job at a time.
+      expect(harness.executed).toHaveLength(36);
+      expect(harness.peakLeased()).toBeLessThanOrEqual(3);
+      expect(harness.peakTotal()).toBe(3);
+    });
+
+    it('gives back the slots a short fetch did not fill, instead of leaking the budget', async () => {
+      // Every empty poll claims capacity it then does not use. Unreturned, those
+      // claims are permanent: the budget shrinks poll by poll until the appliance
+      // fetches nothing at all — with no error anywhere, just idle queues. A
+      // one-slot ceiling makes a single leak fatal rather than statistical.
+      const harness = makeHarness({ queues: ['search-index'], globalConcurrency: 1 });
+
+      harness.listen('search-index', 'note.created');
+      harness.start('search-index');
+
+      // Ten polls against an empty queue: ten reservations, ten short fetches.
+      await jest.advanceTimersByTimeAsync(BACKOFF_WHEN_EMPTY_MS * 10);
+
+      expect(harness.reservedSlots()).toBe(0);
+
+      harness.enqueue('search-index', 'note.created', [0]);
+      await jest.advanceTimersByTimeAsync(BACKOFF_WHEN_EMPTY_MS);
+
+      expect(harness.executed).toEqual(['search-index-job-1']);
+      expect(harness.reservedSlots()).toBe(0);
+    });
+
+    it('gives back the slots when the fetch itself throws', async () => {
+      const harness = makeHarness({ queues: ['search-index'], globalConcurrency: 1 });
+
+      harness.listen('search-index', 'note.created');
+      harness.boss.fetch.mockRejectedValueOnce(new Error('connection terminated'));
+      harness.enqueue('search-index', 'note.created', [0]);
+      harness.start('search-index');
+
+      await jest.advanceTimersByTimeAsync(BACKOFF_WHEN_EMPTY_MS * 2);
+
+      // A failed fetch leased nothing, so nothing will come back to release its
+      // reservation — the loop has to hand it back itself, or a transient
+      // database blip permanently costs the appliance a slot.
+      expect(harness.executed).toEqual(['search-index-job-1']);
+      expect(harness.reservedSlots()).toBe(0);
+    });
+
+    it('gives back the slot of a job that failed, not only of one that completed', async () => {
+      const harness = makeHarness({ queues: ['search-index'], globalConcurrency: 1 });
+
+      harness.listen('search-index', 'bad.event', 'fail');
+      harness.listen('search-index', 'good.event');
+      harness.enqueue('search-index', 'bad.event', [0]);
+      harness.enqueue('search-index', 'good.event', [0]);
+      harness.start('search-index');
+
+      await jest.advanceTimersByTimeAsync(BACKOFF_WHEN_EMPTY_MS);
+
+      expect(harness.boss.fail).toHaveBeenCalledTimes(1);
+      // On a one-slot appliance, a failure that kept its slot would mean the next
+      // job never runs — the queue stops dead on its first bad row.
+      expect(harness.executed).toEqual(['search-index-job-1', 'search-index-job-2']);
+      expect(harness.reservedSlots()).toBe(0);
     });
 
     it('does not let a burst on one queue consume every global slot and starve another', async () => {

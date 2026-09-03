@@ -2,7 +2,7 @@ import type { ServedRole } from '@ci/common/roles';
 
 import { DEAD_LETTER_QUEUE } from './constants';
 import { EventListenerRegistry } from './event-registration';
-import { describeJob, type JobCategory } from './taxonomy';
+import { describeJob, type JobRowCategory } from './taxonomy';
 
 /**
  * Everything the appliance knows about one queue, assembled from the two places
@@ -52,8 +52,13 @@ export interface QueueInventoryEntry {
    * writes, new-user seeding and LLM work — and a UI that showed it under a
    * single category would be telling an operator that switching it off costs
    * them one thing when it costs them five.
+   *
+   * `unclassified` can appear here, and it means what it says: a listener has
+   * been registered for an event with no entry in the taxonomy. Showing the
+   * fingerprint's guess instead would tell an operator this queue does search
+   * work when nothing in the system can confirm that.
    */
-  readonly categories: readonly JobCategory[];
+  readonly categories: readonly JobRowCategory[];
 }
 
 /**
@@ -106,8 +111,8 @@ export function isDeadLetterQueue(queue: string): boolean {
   return queue === DEAD_LETTER_QUEUE;
 }
 
-function rankedCategories(events: readonly string[], queue: string): JobCategory[] {
-  const counts = new Map<JobCategory, number>();
+function rankedCategories(events: readonly string[], queue: string): JobRowCategory[] {
+  const counts = new Map<JobRowCategory, number>();
 
   for (const event of events) {
     const { category } = describeJob(event, null, queue);

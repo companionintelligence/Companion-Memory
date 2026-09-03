@@ -28,6 +28,12 @@ const NOW = new Date('2026-09-01T12:00:00.000Z');
 interface LiveRow {
   at: Date;
   event: string | null;
+  /**
+   * The queue the row ran on. Optional because most cases here do not turn on
+   * it — the fold falls back to the event name when it is absent, which is the
+   * same path a dead-lettered row takes.
+   */
+  queue?: string | null;
   count: number;
 }
 
@@ -158,19 +164,23 @@ afterAll(() => {
 });
 
 describe('JobQueryService.categoryHistory — the grouping key', () => {
-  it('groups the live series on the event in the payload, never on the queue', async () => {
+  it('groups the live series on the (event, queue) pair the fold resolves on', async () => {
     const harness = makeService({ oldest: new Date('2026-09-01T00:07:00.000Z') });
 
     await harness.service.categoryHistory(CTX, { windowHours: 24 });
 
     const { sql } = liveQuery(harness);
 
+    // Both, because `categoryOfJob` resolves the pair — and this series is read
+    // on the same page as the category chips, which resolve it the same way.
     expect(sql).toContain(`live.data->>'name' AS event`);
-    // The queue column may only ever appear as the dead-letter EXCLUSION below.
-    // Projecting or grouping it would file 43% of the appliance under one
-    // bucket that maps to no category at all.
-    expect(sql).not.toMatch(/\bname\s+AS\s+(queue|event|category)\b/);
-    expect(sql).toMatch(/GROUP BY 1, 2/);
+    expect(sql).toContain('live.name AS queue');
+    expect(sql).toMatch(/GROUP BY 1, 2, 3/);
+    // Safe here in a way it is not everywhere: the query below excludes the
+    // dead-letter queue outright, so every row it groups still HAS its origin
+    // queue. `dead-letter`, the one value that would make the pair
+    // unrecoverable, is the one value this query never sees.
+    expect(sql.match(/name <> \$3/g)).toHaveLength(2);
   });
 
   it('excludes the dead-letter copies, whose created_on is the failure time and not an arrival', async () => {
@@ -221,17 +231,36 @@ describe('JobQueryService.categoryHistory — the category fold', () => {
   });
 
   /**
-   * The reason the fold is `categoryOfEvent` and not `describeJob`.
+   * The chart's series has to be the chips' buckets.
    *
-   * `content.created` has a JOB_TYPES_BY_QUEUE override, so describeJob answers
-   * `pipeline` for the copy that runs on `pipeline-index` and `search` for the
-   * other. The category FILTER cannot make that distinction — `applyFilters`
-   * turns a category back into event names out of JOB_TYPES alone, because a
-   * dead-lettered row no longer knows its queue. Folding the chart through
-   * describeJob would draw a `pipeline` series that clicking `pipeline` does
-   * not reproduce.
+   * `content.created` has a JOB_TYPES_BY_QUEUE override, so it is `pipeline` on
+   * `pipeline-index` and `search` everywhere else. The fold used to be
+   * `categoryOfEvent` — event only — which drew every one of them on the
+   * `search` series while the Jobs table beside the chart labelled them
+   * `pipeline` and the Pipeline filter returned them.
    */
-  it('does not fold through describeJob, whose per-queue overrides the filter cannot follow', () => {
+  it('folds the live series by the (event, queue) pair, like the chips below it', async () => {
+    const at = new Date('2026-09-01T11:30:00.000Z');
+    const harness = makeService({
+      oldest: new Date('2026-09-01T00:00:00.000Z'),
+      liveRows: [
+        { at, event: 'content.created', queue: 'search-index', count: 2 },
+        { at, event: 'content.created', queue: 'pipeline-index', count: 7 },
+        // The other listener sharing browseractivity.created: an Ollama call
+        // per page visit, which reads as model work, not as an index write.
+        { at, event: 'browseractivity.created', queue: 'browser-activity-insight', count: 4 },
+        { at, event: 'browseractivity.created', queue: 'search-index', count: 1 },
+      ],
+    });
+
+    const result = await harness.service.categoryHistory(CTX, { windowHours: 24 });
+
+    expect(result.points[0].counts).toEqual({ search: 3, pipeline: 7, llm: 4 });
+  });
+
+  it('still answers from the event alone when the queue says nothing', () => {
+    // A row whose queue carries no override, and the same event with no queue
+    // at all — the pair resolution must not swallow the ordinary case.
     expect(describeJob('content.created', null, 'pipeline-index').category).toBe('pipeline');
     expect(categoryOfEvent('content.created')).toBe('search');
   });

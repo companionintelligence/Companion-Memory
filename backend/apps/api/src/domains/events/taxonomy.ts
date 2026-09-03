@@ -1,3 +1,5 @@
+import { DEAD_LETTER_QUEUE } from './constants';
+
 /**
  * ═══════════════════════════════════════════════════════════════════════════
  * WHAT EACH JOB ACTUALLY DOES.
@@ -64,6 +66,23 @@ export interface JobTypeDescriptor {
    * box is busy with something someone asked for".
    */
   readonly interactive?: boolean;
+}
+
+/**
+ * What {@link describeJob} may report, as opposed to what a table entry may
+ * DECLARE.
+ *
+ * A row can turn out to have no classification at all — no event name, or an
+ * event this file has never heard of — and the honest answer for it is
+ * {@link UNCLASSIFIED_CATEGORY}. A {@link JobTypeDescriptor} written into
+ * {@link JOB_TYPES} still may not say that, which is why the widening lives
+ * here on the RESULT type rather than on the table's: `unclassified` is
+ * something a row can be found to be, never something an author can choose.
+ */
+export type JobRowCategory = JobCategory | typeof UNCLASSIFIED_CATEGORY;
+
+export interface ResolvedJobDescriptor extends Omit<JobTypeDescriptor, 'category'> {
+  readonly category: JobRowCategory;
 }
 
 /**
@@ -539,22 +558,25 @@ export const SMART_ROTATION_WORK_LABELS: Readonly<Record<string, string>> = Obje
  */
 export const UNCLASSIFIED_CATEGORY = 'unclassified';
 
-const UNCLASSIFIED: JobTypeDescriptor = {
+const UNCLASSIFIED: ResolvedJobDescriptor = {
   label: 'Unclassified job',
   // Reached only when a row has NO event name at all — a named event with no
-  // JOB_TYPES entry is fingerprinted instead, which is what closed the bug this
-  // used to carry (an unknown event rendered "Maintenance" while the Maintenance
-  // filter, resolving category -> events out of JOB_TYPES, returned none of
-  // them; 586 rows on a live appliance). {@link UNCLASSIFIED_CATEGORY} still
-  // exists, but as the COUNTING and FILTERING bucket — see
-  // {@link categoryOfEvent} — where it does the work this field cannot.
-  category: JOB_CATEGORIES.maintenance,
+  // JOB_TYPES entry is fingerprinted instead. This used to read
+  // `JOB_CATEGORIES.maintenance`, which put the row's own Category cell at odds
+  // with both the chip that counts it and the filter that returns it: the table
+  // said "Maintenance", the Maintenance chip did not count it, and clicking
+  // Maintenance did not return it. The displayed category IS the filter's
+  // promise, so it has to be the bucket that actually selects the row.
+  category: UNCLASSIFIED_CATEGORY,
   description: 'This row has no event name, so there is nothing to look up or fingerprint.',
 };
 
 /**
  * Guess a category from the event prefix or the queue when the taxonomy has
  * never seen this name. First match wins.
+ *
+ * The guess is a HINT ONLY — it goes in the description, never in the category.
+ * See {@link fingerprintJob}.
  */
 const FINGERPRINT_CATEGORY: ReadonlyArray<readonly [RegExp, JobCategory]> = [
   [
@@ -593,11 +615,33 @@ function sentenceCaseIdentifier(value: string): string {
  * A readable name when JOB_TYPES has no entry. Same idea as `describeCron`:
  * the event / work-type / queue already identify the job; "Unclassified job"
  * throws that away.
+ *
+ * THE CATEGORY IS NOT FINGERPRINTED — only the label and the description are.
+ *
+ * This used to return the guessed category, and it put the row's Category cell
+ * back into the exact contradiction {@link UNCLASSIFIED_CATEGORY} was
+ * introduced to end, one layer up: a category is a FILTERABLE FACT, and
+ * {@link jobCategorySelector} unfolds a category into event names out of
+ * {@link JOB_TYPES}, which by construction cannot contain an event that got
+ * here. So the table rendered "Search index" on a row that selecting the Search
+ * index chip could never return, and that the Search index chip did not count
+ * either — 587 of 9,557 rows on a live appliance.
+ *
+ * Reproducing the guess in the filter instead was the other way out, and it is
+ * a worse one: half the fingerprint is keyed on the QUEUE, and a dead-lettered
+ * row's queue column reads `dead-letter` (43% of rows), so a queue-guessed
+ * category would be unreproducible for exactly the rows an operator is most
+ * often looking at. The guess survives where a guess belongs — in the prose an
+ * operator reads to work out what the job is and what to add to this file.
  */
-function fingerprintJob(event: string, workType?: string | null, queue?: string | null): JobTypeDescriptor {
+function fingerprintJob(
+  event: string,
+  workType?: string | null,
+  queue?: string | null,
+): ResolvedJobDescriptor {
   const fromQueue = queue ? FINGERPRINT_QUEUE_CATEGORY[queue] : undefined;
   const fromPrefix = FINGERPRINT_CATEGORY.find(([pattern]) => pattern.test(event))?.[1];
-  const category = fromQueue ?? fromPrefix ?? JOB_CATEGORIES.maintenance;
+  const guess = fromQueue ?? fromPrefix;
   const label = workType
     ? `${sentenceCaseIdentifier(event)} · ${sentenceCaseIdentifier(workType)}`
     : sentenceCaseIdentifier(event);
@@ -605,12 +649,15 @@ function fingerprintJob(event: string, workType?: string | null, queue?: string 
     `No taxonomy entry for \`${event}\`.`,
     workType ? `Work type \`${workType}\`.` : null,
     queue ? `Queue \`${queue}\`.` : null,
-    'Add it to domains/events/taxonomy.ts to give it a real name.',
+    // Phrased as a guess on purpose. It is not a category the chips count or
+    // the filter can select — it is a pointer at the entry someone should write.
+    guess ? `Looks like \`${guess}\` work.` : null,
+    'Add it to domains/events/taxonomy.ts to give it a real name and a filterable category.',
   ].filter((bit): bit is string => bit != null);
 
   return {
     label,
-    category,
+    category: UNCLASSIFIED_CATEGORY,
     description: bits.join(' '),
   };
 }
@@ -622,7 +669,7 @@ function fingerprintJob(event: string, workType?: string | null, queue?: string 
  * disambiguation table for the events where that has actually happened: keyed
  * by `${event}::${queue}`, checked before falling back to JOB_TYPES.
  */
-const JOB_TYPES_BY_QUEUE: Readonly<Record<string, JobTypeDescriptor>> = {
+export const JOB_TYPES_BY_QUEUE: Readonly<Record<string, JobTypeDescriptor>> = {
   // content.created also drives the pipeline's on-arrival dispatch — a
   // different job from the search-indexing JOB_TYPES entry below.
   'content.created::pipeline-index': {
@@ -645,6 +692,17 @@ const JOB_TYPES_BY_QUEUE: Readonly<Record<string, JobTypeDescriptor>> = {
     category: JOB_CATEGORIES.import,
     description:
       "Create a new account's inbox drop folders on the mount as soon as the user row exists, rather than waiting for a restart or the first Inbox visit.",
+  },
+  // browseractivity.created also runs a per-visit Ollama classification, on its
+  // own 1-slot queue. Filed under `search` by the generated search-index
+  // descriptor it shares a name with, it was invisible to an operator filtering
+  // by Model to find out what is queued against a saturated Ollama — and this
+  // is the highest-frequency LLM trigger on the box, one job per page visit.
+  'browseractivity.created::browser-activity-insight': {
+    label: 'Classify a page visit',
+    category: JOB_CATEGORIES.llm,
+    description:
+      'Ask the utility model which of nine fixed categories one browsed page belongs to, and derive its productivity score from that. Fires once per page visit, so it is the highest-volume model call on the appliance — and off by default for exactly that reason.',
   },
   // answer.created also confirms the seeded home question, on the default
   // queue — unrelated to the search-indexing job of the same event name.
@@ -669,7 +727,7 @@ export function describeJob(
   event: string | null,
   workType?: string | null,
   queue?: string | null,
-): JobTypeDescriptor {
+): ResolvedJobDescriptor {
   if (!event) {
     return UNCLASSIFIED;
   }
@@ -697,40 +755,86 @@ export function describeJob(
 }
 
 /**
- * The category an event belongs to, for COUNTING and GROUPING.
+ * The category an event belongs to when the QUEUE IS UNKNOWN OR UNRECOVERABLE.
  *
- * Deliberately NOT {@link describeJob}`(event).category`, even though the
- * fallback descriptor now reports {@link UNCLASSIFIED_CATEGORY} and the two
- * agree for most events. describeJob resolves {@link JOB_TYPES_BY_QUEUE} first,
- * so it answers "what is this ROW", and the same event on two queues gets two
- * categories from it. The category FILTER cannot: `applyFilters` turns a
- * category back into a set of event names out of JOB_TYPES alone, because the
- * queue a dead-lettered row came from no longer exists on it. Anything that
- * counts categories has to fold the way the filter unfolds, or a chip reads a
- * number that clicking it will not reproduce — which is the bug
- * UNCLASSIFIED_CATEGORY itself was introduced to end.
+ * This is the degraded answer, not the general one — {@link categoryOfJob} is
+ * what aggregates should call. It exists as its own named function because
+ * "unrecoverable queue" is a real and common state, not an edge case: pg-boss
+ * copies a job's `data` verbatim onto the dead-letter row but REWRITES the
+ * queue column to the literal `dead-letter`, so the queue a job died on is gone
+ * forever, and on a live appliance 43% of rows are in that state.
  *
- * One exported function rather than the same two-line expression in each
- * caller: the aggregates that must agree (the list's category chips, the
- * category chart, and the sampled `ci.job_category_metrics` rows behind it) are
- * written in three different files and computed at three different times.
+ * Note this is deliberately NOT {@link describeJob}`(event).category`, which
+ * fingerprints an unknown event: the fingerprint is a guess for prose, and
+ * counting must never follow a guess.
  */
 export function categoryOfEvent(event: string | null | undefined): string {
   return (event ? JOB_TYPES[event]?.category : undefined) ?? UNCLASSIFIED_CATEGORY;
 }
 
 /**
- * ─────────────────────────────────────────────────────────────────────────
- * TWO functions, because counting and filtering are not the same operation.
+ * The category ONE ROW belongs to, for COUNTING and GROUPING — the fold that
+ * every aggregate on the Jobs page shares.
  *
- * {@link categoryOfEvent} FOLDS a row into a bucket, from the event name alone.
- * {@link jobCategorySelector} UNFOLDS a bucket into the SQL that selects it,
- * and is queue-aware. They deliberately disagree for the handful of events in
- * {@link JOB_TYPES_BY_QUEUE}: the selector can move `content.created@pipeline-index`
- * into `pipeline`, and the fold cannot, because a dead-lettered row's queue
- * column reads `dead-letter` and the queue it died on is gone — and on a live
- * appliance 43% of rows are dead-lettered. Folding queue-aware would make a
- * chip count rows that clicking it can never return.
+ * Same rule as the filter, stated as a fold instead of as a selection: resolve
+ * the (event, queue) PAIR when the queue is recoverable, and fall back to the
+ * event alone when it is not. Both halves matter.
+ *
+ *  - Pair-resolving is what makes the chip count agree with the row's own
+ *    Category cell. This function used to be {@link categoryOfEvent}, keyed on
+ *    the event alone, so every `content.created` on `pipeline-index` was counted
+ *    under Search index while the table labelled it Pipeline and clicking
+ *    Pipeline returned it. The chip's number and the table's total disagreed for
+ *    precisely the events that mean different things on different queues.
+ *
+ *  - Falling back for a dead-lettered row is what keeps it reproducible. Its
+ *    queue column reads `dead-letter`, so `${event}::dead-letter` matches no
+ *    entry in {@link JOB_TYPES_BY_QUEUE} and the filter's include/exclude lists
+ *    cannot touch it either. Both sides degrade to the event, identically, and
+ *    the row stays selectable under the category it is shown as.
+ *
+ * One exported function rather than the same expression in each caller: the
+ * aggregates that must agree (the list's category chips, the category chart, and
+ * the sampled `ci.job_category_metrics` rows behind it) are written in three
+ * different files and computed at three different times.
+ */
+export function categoryOfJob(event: string | null | undefined, queue?: string | null): string {
+  if (event != null && queue != null && queue !== DEAD_LETTER_QUEUE) {
+    const pair = JOB_TYPES_BY_QUEUE[`${event}::${queue}`];
+
+    if (pair) {
+      return pair.category;
+    }
+  }
+
+  return categoryOfEvent(event);
+}
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ * TWO functions, because counting and filtering are not the same OPERATION —
+ * but they must be the same RULE.
+ *
+ * {@link categoryOfJob} FOLDS one row into a bucket, in JS, after the database
+ * has grouped it. {@link jobCategorySelector} UNFOLDS a bucket into a SQL
+ * predicate the database can evaluate before it groups anything. That is why
+ * there are two of them and why one cannot simply call the other: a fold reads
+ * a row that already exists; a selector has to be expressible over columns.
+ *
+ * What they may NOT differ on is the answer. Both resolve the (event, queue)
+ * PAIR when the queue is recoverable, and both fall back to the event alone
+ * when it is not — a dead-lettered row's queue column reads `dead-letter`, so
+ * `${event}::dead-letter` is in neither {@link JobCategorySelector.includeQueueKeys}
+ * nor {@link JobCategorySelector.excludeQueueKeys}, and the selector degrades to
+ * `events` on its own for exactly the rows the fold cannot pair-resolve either.
+ * On a live appliance that is 43% of rows, so the fallback is the common path,
+ * not a corner.
+ *
+ * This used to be stated the other way round — the fold was event-only ON
+ * PURPOSE, and the divergence was documented as the price of that 43%. It was
+ * not: folding by event does not make a dead-lettered row's queue recoverable,
+ * it only throws away the queue of the 57% that still have one, and those are
+ * the rows where a chip's number stopped matching the table under it.
  * ─────────────────────────────────────────────────────────────────────────
  *
  * How to select a category, given that a category is not just a set of events.

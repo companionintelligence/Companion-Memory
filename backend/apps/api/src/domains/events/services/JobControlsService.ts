@@ -27,7 +27,7 @@ import {
 } from '../jobConcurrency';
 import { protectedCronReason, protectedQueueReason } from '../jobControlPolicy';
 import { queueInventory } from '../queueInventory';
-import { describeJob, type JobCategory } from '../taxonomy';
+import { describeJob, type JobRowCategory } from '../taxonomy';
 
 /**
  * A number an operator can set, with everything the UI needs to render it
@@ -83,12 +83,12 @@ export interface JobQueueControlDto {
   readonly declaredConcurrency: number | null;
   readonly role: 'web' | 'worker';
   readonly interactive: boolean;
-  readonly categories: readonly JobCategory[];
+  readonly categories: readonly JobRowCategory[];
   /** What is actually on this queue, so "what am I switching off?" has an answer. */
   readonly jobTypes: ReadonlyArray<{
     readonly event: string;
     readonly label: string;
-    readonly category: JobCategory;
+    readonly category: JobRowCategory;
     readonly description: string;
   }>;
   readonly locked: boolean;
