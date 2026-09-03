@@ -6,7 +6,9 @@ import { LoggerService } from '@ci/common/logging';
 import { EventEntity, CalendarEventService, PersonService, UserContextService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 
+import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
 import { PlannedBlockService } from '../PlannedBlockService';
+import { PlanningPrefsService } from '../PlanningPrefsService';
 import { PlanningTimeService } from '../PlanningTimeService';
 import { TaskService } from '../TaskService';
 
@@ -67,6 +69,10 @@ describe('PlannedBlockService', () => {
     declinePendingChange: jest.Mock;
     acceptProposed: jest.Mock;
   };
+  let planningPrefs: { find: jest.Mock; resolve: jest.Mock };
+  let planningTimeMock: { toInstant: jest.Mock; [k: string]: unknown };
+  let userContextMock: { getSelfIdentity: jest.Mock };
+  let personServiceMock: { findById: jest.Mock };
   let personalizationService: { decideAction: jest.Mock };
 
   beforeEach(async () => {
@@ -107,6 +113,17 @@ describe('PlannedBlockService', () => {
       ),
     };
 
+    // No stored row: these cases assert the shipped-default workday, which is
+    // what an appliance that has never opened a settings page uses.
+    planningPrefs = {
+      find: jest.fn().mockResolvedValue(null),
+      resolve: jest.fn().mockResolvedValue({ ...PLANNING_PREFS_DEFAULTS }),
+    };
+
+    planningTimeMock = planningTime as never;
+    userContextMock = { getSelfIdentity: jest.fn().mockResolvedValue(null) };
+    personServiceMock = { findById: jest.fn().mockResolvedValue(null) };
+
     const module = await Test.createTestingModule({
       providers: [
         PlannedBlockService,
@@ -114,9 +131,10 @@ describe('PlannedBlockService', () => {
         { provide: CalendarEventService, useValue: eventService },
         { provide: TaskService, useValue: taskService },
         { provide: PlanningTimeService, useValue: planningTime },
+        { provide: PlanningPrefsService, useValue: planningPrefs },
         { provide: PersonalizationService, useValue: personalizationService },
-        { provide: PersonService, useValue: { findById: jest.fn() } },
-        { provide: UserContextService, useValue: { getSelfIdentity: jest.fn().mockResolvedValue(null) } },
+        { provide: PersonService, useValue: personServiceMock },
+        { provide: UserContextService, useValue: userContextMock },
         { provide: LoggerService, useValue: { setContext: jest.fn(), log: jest.fn(), debug: jest.fn() } },
       ],
     }).compile();
@@ -396,5 +414,50 @@ describe('PlannedBlockService', () => {
     expect(outcome.status).toBe('skipped');
     expect(eventService.create).not.toHaveBeenCalled();
     expect(taskService.createPendingChange).not.toHaveBeenCalled();
+  });
+
+
+  describe('PlannedBlockService workday resolution', () => {
+    // ci.planning_prefs is the new home for the workday. It must win.
+    it('uses the stored preference when there is one', async () => {
+      planningPrefs.find.mockResolvedValue({
+        userId: 'user-1',
+        workStart: '07:00',
+        workEnd: '15:00',
+        defaultEstimatedMinutes: null,
+        flexDays: null,
+      });
+
+      await service.scheduleTask(CTX, OPEN_TASK.id);
+
+      expect(planningTimeMock.toInstant).toHaveBeenCalledWith(CTX, expect.any(String), '07:00');
+      expect(planningTimeMock.toInstant).toHaveBeenCalledWith(CTX, expect.any(String), '15:00');
+    });
+
+    // The regression that matters for shipping this table: anyone who had already
+    // set their hours through the self-Person jsonb leaf must keep them. Dropping
+    // this fallback would silently reset those users to 09:00-17:00.
+    it('falls back to the legacy self-Person leaf when no preference is stored', async () => {
+      planningPrefs.find.mockResolvedValue(null);
+      userContextMock.getSelfIdentity.mockResolvedValue({ entityId: 'person-1' });
+      personServiceMock.findById.mockResolvedValue({
+        properties: { schedule: { work_start: '06:30', work_end: '14:30' } },
+      });
+
+      await service.scheduleTask(CTX, OPEN_TASK.id);
+
+      expect(planningTimeMock.toInstant).toHaveBeenCalledWith(CTX, expect.any(String), '06:30');
+      expect(planningTimeMock.toInstant).toHaveBeenCalledWith(CTX, expect.any(String), '14:30');
+    });
+
+    it('uses the shipped default when neither a preference nor a legacy leaf exists', async () => {
+      planningPrefs.find.mockResolvedValue(null);
+      userContextMock.getSelfIdentity.mockResolvedValue(null);
+
+      await service.scheduleTask(CTX, OPEN_TASK.id);
+
+      expect(planningTimeMock.toInstant).toHaveBeenCalledWith(CTX, expect.any(String), '09:00');
+      expect(planningTimeMock.toInstant).toHaveBeenCalledWith(CTX, expect.any(String), '17:00');
+    });
   });
 });

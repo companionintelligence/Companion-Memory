@@ -22,14 +22,17 @@ import {
   type OccupiedSpan,
   type PlacementPlan,
 } from '../engine/computePlacement';
+import { PLANNING_PREFS_DEFAULTS } from '../entities/PlanningPrefsEntity';
 import type { Task } from '../entities/TaskEntity';
 
+import { PlanningPrefsService } from './PlanningPrefsService';
 import { PlanningTimeService } from './PlanningTimeService';
 import { TaskService } from './TaskService';
 
-const DEFAULT_WORK_START = '09:00';
-const DEFAULT_WORK_END = '17:00';
-const FLEX_DAYS = 7;
+// The legacy self-Person path still needs these; they and
+// PLANNING_PREFS_DEFAULTS must agree, so they are read from it.
+const DEFAULT_WORK_START = PLANNING_PREFS_DEFAULTS.workStart;
+const DEFAULT_WORK_END = PLANNING_PREFS_DEFAULTS.workEnd;
 const PLANNED_BLOCK = 'planned_block';
 
 /**
@@ -60,6 +63,7 @@ export class PlannedBlockService {
     private readonly personalizationService: PersonalizationService,
     private readonly personService: PersonService,
     private readonly userContextService: UserContextService,
+    private readonly planningPrefs: PlanningPrefsService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(PlannedBlockService.name);
@@ -504,14 +508,17 @@ export class PlannedBlockService {
     const timezone = await this.planningTime.timezoneFor(context.userId);
     const today = await this.planningTime.today(context);
     const hours = await this.workdayHours(context);
+    const prefs = await this.planningPrefs.resolve(context);
+    const flexDays = prefs.flexDays;
     const now = new Date();
-    const estimate = estimatedMinutes && estimatedMinutes > 0 ? estimatedMinutes : DEFAULT_ESTIMATED_MINUTES;
+    const estimate =
+      estimatedMinutes && estimatedMinutes > 0 ? estimatedMinutes : prefs.defaultEstimatedMinutes;
 
     const startDate = preferDate && preferDate >= today ? preferDate : today;
     const windowStart = await this.planningTime.toInstant(context, startDate, hours.start);
     const windowEnd = await this.planningTime.toInstant(
       context,
-      shiftLocalDate(startDate, FLEX_DAYS),
+      shiftLocalDate(startDate, flexDays),
       hours.start,
     );
 
@@ -521,7 +528,7 @@ export class PlannedBlockService {
       end: event.endTime ?? new Date(event.startTime.getTime() + (event.plannedMinutes ?? estimate) * 60_000),
     }));
 
-    for (let day = 0; day < FLEX_DAYS; day += 1) {
+    for (let day = 0; day < flexDays; day += 1) {
       const date = shiftLocalDate(startDate, day);
       const workdayStart = await this.planningTime.toInstant(context, date, hours.start);
       const workdayEnd = await this.planningTime.toInstant(context, date, hours.end);
@@ -552,7 +559,39 @@ export class PlannedBlockService {
     return { kind: 'no_gap' };
   }
 
+  /**
+   * The workday window this user's blocks must fit inside.
+   *
+   * Read order is deliberate: `ci.planning_prefs` first, then the legacy
+   * `properties.schedule.work_start` / `work_end` leaf on the self-Person, then
+   * the shipped default. The middle step is what makes adding the prefs table a
+   * non-event for anyone who had already set their hours through the graph —
+   * dropping it would silently reset those users to 09:00-17:00.
+   *
+   * Once nothing writes the Person leaf, the fallback and its two graph reads
+   * can go.
+   */
   private async workdayHours(context: UserServiceContext): Promise<{ start: string; end: string }> {
+    const prefs = await this.planningPrefs.find(context);
+    const storedStart = parseWallClock(prefs?.workStart ?? null);
+    const storedEnd = parseWallClock(prefs?.workEnd ?? null);
+
+    if (storedStart != null && storedEnd != null) {
+      return { start: storedStart, end: storedEnd };
+    }
+
+    const legacy = await this.legacyWorkdayHours(context);
+
+    return {
+      start: storedStart ?? legacy.start,
+      end: storedEnd ?? legacy.end,
+    };
+  }
+
+  /** Pre-`ci.planning_prefs` home for the workday: a jsonb leaf on the self-Person. */
+  private async legacyWorkdayHours(
+    context: UserServiceContext,
+  ): Promise<{ start: string; end: string }> {
     const self = await this.userContextService.getSelfIdentity(context.userId);
 
     if (!self) {

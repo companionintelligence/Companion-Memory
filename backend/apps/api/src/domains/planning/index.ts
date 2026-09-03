@@ -27,6 +27,12 @@ import { SearchNextModule } from '@ci/domains/search-next';
 import { UserEntity, UserModule } from '@ci/domains/user';
 
 import { PlanningJobsCron } from './cron/PlanningJobsCron';
+import {
+  PLANNING_PREFS_DEFAULTS,
+  type PlanningPrefs,
+  PlanningPrefsEntity,
+  type ResolvedPlanningPrefs,
+} from './entities/PlanningPrefsEntity';
 import { TaskDependencyEntity, type TaskDependency } from './entities/TaskDependencyEntity';
 import { TaskEntity, TASK_STATUSES, type Task, type TaskStatus } from './entities/TaskEntity';
 import {
@@ -39,6 +45,7 @@ import './events';
 import { PlanningJobsListener } from './listeners/PlanningJobsListener';
 import { InboxScanService } from './services/InboxScanService';
 import { PlannedBlockService } from './services/PlannedBlockService';
+import { PlanningPrefsService } from './services/PlanningPrefsService';
 import { PlanningTimeService } from './services/PlanningTimeService';
 import { ProposedTaskReconcileService } from './services/ProposedTaskReconcileService';
 import { TaskService } from './services/TaskService';
@@ -53,6 +60,7 @@ import { TodoScanService } from './services/TodoScanService';
   // the single source of truth for "the user's day".
   imports: [
     TypeOrmModule.forFeature([
+      PlanningPrefsEntity,
       TaskEntity,
       TaskDependencyEntity,
       TaskPendingChangeEntity,
@@ -68,6 +76,7 @@ import { TodoScanService } from './services/TodoScanService';
     PersonalizationModule,
   ],
   providers: [
+    PlanningPrefsService,
     TaskService,
     PlanningTimeService,
     PlannedBlockService,
@@ -80,19 +89,22 @@ import { TodoScanService } from './services/TodoScanService';
     PlanningJobsCron,
     PlanningJobsListener,
   ],
-  exports: [TaskService, PlanningTimeService, PlannedBlockService],
+  exports: [TaskService, PlanningTimeService, PlannedBlockService, PlanningPrefsService],
 })
 export class PlanningModule {}
 
-export { TaskEntity, TaskDependencyEntity, TaskPendingChangeEntity };
+export { TaskEntity, TaskDependencyEntity, TaskPendingChangeEntity, PlanningPrefsEntity };
 
-export { TaskService, PlanningTimeService, PlannedBlockService };
+export { TaskService, PlanningTimeService, PlannedBlockService, PlanningPrefsService };
 
 export { TASK_STATUSES };
+export { PLANNING_PREFS_DEFAULTS };
 
 export { isValidTimezone, localDateInTZ, todayInTZ, zonedWallTimeToUTC } from '@ci/common/time/zoned';
 
 export type {
+  PlanningPrefs,
+  ResolvedPlanningPrefs,
   Task,
   TaskStatus,
   TaskDependency,
@@ -100,4 +112,10 @@ export type {
   TaskPendingChangeKind,
   TaskPendingChangeStatus,
 };
-export type { CreateTaskDto, UpdateTaskDto, FindTasksOptions, CreateTaskPendingChangeDto } from './types';
+export type {
+  CreateTaskDto,
+  UpdateTaskDto,
+  FindTasksOptions,
+  CreateTaskPendingChangeDto,
+  UpdatePlanningPrefsDto,
+} from './types';

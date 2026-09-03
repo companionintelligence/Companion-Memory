@@ -14,6 +14,7 @@ import {
 import { UserEntity } from '@ci/domains/user';
 
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
+import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
 import { TaskEntity } from '../../entities/TaskEntity';
 import { TaskPendingChangeEntity } from '../../entities/TaskPendingChangeEntity';
 import { PlannedBlockService } from '../PlannedBlockService';
@@ -296,6 +297,12 @@ describeWithDb('PlannedBlockService — accepted event_revise (integration)', ()
       {} as never,
       {} as never,
       {} as never,
+      // Preferences resolve to the shipped defaults here: this suite is about
+      // tenancy, and a real prefs read would need a row per fixture user.
+      {
+        find: async () => null,
+        resolve: async () => ({ ...PLANNING_PREFS_DEFAULTS }),
+      } as never,
       noopLogger,
     );
   });
