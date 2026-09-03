@@ -43,7 +43,22 @@ export function OidcButton({
       event.preventDefault();
       const nativeParams = new URLSearchParams(params);
       nativeParams.set('client', OIDC_NATIVE_CLIENT_FLAG);
-      void openExternalUrl(buildApiUrl(`${OIDC_URL_PATH}?${nativeParams.toString()}`));
+      const oidcPath = `${OIDC_URL_PATH}?${nativeParams.toString()}`;
+      // Capacitor's native bootstrap calls setApiBaseUrl() before the app makes any
+      // request, so buildApiUrl() is already absolute there. Tauri desktop never
+      // calls setApiBaseUrl (nothing does on desktop boot), so buildApiUrl() would
+      // hand the Rust opener a bare relative path — which open_external_url_command
+      // rejects outright since it only accepts http(s) URLs. Resolve against the
+      // page's own origin instead, which is always absolute once the bootstrap page
+      // has navigated to http://127.0.0.1:8642.
+      const oidcUrl = isTauriPlatform() ? `${window.location.origin}${oidcPath}` : buildApiUrl(oidcPath);
+
+      openExternalUrl(oidcUrl).catch((err: unknown) => {
+        // Surface the failure instead of `void`-ing it — a rejected native/Tauri
+        // open call (bad URL, ACL denial, no default browser, ...) must not look
+        // like a successful click.
+        console.error('Failed to open the CI Portal sign-in page', err);
+      });
     }
     // Web: let the anchor navigate normally.
   };

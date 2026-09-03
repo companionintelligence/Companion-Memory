@@ -761,7 +761,19 @@ export async function addAppUrlOpenListener(handler: (url: string) => void): Pro
   }
 
   if (isTauriPlatform()) {
-    const pending = await tauriInvoke<string | null>('take_pending_deep_link_command').catch(() => null);
+    // `take_pending_deep_link_command` resolves with `null` (never rejects) for the
+    // ordinary "nothing pending" case — its Rust impl returns Option<String>. A
+    // REJECTION here is therefore always a real failure (an ACL/permission denial is
+    // the one seen in practice: the capability granting this command IPC reachability
+    // must list the origin the webview navigated to). Keep the same `null` fallback so
+    // callers are unaffected, but log the failure instead of silently discarding it.
+    const pending = await tauriInvoke<string | null>('take_pending_deep_link_command').catch(
+      (err: unknown) => {
+        console.error('take_pending_deep_link_command failed', err);
+
+        return null;
+      },
+    );
 
     if (pending) {
       handler(pending);

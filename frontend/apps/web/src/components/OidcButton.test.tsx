@@ -16,6 +16,13 @@ vi.mock('@ci/common', async (orig) => ({
 beforeEach(() => {
   vi.mocked(isNativePlatform).mockReturnValue(false);
   vi.mocked(isTauriPlatform).mockReturnValue(false);
+  // vitest.config.ts sets `restoreMocks: true`, which wipes every mock's
+  // implementation (not just its call history) before each test — including
+  // one set once in the vi.mock factory above, the same reason
+  // isNativePlatform/isTauriPlatform are re-armed here rather than only in
+  // the factory. handleClick now chains `.catch()` off this call, so it must
+  // resolve to a real Promise on every test, not just the first.
+  vi.mocked(openExternalUrl).mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -43,18 +50,25 @@ describe('OidcButton', () => {
     expect(openExternalUrl).toHaveBeenCalledWith('/api/authenticate/oidc?client=native');
   });
 
-  it('desktop (Tauri): also opens the OIDC route in the system browser with ?client=native, same as Capacitor native', () => {
+  it('desktop (Tauri): opens the OIDC route in the system browser as an ABSOLUTE url', () => {
     // isNativePlatform stays false here — Tauri is a distinct native shell (see
     // isTauriPlatform's doc comment), so this exercises the OR condition
     // specifically rather than just re-testing the Capacitor branch under a
     // different mock.
+    //
+    // Unlike Capacitor, nothing calls setApiBaseUrl() on Tauri boot, so
+    // buildApiUrl() would stay relative — which open_external_url_command
+    // rejects outright. The Tauri branch resolves against window.location.origin
+    // instead, so this must assert an absolute URL, not the bare relative path.
     vi.mocked(isTauriPlatform).mockReturnValue(true);
 
     render(<OidcButton label="Sign in with Companion account" />);
     fireEvent.click(screen.getByRole('link', { name: 'Sign in with Companion account' }));
 
     expect(openExternalUrl).toHaveBeenCalledTimes(1);
-    expect(openExternalUrl).toHaveBeenCalledWith('/api/authenticate/oidc?client=native');
+    expect(openExternalUrl).toHaveBeenCalledWith(
+      `${window.location.origin}/api/authenticate/oidc?client=native`,
+    );
   });
 
   it('carries a post-login redirect through both paths', () => {

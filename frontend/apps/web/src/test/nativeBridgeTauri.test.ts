@@ -74,6 +74,28 @@ describe('addAppUrlOpenListener — Tauri branch', () => {
     unsubscribe();
   });
 
+  it('logs (rather than silently swallowing) a real take_pending_deep_link_command rejection, and still mounts', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const invoke = vi.fn().mockRejectedValue(new Error('ACL denied'));
+    window.__TAURI_INTERNALS__ = { invoke };
+
+    const handler = vi.fn();
+    const unsubscribe = await addAppUrlOpenListener(handler);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith('take_pending_deep_link_command failed', expect.any(Error));
+
+    // The rejection must not stop the listener from being wired up — a live deep link
+    // dispatched after mount still reaches the handler.
+    window.dispatchEvent(
+      new CustomEvent('companion-deep-link', { detail: 'companion://oidc/callback?code=after-rejection' }),
+    );
+    expect(handler).toHaveBeenCalledWith('companion://oidc/callback?code=after-rejection');
+
+    unsubscribe();
+    consoleError.mockRestore();
+  });
+
   it('delivers a live companion-deep-link DOM event dispatched after mount (main.rs\'s window.eval path)', async () => {
     const invoke = vi.fn().mockResolvedValue(null);
     window.__TAURI_INTERNALS__ = { invoke };
