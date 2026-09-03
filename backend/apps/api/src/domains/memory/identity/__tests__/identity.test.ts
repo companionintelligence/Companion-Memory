@@ -12,6 +12,9 @@ import {
   emailAttachmentIdentity,
   emailFallbackIdentity,
   emailIdentity,
+  emailThreadKey,
+  gmailThreadKeyFromApi,
+  gmailThreadKeyFromImap,
   messageIdFromHeaders,
   normalizeMessageId,
 } from '../email';
@@ -21,7 +24,10 @@ import {
   FEDERATED_SYSTEMS,
   PLATFORM_SYSTEMS,
   SYSTEM_ALIASES,
+  attachmentIdentity,
   canonicalSystem,
+  isFederatedSystem,
+  ledgerPlatform,
   fallbackId,
   isRegisteredSystem,
   platformIdentity,
@@ -69,6 +75,29 @@ describe('identity registry', () => {
 
   it('has no duplicate platform registrations', () => {
     expect(new Set(PLATFORM_SYSTEMS).size).toBe(PLATFORM_SYSTEMS.length);
+  });
+});
+
+describe('ledger platform (record_sources.platform)', () => {
+  it('a platform kind is its own platform', () => {
+    expect(ledgerPlatform('reddit')).toBe('reddit');
+    expect(ledgerPlatform('google_chrome')).toBe('chromium'); // canonicalized
+  });
+
+  it('a federated kind has no platform unless the producer says', () => {
+    expect(isFederatedSystem('email')).toBe(true);
+    expect(ledgerPlatform('email')).toBeNull();
+    expect(ledgerPlatform('calendar')).toBeNull();
+    expect(ledgerPlatform('file')).toBeNull();
+    expect(ledgerPlatform('email', 'gmail')).toBe('gmail');
+    expect(ledgerPlatform('email', 'outlook_mail')).toBe('outlook_mail');
+  });
+
+  it('never lets a federated kind pose as a platform, even when passed explicitly', () => {
+    // A generic mbox reader's datasource name is `email`: that is not a mailbox.
+    expect(ledgerPlatform('email', 'email')).toBeNull();
+    expect(ledgerPlatform('calendar', 'ics')).toBeNull(); // alias of the federated kind
+    expect(ledgerPlatform(undefined)).toBeNull();
   });
 });
 
@@ -125,6 +154,54 @@ describe('email identity (federated on RFC Message-ID)', () => {
     const parent = emailIdentity('<m@x>')!;
     expect(emailAttachmentIdentity(parent, 'abc123').id).toBe('attachment:m@x:abc123');
     expect(emailAttachmentIdentity(parent, 'abc123').system).toBe('email');
+  });
+
+  it('the generic attachment builder is the same format under any parent, hash lowercased', () => {
+    const chat = platformIdentity('twitter', 'dm', '9');
+    expect(attachmentIdentity(chat, 'ABCDEF')).toEqual({ system: 'twitter', id: 'attachment:dm:9:abcdef' });
+    expect(attachmentIdentity(emailIdentity('<m@x>')!, 'abc')).toEqual(emailAttachmentIdentity(emailIdentity('<m@x>')!, 'abc'));
+  });
+});
+
+describe('email thread key (Gmail hex threadId vs mbox X-GM-THRID)', () => {
+  it('CONFORMANCE: the API hex and the IMAP decimal of one thread yield one key', () => {
+    expect(gmailThreadKeyFromApi('18c1a2b3c4d5e6f7')).toBe('18c1a2b3c4d5e6f7');
+    expect(gmailThreadKeyFromImap('1783885820400625399')).toBe('18c1a2b3c4d5e6f7');
+    expect(emailThreadKey({ 'X-GM-THRID': '1783885820400625399' })).toBe(gmailThreadKeyFromApi('18c1a2b3c4d5e6f7'));
+  });
+
+  it('normalizes case, whitespace and leading zeros to the one spelling', () => {
+    expect(gmailThreadKeyFromApi(' 18C1A2B3C4D5E6F7 ')).toBe('18c1a2b3c4d5e6f7');
+    expect(gmailThreadKeyFromApi('0018c1a2b3c4d5e6f7')).toBe('18c1a2b3c4d5e6f7');
+    expect(gmailThreadKeyFromImap(' 01783885820400625399 ')).toBe('18c1a2b3c4d5e6f7');
+  });
+
+  it('refuses a value that is not in the base the caller claimed', () => {
+    expect(gmailThreadKeyFromApi('thread-1')).toBeUndefined();
+    expect(gmailThreadKeyFromApi('')).toBeUndefined();
+    expect(gmailThreadKeyFromApi(undefined)).toBeUndefined();
+    expect(gmailThreadKeyFromImap('18c1a2b3c4d5e6f7')).toBeUndefined(); // hex digits are not decimal
+    expect(gmailThreadKeyFromImap(null)).toBeUndefined();
+  });
+
+  it('prefers the Gmail thread id over the References chain when the mbox carries both', () => {
+    expect(
+      emailThreadKey({
+        'x-gm-thrid': '1783885820400625399',
+        References: '<root@mx.example.com> <parent@mx.example.com>',
+        'Message-ID': '<reply@mx.example.com>',
+      }),
+    ).toBe('18c1a2b3c4d5e6f7');
+  });
+
+  it('falls back to References root, then In-Reply-To, then the own Message-ID', () => {
+    expect(
+      emailThreadKey({ References: '<root@x> <parent@x>', 'In-Reply-To': '<parent@x>', 'Message-ID': '<me@x>' }),
+    ).toBe('root@x');
+    expect(emailThreadKey({ 'In-Reply-To': '<parent@x>', 'Message-ID': '<me@x>' })).toBe('parent@x');
+    expect(emailThreadKey({ 'Message-ID': '<me@x>' })).toBe('me@x');
+    expect(emailThreadKey({ Subject: 'none' })).toBeUndefined();
+    expect(emailThreadKey(undefined)).toBeUndefined();
   });
 });
 

@@ -1,8 +1,18 @@
-import { type ReactNode, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type FormEvent,
+  type ReactNode,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
-import { cn } from '@ci/shadcn';
+import { Button, Input, cn } from '@ci/shadcn';
 
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
+import { combineDateAndClock } from '@/components/EventForm';
 import {
   type ColorMode,
   CLASS_LABEL,
@@ -14,13 +24,7 @@ import {
   normalizeClass,
   sourceOf,
 } from '@/lib/activityPalette';
-import {
-  CANDIDATE_DRAG_TYPE,
-  EVENT_DRAG_TYPE,
-  EVENT_EXTERNAL_DRAG_TYPE,
-  parseEventDrag,
-} from '@/lib/scheduleDrag';
-import { SCHEDULE_SCROLL_ATTR } from '@/lib/schedulePointerDrag';
+import { EVENT_DRAG_TYPE, parseEventDrag } from '@/lib/scheduleDrag';
 
 import { EventPeek } from './EventPeek';
 import { addDays, formatClock, sameLocalDay, startOfLocalDay } from './nowNext';
@@ -40,7 +44,6 @@ import {
   topClusters,
   utcDateKey,
 } from './scheduleGeometry';
-import { useScheduleDropTarget } from './useScheduleDropTarget';
 
 const MINUTES_PER_DAY = 24 * 60;
 const HOURS_PER_DAY = 24;
@@ -159,11 +162,13 @@ function ClusterBlock({
   lane,
   laneCount,
   colorMode,
+  onMoveEvent,
 }: {
   item: Extract<PackedItem, { kind: 'cluster' }>;
   lane: number;
   laneCount: number;
   colorMode: ColorMode;
+  onMoveEvent?: (eventId: string, startTime: Date) => void;
 }) {
   const lead = item.spans[0]?.event;
   const color = lead ? eventColor(lead, colorMode) : 'var(--activity-none)';
@@ -188,6 +193,26 @@ function ClusterBlock({
             ))}
           </ul>
         </div>
+      }
+      // A folded event has no chip of its own to grab, so without a form per
+      // member the only way to reschedule anything in a busy hour was to widen
+      // the window until the cluster broke apart.
+      actions={
+        onMoveEvent
+          ? (close) => (
+              <div className="space-y-2">
+                {item.spans.map(({ event }) => (
+                  <MoveEventForm
+                    key={event.id}
+                    event={event}
+                    name={event.title}
+                    onMoveEvent={onMoveEvent}
+                    onDone={close}
+                  />
+                ))}
+              </div>
+            )
+          : undefined
       }
     >
       <div
@@ -220,6 +245,89 @@ function ClusterBlock({
   );
 }
 
+/** Local-time `yyyy-mm-dd` for a Date — `toISOString` shifts the day west of Greenwich. */
+function dateInputValue(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+
+  return `${date.getFullYear()}-${month}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/** Local-time `HH:mm` for a Date. */
+function clockInputValue(date: Date): string {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+/**
+ * Move a placed event without a drag.
+ *
+ * ═══ WHAT THIS USED TO DO ═══
+ * Nothing — there was no way at all. Dragging a chip is HTML5 drag-and-drop,
+ * which never fires on touch, so on a phone the chip's peek dialog was
+ * read-only and a placed event could not be rescheduled from this surface.
+ * This writes through the same `onMoveEvent` the desktop drop does.
+ *
+ * `name` distinguishes one form from its siblings — a micro-cluster dialog
+ * carries one per folded event, and "Move to date" three times over names
+ * nothing.
+ */
+function MoveEventForm({
+  event,
+  name,
+  onMoveEvent,
+  onDone,
+}: {
+  event: ScheduleEvent;
+  name?: string;
+  onMoveEvent: (eventId: string, startTime: Date) => void;
+  onDone: () => void;
+}) {
+  const start = new Date(event.startTime);
+  const [date, setDate] = useState(() => dateInputValue(start));
+  const [clock, setClock] = useState(() => clockInputValue(start));
+  const allDay = Boolean(event.isAllDay);
+  const suffix = name ? ` ${name}` : '';
+
+  const submit = (form: FormEvent<HTMLFormElement>) => {
+    form.preventDefault();
+
+    // An all-day event has no clock to move, so it lands on midnight local —
+    // the same instant the all-day row hands `onSelectSlot`.
+    const at = combineDateAndClock(date, clock, allDay);
+
+    if (!at) {
+      return;
+    }
+
+    onMoveEvent(event.id, at);
+    onDone();
+  };
+
+  return (
+    <form onSubmit={submit} className="flex flex-wrap items-end gap-2 border-t border-current/20 pt-2">
+      {name ? <p className="w-full truncate text-[11px] font-medium">{name}</p> : null}
+      <Input
+        type="date"
+        aria-label={`Move${suffix} to date`}
+        value={date}
+        onChange={(change) => setDate(change.target.value)}
+        className="h-8 w-[9.5rem] text-xs"
+      />
+      {allDay ? null : (
+        <Input
+          type="time"
+          aria-label={`Move${suffix} to time`}
+          value={clock}
+          onChange={(change) => setClock(change.target.value)}
+          className="h-8 w-[6.5rem] text-xs"
+        />
+      )}
+      <Button type="submit" size="sm" className="h-8" aria-label={name ? `Move ${name}` : undefined}>
+        Move
+      </Button>
+    </form>
+  );
+}
+
 function TimedBlock({
   item,
   lane,
@@ -247,6 +355,11 @@ function TimedBlock({
       label={label}
       side="right"
       content={<EventTooltipBody event={event} color={color} colorMode={colorMode} movable={movable} />}
+      actions={
+        onMoveEvent
+          ? (close) => <MoveEventForm event={event} onMoveEvent={onMoveEvent} onDone={close} />
+          : undefined
+      }
     >
       <div
         role="listitem"
@@ -270,21 +383,8 @@ function TimedBlock({
                 const grabOffsetMs = event.isAllDay
                   ? 0
                   : grabbedAt.getTime() - new Date(event.startTime).getTime();
-                const external = isExternallyOwned(event);
 
-                e.dataTransfer.setData(
-                  EVENT_DRAG_TYPE,
-                  JSON.stringify({
-                    id: event.id,
-                    grabOffsetMs,
-                    externallyOwned: external,
-                  }),
-                );
-
-                if (external) {
-                  e.dataTransfer.setData(EVENT_EXTERNAL_DRAG_TYPE, '1');
-                }
-
+                e.dataTransfer.setData(EVENT_DRAG_TYPE, JSON.stringify({ id: event.id, grabOffsetMs }));
                 e.dataTransfer.setData('text/plain', event.title);
                 e.dataTransfer.effectAllowed = 'move';
               }
@@ -336,16 +436,32 @@ function TimedBlock({
   );
 }
 
-function AllDayChip({ event, colorMode }: { event: ScheduleEvent; colorMode: ColorMode }) {
+function AllDayChip({
+  event,
+  colorMode,
+  onMoveEvent,
+}: {
+  event: ScheduleEvent;
+  colorMode: ColorMode;
+  onMoveEvent?: (eventId: string, startTime: Date) => void;
+}) {
   const color = eventColor(event, colorMode);
   const url = eventUrl(event);
   const label = blockLabel(event, colorMode);
+  const movable = Boolean(onMoveEvent);
 
   return (
     <EventPeek
       label={label}
       side="bottom"
-      content={<EventTooltipBody event={event} color={color} colorMode={colorMode} movable={false} />}
+      content={<EventTooltipBody event={event} color={color} colorMode={colorMode} movable={movable} />}
+      // The all-day row sits outside the hour grid, so nothing drops onto it and
+      // an all-day event had no move path on ANY pointer — this is the only one.
+      actions={
+        onMoveEvent
+          ? (close) => <MoveEventForm event={event} onMoveEvent={onMoveEvent} onDone={close} />
+          : undefined
+      }
     >
       <div
         role="listitem"
@@ -502,7 +618,6 @@ interface DayLaneProps {
   isToday: boolean;
   nowPct: number | null;
   colorMode: ColorMode;
-  onDropCandidate?: (candidateId: string, startTime: Date) => void;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
   selectedSlot?: CalendarSlot | null;
   onSelectSlot?: (slot: CalendarSlot) => void;
@@ -514,7 +629,6 @@ const DayLane = memo(function DayLane({
   isToday,
   nowPct,
   colorMode,
-  onDropCandidate,
   onMoveEvent,
   selectedSlot,
   onSelectSlot,
@@ -533,40 +647,9 @@ const DayLane = memo(function DayLane({
   const lanes = useMemo(() => packItemLanes(packed), [packed]);
   const laneCount = Math.max(1, ...lanes.map((lane) => lane + 1));
   const dayLabel = dayStart.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
-  const acceptsDrops = Boolean(onDropCandidate ?? onMoveEvent);
+  const acceptsDrops = Boolean(onMoveEvent);
 
-  const handlePointerCandidate = useCallback(
-    (id: string, ratio: number) => {
-      onDropCandidate?.(id, dropInstant(dayStart, ratio));
-    },
-    [dayStart, onDropCandidate],
-  );
-
-  const handlePointerEvent = useCallback(
-    (id: string, ratio: number, grabOffsetMs: number) => {
-      onMoveEvent?.(id, movedStart(dayStart, ratio, grabOffsetMs));
-    },
-    [dayStart, onMoveEvent],
-  );
-
-  const { dropRef, dropAxis } = useScheduleDropTarget({
-    axis: 'y',
-    onDropCandidate: onDropCandidate ? handlePointerCandidate : undefined,
-    onMoveEvent: onMoveEvent ? handlePointerEvent : undefined,
-    onHoverPct: setDropPct,
-  });
-
-  const draggedKind = (types: readonly string[]): 'candidate' | 'event' | null => {
-    if (onDropCandidate && types.includes(CANDIDATE_DRAG_TYPE)) {
-      return 'candidate';
-    }
-
-    if (onMoveEvent && types.includes(EVENT_DRAG_TYPE)) {
-      return 'event';
-    }
-
-    return null;
-  };
+  const carriesEvent = (types: readonly string[]) => acceptsDrops && types.includes(EVENT_DRAG_TYPE);
 
   const selectedPct =
     selectedSlot && !selectedSlot.allDay && sameLocalDay(selectedSlot.instant, dayStart)
@@ -578,8 +661,6 @@ const DayLane = memo(function DayLane({
 
   return (
     <div
-      ref={dropRef}
-      {...dropAxis}
       role="listitem"
       aria-label={dayLabel}
       data-testid="vertical-day-lane"
@@ -602,9 +683,7 @@ const DayLane = memo(function DayLane({
       onDragOver={
         acceptsDrops
           ? (e) => {
-              const kind = draggedKind(e.dataTransfer.types);
-
-              if (!kind) {
+              if (!carriesEvent(e.dataTransfer.types)) {
                 return;
               }
 
@@ -614,28 +693,27 @@ const DayLane = memo(function DayLane({
             }
           : undefined
       }
-      onDragLeave={() => setDropPct(null)}
+      // ═══ WHAT THIS USED TO DO ═══
+      // Clear the marker on every dragleave. dragenter/dragover bubble up from
+      // the chips inside the lane, so crossing onto an existing event made the
+      // slot line and its time label flicker on a day that already had one.
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          return;
+        }
+
+        setDropPct(null);
+      }}
       onDrop={
         acceptsDrops
           ? (e) => {
               setDropPct(null);
-              const kind = draggedKind(e.dataTransfer.types);
 
-              if (!kind) {
+              if (!carriesEvent(e.dataTransfer.types)) {
                 return;
               }
 
               e.preventDefault();
-
-              if (kind === 'candidate') {
-                const id = e.dataTransfer.getData(CANDIDATE_DRAG_TYPE);
-
-                if (id) {
-                  onDropCandidate?.(id, dropInstant(dayStart, ratioFor(e)));
-                }
-
-                return;
-              }
 
               const payload = parseEventDrag(e.dataTransfer.getData(EVENT_DRAG_TYPE));
 
@@ -697,6 +775,7 @@ const DayLane = memo(function DayLane({
               lane={lanes[index]}
               laneCount={laneCount}
               colorMode={colorMode}
+              onMoveEvent={onMoveEvent}
             />
           ) : (
             <TimedBlock
@@ -720,7 +799,6 @@ interface VerticalCalendarProps {
   days: number;
   events: ScheduleEvent[];
   rhythm: RhythmDay[];
-  onDropCandidate?: (candidateId: string, startTime: Date) => void;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
   selectedSlot?: CalendarSlot | null;
   onSelectSlot?: (slot: CalendarSlot) => void;
@@ -748,7 +826,6 @@ export function VerticalCalendar({
   days,
   events,
   rhythm,
-  onDropCandidate,
   onMoveEvent,
   selectedSlot,
   onSelectSlot,
@@ -813,13 +890,6 @@ export function VerticalCalendar({
     const y = (minutes / MINUTES_PER_DAY) * GRID_HEIGHT_PX - pane.clientHeight / 3;
     pane.scrollTop = Math.max(0, y);
   }, [dayStarts]);
-
-  const handleDropCandidate = useCallback(
-    (candidateId: string, startTime: Date) => {
-      onDropCandidate?.(candidateId, startTime);
-    },
-    [onDropCandidate],
-  );
 
   const handleMoveEvent = useCallback(
     (eventId: string, startTime: Date) => {
@@ -924,7 +994,12 @@ export function VerticalCalendar({
                 }
               >
                 {allDay.map((event) => (
-                  <AllDayChip key={event.id} event={event} colorMode={colorMode} />
+                  <AllDayChip
+                    key={event.id}
+                    event={event}
+                    colorMode={colorMode}
+                    onMoveEvent={onMoveEvent ? handleMoveEvent : undefined}
+                  />
                 ))}
               </div>
             </div>
@@ -932,12 +1007,7 @@ export function VerticalCalendar({
         })}
       </div>
 
-      <div
-        ref={scrollRef}
-        className="min-h-0 flex-1 overflow-auto"
-        data-testid="vertical-calendar-scroll"
-        {...{ [SCHEDULE_SCROLL_ATTR]: '' }}
-      >
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" data-testid="vertical-calendar-scroll">
         <div className="flex min-w-0">
           {/* The hours the rhythm and the days both read against. Reading
               order per day is rhythm, then time, then what was committed —
@@ -976,7 +1046,6 @@ export function VerticalCalendar({
                     isToday={isToday}
                     nowPct={isToday ? nowPct : null}
                     colorMode={colorMode}
-                    onDropCandidate={onDropCandidate ? handleDropCandidate : undefined}
                     onMoveEvent={onMoveEvent ? handleMoveEvent : undefined}
                     selectedSlot={selectedSlot}
                     onSelectSlot={onSelectSlot}

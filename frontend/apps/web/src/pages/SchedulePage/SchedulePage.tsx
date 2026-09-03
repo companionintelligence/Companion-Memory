@@ -233,8 +233,13 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
 
   const [selectedDay, setSelectedDay] = useState(start);
 
+  // ═══ WHAT THIS USED TO DO ═══
+  // Move the selected day and leave `slot` alone, so paging a week with the
+  // drawer open kept composing against the day that had just scrolled off
+  // screen: "New event" → Add, or a Possibilities card, landed on last week.
   useEffect(() => {
     setSelectedDay(start);
+    setSlot(null);
   }, [start]);
 
   const { events, rhythm, generatedAt, rhythmCoversWindow, loading, fetching, error, refetch } =
@@ -276,17 +281,30 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
     work.catch(() => setActionError(message));
   }, []);
 
-  const handleDrop = useCallback(
-    (taskId: string, startTime: Date) => {
-      run(placeOnDay(taskId, startTime), 'Could not put that on the calendar. Try again shortly.');
-    },
-    [placeOnDay, run],
-  );
-
   const handleSelectSlot = useCallback((next: CalendarSlot) => {
     setSlot(next);
     setSelectedDay(startOfLocalDay(next.instant));
   }, []);
+
+  /**
+   * The slot and the visible window are one selection.
+   *
+   * Paging the week clears it (the effect above), but on the phone the window
+   * is a SINGLE day and the day chips are what move it — so changing the chip
+   * has to clear the slot too. Without this the grid showed Wednesday while the
+   * open drawer still wrote to Monday. On a week-wide window the slot stays on
+   * screen, so picking a day column there is not a reason to drop it.
+   */
+  const handleSelectDay = useCallback(
+    (day: Date) => {
+      setSelectedDay(day);
+
+      if (isMobile) {
+        setSlot(null);
+      }
+    },
+    [isMobile],
+  );
 
   const handlePlace = useCallback(
     (taskId: string) => {
@@ -484,7 +502,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                     start={start}
                     days={DAYS_IN_VIEW}
                     selectedDay={selectedDay}
-                    onSelectDay={setSelectedDay}
+                    onSelectDay={handleSelectDay}
                   />
 
                   {colorChrome}
@@ -504,10 +522,9 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                 colorMode={colorMode}
                 pipelineRunning={pipelineRunning}
                 selectedDay={selectedDay}
-                onSelectDay={setSelectedDay}
+                onSelectDay={handleSelectDay}
                 selectedSlot={slot}
                 onSelectSlot={handleSelectSlot}
-                onDropCandidate={handleDrop}
                 onMoveEvent={handleMove}
                 footer={rhythmFooter(
                   generatedAt,

@@ -1,3 +1,5 @@
+import { emailThreadKey, gmailThreadKeyFromImap } from '@ci/domains/memory';
+
 import { GmailTransformService } from '../TransformGmail';
 
 function makeLogger() {
@@ -29,7 +31,7 @@ function syncJobWith(messages: unknown[]) {
 function gmailMessage(overrides: Record<string, unknown> = {}) {
   return {
     id: 'msg-1',
-    threadId: 'thread-1',
+    threadId: '18c1a2b3c4d5e6f7',
     snippet: 'Hi there',
     labelIds: ['INBOX'],
     payload: {
@@ -55,7 +57,8 @@ describe('GmailTransformService.transformGmail', () => {
     expect(communicationService.create).toHaveBeenCalledWith(
       { userId: 'user-1' },
       expect.objectContaining({
-        thread_id: 'thread-1',
+        // The API's hex threadId in the registry's one spelling (see below).
+        thread_id: '18c1a2b3c4d5e6f7',
         connection_id: 'conn-1',
         source_type: 'ETL',
         // Federated email identity — docs/design/cross-pipeline-identity.md.
@@ -63,6 +66,23 @@ describe('GmailTransformService.transformGmail', () => {
         source_id: 'msg-1-rfc@mail.gmail.com',
       }),
     );
+  });
+
+  it('CONVERGES the thread key with a Takeout mbox of the same message (X-GM-THRID, decimal)', async () => {
+    // The API spells the 64-bit thread id in hex; the mbox carries the same
+    // number in decimal. Both normalize to one key, so the row a Takeout
+    // import writes for this message carries the same thread_id.
+    const { service, communicationService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([gmailMessage({ threadId: '18C1A2B3C4D5E6F7' })]),
+    });
+
+    const [, input] = communicationService.create.mock.calls[0] as unknown as [unknown, { thread_id?: string }];
+    expect(input.thread_id).toBe('18c1a2b3c4d5e6f7');
+    expect(input.thread_id).toBe(gmailThreadKeyFromImap('1783885820400625399'));
+    expect(input.thread_id).toBe(emailThreadKey({ 'X-GM-THRID': '1783885820400625399' }));
   });
 
   it('falls back to a gmail-scoped hash id for Message-ID-less mail (stable, never converging)', async () => {

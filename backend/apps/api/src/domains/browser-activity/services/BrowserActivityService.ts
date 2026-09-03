@@ -10,6 +10,7 @@ import {
   type BulkInsertResult,
   bulkInsertIdempotent,
   INGEST_MERGE_KINDS,
+  INGEST_PRODUCER_PREFERENCE,
   INGEST_REFRESH_COLUMNS,
   keysetPaginate,
   type KeysetPageArgs,
@@ -185,6 +186,9 @@ export class BrowserActivityService {
       // INGEST_MERGE_KINDS .browser_activity for the full rationale.
       conflictUpdateColumns: INGEST_REFRESH_COLUMNS.browser_activity,
       conflictMergeKinds: INGEST_MERGE_KINDS.browser_activity,
+      // duration_seconds: the History file's measured dwell outranks the
+      // extension's default whichever arrived first.
+      conflictProducerPreference: INGEST_PRODUCER_PREFERENCE.browser_activity,
     });
 
     const egress = results.map(({ entity, inserted }) => ({

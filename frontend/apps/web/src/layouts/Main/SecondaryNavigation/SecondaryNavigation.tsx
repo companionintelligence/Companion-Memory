@@ -174,7 +174,7 @@ function OverlayRail({
 }
 
 export function SecondaryNavigation() {
-  const { expanded, pinned, setPointerWithin, variant, closeOverlay } = usePowerRail();
+  const { expanded, pinned, variant, closeOverlay } = usePowerRail();
   const destinations = useVisibleRailDestinations();
   const [{ isOpen: captureOpen }, { close: closeCapture }] = useCaptureModal();
   const overlay = variant === 'overlay';
@@ -236,27 +236,16 @@ export function SecondaryNavigation() {
     // A drawer, not a column that shoves the page around.
     //
     // The wrapper always occupies the collapsed width, so the layout beside it
-    // never moves on hover. The rail itself is absolutely positioned inside
-    // that lane and grows over the content when it opens — brushing past on
-    // the way to something else costs you a widening panel, not a reflow of
-    // everything you were reading.
+    // never moves. The rail itself is absolutely positioned inside that lane
+    // and only grows over the content when a click pins it open — nothing
+    // here reacts to the pointer, so passing through never costs you a
+    // widening panel you didn't ask for.
     //
-    // Pinning is the exception, and deliberately so: a pinned rail takes real
-    // width, the content settles beside it once, and it stays that way.
+    // Pinning takes real width instead: the content settles beside it once,
+    // and it stays that way.
     <>
       {captureModal}
-      <div
-        className={cn('relative h-full shrink-0 transition-[width] duration-200', pinned ? 'w-56' : 'w-14')}
-        // Leave only, and it no longer widens anything: the rail opens when
-        // pinned, not when a pointer passes by. What this still does is close a
-        // submenu that hover opened between the groups inside it.
-        onMouseLeave={() => setPointerWithin(false)}
-        onBlurCapture={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            setPointerWithin(false);
-          }
-        }}
-      >
+      <div className={cn('relative h-full shrink-0 transition-[width] duration-200', pinned ? 'w-56' : 'w-14')}>
         <nav
           id="power-rail"
           aria-label="Main navigation"

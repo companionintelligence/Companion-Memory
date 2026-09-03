@@ -120,6 +120,37 @@ describe('usePlanTasks — placeOnDay', () => {
   });
 });
 
+describe('usePlanTasks — backlogCount', () => {
+  // The nav badge and the board's column badge are the same claim about the
+  // same two sections, so they cannot disagree. `section.tasks` is roots only;
+  // `section.count` is the subtree the column actually renders, and the board
+  // has been reading that one since the column badges were fixed.
+  it('counts nested subtasks, matching the column badge on the board', () => {
+    mockedUseQuery.mockReturnValue({
+      data: {
+        tasks: {
+          edges: [
+            { node: node({ id: 'root', title: 'Parent thing' }) },
+            { node: node({ id: 'kid', title: 'Child thing', parentId: 'root' }) },
+          ],
+          totalCount: 2,
+        },
+        taskPendingChanges: [],
+      },
+      loading: false,
+      error: undefined,
+      refetch,
+    } as unknown as ReturnType<typeof useQuery>);
+
+    const { result } = renderHook(() => usePlanTasks());
+    const unscheduled = result.current.sections.find((section) => section.key === 'unscheduled');
+
+    expect(unscheduled?.tasks).toHaveLength(1);
+    expect(unscheduled?.count).toBe(2);
+    expect(result.current.backlogCount).toBe(2);
+  });
+});
+
 describe('usePlanTasks — pending changes', () => {
   it('does not keep a declined calendar suggestion in Proposed', () => {
     mockedUseQuery.mockReturnValue({

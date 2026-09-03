@@ -248,7 +248,12 @@ describe('groupIntoSections', () => {
     expect(sections[3].tasks.map((t) => t.id)).toEqual(['1']);
   });
 
-  it('nests children under roots rather than as their own section rows', () => {
+  // This case used to assert that a child left NO trace: `tasks` held only the
+  // root and the counts were derived from it, so a column of three roots with
+  // nine live subtasks read "3". The nesting is still right — `tasks` is the
+  // render list and must stay roots-only — but the badges now count what is
+  // actually in the column.
+  it('nests children under roots but counts them into the column', () => {
     const sections = groupIntoSections(
       [
         task({ id: 'root', dueAt: '2026-01-15T12:00:00Z' }),
@@ -262,6 +267,59 @@ describe('groupIntoSections', () => {
     expect(sections[0].key).toBe('unscheduled');
     expect(sections[0].lanes[0].key).toBe('upcoming');
     expect(sections[0].tasks.map((t) => t.id)).toEqual(['root']);
+    expect(sections[0].count).toBe(2);
+    expect(sections[0].lanes[0].count).toBe(2);
+    expect(sections[0].overdueCount).toBe(1);
+  });
+
+  it('counts a whole subtree, not just the first generation', () => {
+    const sections = groupIntoSections(
+      [
+        task({ id: 'root' }),
+        task({ id: 'child', parentId: 'root' }),
+        task({ id: 'grandchild', parentId: 'child' }),
+      ],
+      TODAY,
+      'UTC',
+    );
+
+    expect(sections[0].count).toBe(3);
+    expect(sections[0].overdueCount).toBe(0);
+  });
+
+  // The worst shape of the same bug: an unchecked, overdue subtask sits in the
+  // Done column purely because its parent is done. It is invisible to
+  // Unscheduled, and Done used to give no hint it contained live work.
+  it('reports live overdue work nested inside the Done column', () => {
+    const [done] = groupIntoSections(
+      [
+        task({ id: 'root', status: 'done' }),
+        task({ id: 'child', parentId: 'root', dueAt: '2026-01-14T12:00:00Z' }),
+      ],
+      TODAY,
+      'UTC',
+    );
+
+    expect(done.key).toBe('done');
+    expect(done.tasks.map((t) => t.id)).toEqual(['root']);
+    expect(done.count).toBe(2);
+    expect(done.overdueCount).toBe(1);
+  });
+
+  it('leaves an orphaned child out of every column, since nothing renders it', () => {
+    const sections = groupIntoSections([task({ id: 'orphan', parentId: 'gone' })], TODAY, 'UTC');
+
+    expect(sections).toEqual([]);
+  });
+
+  it('does not loop forever on a parentId cycle', () => {
+    const sections = groupIntoSections(
+      [task({ id: 'a', parentId: 'b' }), task({ id: 'b', parentId: 'a' })],
+      TODAY,
+      'UTC',
+    );
+
+    expect(sections).toEqual([]);
   });
 
   it('omits empty columns rather than rendering a bare heading', () => {
@@ -277,7 +335,7 @@ describe('groupIntoSections', () => {
       groupIntoSections([task({ dueAt: '2026-01-15T12:00:00Z' })], TODAY, 'UTC'),
     );
 
-    expect(sections.map((section) => [section.key, section.tasks.length])).toEqual([
+    expect(sections.map((section) => [section.key, section.count])).toEqual([
       ['proposed', 0],
       ['unscheduled', 1],
       ['scheduled', 0],

@@ -722,6 +722,52 @@ describe('conflictUpdateSetClause', () => {
     );
   });
 
+  // The preference arm: between "same producer" and "other producer", a more
+  // trusted arriving producer takes the same-producer treatment.
+  const rank = (ref: string) =>
+    `COALESCE(array_position(ARRAY['ci-import-tools', 'capture']::text[], ${ref}."source_type"), 2147483647)`;
+  const outranks = `WHEN ${rank('EXCLUDED')} < ${rank('"t"')}`;
+
+  it('adds an "arriving producer outranks" arm for a value column with a preference', () => {
+    expect(
+      conflictUpdateSetClause('t', ['duration_seconds'], {}, { duration_seconds: ['ci-import-tools', 'capture'] }),
+    ).toBe(
+      `"duration_seconds" = CASE WHEN ${same} THEN COALESCE(EXCLUDED."duration_seconds", "t"."duration_seconds") ` +
+        `${outranks} THEN COALESCE(EXCLUDED."duration_seconds", "t"."duration_seconds") ` +
+        `ELSE COALESCE("t"."duration_seconds", EXCLUDED."duration_seconds") END`,
+    );
+  });
+
+  it('gives a preferred producer the winning side of a json merge too', () => {
+    const incomingWins = `(COALESCE("t"."properties", '{}'::jsonb) || COALESCE(EXCLUDED."properties", '{}'::jsonb))`;
+    const currentWins = `(COALESCE(EXCLUDED."properties", '{}'::jsonb) || COALESCE("t"."properties", '{}'::jsonb))`;
+
+    expect(
+      conflictUpdateSetClause(
+        't',
+        ['properties'],
+        { properties: 'json' },
+        { properties: ['ci-import-tools', 'capture'] },
+      ),
+    ).toBe(`"properties" = CASE WHEN ${same} THEN ${incomingWins} ${outranks} THEN ${incomingWins} ELSE ${currentWins} END`);
+  });
+
+  it('leaves a flag alone whatever the preference says (OR is symmetric)', () => {
+    expect(
+      conflictUpdateSetClause('t', ['is_incognito'], { is_incognito: 'flag' }, { is_incognito: ['capture'] }),
+    ).toBe(conflictUpdateSetClause('t', ['is_incognito'], { is_incognito: 'flag' }));
+  });
+
+  it('leaves a column with no preference entry on the arrival-order rule', () => {
+    expect(conflictUpdateSetClause('t', ['direction'], {}, { other_column: ['capture'] })).toBe(
+      conflictUpdateSetClause('t', ['direction']),
+    );
+  });
+
+  it('escapes a quote in a producer name rather than breaking the statement', () => {
+    expect(conflictUpdateSetClause('t', ['a'], {}, { a: ["o'clock"] })).toContain("ARRAY['o''clock']::text[]");
+  });
+
   it('joins one assignment per column, in list order', () => {
     const clause = conflictUpdateSetClause('t', ['a', 'b']);
     expect(clause.startsWith('"a" = CASE')).toBe(true);

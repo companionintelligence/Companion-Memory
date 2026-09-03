@@ -433,6 +433,8 @@ export class OutlookMailTransformService {
       // collapsing every id-less message onto one shared row.
       // communications_source_identity_uniq still rejects a re-synced message.
       source_type: 'ETL',
+      // Ledger platform: the Outlook connection delivered it.
+      source_platform: canonicalSystem('outlook_mail'),
       ...(() => {
         const identity =
           emailIdentity(message.internetMessageId) ??

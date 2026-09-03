@@ -8,7 +8,7 @@ import { usePowerRail } from '../PowerRailContext';
 /**
  * Capture as a rail destination — first row, above Plan, mobile only.
  * Desktop already has Capture in the header Add menu; a second entry point
- * in a rail desktop keeps pinned/hovered open the whole time is one too
+ * in a rail desktop keeps pinned open the whole time is one too
  * many. Opens the same modal the header Add menu uses either way — this is
  * placement, not a second capture flow.
  */
