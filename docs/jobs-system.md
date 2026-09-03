@@ -133,6 +133,7 @@ change from the Controls card moves both together.
 | Global in-flight ceiling | `queues.concurrency` | `CI_QUEUE_CONCURRENCY` | **10** |
 | Per-queue ceiling | `queues.perQueueConcurrency` | `CI_QUEUE_PER_QUEUE_CONCURRENCY` | **6** |
 | Fetch batch cap | `queues.fetchBatchSize` | `CI_QUEUE_FETCH_BATCH_SIZE` | **10** |
+| Fallback job deadline | `queues.jobTimeoutSeconds` | `CI_QUEUE_JOB_TIMEOUT_SECONDS` | **7200 s** |
 | Replayed dead-letter retention | `queues.replayedDeadLetterRetentionDays` | `CI_REPLAYED_DEAD_LETTER_RETENTION_DAYS` | **30 days** |
 | Queue suppression | *(none — raw env only)* | `CI_QUEUE_SUPPRESS` | unset |
 | Process role | `role` | `CI_ROLE` | **`all`** |
@@ -247,7 +248,25 @@ throw → `ack.fail()`. `autoAcknowledge: false` hands the handler an `ack` and 
 must call `done` / `fail` / `defer` itself; the wrapper tracks whether it did and
 fails the job as a fallback if it threw without acknowledging, because
 EventEmitter2's `suppressErrors: true` would otherwise eat the exception and leak
-the worker slot forever.
+the worker slot.
+
+**Every execution is bounded.** `runJob` races the listener against a deadline —
+the queue's own `expireInSeconds` where it declares one, otherwise
+`queues.jobTimeoutSeconds` (2 h), floored at 60 s — and on expiry rejects with a
+`JobTimeoutError` into the existing `catch`, so the timeout inherits the ordinary
+retry and dead-letter policy and releases all three slots (per-queue semaphore,
+global semaphore, `JobSlotPool`) through the same `.finally()` chain a normal
+failure does. It is logged at `error` level naming the queue, job id and event.
+Nothing bounded this before, and pg-boss's `expireInSeconds` is not a substitute:
+that re-queues the row in Postgres, it cannot release a semaphore inside this
+process. A listener that neither resolved nor rejected therefore held its three
+slots until the process restarted — which presented as a queue that had quietly
+stopped, with nothing in the log to say why.
+
+Deferred jobs are not affected: `ack.defer()` settles the promise promptly with
+outcome `deferred`, so the deadline is already cleared by the time the external
+executor starts working. Liveness from there is pg-boss's `expireInSeconds`,
+which is why `py-fn-hbpe` declares ~8 h.
 
 `ack.defer()` releases the worker slot while the job stays **`active`**.
 Completion arrives out-of-band via `EventService.completeJob` / `failJob`, or the

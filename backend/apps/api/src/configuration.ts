@@ -390,6 +390,32 @@ export const ConfigSchema = z.object({
     fetchBatchSize: z.coerce.number().int().positive().default(20),
     perQueueConcurrency: z.coerce.number().int().positive().default(6),
     /**
+     * Appliance-wide fallback execution deadline for ONE job, in seconds
+     * (`CI_QUEUE_JOB_TIMEOUT_SECONDS`).
+     *
+     * Only a fallback: `PGBossEventService.jobDeadlineMs` prefers the queue's
+     * own declared `expireInSeconds`, so the six queues that state a budget
+     * (`llm` 900 s, `py-fn-summary` 30 min, `py-fn-hbpe` ~8 h, the agent
+     * dispatch pair, ingest coalescing) keep theirs. This is what the other 33
+     * get, and before it existed they got nothing at all: a listener that
+     * neither resolved nor rejected — a `fetch` with no timeout, an Ollama call
+     * that hung — held its per-queue slot, its global semaphore slot and its
+     * fetch-side `JobSlotPool` slot for the life of the process, with no log.
+     * Enough of those and the queue silently stops, which is exactly how it
+     * presented in production.
+     *
+     * 7200 (2 h) is sized off the slowest queue that declares nothing:
+     * `import-unpack`, documented at `ImportStageListener.ts` as an hour for a
+     * 350 GB archive. Deliberately generous — a deadline that kills healthy
+     * long work is a worse failure than the stall it prevents, and the honest
+     * way to lower it is per queue via `queueOptions.expireInSeconds` after
+     * reading that queue's p95 out of `ci.job_metrics`, not by tightening this
+     * number for all 33 at once. `PGBossEventService.MIN_JOB_DEADLINE_MS`
+     * floors whatever lands here, so a misconfigured 1 cannot kill every job on
+     * the appliance.
+     */
+    jobTimeoutSeconds: z.coerce.number().int().positive().default(7200),
+    /**
      * Days a REPLAYED dead letter is kept in `ci.pipeline_dead_letters` before
      * `DeadLetterReaperListener.purgeReplayed` reclaims it.
      *
