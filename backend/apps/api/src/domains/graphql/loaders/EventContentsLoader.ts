@@ -24,6 +24,8 @@ export class EventContentsLoader extends Loader<Content[]> {
     context: UserServiceContext,
     eventIds: readonly string[],
   ): Promise<readonly Content[][]> {
-    return this.contentService.findByEventIds(context, [...eventIds]);
+    const byEvent = await this.contentService.findByEventIds(context, [...eventIds]);
+
+    return eventIds.map((eventId) => byEvent.get(eventId) ?? []);
   }
 }

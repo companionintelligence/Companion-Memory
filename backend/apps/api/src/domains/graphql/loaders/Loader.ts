@@ -15,7 +15,12 @@ export abstract class Loader<V, K = string> {
    * neither guarantee: rows arrive in the planner's order, and an id that is
    * missing or invisible to this caller does not arrive at all. Most services
    * here already re-key before returning; a subclass whose service does not
-   * must do it itself. Absent keys become `null`.
+   * must do it itself, with {@link rekey}. Absent keys become `null` (or the
+   * empty collection, for the list-valued loaders).
+   *
+   * `__tests__/loaderKeyOrder.test.ts` holds every loader in this directory to
+   * that contract, driving each one with a collaborator that deliberately
+   * reverses its rows and drops an id.
    */
   protected abstract batchLoad(context: UserServiceContext, keys: readonly K[]): Promise<readonly V[]>;
 
@@ -57,5 +62,44 @@ export abstract class Loader<V, K = string> {
     this.getLoader(context).prime(key, value);
 
     return this;
+  }
+
+  /**
+   * Pair a batch of rows back onto the keys that asked for them.
+   *
+   * The row set a `WHERE id IN (...)` read returns is not a batch result: it
+   * arrives in the planner's order and is short by one for every id that is
+   * missing or invisible to the caller. Zipping that against the keys by
+   * position is what captioned five real answers on this appliance with four
+   * other answers' questions.
+   *
+   * Every loader that reads single rows indexes them here rather than trusting
+   * the service it happens to call to have indexed them already, so the
+   * invariant is local to the file the test drives — a service changing shape
+   * can no longer reach GraphQL as silently mis-attributed data.
+   *
+   * `keyOf` may return null for a row that carries no key (a nullable
+   * `parent_id`); such a row is dropped rather than claiming a key.
+   */
+  protected rekey<T>(
+    keys: readonly K[],
+    rows: readonly (T | null | undefined)[],
+    keyOf: (row: T) => K | null | undefined,
+  ): (T | null)[] {
+    const byKey = new Map<K, T>();
+
+    for (const row of rows) {
+      if (row == null) {
+        continue;
+      }
+
+      const key = keyOf(row);
+
+      if (key != null) {
+        byKey.set(key, row);
+      }
+    }
+
+    return keys.map((key) => byKey.get(key) ?? null);
   }
 }

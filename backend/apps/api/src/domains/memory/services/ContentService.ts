@@ -772,10 +772,12 @@ export class ContentService {
   }
 
   /**
-   * Batch-load content rows linked to each of `eventIds`, oldest first.
-   * Returns one `Content[]` per input id (same order), so a GraphQL DataLoader
-   * can resolve `Event.contents` in a single query. Ownership is scoped through
-   * the event's `user_id` — same rationale as {@link findMediaFilesByEventIds}.
+   * Batch-load content rows linked to each of `eventIds`, oldest first, so a
+   * GraphQL DataLoader can resolve `Event.contents` in a single query. Keyed by
+   * event id rather than returned positionally — an event with no content is
+   * simply absent from the map, which no caller can zip its neighbour's rows
+   * onto. Ownership is scoped through the event's `user_id` — same rationale as
+   * {@link findMediaFilesByEventIds}.
    *
    * Two links are followed, because a content row has ONE `event_id` but may
    * stand for many events: every Audible session of a book, every Netflix
@@ -784,9 +786,9 @@ export class ContentService {
    * `Content -DOCUMENTS-> Event` edge the pipeline projects for each of them,
    * so without the second arm a drawer for the third viewing showed nothing.
    */
-  async findByEventIds(context: UserServiceContext, eventIds: string[]): Promise<Content[][]> {
+  async findByEventIds(context: UserServiceContext, eventIds: string[]): Promise<Map<string, Content[]>> {
     if (eventIds.length === 0) {
-      return [];
+      return new Map();
     }
 
     const rows = await this.contentRepository.manager.query<Array<{ content_id: string; event_id: string }>>(
@@ -809,7 +811,7 @@ export class ContentService {
 
     const contentIds = [...new Set(rows.map((row) => row.content_id))];
     if (contentIds.length === 0) {
-      return eventIds.map(() => []);
+      return new Map();
     }
 
     const entities = await this.contentRepository
@@ -840,7 +842,7 @@ export class ContentService {
       }
     }
 
-    return eventIds.map((id) => contentsMap.get(id) ?? []);
+    return contentsMap;
   }
 
   /**
