@@ -8,7 +8,6 @@ import { EventService } from '@ci/domains/events';
 import { PersonUpdatedEvent } from '@ci/domains/memory/events';
 
 import { type Person, PersonEntity } from '../entities/PersonEntity';
-import { pickFullerName } from '../utils/personNameTokens';
 
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 
@@ -129,7 +128,13 @@ export class PersonMergeService {
         sources.map((id) => byId.get(id)?.properties ?? {}),
       );
 
-      const mergedName = pickFullerName([target.name, ...sources.map((id) => byId.get(id)?.name)]);
+      // Target's name always wins when present — a merge SOURCE (e.g. a
+      // communications-participant stub) must never overwrite the target's
+      // display name, especially when the target is the user's own self
+      // person and the merge runs unattended (MergeCandidateService's
+      // autoMergePendingEmailPairs). Only fall back to a source's name when
+      // the target has none.
+      const mergedName = firstNonEmpty([target.name, ...sources.map((id) => byId.get(id)?.name)]);
       const mergedDescription = firstNonEmpty([
         target.description,
         ...sources.map((id) => byId.get(id)?.description),
