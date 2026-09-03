@@ -93,7 +93,13 @@ export const INDEX_EMBED_EVENT_SOURCE: StageSource = {
   table: 'events',
   idColumn: 'event_id',
   userColumn: 'user_id',
-  predicate: 's.is_deleted IS NOT TRUE',
+  // `planned_block` is planning's own row (docs/architecture/planning-roadmap.md,
+  // ci.events guardrail #2: "index the task, not the block"). The task carries
+  // the words; the block only carries a time — and an autoplan run moving forty
+  // blocks would otherwise be forty embedding calls at plan-loop frequency.
+  // EventSearchIndexListener already refused these on the event-driven path;
+  // this ledger path had no such guard and was embedding them anyway.
+  predicate: "s.is_deleted IS NOT TRUE AND s.event_type <> 'planned_block'",
 };
 
 @Injectable()

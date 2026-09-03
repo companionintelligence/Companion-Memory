@@ -85,7 +85,17 @@ export const ENTITY_SOURCE_MAP: Readonly<Record<IndexableEntity, EntitySource>> 
     backfillPredicate: 's.merged_into_entity_id IS NULL',
   },
   content: { schema: 'ci', table: 'content', idColumn: 'id' },
-  event: { schema: 'ci', table: 'events', idColumn: 'event_id' },
+  // Mirrors INDEX_EMBED_EVENT_SOURCE.predicate (pipeline domain; not importable
+  // from here). Without it the sweep's LEFT JOIN against embeddings + index_skips
+  // re-found every planned block on every pass and re-enqueued it, and the
+  // listener refused it on arrival without recording a skip — the exact
+  // non-convergence index_skips was created to end, at one row per block.
+  event: {
+    schema: 'ci',
+    table: 'events',
+    idColumn: 'event_id',
+    backfillPredicate: "s.is_deleted IS NOT TRUE AND s.event_type <> 'planned_block'",
+  },
   // `ci.files`, NOT the `ci.entities` graph node of `entity_type = 'File'`.
   //
   // Both exist, they are 1:1, and their ids are DIFFERENT: GraphIngest mints a

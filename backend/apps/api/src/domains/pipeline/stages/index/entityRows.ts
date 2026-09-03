@@ -87,7 +87,8 @@ export async function loadEventRows(
        LEFT JOIN ci.entities n ON n.entity_id = e.event_id
       WHERE e.event_id = ANY($1::uuid[])
         AND e.user_id = $2::uuid
-        AND e.is_deleted IS NOT TRUE`,
+        AND e.is_deleted IS NOT TRUE
+        AND e.event_type <> 'planned_block'`,
     [ids, userId],
   );
 }
