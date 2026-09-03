@@ -319,4 +319,75 @@ describe('useEntityService', () => {
 
     expect(fetchMore).toHaveBeenCalledTimes(1);
   });
+
+  it('surfaces a rejected fetchMore as `error`, since Apollo never puts it there itself', async () => {
+    // Regression: useQuery's own `error` only tracks the initial query — a
+    // rejected fetchMore() promise never touches it. Callers (StoryTimelineView's
+    // auto-paging effect, its Retry affordance) guard on this hook's `error`, so
+    // if it stays undefined after a failed page, the guard never trips and the
+    // pump keeps re-issuing the same failing cursor forever.
+    setResult({
+      data: {
+        search: {
+          totalCount: 2,
+          pageInfo: { hasNextPage: true, endCursor: 'c1' },
+          edges: [edge('e1', 'c1')],
+        },
+      },
+    });
+    fetchMore.mockRejectedValueOnce(new Error('network'));
+
+    const { result } = renderService({ searchQuery: '' });
+
+    expect(result.current[0].error).toBeUndefined();
+
+    await act(async () => {
+      result.current[0].loadMore();
+      await Promise.resolve();
+    });
+
+    expect(fetchMore).toHaveBeenCalledTimes(1);
+    expect(result.current[0].error).toBeInstanceOf(Error);
+
+    // A second attempt must not be blocked by this hook itself (that guard is
+    // the caller's job) — but it should get a clean slate, not the previous
+    // failure's error still hanging around once a new page comes back fine.
+    fetchMore.mockResolvedValueOnce(undefined);
+
+    await act(async () => {
+      result.current[0].loadMore();
+      await Promise.resolve();
+    });
+
+    expect(fetchMore).toHaveBeenCalledTimes(2);
+    expect(result.current[0].error).toBeUndefined();
+  });
+
+  it('clears a stuck fetchMore error on retry', async () => {
+    setResult({
+      data: {
+        search: {
+          totalCount: 2,
+          pageInfo: { hasNextPage: true, endCursor: 'c1' },
+          edges: [edge('e1', 'c1')],
+        },
+      },
+    });
+    fetchMore.mockRejectedValueOnce(new Error('network'));
+
+    const { result } = renderService({ searchQuery: '' });
+
+    await act(async () => {
+      result.current[0].loadMore();
+      await Promise.resolve();
+    });
+
+    expect(result.current[0].error).toBeInstanceOf(Error);
+
+    act(() => {
+      result.current[0].refetch();
+    });
+
+    expect(result.current[0].error).toBeUndefined();
+  });
 });

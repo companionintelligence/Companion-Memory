@@ -272,7 +272,7 @@ type ReturnType = [
     loadingMore: boolean;
     hasNextPage: boolean;
     totalCount: number;
-    error: ApolloError | undefined;
+    error: ApolloError | Error | undefined;
     activeEntity: MemoryEntity | null;
     /** The current filters, minus paging. See {@link SearchFilterVariables}. */
     searchVariables: SearchFilterVariables;
@@ -360,6 +360,10 @@ function useEntityService({
   // see `activeEntity` below, which keeps the drawer in step with the cache.
   const [selectedEntity, setActiveEntity] = useState<MemoryEntity | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Apollo's `useQuery` error field only tracks the *initial* query — a
+  // rejected `fetchMore()` promise never touches it (see below), so a failed
+  // page would otherwise be invisible to every caller that guards on `error`.
+  const [loadMoreError, setLoadMoreError] = useState<Error | undefined>(undefined);
 
   const pageInfo = data?.search?.pageInfo;
   const hasNextPage = pageInfo?.hasNextPage ?? false;
@@ -372,6 +376,7 @@ function useEntityService({
     }
 
     setLoadingMore(true);
+    setLoadMoreError(undefined);
 
     fetchMore({
       variables: { after: pageInfo.endCursor },
@@ -392,9 +397,14 @@ function useEntityService({
         };
       },
     })
-      .catch(() => {
-        // Apollo records the query error. Swallow so a failed page is not an
-        // unhandled rejection — callers decide whether to show ErrorState.
+      .catch((rejection: unknown) => {
+        // Apollo's `error` from useQuery does NOT get set by a rejected
+        // fetchMore — record it ourselves so callers guarding on `error`
+        // (auto-paging effects, the Retry affordance) actually see the
+        // failure instead of looping on the same cursor forever.
+        setLoadMoreError(
+          rejection instanceof Error ? rejection : new Error('Failed to load more results'),
+        );
       })
       .finally(() => setLoadingMore(false));
   }, [fetchMore, hasNextPage, loadingMore, pageInfo?.endCursor]);
@@ -407,6 +417,10 @@ function useEntityService({
   const activeEntity = useMemo(() => resolveLiveEntity(selectedEntity, results), [selectedEntity, results]);
 
   const refetchSearch = useCallback(() => {
+    // Retry clears the stuck fetchMore failure too — a fresh refetch (or the
+    // next loadMore it enables) deserves its own chance, not an error left
+    // over from the page that failed before it.
+    setLoadMoreError(undefined);
     void refetch();
   }, [refetch]);
 
@@ -417,7 +431,7 @@ function useEntityService({
       loadingMore,
       hasNextPage,
       totalCount,
-      error,
+      error: error ?? loadMoreError,
       activeEntity,
       searchVariables,
       loadMore,
