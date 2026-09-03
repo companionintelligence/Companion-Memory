@@ -244,7 +244,9 @@ export async function zipFilesStore(
   const centralOffset = offset;
   const centralSize = centrals.reduce((sum, part) => sum + part.length, 0);
 
-  parts.push(...centrals);
+  for (const central of centrals) {
+    parts.push(central);
+  }
 
   const needsZip64Eocd =
     anyZip64 ||
