@@ -136,6 +136,19 @@ export function sectionFor(task: SectionedTask, today: string, timeZone?: string
     return { column: 'done', lane: 'inbox' };
   }
 
+  /**
+   * ═══ DELEGATED WORK IS NOT OVERDUE WORK ═══
+   *
+   * A delegated task is in flight with an agent harness. It kept whatever due
+   * date it had, so falling through to the dated branch below files a past-due
+   * one under Overdue — telling the user to chase something they have already
+   * handed off and cannot act on. It stays in the column its calendar state
+   * puts it in, always in the live lane.
+   */
+  if (task.status === 'delegated') {
+    return { column: task.placedOnCalendar ? 'scheduled' : 'unscheduled', lane: 'upcoming' };
+  }
+
   // A deferred task is invisible until its date arrives, whatever its deadline.
   if (task.deferUntil && task.deferUntil > today) {
     return { column: 'proposed', lane: 'proposed_upcoming' };
