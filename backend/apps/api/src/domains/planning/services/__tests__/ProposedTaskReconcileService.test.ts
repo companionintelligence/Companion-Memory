@@ -1,6 +1,7 @@
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 
+import { SCAN_DEDUP_LIMIT, SCAN_DEDUP_STATUSES } from '../../engine/taskTitleSimilarity';
 import type { Task } from '../../entities/TaskEntity';
 import type { PlanningTimeService } from '../PlanningTimeService';
 import { ProposedTaskReconcileService } from '../ProposedTaskReconcileService';
@@ -166,6 +167,60 @@ describe('ProposedTaskReconcileService', () => {
 
     expect(result).toEqual({ redated: 0, archived: 1 });
     expect(taskService.declineProposed).toHaveBeenCalledWith(CTX, task.id);
+    expect(taskService.update).not.toHaveBeenCalled();
+  });
+
+  it('never declines a proposed task that falls outside the same capped/ordered window callers use to build `tracked`', async () => {
+    // Callers (InboxScanService, TodoScanService) build `relevantTitles` from
+    // `findAll({ status: SCAN_DEDUP_STATUSES, limit: SCAN_DEDUP_LIMIT })`,
+    // ordered `due_at ASC NULLS LAST`. Fill that window with SCAN_DEDUP_LIMIT
+    // older-due archived rows so the one live proposed task — due later than
+    // all of them — sorts past the cap. If reconcileStaleProposed queried an
+    // uncapped `status: ['proposed']` (the bug), it would find this row
+    // regardless and decline it as "not relevant", even though nothing about
+    // it changed; it simply never got a chance to be seen as relevant.
+    const filler: Task[] = Array.from({ length: SCAN_DEDUP_LIMIT }, (_, i) =>
+      makeTask({
+        id: `filler-${i}`,
+        title: `Filler task ${i}`,
+        status: 'archived',
+        dueAt: new Date(Date.UTC(2020, 0, 1 + (i % 28))),
+        scheduledFor: null,
+      }),
+    );
+    const outOfWindow = makeTask({
+      id: 'out-of-window',
+      title: 'Follow up on invoice',
+      scheduledFor: '2026-08-20',
+      dueAt: new Date('2026-08-20T12:00:00.000Z'),
+    });
+    const all = [...filler, outOfWindow];
+
+    taskService.findAll.mockImplementation(
+      async (_ctx: unknown, options: { status?: string[]; limit?: number } = {}) => {
+        let rows = all;
+
+        if (options.status?.length) {
+          rows = rows.filter((task) => options.status!.includes(task.status));
+        }
+
+        rows = [...rows].sort((a, b) => (a.dueAt as Date).getTime() - (b.dueAt as Date).getTime());
+
+        return options.limit ? rows.slice(0, options.limit) : rows;
+      },
+    );
+
+    const result = await service.reconcileStaleProposed(CTX, {
+      sourceKind: 'memory_scan',
+      relevantTitles: [],
+    });
+
+    expect(taskService.findAll).toHaveBeenCalledWith(CTX, {
+      status: [...SCAN_DEDUP_STATUSES],
+      limit: SCAN_DEDUP_LIMIT,
+    });
+    expect(result).toEqual({ redated: 0, archived: 0 });
+    expect(taskService.declineProposed).not.toHaveBeenCalled();
     expect(taskService.update).not.toHaveBeenCalled();
   });
 
