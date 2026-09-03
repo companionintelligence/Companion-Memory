@@ -185,8 +185,9 @@ export function JobControlsCard({
                       <p className="pb-2 text-xs text-muted-foreground">
                         {elsewhereCount} of these run in the worker process rather than this one. They are
                         listed and switchable from here — the setting is stored on the appliance and every
-                        process reads it. The Schedules card above still covers only this process, so it has
-                        no last-run time for them.
+                        process reads it. The Schedules card above shows their last run and last success,
+                        which are durable; when they fire next is only knowable in the process that runs
+                        them.
                       </p>
                     ) : null}
                     <ul className="pb-2">

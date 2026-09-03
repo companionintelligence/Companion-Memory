@@ -389,7 +389,7 @@ function SchedulesCard({
       <Card.Header className={cardPad(phone)}>
         <FoldTrigger>
           <Card.Title className="text-base">Schedules</Card.Title>
-          <Card.Description>Recurring jobs registered in this process ({crons.length})</Card.Description>
+          <Card.Description>{describeScheduleScope(crons)}</Card.Description>
         </FoldTrigger>
       </Card.Header>
       <FoldBody>
@@ -441,6 +441,24 @@ function UnnamedCronWarning() {
 }
 
 /**
+ * How much of the appliance this card is reporting on.
+ *
+ * It used to say "registered in this process" — accurate, and no help at all:
+ * under `CI_ROLE=web` that silently meant 42 of 53, with the eleven the worker
+ * runs absent rather than merely unlabelled. They are listed now, so the count
+ * is the whole build and this sentence says which part of each row is durable.
+ */
+function describeScheduleScope(crons: JobsDashboardResponse['crons']): string {
+  const elsewhere = crons.filter((cron) => !cron.servedHere).length;
+
+  if (elsewhere === 0) {
+    return `Recurring jobs on this appliance (${crons.length})`;
+  }
+
+  return `Recurring jobs on this appliance (${crons.length}) — ${elsewhere} run in the worker process, so only their last run and last success are visible from here`;
+}
+
+/**
  * What the schedule is doing, in the order of what an operator can act on.
  *
  * `running` is not health — the `@Cron` wrapper catches, logs and returns, so a
@@ -468,6 +486,21 @@ function ScheduleStatus({ cron, className }: { cron: ScheduleRow['cron']; classN
         title="Switched off in Controls. The schedule is still registered, but its body does not run."
       >
         off
+      </Badge>
+    );
+  }
+
+  // Checked before `running`, which is null for these rows rather than false.
+  // Read as a boolean it would badge every worker schedule "stopped" — on the
+  // page an operator opens precisely to find out what has stopped.
+  if (!cron.servedHere) {
+    return (
+      <Badge
+        variant="outline"
+        className={badge}
+        title={`Runs in the ${cron.role} process, not the one serving this page. Its last run and last success are durable and shown; whether its scheduler is started, when it fires next, and whether it is overdue are only knowable there.`}
+      >
+        {cron.role}
       </Badge>
     );
   }

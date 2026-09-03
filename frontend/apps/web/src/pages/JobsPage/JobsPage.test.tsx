@@ -546,6 +546,8 @@ describe('JobsPage schedules', () => {
             cron: '0 */2 * * * *',
             timezone: null,
             running: true,
+            role: 'web',
+            servedHere: true,
             nextRunAt: '2026-08-17T01:00:00.000Z',
             lastRunAt: null,
             lastSuccessAt: null,
@@ -582,6 +584,8 @@ describe('JobsPage schedules', () => {
             cron: '0 * * * * *',
             timezone: null,
             running: true,
+            role: 'web',
+            servedHere: true,
             nextRunAt: null,
             lastRunAt: null,
             lastSuccessAt: null,
@@ -617,6 +621,8 @@ describe('JobsPage schedules', () => {
       cron: '0 0 * * * *',
       timezone: null,
       running: true,
+      role: 'web',
+      servedHere: true,
       nextRunAt: null,
       lastRunAt: null,
       lastSuccessAt: null,
@@ -698,6 +704,77 @@ describe('JobsPage schedules', () => {
 
     expect(within(healthy).getByText('scheduled')).toBeInTheDocument();
     expect(within(healthy).queryByText('overdue')).not.toBeInTheDocument();
+  });
+
+  it('badges a schedule the worker runs by its role, not as stopped', () => {
+    render({
+      dashboard: dashboard({
+        crons: [
+          cron('DerivationCron.deriveNightly', {
+            role: 'worker',
+            servedHere: false,
+            // Null, not false: this process cannot see the scheduler holding it.
+            running: null,
+            nextRunAt: null,
+            lastRunAt: '2026-09-01T03:00:00.000Z',
+          }),
+          cron('PipelineTickCron.runOnSchedule'),
+        ],
+      }),
+    });
+
+    // Read as a boolean, `running: null` badges "stopped" — on the page an
+    // operator opens precisely to find out what has stopped, for a schedule that
+    // is ticking perfectly well one process over.
+    const elsewhere = scheduleRow('DerivationCron.deriveNightly');
+
+    expect(within(elsewhere).getByText('worker')).toBeInTheDocument();
+    expect(within(elsewhere).queryByText('stopped')).not.toBeInTheDocument();
+
+    // And a row this process does run is untouched.
+    expect(within(scheduleRow('PipelineTickCron.runOnSchedule')).getByText('scheduled')).toBeInTheDocument();
+  });
+
+  it('still shows the durable history for a schedule it does not run', () => {
+    const attemptedAt = new Date('2026-09-01T03:00:00.000Z');
+
+    render({
+      dashboard: dashboard({
+        crons: [
+          cron('ImportRetentionCron.runOnSchedule', {
+            role: 'worker',
+            servedHere: false,
+            running: null,
+            lastRunAt: attemptedAt.toISOString(),
+            lastSuccessAt: null,
+          }),
+        ],
+      }),
+    });
+
+    // ci.cron_runs is written by whichever process ticks, so last-run and
+    // last-success mean the same from either side — and "ran but never
+    // succeeded" is the signal that was structurally unreachable for these
+    // eleven schedules while they were missing from the list entirely.
+    const row = scheduleRow('ImportRetentionCron.runOnSchedule');
+
+    expect(within(row).getByText(attemptedAt.toLocaleTimeString())).toBeInTheDocument();
+    expect(within(row).getByText('never')).toBeInTheDocument();
+  });
+
+  it('says how much of the appliance the card is reporting on', () => {
+    render({
+      dashboard: dashboard({
+        crons: [
+          cron('PipelineTickCron.runOnSchedule'),
+          cron('DerivationCron.deriveNightly', { role: 'worker', servedHere: false, running: null }),
+        ],
+      }),
+    });
+
+    // It used to say "registered in this process" — accurate, and no help:
+    // under CI_ROLE=web that silently meant 42 of 53.
+    expect(screen.getByText(/1 run in the worker process/i)).toBeInTheDocument();
   });
 
   it('shows when a schedule last succeeded, not only when it last fired', () => {
@@ -840,6 +917,8 @@ describe('JobsPage controls', () => {
             cron: '0 0 3 * * *',
             timezone: null,
             running: true,
+            role: 'web',
+            servedHere: true,
             nextRunAt: '2026-08-18T03:00:00.000Z',
             lastRunAt: '2026-08-17T03:00:00.000Z',
             lastSuccessAt: '2026-08-17T03:00:00.000Z',
@@ -1123,6 +1202,8 @@ describe('JobsPage phone layout', () => {
             cron: '0 0 * * * *',
             timezone: null,
             running: true,
+            role: 'web',
+            servedHere: true,
             nextRunAt: null,
             lastRunAt: null,
             lastSuccessAt: null,
@@ -1162,6 +1243,8 @@ describe('JobsPage phone layout', () => {
             cron: '0 0 * * * *',
             timezone: null,
             running: true,
+            role: 'web',
+            servedHere: true,
             nextRunAt: null,
             lastRunAt: '2026-08-14T00:00:00.000Z',
             lastSuccessAt: null,
