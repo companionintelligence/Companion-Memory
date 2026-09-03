@@ -93,23 +93,39 @@ call — that is what applies new options to a live database.
 ### 1.3 The worker loop
 
 There is **no `boss.work()` subscription anywhere**. Each served queue runs its
-own hand-rolled poller ([`PGBossEventService.ts:635`](../backend/apps/api/src/domains/events/services/PGBossEventService.ts)):
+own hand-rolled poller ([`PGBossEventService.work()`](../backend/apps/api/src/domains/events/services/PGBossEventService.ts)):
 
 ```
 while (running):
-  available = min(perQueueSemaphore.free, globalSemaphore.free)
-  if available == 0:  sleep 150ms;  continue          # backoffWhenFull
-  jobs = boss.fetch(queue, { batchSize: min(available, 10) })
-  if jobs is empty: sleep 5000ms;  continue           # backoffWhenEmpty
+  if perQueueSemaphore.free == 0:  sleep 150ms;  continue      # backoffWhenFull
+  reserved = globalSlots.reserve(min(perQueueSemaphore.free, 10))
+  if reserved == 0:  wait for a release (≤150ms);  continue    # backoffWhenFull
+  jobs = boss.fetch(queue, { batchSize: reserved })
+  globalSlots.release(reserved - jobs.length)                  # short fetch
+  if jobs is empty: sleep 5000ms;  continue                    # backoffWhenEmpty
   for job in jobs:
-     void perQueueSemaphore(() => runJob(queue, job))  # NOT awaited
+     void perQueueSemaphore(() => runJob(queue, job))          # NOT awaited
+        .finally(() => globalSlots.release())
 ```
 
-Two nested `p-limit` semaphores. The **per-queue** slot is held for the job's
-whole lifetime; `runJob` acquires the **global** slot inside it. So a job holds
-one of each while executing, and can sit `pending` on the per-queue limiter while
-it waits for a global slot. One queue can therefore never starve another, and
-total in-flight never exceeds the global cap.
+Two nested `p-limit` semaphores, plus a reservation in front of the fetch. The
+**per-queue** slot is held for the job's whole lifetime; `runJob` acquires the
+**global** slot inside it. So a job holds one of each while executing, and one
+queue can never starve another.
+
+The global half of the *fetch* decision is a claim
+([`jobSlotPool.ts`](../backend/apps/api/src/domains/events/jobSlotPool.ts)), not
+a reading of the limiter's counters, and that distinction is load-bearing. All
+~38 loops are started un-awaited in one synchronous pass and each runs as far as
+its first `await boss.fetch(...)` before any of them has dispatched anything — so
+a *read* showed every loop the same ten free slots, and every loop fetched
+against them. `fetch` takes the pg-boss lease, so the surplus rows went to state
+`active` (on their `expireInSeconds` clock, and counted by the console's
+"Running" tile) while sitting in a semaphore waiting for a slot. The pool grants
+its ten slots synchronously and holds each one until the row reaches a terminal
+outcome, so **rows leased never exceed the global cap**, not merely rows
+executing. It reads its ceiling from `globalSemaphore.concurrency`, so a runtime
+change from the Controls card moves both together.
 
 | Knob | Config path | Env | Value |
 |---|---|---|---|
