@@ -1,9 +1,8 @@
-import { Body, Controller, ForbiddenException, Get, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { Body, Controller, Get, Post, Put, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
 import { Context, type RequestContext } from '@ci/common/context/';
-import { READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
+import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MAX_CONCURRENCY } from '@ci/common/job-controls';
 import { ValidationPipe } from '@ci/common/pipes';
@@ -66,12 +65,6 @@ const jobControlsSchema = z.object({
 
 type JobControlsBody = z.infer<typeof jobControlsSchema>;
 
-function isLoopback(request: Request): boolean {
-  const ip = request.socket.remoteAddress ?? '';
-
-  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
-}
-
 @Controller('jobs')
 export class JobsController {
   constructor(
@@ -89,23 +82,38 @@ export class JobsController {
   /**
    * Fire every Nest `@Cron` (or one named job) the way the scheduler would.
    *
-   * Loopback-only: operators `docker exec` into the api container and curl
-   * localhost. Authenticated remote callers use the Jobs UI / JWT surface
-   * instead of an open stampede endpoint on the public host.
+   * `full`, not `write`, because the set this fans out over is not curated: it is
+   * every schedule the process has registered, and that set includes
+   * `AccountPurgeCron.purgeDueAccounts`, which permanently deletes accounts past
+   * their grace period. Gating on the *narrowest* thing this can fire would be
+   * backwards — the capability has to cover the widest, and a per-cron
+   * destructive/non-destructive registry would fail open the day someone adds a
+   * schedule and forgets to classify it.
+   *
+   * This used to be guarded by a loopback check on `request.socket.remoteAddress`
+   * instead of by auth, on the theory that operators reach it by `docker exec` +
+   * curl. That check could not hold: `remoteAddress` is the IMMEDIATE PEER, so
+   * any reverse proxy in front of the API makes every request look local, and
+   * this repo ships two that dial the API on localhost — the `make dev` Caddy
+   * route at `<project>.localhost`, and the Vite dev server's own `/api` proxy
+   * (`API_PROXY_TARGET`), which binds `0.0.0.0` and allows `.ts.net` hosts. Any
+   * caller on the network could stampede every cron on the appliance.
+   *
+   * Nor was there an honest version of the check to fall back to. `X-Forwarded-For`
+   * is only meaningful behind a proxy that overwrites it, and `express` here runs
+   * `trust proxy = 1` globally, which makes `req.ip` attacker-controlled on a
+   * DIRECT connection — a spoofable header check reading as a network-location
+   * control is worse than none. The guard is the real control, so it is the only
+   * one left.
    */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(FULL_CAPABILITY)
   @Post('crons/run')
-  runCrons(
-    @Req() request: Request,
-    @Query('name') name?: string,
-  ): {
+  runCrons(@Query('name') name?: string): {
     fired: string[];
     skipped: string[];
     errors: { name: string; error: string }[];
   } {
-    if (!isLoopback(request)) {
-      throw new ForbiddenException('POST /jobs/crons/run is only allowed from inside the api container');
-    }
-
     const names = name?.trim() ? [name.trim()] : undefined;
 
     return this.jobMonitorService.fireCronJobs(names);

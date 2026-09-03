@@ -225,7 +225,6 @@ CI-Server uses **per-controller guards**, not a global auth guard.
 | `GET /graphiql` | the GraphiQL IDE page (static HTML; the user pastes their own key into it) |
 | `GET /solid/profile/:userId` | a WebID document must be world-dereferenceable; gated only by the `solid.protocol` flag, which is off by default |
 | `POST /agent/v1/ask` | authenticates a *peer*, not a local user — verifies Portal claims inline |
-| `POST /jobs/crons/run` | loopback-only (`isLoopback(request)`, 403 otherwise); an operator `docker exec`s in and curls localhost |
 
 > Note there is **no** `GET /graphql` playground any more: `playground: false` **and** `graphiql: false` on the Apollo driver, and the IDE is a separate `GET /graphiql` route (`domains/graphql/controllers/GraphQLController.ts`).
 
