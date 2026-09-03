@@ -16,9 +16,29 @@ without re-running the benchmark.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Sequence, Union
 
+from .aggregation import aggregate_runs, aggregated_to_json
 from .schema import SystemResult
+from .stats import describe
+
+# A "results" argument is either a list of SystemResult (single-run, the
+# legacy shape we MUST keep byte-identical) or a list-of-lists of SystemResult
+# (multi-run, one inner list per adapter). The reporter detects which shape
+# it has by peeking at the first non-empty element.
+ResultsArg = Union[Sequence[SystemResult], Sequence[Sequence[SystemResult]]]
+
+
+def _is_multi_run(results: ResultsArg) -> bool:
+    """Detect the multi-run shape (list-of-lists) without importing anything.
+
+    We check the first element only — mixing shapes inside a single call is
+    a programming error the caller is responsible for avoiding, and exploding
+    on it here would be louder than silently treating it as single-run.
+    """
+    for r in results:
+        return isinstance(r, (list, tuple))
+    return False
 
 
 def _ordered_categories(persona: Dict[str, Any]) -> List[str]:
@@ -37,11 +57,16 @@ def _fmt_score(hit: int, total: int) -> str:
 
 def build_markdown_report(
     persona: Dict[str, Any],
-    results: Sequence[SystemResult],
+    results: ResultsArg,
     *,
     scorer_label: str = "keyword",
     include_question_detail: bool = True,
 ) -> str:
+    if _is_multi_run(results):
+        return _build_markdown_multirun(
+            persona, results, scorer_label=scorer_label,
+            include_question_detail=include_question_detail,
+        )
     p = persona
     categories = _ordered_categories(p)
 
@@ -103,7 +128,9 @@ def build_markdown_report(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def build_json_report(persona: Dict[str, Any], results: Sequence[SystemResult]) -> Dict[str, Any]:
+def build_json_report(persona: Dict[str, Any], results: ResultsArg) -> Dict[str, Any]:
+    if _is_multi_run(results):
+        return _build_json_multirun(persona, results)
     categories = _ordered_categories(persona)
     return {
         "persona": {
@@ -141,3 +168,137 @@ def build_json_report(persona: Dict[str, Any], results: Sequence[SystemResult]) 
             for r in results
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Multi-run helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_json_multirun(
+    persona: Dict[str, Any],
+    results: Sequence[Sequence[SystemResult]],
+) -> Dict[str, Any]:
+    """Emit the multi-run JSON shape locked by the orchestrator.
+
+    The persona block is identical to the single-run shape; only the
+    ``systems`` entries grow extra fields. See ``aggregation.py`` for the
+    exact contract.
+    """
+    categories = _ordered_categories(persona)
+    systems: List[Dict[str, Any]] = []
+    for runs in results:
+        if not runs:
+            continue
+        agg = aggregate_runs(runs, categories=categories)
+        systems.append(aggregated_to_json(agg, categories=categories))
+    return {
+        "persona": {
+            "id": persona.get("persona_id"),
+            "name": persona.get("name"),
+            "questions": len(persona.get("eval_questions", [])),
+            "categories": categories,
+        },
+        "systems": systems,
+    }
+
+
+def _fmt_pp(ratio: float) -> str:
+    """Render a [0, 1] ratio as a "Npp" (percentage-points) string for IQR.
+
+    Used by the multi-run markdown header — "65% ±5pp" reads as "65 percent
+    with a 5 percentage-point inter-quartile range" without confusing
+    percent-OF-percent units.
+    """
+    return f"{ratio * 100:.0f}pp"
+
+
+def _build_markdown_multirun(
+    persona: Dict[str, Any],
+    results: Sequence[Sequence[SystemResult]],
+    *,
+    scorer_label: str,
+    include_question_detail: bool,
+) -> str:
+    """Multi-run markdown table.
+
+    The overall-score column shows "median% ±IQRpp (median ±IQR)" and a new
+    "Avg search" column shows the median search latency across runs. Category
+    cells stay as ``hit/total`` from run 0 — the contract says the locked
+    JSON keeps them that way, and the markdown follows.
+    """
+    p = persona
+    categories = _ordered_categories(p)
+
+    scoring_desc = {
+        "keyword": "keyword match (hit if ≥1 keyword found in retrieved context)",
+        "llm": "LLM judge (hit if retrieved context supports the gold answer)",
+    }.get(scorer_label, scorer_label)
+
+    # Use the run count from the first non-empty system; if every system is
+    # empty the report degenerates to "no data" rather than crashing.
+    n_runs = next((len(rs) for rs in results if rs), 0)
+
+    lines: List[str] = [
+        f"# Memory System Benchmark — {p.get('name', p.get('persona_id', '?'))}",
+        "",
+        f"> Persona: **{p.get('name', '?')}** — {p.get('description', '')}  ",
+        f"> Questions: {len(p.get('eval_questions', []))} across {len(categories)} categories  ",
+        f"> Scoring: {scoring_desc}  ",
+        f"> Runs per system: **{n_runs}** (overall column shows median ± IQR)  ",
+        "",
+        "## Overall Scores",
+        "",
+    ]
+    headers = ["System", "Score", *categories, "Ingest", "Flush", "Avg search"]
+    lines.append("| " + " | ".join(headers) + " |")
+    lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+
+    for runs in results:
+        if not runs:
+            continue
+        agg = aggregate_runs(runs, categories=categories)
+        rep = agg.representative
+        if rep.error and all(r.error for r in runs):
+            cells = [rep.system_name, "ERROR"] + ["—"] * len(categories) + ["—", "—", "—"]
+            lines.append("| " + " | ".join(cells) + f" | _{rep.error}_")
+            continue
+        overall = describe(agg.overall_ratios)
+        ingest = describe(agg.ingest_ms)
+        flush = describe(agg.flush_ms)
+        search = describe(agg.search_ms)
+        cat_cells = [_fmt_score(*rep.score_for_category(c)) for c in categories]
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    rep.system_name,
+                    f"{overall['median']:.0%} ±{_fmt_pp(overall['iqr'])} (median ±IQR)",
+                    *cat_cells,
+                    f"{ingest['median']:.0f} ms",
+                    f"{flush['median']:.0f} ms",
+                    f"{search['median']:.0f} ms",
+                ]
+            )
+            + " |"
+        )
+
+    if include_question_detail:
+        lines += ["", "## Per-question detail (run 0)", ""]
+        for runs in results:
+            if not runs:
+                continue
+            rep = runs[0]
+            if rep.error:
+                continue
+            lines += [f"### {rep.system_name}", ""]
+            lines += ["| Q | Category | Hit | Latency | Reason |", "|---|---|---|---|---|"]
+            for q in rep.question_results:
+                reason = (q.reason or "").replace("\n", " ").replace("|", "\\|")
+                lines.append(
+                    f"| {q.question_id} | {q.category} | {'✓' if q.hit else '✗'} | "
+                    f"{q.latency_ms:.0f} ms | {reason} |"
+                )
+            lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"

@@ -138,6 +138,54 @@ def run_all(
     return [run_system(a, persona, user_id, scorer, on_event=on_event) for a in adapters]
 
 
+def run_system_repeated(
+    adapter: MemoryAdapter,
+    persona: Dict[str, Any],
+    user_id: str,
+    scorer: Scorer,
+    *,
+    runs: int,
+    on_event: Optional[Listener] = None,
+) -> List[SystemResult]:
+    """Run an adapter ``runs`` times and return one :class:`SystemResult` per run.
+
+    Why this exists as a separate function (rather than baking the loop into
+    :func:`run_system`): the single-run path is exercised by every existing
+    adapter test and the locked JSON contract requires that ``--runs 1``
+    produce byte-identical output to round-3. Keeping :func:`run_system`
+    untouched is the cheapest way to honour that.
+
+    Contract:
+
+    * ``runs == 1`` returns ``[run_system(...)]`` — a single-element list whose
+      sole entry is exactly what :func:`run_system` would have produced.
+    * ``runs > 1`` invokes the full lifecycle (``setup → ingest → flush →
+      search → teardown``) ``runs`` times, in sequence, against the same
+      adapter instance. Adapters are expected to be re-entrant across
+      ``setup/teardown`` pairs; if one isn't, that's a bug in the adapter,
+      not here.
+    * A failure in any single run is captured on that run's
+      :class:`SystemResult` (via :func:`run_system`'s own error path) and
+      does NOT abort the remaining runs. This matches the rest of the
+      benchmark's "errors degrade, never crash" stance and lets the
+      aggregation layer compute medians over the runs that did complete.
+    * ``runs < 1`` raises :class:`ValueError` — there is no sensible JSON
+      shape for "zero runs".
+    """
+    if runs < 1:
+        raise ValueError(f"runs must be >= 1, got {runs}")
+
+    results: List[SystemResult] = []
+    for i in range(runs):
+        def _wrapped(phase: str, system: str, payload: Dict[str, Any], _i: int = i) -> None:
+            if on_event:
+                on_event(phase, system, {**payload, "run_index": _i})
+
+        listener: Optional[Listener] = _wrapped if on_event else None
+        results.append(run_system(adapter, persona, user_id, scorer, on_event=listener))
+    return results
+
+
 def _safe_teardown(adapter: MemoryAdapter) -> None:
     try:
         adapter.teardown()
