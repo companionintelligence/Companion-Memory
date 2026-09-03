@@ -75,8 +75,8 @@ export function Main() {
         </div>
 
         {/* No background or border here: the rail is a drawer that floats over
-            the content when hovered, so it owns its own surface. Painting the
-            lane too would double the tint wherever the two overlap. */}
+            the content when pinned open, so it owns its own surface. Painting
+            the lane too would double the tint wherever the two overlap. */}
         <SecondaryNavigation />
 
         <div className="overflow-hidden min-w-0 min-h-0 flex flex-col">

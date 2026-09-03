@@ -17,8 +17,10 @@ import { type EventPayloads } from '../event-registry';
 import {
   effectiveQueueConcurrency as computeQueueConcurrency,
   perProcessGlobalConcurrency,
+  perQueueDefaultConcurrency,
   queueWorkerProcesses,
 } from '../jobConcurrency';
+import { JobSlotPool } from '../jobSlotPool';
 import { queueInventory } from '../queueInventory';
 import { EventRegistry } from '../registry';
 import type { EventSendOptions, QueueOptions } from '../types';
@@ -103,6 +105,17 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   // (`ci.job_settings`, kind `global`) so an operator can cool a hot box without
   // editing a compose file and restarting the appliance.
   private globalSemaphore = plimit(config.queues.concurrency);
+
+  // The same ceiling, claimed BEFORE a fetch rather than read after one.
+  //
+  // The semaphore above bounds what RUNS; on its own it does not bound what is
+  // fetched, because every queue's loop read its counters before any of them had
+  // dispatched — so ~38 loops each fetched against the same ten free slots and
+  // took the pg-boss lease on ~200 rows the box would run ten at a time. The
+  // pool hands out those ten slots synchronously, so a queue can only fetch
+  // against budget no other queue has already taken. It reads its ceiling from
+  // the semaphore, so a runtime concurrency change moves both together.
+  private readonly globalSlots = new JobSlotPool(() => this.globalSemaphore.concurrency);
 
   // Per-queue in-flight ceiling — one plimit per queue, created in onModuleInit.
   // Sized BELOW the global ceiling (CI_QUEUE_PER_QUEUE_CONCURRENCY) so a burst of
@@ -862,7 +875,10 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
    */
   private effectiveQueueConcurrency(queue: string): number {
     return computeQueueConcurrency({
-      perQueueDefault: JobControlStore.perQueueConcurrency() ?? this.shippedPerQueueConcurrency,
+      perQueueDefault: perQueueDefaultConcurrency(
+        JobControlStore.perQueueConcurrency(),
+        this.shippedPerQueueConcurrency,
+      ),
       requested: JobControlStore.row('queue', queue)?.concurrency ?? null,
       declared: this.declaredQueueCeilings.get(queue) ?? null,
     });
@@ -972,19 +988,30 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
       this.logQueueMode(queueName, mode);
 
-      // Available slots are bounded by BOTH this queue's own ceiling and the
-      // global ceiling, so one queue can never consume more than its share of the
-      // global pool (no cross-queue starvation) nor exceed the total cap.
+      // A fetch is bounded by BOTH this queue's own ceiling and the global one,
+      // so a queue can never take more than its share of the global pool (no
+      // cross-queue starvation) nor push the appliance past the total cap.
       const perQueueInFlight = perQueueSemaphore.activeCount + perQueueSemaphore.pendingCount;
       const perQueueAvailable = Math.max(perQueueSemaphore.concurrency - perQueueInFlight, 0);
 
-      const globalInFlight = this.globalSemaphore.activeCount + this.globalSemaphore.pendingCount;
-      const globalAvailable = Math.max(this.globalSemaphore.concurrency - globalInFlight, 0);
-
-      const available = Math.min(perQueueAvailable, globalAvailable);
-
-      if (available === 0) {
+      if (perQueueAvailable === 0) {
         await new Promise((resolve) => setTimeout(resolve, this.backoffWhenFull));
+        continue;
+      }
+
+      // The global half is CLAIMED, not read. Reading it was the bug: this loop
+      // is one of ~38 started in a single synchronous pass, none of which has
+      // dispatched anything by the time they all reach this line, so every one
+      // of them saw the whole global budget as free and fetched against it —
+      // taking the pg-boss lease on far more rows than the appliance would run.
+      // `reserve` mutates in the same turn it reads, so the slots this loop is
+      // about to fetch against are already gone from every other loop's view.
+      const reserved = this.globalSlots.reserve(Math.min(perQueueAvailable, this.fetchBatchSize));
+
+      if (reserved === 0) {
+        // Wakes on the next release rather than sleeping the backoff out, so
+        // bounding the fetch does not cost a poll interval per completed job.
+        await this.globalSlots.waitForSlot(this.backoffWhenFull);
         continue;
       }
 
@@ -993,9 +1020,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       try {
         jobs = await this.boss.fetch<EventData>(queueName, {
           includeMetadata: true,
-          batchSize: Math.min(available, this.fetchBatchSize),
+          batchSize: reserved,
         });
       } catch (err: unknown) {
+        // Nothing was leased, so nothing is coming back to release these.
+        this.globalSlots.release(reserved);
+
         // A fetch failure is transient by nature — a dropped connection, a
         // failover, a statement timeout under load. Unguarded, it escaped the
         // `while` loop and rejected the promise sitting in `stopTasks`, which
@@ -1013,6 +1043,13 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         continue;
       }
 
+      // A fetch may return fewer rows than asked for — usually an empty queue.
+      // The slots those rows would have occupied belong to the other queues now,
+      // not to this loop's next iteration.
+      if (jobs.length < reserved) {
+        this.globalSlots.release(reserved - jobs.length);
+      }
+
       if (jobs.length === 0) {
         await new Promise((resolve) => setTimeout(resolve, this.backoffWhenEmpty));
 
@@ -1028,12 +1065,23 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         // rejection, so the chain below must be total — `runJob` catches
         // everything it can, and this `.catch` is the backstop for anything it
         // cannot (a semaphore that throws, an error thrown by the logger itself).
-        void perQueueSemaphore(() => this.runJob(queueName, job)).catch((err: unknown) => {
-          this.logger.error(
-            `Job supervision failed on queue ${queueName}`,
-            err instanceof Error ? err : new Error(String(err)),
-          );
-        });
+        //
+        // The global slot this row was fetched against is released in `finally`,
+        // placed BEFORE the `catch` so that no path leaks it and no path escapes
+        // the chain: the release runs whether the job resolved or rejected, and
+        // a throw from the release itself lands in the same terminal `catch`.
+        // Ordered the other way round, a release that threw would be exactly the
+        // unhandled rejection this chain exists to prevent.
+        void perQueueSemaphore(() => this.runJob(queueName, job))
+          .finally(() => {
+            this.globalSlots.release();
+          })
+          .catch((err: unknown) => {
+            this.logger.error(
+              `Job supervision failed on queue ${queueName}`,
+              err instanceof Error ? err : new Error(String(err)),
+            );
+          });
       }
     }
   }

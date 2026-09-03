@@ -40,14 +40,28 @@ export interface Lane<T> {
   /** Null when the column heading already names the list (Proposed inbox, Done). */
   label: string | null;
   tasks: T[];
+  /** `tasks` plus every descendant rendered nested under them. */
+  count: number;
 }
 
 export interface Section<T> {
   key: ColumnKey;
   label: string;
   lanes: Lane<T>[];
-  /** Flattened lane tasks, same order as `lanes`. */
+  /** Flattened lane tasks, same order as `lanes`. Roots only. */
   tasks: T[];
+  /**
+   * ═══ THE BADGES USED TO COUNT ONLY ROOTS ═══
+   *
+   * Children render nested under their parent, so they are in this column and
+   * actionable there — but `tasks` never held them, so a column of three roots
+   * with nine live subtasks read "3". Worst case an unchecked, overdue subtask
+   * sits inside the Done column purely by nesting: invisible to Unscheduled,
+   * with nothing saying Done contains live work.
+   */
+  count: number;
+  /** How many tasks in this column (roots and descendants) are overdue. */
+  overdueCount: number;
 }
 
 const COLUMN_LABELS: Record<ColumnKey, string> = {
@@ -191,12 +205,34 @@ function emptyLanes(): Record<ColumnKey, Record<LaneKey, SectionedTask[]>> {
   };
 }
 
+/** A root and every task nested beneath it, guarding against a `parentId` cycle. */
+function subtreeOf<T extends SectionedTask>(root: T, childrenByParent: Map<string, T[]>): T[] {
+  const out: T[] = [];
+  const stack: T[] = [root];
+  const seen = new Set<string>();
+
+  while (stack.length) {
+    const next = stack.pop() as T;
+
+    if (seen.has(next.id)) {
+      continue;
+    }
+
+    seen.add(next.id);
+    out.push(next);
+    stack.push(...(childrenByParent.get(next.id) ?? []));
+  }
+
+  return out;
+}
+
 /**
  * Groups tasks into Kanban columns with lanes, dropping empty columns and
  * empty lanes so the UI never renders a bare heading.
  *
  * Only roots are sectioned; children stay nested under their parent via
- * `parentId` (rendered by the Plan page tree).
+ * `parentId` (rendered by the Plan page tree). They are still *counted* into
+ * the column their root landed in — see `Section.count`.
  */
 export function groupIntoSections<T extends SectionedTask>(
   tasks: readonly T[],
@@ -204,6 +240,20 @@ export function groupIntoSections<T extends SectionedTask>(
   timeZone?: string,
 ): Section<T>[] {
   const roots = tasks.filter((task) => !task.parentId);
+  const childrenByParent = new Map<string, T[]>();
+
+  for (const task of tasks) {
+    if (task.parentId) {
+      const siblings = childrenByParent.get(task.parentId);
+
+      if (siblings) {
+        siblings.push(task);
+      } else {
+        childrenByParent.set(task.parentId, [task]);
+      }
+    }
+  }
+
   const buckets = emptyLanes() as Record<ColumnKey, Record<LaneKey, T[]>>;
 
   for (const task of roots) {
@@ -219,19 +269,26 @@ export function groupIntoSections<T extends SectionedTask>(
         return [];
       }
 
-      return [{ key: lane, label: LANE_LABELS[lane], tasks: [...bucket].sort(compareTasks) }];
+      const sorted = [...bucket].sort(compareTasks);
+      const rendered = sorted.flatMap((task) => subtreeOf(task, childrenByParent));
+
+      return [{ key: lane, label: LANE_LABELS[lane], tasks: sorted, count: rendered.length, rendered }];
     });
 
     if (!lanes.length) {
       return [];
     }
 
+    const rendered = lanes.flatMap((lane) => lane.rendered);
+
     return [
       {
         key: column,
         label: COLUMN_LABELS[column],
-        lanes,
+        lanes: lanes.map(({ rendered: _rendered, ...lane }) => lane),
         tasks: lanes.flatMap((lane) => lane.tasks),
+        count: rendered.length,
+        overdueCount: rendered.filter((task) => isOverdue(task, today, timeZone)).length,
       },
     ];
   });
@@ -248,6 +305,8 @@ export function withAllColumns<T extends SectionedTask>(sections: readonly Secti
         label: COLUMN_LABELS[key],
         lanes: [],
         tasks: [],
+        count: 0,
+        overdueCount: 0,
       },
   );
 }

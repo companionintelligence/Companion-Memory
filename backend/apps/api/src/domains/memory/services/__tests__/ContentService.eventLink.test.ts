@@ -220,6 +220,8 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
       sourceType: 'import',
       sourceSystem: 'facebook',
       sourceId: 'photo-1',
+      // Ledger platform: a platform kind is its own platform.
+      sourcePlatform: 'facebook',
     });
     expect(opts.entities[0].userId).toBe('user-1');
   });

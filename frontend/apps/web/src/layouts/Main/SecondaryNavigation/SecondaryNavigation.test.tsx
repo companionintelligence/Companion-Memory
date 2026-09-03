@@ -140,42 +140,32 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
   });
 
-  it('opens Planning sections on hover when expanded, and closes after leave when not sticky', () => {
+  it('opens Planning sections when the Planning link is clicked', () => {
     renderRail('/feed', { expanded: true });
 
     expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
 
-    const submenu = screen.getByTestId('planning-submenu');
-    fireEvent.mouseEnter(submenu);
+    fireEvent.click(screen.getByRole('link', { name: 'Planning' }));
     expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
-
-    fireEvent.mouseLeave(submenu);
-    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
   });
 
-  it('closes a route-open submenu when another group is hovered, then restores it', () => {
+  it('closes a route-open submenu when a peer group is opened by click', () => {
     renderRail('/plan', { expanded: true });
 
     expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
 
-    const jobs = screen.getByTestId('jobs-submenu');
-    fireEvent.mouseEnter(jobs);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Jobs sections' }));
     expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
-
-    fireEvent.mouseLeave(jobs);
-    expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
   });
 
-  it('closes Jobs after hover leave when not on a jobs route', () => {
+  it('closes Jobs sections again when its chevron is clicked to collapse', () => {
     renderRail('/plan', { expanded: true });
 
-    const jobs = screen.getByTestId('jobs-submenu');
-    fireEvent.mouseEnter(jobs);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Jobs sections' }));
     expect(screen.getByRole('link', { name: 'History' })).toBeInTheDocument();
 
-    fireEvent.mouseLeave(jobs);
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Jobs sections' }));
     expect(screen.queryByRole('link', { name: 'History' })).not.toBeInTheDocument();
   });
 
@@ -254,9 +244,9 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Docs' })).toBeInTheDocument();
   });
 
-  // The drawer floats over the content on hover, so the lane it sits in keeps
-  // the collapsed width and the page beside it never reflows.
-  it('does not reflow the page when hover opens it', () => {
+  // The rail floats over the content when pinned open, so the lane it sits in
+  // keeps the collapsed width and the page beside it never reflows.
+  it('does not reflow the page when the rail opens', () => {
     const { container } = renderRail();
 
     const lane = container.querySelector('div.relative');
@@ -267,8 +257,8 @@ describe('SecondaryNavigation', () => {
   });
 
   // The toggle shares the rail's `auto` grid column, so a wordmark appearing
-  // there on hover widens the column and shoves the page — the exact reflow
-  // the absolute drawer above exists to avoid.
+  // there widens the column and shoves the page — the exact reflow the
+  // absolute drawer above exists to avoid.
   it('keeps the wordmark collapsed until the rail is pinned', () => {
     renderToggleAndRail();
 
@@ -343,17 +333,13 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Stats' })).toHaveAttribute('aria-current', 'page');
   });
 
-  it('opens Self sections on hover when expanded, and closes after leave when not sticky', () => {
+  it('opens Self sections when the account tile is clicked', () => {
     renderRail('/plan', { expanded: true });
 
     expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
 
-    const submenu = screen.getByTestId('self-submenu');
-    fireEvent.mouseEnter(submenu);
+    fireEvent.click(screen.getByRole('link', { name: 'Test User' }));
     expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
-
-    fireEvent.mouseLeave(submenu);
-    expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
   });
 
   it('keeps Self sections open after a sticky chevron open even off self routes', () => {
@@ -363,11 +349,10 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
   });
 
-  it('closes Self sections when the chevron is clicked, even while hovered', () => {
+  it('closes Self sections when the chevron is clicked', () => {
     renderRail('/plan', { expanded: true });
 
-    const submenu = screen.getByTestId('self-submenu');
-    fireEvent.mouseEnter(submenu);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Self sections' }));
     expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse Self sections' }));
@@ -379,28 +364,17 @@ describe('SecondaryNavigation', () => {
 
     expect(screen.getByRole('link', { name: 'Stats' })).toBeInTheDocument();
 
-    const submenu = screen.getByTestId('self-submenu');
     fireEvent.click(screen.getByRole('button', { name: 'Collapse Self sections' }));
-    expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
-
-    fireEvent.mouseLeave(submenu);
-    expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
-
-    fireEvent.mouseEnter(submenu);
     expect(screen.queryByRole('link', { name: 'Stats' })).not.toBeInTheDocument();
   });
 
-  it('opens Memory sections on hover when expanded, and closes after leave when not sticky', () => {
+  it('opens Memory sections when the Memory link is clicked', () => {
     renderRail('/plan', { expanded: true });
 
     expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
 
-    const submenu = screen.getByTestId('memory-submenu');
-    fireEvent.mouseEnter(submenu);
+    fireEvent.click(screen.getByRole('link', { name: 'Memory' }));
     expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
-
-    fireEvent.mouseLeave(submenu);
-    expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
   });
 
   it('keeps Memory sections open after a sticky chevron open even off hub routes', () => {
@@ -410,11 +384,10 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
   });
 
-  it('closes Memory sections when the chevron is clicked, even while hovered', () => {
+  it('closes Memory sections when the chevron is clicked', () => {
     renderRail('/plan', { expanded: true });
 
-    const submenu = screen.getByTestId('memory-submenu');
-    fireEvent.mouseEnter(submenu);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Memory sections' }));
     expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Collapse Memory sections' }));
@@ -549,10 +522,10 @@ describe('PowerRailToggle', () => {
     expect(localStorage.getItem(STORAGE_KEY)).toBe('false');
   });
 
-  // H4: hovering the rail open is a passing intention, not a decision — it
-  // must not tell assistive tech the menu was deliberately expanded. Only a
-  // pin (persisted, survives the pointer leaving) should.
-  it('reports aria-expanded from pinned, not from a hover-only expansion', () => {
+  // The rail widens only on a deliberate click of the pin toggle — brushing
+  // past it with the pointer must never expand it, and aria-expanded must
+  // only ever track that pin.
+  it('does not expand the rail on hover — only a click of the pin toggle does', () => {
     const { container } = renderToggleAndRail();
 
     const toggle = container.querySelector('button[aria-controls="power-rail"]');
@@ -562,16 +535,16 @@ describe('PowerRailToggle', () => {
 
     fireEvent.mouseEnter(lane as Element);
 
-    // Hover really did open the rail...
-    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'expanded');
-    // ...but the toggle must not claim it as "expanded".
+    // Hover does nothing to the rail any more...
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
 
     fireEvent.mouseLeave(lane as Element);
 
-    // A deliberate pin is what flips it.
+    // ...only a deliberate pin does.
     fireEvent.click(toggle as Element);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'expanded');
   });
 });
 

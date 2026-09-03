@@ -319,6 +319,8 @@ export class OutlookCalendarTransformService {
       location_name: location_name || undefined,
       location_coordinates: location_coordinates || undefined,
       source_type: 'ETL',
+      // Ledger platform: the Outlook Calendar connection delivered it.
+      source_platform: canonicalSystem('outlook_calendar'),
       // Identity: iCalUId under the federated `calendar` system (override
       // instants as the RECURRENCE-ID suffix), converging with an exported
       // .ics or a Google fetch of the same invite —

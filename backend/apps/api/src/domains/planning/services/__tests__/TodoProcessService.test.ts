@@ -433,6 +433,157 @@ describe('TodoProcessService', () => {
   });
 });
 
+// ═══ per-item guards ═══
+//
+// TodoScanService and InboxScanService already wrap their per-item loops so one
+// item's failure cannot force pg-boss to redeliver the whole job and re-walk
+// every item already applied. These three did not: an item that threw took the
+// rest of the batch with it, and because the job then FAILED rather than
+// resuming per-item, the survivors waited a full tick (6h / 1h / 1h) for a
+// review they had already earned.
+describe('per-item failure isolation', () => {
+  it('TodoProcessService reviews the rest of the batch after one task throws', async () => {
+    const searchService = makeSearchService([{ id: HIT_ID, type: 'communication' }]);
+    const dataSource = makeDataSource([
+      {
+        id: HIT_ID,
+        entity_type: 'communication',
+        name: 'Text from Sam',
+        snippet: 'Already picked up the dry cleaning, no need to go.',
+        occurred_at: new Date(Date.now() - HOUR_MS),
+      },
+    ]);
+    const chat = jest.fn(async () => ({
+      message: { role: 'assistant', content: JSON.stringify({ action: 'revise', title: 'Renamed' }) },
+    })) as unknown as OllamaService['chat'];
+    const update = jest.fn(async (_ctx: unknown, taskId: string) => {
+      // The LLM-suggested reparent/rename target can vanish between suggest()
+      // and update() under concurrent job activity — assertOwnsParent then
+      // throws NotFoundException straight out of the loop.
+      if (taskId === 'task-2') {
+        throw new Error('Parent task not found');
+      }
+
+      return { id: taskId };
+    });
+    const taskService = {
+      findAll: jest.fn(async () => [
+        { id: 'task-1', title: 'Pick up dry cleaning', description: null },
+        { id: 'task-2', title: 'Pick up dry cleaning', description: null },
+        { id: 'task-3', title: 'Pick up dry cleaning', description: null },
+      ]),
+      update,
+      appendNotes: jest.fn(),
+      complete: jest.fn(),
+      createPendingChange: jest.fn(async () => null),
+      findByTitleMatch: jest.fn(async () => null),
+    } as unknown as TaskService;
+
+    const service = new TodoProcessService(
+      taskService,
+      searchService,
+      { chat } as unknown as OllamaService,
+      makePersonalizationService('hands_off') as never,
+      dataSource as never,
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(CTX_USER);
+
+    expect(update.mock.calls.map(([, taskId]) => taskId)).toEqual(['task-1', 'task-2', 'task-3']);
+    expect(result).toEqual({ applied: 2, pending: 0 });
+  });
+
+  it('EventNowService proposes on the rest of the batch after one block throws', async () => {
+    const searchService = makeSearchService([{ id: HIT_ID, type: 'communication' }]);
+    const dataSource = makeDataSource([
+      {
+        id: HIT_ID,
+        entity_type: 'communication',
+        name: 'Text from Sam',
+        snippet: 'I could not attend the dentist appointment today, they cancelled it.',
+        occurred_at: new Date(Date.now() - HOUR_MS),
+      },
+    ]);
+    const blocks = [
+      makeBlock({ id: BLOCK_ID, taskId: 'task-1' }),
+      makeBlock({ id: 'block-2', taskId: 'task-2' }),
+      makeBlock({ id: 'block-3', taskId: 'task-3' }),
+    ];
+    const createPendingChange = jest.fn(async (_ctx: unknown, data: { taskId: string }) => {
+      if (data.taskId === 'task-2') {
+        throw new Error('deadlock detected');
+      }
+
+      return null;
+    });
+
+    const service = new EventNowService(
+      { createQueryBuilder: jest.fn(() => makeEventQb(blocks)) } as never,
+      makeEventService(blocks.map((block) => ({ id: block.id, title: 'Dentist appointment' }))),
+      { createPendingChange } as unknown as TaskService,
+      searchService,
+      makePersonalizationService('hands_off') as never,
+      dataSource as never,
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(CTX_USER);
+
+    expect(createPendingChange.mock.calls.map(([, data]) => data.taskId)).toEqual([
+      'task-1',
+      'task-2',
+      'task-3',
+    ]);
+    expect(result).toEqual({ proposed: 2 });
+  });
+
+  it('VerifyDoneService reviews the rest of the batch after one block throws', async () => {
+    const blocks = [
+      makeBlock({ id: BLOCK_ID, taskId: 'task-1' }),
+      makeBlock({ id: 'block-2', taskId: 'task-2' }),
+      makeBlock({ id: 'block-3', taskId: 'task-3' }),
+    ];
+    const createPendingChange = jest.fn(async (_ctx: unknown, data: { taskId: string }) => {
+      if (data.taskId === 'task-2') {
+        throw new Error('deadlock detected');
+      }
+
+      return null;
+    });
+    const taskService = {
+      findById: jest.fn(async (_ctx: unknown, id: string) => ({
+        id,
+        title: 'Renew passport',
+        status: 'open',
+      })),
+      complete: jest.fn(),
+      createPendingChange,
+    } as unknown as TaskService;
+
+    const service = new VerifyDoneService(
+      {
+        createQueryBuilder: jest.fn(() => makeEventQb(blocks)),
+        save: jest.fn(async (row: EventEntity) => row),
+      } as never,
+      taskService,
+      makeSearchService([]),
+      makePersonalizationService('balanced') as never,
+      makeDataSource([]) as never,
+      makeLogger(),
+    );
+
+    const result = await service.runForUser(CTX_USER);
+
+    expect(createPendingChange.mock.calls.map(([, data]) => data.taskId)).toEqual([
+      'task-1',
+      'task-2',
+      'task-3',
+    ]);
+    expect(result).toEqual({ completed: 0, pending: 2 });
+  });
+});
+
 describe('TodoProcessService LLM budget', () => {
   it('allows the LLM at least 60s before aborting, not 15', () => {
     // Was 15s — the tightest of the three planning-domain LLM budgets, and

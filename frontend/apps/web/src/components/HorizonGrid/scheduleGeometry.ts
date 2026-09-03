@@ -14,13 +14,13 @@ import { type ActivityClass, normalizeClass } from '@/lib/activityPalette';
 import { weekClusterVisible } from '@/lib/forecastDisplay';
 
 import { addDays, sameLocalDay } from './nowNext';
+import { packItemLanes, type EventSpan } from './scheduleClusters';
 
 /** An empty place on the calendar the user pointed at. */
 export interface CalendarSlot {
   instant: Date;
   allDay: boolean;
 }
-import { packItemLanes, type EventSpan } from './scheduleClusters';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 

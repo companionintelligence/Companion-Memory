@@ -1,13 +1,13 @@
-import { act, createEvent, fireEvent, screen } from '@testing-library/react';
+import type { MockedResponse } from '@apollo/client/testing';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { CANDIDATE_DRAG_TYPE } from '@/lib/scheduleDrag';
-import { HOLD_MS, cancelSchedulePointerDrag, getSchedulePointerDrag } from '@/lib/schedulePointerDrag';
+import { gql } from '@/graphql';
 import { groupIntoSections } from '@/pages/PlanPage/taskSections';
 import type { PlanTask } from '@/pages/PlanPage/usePlanTasks';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
-import { TaskSlate, TaskSlateDrawer } from './TaskSlate';
+import { TaskSlateDrawer } from './TaskSlate';
 
 const TODAY = '2026-08-23';
 
@@ -42,10 +42,75 @@ function setViewport(mobile: boolean) {
 
 const NOOP = { loading: false };
 
-describe('TaskSlate — Plan backlog', () => {
-  it('shows Proposed and Unscheduled from the same bucketing as Plan', async () => {
+/**
+ * The slot you clicked on the calendar. Everything the drawer sends is dated
+ * from it, so the mutation assertions below read straight off these numbers.
+ */
+const SLOT = { instant: new Date(2026, 7, 6, 16, 15), allDay: false };
+
+const CREATE_EVENT = gql(`
+  mutation CreateEvent($input: CreateEventInput!) {
+    createEvent(input: $input) {
+      id
+      title
+      description
+      startTime
+      endTime
+      eventType
+      locationName
+    }
+  }
+`);
+
+/** A create mock that records the input it was called with. */
+function createMock(capture: (input: Record<string, unknown>) => void): MockedResponse {
+  return {
+    request: { query: CREATE_EVENT },
+    variableMatcher: (variables: { input: Record<string, unknown> }) => {
+      capture(variables.input);
+
+      return true;
+    },
+    result: {
+      data: {
+        createEvent: {
+          __typename: 'EventType',
+          id: 'event-1',
+          title: 'Coffee with Sam',
+          description: null,
+          startTime: new Date(2026, 7, 6, 16, 15).toISOString(),
+          endTime: null,
+          eventType: null,
+          locationName: null,
+        },
+      },
+    },
+  } as unknown as MockedResponse;
+}
+
+describe('TaskSlateDrawer — Plan backlog', () => {
+  afterEach(() => setViewport(false));
+
+  it('stays shut until it is asked for', () => {
     renderWithProviders(
-      <TaskSlate
+      <TaskSlateDrawer
+        open={false}
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([task({ status: 'proposed' })])}
+        {...NOOP}
+      />,
+    );
+
+    expect(screen.queryByText('Book the dentist')).not.toBeInTheDocument();
+  });
+
+  it('shows Proposed and Unscheduled from the same bucketing as Plan, one at a time', async () => {
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
         sections={backlog([
           task({ id: 'p1', title: 'Try this', status: 'proposed' }),
           task({ id: 'u1', title: 'Call Mum', dueAt: '2026-08-25T17:00:00.000Z' }),
@@ -54,16 +119,23 @@ describe('TaskSlate — Plan backlog', () => {
       />,
     );
 
-    expect(await screen.findByRole('heading', { name: /^proposed/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /^unscheduled/i })).toBeInTheDocument();
+    expect(await screen.findByRole('tab', { name: /^proposed/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Try this')).toBeInTheDocument();
-    expect(screen.getByText('Call Mum')).toBeInTheDocument();
+    expect(screen.queryByText('Call Mum')).not.toBeInTheDocument();
     expect(screen.queryByText(/scheduled on calendar/i)).not.toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /unscheduled/i }), { button: 0 });
+
+    expect(await screen.findByText('Call Mum')).toBeInTheDocument();
+    expect(screen.queryByText('Try this')).not.toBeInTheDocument();
   });
 
   it('does not put scheduled or done work on the rail', () => {
     renderWithProviders(
-      <TaskSlate
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
         sections={backlog([
           task({
             id: 's1',
@@ -83,37 +155,47 @@ describe('TaskSlate — Plan backlog', () => {
     expect(screen.getByText(/Nothing in Proposed or Unscheduled/)).toBeInTheDocument();
   });
 
-  it('stamps a card drag with the task id the calendar drop handlers already read', async () => {
+  /**
+   * ═══ WHAT THIS USED TO DO ═══
+   * Cards carried a whole drag subsystem — `draggable` + `dragstart` on a
+   * mouse, a hold-to-drag pointer protocol and a six-dot handle on touch. #2529
+   * replaced dropping a card on a day with clicking an empty slot, and nothing
+   * has rendered a draggable card since.
+   */
+  it('lists the backlog as click-to-place cards, with no drag affordance at all', async () => {
+    const onPlace = vi.fn();
+
     renderWithProviders(
-      <TaskSlate
-        sections={backlog([task({ id: 'task-9', title: 'Call Mum', dueAt: '2026-08-25T17:00:00.000Z' })])}
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
         {...NOOP}
+        onPlace={onPlace}
       />,
     );
 
-    const card = (await screen.findByText('Call Mum')).closest('li') as HTMLElement;
-    const data: Record<string, string> = {};
-    const event = createEvent.dragStart(card, {
-      dataTransfer: {
-        setData: (key: string, value: string) => {
-          data[key] = value;
-        },
-        effectAllowed: '',
-        types: [],
-        getData: () => '',
-      },
-    });
-    fireEvent(card, event);
+    const card = (await screen.findByRole('button', { name: /Add Try this at this time/ })) as HTMLElement;
 
-    expect(data[CANDIDATE_DRAG_TYPE]).toBe('task-9');
-    expect(data['text/plain']).toBe('Call Mum');
+    expect(card).not.toHaveAttribute('draggable');
+    expect(
+      screen.queryByRole('button', { name: /drag try this onto the calendar/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/drag/i)).not.toBeInTheDocument();
+
+    fireEvent.click(card);
+    expect(onPlace).toHaveBeenCalledWith('p1');
   });
 
   it('offers dismiss only on proposed cards', async () => {
     const onDismissProposed = vi.fn();
 
     renderWithProviders(
-      <TaskSlate
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
         sections={backlog([
           task({ id: 'p1', title: 'Try this', status: 'proposed' }),
           task({ id: 'u1', title: 'Call Mum', dueAt: '2026-08-25T17:00:00.000Z' }),
@@ -125,12 +207,50 @@ describe('TaskSlate — Plan backlog', () => {
 
     fireEvent.click(await screen.findByLabelText('Dismiss Try this'));
     expect(onDismissProposed).toHaveBeenCalledWith('p1');
+
+    fireEvent.mouseDown(screen.getByRole('tab', { name: /unscheduled/i }), { button: 0 });
+
+    expect(await screen.findByText('Call Mum')).toBeInTheDocument();
     expect(screen.queryByLabelText('Dismiss Call Mum')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The slate and the Plan board read the same `Section`, so they have to
+   * report the same size. The slate used to count `section.tasks.length` —
+   * roots only — while the board counts the subtree, so a column of one parent
+   * with two live subtasks read "3" on Plan and "1" here, and an overdue
+   * subtask went unmentioned on this surface entirely.
+   */
+  it('counts nested work the way the Plan board does, not just the roots', async () => {
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={backlog([
+          task({ id: 'u1', title: 'Plan the trip', dueAt: '2026-08-25T17:00:00.000Z' }),
+          task({ id: 'u2', title: 'Book flights', parentId: 'u1', dueAt: '2026-08-25T17:00:00.000Z' }),
+          task({ id: 'u3', title: 'Renew passport', parentId: 'u1', dueAt: '2026-08-20T17:00:00.000Z' }),
+        ])}
+        {...NOOP}
+      />,
+    );
+
+    const tab = await screen.findByRole('tab', { name: /unscheduled/i });
+
+    expect(within(tab).getByText('3')).toBeInTheDocument();
+    expect(within(tab).getByText('1 overdue')).toBeInTheDocument();
+    // Cards are still roots only — the badge describes the column, not the list.
+    expect(screen.getByText('Plan the trip')).toBeInTheDocument();
+    expect(screen.queryByText('Book flights')).not.toBeInTheDocument();
   });
 
   it('lists overdue after upcoming instead of pinning it to the column foot', async () => {
     renderWithProviders(
-      <TaskSlate
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
         sections={backlog([
           task({ id: 'u1', title: 'Call Mum', dueAt: '2026-08-25T17:00:00.000Z' }),
           task({ id: 'o1', title: 'Pay the bill', dueAt: '2026-08-20T17:00:00.000Z' }),
@@ -149,207 +269,8 @@ describe('TaskSlate — Plan backlog', () => {
   });
 });
 
-describe('TaskSlate — the header hint', () => {
-  it('tells you what to do with the cards that are there', () => {
-    renderWithProviders(<TaskSlate sections={backlog([task({ status: 'proposed' })])} {...NOOP} />);
-
-    expect(screen.getByText('drag one onto a day above')).toBeInTheDocument();
-  });
-
-  it('says nothing at all when the rail is empty', () => {
-    renderWithProviders(<TaskSlate sections={[]} {...NOOP} />);
-
-    expect(screen.queryByText('unplaced')).not.toBeInTheDocument();
-    expect(screen.getByText(/Nothing in Proposed or Unscheduled/)).toBeInTheDocument();
-  });
-});
-
-describe('TaskSlate — failed and loading fetches', () => {
-  it('shows the slate as failed rather than empty', () => {
-    renderWithProviders(<TaskSlate sections={[]} loading={false} error />);
-
-    expect(screen.getByText(/Could not load your plan/)).toBeInTheDocument();
-    expect(screen.queryByText(/Nothing in Proposed or Unscheduled/)).not.toBeInTheDocument();
-  });
-
-  it('says it is loading only while there is nothing to show yet', () => {
-    renderWithProviders(<TaskSlate sections={[]} loading />);
-
-    expect(screen.getByText(/Loading your plan/)).toBeInTheDocument();
-  });
-});
-
-describe('TaskSlate — phone tabs', () => {
-  afterEach(() => {
-    setViewport(false);
-    cancelSchedulePointerDrag();
-    vi.useRealTimers();
-  });
-
-  it('shows one Plan column at a time behind a tablist', async () => {
-    setViewport(true);
-
-    renderWithProviders(
-      <TaskSlate
-        sections={backlog([
-          task({ id: 'p1', title: 'Try this', status: 'proposed' }),
-          task({ id: 'u1', title: 'Call Mum', dueAt: '2026-08-20T17:00:00.000Z' }),
-        ])}
-        {...NOOP}
-      />,
-    );
-
-    expect(await screen.findByRole('tablist')).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^proposed/i })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText('Try this')).toBeInTheDocument();
-    expect(screen.queryByText('Call Mum')).not.toBeInTheDocument();
-
-    fireEvent.mouseDown(screen.getByRole('tab', { name: /unscheduled/i }), { button: 0 });
-
-    expect(await screen.findByText('Call Mum')).toBeInTheDocument();
-    expect(screen.queryByText('Try this')).not.toBeInTheDocument();
-  });
-
-  it('tells a phone to drag the handle rather than hold the card', async () => {
-    setViewport(true);
-
-    renderWithProviders(<TaskSlate sections={backlog([task({ status: 'proposed' })])} {...NOOP} />);
-
-    expect(await screen.findByText('drag the handle onto the day above')).toBeInTheDocument();
-  });
-
-  it('picks a card up after a touch hold so it can be dropped on the calendar', async () => {
-    setViewport(true);
-    vi.useFakeTimers();
-
-    renderWithProviders(
-      <TaskSlate
-        sections={backlog([task({ id: 'task-9', title: 'Call Mum', status: 'proposed' })])}
-        {...NOOP}
-      />,
-    );
-
-    const card = screen.getByText('Call Mum').closest('li') as HTMLElement;
-    fireEvent.pointerDown(card, {
-      pointerId: 1,
-      pointerType: 'touch',
-      clientX: 10,
-      clientY: 10,
-      button: 0,
-    });
-
-    act(() => {
-      vi.advanceTimersByTime(HOLD_MS);
-    });
-
-    expect(getSchedulePointerDrag()?.payload).toEqual({
-      kind: 'candidate',
-      id: 'task-9',
-      title: 'Call Mum',
-    });
-
-    fireEvent.pointerUp(window, { pointerId: 1, pointerType: 'touch', clientX: 10, clientY: 10 });
-    expect(getSchedulePointerDrag()).toBeNull();
-
-    vi.useRealTimers();
-  });
-
-  it('starts a drag from the six-dot handle without waiting for a hold', async () => {
-    setViewport(true);
-
-    renderWithProviders(
-      <TaskSlate
-        sections={backlog([task({ id: 'task-9', title: 'Call Mum', status: 'proposed' })])}
-        {...NOOP}
-      />,
-    );
-
-    const handle = await screen.findByRole('button', { name: /drag call mum onto the calendar/i });
-    fireEvent.pointerDown(handle, {
-      pointerId: 1,
-      pointerType: 'touch',
-      clientX: 10,
-      clientY: 10,
-      button: 0,
-    });
-
-    expect(getSchedulePointerDrag()?.payload).toEqual({
-      kind: 'candidate',
-      id: 'task-9',
-      title: 'Call Mum',
-    });
-
-    fireEvent.pointerUp(window, { pointerId: 1, pointerType: 'touch', clientX: 40, clientY: 80 });
-    expect(getSchedulePointerDrag()).toBeNull();
-  });
-});
-
-/**
- * On a phone the backlog moves off the calendar board entirely. It is reachable
- * — that is the point of the drawer — but it is not a second place to schedule
- * work, because the drawer covers the only day column the phone has.
- */
-const SLOT = { instant: new Date(2026, 7, 6, 16, 15), allDay: false };
-
-describe('TaskSlateDrawer — the slot drawer', () => {
+describe('TaskSlateDrawer — failed and loading fetches', () => {
   afterEach(() => setViewport(false));
-
-  it('stays shut until it is asked for', () => {
-    renderWithProviders(
-      <TaskSlateDrawer
-        open={false}
-        onOpenChange={() => {}}
-        slot={SLOT}
-        sections={backlog([task({ status: 'proposed' })])}
-        {...NOOP}
-      />,
-    );
-
-    expect(screen.queryByText('Book the dentist')).not.toBeInTheDocument();
-  });
-
-  it('lists the backlog as click-to-place cards, not a drag', async () => {
-    const onPlace = vi.fn();
-
-    renderWithProviders(
-      <TaskSlateDrawer
-        open
-        onOpenChange={() => {}}
-        slot={SLOT}
-        sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
-        {...NOOP}
-        onPlace={onPlace}
-      />,
-    );
-
-    const card = (await screen.findByRole('button', { name: /Add Try this at this time/ })) as HTMLElement;
-
-    expect(card).toHaveAttribute('draggable', 'false');
-    expect(
-      screen.queryByRole('button', { name: /drag try this onto the calendar/i }),
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(card);
-    expect(onPlace).toHaveBeenCalledWith('p1');
-  });
-
-  it('still lets a proposed card be declined', async () => {
-    const onDismissProposed = vi.fn();
-
-    renderWithProviders(
-      <TaskSlateDrawer
-        open
-        onOpenChange={() => {}}
-        slot={SLOT}
-        sections={backlog([task({ id: 'p1', title: 'Try this', status: 'proposed' })])}
-        {...NOOP}
-        onDismissProposed={onDismissProposed}
-      />,
-    );
-
-    fireEvent.click(await screen.findByLabelText('Dismiss Try this'));
-    expect(onDismissProposed).toHaveBeenCalledWith('p1');
-  });
 
   it('says the plan failed rather than that there is nothing waiting', async () => {
     renderWithProviders(
@@ -358,6 +279,12 @@ describe('TaskSlateDrawer — the slot drawer', () => {
 
     expect(await screen.findByText(/Could not load your plan/)).toBeInTheDocument();
     expect(screen.queryByText(/Nothing in Proposed or Unscheduled/)).not.toBeInTheDocument();
+  });
+
+  it('says it is loading only while there is nothing to show yet', async () => {
+    renderWithProviders(<TaskSlateDrawer open onOpenChange={() => {}} slot={SLOT} sections={[]} loading />);
+
+    expect(await screen.findByText(/Loading your plan/)).toBeInTheDocument();
   });
 
   it('does not tell an empty drawer to drop anything on a day', async () => {
@@ -372,13 +299,143 @@ describe('TaskSlateDrawer — the slot drawer', () => {
 
     expect(await screen.findByText('No predictions available')).toBeInTheDocument();
   });
+});
 
-  it('opens the event form in the drawer', async () => {
-    renderWithProviders(<TaskSlateDrawer open onOpenChange={() => {}} slot={SLOT} sections={[]} {...NOOP} />);
+/**
+ * "New event" writes straight to ci.events from the slot the user pointed at.
+ * The whole point of the flow is that the time comes from the calendar rather
+ * than from a date picker, so what reaches the mutation is the assertion that
+ * matters — a timezone or field-name slip here creates a silently wrong event.
+ */
+describe('TaskSlateDrawer — composing an event on the slot', () => {
+  afterEach(() => setViewport(false));
 
-    fireEvent.click(await screen.findByRole('button', { name: 'New event' }));
+  function compose(mocks: MockedResponse[], onCreated = vi.fn()) {
+    renderWithProviders(
+      <TaskSlateDrawer
+        open
+        onOpenChange={() => {}}
+        slot={SLOT}
+        sections={[]}
+        {...NOOP}
+        onCreated={onCreated}
+      />,
+      { mocks },
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'New event' }));
+
+    return { onCreated };
+  }
+
+  it('opens the event form in the drawer', () => {
+    compose([]);
 
     expect(screen.getByLabelText('Title')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add' })).toBeInTheDocument();
+  });
+
+  it('sends the clicked slot as the start, tells the caller to refetch, and closes the form', async () => {
+    const inputs: Record<string, unknown>[] = [];
+    const { onCreated } = compose([createMock((input) => inputs.push(input))]);
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Coffee with Sam' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(onCreated).toHaveBeenCalled());
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toMatchObject({
+      title: 'Coffee with Sam',
+      startTime: new Date(2026, 7, 6, 16, 15).toISOString(),
+      endTime: new Date(2026, 7, 6, 17, 15).toISOString(),
+      isAllDay: false,
+      durationMinutes: 60,
+    });
+    // Blank means "no kind", which is what keeps a hand-made event on the
+    // Schedule (CalendarEventService.findInRange serves NULL event_type).
+    expect(inputs[0].eventType).toBeUndefined();
+
+    // Back to the two ways in, with nothing left in the box.
+    await waitFor(() => expect(screen.queryByLabelText('Title')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'New event' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'New event' }));
+    expect(screen.getByLabelText('Title')).toHaveValue('');
+  });
+
+  it('never reaches the network with an untitled draft', async () => {
+    const sent = vi.fn();
+    const { onCreated } = compose([createMock(sent)]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(await screen.findByText(/give the event a title/i)).toBeInTheDocument();
+    expect(sent).not.toHaveBeenCalled();
+    expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a rejected write instead of hanging on "Adding…"', async () => {
+    const { onCreated } = compose([
+      {
+        request: { query: CREATE_EVENT },
+        variableMatcher: () => true,
+        error: new Error('calendar is read only'),
+      } as unknown as MockedResponse,
+    ]);
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Coffee with Sam' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/read only/i);
+    expect(onCreated).not.toHaveBeenCalled();
+    // The typing survives, and the form is usable again rather than stuck.
+    expect(screen.getByLabelText('Title')).toHaveValue('Coffee with Sam');
+    expect(screen.getByRole('button', { name: 'Add' })).toBeEnabled();
+  });
+
+  /**
+   * ═══ WHAT THIS TEST USED TO CHECK ═══
+   * That the alert was gone right after Cancel — which it always was, because
+   * the alert only renders inside the composer. `submitError` itself survived,
+   * so the very next "New event" re-mounted an empty form under the rejection
+   * from an attempt the user had already abandoned. The name said the case was
+   * covered; the assertions never reached it.
+   */
+  it('does not re-raise the abandoned error when the composer is reopened after Cancel', async () => {
+    compose([
+      {
+        request: { query: CREATE_EVENT },
+        variableMatcher: () => true,
+        error: new Error('calendar is read only'),
+      } as unknown as MockedResponse,
+    ]);
+
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Coffee with Sam' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByLabelText('Title')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'New event' }));
+
+    expect(screen.getByLabelText('Title')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(/read only/i)).not.toBeInTheDocument();
+  });
+
+  it('does not re-raise an abandoned validation complaint either', () => {
+    compose([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(screen.getByText(/give the event a title/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'New event' }));
+
+    expect(screen.queryByText(/give the event a title/i)).not.toBeInTheDocument();
   });
 });

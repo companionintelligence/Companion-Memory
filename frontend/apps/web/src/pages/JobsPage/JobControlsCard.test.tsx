@@ -56,6 +56,8 @@ function cron(overrides: Partial<JobCronControl> = {}): JobCronControl {
     name: 'PlanningJobsCron.todoScan',
     cron: '0 */30 * * * *',
     mode: 'enabled',
+    role: 'web',
+    servedHere: true,
     locked: false,
     lockedReason: null,
     skippedCount: 0,
@@ -67,8 +69,10 @@ function cron(overrides: Partial<JobCronControl> = {}): JobCronControl {
 function controls(overrides: Partial<JobControlsResponse> = {}): JobControlsResponse {
   return {
     global: {
-      concurrency: { value: null, default: 10, max: 64, effective: 10 },
-      perQueueConcurrency: { value: null, default: 6, max: 64, effective: 6 },
+      // `max` mirrors `default` on the two global numbers: these controls only
+      // go down, so the shipped figure is also the ceiling.
+      concurrency: { value: null, default: 10, max: 10, effective: 10 },
+      perQueueConcurrency: { value: null, default: 6, max: 6, effective: 6 },
       nonInteractive: 'enabled',
     },
     topology: { role: 'all', queueWorkerProcesses: 1, perProcessConcurrency: 10 },
@@ -291,6 +295,41 @@ describe('JobControlsCard queues', () => {
   });
 });
 
+describe('JobControlsCard concurrency ceilings', () => {
+  it('offers the shipped figure as the highest value either box will take', () => {
+    renderCard(controls());
+
+    // Both boxes used to carry max=64 against a shipped 10 and 6, so the page
+    // invited an operator to take the appliance six times past what the build
+    // allows — from the page they opened because it was already too hot.
+    expect(screen.getByLabelText(/Jobs at once, whole appliance/i)).toHaveAttribute('max', '10');
+    expect(screen.getByLabelText(/Jobs at once, per queue/i)).toHaveAttribute('max', '6');
+  });
+
+  it('says in words that the numbers only go down', () => {
+    renderCard(controls());
+
+    expect(screen.getByText(/only go/i)).toBeInTheDocument();
+    expect(screen.getByText(/10 appliance-wide and 6 per queue/)).toBeInTheDocument();
+  });
+
+  it('reports a stored value the appliance is not honouring', () => {
+    // A row can hold a number above the ceiling — written by an older build, or
+    // by hand — so the card has to show the disagreement rather than the request.
+    renderCard(
+      controls({
+        global: {
+          concurrency: { value: 64, default: 10, max: 10, effective: 10 },
+          perQueueConcurrency: { value: null, default: 6, max: 6, effective: 6 },
+          nonInteractive: 'enabled',
+        },
+      }),
+    );
+
+    expect(screen.getByText(/Running at 10 — a lower ceiling applies/)).toBeInTheDocument();
+  });
+});
+
 describe('JobControlsCard schedules', () => {
   it('switches a schedule off by name', async () => {
     const { onSave } = renderCard(controls());
@@ -313,6 +352,41 @@ describe('JobControlsCard schedules', () => {
 
     expect(screen.getByText(/this schedule does not run/i)).toBeInTheDocument();
     expect(screen.getByText(/42 ticks skipped/)).toBeInTheDocument();
+  });
+
+  it('marks a schedule the answering process does not run, and explains it once', () => {
+    renderCard(
+      controls({
+        topology: { role: 'web', queueWorkerProcesses: 2, perProcessConcurrency: 10 },
+        crons: [
+          cron(),
+          cron({
+            name: 'OrphanCleanupCron.sweepOnSchedule',
+            role: 'worker',
+            servedHere: false,
+          }),
+        ],
+      }),
+    );
+    openSection(/Schedules/);
+
+    // Sourced from the live scheduler, this row was simply absent under
+    // CI_ROLE=web — with a plain count above it saying the list was complete.
+    expect(screen.getByText(/1 of these run in the worker process/i)).toBeInTheDocument();
+    expect(screen.getByText('worker')).toBeInTheDocument();
+
+    // And it is still switchable from here: the mode is stored on the appliance
+    // and read by the process that runs it.
+    expect(screen.getByRole('switch', { name: /Orphan cleanup sweep/i })).toBeEnabled();
+  });
+
+  it('says nothing about other processes on a single-process appliance', () => {
+    renderCard(controls());
+    openSection(/Schedules/);
+
+    // CI_ROLE=all is the default and every test; a note on every appliance
+    // would be noise about a topology most of them do not run.
+    expect(screen.queryByText(/run in the worker process/i)).not.toBeInTheDocument();
   });
 
   it('will not let a protected schedule be switched off', () => {

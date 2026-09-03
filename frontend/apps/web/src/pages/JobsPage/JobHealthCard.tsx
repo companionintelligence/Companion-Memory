@@ -42,9 +42,19 @@ export function JobHealthCard({
   onOpenSchedules,
 }: Props) {
   const phone = usePhone();
-  const verdicts = jobVerdicts({ stateCounts, categoryCounts, categoryLabel, crons });
+  const verdicts = jobVerdicts({ stateCounts, categoryCounts, crons });
 
   const total = Object.values(stateCounts).reduce((sum, n) => sum + n, 0);
+
+  // The bar's denominator is the CATEGORY total, not the state total.
+  //
+  // They are different sets. `stateCounts` honours the category and type
+  // filters; `categoryCounts` deliberately ignores them so each chip can show
+  // what picking it would yield. Dividing an unfiltered slice by a filtered
+  // total made the segments overflow their track the moment any category was
+  // selected — on `/jobs?category=llm` the total was 262 while the ingest slice
+  // alone was 5,977, i.e. a segment 22x the width of the bar.
+  const categoryTotal = Object.values(categoryCounts).reduce((sum, n) => sum + n, 0);
   const slices = Object.entries(categoryCounts)
     .filter(([, count]) => count > 0)
     .sort((a, b) => b[1] - a[1]);
@@ -81,20 +91,23 @@ export function JobHealthCard({
           </ul>
         )}
 
-        {slices.length > 0 ? (
+        {slices.length > 0 && categoryTotal > 0 ? (
           <div>
             <div className="flex h-[7px] overflow-hidden rounded-full bg-muted" role="presentation">
               {shown.map(([category, count]) => (
                 <span
                   key={category}
                   className="h-full"
-                  style={{ width: `${(count / total) * 100}%`, background: categoryChartColor(category) }}
+                  style={{
+                    width: `${(count / categoryTotal) * 100}%`,
+                    background: categoryChartColor(category),
+                  }}
                 />
               ))}
               {rest > 0 ? (
                 <span
                   className="h-full bg-muted-foreground/50"
-                  style={{ width: `${(rest / total) * 100}%` }}
+                  style={{ width: `${(rest / categoryTotal) * 100}%` }}
                 />
               ) : null}
             </div>

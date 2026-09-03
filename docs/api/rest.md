@@ -60,7 +60,7 @@ Grounded in source; every route cites `file:line`.
 
 **Scopes and capability.** A route may declare `@RequireScopes('memory'|'intents'|'mcp'|'capture')` and `@RequireCapability('read'|'write'|'full')`. Enforcement is **deny-by-default for scope-limited API keys**: such a key may reach a route only if the route grants a scope it holds. Session/JWT/Portal principals and empty-scope (legacy full-authority) keys are unaffected by the scope axis, but capability applies to *every* api-key principal. See [auth-and-conventions.md §1.2](auth-and-conventions.md#12-api-keys-programmatic-clients).
 
-**Unauthenticated routes (no auth guard):** `GET /health`, `GET /_internal/features/global`, `GET /config/telemetry`, the `authenticate/*` + `/signup` + `authenticate/oidc/*` endpoints, `GET /connect`, `GET /graphiql`, `GET /solid/profile/:userId` (flag-gated), `POST /agent/v1/ask` (verifies a peer's Portal token inline), and `POST /jobs/crons/run` (loopback-only, 403 otherwise).
+**Unauthenticated routes (no auth guard):** `GET /health`, `GET /_internal/features/global`, `GET /config/telemetry`, the `authenticate/*` + `/signup` + `authenticate/oidc/*` endpoints, `GET /connect`, `GET /graphiql`, `GET /solid/profile/:userId` (flag-gated), and `POST /agent/v1/ask` (verifies a peer's Portal token inline).
 
 See [auth-and-conventions.md](auth-and-conventions.md) for the full auth model.
 
@@ -600,11 +600,11 @@ Import stage work is dispatched over **per-kind pg-boss queues** — `import-unp
 
 | Controller | Verb · Path | Auth | Purpose |
 |-----------|-------------|------|---------|
-| `JobsController` (`domains/events/controllers/JobsController.ts:17`) | GET `/jobs/dashboard` (`:25`) | `JwtOrApiKeyAuthGuard` | pg-boss job-monitor dashboard. |
-| `JobsController` | GET `/jobs` (`:63`) | `JwtOrApiKeyAuthGuard` | The queryable job list behind the dashboard table. Optional filters compose; `state` accepts pg-boss's own states **plus the synthetic `dead-letter`**, which selects the DLQ copies (they are stored as `created`, so without it they are unfindable). |
-| `JobsController` | GET `/jobs/history` (`:93`) | `JwtOrApiKeyAuthGuard` | Job history. |
-| `JobsController` | GET `/jobs/types` (`:111`) | `JwtOrApiKeyAuthGuard` | Distinct job types. |
-| `JobsController` | POST `/jobs/crons/run` (`:37`) | **None — but loopback-only** | Fire every Nest `@Cron` (or one named via `?name=`) the way the scheduler would. `isLoopback(request)` → **403** for anything else; operators `docker exec` in and curl localhost. |
+| `JobsController` (`domains/events/controllers/JobsController.ts:69`) | GET `/jobs/dashboard` (`:77`) | `JwtOrApiKeyAuthGuard` | pg-boss job-monitor dashboard. |
+| `JobsController` | GET `/jobs` (`:130`) | `JwtOrApiKeyAuthGuard` | The queryable job list behind the dashboard table. Optional filters compose; `state` accepts pg-boss's own states **plus the synthetic `dead-letter`**, which selects the DLQ copies (they are stored as `created`, so without it they are unfindable). |
+| `JobsController` | GET `/jobs/history` (`:160`) | `JwtOrApiKeyAuthGuard` | Job history. |
+| `JobsController` | GET `/jobs/types` (`:246`) | `JwtOrApiKeyAuthGuard` | Distinct job types. |
+| `JobsController` | POST `/jobs/crons/run` (`:111`) | `JwtOrApiKeyAuthGuard` + `@RequireCapability('full')` | Fire every Nest `@Cron` (or one named via `?name=`) the way the scheduler would. `full`, not `write`, because the set is every registered schedule — including `AccountPurgeCron.purgeDueAccounts`, which permanently deletes accounts. Formerly unguarded and "loopback-only" via `request.socket.remoteAddress`, which is the immediate peer: both proxies in this repo (dev Caddy, Vite `/api`) dial the API on localhost, so any caller on the network passed it. |
 | `AuditController` (`:23`, class-level `JwtOrApiKeyAuthGuard` `:24`) | GET `/audit/forward-auth/whoami` (`:41`) | **Both**: `JwtOrApiKeyAuthGuard` (class, `:24`) **then** `HubForwardAuthGuard` (method, `:42`) | Echo the verified Hub forward-auth username (HMAC `X-CI-Hub-User`). Nest **concatenates** guards `[global, class, method]` (`@nestjs/core` `helpers/context-creator.js` `createContext`, run in order by `GuardsConsumer`); a method-level guard does **not** override a class-level one. So the class guard runs first and 401s any caller without a JWT/API key before the signature is ever checked — a valid session or API key is required **in addition to** the signed header. The source comment at `:38-39` calls it an override; that is wrong. |
 | `AuditController` | GET `/audit/deltas` (`:53`) | `JwtOrApiKeyAuthGuard` | Entity-evolution deltas (`entityId`, `limit`, `changeType`, `since`/`until`). |
 | `OnboardingController` (`:15`) | GET `/onboarding/progress` (`:20`), PUT `/onboarding/progress` (`:26`), POST `/onboarding/onboard` (`:35`) | **`JwtAuthGuard`** (session only) | Read/save onboarding progress; run onboarding. |

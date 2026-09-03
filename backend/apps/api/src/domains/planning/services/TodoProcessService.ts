@@ -308,95 +308,108 @@ export class TodoProcessService {
     });
 
     for (const task of tasks) {
-      const block = formatRecall(
-        await recallHits(
-          this.dataSource,
-          this.searchService,
-          context,
-          `${task.title} ${task.description ?? ''}`.trim(),
-          8,
-        ),
-      );
+      try {
+        const block = formatRecall(
+          await recallHits(
+            this.dataSource,
+            this.searchService,
+            context,
+            `${task.title} ${task.description ?? ''}`.trim(),
+            8,
+          ),
+        );
 
-      if (!block.trim()) {
-        continue;
-      }
+        if (!block.trim()) {
+          continue;
+        }
 
-      const suggestion = await this.suggest(context, task.title, block);
+        const suggestion = await this.suggest(context, task.title, block);
 
-      if (!suggestion || suggestion.action === 'none') {
-        continue;
-      }
+        if (!suggestion || suggestion.action === 'none') {
+          continue;
+        }
 
-      const confidence = clampConfidence(suggestion.confidence);
-      const kind = suggestion.action === 'complete' ? 'task_complete' : 'task_mutate';
-      const decision = await this.personalizationService.decideAction(userId, { kind, confidence });
+        const confidence = clampConfidence(suggestion.confidence);
+        const kind = suggestion.action === 'complete' ? 'task_complete' : 'task_mutate';
+        const decision = await this.personalizationService.decideAction(userId, { kind, confidence });
 
-      if (decision === 'skip') {
-        continue;
-      }
+        if (decision === 'skip') {
+          continue;
+        }
 
-      if (suggestion.action === 'complete') {
+        if (suggestion.action === 'complete') {
+          if (decision === 'auto') {
+            await this.taskService.complete(context, task.id);
+            tallies.applied += 1;
+          } else {
+            await this.taskService.createPendingChange(context, {
+              taskId: task.id,
+              kind: 'complete',
+              patch: {},
+              rationale: suggestion.rationale ?? 'Looks like this may be done.',
+              confidence,
+            });
+            tallies.pending += 1;
+          }
+
+          continue;
+        }
+
+        const patch: Record<string, unknown> = {};
+
+        if (suggestion.action === 'append' && suggestion.notes?.trim()) {
+          patch.appendNotes = suggestion.notes.trim();
+        }
+
+        if (suggestion.action === 'revise' && suggestion.title?.trim()) {
+          patch.title = suggestion.title.trim();
+        }
+
+        if (suggestion.action === 'reparent' && suggestion.parentTitle?.trim()) {
+          const parent = await this.taskService.findByTitleMatch(context, suggestion.parentTitle);
+
+          if (parent && parent.id !== task.id) {
+            patch.parentId = parent.id;
+          }
+        }
+
+        if (Object.keys(patch).length === 0) {
+          continue;
+        }
+
         if (decision === 'auto') {
-          await this.taskService.complete(context, task.id);
+          if (typeof patch.appendNotes === 'string') {
+            await this.taskService.appendNotes(context, task.id, patch.appendNotes);
+          }
+
+          const { appendNotes: _a, ...rest } = patch;
+
+          if (Object.keys(rest).length > 0) {
+            await this.taskService.update(context, task.id, rest);
+          }
+
           tallies.applied += 1;
         } else {
           await this.taskService.createPendingChange(context, {
             taskId: task.id,
-            kind: 'complete',
-            patch: {},
-            rationale: suggestion.rationale ?? 'Looks like this may be done.',
+            kind: 'mutate',
+            patch,
+            rationale: suggestion.rationale ?? 'Suggested update from memory.',
             confidence,
           });
           tallies.pending += 1;
         }
-
-        continue;
-      }
-
-      const patch: Record<string, unknown> = {};
-
-      if (suggestion.action === 'append' && suggestion.notes?.trim()) {
-        patch.appendNotes = suggestion.notes.trim();
-      }
-
-      if (suggestion.action === 'revise' && suggestion.title?.trim()) {
-        patch.title = suggestion.title.trim();
-      }
-
-      if (suggestion.action === 'reparent' && suggestion.parentTitle?.trim()) {
-        const parent = await this.taskService.findByTitleMatch(context, suggestion.parentTitle);
-
-        if (parent && parent.id !== task.id) {
-          patch.parentId = parent.id;
-        }
-      }
-
-      if (Object.keys(patch).length === 0) {
-        continue;
-      }
-
-      if (decision === 'auto') {
-        if (typeof patch.appendNotes === 'string') {
-          await this.taskService.appendNotes(context, task.id, patch.appendNotes);
-        }
-
-        const { appendNotes: _a, ...rest } = patch;
-
-        if (Object.keys(rest).length > 0) {
-          await this.taskService.update(context, task.id, rest);
-        }
-
-        tallies.applied += 1;
-      } else {
-        await this.taskService.createPendingChange(context, {
+      } catch (err) {
+        // Same reasoning as TodoScanService: one task's failure must not force
+        // pg-boss to redeliver the whole job and re-walk the tasks already
+        // reviewed above. A reparent whose target was deleted between
+        // findByTitleMatch and update throws NotFoundException out of the loop,
+        // and the remaining tasks would then wait a full 6-hour tick.
+        this.logger.warn('Todo process task failed; continuing with remaining tasks', {
+          userId,
           taskId: task.id,
-          kind: 'mutate',
-          patch,
-          rationale: suggestion.rationale ?? 'Suggested update from memory.',
-          confidence,
+          error: err instanceof Error ? err.message : String(err),
         });
-        tallies.pending += 1;
       }
     }
 
@@ -513,41 +526,53 @@ export class EventNowService {
         continue;
       }
 
-      const title = titles.get(block.id) ?? '';
-      const tokens = distinctiveTokens(title);
+      try {
+        const title = titles.get(block.id) ?? '';
+        const tokens = distinctiveTokens(title);
 
-      if (tokens.length === 0) {
-        continue;
+        if (tokens.length === 0) {
+          continue;
+        }
+
+        const hits = await recallHits(this.dataSource, this.searchService, context, title, 6);
+        const from = new Date(block.startTime.getTime() - CANCEL_LOOKBEHIND_MS);
+        const evidence = hits.filter(
+          (hit) => hasPhrase(hit, CANCEL_PHRASES) && mentions(hit, tokens) && occurredWithin(hit, from, now),
+        );
+
+        if (evidence.length === 0) {
+          continue;
+        }
+
+        const confidence = evidence.length > 1 ? 0.75 : 0.6;
+        const decision = await this.personalizationService.decideAction(userId, {
+          kind: 'event_revise',
+          confidence,
+        });
+
+        if (decision === 'skip') {
+          continue;
+        }
+
+        await this.taskService.createPendingChange(context, {
+          taskId: block.taskId,
+          kind: 'event_revise',
+          patch: { eventStatus: 'cancelled', eventId: block.id },
+          rationale: `Memory suggests "${title}" may have been cancelled: ${describeEvidence(evidence[0])}`,
+          confidence,
+        });
+        tallies.proposed += 1;
+      } catch (err) {
+        // Same reasoning as TodoScanService: one block's failure must not force
+        // pg-boss to redeliver the whole job and re-walk the blocks above.
+        // createPendingChange is idempotent per (task, kind), so the skipped
+        // block is simply picked up by the next hourly tick.
+        this.logger.warn('Event-now block failed; continuing with remaining blocks', {
+          userId,
+          eventId: block.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-
-      const hits = await recallHits(this.dataSource, this.searchService, context, title, 6);
-      const from = new Date(block.startTime.getTime() - CANCEL_LOOKBEHIND_MS);
-      const evidence = hits.filter(
-        (hit) => hasPhrase(hit, CANCEL_PHRASES) && mentions(hit, tokens) && occurredWithin(hit, from, now),
-      );
-
-      if (evidence.length === 0) {
-        continue;
-      }
-
-      const confidence = evidence.length > 1 ? 0.75 : 0.6;
-      const decision = await this.personalizationService.decideAction(userId, {
-        kind: 'event_revise',
-        confidence,
-      });
-
-      if (decision === 'skip') {
-        continue;
-      }
-
-      await this.taskService.createPendingChange(context, {
-        taskId: block.taskId,
-        kind: 'event_revise',
-        patch: { eventStatus: 'cancelled', eventId: block.id },
-        rationale: `Memory suggests "${title}" may have been cancelled: ${describeEvidence(evidence[0])}`,
-        confidence,
-      });
-      tallies.proposed += 1;
     }
 
     this.logger.log('Event-now pass finished', { userId, ...tallies });
@@ -602,49 +627,63 @@ export class VerifyDoneService {
         continue;
       }
 
-      const task = await this.taskService.findById(context, block.taskId);
+      try {
+        const task = await this.taskService.findById(context, block.taskId);
 
-      if (!task || task.status === 'done' || task.status === 'archived' || task.status === 'skipped') {
-        continue;
-      }
+        if (!task || task.status === 'done' || task.status === 'archived' || task.status === 'skipped') {
+          continue;
+        }
 
-      // The query is the task's own words ONLY. Asking memory for "did I finish
-      // or complete X" retrieves entities BECAUSE they contain finish/complete,
-      // so a doneSignal over those hits is circular — it re-reads the terms the
-      // retrieval selected for, and any "your order has been completed" mail
-      // satisfies it.
-      const tokens = distinctiveTokens(task.title);
-      const hits = tokens.length
-        ? await recallHits(this.dataSource, this.searchService, context, task.title, 6)
-        : [];
-      const evidence = hits.filter(
-        (hit) =>
-          hasPhrase(hit, DONE_PHRASES) && mentions(hit, tokens) && occurredWithin(hit, block.startTime, now),
-      );
-      const doneSignal = evidence.length > 0;
+        // The query is the task's own words ONLY. Asking memory for "did I finish
+        // or complete X" retrieves entities BECAUSE they contain finish/complete,
+        // so a doneSignal over those hits is circular — it re-reads the terms the
+        // retrieval selected for, and any "your order has been completed" mail
+        // satisfies it.
+        const tokens = distinctiveTokens(task.title);
+        const hits = tokens.length
+          ? await recallHits(this.dataSource, this.searchService, context, task.title, 6)
+          : [];
+        const evidence = hits.filter(
+          (hit) =>
+            hasPhrase(hit, DONE_PHRASES) &&
+            mentions(hit, tokens) &&
+            occurredWithin(hit, block.startTime, now),
+        );
+        const doneSignal = evidence.length > 0;
 
-      const confidence = doneSignal ? ATTRIBUTED_DONE_CONFIDENCE : UNVERIFIED_DONE_CONFIDENCE;
-      const decision = await this.personalizationService.decideAction(userId, {
-        kind: 'task_complete',
-        confidence,
-      });
-
-      if (decision === 'auto' && doneSignal) {
-        await this.taskService.complete(context, task.id);
-        block.status = 'completed';
-        await this.eventRepository.save(block);
-        tallies.completed += 1;
-      } else if (decision === 'review' || (decision === 'auto' && !doneSignal)) {
-        await this.taskService.createPendingChange(context, {
-          taskId: task.id,
-          kind: 'complete',
-          patch: { eventId: block.id },
-          rationale: doneSignal
-            ? `Looks like this got done — confirm to mark complete? ${describeEvidence(evidence[0])}`
-            : 'This scheduled item passed. Did it get done?',
+        const confidence = doneSignal ? ATTRIBUTED_DONE_CONFIDENCE : UNVERIFIED_DONE_CONFIDENCE;
+        const decision = await this.personalizationService.decideAction(userId, {
+          kind: 'task_complete',
           confidence,
         });
-        tallies.pending += 1;
+
+        if (decision === 'auto' && doneSignal) {
+          await this.taskService.complete(context, task.id);
+          block.status = 'completed';
+          await this.eventRepository.save(block);
+          tallies.completed += 1;
+        } else if (decision === 'review' || (decision === 'auto' && !doneSignal)) {
+          await this.taskService.createPendingChange(context, {
+            taskId: task.id,
+            kind: 'complete',
+            patch: { eventId: block.id },
+            rationale: doneSignal
+              ? `Looks like this got done — confirm to mark complete? ${describeEvidence(evidence[0])}`
+              : 'This scheduled item passed. Did it get done?',
+            confidence,
+          });
+          tallies.pending += 1;
+        }
+      } catch (err) {
+        // Same reasoning as TodoScanService: one block's failure must not force
+        // pg-boss to redeliver the whole job and re-walk the blocks above. Both
+        // outcomes here are idempotent on a later tick (complete() keeps the
+        // original instant, createPendingChange upserts per (task, kind)).
+        this.logger.warn('Verify-done block failed; continuing with remaining blocks', {
+          userId,
+          eventId: block.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 

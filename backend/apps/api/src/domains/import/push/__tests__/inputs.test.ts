@@ -120,6 +120,37 @@ describe('toContentInput', () => {
     expect(input.mimetype).toBe('image/jpeg');
   });
 
+  it('keys the row on its bytes when the upload leg stamped the store’s SHA-256 beside the file id', () => {
+    // The `file` federated kind (docs/design/cross-pipeline-identity.md §3.2):
+    // the same photo from two archives, or a document the OneDrive connection
+    // listed by sha256Hash, is one row. Replaces the per-item staged triple
+    // the way a URI does; provenance (source_type) is untouched.
+    const sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const photo = recordFor({
+      classification: 'photo',
+      dataSource: 'google_photos',
+      mediaType: 'image/jpeg',
+      metadata: { FileId: 'file-uuid-1', FileSha256: sha256 },
+    });
+
+    const input = toContentInput(photo);
+
+    expect(input).toMatchObject({
+      external_id: 'file-uuid-1',
+      external_id_kind: 'file',
+      source_type: 'ci-import-tools',
+      source_system: 'file',
+      source_id: `sha256:${sha256}`,
+    });
+  });
+
+  it('keeps the staged triple when the upload leg stamped a file id but no hash', () => {
+    const input = toContentInput(recordFor({ classification: 'photo', metadata: { FileId: 'file-uuid-1' } }));
+
+    expect(input.source_system).toBe('gmail');
+    expect(input.source_id).toBe('hash-1');
+  });
+
   it('lets the file id win over a source URI when a record somehow carries both', () => {
     // "The file id wins over a source URI: it identifies these bytes in
     // CI-Server, which is what a consumer of this row needs." — the URI still

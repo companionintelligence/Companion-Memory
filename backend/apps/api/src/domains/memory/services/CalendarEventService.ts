@@ -28,6 +28,7 @@ import { BaseEntity } from '../entities/BaseEntity';
 import { EventBaseEntity } from '../entities/EventBaseEntity';
 import { EventEntity, Event } from '../entities/EventEntity';
 import { PlaceEntity } from '../entities/PlaceEntity';
+import { ledgerPlatform } from '../identity';
 import { CreateEventDto, UpdateEventDto, SearchEventDto } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
@@ -450,7 +451,7 @@ export class CalendarEventService {
   private async ledgerArrival(
     context: UserServiceContext,
     recordId: string,
-    item: Pick<CreateEventDto, 'source_type' | 'source_system' | 'source_id' | 'connection_id'>,
+    item: Pick<CreateEventDto, 'source_type' | 'source_system' | 'source_id' | 'source_platform' | 'connection_id'>,
   ): Promise<void> {
     if (!item.source_type || !item.source_system || !item.source_id) {
       return;
@@ -464,6 +465,7 @@ export class CalendarEventService {
         sourceId: item.source_id,
         connectionId: item.connection_id ?? null,
         importRunId: context.importRunId ?? null,
+        platform: ledgerPlatform(item.source_system, item.source_platform),
       },
     ]);
   }
@@ -532,6 +534,11 @@ export class CalendarEventService {
     // land first (the triple arbiter decides which actually insert), then a
     // base row is written for exactly the inserted set. The deferred FK
     // (events_event_id_entities_fk) tolerates the detail-before-base order.
+    // Ledger platform per input row (entities[i] came from withIds[i]).
+    const platformById = new Map(
+      withIds.map((item) => [item.id, ledgerPlatform(item.source_system, item.source_platform)]),
+    );
+
     const { results, bases } = await this.eventRepository.manager.transaction(async (manager) => {
       const detailResults = await bulkInsertIdempotent({
         repository: this.eventRepository,
@@ -542,6 +549,7 @@ export class CalendarEventService {
           sourceType: entity.sourceType,
           sourceSystem: entity.sourceSystem,
           sourceId: entity.sourceId,
+          sourcePlatform: platformById.get(entity.id) ?? null,
         }),
         scope: { userId: context.userId },
         // Must match events_source_identity_uniq (20260901175654).

@@ -30,6 +30,7 @@ import { ContentBaseEntity } from '../entities/ContentBaseEntity';
 import { Content, ContentEntity } from '../entities/ContentEntity';
 import { EventEntity } from '../entities/EventEntity';
 import { classifyExternalId } from '../externalIdKind';
+import { ledgerPlatform } from '../identity';
 import { CreateContentDto, SearchContentDto, UpdateContentDto } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
@@ -263,7 +264,7 @@ export class ContentService {
   private async ledgerArrival(
     context: UserServiceContext,
     recordId: string,
-    item: Pick<CreateContentDto, 'source_type' | 'source_system' | 'source_id' | 'connection_id'>,
+    item: Pick<CreateContentDto, 'source_type' | 'source_system' | 'source_id' | 'source_platform' | 'connection_id'>,
   ): Promise<void> {
     if (!item.source_type || !item.source_system || !item.source_id) {
       return;
@@ -277,6 +278,7 @@ export class ContentService {
         sourceId: item.source_id,
         connectionId: item.connection_id ?? null,
         importRunId: context.importRunId ?? null,
+        platform: ledgerPlatform(item.source_system, item.source_platform),
       },
     ]);
   }
@@ -379,6 +381,10 @@ export class ContentService {
 
     // title is base-row data and never touches the detail table.
     const ingressById = new Map(withIds.map((item) => [item.id, { title: item.title ?? null }]));
+    // Ledger platform per input row (entities[i] came from withIds[i]).
+    const platformById = new Map(
+      withIds.map((item) => [item.id, ledgerPlatform(item.source_system, item.source_platform)]),
+    );
 
     const { detailResults, bases } = await this.contentRepository.manager.transaction(async (manager) => {
       const results = await bulkInsertIdempotent({
@@ -390,6 +396,7 @@ export class ContentService {
           sourceType: entity.sourceType,
           sourceSystem: entity.sourceSystem,
           sourceId: entity.sourceId,
+          sourcePlatform: platformById.get(entity.id) ?? null,
         }),
         // content_source_identity_uniq is user-scoped; scope the existence +
         // hydrate reads to the same user.

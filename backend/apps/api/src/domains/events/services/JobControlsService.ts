@@ -13,7 +13,8 @@ import {
   type JobControlKind,
   type JobMode,
 } from '@ci/common/job-controls';
-import { processRole, type ProcessRole } from '@ci/common/roles';
+import { processRole, serves, type ProcessRole, type ServedRole } from '@ci/common/roles';
+import { CronRegistry } from '@ci/common/schedule';
 import config from '@ci/configuration';
 
 import { JobSettingEntity } from '../entities/JobSettingEntity';
@@ -21,6 +22,7 @@ import {
   effectiveQueueConcurrency,
   maxQueueConcurrency,
   perProcessGlobalConcurrency,
+  perQueueDefaultConcurrency,
   queueWorkerProcesses,
 } from '../jobConcurrency';
 import { protectedCronReason, protectedQueueReason } from '../jobControlPolicy';
@@ -42,7 +44,15 @@ export interface JobControlNumberDto {
   readonly value: number | null;
   /** What the appliance uses when `value` is null. */
   readonly default: number;
-  /** The largest value that changes anything. Above it, the request is clamped. */
+  /**
+   * The largest value that changes anything. Above it, the request is clamped.
+   *
+   * On the two global fields this equals `default`, and that is the point: these
+   * controls exist to cool a box down, so the shipped figure is both what you
+   * get for free and the most you can ask for. More throughput than the build
+   * ships with is a config change (`CI_QUEUE_CONCURRENCY`), not a text box on
+   * the page you opened because the fans were loud.
+   */
   readonly max: number;
   /** What the appliance is using right now. */
   readonly effective: number;
@@ -92,6 +102,18 @@ export interface JobCronControlDto {
   readonly name: string;
   readonly cron: string;
   readonly mode: CronMode;
+  /** Which process runs it. Every schedule in the build is listed, both roles. */
+  readonly role: ServedRole;
+  /**
+   * Whether the process answering this request is the one that runs it.
+   *
+   * False only under the web/worker split, and it does NOT mean uncontrollable:
+   * the mode is a `ci.job_settings` row every process polls, so switching a
+   * worker schedule off from the web process works. It means the row is here for
+   * completeness rather than because this process would ever fire it — which the
+   * card has to say, or a `false` row looks like a schedule that is not running.
+   */
+  readonly servedHere: boolean;
   readonly locked: boolean;
   readonly lockedReason: string | null;
   readonly skippedCount: number;
@@ -318,13 +340,13 @@ export class JobControlsService {
       }
     }
 
-    const cronNames = this.cronNames();
+    const cronNames = this.cronDeclarations();
 
     for (const cron of input.crons ?? []) {
       if (!cronNames.has(cron.name)) {
         throw new BadRequestException(
-          `Unknown schedule "${cron.name}". Schedules are read from this process's scheduler registry; ` +
-            `a schedule gated to the other role is not controllable from here.`,
+          `Unknown schedule "${cron.name}". Schedules are every @Cron declared in this build, both roles, ` +
+            `so a name that is not among them is not one this appliance has.`,
         );
       }
 
@@ -370,18 +392,50 @@ export class JobControlsService {
     return mode;
   }
 
-  private cronNames(): Map<string, string> {
-    const names = new Map<string, string>();
+  /**
+   * Every schedule in the BUILD, not every schedule in this process.
+   *
+   * The scheduler registry holds only what this process registered, and the
+   * `@Cron` wrapper deliberately does not register a schedule whose `role` this
+   * process does not serve. Under the Procfile's split that is eleven schedules
+   * — the derivation pass, the orphan sweep, the import retention purge —
+   * invisible to the API, which then offered its list under a plain count as if
+   * it were the total. An operator looking for one of them found no row and no
+   * hint that a row was missing.
+   *
+   * So the declarations come first, and the scheduler is consulted only to pick
+   * up anything registered without going through the decorator (nothing does
+   * today; a `SchedulerRegistry.addCronJob` call would). Those are known to be
+   * served here by definition, and their role is whichever this process serves.
+   */
+  private cronDeclarations(): Map<string, CronFacts> {
+    const declarations = new Map<string, CronFacts>();
+
+    for (const declaration of CronRegistry.all()) {
+      declarations.set(declaration.name, {
+        cron: declaration.cron,
+        role: declaration.role,
+        servedHere: declaration.servedHere,
+      });
+    }
 
     if (!this.schedulerRegistry) {
-      return names;
+      return declarations;
     }
 
     for (const [name, job] of this.schedulerRegistry.getCronJobs()) {
-      names.set(name, String(job.cronTime?.source ?? ''));
+      if (declarations.has(name)) {
+        continue;
+      }
+
+      declarations.set(name, {
+        cron: String(job.cronTime?.source ?? ''),
+        role: serves('web') ? 'web' : 'worker',
+        servedHere: true,
+      });
     }
 
-    return names;
+    return declarations;
   }
 
   /** Build the whole reportable state from the store's current snapshot. */
@@ -395,7 +449,7 @@ export class JobControlsService {
     // the number of processes — which is what the appliance actually allows
     // today, and is why leaving this unset changes nothing.
     const shippedAppliance = config.queues.concurrency * processes;
-    const perQueueDefault = perQueueSetting ?? config.queues.perQueueConcurrency;
+    const perQueueDefault = perQueueDefaultConcurrency(perQueueSetting, config.queues.perQueueConcurrency);
 
     const queues = queueInventory().map((entry): JobQueueControlDto => {
       const row = JobControlStore.row('queue', entry.queue);
@@ -440,15 +494,17 @@ export class JobControlsService {
       };
     });
 
-    const crons = [...this.cronNames().entries()]
-      .map(([name, cron]): JobCronControlDto => {
+    const crons = [...this.cronDeclarations().entries()]
+      .map(([name, facts]): JobCronControlDto => {
         const row = JobControlStore.row('cron', name);
         const locked = protectedCronReason(name);
 
         return {
           name,
-          cron,
+          cron: facts.cron,
           mode: JobControlStore.cronMode(name),
+          role: facts.role,
+          servedHere: facts.servedHere,
           locked: locked != null,
           lockedReason: locked,
           skippedCount: row?.skippedCount ?? 0,
@@ -468,7 +524,12 @@ export class JobControlsService {
         concurrency: {
           value: globalSetting,
           default: shippedAppliance,
-          max: MAX_CONCURRENCY,
+          // The shipped figure, NOT `MAX_CONCURRENCY`. This used to report 64
+          // against a shipped 10, so the page invited an operator to take the
+          // appliance six times past what the build allows — on the one page
+          // whose reason for existing is that an unattended appliance already
+          // pegs the machine.
+          max: shippedAppliance,
           // The appliance figure, i.e. the per-process share multiplied back
           // out. On a split deployment a cap of 1 reports 2, because a process
           // with zero worker slots is a stopped process — the one place the
@@ -478,7 +539,7 @@ export class JobControlsService {
         perQueueConcurrency: {
           value: perQueueSetting,
           default: config.queues.perQueueConcurrency,
-          max: MAX_CONCURRENCY,
+          max: config.queues.perQueueConcurrency,
           effective: perQueueDefault,
         },
         nonInteractive: JobControlStore.nonInteractivePaused() ? 'paused' : 'enabled',
@@ -493,6 +554,13 @@ export class JobControlsService {
       maxConcurrency: MAX_CONCURRENCY,
     };
   }
+}
+
+/** What the settings API needs about a schedule, from wherever it learned of it. */
+interface CronFacts {
+  readonly cron: string;
+  readonly role: ServedRole;
+  readonly servedHere: boolean;
 }
 
 interface PlannedWrite {

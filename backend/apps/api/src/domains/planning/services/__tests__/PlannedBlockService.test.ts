@@ -57,6 +57,7 @@ describe('PlannedBlockService', () => {
     create: jest.Mock;
     remove: jest.Mock;
     reschedule: jest.Mock;
+    update: jest.Mock;
   };
   let taskService: {
     findById: jest.Mock;
@@ -85,6 +86,7 @@ describe('PlannedBlockService', () => {
       ]),
       remove: jest.fn(),
       reschedule: jest.fn(),
+      update: jest.fn(),
     };
     taskService = {
       findById: jest.fn().mockResolvedValue(OPEN_TASK),
@@ -321,6 +323,69 @@ describe('PlannedBlockService', () => {
     expect(taskService.acceptProposed).not.toHaveBeenCalled();
     expect(taskService.declinePendingChange).toHaveBeenCalledWith(CTX, 'chg-2');
     expect(taskService.update).toHaveBeenCalledWith(CTX, OPEN_TASK.id, { scheduledFor: null });
+  });
+
+  // ═══ applyPendingEventRevision — the Accept click on a cancellation ═══
+  //
+  // EventNowService only ever PROPOSES a cancellation; accepting it used to
+  // apply nothing at all, because TaskService treated the patch as a task
+  // patch and TypeORM silently dropped the event fields. The block stayed on
+  // the calendar — the opposite of what Accept promised.
+
+  const CANCEL_PATCH = { eventStatus: 'cancelled', eventId: 'evt-1' };
+
+  function plannedBlock(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'evt-1',
+      taskId: OPEN_TASK.id,
+      eventType: 'planned_block',
+      status: 'confirmed',
+      ...overrides,
+    };
+  }
+
+  it('cancels the linked planned block when an event_revise change is accepted', async () => {
+    eventService.findById.mockResolvedValue(plannedBlock());
+    eventService.update.mockImplementation(async (_ctx: unknown, id: string, data: { status: string }) =>
+      plannedBlock({ id, status: data.status }),
+    );
+
+    const result = await service.applyPendingEventRevision(CTX, OPEN_TASK.id, CANCEL_PATCH);
+
+    expect(eventService.update).toHaveBeenCalledWith(CTX, 'evt-1', { status: 'cancelled' });
+    expect(result?.status).toBe('cancelled');
+  });
+
+  it('never names the generated duration_minutes column', async () => {
+    // ci.events.duration_minutes is GENERATED ALWAYS — naming it in an UPDATE
+    // is a hard Postgres error, not a silent no-op.
+    eventService.findById.mockResolvedValue(plannedBlock());
+    eventService.update.mockResolvedValue(plannedBlock({ status: 'cancelled' }));
+
+    await service.applyPendingEventRevision(CTX, OPEN_TASK.id, CANCEL_PATCH);
+
+    const [, , patch] = eventService.update.mock.calls[0];
+
+    expect(Object.keys(patch)).toEqual(['status']);
+  });
+
+  it("refuses a patch pointing at another task's block", async () => {
+    eventService.findById.mockResolvedValue(plannedBlock({ taskId: 'someone-elses-task' }));
+
+    expect(await service.applyPendingEventRevision(CTX, OPEN_TASK.id, CANCEL_PATCH)).toBeNull();
+    expect(eventService.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a status this pathway never proposes', async () => {
+    eventService.findById.mockResolvedValue(plannedBlock());
+
+    expect(
+      await service.applyPendingEventRevision(CTX, OPEN_TASK.id, {
+        ...CANCEL_PATCH,
+        eventStatus: 'confirmed',
+      }),
+    ).toBeNull();
+    expect(eventService.update).not.toHaveBeenCalled();
   });
 
   it('automation skip leaves the task unscheduled', async () => {

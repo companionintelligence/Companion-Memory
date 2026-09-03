@@ -4,10 +4,20 @@ import { v7 as uuidv7 } from 'uuid';
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
+import {
+  BaseEntity,
+  CalendarEventService,
+  EventBaseEntity,
+  EventEntity,
+  GraphDeltaWriter,
+} from '@ci/domains/memory';
+import { UserEntity } from '@ci/domains/user';
 
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { TaskEntity } from '../../entities/TaskEntity';
 import { TaskPendingChangeEntity } from '../../entities/TaskPendingChangeEntity';
+import { PlannedBlockService } from '../PlannedBlockService';
+import { PlanningTimeService } from '../PlanningTimeService';
 import { TaskService } from '../TaskService';
 
 /**
@@ -173,5 +183,203 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
     const aliceTask = await service.create(alice, { title: "Alice's other task" });
 
     await expect(service.update(alice, aliceTask!.id, { parentId: bobsTask!.id })).rejects.toThrow();
+  });
+});
+
+/**
+ * Accepting an `event_revise` confirmation, end to end against real Postgres.
+ *
+ * The unit coverage for this path stops at a mock: `TaskResolver.test.ts`
+ * proves the resolver DISPATCHES to `applyPendingEventRevision`, and
+ * `PlannedBlockService.test.ts` proves the call reaches a mocked
+ * `CalendarEventService` with `{ status }` and nothing else. Neither can see
+ * the leg that actually fails in production — the CTI base/detail transaction
+ * and the `events_status_check` CHECK constraint. This writes a real planned
+ * block, accepts a real pending change, and reads `ci.events.status` back with
+ * SQL, so a rejected status value or a broken aggregate update fails the suite.
+ *
+ * Same opt-in as the suite above (`PLANNING_TEST_DATABASE_URL`).
+ */
+describeWithDb('PlannedBlockService — accepted event_revise (integration)', () => {
+  let dataSource: DataSource;
+  let schemaLock: SchemaLock | null = null;
+  let taskService: TaskService;
+  let plannedBlocks: PlannedBlockService;
+
+  const owner: UserServiceContext = { userId: uuidv7() } as UserServiceContext;
+  const stranger: UserServiceContext = { userId: uuidv7() } as UserServiceContext;
+
+  const noopSignalling = { send: async () => undefined };
+  const noopLogger = {
+    setContext: () => undefined,
+    log: () => undefined,
+    debug: () => undefined,
+    warn: () => undefined,
+  } as unknown as LoggerService;
+
+  /** `ci.events.status` straight from the table — not through any service. */
+  async function storedStatus(eventId: string): Promise<string | undefined> {
+    const rows = await dataSource.query<Array<{ status: string }>>(
+      'SELECT status FROM ci.events WHERE event_id = $1',
+      [eventId],
+    );
+
+    return rows[0]?.status;
+  }
+
+  async function placeBlock(context: UserServiceContext, title: string) {
+    const task = await taskService.create(context, { title });
+    const start = new Date(Date.now() + 3_600_000);
+    const outcome = await plannedBlocks.scheduleTaskAt(
+      context,
+      task!.id,
+      start,
+      new Date(start.getTime() + 30 * 60_000),
+    );
+
+    if (outcome.status !== 'placed') {
+      throw new Error(`expected a placed block, got ${outcome.status}`);
+    }
+
+    return { task: task!, event: outcome.event };
+  }
+
+  beforeAll(async () => {
+    dataSource = new DataSource({
+      type: 'postgres',
+      url: DATABASE_URL,
+      // EventBaseEntity is a @ChildEntity of the ci.entities STI tree, so its
+      // root has to be mapped alongside it; UserEntity because EventEntity.user
+      // and PlanningTimeService both resolve against it.
+      entities: [TaskEntity, TaskPendingChangeEntity, EventEntity, BaseEntity, EventBaseEntity, UserEntity],
+      synchronize: false,
+      extra: { options: '-c search_path=ci,public' },
+    });
+
+    await dataSource.initialize();
+
+    // SHARED, for the same reason the suite above takes it: this one commits
+    // and then DELETEs real `ci.users` rows.
+    schemaLock = await acquireSchemaWriteLock(dataSource, 'PlannedBlockService.eventRevise');
+
+    for (const context of [owner, stranger]) {
+      await dataSource.query(
+        `INSERT INTO ci.users (id, name, email, password, onboarded, timezone)
+         VALUES ($1, 'Planning Test', $2, 'x', true, 'UTC')
+         ON CONFLICT (id) DO NOTHING`,
+        [context.userId, `planning.${context.userId}@example.test`],
+      );
+    }
+
+    const eventService = new CalendarEventService(
+      dataSource.getRepository(EventEntity),
+      dataSource.getRepository(EventBaseEntity),
+      noopSignalling as never,
+      dataSource,
+      new GraphDeltaWriter(dataSource, noopLogger),
+    );
+
+    taskService = new TaskService(
+      dataSource.getRepository(TaskEntity),
+      dataSource.getRepository(TaskPendingChangeEntity),
+      { send: async () => undefined } as unknown as EventService,
+      noopLogger,
+    );
+
+    plannedBlocks = new PlannedBlockService(
+      dataSource.getRepository(EventEntity),
+      eventService,
+      taskService,
+      new PlanningTimeService(dataSource.getRepository(UserEntity), noopLogger),
+      // The revise path never consults the trust dial or the workday hours;
+      // those only steer where a NEW block is proposed.
+      {} as never,
+      {} as never,
+      {} as never,
+      noopLogger,
+    );
+  });
+
+  afterAll(async () => {
+    if (dataSource?.isInitialized) {
+      // ON DELETE CASCADE takes the tasks and the events with the users.
+      await dataSource.query('DELETE FROM ci.users WHERE id = ANY($1)', [[owner.userId, stranger.userId]]);
+      // Before `destroy()`: the lock is held on a runner from this pool.
+      await schemaLock?.release();
+      await dataSource.destroy();
+    }
+  });
+
+  it('takes the block off the calendar, and the database agrees', async () => {
+    const { task, event } = await placeBlock(owner, 'Dentist');
+
+    expect(await storedStatus(event.id)).toBe('planned');
+
+    const change = await taskService.createPendingChange(owner, {
+      taskId: task.id,
+      kind: 'event_revise',
+      patch: { eventStatus: 'cancelled', eventId: event.id },
+      rationale: 'They called to cancel',
+    });
+
+    // The resolver's accept body, minus GraphQL.
+    const accepted = await taskService.acceptPendingChange(owner, change!.id);
+
+    expect(accepted.change?.kind).toBe('event_revise');
+
+    await plannedBlocks.applyPendingEventRevision(owner, task.id, accepted.change!.patch);
+
+    // The point of this suite: not "a service was called" but "the row moved".
+    // `cancelled` has to survive events_status_check, and the CTI base/detail
+    // transaction has to commit, or this reads back 'planned'.
+    expect(await storedStatus(event.id)).toBe('cancelled');
+    expect(await plannedBlocks.findActiveForTask(owner, task.id)).toBeNull();
+  });
+
+  it('writes a second revisable status and leaves duration_minutes generated', async () => {
+    const { task, event } = await placeBlock(owner, 'Standup');
+
+    await plannedBlocks.applyPendingEventRevision(owner, task.id, {
+      eventStatus: 'skipped',
+      eventId: event.id,
+    });
+
+    const [row] = await dataSource.query<Array<{ status: string; duration_minutes: number }>>(
+      'SELECT status, duration_minutes FROM ci.events WHERE event_id = $1',
+      [event.id],
+    );
+
+    expect(row.status).toBe('skipped');
+    // Still derived from the unchanged 30-minute window. This does not prove
+    // the UPDATE could not name duration_minutes — `EventEntity.durationMinutes`
+    // is `update: false`, so TypeORM drops it before Postgres ever sees it —
+    // only that the revise leg leaves the generated value intact.
+    expect(row.duration_minutes).toBe(30);
+  });
+
+  it('will not let another user cancel the block', async () => {
+    const { task, event } = await placeBlock(owner, 'Private appointment');
+
+    expect(
+      await plannedBlocks.applyPendingEventRevision(stranger, task.id, {
+        eventStatus: 'cancelled',
+        eventId: event.id,
+      }),
+    ).toBeNull();
+
+    expect(await storedStatus(event.id)).toBe('planned');
+  });
+
+  it('refuses a status the CHECK constraint would reject anyway', async () => {
+    const { task, event } = await placeBlock(owner, 'Not a cancellation');
+
+    expect(
+      await plannedBlocks.applyPendingEventRevision(owner, task.id, {
+        eventStatus: 'obliterated',
+        eventId: event.id,
+      }),
+    ).toBeNull();
+
+    expect(await storedStatus(event.id)).toBe('planned');
   });
 });

@@ -3,7 +3,10 @@ import {
   browserBookmarkIdentity,
   browserVisitIdentity,
   emailIdentity,
+  emailThreadKey,
   facebookPostIdentity,
+  fileIdentity,
+  gmailThreadKeyFromApi,
   messageIdFromHeaders,
   unixMsFromApiMillis,
   youtubeLikeIdentity,
@@ -94,6 +97,19 @@ describe('email: Takeout mbox import vs Gmail API connection', () => {
     expect(importInput.source_id).toBe(etlIdentity.id);
   });
 
+  it('ledgers a Takeout mbox arrival under the gmail platform, and a generic mbox under none', () => {
+    // record_sources.platform is what lets the doctor pair this archive with
+    // the Google connection (which stamps `gmail` too) and NOT pair a
+    // Thunderbird export of some other mailbox with it.
+    const takeout = toCommunicationInput(recordFor({ dataSource: 'gmail', metadata: { MessageID: 'a@x' } }));
+    expect(takeout.source_system).toBe('email');
+    expect(takeout.source_platform).toBe('gmail');
+
+    const generic = toCommunicationInput(recordFor({ dataSource: 'email', metadata: { MessageID: 'a@x' } }));
+    expect(generic.source_system).toBe('email');
+    expect(generic.source_platform).toBeUndefined();
+  });
+
   it('Message-ID-less mail stays in the per-pipeline namespace (no false federation)', () => {
     const input = toCommunicationInput(recordFor({ metadata: {} }));
     expect(input.source_system).toBe('gmail');
@@ -123,6 +139,8 @@ describe('calendar: .ics import vs Google Calendar API connection', () => {
     const input = toEventInput(record);
     expect(input.source_system).toBe('calendar');
     expect(input.source_id).toBe('abc123@google.com');
+    // A bare .ics says nothing about which calendar platform exported it.
+    expect(input.source_platform).toBeUndefined();
   });
 });
 
@@ -271,5 +289,66 @@ describe('browser: Takeout Chrome / History SQLite import vs the browser extensi
     expect(
       adoptIngestIdentity('chromium', `bookmark:${Math.floor((ADDED_S * 1000 + 999) / 1000)}:${URL}`).id,
     ).toBe(input.source_id);
+  });
+});
+
+describe('email threads: Takeout mbox X-GM-THRID vs Gmail API threadId', () => {
+  // Not an identity pair — thread_id is a column, not the index — but the same
+  // convergence problem: the API spells the 64-bit thread id in hex, the mbox
+  // in decimal. datasources/gmail.ts stamps ThreadId via emailThreadId (the
+  // registry's emailThreadKey); TransformGmail via gmailThreadKeyFromApi.
+  const HEX = '18c1a2b3c4d5e6f7';
+  const DECIMAL = '1783885820400625399';
+
+  it('CONVERGES: the mbox header and the API field yield the same thread_id', () => {
+    expect(emailThreadKey({ 'X-GM-THRID': DECIMAL, 'Message-ID': '<m@x>' })).toBe(gmailThreadKeyFromApi(HEX));
+  });
+
+  it('a non-Gmail mailbox keeps the RFC References root — the honest fallback, no false key', () => {
+    expect(emailThreadKey({ References: '<root@x>', 'Message-ID': '<m@x>' })).toBe('root@x');
+  });
+});
+
+describe('files: archive upload vs OneDrive Graph listing', () => {
+  // The `file` federated kind: MediaStage stamps the object store's SHA-256
+  // (FileSha256) beside FileId; toContentInput promotes it to
+  // (file, sha256:<hash>). TransformOneDrive mints the same pair from the
+  // Graph item's file.hashes.sha256Hash via fileIdentity.
+  const SHA256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+  it('the import path keys a bytes-bearing content row on (file, sha256:<hash>)', () => {
+    const record = recordFor({
+      dataSource: 'microsoft_account',
+      classification: 'document',
+      mediaType: 'application/pdf',
+      metadata: { FileId: 'file-uuid-1', FileSha256: SHA256, Title: 'report.pdf' },
+    });
+
+    const input = toContentInput(record);
+    expect(input.source_system).toBe('file');
+    expect(input.source_id).toBe(`sha256:${SHA256}`);
+    expect(input.external_id).toBe('file-uuid-1'); // the stored bytes, unchanged
+    expect(input.source_type).toBe('ci-import-tools'); // provenance, unchanged
+  });
+
+  it('CONVERGES with the pair the OneDrive connection mints from the Graph sha256Hash', () => {
+    const importInput = toContentInput(
+      recordFor({ dataSource: 'microsoft_account', metadata: { FileId: 'f', FileSha256: SHA256.toUpperCase() } }),
+    );
+    const etlIdentity = fileIdentity(SHA256.toUpperCase());
+
+    expect(importInput.source_system).toBe(etlIdentity.system);
+    expect(importInput.source_id).toBe(etlIdentity.id);
+  });
+
+  it('a row with a stored file but no hash keeps its staged triple (no false federation)', () => {
+    const input = toContentInput(recordFor({ dataSource: 'google_photos', metadata: { FileId: 'f' } }));
+    expect(input.source_system).toBe('google_photos');
+    expect(input.source_id).toBe('hash-1');
+  });
+
+  it('a malformed hash is ignored rather than becoming a file identity', () => {
+    const input = toContentInput(recordFor({ metadata: { FileId: 'f', FileSha256: 'not-a-hash' } }));
+    expect(input.source_system).toBe('gmail');
   });
 });

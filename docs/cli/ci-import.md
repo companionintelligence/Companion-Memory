@@ -206,7 +206,7 @@ row, not a shortfall.
 
 ### `doctor [--list] [--check <id>] [--timeout <ms>] [--failures-only] [--json]`
 
-**Twenty-one** data-quality checks over what the importers actually **wrote**,
+**Twenty-three** data-quality checks over what the importers actually **wrote**,
 via `GET /import/doctor` (and `GET /import/doctor/checks` for `--list`). Every
 other command answers "did the import run"; this is the only one that answers
 "did it write the right rows" — the distinction that matters, because every
@@ -216,9 +216,11 @@ Each check is a regression detector for a defect that really shipped. Where a
 check copies a live predicate, its `mirrors` field names the twin — nowadays a
 **guard** (`push/inputs.ts isNotAPlaceName`, `push/canonical.ts destinationsFor`,
 `push/canonical.ts isSocialAffiliation`, …) rather than a one-off backfill
-migration, since the guard is what stays. Only **seven** of the twenty-one name
+migration, since the guard is what stays. Only **nine** of the twenty-three name
 a twin at all — six a guard, one the migration that defined the `time_source`
-vocabulary — and `mirrors` is `null` for the other fourteen. Do not read a null
+vocabulary, and the two cross-pipeline identity checks (`identity-*`) the
+registry marker and the conformance suite they watch — and `mirrors` is `null`
+for the other fourteen. Do not read a null
 as "pipeline check": the four `pipeline-*` checks are null because they watch a
 control plane rather than a data shape, but so are ten data-shape checks whose
 predicate copies no single reusable guard — `events-dated-before-1990` has no

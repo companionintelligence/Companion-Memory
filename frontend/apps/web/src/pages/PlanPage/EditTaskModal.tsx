@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useMutation } from '@apollo/client';
-import { Button, Dialog, Input, Label, Textarea } from '@ci/shadcn';
+import { Button, Dialog, Input, Label, Textarea, useToast } from '@ci/shadcn';
 
 import { gql } from '@/graphql';
 
@@ -32,6 +32,14 @@ export const UPDATE_TASK = gql(`
 `);
 
 const SAVE_MS = 450;
+
+/**
+ * Why closing needs three answers and not two: a refusal to save is not one
+ * thing. `invalid` is the user's own draft asking to be fixed and is worth
+ * holding the dialog open for; `failed` is the network or the server, which no
+ * amount of staying open can fix, so it must never be what keeps the user in.
+ */
+type PersistResult = 'saved' | 'invalid' | 'failed';
 
 type Draft = {
   title: string;
@@ -121,22 +129,23 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [updateTask] = useMutation(UPDATE_TASK, { errorPolicy: 'all' });
+  const { toast } = useToast();
   const lastSaved = useRef<Draft>(draftFromTask(task));
-  const persistRef = useRef<(next: Draft) => Promise<boolean>>(async () => false);
+  const persistRef = useRef<(next: Draft) => Promise<PersistResult>>(async () => 'failed');
 
   const persist = useCallback(
-    async (next: Draft): Promise<boolean> => {
+    async (next: Draft): Promise<PersistResult> => {
       const invalid = validateDraft(next);
 
       if (invalid) {
         setError(invalid);
         setStatus('idle');
 
-        return false;
+        return 'invalid';
       }
 
       if (draftsEqual(next, lastSaved.current)) {
-        return true;
+        return 'saved';
       }
 
       setError(null);
@@ -154,19 +163,19 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
           setError("That task couldn't be saved. Try again.");
           setStatus('idle');
 
-          return false;
+          return 'failed';
         }
 
         lastSaved.current = next;
         setStatus('saved');
         onSaved?.();
 
-        return true;
+        return 'saved';
       } catch {
         setError("That task couldn't be saved. Try again.");
         setStatus('idle');
 
-        return false;
+        return 'failed';
       }
     },
     [onSaved, task.id, updateTask],
@@ -196,8 +205,34 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
     return () => window.clearTimeout(timer);
   }, [draft]);
 
+  /**
+   * ═══ CLOSING USED TO THROW THE EDIT AWAY, THEN USED TO TRAP THE USER ═══
+   *
+   * `persist` refuses an invalid draft without touching the network — it only
+   * calls `setError`. Closing regardless unmounted the dialog with the error
+   * still inside it, so a blank title silently discarded every unsaved change
+   * and said nothing. Staying open on ANY refusal then over-corrected: Done,
+   * Escape, the backdrop and shadcn's X all funnel through here, so an offline
+   * user whose save kept failing had no exit but a page reload.
+   *
+   * So the two refusals part ways. An invalid draft holds the dialog open —
+   * the inline error is the whole point of it, and the fix is one keystroke
+   * away. A failed save lets the close through and says so in a toast that
+   * outlives the dialog: staying open cannot repair a dead network, and the
+   * user must never be locked in a box whose only key is the thing that just
+   * broke.
+   */
   const handleClose = async () => {
-    await persistRef.current(draft);
+    const result = await persistRef.current(draft);
+
+    if (result === 'invalid') {
+      return;
+    }
+
+    if (result === 'failed') {
+      toast.error("Those changes couldn't be saved — the task is unchanged.");
+    }
+
     onClose();
   };
 
@@ -211,9 +246,7 @@ export function EditTaskModal({ task, onClose, onSaved }: Props) {
       <Dialog.Content className="overflow-x-hidden sm:max-w-[425px]">
         <Dialog.Header>
           <Dialog.Title>Edit task</Dialog.Title>
-          <Dialog.Description>
-            Changes save as you type. Close when you are done.
-          </Dialog.Description>
+          <Dialog.Description>Changes save as you type. Close when you are done.</Dialog.Description>
         </Dialog.Header>
 
         <div className="flex min-w-0 flex-col gap-4">

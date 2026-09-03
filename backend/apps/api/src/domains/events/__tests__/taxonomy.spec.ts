@@ -8,6 +8,7 @@ import {
   JOB_CATEGORIES,
   JOB_TYPES,
   JOB_TYPES_BY_QUEUE,
+  SMART_ROTATION_WORK,
   SMART_ROTATION_WORK_LABELS,
   UNCLASSIFIED_CATEGORY,
 } from '../taxonomy';
@@ -40,11 +41,45 @@ describe('job taxonomy', () => {
     const generic = describeJob('smart.rotation.work');
     const specific = describeJob('smart.rotation.work', 'graph_enrich');
 
-    // One event covers eleven unrelated activities. Showing the event name is
-    // the same as showing nothing.
+    // One event covers ten unrelated activities. Showing the event name is the
+    // same as showing nothing.
     expect(specific.label).toBe('Enrich graph entities');
     expect(specific.label).not.toBe(generic.label);
-    expect(specific.description).toContain('Enrich graph entities');
+    // The description must SAY something, not restate the label — that was the
+    // old shape (`${base.description} This run: ${label}.`) and is #2509's
+    // complaint. Assert substance instead of an echo.
+    expect(specific.description).not.toBe(generic.description);
+    expect(specific.description).toMatch(/graph entities already present/);
+  });
+
+  it('gives each rotation activity its OWN description, not the parent sentence plus its label', () => {
+    // #2509, in the issue's own words: a row called "Infer answers" told you
+    // only that the rotation job "depends on its work type … This run: Infer
+    // answers." One event covers ten unrelated activities, so the event's
+    // description explains none of them.
+    const inferred = describeJob('smart.rotation.work', 'answer_infer');
+    const generic = describeJob('smart.rotation.work');
+
+    expect(inferred.label).toBe('Infer answers');
+    expect(inferred.description).not.toContain('This run:');
+    expect(inferred.description).not.toBe(generic.description);
+    expect(inferred.description).toMatch(/answer it from what the appliance already knows/);
+
+    // And every activity is covered — a new work type must not ship label-only.
+    for (const workType of Object.keys(SMART_ROTATION_WORK)) {
+      const descriptor = describeJob('smart.rotation.work', workType);
+
+      expect(descriptor.description).not.toBe(generic.description);
+      expect(descriptor.description.length).toBeGreaterThan(60);
+    }
+  });
+
+  it('falls back to the parent description for an unknown work type', () => {
+    // Better a true generic sentence than an invented specific one.
+    const unknown = describeJob('smart.rotation.work', 'brand_new_thing');
+
+    expect(unknown.label).toBe('brand_new_thing');
+    expect(unknown.description).toBe(describeJob('smart.rotation.work').description);
   });
 
   it('falls back to the raw work type rather than hiding an unknown one', () => {
@@ -171,6 +206,11 @@ describe('job taxonomy', () => {
     expect(describeJob('some.brand.new.event').label).toBe('Some brand new event');
     // …and the category the row DISPLAYS is now the one that counts and selects
     // it. Display, fold and filter are three views of one answer.
+    //
+    // This assertion used to be its own inverse — `categoryOfEvent(...)` had to
+    // NOT equal `describeJob(...).category`, with the divergence written down as
+    // deliberate. It was the bug: the guess was rendered in the Category cell of
+    // a row no chip counted and no filter returned.
     expect(describeJob('some.brand.new.event').category).toBe(UNCLASSIFIED_CATEGORY);
     expect(describeJob(null).category).toBe(UNCLASSIFIED_CATEGORY);
 

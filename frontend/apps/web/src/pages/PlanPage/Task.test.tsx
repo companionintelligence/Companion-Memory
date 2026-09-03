@@ -1,9 +1,9 @@
-import { fireEvent, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
-import { Task } from './Task';
+import { SELECT_HOLD_MS, Task } from './Task';
 
 function node(overrides: Record<string, unknown> = {}) {
   return {
@@ -153,5 +153,303 @@ describe('Task actions', () => {
 
     expect(title).toHaveClass('line-clamp-5');
     expect(title).not.toHaveClass('truncate');
+  });
+
+  // Only prop-passing was ever asserted here: if Trash stopped calling
+  // onDelete, or Pencil stopped calling onEdit, nothing failed.
+  it('edits from the desktop pencil', () => {
+    const onEdit = vi.fn();
+
+    renderTask({ description: 'First draft', estimatedMinutes: 30 }, { onEdit });
+
+    fireEvent.click(screen.getByRole('button', { name: /edit write the migration/i }));
+
+    expect(onEdit).toHaveBeenCalledWith({
+      id: 'dGFzazoxMTE=',
+      title: 'Write the migration',
+      description: 'First draft',
+      dueAt: null,
+      estimatedMinutes: 30,
+    });
+  });
+
+  it('deletes from the desktop trash', () => {
+    const onDelete = vi.fn();
+
+    renderTask({}, { onDelete });
+
+    fireEvent.click(screen.getByRole('button', { name: /delete write the migration/i }));
+
+    expect(onDelete).toHaveBeenCalledWith('dGFzazoxMTE=');
+  });
+
+  it('reschedules to a day picked from the calendar input, not just the chips', () => {
+    const onReschedule = vi.fn();
+
+    renderTask({ dueAt: '2020-01-02T12:00:00.000Z' }, { onReschedule });
+
+    fireEvent.click(screen.getByRole('button', { name: /reschedule write the migration/i }));
+    fireEvent.change(screen.getByLabelText(/pick a day/i), { target: { value: '2099-03-05' } });
+
+    expect(onReschedule).toHaveBeenCalledWith('dGFzazoxMTE=', '2099-03-05');
+    expect(screen.queryByRole('group', { name: /reschedule to/i })).not.toBeInTheDocument();
+  });
+
+  it('backs out of the reschedule picker without moving the task', () => {
+    const onReschedule = vi.fn();
+
+    renderTask({ dueAt: '2020-01-02T12:00:00.000Z' }, { onReschedule });
+
+    fireEvent.click(screen.getByRole('button', { name: /reschedule write the migration/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+    expect(onReschedule).not.toHaveBeenCalled();
+    expect(screen.queryByRole('group', { name: /reschedule to/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /reschedule write the migration/i })).toBeInTheDocument();
+  });
+
+  // 16px is well under any touch-target guidance, and completing a task is the
+  // primary action on the card. The ::before keeps the box its own size while
+  // growing its target, so a near-miss no longer lands on the title button and
+  // opens the edit modal.
+  it('gives the completion checkbox a tap target bigger than the box', () => {
+    renderTask({});
+
+    const checkbox = screen.getByRole('checkbox', { name: /complete write the migration/i });
+
+    expect(checkbox).toHaveClass('relative', 'before:absolute');
+    expect(tapTargetReach(checkbox, 'y')).toBeGreaterThanOrEqual(8);
+    expect(tapTargetReach(checkbox, 'left')).toBeGreaterThanOrEqual(8);
+  });
+});
+
+/** Tailwind spacing steps this file asserts on, in CSS pixels. */
+const SPACING_PX: Record<string, number> = { '1': 4, '1.5': 6, '2': 8, '2.5': 10, '3': 12, '4': 16 };
+
+function spacingOf(className: string | undefined): number {
+  return SPACING_PX[className?.slice(className.lastIndexOf('-') + 1) ?? ''] ?? Number.NaN;
+}
+
+/**
+ * How far the checkbox's `::before` tap target reaches past the box on one
+ * side, in px — reading whichever utility actually governs that side, so a
+ * uniform `-inset-*` is measured the same as a per-side one.
+ */
+function tapTargetReach(checkbox: HTMLElement, side: 'left' | 'right' | 'y'): number {
+  const classes = [...checkbox.classList];
+  const axis = side === 'y' ? 'y' : 'x';
+
+  return spacingOf(
+    classes.find((name) => name.startsWith(`before:-${side}-`)) ??
+      classes.find((name) => name.startsWith(`before:-inset-${axis}-`)) ??
+      classes.find((name) => /^before:-inset-(?![xy]-)/.test(name)),
+  );
+}
+
+/** The flex `gap-*` separating the checkbox from what sits beside it, in px. */
+function rowGap(checkbox: HTMLElement): number {
+  const row = checkbox.parentElement as HTMLElement;
+
+  return spacingOf([...row.classList].find((name) => /^gap-\d/.test(name)));
+}
+
+// `setup.ts` stubs matchMedia to never match, so every case above renders the
+// desktop card and the phone half of this component was untested.
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes('max-width') ? mobile : false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })) as unknown as typeof window.matchMedia;
+}
+
+function holdTitle(init: Partial<PointerEventInit> = {}) {
+  fireEvent.pointerDown(screen.getByRole('button', { name: /^write the migration$/i }), {
+    pointerId: 1,
+    pointerType: 'touch',
+    clientX: 10,
+    clientY: 10,
+    button: 0,
+    ...init,
+  });
+}
+
+describe('Task on a phone', () => {
+  afterEach(() => {
+    setViewport(false);
+    vi.useRealTimers();
+  });
+
+  it('edits from the overflow menu', () => {
+    const onEdit = vi.fn();
+
+    setViewport(true);
+    renderTask({ description: 'First draft', estimatedMinutes: 30 }, { onEdit });
+
+    // Radix's DropdownMenuTrigger opens on pointerdown, not click.
+    fireEvent.pointerDown(screen.getByRole('button', { name: /more actions for write the migration/i }), {
+      button: 0,
+    });
+    fireEvent.click(screen.getByRole('menuitem', { name: /^edit$/i }));
+
+    expect(onEdit).toHaveBeenCalledWith({
+      id: 'dGFzazoxMTE=',
+      title: 'Write the migration',
+      description: 'First draft',
+      dueAt: null,
+      estimatedMinutes: 30,
+    });
+  });
+
+  // ═══ THE TAP TARGET USED TO EAT THE TITLE'S FIRST PIXELS ═══
+  //
+  // A uniform 10px `::before` is wider than the phone row's whole 8px gap, and
+  // the checkbox is positioned while the title button was not — so the target
+  // painted over the title's left edge and a tap there completed the task
+  // instead of opening edit. The target may reach the padding on every other
+  // side; to the right it may not out-reach the gap.
+  it('keeps the checkbox tap target out of the title button', () => {
+    setViewport(true);
+    renderTask({});
+
+    const checkbox = screen.getByRole('checkbox', { name: /complete write the migration/i });
+
+    expect(rowGap(checkbox)).toBe(8);
+    expect(tapTargetReach(checkbox, 'right')).toBeLessThanOrEqual(rowGap(checkbox));
+    // Still a real target, not one shrunk back to the 16px box.
+    expect(tapTargetReach(checkbox, 'y')).toBeGreaterThanOrEqual(8);
+    // Belt and braces: the title is positioned too, so it paints above
+    // anything that ever does reach over it.
+    expect(screen.getByRole('button', { name: /^write the migration$/i })).toHaveClass('relative');
+  });
+
+  it('deletes from the overflow menu', () => {
+    const onDelete = vi.fn();
+
+    setViewport(true);
+    renderTask({}, { onDelete });
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: /more actions for write the migration/i }), {
+      button: 0,
+    });
+    fireEvent.click(screen.getByRole('menuitem', { name: /^delete$/i }));
+
+    expect(onDelete).toHaveBeenCalledWith('dGFzazoxMTE=');
+  });
+
+  // The chevron is the ONLY way to read a description on a phone and used to be
+  // shrunk to 32px next to a much larger title button that opens the edit modal.
+  it('keeps the description chevron at the full icon-button size', () => {
+    setViewport(true);
+    renderTask({ description: 'First draft' });
+
+    const chevron = screen.getByRole('button', { name: /show description for write the migration/i });
+
+    expect(chevron).toHaveClass('size-9');
+    expect(chevron).not.toHaveClass('h-8', 'w-8');
+  });
+
+  it('enters selection after a deliberate hold', () => {
+    const onLongPressSelect = vi.fn();
+
+    setViewport(true);
+    renderTask({}, { onLongPressSelect });
+
+    vi.useFakeTimers();
+    holdTitle();
+    act(() => vi.advanceTimersByTime(SELECT_HOLD_MS));
+
+    expect(onLongPressSelect).toHaveBeenCalledWith('dGFzazoxMTE=');
+  });
+
+  // A mouse pointer used to bail out of the gesture entirely, so an iPad with a
+  // trackpad — or any desktop window narrowed under the mobile breakpoint —
+  // could never reach selection, and bulk delete was unreachable for the whole
+  // session. The hold duration and the move threshold are what separate a
+  // deliberate hold from a click, not the pointer type.
+  it('enters selection from a mouse hold too', () => {
+    const onLongPressSelect = vi.fn();
+
+    setViewport(true);
+    renderTask({}, { onLongPressSelect });
+
+    vi.useFakeTimers();
+    holdTitle({ pointerType: 'mouse' });
+    act(() => vi.advanceTimersByTime(SELECT_HOLD_MS));
+
+    expect(onLongPressSelect).toHaveBeenCalledWith('dGFzazoxMTE=');
+  });
+
+  it('cancels the hold once the pointer moves far enough to be a scroll', () => {
+    const onLongPressSelect = vi.fn();
+
+    setViewport(true);
+    renderTask({}, { onLongPressSelect });
+
+    vi.useFakeTimers();
+    holdTitle();
+    fireEvent.pointerMove(window, { pointerId: 1, pointerType: 'touch', clientX: 10, clientY: 60 });
+    act(() => vi.advanceTimersByTime(SELECT_HOLD_MS));
+
+    expect(onLongPressSelect).not.toHaveBeenCalled();
+  });
+
+  it('keeps a small wobble inside the hold', () => {
+    const onLongPressSelect = vi.fn();
+
+    setViewport(true);
+    renderTask({}, { onLongPressSelect });
+
+    vi.useFakeTimers();
+    holdTitle();
+    fireEvent.pointerMove(window, { pointerId: 1, pointerType: 'touch', clientX: 14, clientY: 14 });
+    act(() => vi.advanceTimersByTime(SELECT_HOLD_MS));
+
+    expect(onLongPressSelect).toHaveBeenCalledWith('dGFzazoxMTE=');
+  });
+
+  it('opens edit instead of selecting when the pointer lifts before the hold', () => {
+    const onLongPressSelect = vi.fn();
+    const onEdit = vi.fn();
+
+    setViewport(true);
+    renderTask({}, { onLongPressSelect, onEdit });
+
+    vi.useFakeTimers();
+    holdTitle();
+    fireEvent.pointerUp(window, { pointerId: 1, pointerType: 'touch', clientX: 10, clientY: 10 });
+    act(() => vi.advanceTimersByTime(SELECT_HOLD_MS));
+    vi.useRealTimers();
+
+    expect(onLongPressSelect).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /^write the migration$/i }));
+
+    expect(onEdit).toHaveBeenCalled();
+  });
+
+  // ═══ THE HOLD USED TO OUTLIVE THE CARD ═══
+  //
+  // Radix Tabs unmounts the inactive Kanban panel, so a hold begun just before
+  // a tab switch still fired — selecting a task the user could no longer see
+  // and popping the "1 selected" bar over a different column.
+  it('drops a hold in progress when the card unmounts', () => {
+    const onLongPressSelect = vi.fn();
+
+    setViewport(true);
+
+    const { unmount } = renderTask({}, { onLongPressSelect });
+
+    vi.useFakeTimers();
+    holdTitle();
+    unmount();
+    act(() => vi.advanceTimersByTime(SELECT_HOLD_MS));
+
+    expect(onLongPressSelect).not.toHaveBeenCalled();
   });
 });

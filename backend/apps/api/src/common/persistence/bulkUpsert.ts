@@ -22,6 +22,12 @@ export interface SourceTriple {
   sourceType: string | null | undefined;
   sourceSystem: string | null | undefined;
   sourceId: string | null | undefined;
+  /**
+   * Ledger-only: the delivering platform (see RecordSourceRow.platform).
+   * Omit for platform kinds (the system is the platform); federated kinds
+   * pass the producer's platform, or null when it has none. Never matched on.
+   */
+  sourcePlatform?: string | null;
 }
 
 /**
@@ -116,6 +122,14 @@ interface BulkInsertOptions<Entity extends ObjectLiteral> {
    * here are `'value'`. See INGEST_MERGE_KINDS for the central declarations.
    */
   conflictMergeKinds?: Readonly<Record<string, ConflictMergeKind>>;
+  /**
+   * Per-column producer preference for `conflictUpdateColumns` entries where
+   * "the first arrival keeps it" is the wrong tie-break between two producers
+   * that BOTH hold a value (see {@link ProducerPreference}). Columns absent
+   * here keep the arrival-order rule. See INGEST_PRODUCER_PREFERENCE for the
+   * central declarations.
+   */
+  conflictProducerPreference?: ProducerPreference;
   /**
    * Optional partition-time column (entity property). When set, the existence and
    * hydration SELECTs are bounded to the batch's [min, max] of this column so a
@@ -318,12 +332,39 @@ async function executeBulkInsert<Entity extends ObjectLiteral>(
  */
 export type ConflictMergeKind = 'value' | 'flag' | 'json';
 
+/**
+ * Which producer's value wins a refreshed column when two DIFFERENT producers
+ * both hold one. Keyed by column; the value is the `source_type` values in
+ * order of trust, most trusted first. A producer not in the list ranks below
+ * every listed one; two unlisted producers tie, and a tie keeps the existing
+ * value (the arrival-order rule this refines).
+ *
+ * The rule without a preference — "another producer only fills what is
+ * empty" — is order-DEPENDENT whenever both sides have a value: the History
+ * file's real dwell time and the extension's 30-second default are both
+ * non-null, so whichever arrived first stood. A preference makes that column
+ * order-independent: the more trusted producer's value stands whether it
+ * arrived first (the less trusted one cannot overwrite it) or second (it
+ * overwrites). The same-producer branch is untouched — a producer always
+ * refreshes its own value.
+ */
+export type ProducerPreference = Readonly<Record<string, readonly string[]>>;
+
 /** The column that names a producer for the same-vs-other test. */
 const PRODUCER_COLUMN = 'source_type';
 
+/** Rank of `ref`'s producer in `producers` (1 = most trusted); unlisted ranks last. */
+function producerRank(ref: string, producers: readonly string[]): string {
+  const list = producers.map((producer) => `'${producer.replace(/'/g, "''")}'`).join(', ');
+
+  return `COALESCE(array_position(ARRAY[${list}]::text[], ${ref}."${PRODUCER_COLUMN}"), 2147483647)`;
+}
+
 /**
  * The `SET` list of the DO UPDATE conflict action, one CASE per refreshed
- * column: same producer refreshes, another producer only fills what is empty.
+ * column: same producer refreshes, another producer only fills what is empty
+ * — unless `preference` names the column, in which case a MORE trusted
+ * producer also overwrites (and a less trusted one still only fills).
  * `tableName` is the unqualified target table, which is how Postgres lets the
  * existing row be referenced inside ON CONFLICT DO UPDATE.
  *
@@ -334,6 +375,7 @@ export function conflictUpdateSetClause(
   tableName: string,
   columns: readonly string[],
   kinds: Readonly<Record<string, ConflictMergeKind>> = {},
+  preference: ProducerPreference = {},
 ): string {
   const same = `EXCLUDED."${PRODUCER_COLUMN}" IS NOT DISTINCT FROM "${tableName}"."${PRODUCER_COLUMN}"`;
 
@@ -341,21 +383,43 @@ export function conflictUpdateSetClause(
     .map((col) => {
       const current = `"${tableName}"."${col}"`;
       const incoming = `EXCLUDED."${col}"`;
+      const producers = preference[col];
+      // The extra arm between "same producer" and "other producer": the
+      // arriving producer outranks the one that wrote the row, so it takes
+      // the same-producer treatment (its value wins, null-guarded).
+      const outranks =
+        producers && producers.length > 0
+          ? ` WHEN ${producerRank('EXCLUDED', producers)} < ${producerRank(`"${tableName}"`, producers)}`
+          : null;
 
       switch (kinds[col] ?? 'value') {
         case 'flag':
+          // OR is symmetric; a preference has nothing to decide here.
           return (
             `"${col}" = CASE WHEN ${same} THEN COALESCE(${incoming}, ${current}) ` +
             `ELSE (COALESCE(${current}, false) OR COALESCE(${incoming}, false)) END`
           );
-        case 'json':
+        case 'json': {
+          const incomingWins = `(COALESCE(${current}, '{}'::jsonb) || COALESCE(${incoming}, '{}'::jsonb))`;
+          const currentWins = `(COALESCE(${incoming}, '{}'::jsonb) || COALESCE(${current}, '{}'::jsonb))`;
+
           return (
-            `"${col}" = CASE WHEN ${same} ` +
-            `THEN (COALESCE(${current}, '{}'::jsonb) || COALESCE(${incoming}, '{}'::jsonb)) ` +
-            `ELSE (COALESCE(${incoming}, '{}'::jsonb) || COALESCE(${current}, '{}'::jsonb)) END`
+            `"${col}" = CASE WHEN ${same} THEN ${incomingWins}` +
+            (outranks ? `${outranks} THEN ${incomingWins}` : '') +
+            ` ELSE ${currentWins} END`
           );
-        default:
-          return `"${col}" = CASE WHEN ${same} THEN COALESCE(${incoming}, ${current}) ELSE COALESCE(${current}, ${incoming}) END`;
+        }
+
+        default: {
+          const incomingWins = `COALESCE(${incoming}, ${current})`;
+          const currentWins = `COALESCE(${current}, ${incoming})`;
+
+          return (
+            `"${col}" = CASE WHEN ${same} THEN ${incomingWins}` +
+            (outranks ? `${outranks} THEN ${incomingWins}` : '') +
+            ` ELSE ${currentWins} END`
+          );
+        }
       }
     })
     .join(', ');
@@ -375,6 +439,7 @@ async function executeChunk<Entity extends ObjectLiteral>(
     timeColumn,
     conflictUpdateColumns,
     conflictMergeKinds,
+    conflictProducerPreference,
     sourceLedger,
   } = options;
 
@@ -560,7 +625,7 @@ async function executeChunk<Entity extends ObjectLiteral>(
 
   if (toInsert.length > 0) {
     const conflictAction = doUpdate
-      ? `${conflictTarget} DO UPDATE SET ${conflictUpdateSetClause(alias, conflictUpdateColumns!, conflictMergeKinds)}`
+      ? `${conflictTarget} DO UPDATE SET ${conflictUpdateSetClause(alias, conflictUpdateColumns!, conflictMergeKinds, conflictProducerPreference)}`
       : `${conflictTarget} DO NOTHING`;
 
     const insertQb = repository
@@ -652,6 +717,7 @@ async function executeChunk<Entity extends ObjectLiteral>(
         sourceId: triple.sourceId as string,
         connectionId: sourceLedger.getConnectionId?.(entity) ?? null,
         importRunId: sourceLedger.importRunId ?? null,
+        platform: triple.sourcePlatform,
       });
     }
 

@@ -1,4 +1,4 @@
-import { dropGenericWhenSpecialised } from '../ParseStage';
+import { dropGenericMailWhenSpecialised, dropGenericWhenSpecialised } from '../ParseStage';
 
 /**
  * `generic` returns `confidence: 1` without inspecting anything, so it matches
@@ -129,5 +129,67 @@ describe('ParseStage generic exclusion — path-scoped', () => {
     ]);
 
     expect(namesAndExcludes(selected)).toEqual([{ name: 'spotify', excludePaths: undefined }]);
+  });
+});
+
+/**
+ * The mail form of the same rule. `email` (any .mbox / .eml) and `gmail`
+ * (Takeout) both claim a Takeout mbox, and the stage runs every match — so one
+ * file was parsed twice, once without the bulk gate. See
+ * `dropGenericMailWhenSpecialised`.
+ */
+describe('ParseStage generic-mail exclusion', () => {
+  const ROOT = '/scratch/run';
+  const TAKEOUT_MBOX = `${ROOT}/google-takeout/Mail/All mail Including Spam and Trash.mbox`;
+
+  function at(name: string, matchedPath?: string) {
+    return { data_source: { name }, recognition: { confidence: 1 }, matchedPath } as never;
+  }
+
+  it('drops email when gmail claimed the same file', () => {
+    const selected = dropGenericMailWhenSpecialised([at('gmail', TAKEOUT_MBOX), at('email', TAKEOUT_MBOX)]);
+
+    expect(names(selected)).toEqual(['gmail']);
+  });
+
+  it('drops an email claim that sits ABOVE a gmail file (its walker would re-read the file)', () => {
+    const selected = dropGenericMailWhenSpecialised([
+      at('gmail', TAKEOUT_MBOX),
+      at('email', `${ROOT}/google-takeout/Mail`),
+    ]);
+
+    expect(names(selected)).toEqual(['gmail']);
+  });
+
+  it('keeps an email claim on a sibling mailbox nothing specialised covers', () => {
+    // A Yahoo mbox exported from Thunderbird, dropped beside the Takeout.
+    const selected = dropGenericMailWhenSpecialised([
+      at('gmail', TAKEOUT_MBOX),
+      at('email', TAKEOUT_MBOX),
+      at('email', `${ROOT}/yahoo_mail/Inbox`),
+    ]);
+
+    expect(selected.map((m: { matchedPath?: string }) => `${names([m])[0]}:${m.matchedPath}`)).toEqual([
+      `gmail:${TAKEOUT_MBOX}`,
+      `email:${ROOT}/yahoo_mail/Inbox`,
+    ]);
+  });
+
+  it('keeps email when no specialised mail reader matched at all', () => {
+    const selected = dropGenericMailWhenSpecialised([at('email', `${ROOT}/yahoo_mail/Inbox`), at('calendar', ROOT)]);
+
+    expect(names(selected)).toEqual(['email', 'calendar']);
+  });
+
+  it('falls back to dropping email when path info is missing (unknown means nested)', () => {
+    const selected = dropGenericMailWhenSpecialised([at('gmail'), at('email')]);
+
+    expect(names(selected)).toEqual(['gmail']);
+  });
+
+  it('leaves every non-mail match alone', () => {
+    const selected = dropGenericMailWhenSpecialised([at('gmail', TAKEOUT_MBOX), at('google_voice', ROOT), at('generic', ROOT)]);
+
+    expect(names(selected)).toEqual(['gmail', 'google_voice', 'generic']);
   });
 });

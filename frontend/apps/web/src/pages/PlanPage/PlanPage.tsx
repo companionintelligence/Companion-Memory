@@ -140,25 +140,47 @@ export function PlanPage() {
     toast.error(scheduleStatusMessage[status] ?? 'Could not schedule that task. Try again shortly.');
   };
 
+  /**
+   * ═══ A THROWN MUTATION USED TO SAY NOTHING AT ALL ═══
+   *
+   * None of these paths had a `.catch`, so a network or GraphQL failure aborted
+   * the async block: no toast, no refetch, and the card simply snapped back to
+   * where it was. `handlePlan` below already carried the fix; its siblings did
+   * not. Refreshing in `finally` also puts the board back in step with the
+   * server after a partial sequence (an `updateTask` that landed, a
+   * `scheduleTask` that did not).
+   */
   const handleSchedule = (id: string) => {
-    void scheduleTask({ variables: { id } }).then((result) => {
-      reportScheduleOutcome(result.data?.scheduleTask.status);
-      refresh();
-    });
+    void (async () => {
+      try {
+        const result = await scheduleTask({ variables: { id } });
+
+        reportScheduleOutcome(result.data?.scheduleTask.status);
+      } catch {
+        toast.error('Could not schedule that task. Try again shortly.');
+      } finally {
+        refresh();
+      }
+    })();
   };
 
   const handleReschedule = (id: string, date: string) => {
     void (async () => {
-      await updateTask({
-        variables: {
-          input: { id, dueAt: dueAtFromLocalDate(date) },
-        },
-      });
+      try {
+        await updateTask({
+          variables: {
+            input: { id, dueAt: dueAtFromLocalDate(date) },
+          },
+        });
 
-      const result = await scheduleTask({ variables: { id, date } });
+        const result = await scheduleTask({ variables: { id, date } });
 
-      reportScheduleOutcome(result.data?.scheduleTask.status);
-      refresh();
+        reportScheduleOutcome(result.data?.scheduleTask.status);
+      } catch {
+        toast.error('Could not move that task. Try again shortly.');
+      } finally {
+        refresh();
+      }
     })();
   };
 
@@ -183,12 +205,19 @@ export function PlanPage() {
   };
 
   const handleAcceptAndSchedule = (id: string) => {
-    void acceptProposed({ variables: { id } }).then(() =>
-      scheduleTask({ variables: { id } }).then((result) => {
+    void (async () => {
+      try {
+        await acceptProposed({ variables: { id } });
+
+        const result = await scheduleTask({ variables: { id } });
+
         reportScheduleOutcome(result.data?.scheduleTask.status);
+      } catch {
+        toast.error('Could not schedule that task. Try again shortly.');
+      } finally {
         refresh();
-      }),
-    );
+      }
+    })();
   };
 
   const renderTree = (task: SectionedTask, depth: number): ReactNode => {
@@ -208,7 +237,28 @@ export function PlanPage() {
         onSelectToggle={handleSelectToggle}
         onLongPressSelect={handleLongPressSelect}
         onAcceptProposed={handlePlan}
-        onDeclineProposed={(id) => void declineProposed({ variables: { id } }).then(refresh)}
+        onDeclineProposed={(id) => {
+          void (async () => {
+            try {
+              // Only a `schedule` change is orphaned by this Dismiss. Task
+              // renders the proposed row INSTEAD of the pending-schedule row,
+              // so declining the proposal alone left that change open on the
+              // server with no UI left that could ever answer it. Every other
+              // kind still gets its own Confirm/Dismiss row alongside the
+              // proposed row, so the user is answering it themselves —
+              // declining it from here would silently answer for them.
+              if (pending?.kind === 'schedule') {
+                await declinePending({ variables: { id: pending.id } });
+              }
+
+              await declineProposed({ variables: { id } });
+            } catch {
+              toast.error('Could not dismiss that task. Try again shortly.');
+            } finally {
+              refresh();
+            }
+          })();
+        }}
         onAcceptAndSchedule={handleAcceptAndSchedule}
         onSchedule={handleSchedule}
         onReschedule={handleReschedule}
@@ -220,15 +270,19 @@ export function PlanPage() {
         onPlanPending={(taskId) => handlePlan(taskId)}
         onDismissPendingTask={(taskId, changeId) => {
           void (async () => {
-            await declinePending({ variables: { id: changeId } });
-
-            if (task.status === 'proposed') {
-              await declineProposed({ variables: { id: taskId } });
-            } else {
+            try {
+              // Only ever reached from the pending-schedule row, which a
+              // proposed card never renders — Task prefers the proposed
+              // actions when both apply. The `status === 'proposed'` branch
+              // that used to sit here was dead; the proposed card's own
+              // Dismiss handles that case.
+              await declinePending({ variables: { id: changeId } });
               await updateTask({ variables: { input: { id: taskId, status: 'archived' } } });
+            } catch {
+              toast.error('Could not dismiss that suggestion. Try again shortly.');
+            } finally {
+              refresh();
             }
-
-            refresh();
           })();
         }}
       >
