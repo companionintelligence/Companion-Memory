@@ -131,6 +131,7 @@ export type {
   FacebookPostAttachment,
   FacebookVideo,
   GmailMessage,
+  GmailPart,
   EmailParticipant,
 } from './clients/types';
 
