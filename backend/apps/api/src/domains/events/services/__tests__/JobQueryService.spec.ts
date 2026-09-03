@@ -11,6 +11,7 @@ import { JobCategoryMetricEntity } from '../../entities/JobCategoryMetricEntity'
 import { JobMetricEntity } from '../../entities/JobMetricEntity';
 import { PgBossArchiveEntity } from '../../entities/PgBossArchiveEntity';
 import { PgBossJobEntity } from '../../entities/PgBossJobEntity';
+import { JOB_CATEGORIES, UNCLASSIFIED_CATEGORY } from '../../taxonomy';
 import { JobQueryService } from '../JobQueryService';
 
 describe('JobQueryService — the auth guard (no database required)', () => {
@@ -145,6 +146,115 @@ describe('JobQueryService — the category filter (no database required)', () =>
     // A typo returns an empty table, never the unfiltered one.
     expect(parameters.categoryEvents).toEqual(['__no-such-category__']);
   });
+
+  it('can select the queue-scoped Ollama listener the Model chip now counts', () => {
+    // Adding a JOB_TYPES_BY_QUEUE entry is only half the fix: the descriptor
+    // makes the row SAY `llm`, and this is what makes the Model filter return
+    // it. `browseractivity.created` fires once per page visit, so this is the
+    // highest-frequency model call on the appliance.
+    const { parameters } = captureCategorySql('llm');
+
+    expect(parameters.includedQueueKeys).toEqual(
+      expect.arrayContaining(['browseractivity.created::browser-activity-insight']),
+    );
+  });
+});
+
+/**
+ * The chip's NUMBER and the table's TOTAL, which are computed by two different
+ * pieces of code and have to agree.
+ *
+ * `facetCounts` folds rows in JS after a GROUP BY; `applyFilters` emits a SQL
+ * predicate. They used to disagree on the events two listeners share on
+ * different queues: the fold was keyed on the event alone, so every
+ * `content.created` on `pipeline-index` was added to the Search index chip while
+ * the Pipeline filter was what actually returned it. Both chips lied — one high,
+ * one low.
+ */
+describe('JobQueryService.facetCounts — the fold behind the chips', () => {
+  /** Drive facetCounts over canned grouped rows and return its two fold outputs. */
+  async function foldOver(
+    rows: Array<{ bucket: string; event: string | null; queue: string | null; count: number }>,
+    query: Record<string, unknown> = {},
+  ): Promise<{ stateCounts: Record<string, number>; categoryCounts: Record<string, number> }> {
+    const builder: Record<string, unknown> = {};
+    const chain = () => builder;
+
+    Object.assign(builder, {
+      select: jest.fn(chain),
+      addSelect: jest.fn(chain),
+      setParameter: jest.fn(chain),
+      groupBy: jest.fn(chain),
+      andWhere: jest.fn(chain),
+      where: jest.fn(chain),
+      orWhere: jest.fn(chain),
+      getRawMany: jest.fn().mockResolvedValue(rows),
+    });
+
+    const repo = { createQueryBuilder: jest.fn(() => builder) };
+    const service = new JobQueryService(repo as never, repo as never, repo as never, repo as never);
+
+    return (
+      service as unknown as {
+        facetCounts: (
+          q: unknown,
+          u: string,
+        ) => Promise<{ stateCounts: Record<string, number>; categoryCounts: Record<string, number> }>;
+      }
+    ).facetCounts(query, uuidv7());
+  }
+
+  it('counts a queue-scoped row under the chip that returns it, not the one its event names', async () => {
+    const { categoryCounts } = await foldOver([
+      { bucket: 'completed', event: 'content.created', queue: 'search-index', count: 2 },
+      { bucket: 'completed', event: 'content.created', queue: 'pipeline-index', count: 7 },
+      { bucket: 'completed', event: 'browseractivity.created', queue: 'browser-activity-insight', count: 4 },
+    ]);
+
+    expect(categoryCounts.pipeline).toBe(7);
+    expect(categoryCounts.llm).toBe(4);
+    // …and the chip whose event name they carry counts only its own rows.
+    expect(categoryCounts.search).toBe(2);
+  });
+
+  it('counts a dead-lettered row by its event, because the filter cannot do better either', async () => {
+    // pg-boss rewrote the queue column on the copy, so `content.created` can no
+    // longer be known to have run on `pipeline-index`. The filter's
+    // include/exclude lists hold no `::dead-letter` key, so `?category=search`
+    // is what returns this row — and so `search` is what has to count it.
+    const { categoryCounts } = await foldOver([
+      { bucket: 'dead-letter', event: 'content.created', queue: DEAD_LETTER_QUEUE, count: 5 },
+    ]);
+
+    expect(categoryCounts).toEqual({ search: 5 });
+  });
+
+  it('files a fingerprinted event under the chip that can open it', async () => {
+    // `describeJob` gives this row a readable label and guesses `search` from
+    // its queue, but the guess is prose: `unclassified` is the only chip that
+    // both counts it and returns it.
+    const { categoryCounts } = await foldOver([
+      { bucket: 'completed', event: 'zz.no-such-event', queue: 'search-index', count: 3 },
+      { bucket: 'completed', event: null, queue: DEAD_LETTER_QUEUE, count: 1 },
+    ]);
+
+    expect(categoryCounts).toEqual({ unclassified: 4 });
+  });
+
+  it('re-applies the category filter to the state tabs, queue-aware', async () => {
+    // `stateCounts` drops the state filter and keeps the category one, so the
+    // tabs must resolve a row the same way the chips do or the two badge sets
+    // describe different populations.
+    const rows = [
+      { bucket: 'completed', event: 'content.created', queue: 'pipeline-index', count: 7 },
+      { bucket: 'failed', event: 'content.created', queue: 'pipeline-index', count: 2 },
+      { bucket: 'completed', event: 'content.created', queue: 'search-index', count: 9 },
+    ];
+
+    const { stateCounts } = await foldOver(rows, { category: 'pipeline' });
+
+    expect(stateCounts).toEqual({ completed: 7, failed: 2 });
+  });
 });
 
 /**
@@ -189,6 +299,7 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
   // id and deleted by id.
   const stagedContentId = uuidv7();
   const linkedCommunicationId = uuidv7();
+  const classifiedVisitId = uuidv7();
   const otherUserTerm = `zzowner-${marker}`;
 
   beforeAll(async () => {
@@ -313,6 +424,15 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
       eventName: 'communication.created',
       createdOn: new Date(base.getTime() + 9000),
     });
+    // The per-visit Ollama classification, which shares `browseractivity.created`
+    // with the search-index listener. Seeded so "what is queued against the
+    // model?" can be shown to actually return it.
+    await seedJob({
+      id: classifiedVisitId,
+      queue: 'browser-activity-insight',
+      eventName: 'browseractivity.created',
+      createdOn: new Date(base.getTime() + 10000),
+    });
 
     // Owned by a DIFFERENT user, seeded before every other row (so it never
     // shifts the pagination test's ordering) — proves message search is
@@ -333,7 +453,7 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
         [new Date('2026-08-01T00:00:00.000Z')],
       );
       await dataSource.query('DELETE FROM pgboss.job WHERE id = ANY($1::uuid[])', [
-        [stagedContentId, linkedCommunicationId],
+        [stagedContentId, linkedCommunicationId, classifiedVisitId],
       ]);
       await dataSource.query('DELETE FROM ci.job_metrics WHERE queue LIKE $1', [`${marker}%`]);
       // Before `destroy()`: the lock is held on a runner from this pool.
@@ -367,7 +487,12 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
     // The invariant the old filter broke: it selected on the event name while
     // `toListItem` labelled through `describeJob`, which resolves the (event,
     // queue) pair. Asking for `search` returned rows labelled `graph`.
-    for (const category of ['search', 'graph', 'pipeline']) {
+    //
+    // Every bucket, not a chosen three — `unclassified` included, because a
+    // fingerprinted row used to render a GUESSED category ("Search index") that
+    // no filter could reproduce, and `maintenance` because that guess's default
+    // landed there.
+    for (const category of [...Object.values(JOB_CATEGORIES), UNCLASSIFIED_CATEGORY]) {
       const result = await service.list(CTX, { category, limit: 200 });
       const mislabelled = result.items
         .filter((i) => i.category !== category)
@@ -375,6 +500,41 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
 
       expect(mislabelled).toEqual([]);
     }
+  });
+
+  it("every category chip's number is the total of the table that chip opens", async () => {
+    // The other half of the same promise, and the one the queue-aware filter
+    // broke on its own: `facetCounts` folded on the event name while
+    // `applyFilters` selected on the (event, queue) pair, so for the events two
+    // listeners share the chip counted one population and clicking it returned
+    // another. Asserted over the WHOLE table rather than the seeded rows: both
+    // sides see the same population, so the equality holds whatever else is in
+    // pgboss.job, and a row that falls out of every bucket shows up as a
+    // mismatch in the totals below.
+    const { categoryCounts } = await service.list(CTX, { limit: 1 });
+    const buckets = [...Object.values(JOB_CATEGORIES), UNCLASSIFIED_CATEGORY];
+
+    const disagreements: string[] = [];
+    let summed = 0;
+
+    for (const category of buckets) {
+      const chip = categoryCounts[category] ?? 0;
+      const { total } = await service.list(CTX, { category, limit: 1 });
+
+      summed += chip;
+
+      if (chip !== total) {
+        disagreements.push(`${category}: chip ${chip}, table ${total}`);
+      }
+    }
+
+    expect(disagreements).toEqual([]);
+
+    // And no row falls between the buckets: the chips have to add up to the
+    // unfiltered total, or the shortfall is unexplainable on screen.
+    const { total: everything } = await service.list(CTX, { limit: 1 });
+
+    expect(summed).toBe(everything);
   });
 
   it('files a queue-scoped job under the category its QUEUE names, not its event name', async () => {
@@ -388,6 +548,26 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
     const graph = await service.list(CTX, { category: 'graph', queue: 'people-linking', limit: 200 });
 
     expect(graph.items.map((i) => i.id)).toContain(linkedCommunicationId);
+  });
+
+  it('returns the per-visit model call under Model, not under the search index', async () => {
+    // `browseractivity.created` fires once per page visit and has TWO listeners:
+    // the search-index write, and an Ollama classification on its own 1-slot
+    // queue. Only the first was in the taxonomy, so an operator filtering by
+    // Model to see what is queued against a saturated Ollama got nothing back.
+    const model = await service.list(CTX, {
+      category: 'llm',
+      queue: 'browser-activity-insight',
+      limit: 200,
+    });
+    const asSearch = await service.list(CTX, {
+      category: 'search',
+      queue: 'browser-activity-insight',
+      limit: 200,
+    });
+
+    expect(model.items.map((i) => i.id)).toContain(classifiedVisitId);
+    expect(asSearch.items.map((i) => i.id)).not.toContain(classifiedVisitId);
   });
 
   it('an unknown category matches nothing (fails closed, not open)', async () => {
