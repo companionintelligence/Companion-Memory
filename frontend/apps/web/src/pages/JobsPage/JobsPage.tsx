@@ -57,6 +57,32 @@ export function JobsPage() {
 
   const onFilterChange = useCallback((next: Partial<JobFilters>) => setFilters(next), [setFilters]);
 
+  /**
+   * The Health card's verdicts and empty state must read the SAME unfiltered,
+   * appliance-wide source its own state tiles already use (`dashboard.data.
+   * summary`) — not `list.data.stateCounts`, which the server scopes to the
+   * active category/type/queue/search filter. Passing the filtered counts
+   * made the card contradict its own tiles: open a category route with no
+   * rows and the verdicts said "nothing has ever been queued" while the
+   * tiles directly underneath showed the real, appliance-wide counts.
+   *
+   * Reshaped to the state keys `jobVerdicts` and the tiles already key off
+   * (`created`, `dead-letter`, …), the same as `list.data.stateCounts` was,
+   * so nothing downstream has to change.
+   */
+  const healthStateCounts = useMemo<Readonly<Record<string, number>>>(() => {
+    const summary = dashboard.data?.summary;
+
+    return {
+      created: summary?.pending ?? 0,
+      active: summary?.active ?? 0,
+      retry: summary?.retry ?? 0,
+      completed: summary?.completed ?? 0,
+      failed: summary?.failed ?? 0,
+      'dead-letter': summary?.deadLettered ?? 0,
+    };
+  }, [dashboard.data?.summary]);
+
   // Which surface this address shows. A category deep-link is the table, so it
   // falls through to the same branch Overview's table lives in.
   const section = JOBS_SECTIONS.find((candidate) => candidate.match(pathname))?.id ?? 'overview';
@@ -177,7 +203,7 @@ export function JobsPage() {
               stayed clickable, because they are how an operator filters the
               table underneath. */}
           <JobHealthCard
-            stateCounts={list.data?.stateCounts ?? {}}
+            stateCounts={healthStateCounts}
             categoryCounts={list.data?.categoryCounts ?? {}}
             crons={dashboard.data?.crons ?? []}
             loading={list.loading || dashboard.loading}

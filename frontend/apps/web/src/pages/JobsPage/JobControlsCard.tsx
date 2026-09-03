@@ -526,7 +526,7 @@ function NumberControl({
     setDraft(control.value == null ? '' : String(control.value));
   }, [control.value]);
 
-  const commit = () => {
+  const commit = async () => {
     const trimmed = draft.trim();
     const next = trimmed === '' ? null : Number.parseInt(trimmed, 10);
 
@@ -540,7 +540,16 @@ function NumberControl({
       return;
     }
 
-    void onCommit(next);
+    const saved = await onCommit(next);
+
+    // The `useEffect` above only re-syncs `draft` when `control.value` itself
+    // changes, which by definition does not happen when the appliance refuses
+    // the save or the request fails outright. Without this, a rejected number
+    // stayed in the box looking exactly like a stored one — resync it back to
+    // what is actually on the appliance instead.
+    if (!saved) {
+      setDraft(control.value == null ? '' : String(control.value));
+    }
   };
 
   return (

@@ -162,6 +162,36 @@ describe('JobControlsCard global controls', () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledWith({ global: { concurrency: 4 } }));
   });
 
+  it('resyncs the field to the stored value when the appliance rejects the save', async () => {
+    // The only re-sync path is a `useEffect` keyed on `control.value`, which by
+    // definition does not change when the save is refused or the request
+    // fails — so a discarded `false` used to leave the rejected number sitting
+    // in the box looking exactly like it had been stored.
+    const onSave = vi.fn(async () => false);
+
+    const { onSave: usedOnSave } = renderCard(
+      controls({
+        global: {
+          concurrency: { value: 4, default: 10, max: 64, effective: 4 },
+          perQueueConcurrency: { value: null, default: 6, max: 64, effective: 6 },
+          nonInteractive: 'enabled',
+        },
+      }),
+      onSave,
+    );
+
+    const input = screen.getByLabelText('Jobs at once, whole appliance');
+
+    fireEvent.change(input, { target: { value: '100' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(usedOnSave).toHaveBeenCalledWith({ global: { concurrency: 100 } }));
+
+    // The appliance never accepted 100 — it is still at 4, and the field has
+    // to say so rather than keep showing the rejected input.
+    await waitFor(() => expect(input).toHaveValue(4));
+  });
+
   it('treats an emptied box as a reset to the shipped default', async () => {
     const { onSave } = renderCard(
       controls({

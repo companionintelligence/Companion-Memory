@@ -320,6 +320,22 @@ describe('JobsPage summary', () => {
     // A number an operator cannot click is a number they have to go hunting for.
     expect(lastFilters).toMatchObject({ state: 'failed', offset: 0 });
   });
+
+  it('reads its verdicts from the same appliance-wide summary as its tiles, not the filtered list', () => {
+    // A category route with no rows: the server scopes both stateCounts and
+    // categoryCounts to the active filter, so an empty category comes back
+    // empty here — exactly like /jobs/category/reflection with nothing in it.
+    // The dashboard summary (and its tiles) stay appliance-wide regardless.
+    render({ list: list({ stateCounts: {}, categoryCounts: {} }) });
+
+    // The tiles already read the unfiltered summary and show the real counts.
+    expect(tile('Dead-lettered')).toHaveTextContent('1,191');
+
+    // The verdicts sitting right above those tiles must not contradict them
+    // by claiming nothing has ever been queued.
+    expect(screen.queryByText(/No job history yet on this appliance/)).not.toBeInTheDocument();
+    expect(screen.getByText(/have given up/)).toBeInTheDocument();
+  });
 });
 
 describe('JobsPage table', () => {
