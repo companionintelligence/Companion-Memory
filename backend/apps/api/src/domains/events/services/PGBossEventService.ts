@@ -73,6 +73,33 @@ const QUEUE_PROVISION_LOCK_KEY = 804_551_297;
 const DEAD_LETTER_RETENTION_MINUTES = 30 * 24 * 60;
 
 /**
+ * How long an UNFINISHED job may sit on a work queue before pg-boss discards
+ * it. 90 days, in minutes, for the same reason the DLQ constant is in minutes.
+ *
+ * This is not the finished-job window — that is `deleteAfterHours`, and it is
+ * unrelated. pg-boss's `archive()` carries a third predicate nobody here had
+ * read: `state < 'active' AND keep_until < now()`, and `state < 'active'`
+ * covers `created` and `retry`, i.e. work that has never run. `keep_until`
+ * resolves as `start_after + COALESCE(job.keep_until, queue.retention_minutes
+ * * 60, constructor keep_until default, '14 days')` and this codebase set none
+ * of the first three — so every work queue row carried
+ * `retention_minutes = NULL` and inherited **14 days**. A queue an operator
+ * paused for a fortnight, or a backlog that outlived one (a bulk-import fan-out
+ * behind a stalled Ollama is the realistic case), had its oldest jobs moved to
+ * `pgboss.archive` and deleted `deleteAfterHours` later. Silently: that path
+ * logs nothing, raises nothing, and never routes to the dead-letter queue, so
+ * the work is gone with no record it ever existed.
+ *
+ * 90 days, and a code constant rather than a config key, on purpose. This is a
+ * floor on how long accepted work survives, not a tuning knob — there is no
+ * appliance workload for which losing queued work SOONER is the better outcome,
+ * and the number an operator would actually reach for is the length of pause
+ * they want to be safe. A queue that genuinely wants a different window says so
+ * in `QueueOptions.retentionMinutes`, where the unit is stated in the type.
+ */
+const WORK_QUEUE_RETENTION_MINUTES = 90 * 24 * 60;
+
+/**
  * The retry policy, stated once and applied in both places it has to hold.
  *
  * pg-boss resolves a job's retry settings as COALESCE(job, queue, constructor
@@ -328,6 +355,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         const options = {
           name: queue,
           deadLetter: PGBossEventService.DEAD_LETTER_QUEUE,
+          // Before BOTH spreads, so a listener that declares its own
+          // `retentionMinutes` still wins. Stating it at all is what stops
+          // `keep_until` falling through to pg-boss's 14-day default and
+          // deleting never-run jobs off a paused or backlogged queue — see
+          // WORK_QUEUE_RETENTION_MINUTES.
+          retentionMinutes: WORK_QUEUE_RETENTION_MINUTES,
           ...QUEUE_RETRY_POLICY,
           ...queueOptions,
         };
@@ -971,7 +1004,15 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       // it could be: the jobs stay `created`, pg-boss holds no lease on them,
       // and they run in order the moment the queue is switched back on. That is
       // what makes `paused` safe to reach for on a hot box — it costs a backlog,
-      // never work.
+      // not work.
+      //
+      // "Not work" has a horizon, and it is the queue's retention: pg-boss's
+      // archive sweep deletes `created`/`retry` rows past `keep_until`, which
+      // is `start_after + retention`. WORK_QUEUE_RETENTION_MINUTES makes that
+      // 90 days rather than the 14-day default it silently used to be, so a
+      // pause is safe for as long as any operator plausibly holds one — but it
+      // is not infinite, and a queue left paused for a quarter starts losing
+      // its oldest jobs with no log and no dead letter.
       //
       // A `disabled` queue lands here too. Its own sends were already dropped at
       // enqueue, so what this stops is whatever was queued BEFORE the switch —

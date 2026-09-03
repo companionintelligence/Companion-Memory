@@ -62,6 +62,7 @@ invariants are enforced at registration, i.e. before Nest even starts:
 |---|---|---|
 | `policy` | pg-boss de-duplication policy. **This is what makes a `singletonKey` real** | `standard` (stores keys, enforces nothing) |
 | `expireInSeconds` | how long an `active` job may run before pg-boss expires and retries it | constructor `expireInHours: 12` |
+| `retentionMinutes` | how long an **unfinished** (`created`/`retry`) job survives before the archive sweep discards it — see §1.7 | `WORK_QUEUE_RETENTION_MINUTES`, 90 d |
 | `retryLimit` / `retryDelay` | retries before dead-lettering; seconds between them | 3 / 10, with backoff |
 | `localConcurrency` | in-process worker slots for this queue — **can only lower**, never raise | `queues.perQueueConcurrency` (6) |
 | `role` | which process **consumes** this queue | `web` |
@@ -295,6 +296,44 @@ it into one statement, `DELETE FROM pgboss.archive WHERE archived_on < now() - i
 Likewise only the three **retry** values are written onto queue rows; `expireInHours: 12`
 stays a constructor default resolved as `COALESCE(job, queue, constructor)`.
 
+**…and to a job that never ran.** The same archive statement carries a third
+predicate, and it is the one that costs work rather than history:
+
+```sql
+OR (state < 'active' AND keep_until < now())
+```
+
+`state < 'active'` is the state enum's ordering, so it covers **`created` and
+`retry`** — jobs that have never completed. `keep_until` resolves as
+`start_after + COALESCE(job.keep_until, queue.retention_minutes * 60, constructor keep_until default, '14 days')`.
+
+| Stage | Mechanism | Window |
+|---|---|---|
+| `created`/`retry` → `pgboss.archive` | `retentionMinutes` on the queue row | `start_after` + **90 d** |
+| `pgboss.archive` → deleted | `deleteAfterHours: 24` | +24 h |
+
+That path **logs nothing, raises nothing, and never routes to `dead-letter`** —
+the job is simply gone, with no record that it existed. Until
+`retentionMinutes` was stamped onto every work queue all three COALESCE terms
+were NULL and the window was pg-boss's **14-day** fallback, so a queue an
+operator paused for a fortnight — or a bulk-import fan-out that outlived one
+behind a stalled Ollama — silently lost its oldest jobs.
+`WORK_QUEUE_RETENTION_MINUTES` (90 days) is now written onto every queue by
+`createQueue` **and** `updateQueue`; the second call is the one that back-fills
+appliances whose queue rows already exist, because `createQueue` is a no-op on
+an existing queue.
+
+Units matter here and only one survives the trip: pg-boss v10 destructures
+`retentionMinutes` alone, and its `create_queue` reads
+`options->>'retentionMinutes'` — a `retentionDays` is dropped on the floor and
+reads as a fix that did nothing. A queue wanting a different window declares
+`queueOptions.retentionMinutes` (§1.1); the appliance-wide 90 days is a code
+constant rather than a config key, because there is no appliance workload for
+which losing queued work *sooner* is the better outcome.
+
+This is also the horizon on the pause control described at §1.3: `paused` costs
+a backlog rather than work, but only for 90 days.
+
 Charts on the Jobs dashboard therefore read from `ci.job_metrics` (sampled every
 5 minutes, 30-day retention), not from pg-boss.
 
@@ -381,7 +420,8 @@ from the discovered set — which is why no worker starts on it and why
 `send(…, { queue: 'dead-letter' })` is refused with a warning.
 
 Everything not stated inherits: `policy standard`, `retryLimit 3`, `retryDelay 10`
-(with backoff), `expireInHours 12`, `localConcurrency 6`, `role web`.
+(with backoff), `expireInHours 12`, `retentionMinutes 129600` (90 d),
+`localConcurrency 6`, `role web`.
 
 | Queue | Slots | Role | Policy | Expire | Carries |
 |---|---|---|---|---|---|
