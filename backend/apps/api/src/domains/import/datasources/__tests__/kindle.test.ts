@@ -75,6 +75,31 @@ describe('Kindle highlights datasource', () => {
     expect(first.entity?.name).toBe('Thinking, Fast and Slow');
   });
 
+  // SRC-01. `annotation` → kind `reading.annotation`, which routes to `content`
+  // only. The clipping text has to ride in metadata: `descriptionFor` fills the
+  // content row's `text` from `Highlight`, and `titleFor` appends it to the book
+  // name so two clippings from one book do not share a title.
+  it('carries the clipping text in metadata.Highlight, not only in the content loader', async () => {
+    const root = path.join(FIXTURES_DIR, 'kindle-export');
+    const fi = new KindleFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: 'kindle-export', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    for (const g of pipeline) {
+      const highlight = g.item.metadata.Highlight;
+      expect(typeof highlight).toBe('string');
+      expect(highlight).toBe((await g.item.content!.data!()).toString('utf8'));
+    }
+
+    // Distinct clippings carry distinct text — this is what keeps their titles apart.
+    const highlights = new Set(pipeline.map((g) => g.item.metadata.Highlight));
+    expect(highlights.size).toBe(pipeline.length);
+  });
+
   it('handles two different books', async () => {
     const root = path.join(FIXTURES_DIR, 'kindle-export');
     const fi = new KindleFileImporter();

@@ -227,6 +227,12 @@ export class GoodreadsFileImporter implements FileImporter {
         metadata: {
           Title: title || undefined,
           Author: row['Author'] || undefined,
+          // The review body. `reading.annotation` routes to `content` only and
+          // that row's `text` is read from metadata by `descriptionFor`; the
+          // review.txt blob attached above is never loaded on the push path.
+          // Left undefined for a shelved-but-unreviewed book so `titleFor`
+          // keeps the bare book name rather than appending an empty excerpt.
+          Text: review || undefined,
           MyRating: row['My Rating'] || undefined,
           AverageRating: row['Average Rating'] || undefined,
           ExclusiveShelf: row['Exclusive Shelf'] || undefined,

@@ -82,6 +82,31 @@ describe('Notion datasource', () => {
     expect(meetingText).toContain('GraphQL handoff');
   });
 
+  // SRC-01. A `note` routes to `content` ONLY, and the content row's `text` is
+  // read out of metadata by push/canonical.ts `descriptionFor`. Nothing on the
+  // push path ever calls `item.content.data()`, so a body that exists only in
+  // the blob loader lands as an empty content row.
+  it('carries the page body in metadata.Text, not only in the content loader', async () => {
+    const root = path.join(FIXTURES_DIR, 'notion-export');
+    const fi = new NotionFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: 'notion-export', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const byTitle: Record<string, EmittedItem> = {};
+    for (const g of pipeline) {
+      byTitle[metaText(g.item.metadata.Title)] = g.item;
+    }
+
+    const weekly = byTitle['Weekly Review'];
+    expect(metaText(weekly.metadata.Text)).toContain('Finished the Notion importer');
+    // Same bytes the loader would have produced.
+    expect(metaText(weekly.metadata.Text)).toBe((await weekly.content.data!()).toString('utf8'));
+  });
+
   it('respects the timeframe filter', async () => {
     const root = path.join(FIXTURES_DIR, 'notion-export');
     const fi = new NotionFileImporter();
