@@ -77,9 +77,20 @@ export class TaskEntity {
   @Column({ type: 'text', name: 'source_ref', nullable: true })
   sourceRef!: string | null;
 
+  /**
+   * KNOWN GAP (as of migration 20260828120000_hbpe_life_forecast): added for
+   * HBPE's completed-task token reader (`get_completed_tasks_for_day` in
+   * `backend/apps/hbpe/src/ci/hbpe/data_client.py`, which filters on this
+   * being non-null and non-'UNKNOWN'), but no writer exists anywhere in this
+   * repo — no DTO field, resolver, or service ever sets it. Every row is
+   * NULL, so that HBPE query is structurally empty until a writer ships.
+   * data_client.py short-circuits the empty scan rather than fixing this;
+   * the real fix is a classifier wired into task creation/completion.
+   */
   @Column({ type: 'text', name: 'l0_class', nullable: true })
   l0Class!: string | null;
 
+  /** KNOWN GAP: same as `l0Class` above — no writer exists yet. */
   @Column({ type: 'uuid', name: 'l1_cluster_id', nullable: true })
   l1ClusterId!: string | null;
 

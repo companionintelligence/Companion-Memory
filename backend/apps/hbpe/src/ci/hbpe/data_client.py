@@ -311,6 +311,58 @@ def get_token_events_for_day(user_id: str, date_str: str) -> list[dict]:
             return [dict(r) for r in cur.fetchall()]
 
 
+# Structural-emptiness guard: as of migration 20260828120000, ci.tasks carries
+# l0_class / l1_cluster_id columns but nothing in the repo ever writes them
+# (see the comment on TaskEntity.l0Class / l1ClusterId). Without this guard,
+# every scheduled pass runs the WHERE-gated query below once per user per day
+# in the serialize window and it is *always* empty — a real DB round trip
+# spent proving a structural fact that does not change until a writer ships.
+# Cached for the life of the process so it costs one query, not one per call.
+_completed_tasks_precondition_checked: bool = False
+_completed_tasks_precondition_populated: bool = True
+
+
+def _completed_tasks_l0_class_populated() -> bool:
+    """One-time, process-wide EXISTS probe for a classified completed task."""
+    global \
+        _completed_tasks_precondition_checked, \
+        _completed_tasks_precondition_populated
+
+    if _completed_tasks_precondition_checked:
+        return _completed_tasks_precondition_populated
+
+    sql = """
+        SELECT EXISTS (
+            SELECT 1 FROM ci.tasks
+            WHERE l0_class IS NOT NULL AND l0_class <> 'UNKNOWN'
+        )
+    """
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                row = cur.fetchone()
+                populated = bool(row[0]) if row else False
+    except Exception as exc:
+        # Cannot tell either way on a read failure — do not mask a genuine DB
+        # problem behind the short-circuit; let the normal query run below
+        # and surface (or swallow, per its own contract) the same failure.
+        log.warning("l0_class population probe failed (non-fatal): %s", exc)
+        return True
+
+    _completed_tasks_precondition_checked = True
+    _completed_tasks_precondition_populated = populated
+
+    if not populated:
+        log.warning(
+            "ci.tasks.l0_class has no writer yet (see TaskEntity.ts) — "
+            "get_completed_tasks_for_day will short-circuit to [] for the "
+            "rest of this process instead of re-running an always-empty scan."
+        )
+
+    return populated
+
+
 def get_completed_tasks_for_day(user_id: str, date_str: str) -> list[dict]:
     """
     Done tasks with an L0 class, occurring at completed_at on date_str.
@@ -322,6 +374,9 @@ def get_completed_tasks_for_day(user_id: str, date_str: str) -> list[dict]:
     but it has to be able to tell "no completed tasks" from "could not read
     the completed tasks" before it deletes a day's token stream.
     """
+    if not _completed_tasks_l0_class_populated():
+        return []
+
     sql = """
         SELECT
             t.l0_class,
