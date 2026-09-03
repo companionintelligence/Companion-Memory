@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
@@ -42,20 +42,20 @@ vi.mock('@/api/useRescheduleEvent', () => ({
 /**
  * Stand-in for the grid.
  *
- * The page's job here is wiring — which footer copy it chooses, and what it
- * does with a rejected drop — and driving those through real HTML5 drag events
- * would test VerticalCalendar instead. The stub exposes the two callbacks as
- * buttons and renders the footer verbatim.
+ * The page's job here is wiring — which footer copy it chooses, what colour
+ * mode it hands down, and what it does with a rejected move — and driving those
+ * through real HTML5 drag events would test VerticalCalendar instead. The stub
+ * exposes the callbacks as buttons and renders the footer verbatim.
  */
 vi.mock('@/components/HorizonGrid', () => ({
   VerticalCalendar: ({
     footer,
-    onDropCandidate,
+    colorMode,
     onMoveEvent,
     onSelectSlot,
   }: {
     footer?: string;
-    onDropCandidate: (id: string, at: Date) => void;
+    colorMode?: string;
     onMoveEvent: (id: string, at: Date) => void;
     onSelectSlot?: (slot: { instant: Date; allDay: boolean }) => void;
   }) => (
@@ -66,12 +66,10 @@ vi.mock('@/components/HorizonGrid', () => ({
       >
         stub-slot
       </button>
-      <button type="button" onClick={() => onDropCandidate('c1', new Date())}>
-        stub-drop
-      </button>
       <button type="button" onClick={() => onMoveEvent('e1', new Date())}>
         stub-move
       </button>
+      <p data-testid="stub-color-mode">{colorMode}</p>
       <p>{footer}</p>
     </div>
   ),
@@ -286,12 +284,22 @@ describe('SchedulePage — what the footer is allowed to claim', () => {
   });
 });
 
+/** Open the slot drawer and click the one possibility on the rail. */
+function placeFromDrawer(title: string) {
+  fireEvent.click(screen.getByText('stub-slot'));
+  fireEvent.click(screen.getByRole('button', { name: `Add ${title} at this time` }));
+}
+
 describe('SchedulePage — mutations that the server refuses', () => {
   it('tells the user when a placement is rejected', async () => {
-    setPlan({ placeOnDay: vi.fn().mockRejectedValue(new Error('slot taken')) });
+    setPlan({
+      backlog: [{ key: 'unscheduled', tasks: [{ id: 't1', title: 'Call the dentist' }] }],
+      backlogCount: 1,
+      placeOnDay: vi.fn().mockRejectedValue(new Error('slot taken')),
+    });
 
     renderWithProviders(<SchedulePage />);
-    fireEvent.click(screen.getByText('stub-drop'));
+    placeFromDrawer('Call the dentist');
 
     expect(await screen.findByText(/Could not put that on the calendar/)).toBeInTheDocument();
   });
@@ -320,10 +328,14 @@ describe('SchedulePage — mutations that the server refuses', () => {
   });
 
   it('clears the message when the next attempt succeeds', async () => {
-    setPlan({ placeOnDay: vi.fn().mockRejectedValue(new Error('slot taken')) });
+    setPlan({
+      backlog: [{ key: 'unscheduled', tasks: [{ id: 't1', title: 'Call the dentist' }] }],
+      backlogCount: 1,
+      placeOnDay: vi.fn().mockRejectedValue(new Error('slot taken')),
+    });
 
     renderWithProviders(<SchedulePage />);
-    fireEvent.click(screen.getByText('stub-drop'));
+    placeFromDrawer('Call the dentist');
     expect(await screen.findByText(/Could not put that on the calendar/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('stub-move'));
@@ -342,7 +354,7 @@ describe('SchedulePage — failed queries', () => {
 
     expect(screen.getByText(/what is shown may be incomplete/)).toBeInTheDocument();
     // The grid is still on screen rather than replaced wholesale.
-    expect(screen.getByText('stub-drop')).toBeInTheDocument();
+    expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
   });
 
   it('falls back to the hard error when nothing resolved', () => {
@@ -351,7 +363,7 @@ describe('SchedulePage — failed queries', () => {
     renderWithProviders(<SchedulePage />);
 
     expect(screen.getByText(/Could not load the schedule/)).toBeInTheDocument();
-    expect(screen.queryByText('stub-drop')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('vertical-calendar')).not.toBeInTheDocument();
   });
 
   it('shows the slate as failed rather than empty when the plan list errors', () => {
@@ -413,7 +425,7 @@ describe('SchedulePage — week paging', () => {
     renderWithProviders(<SchedulePage />);
     fireEvent.click(screen.getByLabelText('Next week'));
 
-    expect(screen.getByText('stub-drop')).toBeInTheDocument();
+    expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
     expect(screen.queryByText(/Connect a calendar/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Nothing on the calendar this week/)).not.toBeInTheDocument();
   });
@@ -479,7 +491,30 @@ describe('SchedulePage — week paging', () => {
       renderWithProviders(<SchedulePage />);
 
       expect(screen.getByText('Afternoon review')).toBeInTheDocument();
-      expect(screen.getByText('stub-drop')).toBeInTheDocument();
+      expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
+    });
+
+    /**
+     * The phone's visible window is ONE day, and the chips are what move it —
+     * paging the week is not the only way the ground shifts under an open
+     * drawer. Tapping Wednesday used to redraw the grid and leave the drawer
+     * pointed at Monday 2pm, so "New event" or a Possibilities card landed on
+     * a day that was no longer on screen.
+     */
+    it('drops the slot when a day chip moves the one visible day', () => {
+      setViewport(true);
+
+      renderWithProviders(<SchedulePage />);
+
+      fireEvent.click(screen.getByText('stub-slot'));
+      expect(screen.getByTestId('slate-drawer')).toBeInTheDocument();
+
+      const chips = within(screen.getByRole('tablist', { name: 'Days this week' })).getAllByRole('tab');
+      const elsewhere = chips.find((chip) => chip.getAttribute('aria-selected') !== 'true') ?? chips[0];
+
+      fireEvent.click(elsewhere);
+
+      expect(screen.queryByTestId('slate-drawer')).not.toBeInTheDocument();
     });
 
     it('does not keep a Possibilities button or rail on the phone', () => {
@@ -522,6 +557,32 @@ describe('SchedulePage — week paging', () => {
   });
 
   /**
+   * The window and the slot are one selection. Paging used to move only the
+   * window, leaving the open drawer pointed at a day that had scrolled off
+   * screen — so "New event" or a Possibilities card landed on last week.
+   */
+  it('closes the slot drawer when the visible week changes under it', () => {
+    setPlan({
+      backlog: [{ key: 'unscheduled', tasks: [{ id: 't1', title: 'Call the dentist' }] }],
+      backlogCount: 1,
+    });
+
+    renderWithProviders(<SchedulePage />);
+
+    fireEvent.click(screen.getByText('stub-slot'));
+    expect(screen.getByTestId('slate-drawer')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Next week'));
+    expect(screen.queryByTestId('slate-drawer')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('stub-slot'));
+    expect(screen.getByTestId('slate-drawer')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Back to today' }));
+    expect(screen.queryByTestId('slate-drawer')).not.toBeInTheDocument();
+  });
+
+  /**
    * Embedded in Today, this page contributes content and no chrome.
    *
    * The positioning assertion is the one that would fail silently in the
@@ -555,7 +616,7 @@ describe('SchedulePage — week paging', () => {
     it('still renders the week itself', () => {
       renderWithProviders(<SchedulePage embedded />);
 
-      expect(screen.getByText('stub-drop')).toBeInTheDocument();
+      expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
     });
   });
 });
@@ -605,6 +666,42 @@ describe('SchedulePage — colour mode only once colour means something', () => 
     expect(screen.getByRole('radio', { name: 'Activity' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('work')).toBeInTheDocument();
     expect(screen.getByText('exercise')).toBeInTheDocument();
+  });
+
+  /**
+   * Clicking the toggle has to move the picture, not just the pressed state:
+   * a wrong mode handed to `setColorMode` would depress Source while every chip
+   * and every legend swatch stayed on activity colouring.
+   */
+  it('switches the whole reading when Source is picked, not just the pressed state', () => {
+    setSchedule({
+      events: [
+        event({ title: 'Standup' }),
+        event({ id: 'e2', title: 'Gym session', sourceSystem: 'google_calendar' }),
+      ],
+    });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByTestId('stub-color-mode')).toHaveTextContent('type');
+    expect(screen.getByText('work')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Source' }));
+
+    expect(screen.getByRole('radio', { name: 'Source' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'Activity' })).toHaveAttribute('aria-checked', 'false');
+    // The grid (eventColor, RhythmStrip) is told, and the legend re-keys from
+    // activity classes to connectors.
+    expect(screen.getByTestId('stub-color-mode')).toHaveTextContent('source');
+    expect(screen.getByText('Google')).toBeInTheDocument();
+    expect(screen.getByText('Companion')).toBeInTheDocument();
+    expect(screen.queryByText('work')).not.toBeInTheDocument();
+    expect(screen.queryByText('exercise')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Activity' }));
+
+    expect(screen.getByTestId('stub-color-mode')).toHaveTextContent('type');
+    expect(screen.getByText('work')).toBeInTheDocument();
   });
 
   it('counts what the rhythm predicts, not only what is committed', () => {

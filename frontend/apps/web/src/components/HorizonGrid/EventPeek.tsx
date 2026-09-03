@@ -30,50 +30,75 @@ export function EventPeek({
   label,
   side = 'top',
   content,
+  actions,
   children,
 }: {
   label: string;
   side?: TooltipSide;
   content: ReactNode;
+  /**
+   * Controls shown under the body, dialog only — a tooltip is not a surface a
+   * finger or a keyboard can reach into. Passing them is what makes a click
+   * open the dialog on every pointer; see `clickOpensDialog` below.
+   */
+  actions?: (close: () => void) => ReactNode;
   children: ReactElement<{ onClick?: (event: MouseEvent<HTMLElement>) => void }>;
 }) {
   const tapOpensDialog = useTapOpensDialog();
   const [open, setOpen] = useState(false);
+  /**
+   * A media query may decide whether hover can show a tooltip. It must NOT
+   * decide whether the actions are reachable at all: `(hover: none), (pointer:
+   * coarse)` answers false on a touchscreen laptop, which then got neither the
+   * dialog nor a drag that a finger can start. Anywhere there is something to
+   * do, a click opens the dialog — a mouse user simply has both routes.
+   */
+  const clickOpensDialog = tapOpensDialog || Boolean(actions);
 
-  if (tapOpensDialog) {
+  if (!clickOpensDialog) {
     return (
-      <>
-        {cloneElement(children, {
-          onClick: (event) => {
-            children.props.onClick?.(event);
-            if (event.defaultPrevented) {
-              return;
-            }
-
-            if ((event.target as HTMLElement | null)?.closest?.('a')) {
-              return;
-            }
-
-            setOpen(true);
-          },
-        })}
-        <Dialog open={open} onOpenChange={setOpen}>
-          <Dialog.Content className="max-w-sm gap-3 p-4" aria-label={label}>
-            <Dialog.Header>
-              <Dialog.Title className="sr-only">{label}</Dialog.Title>
-              <Dialog.Description className="sr-only">Event details</Dialog.Description>
-            </Dialog.Header>
-            {content}
-          </Dialog.Content>
-        </Dialog>
-      </>
+      <Tooltip>
+        <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
+        <Tooltip.Content side={side}>{content}</Tooltip.Content>
+      </Tooltip>
     );
   }
 
+  const trigger = cloneElement(children, {
+    onClick: (event) => {
+      children.props.onClick?.(event);
+      if (event.defaultPrevented) {
+        return;
+      }
+
+      if ((event.target as HTMLElement | null)?.closest?.('a')) {
+        return;
+      }
+
+      setOpen(true);
+    },
+  });
+
   return (
-    <Tooltip>
-      <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
-      <Tooltip.Content side={side}>{content}</Tooltip.Content>
-    </Tooltip>
+    <>
+      {tapOpensDialog ? (
+        trigger
+      ) : (
+        <Tooltip>
+          <Tooltip.Trigger asChild>{trigger}</Tooltip.Trigger>
+          <Tooltip.Content side={side}>{content}</Tooltip.Content>
+        </Tooltip>
+      )}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog.Content className="max-w-sm gap-3 p-4" aria-label={label}>
+          <Dialog.Header>
+            <Dialog.Title className="sr-only">{label}</Dialog.Title>
+            <Dialog.Description className="sr-only">Event details</Dialog.Description>
+          </Dialog.Header>
+          {content}
+          {actions?.(() => setOpen(false))}
+        </Dialog.Content>
+      </Dialog>
+    </>
   );
 }

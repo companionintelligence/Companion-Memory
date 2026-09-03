@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
@@ -9,7 +9,7 @@ import { PlanPage } from './PlanPage';
 import { SELECT_HOLD_MS } from './Task';
 import { addLocalDays, dueAtFromLocalDate, localDateOf } from './taskSections';
 import { DELETE_TASK } from './useDeleteTasks';
-import { GET_TASKS, PLAN_TASK, SCHEDULE_TASK } from './usePlanTasks';
+import { ACCEPT_PROPOSED, DECLINE_PROPOSED, GET_TASKS, PLAN_TASK, SCHEDULE_TASK } from './usePlanTasks';
 
 const featureState = vi.hoisted(() => ({ emptyState: false }));
 const toastError = vi.hoisted(() => vi.fn());
@@ -36,6 +36,14 @@ const COMPLETE_TASK = gql(`
       id
       status
       completedAt
+    }
+  }
+`);
+
+const DECLINE_PENDING = gql(`
+  mutation DeclineTaskPendingChange($id: ID!) {
+    declineTaskPendingChange(id: $id) {
+      success
     }
   }
 `);
@@ -536,6 +544,206 @@ describe('PlanPage', () => {
     expect(screen.queryByRole('heading', { name: /^overdue/i })).not.toBeInTheDocument();
   });
 
+  // ═══ A THROWN MUTATION USED TO SAY NOTHING AT ALL ═══
+  //
+  // None of these paths had a `.catch`. A network or GraphQL failure aborted
+  // the async block: no toast, no refetch, and the card just snapped back —
+  // indistinguishable from a dead button.
+  it('says so when Schedule throws instead of failing silently', async () => {
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([node()]),
+        {
+          request: { query: SCHEDULE_TASK, variables: { id: 'dGFzazoxMTE=' } },
+          error: new Error('offline'),
+        },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /^schedule$/i }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not/i)));
+  });
+
+  it('says so when a reschedule throws', async () => {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const todayDate = localDateOf(new Date());
+
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([node({ id: 'a', title: 'Overdue thing', dueAt: yesterday.toISOString() })]),
+        {
+          request: {
+            query: UPDATE_TASK,
+            variables: { input: { id: 'a', dueAt: dueAtFromLocalDate(todayDate) } },
+          },
+          error: new Error('offline'),
+        },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /reschedule overdue thing/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^today$/i }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not/i)));
+  });
+
+  it('says so when accepting a proposal and scheduling it throws', async () => {
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([node({ status: 'proposed' })]),
+        {
+          request: { query: ACCEPT_PROPOSED, variables: { id: 'dGFzazoxMTE=' } },
+          error: new Error('offline'),
+        },
+      ],
+    });
+
+    await screen.findByTestId('proposed-actions');
+    fireEvent.click(screen.getByRole('button', { name: /^schedule$/i }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not/i)));
+  });
+
+  it('says so when dismissing a calendar suggestion throws', async () => {
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([node()], [pendingChange()]),
+        {
+          request: { query: DECLINE_PENDING, variables: { id: 'change-1' } },
+          error: new Error('offline'),
+        },
+      ],
+    });
+
+    await screen.findByTestId('pending-schedule-actions');
+    fireEvent.click(screen.getByRole('button', { name: /^dismiss$/i }));
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not/i)));
+  });
+
+  // ═══ WHICH PENDING CHANGES A PROPOSAL'S DISMISS MAY ANSWER ═══
+  //
+  // Task renders the proposed row INSTEAD of the pending-schedule row, so a
+  // dismissed proposal used to leave its `schedule` change open on the server
+  // with no UI left that could ever answer it.
+  it('declines an orphaned schedule suggestion when its proposal is dismissed', async () => {
+    let declinedChange = false;
+
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([node({ status: 'proposed' })], [pendingChange()]),
+        {
+          request: { query: DECLINE_PENDING, variables: { id: 'change-1' } },
+          maxUsageCount: Number.POSITIVE_INFINITY,
+          result: () => {
+            declinedChange = true;
+
+            return {
+              data: {
+                declineTaskPendingChange: {
+                  __typename: 'ResolveTaskPendingChangePayload',
+                  success: true,
+                },
+              },
+            };
+          },
+        },
+        {
+          request: { query: DECLINE_PROPOSED, variables: { id: 'dGFzazoxMTE=' } },
+          maxUsageCount: Number.POSITIVE_INFINITY,
+          result: {
+            data: {
+              declineProposedTask: { __typename: 'TaskType', id: 'dGFzazoxMTE=', status: 'skipped' },
+            },
+          },
+        },
+      ],
+    });
+
+    const actions = await screen.findByTestId('proposed-actions');
+    fireEvent.click(within(actions).getByRole('button', { name: /^dismiss$/i }));
+
+    await waitFor(() => expect(declinedChange).toBe(true));
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  // …but a `split` (or any non-schedule) change renders its OWN Confirm/Dismiss
+  // row alongside the proposed row. The user is answering that one themselves,
+  // so dismissing the proposal must not answer it for them.
+  it('leaves a non-schedule pending change alone when the proposal is dismissed', async () => {
+    let declinedChange = false;
+    let declinedProposal = false;
+
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock(
+          [node({ status: 'proposed' })],
+          [pendingChange({ kind: 'split', rationale: 'Split this into two steps?' })],
+        ),
+        {
+          request: { query: DECLINE_PENDING, variables: { id: 'change-1' } },
+          maxUsageCount: Number.POSITIVE_INFINITY,
+          result: () => {
+            declinedChange = true;
+
+            return {
+              data: {
+                declineTaskPendingChange: {
+                  __typename: 'ResolveTaskPendingChangePayload',
+                  success: true,
+                },
+              },
+            };
+          },
+        },
+        {
+          request: { query: DECLINE_PROPOSED, variables: { id: 'dGFzazoxMTE=' } },
+          maxUsageCount: Number.POSITIVE_INFINITY,
+          result: () => {
+            declinedProposal = true;
+
+            return {
+              data: {
+                declineProposedTask: { __typename: 'TaskType', id: 'dGFzazoxMTE=', status: 'skipped' },
+              },
+            };
+          },
+        },
+      ],
+    });
+
+    const actions = await screen.findByTestId('proposed-actions');
+
+    // Both rows are on this card, so the Dismiss under test has to be the
+    // proposal's own — not the pending change's.
+    expect(screen.getAllByRole('button', { name: /^dismiss$/i })).toHaveLength(2);
+    fireEvent.click(within(actions).getByRole('button', { name: /^dismiss$/i }));
+
+    await waitFor(() => expect(declinedProposal).toBe(true));
+    expect(declinedChange).toBe(false);
+  });
+
+  // Column badges used to count roots only, so a column of three roots with
+  // nine live subtasks read "3" — and an overdue subtask was summarised as not
+  // existing at all.
+  it('counts nested subtasks into the column badge and its overdue hint', async () => {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([
+          node({ id: 'root', title: 'Parent thing' }),
+          node({ id: 'kid', title: 'Child thing', parentId: 'root', dueAt: yesterday.toISOString() }),
+        ]),
+      ],
+    });
+
+    expect(await screen.findByText('Child thing')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^unscheduled 2/i })).toBeInTheDocument();
+    expect(screen.getByText('1 overdue')).toBeInTheDocument();
+  });
+
   it('lets an overdue missed block be moved with the same when chips', async () => {
     const today = new Date();
     const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
@@ -650,6 +858,85 @@ describe('PlanPage mobile tabs', () => {
       'true',
     );
     expect(screen.queryByText('Overdue thing')).not.toBeInTheDocument();
+  });
+
+  // ═══ THE TAB USED TO MOVE UNDER THE USER ═══
+  //
+  // `boardTab` starts null and almost nothing sets it, so the board fell back
+  // to "first non-empty column" on EVERY render. Emptying the visible column —
+  // Dismiss on the last Proposed card — swapped the pane to a column the user
+  // had never chosen, mid-gesture.
+  it('stays on the column the user is reading after its last card leaves', async () => {
+    setViewport(true);
+
+    const proposed = node({ id: 'p', title: 'Proposed thing', status: 'proposed' });
+    const other = node({ id: 'b', title: 'Someday thing' });
+    let dismissed = false;
+
+    const board = (nodes: ReturnType<typeof node>[]) => ({
+      tasks: {
+        __typename: 'TaskConnection',
+        edges: nodes.map((item) => ({ __typename: 'TaskEdge', node: item })),
+        totalCount: nodes.length,
+      },
+      taskPendingChanges: [],
+    });
+
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        {
+          request: { query: GET_TASKS, variables: { first: 200 } },
+          maxUsageCount: Number.POSITIVE_INFINITY,
+          result: () => ({ data: board(dismissed ? [other] : [proposed, other]) }),
+          newData: () => ({ data: board(dismissed ? [other] : [proposed, other]) }),
+        },
+        {
+          request: { query: DECLINE_PROPOSED, variables: { id: 'p' } },
+          result: () => {
+            dismissed = true;
+
+            return { data: { declineProposedTask: { __typename: 'TaskType', id: 'p', status: 'skipped' } } };
+          },
+        },
+      ],
+    });
+
+    expect(await screen.findByRole('tab', { name: /^proposed 1$/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^dismiss$/i }));
+
+    await waitFor(() => expect(screen.getByRole('tab', { name: /^proposed 0$/i })).toBeInTheDocument());
+    expect(screen.getByRole('tab', { name: /^proposed 0$/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByText('Someday thing')).not.toBeInTheDocument();
+  });
+
+  // `handlePlan` toasts on failure but still shows Unscheduled — the `finally`
+  // is load-bearing UX, and moving `showUnscheduled()` into the `try` would
+  // change it silently. No test supplied a rejecting PLAN_TASK before this one.
+  it('still shows Unscheduled when Plan fails, and says that it failed', async () => {
+    setViewport(true);
+
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([node({ title: 'Proposed thing', status: 'proposed' })]),
+        {
+          request: { query: PLAN_TASK, variables: { id: 'dGFzazoxMTE=' } },
+          error: new Error('offline'),
+        },
+      ],
+    });
+
+    await screen.findByTestId('proposed-actions');
+    fireEvent.click(screen.getByRole('button', { name: /^plan$/i }));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/could not move that task/i)),
+    );
+    expect(screen.getByRole('tab', { name: /^unscheduled/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /^proposed 1$/i })).toHaveAttribute('aria-selected', 'false');
   });
 
   it('keeps edit and delete off the title row, and opens edit from the card body', async () => {

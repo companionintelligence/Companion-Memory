@@ -244,6 +244,8 @@ export class TaskResolver {
 
     if (change?.kind === 'schedule' && task) {
       await this.plannedBlockService.applyPendingSchedule(serviceContext, task.id, change.patch);
+    } else if (change?.kind === 'event_revise' && task) {
+      await this.plannedBlockService.applyPendingEventRevision(serviceContext, task.id, change.patch);
     }
 
     const refreshed = task ? await this.taskService.findById(serviceContext, task.id) : null;

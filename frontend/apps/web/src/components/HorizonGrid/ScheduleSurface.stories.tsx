@@ -1,14 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 
 import type { Meta, StoryObj } from '@storybook/react';
 
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 import { VerticalCalendar } from '@/components/HorizonGrid';
 import type { ColorMode } from '@/lib/activityPalette';
-import { groupIntoSections, localDateOf } from '@/pages/PlanPage/taskSections';
-import type { PlanTask } from '@/pages/PlanPage/usePlanTasks';
-
-import { TaskSlate } from './TaskSlate';
 
 const START = (() => {
   const d = new Date(2026, 7, 3);
@@ -110,92 +106,37 @@ const RHYTHM: RhythmDay[] = Array.from({ length: 7 }, (_, i) => {
   };
 });
 
-function task(id: string, title: string, overrides: Partial<PlanTask> = {}): PlanTask {
-  return {
-    id,
-    title,
-    status: 'open',
-    priority: 3,
-    ...overrides,
-  };
-}
-
-const TASKS: PlanTask[] = [
-  task('p1', 'Review goals for Backlog Grooming', { status: 'proposed' }),
-  task('u1', 'Pre-Read Prep', { dueAt: '2026-08-25T17:00:00.000Z', estimatedMinutes: 120 }),
-  task('u2', 'Call the dentist', { dueAt: '2026-08-20T17:00:00.000Z' }),
-];
-
-function backlogOf(tasks: PlanTask[]) {
-  return groupIntoSections(tasks, localDateOf(START)).filter(
-    (section) => section.key === 'proposed' || section.key === 'unscheduled',
-  );
-}
-
-/** Live wiring, so the drop actually places a card during a manual drag. */
+/** Live wiring, so a move actually lands during a manual drag or from the dialog. */
 function Surface({ colorMode = 'type' }: { colorMode?: ColorMode }) {
   const [events, setEvents] = useState(EVENTS);
-  const [tasks, setTasks] = useState(TASKS);
-  const sections = useMemo(() => backlogOf(tasks), [tasks]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <VerticalCalendar
-        start={START}
-        days={7}
-        events={events}
-        rhythm={RHYTHM}
-        colorMode={colorMode}
-        footer="Rhythm from your own patterns, updated Aug 4."
-        onDropCandidate={(id, startTime) => {
-          const placed = tasks.find((item) => item.id === id);
+    <VerticalCalendar
+      start={START}
+      days={7}
+      events={events}
+      rhythm={RHYTHM}
+      colorMode={colorMode}
+      footer="Rhythm from your own patterns, updated Aug 4."
+      onMoveEvent={(id, startTime) =>
+        setEvents((current) =>
+          current.map((e) => {
+            if (e.id !== id) {
+              return e;
+            }
 
-          if (!placed) {
-            return;
-          }
+            const span = e.endTime ? new Date(e.endTime).getTime() - new Date(e.startTime).getTime() : 0;
 
-          setTasks((rest) => rest.filter((item) => item.id !== id));
-          setEvents((current) => [
-            ...current,
-            {
-              id: `placed-${id}`,
-              title: placed.title,
-              description: placed.description ?? null,
+            return {
+              ...e,
               startTime: startTime.toISOString(),
-              endTime: new Date(startTime.getTime() + 30 * 60_000).toISOString(),
-              isAllDay: false,
-              status: 'confirmed',
-              category: null,
-              locationName: null,
-            },
-          ]);
-        }}
-        onMoveEvent={(id, startTime) =>
-          setEvents((current) =>
-            current.map((e) => {
-              if (e.id !== id) {
-                return e;
-              }
-
-              const span = e.endTime ? new Date(e.endTime).getTime() - new Date(e.startTime).getTime() : 0;
-
-              return {
-                ...e,
-                startTime: startTime.toISOString(),
-                endTime: span ? new Date(startTime.getTime() + span).toISOString() : e.endTime,
-                externalSyncStatus: e.sourceSystem ? 'pending' : e.externalSyncStatus,
-              };
-            }),
-          )
-        }
-      />
-
-      <TaskSlate
-        sections={sections}
-        loading={false}
-        onDismissProposed={(id) => setTasks((rest) => rest.filter((item) => item.id !== id))}
-      />
-    </div>
+              endTime: span ? new Date(startTime.getTime() + span).toISOString() : e.endTime,
+              externalSyncStatus: e.sourceSystem ? 'pending' : e.externalSyncStatus,
+            };
+          }),
+        )
+      }
+    />
   );
 }
 
@@ -209,8 +150,8 @@ export default meta;
 
 type Story = StoryObj<typeof Surface>;
 
-/** Drag a card from Possibilities onto a day — it becomes committed time. */
-export const WeekWithSlate: Story = {};
+/** The committed week, with the rhythm strip beside each day's hours. */
+export const Week: Story = {};
 
 /** Hue as activity class — the reading both lanes share. */
 export const ColouredByType: Story = { args: { colorMode: 'type' } };

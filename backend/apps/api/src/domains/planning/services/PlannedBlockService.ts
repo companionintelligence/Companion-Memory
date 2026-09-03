@@ -4,7 +4,12 @@ import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { EventEntity, CalendarEventService, PersonService, UserContextService, type Event,
+import {
+  EventEntity,
+  CalendarEventService,
+  PersonService,
+  UserContextService,
+  type Event,
   platformIdentity,
 } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
@@ -26,6 +31,16 @@ const DEFAULT_WORK_START = '09:00';
 const DEFAULT_WORK_END = '17:00';
 const FLEX_DAYS = 7;
 const PLANNED_BLOCK = 'planned_block';
+
+/**
+ * Statuses an accepted `event_revise` confirmation may write to a planned
+ * block. `EventNowService` only ever proposes `cancelled`; the other two are
+ * the same "this did not happen" family the block queries already filter on
+ * (`status NOT IN ('cancelled', 'no_show', 'skipped')`). Anything else is a
+ * patch this pathway did not author, and is refused rather than written blind
+ * into a CHECK-constrained column.
+ */
+const REVISABLE_BLOCK_STATUSES = new Set(['cancelled', 'no_show', 'skipped']);
 
 export type PlaceOutcome =
   | { status: 'placed'; event: Event; task: Task }
@@ -269,6 +284,59 @@ export class PlannedBlockService {
     }
 
     return this.placeAt(context, task, start, end);
+  }
+
+  /**
+   * Apply an accepted `event_revise` confirmation to the linked planned block.
+   *
+   * ═══ WHAT THIS USED TO DO ═══
+   *
+   * Nothing at all. `EventNowService` files an `event_revise` change carrying
+   * `{ eventStatus: 'cancelled', eventId }`, and accepting it fell through to
+   * `TaskService.acceptPendingChange`, which treats a patch as a TASK patch:
+   * `eventStatus` was destructured away and `eventId` was handed to
+   * `taskRepository.save` as a column that exists on neither UpdateTaskDto nor
+   * TaskEntity, so TypeORM dropped it. Nothing anywhere read either key. The
+   * change flipped to `accepted` and the appointment the user had just
+   * confirmed as cancelled kept showing on the calendar.
+   *
+   * Owner-scoped like every other planning write, and it names only `status` —
+   * `duration_minutes` is `GENERATED ALWAYS`, so writing it is a hard Postgres
+   * error (docs/architecture/planning-roadmap.md, guardrail 1).
+   */
+  async applyPendingEventRevision(
+    context: UserServiceContext,
+    taskId: string,
+    patch: Record<string, unknown>,
+  ): Promise<Event | null> {
+    const status = typeof patch.eventStatus === 'string' ? patch.eventStatus : null;
+
+    if (!status || !REVISABLE_BLOCK_STATUSES.has(status)) {
+      return null;
+    }
+
+    const eventId = typeof patch.eventId === 'string' && patch.eventId ? patch.eventId : null;
+    const block = eventId
+      ? await this.eventService.findById(context, eventId)
+      : await this.findActiveForTask(context, taskId);
+
+    // The proposal named a block; a patch that points at some other task's
+    // block (or at a plain calendar event) is not this confirmation's to
+    // revise, however it got into the row.
+    if (!block || block.taskId !== taskId || block.eventType !== PLANNED_BLOCK) {
+      return null;
+    }
+
+    const updated = await this.eventService.update(context, block.id, { status });
+
+    this.logger.log('Applied pending event revision', {
+      userId: context.userId,
+      taskId,
+      eventId: block.id,
+      status,
+    });
+
+    return updated;
   }
 
   async unschedule(context: UserServiceContext, taskId: string): Promise<Task | null> {

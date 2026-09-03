@@ -82,6 +82,12 @@ describe('TaskService', () => {
   };
   let signalling: { send: jest.Mock };
   let qb: ReturnType<typeof makeQueryBuilder>;
+  let pendingRepo: {
+    create: jest.Mock;
+    save: jest.Mock;
+    findOne: jest.Mock;
+    createQueryBuilder: jest.Mock;
+  };
 
   async function setup(rows: TaskEntity[] = []) {
     qb = makeQueryBuilder(rows);
@@ -95,7 +101,7 @@ describe('TaskService', () => {
     };
     signalling = { send: jest.fn(async () => undefined) };
 
-    const pendingRepo = {
+    pendingRepo = {
       create: jest.fn((data: unknown) => data),
       save: jest.fn(async (entity: unknown) => entity),
       findOne: jest.fn(async () => null),
@@ -442,6 +448,155 @@ describe('TaskService', () => {
       await service.findAll(ALICE, {});
 
       expect(qb.calls.andWhere ?? []).toEqual([]);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // The pending-change review path.
+  //
+  // Every planning job's non-auto decision routes through here, and what an
+  // Accept click actually DOES was previously unasserted end to end — which is
+  // how `event_revise` shipped applying nothing at all.
+  // ---------------------------------------------------------------------------
+  describe('pending changes', () => {
+    function makePendingChange(overrides: Partial<TaskPendingChangeEntity> = {}): TaskPendingChangeEntity {
+      return {
+        id: 'change-1',
+        userId: ALICE.userId,
+        taskId: 'task-1',
+        kind: 'mutate',
+        patch: {},
+        rationale: null,
+        confidence: 0.8,
+        status: 'pending',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        resolvedAt: null,
+        ...overrides,
+      } as TaskPendingChangeEntity;
+    }
+
+    describe('createPendingChange', () => {
+      it("refuses to file a change against a task the caller doesn't own", async () => {
+        await setup([]);
+
+        expect(
+          await service.createPendingChange(BOB, { taskId: 'task-1', kind: 'mutate', patch: {} }),
+        ).toBeNull();
+        expect(pendingRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('files a pending row stamped with the caller', async () => {
+        await setup([makeTask()]);
+
+        const change = await service.createPendingChange(ALICE, {
+          taskId: 'task-1',
+          kind: 'complete',
+          patch: {},
+          rationale: 'Looks done.',
+          confidence: 0.6,
+        });
+
+        expect(change).toMatchObject({
+          userId: ALICE.userId,
+          taskId: 'task-1',
+          kind: 'complete',
+          status: 'pending',
+          rationale: 'Looks done.',
+        });
+      });
+
+      it('updates the existing pending change of the same kind instead of duplicating it', async () => {
+        // Scan loops redeliver whole batches under pg-boss retry; a second run
+        // must refresh the open question, not stack a second copy of it in the
+        // Proposed column.
+        await setup([makeTask()]);
+
+        const existing = makePendingChange({ patch: { title: 'Old' }, rationale: 'Old reason' });
+        pendingRepo.findOne.mockResolvedValue(existing);
+
+        const change = await service.createPendingChange(ALICE, {
+          taskId: 'task-1',
+          kind: 'mutate',
+          patch: { title: 'New' },
+          rationale: 'New reason',
+        });
+
+        expect(pendingRepo.create).not.toHaveBeenCalled();
+        expect(change).toMatchObject({ id: 'change-1', patch: { title: 'New' }, rationale: 'New reason' });
+      });
+    });
+
+    describe('acceptPendingChange', () => {
+      it("returns nothing for a change that is not the caller's own pending row", async () => {
+        await setup([makeTask()]);
+        pendingRepo.findOne.mockResolvedValue(null);
+
+        expect(await service.acceptPendingChange(BOB, 'change-1')).toEqual({ task: null, change: null });
+        expect(repository.save).not.toHaveBeenCalled();
+      });
+
+      it("completes the task for a 'complete' change", async () => {
+        await setup([makeTask()]);
+        pendingRepo.findOne.mockResolvedValue(makePendingChange({ kind: 'complete' }));
+
+        const { task, change } = await service.acceptPendingChange(ALICE, 'change-1');
+
+        expect(task?.status).toBe('done');
+        expect(task?.completedAt).toBeInstanceOf(Date);
+        expect(change?.status).toBe('accepted');
+        expect(change?.resolvedAt).toBeInstanceOf(Date);
+      });
+
+      it("applies both the note append and the field patch for a 'mutate' change", async () => {
+        await setup([makeTask({ notes: 'first note' })]);
+        pendingRepo.findOne.mockResolvedValue(
+          makePendingChange({ patch: { appendNotes: 'seen in memory', title: 'Ship the other thing' } }),
+        );
+
+        const { task } = await service.acceptPendingChange(ALICE, 'change-1');
+
+        expect(task?.notes).toBe('first note\n\nseen in memory');
+        expect(task?.title).toBe('Ship the other thing');
+      });
+
+      it("never writes the linked event's fields onto the task row for an 'event_revise' change", async () => {
+        // `eventStatus`/`eventId` address the planned block, not the task.
+        // `eventId` used to survive into `taskRepository.save` as a column that
+        // exists on neither UpdateTaskDto nor TaskEntity, so TypeORM dropped it
+        // — an accepted cancellation wrote nothing anywhere. The block write
+        // now belongs to PlannedBlockService.applyPendingEventRevision.
+        await setup([makeTask()]);
+        pendingRepo.findOne.mockResolvedValue(
+          makePendingChange({ kind: 'event_revise', patch: { eventStatus: 'cancelled', eventId: 'evt-1' } }),
+        );
+
+        const { task, change } = await service.acceptPendingChange(ALICE, 'change-1');
+
+        expect(repository.save).not.toHaveBeenCalled();
+        expect(task?.id).toBe('task-1');
+        expect(change?.status).toBe('accepted');
+      });
+    });
+
+    describe('declinePendingChange', () => {
+      it('flips the row to declined and stamps the resolution', async () => {
+        await setup([makeTask()]);
+        pendingRepo.findOne.mockResolvedValue(makePendingChange());
+
+        const change = await service.declinePendingChange(ALICE, 'change-1');
+
+        expect(change?.status).toBe('declined');
+        expect(change?.resolvedAt).toBeInstanceOf(Date);
+        expect(repository.save).not.toHaveBeenCalled();
+      });
+
+      it("returns null for a change that is not the caller's own pending row", async () => {
+        await setup([makeTask()]);
+        pendingRepo.findOne.mockResolvedValue(null);
+
+        expect(await service.declinePendingChange(BOB, 'change-1')).toBeNull();
+        expect(pendingRepo.save).not.toHaveBeenCalled();
+      });
     });
   });
 });
