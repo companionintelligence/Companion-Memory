@@ -269,39 +269,99 @@ function SchedulesCard({
     () => new Map((cronControls ?? []).map((control) => [control.name, control])),
     [cronControls],
   );
-  const rows = useMemo(
-    () =>
-      crons.map((cron) => ({
-        cron,
-        descriptor: describeCron(cron.name, jobTypes),
-        schedule: describeCronExpression(cron.cron),
-        control: controlByName.get(cron.name) ?? null,
-      })),
-    [crons, jobTypes, controlByName],
-  );
+
+  /**
+   * Every schedule in the build, not every schedule THIS process registered.
+   *
+   * `crons` comes from JobMonitorService, which can only see what reached its
+   * own SchedulerRegistry — under `CI_ROLE=web` that omits the eleven
+   * `role: 'worker'` schedules (of 53). Listing only those left a schedule an
+   * operator came to switch off simply absent, with nothing to say it existed;
+   * #2546 fixed that for the controls list, and this table has to hold the same
+   * line now that the switches live here.
+   *
+   * The controls payload IS complete (CronRegistry is filled by the decorator
+   * before the role gate), so anything it knows about and the monitor does not
+   * is appended with no timings — which is honest: this process has no
+   * nextDate/lastDate for a job it never registered.
+   */
+  const rows = useMemo(() => {
+    const seen = new Set(crons.map((cron) => cron.name));
+    const registered = crons.map((cron) => ({
+      cron,
+      descriptor: describeCron(cron.name, jobTypes),
+      schedule: describeCronExpression(cron.cron),
+      control: controlByName.get(cron.name) ?? null,
+    }));
+    const elsewhere = (cronControls ?? [])
+      .filter((control) => !seen.has(control.name))
+      .map((control) => ({
+        cron: {
+          name: control.name,
+          cron: control.cron,
+          timezone: null,
+          running: false,
+          nextRunAt: null,
+          lastRunAt: null,
+          lastSuccessAt: null,
+          overdue: false,
+        } as JobsDashboardResponse['crons'][number],
+        descriptor: describeCron(control.name, jobTypes),
+        schedule: describeCronExpression(control.cron),
+        control,
+      }));
+
+    return [...registered, ...elsewhere];
+  }, [crons, jobTypes, controlByName, cronControls]);
+
+  // Zero on a single-process appliance (CI_ROLE=all), which is the default, so
+  // the note stays silent unless the split is actually in use.
+  const elsewhereCount = (cronControls ?? []).filter((control) => !control.servedHere).length;
 
   return (
     <FoldCard fold>
       <Card.Header className={cardPad(phone)}>
         <FoldTrigger>
           <Card.Title className="text-base">Schedules</Card.Title>
-          <Card.Description>Recurring jobs registered in this process ({crons.length})</Card.Description>
+          <Card.Description>
+            {elsewhereCount > 0
+              ? `Every schedule in this build (${rows.length})`
+              : `Recurring jobs registered in this process (${rows.length})`}
+          </Card.Description>
         </FoldTrigger>
       </Card.Header>
       <FoldBody>
         <Card.Content className={cardPad(phone)}>
-          {loading && !crons.length ? (
+          {/* `rows`, not `crons`: under CI_ROLE=web the dashboard reports no
+              schedules at all while the controls payload still has all 53, and
+              keying the empty state off the raw prop printed "nothing is
+              registered here" over a full table. */}
+          {loading && !rows.length ? (
             <Skeleton className="h-32 w-full" />
-          ) : !crons.length ? (
+          ) : !rows.length ? (
             <p className="text-sm text-muted-foreground">No recurring jobs are registered here.</p>
-          ) : phone ? (
-            <SchedulesPhoneList rows={rows} saving={saving} onSave={onSave} />
           ) : (
+            <>
+              {/* Said once, not per row. These schedules are listed and
+                  switchable from here because the mode is a ci.job_settings row
+                  every process reads — but their run times come from the
+                  scheduler that registered them, which is not this one. */}
+              {elsewhereCount > 0 ? (
+                <p className="pb-2 text-xs text-muted-foreground">
+                  {elsewhereCount} of these run in the worker process rather than this one. They are
+                  switchable from here, but this process has no run times for them.
+                </p>
+              ) : null}
+              {phone ? (
+                <SchedulesPhoneList rows={rows} saving={saving} onSave={onSave} />
+              ) : (
             // A table, like the Jobs list — same columns-and-rows shape, so the two
             // cards read as one system rather than two unrelated widgets. The grid
             // of cards it replaced could not be scanned down a column (every
             // schedule's cron sat at a different x-position).
-            <SchedulesTable rows={rows} saving={saving} onSave={onSave} />
+                <SchedulesTable rows={rows} saving={saving} onSave={onSave} />
+              )}
+            </>
           )}
         </Card.Content>
       </FoldBody>

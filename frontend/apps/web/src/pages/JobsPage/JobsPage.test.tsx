@@ -729,6 +729,50 @@ describe('JobsPage schedules', () => {
     });
 
     /**
+     * The 11 `role: 'worker'` schedules (of 53) never reach a CI_ROLE=web
+     * process's SchedulerRegistry, so the dashboard payload omits them. #2546
+     * fixed that for the controls list; moving the switches into this table
+     * would have re-hidden them, which is the same defect wearing a different
+     * card. The controls payload IS complete, so anything only it knows about
+     * is appended — switchable, with no run times, because this process never
+     * registered it.
+     */
+    it('lists a worker schedule the dashboard never saw, and says why it has no times', () => {
+      controlsState.data = {
+        global: {
+          concurrency: { value: 10, effective: 10, source: 'default' },
+          perQueueConcurrency: { value: 6, effective: 6, source: 'default' },
+          nonInteractive: 'enabled',
+        },
+        topology: { role: 'web', queueWorkerProcesses: 1, perProcessConcurrency: 6 },
+        maxConcurrency: 64,
+        queues: [],
+        crons: [
+          {
+            name: 'WorkerOnlyCron.sweep',
+            cron: '0 0 * * * *',
+            mode: 'enabled',
+            role: 'worker',
+            servedHere: false,
+            locked: false,
+            lockedReason: null,
+            skippedCount: 0,
+            lastSkippedAt: null,
+          },
+        ],
+      } as unknown as JobControlsResponse;
+
+      // The dashboard knows nothing about it — this is the CI_ROLE=web case.
+      render({ dashboard: dashboard({ crons: [] }) });
+
+      const row = scheduleRow('WorkerOnlyCron.sweep');
+
+      expect(row).toBeInTheDocument();
+      expect(within(row).getByRole('switch')).toBeInTheDocument();
+      expect(screen.getByText(/run in the worker process rather than this one/i)).toBeInTheDocument();
+    });
+
+    /**
      * The table is the record of what is REGISTERED. A schedule the controls
      * endpoint does not know about — an older server, or one registered since
      * the controls were read — keeps its row and loses only its switch.

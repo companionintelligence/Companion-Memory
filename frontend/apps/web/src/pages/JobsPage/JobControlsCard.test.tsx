@@ -56,6 +56,8 @@ function cron(overrides: Partial<JobCronControl> = {}): JobCronControl {
     name: 'PlanningJobsCron.todoScan',
     cron: '0 */30 * * * *',
     mode: 'enabled',
+    role: 'web',
+    servedHere: true,
     locked: false,
     lockedReason: null,
     skippedCount: 0,
@@ -67,8 +69,10 @@ function cron(overrides: Partial<JobCronControl> = {}): JobCronControl {
 function controls(overrides: Partial<JobControlsResponse> = {}): JobControlsResponse {
   return {
     global: {
-      concurrency: { value: null, default: 10, max: 64, effective: 10 },
-      perQueueConcurrency: { value: null, default: 6, max: 64, effective: 6 },
+      // `max` mirrors `default` on the two global numbers: these controls only
+      // go down, so the shipped figure is also the ceiling.
+      concurrency: { value: null, default: 10, max: 10, effective: 10 },
+      perQueueConcurrency: { value: null, default: 6, max: 6, effective: 6 },
       nonInteractive: 'enabled',
     },
     topology: { role: 'all', queueWorkerProcesses: 1, perProcessConcurrency: 10 },
@@ -287,6 +291,41 @@ describe('JobControlsCard queues', () => {
     openSection(/Queues/);
 
     expect(screen.getByText(/Running at 6 — a lower ceiling applies/)).toBeInTheDocument();
+  });
+});
+
+describe('JobControlsCard concurrency ceilings', () => {
+  it('offers the shipped figure as the highest value either box will take', () => {
+    renderCard(controls());
+
+    // Both boxes used to carry max=64 against a shipped 10 and 6, so the page
+    // invited an operator to take the appliance six times past what the build
+    // allows — from the page they opened because it was already too hot.
+    expect(screen.getByLabelText(/Jobs at once, whole appliance/i)).toHaveAttribute('max', '10');
+    expect(screen.getByLabelText(/Jobs at once, per queue/i)).toHaveAttribute('max', '6');
+  });
+
+  it('says in words that the numbers only go down', () => {
+    renderCard(controls());
+
+    expect(screen.getByText(/only go/i)).toBeInTheDocument();
+    expect(screen.getByText(/10 appliance-wide and 6 per queue/)).toBeInTheDocument();
+  });
+
+  it('reports a stored value the appliance is not honouring', () => {
+    // A row can hold a number above the ceiling — written by an older build, or
+    // by hand — so the card has to show the disagreement rather than the request.
+    renderCard(
+      controls({
+        global: {
+          concurrency: { value: 64, default: 10, max: 10, effective: 10 },
+          perQueueConcurrency: { value: null, default: 6, max: 6, effective: 6 },
+          nonInteractive: 'enabled',
+        },
+      }),
+    );
+
+    expect(screen.getByText(/Running at 10 — a lower ceiling applies/)).toBeInTheDocument();
   });
 });
 
