@@ -1,8 +1,8 @@
 import { useCallback, useMemo, useState } from 'react';
 
 import { usePageTitle } from '@ci/common';
-import { Accordion, Badge, Button, Card, Skeleton, Switch, cn } from '@ci/shadcn';
-import { AlertTriangle, RefreshCcw } from '@ci/shadcn/icons';
+import { Accordion, Badge, Card, Skeleton, Switch, cn } from '@ci/shadcn';
+import { AlertTriangle } from '@ci/shadcn/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { PageContent } from '@/components/layout';
@@ -170,12 +170,16 @@ export function JobsPage() {
               is in flight, so the page is unchanged the rest of the time. */}
           <JobsImportActivity />
 
-          {/* The verdict first. The tiles that used to be here were accurate
-              and mute — "Dead-lettered 8,431" carried the same weight as
-              "Retrying 2", and on a real appliance the first number was 43% of
-              every job on the box. The counts survive as the proportional bar
-              inside this card; what is new is that the page now says what it
-              thinks before showing its working. */}
+          {/* One card, not two. This and "Queue Activity" sat next to each
+              other answering the same question in two registers: the sentences
+              here already said "8,535 jobs have given up" and "36 are failing
+              but still retrying", and the six tiles below repeated both figures
+              at the weight of "Retrying 0".
+
+              Now the card says what it thinks, then shows its working — the six
+              live counts, then the proportional split by category. The counts
+              stayed clickable, because they are how an operator filters the
+              table underneath. */}
           <JobHealthCard
             stateCounts={list.data?.stateCounts ?? {}}
             categoryCounts={list.data?.categoryCounts ?? {}}
@@ -183,17 +187,13 @@ export function JobsPage() {
             loading={list.loading || dashboard.loading}
             onSelect={(filter) => onFilterChange(filter)}
             onOpenSchedules={() => navigate('/jobs/schedules')}
-          />
-
-          <SummaryCard
             summary={dashboard.data?.summary}
-            loading={dashboard.loading}
             refreshing={refreshing || dashboard.refreshing}
             error={dashboard.error}
             staleSince={dashboard.staleSince}
             updatedAt={dashboard.updatedAt}
             onRefresh={refreshAll}
-            onSelectState={(state) => onFilterChange({ state, offset: 0 })}
+            onSelectState={(state: string) => onFilterChange({ state, offset: 0 })}
           />
 
           {/* Controls sit directly under the counts on both form factors.
@@ -245,138 +245,6 @@ export function JobsPage() {
   );
 }
 
-type SummaryCardProps = {
-  summary?: JobsDashboardResponse['summary'];
-  loading: boolean;
-  /** A refetch is running over figures that are still on screen. */
-  refreshing: boolean;
-  error: string | null;
-  staleSince: Date | null;
-  updatedAt: Date | null;
-  onRefresh: () => void;
-  onSelectState: (state: string) => void;
-};
-
-function SummaryCard({
-  summary,
-  loading,
-  refreshing,
-  error,
-  staleSince,
-  updatedAt,
-  onRefresh,
-  onSelectState,
-}: SummaryCardProps) {
-  const phone = usePhone();
-
-  // Each tile is a shortcut into the table below it — a number an operator
-  // cannot click is a number they have to go hunting for.
-  const tiles = useMemo(
-    () => [
-      { label: 'Pending', value: summary?.pending ?? 0, state: 'created' },
-      { label: 'Running', value: summary?.active ?? 0, state: 'active' },
-      { label: 'Retrying', value: summary?.retry ?? 0, state: 'retry' },
-      { label: 'Completed', value: summary?.completed ?? 0, state: 'completed' },
-      { label: 'Failed', value: summary?.failed ?? 0, state: 'failed' },
-      { label: 'Dead-lettered', value: summary?.deadLettered ?? 0, state: 'dead-letter' },
-    ],
-    [summary],
-  );
-
-  return (
-    <FoldCard>
-      <Card.Header
-        className={cn(
-          'flex gap-2',
-          phone
-            ? 'flex-row items-center justify-between'
-            : 'flex-col md:flex-row md:items-center md:justify-between',
-          cardPad(phone),
-        )}
-      >
-        <div>
-          <Card.Title className="text-lg">Queue Activity</Card.Title>
-          <Card.Description>
-            {updatedAt
-              ? `Updated ${new Intl.DateTimeFormat(undefined, {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                }).format(updatedAt)}`
-              : 'Current job workload'}
-          </Card.Description>
-        </div>
-        {/* Spins in place. The figures below it stay exactly where they are —
-            a refresh that blanked the card is what sent an operator to a page
-            with nothing on it every time they asked it a question. */}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRefresh}
-          aria-busy={refreshing || undefined}
-          className={phone ? 'shrink-0' : 'w-full md:w-auto'}
-        >
-          <RefreshCcw className={cn(phone ? 'h-4 w-4' : 'mr-2 h-4 w-4', refreshing && 'animate-spin')} />
-          {phone ? (
-            <span className="sr-only">{refreshing ? 'Refreshing' : 'Refresh'}</span>
-          ) : refreshing ? (
-            'Refreshing'
-          ) : (
-            'Refresh'
-          )}
-        </Button>
-      </Card.Header>
-      <Card.Content className={cn('space-y-3', cardPad(phone))}>
-        {staleSince ? (
-          <div
-            role="status"
-            className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400"
-          >
-            <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="min-w-0 break-words">
-              Showing data from {staleSince.toLocaleTimeString()} — refreshes have been failing since then
-              {error ? ` (${error})` : ''}.
-            </span>
-          </div>
-        ) : error ? (
-          <div
-            role="alert"
-            className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-          >
-            <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="min-w-0 break-words">{error}</span>
-          </div>
-        ) : null}
-
-        {loading && !summary ? (
-          <Skeleton className="h-24 w-full" />
-        ) : (
-          <div className={phone ? 'grid grid-cols-2 gap-2' : 'grid gap-3 sm:grid-cols-3 lg:grid-cols-6'}>
-            {tiles.map((tile) => (
-              <button
-                key={tile.label}
-                type="button"
-                onClick={() => onSelectState(tile.state)}
-                className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-left transition-colors hover:border-border hover:bg-muted/60"
-              >
-                <p className="text-xs uppercase text-muted-foreground">{tile.label}</p>
-                <p className="mt-0.5 text-xl font-semibold tabular-nums">{tile.value.toLocaleString()}</p>
-              </button>
-            ))}
-          </div>
-        )}
-      </Card.Content>
-    </FoldCard>
-  );
-}
-
-/**
- * The recurring jobs, from Nest's live scheduler registry.
- *
- * The column this replaces rendered `pgboss.schedule`, which nothing in this
- * codebase writes — so it was empty on every appliance ever shipped while ~34
- * `@Cron` methods ran beside it, invisible.
- */
 function SchedulesCard({
   crons,
   loading,

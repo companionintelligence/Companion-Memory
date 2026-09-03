@@ -83,7 +83,7 @@ let lastWindowHours = 0;
 
 // Same reason as `useDeadLetters` above: the pinned import region reads the
 // auth context that `renderWithProviders` deliberately does not supply. It has
-// its own test file; what the PAGE owes is mounting it, above Queue Activity.
+// its own test file; what the PAGE owes is mounting it, above the Health card.
 vi.mock('@/components/ImportActivity', () => ({
   ImportActivity: ({ className }: { className?: string }) => <div className={className}>import activity</div>,
 }));
@@ -291,7 +291,7 @@ describe('JobsPage summary', () => {
   function tile(label: string): HTMLElement {
     const heading = screen
       .getAllByText(label)
-      .find((node) => node.className.includes('uppercase') && node.tagName === 'P');
+      .find((node) => node.className.includes('uppercase') && node.tagName === 'SPAN');
 
     const button = heading?.closest('button');
 
@@ -908,7 +908,10 @@ describe('JobsPage controls', () => {
     render();
 
     const controls = screen.getByText('Controls');
-    const summary = screen.getByText('Queue Activity');
+    // The counts live in the Health card now — it and "Queue Activity" were two
+    // cards answering one question, and the tiles repeated figures the verdicts
+    // above them had already called out.
+    const summary = screen.getByText('Health');
 
     expect(controls).toBeInTheDocument();
     // DOCUMENT_POSITION_FOLLOWING: the summary comes before the controls.
@@ -1096,10 +1099,11 @@ describe('JobsPage live imports', () => {
     const activity = screen.getByText('import activity');
 
     expect(activity).toBeInTheDocument();
-    // Above Queue Activity: while an import is in flight it outranks the raw
-    // queue, which is the thing an operator came here unable to interpret.
+    // Above the Health card, which now carries the queue counts: while an
+    // import is in flight it outranks the raw queue, which is the thing an
+    // operator came here unable to interpret.
     expect(
-      activity.compareDocumentPosition(screen.getByText('Queue Activity')) & Node.DOCUMENT_POSITION_FOLLOWING,
+      activity.compareDocumentPosition(screen.getByText('Health')) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 

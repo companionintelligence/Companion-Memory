@@ -4,7 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { DeadLettersCard, describeReplay, formatAge } from './DeadLettersCard';
-import { groupDeadLetters, type DeadLetter, type DeadLetterReplayResponse } from './useDeadLetters';
+import {
+  DEAD_LETTER_PAGE,
+  groupDeadLetters,
+  type DeadLetter,
+  type DeadLetterReplayResponse,
+} from './useDeadLetters';
 
 /**
  * The dead-letter card.
@@ -222,5 +227,35 @@ describe('formatAge', () => {
 describe('describeReplay', () => {
   it('leads with what actually went back on the bus', () => {
     expect(describeReplay(OK)).toBe('Re-emitted 2.');
+  });
+});
+
+/**
+ * `total` is the length of ONE page — the request asks for at most
+ * `DEAD_LETTER_PAGE` — so on an appliance with thousands of dead letters the
+ * card read exactly "200 un-replayed", which looks like a count and is really
+ * the ceiling. Sitting under a Health card that says "8,535 jobs have given
+ * up", that was two unexplained numbers for the same thing.
+ */
+describe('DeadLettersCard when the page is full', () => {
+  it('says the count is a first page rather than a total', () => {
+    renderCard(
+      Array.from({ length: DEAD_LETTER_PAGE }, (_, i) =>
+        letter({ id: `dl-${i}` }),
+      ),
+    );
+
+    expect(screen.getByText(/First 200 un-replayed/)).toBeInTheDocument();
+    expect(screen.getByText(/there are more/)).toBeInTheDocument();
+  });
+
+  it('reports a short page as the exact count it is', () => {
+    renderCard([
+      letter({ id: 'dl-1' }),
+      letter({ id: 'dl-2' }),
+    ]);
+
+    expect(screen.getByText(/^2 un-replayed/)).toBeInTheDocument();
+    expect(screen.queryByText(/there are more/)).not.toBeInTheDocument();
   });
 });
