@@ -9,6 +9,8 @@ import { useAuth } from '@/hooks';
 import { type AgentChatContext, openAgentHarness, openInAppChat } from '@/lib/agentChat';
 import { chatThreadPath } from '@/pages/ChatPage/chatPaths';
 
+import { dispatchNotReadyAction, dispatchNotReadyMessage } from './dispatchNotReady';
+
 /** Chat: running + open URL. OpenClaw also has to be talking to Memory. */
 export function isChatableHarness(harness: AgentHarnessStatus): boolean {
   if (!harness.openUrl || !harness.running) {
@@ -32,9 +34,11 @@ export function useChatAboutActions(context: AgentChatContext) {
     () => installedHarnesses.filter(isChatableHarness),
     [installedHarnesses],
   );
+  // Always take OpenClaw from the full list — the API returns it even when
+  // not installed, so Dispatch can toast a real reason instead of vanishing.
   const openclaw = useMemo(
-    () => installedHarnesses.find((harness) => harness.id === 'openclaw') ?? null,
-    [installedHarnesses],
+    () => harnesses.find((harness) => harness.id === 'openclaw') ?? null,
+    [harnesses],
   );
 
   const chatHere = useCallback(() => {
@@ -57,16 +61,34 @@ export function useChatAboutActions(context: AgentChatContext) {
   }, []);
 
   const dispatchToOpenClaw = useCallback(async () => {
-    if (!authToken || !openclaw?.dispatchReady) {
+    if (!authToken) {
+      toast.error('Sign in to Dispatch to OpenClaw.');
+      return;
+    }
+
+    if (!openclaw) {
+      toast.error('OpenClaw is not available on this Hub.');
+      return;
+    }
+
+    if (!openclaw.dispatchReady) {
+      const action = dispatchNotReadyAction(openclaw);
+      toast.error(
+        dispatchNotReadyMessage(openclaw.dispatchBlocker),
+        action ? { action } : undefined,
+      );
       return;
     }
 
     try {
+      const sourceKind = context.sourceKind ?? 'GenericEntity';
+      const sourceId = context.sourceId ?? context.title;
       const job = await createDispatchJob(authToken, {
-        sourceKind: context.sourceKind ?? 'GenericEntity',
-        sourceId: context.sourceId ?? context.title,
+        sourceKind,
+        sourceId,
         title: context.title,
         body: context.body,
+        taskId: sourceKind === 'Task' ? sourceId : null,
       });
 
       toast.success('Handed to OpenClaw. It writes back into the thread when it has something.', {
