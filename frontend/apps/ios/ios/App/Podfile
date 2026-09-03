@@ -217,22 +217,37 @@ post_integrate do |installer|
   # EXCLUDED_ARCHS (that's a per-target *compile* setting; OTHER_LDFLAGS is a separate
   # aggregate *link* setting CocoaPods computes independently). Since post_install leaves
   # the MLKit family building nothing for arm64-simulator, those frameworks never exist on
-  # disk for this build, and the App target's own link step -- which does still need to
-  # succeed, unlike the individual MLKit pod targets -- would otherwise fail with
-  # `ld: framework 'CapacitorMlkitBarcodeScanning' not found` (and the same for
+  # disk for the SIMULATOR build, and the App target's simulator link step -- which does
+  # still need to succeed, unlike the individual MLKit pod targets -- would otherwise fail
+  # with `ld: framework 'CapacitorMlkitBarcodeScanning' not found` (and the same for
   # MLImage/MLKitBarcodeScanning/MLKitCommon/MLKitVision/GoogleDataTransport/
-  # GoogleToolboxForMac/GoogleUtilities/GTMSessionFetcher/nanopb/FBLPromises). Strip
-  # exactly those `-framework "X"` tokens so the App target only tries to link what
-  # actually got built.
+  # GoogleToolboxForMac/GoogleUtilities/GTMSessionFetcher/nanopb/FBLPromises).
+  #
+  # Pods-App.{debug,release}.xcconfig is per-CONFIGURATION, not per-SDK: the same file
+  # backs both the device (iphoneos) and simulator (iphonesimulator) builds of that
+  # configuration. MLKit's frameworks DO get built for the device, so stripping the
+  # `-framework "X"` tokens from the base OTHER_LDFLAGS -- as this used to do -- silently
+  # broke MLKit linking for the device build too. Instead, leave the base OTHER_LDFLAGS
+  # (and the App target's device link) completely untouched, and add an SDK-scoped
+  # override -- `OTHER_LDFLAGS[sdk=iphonesimulator*]`, the same `[sdk=iphonesimulator*]`
+  # qualifier convention post_install above already uses for EXCLUDED_ARCHS -- carrying
+  # every linker flag EXCEPT the MLKit family's. Xcode uses the more specific
+  # SDK-qualified key only for matching (simulator) builds and falls back to the base
+  # OTHER_LDFLAGS for every other SDK, so the device build keeps linking MLKit unchanged.
   #
   # The generated "[CP] Embed Pods Frameworks" script (Pods-App-frameworks.sh) has the
-  # exact same problem, for the same reason: it unconditionally calls
+  # analogous problem, for the same reason: it unconditionally calls
   # `install_framework ".../X.framework"` for every linked pod, including the MLKit
-  # family. That helper has `set -u` and never assigns its local `source` var when the
-  # path doesn't exist under any of the locations it checks, so rsync-ing an unbound
-  # `"${source}"` aborts the whole script (the same class of bug as the
-  # `ARCHS[@]: unbound variable` failure #2443/#2463 already fixed, in a different
-  # generated script). Strip exactly the MLKit family's `install_framework` lines.
+  # family, and that call would fail on a simulator build (the framework was never built)
+  # -- but the device build DOES produce and need those frameworks embedded. That helper
+  # also has `set -u` and never assigns its local `source` var when the path doesn't exist
+  # under any of the locations it checks, so rsync-ing an unbound `"${source}"` aborts the
+  # whole script (the same class of bug as the `ARCHS[@]: unbound variable` failure
+  # #2443/#2463 already fixed, in a different generated script) -- so it's not enough to
+  # leave the call in place for both platforms. Wrap exactly the MLKit family's
+  # `install_framework` lines in a `$PLATFORM_NAME` check (a standard Xcode Run Script
+  # build-phase environment variable, e.g. "iphoneos" / "iphonesimulator") so they still
+  # run for the device build and only skip for the simulator build.
   mlkit_product_names = mlkit_family_product_names(installer)
   next if mlkit_product_names.empty?
 
@@ -244,18 +259,37 @@ post_integrate do |installer|
     # OTHER_LDFLAGS into a dedicated `other_linker_flags[:frameworks]` /
     # `[:weak_frameworks]` Set, NOT into `.attributes['OTHER_LDFLAGS']` (that generic
     # `attributes` hash explicitly excludes frameworks/weak_frameworks/libraries --
-    # they're tracked separately so Xcodeproj can de-duplicate them). Removing entries
-    # from those sets before re-serializing is the correct way to drop them.
+    # they're tracked separately so Xcodeproj can de-duplicate them). A conditioned key
+    # like `OTHER_LDFLAGS[sdk=iphonesimulator*]`, though, is just an ordinary string key
+    # in `attributes` as far as Xcodeproj::Config is concerned -- only the exact literal
+    # `OTHER_LDFLAGS` key gets decomposed into `other_linker_flags`. So the simulator
+    # override has to be built by hand from the same pieces `Config#to_hash` would use,
+    # and written into `attributes` directly.
     aggregate_target.xcconfigs.each_key do |config_name|
       xcconfig_path = aggregate_target.xcconfig_path(config_name)
       next unless File.exist?(xcconfig_path)
       config = Xcodeproj::Config.new(xcconfig_path)
-      removed = false
-      mlkit_product_names.each do |product_name|
-        removed |= config.other_linker_flags[:frameworks].delete?(product_name) ? true : false
-        removed |= config.other_linker_flags[:weak_frameworks].delete?(product_name) ? true : false
+
+      has_mlkit = mlkit_product_names.any? do |product_name|
+        config.other_linker_flags[:frameworks].include?(product_name) ||
+          config.other_linker_flags[:weak_frameworks].include?(product_name)
       end
-      config.save_as(xcconfig_path) if removed
+      next unless has_mlkit
+
+      # `Set#-` returns a new Set rather than mutating the receiver, so `config`'s own
+      # frameworks/weak_frameworks (and therefore the base OTHER_LDFLAGS this same
+      # `config` is about to be saved back with, unchanged, for the device build) are
+      # never touched.
+      simulator_config = Xcodeproj::Config.new
+      simulator_config.other_linker_flags[:simple] = config.other_linker_flags[:simple]
+      simulator_config.other_linker_flags[:libraries] = config.other_linker_flags[:libraries]
+      simulator_config.other_linker_flags[:frameworks] = config.other_linker_flags[:frameworks] - mlkit_product_names
+      simulator_config.other_linker_flags[:weak_frameworks] = config.other_linker_flags[:weak_frameworks] - mlkit_product_names
+      simulator_config.other_linker_flags[:arg_files] = config.other_linker_flags[:arg_files]
+      simulator_config.other_linker_flags[:force_load] = config.other_linker_flags[:force_load]
+
+      config.attributes['OTHER_LDFLAGS[sdk=iphonesimulator*]'] = simulator_config.to_hash['OTHER_LDFLAGS'] || ''
+      config.save_as(xcconfig_path)
     end
 
     script_path = aggregate_target.embed_frameworks_script_path
@@ -263,7 +297,15 @@ post_integrate do |installer|
     original = File.read(script_path)
     contents = original
     mlkit_product_names.each do |product_name|
-      contents = contents.gsub(/^[ \t]*install_framework\s+"[^"\n]*\/#{Regexp.escape(product_name)}\.framework"[ \t]*\n/, '')
+      contents = contents.gsub(
+        /^([ \t]*)(install_framework\s+"[^"\n]*\/#{Regexp.escape(product_name)}\.framework")[ \t]*\n/
+      ) do
+        indent = Regexp.last_match(1)
+        call = Regexp.last_match(2)
+        "#{indent}if [ \"$PLATFORM_NAME\" != \"iphonesimulator\" ]; then\n" \
+        "#{indent}  #{call}\n" \
+        "#{indent}fi\n"
+      end
     end
     File.write(script_path, contents) if contents != original
   end
