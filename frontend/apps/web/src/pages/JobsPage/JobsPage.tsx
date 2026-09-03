@@ -437,6 +437,23 @@ function ScheduleStatus({ cron, className }: { cron: ScheduleRow['cron']; classN
     );
   }
 
+  // Outranks the elsewhere badge: `overdue` is now derived from durable state
+  // (the declared expression against ci.cron_runs), so it is as true for a
+  // worker schedule as for a local one — and it is the one signal that says a
+  // worker process has died. A row that is late must say so wherever it runs.
+  if (cron.overdue) {
+    return (
+      <Badge
+        variant="destructive"
+        className={badge}
+        title="The scheduler has this job started, but its expression asked for a fire that never got recorded."
+      >
+        <AlertTriangle aria-hidden className="h-3 w-3" />
+        overdue
+      </Badge>
+    );
+  }
+
   // Checked before `running`, which is null for these rows rather than false.
   // Read as a boolean it badges every worker schedule "stopped" — on the page an
   // operator opens precisely to find out what has stopped.
@@ -445,7 +462,7 @@ function ScheduleStatus({ cron, className }: { cron: ScheduleRow['cron']; classN
       <Badge
         variant="outline"
         className={badge}
-        title={`Runs in the ${cron.role ?? 'worker'} process, not the one serving this page. Its last run and last success are durable and shown; whether its scheduler is started, when it fires next, and whether it is overdue are only knowable there.`}
+        title={`Runs in the ${cron.role ?? 'worker'} process, not the one serving this page. Its last run, last success and overdue verdict are durable and shown; whether its scheduler is started and when it fires next are only knowable there.`}
       >
         {cron.role ?? 'elsewhere'}
       </Badge>
@@ -456,19 +473,6 @@ function ScheduleStatus({ cron, className }: { cron: ScheduleRow['cron']; classN
     return (
       <Badge variant="secondary" className={badge}>
         stopped
-      </Badge>
-    );
-  }
-
-  if (cron.overdue) {
-    return (
-      <Badge
-        variant="destructive"
-        className={badge}
-        title="The scheduler has this job started, but its expression asked for a fire that never got recorded."
-      >
-        <AlertTriangle aria-hidden className="h-3 w-3" />
-        overdue
       </Badge>
     );
   }

@@ -2996,6 +2996,7 @@ __metadata:
     commander: "npm:^14.0.0"
     config: "npm:^4.0.0"
     cookie-parser: "npm:^1.4.7"
+    cron: "npm:4.3.0"
     csv-parse: "npm:^5.6.0"
     dataloader: "npm:^2.2.3"
     dbmate: "npm:^2.27.0"

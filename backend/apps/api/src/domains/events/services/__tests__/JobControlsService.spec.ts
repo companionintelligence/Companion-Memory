@@ -236,6 +236,7 @@ describe('JobControlsService.update validation', () => {
     CronRegistry.declare({
       name: 'DerivationCron.deriveNightly',
       cron: '0 0 3 * * *',
+      timeZone: null,
       role: 'worker',
       servedHere: false,
     });
@@ -455,6 +456,7 @@ describe('JobControlsService.get', () => {
     CronRegistry.declare({
       name: 'OrphanCleanupCron.sweepOnSchedule',
       cron: '0 15 4 * * *',
+      timeZone: null,
       role: 'worker',
       servedHere: false,
     });

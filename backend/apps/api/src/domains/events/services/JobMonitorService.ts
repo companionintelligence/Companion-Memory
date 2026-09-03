@@ -1,12 +1,13 @@
 import { Injectable, Logger, Optional, UnauthorizedException } from '@nestjs/common';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
+import { CronTime } from 'cron';
 import { Repository } from 'typeorm';
 
 import { RequestContext } from '@ci/common/context';
 import { JobControlStore } from '@ci/common/job-controls';
 import { processRole, serves, type ServedRole } from '@ci/common/roles';
-import { CronRegistry, CronRunStore } from '@ci/common/schedule';
+import { type CronDeclaration, CronRegistry, CronRunStore } from '@ci/common/schedule';
 
 import { DEAD_LETTER_QUEUE } from '../constants';
 import { PgBossArchiveEntity } from '../entities/PgBossArchiveEntity';
@@ -479,7 +480,12 @@ export class JobMonitorService {
         lastSuccessAt: durable?.lastSuccessAt?.toISOString() ?? null,
         overdue: !disabled && isOverdue(job.cronTime, lastRunAt, now),
         disabled,
-        role: serves('web') ? 'web' : 'worker',
+        // The DECLARED role, which is a fact about the build. Deriving it from
+        // the process role was wrong under CI_ROLE=all, where every worker
+        // schedule registers locally and so reported itself as `web` — the
+        // preview fixture models role as a declaration for exactly this reason.
+        // The fallback covers a job registered without the decorator.
+        role: CronRegistry.get(name)?.role ?? (serves('web') ? 'web' : 'worker'),
         servedHere: true,
       });
     }
@@ -490,11 +496,13 @@ export class JobMonitorService {
       }
 
       const durable = persisted.get(declaration.name);
+      const disabled = JobControlStore.cronMode(declaration.name) === 'disabled';
+      const lastRunAtMs = durable?.lastRunAt.getTime() ?? null;
 
       schedules.push({
         name: declaration.name,
         cron: declaration.cron,
-        timezone: null,
+        timezone: declaration.timeZone,
         // Not `false`, which the card renders as "stopped".
         running: null,
         nextRunAt: null,
@@ -502,11 +510,15 @@ export class JobMonitorService {
         // and discarded here until now.
         lastRunAt: durable?.lastRunAt.toISOString() ?? null,
         lastSuccessAt: durable?.lastSuccessAt?.toISOString() ?? null,
-        // Needs the expression evaluated, and the only evaluator on this
-        // appliance is a `CronTime` the local registry holds. Absent one, the
-        // honest answer is "not claimed" rather than a computed false.
-        overdue: false,
-        disabled: JobControlStore.cronMode(declaration.name) === 'disabled',
+        // Derived from durable state alone: the declaration carries the
+        // expression and timezone, ci.cron_runs carries the last attempt, and
+        // `cron` is a direct dependency so the expression can be evaluated here.
+        // This is the one signal that catches a dead worker process — a daily
+        // schedule whose last attempt is three days old — and it is the signal
+        // listing these rows was meant to restore. Hardcoding it false left the
+        // dashboard unable to say anything had gone wrong in the other process.
+        overdue: !disabled && isOverdue(cronTimeFor(declaration), lastRunAtMs, now),
+        disabled,
         role: declaration.role,
         servedHere: false,
       });
@@ -780,16 +792,31 @@ export class JobMonitorService {
 /**
  * The slice of the `cron` library's `CronTime` this file uses.
  *
- * Declared structurally because `cron` is a transitive dependency of
- * `@nestjs/schedule` and PnP will not let this workspace import it — the only
- * handle on it is the live instance the registry hands back on `job.cronTime`.
- * Nothing here parses a cron string; the expression is only ever evaluated by
- * the library that registered it.
+ * Kept structural even though `cron` is now a direct dependency (pinned to the
+ * exact version `@nestjs/schedule` resolves, so there is one copy): the value
+ * arrives two ways — the live instance the registry hands back on
+ * `job.cronTime` for schedules this process runs, and one built by
+ * {@link cronTimeFor} for schedules it does not — and the verdict logic must not
+ * care which.
  */
 interface CronTimeLike {
   readonly timeZone?: string | null;
   sendAt?: (count: number) => unknown;
   getNextDateFrom?: (start: Date, timeZone?: string) => unknown;
+}
+
+/**
+ * A `CronTime` for a schedule this process did not register, built from its
+ * declaration. `undefined` when `cron` rejects the expression: a bad expression
+ * must not take the dashboard down, and `isOverdue` reads `undefined` as
+ * "cannot say", which is the honest answer for it.
+ */
+function cronTimeFor(declaration: CronDeclaration): CronTimeLike | undefined {
+  try {
+    return new CronTime(declaration.cron, declaration.timeZone ?? undefined);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Below a minute, clock skew alone would flip the verdict. */

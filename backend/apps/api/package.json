@@ -62,6 +62,7 @@
     "commander": "^14.0.0",
     "config": "^4.0.0",
     "cookie-parser": "^1.4.7",
+    "cron": "4.3.0",
     "csv-parse": "^5.6.0",
     "dataloader": "^2.2.3",
     "dbmate": "^2.27.0",

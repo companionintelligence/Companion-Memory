@@ -880,6 +880,32 @@ describe('JobsPage schedules', () => {
     expect(within(healthy).queryByText('overdue')).not.toBeInTheDocument();
   });
 
+  it('calls a worker schedule overdue when the server says so, ahead of its role badge', () => {
+    render({
+      dashboard: dashboard({
+        crons: [
+          cron('DerivationCron.deriveNightly', {
+            role: 'worker',
+            servedHere: false,
+            running: null,
+            nextRunAt: null,
+            lastRunAt: '2026-09-01T03:00:00.000Z',
+            // Computed by the server from the declared expression against the
+            // durable last attempt — the signal that a worker process has died.
+            overdue: true,
+          }),
+        ],
+      }),
+    });
+
+    // The role badge used to take the slot first, so a late worker schedule
+    // could never read as late on the page an operator opens to find out.
+    const row = scheduleRow('DerivationCron.deriveNightly');
+
+    expect(within(row).getByText('overdue')).toBeInTheDocument();
+    expect(within(row).queryByText('stopped')).not.toBeInTheDocument();
+  });
+
   it('shows when a schedule last succeeded, not only when it last fired', () => {
     const attemptedAt = new Date('2026-08-17T00:04:00.000Z');
     const succeededAt = new Date('2026-08-16T02:00:00.000Z');

@@ -55,12 +55,15 @@ worker schedule — only unable to name one.
 `JobMonitorService.getCronSchedules()` lists them too, carrying exactly what
 durable state supports: `lastRunAt`, `lastSuccessAt` and `disabled`, read from
 `ci.cron_runs` and `ci.job_settings`, which whichever process ticks has already
-written. What it does not carry for those rows is `running`, `nextRunAt` or
-`overdue` — live scheduler state this process does not have. `running` is `null`
-rather than `false` there, because `false` renders as *stopped*, and a schedule
-ticking normally in the worker is the last thing that should read as stopped on
-the page an operator opens to find out what stopped. The Schedules table badges
-them by role instead.
+written. It carries `overdue` for them too, computed from the declared
+expression and timezone against that durable last attempt — the one signal that
+says a worker process has died, and the reason listing these rows was worth
+doing. What it does not carry is `running` or `nextRunAt`: live scheduler state
+this process does not have. `running` is `null` rather than `false` there,
+because `false` renders as *stopped*, and a schedule ticking normally in the
+worker is the last thing that should read as stopped on the page an operator
+opens to find out what stopped. The Schedules table badges them by role instead,
+except when they are overdue, which outranks the badge wherever a schedule runs.
 
 `POST /jobs/crons/run` cannot fire across processes — `fireOnTick` is a handle on
 a live job — so asking the web process for a worker schedule returns an error

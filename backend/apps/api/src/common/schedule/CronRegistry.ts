@@ -10,6 +10,13 @@ export interface CronDeclaration {
   readonly name: string;
   /** The cron expression, as written at the declaration site. */
   readonly cron: string;
+  /**
+   * The `timeZone` option, if the declaration set one. Recorded so the
+   * expression can be evaluated correctly in a process that never registered
+   * the job — `overdue` for a worker schedule is computed from this plus
+   * `ci.cron_runs`, and a daily 03:00 job is a different instant in each zone.
+   */
+  readonly timeZone: string | null;
   /** Which process runs it. `web` unless the declaration says otherwise. */
   readonly role: ServedRole;
   /** Whether THIS process registered it with Nest's scheduler. */

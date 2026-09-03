@@ -790,6 +790,9 @@ describe('JobMonitorService schedules the answering process does not run', () =>
     // `ci.cron_runs` is written by whichever process ticks, and these rows were
     // being loaded and thrown away for want of a registry entry.
     const lastRunAt = new Date('2026-09-01T03:00:00.000Z');
+    // Half an hour after a daily tick: on cadence, so `overdue` is a computed
+    // false here rather than the hardcoded one it used to be.
+    jest.useFakeTimers({ now: lastRunAt.getTime() + 30 * 60_000 });
     const spy = jest
       .spyOn(CronRunStore, 'runsByName')
       .mockResolvedValue(new Map([['DerivationCron.deriveNightly', { lastRunAt, lastSuccessAt: null }]]));
@@ -798,6 +801,7 @@ describe('JobMonitorService schedules the answering process does not run', () =>
       CronRegistry.declare({
         name: 'DerivationCron.deriveNightly',
         cron: '0 0 3 * * *',
+        timeZone: null,
         role: 'worker',
         servedHere: false,
       });
@@ -841,6 +845,7 @@ describe('JobMonitorService schedules the answering process does not run', () =>
       expect(derivation?.overdue).toBe(false);
     } finally {
       spy.mockRestore();
+      jest.useRealTimers();
     }
   });
 
@@ -858,6 +863,7 @@ describe('JobMonitorService schedules the answering process does not run', () =>
       CronRegistry.declare({
         name: 'OrphanCleanupCron.sweepOnSchedule',
         cron: '0 30 4 * * *',
+        timeZone: null,
         role: 'worker',
         servedHere: false,
       });
@@ -877,6 +883,7 @@ describe('JobMonitorService schedules the answering process does not run', () =>
     CronRegistry.declare({
       name: 'ImportRetentionCron.runOnSchedule',
       cron: '0 0 5 * * 0',
+      timeZone: null,
       role: 'worker',
       servedHere: false,
     });
@@ -907,6 +914,162 @@ describe('JobMonitorService schedules the answering process does not run', () =>
       expect(crons[0]).toMatchObject({ name: 'ImportRetentionCron.runOnSchedule', disabled: true });
     } finally {
       await JobControlStore.configure(null);
+    }
+  });
+
+  it('reports a registered schedule by its declared role, not the process role', async () => {
+    // Under CI_ROLE=all — the single-process default — every worker schedule
+    // registers with the local scheduler, and deriving `role` from the process
+    // role reported all eleven as `web`. Role is a fact about the build, and the
+    // preview fixture already models it that way.
+    CronRegistry.declare({
+      name: 'DerivationCron.deriveNightly',
+      cron: '0 0 3 * * *',
+      timeZone: null,
+      role: 'worker',
+      servedHere: true,
+    });
+
+    const cronJobs = new Map<string, unknown>([
+      [
+        'DerivationCron.deriveNightly',
+        { cronTime: { source: '0 0 3 * * *', timeZone: 'UTC' }, isActive: true, nextDate: () => null, lastDate: () => null },
+      ],
+    ]);
+
+    const { service } = makeService({ cronJobs });
+    const { crons } = await service.getDashboard(context);
+
+    expect(crons.find((cron) => cron.name === 'DerivationCron.deriveNightly')).toMatchObject({
+      role: 'worker',
+      servedHere: true,
+    });
+  });
+
+  it('flags a worker schedule as overdue from its durable last attempt', async () => {
+    // A daily 03:00 schedule whose last attempt is three days old. Nothing local
+    // registered it, so the verdict comes from the declaration's expression
+    // evaluated against ci.cron_runs — which is the signal that says the worker
+    // process is dead, and the one that used to be hardcoded false.
+    const now = Date.UTC(2026, 8, 4, 12, 0, 0);
+    jest.useFakeTimers({ now });
+    const spy = jest.spyOn(CronRunStore, 'runsByName').mockResolvedValue(
+      new Map([
+        ['DerivationCron.deriveNightly', { lastRunAt: new Date(now - 3 * 24 * 60 * 60_000), lastSuccessAt: null }],
+      ]),
+    );
+
+    try {
+      CronRegistry.declare({
+        name: 'DerivationCron.deriveNightly',
+        cron: '0 0 3 * * *',
+        timeZone: 'UTC',
+        role: 'worker',
+        servedHere: false,
+      });
+
+      const { service } = makeService({ cronJobs: new Map() });
+      const { crons } = await service.getDashboard(context);
+
+      expect(crons[0]).toMatchObject({ name: 'DerivationCron.deriveNightly', servedHere: false, overdue: true });
+    } finally {
+      spy.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it('leaves a worker schedule that fired on cadence alone', async () => {
+    // 05:00 after a 03:00 tick: past the one-hour grace, so the expression is
+    // actually evaluated, and the previous expected fire is the one recorded.
+    const now = Date.UTC(2026, 8, 4, 5, 0, 0);
+    jest.useFakeTimers({ now });
+    const spy = jest.spyOn(CronRunStore, 'runsByName').mockResolvedValue(
+      new Map([
+        ['DerivationCron.deriveNightly', { lastRunAt: new Date(Date.UTC(2026, 8, 4, 3, 0, 0)), lastSuccessAt: null }],
+      ]),
+    );
+
+    try {
+      CronRegistry.declare({
+        name: 'DerivationCron.deriveNightly',
+        cron: '0 0 3 * * *',
+        timeZone: 'UTC',
+        role: 'worker',
+        servedHere: false,
+      });
+
+      const { service } = makeService({ cronJobs: new Map() });
+      const { crons } = await service.getDashboard(context);
+
+      expect(crons[0]?.overdue).toBe(false);
+    } finally {
+      spy.mockRestore();
+      jest.useRealTimers();
+    }
+  });
+
+  it('reports a switched-off worker schedule as disabled, not overdue', async () => {
+    const now = Date.UTC(2026, 8, 4, 12, 0, 0);
+    jest.useFakeTimers({ now });
+    const spy = jest.spyOn(CronRunStore, 'runsByName').mockResolvedValue(
+      new Map([
+        ['ImportRetentionCron.runOnSchedule', { lastRunAt: new Date(now - 9 * 24 * 60 * 60_000), lastSuccessAt: null }],
+      ]),
+    );
+
+    CronRegistry.declare({
+      name: 'ImportRetentionCron.runOnSchedule',
+      cron: '0 0 5 * * 0',
+      timeZone: 'UTC',
+      role: 'worker',
+      servedHere: false,
+    });
+
+    await JobControlStore.configure({
+      query: (sql: string) =>
+        sql.includes('UPDATE ci.job_settings')
+          ? Promise.resolve([])
+          : Promise.resolve([
+              {
+                kind: 'cron',
+                key: 'ImportRetentionCron.runOnSchedule',
+                mode: 'disabled',
+                concurrency: null,
+                skipped_count: '0',
+                last_skipped_at: null,
+                updated_at: new Date(),
+              },
+            ]),
+    } as unknown as DataSource);
+
+    try {
+      const { service } = makeService({ cronJobs: new Map() });
+      const { crons } = await service.getDashboard(context);
+
+      // Same rule as a local schedule: a decision outranks a symptom.
+      expect(crons[0]).toMatchObject({ disabled: true, overdue: false });
+    } finally {
+      spy.mockRestore();
+      jest.useRealTimers();
+      await JobControlStore.configure(null);
+    }
+  });
+
+  it('does not let a declaration with a bad expression take the dashboard down', async () => {
+    const spy = jest.spyOn(CronRunStore, 'runsByName').mockResolvedValue(
+      new Map([['Broken.tick', { lastRunAt: new Date(0), lastSuccessAt: null }]]),
+    );
+
+    try {
+      CronRegistry.declare({ name: 'Broken.tick', cron: 'not a cron', timeZone: null, role: 'worker', servedHere: false });
+
+      const { service } = makeService({ cronJobs: new Map() });
+      const { crons } = await service.getDashboard(context);
+
+      // `cron` rejects the expression; the honest verdict is "cannot say".
+      expect(crons[0]).toMatchObject({ name: 'Broken.tick', overdue: false });
+    } finally {
+      spy.mockRestore();
     }
   });
 });
@@ -953,6 +1116,7 @@ describe('JobMonitorService.fireCronJobs', () => {
     CronRegistry.declare({
       name: 'DerivationCron.deriveNightly',
       cron: '0 0 3 * * *',
+      timeZone: null,
       role: 'worker',
       servedHere: false,
     });

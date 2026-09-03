@@ -113,7 +113,14 @@ export function Cron(expression: string, options?: CiCronOptions) {
     // instead of the scheduler registry, which by construction only ever knew
     // about the half of the schedules its own process runs — and presented that
     // half as the whole list.
-    CronRegistry.declare({ name: runName, cron: expression, role, servedHere: serves(role) });
+    CronRegistry.declare({
+      name: runName,
+      cron: expression,
+      // Nest types this `unknown`; only a string is a timezone `cron` can evaluate.
+      timeZone: typeof cronOptions.timeZone === 'string' ? cronOptions.timeZone : null,
+      role,
+      servedHere: serves(role),
+    });
 
     if (!serves(role)) {
       return descriptor;
