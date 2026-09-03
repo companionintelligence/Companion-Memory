@@ -723,9 +723,7 @@ describe('JobsPage schedules', () => {
         dashboard: dashboard({ crons: [cron('JobMetricsCollector.sampleOnSchedule')] }),
       });
 
-      expect(
-        within(scheduleRow('JobMetricsCollector.sampleOnSchedule')).getByRole('switch'),
-      ).toBeDisabled();
+      expect(within(scheduleRow('JobMetricsCollector.sampleOnSchedule')).getByRole('switch')).toBeDisabled();
     });
 
     /**
@@ -770,6 +768,51 @@ describe('JobsPage schedules', () => {
       expect(row).toBeInTheDocument();
       expect(within(row).getByRole('switch')).toBeInTheDocument();
       expect(screen.getByText(/run in the worker process rather than this one/i)).toBeInTheDocument();
+
+      // The synthesized row used to carry `running: false`, which the status
+      // badge renders as "stopped" — on the page an operator opens to find out
+      // what has stopped, for a schedule ticking normally one process over.
+      expect(within(row).queryByText('stopped')).not.toBeInTheDocument();
+      expect(within(row).getByText('worker')).toBeInTheDocument();
+    });
+
+    it('shows the durable history the monitor now supplies for a worker schedule', () => {
+      const attemptedAt = new Date('2026-09-01T03:00:00.000Z');
+
+      // A current server lists these itself, with the ci.cron_runs rows it had
+      // been fetching and discarding. `servedHere: false` still suppresses the
+      // live fields, but last run and last success are real.
+      render({
+        dashboard: dashboard({
+          crons: [
+            cron('DerivationCron.deriveNightly', {
+              role: 'worker',
+              servedHere: false,
+              running: null,
+              lastRunAt: attemptedAt.toISOString(),
+              lastSuccessAt: null,
+            }),
+          ],
+        }),
+      });
+
+      const row = scheduleRow('DerivationCron.deriveNightly');
+
+      expect(within(row).getByText('worker')).toBeInTheDocument();
+      expect(within(row).queryByText('stopped')).not.toBeInTheDocument();
+      expect(within(row).getByText(attemptedAt.toLocaleTimeString())).toBeInTheDocument();
+      // "ran but never succeeded" — the signal that was structurally
+      // unreachable for these eleven while the monitor could not see them.
+      expect(within(row).getByText('never')).toBeInTheDocument();
+    });
+
+    it('leaves a schedule this process does run reading exactly as before', () => {
+      render({ dashboard: dashboard({ crons: [cron('PipelineTickCron.runOnSchedule')] }) });
+
+      const row = scheduleRow('PipelineTickCron.runOnSchedule');
+
+      expect(within(row).getByText('scheduled')).toBeInTheDocument();
+      expect(within(row).queryByText('worker')).not.toBeInTheDocument();
     });
 
     /**

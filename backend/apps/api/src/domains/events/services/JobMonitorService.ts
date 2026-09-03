@@ -5,7 +5,8 @@ import { Repository } from 'typeorm';
 
 import { RequestContext } from '@ci/common/context';
 import { JobControlStore } from '@ci/common/job-controls';
-import { CronRunStore } from '@ci/common/schedule';
+import { processRole, serves, type ServedRole } from '@ci/common/roles';
+import { CronRegistry, CronRunStore } from '@ci/common/schedule';
 
 import { DEAD_LETTER_QUEUE } from '../constants';
 import { PgBossArchiveEntity } from '../entities/PgBossArchiveEntity';
@@ -106,8 +107,14 @@ export interface CronScheduleDto {
    * NOT health. The `@Cron` wrapper catches, logs and returns, so a schedule
    * whose body throws on every tick stays started forever. Read this with
    * {@link lastSuccessAt} and {@link overdue}, never alone.
+   *
+   * `null` when {@link servedHere} is false: the scheduler holding this job is
+   * in the other process and this one cannot see it. Distinct from `false`,
+   * which means the local scheduler has it and has it stopped — the card
+   * renders that as "stopped", which is exactly wrong for a schedule ticking
+   * normally one process over.
    */
-  readonly running: boolean;
+  readonly running: boolean | null;
   /** Next fire time, ISO-8601, or null if the job is stopped. */
   readonly nextRunAt: string | null;
   /**
@@ -146,6 +153,18 @@ export interface CronScheduleDto {
    * supposed not to be.
    */
   readonly disabled: boolean;
+  /** Which process runs it. Every schedule in the build is listed, both roles. */
+  readonly role: ServedRole;
+  /**
+   * Whether the process that answered is the one whose scheduler holds it.
+   *
+   * False only under the web/worker split, and it is what makes the rest of the
+   * row readable: `running`, `nextRunAt` and `overdue` are live scheduler state
+   * this process does not have, so they are null/false rather than claimed.
+   * `lastRunAt`, `lastSuccessAt` and `disabled` are durable and mean the same
+   * either way.
+   */
+  readonly servedHere: boolean;
 }
 
 export interface JobQueueDto {
@@ -308,6 +327,15 @@ export class JobMonitorService {
    *
    * `fireOnTick` does not await async cron bodies; work continues in the
    * background and lands on pg-boss like a normal tick.
+   *
+   * **A name this process cannot fire is reported, not dropped.** Under the
+   * split, the process serving HTTP is `CI_ROLE=web`, which holds none of the
+   * eleven worker schedules. Asking it for one walked a registry the name was
+   * not in, matched nothing, and returned `{fired: [], skipped: [], errors: []}`
+   * — a success-shaped answer to a request that did nothing, for the one
+   * operation whose whole purpose is making something happen now. Firing across
+   * processes is not possible (`fireOnTick` is a handle on a live job), so the
+   * honest outcome is an error naming the process that can.
    */
   fireCronJobs(names?: readonly string[]): {
     fired: string[];
@@ -327,8 +355,26 @@ export class JobMonitorService {
     }
 
     const allow = names && names.length > 0 ? new Set(names) : null;
+    const jobs = this.schedulerRegistry.getCronJobs();
 
-    for (const [name, job] of this.schedulerRegistry.getCronJobs()) {
+    for (const requested of allow ?? []) {
+      if (jobs.has(requested)) {
+        continue;
+      }
+
+      const declared = CronRegistry.get(requested);
+
+      errors.push({
+        name: requested,
+        error: declared
+          ? `"${requested}" runs in the ${declared.role} process (this one is ${processRole()}), so its ` +
+            `scheduler is not here to fire. Run it from that process, or switch it off and on from the ` +
+            `Jobs page if you only need the setting to change.`
+          : `"${requested}" is not a schedule in this build.`,
+      });
+    }
+
+    for (const [name, job] of jobs) {
       if (allow && !allow.has(name)) {
         skipped.push(name);
         continue;
@@ -349,7 +395,7 @@ export class JobMonitorService {
   }
 
   /**
-   * The recurring jobs registered with Nest's scheduler in THIS process.
+   * Every recurring job on the appliance, whether or not this process runs it.
    *
    * `nextRunAt` comes from the live registry. `lastRunAt` prefers the durable
    * `ci.cron_runs` row (survives restarts) and falls back to in-memory
@@ -360,18 +406,43 @@ export class JobMonitorService {
    * `overdue` is computed here rather than left to the UI because it needs the
    * cron expression evaluated, and the only evaluator is the `CronTime` the
    * registry is holding.
+   *
+   * ── The schedules this process does not run ────────────────────────────────
+   *
+   * Under the Procfile's split the API is `CI_ROLE=web` and the eleven
+   * `role: 'worker'` schedules never register with its scheduler, so this
+   * reported 42 of 53. #2539 moved the switches into the Schedules table and
+   * #2546 gave the controls payload the complete list, so the card now fills the
+   * gap by appending the names the controls endpoint knows and this one does not
+   * — but it can only invent a row, and it invents `running: false`, which the
+   * status badge renders as **stopped**. Eleven schedules ticking normally in
+   * the worker therefore read as stopped on the page an operator opens to find
+   * out what stopped, with dashes where their history should be.
+   *
+   * The durable half of the answer was already in hand here: `ci.cron_runs` is
+   * written by whichever process ticks, `runsByName()` loads all of it, and
+   * those eleven rows were being fetched and thrown away for want of a registry
+   * entry. That is also why the page's `never-succeeded` verdict — its only
+   * critical schedule signal — could not fire for a worker schedule however long
+   * one had been broken: it reads `lastRunAt`/`lastSuccessAt` off this list.
+   *
+   * So they are listed here, from {@link CronRegistry}, carrying exactly what
+   * durable state supports: last run, last success, and the operator's own
+   * on/off. What they deliberately do NOT carry is `running`, `nextRunAt` or
+   * `overdue` — facts about a process, not about the build. This process cannot
+   * know whether the worker is up, and no cron evaluator is resolvable here to
+   * compute a fire time for an expression nothing local has parsed. `running` is
+   * `null` rather than `false` so the badge can tell "elsewhere" from "stopped".
    */
   private async getCronSchedules(): Promise<CronScheduleDto[]> {
     const schedules: CronScheduleDto[] = [];
     const persisted = await CronRunStore.runsByName();
-
-    if (!this.schedulerRegistry) {
-      return schedules;
-    }
+    const registered = new Set<string>();
 
     const now = Date.now();
 
-    for (const [name, job] of this.schedulerRegistry.getCronJobs()) {
+    for (const [name, job] of this.schedulerRegistry?.getCronJobs() ?? []) {
+      registered.add(name);
       let nextRunAt: string | null = null;
       let memoryLastRunAt: string | null = null;
       const durable = persisted.get(name);
@@ -408,6 +479,36 @@ export class JobMonitorService {
         lastSuccessAt: durable?.lastSuccessAt?.toISOString() ?? null,
         overdue: !disabled && isOverdue(job.cronTime, lastRunAt, now),
         disabled,
+        role: serves('web') ? 'web' : 'worker',
+        servedHere: true,
+      });
+    }
+
+    for (const declaration of CronRegistry.all()) {
+      if (registered.has(declaration.name)) {
+        continue;
+      }
+
+      const durable = persisted.get(declaration.name);
+
+      schedules.push({
+        name: declaration.name,
+        cron: declaration.cron,
+        timezone: null,
+        // Not `false`, which the card renders as "stopped".
+        running: null,
+        nextRunAt: null,
+        // The whole reason this loop exists: written by whichever process ticks,
+        // and discarded here until now.
+        lastRunAt: durable?.lastRunAt.toISOString() ?? null,
+        lastSuccessAt: durable?.lastSuccessAt?.toISOString() ?? null,
+        // Needs the expression evaluated, and the only evaluator on this
+        // appliance is a `CronTime` the local registry holds. Absent one, the
+        // honest answer is "not claimed" rather than a computed false.
+        overdue: false,
+        disabled: JobControlStore.cronMode(declaration.name) === 'disabled',
+        role: declaration.role,
+        servedHere: false,
       });
     }
 

@@ -50,10 +50,22 @@ identical in both processes. Rows the answering process does not run carry a
 Those rows are still switchable from the web process: the mode is a
 `ci.job_settings` row, every process polls it, and the `@Cron` wrapper in the
 worker consults it on each tick. The web process was never unable to *control* a
-worker schedule — only unable to name one. What genuinely stays per-process is
-live scheduler state (next run, last run, fire-by-hand), which is why the
-dashboard's Schedules card still reads `SchedulerRegistry` and still shows only
-this process's own.
+worker schedule — only unable to name one.
+
+`JobMonitorService.getCronSchedules()` lists them too, carrying exactly what
+durable state supports: `lastRunAt`, `lastSuccessAt` and `disabled`, read from
+`ci.cron_runs` and `ci.job_settings`, which whichever process ticks has already
+written. What it does not carry for those rows is `running`, `nextRunAt` or
+`overdue` — live scheduler state this process does not have. `running` is `null`
+rather than `false` there, because `false` renders as *stopped*, and a schedule
+ticking normally in the worker is the last thing that should read as stopped on
+the page an operator opens to find out what stopped. The Schedules table badges
+them by role instead.
+
+`POST /jobs/crons/run` cannot fire across processes — `fireOnTick` is a handle on
+a live job — so asking the web process for a worker schedule returns an error
+naming the process that can, rather than the empty `{fired: [], skipped: [],
+errors: []}` it used to.
 
 ### Pause background work
 

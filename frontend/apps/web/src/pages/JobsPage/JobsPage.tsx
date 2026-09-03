@@ -20,11 +20,7 @@ import { JobsImportActivity } from './JobsImportActivity';
 import { categoryFromPath, JOBS_SECTIONS } from './jobsSections';
 import { JobsTable } from './JobsTable';
 import { useDeadLetters } from './useDeadLetters';
-import {
-  useJobControls,
-  type JobControlsPatch,
-  type JobCronControl,
-} from './useJobControls';
+import { useJobControls, type JobControlsPatch, type JobCronControl } from './useJobControls';
 import { useHistoryWindow, useJobFilters } from './useJobFilters';
 import { useJobHistory } from './useJobHistory';
 import { useJobsDashboard, type JobsDashboardResponse } from './useJobsDashboard';
@@ -280,10 +276,12 @@ function SchedulesCard({
    * #2546 fixed that for the controls list, and this table has to hold the same
    * line now that the switches live here.
    *
-   * The controls payload IS complete (CronRegistry is filled by the decorator
-   * before the role gate), so anything it knows about and the monitor does not
-   * is appended with no timings — which is honest: this process has no
-   * nextDate/lastDate for a job it never registered.
+   * The monitor lists them itself now, with the durable history it had been
+   * fetching and discarding, so on a current server this merge finds nothing to
+   * append. It is kept for the appliance running a build from before that: the
+   * controls payload IS complete (CronRegistry is filled by the decorator before
+   * the role gate), so anything it knows about and the monitor does not is
+   * appended with no timings rather than going missing.
    */
   const rows = useMemo(() => {
     const seen = new Set(crons.map((cron) => cron.name));
@@ -293,6 +291,12 @@ function SchedulesCard({
       schedule: describeCronExpression(cron.cron),
       control: controlByName.get(cron.name) ?? null,
     }));
+    // Only reached against a server that predates the monitor listing these
+    // itself. It cannot supply run times — that is the point of the fix on the
+    // server — but it must not claim `running: false` either: the status badge
+    // renders that as "stopped", so eleven schedules ticking normally in the
+    // worker read as stopped on the page an operator opens to find out what
+    // stopped. `null` plus `servedHere: false` is what the badge reads.
     const elsewhere = (cronControls ?? [])
       .filter((control) => !seen.has(control.name))
       .map((control) => ({
@@ -300,7 +304,9 @@ function SchedulesCard({
           name: control.name,
           cron: control.cron,
           timezone: null,
-          running: false,
+          running: null,
+          role: control.role,
+          servedHere: false,
           nextRunAt: null,
           lastRunAt: null,
           lastSuccessAt: null,
@@ -349,16 +355,17 @@ function SchedulesCard({
               {elsewhereCount > 0 ? (
                 <p className="pb-2 text-xs text-muted-foreground">
                   {elsewhereCount} of these run in the worker process rather than this one. They are
-                  switchable from here, but this process has no run times for them.
+                  switchable from here, and their last run and last success are shown — those are durable,
+                  written by whichever process ticks. When they fire next is only knowable there.
                 </p>
               ) : null}
               {phone ? (
                 <SchedulesPhoneList rows={rows} saving={saving} onSave={onSave} />
               ) : (
-            // A table, like the Jobs list — same columns-and-rows shape, so the two
-            // cards read as one system rather than two unrelated widgets. The grid
-            // of cards it replaced could not be scanned down a column (every
-            // schedule's cron sat at a different x-position).
+                // A table, like the Jobs list — same columns-and-rows shape, so the two
+                // cards read as one system rather than two unrelated widgets. The grid
+                // of cards it replaced could not be scanned down a column (every
+                // schedule's cron sat at a different x-position).
                 <SchedulesTable rows={rows} saving={saving} onSave={onSave} />
               )}
             </>
@@ -426,6 +433,21 @@ function ScheduleStatus({ cron, className }: { cron: ScheduleRow['cron']; classN
         title="Switched off in Controls. The schedule is still registered, but its body does not run."
       >
         off
+      </Badge>
+    );
+  }
+
+  // Checked before `running`, which is null for these rows rather than false.
+  // Read as a boolean it badges every worker schedule "stopped" — on the page an
+  // operator opens precisely to find out what has stopped.
+  if (cron.servedHere === false) {
+    return (
+      <Badge
+        variant="outline"
+        className={badge}
+        title={`Runs in the ${cron.role ?? 'worker'} process, not the one serving this page. Its last run and last success are durable and shown; whether its scheduler is started, when it fires next, and whether it is overdue are only knowable there.`}
+      >
+        {cron.role ?? 'elsewhere'}
       </Badge>
     );
   }
@@ -673,12 +695,7 @@ function SchedulesPhoneList({
                       </span>
                       <span className="flex shrink-0 items-center gap-2">
                         <ScheduleStatus cron={cron} />
-                        <ScheduleSwitch
-                          cron={cron.name}
-                          control={control}
-                          saving={saving}
-                          onSave={onSave}
-                        />
+                        <ScheduleSwitch cron={cron.name} control={control} saving={saving} onSave={onSave} />
                       </span>
                     </div>
                     <p className="mt-0.5 text-xs text-muted-foreground" title={schedule.raw}>
