@@ -76,6 +76,28 @@ def test_profile_stats_single_day_has_no_intervals():
     assert s["conf"] == 0.0
 
 
+def test_profile_stats_dow_survives_five_weeks_stale():
+    """
+    A perfectly regular weekly habit last seen 5 weeks ago must still leave a
+    non-zero, meaningfully-weighted signal in dow_counts — not an all-zero
+    histogram that flattens _dow_lift's day-of-week shape to "no preference."
+    """
+    today = datetime.datetime.utcnow().date()
+    last = (
+        today - datetime.timedelta(days=today.weekday()) - datetime.timedelta(weeks=5)
+    )
+    dates = [last - datetime.timedelta(weeks=25 - i) for i in range(26)]
+
+    s = rec._profile_stats(dates, [[1]] * 26)
+
+    assert s["dow"][last.weekday()] > 0
+    assert all(v == 0 for i, v in enumerate(s["dow"]) if i != last.weekday())
+
+    lift = rec._dow_lift(s["dow"], s["n_days"])
+    assert lift[last.weekday()] > 2.0  # meaningfully above the mean-1 baseline
+    assert not np.allclose(lift, 1.0)  # not the flat "no preference" fallback
+
+
 # ── build_recurrence_profiles (pruning) ────────────────────────────────────────
 
 

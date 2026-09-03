@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from ci.hbpe.tokenizer.bucket_aggregator import aggregate_day
 from ci.hbpe.tokenizer.vocab_registry import L0_CLASSES
 
@@ -87,3 +89,31 @@ def test_one_pair_per_bucket():
     )
     assert sum(1 for t in tokens if t["level"] == "L0") == 1
     assert sum(1 for t in tokens if t["level"] == "L1") == 1
+
+
+def test_decimal_start_and_end_min_from_postgres_extract():
+    """get_token_events_for_day computes start_min/end_min via
+    EXTRACT(epoch FROM ...) / 60.0, which Postgres returns as numeric ->
+    decimal.Decimal. aggregate_day must not raise TypeError when mixing
+    that with the float defaults used elsewhere."""
+    tokens = aggregate_day(
+        [
+            {
+                "l0_class": "LEISURE",
+                "l1_cluster_id": "c1",
+                "l1_sim": 1.0,
+                "tier": "ambient",
+                "start_min": Decimal("603.2"),
+                "end_min": Decimal("606.75"),
+                "default_duration_min": 3,
+                "priority": None,
+            }
+        ]
+    )
+    l0 = [t for t in tokens if t["level"] == "L0"]
+    l1 = [t for t in tokens if t["level"] == "L1"]
+    assert len(l0) == 1
+    assert l0[0]["token_id"] == "LEISURE"
+    assert l0[0]["bucket_idx"] == 40
+    assert len(l1) == 1
+    assert l1[0]["token_id"] == "c1"

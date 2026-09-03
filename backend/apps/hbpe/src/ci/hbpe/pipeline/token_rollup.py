@@ -50,8 +50,13 @@ def _build_weekly(user_id: str, today: datetime.date) -> list[tuple]:
         by_week[(monday, kind)].append(row)
 
     out: list[tuple] = []
-    for (monday, _kind), tokens in by_week.items():
-        out.extend(_archetype_rows(user_id, monday, "weekly", WEEKDAY_WEIGHT, tokens))
+    for (monday, kind), tokens in by_week.items():
+        # Fold the weekday/weekend split into `tier` itself: both groups
+        # otherwise share (user_id, period_start, tier) and _archetype_rows
+        # restarts seq_order at 0 for each call, colliding on
+        # hbpe.token_stream_rollup's primary key.
+        tier = f"weekly_{kind}"
+        out.extend(_archetype_rows(user_id, monday, tier, WEEKDAY_WEIGHT, tokens))
     return out
 
 

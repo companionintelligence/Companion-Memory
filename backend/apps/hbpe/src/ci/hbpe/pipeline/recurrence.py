@@ -78,6 +78,13 @@ DOW_LIFT_PRIOR = 0.25  # per-weekday Dirichlet prior for the hazard's DoW shape
 DOW_PRIOR_WEEKS = 3.0  # pseudo-weeks smoothing the DoW base rate
 DOW_MIN_DAYS = 4  # occurrence days before DoW evidence counts at face value
 DOW_P_MAX = 0.95  # a statistical DoW rate never reads as certainty
+# How fast dow_counts forgets old occurrences (see _profile_stats). Deliberately
+# much slower than kernel.DECAY_LAMBDA (7 days, tuned for the same-day occupancy
+# signal): "which weekday" is a slow-changing habit, and week_forecast's dow_rate
+# / _dow_lift both treat dow_counts as an approximate occurrence count (their
+# priors are calibrated for that scale) — a corpus whose newest data is a few
+# weeks old must not read as "this cluster has no weekday preference at all."
+DOW_DECAY_LAMBDA_DAYS = 56.0  # ~8 weeks
 
 DAYPART_NAMES = ("night", "morning", "afternoon", "evening")
 
@@ -148,13 +155,15 @@ def _profile_stats(dates: list[datetime.date], daypart_lists: list[list[int]]) -
     """Compute the statistical fields of one cluster's profile row."""
     from math import exp
 
-    from ci.hbpe.pipeline.kernel import DECAY_LAMBDA
-
     as_of = datetime.datetime.utcnow().date()
     dow = [0.0] * 7
     daypart = [0] * 4
     for d, parts in zip(dates, daypart_lists, strict=True):
-        weight = exp(-max((as_of - d).days, 0) / DECAY_LAMBDA)
+        # Recency-weighted (DOW_DECAY_LAMBDA_DAYS, not kernel.DECAY_LAMBDA —
+        # see its definition above) so a habit that has shifted weekday
+        # recently outweighs its own older history, without a corpus that is
+        # merely a few weeks stale rounding every weekday to 0 below.
+        weight = exp(-max((as_of - d).days, 0) / DOW_DECAY_LAMBDA_DAYS)
         dow[d.weekday()] += weight
         for p in parts:
             if 0 <= p < 4:
@@ -167,7 +176,7 @@ def _profile_stats(dates: list[datetime.date], daypart_lists: list[list[int]]) -
         "n_days": len(dates),
         "first_seen": dates[0],
         "last_seen": dates[-1],
-        "dow": [round(v * 10) for v in dow],
+        "dow": [round(v) for v in dow],
         "daypart": daypart,
         "gaps": gaps,
         "median": None,
