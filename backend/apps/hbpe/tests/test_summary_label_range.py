@@ -101,7 +101,7 @@ def test_token_source_days_cover_events_and_summaries_and_clamp_to_today(monkeyp
     one of the LIMIT slots and pushes a real day out of the budget.
     """
     calls: list[tuple] = []
-    rows = [("2026-08-30",), ("2024-01-15",)]
+    rows = [("2026-08-30", True), ("2024-01-15", True)]
     monkeypatch.setattr(db, "get_conn", lambda: _ScalarConn(rows, calls))
 
     days = bs.token_source_days(USER, window_days=90, today=dt.date(2026, 8, 30))
@@ -113,14 +113,99 @@ def test_token_source_days_cover_events_and_summaries_and_clamp_to_today(monkeyp
     assert "FROM ci.summaries s" in sql
     assert "s.period_type = 'hourly'" in sql
     assert "SELECT DISTINCT" in sql
-    assert "UNION" in sql and "UNION ALL" not in sql
+    # The two source branches are UNIONed — a day holding both an event and a
+    # summary is one day. The final SELECT is UNION ALL because it carries the
+    # content/purge tag that keeps label_recency_start off the purge days, and
+    # the two sets are already disjoint (purge excludes both source branches).
+    assert (
+        "SELECT source_date FROM event_days UNION SELECT source_date FROM summary_days"
+        in sql
+    )
+    assert (
+        "SELECT source_date, TRUE AS is_content FROM content "
+        "UNION ALL SELECT source_date, FALSE AS is_content FROM purge" in sql
+    )
     assert "ORDER BY source_date DESC LIMIT" in sql
     assert "e.start_time < (%s::date + INTERVAL '1 day')" in sql
     assert "s.period_start < (%s::date + INTERVAL '1 day')" in sql
-    # user_id/today per branch, then the day budget — inclusive on both ends,
-    # so 90 window days is 91 calendar days, matching the old range's width.
+    # user_id/today per source branch, then the event-day reservation and the
+    # content budget, then the purge branch's own user_id/today and its cap.
+    #
+    # The budget is inclusive on both ends, so 90 window days is 91 calendar
+    # days, matching the old contiguous range's width. The floor is half of it —
+    # the largest reservation that still leaves the fill tier a majority of the
+    # slots for recent context.
     today = dt.date(2026, 8, 30)
-    assert params == (USER, today, USER, today, USER, today, 91)
+    assert bs.EVENT_DAY_FLOOR == 45
+    assert params == (USER, today, USER, today, 45, 91, USER, today, 91)
+
+
+def test_token_source_days_exclude_planning_blocks_like_both_reads_do(monkeypatch):
+    """
+    The day query PREDICTS two reads, and it has to carry their predicates or a
+    selected slot buys nothing. ``data_client.get_token_events_for_day`` (what
+    the serializer publishes) and ``data_client._unlabeled_events_where`` (what
+    the drain labels) both filter ``event_type IS DISTINCT FROM
+    'planned_block'`` — planning's own suggested blocks, written by
+    PlannedBlockService, are the appliance's output rather than observed
+    behaviour. A day holding only those serializes to zero event tokens.
+
+    Asserted as the whole event branch, not as a loose substring: the predicate
+    has to be in ``event_days`` (and in the bounds query, its fallback), not
+    merely somewhere in the file.
+    """
+    calls: list[tuple] = []
+    monkeypatch.setattr(db, "get_conn", lambda: _ScalarConn([], calls))
+    bs.token_source_days(USER, today=dt.date(2026, 8, 30))
+    bs.event_date_bounds(USER)
+
+    day_sql, bounds_sql = calls[0][0], calls[1][0]
+    assert (
+        "event_days AS ( SELECT DISTINCT e.start_time::date AS source_date "
+        "FROM ci.events e WHERE e.user_id = %s::uuid AND e.is_deleted = FALSE "
+        "AND e.event_type IS DISTINCT FROM 'planned_block'" in day_sql
+    )
+    assert (
+        "FROM ci.events e WHERE e.user_id = %s::uuid AND e.is_deleted = FALSE "
+        "AND e.event_type IS DISTINCT FROM 'planned_block'" in bounds_sql
+    )
+
+
+def test_token_source_days_reserve_a_share_of_the_budget_for_event_days(monkeypatch):
+    """
+    The tiers, in SQL shape. Events carry hard L0/L1 labels; hourly summaries
+    are the SUMMARY_SOFT_PROB (0.7) gap-filler. A flat ``ORDER BY source_date
+    DESC LIMIT 91`` over their union therefore hands the whole corpus to the
+    weaker source on any appliance with both an archival import and live
+    capture: summaries accrue one day-with-data per calendar day, so about 91
+    days after the import every imported event day is evicted from the budget.
+
+    ``reserved`` takes the newest EVENT_DAY_FLOOR event days first; ``fill``
+    takes the newest remaining days of either kind for whatever the reservation
+    left — an expression, not a literal, so an absent or short event corpus
+    hands its slots back to the fill instead of wasting them.
+    """
+    calls: list[tuple] = []
+    monkeypatch.setattr(db, "get_conn", lambda: _ScalarConn([], calls))
+
+    bs.token_source_days(USER, window_days=90, today=dt.date(2026, 8, 30))
+
+    sql, _params = calls[0]
+    # The whole reserved CTE, not a prefix of it: widening its source to the
+    # union is exactly the mutation that undoes the fix while leaving every
+    # other assertion here true.
+    assert (
+        "reserved AS ( SELECT source_date FROM event_days "
+        "ORDER BY source_date DESC LIMIT %s )" in sql
+    )
+    assert "fill AS (" in sql
+    assert "LIMIT GREATEST(%s - (SELECT count(*) FROM reserved), 0)" in sql
+    # The fill draws from BOTH sources, minus what the reservation already took.
+    assert (
+        "SELECT source_date FROM event_days UNION SELECT source_date FROM summary_days"
+        in sql
+    )
+    assert "FROM reserved r WHERE r.source_date = content_days.source_date" in sql
 
 
 def test_token_source_days_revisit_days_that_only_hold_stale_tokens(monkeypatch):
@@ -143,14 +228,25 @@ def test_token_source_days_revisit_days_that_only_hold_stale_tokens(monkeypatch)
     assert "FROM hbpe.token_stream ts" in sql
     assert "SELECT DISTINCT ts.date AS source_date" in sql
     # Clamped like the other two branches: a future-dated stale row would
-    # otherwise consume a budget slot a real day needs.
+    # otherwise be visited ahead of days that can still be read.
     assert "ts.date < (%s::date + INTERVAL '1 day')" in sql
-    # Three user_id/today pairs and ONE budget: the purge days compete for the
-    # same slots rather than getting a limit of their own. An emptied day is
-    # purged by the run that visits it, so it stops consuming a slot by itself,
-    # whereas a second budget would let a bulk delete inflate one night's
-    # serialize_day count without bound.
-    assert params == (USER, today, USER, today, USER, today, 91)
+    # Delete-only work, and correctness-critical: a day whose stale rows are
+    # never purged keeps nudging the forecast forever. So the purge tier is
+    # added ON TOP of the content budget — days it visits are excluded from the
+    # content tiers rather than competing with them — under its own cap, which
+    # is what keeps one bulk delete from making a single night unbounded. The
+    # set only ever shrinks (a visited day is purged and never returns), so the
+    # leftovers converge over subsequent nights.
+    #
+    # What it selects is SOURCE-LESS days, not "days outside the budget": those
+    # are two different sets once the tier sits on top of the budget rather than
+    # inside it. hbpe.token_stream holds far more history than 91 days —
+    # recurrence reads 180 and seasonal 800 — so purging everything the budget
+    # did not select would delete the profiler's history every night.
+    assert "FROM event_days e WHERE e.source_date = stale.source_date" in sql
+    assert "FROM summary_days s WHERE s.source_date = stale.source_date" in sql
+    assert params[-3:] == (USER, today, 91)
+    assert bs.PURGE_DAY_CAP == 91
 
 
 def test_token_source_days_omit_the_always_empty_tasks_branch(monkeypatch):
@@ -317,7 +413,7 @@ def test_nightly_step_targets_the_serialize_day_list_not_its_span(monkeypatch):
     monkeypatch.setattr(nr, "_run_inference", _immediate_inference)
     monkeypatch.setattr(
         bs,
-        "token_source_days",
+        "content_source_days",
         lambda _user_id: [dt.date(2024, 1, 15), dt.date(2026, 8, 30)],
     )
     monkeypatch.setattr(st, "SummaryTokenizer", _Tokenizer)
@@ -333,6 +429,38 @@ def test_nightly_step_targets_the_serialize_day_list_not_its_span(monkeypatch):
     }
 
 
+def test_nightly_step_labels_content_days_only_not_purge_days(monkeypatch):
+    """
+    Summaries are labeled on ``content_source_days``, not on the full
+    ``token_source_days``. A purge day is source-less by construction — having
+    no event and no summary is what put it in that tier — so it can only ever
+    add a date that matches nothing. That is not free:
+    ``get_unlabeled_summaries_on_days`` pairs its ``= ANY(...)`` match with a
+    MIN/MAX bracket because the array match is not sargable on its own, so one
+    source-less 2020 day widens the planner's bracket across six years of
+    hourly summaries.
+    """
+    calls: list[tuple] = []
+
+    class _Tokenizer:
+        def label_days(self, user_id, dates, should_continue=None):
+            calls.append((user_id, tuple(dates)))
+            return 3
+
+    purged = dt.date(2020, 5, 1)
+    monkeypatch.setattr(nr, "_run_inference", _immediate_inference)
+    monkeypatch.setattr(bs, "content_source_days", lambda _uid: [dt.date(2026, 8, 30)])
+    monkeypatch.setattr(
+        bs, "token_source_days", lambda _uid: [purged, dt.date(2026, 8, 30)]
+    )
+    monkeypatch.setattr(st, "SummaryTokenizer", _Tokenizer)
+
+    result = asyncio.run(nr.label_summary_tokens(USER))
+
+    assert calls == [(USER, ("2026-08-30",))]
+    assert result["start_date"] == "2026-08-30"
+
+
 def test_nightly_step_falls_back_to_yesterday_with_no_serializable_day(monkeypatch):
     calls: list[tuple] = []
 
@@ -342,7 +470,7 @@ def test_nightly_step_falls_back_to_yesterday_with_no_serializable_day(monkeypat
             return 0
 
     monkeypatch.setattr(nr, "_run_inference", _immediate_inference)
-    monkeypatch.setattr(bs, "token_source_days", lambda _user_id: [])
+    monkeypatch.setattr(bs, "content_source_days", lambda _user_id: [])
     monkeypatch.setattr(st, "SummaryTokenizer", _Tokenizer)
 
     result = asyncio.run(nr.label_summary_tokens(USER))
@@ -531,7 +659,7 @@ def test_nightly_step_hands_the_cancellation_event_to_the_tokenizer(monkeypatch)
         return fn(cancelled)
 
     monkeypatch.setattr(nr, "_run_inference", _run_with_cancelled_event)
-    monkeypatch.setattr(bs, "token_source_days", lambda _uid: [dt.date(2026, 8, 30)])
+    monkeypatch.setattr(bs, "content_source_days", lambda _uid: [dt.date(2026, 8, 30)])
     monkeypatch.setattr(st, "SummaryTokenizer", _Tokenizer)
 
     asyncio.run(nr.label_summary_tokens(USER))

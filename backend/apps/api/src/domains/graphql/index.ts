@@ -101,6 +101,7 @@ import { RelationshipResolver } from './resolvers/RelationshipResolver';
 import { SavedSearchResolver } from './resolvers/SavedSearchResolver';
 import { ScheduleCandidateResolver } from './resolvers/ScheduleCandidateResolver';
 import { SearchResolver } from './resolvers/SearchResolver';
+import { SourceSystemResolver } from './resolvers/SourceSystemResolver';
 import { SummaryResolver } from './resolvers/SummaryResolver';
 import { TagResolver } from './resolvers/TagResolver';
 import { TaskResolver } from './resolvers/TaskResolver';
@@ -226,6 +227,7 @@ import { UserResolver } from './resolvers/UserResolver';
     RelationshipResolver,
     SavedSearchResolver,
     SearchResolver,
+    SourceSystemResolver,
     SummaryResolver,
     TagAssignmentCountLoader,
     TagLoader,

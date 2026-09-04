@@ -390,6 +390,41 @@ export const ConfigSchema = z.object({
     fetchBatchSize: z.coerce.number().int().positive().default(20),
     perQueueConcurrency: z.coerce.number().int().positive().default(6),
     /**
+     * Appliance-wide fallback execution deadline for ONE job, in seconds
+     * (`CI_QUEUE_JOB_TIMEOUT_SECONDS`).
+     *
+     * Only a fallback: `PGBossEventService.jobDeadlineMs` prefers the queue's
+     * own declared `expireInSeconds`, so the eleven queues that state a budget
+     * keep theirs — `llm` 900 s, `agent-memory` 300 s, `ingest-coalesce` 1 h,
+     * `py-fn-summary` 30 min, `agent` 2 h, `py-fn-hbpe` ~8 h, and the five
+     * import queues at 12 h. This is what the other 28 get, and before it
+     * existed they got nothing at all: a listener that neither resolved nor
+     * rejected — a `fetch` with no timeout, an Ollama call that hung — held its
+     * per-queue slot, its global semaphore slot and its fetch-side
+     * `JobSlotPool` slot for the life of the process, with no log. Enough of
+     * those and the queue silently stops, which is exactly how it presented in
+     * production.
+     *
+     * 7200 (2 h) bounds the 28 queues whose unit of work is one entity, one
+     * file, one bounded batch or one ~60 s pipeline slice — two orders of
+     * magnitude of headroom over any of them, so it can only ever fire on
+     * something wedged. It is emphatically NOT a number to size long work
+     * against: this value replaced nothing, but it did TIGHTEN the effective
+     * bound, because a queue declaring no `expireInSeconds` was already
+     * inheriting the pg-boss constructor's `expireInHours: 12`. The import
+     * lane, which legitimately runs for hours, therefore states 12 h of its own
+     * rather than inheriting this — see `IMPORT_STAGE_EXPIRE_SECONDS`, and
+     * `docs/jobs-system.md` §1.11 for the per-queue verdicts behind the 28.
+     *
+     * Any queue that can outrun two hours must say so the same way. Raising
+     * THIS number instead is the wrong lever — it widens the wedge window for
+     * all 28 to buy headroom for one. Lowering it is only honest after reading
+     * a queue's p95 out of `ci.job_metrics`, and is likewise a per-queue edit.
+     * `PGBossEventService.MIN_JOB_DEADLINE_MS` floors whatever lands here, so a
+     * misconfigured 1 cannot kill every job on the appliance.
+     */
+    jobTimeoutSeconds: z.coerce.number().int().positive().default(7200),
+    /**
      * Days a REPLAYED dead letter is kept in `ci.pipeline_dead_letters` before
      * `DeadLetterReaperListener.purgeReplayed` reclaims it.
      *

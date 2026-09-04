@@ -2,7 +2,7 @@ import { type ReactNode, useCallback, useMemo } from 'react';
 
 import { useApolloClient, useQuery } from '@apollo/client';
 import { EmptyState, GlobalUID, LoadingPage, usePageTitle } from '@ci/common';
-import { Badge, Button, Card, Input } from '@ci/shadcn';
+import { Badge, Button, Card } from '@ci/shadcn';
 import { Merge } from '@ci/shadcn/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 
@@ -221,10 +221,11 @@ export function PeoplePage() {
   usePageTitle('People & communications - Companion Intelligence');
 
   const navigate = useNavigate();
-  // Lives in the URL (not local state) so the search text survives navigating
-  // away and back — e.g. via the Memory hub tabs — and is deep-linkable.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const searchQuery = searchParams.get('q') ?? '';
+  // The header search box's `?search=`: it edits this page's query in place
+  // (see GlobalSearchBox / isLiveSearchPath), so the page has no input of its
+  // own. In the URL, it survives navigating away and back and is deep-linkable.
+  const [searchParams] = useSearchParams();
+  const searchQuery = searchParams.get('search') ?? '';
 
   const client = useApolloClient();
 
@@ -408,33 +409,6 @@ export function PeoplePage() {
           <MemoryHubShell>
             <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
               <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-                <Input
-                  placeholder="Search people and communications..."
-                  value={searchQuery}
-                  onChange={(e) => {
-                    const value = e.target.value;
-
-                    setSearchParams(
-                      (params) => {
-                        if (value === '') {
-                          params.delete('q');
-                        } else {
-                          params.set('q', value);
-                        }
-
-                        return params;
-                      },
-                      { replace: true },
-                    );
-                    // New query, new cursor space — a stale failure must not gate it.
-                    pagination.reset();
-                  }}
-                  // A long placeholder next to the count on one row always has SOME
-                  // width where it clips mid-word — a min-width guess just moves the
-                  // threshold. Full-width below `sm` sidesteps that: the count drops
-                  // to its own line instead of fighting the input for space.
-                  className="max-w-xl w-full flex-1 sm:w-auto"
-                />
                 <div className="text-sm text-muted-foreground">{pagination.totalCount} people</div>
               </div>
 

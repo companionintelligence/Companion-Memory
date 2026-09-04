@@ -880,16 +880,16 @@ export class PlaceService {
       .andWhere('place.owner_user_id = :userId', { userId: context.userId });
 
     // Composite keyset: page strictly past (afterTime, afterId) in
-    // (created_at DESC, entity_id DESC) — see ContentService.getEntitiesForContents.
+    // (updated_at DESC, entity_id DESC) — see ContentService.getEntitiesForContents.
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(place.created_at < :afterTime OR (place.created_at = :afterTime AND place.entity_id < :afterId))',
+        '(place.updated_at < :afterTime OR (place.updated_at = :afterTime AND place.entity_id < :afterId))',
         { afterTime: options.afterTime, afterId: options.afterId },
       );
     }
 
     // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('place.created_at', options.order ?? 'DESC').addOrderBy('place.entity_id', 'DESC');
+    query = query.orderBy('place.updated_at', options.order ?? 'DESC').addOrderBy('place.entity_id', 'DESC');
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -959,11 +959,11 @@ export class PlaceService {
       .andWhere('place.owner_user_id = :userId', { userId: context.userId });
 
     if (options.startTime) {
-      query = query.andWhere('place.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('place.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('place.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('place.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     return query.getCount();

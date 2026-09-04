@@ -74,7 +74,15 @@ export class NMEAFileImporter implements FileImporter {
       return;
     }
 
+    // U-22: from here the sentence is a countable record — it either becomes a
+    // fix or is named in the drop ledger. A truncated sentence above is not
+    // counted at all, so the reconciliation stays exact rather than approximate.
+    params.pipeline.consumed?.(1);
+
     if (p[2] !== 'A') {
+      // Status 'V': the receiver had no valid fix on this sentence.
+      params.pipeline.drop?.('position_without_fix');
+
       return;
     } // data valid
 
@@ -84,10 +92,14 @@ export class NMEAFileImporter implements FileImporter {
     const lat = parseLat(p[3], p[4]);
     const lon = parseLon(p[5], p[6]);
     if (!timeframeContains(params.timeframe, ts)) {
+      params.pipeline.drop?.('outside_timeframe');
+
       return;
     }
 
     if (lat === undefined || lon === undefined) {
+      params.pipeline.drop?.('position_without_fix');
+
       return;
     }
 
@@ -100,6 +112,8 @@ export class NMEAFileImporter implements FileImporter {
       return;
     }
 
+    params.pipeline.consumed?.(1);
+
     const timeUTC = p[1];
     // Use the most recently seen RMC date. A pure GGA-only file yields no date
     // at all, and the fix is emitted undated rather than dated today.
@@ -108,6 +122,8 @@ export class NMEAFileImporter implements FileImporter {
     const lon = parseLon(p[4], p[5]);
     const alt = parseFloat(p[9]);
     if (lat === undefined || lon === undefined) {
+      params.pipeline.drop?.('position_without_fix');
+
       return;
     }
 
@@ -199,6 +215,10 @@ function pushLocation(
   tag: string,
 ) {
   if (!timeframeContains(params.timeframe, ts)) {
+    // Reached only for GGA sentences: parseGPRMC has already made this call and
+    // returned, so a sentence is never counted twice.
+    params.pipeline.drop?.('outside_timeframe');
+
     return;
   }
 

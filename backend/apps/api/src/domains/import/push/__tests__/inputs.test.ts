@@ -1,5 +1,9 @@
+import path from 'node:path';
+
 import { CommunicationType } from '@ci/domains/memory';
 
+import { KindleFileImporter } from '../../datasources/kindle';
+import type { ImportParams } from '../../datasources/timeline';
 import type { StagedItem } from '../../entities/StagedItemEntity';
 import { toCanonical, type CanonicalRecord } from '../canonical';
 import {
@@ -258,6 +262,117 @@ describe('toContentInput', () => {
 
     expect(input.external_id).toBe(uri);
     expect(input.external_id_kind).toBe('external_uri');
+  });
+});
+
+/**
+ * SRC-01 — the body contract for the two kinds that route to `content` ALONE.
+ *
+ * `note` and `reading.annotation` are the only two destinations a Notion page,
+ * an Evernote note, a Kindle clipping or a Goodreads review ever reaches
+ * (`destinationsFor`), so the content row's `text` is the sole home for the
+ * body. That `text` is filled from METADATA (`descriptionFor` reads
+ * Text/Body/Message/…/Highlight); `item.content.data()` is a parser-side blob
+ * loader that nothing on the push path ever calls. A parser that attaches its
+ * body only to the loader therefore lands an empty row and the words are gone.
+ *
+ * These assertions guard the contract itself rather than any one parser — a new
+ * note-shaped importer that forgets the metadata key is the same bug again.
+ */
+describe('toContentInput — bodies for content-only kinds (SRC-01)', () => {
+  it('carries a note body into content.text', () => {
+    const note = recordFor({
+      classification: 'note',
+      dataSource: 'notion',
+      metadata: { Title: 'Weekly Review', Source: 'Notion', Text: '# Weekly Review\n\nShipped the parser.' },
+    });
+
+    const input = toContentInput(note);
+
+    expect(input.type).toBe('note');
+    expect(input.text).toBe('# Weekly Review\n\nShipped the parser.');
+  });
+
+  it('carries a reading annotation body into content.text', () => {
+    const clipping = recordFor({
+      classification: 'annotation',
+      dataSource: 'kindle',
+      metadata: { Book: 'Thinking, Fast and Slow', Highlight: 'Nothing in life is as important…' },
+    });
+
+    expect(toContentInput(clipping).text).toBe('Nothing in life is as important…');
+  });
+
+  it('keeps two clippings from one book apart by appending the excerpt to the title', () => {
+    // titleFor's `reading.annotation` branch. Without the excerpt both rows are
+    // titled "Sapiens" and a reader cannot tell which highlight they are
+    // looking at.
+    const clip = (highlight: string) =>
+      toContentInput(
+        recordFor({
+          classification: 'annotation',
+          dataSource: 'kindle',
+          metadata: { Book: 'Sapiens', Highlight: highlight },
+        }),
+      );
+
+    const first = clip('First idea about the cognitive revolution.');
+    const second = clip('Second idea about the agricultural revolution.');
+
+    expect(first.title).toBe('Sapiens — First idea about the cognitive revolution.');
+    expect(second.title).toBe('Sapiens — Second idea about the agricultural revolution.');
+    expect(first.title).not.toBe(second.title);
+  });
+
+  it('holds end to end: the real Kindle parser’s metadata lands as content text', async () => {
+    // The contract cases above are written against literal metadata, so they
+    // pass whether or not any parser actually populates the keys. This one runs
+    // the shipped importer over its fixture and pushes what it emitted through
+    // the same builder — it is what goes red when a parser stops carrying the
+    // body. StagedWriter persists `item.metadata` verbatim (`StagedWriter.ts`
+    // `JSON.stringify(item.metadata ?? {})`), so the hand-off is faithful.
+    const fixture = path.join(__dirname, '..', '..', 'datasources', '__tests__', 'fixtures', 'kindle-export');
+    const importer = new KindleFileImporter();
+    const emitted: Array<{ item: { classification?: string; metadata?: Record<string, unknown> } }> = [];
+    await importer.fileImport({}, { filename: 'kindle-export', fullPath: fixture }, {
+      pipeline: { push: (g: unknown) => emitted.push(g as (typeof emitted)[number]) },
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    expect(emitted.length).toBeGreaterThan(0);
+
+    const inputs = emitted.map((g) =>
+      toContentInput(
+        recordFor({
+          classification: g.item.classification ?? null,
+          dataSource: 'kindle',
+          metadata: (g.item.metadata ?? {}) as StagedItem['metadata'],
+        }),
+      ),
+    );
+
+    for (const input of inputs) {
+      expect(input.text).toBeTruthy();
+    }
+
+    // And every clipping is distinguishable in a list view.
+    expect(new Set(inputs.map((i) => i.title)).size).toBe(inputs.length);
+  });
+
+  it('leaves a shelved-but-unreviewed book titled with the bare book name', () => {
+    // Goodreads only sets Text when 'My Review' is non-empty, so the title must
+    // not degrade into "Dune — " for the majority of a library export.
+    const shelved = recordFor({
+      classification: 'annotation',
+      dataSource: 'goodreads',
+      metadata: { Title: 'Dune', Author: 'Frank Herbert' },
+    });
+
+    const input = toContentInput(shelved);
+
+    expect(input.title).toBe('Dune');
+    expect(input.text).toBeUndefined();
   });
 });
 

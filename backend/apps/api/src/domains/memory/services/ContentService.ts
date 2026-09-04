@@ -37,6 +37,25 @@ import { CtiAggregate } from './CtiAggregate';
 import { GraphDeltaWriter } from './GraphDeltaWriter';
 
 /** The provenance triple shared by a content row and the event it auto-links to. */
+/** Scoped filter for {@link ContentService.findPage}: the content library's pickers. */
+export interface FindContentsFilter {
+  /** Free text: a case-insensitive substring of the title, the text or the URL. */
+  query?: string;
+  /** `ci.content.type` values to keep (image, post, note, …). */
+  types?: string[];
+  /** `ci.content.mimetype` values to keep. */
+  mimetypes?: string[];
+  /** `ci.content.source_system` values to keep — the How filter. */
+  sourceSystems?: string[];
+}
+
+/** What the library's pickers can offer — see {@link ContentService.getFacets}. */
+export interface ContentFacets {
+  types: string[];
+  mimetypes: string[];
+  sourceSystems: string[];
+}
+
 type Triple = { sourceType: string; sourceSystem: string | null; sourceId: string };
 
 /**
@@ -596,20 +615,96 @@ export class ContentService {
    * id) DESC over the (user_id, created_at) index. Reads one page (+1 sentinel)
    * instead of the whole 194k-row table and drops the eager `user` join.
    */
-  async findPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Content>> {
+  async findPage(
+    context: UserServiceContext,
+    args: KeysetPageArgs,
+    filter: FindContentsFilter = {},
+  ): Promise<KeysetPage<Content>> {
     const page = await keysetPaginate(this.contentRepository, args, {
       alias: 'content',
       timeProp: 'createdAt',
       userId: context.userId,
       // Same rule as findById/findByIds: a deleted event's photo must not resurface
       // in the paginated library (and must not inflate totalCount).
-      scope: (qb) => this.excludeDeletedEventMedia(qb, 'content'),
+      scope: (qb) => this.applyContentsFilter(this.excludeDeletedEventMedia(qb, 'content'), 'content', filter),
     });
 
     return {
       ...page,
       entities: await this.composeMany(page.entities),
     };
+  }
+
+  /**
+   * The content library's filter facets: every distinct `type`, `mimetype`
+   * and `source_system` the user's rows carry, each sorted. Built the way the
+   * explorer's How list is (SourceSystemService) — from what is actually in
+   * the column, not a fixed vocabulary — over the same rows the library
+   * pages, so every option offered matches something.
+   */
+  async getFacets(context: UserServiceContext): Promise<ContentFacets> {
+    const distinct = async (column: 'type' | 'mimetype' | 'source_system'): Promise<string[]> => {
+      const rows = await this.excludeDeletedEventMedia(
+        this.contentRepository
+          .createQueryBuilder('content')
+          .select(`DISTINCT content.${column}`, 'value')
+          .where('content.user_id = :userId', { userId: context.userId })
+          .andWhere(`content.${column} IS NOT NULL`),
+        'content',
+      )
+        .orderBy('value', 'ASC')
+        .getRawMany<{ value: string }>();
+
+      return rows.map((row) => row.value);
+    };
+
+    const [types, mimetypes, sourceSystems] = await Promise.all([
+      distinct('type'),
+      distinct('mimetype'),
+      distinct('source_system'),
+    ]);
+
+    return { types, mimetypes, sourceSystems };
+  }
+
+  /** The library's explicit filters, each an IN list over its column. */
+  private applyContentsFilter<T extends ObjectLiteral>(
+    query: SelectQueryBuilder<T>,
+    alias: string,
+    filter: FindContentsFilter,
+  ): SelectQueryBuilder<T> {
+    let scoped = query;
+
+    const needle = filter.query?.trim();
+
+    if (needle) {
+      // The title is the base row's `name` (ci.entities, same id — CTI), so the
+      // text search reaches it through a join rather than a column of its own.
+      scoped = scoped
+        .leftJoin(ContentBaseEntity, `${alias}_base`, `${alias}_base.id = ${alias}.id`)
+        .andWhere(
+          `(${alias}_base.name ILIKE :contentQuery OR ${alias}.text ILIKE :contentQuery OR ${alias}.url ILIKE :contentQuery)`,
+          { contentQuery: `%${needle}%` },
+        );
+    }
+
+    if (filter.types && filter.types.length > 0) {
+      scoped = scoped.andWhere(`${alias}.type IN (:...contentTypes)`, { contentTypes: filter.types });
+    }
+
+    if (filter.mimetypes && filter.mimetypes.length > 0) {
+      scoped = scoped.andWhere(`${alias}.mimetype IN (:...contentMimetypes)`, {
+        contentMimetypes: filter.mimetypes,
+      });
+    }
+
+    if (filter.sourceSystems && filter.sourceSystems.length > 0) {
+      scoped = scoped.andWhere(`${alias}.source_system IN (:...contentSources)`, {
+        contentSources: filter.sourceSystems,
+      });
+    }
+
+    return scoped;
   }
 
   /**
@@ -694,6 +789,7 @@ export class ContentService {
       limit?: number;
       startTime?: Date;
       endTime?: Date;
+      connectors?: string[];
       afterTime?: Date;
       afterId?: string;
       order?: 'ASC' | 'DESC';
@@ -713,26 +809,34 @@ export class ContentService {
       query = query.andWhere('content.event_id IS NULL');
     }
 
+    // The How filter: keep rows from the named sources. Every browsed table
+    // with a source_system column applies this same clause (see
+    // SearchResolver.searchByTimedEntities), so a source selected on /memory
+    // narrows every kind it can, not just events.
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('content.source_system IN (:...connectors)', { connectors: options.connectors });
+    }
+
     if (options.startTime) {
-      query = query.andWhere('content.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('content.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('content.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('content.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     // Composite keyset: page strictly past (afterTime, afterId) in
-    // (created_at DESC, id DESC). Without it the search feed re-fetched the same
+    // (updated_at DESC, id DESC). Without it the search feed re-fetched the same
     // top-N rows every page and dead-ended at `first * FETCH_MULTIPLIER` rows.
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(content.created_at < :afterTime OR (content.created_at = :afterTime AND content.id < :afterId))',
+        '(content.updated_at < :afterTime OR (content.updated_at = :afterTime AND content.id < :afterId))',
         { afterTime: options.afterTime, afterId: options.afterId },
       );
     }
 
     // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('content.created_at', options.order ?? 'DESC').addOrderBy('content.id', 'DESC');
+    query = query.orderBy('content.updated_at', options.order ?? 'DESC').addOrderBy('content.id', 'DESC');
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -750,7 +854,7 @@ export class ContentService {
    */
   async countEntitiesForContents(
     context: ServiceContext,
-    options: { startTime?: Date; endTime?: Date; excludeEventLinked?: boolean },
+    options: { startTime?: Date; endTime?: Date; connectors?: string[]; excludeEventLinked?: boolean },
   ): Promise<number> {
     let query = this.excludeDeletedEventMedia(
       this.contentRepository
@@ -763,12 +867,20 @@ export class ContentService {
       query = query.andWhere('content.event_id IS NULL');
     }
 
+    // The How filter: keep rows from the named sources. Every browsed table
+    // with a source_system column applies this same clause (see
+    // SearchResolver.searchByTimedEntities), so a source selected on /memory
+    // narrows every kind it can, not just events.
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('content.source_system IN (:...connectors)', { connectors: options.connectors });
+    }
+
     if (options.startTime) {
-      query = query.andWhere('content.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('content.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('content.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('content.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     return query.getCount();

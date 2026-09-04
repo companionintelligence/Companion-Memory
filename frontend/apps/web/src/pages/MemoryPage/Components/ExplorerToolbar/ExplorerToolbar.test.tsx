@@ -56,9 +56,9 @@ vi.mock('@ci/shadcn', async (importOriginal) => {
   };
 });
 
-const EVENT_SOURCES_QUERY = gql(`
-  query EventSources {
-    eventSources
+const SOURCE_SYSTEMS_QUERY = gql(`
+  query SourceSystems($includeTypes: [String!], $excludeTypes: [String!]) {
+    sourceSystems(includeTypes: $includeTypes, excludeTypes: $excludeTypes)
   }
 `);
 
@@ -77,7 +77,7 @@ function renderToolbar(ui: ReactNode, options: RenderWithProvidersOptions = {}) 
       {ui}
     </DropdownProvider>,
     {
-      mocks: [mockQuery(EVENT_SOURCES_QUERY, {}, { eventSources: [] })],
+      mocks: [mockQuery(SOURCE_SYSTEMS_QUERY, {}, { sourceSystems: [] })],
       ...options,
     },
   );
@@ -153,6 +153,46 @@ describe('ExplorerToolbar', () => {
       renderToolbar(<MemoryExplorerFilterControls />, { route: '/?sortBy=name&sortOrder=desc' });
 
       expect(screen.getByRole('combobox', { name: 'Sort' })).toHaveValue('name-desc');
+    });
+
+    it('defaults to Relevance on /memory and offers no time sort without a When filter', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory?view=list' });
+
+      const select = screen.getByRole('combobox', { name: 'Sort' });
+
+      expect(select).toHaveValue('relevance');
+      expect(screen.queryByRole('option', { name: 'Newest first' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: 'Oldest first' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('option', { name: 'Default' })).not.toBeInTheDocument();
+
+      // Choosing Relevance writes nothing: the server's own ranking is the default.
+      fireEvent.change(select, { target: { value: 'name-asc' } });
+      fireEvent.change(select, { target: { value: 'relevance' } });
+
+      expect(screen.getByTestId('params').textContent).toBe('view=list');
+    });
+
+    it('offers Newest / Oldest on /memory once a When filter is active', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, {
+        route: '/memory?view=list&when=last-week&from=2026-01-01T00:00:00.000Z&to=2026-01-07T23:59:59.999Z',
+      });
+
+      const select = screen.getByRole('combobox', { name: 'Sort' });
+
+      expect(screen.getByRole('option', { name: 'Newest first' })).toBeInTheDocument();
+      expect(screen.getByRole('option', { name: 'Oldest first' })).toBeInTheDocument();
+
+      fireEvent.change(select, { target: { value: 'oldest' } });
+
+      expect(screen.getByTestId('params').textContent).toContain('sortBy=time');
+      expect(screen.getByTestId('params').textContent).toContain('sortOrder=asc');
+    });
+
+    it('keeps the full preset list on the events browse', () => {
+      renderToolbar(<MemoryExplorerFilterControls />, { route: '/memory/events?view=list' });
+
+      expect(screen.getByRole('combobox', { name: 'Sort' })).toHaveValue('default');
+      expect(screen.getByRole('option', { name: 'Newest first' })).toBeInTheDocument();
     });
   });
 

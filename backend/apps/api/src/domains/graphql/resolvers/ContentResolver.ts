@@ -14,6 +14,7 @@ import { TagLoader } from '../loaders/TagLoader';
 import { UnfurlLoader } from '../loaders/UnfurlLoader';
 import { ContentConnection } from '../types/ContentConnection';
 import { ContentEdge } from '../types/ContentEdge';
+import { ContentFacetsType } from '../types/ContentFacetsType';
 import { ContentType } from '../types/ContentType';
 import { DeleteByIdInput } from '../types/DeleteByIdInput';
 import { DeleteByIdPayload } from '../types/DeleteByIdPayload';
@@ -214,10 +215,33 @@ export class ContentResolver {
     };
   }
 
+  @Query(() => ContentFacetsType, {
+    description: 'The distinct type / mimetype / source values the content library can filter by.',
+  })
+  async contentFacets(@Context() context: RequestContext): Promise<ContentFacetsType> {
+    return this.contentService.getFacets(toServiceContext(context));
+  }
+
   @Query(() => ContentConnection)
   async contents(
     @Context() context: RequestContext,
     @Args() pagination: PaginationArgs,
+    @Args('query', {
+      type: () => String,
+      nullable: true,
+      description: 'Substring of the title, text or URL — the header search box on /memory/content.',
+    })
+    query?: string,
+    @Args('types', { type: () => [String], nullable: true, description: 'Keep only these `type` values.' })
+    types?: string[],
+    @Args('mimetypes', { type: () => [String], nullable: true, description: 'Keep only these mimetypes.' })
+    mimetypes?: string[],
+    @Args('connectors', {
+      type: () => [String],
+      nullable: true,
+      description: 'Keep only these `source_system` values — the same How filter the explorer takes.',
+    })
+    connectors?: string[],
   ): Promise<ContentConnection> {
     const serviceContext = toServiceContext(context);
 
@@ -228,6 +252,12 @@ export class ContentResolver {
         last: pagination.last,
         afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
         beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
+      },
+      {
+        ...(query && query.trim() !== '' ? { query: query.trim() } : {}),
+        ...(types && types.length > 0 ? { types } : {}),
+        ...(mimetypes && mimetypes.length > 0 ? { mimetypes } : {}),
+        ...(connectors && connectors.length > 0 ? { sourceSystems: connectors } : {}),
       },
     );
 

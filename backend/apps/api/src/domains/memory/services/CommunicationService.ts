@@ -34,6 +34,8 @@ interface Options {
   order?: FindOptionsOrder<CommunicationEntity>;
   startTime?: Date;
   endTime?: Date;
+  /** The How filter: `source_system` values to keep (the explorer's connectors). */
+  connectors?: string[];
   /** Composite keyset cursor for the timed search path (see CalendarEventService). */
   afterTime?: Date;
   afterId?: string;
@@ -794,6 +796,12 @@ export class CommunicationService {
       );
     }
 
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('communications.source_system IN (:...connectors)', {
+        connectors: options.connectors,
+      });
+    }
+
     if (options.startTime) {
       query = query.andWhere('communications.time >= :startTime', { startTime: options.startTime });
     }
@@ -817,12 +825,18 @@ export class CommunicationService {
    */
   async countEntitiesForCommunications(
     context: ServiceContext,
-    options: Pick<Options, 'startTime' | 'endTime'>,
+    options: Pick<Options, 'startTime' | 'endTime' | 'connectors'>,
   ): Promise<number> {
     let query = this.dataSource
       .getRepository(CommunicationEntity)
       .createQueryBuilder('communications')
       .where('communications.user_id = :userId', { userId: context.userId });
+
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('communications.source_system IN (:...connectors)', {
+        connectors: options.connectors,
+      });
+    }
 
     if (options.startTime) {
       query = query.andWhere('communications.time >= :startTime', { startTime: options.startTime });

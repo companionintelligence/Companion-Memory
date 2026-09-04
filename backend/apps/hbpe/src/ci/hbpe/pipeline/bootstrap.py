@@ -30,13 +30,77 @@ log = logging.getLogger(__name__)
 # becomes visible to hbpe.pipeline.recurrence (and therefore to /forecast) once
 # serialize turns it into an hbpe.token_stream row, and serialize only ever
 # rewrites the days it selects — a day that fell out of the selection before its
-# events were labeled is never revisited. So the drain aims at
-# ``token_source_days()``, not at recurrence.HISTORY_DAYS (180): labeling the
-# 90–180-day band produces no token_stream rows at all, and on the dev corpus
-# that band is 5,775 of the 7,192 unlabeled events inside 180 days — 80% of a
-# reserved budget share buying nothing. See ``label_recency_start`` below and
-# ``nightly_runner.label_unlabeled``.
+# events were labeled is never revisited. So the drain aims at the day list,
+# ``content_source_days()``, and NOT at a calendar band: not at
+# recurrence.HISTORY_DAYS (180), and not at ``today - 90`` either.
+#
+# The day list is the whole point, because which calendar days it holds is
+# corpus-dependent. On a DENSE corpus it is the trailing 91 days, so labeling
+# the 90–180-day band produces no token_stream rows at all — on the dev corpus
+# that band is 5,775 of the 7,192 unlabeled events inside 180 days, 80% of a
+# reserved budget share buying nothing. That was once stated flatly here; the
+# reserved tier (EVENT_DAY_FLOOR) made it conditional. On a corpus whose events
+# are SPARSE, the newest 45 event days can reach arbitrarily far back — days
+# 90–180 included, and past 180 — and those days do get serialized, so labeling
+# them is not wasted. Only the day list can say which case an appliance is in,
+# which is exactly why the cutoff is read off the list rather than computed from
+# today. See ``label_recency_start`` below and ``nightly_runner.label_unlabeled``.
+#
+# The trade-off the tiers introduce, written down because nothing else records
+# it: on a bimodal corpus the fill tier reaches back only 46 days from the
+# newest day-with-data, so days ~47–90 back are no longer rewritten nightly —
+# yet they are not purged either, because they still hold an hourly summary and
+# so never match the purge tier. Their hbpe.token_stream rows FREEZE at whatever
+# the last run that selected them wrote, and a late-arriving edit to one of
+# those days (a backfilled event, a re-labeled summary) can never be serialized.
+# The bimodal corpus is the only shape where this bites; on any corpus whose
+# recent end holds events the two content tiers overlap and the fill still
+# covers the whole trailing window.
 SERIALIZE_WINDOW_DAYS = 90
+
+# Of the ``SERIALIZE_WINDOW_DAYS + 1`` content days, the share reserved for days
+# that actually hold EVENTS before any summary-only day may claim a slot.
+#
+# Half the budget, and half is deliberate: it is the largest reservation that
+# still cannot starve recent context. The fill tier always keeps 46 of the 91
+# slots — a majority — for the newest days-with-data of either kind, so on every
+# corpus whose recent end holds events (which is every non-bimodal corpus) the
+# reservation and the fill draw from overlapping sets and the answer is exactly
+# the newest 91 days the flat ``LIMIT`` used to return. Smaller, and an archival
+# corpus still loses most of its hard-labeled days; larger, and a live appliance
+# with an old import would start serializing more history than present.
+#
+# The reservation is a ceiling, never a quota: fewer event days than the floor
+# reserves fewer slots and the fill takes the rest, so no slot is ever wasted.
+# It is also clamped to half of whatever budget the caller asked for (see
+# token_source_days) — HBPE_LABEL_RECENCY_DAYS can shrink ``window_days``, and a
+# literal 45 against an 11-day budget would return 45 archival days and no
+# recent day at all.
+EVENT_DAY_FLOOR = 45
+
+# Cap on the emptied days one run may purge, ON TOP of the content budget.
+#
+# Purge days are delete-only work (serialize_day's DELETE is the only thing that
+# ever removes a day's tokens) and they are correctness-critical: a day whose
+# rows are never purged keeps a deleted event nudging the forecast forever. So
+# they must not be funded out of the content budget, where a handful of
+# deletions would evict real days. They still need a bound of their own, or one
+# bulk delete — a whole year of events removed at once — makes a single night's
+# serialize_day count unbounded. At this cap the worst night is twice the
+# serialize_day count the content budget alone implies — and to keep that true
+# for a caller that shrank ``window_days``, the effective cap is clamped to that
+# caller's own budget (see token_source_days), exactly as EVENT_DAY_FLOOR is.
+#
+# Leftovers are picked up on subsequent nights, and the set shrinks by one on
+# every day visited *as long as serialize_day writes that day nothing* — which
+# is what makes it converge. That holds today for every day this branch can
+# select. It would stop holding for a day whose only remaining source is a
+# completed labeled task: serializer._fetch_tokens_for_day still consumes those
+# (get_completed_tasks_for_day), so such a day would be purged and immediately
+# rewritten, re-qualifying for the branch every night forever. Unreachable while
+# nothing writes ci.tasks.l0_class; see the ci.tasks note below, which a future
+# writer of that column has to act on.
+PURGE_DAY_CAP = SERIALIZE_WINDOW_DAYS + 1
 
 # The N most recent calendar days that hold anything the serializer can publish,
 # newest first, with nothing after today.
@@ -61,17 +125,39 @@ SERIALIZE_WINDOW_DAYS = 90
 # serialize_day calls as a contiguous 90-day range, whereas widening the range
 # to span the gap would be ~800 days on that corpus.
 #
-# That guarantee is bounded, and the bound is worth naming: ``ORDER BY
-# source_date DESC LIMIT 91`` takes the newest 91 days-with-data, full stop. On
-# an appliance that has BOTH an archival import and continuous live capture, the
-# hourly summaries accrue one day-with-data per calendar day, so ~91 days after
-# the import the 2024 event days are evicted and the historical corpus stops
-# reaching hbpe.token_stream again — the same failure a contiguous trailing
-# window has on day one, deferred by about three months rather than removed.
-# Fixing that properly means reserving a share of the budget for event-bearing
-# days (the summary branch would then be capped rather than allowed to fill the
-# whole list); that is a policy change, not a query change, and is deliberately
-# not made here.
+# A flat ``ORDER BY source_date DESC LIMIT 91`` over the union is not enough to
+# hold that guarantee, which is why the budget is allocated in tiers. Flat, the
+# newest 91 days-with-data win outright; on an appliance that has BOTH an
+# archival import and continuous live capture the hourly summaries accrue one
+# day-with-data per calendar day, so ~91 days after the import the 2024 event
+# days are evicted and the historical corpus stops reaching hbpe.token_stream —
+# the same failure a contiguous trailing window has on day one, deferred by
+# about three months rather than removed. And the days it evicts are the only
+# ones that matter most: events carry hard L0/L1 labels, while summary-derived
+# tokens are the gap-filler at SUMMARY_SOFT_PROB (0.7), so a flat budget spends
+# the whole corpus on the weaker source.
+#
+# The tiers:
+#
+#   A. reserved — the newest EVENT_DAY_FLOOR days that hold events. Taken
+#      first, from the event branch alone, so no volume of summary days can
+#      evict them. A ceiling, not a quota: a corpus with fewer event days
+#      reserves fewer slots.
+#   B. fill     — the newest remaining days from (events UNION summaries),
+#      minus tier A, for whatever the reservation left of the budget. The LIMIT
+#      is an expression over ``count(*) FROM reserved`` precisely so unclaimed
+#      reservation slots come back here instead of being wasted.
+#   C. purge    — days holding hbpe.token_stream rows but NO live source at
+#      all, newest first. Delete-only work, added ON TOP of the content budget
+#      under PURGE_DAY_CAP; see that constant for why on-top-but-capped, and
+#      the branch itself for why "source-less" and not "outside the budget".
+#
+# Tiers A and B are exactly the flat budget on every corpus whose recent end
+# holds events, because the two tiers then draw from overlapping sets: dense
+# live appliance, events-only, summaries-only (A is empty, B takes all 91) and
+# short-event-corpus all return the same newest 91 days as before. The bimodal
+# corpus is the only shape that moves, and it moves from 91 summary days and
+# zero events to 45 event days plus 46 summary days.
 #
 # ci.tasks is deliberately NOT a source branch here. The bounds query used to
 # union completed tasks gated on ``l0_class IS NOT NULL AND l0_class <>
@@ -84,56 +170,172 @@ SERIALIZE_WINDOW_DAYS = 90
 # for_day). So the day a task falls on is tokenized only if an event, an hourly
 # summary or an existing token_stream row already put that day in this list. A
 # future writer of ci.tasks.l0_class has to add the selection branch back here
-# too, or its tokens land only on days something else selected.
+# too — to BOTH the content tiers and the purge tier's exclusions — or two
+# things break at once. Its tokens land only on days something else selected;
+# and a task-only day becomes a permanent purge slot, because the purge branch
+# would keep selecting it (no event, no summary) while serialize_day keeps
+# writing its task tokens straight back. That is the one shape in which the
+# purge tier does not converge, and it is the reason the convergence claim on
+# PURGE_DAY_CAP is stated conditionally.
+#
+# ``event_days`` has to agree with the reads it is PREDICTING, or a reserved
+# slot buys nothing. The serializer's event read
+# (data_client.get_token_events_for_day) and the drain's unlabeled-event read
+# (data_client._unlabeled_events_where) both carry ``event_type IS DISTINCT
+# FROM 'planned_block'`` — planning's own calendar rows, written by
+# PlannedBlockService, are the appliance's own suggestions and are deliberately
+# not part of the behavioural corpus. Without the same predicate here, an
+# appliance that uses planning spends tier A's 45 reserved slots on days whose
+# only events are planned blocks: days that serialize to ZERO event tokens, on
+# exactly the bimodal shape tier A exists for. It also keeps such a day out of
+# the purge tier, so its stale rows would never be removed either.
+#
+# The two reads carry three more predicates this CTE does not, and each is
+# deliberate rather than an oversight:
+#
+#   * ``JOIN hbpe.l1_event_cluster`` (serializer only) — an unlabeled event day
+#     yields no tokens *yet*. Reserving it is the point: the drain aims at this
+#     list, so requiring the label here would be circular and no day would ever
+#     become labeled.
+#   * ``NOT (mapped_kind_sql())`` (drain only) — kinds in hbpe.kind_l0_map are
+#     labeled by static_labeler.label_mapped_events, not by Qwen. They are
+#     labeled events and the serializer publishes them, so their days are real
+#     token days.
+#   * ``ec.event_id IS NULL`` (drain only) — the drain's already-labeled filter,
+#     which says nothing about whether a day produces tokens.
+#
+# ``is_deleted = FALSE`` and the ``>= '2010-01-01'`` sentinel bound are shared
+# by all three and are present here. The ``< today + 1 day`` clamp is this
+# query's alone; see the docstring for why.
 _TOKEN_SOURCE_DAYS_SQL = """
-    SELECT source_date
-    FROM (
+    WITH event_days AS (
         SELECT DISTINCT e.start_time::date AS source_date
         FROM ci.events e
         WHERE e.user_id = %s::uuid
           AND e.is_deleted = FALSE
+          AND e.event_type IS DISTINCT FROM 'planned_block'
           AND e.start_time >= '2010-01-01'::timestamptz
           AND e.start_time < (%s::date + INTERVAL '1 day')
-
-        UNION
-
+    ),
+    summary_days AS (
         SELECT DISTINCT s.period_start::date AS source_date
         FROM ci.summaries s
         WHERE s.user_id = %s::uuid
           AND s.period_type = 'hourly'
           AND s.period_start >= '2010-01-01'::timestamptz
           AND s.period_start < (%s::date + INTERVAL '1 day')
+    ),
 
+    -- Tier A. The newest event days, reserved before anything else can claim a
+    -- slot. Drawn from the event branch ALONE, which is the whole point: on a
+    -- bimodal corpus every summary day is newer than every event day, so any
+    -- selection over the union puts these last.
+    reserved AS (
+        SELECT source_date FROM event_days
+        ORDER BY source_date DESC
+        LIMIT %s
+    ),
+
+    -- Tier B. The newest content days of either kind that tier A did not take,
+    -- for whatever is left of the budget. The LIMIT is an expression, not a
+    -- literal: a corpus with no events (or fewer than the floor) reserves fewer
+    -- slots, and those slots come back here rather than going unspent. GREATEST
+    -- guards the negative that a caller-shrunk budget could otherwise produce.
+    fill AS (
+        SELECT source_date
+        FROM (
+            SELECT source_date FROM event_days
+            UNION
+            SELECT source_date FROM summary_days
+        ) content_days
+        WHERE NOT EXISTS (
+            SELECT 1 FROM reserved r WHERE r.source_date = content_days.source_date
+        )
+        ORDER BY source_date DESC
+        LIMIT GREATEST(%s - (SELECT count(*) FROM reserved), 0)
+    ),
+    content AS (
+        SELECT source_date FROM reserved
         UNION
+        SELECT source_date FROM fill
+    ),
 
-        -- Days that no longer hold anything but still hold stale tokens.
-        -- serialize_day's DELETE is the only thing that ever purges a day, and
-        -- it only runs on days this query returns. Without this branch a day
-        -- that EMPTIES OUT — the sole event on it soft-deleted by
-        -- CalendarEventService, or its start_time edited onto another day —
-        -- drops out of the two source branches above and is never visited
-        -- again, so its rows sit in hbpe.token_stream forever while
-        -- pipeline.recurrence and HMT training keep reading them: a deleted
-        -- event still nudging the forecast. The old contiguous
-        -- serialize_range(start, end) purged such days for free, because it
-        -- walked every calendar day in the window whether or not it held data.
-        --
-        -- These days compete for the same LIMIT budget rather than being added
-        -- on top of it. An emptied day is self-limiting: the run that visits it
-        -- deletes its rows, so it contributes to neither this branch nor the
-        -- source branches on the next run and stops consuming a slot. Adding
-        -- them on top would instead let a bulk delete (a whole year of events
-        -- removed) inflate one night's serialize_day count without bound, and
-        -- the slot a purge borrows is given back the same night.
-        SELECT DISTINCT ts.date AS source_date
-        FROM hbpe.token_stream ts
-        WHERE ts.user_id = %s::uuid
-          AND ts.date < (%s::date + INTERVAL '1 day')
-    ) token_days
+    -- Tier C. Days that no longer hold anything but still hold stale tokens.
+    -- serialize_day's DELETE is the only thing that ever purges a day, and it
+    -- only runs on days this query returns. Without this branch a day that
+    -- EMPTIES OUT — the sole event on it soft-deleted by CalendarEventService,
+    -- or its start_time edited onto another day — drops out of the two source
+    -- branches above and is never visited again, so its rows sit in
+    -- hbpe.token_stream forever while pipeline.recurrence and HMT training keep
+    -- reading them: a deleted event still nudging the forecast. The old
+    -- contiguous serialize_range(start, end) purged such days for free, because
+    -- it walked every calendar day in the window whether or not it held data.
+    --
+    -- These days are ADDED ON TOP of the content budget rather than competing
+    -- for its slots. Competing was the earlier policy and it is wrong in both
+    -- directions: a purge that borrows a slot evicts a real day for the night,
+    -- and — worse once tier A exists — a run of emptied days newer than the
+    -- reserved event days would eat the fill tier. The cap is what keeps "on
+    -- top" bounded: one bulk delete cannot make a single night unbounded, the
+    -- leftovers are taken on subsequent nights, and the set shrinks by one per
+    -- day visited because serialize_day writes such a day nothing, so it never
+    -- returns to this branch. That last step is conditional, not structural —
+    -- a completed labeled task would still be written back onto a day matching
+    -- neither source branch. See the completed-task note above the query.
+    --
+    -- SOURCE-LESS is the load-bearing predicate, not "outside the content
+    -- budget". hbpe.token_stream deliberately holds far more history than the
+    -- serialize budget — pipeline.recurrence reads 180 days of it and
+    -- pipeline.seasonal 800 — and every one of those days still has its event
+    -- or summary behind it. Purging "every token_stream day the budget did not
+    -- select" would therefore delete the profiler's own history every night;
+    -- under the old competing-LIMIT policy nothing noticed, because the LIMIT
+    -- kept this branch from ever reaching past the 91st newest day. On top of
+    -- the budget it has no such ceiling, so the exclusion has to be explicit.
+    -- The flip side is the gap that policy left: a day that emptied out below
+    -- the 91st newest was never revisited at all, and its rows have been
+    -- feeding recurrence ever since. Those days are now reachable.
+    --
+    -- Excluding both source branches also subsumes ``NOT IN content``: both
+    -- content tiers draw only from event_days and summary_days.
+    purge AS (
+        SELECT stale.source_date
+        FROM (
+            SELECT DISTINCT ts.date AS source_date
+            FROM hbpe.token_stream ts
+            WHERE ts.user_id = %s::uuid
+              AND ts.date < (%s::date + INTERVAL '1 day')
+        ) stale
+        WHERE NOT EXISTS (
+            SELECT 1 FROM event_days e WHERE e.source_date = stale.source_date
+        )
+          AND NOT EXISTS (
+            SELECT 1 FROM summary_days s WHERE s.source_date = stale.source_date
+        )
+        ORDER BY stale.source_date DESC
+        LIMIT %s
+    )
+    -- Content and purge come back TAGGED, not merged. Serialize wants both;
+    -- label_recency_start wants the oldest CONTENT day and must never see a
+    -- purge day. A purge day carries no label to write — it has no event and no
+    -- summary, that is what put it in the tier — but the tier is bounded in
+    -- COUNT, not in REACH, so days[0] of the merged list can be an arbitrarily
+    -- old emptied day. Merged, a 200-day corpus plus a handful of source-less
+    -- 2020 token_stream days moves the label drain's phase boundary from
+    -- 2026-06-05 to 2020, dissolving the recency phase — most of the nightly
+    -- label budget — across years. UNION ALL is safe because the purge tier
+    -- already excludes both content branches, so the two sets are disjoint.
+    SELECT source_date, TRUE AS is_content FROM content
+    UNION ALL
+    SELECT source_date, FALSE AS is_content FROM purge
     ORDER BY source_date DESC
-    LIMIT %s
 """
 
+# Same event predicates as the day query's event_days branch, and for the same
+# reason: this is the fallback answer to "what can the serializer publish", so
+# counting a day whose only events are planned blocks would hand the label drain
+# a cutoff for a day that yields no tokens, and would report a planning-only
+# appliance as having a corpus.
 _TOKEN_DATE_BOUNDS_SQL = """
     SELECT MIN(source_date), MAX(source_date)
     FROM (
@@ -141,6 +343,7 @@ _TOKEN_DATE_BOUNDS_SQL = """
         FROM ci.events e
         WHERE e.user_id = %s::uuid
           AND e.is_deleted = FALSE
+          AND e.event_type IS DISTINCT FROM 'planned_block'
           AND e.start_time >= '2010-01-01'::timestamptz
 
         UNION ALL
@@ -159,6 +362,84 @@ def _utc_today() -> date:
     return datetime.now(UTC).date()
 
 
+def _token_source_rows(
+    user_id: str,
+    window_days: int,
+    today: date | None,
+) -> tuple[list[date], list[date]]:
+    """
+    One day-list read, returned as ``(content_days, purge_days)``, oldest first.
+
+    The two are kept apart rather than merged because their consumers differ:
+    serialize walks both (a purge day's whole purpose is to be visited), while
+    ``label_recency_start`` may only ever see content. See the tag comment at
+    the end of _TOKEN_SOURCE_DAYS_SQL.
+    """
+    from ci.hbpe.database import get_conn
+
+    end = today or _utc_today()
+    budget = window_days + 1
+    # Never more than half the budget the caller actually asked for. The default
+    # window makes this exactly EVENT_DAY_FLOOR; a shrunk window (see
+    # HBPE_LABEL_RECENCY_DAYS, via label_recency_start) would otherwise get a
+    # reservation-only day list — more days than its budget, all archival.
+    event_floor = min(EVENT_DAY_FLOOR, budget // 2)
+    # Same reasoning, same reason: window_days is a caller parameter, so a flat
+    # cap would let an 11-day request return 11 content days and up to 91 purge
+    # days — a night eight times the size the caller asked for. Capped at the
+    # content budget, the "worst night is at most twice the content budget"
+    # bound PURGE_DAY_CAP documents holds for every window, not just the
+    # default (where budget == PURGE_DAY_CAP and this is a no-op).
+    purge_cap = min(PURGE_DAY_CAP, budget)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                _TOKEN_SOURCE_DAYS_SQL,
+                (
+                    user_id,
+                    end,
+                    user_id,
+                    end,
+                    event_floor,
+                    budget,
+                    user_id,
+                    end,
+                    purge_cap,
+                ),
+            )
+            rows = cur.fetchall()
+
+    content: list[date] = []
+    purge: list[date] = []
+    for row in rows:
+        if not row or row[0] is None:
+            continue
+        (content if row[1] else purge).append(date.fromisoformat(str(row[0])))
+    content.sort()
+    purge.sort()
+    return content, purge
+
+
+def content_source_days(
+    user_id: str,
+    window_days: int = SERIALIZE_WINDOW_DAYS,
+    today: date | None = None,
+) -> list[date]:
+    """
+    The days of ``token_source_days`` that hold an event or an hourly summary —
+    tiers A and B only, no purge days — oldest first.
+
+    This is what ``label_recency_start`` aims at. A purge day is source-less by
+    construction, so it has no label to write and no business setting the label
+    drain's phase boundary; the purge tier is capped in count but not in reach,
+    so letting it into that boundary drags the recency phase back arbitrarily
+    far (see the tag comment in _TOKEN_SOURCE_DAYS_SQL). Clamping the purge
+    tier's reach instead would have been the wrong repair: reaching back is
+    exactly what lets it clean up days that emptied out long ago.
+    """
+    return _token_source_rows(user_id, window_days, today)[0]
+
+
 def token_source_days(
     user_id: str,
     window_days: int = SERIALIZE_WINDOW_DAYS,
@@ -167,15 +448,35 @@ def token_source_days(
     """
     The calendar days the next serialize run will write, oldest first.
 
-    The most recent ``window_days + 1`` distinct days that hold an event, an
-    hourly summary, or stale hbpe.token_stream rows, with nothing dated after
-    ``today``. The ``+ 1`` keeps the same day budget the old inclusive
-    ``[end - window_days, end]`` range had, so switching from a range to a list
-    does not silently shave a day off every appliance's corpus.
+    A budget of ``window_days + 1`` distinct CONTENT days — days holding an
+    event or an hourly summary, nothing dated after ``today`` — allocated in two
+    tiers, plus the purge days that ride on top of it. The ``+ 1`` keeps the
+    same day budget the old inclusive ``[end - window_days, end]`` range had, so
+    switching from a range to a list did not silently shave a day off every
+    appliance's corpus.
 
-    The token_stream branch is what lets a day that emptied out be purged: see
-    _TOKEN_SOURCE_DAYS_SQL, and serialize_day, whose DELETE is the only purge
-    there is.
+      * Reserved: the newest ``EVENT_DAY_FLOOR`` days that hold events, taken
+        before any summary-only day may claim a slot. Events carry hard L0/L1
+        labels; without the reservation an appliance running both an archival
+        import and continuous live capture evicts every imported event day once
+        ~91 days of hourly summaries have accrued, and serializes nothing but
+        the 0.7-confidence gap-filler.
+      * Fill: the newest remaining content days of either kind, for whatever the
+        reservation left. Unclaimed reservation slots come back here, so a
+        corpus with few or no events wastes none of the budget.
+      * Purge: days holding hbpe.token_stream rows but no live source at all,
+        newest first, capped at ``PURGE_DAY_CAP`` and added ON TOP of the
+        budget. serialize_day's DELETE is the only purge there is, and a day it
+        never visits keeps a deleted event nudging the forecast forever. Days
+        that still HAVE a source are never in this tier: token_stream holds far
+        more history than the budget (recurrence reads 180 days of it, seasonal
+        800), and that history is not stale.
+
+    The tiers are a no-op on every corpus whose recent end holds events: they
+    then draw from overlapping sets, and the answer is the newest
+    ``window_days + 1`` days-with-data, exactly what a flat ``LIMIT`` returned.
+    Only a bimodal corpus — old events, new summaries — moves. See
+    _TOKEN_SOURCE_DAYS_SQL for the tiers in SQL and for why each bound is there.
 
     The clamp lives in SQL, not in Python: a future-dated row (a calendar
     reminder, a booked flight, an import with a bad date) that survived into the
@@ -184,23 +485,12 @@ def token_source_days(
     seasonal 800d) anchors on today, so a serialized future day is work nothing
     can ever read.
 
-    Returns ``[]`` when the user has no dated source at or before today — an
-    empty corpus, or one that is entirely in the future.
+    Returns ``[]`` when the user has no dated source at or before today and no
+    stale rows to purge — an empty corpus, or one that is entirely in the
+    future.
     """
-    from ci.hbpe.database import get_conn
-
-    end = today or _utc_today()
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                _TOKEN_SOURCE_DAYS_SQL,
-                (user_id, end, user_id, end, user_id, end, window_days + 1),
-            )
-            rows = cur.fetchall()
-
-    days = [date.fromisoformat(str(r[0])) for r in rows if r and r[0] is not None]
-    days.sort()
-    return days
+    content, purge = _token_source_rows(user_id, window_days, today)
+    return sorted(content + purge)
 
 
 def event_date_bounds(user_id: str) -> tuple[date, date] | None:
@@ -265,7 +555,14 @@ def serialize_window(
 def label_recency_start(user_id: str, window_days: int = SERIALIZE_WINDOW_DAYS) -> date:
     """
     Oldest day whose labels can still reach hbpe.token_stream — i.e. the first
-    of the days the *next* serialize run will write.
+    CONTENT day the *next* serialize run will write.
+
+    Content, not the whole day list: serialize also visits purge days, and those
+    are source-less by definition, so there is no label on them for this cutoff
+    to protect. They are also unbounded in reach — the purge tier is capped in
+    count only — so including them would let one emptied 2020 day drag the
+    drain's phase boundary back six years and dissolve the recency phase that
+    boundary exists to create.
 
     This is the boundary the nightly drain splits its two phases on, so the
     recency phase covers exactly the events a serialize run can still pick up.
@@ -283,9 +580,9 @@ def label_recency_start(user_id: str, window_days: int = SERIALIZE_WINDOW_DAYS) 
     ordering, never correctness.
     """
     try:
-        days = token_source_days(user_id, window_days)
+        days = content_source_days(user_id, window_days)
     except Exception:
-        log.exception("label_recency_start: token source days unavailable")
+        log.exception("label_recency_start: content source days unavailable")
         days = []
     if days:
         return days[0]
@@ -311,13 +608,16 @@ async def serialize_token_stream(user_id: str) -> dict:
     def _run() -> dict:
         from ci.hbpe.tokenizer.serializer import TokenSerializer
 
-        # Days that hold data (plus any day whose stale tokens still need
-        # purging), capped at SERIALIZE_WINDOW_DAYS, rather than every day
-        # between MIN and MAX: same number of serialize_day calls as a
-        # contiguous 90-day range, but on a bimodal corpus (imported events two
-        # years old, hourly summaries still being written today) the list holds
-        # both ends instead of only the live one. See token_source_days.
-        days = token_source_days(user_id)
+        # Days that hold data — a budget of SERIALIZE_WINDOW_DAYS + 1 of them,
+        # with EVENT_DAY_FLOOR reserved for event-bearing days — plus up to
+        # PURGE_DAY_CAP source-less days whose stale tokens still need purging.
+        # Not every day between MIN and MAX: the same number of serialize_day
+        # calls as a contiguous 90-day range, but on a bimodal corpus (imported
+        # events two years old, hourly summaries still being written today) the
+        # list holds both ends instead of only the live one. See
+        # token_source_days.
+        content, purge = _token_source_rows(user_id, SERIALIZE_WINDOW_DAYS, None)
+        days = sorted(content + purge)
         if not days:
             # One extra query, only on the empty path, to keep the two legacy
             # reason strings apart: they are the operator's only signal for why
@@ -332,11 +632,18 @@ async def serialize_token_stream(user_id: str) -> dict:
         from ci.hbpe.pipeline.token_rollup import rebuild_token_rollups
 
         rollup = rebuild_token_rollups(user_id)
+        # start/end describe the CONTENT tiers, not the merged list. A purge day
+        # can sit years behind the corpus the model actually trains on, so
+        # reporting days[0] made the nightly result claim a start date for an
+        # appliance whose model corpus begins months later — the same days[0]
+        # conflation that let the purge tier hijack label_recency_start. Purge
+        # days are counted separately because they are delete-only work.
         return {
             "rows": total_rows,
-            "start": days[0].isoformat(),
-            "end": days[-1].isoformat(),
-            "days": len(days),
+            "start": content[0].isoformat() if content else None,
+            "end": content[-1].isoformat() if content else None,
+            "days": len(content),
+            "purge_days": len(purge),
             "rollup": rollup,
         }
 

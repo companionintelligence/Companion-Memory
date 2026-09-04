@@ -5,7 +5,12 @@ import { serves } from '@ci/common/roles';
 import { Cron } from '@ci/common/schedule';
 import { OnEvent } from '@ci/domains/events';
 
-import { IMPORT_QUEUE, IMPORT_STAGE_CONCURRENCY, IMPORT_STAGE_QUEUE_BY_KIND } from '../constants';
+import {
+  IMPORT_QUEUE,
+  IMPORT_QUEUE_OPTIONS,
+  IMPORT_STAGE_QUEUE_BY_KIND,
+  IMPORT_STAGE_QUEUE_OPTIONS,
+} from '../constants';
 import { ImportStageEvent } from '../events';
 import { ImportRunService } from '../services/ImportRunService';
 import { ImportScratchService } from '../services/ImportScratchService';
@@ -136,7 +141,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
   // stutter the web process serving buttons.
   @OnEvent(ImportStageEvent, {
     queue: IMPORT_STAGE_QUEUE_BY_KIND.unpack,
-    queueOptions: { policy: 'short', role: 'worker', localConcurrency: IMPORT_STAGE_CONCURRENCY.unpack },
+    queueOptions: IMPORT_STAGE_QUEUE_OPTIONS.unpack,
   })
   async handleUnpackStage(payload: unknown): Promise<void> {
     await this.runStage(payload);
@@ -144,7 +149,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
 
   @OnEvent(ImportStageEvent, {
     queue: IMPORT_STAGE_QUEUE_BY_KIND.parse,
-    queueOptions: { policy: 'short', role: 'worker', localConcurrency: IMPORT_STAGE_CONCURRENCY.parse },
+    queueOptions: IMPORT_STAGE_QUEUE_OPTIONS.parse,
   })
   async handleParseStage(payload: unknown): Promise<void> {
     await this.runStage(payload);
@@ -152,7 +157,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
 
   @OnEvent(ImportStageEvent, {
     queue: IMPORT_STAGE_QUEUE_BY_KIND.media,
-    queueOptions: { policy: 'short', role: 'worker', localConcurrency: IMPORT_STAGE_CONCURRENCY.media },
+    queueOptions: IMPORT_STAGE_QUEUE_OPTIONS.media,
   })
   async handleMediaStage(payload: unknown): Promise<void> {
     await this.runStage(payload);
@@ -160,7 +165,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
 
   @OnEvent(ImportStageEvent, {
     queue: IMPORT_STAGE_QUEUE_BY_KIND.push,
-    queueOptions: { policy: 'short', role: 'worker', localConcurrency: IMPORT_STAGE_CONCURRENCY.push },
+    queueOptions: IMPORT_STAGE_QUEUE_OPTIONS.push,
   })
   async handlePushStage(payload: unknown): Promise<void> {
     await this.runStage(payload);
@@ -171,7 +176,7 @@ export class ImportStageListener implements OnApplicationBootstrap {
   // process left queued under the old name. New enqueues never target it
   // (except the deleted-stage fallback in enqueueStage); once a deployment
   // has drained it this handler is removable.
-  @OnEvent(ImportStageEvent, { queue: IMPORT_QUEUE, queueOptions: { role: 'worker', localConcurrency: 1 } })
+  @OnEvent(ImportStageEvent, { queue: IMPORT_QUEUE, queueOptions: IMPORT_QUEUE_OPTIONS })
   async handleStage(payload: unknown): Promise<void> {
     await this.runStage(payload);
   }

@@ -5,7 +5,7 @@ import { EmptyState, GlobalUID, LoadingPage, useDeviceLayout, usePageTitle } fro
 import { Badge, Button, Card, Input } from '@ci/shadcn';
 import { LocateFixed, MapPin, Plus } from '@ci/shadcn/icons';
 import { Tooltip, useMap as useLeafletMap } from 'react-leaflet';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { ChatAbout } from '@/components/ChatWithAgent';
 import { ErrorState } from '@/components/ErrorState';
@@ -461,7 +461,10 @@ export function PlacesPage() {
   const { isMobile } = useDeviceLayout();
   const navigate = useNavigate();
   const { placeId } = useParams<{ placeId: string }>();
-  const [searchQuery, setSearchQuery] = useState('');
+  // The header search box's `?search=`: it edits this page's query in place
+  // (see GlobalSearchBox / isLiveSearchPath), so the page has no input of its own.
+  const [searchParams] = useSearchParams();
+  const searchQuery = searchParams.get('search') ?? '';
   const [locatedCandidate, setLocatedCandidate] = useState<LocatedCandidate | null>(null);
   const mapRef = useRef<HTMLDivElement>(null);
 
@@ -579,16 +582,6 @@ export function PlacesPage() {
           >
             <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
               <div className="flex items-center gap-2">
-                <Input
-                  placeholder="Search places by name..."
-                  value={searchQuery}
-                  onChange={(e) => {
-                    setSearchQuery(e.target.value);
-                    // New query, new cursor space — a stale failure must not gate it.
-                    pagination.reset();
-                  }}
-                  className="max-w-xl flex-1"
-                />
                 <div className="text-sm text-muted-foreground">{pagination.totalCount} places</div>
               </div>
 

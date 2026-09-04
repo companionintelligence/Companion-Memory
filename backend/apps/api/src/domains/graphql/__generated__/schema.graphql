@@ -577,6 +577,17 @@ type ContentEdge implements Edge {
   node: ContentType!
 }
 
+type ContentFacets {
+  """Distinct `mimetype` values."""
+  mimetypes: [String!]!
+
+  """Distinct `source_system` values — the How filter, over content alone."""
+  sourceSystems: [String!]!
+
+  """Distinct `type` values (image, post, note, …)."""
+  types: [String!]!
+}
+
 type ContentType implements Node & Taggable {
   createdAt: DateTime!
   event: EventType
@@ -2754,7 +2765,33 @@ type Query {
   connectionSyncJobs(after: String, before: String, connectionId: ID, endpointName: String, first: Int, last: Int, type: String): ConnectionSyncJobConnection!
   connections(after: String, before: String, first: Int, last: Int): ConnectionConnection!
   content(id: ID!): ContentType
-  contents(after: String, before: String, first: Int, last: Int): ContentConnection!
+
+  """
+  The distinct type / mimetype / source values the content library can filter by.
+  """
+  contentFacets: ContentFacets!
+  contents(
+    after: String
+    before: String
+
+    """
+    Keep only these `source_system` values — the same How filter the explorer takes.
+    """
+    connectors: [String!]
+    first: Int
+    last: Int
+
+    """Keep only these mimetypes."""
+    mimetypes: [String!]
+
+    """
+    Substring of the title, text or URL — the header search box on /memory/content.
+    """
+    query: String
+
+    """Keep only these `type` values."""
+    types: [String!]
+  ): ContentConnection!
 
   """
   Precomputed daily feature-store rows for the signed-in user over an inclusive yyyy-MM-dd range.
@@ -2931,6 +2968,11 @@ type Query {
   scheduleCandidates(from: DateTime!, to: DateTime!): [ScheduleCandidateType!]!
   search(input: SearchInput!): SearchResultConnection!
   sharedSavedSearch(token: String!): SavedSearchType
+
+  """
+  Distinct data sources (source_system) present for the user across every browsed table — events, communications, content, browser activity, receipts, products and things. The How picker's option list; `eventSources` is the events-only subset. Takes the same includeTypes / excludeTypes pair as `search`, so the list is pared to the kinds a What selection has in play — a source no selected kind carries would select nothing.
+  """
+  sourceSystems(excludeTypes: [String!], includeTypes: [String!]): [String!]!
   summaries(after: String, before: String, first: Int, last: Int): SummaryConnection!
   summary(id: ID!): SummaryType
   tag(id: ID!): TagType

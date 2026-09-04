@@ -150,6 +150,7 @@
     "concurrency": 10,
     "fetchBatchSize": 10,
     "perQueueConcurrency": 6,
+    "jobTimeoutSeconds": 7200,
     "replayedDeadLetterRetentionDays": 30
   },
   "import": {

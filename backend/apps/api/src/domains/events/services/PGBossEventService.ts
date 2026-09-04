@@ -73,6 +73,33 @@ const QUEUE_PROVISION_LOCK_KEY = 804_551_297;
 const DEAD_LETTER_RETENTION_MINUTES = 30 * 24 * 60;
 
 /**
+ * How long an UNFINISHED job may sit on a work queue before pg-boss discards
+ * it. 90 days, in minutes, for the same reason the DLQ constant is in minutes.
+ *
+ * This is not the finished-job window — that is `deleteAfterHours`, and it is
+ * unrelated. pg-boss's `archive()` carries a third predicate nobody here had
+ * read: `state < 'active' AND keep_until < now()`, and `state < 'active'`
+ * covers `created` and `retry`, i.e. work that has never run. `keep_until`
+ * resolves as `start_after + COALESCE(job.keep_until, queue.retention_minutes
+ * * 60, constructor keep_until default, '14 days')` and this codebase set none
+ * of the first three — so every work queue row carried
+ * `retention_minutes = NULL` and inherited **14 days**. A queue an operator
+ * paused for a fortnight, or a backlog that outlived one (a bulk-import fan-out
+ * behind a stalled Ollama is the realistic case), had its oldest jobs moved to
+ * `pgboss.archive` and deleted `deleteAfterHours` later. Silently: that path
+ * logs nothing, raises nothing, and never routes to the dead-letter queue, so
+ * the work is gone with no record it ever existed.
+ *
+ * 90 days, and a code constant rather than a config key, on purpose. This is a
+ * floor on how long accepted work survives, not a tuning knob — there is no
+ * appliance workload for which losing queued work SOONER is the better outcome,
+ * and the number an operator would actually reach for is the length of pause
+ * they want to be safe. A queue that genuinely wants a different window says so
+ * in `QueueOptions.retentionMinutes`, where the unit is stated in the type.
+ */
+const WORK_QUEUE_RETENTION_MINUTES = 90 * 24 * 60;
+
+/**
  * The retry policy, stated once and applied in both places it has to hold.
  *
  * pg-boss resolves a job's retry settings as COALESCE(job, queue, constructor
@@ -96,6 +123,29 @@ const QUEUE_RETRY_POLICY = {
  * cap has to be divided by it before it reaches a semaphore.
  */
 const QUEUE_WORKER_PROCESSES = queueWorkerProcesses();
+
+/**
+ * A job whose listener outran its execution deadline.
+ *
+ * Typed rather than a bare `Error` so the two things that have to tell it apart
+ * can: `runJob`, which logs a distinct line for it, and anyone reading
+ * `pgboss.job.output` afterwards, where the name is what separates "the handler
+ * threw" from "the handler never came back".
+ */
+export class JobTimeoutError extends Error {
+  constructor(
+    readonly queue: string,
+    readonly jobId: string,
+    readonly eventName: string | undefined,
+    readonly deadlineMs: number,
+  ) {
+    super(
+      `Job ${jobId} on queue ${queue} (${eventName ?? 'unknown event'}) did not settle within its ` +
+        `${deadlineMs} ms execution deadline`,
+    );
+    this.name = 'JobTimeoutError';
+  }
+}
 
 @Injectable()
 export class PGBossEventService extends EventService implements OnModuleInit, OnModuleDestroy {
@@ -135,6 +185,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
   private readonly fetchBatchSize = config.queues.fetchBatchSize;
 
+  // Fallback execution deadline for a job on a queue that declares no
+  // `expireInSeconds`. Held as an instance field for the same reason the
+  // ceilings above are: the worker specs need a two-second appliance without
+  // mutating process-wide config for every other suite in the run.
+  private readonly jobTimeoutMs = config.queues.jobTimeoutSeconds * 1000;
+
   // The `localConcurrency` each queue declared for itself, if any. A hard floor
   // on what a settings row can ask for: the code that wrote `localConcurrency: 1`
   // knows something about the workload that the person typing a number does not.
@@ -169,6 +225,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   // has to exclude this queue from every "pending work" aggregate, and two
   // copies of the string is exactly how that exclusion silently stops matching.
   private static readonly DEAD_LETTER_QUEUE = DEAD_LETTER_QUEUE;
+
+  // Hard floor under every per-job execution deadline. A queue may ask for
+  // longer, never shorter: the deadline is a backstop against a wedged
+  // listener, and one set below the time a healthy job takes stops being a
+  // backstop and becomes a dead-letter generator for the whole appliance.
+  private static readonly MIN_JOB_DEADLINE_MS = 60_000;
 
   // Bulk-import escape hatch: even with per-event routing, one imported row can
   // legitimately fan out to several enrichment queues. During a bulk load, set
@@ -328,6 +390,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         const options = {
           name: queue,
           deadLetter: PGBossEventService.DEAD_LETTER_QUEUE,
+          // Before BOTH spreads, so a listener that declares its own
+          // `retentionMinutes` still wins. Stating it at all is what stops
+          // `keep_until` falling through to pg-boss's 14-day default and
+          // deleting never-run jobs off a paused or backlogged queue — see
+          // WORK_QUEUE_RETENTION_MINUTES.
+          retentionMinutes: WORK_QUEUE_RETENTION_MINUTES,
           ...QUEUE_RETRY_POLICY,
           ...queueOptions,
         };
@@ -971,7 +1039,15 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       // it could be: the jobs stay `created`, pg-boss holds no lease on them,
       // and they run in order the moment the queue is switched back on. That is
       // what makes `paused` safe to reach for on a hot box — it costs a backlog,
-      // never work.
+      // not work.
+      //
+      // "Not work" has a horizon, and it is the queue's retention: pg-boss's
+      // archive sweep deletes `created`/`retry` rows past `keep_until`, which
+      // is `start_after + retention`. WORK_QUEUE_RETENTION_MINUTES makes that
+      // 90 days rather than the 14-day default it silently used to be, so a
+      // pause is safe for as long as any operator plausibly holds one — but it
+      // is not infinite, and a queue left paused for a quarter starts losing
+      // its oldest jobs with no log and no dead letter.
       //
       // A `disabled` queue lands here too. Its own sends were already dropped at
       // enqueue, so what this stops is whatever was queued BEFORE the switch —
@@ -1106,9 +1182,31 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     await this.globalSemaphore(async () => {
       let outcome: 'completed' | 'deferred';
 
+      const deadlineMs = this.jobDeadlineMs(queueName);
+
       try {
-        outcome = await this.executeJob(queueName, job);
+        // Bounded, because nothing else bounds it. `executeJob` resolves only
+        // when the listener acknowledges, and a listener that neither resolves
+        // nor rejects — a `fetch` with no timeout, an Ollama generation that
+        // hangs — used to hold this global slot, the per-queue slot outside it
+        // and the fetch-side JobSlotPool slot for the life of the PROCESS.
+        // pg-boss's own `expireInSeconds` does not help: it re-queues the row in
+        // Postgres, it cannot reach into this process and release a semaphore.
+        // Enough stuck jobs and the queue stops fetching, silently.
+        outcome = await this.withDeadline(this.executeJob(queueName, job), deadlineMs, queueName, job);
       } catch (err: unknown) {
+        if (err instanceof JobTimeoutError) {
+          // Its own line, at error level, because this is the signal that did
+          // not exist: the old symptom was a queue that had quietly stopped,
+          // with nothing in the log to say which job wedged it.
+          this.logger.error(
+            `Job ${job.id} on queue ${queueName} (${job.data?.name ?? 'unknown event'}) exceeded its ` +
+              `${deadlineMs} ms execution deadline and was failed; pg-boss's retry and dead-letter ` +
+              `policy applies from here`,
+            err,
+          );
+        }
+
         // Persist the failure reason in the job's output so it survives in
         // pgboss.job — without this arg the error is lost and a failed job
         // is undiagnosable after the fact.
@@ -1133,6 +1231,78 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
           err instanceof Error ? err : new Error(String(err)),
         );
       }
+    });
+  }
+
+  /**
+   * How long one job on this queue may run before it is failed.
+   *
+   * The queue's own `expireInSeconds` first, because that number is already the
+   * considered statement of how long this queue's work legitimately takes —
+   * `py-fn-hbpe` says ~8 h because a GGUF labelling pass takes hours, and a
+   * shorter in-process deadline would kill it. Only a queue that declares
+   * nothing falls back to the appliance-wide default, and 28 of the 39 do.
+   *
+   * Note what the fallback does to a queue that declares nothing: pg-boss
+   * already gave it the constructor's `expireInHours: 12` via
+   * COALESCE(job, queue row, constructor), so the fallback does not fill a gap,
+   * it TIGHTENS an existing bound to `queues.jobTimeoutSeconds`. That is only
+   * safe where the queue's unit of work is orders of magnitude inside two
+   * hours. A queue that can legitimately run longer has to say so here — which
+   * is why the five import queues declare 12 h explicitly rather than
+   * inheriting a number that would have failed them mid-archive. See
+   * `IMPORT_STAGE_EXPIRE_SECONDS` and `docs/jobs-system.md` §1.11.
+   *
+   * Floored, so a misconfigured `expireInSeconds: 1` (or a config file that
+   * somehow yields a tiny number) cannot turn the deadline into a machine for
+   * dead-lettering every job on the box. The floor never lowers a deadline.
+   */
+  private jobDeadlineMs(queue: string): number {
+    const declaredSeconds = EventListenerRegistry.getQueueOptions(queue)?.expireInSeconds;
+    const requested = declaredSeconds != null ? declaredSeconds * 1000 : this.jobTimeoutMs;
+
+    return Math.max(requested, PGBossEventService.MIN_JOB_DEADLINE_MS);
+  }
+
+  /**
+   * Settle `work`, or reject with {@link JobTimeoutError} once `ms` has passed.
+   *
+   * The timer is cleared on every exit, so a healthy job does not park a
+   * two-hour timer per execution. The losing side of the race stays pending
+   * forever — that is unavoidable, since a listener that never acknowledges is
+   * precisely what this is for — but `Promise.race` has already subscribed to
+   * it, so a late rejection is absorbed rather than escaping as an unhandled
+   * rejection (which `application.ts` turns into `process.exit(1)`).
+   *
+   * ABANDONED, NOT KILLED, and that asymmetry is what sizes every deadline.
+   * `Promise.race` cannot cancel `work`: a listener that outruns its budget
+   * keeps its sockets, its file handles and its transaction open and keeps
+   * writing, while its global slot, its per-queue slot and its `JobSlotPool`
+   * slot have all been handed back and pg-boss has re-queued the row. On a
+   * queue whose `localConcurrency` is a safety property rather than a
+   * throughput knob — `import-unpack` is 1 so two archives' disk preflights
+   * cannot both pass — a deadline that fires on healthy work does not stop
+   * that work, it ADDS a second copy beside it. A too-short deadline is
+   * therefore not a milder version of a too-long one; it is a different and
+   * worse failure. Size every budget so it can only fire on something already
+   * broken.
+   */
+  private withDeadline<T>(
+    work: Promise<T>,
+    ms: number,
+    queue: string,
+    job: JobWithMetadata<EventData>,
+  ): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new JobTimeoutError(queue, job.id, job.data?.name, ms));
+      }, ms);
+    });
+
+    return Promise.race([work, deadline]).finally(() => {
+      clearTimeout(timer);
     });
   }
 

@@ -28,6 +28,17 @@ function syncJobWith(messages: unknown[]) {
   return { id: 'job-1', userId: 'user-1', connectionId: 'conn-1', data: { messages } } as never;
 }
 
+/** Gmail hands body part data back as URL-safe base64. */
+function b64url(text: string): string {
+  return Buffer.from(text, 'utf-8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_');
+}
+
+/**
+ * Headers a receiving MTA stamps at final delivery. Real `format=full` mail
+ * carries them; `emailDirection` reads them as the inbound signal.
+ */
+const DELIVERED = { name: 'Delivered-To', value: 'kyle@example.com' };
+
 function gmailMessage(overrides: Record<string, unknown> = {}) {
   return {
     id: 'msg-1',
@@ -172,5 +183,303 @@ describe('GmailTransformService.transformGmail', () => {
     expect(communicationService.create).toHaveBeenCalledTimes(2);
     // Only the surviving message gets tagged.
     expect(tagService.tagEntities).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GmailTransformService direction', () => {
+  it('files a SENT message as OUTBOUND — the sweep SyncGmail explicitly performs', async () => {
+    // SyncGmail fetches labelIds=SENT on purpose. The transform used to file
+    // every one of those rows 'inbound', which made LifeStatsService read the
+    // owner as their own counterparty (then drop it as self) and never count
+    // the real recipients.
+    const { service, communicationService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage({
+          id: 'sent-1',
+          labelIds: ['SENT'],
+          payload: {
+            headers: [
+              { name: 'Subject', value: 'Re: Hello' },
+              { name: 'From', value: 'Kyle <kyle@example.com>' },
+              { name: 'To', value: 'alice@example.com' },
+              { name: 'Date', value: 'Tue, 18 Aug 2026 11:00:00 -0700' },
+              { name: 'Message-ID', value: '<sent-1-rfc@mail.gmail.com>' },
+            ],
+          },
+        }),
+      ]),
+    });
+
+    const [, dto] = communicationService.create.mock.calls[0] as unknown as [unknown, { direction?: string }];
+    expect(dto.direction).toBe('outbound');
+  });
+
+  it('files delivered mail as INBOUND on the receiving-MTA trace headers', async () => {
+    const { service, communicationService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage({
+          payload: {
+            headers: [
+              DELIVERED,
+              { name: 'Subject', value: 'Hello' },
+              { name: 'From', value: 'Alice <alice@example.com>' },
+              { name: 'To', value: 'kyle@example.com' },
+              { name: 'Date', value: 'Tue, 18 Aug 2026 10:00:00 -0700' },
+              { name: 'Message-ID', value: '<msg-1-rfc@mail.gmail.com>' },
+            ],
+          },
+        }),
+      ]),
+    });
+
+    const [, dto] = communicationService.create.mock.calls[0] as unknown as [unknown, { direction?: string }];
+    expect(dto.direction).toBe('inbound');
+  });
+
+  it('uses EMAILED, not RECEIVED_EMAIL_FROM, for the From address of an outbound message', async () => {
+    // On sent mail the From address is the owner; RECEIVED_EMAIL_FROM would
+    // assert the owner received mail from themselves.
+    const { service, promoteService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([gmailMessage({ id: 'sent-2', labelIds: ['SENT'] })]),
+    });
+
+    const fromCall = promoteService.processParticipants.mock.calls[0] as unknown as unknown[];
+    expect(fromCall[4]).toBe('EMAILED');
+  });
+
+  it('keeps RECEIVED_EMAIL_FROM for the From address of an inbound message', async () => {
+    const { service, promoteService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage({
+          payload: {
+            headers: [
+              DELIVERED,
+              { name: 'Subject', value: 'Hello' },
+              { name: 'From', value: 'Alice <alice@example.com>' },
+              { name: 'To', value: 'kyle@example.com' },
+              { name: 'Message-ID', value: '<msg-1-rfc@mail.gmail.com>' },
+            ],
+          },
+        }),
+      ]),
+    });
+
+    const fromCall = promoteService.processParticipants.mock.calls[0] as unknown as unknown[];
+    expect(fromCall[4]).toBe('RECEIVED_EMAIL_FROM');
+  });
+});
+
+describe('GmailTransformService body extraction', () => {
+  const NESTED_PLAIN = 'The real body, two MIME levels down and 40+ chars long.';
+
+  /** multipart/mixed → [multipart/alternative → [plain, html], application/pdf] */
+  function nestedPayload() {
+    return {
+      mimeType: 'multipart/mixed',
+      filename: '',
+      headers: [
+        DELIVERED,
+        { name: 'Subject', value: 'Quarterly numbers' },
+        { name: 'From', value: 'Alice <alice@example.com>' },
+        { name: 'To', value: 'kyle@example.com' },
+        { name: 'Message-ID', value: '<nested-rfc@mail.gmail.com>' },
+      ],
+      parts: [
+        {
+          mimeType: 'multipart/alternative',
+          filename: '',
+          parts: [
+            { mimeType: 'text/plain; charset="UTF-8"', filename: '', body: { data: b64url(NESTED_PLAIN) } },
+            { mimeType: 'text/html', filename: '', body: { data: b64url('<p>markup copy</p>') } },
+          ],
+        },
+        {
+          mimeType: 'application/pdf',
+          filename: 'numbers.pdf',
+          body: { attachmentId: 'att-1', size: 1024 },
+        },
+      ],
+    };
+  }
+
+  it('walks a nested multipart tree for the body instead of storing the snippet', async () => {
+    const { service, communicationService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage({ id: 'nested-1', snippet: 'The real body, two MIME…', payload: nestedPayload() }),
+      ]),
+    });
+
+    const [, dto] = communicationService.create.mock.calls[0] as unknown as [
+      unknown,
+      { content?: string; preview?: string | null },
+    ];
+    expect(dto.content).toBe(NESTED_PLAIN);
+    // The snippet stays a preview and never doubles as the body.
+    expect(dto.preview).toBe('The real body, two MIME…');
+    expect(dto.content).not.toBe(dto.preview);
+  });
+
+  it('flattens a text/html leaf through htmlToText rather than storing raw markup', async () => {
+    const { service, communicationService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage({
+          id: 'html-1',
+          payload: {
+            mimeType: 'multipart/alternative',
+            filename: '',
+            headers: [
+              DELIVERED,
+              { name: 'Subject', value: 'Rich text' },
+              { name: 'From', value: 'Alice <alice@example.com>' },
+              { name: 'To', value: 'kyle@example.com' },
+              { name: 'Message-ID', value: '<html-1-rfc@mail.gmail.com>' },
+            ],
+            parts: [
+              {
+                mimeType: 'text/html',
+                filename: '',
+                body: {
+                  data: b64url('<style>p{color:red}</style><p>Hello&nbsp;Kyle</p><p>Second line</p>'),
+                },
+              },
+            ],
+          },
+        }),
+      ]),
+    });
+
+    const [, dto] = communicationService.create.mock.calls[0] as unknown as [unknown, { content?: string }];
+    expect(dto.content).not.toContain('<p>');
+    expect(dto.content).not.toContain('color:red');
+    expect(dto.content).toContain('Hello');
+    expect(dto.content).toContain('Second line');
+  });
+
+  it('prefers a nested text/plain leaf over a top-level text/html one', async () => {
+    const { service, communicationService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage({
+          id: 'prefer-1',
+          payload: {
+            mimeType: 'multipart/mixed',
+            filename: '',
+            headers: [
+              DELIVERED,
+              { name: 'Subject', value: 'Prefer plain' },
+              { name: 'From', value: 'Alice <alice@example.com>' },
+              { name: 'To', value: 'kyle@example.com' },
+              { name: 'Message-ID', value: '<prefer-1-rfc@mail.gmail.com>' },
+            ],
+            parts: [
+              { mimeType: 'text/html', filename: '', body: { data: b64url('<p>html sibling</p>') } },
+              {
+                mimeType: 'multipart/related',
+                filename: '',
+                parts: [{ mimeType: 'text/plain', filename: '', body: { data: b64url('plain wins') } }],
+              },
+            ],
+          },
+        }),
+      ]),
+    });
+
+    const [, dto] = communicationService.create.mock.calls[0] as unknown as [unknown, { content?: string }];
+    expect(dto.content).toBe('plain wins');
+  });
+
+  it('skips an attached .txt file and takes the inline body instead', async () => {
+    const { service, communicationService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage({
+          id: 'attach-1',
+          payload: {
+            mimeType: 'multipart/mixed',
+            filename: '',
+            headers: [
+              DELIVERED,
+              { name: 'Subject', value: 'With a text attachment' },
+              { name: 'From', value: 'Alice <alice@example.com>' },
+              { name: 'To', value: 'kyle@example.com' },
+              { name: 'Message-ID', value: '<attach-1-rfc@mail.gmail.com>' },
+            ],
+            parts: [
+              { mimeType: 'text/plain', filename: 'notes.txt', body: { data: b64url('ATTACHED FILE') } },
+              { mimeType: 'text/plain', filename: '', body: { data: b64url('inline body') } },
+            ],
+          },
+        }),
+      ]),
+    });
+
+    const [, dto] = communicationService.create.mock.calls[0] as unknown as [unknown, { content?: string }];
+    expect(dto.content).toBe('inline body');
+  });
+
+  it('stores an empty content rather than the snippet when the message carries no body part', async () => {
+    const { service, communicationService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([gmailMessage({ snippet: 'a preview, not a body' })]),
+    });
+
+    const [, dto] = communicationService.create.mock.calls[0] as unknown as [
+      unknown,
+      { content?: string; preview?: string | null },
+    ];
+    expect(dto.content).toBe('');
+    expect(dto.preview).toBe('a preview, not a body');
+  });
+
+  it('still decodes a single-part payload body', async () => {
+    const { service, communicationService } = build();
+
+    await service.transformGmail({
+      connection,
+      syncJob: syncJobWith([
+        gmailMessage({
+          id: 'single-1',
+          payload: {
+            mimeType: 'text/plain',
+            filename: '',
+            headers: [
+              DELIVERED,
+              { name: 'Subject', value: 'Plain single part' },
+              { name: 'From', value: 'Alice <alice@example.com>' },
+              { name: 'To', value: 'kyle@example.com' },
+              { name: 'Message-ID', value: '<single-1-rfc@mail.gmail.com>' },
+            ],
+            body: { data: b64url('single part body') },
+          },
+        }),
+      ]),
+    });
+
+    const [, dto] = communicationService.create.mock.calls[0] as unknown as [unknown, { content?: string }];
+    expect(dto.content).toBe('single part body');
   });
 });

@@ -27,6 +27,19 @@ describe('activityTimelineFiltersFromSearchParams', () => {
     expect(activityTimelineFiltersFromSearchParams(params)?.includeTypes).toHaveLength(2);
   });
 
+  it('applies the When override so the heatmap counts the same kinds as the list', () => {
+    const when = 'from=2026-01-01T00:00:00.000Z&to=2026-01-31T23:59:59.999Z';
+
+    expect(activityTimelineFiltersFromSearchParams(new URLSearchParams(when))).toEqual({
+      excludeTypes: ['content', 'file', 'note', 'person', 'place', 'product', 'item', 'answer', 'concept'],
+    });
+    expect(
+      activityTimelineFiltersFromSearchParams(
+        new URLSearchParams(`${when}&includedEntityTypes=Event,Content`),
+      ),
+    ).toEqual({ includeTypes: ['event'] });
+  });
+
   it('passes who/where/how and text filters through to the heatmap query', () => {
     const params = new URLSearchParams({
       people: 'Ada',

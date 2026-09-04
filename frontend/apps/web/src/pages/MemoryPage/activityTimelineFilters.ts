@@ -1,6 +1,6 @@
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 
-import { narrowedEntityTypes } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
+import { explorerSearchTypeFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
 export interface ActivityTimelineFilterVariables {
   includeTypes?: string[];
@@ -22,12 +22,15 @@ function toIndexableTypes(displayTypes: string[]): string[] {
 /**
  * Derive the Memory explorer filters that should constrain the activity heatmap.
  * When no entity-type filter is active, omit include/exclude so the server uses
- * its full browse set — matching an unfiltered search.
+ * its full browse set — matching an unfiltered search. The type filters come
+ * through explorerSearchTypeFilters, so the heatmap sees the same When
+ * override as the list (a date range asks only for kinds that have a date).
  */
 export function activityTimelineFiltersFromSearchParams(
   params: URLSearchParams,
+  pathname?: string,
 ): ActivityTimelineFilterVariables | undefined {
-  const narrowed = narrowedEntityTypes(params);
+  const { includeTypes, excludeTypes } = explorerSearchTypeFilters(params, pathname);
   const search = params.get('search')?.trim();
   const tags =
     params
@@ -42,8 +45,12 @@ export function activityTimelineFiltersFromSearchParams(
 
   const filters: ActivityTimelineFilterVariables = {};
 
-  if (narrowed) {
-    filters.includeTypes = toIndexableTypes(narrowed);
+  if (includeTypes) {
+    filters.includeTypes = toIndexableTypes(includeTypes);
+  }
+
+  if (excludeTypes) {
+    filters.excludeTypes = toIndexableTypes(excludeTypes);
   }
 
   if (eventTypes.length > 0) {

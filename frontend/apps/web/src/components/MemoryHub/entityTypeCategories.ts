@@ -15,6 +15,8 @@ import {
   ProductIcon,
   ReceiptIcon,
 } from '@/components/icons';
+import { EVENTS_EXPLORER_TYPES, isEventsExplorer } from '@/pages/MemoryPage/explorerRoute';
+
 
 export type EntityTypeIcon = ComponentType<{ className?: string; colorized?: boolean }>;
 
@@ -89,12 +91,21 @@ export const WHAT_CATEGORIES: WhatCategory[] = [
     icon: EventIcon,
   },
   {
+    // Browser activity is a happening — a visit at a moment — like a message
+    // or an event, not a piece of content. It gets its own button beside them
+    // on every page, in the order the events browse offers the three.
+    kind: 'standalone',
+    id: 'browser',
+    label: 'Browser',
+    entityType: 'Browser',
+    icon: BrowserActivityIcon,
+  },
+  {
     kind: 'group',
     id: 'content',
     label: 'Content',
     icon: ContentIcon,
     items: [
-      { entityType: 'Browser', label: 'Browser', icon: BrowserActivityIcon },
       { entityType: 'Content', label: 'Content', icon: ContentIcon },
       { entityType: 'File', label: 'Files', icon: FileIcon },
       { entityType: 'Note', label: 'Notes', icon: NoteIcon },
@@ -123,6 +134,44 @@ export const WHAT_CATEGORIES: WhatCategory[] = [
     icon: TagIcon,
   },
 ];
+
+/**
+ * The What bar for a page. `/memory/events` only browses the kinds with a
+ * moment of their own (EVENTS_EXPLORER_TYPES), so it offers exactly those:
+ * Messages, Events and Browser. Tags stay — they are not a kind. Everywhere
+ * else the full list applies. (A group member in the allowed set would be
+ * lifted out as a standalone button; today all three are standalone already.)
+ */
+export function whatCategoriesFor(pathname: string): WhatCategory[] {
+  if (!isEventsExplorer(pathname)) {
+    return WHAT_CATEGORIES;
+  }
+
+  const allowed = new Set(EVENTS_EXPLORER_TYPES);
+  const categories: WhatCategory[] = [];
+
+  for (const category of WHAT_CATEGORIES) {
+    if (category.kind === 'tag') {
+      categories.push(category);
+    } else if (category.kind === 'group') {
+      for (const item of category.items) {
+        if (allowed.has(item.entityType)) {
+          categories.push({
+            kind: 'standalone',
+            id: item.entityType.toLowerCase(),
+            label: item.label,
+            entityType: item.entityType,
+            icon: item.icon ?? category.icon,
+          });
+        }
+      }
+    } else if (allowed.has(category.entityType)) {
+      categories.push(category);
+    }
+  }
+
+  return categories;
+}
 
 export function entityTypesForCategory(category: WhatCategory): string[] {
   if (category.kind === 'standalone' || category.kind === 'events') {

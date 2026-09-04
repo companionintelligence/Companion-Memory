@@ -326,12 +326,12 @@ function AppRoutes() {
 
           {/* Nothing in the shell ever linked here — GlobalSearchBox is
               embedded directly in both the desktop header and MobileTopBar
-              and commits straight to /memory/events?search=, and desktop
+              and commits straight to /memory?search=, and desktop
               search itself is List View in Memory now (the old
               DesktopSearchRedirect this replaced already said so). Kept as a
               redirect, not deleted outright, in case an old bookmark or
               external link still points at /search. */}
-          <Route path="/search" element={<Navigate to="/memory/events" replace />} />
+          <Route path="/search" element={<Navigate to="/memory" replace />} />
 
           {/* `/memory` is the unfiltered explorer (all kinds). `/memory/events`
               is the same page with the Events submenu's type filter. */}
@@ -487,7 +487,7 @@ function AppRoutes() {
             </>
           )}
 
-          <Route path="/memory/knowledge" element={<Navigate to="/memory/events?view=graph" replace />} />
+          <Route path="/memory/knowledge" element={<Navigate to="/memory?view=graph" replace />} />
 
           {/* Chat moved under Memory — it's a bounded view over your own
               history the same way Events/People/Places are, not a peer
