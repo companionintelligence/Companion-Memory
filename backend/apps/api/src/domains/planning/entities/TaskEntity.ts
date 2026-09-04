@@ -1,16 +1,12 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn, UpdateDateColumn, Index } from 'typeorm';
 
-export const TASK_STATUSES = [
-  'proposed',
-  'open',
-  'in_progress',
-  'delegated',
-  'done',
-  'skipped',
-  'archived',
-] as const;
+import { TASK_STATUSES, type TaskStatus } from '../taskStatus';
 
-export type TaskStatus = (typeof TASK_STATUSES)[number];
+// Re-exported so the many callers that already reach for the vocabulary through
+// the entity keep working. `../taskStatus` is where it is DEFINED, together with
+// the named subsets that stop a filter from silently missing a new status.
+export { TASK_STATUSES };
+export type { TaskStatus };
 
 /**
  * A unit of planned work.

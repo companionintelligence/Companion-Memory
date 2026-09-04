@@ -12,7 +12,7 @@ import { Events, EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/even
 import { FileService } from '@ci/domains/files';
 import { ActionService } from '@ci/domains/intelligence';
 import { UserContextService } from '@ci/domains/memory';
-import { TaskService } from '@ci/domains/planning';
+import { ACTIVE_TASK_STATUSES, TaskService } from '@ci/domains/planning';
 import { HbpeService } from '@ci/domains/predictions';
 import { SummaryService } from '@ci/domains/summaries';
 
@@ -734,7 +734,7 @@ Communication style:
 
     try {
       const tasks = await this.taskService.findAll(context, {
-        status: ['open', 'in_progress'],
+        status: [...ACTIVE_TASK_STATUSES],
         limit: 20,
       });
 

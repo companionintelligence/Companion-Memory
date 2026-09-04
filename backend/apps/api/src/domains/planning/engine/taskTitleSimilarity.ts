@@ -7,6 +7,8 @@
  * create and when reconciling stale proposals.
  */
 
+import { TASK_STATUSES } from '../taskStatus';
+
 const STOP_WORDS = new Set([
   'a',
   'an',
@@ -26,15 +28,15 @@ const STOP_WORDS = new Set([
   'your',
 ]);
 
-/** Statuses that mean "we already looked at this work" — including declined. */
-export const SCAN_DEDUP_STATUSES = [
-  'proposed',
-  'open',
-  'in_progress',
-  'done',
-  'skipped',
-  'archived',
-] as const;
+/**
+ * Statuses that mean "we already looked at this work" — including declined.
+ *
+ * That is every status there is, so it is the vocabulary itself rather than a
+ * copy of it. Written out as a literal it silently lost `delegated` when #2558
+ * added it, which let a scan re-propose a duplicate of the very task an agent
+ * was already working on.
+ */
+export const SCAN_DEDUP_STATUSES = TASK_STATUSES;
 
 export const SCAN_DEDUP_LIMIT = 300;
 

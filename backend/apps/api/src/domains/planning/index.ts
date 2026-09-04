@@ -34,7 +34,7 @@ import {
   type ResolvedPlanningPrefs,
 } from './entities/PlanningPrefsEntity';
 import { TaskDependencyEntity, type TaskDependency } from './entities/TaskDependencyEntity';
-import { TaskEntity, TASK_STATUSES, type Task, type TaskStatus } from './entities/TaskEntity';
+import { TaskEntity, type Task } from './entities/TaskEntity';
 import {
   TaskPendingChangeEntity,
   type TaskPendingChange,
@@ -97,16 +97,29 @@ export { TaskEntity, TaskDependencyEntity, TaskPendingChangeEntity, PlanningPref
 
 export { TaskService, PlanningTimeService, PlannedBlockService, PlanningPrefsService };
 
-export { TASK_STATUSES };
+// The status vocabulary and its named subsets. Cross-domain callers that filter
+// tasks by status (ChatTurnService's Plan snapshot, for one) take a subset from
+// here rather than writing the literals out again — see `./taskStatus`.
+export {
+  ACTIVE_TASK_STATUSES,
+  CLOSED_TASK_STATUSES,
+  LIVE_TASK_STATUSES,
+  PROPOSED_TASK_STATUSES,
+  SCHEDULABLE_TASK_STATUSES,
+  TASK_STATUSES,
+  TITLE_MATCH_TASK_STATUSES,
+  isActiveTaskStatus,
+  isClosedTaskStatus,
+} from './taskStatus';
 export { PLANNING_PREFS_DEFAULTS };
 
 export { isValidTimezone, localDateInTZ, todayInTZ, zonedWallTimeToUTC } from '@ci/common/time/zoned';
 
+export type { TaskStatus } from './taskStatus';
 export type {
   PlanningPrefs,
   ResolvedPlanningPrefs,
   Task,
-  TaskStatus,
   TaskDependency,
   TaskPendingChange,
   TaskPendingChangeKind,
