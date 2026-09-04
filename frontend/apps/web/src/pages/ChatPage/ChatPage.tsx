@@ -172,6 +172,7 @@ function ChatPageContent() {
           message: data.message,
         });
         await refetchThread();
+
         return true;
       }
 
