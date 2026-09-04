@@ -7,15 +7,16 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/events';
-import { TaskService } from '@ci/domains/planning';
+import { TaskService, isActiveTaskStatus } from '@ci/domains/planning';
 
-import {
-  AGENT_DISPATCH_QUEUE,
-  DISPATCH_QUEUED_STALE_MS,
-  DISPATCH_RUNNING_STALE_MS,
-} from '../constants';
-
+import { AGENT_DISPATCH_QUEUE, DISPATCH_QUEUED_STALE_MS, DISPATCH_RUNNING_STALE_MS } from '../constants';
 import { buildDispatchPacket } from '../dispatchPacket';
+import {
+  AgentJobEntity,
+  type AgentJob,
+  type AgentJobStatus,
+  type PacketMode,
+} from '../entities/AgentJobEntity';
 import {
   AgentTaskBlockedEvent,
   AgentTaskCheckpointEvent,
@@ -23,12 +24,6 @@ import {
   AgentTaskDispatchEvent,
   PlanningTaskResultEvent,
 } from '../events';
-import {
-  AgentJobEntity,
-  type AgentJob,
-  type AgentJobStatus,
-  type PacketMode,
-} from '../entities/AgentJobEntity';
 
 import { HubDoorbellService } from './HubDoorbellService';
 
@@ -78,7 +73,7 @@ export class AgentDispatchService {
       throw new BadRequestException('Dispatch needs a title');
     }
 
-    let taskId = input.taskId ?? null;
+    const taskId = input.taskId ?? null;
 
     if (taskId) {
       const task = await this.taskService.findById(context, taskId);
@@ -145,7 +140,9 @@ export class AgentDispatchService {
     );
 
     if (eventJobId) {
-      await this.jobRepository.update({ id: jobId }, { eventJobId } as QueryDeepPartialEntity<AgentJobEntity>);
+      await this.jobRepository.update({ id: jobId }, {
+        eventJobId,
+      } as QueryDeepPartialEntity<AgentJobEntity>);
       entity.eventJobId = eventJobId;
     }
 
@@ -225,16 +222,13 @@ export class AgentDispatchService {
 
     const completed = status === 'completed' || status === 'blocked' || status === 'failed';
 
-    await this.jobRepository.update(
-      { id, userId: context.userId },
-      {
-        status,
-        failStep,
-        failCount,
-        result: input.result ?? job.result,
-        completedAt: completed ? new Date() : job.completedAt,
-      } as QueryDeepPartialEntity<AgentJobEntity>,
-    );
+    await this.jobRepository.update({ id, userId: context.userId }, {
+      status,
+      failStep,
+      failCount,
+      result: input.result ?? job.result,
+      completedAt: completed ? new Date() : job.completedAt,
+    } as QueryDeepPartialEntity<AgentJobEntity>);
 
     const updated = await this.requireJob(context, id);
 
@@ -281,8 +275,7 @@ export class AgentDispatchService {
           turns: [
             {
               role: 'assistant',
-              content:
-                'OpenClaw did not check in. Memory closed the job so it would not hang.',
+              content: 'OpenClaw did not check in. Memory closed the job so it would not hang.',
             },
           ],
           result: { summary: 'Timed out waiting for OpenClaw' },
@@ -304,14 +297,11 @@ export class AgentDispatchService {
     const message = input.message?.trim();
 
     if (input.action === 'halt') {
-      await this.jobRepository.update(
-        { id, userId: context.userId },
-        {
-          status: 'blocked',
-          completedAt: new Date(),
-          result: { ...(job.result ?? {}), halted: true },
-        } as QueryDeepPartialEntity<AgentJobEntity>,
-      );
+      await this.jobRepository.update({ id, userId: context.userId }, {
+        status: 'blocked',
+        completedAt: new Date(),
+        result: { ...(job.result ?? {}), halted: true },
+      } as QueryDeepPartialEntity<AgentJobEntity>);
 
       if (message) {
         await this.messageService.create(context, {
@@ -325,6 +315,7 @@ export class AgentDispatchService {
 
       const updated = await this.requireJob(context, id);
       await this.finishBlocked(context, updated, 'halted');
+
       return updated;
     }
 
@@ -346,11 +337,7 @@ export class AgentDispatchService {
     return this.requireJob(context, id);
   }
 
-  private async finishBlocked(
-    context: UserServiceContext,
-    job: AgentJob,
-    reason: string,
-  ): Promise<void> {
+  private async finishBlocked(context: UserServiceContext, job: AgentJob, reason: string): Promise<void> {
     await this.messageService.create(context, {
       threadId: job.threadId,
       role: 'assistant',
@@ -358,6 +345,8 @@ export class AgentDispatchService {
       source: 'memory',
       content: `Dispatch blocked. ${reason}`,
     });
+
+    await this.releaseTask(context, job);
 
     await this.eventService.send(AgentTaskBlockedEvent, {
       userId: context.userId,
@@ -377,6 +366,8 @@ export class AgentDispatchService {
   }
 
   private async finishFailed(context: UserServiceContext, job: AgentJob, reason: string): Promise<void> {
+    await this.releaseTask(context, job);
+
     await this.messageService.create(context, {
       threadId: job.threadId,
       role: 'assistant',
@@ -393,6 +384,49 @@ export class AgentDispatchService {
       reason,
     });
     await this.completeEventJob(job, { status: 'failed', reason });
+  }
+
+  /**
+   * ═══ A DISPATCH THAT ENDS BADLY MUST HAND THE TASK BACK ═══
+   *
+   * `blocked` and `failed` are terminal for the job — both stamp `completedAt`,
+   * and `finishCompleted` is the only thing that ever moved the task off
+   * `delegated`. So every dispatch that did not succeed left the task delegated
+   * forever, which is worse than it sounds: `delegated` means "an agent has
+   * this", and the whole Plan surface believes it. The card hides Schedule and
+   * Reschedule, the board refuses to file it as Overdue however old its
+   * deadline, and the planner will not place a calendar block against it. The
+   * work became unreachable by the one person left who could do it.
+   *
+   * Returning it to `open` says the truth: nobody has this, it is yours again.
+   *
+   * Guarded on the task still being ACTIVE, not on it being exactly
+   * `delegated`, so this cannot resurrect work the owner has since completed,
+   * declined or archived while the harness was away — a stale job checking in
+   * late must not undo a decision the user has already made.
+   */
+  private async releaseTask(context: UserServiceContext, job: AgentJob): Promise<void> {
+    if (!job.taskId) {
+      return;
+    }
+
+    try {
+      const task = await this.taskService.findById(context, job.taskId);
+
+      if (!task || !isActiveTaskStatus(task.status)) {
+        return;
+      }
+
+      await this.taskService.update(context, job.taskId, { status: 'open' });
+    } catch (error) {
+      // Never let the hand-back stop the job from closing: the message, the
+      // events and completeJob below are what stop OpenClaw retrying forever.
+      this.logger.warn('Could not release the task from a failed dispatch', {
+        jobId: job.id,
+        taskId: job.taskId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async finishCompleted(context: UserServiceContext, job: AgentJob): Promise<void> {
