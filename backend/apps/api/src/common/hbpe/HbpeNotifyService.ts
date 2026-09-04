@@ -41,17 +41,11 @@ export class HbpeNotifyService {
     return this.notify(HBPE_NOTIFY_CHANNELS.events, userId, at);
   }
 
-  async notifyBrowserActivity(
-    userId: string,
-    at: Date | Iterable<Date | null | undefined>,
-  ): Promise<void> {
+  async notifyBrowserActivity(userId: string, at: Date | Iterable<Date | null | undefined>): Promise<void> {
     return this.notify(HBPE_NOTIFY_CHANNELS.browserActivity, userId, at);
   }
 
-  async notifyCommunications(
-    userId: string,
-    at: Date | Iterable<Date | null | undefined>,
-  ): Promise<void> {
+  async notifyCommunications(userId: string, at: Date | Iterable<Date | null | undefined>): Promise<void> {
     return this.notify(HBPE_NOTIFY_CHANNELS.communications, userId, at);
   }
 

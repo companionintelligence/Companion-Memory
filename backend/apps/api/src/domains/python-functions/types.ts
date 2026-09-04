@@ -103,6 +103,12 @@ export const PYTHON_FUNCTION_QUEUE_OPTIONS: Record<
 export const PYTHON_FUNCTIONS: Record<PythonFunctionTarget, readonly string[]> = {
   summary: [
     'hourly_summary',
+    // Operator-initiated recovery, never scheduled — no cron sends it. It is
+    // listed because this array is a dispatch allowlist, not a schedule: the
+    // summary sidecar registers `hourly_summary_backfill` in its own FUNCTIONS
+    // registry, and without a matching entry here `dispatch()` rejects the name
+    // before it ever reaches a queue.
+    'hourly_summary_backfill',
     'daily_summary',
     'weekly_summary',
     'monthly_summary',

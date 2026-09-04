@@ -27,6 +27,8 @@ export class ItemProductLoader extends Loader<ProductModel | null> {
     context: UserServiceContext,
     productIds: readonly string[],
   ): Promise<readonly (ProductModel | null)[]> {
-    return this.productModelService.findByIds(context, [...productIds]);
+    const products = await this.productModelService.findByIds(context, [...productIds]);
+
+    return this.rekey(productIds, products, (product) => product.id);
   }
 }

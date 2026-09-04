@@ -329,9 +329,7 @@ describe('PickStep', () => {
   });
 
   it('does not make the pinned-variant row sticky (the flex split already pins it)', () => {
-    render(
-      <PickStep catalog={CATALOG} picked={new Set()} onToggle={vi.fn()} onContinue={vi.fn()} />,
-    );
+    render(<PickStep catalog={CATALOG} picked={new Set()} onToggle={vi.fn()} onContinue={vi.fn()} />);
 
     const continueButton = screen.getByRole('button', { name: /continue/i });
     expect(continueButton.parentElement?.className).not.toMatch(/sticky/);

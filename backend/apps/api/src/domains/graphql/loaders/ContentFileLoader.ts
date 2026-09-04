@@ -54,9 +54,18 @@ export class ContentFileLoader extends Loader<ContentFileMedia | null, string> {
       this.fileService.findVariantsByParentIds(context, ids, FileVariant.PREVIEW),
     ]);
 
-    return ids.map((_id, index) => {
-      const original = originals[index] ?? null;
-      const preview = previews[index] ?? null;
+    // Indexed by id rather than zipped by position, for the same reason
+    // AttachmentFileLoader does: a positional zip is correct only for as long
+    // as FileService keeps re-keying, and nothing here would notice if it
+    // stopped — the page would just render other files' thumbnails.
+    const originalById = new Map(originals.filter((file) => file != null).map((file) => [file.id, file]));
+    const previewByParent = new Map(
+      previews.filter((file) => file != null).map((file) => [file.parentId, file]),
+    );
+
+    return ids.map((id) => {
+      const original = originalById.get(id) ?? null;
+      const preview = previewByParent.get(id) ?? null;
 
       // An external_id that resolves to neither an original nor a preview is
       // not a file reference we can render (a purged blob, or an opaque

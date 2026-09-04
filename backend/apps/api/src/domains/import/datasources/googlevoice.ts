@@ -483,11 +483,7 @@ export class GoogleVoiceFileImporter implements FileImporter {
     }
   }
 
-  private async processConversation(
-    fpath: string,
-    params: ImportParams,
-    fromSpam = false,
-  ): Promise<void> {
+  private async processConversation(fpath: string, params: ImportParams, fromSpam = false): Promise<void> {
     let raw: string;
     try {
       raw = await fs.promises.readFile(fpath, 'utf8');
@@ -1337,7 +1333,9 @@ function pushCollapsedAttachments(
 ): void {
   const escaped = basenameNoExt.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const collisionRe = new RegExp(`^${escaped}-(?:\\(\\d+\\))?\\.(jpg|gif|png|jpeg|3gp|mp4|amr)$`, 'i');
-  const matches = dirEntries.filter((name) => collisionRe.test(name) && !alreadyPushed.has(path.join(dir, name)));
+  const matches = dirEntries.filter(
+    (name) => collisionRe.test(name) && !alreadyPushed.has(path.join(dir, name)),
+  );
 
   if (matches.length === 0) {
     return;

@@ -2,7 +2,7 @@ import { UnauthorizedException, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
-import { FULL_CAPABILITY, REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorators';
+import { FULL_CAPABILITY, REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { JobControlsService } from '../../services/JobControlsService';
@@ -49,12 +49,25 @@ function makeMonitorService() {
   };
 }
 
-async function buildApp(guard: unknown, monitor: ReturnType<typeof makeMonitorService>) {
+function makeQueryService() {
+  return {
+    clearTerminal: jest.fn(async (_context: unknown, scope: 'dead-letter' | 'failed') => ({
+      scope,
+      deleted: 3,
+    })),
+  };
+}
+
+async function buildApp(
+  guard: unknown,
+  monitor: ReturnType<typeof makeMonitorService>,
+  query: ReturnType<typeof makeQueryService> = makeQueryService(),
+) {
   const module = await Test.createTestingModule({
     controllers: [JobsController],
     providers: [
       { provide: JobMonitorService, useValue: monitor },
-      { provide: JobQueryService, useValue: {} },
+      { provide: JobQueryService, useValue: query },
       { provide: JobControlsService, useValue: {} },
     ],
   })
@@ -173,6 +186,52 @@ describe('POST /jobs/crons/run', () => {
       // OPEN the route to scoped keys, not confine it.
       expect(Reflect.getMetadata(REQUIRE_SCOPES_KEY, handler)).toBeUndefined();
       expect(Reflect.getMetadata(REQUIRE_SCOPES_KEY, JobsController)).toBeUndefined();
+    });
+  });
+});
+
+describe('POST /jobs/clear', () => {
+  let app: INestApplication;
+  let query: ReturnType<typeof makeQueryService>;
+
+  beforeEach(() => {
+    query = makeQueryService();
+  });
+
+  afterEach(async () => {
+    await app?.close();
+  });
+
+  it('rejects an unauthenticated call', async () => {
+    app = await buildApp(DenyUnauthenticatedGuard, makeMonitorService(), query);
+
+    await request(app.getHttpServer()).post('/jobs/clear').send({ scope: 'dead-letter' }).expect(401);
+    expect(query.clearTerminal).not.toHaveBeenCalled();
+  });
+
+  it('forwards the scope when authenticated', async () => {
+    app = await buildApp(AlwaysAllowGuard, makeMonitorService(), query);
+
+    const response = await request(app.getHttpServer())
+      .post('/jobs/clear')
+      .send({ scope: 'failed' })
+      .expect(201);
+
+    expect(response.body).toEqual({ scope: 'failed', deleted: 3 });
+    expect(query.clearTerminal).toHaveBeenCalledWith(expect.anything(), 'failed');
+  });
+
+  describe('auth declarations', () => {
+    const handler = JobsController.prototype.clearTerminal as unknown as object;
+
+    it('is guarded by JwtOrApiKeyAuthGuard', () => {
+      const guards = Reflect.getMetadata('__guards__', handler) as unknown[] | undefined;
+
+      expect(guards).toContain(JwtOrApiKeyAuthGuard);
+    });
+
+    it('requires WRITE capability — irreversible, but only for already-stopped work', () => {
+      expect(Reflect.getMetadata(REQUIRE_CAPABILITY_KEY, handler)).toBe(WRITE_CAPABILITY);
     });
   });
 });

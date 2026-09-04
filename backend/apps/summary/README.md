@@ -150,12 +150,22 @@ The registry (`FUNCTIONS` in `functions.py`) must stay in sync with
 | Function | Cron (UTC) |
 | --- | --- |
 | `hourly_summary` | `0 5 * * * *` |
+| `hourly_summary_backfill` | none — operator-initiated |
 | `daily_summary` | `0 10 0 * * *` |
 | `weekly_summary` | `0 15 0 * * 1` |
 | `monthly_summary` | `0 20 0 1 * *` |
 | `dossier_refresh` | `0 12 * * * *` |
 | `insights_generation` | `0 30 */3 * * *` |
 | `actions_generation` | `0 45 * * * *` |
+
+> `hourly_summary_backfill` has no cron — it only ever runs because an operator
+> asked for it — but it is in `FUNCTIONS` so the manual endpoint can hand a
+> multi-hour range to the runner instead of holding an HTTP request open for
+> it. It is listed in `PYTHON_FUNCTIONS.summary` on the NestJS side too: that
+> array is a dispatch allowlist, not a schedule, and a name missing from it is
+> one `dispatch()` rejects at the call site — so pg-boss could not send a
+> backfill at all. `pythonFunctionRegistryDrift.test.ts` parses this app's
+> `FUNCTIONS` dict and fails if the two sides diverge again.
 
 When `smart.rotation` is enabled, it owns the hourly summary/dossier tick at
 `:22` and the three-hour insight tick at `:45`. The ordinary hourly, dossier,
@@ -165,7 +175,14 @@ replace its own input stream.
 
 ### Checking Results
 
-Summaries land in `ci.summaries`, not in the entity graph:
+Summaries land in `ci.summaries`, not in the entity graph. **One row per
+`(user_id, period_type, period_start, period_end)`**, enforced by the partial
+unique index `summaries_user_window_uniq` (migration 20260903162709), so a
+concurrent cron and manual trigger converge instead of both inserting, and a
+`force` regeneration overwrites the window rather than adding a second answer
+to it. Insights are the deliberate exception — `period_type = 'insight'` is
+excluded from that index because a run stores one row per card over the same
+span.
 
 ```sql
 SELECT
@@ -217,19 +234,90 @@ curl -X POST http://localhost:8001/summary/manual-trigger \
   }'
 ```
 
+### Hourly Backfill
+
+`hourly_backfill` is the bounded recovery path: aligned hour boundaries, UTC
+offsets required, whole hours only, at most **24** of them
+(`MAX_HOURLY_BACKFILL_HOURS`). A bad range is a `400` before anything is
+started, never a background failure you have to go looking for.
+
+Each window is a full LLM summary plus an embedding, so 24 of them serially is
+tens of minutes to hours — far longer than any proxy in front of this service
+will hold a connection. So **a multi-hour range is accepted, not awaited**:
+
+```jsonc
+// 202-shaped body from POST /summary/manual-trigger
+{
+  "status": "accepted",
+  "message": "Hourly backfill queued for 24 hour(s)",
+  "duplicate": false,          // true when this range was already in flight
+  "backfill_id": "…",
+  "run_id": "…",
+  "progress_url": "/summary/backfill/<backfill_id>",
+  "run_url": "/runs/<run_id>",
+  "hours": 24,
+  "forced": false,
+  "time_range": { "start": "…", "end": "…" }
+}
+```
+
+Poll `GET /summary/backfill/{backfill_id}` from the moment you get the 202.
+`status` is `queued` | `running` | `completed` | `failed` — the record is
+published when the run is accepted, not when a worker reaches it, which matters
+because `FUNCTION_RUNNER_CONCURRENCY` defaults to 2 against a pool of
+minutes-long LLM jobs. `completed`/`generated`/`skipped` advance after **every**
+window, and `windows` carries the per-hour result as each hour lands — so a
+backfill that dies on hour 9 of 24 still tells you which eight were written. A
+failure also records `error`. The last `MAX_BACKFILL_RECORDS` (50) records are
+kept in the service process; older ids answer `404`, as does an id from before a
+restart. `GET /runs/{run_id}` reports the same run from the runner's side.
+
+Submitting a range that is already `queued` or `running` returns that run —
+same `backfill_id`, `duplicate: true` — instead of starting a second one. The
+in-process runner takes no singleton key, so nothing else would stop a
+double-submitted day from spending 24 more LLM summaries rewriting the windows
+the first run is still working through. A finished range can be submitted
+again; the dedup only covers work in flight.
+
+Two flags:
+
+| Field | Does |
+| --- | --- |
+| `force` | Regenerate windows that already have a summary, **overwriting the row in place** (`summaries_user_window_uniq` makes that an upsert, not a second row). Without it the backfill can only fill gaps — an hour summarized before its import batch finished landing keeps its thin summary forever, because that row satisfies the exact-window match. Also accepted for `period_type: "hourly"`. |
+| `wait` | Run inline and return the finished result even for a multi-hour range. For a range short enough to beat your proxy timeout. A single hour runs inline either way. |
+
+```bash
+# Re-summarize a day that was summarized mid-import, and watch it land
+BACKFILL=$(curl -sX POST http://localhost:8001/summary/manual-trigger \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "<user-uuid>",
+    "period_type": "hourly_backfill",
+    "start_time": "2026-09-01T00:00:00Z",
+    "end_time": "2026-09-02T00:00:00Z",
+    "force": true
+  }' | jq -r .backfill_id)
+
+curl -s "http://localhost:8001/summary/backfill/$BACKFILL" | jq '{status, completed, hours}'
+```
+
 The full inline surface:
 
 | Route | Does |
 | --- | --- |
-| `POST /summary/manual-trigger` | `hourly` / `hourly_backfill` / `daily` / `weekly` / `monthly` / `dossier` |
+| `POST /summary/manual-trigger` | `hourly` / `hourly_backfill` / `daily` / `weekly` / `monthly` / `dossier` — inline, except a multi-hour `hourly_backfill` |
+| `GET /summary/backfill/{id}` | Per-window progress for an accepted backfill |
 | `POST /dossier/refresh` · `POST /dossier/get` | Rebuild or read the dossier |
 | `POST /insights/generate` · `POST /insights/force-generate` | Insight generation, with and without the new-data gate |
 | `POST /actions/generate` | Feed actions |
 | `GET /summary/aggregate` | The aggregation step alone, no LLM |
 
-These bypass the queue and execute the same code the runner does, which makes
-them useful for debugging a specific window, backfilling a period, or working
-offline from the scheduler.
+These bypass the pg-boss queue and execute the same code the runner does, which
+makes them useful for debugging a specific window, backfilling a period, or
+working offline from the scheduler. The one exception is a multi-hour
+`hourly_backfill`, which goes through the runner's worker pool so the request
+does not have to stay open for the length of the generation — see
+[Hourly Backfill](#hourly-backfill).
 
 ### Hourly User Dossier Refresh
 

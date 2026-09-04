@@ -23,8 +23,7 @@ export function dispatchNotReadyAction(
   openclaw: Pick<AgentHarnessStatus, 'dispatchBlocker' | 'connectUrl'>,
 ): { label: string; onClick: () => void } | undefined {
   if (
-    (openclaw.dispatchBlocker === 'not_installed' ||
-      openclaw.dispatchBlocker === 'not_connected') &&
+    (openclaw.dispatchBlocker === 'not_installed' || openclaw.dispatchBlocker === 'not_connected') &&
     openclaw.connectUrl
   ) {
     return {

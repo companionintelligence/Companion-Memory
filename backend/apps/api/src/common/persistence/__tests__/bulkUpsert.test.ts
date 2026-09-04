@@ -730,7 +730,12 @@ describe('conflictUpdateSetClause', () => {
 
   it('adds an "arriving producer outranks" arm for a value column with a preference', () => {
     expect(
-      conflictUpdateSetClause('t', ['duration_seconds'], {}, { duration_seconds: ['ci-import-tools', 'capture'] }),
+      conflictUpdateSetClause(
+        't',
+        ['duration_seconds'],
+        {},
+        { duration_seconds: ['ci-import-tools', 'capture'] },
+      ),
     ).toBe(
       `"duration_seconds" = CASE WHEN ${same} THEN COALESCE(EXCLUDED."duration_seconds", "t"."duration_seconds") ` +
         `${outranks} THEN COALESCE(EXCLUDED."duration_seconds", "t"."duration_seconds") ` +
@@ -749,7 +754,9 @@ describe('conflictUpdateSetClause', () => {
         { properties: 'json' },
         { properties: ['ci-import-tools', 'capture'] },
       ),
-    ).toBe(`"properties" = CASE WHEN ${same} THEN ${incomingWins} ${outranks} THEN ${incomingWins} ELSE ${currentWins} END`);
+    ).toBe(
+      `"properties" = CASE WHEN ${same} THEN ${incomingWins} ${outranks} THEN ${incomingWins} ELSE ${currentWins} END`,
+    );
   });
 
   it('leaves a flag alone whatever the preference says (OR is symmetric)', () => {
@@ -765,7 +772,9 @@ describe('conflictUpdateSetClause', () => {
   });
 
   it('escapes a quote in a producer name rather than breaking the statement', () => {
-    expect(conflictUpdateSetClause('t', ['a'], {}, { a: ["o'clock"] })).toContain("ARRAY['o''clock']::text[]");
+    expect(conflictUpdateSetClause('t', ['a'], {}, { a: ["o'clock"] })).toContain(
+      "ARRAY['o''clock']::text[]",
+    );
   });
 
   it('joins one assignment per column, in list order', () => {

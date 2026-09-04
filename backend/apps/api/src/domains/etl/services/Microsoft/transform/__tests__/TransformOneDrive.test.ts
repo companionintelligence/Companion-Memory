@@ -69,7 +69,12 @@ describe('OneDriveTransformService.transformOneDrive', () => {
       connection,
       syncJob: syncJobWithItem(
         docItem({
-          content: { id: 'item-1', name: 'report.pdf', size: 9, file: { mimeType: 'application/pdf', hashes: { sha256Hash: sha256 } } },
+          content: {
+            id: 'item-1',
+            name: 'report.pdf',
+            size: 9,
+            file: { mimeType: 'application/pdf', hashes: { sha256Hash: sha256 } },
+          },
         }),
       ),
     });

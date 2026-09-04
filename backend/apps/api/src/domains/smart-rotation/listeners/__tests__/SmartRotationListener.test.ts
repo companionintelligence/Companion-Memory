@@ -292,16 +292,27 @@ describe('SmartRotationListener', () => {
   });
 
   describe('summaries', () => {
-    it('dispatches both the hourly digest and dossier maintenance for a new user', async () => {
-      const pythonFunctionService = {
-        dispatch: jest.fn().mockResolvedValue(true),
-      } as unknown as PythonFunctionService;
+    // The dossier gate answers ONE boolean: has a summary been stored since
+    // the dossier was built. `true` is also what every unknown resolves to
+    // inside the SQL — no user row, no self entity, the `'{}'` default
+    // dossier, or a `lastUpdatedAt` that will not parse.
+    const dossierGate = (stale: boolean) => ({ query: jest.fn().mockResolvedValue([{ stale }]) });
+    const dispatchMock = () => jest.fn().mockResolvedValue(true);
 
-      const listener = buildListener({ pythonFunctionService });
+    // Deliberately named for what it asserts: the gate is a mock here, so this
+    // is "the gate reported stale", not "the user is new". Whether a user with
+    // no dossier actually resolves to stale is a question about SQL, answered
+    // against a real Postgres in
+    // PythonFunctionCrons.dossierGate.integration.spec.ts.
+    it('dispatches the hourly digest and then the dossier, in that order, when the gate reports stale', async () => {
+      const dispatch = dispatchMock();
+      const pythonFunctionService = { dispatch } as unknown as PythonFunctionService;
+
+      const listener = buildListener({ pythonFunctionService, dataSource: dossierGate(true) });
 
       await listener.handleWork({ userId: 'user-1', workType: 'summaries' });
 
-      expect(pythonFunctionService.dispatch).toHaveBeenNthCalledWith(
+      expect(dispatch).toHaveBeenNthCalledWith(
         1,
         'summary',
         'hourly_summary',
@@ -309,7 +320,7 @@ describe('SmartRotationListener', () => {
         {},
         { singletonKey: 'fn:hourly_summary:user-1:rotation' },
       );
-      expect(pythonFunctionService.dispatch).toHaveBeenNthCalledWith(
+      expect(dispatch).toHaveBeenNthCalledWith(
         2,
         'summary',
         'dossier_refresh',
@@ -319,21 +330,145 @@ describe('SmartRotationListener', () => {
       );
     });
 
-    it('never withholds the hourly digest because prior summaries are stale', async () => {
-      const pythonFunctionService = {
-        dispatch: jest.fn().mockResolvedValue(true),
-      } as unknown as PythonFunctionService;
+    it('dispatches the dossier when a summary has been stored since it was built', async () => {
+      const dispatch = dispatchMock();
+      const pythonFunctionService = { dispatch } as unknown as PythonFunctionService;
 
-      const listener = buildListener({ pythonFunctionService });
+      const listener = buildListener({ pythonFunctionService, dataSource: dossierGate(true) });
 
       await listener.handleWork({ userId: 'user-1', workType: 'summaries' });
 
-      expect(pythonFunctionService.dispatch).toHaveBeenCalledWith(
+      expect(dispatch).toHaveBeenCalledWith(
+        'summary',
+        'dossier_refresh',
+        'user-1',
+        {},
+        { singletonKey: 'fn:dossier_refresh:user-1:rotation' },
+      );
+    });
+
+    // SMART_ROTATION_CRONS.summaries ticks hourly, and on a quiet appliance
+    // hourly_summary returns skipped:no_activity without writing a row.
+    // Ungated, the dossier ran a full LLM pass over the same unchanged
+    // summaries 24 times a day, on the GPU the digest itself contends for.
+    it('skips the dossier when nothing has been stored since it was last built', async () => {
+      const dispatch = dispatchMock();
+      const pythonFunctionService = { dispatch } as unknown as PythonFunctionService;
+
+      const listener = buildListener({ pythonFunctionService, dataSource: dossierGate(false) });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'summaries' });
+
+      expect(dispatch).not.toHaveBeenCalledWith(
+        'summary',
+        'dossier_refresh',
+        'user-1',
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    // The half of the either/or bug that must never come back: a user with no
+    // summaries can only escape by being given the digest, so the digest is
+    // dispatched before the gate is consulted and irrespective of its answer.
+    it('never withholds the hourly digest, including when the dossier is skipped', async () => {
+      const dispatch = dispatchMock();
+      const pythonFunctionService = { dispatch } as unknown as PythonFunctionService;
+      const dataSource = dossierGate(false);
+
+      const listener = buildListener({ pythonFunctionService, dataSource });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'summaries' });
+
+      expect(dispatch).toHaveBeenCalledWith(
         'summary',
         'hourly_summary',
         'user-1',
         {},
         { singletonKey: 'fn:hourly_summary:user-1:rotation' },
+      );
+      // Ordering, not decoration: if the gate query ever moved ahead of the
+      // digest, a database blip would withhold the one job that makes a
+      // summary-less user recoverable.
+      expect(dispatch.mock.invocationCallOrder[0]).toBeLessThan(dataSource.query.mock.invocationCallOrder[0]);
+    });
+
+    // A mocked DataSource cannot rank timestamps, so these pin the SHAPE of
+    // the gate — the parts that decide WHICH question it asks. Nothing
+    // executes THIS query: the gate is entirely in TypeScript, and the summary
+    // sidecar's own dossier tests reach no database at all (tests/conftest.py
+    // sets a fake DATABASE_URL and every activity is monkeypatched). The same
+    // predicate, asked set-wise for the fan-out, IS executed against a real
+    // Postgres in PythonFunctionCrons.dossierGate.integration.spec.ts — which
+    // is where an inverted comparison or a mistyped AT TIME ZONE would be
+    // caught.
+    it('gates on the dossier payload stamp rather than the entity row timestamp', async () => {
+      const dispatch = dispatchMock();
+      const pythonFunctionService = { dispatch } as unknown as PythonFunctionService;
+      const dataSource = dossierGate(true);
+
+      const listener = buildListener({ pythonFunctionService, dataSource });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'summaries' });
+
+      const [sql, params] = dataSource.query.mock.calls[0] as [string, unknown[]];
+      const flattened = sql.replace(/\s+/g, ' ');
+
+      // store_dossier_activity writes the payload into ci.entities.dossier and
+      // the generator stamps it with lastUpdatedAt. entities.updated_at is
+      // bumped by unrelated entity writes (imports, merges, enrichment), any
+      // one of which would read as "the dossier is current" and suppress a
+      // rebuild that is genuinely owed. Matched on the bare column name: an
+      // alias rename (`entities.updated_at`, `ent.updated_at`) reintroduces
+      // exactly the bug while satisfying any one spelling of it.
+      expect(flattened).toContain("JSON_VALUE(e.dossier, '$.lastUpdatedAt'");
+      expect(flattened).not.toMatch(/\bupdated_at\b/);
+      // A bare ::timestamp cast throws on a malformed stamp, which would take
+      // the whole summaries tick down with it; ON ERROR turns it into
+      // "unknown", and unknown means stale.
+      expect(flattened).toContain('DEFAULT NULL ON ERROR');
+      expect(flattened).toContain('(SELECT built_at FROM built) IS NULL');
+      // Compared in naive UTC, because the sidecar stamps datetime.utcnow()
+      // and the API pool pins no session TimeZone.
+      expect(flattened).toContain("fresh.created_at AT TIME ZONE 'UTC' > (SELECT built_at FROM built)");
+      expect(params).toEqual(['user-1']);
+    });
+
+    it('counts only the period types the dossier actually reads', async () => {
+      const dispatch = dispatchMock();
+      const pythonFunctionService = { dispatch } as unknown as PythonFunctionService;
+      const dataSource = dossierGate(true);
+
+      const listener = buildListener({ pythonFunctionService, dataSource });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'summaries' });
+
+      const [sql] = dataSource.query.mock.calls[0] as [string];
+
+      // fetch_summaries_for_dossier_activity reads hourly + daily only.
+      // `insight` rows live in the same table and are written hourly by
+      // insights_generation — counting one as dossier input would restore the
+      // every-hour rebuild through the back door.
+      expect(sql.replace(/\s+/g, ' ')).toContain("fresh.period_type IN ('hourly', 'daily')");
+    });
+
+    it('treats an unreadable gate result as stale so a first dossier is never withheld', async () => {
+      const dispatch = dispatchMock();
+      const pythonFunctionService = { dispatch } as unknown as PythonFunctionService;
+
+      const listener = buildListener({
+        pythonFunctionService,
+        dataSource: { query: jest.fn().mockResolvedValue([]) },
+      });
+
+      await listener.handleWork({ userId: 'user-1', workType: 'summaries' });
+
+      expect(dispatch).toHaveBeenCalledWith(
+        'summary',
+        'dossier_refresh',
+        'user-1',
+        {},
+        { singletonKey: 'fn:dossier_refresh:user-1:rotation' },
       );
     });
   });

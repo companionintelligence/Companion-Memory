@@ -23,6 +23,8 @@ describe('jobVerdicts', () => {
     expect(first?.tone).toBe('critical');
     expect(first?.headline).toBe('8,431 jobs have given up.');
     expect(first?.filter).toMatchObject({ state: 'dead-letter' });
+    expect(first?.action).toBe('Show');
+    expect(first?.clearScope).toBe('dead-letter');
   });
 
   // ── Regressions a review caught ─────────────────────────────────────────
@@ -89,6 +91,8 @@ describe('jobVerdicts', () => {
     expect(failed?.detail).toMatch(/spent|exhausted/i);
     expect(failed?.detail).not.toMatch(/attempts left/);
     expect(failed?.filter).toMatchObject({ state: 'failed' });
+    expect(failed?.clearScope).toBe('failed');
+    expect(retrying?.clearScope).toBeUndefined();
   });
 
   // ── Distinctions worth keeping ──────────────────────────────────────────

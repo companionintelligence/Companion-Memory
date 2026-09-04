@@ -24,9 +24,7 @@ describe('redactRequestPath', () => {
    * going to the log on every delivery.
    */
   it('redacts the bare path the server actually receives behind the proxy', () => {
-    expect(redactRequestPath('/bluebubbles/webhook/deadbeefcafe0123')).toBe(
-      '/bluebubbles/webhook/REDACTED',
-    );
+    expect(redactRequestPath('/bluebubbles/webhook/deadbeefcafe0123')).toBe('/bluebubbles/webhook/REDACTED');
     expect(redactRequestPath('/bluebubbles/webhook/abc123?retry=1')).toBe(
       '/bluebubbles/webhook/REDACTED?retry=1',
     );

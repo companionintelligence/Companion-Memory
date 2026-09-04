@@ -291,7 +291,8 @@ export class GoogleCalendarTransformService {
       organizerName: eventDetails.organizerName,
       participantCount: eventDetails.participants.length,
       participants: eventDetails.participants,
-      googleCalendarUrl: rawEvent.htmlLink ?? `https://calendar.google.com/calendar/event?eid=${eventDetails.id}`,
+      googleCalendarUrl:
+        rawEvent.htmlLink ?? `https://calendar.google.com/calendar/event?eid=${eventDetails.id}`,
       created: eventDetails.created,
       updated: eventDetails.updated,
       rawEventId: rawEvent.id,
@@ -304,7 +305,9 @@ export class GoogleCalendarTransformService {
       // which only renames a handful of DTO fields onto EventEntity's camelCase
       // columns; `recurrence_pattern` is not one of them and would be silently
       // dropped on insert) — so a future expansion pass has something to expand.
-      ...(rawEvent.recurrence && rawEvent.recurrence.length > 0 ? { recurrenceRule: rawEvent.recurrence } : {}),
+      ...(rawEvent.recurrence && rawEvent.recurrence.length > 0
+        ? { recurrenceRule: rawEvent.recurrence }
+        : {}),
     };
 
     const isAllDay = this.isAllDayEvent(eventDetails.startTime);

@@ -34,6 +34,11 @@ export interface JobVerdict {
   /** The filter that produced this sentence, or null when there is nothing to show. */
   readonly filter: Partial<JobFilters> | null;
   readonly action?: string;
+  /**
+   * When set, the Health card offers Clear — permanently delete these terminal
+   * rows from `pgboss.job` via `POST /jobs/clear`.
+   */
+  readonly clearScope?: 'dead-letter' | 'failed';
 }
 
 export interface VerdictInput {
@@ -100,7 +105,8 @@ export function jobVerdicts(input: VerdictInput): JobVerdict[] {
       // dead-lettered rows, which the API does not return yet.
       detail: 'Retries are exhausted — nothing retries a dead letter on its own.',
       filter: { state: 'dead-letter', offset: 0 },
-      action: 'Show them',
+      action: 'Show',
+      clearScope: 'dead-letter',
     });
   }
 
@@ -114,7 +120,7 @@ export function jobVerdicts(input: VerdictInput): JobVerdict[] {
       headline: `${pending.toLocaleString()} ${pending === 1 ? 'job is' : 'jobs are'} waiting with nothing running.`,
       detail: 'Work is queued but no worker has picked it up. Check that the worker process is alive.',
       filter: { state: 'created', offset: 0 },
-      action: 'Show them',
+      action: 'Show',
     });
   } else if (pending > 0) {
     verdicts.push({
@@ -123,7 +129,7 @@ export function jobVerdicts(input: VerdictInput): JobVerdict[] {
       headline: `${pending.toLocaleString()} ${pending === 1 ? 'job is' : 'jobs are'} waiting.`,
       detail: `${active.toLocaleString()} running.`,
       filter: { state: 'created', offset: 0 },
-      action: 'Show them',
+      action: 'Show',
     });
   }
 
@@ -141,7 +147,7 @@ export function jobVerdicts(input: VerdictInput): JobVerdict[] {
       headline: `${retry.toLocaleString()} ${retry === 1 ? 'job is' : 'jobs are'} retrying.`,
       detail: 'These still have attempts left. They become dead letters if they run out.',
       filter: { state: 'retry', offset: 0 },
-      action: 'Show them',
+      action: 'Show',
     });
   }
 
@@ -152,7 +158,8 @@ export function jobVerdicts(input: VerdictInput): JobVerdict[] {
       headline: `${failed.toLocaleString()} ${failed === 1 ? 'job has' : 'jobs have'} failed outright.`,
       detail: 'Retries are spent. Each of these has a dead-letter copy holding its payload.',
       filter: { state: 'failed', offset: 0 },
-      action: 'Show them',
+      action: 'Show',
+      clearScope: 'failed',
     });
   }
 
@@ -167,7 +174,7 @@ export function jobVerdicts(input: VerdictInput): JobVerdict[] {
       detail:
         'They are counted but cannot be grouped or named. Adding a descriptor in domains/events/taxonomy.ts fixes it.',
       filter: { category: 'unclassified', type: '', offset: 0 },
-      action: 'Show them',
+      action: 'Show',
     });
   }
 

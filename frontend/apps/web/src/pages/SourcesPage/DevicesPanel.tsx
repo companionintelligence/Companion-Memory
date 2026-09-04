@@ -16,8 +16,7 @@ import { useDevices, type RegisteredDevice } from './useDevices';
 export const CHROME_EXTENSION_URL =
   'https://chromewebstore.google.com/detail/companion-intelligence/bcocflgkdeimninckpmdifcniajoneih?authuser=3&hl=en';
 
-export const FIREFOX_EXTENSION_URL =
-  'https://addons.mozilla.org/en-US/firefox/addon/companion-intelligence/';
+export const FIREFOX_EXTENSION_URL = 'https://addons.mozilla.org/en-US/firefox/addon/companion-intelligence/';
 
 export const CAPTURE_DOWNLOAD_URL = 'https://ci.computer/download#capture';
 

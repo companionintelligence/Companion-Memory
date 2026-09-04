@@ -20,6 +20,7 @@ HOME_MEDIAN_FALLBACK = 600.0  # 10h
 LIFT_LO = 0.5
 LIFT_HI = 2.0
 
+
 def _hour_range(start_hour: int, end_hour: int) -> range:
     """Wall-clock hours → bucket indices at the current `BUCKET_MINUTES` grid."""
     start = (start_hour * 60) // BUCKET_MINUTES

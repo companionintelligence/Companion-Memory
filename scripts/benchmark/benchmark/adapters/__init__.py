@@ -12,7 +12,7 @@ defaults so the CLI stays uniform.
 
 from __future__ import annotations
 
-from typing import Callable, Dict
+from collections.abc import Callable
 
 from .base import MemoryAdapter
 from .ci_server import CIServerAdapter
@@ -22,7 +22,7 @@ from .naive import NaiveAdapter
 
 AdapterFactory = Callable[[], MemoryAdapter]
 
-ADAPTERS: Dict[str, AdapterFactory] = {
+ADAPTERS: dict[str, AdapterFactory] = {
     "ci_server": CIServerAdapter,
     "hindsight": HindsightAdapter,
     "mem0": Mem0Adapter,
@@ -41,4 +41,4 @@ def get_adapter(name: str) -> MemoryAdapter:
     return ADAPTERS[name]()
 
 
-__all__ = ["MemoryAdapter", "ADAPTERS", "register_adapter", "get_adapter"]
+__all__ = ["ADAPTERS", "MemoryAdapter", "get_adapter", "register_adapter"]

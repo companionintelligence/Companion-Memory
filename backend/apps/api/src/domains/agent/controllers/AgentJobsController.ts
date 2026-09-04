@@ -1,13 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  NotFoundException,
-  Param,
-  Post,
-  Query,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -72,18 +63,12 @@ export class AgentJobsController {
 
   @Get()
   @RequireCapability(READ_CAPABILITY)
-  async findByThread(
-    @Context() context: RequestContext,
-    @Query('threadId') threadId?: string,
-  ) {
+  async findByThread(@Context() context: RequestContext, @Query('threadId') threadId?: string) {
     if (!threadId) {
       return { job: null };
     }
 
-    const job = await this.dispatchService.findByThreadId(
-      toServiceContext(context),
-      threadId,
-    );
+    const job = await this.dispatchService.findByThreadId(toServiceContext(context), threadId);
 
     return { job };
   }

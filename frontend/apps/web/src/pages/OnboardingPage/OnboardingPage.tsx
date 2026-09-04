@@ -280,10 +280,7 @@ export function OnboardingPage() {
   // 037d0e9b0), which put Back/Skip/Next below the fold on any step tall
   // enough to scroll; the step content scrolls, the nav does not.
   const navRow = showNav ? (
-    <div
-      data-testid="onboarding-nav"
-      className="mb-5 flex items-center gap-2 px-4 sm:mb-6 sm:gap-3"
-    >
+    <div data-testid="onboarding-nav" className="mb-5 flex items-center gap-2 px-4 sm:mb-6 sm:gap-3">
       {stepIndex > 0 && (
         <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleBack}>
           Back

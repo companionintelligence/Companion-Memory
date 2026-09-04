@@ -691,14 +691,16 @@ export class ItemService {
   }
 
   /**
-   * Yields an collection of Items each associated with a given File id.
+   * The Items associated with each of `fileIds`, keyed by file id. A file with
+   * no items is absent from the map rather than a positional hole a caller
+   * could zip its neighbours onto.
    *
    * This method assumes the context user has access to the corresponding Files.
    * This access must be ensured before safely calling this method.
    */
-  async findByFileIds(context: ServiceContext, fileIds: string[]): Promise<Item[][]> {
+  async findByFileIds(context: ServiceContext, fileIds: string[]): Promise<Map<string, Item[]>> {
     if (fileIds.length === 0) {
-      return [];
+      return new Map();
     }
 
     const queryBuilder = this.itemRepository.createQueryBuilder('object');
@@ -728,7 +730,7 @@ export class ItemService {
       }
     }
 
-    return fileIds.map((id) => itemsMap.get(id) ?? []);
+    return itemsMap;
   }
 
   async update(context: ServiceContext, id: string, data: UpdateItemDto): Promise<Item | null> {

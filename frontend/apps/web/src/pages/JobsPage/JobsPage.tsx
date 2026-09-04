@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 
-import { usePageTitle } from '@ci/common';
+import { fetchJson, usePageTitle } from '@ci/common';
 import { Accordion, Badge, Card, Skeleton, Switch, cn } from '@ci/shadcn';
 import { AlertTriangle } from '@ci/shadcn/icons';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -23,6 +23,7 @@ import { useDeadLetters } from './useDeadLetters';
 import { useJobControls, type JobControlsPatch, type JobCronControl } from './useJobControls';
 import { useHistoryWindow, useJobFilters } from './useJobFilters';
 import { useJobHistory } from './useJobHistory';
+import { useJobsAuth } from './useJobsAuth';
 import { useJobsDashboard, type JobsDashboardResponse } from './useJobsDashboard';
 import { DESKTOP_JOB_PAGE_SIZE, MOBILE_JOB_PAGE_SIZE, useJobsList, type JobFilters } from './useJobsList';
 import { useJobTypes, type JobTypesResponse } from './useJobTypes';
@@ -54,8 +55,21 @@ export function JobsPage() {
   const history = useJobHistory(windowHours, filters.queue);
   const deadLetters = useDeadLetters();
   const controls = useJobControls();
+  const { headers: jobsAuthHeaders } = useJobsAuth();
 
   const onFilterChange = useCallback((next: Partial<JobFilters>) => setFilters(next), [setFilters]);
+
+  const clearTerminal = useCallback(
+    async (scope: 'dead-letter' | 'failed') => {
+      await fetchJson<{ scope: string; deleted: number }>('/api/jobs/clear', {
+        method: 'POST',
+        headers: { ...jobsAuthHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope }),
+      });
+      await Promise.all([dashboard.refresh(), list.refresh()]);
+    },
+    [dashboard.refresh, list.refresh, jobsAuthHeaders],
+  );
 
   /**
    * The Health card's verdicts and empty state must read the SAME unfiltered,
@@ -209,6 +223,7 @@ export function JobsPage() {
             loading={list.loading || dashboard.loading}
             onSelect={(filter) => onFilterChange(filter)}
             onOpenSchedules={() => navigate('/jobs/schedules')}
+            onClearTerminal={clearTerminal}
             summary={dashboard.data?.summary}
             refreshing={refreshing || dashboard.refreshing}
             error={dashboard.error}

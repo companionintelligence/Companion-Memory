@@ -22,7 +22,8 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from typing import Any
 
 from .base import MemoryAdapter
 
@@ -30,7 +31,7 @@ _DEFAULT_TIMEOUT = 30.0
 _MAX_RECALL_RESULTS = 20  # mirrors the harness clients
 
 
-def _extract_block(resp: Dict[str, Any]) -> str:
+def _extract_block(resp: dict[str, Any]) -> str:
     """Tolerate ``block`` / ``text`` / ``context`` — matches the harness plugins."""
     if not isinstance(resp, dict):
         return ""
@@ -40,14 +41,18 @@ def _extract_block(resp: Dict[str, Any]) -> str:
 class CIServerAdapter(MemoryAdapter):
     def __init__(
         self,
-        url: Optional[str] = None,
-        token: Optional[str] = None,
+        url: str | None = None,
+        token: str | None = None,
         timeout: float = _DEFAULT_TIMEOUT,
         *,
         http_post: Callable[[str, bytes, dict, float], bytes] | None = None,
         http_get: Callable[[str, dict, float], bytes] | None = None,
     ) -> None:
-        base = (url or os.environ.get("CI_SERVER_URL", "http://localhost:8642")).strip().rstrip("/")
+        base = (
+            (url or os.environ.get("CI_SERVER_URL", "http://localhost:8642"))
+            .strip()
+            .rstrip("/")
+        )
         if base.endswith("/api/mcp"):
             base = base[: -len("/api/mcp")]
         self._base = base
@@ -85,7 +90,9 @@ class CIServerAdapter(MemoryAdapter):
         if not query.strip():
             return _extract_block(self._call_json("GET", "/api/memory/context"))
         resp = self._call_json(
-            "POST", "/api/memory/recall", {"query": query, "maxResults": _MAX_RECALL_RESULTS}
+            "POST",
+            "/api/memory/recall",
+            {"query": query, "maxResults": _MAX_RECALL_RESULTS},
         )
         return _extract_block(resp)
 
@@ -96,12 +103,16 @@ class CIServerAdapter(MemoryAdapter):
 
     # ── transport ─────────────────────────────────────────────────────────────
 
-    def _call_json(self, method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _call_json(
+        self, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         url = f"{self._base}{path}"
         headers = {"Accept": "application/json", "x-api-key": self._token}
         if method == "POST":
             headers["Content-Type"] = "application/json"
-            raw = self._post(url, json.dumps(body or {}).encode("utf-8"), headers, self._timeout)
+            raw = self._post(
+                url, json.dumps(body or {}).encode("utf-8"), headers, self._timeout
+            )
         else:
             raw = self._get(url, headers, self._timeout)
         if not raw:

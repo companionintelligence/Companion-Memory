@@ -513,7 +513,9 @@ export function dropGenericWhenSpecialised(matches: DataSourceRecognition[]): Da
  * `email` match ABOVE a gmail file would re-read that file too.
  */
 export function dropGenericMailWhenSpecialised(matches: DataSourceRecognition[]): DataSourceRecognition[] {
-  const specialisedMail = matches.filter((match) => SPECIALISED_MAIL_DATA_SOURCES.has(match.data_source.name));
+  const specialisedMail = matches.filter((match) =>
+    SPECIALISED_MAIL_DATA_SOURCES.has(match.data_source.name),
+  );
 
   if (specialisedMail.length === 0) {
     return matches;
@@ -525,7 +527,9 @@ export function dropGenericMailWhenSpecialised(matches: DataSourceRecognition[])
     }
 
     return !specialisedMail.some(
-      (claim) => pathCoveredBy(match.matchedPath, claim.matchedPath) || pathCoveredBy(claim.matchedPath, match.matchedPath),
+      (claim) =>
+        pathCoveredBy(match.matchedPath, claim.matchedPath) ||
+        pathCoveredBy(claim.matchedPath, match.matchedPath),
     );
   });
 }

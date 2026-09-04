@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import nest_asyncio
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from ci.telemetry import init_telemetry
@@ -20,6 +20,7 @@ from ci.telemetry import init_telemetry
 from . import __version__, functions
 from .data_aggregator import aggregator
 from .llm_health import check_endpoint_at_startup, probe_endpoint
+from .runner import RunRequest, runner
 from .runner import router as runner_router
 
 # No-op unless SENTRY_DSN is set — see telemetry.py.
@@ -93,6 +94,21 @@ class ManualSummaryRequest(BaseModel):
     lookback_days: int | None = Field(
         default=None, description="For dossier: lookback days"
     )
+    force: bool = Field(
+        default=False,
+        description=(
+            "hourly / hourly_backfill: regenerate windows that already have a "
+            "summary, overwriting them in place"
+        ),
+    )
+    wait: bool = Field(
+        default=False,
+        description=(
+            "hourly_backfill: run inline and return the finished result instead "
+            "of queueing. Only safe for a range short enough to beat the proxy "
+            "timeout; a single hour runs inline either way."
+        ),
+    )
 
 
 async def _trigger_summary_workflow(
@@ -102,6 +118,7 @@ async def _trigger_summary_workflow(
     end_time: str,
     timezone: str,
     lookback_days: int | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """
     Run summary generation directly (same functions the pg-boss scheduler
@@ -117,12 +134,20 @@ async def _trigger_summary_workflow(
 
     if period_type == "hourly":
         return await functions.hourly_summary(
-            user_id, start_time=start_time, end_time=end_time, timezone=timezone
+            user_id,
+            start_time=start_time,
+            end_time=end_time,
+            timezone=timezone,
+            force=force,
         )
 
     if period_type == "hourly_backfill":
         return await functions.hourly_summary_backfill(
-            user_id, start_time=start_time, end_time=end_time, timezone=timezone
+            user_id,
+            start_time=start_time,
+            end_time=end_time,
+            timezone=timezone,
+            force=force,
         )
 
     rollups = {
@@ -140,9 +165,132 @@ async def _trigger_summary_workflow(
     )
 
 
+def _accepted_body(
+    progress: dict[str, Any], message: str, duplicate: bool
+) -> dict[str, Any]:
+    backfill_id = progress["backfill_id"]
+    run_id = progress.get("run_id")
+
+    return {
+        "status": "accepted",
+        "message": message,
+        "duplicate": duplicate,
+        "backfill_id": backfill_id,
+        "run_id": run_id,
+        "progress_url": f"/summary/backfill/{backfill_id}",
+        "run_url": f"/runs/{run_id}",
+        "hours": progress["hours"],
+        "forced": progress["forced"],
+        "time_range": {"start": progress["start_time"], "end": progress["end_time"]},
+    }
+
+
+def _accept_hourly_backfill(
+    user_id: str,
+    plan: list[tuple[str, str]],
+    timezone: str,
+    force: bool,
+) -> dict[str, Any]:
+    """
+    Hand a multi-hour backfill to the runner and answer immediately.
+
+    Each window is a full LLM summary plus an embedding, so 24 of them serially
+    is tens of minutes to hours. Running that inside the request meant every
+    proxy in front of this service timed out first: the operator got no result,
+    no progress, and no way to tell which hours had landed — while the work
+    kept going invisibly on the other side of the dropped connection.
+
+    The runner already has the shape we need (bounded pool, run records, a
+    ``GET /runs/{id}``), so this is a submit plus a progress id the function
+    publishes each finished window to.
+
+    A range already queued or running is answered with that run instead of a
+    second submit. The runner takes no singleton key, so nothing else stops a
+    double-submitted day from spending 24 more LLM summaries rewriting the
+    windows the first run is still working through.
+    """
+    start_time, end_time = plan[0][0], plan[-1][1]
+
+    in_flight = functions.active_backfill(user_id, start_time, end_time, force)
+    if in_flight is not None:
+        return _accepted_body(
+            in_flight,
+            f"Hourly backfill for these {in_flight['hours']} hour(s) is already "
+            f"{in_flight['status']}; watch that run rather than starting a second",
+            duplicate=True,
+        )
+
+    backfill_id = str(uuid.uuid4())
+    record = runner.submit(
+        RunRequest(
+            function="hourly_summary_backfill",
+            args={
+                "user_id": user_id,
+                "start_time": start_time,
+                "end_time": end_time,
+                "timezone": timezone,
+                "force": force,
+                "backfill_id": backfill_id,
+            },
+        )
+    )
+    # Publish the queued record after the submit, with no await between the
+    # two: a full runner queue raises 429 here and must not leave a record for
+    # work nothing will run, while a worker cannot advance until this handler
+    # yields, so there is no instant in which the id the caller was just given
+    # answers 404.
+    progress = functions.queue_backfill(backfill_id, user_id, plan, force)
+    progress["run_id"] = record.run_id
+
+    return _accepted_body(
+        progress,
+        f"Hourly backfill queued for {progress['hours']} hour(s)",
+        duplicate=False,
+    )
+
+
+@app.get("/summary/backfill/{backfill_id}")
+async def get_backfill_progress(backfill_id: str) -> dict[str, Any]:
+    """
+    Per-window progress for an accepted hourly backfill.
+
+    ``status`` is queued | running | completed | failed — the record exists from
+    the moment the 202 is returned, so polling the progress_url immediately
+    answers rather than 404ing for the minutes a backfill spends waiting on a
+    runner worker. ``windows`` grows as each hour finishes, carrying the same
+    per-window shape the inline result returns, so a caller can see exactly
+    which hours landed and which were skipped.
+    """
+    progress = functions.backfill_progress(backfill_id)
+
+    if progress is None:
+        # Say only what a missing record can actually distinguish. It used to
+        # claim the backfill "never started", which was wrong for the entire
+        # queued window and sent operators looking for a failure that was in
+        # fact a healthy run waiting its turn.
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No backfill {backfill_id} on this process — progress records "
+                f"are in-memory, so this id is unknown here, has aged out (last "
+                f"{functions.MAX_BACKFILL_RECORDS} kept), or predates a restart"
+            ),
+        )
+
+    return progress
+
+
 @app.post("/summary/manual-trigger")
-async def manual_trigger_summary(request: ManualSummaryRequest) -> dict[str, Any]:
-    """Manually trigger summary generation (runs inline)."""
+async def manual_trigger_summary(
+    request: ManualSummaryRequest, response: Response
+) -> dict[str, Any]:
+    """
+    Manually trigger summary generation.
+
+    Runs inline and returns the finished result, except for a multi-hour
+    ``hourly_backfill``, which is accepted into the runner and answered with a
+    poll url — see _accept_hourly_backfill for why.
+    """
     try:
         user_id = uuid.UUID(request.user_id)
     except ValueError as exc:
@@ -171,6 +319,31 @@ async def manual_trigger_summary(request: ManualSummaryRequest) -> dict[str, Any
         }.get(request.period_type, timedelta(hours=1))
         start_time = end_time - delta
 
+    if request.period_type == "hourly_backfill":
+        # Validate here rather than inside the accepted run: once the work is
+        # queued a bad range is a failed background job the operator has to go
+        # hunting for, instead of a 400 answering the request they just made.
+        try:
+            plan = functions.plan_hourly_backfill(
+                start_time.isoformat(), end_time.isoformat()
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # One hour is a single LLM call — cheap enough to answer inline, which
+        # is what the documented single-window debugging use expects.
+        if len(plan) > 1 and not request.wait:
+            # 202: the work is queued, not done — the body carries where to
+            # watch it, and a caller that keys off the status code should see
+            # that difference rather than a 200 promising a finished summary.
+            response.status_code = 202
+            return _accept_hourly_backfill(
+                str(user_id),
+                plan,
+                request.timezone,
+                request.force,
+            )
+
     try:
         result = await _trigger_summary_workflow(
             str(user_id),
@@ -179,6 +352,7 @@ async def manual_trigger_summary(request: ManualSummaryRequest) -> dict[str, Any
             end_time.isoformat(),
             request.timezone,
             request.lookback_days,
+            request.force,
         )
 
         return {

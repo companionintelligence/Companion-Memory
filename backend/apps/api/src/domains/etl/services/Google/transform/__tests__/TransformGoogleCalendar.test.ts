@@ -134,7 +134,12 @@ describe('GoogleCalendarTransformService.transformToEventDto — recurrence', ()
     const dto = await callTransformToEventDto(
       service,
       { ...eventDetails(null), isRecurring: true },
-      { id: 'evt-1', summary: 'Weekly sync', status: 'confirmed', recurrence: ['RRULE:FREQ=WEEKLY;COUNT=10'] },
+      {
+        id: 'evt-1',
+        summary: 'Weekly sync',
+        status: 'confirmed',
+        recurrence: ['RRULE:FREQ=WEEKLY;COUNT=10'],
+      },
       'user-1',
       'conn-1',
     );

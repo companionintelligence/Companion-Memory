@@ -68,6 +68,7 @@ export function useDispatchJob(threadId: string | null, enabled: boolean) {
   const reload = useCallback(async () => {
     if (!authToken || !threadId || !enabled) {
       setJob(null);
+
       return null;
     }
 
@@ -76,6 +77,7 @@ export function useDispatchJob(threadId: string | null, enabled: boolean) {
       { headers: { Authorization: `Bearer ${authToken}` } },
     );
     setJob(result?.job ?? null);
+
     return result?.job ?? null;
   }, [authToken, enabled, threadId]);
 

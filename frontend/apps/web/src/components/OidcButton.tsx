@@ -1,6 +1,12 @@
 import type { ComponentProps, MouseEvent } from 'react';
 
-import { buildApiUrl, isNativePlatform, isTauriPlatform, OIDC_NATIVE_CLIENT_FLAG, openExternalUrl } from '@ci/common';
+import {
+  buildApiUrl,
+  isNativePlatform,
+  isTauriPlatform,
+  OIDC_NATIVE_CLIENT_FLAG,
+  openExternalUrl,
+} from '@ci/common';
 import { Button } from '@ci/shadcn';
 
 const OIDC_URL_PATH = '/api/authenticate/oidc';

@@ -27,6 +27,14 @@ describe('JobQueryService — the auth guard (no database required)', () => {
     await expect(service.list({} as RequestContext, {})).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
+  it('clearTerminal() refuses a request with no user context', async () => {
+    const service = makeService();
+
+    await expect(service.clearTerminal({} as RequestContext, 'dead-letter')).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+  });
+
   it('history() refuses a request with no user context', async () => {
     const service = makeService();
 

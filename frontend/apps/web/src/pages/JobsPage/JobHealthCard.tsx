@@ -1,5 +1,6 @@
 import { Button, Card, Skeleton, cn } from '@ci/shadcn';
 import { AlertTriangle, CheckCircle2, Info, RefreshCcw } from '@ci/shadcn/icons';
+import { useState } from 'react';
 
 import { cardPad, usePhone } from './Fold';
 import { categoryChartColor, categoryLabel } from './jobCategories';
@@ -18,6 +19,12 @@ type Props = {
   loading: boolean;
   onSelect: (filter: Partial<JobFilters>) => void;
   onOpenSchedules: () => void;
+  /**
+   * Clear terminal jobs for a Health verdict. Returns when the server has
+   * deleted them so the card can refresh. Null/absent when the caller cannot
+   * clear (e.g. preview without the route).
+   */
+  onClearTerminal?: (scope: 'dead-letter' | 'failed') => Promise<void>;
   /** Live queue counts — the same six the page used to print in its own card. */
   summary: JobsSummary | undefined;
   refreshing: boolean;
@@ -71,6 +78,7 @@ export function JobHealthCard({
   loading,
   onSelect,
   onOpenSchedules,
+  onClearTerminal,
   summary,
   refreshing,
   error,
@@ -181,6 +189,7 @@ export function JobHealthCard({
                 verdict={verdict}
                 onSelect={onSelect}
                 onOpenSchedules={onOpenSchedules}
+                onClearTerminal={onClearTerminal}
               />
             ))}
           </ul>
@@ -289,41 +298,88 @@ const TONE: Record<VerdictTone, { wrap: string; icon: typeof AlertTriangle; icon
 /**
  * One verdict.
  *
- * The action is not decoration: it runs the filter the sentence was computed
- * from. That is what keeps the claim and the evidence from drifting — a verdict
- * whose number disagrees with the table it opens is visibly wrong, immediately,
- * rather than quietly wrong forever.
+ * Show sits at the end of the copy as a text action — it runs the filter the
+ * sentence was computed from, so a wrong number is visible the moment you open
+ * the table. Clear (when offered) is a real button on the right: it deletes the
+ * terminal rows the sentence named, after a confirm.
  */
 function VerdictRow({
   verdict,
   onSelect,
   onOpenSchedules,
+  onClearTerminal,
 }: {
   verdict: JobVerdict;
   onSelect: (filter: Partial<JobFilters>) => void;
   onOpenSchedules: () => void;
+  onClearTerminal?: (scope: 'dead-letter' | 'failed') => Promise<void>;
 }) {
   const tone = TONE[verdict.tone];
   const Icon = tone.icon;
-  const actionable = verdict.filter != null || verdict.action === 'View schedules';
+  const canShow = verdict.filter != null || verdict.action === 'View schedules';
+  const canClear = verdict.clearScope != null && onClearTerminal != null;
+  const [clearing, setClearing] = useState(false);
+
+  const onShow = () => {
+    if (verdict.filter) {
+      onSelect(verdict.filter);
+      return;
+    }
+
+    onOpenSchedules();
+  };
+
+  const onClear = async () => {
+    if (!verdict.clearScope || !onClearTerminal || clearing) {
+      return;
+    }
+
+    const label =
+      verdict.clearScope === 'dead-letter'
+        ? 'Permanently delete every dead-lettered job on this appliance?'
+        : 'Permanently delete every failed job on this appliance?';
+
+    if (!window.confirm(label)) {
+      return;
+    }
+
+    setClearing(true);
+
+    try {
+      await onClearTerminal(verdict.clearScope);
+    } finally {
+      setClearing(false);
+    }
+  };
 
   return (
     <li className={cn('flex items-start gap-3 rounded-lg border p-3', tone.wrap)}>
       <Icon aria-hidden className={cn('mt-0.5 h-4 w-4 shrink-0', tone.iconClass)} />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium leading-snug">{verdict.headline}</p>
-        {verdict.detail ? (
-          <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{verdict.detail}</p>
-        ) : null}
+        <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
+          {verdict.detail ? <span>{verdict.detail} </span> : null}
+          {canShow ? (
+            <button
+              type="button"
+              onClick={onShow}
+              className="font-medium text-foreground underline-offset-2 hover:underline"
+            >
+              {verdict.action ?? 'Show'}
+            </button>
+          ) : null}
+        </p>
       </div>
-      {actionable ? (
+      {canClear ? (
         <Button
           size="sm"
-          variant="ghost"
+          variant="outline"
           className="shrink-0 self-center text-xs"
-          onClick={() => (verdict.filter ? onSelect(verdict.filter) : onOpenSchedules())}
+          disabled={clearing}
+          aria-busy={clearing || undefined}
+          onClick={() => void onClear()}
         >
-          {verdict.action ?? 'Show'}
+          {clearing ? 'Clearing…' : 'Clear'}
         </Button>
       ) : null}
     </li>

@@ -79,7 +79,10 @@ describe('GmailTransformService.transformGmail', () => {
       syncJob: syncJobWith([gmailMessage({ threadId: '18C1A2B3C4D5E6F7' })]),
     });
 
-    const [, input] = communicationService.create.mock.calls[0] as unknown as [unknown, { thread_id?: string }];
+    const [, input] = communicationService.create.mock.calls[0] as unknown as [
+      unknown,
+      { thread_id?: string },
+    ];
     expect(input.thread_id).toBe('18c1a2b3c4d5e6f7');
     expect(input.thread_id).toBe(gmailThreadKeyFromImap('1783885820400625399'));
     expect(input.thread_id).toBe(emailThreadKey({ 'X-GM-THRID': '1783885820400625399' }));

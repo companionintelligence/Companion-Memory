@@ -20,6 +20,8 @@ export class ConnectionLoader extends Loader<Connection | null, string> {
     context: UserServiceContext,
     connectionIds: readonly string[],
   ): Promise<readonly (Connection | null)[]> {
-    return this.connectionService.findByIds(context, [...connectionIds]);
+    const connections = await this.connectionService.findByIds(context, [...connectionIds]);
+
+    return this.rekey(connectionIds, connections, (connection) => connection.id);
   }
 }

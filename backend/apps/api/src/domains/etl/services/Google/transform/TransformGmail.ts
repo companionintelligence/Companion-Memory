@@ -2,11 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService, GmailMessage, EmailParticipant } from '@ci/domains/connections';
-import {
-  headersFromGmailApi,
-  liveMailDropReason,
-  mailIncludeBulkEnabled,
-} from '@ci/domains/import';
+import { headersFromGmailApi, liveMailDropReason, mailIncludeBulkEnabled } from '@ci/domains/import';
 import {
   CommunicationDirection,
   CommunicationService,

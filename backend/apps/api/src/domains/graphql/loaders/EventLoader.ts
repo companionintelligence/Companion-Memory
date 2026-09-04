@@ -22,6 +22,8 @@ export class EventLoader extends Loader<Event | null> {
   ): Promise<readonly (Event | null)[]> {
     this.logger.log(`Loading a batch of ${eventIds.length} people`);
 
-    return this.eventService.findByIds(context, [...eventIds]);
+    const events = await this.eventService.findByIds(context, [...eventIds]);
+
+    return this.rekey(eventIds, events, (event) => event.id);
   }
 }

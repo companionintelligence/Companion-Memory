@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from benchmark.adapters import ADAPTERS, MemoryAdapter, get_adapter, register_adapter
 from benchmark.adapters.naive import NaiveAdapter
 
