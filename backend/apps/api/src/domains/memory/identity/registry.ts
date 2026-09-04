@@ -84,6 +84,7 @@ export const PLATFORM_SYSTEMS: readonly string[] = [
   'google_voice',
   'gpx',
   'grok',
+  'hulu',
   'imessage',
   'instagram',
   'kindle',

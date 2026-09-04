@@ -209,7 +209,8 @@ export class YouTubeFileImporter implements FileImporter {
           timestamp: ts,
           content: {
             filename: isSearch ? 'search.txt' : 'watch.txt',
-            mediaType: 'text/plain',
+            // A watched video is delivered over MPEG-DASH; a search is text.
+            mediaType: isSearch ? 'text/plain' : 'application/dash+xml',
             data: async () => Buffer.from(url || title),
           },
           metadata: isSearch

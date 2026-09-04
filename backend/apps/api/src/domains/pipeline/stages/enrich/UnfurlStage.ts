@@ -33,7 +33,7 @@ export const UNFURL_SOURCE: StageSource = {
   predicate:
     `(s.source_system IS DISTINCT FROM 'youtube' AND (s.url IS NOT NULL OR s.source_url IS NOT NULL ` +
     `OR s.external_id_kind = 'external_uri' ` +
-    `OR s.source_system IN ('netflix', 'prime_video')))`,
+    `OR s.source_system IN ('netflix', 'prime_video', 'hulu')))`,
 };
 
 interface ContentRow {

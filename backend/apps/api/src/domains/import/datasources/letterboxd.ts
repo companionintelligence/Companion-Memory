@@ -177,7 +177,10 @@ export class LetterboxdFileImporter implements FileImporter {
         id,
         classification: 'watch',
         timestamp: ts,
-        content: { filename: 'watch.txt', mediaType: 'text/plain', data: async () => Buffer.from(name) },
+        // A Letterboxd entry is a film seen anywhere — cinema, disc, any service —
+        // so there is no delivery format to name; the generic video container says
+        // "a video" without claiming how it was streamed.
+        content: { filename: 'watch.txt', mediaType: 'video/mp4', data: async () => Buffer.from(name) },
         metadata: {
           Name: name || undefined,
           Year: row['Year'] || undefined,

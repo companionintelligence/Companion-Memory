@@ -3,7 +3,7 @@ import { Args, Float, ID, Parent, Query, Mutation, Resolver, ResolveField } from
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { derivePlayer, resolveTargetFor } from '@ci/domains/embed';
+import { derivePlayer, resolveTargetFor, watchLinkFor } from '@ci/domains/embed';
 import { CreateContentInput } from '@ci/domains/graphql/types/CreateContentInput';
 import { UpdateContentInput } from '@ci/domains/graphql/types/UpdateContentInput';
 import { ContentService, classifyExternalId, adoptIngestIdentity } from '@ci/domains/memory';
@@ -413,13 +413,27 @@ export class ContentResolver {
       return null;
     }
 
-    const view = await this.unfurlLoader.load(entityOwnerScope(context, userId), target.key);
-    if (!view) {
+    const cached = await this.unfurlLoader.load(entityOwnerScope(context, userId), target.key);
+    if (!cached) {
       return null;
     }
 
-    // The cache row is per WORK and shared by every episode; the episode
-    // coordinates are this row's own, parsed from its title.
+    // The cache row is per WORK and shared by every source that resolved to
+    // it. When Wikidata knows the provider's own page for THIS row's source
+    // (embed/watchLinks.ts), that page is the row's "open" target and the
+    // Wikipedia article steps aside into the payload.
+    const watch = watchLinkFor(sourceSystem, cached.payload);
+    const view = watch
+      ? {
+          ...cached,
+          canonicalUrl: watch.url,
+          siteName: watch.siteName,
+          payload: { ...cached.payload, wikipedia_url: cached.canonicalUrl ?? undefined },
+        }
+      : cached;
+
+    // Shared by every episode too; the episode coordinates are this row's
+    // own, parsed from its title.
     const work = target.work;
     if (!work || (work.season == null && work.episode == null && !work.episodeTitle)) {
       return UnfurlType.toType(view);

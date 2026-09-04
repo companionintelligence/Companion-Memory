@@ -1,6 +1,7 @@
 import type { ResolveTarget } from '../resolveKey';
 import { MAX_JSON_BYTES, type FetchOutcome, type UnfurlFetcher } from '../services/UnfurlFetcher';
 import { normalizeWorkTitle, type StreamingWork } from '../streamingTitle';
+import { watchLinksFor } from '../watchLinks';
 
 import { str, statusOutcome, type UnfurlData, type UnfurlOutcome, type UnfurlResolver } from './types';
 
@@ -79,6 +80,11 @@ interface WikidataEntity {
   episodes?: number;
   seasons?: number;
   durationMinutes?: number;
+  /** Streaming providers' catalogue ids (see ../watchLinks.ts). */
+  huluSeries?: string;
+  huluMovie?: string;
+  netflix?: string;
+  primeVideo?: string;
 }
 
 type Fail = Exclude<UnfurlOutcome, { status: 'ok' }>;
@@ -245,6 +251,10 @@ export function parseEntity(raw: Record<string, unknown>): WikidataEntity {
     episodes: quantity('P1113'),
     seasons: quantity('P2437'),
     durationMinutes: quantity('P2047'),
+    huluSeries: text('P6467'),
+    huluMovie: text('P6466'),
+    netflix: text('P1874'),
+    primeVideo: text('P8055'),
   };
 }
 
@@ -253,6 +263,7 @@ export function dataFromEntity(
   summary?: { extract?: string; description?: string },
 ): UnfurlData {
   const kind = classifyEntity(e) === 'tv' ? 'tv' : 'movie';
+  const watchLinks = watchLinksFor(e);
   const year = e.start ? Number.parseInt(e.start.replace(/^\+/, '').slice(0, 4), 10) : NaN;
   const page = e.enwiki
     ? `https://en.wikipedia.org/wiki/${encodeURIComponent(e.enwiki.replace(/ /g, '_'))}`
@@ -275,6 +286,10 @@ export function dataFromEntity(
       episodes: e.episodes,
       seasons: e.seasons,
       image_source: e.poster ? 'P3383' : e.image ? 'P18' : e.logo ? 'P154' : undefined,
+      // Every provider's page for the work, keyed by source_system. The row is
+      // shared across sources, so the per-row read picks its own
+      // (ContentResolver.unfurl via watchLinkFor).
+      ...(watchLinks ? { watch_links: watchLinks } : {}),
       // NO season / episode here: this row is shared by every episode of the
       // work (that is the point of the key), so per-row coordinates are
       // re-derived from each content row's own title at read time

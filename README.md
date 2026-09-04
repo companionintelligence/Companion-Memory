@@ -346,6 +346,15 @@ ollama pull nomic-embed-text
 ollama run nomic-embed-text "embed this"
 ```
 
+#### poppler-utils (optional)
+
+The Hulu importer reads the "Personal Information Report" PDF with `pdftotext`, which ships in `poppler-utils`. The API image installs it; on a dev machine it is only needed to import or recognize a Hulu report (the Hulu PDF tests skip without it).
+
+```bash
+brew install poppler        # macOS
+sudo apt install poppler-utils   # Debian / Ubuntu
+```
+
 ## Initialize development environment
 
 Everything below is orchestrated by a single command:

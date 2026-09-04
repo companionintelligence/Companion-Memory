@@ -153,6 +153,8 @@ describe('WikidataResolver', () => {
       P345: ['tt5753856'],
       P1113: [{ amount: '+26' }],
       P2437: [{ amount: '+3' }],
+      P1874: ['80100172'],
+      P6467: ['2171423f-3326-4dfa-b193-b40494e60109'],
     },
   );
   const darkness = entity(
@@ -207,7 +209,18 @@ describe('WikidataResolver', () => {
         canonicalUrl: 'https://en.wikipedia.org/wiki/Dark_(TV_series)',
         thumbnailUrl: 'https://commons.wikimedia.org/wiki/Special:FilePath/Dark_logo.png?width=500',
         externalRef: 'wikidata:Q28443710',
-        payload: { year: 2017, imdb_id: 'tt5753856', episodes: 26, seasons: 3, image_source: 'P154' },
+        payload: {
+          year: 2017,
+          imdb_id: 'tt5753856',
+          episodes: 26,
+          seasons: 3,
+          image_source: 'P154',
+          // Every provider Wikidata names, so each source's row can pick its own.
+          watch_links: {
+            netflix: 'https://www.netflix.com/title/80100172',
+            hulu: 'https://www.hulu.com/series/2171423f-3326-4dfa-b193-b40494e60109',
+          },
+        },
       },
     });
     // Shared by every episode of the work, so it must carry none of them.
@@ -326,6 +339,8 @@ describe('WikidataResolver', () => {
       durationSeconds: 133 * 60,
       payload: { year: 2018, image_source: 'P3383', media_type: 'movie' },
     });
+    // No provider ids on the item: no watch_links key at all, not an empty bag.
+    expect(dataFromEntity(film).payload).not.toHaveProperty('watch_links');
   });
 
   it('picks the exact-title entity of the right kind over a popular partial match', () => {

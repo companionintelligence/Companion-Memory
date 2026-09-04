@@ -28,6 +28,8 @@ export { resolveTargetFor, OEMBED_PROVIDERS } from './resolveKey';
 export type { ResolveSource, ResolveTarget, Resolver } from './resolveKey';
 export { parseStreamingTitle, normalizeWorkTitle } from './streamingTitle';
 export type { StreamingWork } from './streamingTitle';
+export { watchLinkFor } from './watchLinks';
+export type { WatchLinks } from './watchLinks';
 export { UnfurlEntity } from './entities/UnfurlEntity';
 export { UnfurlService } from './services/UnfurlService';
 export type { ResolveResult } from './services/UnfurlService';

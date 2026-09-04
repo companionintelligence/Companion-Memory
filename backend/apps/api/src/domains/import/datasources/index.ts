@@ -43,6 +43,7 @@ import './google_purchases';
 import './googlevoice';
 import './gpx';
 import './grok';
+import './hulu';
 import './imessage';
 import './instagram';
 import './kindle';

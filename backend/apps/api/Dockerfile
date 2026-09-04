@@ -15,9 +15,11 @@ RUN apt-get update && \
     # codec for video — and the sole capture-time source for sidecar-less
     # Takeout videos, which otherwise fall back to archive mtime and land in the
     # wrong place on the timeline. It also backs the media-dimensions and
-    # video-thumbnail stages outside import.
+    # video-thumbnail stages outside import. `poppler-utils` ships `pdftotext`,
+    # which the Hulu importer needs: that export is a PDF and nothing else.
     unzip \
     ffmpeg \
+    poppler-utils \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \

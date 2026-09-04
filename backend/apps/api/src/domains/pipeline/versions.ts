@@ -134,8 +134,16 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * poster copies are real objects now (v1 wrote `ci.files` rows with no bytes).
    * v1 never shipped; its rows were cleared by hand on the one dev database
    * that had them, and this bump re-offers every row so they are re-resolved.
+   *
+   * v3 — Hulu titles resolve through Wikidata like Netflix's, and the
+   * Wikidata answer now carries the providers' own pages (`watch_links`:
+   * Hulu / Netflix / Prime Video ids, see embed/watchLinks.ts) — a changed
+   * answer for every streaming key. Hulu content rows had already matched the
+   * predicate (their `hulu:title:` URI is an external_uri) and were ledgered
+   * `skipped / no_resolve_target` at v2 — terminal, so only a bump re-offers
+   * them.
    */
-  [STAGE_IDS.ENRICH_UNFURL]: 2,
+  [STAGE_IDS.ENRICH_UNFURL]: 3,
 
   /**
    * DERIVED, not chosen — the one entry in this map nobody bumps by hand.

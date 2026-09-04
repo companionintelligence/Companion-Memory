@@ -1,4 +1,9 @@
-import { normalizeWorkTitle, parseNetflixTitle, parsePrimeVideoTitle } from '../streamingTitle';
+import {
+  normalizeWorkTitle,
+  parseNetflixTitle,
+  parsePrimeVideoTitle,
+  parseStreamingTitle,
+} from '../streamingTitle';
 
 describe('parseNetflixTitle', () => {
   it('splits Show: Season N: Episode (Episode M)', () => {
@@ -77,6 +82,28 @@ describe('parsePrimeVideoTitle', () => {
       kind: 'movie',
       title: 'Sam Smith: Dreams Come True',
     });
+  });
+});
+
+describe('parseStreamingTitle', () => {
+  it('reads Hulu titles with the Netflix parser', () => {
+    expect(parseStreamingTitle('hulu', "Bob's Burgers: Season 16: The Keyboard Kid")).toEqual({
+      kind: 'tv',
+      title: "Bob's Burgers",
+      season: 16,
+      episode: undefined,
+      episodeTitle: 'The Keyboard Kid',
+    });
+    expect(parseStreamingTitle('hulu', 'Alien: Earth: Season 1: The Real Monsters')).toMatchObject({
+      kind: 'tv',
+      title: 'Alien: Earth',
+      season: 1,
+    });
+    expect(parseStreamingTitle('hulu', 'The Raid: Redemption')).toEqual({
+      kind: 'movie',
+      title: 'The Raid: Redemption',
+    });
+    expect(parseStreamingTitle('disney_plus', 'Anything')).toBeNull();
   });
 });
 

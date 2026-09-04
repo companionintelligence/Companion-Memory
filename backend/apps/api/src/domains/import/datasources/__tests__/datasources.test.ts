@@ -33,6 +33,7 @@ const EXPECTED_DATASOURCES = [
   'google_photos',
   'google_voice',
   'gpx',
+  'hulu',
   'imessage',
   'instagram',
   'kindle',
