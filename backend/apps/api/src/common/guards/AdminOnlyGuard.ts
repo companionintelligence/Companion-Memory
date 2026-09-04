@@ -16,11 +16,24 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
  * `PortalTokenVerifier`'s doc comment) to avoid a guard → auth → user → guard cycle, so this reads
  * only what the auth guard already put on the request.
  *
- * One consequence of that: a request authenticated via the portal-bearer path currently populates
- * `request.user` with only `{ id }` (see `PortalTokenVerifier.verifyAndProvision`), not the full
- * user record — so a portal-authenticated admin is refused here today, not just a non-admin. That
- * fails closed (403, not a bypass), and widening the portal principal to carry `role` is a change
- * to that path, not to this guard.
+ * All three principals reaching this guard DO carry `role`: `JwtStrategy` and `ApiKeyStrategy` both
+ * return `userService.findById(...)`, and `PortalTokenService.verifyAndProvision` returns a whole
+ * `User` too — its interface merely used to say `{ id }` (now widened, and asserted in
+ * `__tests__/AdminOnlyGuard.test.ts`). An earlier revision of this comment claimed the portal path
+ * was refused here; it is not, and that claim was being cited as a reason not to admin-gate routes.
+ *
+ * ═══ THE REAL CAVEAT: A FRESH APPLIANCE HAS NO ADMIN AT ALL ═══
+ *
+ * Nothing in application code ever writes `role = 'admin'` — the only path is migration
+ * 20260825233952, which promotes the earliest existing user and ONLY when no admin exists. On an
+ * UPGRADE that finds the owner. On a FRESH install the migration runs against an empty `ci.users`,
+ * matches nothing, and the first user then signs up on the column default `'user'` — so the
+ * appliance has no admin, permanently, with no in-app way to mint one.
+ *
+ * Every route behind this guard is therefore unreachable on a fresh appliance. That is a live
+ * problem for the MCP server-config routes already, and it is the reason `/jobs`' appliance-wide
+ * controls are NOT gated here yet even though they should be: gating them today would take the
+ * Jobs page's switches away from every new install. Admin bootstrapping has to land first.
  */
 @Injectable()
 export class AdminOnlyGuard implements CanActivate {
