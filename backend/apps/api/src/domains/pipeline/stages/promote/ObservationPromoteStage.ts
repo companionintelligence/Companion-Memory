@@ -12,7 +12,10 @@ import { LoggerService } from '@ci/common/logging';
 // owns the PostGIS nearest-place read. Re-implementing either here would give
 // the sighting table a second writer with its own opinion about identity, which
 // is the thing that made `ci.objects` hard.
-import { ObjectObservationService, PlaceService, type CreateObjectObservationDto,
+import {
+  ObjectObservationService,
+  PlaceService,
+  type CreateObjectObservationDto,
   platformIdentity,
 } from '@ci/domains/memory';
 

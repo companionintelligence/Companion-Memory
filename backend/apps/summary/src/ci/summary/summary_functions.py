@@ -17,6 +17,12 @@ from .llm_config import LLMConfig, run_agent_sync
 MAX_HOURLY_PROMPT_CHARS = 24_000
 MAX_PROMPT_ITEMS_PER_SOURCE = 5
 MAX_PROMPT_ITEM_CHARS = 1_000
+# A row cut below this is key names and a few characters of value, which reads as
+# corrupt JSON to the model. When a source cannot afford this much per item we
+# show fewer items rather than more unreadable ones.
+MIN_PROMPT_ITEM_CHARS = 120
+
+_ITEM_PREFIX = "    - "
 
 
 def count_activities(aggregated_data: dict[str, Any]) -> dict[str, int]:
@@ -42,7 +48,12 @@ def build_data_prompt(
 
     Pure function - creates the LLM prompt from data.
     """
-    header = f"Activity Summary ({activity_counts['total']} total items):"
+    # .get, not ['total']: this is exported, and its two arguments are
+    # independent — a caller whose counts did not come from count_activities on
+    # this exact dict (a rollup merging several windows, a retry carrying counts
+    # forward) must not take a KeyError mid-prompt. Same reasoning as the
+    # per-source read below.
+    header = f"Activity Summary ({activity_counts.get('total', 0)} total items):"
     active_sources = [
         (source, count)
         for source, count in activity_counts.items()
@@ -57,25 +68,69 @@ def build_data_prompt(
     sections: list[str] = []
 
     for source, count in active_sources:
-        items = aggregated_data[source]
-        sample_size = min(MAX_PROMPT_ITEMS_PER_SOURCE, len(items))
-        lines = [
-            f"{source.replace('_', ' ').title()}: {count} items",
-            f"  Sample (newest {sample_size}):",
-        ]
-
-        for item in items[:sample_size]:
-            item_text = json.dumps(item, default=str, ensure_ascii=False)
-            if len(item_text) > MAX_PROMPT_ITEM_CHARS:
-                item_text = f"{item_text[: MAX_PROMPT_ITEM_CHARS - 3]}..."
-            lines.append(f"    - {item_text}")
-
-        section = "\n".join(lines)
-        if len(section) > section_budget:
-            section = section[: max(0, section_budget - 3)] + "..."
-        sections.append(section)
+        # activity_counts is an independent argument, so a caller can pass counts
+        # that were not derived from this exact dict; a missing or non-list source
+        # skips its sample instead of raising KeyError halfway through the prompt.
+        rows = aggregated_data.get(source)
+        items = rows if isinstance(rows, list) else []
+        sections.append(_render_source_section(source, count, items, section_budget))
 
     return "\n\n".join([header, *sections])
+
+
+def _truncate(text: str, limit: int) -> str:
+    """Cut `text` to at most `limit` characters, ellipsis included.
+
+    The ellipsis has to fit inside the limit: the earlier version appended "..."
+    after slicing to the budget, so a 1-character budget produced 3 characters and
+    the caller's own ceiling was breached by every truncation it performed.
+    """
+    if limit <= 0:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return f"{text[: limit - 3]}..."
+
+
+def _render_source_section(
+    source: str, count: int, items: list[Any], section_budget: int
+) -> str:
+    """Render one source's section within `section_budget`, sizing items first.
+
+    The budget is spent on ITEMS, not on the rendered section: we pick how many
+    items fit and how many characters each one gets before rendering, so the
+    "Sample (newest N)" header can only ever name rows the section actually
+    contains. Cutting the finished section instead - what this used to do - told
+    the model it was reading five records and handed it one and a fragment of a
+    second, in JSON that no longer parsed.
+    """
+    title = f"{source.replace('_', ' ').title()}: {count} items"
+
+    for sample_size in range(min(MAX_PROMPT_ITEMS_PER_SOURCE, len(items)), 0, -1):
+        sample_line = f"  Sample (newest {sample_size}):"
+        # title + newline + sample line, then a newline and the bullet prefix per item.
+        overhead = (
+            len(title) + 1 + len(sample_line) + sample_size * (1 + len(_ITEM_PREFIX))
+        )
+        item_chars = min(
+            MAX_PROMPT_ITEM_CHARS, (section_budget - overhead) // sample_size
+        )
+        if item_chars < MIN_PROMPT_ITEM_CHARS and sample_size > 1:
+            continue
+        if item_chars < 1:
+            break
+
+        lines = [title, sample_line]
+        for item in items[:sample_size]:
+            item_text = json.dumps(item, default=str, ensure_ascii=False)
+            lines.append(f"{_ITEM_PREFIX}{_truncate(item_text, item_chars)}")
+        return "\n".join(lines)
+
+    # Either the source carried no rows or the budget cannot hold a single legible
+    # one. Report the count and claim no sample at all.
+    return _truncate(title, section_budget)
 
 
 def generate_hourly_summary(
@@ -458,8 +513,8 @@ def _build_actions_prompt(context: dict[str, Any]) -> str:
     if insights:
         parts.append("## RECENT INSIGHTS (already surfaced to user)")
         for i in insights[:5]:
-            title = i.get("title", "")
-            text = i.get("insight_text", "")
+            title = i.get("title") or ""
+            text = i.get("insight_text") or ""
             if title or text:
                 parts.append(f"- {title}: {text[:150]}...")
         parts.append("")
@@ -619,11 +674,19 @@ def _build_insights_prompt(context: dict[str, Any]) -> str:
     if comms:
         parts.append("## RECENT COMMUNICATIONS")
         for comm in comms[:5]:
-            subject = comm.get("subject") or comm.get("title", "")
-            text = comm.get("text", "")
-            direction = comm.get("direction", "")
-            from_name = comm.get("from_name", "")
-            to_names = ", ".join(comm.get("to_names") or [])
+            # Every column here arrives NULL for real rows, so `.get(key, "")` is not
+            # enough - the key exists with value None and the slice below raises. The
+            # projection is LEFT(COALESCE(NULLIF(summary,''), NULLIF(preview,''),
+            # NULLIF(content,'')), 1000), and content is NOT NULL but may be '', so a
+            # call log or an attachment-only MMS yields text = None and used to fail
+            # insights_generation for that user on every run.
+            subject = comm.get("subject") or comm.get("title") or ""
+            text = comm.get("text") or ""
+            direction = comm.get("direction") or ""
+            from_name = comm.get("from_name") or ""
+            to_names = ", ".join(
+                str(name) for name in (comm.get("to_names") or []) if name
+            )
             label = subject or text or "Communication"
             details = [value for value in (direction, from_name, to_names) if value]
             prefix = f" ({'; '.join(details)})" if details else ""

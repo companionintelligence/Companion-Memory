@@ -245,7 +245,9 @@ export function SecondaryNavigation() {
     // and it stays that way.
     <>
       {captureModal}
-      <div className={cn('relative h-full shrink-0 transition-[width] duration-200', pinned ? 'w-56' : 'w-14')}>
+      <div
+        className={cn('relative h-full shrink-0 transition-[width] duration-200', pinned ? 'w-56' : 'w-14')}
+      >
         <nav
           id="power-rail"
           aria-label="Main navigation"

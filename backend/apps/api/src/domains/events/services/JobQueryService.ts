@@ -161,12 +161,21 @@ function clampWindowHours(windowHours: number | undefined): number {
  * Split from `JobMonitorService` (which answers "how is the appliance doing?")
  * because this answers a different question — "find me these specific jobs" —
  * and it needs filtering, paging and a stable ordering that the summary does
- * not. Both read the same tables; neither writes.
+ * not. Both read the same tables. The one write is {@link clearTerminal}: an
+ * operator clearing exhausted dead-letter or failed rows from the Health card.
  *
- * As with the dashboard summary, job payloads never leave here: rows are
- * projected to their taxonomy description plus a parsed failure. See
+ * As with the dashboard summary, job payloads never leave the list path: rows
+ * are projected to their taxonomy description plus a parsed failure. See
  * `JobRecordDto` in JobMonitorService for the reasoning.
  */
+export type TerminalJobClearScope = 'dead-letter' | 'failed';
+
+export interface TerminalJobClearDto {
+  readonly scope: TerminalJobClearScope;
+  /** Rows removed from `pgboss.job` for this scope. */
+  readonly deleted: number;
+}
+
 @Injectable()
 export class JobQueryService {
   constructor(
@@ -179,6 +188,35 @@ export class JobQueryService {
     @InjectRepository(JobCategoryMetricEntity)
     private readonly categoryMetricRepository: Repository<JobCategoryMetricEntity>,
   ) {}
+
+  /**
+   * Permanently delete terminal jobs the Health card has already named.
+   *
+   * `dead-letter` removes every row on the dead-letter queue (exhausted retries,
+   * payload kept only until retention). `failed` removes the origin rows that
+   * minted those copies — still in state `failed`, not already on the DLQ.
+   * Neither touches live work (`created` / `active` / `retry`) or completed
+   * history. Irreversible; the Health card asks before calling.
+   */
+  async clearTerminal(context: RequestContext, scope: TerminalJobClearScope): Promise<TerminalJobClearDto> {
+    if (!context.userId) {
+      throw new UnauthorizedException('A user context is required.');
+    }
+
+    const builder = this.jobRepository.createQueryBuilder().delete().from(PgBossJobEntity);
+
+    if (scope === 'dead-letter') {
+      builder.where('name = :deadLetter', { deadLetter: DEAD_LETTER_QUEUE });
+    } else {
+      builder
+        .where('state = :failed', { failed: 'failed' })
+        .andWhere('name != :deadLetter', { deadLetter: DEAD_LETTER_QUEUE });
+    }
+
+    const result = await builder.execute();
+
+    return { scope, deleted: result.affected ?? 0 };
+  }
 
   async list(context: RequestContext, query: JobQuery): Promise<JobListDto> {
     if (!context.userId) {
@@ -584,9 +622,7 @@ export class JobQueryService {
             // typo in a query string should return an empty table, not the
             // unfiltered one — so an empty event list becomes a sentinel.
             const excludes =
-              selector.excludeQueueKeys.length > 0
-                ? ` AND ${queueKey} NOT IN (:...excludedQueueKeys)`
-                : '';
+              selector.excludeQueueKeys.length > 0 ? ` AND ${queueKey} NOT IN (:...excludedQueueKeys)` : '';
 
             where.where(`job.data->>'name' IN (:...categoryEvents)${excludes}`, {
               categoryEvents: selector.events.length > 0 ? selector.events : ['__no-such-category__'],

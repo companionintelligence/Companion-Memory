@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-  dispatchNotReadyAction,
-  dispatchNotReadyMessage,
-} from './dispatchNotReady';
+import { dispatchNotReadyAction, dispatchNotReadyMessage } from './dispatchNotReady';
 
 describe('dispatchNotReadyMessage', () => {
   it('names the Hub fix for each blocker', () => {
@@ -25,11 +22,7 @@ describe('dispatchNotReadyAction', () => {
 
     expect(action?.label).toBe('Connect in Hub');
     action?.onClick();
-    expect(open).toHaveBeenCalledWith(
-      'https://hub.example/connect',
-      '_blank',
-      'noopener,noreferrer',
-    );
+    expect(open).toHaveBeenCalledWith('https://hub.example/connect', '_blank', 'noopener,noreferrer');
     open.mockRestore();
   });
 

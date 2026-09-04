@@ -22,6 +22,8 @@ export class PersonLoader extends Loader<Person | null> {
   ): Promise<readonly (Person | null)[]> {
     this.logger.log(`Loading a batch of ${personIds.length} people`);
 
-    return this.personService.findByIds(context, [...personIds]);
+    const people = await this.personService.findByIds(context, [...personIds]);
+
+    return this.rekey(personIds, people, (person) => person.id);
   }
 }

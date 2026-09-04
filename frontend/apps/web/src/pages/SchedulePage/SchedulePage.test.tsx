@@ -249,6 +249,21 @@ describe('SchedulePage — prediction audit band', () => {
 
     expect(screen.queryByTestId('prediction-band')).not.toBeInTheDocument();
   });
+
+  it("hands the band the hook's refetch so a failed forecast is recoverable", () => {
+    // The hook stops polling as soon as the forecast is null, so the band's own
+    // retry is the only thing that will ever re-issue the query. Dropping
+    // `refetch` at this call site is what made the unavailable state terminal.
+    const refetch = vi.fn();
+    h.forecast = [{ data: null, loading: false, stalled: false }, { refetch }];
+
+    renderWithProviders(<SchedulePage />);
+
+    const props = h.predictionBand.mock.lastCall?.[0] as { onRetry: () => void };
+    props.onRetry();
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('SchedulePage — what the footer is allowed to claim', () => {

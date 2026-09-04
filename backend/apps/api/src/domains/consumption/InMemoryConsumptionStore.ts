@@ -3,7 +3,6 @@ import { Injectable } from '@nestjs/common';
 import type { ConsumptionStore } from './ConsumptionStore';
 import { checkSlidingWindow, type RateLimitDecision } from './slidingWindow';
 
-
 /**
  * Hard cap on remembered keys, per map.
  *
@@ -46,7 +45,6 @@ export class InMemoryConsumptionStore implements ConsumptionStore {
   /** key -> expiry epoch ms. Insertion-ordered, which makes eviction oldest-first. */
   private readonly nonces = new Map<string, number>();
 
-   
   async takeWindow(params: {
     key: string;
     now: number;
@@ -62,7 +60,6 @@ export class InMemoryConsumptionStore implements ConsumptionStore {
     return decision;
   }
 
-   
   async claimOnce(params: { key: string; now: number; expiresAtMs: number }): Promise<boolean> {
     this.pruneNonces(params.now);
 

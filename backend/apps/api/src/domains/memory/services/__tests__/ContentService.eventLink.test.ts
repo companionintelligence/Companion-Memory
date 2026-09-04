@@ -209,9 +209,7 @@ describe('ContentService.createMany — set-based batch + event auto-link', () =
     expect(bulkInsertMock).toHaveBeenCalledTimes(1);
     const opts = bulkInsertMock.mock.calls[0][0];
     // Arbiter is the exact partial unique index (user-scoped, WHERE source_id NOT NULL).
-    expect(opts.conflictTarget).toBe(
-      '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
-    );
+    expect(opts.conflictTarget).toBe('(user_id, source_system, source_id) WHERE source_id IS NOT NULL');
     expect(opts.scope).toEqual({ userId: 'user-1' });
     expect(opts.identityColumns).toEqual(['source_system', 'source_id']);
     // The row carries its triple + owner for the set-based insert.

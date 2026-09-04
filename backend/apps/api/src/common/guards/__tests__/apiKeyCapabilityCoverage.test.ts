@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 
 import { REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorators';
 
+import { AgentJobsController } from '../../../domains/agent/controllers/AgentJobsController';
 import { IntentsController } from '../../../domains/agent/controllers/IntentsController';
 import { MemoryController } from '../../../domains/agent/controllers/MemoryController';
 import { FilesController } from '../../../domains/files/controllers/FilesController';
@@ -27,6 +28,7 @@ import { PendingActionsController } from '../../../domains/tools/controllers/Pen
 const SCOPED_CONTROLLERS = [
   MemoryController,
   IntentsController,
+  AgentJobsController,
   McpController,
   PersonaIntelligenceController,
   // The `capture` tier. Both grant at the CLASS level, which is why

@@ -23,3 +23,12 @@ preserving retries after a failed generation.
 Communication context projects compact semantic text plus sender/recipient
 names. Subject-only context is insufficient for surfacing changes in a
 conversation, while raw participant metadata and attachments are unnecessary.
+
+## NULL-safe exclusion
+
+`ci.communications.is_archived` is nullable, so the archived filter is
+`IS NOT TRUE`, not `= false`: the equality is NULL rather than true for a row
+whose flag was written as an explicit NULL, which drops that communication from
+insight context silently. A NULL means nobody archived the row, so it stays in.
+This matches the registry rule documented in `summary_sources.md`.
+`ci.events.is_deleted` is NOT NULL, so the novelty gate's `= false` is total.

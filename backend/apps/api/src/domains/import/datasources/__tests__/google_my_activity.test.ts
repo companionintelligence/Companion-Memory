@@ -372,13 +372,29 @@ describe('id stability across a re-export (growing-account regression)', () => {
   // v1 is an EARLIER export, taken mid-session: 3 entries, oldest→newest by
   // FILE POSITION is [around Lanier, Lanier, road...reality] since
   // MyActivity.html is newest-first (position 0 = "road...reality").
-  const V1 = path.join(__dirname, 'fixtures', 'google_my_activity', 're_export', 'v1', 'Search', 'MyActivity.html');
+  const V1 = path.join(
+    __dirname,
+    'fixtures',
+    'google_my_activity',
+    're_export',
+    'v1',
+    'Search',
+    'MyActivity.html',
+  );
   // v2 is a LATER export of the SAME account: the account did one more real
   // search ("Visited Jaron Lanier's Homepage") in between, which Google
   // prepends — so v2 = [Homepage (NEW), road...reality, Lanier, around
   // Lanier], and the 3 entries common to both files have each shifted one
   // position later (0→1, 1→2, 2→3).
-  const V2 = path.join(__dirname, 'fixtures', 'google_my_activity', 're_export', 'v2', 'Search', 'MyActivity.html');
+  const V2 = path.join(
+    __dirname,
+    'fixtures',
+    'google_my_activity',
+    're_export',
+    'v2',
+    'Search',
+    'MyActivity.html',
+  );
 
   it('gives the position-shifted, previously-seen entries the SAME id both times (dedup/self-heal)', async () => {
     const v1Items = await runImport(V1);

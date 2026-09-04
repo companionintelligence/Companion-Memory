@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from benchmark.schema import EvalQuestion, validate_persona
 
 
@@ -18,12 +17,18 @@ def _valid_persona() -> dict:
             {"id": "s1", "messages": [{"role": "user", "content": "hi"}]},
         ],
         "eval_questions": [
-            {"id": "q1", "question": "what?", "keywords": ["x"], "category": "flat-recall"},
+            {
+                "id": "q1",
+                "question": "what?",
+                "keywords": ["x"],
+                "category": "flat-recall",
+            },
         ],
     }
 
 
 # ── happy path ──────────────────────────────────────────────────────────────
+
 
 def test_valid_persona_has_no_errors():
     assert validate_persona(_valid_persona()) == []
@@ -40,7 +45,10 @@ def test_eval_question_from_dict_round_trip():
 
 # ── failure modes ───────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("missing", ["persona_id", "name", "sessions", "eval_questions"])
+
+@pytest.mark.parametrize(
+    "missing", ["persona_id", "name", "sessions", "eval_questions"]
+)
 def test_missing_top_level_field_reports_error(missing):
     p = _valid_persona()
     del p[missing]
@@ -68,7 +76,9 @@ def test_duplicate_session_id_flagged():
 
 def test_duplicate_question_id_flagged():
     p = _valid_persona()
-    p["eval_questions"].append({"id": "q1", "question": "?", "keywords": ["x"], "category": "c"})
+    p["eval_questions"].append(
+        {"id": "q1", "question": "?", "keywords": ["x"], "category": "c"}
+    )
     assert any("duplicate question id" in e for e in validate_persona(p))
 
 

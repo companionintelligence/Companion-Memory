@@ -589,9 +589,7 @@ export class PlannedBlockService {
   }
 
   /** Pre-`ci.planning_prefs` home for the workday: a jsonb leaf on the self-Person. */
-  private async legacyWorkdayHours(
-    context: UserServiceContext,
-  ): Promise<{ start: string; end: string }> {
+  private async legacyWorkdayHours(context: UserServiceContext): Promise<{ start: string; end: string }> {
     const self = await this.userContextService.getSelfIdentity(context.userId);
 
     if (!self) {

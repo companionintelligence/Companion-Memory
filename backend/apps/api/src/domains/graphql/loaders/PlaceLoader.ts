@@ -22,6 +22,8 @@ export class PlaceLoader extends Loader<Place | null> {
   ): Promise<readonly (Place | null)[]> {
     this.logger.log(`Loading a batch of ${placeIds.length} places`);
 
-    return this.placeService.findByIds(context, [...placeIds]);
+    const places = await this.placeService.findByIds(context, [...placeIds]);
+
+    return this.rekey(placeIds, places, (place) => place.id);
   }
 }

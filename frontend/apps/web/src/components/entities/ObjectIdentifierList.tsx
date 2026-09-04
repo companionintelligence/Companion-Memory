@@ -264,7 +264,9 @@ export function ObjectIdentifierList({ itemId, identifiers, onChanged, readOnly 
 
                 {row.isPrimary && <Badge className="shrink-0">Primary</Badge>}
                 {row.source && (
-                  <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{row.source}</span>
+                  <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
+                    {row.source}
+                  </span>
                 )}
 
                 {!readOnly && (

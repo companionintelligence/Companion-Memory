@@ -28,7 +28,8 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 from .base import MemoryAdapter
 
@@ -46,19 +47,25 @@ _FLUSH_STABLE_ROUNDS = 2
 class HindsightAdapter(MemoryAdapter):
     def __init__(
         self,
-        base_url: Optional[str] = None,
-        budget: Optional[str] = None,
-        max_tokens: Optional[int] = None,
-        timeout: Optional[float] = None,
+        base_url: str | None = None,
+        budget: str | None = None,
+        max_tokens: int | None = None,
+        timeout: float | None = None,
         *,
-        client_factory: Optional[Callable[[str, float], Any]] = None,
+        client_factory: Callable[[str, float], Any] | None = None,
         sleep: Callable[[float], None] = time.sleep,
-        bank_id: Optional[str] = None,
+        bank_id: str | None = None,
     ) -> None:
-        self._base_url = base_url or os.environ.get("HINDSIGHT_BASE_URL", _DEFAULT_BASE_URL)
+        self._base_url = base_url or os.environ.get(
+            "HINDSIGHT_BASE_URL", _DEFAULT_BASE_URL
+        )
         self._budget = budget or os.environ.get("HINDSIGHT_BUDGET", _DEFAULT_BUDGET)
-        self._max_tokens = max_tokens or int(os.environ.get("HINDSIGHT_MAX_TOKENS", str(_DEFAULT_MAX_TOKENS)))
-        self._timeout = timeout or float(os.environ.get("HINDSIGHT_TIMEOUT", str(_DEFAULT_TIMEOUT)))
+        self._max_tokens = max_tokens or int(
+            os.environ.get("HINDSIGHT_MAX_TOKENS", str(_DEFAULT_MAX_TOKENS))
+        )
+        self._timeout = timeout or float(
+            os.environ.get("HINDSIGHT_TIMEOUT", str(_DEFAULT_TIMEOUT))
+        )
         # Injection seams used by tests; production code falls back to the real
         # SDK + time.sleep.
         self._client_factory = client_factory

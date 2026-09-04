@@ -54,7 +54,6 @@ beforeAll(async () => {
   migrated = present != null;
 
   if (!migrated) {
-     
     console.warn(
       'PostgresConsumptionStore spec skipped: ci.consumption_windows is absent — run `yarn migrate` against ASKS_TEST_DATABASE_URL.',
     );

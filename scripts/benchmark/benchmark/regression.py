@@ -20,7 +20,7 @@ usually means the persona changed and the baseline needs refreshing.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -29,12 +29,12 @@ class RegressionChange:
 
     system: str
     category: str  # "overall" for the system-level score
-    baseline: Optional[float]   # ratio in [0, 1], or None for missing/error rows
-    current: Optional[float]
-    delta: Optional[float]      # current - baseline; None if either side missing
-    kind: str                   # "regression" | "improvement" | "stable"
-                                #   | "error_introduced" | "error_resolved"
-                                #   | "missing"
+    baseline: float | None  # ratio in [0, 1], or None for missing/error rows
+    current: float | None
+    delta: float | None  # current - baseline; None if either side missing
+    kind: str  # "regression" | "improvement" | "stable"
+    #   | "error_introduced" | "error_resolved"
+    #   | "missing"
 
     @property
     def is_failure(self) -> bool:
@@ -45,10 +45,10 @@ class RegressionChange:
 @dataclass
 class RegressionReport:
     tolerance: float
-    changes: List[RegressionChange] = field(default_factory=list)
+    changes: list[RegressionChange] = field(default_factory=list)
 
     @property
-    def failures(self) -> List[RegressionChange]:
+    def failures(self) -> list[RegressionChange]:
         return [c for c in self.changes if c.is_failure]
 
     @property
@@ -56,19 +56,19 @@ class RegressionReport:
         return not self.failures
 
 
-def _ratio(hit: int, total: int) -> Optional[float]:
+def _ratio(hit: int, total: int) -> float | None:
     if not total:
         return None
     return hit / total
 
 
-def _index_by_name(systems: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def _index_by_name(systems: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {s["name"]: s for s in systems}
 
 
 def compare(
-    baseline: Dict[str, Any],
-    current: Dict[str, Any],
+    baseline: dict[str, Any],
+    current: dict[str, Any],
     *,
     tolerance: float = 0.05,
 ) -> RegressionReport:
@@ -91,10 +91,16 @@ def compare(
         if b is None or c is None:
             report.changes.append(
                 RegressionChange(
-                    system=name, category="overall",
-                    baseline=None if b is None else _ratio(b["score"]["hit"], b["score"]["total"]),
-                    current=None if c is None else _ratio(c["score"]["hit"], c["score"]["total"]),
-                    delta=None, kind="missing",
+                    system=name,
+                    category="overall",
+                    baseline=None
+                    if b is None
+                    else _ratio(b["score"]["hit"], b["score"]["total"]),
+                    current=None
+                    if c is None
+                    else _ratio(c["score"]["hit"], c["score"]["total"]),
+                    delta=None,
+                    kind="missing",
                 )
             )
             continue
@@ -102,23 +108,39 @@ def compare(
         # Errors are first-class events, not a -100% regression.
         if b.get("error") and not c.get("error"):
             report.changes.append(
-                RegressionChange(system=name, category="overall", baseline=None,
-                                 current=_ratio(c["score"]["hit"], c["score"]["total"]),
-                                 delta=None, kind="error_resolved")
+                RegressionChange(
+                    system=name,
+                    category="overall",
+                    baseline=None,
+                    current=_ratio(c["score"]["hit"], c["score"]["total"]),
+                    delta=None,
+                    kind="error_resolved",
+                )
             )
             continue
         if c.get("error") and not b.get("error"):
             report.changes.append(
-                RegressionChange(system=name, category="overall",
-                                 baseline=_ratio(b["score"]["hit"], b["score"]["total"]),
-                                 current=None, delta=None, kind="error_introduced")
+                RegressionChange(
+                    system=name,
+                    category="overall",
+                    baseline=_ratio(b["score"]["hit"], b["score"]["total"]),
+                    current=None,
+                    delta=None,
+                    kind="error_introduced",
+                )
             )
             continue
         if c.get("error") and b.get("error"):
             # Both errored — uninteresting for the gate; record as stable.
             report.changes.append(
-                RegressionChange(system=name, category="overall", baseline=None,
-                                 current=None, delta=None, kind="stable")
+                RegressionChange(
+                    system=name,
+                    category="overall",
+                    baseline=None,
+                    current=None,
+                    delta=None,
+                    kind="stable",
+                )
             )
             continue
 
@@ -132,20 +154,29 @@ def compare(
         for cat in cats:
             bh, bt = b["categories"][cat]
             ch, ct = c["categories"][cat]
-            report.changes.append(_classify(name, cat, _ratio(bh, bt), _ratio(ch, ct), tolerance))
+            report.changes.append(
+                _classify(name, cat, _ratio(bh, bt), _ratio(ch, ct), tolerance)
+            )
 
     return report
 
 
 def _classify(
-    system: str, category: str,
-    baseline: Optional[float], current: Optional[float],
+    system: str,
+    category: str,
+    baseline: float | None,
+    current: float | None,
     tolerance: float,
 ) -> RegressionChange:
     if baseline is None or current is None:
-        return RegressionChange(system=system, category=category,
-                                baseline=baseline, current=current,
-                                delta=None, kind="missing")
+        return RegressionChange(
+            system=system,
+            category=category,
+            baseline=baseline,
+            current=current,
+            delta=None,
+            kind="missing",
+        )
     delta = current - baseline
     if delta < -tolerance:
         kind = "regression"
@@ -153,9 +184,14 @@ def _classify(
         kind = "improvement"
     else:
         kind = "stable"
-    return RegressionChange(system=system, category=category,
-                            baseline=baseline, current=current,
-                            delta=delta, kind=kind)
+    return RegressionChange(
+        system=system,
+        category=category,
+        baseline=baseline,
+        current=current,
+        delta=delta,
+        kind=kind,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +200,7 @@ def _classify(
 
 
 def format_summary(report: RegressionReport) -> str:
-    lines: List[str] = [f"## Regression report (tolerance ±{report.tolerance:.0%})", ""]
+    lines: list[str] = [f"## Regression report (tolerance ±{report.tolerance:.0%})", ""]
     if not report.changes:
         return "## Regression report\n\n(no systems compared)\n"
 
@@ -187,7 +223,7 @@ def format_summary(report: RegressionReport) -> str:
 
 
 def _format_change(c: RegressionChange) -> str:
-    def _pct(x: Optional[float]) -> str:
+    def _pct(x: float | None) -> str:
         return f"{x:.0%}" if x is not None else "—"
 
     delta = f" Δ {c.delta:+.0%}" if c.delta is not None else ""

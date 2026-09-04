@@ -1,4 +1,5 @@
 import { Button } from '@ci/shadcn';
+import { RotateCw } from '@ci/shadcn/icons';
 import { Link } from 'react-router-dom';
 
 import type { ForecastResponse } from '@/api/useForecastService';
@@ -9,6 +10,17 @@ export interface PredictionBandProps {
   loading: boolean;
   stalled: boolean;
   showFullForecastLink: boolean;
+  /**
+   * Re-issues the forecast query.
+   *
+   * Nothing else will. `ForecastResolver.ts` swallows an HBPE failure and
+   * answers `null`, and `useForecastService`'s effect reads a null forecast as
+   * "nothing to poll for" and calls `stopPolling()` — so the unavailable state
+   * is terminal until the user navigates away and back. Telling them to "try
+   * again shortly" over a request that will never be made again is the failure
+   * this prop exists to end.
+   */
+  onRetry: () => void;
 }
 
 /**
@@ -18,7 +30,13 @@ export interface PredictionBandProps {
  * display-only local-clock ordering and exposes every L0/L1 probability on
  * hover; this component only supplies context and honest request states.
  */
-export function PredictionBand({ forecast, loading, stalled, showFullForecastLink }: PredictionBandProps) {
+export function PredictionBand({
+  forecast,
+  loading,
+  stalled,
+  showFullForecastLink,
+  onRetry,
+}: PredictionBandProps) {
   return (
     <section
       aria-labelledby="prediction-band-heading"
@@ -54,12 +72,30 @@ export function PredictionBand({ forecast, loading, stalled, showFullForecastLin
           pipelineDetail={forecast.pipelineDetail}
           className="mt-3"
         />
-      ) : (
-        <p role={loading ? 'status' : 'alert'} className="mt-3 text-sm text-muted-foreground">
-          {loading
-            ? 'Loading the prediction band…'
-            : "Couldn't reach HBPE for the prediction band. Try again shortly."}
+      ) : loading ? (
+        // Two separate nodes, each with its own key, rather than one paragraph
+        // whose `role` flips between renders: a live region that changes role
+        // in place asks a screen reader to reinterpret a region it is already
+        // watching, and announcement of the swap is left to the AT. Remounting
+        // retires the polite region and introduces the assertive one.
+        <p key="prediction-band-loading" role="status" className="mt-3 text-sm text-muted-foreground">
+          Loading the prediction band…
         </p>
+      ) : (
+        <div
+          key="prediction-band-unavailable"
+          role="alert"
+          className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground"
+        >
+          {/* Same reading as ForecastPage's empty state — the resolver's
+              try/catch means a null forecast is always a failed call, never an
+              untrained model (that answers with systemStatus: 'COLD_START'). */}
+          <span>Couldn&apos;t reach HBPE for the prediction band.</span>
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onRetry}>
+            <RotateCw className="h-3.5 w-3.5" />
+            Try again
+          </Button>
+        </div>
       )}
     </section>
   );

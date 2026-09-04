@@ -13,7 +13,10 @@ function makeCron(sweep: jest.Mock) {
 
 describe('ConsumptionSweepCron registration', () => {
   it('is registered on a schedule at all — the reaper is worthless unregistered', () => {
-    const options = Reflect.getMetadata(SCHEDULE_CRON_OPTIONS, ConsumptionSweepCron.prototype.sweepOnSchedule);
+    const options = Reflect.getMetadata(
+      SCHEDULE_CRON_OPTIONS,
+      ConsumptionSweepCron.prototype.sweepOnSchedule,
+    );
 
     expect(options).toBeDefined();
     expect(options.cronTime).toBe(CONSUMPTION_SWEEP_CRON);
@@ -23,12 +26,15 @@ describe('ConsumptionSweepCron registration', () => {
     // Every cron in this codebase is named. Unnamed, `@nestjs/schedule` assigns
     // the job a random UUID in the SchedulerRegistry, so it is un-addressable
     // across restarts and cannot be deduped; named ones dedupe on the name.
-    const options = Reflect.getMetadata(SCHEDULE_CRON_OPTIONS, ConsumptionSweepCron.prototype.sweepOnSchedule);
+    const options = Reflect.getMetadata(
+      SCHEDULE_CRON_OPTIONS,
+      ConsumptionSweepCron.prototype.sweepOnSchedule,
+    );
 
     expect(options.name).toBe('ConsumptionSweepCron.sweepOnSchedule');
   });
 
-  it('is declared in CronRegistry as a worker job — this is the finding\'s own repro: before this cron existed, CronRegistry had no entry naming the consumption sweep at all', () => {
+  it("is declared in CronRegistry as a worker job — this is the finding's own repro: before this cron existed, CronRegistry had no entry naming the consumption sweep at all", () => {
     const declaration = CronRegistry.get('ConsumptionSweepCron.sweepOnSchedule');
 
     expect(declaration).toBeDefined();

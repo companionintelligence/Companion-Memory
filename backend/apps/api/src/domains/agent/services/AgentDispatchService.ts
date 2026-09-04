@@ -9,13 +9,14 @@ import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/events';
 import { TaskService } from '@ci/domains/planning';
 
-import {
-  AGENT_DISPATCH_QUEUE,
-  DISPATCH_QUEUED_STALE_MS,
-  DISPATCH_RUNNING_STALE_MS,
-} from '../constants';
-
+import { AGENT_DISPATCH_QUEUE, DISPATCH_QUEUED_STALE_MS, DISPATCH_RUNNING_STALE_MS } from '../constants';
 import { buildDispatchPacket } from '../dispatchPacket';
+import {
+  AgentJobEntity,
+  type AgentJob,
+  type AgentJobStatus,
+  type PacketMode,
+} from '../entities/AgentJobEntity';
 import {
   AgentTaskBlockedEvent,
   AgentTaskCheckpointEvent,
@@ -23,12 +24,6 @@ import {
   AgentTaskDispatchEvent,
   PlanningTaskResultEvent,
 } from '../events';
-import {
-  AgentJobEntity,
-  type AgentJob,
-  type AgentJobStatus,
-  type PacketMode,
-} from '../entities/AgentJobEntity';
 
 import { HubDoorbellService } from './HubDoorbellService';
 
@@ -78,7 +73,7 @@ export class AgentDispatchService {
       throw new BadRequestException('Dispatch needs a title');
     }
 
-    let taskId = input.taskId ?? null;
+    const taskId = input.taskId ?? null;
 
     if (taskId) {
       const task = await this.taskService.findById(context, taskId);
@@ -145,7 +140,9 @@ export class AgentDispatchService {
     );
 
     if (eventJobId) {
-      await this.jobRepository.update({ id: jobId }, { eventJobId } as QueryDeepPartialEntity<AgentJobEntity>);
+      await this.jobRepository.update({ id: jobId }, {
+        eventJobId,
+      } as QueryDeepPartialEntity<AgentJobEntity>);
       entity.eventJobId = eventJobId;
     }
 
@@ -225,16 +222,13 @@ export class AgentDispatchService {
 
     const completed = status === 'completed' || status === 'blocked' || status === 'failed';
 
-    await this.jobRepository.update(
-      { id, userId: context.userId },
-      {
-        status,
-        failStep,
-        failCount,
-        result: input.result ?? job.result,
-        completedAt: completed ? new Date() : job.completedAt,
-      } as QueryDeepPartialEntity<AgentJobEntity>,
-    );
+    await this.jobRepository.update({ id, userId: context.userId }, {
+      status,
+      failStep,
+      failCount,
+      result: input.result ?? job.result,
+      completedAt: completed ? new Date() : job.completedAt,
+    } as QueryDeepPartialEntity<AgentJobEntity>);
 
     const updated = await this.requireJob(context, id);
 
@@ -281,8 +275,7 @@ export class AgentDispatchService {
           turns: [
             {
               role: 'assistant',
-              content:
-                'OpenClaw did not check in. Memory closed the job so it would not hang.',
+              content: 'OpenClaw did not check in. Memory closed the job so it would not hang.',
             },
           ],
           result: { summary: 'Timed out waiting for OpenClaw' },
@@ -304,14 +297,11 @@ export class AgentDispatchService {
     const message = input.message?.trim();
 
     if (input.action === 'halt') {
-      await this.jobRepository.update(
-        { id, userId: context.userId },
-        {
-          status: 'blocked',
-          completedAt: new Date(),
-          result: { ...(job.result ?? {}), halted: true },
-        } as QueryDeepPartialEntity<AgentJobEntity>,
-      );
+      await this.jobRepository.update({ id, userId: context.userId }, {
+        status: 'blocked',
+        completedAt: new Date(),
+        result: { ...(job.result ?? {}), halted: true },
+      } as QueryDeepPartialEntity<AgentJobEntity>);
 
       if (message) {
         await this.messageService.create(context, {
@@ -325,6 +315,7 @@ export class AgentDispatchService {
 
       const updated = await this.requireJob(context, id);
       await this.finishBlocked(context, updated, 'halted');
+
       return updated;
     }
 
@@ -346,11 +337,7 @@ export class AgentDispatchService {
     return this.requireJob(context, id);
   }
 
-  private async finishBlocked(
-    context: UserServiceContext,
-    job: AgentJob,
-    reason: string,
-  ): Promise<void> {
+  private async finishBlocked(context: UserServiceContext, job: AgentJob, reason: string): Promise<void> {
     await this.messageService.create(context, {
       threadId: job.threadId,
       role: 'assistant',

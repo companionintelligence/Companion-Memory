@@ -52,7 +52,12 @@ export interface RedditRecord {
 }
 
 const LEGACY_CONTENT_TYPES = new Set(['reddit_post', 'reddit_comment']);
-const LEGACY_EVENT_TYPES = new Set(['reddit_post', 'reddit_comment', 'reddit_saved_post', 'reddit_saved_comment']);
+const LEGACY_EVENT_TYPES = new Set([
+  'reddit_post',
+  'reddit_comment',
+  'reddit_saved_post',
+  'reddit_saved_comment',
+]);
 
 function absolutePermalink(permalink: string): string {
   return permalink.startsWith('http') ? permalink : `https://www.reddit.com${permalink}`;
@@ -227,7 +232,10 @@ export class RedditRecordWriter {
     // - Undated records: same NOT NULL `communications.time` reason, kept for
     //   parity with the importer (the API always carries created_utc).
     if (saved || !record.createdAt) {
-      await this.contentService.create(context, this.contentRow(record, { content, isComment, sourceData, source, connection }));
+      await this.contentService.create(
+        context,
+        this.contentRow(record, { content, isComment, sourceData, source, connection }),
+      );
 
       if (saved) {
         // A saved item written as a communication by an earlier revision of
@@ -297,7 +305,10 @@ export class RedditRecordWriter {
       // `update` does not ledger; without this the row shows only the pipeline
       // that inserted it, and the dedup hit that just happened is invisible to
       // ci.record_sources (and to the import doctor's pairing checks).
-      await this.communicationService.recordArrival(context, existing.id, { ...source, connection_id: connection.id });
+      await this.communicationService.recordArrival(context, existing.id, {
+        ...source,
+        connection_id: connection.id,
+      });
     } else {
       await this.communicationService.create(context, row);
     }
@@ -384,11 +395,18 @@ export class RedditRecordWriter {
     // The old events were keyed (reddit, <fullname>) — `reddit_posts` etc.
     // aliased to `reddit` by the registry.
     const legacy = platformIdentity('reddit', fullname);
-    const events = await this.eventService.search(context, { sourceSystem: legacy.system, sourceId: legacy.id });
+    const events = await this.eventService.search(context, {
+      sourceSystem: legacy.system,
+      sourceId: legacy.id,
+    });
     for (const event of events) {
       if (event.eventType && LEGACY_EVENT_TYPES.has(event.eventType)) {
         await this.eventService.remove(context, event.id);
-        this.logger.log('Removed legacy Reddit event row', { fullname, eventId: event.id, type: event.eventType });
+        this.logger.log('Removed legacy Reddit event row', {
+          fullname,
+          eventId: event.id,
+          type: event.eventType,
+        });
       }
     }
   }

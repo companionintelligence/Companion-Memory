@@ -657,17 +657,18 @@ const DayLane = memo(function DayLane({
       : null;
   const markerPct = dropPct ?? selectedPct;
   const markerAt =
-    dropPct !== null ? dropInstant(dayStart, dropPct / 100) : selectedSlot && !selectedSlot.allDay ? selectedSlot.instant : null;
+    dropPct !== null
+      ? dropInstant(dayStart, dropPct / 100)
+      : selectedSlot && !selectedSlot.allDay
+        ? selectedSlot.instant
+        : null;
 
   return (
     <div
       role="listitem"
       aria-label={dayLabel}
       data-testid="vertical-day-lane"
-      className={cn(
-        'relative min-w-0 flex-1 border-l border-border/60',
-        onSelectSlot && 'cursor-cell',
-      )}
+      className={cn('relative min-w-0 flex-1 border-l border-border/60', onSelectSlot && 'cursor-cell')}
       style={{ height: GRID_HEIGHT_PX }}
       onClick={
         onSelectSlot

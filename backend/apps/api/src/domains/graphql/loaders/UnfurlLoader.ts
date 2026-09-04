@@ -54,7 +54,9 @@ export class UnfurlLoader extends Loader<UnfurlView | null, string> {
       ...new Set([...rows.values()].map((r) => r.posterFileId).filter((id): id is string => !!id)),
     ];
     const posters = posterIds.length ? await this.fileService.findByIds(context, posterIds) : [];
-    const posterUrlById = new Map(posterIds.map((id, i) => [id, posters[i]?.url ?? null]));
+    const posterUrlById = new Map(
+      posters.filter((file) => file != null).map((file) => [file.id, file.url ?? null]),
+    );
 
     return keys.map((key) => {
       const row = rows.get(key);
@@ -62,7 +64,7 @@ export class UnfurlLoader extends Loader<UnfurlView | null, string> {
         return null;
       }
 
-      const local = row.posterFileId ? posterUrlById.get(row.posterFileId) : null;
+      const local = row.posterFileId ? (posterUrlById.get(row.posterFileId) ?? null) : null;
 
       return {
         status: row.status,

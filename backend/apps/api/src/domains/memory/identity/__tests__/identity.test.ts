@@ -160,7 +160,9 @@ describe('email identity (federated on RFC Message-ID)', () => {
   it('the generic attachment builder is the same format under any parent, hash lowercased', () => {
     const chat = platformIdentity('twitter', 'dm', '9');
     expect(attachmentIdentity(chat, 'ABCDEF')).toEqual({ system: 'twitter', id: 'attachment:dm:9:abcdef' });
-    expect(attachmentIdentity(emailIdentity('<m@x>')!, 'abc')).toEqual(emailAttachmentIdentity(emailIdentity('<m@x>')!, 'abc'));
+    expect(attachmentIdentity(emailIdentity('<m@x>')!, 'abc')).toEqual(
+      emailAttachmentIdentity(emailIdentity('<m@x>')!, 'abc'),
+    );
   });
 });
 
@@ -168,7 +170,9 @@ describe('email thread key (Gmail hex threadId vs mbox X-GM-THRID)', () => {
   it('CONFORMANCE: the API hex and the IMAP decimal of one thread yield one key', () => {
     expect(gmailThreadKeyFromApi('18c1a2b3c4d5e6f7')).toBe('18c1a2b3c4d5e6f7');
     expect(gmailThreadKeyFromImap('1783885820400625399')).toBe('18c1a2b3c4d5e6f7');
-    expect(emailThreadKey({ 'X-GM-THRID': '1783885820400625399' })).toBe(gmailThreadKeyFromApi('18c1a2b3c4d5e6f7'));
+    expect(emailThreadKey({ 'X-GM-THRID': '1783885820400625399' })).toBe(
+      gmailThreadKeyFromApi('18c1a2b3c4d5e6f7'),
+    );
   });
 
   it('normalizes case, whitespace and leading zeros to the one spelling', () => {
@@ -197,7 +201,11 @@ describe('email thread key (Gmail hex threadId vs mbox X-GM-THRID)', () => {
 
   it('falls back to References root, then In-Reply-To, then the own Message-ID', () => {
     expect(
-      emailThreadKey({ References: '<root@x> <parent@x>', 'In-Reply-To': '<parent@x>', 'Message-ID': '<me@x>' }),
+      emailThreadKey({
+        References: '<root@x> <parent@x>',
+        'In-Reply-To': '<parent@x>',
+        'Message-ID': '<me@x>',
+      }),
     ).toBe('root@x');
     expect(emailThreadKey({ 'In-Reply-To': '<parent@x>', 'Message-ID': '<me@x>' })).toBe('parent@x');
     expect(emailThreadKey({ 'Message-ID': '<me@x>' })).toBe('me@x');
@@ -419,7 +427,10 @@ describe('reddit identities', () => {
   it("mints the importer's staged-id spelling, verbatim, as the source_id", () => {
     expect(redditRecordId('post', 'xfkamy')).toBe('reddit:post:xfkamy');
     expect(redditIdentity('post', 't3_xfkamy')).toEqual({ system: 'reddit', id: 'reddit:post:xfkamy' });
-    expect(redditIdentity('comment', 't1_iomlcrs')).toEqual({ system: 'reddit', id: 'reddit:comment:iomlcrs' });
+    expect(redditIdentity('comment', 't1_iomlcrs')).toEqual({
+      system: 'reddit',
+      id: 'reddit:comment:iomlcrs',
+    });
   });
 
   it('keeps authored and saved copies of the same thing distinct, as both exports do', () => {

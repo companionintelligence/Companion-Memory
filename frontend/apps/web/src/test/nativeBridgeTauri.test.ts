@@ -96,7 +96,7 @@ describe('addAppUrlOpenListener — Tauri branch', () => {
     consoleError.mockRestore();
   });
 
-  it('delivers a live companion-deep-link DOM event dispatched after mount (main.rs\'s window.eval path)', async () => {
+  it("delivers a live companion-deep-link DOM event dispatched after mount (main.rs's window.eval path)", async () => {
     const invoke = vi.fn().mockResolvedValue(null);
     window.__TAURI_INTERNALS__ = { invoke };
 
@@ -144,7 +144,9 @@ describe('addAppUrlOpenListener — Tauri branch', () => {
     const handler = vi.fn();
     const unsubscribe = await addAppUrlOpenListener(handler);
 
-    window.dispatchEvent(new CustomEvent('companion-deep-link', { detail: 'companion://oidc/callback?code=x' }));
+    window.dispatchEvent(
+      new CustomEvent('companion-deep-link', { detail: 'companion://oidc/callback?code=x' }),
+    );
 
     expect(handler).not.toHaveBeenCalled();
     expect(() => unsubscribe()).not.toThrow();

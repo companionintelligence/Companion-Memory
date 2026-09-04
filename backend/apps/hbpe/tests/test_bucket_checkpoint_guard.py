@@ -12,7 +12,9 @@ from ci.hbpe.pipeline import inference_engine as ie
 
 
 def test_assert_accepts_matching_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ie, "_onnx_pos_emb_dims", lambda _path: (BUCKETS_PER_DAY, D_MODEL))
+    monkeypatch.setattr(
+        ie, "_onnx_pos_emb_dims", lambda _path: (BUCKETS_PER_DAY, D_MODEL)
+    )
     ie._assert_checkpoint_bucket_resolution(Path("ok.onnx"))
 
 

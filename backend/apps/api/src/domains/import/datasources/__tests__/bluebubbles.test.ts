@@ -65,9 +65,11 @@ describe('mapBlueBubblesMessageToGraph', () => {
   });
 
   it('decodes a raw typedstream attributedBody, base64 or JSON Buffer', () => {
-    expect(blueBubblesBodyText(message({ text: null, attributedBody: typedStream('base64 body').toString('base64') }))).toBe(
-      'base64 body',
-    );
+    expect(
+      blueBubblesBodyText(
+        message({ text: null, attributedBody: typedStream('base64 body').toString('base64') }),
+      ),
+    ).toBe('base64 body');
     expect(
       blueBubblesBodyText(
         message({
@@ -79,7 +81,9 @@ describe('mapBlueBubblesMessageToGraph', () => {
   });
 
   it('prefers text over attributedBody, and yields nothing when neither is usable', () => {
-    expect(blueBubblesBodyText(message({ text: 'plain', attributedBody: [{ string: 'other' }] }))).toBe('plain');
+    expect(blueBubblesBodyText(message({ text: 'plain', attributedBody: [{ string: 'other' }] }))).toBe(
+      'plain',
+    );
     expect(blueBubblesBodyText(message({ text: null, attributedBody: null }))).toBeUndefined();
     expect(blueBubblesBodyText(message({ text: null, attributedBody: { nonsense: true } }))).toBeUndefined();
   });
@@ -254,21 +258,17 @@ describe('BlueBubblesAPIImporter.apiImport', () => {
    */
   it('stops the pass when the server answers out of order, keeping the staged rows a prefix', async () => {
     jest.spyOn(BlueBubblesApiClient.prototype, 'queryChats').mockResolvedValue([]);
-    jest
-      .spyOn(BlueBubblesApiClient.prototype, 'queryMessages')
-      .mockResolvedValue([
-        message({ guid: 'a', dateCreated: 1_700_000_000_000 }),
-        message({ guid: 'b', dateCreated: 1_700_000_005_000 }),
-        // Older than the one before it — the ordering contract broken.
-        message({ guid: 'c', dateCreated: 1_700_000_001_000 }),
-        message({ guid: 'd', dateCreated: 1_700_000_009_000 }),
-      ]);
+    jest.spyOn(BlueBubblesApiClient.prototype, 'queryMessages').mockResolvedValue([
+      message({ guid: 'a', dateCreated: 1_700_000_000_000 }),
+      message({ guid: 'b', dateCreated: 1_700_000_005_000 }),
+      // Older than the one before it — the ordering contract broken.
+      message({ guid: 'c', dateCreated: 1_700_000_001_000 }),
+      message({ guid: 'd', dateCreated: 1_700_000_009_000 }),
+    ]);
 
     const { pipeline, params } = collector();
 
-    await expect(new BlueBubblesAPIImporter().apiImport(SETTINGS, params)).rejects.toThrow(
-      /out of order/,
-    );
+    await expect(new BlueBubblesAPIImporter().apiImport(SETTINGS, params)).rejects.toThrow(/out of order/);
 
     // Everything before the violation is kept and is still a prefix; nothing at
     // or after it is staged, so the cursor cannot be advanced past 'c'.

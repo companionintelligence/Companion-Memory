@@ -54,7 +54,10 @@ def sam_saturday_lake() -> tuple[FactorModel, np.ndarray, list[LakeItem], dict]:
         (
             "jerry_text",
             "message: Jerry is free Saturday near the beach",
-            {("beach", "jerry"): "jerry_mention", ("errands", "jerry"): "jerry_mention"},
+            {
+                ("beach", "jerry"): "jerry_mention",
+                ("errands", "jerry"): "jerry_mention",
+            },
         ),
         (
             "tom_chess",
@@ -192,16 +195,22 @@ def lake_from_spec(spec: dict) -> tuple[FactorModel, np.ndarray, list[LakeItem],
         raise ValueError("lake spec needs at least one item")
 
     process_A = normalize_A_gaze(np.stack(tables, axis=-1))
-    model = FactorModel(branches=branches, people=people, cues=cues, interests=interests, kind="memory")
+    model = FactorModel(
+        branches=branches, people=people, cues=cues, interests=interests, kind="memory"
+    )
     model.bind_gaze(len(items))
     model.A = process_A.copy()
     model.a = model.A * 8.0
     model.C = np.ones(len(cues)) / len(cues)
     prior = spec.get("branch_prior") or {}
     if prior:
-        weights = np.array([float(prior.get(name, 1.0)) for name in branches], dtype=float)
+        weights = np.array(
+            [float(prior.get(name, 1.0)) for name in branches], dtype=float
+        )
         weights = np.clip(weights, EPS, None)
-        model.D_joint = np.outer(weights / weights.sum(), np.ones(len(people)) / len(people))
+        model.D_joint = np.outer(
+            weights / weights.sum(), np.ones(len(people)) / len(people)
+        )
         model.d_joint = model.D_joint * (len(branches) * len(people))
     truth = spec.get("truth") or {"branch": branches[0], "texture": people[0]}
     return model, process_A, items, truth

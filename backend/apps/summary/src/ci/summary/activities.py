@@ -186,7 +186,16 @@ async def find_existing_summary_activity(
     start_time: str,
     end_time: str,
 ) -> dict[str, Any] | None:
-    """Return an existing summary for the exact user/type/window, if any."""
+    """
+    Return an existing summary for the exact user/type/window, if any.
+
+    Newest first. ``summaries_user_window_uniq`` makes this at most one row
+    going forward, but an appliance whose duplicates were collapsed by
+    migration 20260903162709 keeps the newest of each pair — and this read used
+    to ``ORDER BY created_at`` ascending, pinning the OLDEST row (often the one
+    generated from a half-imported hour) as the permanent answer for that
+    window. Order the two the same way so the survivor is the row callers see.
+    """
     rows = db.execute_query(
         """
         SELECT summary_id::text, content
@@ -195,7 +204,7 @@ async def find_existing_summary_activity(
           AND period_type = :period_type
           AND period_start = :period_start
           AND period_end = :period_end
-        ORDER BY created_at
+        ORDER BY created_at DESC NULLS LAST, summary_id DESC
         LIMIT 1
         """,
         {
@@ -230,9 +239,20 @@ async def store_summary_activity(
     timezone: str,
 ) -> str:
     """
-    Store a summary in the database.
+    Store a summary in the database, one row per (user, type, window).
 
-    Returns the summary_id as a string.
+    Upsert, not insert. ``hourly_summary`` checks for an existing row before
+    doing any work, but a check followed by a bare INSERT is not atomic: the
+    :05 cron racing an operator's manual trigger, or two runner workers
+    draining a queued backfill, both saw no row and both wrote one. Migration
+    20260903162709 added the partial unique index this conflicts against
+    (``summaries_user_window_uniq``, every period_type except 'insight', which
+    stores one row per card over the same span on purpose), so the race now
+    converges on a single row and a forced regeneration overwrites the window
+    in place instead of minting a second answer for it.
+
+    Returns the summary_id as a string — the SURVIVING row's id, which for a
+    conflict is the id already on disk, not the one minted here.
     """
     logger.info("storing_summary", summary_type=summary_data.get("summary_type"))
 
@@ -265,10 +285,25 @@ async def store_summary_activity(
     embedding = summary_data.get("embedding", [])
     embedding_value = json.dumps(embedding) if embedding else None
 
-    # Insert
+    params = {
+        "summary_id": str(summary_id),
+        "user_id": str(user_uuid),
+        "period_start": start_dt,
+        "period_end": end_dt,
+        "period_type": summary_type,
+        "timezone": timezone,
+        "source_types": source_types,
+        "title": f"{summary_type.title()} Summary",
+        "content": json.dumps(content),
+        "embedding": embedding_value,
+        "seen": bool(summary_data.get("seen", False)),
+    }
+
+    # `seen` is deliberately NOT overwritten: a regenerated window keeps
+    # whatever read state the user already gave it.
     db.execute_write(
         """
-        INSERT INTO summaries (
+        INSERT INTO ci.summaries (
             summary_id, user_id, period_start, period_end, period_type,
             timezone, source_types, title, content, summary_embedding, seen, created_at, updated_at
         ) VALUES (
@@ -276,25 +311,43 @@ async def store_summary_activity(
             :timezone, :source_types, :title, CAST(:content AS jsonb),
             CASE WHEN :embedding IS NULL THEN NULL ELSE CAST(:embedding AS vector) END, :seen, NOW(), NOW()
         )
+        ON CONFLICT (user_id, period_type, period_start, period_end)
+            WHERE period_type <> 'insight'
+        DO UPDATE SET
+            timezone = EXCLUDED.timezone,
+            source_types = EXCLUDED.source_types,
+            title = EXCLUDED.title,
+            content = EXCLUDED.content,
+            summary_embedding = EXCLUDED.summary_embedding,
+            updated_at = NOW()
         """,
-        {
-            "summary_id": str(summary_id),
-            "user_id": str(user_uuid),
-            "period_start": start_dt,
-            "period_end": end_dt,
-            "period_type": summary_type,
-            "timezone": timezone,
-            "source_types": source_types,
-            "title": f"{summary_type.title()} Summary",
-            "content": json.dumps(content),
-            "embedding": embedding_value,
-            "seen": bool(summary_data.get("seen", False)),
-        },
+        params,
     )
 
-    logger.info("summary_stored", summary_id=str(summary_id), type=summary_type)
+    # Read the id back rather than trusting the one minted above: on conflict
+    # the row that survives is the one already on disk, and callers (and the
+    # feed rows keyed on it) must get that id, not an id nothing points at.
+    rows = db.execute_query(
+        """
+        SELECT summary_id::text
+        FROM ci.summaries
+        WHERE user_id = :user_id
+          AND period_type = :period_type
+          AND period_start = :period_start
+          AND period_end = :period_end
+        """,
+        {
+            "user_id": params["user_id"],
+            "period_type": params["period_type"],
+            "period_start": start_dt,
+            "period_end": end_dt,
+        },
+    )
+    stored_id = rows[0]["summary_id"] if rows else str(summary_id)
 
-    return str(summary_id)
+    logger.info("summary_stored", summary_id=stored_id, type=summary_type)
+
+    return stored_id
 
 
 async def fetch_child_summaries_activity(

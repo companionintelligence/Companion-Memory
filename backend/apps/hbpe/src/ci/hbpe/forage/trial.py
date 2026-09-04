@@ -126,18 +126,20 @@ class ForageTrial:
         rows = []
         for gaze, item in enumerate(self.items):
             scored = self.score_gaze(gaze)
-            rows.append({
-                "gaze": gaze,
-                "id": item.id,
-                "label": item.label,
-                "provenance": item.id,
-                "source": item.source,
-                "read": gaze not in self.unread,
-                "G": float(scored["G"]),
-                "epistemic": float(scored["epistemic"]),
-                "risk": float(scored["risk"]),
-                "ambiguity": float(scored["ambiguity"]),
-            })
+            rows.append(
+                {
+                    "gaze": gaze,
+                    "id": item.id,
+                    "label": item.label,
+                    "provenance": item.id,
+                    "source": item.source,
+                    "read": gaze not in self.unread,
+                    "G": float(scored["G"]),
+                    "epistemic": float(scored["epistemic"]),
+                    "risk": float(scored["risk"]),
+                    "ambiguity": float(scored["ambiguity"]),
+                }
+            )
         rows.sort(key=lambda row: row["G"])
         return rows
 
@@ -211,10 +213,16 @@ class ForageTrial:
 
     def ingest(self, spec_items: list[dict]) -> int:
         """Append unread facts the indexes just returned. Does not rewind Q."""
-        incoming = [row for row in spec_items if row.get("id") and not any(item.id == row["id"] for item in self.items)]
+        incoming = [
+            row
+            for row in spec_items
+            if row.get("id") and not any(item.id == row["id"] for item in self.items)
+        ]
         if not incoming:
             return 0
-        extra, extra_A = likelihoods_from_items(incoming, self.cues, self.branches, self.people)
+        extra, extra_A = likelihoods_from_items(
+            incoming, self.cues, self.branches, self.people
+        )
         start = len(self.items)
         self.model.append_gaze(len(extra))
         self.model.A[:, :, :, start:] = extra_A
@@ -241,7 +249,9 @@ class ForageTrial:
     def permutations(self, name: str) -> dict[str, float]:
         idx = self._require_branch(name)
         cond = texture_given_branch(self.belief, idx)
-        return {person: float(mass) for person, mass in zip(self.people, cond)}
+        return {
+            person: float(mass) for person, mass in zip(self.people, cond, strict=True)
+        }
 
     def interests_for(self, name: str) -> dict[str, list[str]]:
         self._require_branch(name)
@@ -257,11 +267,13 @@ class ForageTrial:
             delta = rec.branch_delta.get(name, 0.0)
             if abs(delta) < 1e-9:
                 continue
-            rows.append({
-                "item_id": rec.item_id,
-                "cue": rec.cue,
-                "delta_mass": delta,
-            })
+            rows.append(
+                {
+                    "item_id": rec.item_id,
+                    "cue": rec.cue,
+                    "delta_mass": delta,
+                }
+            )
         return rows
 
     def expect(self, name: str) -> dict:
@@ -278,9 +290,13 @@ class ForageTrial:
         top = [self.cues[i] for i in np.argsort(-predicted)[:5]]
         return {
             "branch": name,
-            "permutations": {person: float(m) for person, m in zip(self.people, cond)},
+            "permutations": {
+                person: float(m) for person, m in zip(self.people, cond, strict=True)
+            },
             "interests": self.interests_for(name),
-            "predicted_cues": {cue: float(p) for cue, p in zip(self.cues, predicted)},
+            "predicted_cues": {
+                cue: float(p) for cue, p in zip(self.cues, predicted, strict=True)
+            },
             "top_cues": top,
         }
 
@@ -304,7 +320,9 @@ class ForageTrial:
             "branch": branch,
             "texture": texture,
             "texture_mass": texture_mass,
-            "branch_mass": {name: float(m) for name, m in zip(self.branches, mass)},
+            "branch_mass": {
+                name: float(m) for name, m in zip(self.branches, mass, strict=True)
+            },
             "permutations": self.permutations(branch) if branch else None,
             "entropy_branch": entropy(mass),
             "pin": self.pin,
@@ -376,12 +394,14 @@ class ForageTrial:
             F_now = variational_free_energy(prior.ravel(), like, prior.ravel())["F"]
             fictive = infer_joint(cue_i, A_g, prior)
             F_after = variational_free_energy(fictive.ravel(), like, prior.ravel())["F"]
-            ranked.append({
-                "gaze": gaze,
-                "item_id": self.items[gaze].id,
-                "would_show": self.cues[cue_i],
-                "delta_F": F_now - F_after,
-            })
+            ranked.append(
+                {
+                    "gaze": gaze,
+                    "item_id": self.items[gaze].id,
+                    "would_show": self.cues[cue_i],
+                    "delta_F": F_now - F_after,
+                }
+            )
         ranked.sort(key=lambda row: row["delta_F"], reverse=True)
         return ranked
 
@@ -393,33 +413,48 @@ class ForageTrial:
         mass = self.qs_branch
         future_unknowns = []
         if entropy(mass) > np.log(len(self.branches)) * 0.5:
-            future_unknowns.append({
-                "id": "branch",
-                "question": "which Saturday branch",
-                "mass": {name: float(m) for name, m in zip(self.branches, mass)},
-            })
+            future_unknowns.append(
+                {
+                    "id": "branch",
+                    "question": "which Saturday branch",
+                    "mass": {
+                        name: float(m)
+                        for name, m in zip(self.branches, mass, strict=True)
+                    },
+                }
+            )
         for i, name in enumerate(self.branches):
             if self.is_past(name):
                 continue
             cond = texture_given_branch(self.belief, i)
             if entropy(cond) > np.log(len(self.people)) * 0.5:
-                future_unknowns.append({
-                    "id": f"texture|{name}",
-                    "question": f"who under {name}",
-                    "mass": {person: float(m) for person, m in zip(self.people, cond)},
-                })
+                future_unknowns.append(
+                    {
+                        "id": f"texture|{name}",
+                        "question": f"who under {name}",
+                        "mass": {
+                            person: float(m)
+                            for person, m in zip(self.people, cond, strict=True)
+                        },
+                    }
+                )
         refused = [
-            row for row in self.attention()
+            row
+            for row in self.attention()
             if (not row["read"]) and row["epistemic"] < REFUSED_EPISTEMIC
         ]
         return {
             "question": self.question,
-            "C": {cue: float(p) for cue, p in zip(self.cues, self.model.C)},
+            "C": {
+                cue: float(p) for cue, p in zip(self.cues, self.model.C, strict=True)
+            },
             "pin": self.pin,
             "past_branches": sorted(self.past_branches()),
             "future_unknowns": future_unknowns,
             "used": [rec.item_id for rec in self.log],
-            "refused": [{"id": row["id"], "epistemic": row["epistemic"]} for row in refused],
+            "refused": [
+                {"id": row["id"], "epistemic": row["epistemic"]} for row in refused
+            ],
             "factors": {"branch": list(self.branches), "texture": list(self.people)},
         }
 
@@ -450,7 +485,11 @@ class ForageTrial:
         """One payload the Forecast panel can render without a second round-trip."""
         picked = self.pick()
         mass = picked["branch_mass"]
-        permutation_branch = self.pin or picked["branch"] or self.branches[int(np.argmax(self.qs_branch))]
+        permutation_branch = (
+            self.pin
+            or picked["branch"]
+            or self.branches[int(np.argmax(self.qs_branch))]
+        )
         perms = self.permutations(permutation_branch)
         return {
             "question": self.question,
@@ -470,11 +509,15 @@ class ForageTrial:
                     "ready": picked["branch"] == name,
                     "past": self.is_past(name),
                     "pinned": self.pin == name,
-                    "top_texture": max(self.permutations(name), key=self.permutations(name).get),
+                    "top_texture": max(
+                        self.permutations(name), key=self.permutations(name).get
+                    ),
                 }
                 for name in self.branches
             ],
-            "permutations": [{"label": person, "mass": value} for person, value in perms.items()],
+            "permutations": [
+                {"label": person, "mass": value} for person, value in perms.items()
+            ],
             "interests": self.interests_for(permutation_branch),
             "attention": self.attention(),
             "reads": [

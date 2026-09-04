@@ -30,6 +30,16 @@ vi.mock('@/common/feature', () => ({
   }),
 }));
 
+// PlanPage renders Task, which mounts ChatWithAgentMenu (needs Auth + harness
+// providers). Page tests do not exercise that menu — stub it like Task.test.
+vi.mock('@/components/ChatWithAgent', () => ({
+  ChatWithAgentMenu: () => null,
+}));
+
+vi.mock('@/components/ChatWithAgent/AgentActionItems', () => ({
+  AgentActionItems: () => null,
+}));
+
 const COMPLETE_TASK = gql(`
   mutation CompleteTask($id: ID!) {
     completeTask(id: $id) {

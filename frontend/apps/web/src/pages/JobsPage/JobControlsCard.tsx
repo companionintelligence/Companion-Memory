@@ -5,12 +5,7 @@ import { AlertTriangle, Lock } from '@ci/shadcn/icons';
 
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
 import { categoryDot, categoryLabel, CATEGORY_LABELS } from './jobCategories';
-import type {
-  JobControlsPatch,
-  JobControlsResponse,
-  JobMode,
-  JobQueueControl,
-} from './useJobControls';
+import type { JobControlsPatch, JobControlsResponse, JobMode, JobQueueControl } from './useJobControls';
 
 /**
  * The operator's controls over the job system.
@@ -143,7 +138,6 @@ export function JobControlsCard({
                     </div>
                   </Accordion.Content>
                 </Accordion.Item>
-
               </Accordion>
             </>
           )}

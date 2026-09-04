@@ -402,9 +402,7 @@ function useEntityService({
         // fetchMore — record it ourselves so callers guarding on `error`
         // (auto-paging effects, the Retry affordance) actually see the
         // failure instead of looping on the same cursor forever.
-        setLoadMoreError(
-          rejection instanceof Error ? rejection : new Error('Failed to load more results'),
-        );
+        setLoadMoreError(rejection instanceof Error ? rejection : new Error('Failed to load more results'));
       })
       .finally(() => setLoadingMore(false));
   }, [fetchMore, hasNextPage, loadingMore, pageInfo?.endCursor]);

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime
 
 from ci.hbpe.buckets import BUCKET_MINUTES, MAX_BUCKET_INDEX, SUMMARY_BUCKETS_PER_HOUR
@@ -34,7 +35,12 @@ SUMMARY_SOFT_PROB = 0.7
 class SummaryTokenizer:
     """Labels hourly summaries and provides token records for the token stream."""
 
-    def label_day(self, user_id: str, date_str: str) -> int:
+    def label_day(
+        self,
+        user_id: str,
+        date_str: str,
+        should_continue: Callable[[], bool] | None = None,
+    ) -> int:
         """
         Label all unlabeled hourly summaries for user+date via Qwen.
 
@@ -45,19 +51,74 @@ class SummaryTokenizer:
         from ci.hbpe.data_client import get_unlabeled_summaries
 
         unlabeled = get_unlabeled_summaries(user_id, date_str)
-        return self._label_rows(user_id, unlabeled, f"date={date_str}")
+        return self._label_rows(
+            user_id, unlabeled, f"date={date_str}", should_continue=should_continue
+        )
 
-    def label_range(self, user_id: str, start_date: str, end_date: str) -> int:
+    def label_range(
+        self,
+        user_id: str,
+        start_date: str,
+        end_date: str,
+        should_continue: Callable[[], bool] | None = None,
+    ) -> int:
         """Label all unlabeled hourly summaries in an inclusive date range."""
         from ci.hbpe.data_client import get_unlabeled_summaries_in_range
 
         unlabeled = get_unlabeled_summaries_in_range(user_id, start_date, end_date)
         return self._label_rows(
-            user_id, unlabeled, f"start={start_date} end={end_date}"
+            user_id,
+            unlabeled,
+            f"start={start_date} end={end_date}",
+            should_continue=should_continue,
         )
 
-    def _label_rows(self, user_id: str, unlabeled: list[dict], scope: str) -> int:
-        """Run the shared L0/L1 classifier and persist labels for supplied rows."""
+    def label_days(
+        self,
+        user_id: str,
+        dates: list[str],
+        should_continue: Callable[[], bool] | None = None,
+    ) -> int:
+        """
+        Label all unlabeled hourly summaries on an explicit set of days.
+
+        The serialize day list is not contiguous on a bimodal corpus (imported
+        events two years old, hourly summaries still landing today), so a
+        ``label_range`` spanning it would fetch — and pay two Qwen calls for —
+        every summary in the two-year gap, none of which serialize will ever
+        publish.  One read, exactly the days that will be serialized.
+        """
+        from ci.hbpe.data_client import get_unlabeled_summaries_on_days
+
+        if not dates:
+            return 0
+        unlabeled = get_unlabeled_summaries_on_days(user_id, dates)
+        return self._label_rows(
+            user_id,
+            unlabeled,
+            f"days={len(dates)} first={dates[0]} last={dates[-1]}",
+            should_continue=should_continue,
+        )
+
+    def _label_rows(
+        self,
+        user_id: str,
+        unlabeled: list[dict],
+        scope: str,
+        should_continue: Callable[[], bool] | None = None,
+    ) -> int:
+        """
+        Run the shared L0/L1 classifier and persist labels for supplied rows.
+
+        ``should_continue`` is polled before every row.  This batch used to be
+        one day (≤24 summaries); it is now the whole serialize day list, up to
+        ~2,160 summaries at two Qwen calls each — Stage 1 L0 and Stage 2 L1 —
+        so a cancelled nightly that could not interrupt it would zombie-run
+        ~4,300 model calls on the single-flight inference executor, blocking
+        every other user's night behind it.  Stopping mid-batch is safe because
+        each label is committed on its own row: the next run picks up exactly
+        the summaries this one did not reach.
+        """
         if not unlabeled:
             return 0
 
@@ -83,7 +144,11 @@ class SummaryTokenizer:
         }
 
         labeled = 0
+        stopped = False
         for row in unlabeled:
+            if should_continue is not None and not should_continue():
+                stopped = True
+                break
             try:
                 summary_text = _extract_summary_text(row["content"])
                 if not summary_text:
@@ -133,11 +198,12 @@ class SummaryTokenizer:
                 )
 
         log.info(
-            "SummaryTokenizer: labeled %d/%d summaries (user=%s %s)",
+            "SummaryTokenizer: labeled %d/%d summaries (user=%s %s)%s",
             labeled,
             len(unlabeled),
             user_id,
             scope,
+            " [cancelled]" if stopped else "",
         )
         return labeled
 

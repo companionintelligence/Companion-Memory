@@ -31,7 +31,7 @@ class MemoryAdapter(ABC):
     def ingest(self, text: str, session_id: str) -> None:
         """Store one memory fragment from ``session_id``."""
 
-    def flush(self) -> None:
+    def flush(self) -> None:  # noqa: B027 — optional override; sync adapters need no-op
         """Block until ingested fragments are searchable. Default is a no-op."""
 
     @abstractmethod

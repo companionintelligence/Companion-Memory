@@ -30,16 +30,10 @@ export function useChatAboutActions(context: AgentChatContext) {
     () => harnesses.filter((harness) => harness.installed || harness.connectedToMemory),
     [harnesses],
   );
-  const chatableHarnesses = useMemo(
-    () => installedHarnesses.filter(isChatableHarness),
-    [installedHarnesses],
-  );
+  const chatableHarnesses = useMemo(() => installedHarnesses.filter(isChatableHarness), [installedHarnesses]);
   // Always take OpenClaw from the full list — the API returns it even when
   // not installed, so Dispatch can toast a real reason instead of vanishing.
-  const openclaw = useMemo(
-    () => harnesses.find((harness) => harness.id === 'openclaw') ?? null,
-    [harnesses],
-  );
+  const openclaw = useMemo(() => harnesses.find((harness) => harness.id === 'openclaw') ?? null, [harnesses]);
 
   const chatHere = useCallback(() => {
     openInAppChat(navigate, context);
@@ -63,20 +57,20 @@ export function useChatAboutActions(context: AgentChatContext) {
   const dispatchToOpenClaw = useCallback(async () => {
     if (!authToken) {
       toast.error('Sign in to Dispatch to OpenClaw.');
+
       return;
     }
 
     if (!openclaw) {
       toast.error('OpenClaw is not available on this Hub.');
+
       return;
     }
 
     if (!openclaw.dispatchReady) {
       const action = dispatchNotReadyAction(openclaw);
-      toast.error(
-        dispatchNotReadyMessage(openclaw.dispatchBlocker),
-        action ? { action } : undefined,
-      );
+      toast.error(dispatchNotReadyMessage(openclaw.dispatchBlocker), action ? { action } : undefined);
+
       return;
     }
 

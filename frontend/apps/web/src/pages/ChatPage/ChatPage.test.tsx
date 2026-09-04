@@ -62,6 +62,7 @@ vi.mock('@/hooks', async (importOriginal) => {
 
   return {
     ...actual,
+    useAuth: () => [{ authToken: 'test-token', authenticated: true }, {}],
     useChatRequester: () => [
       { stream: null, loading: false, error: null, streaming: false, hasStartedReceiving: null },
       { submit: h.submit, attach: h.attach, detach: h.detach, stop: h.stop, cancel: h.cancel },

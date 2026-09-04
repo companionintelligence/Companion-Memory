@@ -571,6 +571,32 @@ function topCounts(counts: Map<string, number>, limit: number, label: string): R
     .map(([name, count]) => ({ [label]: name, count }));
 }
 
+/**
+ * Health-card Clear — drop terminal rows from the live corpus so the next
+ * dashboard poll matches what the appliance would show after `POST /jobs/clear`.
+ */
+function clearTerminalJobs(body: unknown): Record<string, unknown> {
+  const scope =
+    body && typeof body === 'object' && 'scope' in body && typeof (body as { scope: unknown }).scope === 'string'
+      ? (body as { scope: string }).scope
+      : null;
+
+  if (scope !== 'dead-letter' && scope !== 'failed') {
+    throw new Error(`clearTerminalJobs: scope must be dead-letter or failed (got ${String(scope)})`);
+  }
+
+  const current = getCorpus();
+  const before = current.jobs.length;
+  const nextJobs =
+    scope === 'dead-letter'
+      ? current.jobs.filter((row) => row.name !== DEAD_LETTER_QUEUE)
+      : current.jobs.filter((row) => !(row.state === 'failed' && row.name !== DEAD_LETTER_QUEUE));
+
+  corpus = { ...current, jobs: nextJobs };
+
+  return { scope, deleted: before - nextJobs.length };
+}
+
 function dashboard(now: number): Record<string, unknown> {
   const { jobs, archive } = getCorpus();
 
@@ -846,6 +872,11 @@ export function jobsPreviewApi(): Plugin {
 
             case 'POST /api/pipeline/dead-letters/replay':
               send(res, 200, replayDeadLetters(await readBody(req)));
+
+              return;
+
+            case 'POST /api/jobs/clear':
+              send(res, 200, clearTerminalJobs(await readBody(req)));
 
               return;
 

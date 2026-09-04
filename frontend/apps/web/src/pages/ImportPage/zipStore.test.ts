@@ -302,7 +302,15 @@ function readZip64CentralEntries(bytes: Uint8Array, dirOffset: number, dirSize: 
       extraAt += 4 + dataSize;
     }
 
-    entries.push({ name, crc32: view.getUint32(at + 16, true), rawSize, rawOffset, size, offset, versionNeeded });
+    entries.push({
+      name,
+      crc32: view.getUint32(at + 16, true),
+      rawSize,
+      rawOffset,
+      size,
+      offset,
+      versionNeeded,
+    });
     at += 46 + nameLength + extraLength;
   }
 
