@@ -509,6 +509,50 @@ def get_unlabeled_summaries_in_range(
             return [dict(row) for row in cur.fetchall()]
 
 
+def get_unlabeled_summaries_on_days(user_id: str, dates: list[str]) -> list[dict]:
+    """
+    Return unlabeled hourly summaries falling on an explicit set of days.
+
+    The serialize day list is days-with-data, so it is not contiguous: an
+    archival corpus whose events stop in 2024 still writes hourly summaries
+    today, and the two clusters sit two years apart.  Selecting them with a
+    range would drag in every summary in the gap.
+
+    The array match is paired with a MIN/MAX range predicate even though it
+    subsumes it.  ``period_start::date = ANY(...)`` is not sargable — on its own
+    it forces a full scan of the user's hourly summaries — so the range gives
+    the planner an index-usable bound and the array does the exact selection.
+    """
+    if not dates:
+        return []
+
+    days = sorted({date.fromisoformat(d) for d in dates})
+
+    sql = """
+        SELECT s.summary_id::text, s.period_start, s.content
+        FROM ci.summaries s
+        LEFT JOIN hbpe.summary_l1_label label
+          ON label.summary_id = s.summary_id
+        WHERE s.user_id = %s::uuid
+          AND s.period_type = 'hourly'
+          AND s.period_start >= %s::date
+          AND s.period_start < (%s::date + INTERVAL '1 day')
+          AND s.period_start::date = ANY(%s::date[])
+          AND label.summary_id IS NULL
+        ORDER BY s.period_start
+    """
+    params = (
+        str(user_id),
+        days[0].isoformat(),
+        days[-1].isoformat(),
+        [d.isoformat() for d in days],
+    )
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            return [dict(row) for row in cur.fetchall()]
+
+
 def get_labeled_summaries(user_id: str, date_str: str) -> list[dict]:
     """
     Return hourly summaries that have a hbpe.summary_l1_label entry.

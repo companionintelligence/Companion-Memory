@@ -4,7 +4,11 @@ import { Args, ID, Mutation, Parent, Query, Resolver, ResolveField } from '@nest
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
-import { CommunicationService, CommunicationType as CommunicationTypeEnum, adoptIngestIdentity } from '@ci/domains/memory';
+import {
+  CommunicationService,
+  CommunicationType as CommunicationTypeEnum,
+  adoptIngestIdentity,
+} from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
 import { AttachmentFileLoader } from '../loaders/AttachmentFileLoader';

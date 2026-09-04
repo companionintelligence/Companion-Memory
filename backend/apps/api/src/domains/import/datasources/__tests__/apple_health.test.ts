@@ -51,12 +51,14 @@ describe('Apple Health datasource', () => {
       log: () => {},
     } as unknown as ImportParams);
 
-    // 3 records + 1 workout + 1 activity summary
+    // 2 health records + 1 sleep + 1 workout + 1 activity summary
     expect(pipeline.length).toBe(5);
 
-    const records = pipeline.filter((p) => p.item.classification === 'health');
+    const health = pipeline.filter((p) => p.item.classification === 'health');
+    const sleep = pipeline.filter((p) => p.item.classification === 'sleep');
     const workouts = pipeline.filter((p) => p.item.classification === 'workout');
-    expect(records.length).toBe(4); // 3 records + 1 activity summary
+    expect(health.length).toBe(3); // steps + heart rate + activity summary
+    expect(sleep.length).toBe(1); // SleepAnalysis is its own classification
     expect(workouts.length).toBe(1);
   });
 

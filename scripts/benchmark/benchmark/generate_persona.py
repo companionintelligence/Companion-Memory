@@ -21,13 +21,13 @@ import json
 import random
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from .schema import validate_persona
 
 # A small library of plausible-but-uninformative messages. They should be
 # semantically distant from any persona fact so they reliably act as noise.
-_NOISE_TEMPLATES: List[str] = [
+_NOISE_TEMPLATES: list[str] = [
     "Watched a documentary about deep-sea hydrothermal vents last night.",
     "Saw the new ramen place got a long line out the door again today.",
     "Restocked on coffee beans this morning — switched to a different roast.",
@@ -55,13 +55,13 @@ _POSITIONS = ("append", "prepend", "interleave")
 
 
 def generate(
-    base: Dict[str, Any],
+    base: dict[str, Any],
     *,
     noise_sessions: int = 0,
     messages_per_noise_session: int = 3,
     seed: int = 0,
     position: str = "append",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return a new persona dict with ``noise_sessions`` extra sessions injected.
 
     Deterministic for a fixed ``seed`` so a run is reproducible. The original
@@ -86,7 +86,7 @@ def generate(
     rng = random.Random(seed)
     existing_ids = {s["id"] for s in persona["sessions"]}
     next_idx = 1
-    noise: list[Dict[str, Any]] = []
+    noise: list[dict[str, Any]] = []
     for _ in range(noise_sessions):
         while f"noise_{next_idx}" in existing_ids:
             next_idx += 1
@@ -126,12 +126,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=_POSITIONS,
         default="append",
         help="where noise lands relative to originals (append stresses recency bias, "
-             "prepend stresses primacy bias, interleave gives uniform dilution)",
+        "prepend stresses primacy bias, interleave gives uniform dilution)",
     )
     p.add_argument("--out", type=Path, required=True, help="output JSON path")
     args = p.parse_args(argv)
 
-    with open(args.base, "r", encoding="utf-8") as fh:
+    with open(args.base, encoding="utf-8") as fh:
         base = json.load(fh)
 
     persona = generate(

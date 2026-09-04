@@ -7,7 +7,6 @@ import { LoggerService } from '@ci/common/logging';
 import type { ConsumptionStore } from './ConsumptionStore';
 import { checkSlidingWindow, type RateLimitDecision } from './slidingWindow';
 
-
 /**
  * Postgres-backed {@link ConsumptionStore} — the one that actually closes G8.
  *

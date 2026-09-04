@@ -363,17 +363,34 @@ describe('QuestionService privacy scoping (is_private_to)', () => {
   });
 
   describe('findByIds', () => {
-    it('filters out ids private to another user while keeping public and own-private ids, deduped', async () => {
+    // The caller is a DataLoader, which pairs a batch result with its keys by
+    // POSITION: an id private to another user has to come back as a HOLE at its
+    // own index, not be filtered out. Dropping it shifts every later answer
+    // onto its neighbour's question.
+    it('returns one entry per requested id, in id order, with null for an id private to another user', async () => {
       const { service } = makeScopedService([
         makeQuestion('public-1'),
         makeQuestion('mine-1', { isPrivateTo: USER }),
         makeQuestion('theirs-1', { isPrivateTo: OTHER_USER }),
       ]);
 
-      const result = await service.findByIds(CONTEXT, ['public-1', 'mine-1', 'theirs-1']);
-      const ids = result.map((q) => q.id).sort();
+      const result = await service.findByIds(CONTEXT, ['theirs-1', 'public-1', 'unknown-1', 'mine-1']);
 
-      expect(ids).toEqual(['mine-1', 'public-1']);
+      expect(result.map((question) => question?.id ?? null)).toEqual([null, 'public-1', null, 'mine-1']);
+    });
+
+    it('returns each id once even when the public and own-private arms both match', async () => {
+      const { service } = makeScopedService([makeQuestion('public-1')]);
+
+      const result = await service.findByIds(CONTEXT, ['public-1', 'public-1']);
+
+      expect(result.map((question) => question?.id ?? null)).toEqual(['public-1', 'public-1']);
+    });
+
+    it('does not query at all for an empty batch', async () => {
+      const { service } = makeScopedService([makeQuestion('public-1')]);
+
+      await expect(service.findByIds(CONTEXT, [])).resolves.toEqual([]);
     });
   });
 

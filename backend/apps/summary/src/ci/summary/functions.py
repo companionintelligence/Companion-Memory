@@ -5,10 +5,12 @@ These are the former Temporal workflow bodies as plain async functions. The
 NestJS API schedules them through pg-boss and dispatches each run to
 ``POST /functions/run`` (see runner.py); the manual API endpoints call them
 directly. Hourly summaries first reuse an existing exact-window row so retries
-and bounded recovery do not duplicate that stream. Insight cards are appended
-one at a time so a later failure preserves completed work.
+and bounded recovery do not duplicate that stream, unless ``force`` is set to
+repair a window that was summarized from partial data. Insight cards are
+appended one at a time so a later failure preserves completed work.
 """
 
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -54,6 +56,98 @@ MAX_INSIGHTS_PER_RUN = 5
 # surface bounded so one typo cannot enqueue days or months of generation.
 MAX_HOURLY_BACKFILL_HOURS = 24
 
+# In-flight/recent hourly backfill progress, keyed by backfill_id. A 24-hour
+# backfill is up to 24 full LLM summaries plus embeddings — tens of minutes to
+# hours — so the operator who started it needs to see which windows have landed
+# WHILE it runs. It used to run inline in the manual-trigger request, which any
+# proxy times out long before the last hour finishes, leaving no result and no
+# way to tell what got written. Bounded, because a long-lived process would
+# otherwise accumulate one record per backfill forever.
+MAX_BACKFILL_RECORDS = 50
+_backfill_progress: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+
+def backfill_progress(backfill_id: str) -> dict[str, Any] | None:
+    """Return the progress record for a backfill, or None if unknown/evicted."""
+    return _backfill_progress.get(backfill_id)
+
+
+def backfill_key(user_id: str, start_time: str, end_time: str, force: bool) -> str:
+    """Identity of the WORK a backfill does, independent of its backfill_id."""
+    return f"{user_id}|{start_time}|{end_time}|{int(force)}"
+
+
+def active_backfill(
+    user_id: str, start_time: str, end_time: str, force: bool
+) -> dict[str, Any] | None:
+    """
+    The queued-or-running record for exactly this work, if there is one.
+
+    Every pg-boss caller of this target dedupes with a singletonKey; the
+    in-process runner has no equivalent, so an operator who submits the same
+    range twice queues two identical runs and burns up to 48 LLM summaries to
+    produce one answer. The unique window index stops the duplicate ROW, not
+    the duplicate WORK. Newest first: the most recent record for a key is the
+    one still moving.
+    """
+    key = backfill_key(user_id, start_time, end_time, force)
+    for record in reversed(_backfill_progress.values()):
+        if record.get("key") == key and record.get("status") in ("queued", "running"):
+            return record
+    return None
+
+
+def queue_backfill(
+    backfill_id: str,
+    user_id: str,
+    plan: list[tuple[str, str]],
+    force: bool,
+) -> dict[str, Any]:
+    """
+    Publish the record for a backfill that has been accepted but not started.
+
+    The 202 hands the caller a progress_url it is expected to poll immediately.
+    FUNCTION_RUNNER_CONCURRENCY defaults to 2 and every other summary job on
+    that pool is a minutes-long LLM call, so the wait for a worker is minutes —
+    and a record written only once the function body ran answered 404 for all
+    of it, telling the operator their healthy queued backfill never existed.
+    """
+    record = _backfill_record(
+        backfill_id, user_id, plan, force, status="queued", windows=[]
+    )
+    _remember_backfill(backfill_id, record)
+    return record
+
+
+def _backfill_record(
+    backfill_id: str | None,
+    user_id: str,
+    plan: list[tuple[str, str]],
+    force: bool,
+    status: str,
+    windows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "backfill_id": backfill_id,
+        "user_id": user_id,
+        "key": backfill_key(user_id, plan[0][0], plan[-1][1], force),
+        "start_time": plan[0][0],
+        "end_time": plan[-1][1],
+        "hours": len(plan),
+        "forced": force,
+        "status": status,
+        "completed": 0,
+        "generated": 0,
+        "skipped": 0,
+        "windows": windows,
+    }
+
+
+def _remember_backfill(backfill_id: str, record: dict[str, Any]) -> None:
+    _backfill_progress[backfill_id] = record
+    while len(_backfill_progress) > MAX_BACKFILL_RECORDS:
+        _backfill_progress.popitem(last=False)
+
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
@@ -73,9 +167,27 @@ async def hourly_summary(
     start_time: str | None = None,
     end_time: str | None = None,
     timezone: str = "UTC",
+    force: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
-    """Generate the hourly summary; defaults to the previous full UTC hour."""
+    """
+    Generate the hourly summary; defaults to the previous full UTC hour.
+
+    ``force`` bypasses the existing-row check. Without it the only recovery
+    path is filling gaps: an hour summarized before an import batch finished
+    landing stays wrong forever, because the thin row it produced satisfies the
+    exact-window match. The regenerated summary overwrites that row rather than
+    adding a second one — see store_summary_activity and the unique index it
+    conflicts against.
+
+    Every branch reports ``forced``. hourly_summary_backfill spreads this dict
+    verbatim into each entry of the progress record's ``windows`` list, so a
+    key present on only some branches is a KeyError for the operator reading
+    the run — and ``forced`` used to be missing from exactly the
+    already-summarized windows a forced run exists to repair. ``skipped`` is
+    the one deliberate exception: like the rollups, it signals by presence, so
+    callers read it with ``.get``.
+    """
     if end_time is None:
         end_dt = _utcnow().replace(minute=0, second=0, microsecond=0)
     else:
@@ -85,11 +197,17 @@ async def hourly_summary(
     start_iso, end_iso = start_dt.isoformat(), end_dt.isoformat()
 
     logger.info(
-        "hourly_summary_started", user_id=user_id[:8], start=start_iso, end=end_iso
+        "hourly_summary_started",
+        user_id=user_id[:8],
+        start=start_iso,
+        end=end_iso,
+        force=force,
     )
 
-    existing = await find_existing_summary_activity(
-        user_id, "hourly", start_iso, end_iso
+    existing = (
+        None
+        if force
+        else await find_existing_summary_activity(user_id, "hourly", start_iso, end_iso)
     )
     if existing:
         content = existing.get("content", {})
@@ -105,6 +223,7 @@ async def hourly_summary(
             "summary_id": existing["summary_id"],
             "summary_type": "hourly",
             "skipped": "already_exists",
+            "forced": force,
             "summary_text": content.get("summary_text", ""),
             "key_insights": content.get("key_insights", []),
             "activity_counts": content.get("activity_counts", {}),
@@ -130,6 +249,7 @@ async def hourly_summary(
             "summary_id": None,
             "summary_type": "hourly",
             "skipped": "no_activity",
+            "forced": force,
             "summary_text": "Nothing new.",
             "key_insights": [],
             "activity_counts": activity_counts,
@@ -146,6 +266,7 @@ async def hourly_summary(
     return {
         "summary_id": summary_id,
         "summary_type": "hourly",
+        "forced": force,
         "summary_text": summary_data.get("summary_text", ""),
         "key_insights": summary_data.get("key_insights", []),
         "activity_counts": summary_data.get("activity_counts", {}),
@@ -153,14 +274,17 @@ async def hourly_summary(
     }
 
 
-async def hourly_summary_backfill(
-    user_id: str,
-    start_time: str,
-    end_time: str,
-    timezone: str = "UTC",
-    **_: Any,
-) -> dict[str, Any]:
-    """Generate missing hourly summaries over an explicit bounded range."""
+def plan_hourly_backfill(start_time: str, end_time: str) -> list[tuple[str, str]]:
+    """
+    Validate an hourly backfill range and return its one-hour windows.
+
+    Split out of ``hourly_summary_backfill`` so the manual endpoint can reject
+    a bad range with a 400 *before* accepting the run — once the work is handed
+    to the runner, a ValueError is a failed background job the caller has to go
+    looking for, not an answer to their request. The function still calls this
+    itself, because pg-boss dispatch reaches it without going through the
+    endpoint.
+    """
     start_dt = _parse_iso(start_time)
     end_dt = _parse_iso(end_time)
 
@@ -182,33 +306,96 @@ async def hourly_summary_backfill(
             f"hourly backfill is limited to {MAX_HOURLY_BACKFILL_HOURS} hours"
         )
 
-    windows: list[dict[str, Any]] = []
+    plan: list[tuple[str, str]] = []
     cursor = start_dt
     while cursor < end_dt:
         window_end = cursor + timedelta(hours=1)
-        result = await hourly_summary(
-            user_id,
-            start_time=cursor.isoformat(),
-            end_time=window_end.isoformat(),
-            timezone=timezone,
-        )
-        windows.append(
-            {
-                "start_time": cursor.isoformat(),
-                "end_time": window_end.isoformat(),
-                **result,
-            }
-        )
+        plan.append((cursor.isoformat(), window_end.isoformat()))
         cursor = window_end
 
-    skipped = sum(1 for window in windows if window.get("skipped"))
+    return plan
+
+
+async def hourly_summary_backfill(
+    user_id: str,
+    start_time: str,
+    end_time: str,
+    timezone: str = "UTC",
+    force: bool = False,
+    backfill_id: str | None = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """
+    Generate hourly summaries over an explicit bounded range.
+
+    Registered in FUNCTIONS so it can be dispatched to the runner's worker pool
+    instead of occupying an HTTP request for the length of up to 24 LLM calls.
+    When ``backfill_id`` is supplied each finished window is published to the
+    progress record that ``GET /summary/backfill/{id}`` serves, so a caller who
+    was handed a 202 can watch the hours land. The endpoint publishes that
+    record as ``queued`` before submitting, so this takes over an existing one
+    rather than minting a second record on the same id.
+
+    ``force`` regenerates windows that already have a summary — the only way to
+    repair an hour that was summarized before its import batch finished.
+    """
+    plan = plan_hourly_backfill(start_time, end_time)
+
+    windows: list[dict[str, Any]] = []
+    # Take over the record the endpoint published at accept time when there is
+    # one: replacing it would reset the id the caller is already polling, and
+    # would drop the run_id the 202 pointed them at.
+    record = _backfill_progress.get(backfill_id) if backfill_id else None
+    if record is None:
+        record = _backfill_record(
+            backfill_id, user_id, plan, force, status="running", windows=windows
+        )
+        if backfill_id:
+            _remember_backfill(backfill_id, record)
+    else:
+        record["windows"] = windows
+    record["status"] = "running"
+
+    try:
+        for window_start, window_end in plan:
+            result = await hourly_summary(
+                user_id,
+                start_time=window_start,
+                end_time=window_end,
+                timezone=timezone,
+                force=force,
+            )
+            windows.append(
+                {
+                    "start_time": window_start,
+                    "end_time": window_end,
+                    **result,
+                }
+            )
+            # Update in place after every window, not at the end: the whole
+            # point of the record is answering "which hours landed?" while the
+            # run is still going.
+            record["completed"] = len(windows)
+            record["skipped"] = sum(1 for w in windows if w.get("skipped"))
+            record["generated"] = len(windows) - record["skipped"]
+    except Exception as exc:
+        # Leave the partial progress visible; a backfill that died on hour 9 of
+        # 24 still wrote eight hours, and the operator needs to know which.
+        record["status"] = "failed"
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        raise
+
+    record["status"] = "completed"
+
     return {
         "user_id": user_id,
-        "start_time": start_dt.isoformat(),
-        "end_time": end_dt.isoformat(),
-        "hours": len(windows),
-        "generated": len(windows) - skipped,
-        "skipped": skipped,
+        "backfill_id": backfill_id,
+        "start_time": record["start_time"],
+        "end_time": record["end_time"],
+        "hours": record["hours"],
+        "forced": force,
+        "generated": record["generated"],
+        "skipped": record["skipped"],
         "windows": windows,
     }
 
@@ -640,10 +827,19 @@ async def actions_generation(
 # ============================================================================
 # Registry — the only names the function runner will execute. Must stay in
 # sync with PYTHON_FUNCTIONS.summary in the NestJS python-functions domain.
+#
+# `hourly_summary_backfill` is here so the manual endpoint can hand a 24-hour
+# recovery to the runner's worker pool instead of holding an HTTP request open
+# for tens of minutes. It is operator-initiated only — there is no cron for it —
+# but a name absent from PYTHON_FUNCTIONS.summary is one `dispatch()` rejects at
+# the call site, so pg-boss could not send it at all; it is now listed there
+# too, and pythonFunctionRegistryDrift.test.ts parses this dict to keep the two
+# sides from drifting apart again.
 # ============================================================================
 
 FUNCTIONS = {
     "hourly_summary": hourly_summary,
+    "hourly_summary_backfill": hourly_summary_backfill,
     "daily_summary": daily_summary,
     "weekly_summary": weekly_summary,
     "monthly_summary": monthly_summary,
@@ -655,14 +851,20 @@ FUNCTIONS = {
 __all__ = [
     "DEFAULT_MAX_FEED_ACTIONS",
     "FUNCTIONS",
+    "MAX_BACKFILL_RECORDS",
     "MAX_HOURLY_BACKFILL_HOURS",
     "MAX_INSIGHTS_PER_RUN",
     "actions_generation",
+    "active_backfill",
+    "backfill_key",
+    "backfill_progress",
     "daily_summary",
     "dossier_refresh",
     "hourly_summary",
     "hourly_summary_backfill",
     "insights_generation",
     "monthly_summary",
+    "plan_hourly_backfill",
+    "queue_backfill",
     "weekly_summary",
 ]

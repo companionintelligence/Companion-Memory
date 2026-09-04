@@ -214,7 +214,8 @@ describe('Reddit datasource', () => {
   });
 
   it('does not fabricate a thread key when a private message names no correspondent', async () => {
-    const csv = 'id,permalink,date,from,to,subject,body\nm1,/message/messages/m1,2020-03-04 12:00:00 UTC,,,,Body only.\n';
+    const csv =
+      'id,permalink,date,from,to,subject,body\nm1,/message/messages/m1,2020-03-04 12:00:00 UTC,,,,Body only.\n';
     const pipeline = await importCsv('messages_archive.csv', csv);
     expect(pipeline.length).toBe(1);
     expect(pipeline[0].item.metadata.ThreadId).toBeUndefined();

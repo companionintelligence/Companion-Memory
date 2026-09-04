@@ -125,9 +125,7 @@ describe('CommunicationService bulk createMany', () => {
     // The clean key the de-hypertabling restored: no `time` in the arbiter.
     // Identity is the (source_system, source_id) pair — source_type is
     // provenance and stays out of the key (docs/design/cross-pipeline-identity.md).
-    expect(options.conflictTarget).toBe(
-      '(user_id, source_system, source_id) WHERE source_id IS NOT NULL',
-    );
+    expect(options.conflictTarget).toBe('(user_id, source_system, source_id) WHERE source_id IS NOT NULL');
     expect(options.conflictTarget).not.toContain('time');
     // No hypertable, no chunk-exclusion bound — and time is not stable across
     // re-syncs, so a time bound would exclude legitimate canonical rows.

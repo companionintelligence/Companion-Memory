@@ -166,7 +166,10 @@ describe('ChatTurnService.execute providers', () => {
       { role: 'tool', content: '[]' },
     ];
     const chatStream = jest.fn(async () =>
-      streamFrom([{ message: { thinking: 'searching' } }, { message: { thinking: 'retrying' } }], accumulated),
+      streamFrom(
+        [{ message: { thinking: 'searching' } }, { message: { thinking: 'retrying' } }],
+        accumulated,
+      ),
     );
     const messageService = {
       findByThreadId: jest.fn(),

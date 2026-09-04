@@ -8,18 +8,21 @@ four years in the past, so the window hbpe.pipeline.recurrence reads held zero
 labeled tokens, hbpe.recurrence_profiles stayed empty and GET /forecast
 returned ``clusters: []`` every day, indefinitely. These tests pin the
 properties that fix depends on — phase order, window partitioning, per-phase
-cursors, budget rollover, the serialize window's clamp to today, and the fact
-that the nightly actually publishes what the drain labeled.
+cursors, budget rollover, which days serialize writes, and the fact that the
+nightly actually publishes what the drain labeled.
 
 The recency window is sized by bootstrap.SERIALIZE_WINDOW_DAYS, not by
 recurrence.HISTORY_DAYS: labels only become visible to the profiler once
 serialize writes them into hbpe.token_stream, and serialize only ever touches
-that trailing window.
+the days bootstrap.token_source_days selects — days that hold data (or stale
+tokens needing a purge), clamped to today, newest first, which is not the same
+set as a contiguous (MIN, MAX) range once hourly summaries keep MAX pinned at
+today.
 
 Everything runs against injected fakes: an in-memory corpus that reproduces the
 real query's window/keyset/order semantics, a labeler that advances a fake
-clock, and a recording fake connection for the SQL-shape assertions. No
-Postgres, no model.
+clock, a Postgres stand-in for bootstrap's day queries, and a recording fake
+connection for the SQL-shape assertions. No Postgres, no model.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from ci.hbpe import data_client as dc  # noqa: E402
+from ci.hbpe import database as db  # noqa: E402
 from ci.hbpe.pipeline import bootstrap as bs  # noqa: E402
 from ci.hbpe.pipeline import nightly_runner as nr  # noqa: E402
 from ci.hbpe.pipeline import recurrence as rec  # noqa: E402
@@ -183,10 +187,103 @@ def _run_phases(corpus, labeler, *, cutoff, budget, share, clock):
 # ── The cutoff ────────────────────────────────────────────────────────────────
 
 
+class _DayQueryCursor:
+    """
+    Postgres stand-in for bootstrap's two day queries.
+
+    Answers from one day set per source table, and folds a set in only when
+    ``FROM <table>`` actually appears in the SQL. That table check is the point:
+    a fake that returned the same days whatever the query said could not tell a
+    correct day list from one that had dropped a source branch, which is how
+    ``token_source_days`` lost the emptied-day purge in the first place. The
+    LIMIT and the clamp are read off the bound parameters for the same reason —
+    the production values, not the test's idea of them.
+    """
+
+    _TABLES = ("FROM ci.events", "FROM ci.summaries", "FROM hbpe.token_stream")
+
+    def __init__(self, sources: dict[str, list[dt.date]], calls: list) -> None:
+        self._sources = sources
+        self._calls = calls
+        self._result = None
+
+    def execute(self, sql, params=None):
+        flat = " ".join(str(sql).split())
+        params = tuple(params or ())
+        self._calls.append((flat, params))
+        days = sorted(
+            {
+                day
+                for table in self._TABLES
+                if table in flat
+                for day in self._sources.get(table, ())
+            }
+        )
+        if "MIN(source_date)" in flat:
+            self._result = (days[0], days[-1]) if days else (None, None)
+            return
+        end = next(p for p in params if isinstance(p, dt.date))
+        limit = params[-1]
+        visible = sorted((d for d in days if d <= end), reverse=True)[:limit]
+        self._result = [(d.isoformat(),) for d in visible]
+
+    def fetchone(self):
+        return self._result
+
+    def fetchall(self):
+        return self._result
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class _DayQueryConn:
+    def __init__(self, sources: dict[str, list[dt.date]], calls: list) -> None:
+        self._sources = sources
+        self._calls = calls
+
+    def cursor(self, **_kw):
+        return _DayQueryCursor(self._sources, self._calls)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def _dense_between(min_date: dt.date, max_date: dt.date) -> list[dt.date]:
+    return [
+        min_date + dt.timedelta(days=i) for i in range((max_date - min_date).days + 1)
+    ]
+
+
 def _pin_corpus(monkeypatch, bounds, today=TODAY):
-    """Pin bootstrap's view of the corpus and of 'today' for a cutoff test."""
+    """
+    Pin bootstrap's view of the corpus and of 'today' for a cutoff test.
+
+    The day list is served by a fake *connection* over a corpus that is dense
+    between ``bounds``, so ``token_source_days`` runs for real. Stubbing the
+    function instead is what hollowed out
+    test_drain_cutoff_equals_the_serialize_window_start: the stub re-derived
+    serialize_window's own arithmetic, so the assertion compared a fake built
+    from serialize_window against serialize_window, and replacing the
+    production ``window_days + 1`` budget with a literal 200 left all five
+    parametrizations green.
+
+    A dense corpus has exactly one day-with-data per calendar day, which is what
+    makes the cross-check against the contiguous window meaningful. The sparse
+    case, where the list jumps a two-year gap, is pinned in
+    test_summary_label_range and in the serialize tests below.
+    """
     monkeypatch.setattr(bs, "_utc_today", lambda: today)
-    monkeypatch.setattr(bs, "event_date_bounds", lambda _uid: bounds)
+    days = [] if bounds is None else _dense_between(*bounds)
+    monkeypatch.setattr(
+        db, "get_conn", lambda: _DayQueryConn({"FROM ci.events": days}, [])
+    )
 
 
 def test_midnight_utc_is_the_start_of_the_day():
@@ -240,18 +337,18 @@ def test_cutoff_falls_back_to_the_wall_clock_when_the_corpus_is_unreadable(monke
     An empty corpus, an all-future one, or a failing bounds query must still
     yield a usable cutoff — the drain has to run either way.
     """
-    monkeypatch.setattr(bs, "_utc_today", lambda: TODAY)
+    # All-future: the day list clamps it away and serialize_window of its real
+    # bounds is None too, so both legs of the fallback fire.
+    _pin_corpus(monkeypatch, (dt.date(2026, 9, 1), dt.date(2026, 10, 15)))
+    assert nr._recency_cutoff(USER, 90) == CUTOFF
+
+    _pin_corpus(monkeypatch, None)
+    assert nr._recency_cutoff(USER, 90) == CUTOFF
 
     def _boom(_uid):
         raise RuntimeError("no database")
 
     monkeypatch.setattr(bs, "event_date_bounds", _boom)
-    assert nr._recency_cutoff(USER, 90) == CUTOFF
-
-    monkeypatch.setattr(bs, "event_date_bounds", lambda _uid: None)
-    assert nr._recency_cutoff(USER, 90) == CUTOFF
-
-    _pin_corpus(monkeypatch, (dt.date(2026, 9, 1), dt.date(2026, 10, 15)))
     assert nr._recency_cutoff(USER, 90) == CUTOFF
 
 
@@ -271,6 +368,16 @@ def test_drain_cutoff_equals_the_serialize_window_start(monkeypatch, bounds):
     inside the recency phase, and no day outside it is. Drift either way is
     silent — too wide burns budget on rows that reach no forecast, too narrow
     leaves days serialize *will* write to the phase that reaches them last.
+
+    On a dense corpus the day list and the contiguous window agree exactly,
+    which is what makes this cross-check meaningful: the cutoff is now the
+    oldest day of the list, and it must still land on the window's start.
+
+    Both sides are production code — the real ``_TOKEN_SOURCE_DAYS_SQL`` (its
+    ORDER BY, LIMIT and clamp interpreted by the fake connection) against
+    ``serialize_window``'s arithmetic. Swapping the query's ``window_days + 1``
+    budget for a literal 200 turns four of the five cases red — every one whose
+    corpus is longer than the budget, which the brand-new appliance is not.
     """
     _pin_corpus(monkeypatch, bounds)
     window = bs.serialize_window(bounds, bs.SERIALIZE_WINDOW_DAYS, TODAY)
@@ -612,27 +719,39 @@ def test_window_and_keyset_params_bind_in_query_order(monkeypatch):
     assert params == [USER, since, after, "abc", 1000]
 
 
-# ── Serialize window clamp (bootstrap) ────────────────────────────────────────
+# ── Which days serialize writes (bootstrap) ───────────────────────────────────
 
 
-_SERIALIZED_RANGES: list[tuple[str, str]] = []
+_SERIALIZED_DAYS: list[str] = []
+_ROWS_PER_DAY = 59
 
 
-class _RangeSerializer:
-    def serialize_range(self, user_id, start_date, end_date):
-        _SERIALIZED_RANGES.append((start_date, end_date))
-        return 1412
+class _DaySerializer:
+    def serialize_day(self, user_id, date_str):
+        _SERIALIZED_DAYS.append(date_str)
+        return _ROWS_PER_DAY
 
 
-def _run_serialize(monkeypatch, min_date, max_date, today):
-    _SERIALIZED_RANGES.clear()
+def _run_serialize(monkeypatch, days, bounds=None, today=TODAY):
+    """
+    Drive serialize_token_stream against a fake days-with-data read.
+
+    ``days`` is what the day-list query returns — already clamped to today and
+    LIMITed, as the real SQL does, and in the query's DESC order. ``bounds`` is
+    what the fallback bounds query returns, and is consulted only when ``days``
+    is empty, to tell an empty corpus from an entirely future-dated one.
+    """
+    _SERIALIZED_DAYS.clear()
 
     class _Cur:
         def execute(self, *_a, **_k):
             return None
 
+        def fetchall(self):
+            return [(d.isoformat(),) for d in sorted(days, reverse=True)]
+
         def fetchone(self):
-            return (min_date, max_date)
+            return bounds if bounds is not None else (None, None)
 
         def __enter__(self):
             return self
@@ -655,53 +774,134 @@ def _run_serialize(monkeypatch, min_date, max_date, today):
     import ci.hbpe.tokenizer.serializer as ser
 
     monkeypatch.setattr(db, "get_conn", lambda: _Conn())
-    monkeypatch.setattr(ser, "TokenSerializer", _RangeSerializer)
+    monkeypatch.setattr(ser, "TokenSerializer", _DaySerializer)
     monkeypatch.setattr(tr, "rebuild_token_rollups", lambda uid: {"days": 0})
     monkeypatch.setattr(bs, "_utc_today", lambda: today)
     return asyncio.run(bs.serialize_token_stream(USER))
 
 
-def test_serialize_window_is_clamped_to_today_not_to_a_future_max(monkeypatch):
+def _dense_days(end: dt.date, n: int) -> list[dt.date]:
+    return [end - dt.timedelta(days=i) for i in range(n)]
+
+
+def test_serialize_writes_every_returned_day_oldest_first(monkeypatch):
     """
-    Three future-dated rows (a scan, two tax reminders) pulled MAX(start_time)
-    to 2026-10-15 on the dev corpus, so the 90-day window became
-    2026-07-17..2026-10-15 — 7 events. Clamped it holds 1,412 over 24 days.
+    The query hands back the newest days first (that is how the LIMIT picks the
+    budget); serialize must walk them chronologically, and write each exactly
+    once. serialize_day deletes and rewrites one (user, date), so a duplicated
+    day is wasted work and a skipped one is a hole in hbpe.token_stream.
     """
-    result = _run_serialize(
-        monkeypatch,
-        dt.date(2010, 1, 6),
-        dt.date(2026, 10, 15),
-        today=TODAY,
-    )
-    assert _SERIALIZED_RANGES == [("2026-06-01", "2026-08-30")]
+    days = _dense_days(dt.date(2026, 8, 30), 91)
+    result = _run_serialize(monkeypatch, days)
+
+    assert _SERIALIZED_DAYS == [d.isoformat() for d in sorted(days)]
+    assert result["start"] == "2026-06-01"
     assert result["end"] == "2026-08-30"
-    assert result["rows"] == 1412
+    assert result["days"] == 91
+    assert result["rows"] == 91 * _ROWS_PER_DAY
 
 
-def test_serialize_window_of_an_archival_corpus_is_untouched(monkeypatch):
+def test_serialize_of_an_archival_corpus_keeps_its_own_days(monkeypatch):
     """
-    Clamp, do not anchor. An appliance whose data stops two years ago must keep
-    serializing its own last 90 days; ``end = today`` would give it an empty
+    An appliance whose data stops two years ago must keep serializing its own
+    most recent 90 days; anchoring the range on today would give it an empty
     range, rows: 0, and a bootstrap abort with no_token_data.
     """
-    _run_serialize(
-        monkeypatch,
-        dt.date(2010, 1, 6),
-        dt.date(2024, 1, 15),
-        today=TODAY,
+    days = _dense_days(dt.date(2024, 1, 15), 91)
+    _run_serialize(monkeypatch, days)
+
+    assert _SERIALIZED_DAYS[0] == "2023-10-17"
+    assert _SERIALIZED_DAYS[-1] == "2024-01-15"
+
+
+def test_serialize_keeps_the_archival_event_days_and_todays_summary_day(monkeypatch):
+    """
+    The bimodal corpus, which a contiguous window cannot express at all.
+
+    Imported events stop on 2024-01-15; ci.summaries keeps writing hourly rows,
+    so 2026-08-30 also holds data. A (MIN, MAX) window ending at MAX puts the
+    whole 90 days in 2026 and serializes ZERO events — the historical corpus
+    silently drops out of hbpe.token_stream and is replaced by summary tokens at
+    SUMMARY_SOFT_PROB. A window ending at the last event strands the new summary
+    instead. The day list holds both ends inside the same 90-day budget.
+    """
+    days = [*_dense_days(dt.date(2024, 1, 15), 90), dt.date(2026, 8, 30)]
+    result = _run_serialize(monkeypatch, days)
+
+    assert "2024-01-15" in _SERIALIZED_DAYS
+    assert "2026-08-30" in _SERIALIZED_DAYS
+    assert _SERIALIZED_DAYS[0] == "2023-10-18"  # oldest event day still in budget
+    assert _SERIALIZED_DAYS[-1] == "2026-08-30"
+    # The gap costs nothing: 91 serialize_day calls, not the ~960 a range
+    # spanning 2023-10-18..2026-08-30 would have made.
+    assert len(_SERIALIZED_DAYS) == 91
+    assert result["days"] == 91
+
+
+def test_serialize_revisits_a_day_whose_only_content_is_stale_tokens(monkeypatch):
+    """
+    A day that EMPTIED OUT must still reach serialize_day, whose DELETE is the
+    only purge of hbpe.token_stream anywhere in the repo.
+
+    Event E is the only event on 2024-06-03 and serialize wrote its tokens. The
+    user deletes E — CalendarEventService soft-deletes, and the day-list query
+    filters ``is_deleted = FALSE``. Selecting only days that currently hold data
+    drops 2024-06-03 from every subsequent run, so its rows sit in
+    hbpe.token_stream indefinitely while pipeline.recurrence and HMT training
+    keep reading a deleted event. The contiguous serialize_range this replaced
+    purged the day for free by walking every calendar day in the window.
+
+    Runs against the real day query: the fake connection folds in a table's days
+    only when the SQL selects ``FROM`` it, so dropping the token_stream branch
+    drops the day here too.
+    """
+    _SERIALIZED_DAYS.clear()
+    emptied = dt.date(2024, 6, 3)
+    live = dt.date(2026, 8, 30)
+
+    import ci.hbpe.pipeline.token_rollup as tr
+    import ci.hbpe.tokenizer.serializer as ser
+
+    monkeypatch.setattr(
+        db,
+        "get_conn",
+        lambda: _DayQueryConn(
+            {
+                "FROM ci.summaries": [live],
+                # The emptied day is gone from both sources and survives only as
+                # the stale rows the purge has to remove.
+                "FROM hbpe.token_stream": [emptied, live],
+            },
+            [],
+        ),
     )
-    assert _SERIALIZED_RANGES == [("2023-10-17", "2024-01-15")]
+    monkeypatch.setattr(ser, "TokenSerializer", _DaySerializer)
+    monkeypatch.setattr(tr, "rebuild_token_rollups", lambda _uid: {"days": 0})
+    monkeypatch.setattr(bs, "_utc_today", lambda: TODAY)
+
+    result = asyncio.run(bs.serialize_token_stream(USER))
+
+    assert _SERIALIZED_DAYS == ["2024-06-03", "2026-08-30"]
+    assert result["days"] == 2
 
 
 def test_serialize_reports_a_corpus_that_is_entirely_in_the_future(monkeypatch):
+    """
+    The day list clamps future dates away, so an all-future corpus comes back
+    empty. The bounds query is what still distinguishes it from no corpus at
+    all — the reason string is the operator's only signal for the abort.
+    """
     result = _run_serialize(
-        monkeypatch,
-        dt.date(2026, 9, 1),
-        dt.date(2026, 10, 15),
-        today=TODAY,
+        monkeypatch, [], bounds=(dt.date(2026, 9, 1), dt.date(2026, 10, 15))
     )
     assert result == {"rows": 0, "reason": "only_future_events"}
-    assert _SERIALIZED_RANGES == []
+    assert _SERIALIZED_DAYS == []
+
+
+def test_serialize_reports_an_empty_corpus(monkeypatch):
+    result = _run_serialize(monkeypatch, [], bounds=None)
+    assert result == {"rows": 0, "reason": "no_events"}
+    assert _SERIALIZED_DAYS == []
 
 
 # ── The nightly publishes what the drain labeled (functions.nightly) ──────────

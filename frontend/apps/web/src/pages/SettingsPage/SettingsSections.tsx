@@ -23,6 +23,9 @@ const BlueBubblesSection = lazy(() =>
   import('./sections/BlueBubblesSection').then((m) => ({ default: m.BlueBubblesSection })),
 );
 const McpSection = lazy(() => import('./sections/McpSection').then((m) => ({ default: m.McpSection })));
+const AgentHarnessesSection = lazy(() =>
+  import('./sections/AgentHarnessesSection').then((m) => ({ default: m.AgentHarnessesSection })),
+);
 const ApiKeysSection = lazy(() =>
   import('./sections/ApiKeysSection').then((m) => ({ default: m.ApiKeysSection })),
 );
@@ -49,6 +52,8 @@ function sectionElement(section: string): ReactNode {
       return <BlueBubblesSection />;
     case 'mcp':
       return <McpSection />;
+    case 'agents':
+      return <AgentHarnessesSection />;
     case 'api-keys':
       return <ApiKeysSection />;
     case 'oauth':

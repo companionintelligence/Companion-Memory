@@ -692,7 +692,22 @@ export class QuestionService {
     return result ? QuestionEntity.toEgressType(result) : null;
   }
 
-  async findByIds(context: ServiceContext, ids: string[]): Promise<Question[]> {
+  /**
+   * Batched read: one entry per requested id, IN ID ORDER, `null` for an id
+   * that does not exist or is private to somebody else.
+   *
+   * The shape matters as much as the rows. This used to return the SET of
+   * visible questions — planner order, short by one for every id it could not
+   * see — and its only caller is a DataLoader, which pairs a batch result with
+   * its keys by POSITION. Every sibling `findByIds` in the codebase
+   * (CalendarEventService, PlaceService, ContentService, ThreadService,
+   * FileService …) already re-keys; this one now matches them.
+   */
+  async findByIds(context: ServiceContext, ids: string[]): Promise<(Question | null)[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
     const whereClauses: FindOptionsWhere<QuestionEntity>[] = [
       {
         id: In(ids),
@@ -708,13 +723,13 @@ export class QuestionService {
       where: whereClauses,
     });
 
-    const unique = new Map<string, QuestionEntity>();
+    const byId = new Map<string, Question>();
 
     for (const entity of results) {
-      unique.set(entity.id, entity);
+      byId.set(entity.id, QuestionEntity.toEgressType(entity));
     }
 
-    return Array.from(unique.values()).map((entity) => QuestionEntity.toEgressType(entity));
+    return ids.map((id) => byId.get(id) ?? null);
   }
 
   /**

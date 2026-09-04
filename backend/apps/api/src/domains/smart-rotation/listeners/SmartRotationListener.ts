@@ -176,9 +176,33 @@ export class SmartRotationListener {
           {},
           { singletonKey: `fn:hourly_summary:${userId}:rotation` },
         );
-        // Dossier refresh remains a separate best-effort job. On a brand-new
-        // user it may run before the first summary lands and skip; the next
-        // hourly tick sees the stored summary and can build the dossier.
+        // The dossier is a separate, far more expensive product — a full LLM
+        // pass over 30 days of daily plus 24 hours of hourly summaries — and
+        // this case runs hourly. Unlike the digest it has no cheap "nothing
+        // happened" exit of its own: it re-reads whatever summaries exist and
+        // regenerates, so on a quiet appliance (where hourly_summary returns
+        // skipped:no_activity and writes no row) it would spend a GPU slot
+        // rewriting the same dossier from the same inputs 24 times a day.
+        //
+        // The gate is on the INPUT, not a cadence: build only when a summary
+        // has been stored since the dossier itself was built. That never
+        // withholds the hourly digest above, so the empty-user loop the
+        // either/or branch created cannot come back — a user with no summaries
+        // still gets hourly_summary every tick, and the first stored row makes
+        // the dossier stale on the very next one.
+        const dossierStale = await this.hasSummaryNewerThanDossier(userId);
+
+        if (!dossierStale) {
+          this.logger.log('Smart rotation summary work dispatched', {
+            userId,
+            summaryEnqueued,
+            dossierEnqueued: false,
+            dossierSkipped: 'no_new_summaries',
+          });
+
+          return;
+        }
+
         const dossierEnqueued = await this.pythonFunctionService.dispatch(
           'summary',
           'dossier_refresh',
@@ -276,6 +300,97 @@ export class SmartRotationListener {
       default:
         throw new Error(`Unknown smart rotation work type: ${workType satisfies never}`);
     }
+  }
+
+  /**
+   * Is there anything for `dossier_refresh` to fold in that the stored dossier
+   * has not already seen?
+   *
+   * ═══ WHAT THIS ASKS, AND WHAT IT DELIBERATELY DOES NOT ═══
+   *
+   * A deleted predecessor (`hoursSinceLastSummary`) asked "is the newest
+   * summary older than 24h?" and picked dossier-instead-of-digest when it was.
+   * That is the wrong question twice over: it starved the hourly stream on a
+   * user with no summaries at all, and on a busy user it fired the dossier on a
+   * clock rather than on new input. This asks the only question the dossier
+   * actually cares about — was a summary STORED after the dossier was BUILT —
+   * so a quiet hour costs nothing and a single new summary is enough.
+   *
+   * Only `hourly` and `daily` count, because those are exactly the two period
+   * types `fetch_summaries_for_dossier_activity` reads. An `insight` row (same
+   * table, written by `insights_generation`) is not dossier input, and letting
+   * it mark the dossier stale would put the hourly rebuild straight back.
+   *
+   * It reads `created_at`, not `GREATEST(created_at, updated_at)`, on purpose.
+   * A window re-summarized in place keeps its `created_at`, so a rewrite of an
+   * hour that already has a row waits for the next new hour before it is
+   * folded in — a bounded miss, on the quiet side. `updated_at` moves for
+   * reasons that are not new input at all, `seen`/`dismissed` among them, and
+   * a flag flipped in the feed is not worth an LLM pass.
+   *
+   * ═══ WHERE THE BUILD TIME COMES FROM ═══
+   *
+   * `store_dossier_activity` writes the whole dossier into
+   * `ci.entities.dossier`, and the payload carries its own `lastUpdatedAt`
+   * stamped by the generator. That field, not `entities.updated_at`, is the
+   * honest answer: the row's `updated_at` is bumped by every unrelated entity
+   * write (imports, merges, enrichment), and a bump from one of those would
+   * read as "the dossier is current" and suppress a rebuild that is genuinely
+   * owed. The stamp is naive UTC (`datetime.utcnow().isoformat()`), so the
+   * comparison is done in UTC rather than the session TimeZone, which the API's
+   * pool does not pin.
+   *
+   * ═══ IT FAILS OPEN ═══
+   *
+   * Every unknown reads as stale: no user row, no self entity, `dossier` still
+   * the `'{}'` default, or a `lastUpdatedAt` that will not parse (hence
+   * JSON_VALUE ... DEFAULT NULL ON ERROR rather than a bare cast, which would
+   * throw and take the whole tick down with it). A brand-new user therefore
+   * always gets their first dossier attempt, and a corrupted stamp costs one
+   * extra LLM pass rather than a dossier that is never rebuilt again.
+   */
+  private async hasSummaryNewerThanDossier(userId: string): Promise<boolean> {
+    type Row = { stale: boolean };
+    const rows = (await this.dataSource.query(
+      `
+      WITH self_entity AS (
+        -- Same resolution order as the sidecar's get_entity_id_activity: the
+        -- users row first, the oldest owned Person second. Resolving it
+        -- differently here would gate on a different entity than the one
+        -- dossier_refresh writes to, and the gate would never close.
+        SELECT COALESCE(
+          (SELECT u.entity_id FROM ci.users u WHERE u.id = $1),
+          (
+            SELECT e.entity_id
+            FROM ci.entities e
+            WHERE e.owner_user_id = $1
+              AND e.entity_type = 'Person'
+            ORDER BY e.created_at
+            LIMIT 1
+          )
+        ) AS entity_id
+      ),
+      built AS (
+        SELECT JSON_VALUE(e.dossier, '$.lastUpdatedAt' RETURNING timestamp DEFAULT NULL ON ERROR) AS built_at
+        FROM ci.entities e
+        JOIN self_entity s ON s.entity_id = e.entity_id
+      )
+      SELECT
+        (SELECT built_at FROM built) IS NULL
+        OR EXISTS (
+          SELECT 1
+          FROM ci.summaries fresh
+          WHERE fresh.user_id = $1
+            AND fresh.period_type IN ('hourly', 'daily')
+            AND fresh.created_at AT TIME ZONE 'UTC' > (SELECT built_at FROM built)
+        ) AS stale;
+      `,
+      [userId],
+    )) as Row[];
+
+    // No FROM on the outer SELECT, so one row always comes back; the ?? true
+    // is the same fail-open as every branch inside the query.
+    return rows[0]?.stale ?? true;
   }
 
   /**

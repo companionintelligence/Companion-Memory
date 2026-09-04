@@ -8,7 +8,6 @@ import { PeerSignatureService } from '../services/PeerSignatureService';
 
 import { PeerAskController } from './PeerAskController';
 
-
 const peersConfig: Record<string, unknown> = {};
 
 jest.mock('@ci/configuration', () => ({

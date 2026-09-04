@@ -9,7 +9,12 @@ from ci.hbpe.forage.math.expected import (
     expected_free_energy_from_joint,
     expected_free_energy_joint,
 )
-from ci.hbpe.forage.math.infer import infer_factors, infer_joint, infer_states, policy_posterior
+from ci.hbpe.forage.math.infer import (
+    infer_factors,
+    infer_joint,
+    infer_states,
+    policy_posterior,
+)
 from ci.hbpe.forage.math.learn import dirichlet_update_A, expected_A
 from ci.hbpe.forage.math.ops import kl_divergence, log_stable, softmax
 from ci.hbpe.forage.math.variational import variational_free_energy
@@ -39,10 +44,12 @@ def test_F_is_at_least_surprise():
 
 def test_G_is_risk_plus_ambiguity():
     """(2.6): G = o·(ln o − U) + s·H = risk + ambiguity."""
-    A = np.array([
-        [0.8, 0.1],
-        [0.2, 0.9],
-    ])
+    A = np.array(
+        [
+            [0.8, 0.1],
+            [0.2, 0.9],
+        ]
+    )
     qs = np.array([0.5, 0.5])
     C = np.array([0.5, 0.5])
     out = expected_free_energy(qs, A, C)

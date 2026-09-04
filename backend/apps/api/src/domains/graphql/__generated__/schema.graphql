@@ -61,16 +61,27 @@ type ActivityBucketType {
 }
 
 type ActivityCountsType {
-  activities: Int
-  apiLogs: Int
+  activities: Int @deprecated(reason: "Retired summary source; only set on summaries written before it was dropped.")
+  answers: Int
+  apiLogs: Int @deprecated(reason: "Retired summary source; only set on summaries written before it was dropped.")
   browserActivity: Int
   communications: Int
+  content: Int
   events: Int
+  fileChunks: Int
   files: Int
-  measurements: Int
+  measurements: Int @deprecated(reason: "Retired summary source; only set on summaries written before it was dropped.")
   messages: Int
-  positions: Int
-  screenCaptures: Int
+  notes: Int
+  objectObservations: Int
+  objects: Int
+  position: Int
+  positions: Int @deprecated(reason: "Never populated — the source has always been named `position`. Use `position`.")
+  receiptLineItems: Int
+  receipts: Int
+  screenCaptures: Int @deprecated(reason: "Retired summary source; only set on summaries written before it was dropped.")
+  tasks: Int
+  toolInvocations: Int
   total: Int!
 }
 

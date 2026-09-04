@@ -167,7 +167,15 @@ export function RailSubmenuShell({
 }
 
 /** Standard icon + label (+ badge) head row — everything but Self's avatar tile. */
-export function RailSubmenuHead({ icon, label, badge }: { icon: ReactNode; label: string; badge?: ReactNode }) {
+export function RailSubmenuHead({
+  icon,
+  label,
+  badge,
+}: {
+  icon: ReactNode;
+  label: string;
+  badge?: ReactNode;
+}) {
   return (
     <>
       {icon}

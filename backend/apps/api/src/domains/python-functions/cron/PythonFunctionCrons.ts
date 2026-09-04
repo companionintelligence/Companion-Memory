@@ -138,15 +138,15 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
       return;
     }
 
-    // Narrower audience than every onboarded user: dossier_refresh reads the
-    // last `DOSSIER_LOOKBACK_DAYS` of hourly/daily summaries and has nothing
-    // to build without them. Hourly summaries run at :05 and this at :12, so
-    // an appliance in a quiet hour used to enqueue a job per user per hour
-    // that could only end in "No summaries found for dossier generation".
-    // The Python side now reports that as a skip rather than raising, so this
-    // gate is an optimisation, not the fix — it stops the pointless dispatch.
+    // Narrower audience than every onboarded user, on two counts: has this
+    // user any dossier input at all, and is any of it NEWER than the dossier
+    // already stored. See listUsersWithStaleDossier — without the second half
+    // this cron ran a full LLM pass per user per hour over inputs that had not
+    // moved, which is the shipped-config behaviour because `smart.rotation`
+    // (the only other dossier scheduler, and the only one that had a freshness
+    // gate) is false in config/default.json.
     await this.fanOut('summary', 'dossier_refresh', hourKey(), { lookback_days: DOSSIER_LOOKBACK_DAYS }, () =>
-      this.listUsersWithDossierInput(DOSSIER_LOOKBACK_DAYS),
+      this.listUsersWithStaleDossier(DOSSIER_LOOKBACK_DAYS),
     );
   }
 
@@ -231,20 +231,86 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
   }
 
   /**
-   * Onboarded users with at least one summary `dossier_refresh` could read.
+   * Onboarded users `dossier_refresh` has something NEW to build from.
    *
-   * Deliberately a superset of what the function actually consumes (it takes
-   * daily summaries over the whole lookback but hourly ones only from the
-   * last 24h): the gate must never withhold a user the function would have
-   * had input for. Over-selecting costs one dispatch that returns skipped;
-   * under-selecting would silently stop dossiers from ever refreshing.
+   * ═══ TWO CONDITIONS, FOR TWO DIFFERENT WASTED DISPATCHES ═══
+   *
+   * The first is input existence: `dossier_refresh` reads the last
+   * `lookbackDays` of hourly/daily summaries and has nothing to build without
+   * them. Hourly summaries run at :05 and this cron at :12, so an appliance in
+   * a quiet hour used to enqueue a job per user per hour whose only possible
+   * outcome was "No summaries found for dossier generation" — 19 dead letters
+   * on the QA box before the Python side downgraded that to a skip.
+   *
+   * The second is input freshness, and it is the expensive one. Past that
+   * skip, `dossier_refresh` regenerates unconditionally: a full LLM pass over
+   * 30 days of daily plus 24 hours of hourly summaries, once an hour, whether
+   * or not a single summary was written in between. On a corpus that stopped
+   * moving that is 24 identical rebuilds a day on the GPU the hourly digest
+   * contends for.
+   *
+   * The freshness half is the same question `SmartRotationListener`'s
+   * `hasSummaryNewerThanDossier` asks per user — was a summary STORED after
+   * the dossier was BUILT — asked here set-wise for a fan-out. That listener
+   * only runs when `smart.rotation` is enabled, and it is `false` in
+   * `config/default.json` with no production override, so on the configuration
+   * that actually ships this cron is the only dossier scheduler there is; a
+   * gate that lives only in the listener is a gate nobody runs.
+   *
+   * ═══ WHAT IT READS, AND WHAT IT DELIBERATELY DOES NOT ═══
+   *
+   * The build time comes from the dossier payload's own `lastUpdatedAt`, which
+   * `store_dossier_activity` stamps when it writes `ci.entities.dossier` — not
+   * `entities.updated_at`, which every unrelated entity write (imports, merges,
+   * enrichment) bumps and which would therefore read as "the dossier is
+   * current" and suppress a rebuild that is genuinely owed. The stamp is naive
+   * UTC (`datetime.utcnow().isoformat()`), hence the `AT TIME ZONE 'UTC'` on
+   * the summary side rather than a session TimeZone the API pool does not pin.
+   *
+   * Only `hourly` and `daily` mark it stale, because those are the two period
+   * types `fetch_summaries_for_dossier_activity` reads. An `insight` row shares
+   * the table and is written hourly by `insights_generation`; counting one as
+   * dossier input would put the hourly rebuild straight back.
+   *
+   * `created_at`, not `GREATEST(created_at, updated_at)`: a window
+   * re-summarized in place keeps its `created_at`, so a rewrite waits for the
+   * next new hour — a bounded miss on the quiet side — while `updated_at`
+   * moves for `seen`/`dismissed` flips that are not new input at all.
+   *
+   * ═══ BOTH HALVES FAIL OPEN ═══
+   *
+   * The existence half is deliberately a superset of what the function
+   * consumes (it takes daily summaries over the whole lookback but hourly ones
+   * only from the last 24h), and the freshness half treats every unknown as
+   * stale: no self entity, the `'{}'` default dossier, or a `lastUpdatedAt`
+   * that will not parse (hence `DEFAULT NULL ON ERROR` rather than a bare cast,
+   * which would throw and take the whole fan-out down). Over-selecting costs
+   * one dispatch that returns skipped; under-selecting would silently stop
+   * dossiers from ever refreshing again.
    */
-  private async listUsersWithDossierInput(lookbackDays: number): Promise<string[]> {
+  private async listUsersWithStaleDossier(lookbackDays: number): Promise<string[]> {
     type Row = { id: string };
 
     const rows = (await this.dataSource.query(
       `SELECT u.id
          FROM ci.users u
+         -- Same resolution order as the sidecar's get_entity_id_activity: the
+         -- users row first, the oldest owned Person second. Resolving it
+         -- differently would gate on a different entity than the one
+         -- dossier_refresh writes to, and the gate would never close.
+         LEFT JOIN LATERAL (
+           SELECT JSON_VALUE(e.dossier, '$.lastUpdatedAt' RETURNING timestamp DEFAULT NULL ON ERROR) AS built_at
+             FROM ci.entities e
+            WHERE e.entity_id = COALESCE(
+                    u.entity_id,
+                    (SELECT p.entity_id
+                       FROM ci.entities p
+                      WHERE p.owner_user_id = u.id
+                        AND p.entity_type = 'Person'
+                      ORDER BY p.created_at
+                      LIMIT 1)
+                  )
+         ) built ON TRUE
         WHERE u.onboarded = true
           AND EXISTS (
                 SELECT 1
@@ -252,6 +318,16 @@ export class PythonFunctionCrons implements OnApplicationBootstrap {
                  WHERE s.user_id = u.id
                    AND s.period_type IN ('hourly', 'daily')
                    AND s.period_start >= now() - make_interval(days => $1)
+              )
+          AND (
+                built.built_at IS NULL
+                OR EXISTS (
+                     SELECT 1
+                       FROM ci.summaries fresh
+                      WHERE fresh.user_id = u.id
+                        AND fresh.period_type IN ('hourly', 'daily')
+                        AND fresh.created_at AT TIME ZONE 'UTC' > built.built_at
+                   )
               )`,
       [lookbackDays],
     )) as Row[];

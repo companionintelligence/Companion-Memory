@@ -1212,7 +1212,11 @@ export function toProductModelInput(rec: CanonicalRecord): CreateProductModelDto
     },
     sourceType: rec.sourceType,
     ...(() => {
-      const productIdentity = platformIdentity(PRODUCT_MODEL_SOURCE_SYSTEM, identity.namespace, identity.value);
+      const productIdentity = platformIdentity(
+        PRODUCT_MODEL_SOURCE_SYSTEM,
+        identity.namespace,
+        identity.value,
+      );
 
       return { sourceSystem: productIdentity.system, sourceId: productIdentity.id };
     })(),

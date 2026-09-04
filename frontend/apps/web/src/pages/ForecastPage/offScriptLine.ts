@@ -13,10 +13,12 @@ export function offScriptLine(args: {
   if (!args.drift && args.scored < MIN_SCORED) {
     return null;
   }
+
   const missRate = args.scored > 0 ? args.missed / args.scored : 0;
   if (!args.drift && missRate < HIGH_MISS) {
     return null;
   }
+
   const when = args.eveningOrNight ? 'Tonight' : 'Today';
 
   return `${when} does not look like your usual ${args.weekday}.`;

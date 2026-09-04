@@ -169,7 +169,9 @@ export function DeadLettersCard({ groups, total, loading, error, onReplay }: Pro
                   // card saying "8,535 jobs have given up", that is two
                   // unexplained numbers for the same thing.
                   `${
-                    total >= DEAD_LETTER_PAGE ? `First ${DEAD_LETTER_PAGE.toLocaleString()}` : total.toLocaleString()
+                    total >= DEAD_LETTER_PAGE
+                      ? `First ${DEAD_LETTER_PAGE.toLocaleString()}`
+                      : total.toLocaleString()
                   } un-replayed across ${groups.length.toLocaleString()} ${
                     groups.length === 1 ? 'cause' : 'causes'
                   }${total >= DEAD_LETTER_PAGE ? ' — there are more' : ''}`}

@@ -12,13 +12,7 @@ interface Props {
   streamingRef?: RefObject<HTMLDivElement | null> | ((el: HTMLDivElement | null) => void);
 }
 
-function AssistantMessage({
-  content,
-  renderEmptyContent = false,
-  streamingRef,
-  createdAt,
-  source,
-}: Props) {
+function AssistantMessage({ content, renderEmptyContent = false, streamingRef, createdAt, source }: Props) {
   const trimmedContent = useMemo(() => content?.trim(), [content]);
 
   if (!trimmedContent && !renderEmptyContent) {

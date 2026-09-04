@@ -6,7 +6,11 @@ import { v7 as uuid7 } from 'uuid';
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import {
-  appendRecordSources, type BulkInsertResult, bulkInsertIdempotent, computeChunkSize } from '@ci/common/persistence';
+  appendRecordSources,
+  type BulkInsertResult,
+  bulkInsertIdempotent,
+  computeChunkSize,
+} from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { ObjectIdentifierService } from '@ci/domains/graph/services/ObjectIdentifierService';
 import type {

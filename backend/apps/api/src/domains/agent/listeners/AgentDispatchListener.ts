@@ -3,10 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { LoggerService } from '@ci/common/logging';
 import { OnEvent, type Acknowledgement } from '@ci/domains/events';
 
-import {
-  AGENT_DISPATCH_QUEUE,
-  AGENT_DISPATCH_QUEUE_OPTIONS,
-} from '../constants';
+import { AGENT_DISPATCH_QUEUE, AGENT_DISPATCH_QUEUE_OPTIONS } from '../constants';
 import {
   AgentTaskBlockedEvent,
   AgentTaskCheckpointEvent,
@@ -46,6 +43,7 @@ export class AgentDispatchListener {
 
     if (!woke) {
       ack.fail(new Error(`Hub doorbell missed for ${payload.jobId}`));
+
       return;
     }
 

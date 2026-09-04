@@ -397,10 +397,7 @@ export class EmbedCoverageTelemetryService {
 
     const whereClause = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
 
-    const rows = await query(
-      `SELECT COUNT(*)::bigint AS count FROM ${sourceRef} s ${whereClause}`,
-      params,
-    );
+    const rows = await query(`SELECT COUNT(*)::bigint AS count FROM ${sourceRef} s ${whereClause}`, params);
 
     return Number(rows[0]?.count ?? 0);
   }

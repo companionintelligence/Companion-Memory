@@ -6,7 +6,6 @@ import json
 import urllib.error
 
 import pytest
-
 from benchmark.adapters.ci_server import CIServerAdapter
 
 
@@ -15,7 +14,14 @@ def _stub_transport():
     calls: list[dict] = []
 
     def post(url, body, headers, timeout):
-        calls.append({"method": "POST", "url": url, "headers": dict(headers), "body": json.loads(body)})
+        calls.append(
+            {
+                "method": "POST",
+                "url": url,
+                "headers": dict(headers),
+                "body": json.loads(body),
+            }
+        )
         return b'{"block": "ok"}'
 
     def get(url, headers, timeout):
@@ -32,6 +38,7 @@ def _adapter(post, get):
 
 
 # ── transport contract ───────────────────────────────────────────────────────
+
 
 def test_setup_requires_token():
     a = CIServerAdapter(url="http://x", token="")
@@ -53,13 +60,13 @@ def test_ingest_posts_to_memory_write_with_x_api_key_and_session():
 
 
 def test_search_recall_extracts_block_text_or_context_fallback():
-    payloads = iter([b'{"text": "T"}', b'{"context": "C"}', b'{}'])
+    payloads = iter([b'{"text": "T"}', b'{"context": "C"}', b"{}"])
 
     def post(url, body, headers, timeout):
         return next(payloads)
 
     def get(*a):
-        return b'{}'
+        return b"{}"
 
     a = _adapter(post, get)
     a.setup("u1")
@@ -79,6 +86,7 @@ def test_empty_query_falls_back_to_memory_context_get():
 
 
 # ── 404 fallback (matches the harness plugins) ───────────────────────────────
+
 
 def test_ingest_falls_back_to_memory_note_on_404():
     seen: list[str] = []
@@ -111,8 +119,12 @@ def test_ingest_propagates_non_404_errors():
 
 # ── url normalization (matches the harness plugins) ──────────────────────────
 
+
 def test_strips_trailing_slash_and_legacy_api_mcp_suffix():
     assert CIServerAdapter(url="http://x:1/", token="t")._base == "http://x:1"
     assert CIServerAdapter(url="http://x:1/api/mcp/", token="t")._base == "http://x:1"
     # but a legitimate sub-path is left alone
-    assert CIServerAdapter(url="http://x:1/api/memory", token="t")._base == "http://x:1/api/memory"
+    assert (
+        CIServerAdapter(url="http://x:1/api/memory", token="t")._base
+        == "http://x:1/api/memory"
+    )

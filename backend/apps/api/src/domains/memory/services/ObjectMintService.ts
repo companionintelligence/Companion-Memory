@@ -384,7 +384,9 @@ export class ObjectMintService {
     for (let offset = 0; offset < rows.length; offset += chunkSize) {
       const chunk = rows.slice(offset, offset + chunkSize);
 
-      const returned = await em.query<Array<{ object_id: string; source_id: string | null; inserted: boolean }>>(
+      const returned = await em.query<
+        Array<{ object_id: string; source_id: string | null; inserted: boolean }>
+      >(
         `INSERT INTO ci.objects AS inv (
            object_id, user_id, owner_user_id, category, brand, model,
            identifier_codes, purchase_price, currency, acquired_at,

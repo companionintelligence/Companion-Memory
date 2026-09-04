@@ -20,6 +20,13 @@ export class PreviewLoader extends Loader<SignedFile | null, string> {
     context: UserServiceContext,
     fileIds: readonly string[],
   ): Promise<readonly (SignedFile | null)[]> {
-    return this.fileService.findVariantsByParentIds(context, [...fileIds], FileVariant.PREVIEW);
+    const previews = await this.fileService.findVariantsByParentIds(
+      context,
+      [...fileIds],
+      FileVariant.PREVIEW,
+    );
+
+    // Keyed by the ORIGINAL this variant hangs off, not by the variant's own id.
+    return this.rekey(fileIds, previews, (preview) => preview.parentId);
   }
 }

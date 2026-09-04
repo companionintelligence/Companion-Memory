@@ -219,13 +219,7 @@ describe('VerticalCalendar — empty-slot selection', () => {
   it('does not select a slot when an existing event is clicked', () => {
     const onSelectSlot = vi.fn();
     render(
-      <VerticalCalendar
-        start={MONDAY}
-        days={1}
-        events={[event()]}
-        rhythm={[]}
-        onSelectSlot={onSelectSlot}
-      />,
+      <VerticalCalendar start={MONDAY} days={1} events={[event()]} rhythm={[]} onSelectSlot={onSelectSlot} />,
     );
 
     fireEvent.click(screen.getByLabelText(/^Standup,/));
@@ -250,9 +244,7 @@ describe('VerticalCalendar — empty-slot selection', () => {
 
   it('selects all-day when the all-day row is clicked', () => {
     const onSelectSlot = vi.fn();
-    render(
-      <VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} onSelectSlot={onSelectSlot} />,
-    );
+    render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} onSelectSlot={onSelectSlot} />);
 
     fireEvent.click(screen.getByTestId('vertical-all-day'));
 
@@ -492,13 +484,7 @@ describe('VerticalCalendar — moving a committed event by drag', () => {
    */
   it('keeps the drop marker while the drag crosses a chip inside the same lane', () => {
     const { container } = render(
-      <VerticalCalendar
-        start={MONDAY}
-        days={1}
-        events={[event()]}
-        rhythm={[]}
-        onMoveEvent={() => {}}
-      />,
+      <VerticalCalendar start={MONDAY} days={1} events={[event()]} rhythm={[]} onMoveEvent={() => {}} />,
     );
     stubLaneHeights(container);
 

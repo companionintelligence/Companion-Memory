@@ -268,7 +268,11 @@ describe('reddit posts/comments: GDPR CSV import vs OAuth listing connection', (
       dataSource: 'reddit',
       classification: 'social',
       contentHash: redditRecordId('saved_post', 'xfkamy'),
-      metadata: { Permalink: 'https://www.reddit.com/r/x/comments/xfkamy/s/', Kind: 'saved_post', Source: 'Reddit' },
+      metadata: {
+        Permalink: 'https://www.reddit.com/r/x/comments/xfkamy/s/',
+        Kind: 'saved_post',
+        Source: 'Reddit',
+      },
     });
     const savedInput = toCommunicationInput(saved);
     expect(savedInput.direction).toBe('inbound');
@@ -281,7 +285,13 @@ describe('reddit posts/comments: GDPR CSV import vs OAuth listing connection', (
       dataSource: 'reddit',
       classification: 'social',
       contentHash: redditRecordId('post', 'abc'),
-      metadata: { Title: 'Cat', URL: 'https://i.redd.it/cat.png', Subreddit: 'pics', Kind: 'post', Source: 'Reddit' },
+      metadata: {
+        Title: 'Cat',
+        URL: 'https://i.redd.it/cat.png',
+        Subreddit: 'pics',
+        Kind: 'post',
+        Source: 'Reddit',
+      },
     });
 
     expect(destinationsFor(record)).toEqual(['communications', 'content']);
@@ -297,7 +307,11 @@ describe('reddit posts/comments: GDPR CSV import vs OAuth listing connection', (
       classification: 'social',
       contentHash: redditRecordId('saved_post', 'xfkamy'),
       occurredAt: null as unknown as Date,
-      metadata: { Permalink: 'https://www.reddit.com/r/x/comments/xfkamy/s/', Kind: 'saved_post', Source: 'Reddit' },
+      metadata: {
+        Permalink: 'https://www.reddit.com/r/x/comments/xfkamy/s/',
+        Kind: 'saved_post',
+        Source: 'Reddit',
+      },
     });
 
     expect(destinationsFor(undated)).toEqual(['content']);
@@ -423,7 +437,10 @@ describe('files: archive upload vs OneDrive Graph listing', () => {
 
   it('CONVERGES with the pair the OneDrive connection mints from the Graph sha256Hash', () => {
     const importInput = toContentInput(
-      recordFor({ dataSource: 'microsoft_account', metadata: { FileId: 'f', FileSha256: SHA256.toUpperCase() } }),
+      recordFor({
+        dataSource: 'microsoft_account',
+        metadata: { FileId: 'f', FileSha256: SHA256.toUpperCase() },
+      }),
     );
     const etlIdentity = fileIdentity(SHA256.toUpperCase());
 

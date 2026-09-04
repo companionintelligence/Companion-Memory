@@ -33,6 +33,8 @@ export class ContentLoader extends Loader<Content | null> {
   ): Promise<readonly (Content | null)[]> {
     this.logger.log(`Loading a batch of ${contentIds.length} content rows`);
 
-    return this.contentService.findByIds(context, [...contentIds]);
+    const contents = await this.contentService.findByIds(context, [...contentIds]);
+
+    return this.rekey(contentIds, contents, (content) => content.id);
   }
 }

@@ -8,3 +8,9 @@ The suite verifies current sources are queried, retired/derived sources are
 absent, query failures remain visible, activity counting follows list-valued
 sources automatically, and prompt budgets preserve semantic content from both
 early and late sources.
+
+It also pins the honesty of the budget: a sample header never names more rows
+than its section contains, a section too small for a legible row drops the
+sample claim instead of leaving a fragment of it, truncation stays inside a
+one-character budget, a source named only by the counts is skipped rather than
+raising, and a communication whose every text column is NULL still renders.

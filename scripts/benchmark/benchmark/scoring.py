@@ -21,18 +21,19 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from typing import Callable, Tuple
+from collections.abc import Callable
 
 from .schema import EvalQuestion
 
-Scorer = Callable[[EvalQuestion, str], Tuple[bool, str]]
+Scorer = Callable[[EvalQuestion, str], tuple[bool, str]]
 
 
 # ---------------------------------------------------------------------------
 # Keyword scorer
 # ---------------------------------------------------------------------------
 
-def score_keyword(question: EvalQuestion, context: str) -> Tuple[bool, str]:
+
+def score_keyword(question: EvalQuestion, context: str) -> tuple[bool, str]:
     """Hit when at least one keyword appears in the retrieved context (case-insensitive)."""
     ctx_lower = context.lower()
     for kw in question.keywords:
@@ -99,15 +100,13 @@ def make_llm_scorer(
 
     post = http_post or _default_post
 
-    def score(question: EvalQuestion, context: str) -> Tuple[bool, str]:
+    def score(question: EvalQuestion, context: str) -> tuple[bool, str]:
         if not context.strip():
             return False, "empty context"
 
         gold = question.answer or ", ".join(question.keywords)
         user_msg = (
-            f"QUESTION: {question.question}\n"
-            f"GOLD ANSWER: {gold}\n"
-            f"CONTEXT:\n{context}"
+            f"QUESTION: {question.question}\nGOLD ANSWER: {gold}\nCONTEXT:\n{context}"
         )
         payload = {
             "model": model,
@@ -118,7 +117,11 @@ def make_llm_scorer(
             "temperature": 0,
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "verdict", "strict": True, "schema": _JUDGE_SCHEMA},
+                "json_schema": {
+                    "name": "verdict",
+                    "strict": True,
+                    "schema": _JUDGE_SCHEMA,
+                },
             },
         }
         body = json.dumps(payload).encode("utf-8")

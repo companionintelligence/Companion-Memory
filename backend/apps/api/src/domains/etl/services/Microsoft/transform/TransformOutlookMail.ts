@@ -3,11 +3,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { LoggerService } from '@ci/common/logging';
 import { type Connection, ConnectionService } from '@ci/domains/connections';
-import {
-  headersFromOutlookMessage,
-  liveMailDropReason,
-  mailIncludeBulkEnabled,
-} from '@ci/domains/import';
+import { headersFromOutlookMessage, liveMailDropReason, mailIncludeBulkEnabled } from '@ci/domains/import';
 import {
   CommunicationService,
   CommunicationType,

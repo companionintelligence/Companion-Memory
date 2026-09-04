@@ -686,7 +686,6 @@ export class ObjectObservationService {
 
       ids.push(...returned.map((row) => row.observation_id));
 
-
       // Ledger the arrivals that carried a full triple (detection-key rows
 
       // have none) — inserts AND refresh-hits alike evidence the record.

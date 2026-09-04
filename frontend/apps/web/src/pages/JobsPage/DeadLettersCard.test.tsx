@@ -239,21 +239,14 @@ describe('describeReplay', () => {
  */
 describe('DeadLettersCard when the page is full', () => {
   it('says the count is a first page rather than a total', () => {
-    renderCard(
-      Array.from({ length: DEAD_LETTER_PAGE }, (_, i) =>
-        letter({ id: `dl-${i}` }),
-      ),
-    );
+    renderCard(Array.from({ length: DEAD_LETTER_PAGE }, (_, i) => letter({ id: `dl-${i}` })));
 
     expect(screen.getByText(/First 200 un-replayed/)).toBeInTheDocument();
     expect(screen.getByText(/there are more/)).toBeInTheDocument();
   });
 
   it('reports a short page as the exact count it is', () => {
-    renderCard([
-      letter({ id: 'dl-1' }),
-      letter({ id: 'dl-2' }),
-    ]);
+    renderCard([letter({ id: 'dl-1' }), letter({ id: 'dl-2' })]);
 
     expect(screen.getByText(/^2 un-replayed/)).toBeInTheDocument();
     expect(screen.queryByText(/there are more/)).not.toBeInTheDocument();

@@ -134,7 +134,10 @@ export class SteamOwnedGamesTransformService {
                 // the key on purpose — playing the game again IS a new event.
                 source_type: 'ETL',
                 ...(() => {
-                  const identity = platformIdentity('steam', `played:${game.appid}:${game.rtime_last_played}`);
+                  const identity = platformIdentity(
+                    'steam',
+                    `played:${game.appid}:${game.rtime_last_played}`,
+                  );
 
                   return { source_system: identity.system, source_id: identity.id };
                 })(),

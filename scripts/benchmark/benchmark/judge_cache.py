@@ -30,7 +30,6 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
 
 from .schema import EvalQuestion
 from .scoring import Scorer
@@ -50,15 +49,15 @@ def _key(model: str, question: EvalQuestion, context: str) -> str:
 class JudgeCache:
     """In-memory verdict cache with atomic JSON persistence."""
 
-    entries: Dict[str, Tuple[bool, str]] = field(default_factory=dict)
-    path: Optional[Path] = None
+    entries: dict[str, tuple[bool, str]] = field(default_factory=dict)
+    path: Path | None = None
     hits: int = 0
     misses: int = 0
 
     # ── load / save ──────────────────────────────────────────────────────────
 
     @classmethod
-    def load(cls, path: str | os.PathLike) -> "JudgeCache":
+    def load(cls, path: str | os.PathLike) -> JudgeCache:
         """Load from ``path`` if it exists; otherwise return an empty cache."""
         p = Path(path)
         if not p.exists():
@@ -69,7 +68,7 @@ class JudgeCache:
             # Corrupt or unreadable — start fresh rather than crash a run that
             # only wanted the cache as a speed-up.
             return cls(path=p)
-        entries: Dict[str, Tuple[bool, str]] = {}
+        entries: dict[str, tuple[bool, str]] = {}
         for k, v in (raw.get("entries") or {}).items():
             try:
                 entries[k] = (bool(v["correct"]), str(v.get("reason", "")))
@@ -84,7 +83,10 @@ class JudgeCache:
             return
         payload = {
             "version": 1,
-            "entries": {k: {"correct": ok, "reason": reason} for k, (ok, reason) in self.entries.items()},
+            "entries": {
+                k: {"correct": ok, "reason": reason}
+                for k, (ok, reason) in self.entries.items()
+            },
         }
         # Write to a sibling .tmp, then rename — atomic on POSIX.
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -104,11 +106,22 @@ class JudgeCache:
 
     # ── lookup / write ───────────────────────────────────────────────────────
 
-    def get(self, model: str, question: EvalQuestion, context: str) -> Optional[Tuple[bool, str]]:
+    def get(
+        self, model: str, question: EvalQuestion, context: str
+    ) -> tuple[bool, str] | None:
         return self.entries.get(_key(model, question, context))
 
-    def put(self, model: str, question: EvalQuestion, context: str, verdict: Tuple[bool, str]) -> None:
-        self.entries[_key(model, question, context)] = (bool(verdict[0]), str(verdict[1]))
+    def put(
+        self,
+        model: str,
+        question: EvalQuestion,
+        context: str,
+        verdict: tuple[bool, str],
+    ) -> None:
+        self.entries[_key(model, question, context)] = (
+            bool(verdict[0]),
+            str(verdict[1]),
+        )
 
     def __len__(self) -> int:
         return len(self.entries)
@@ -122,7 +135,7 @@ class JudgeCache:
 def cached_scorer(inner: Scorer, cache: JudgeCache, *, model: str) -> Scorer:
     """Wrap a scorer to short-circuit on cache hit; record hit/miss counts."""
 
-    def scored(question: EvalQuestion, context: str) -> Tuple[bool, str]:
+    def scored(question: EvalQuestion, context: str) -> tuple[bool, str]:
         cached = cache.get(model, question, context)
         if cached is not None:
             cache.hits += 1

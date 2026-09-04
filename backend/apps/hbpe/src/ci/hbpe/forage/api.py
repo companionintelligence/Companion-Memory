@@ -141,7 +141,11 @@ def ask(
 ) -> dict:
     uid = _user_id(user_id)
     try:
-        trial = store.start_from_spec(uid, spec) if spec is not None else store.start(uid, seed=seed)
+        trial = (
+            store.start_from_spec(uid, spec)
+            if spec is not None
+            else store.start(uid, seed=seed)
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _payload(uid, trial)

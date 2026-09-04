@@ -27,11 +27,6 @@ interface SummaryDetail {
     files?: number | null;
     events?: number | null;
     messages?: number | null;
-    screenCaptures?: number | null;
-    apiLogs?: number | null;
-    positions?: number | null;
-    activities?: number | null;
-    measurements?: number | null;
   };
   insights: InsightNode[];
   dailyRhythm?: string[] | null;
@@ -72,11 +67,6 @@ const GET_SUMMARY = gql`
         files
         events
         messages
-        screenCaptures
-        apiLogs
-        positions
-        activities
-        measurements
       }
       insights {
         title

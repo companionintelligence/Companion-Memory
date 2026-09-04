@@ -1,8 +1,9 @@
 """Memory-lake spec: user facts, not the Sam Saturday fixture."""
 
+import numpy as np
+
 from ci.hbpe.forage.lake import lake_from_spec
 from ci.hbpe.forage.trial import ForageTrial
-import numpy as np
 
 
 def _spec():
@@ -38,13 +39,21 @@ def _spec():
             },
         ],
         "branch_prior": {"beach_trip": 0.6, "office": 0.4},
-        "interests": [{"branch": "beach_trip", "person": "jerry", "activities": ["surf"]}],
+        "interests": [
+            {"branch": "beach_trip", "person": "jerry", "activities": ["surf"]}
+        ],
     }
 
 
 def test_memory_read_is_the_item_not_a_hidden_world():
     model, process_A, items, truth = lake_from_spec(_spec())
-    trial = ForageTrial(model=model, process_A=process_A, items=items, truth=truth, rng=np.random.default_rng(0))
+    trial = ForageTrial(
+        model=model,
+        process_A=process_A,
+        items=items,
+        truth=truth,
+        rng=np.random.default_rng(0),
+    )
     rec = trial.read_item("event:1")
     assert rec.cue == "beach_trip_mention"
     assert trial.model.kind == "memory"
@@ -54,7 +63,13 @@ def test_memory_read_is_the_item_not_a_hidden_world():
 
 def test_ingest_appends_unread_index_hits():
     model, process_A, items, truth = lake_from_spec(_spec())
-    trial = ForageTrial(model=model, process_A=process_A, items=items, truth=truth, rng=np.random.default_rng(0))
+    trial = ForageTrial(
+        model=model,
+        process_A=process_A,
+        items=items,
+        truth=truth,
+        rng=np.random.default_rng(0),
+    )
     added = trial.ingest(
         [
             {

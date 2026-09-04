@@ -443,7 +443,12 @@ export class BlueBubblesSyncService implements OnModuleDestroy {
         return;
       }
 
-      await this.runStage(this.mediaStage, { userId, runId, stageId: stageIdByKind.get('media')!, scratchDir });
+      await this.runStage(this.mediaStage, {
+        userId,
+        runId,
+        stageId: stageIdByKind.get('media')!,
+        scratchDir,
+      });
       await this.runStage(this.pushStage, { userId, runId, stageId: stageIdByKind.get('push')!, scratchDir });
 
       // Belt to the compile-time brace above: a stage that was declared onto
