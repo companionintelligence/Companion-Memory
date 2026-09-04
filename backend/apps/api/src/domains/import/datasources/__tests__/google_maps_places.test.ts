@@ -84,7 +84,7 @@ describe('Google Maps (your places) datasource', () => {
     // the identity of every review moves the moment Google emits one more (they
     // arrive newest-first), silently overwriting its neighbour's row on the next
     // import. Pin the SHAPE here; the stability properties are asserted below.
-    expect(review!.id).toMatch(/^gmaps:review:[0-9a-f]{40}$/);
+    expect(review!.id).toMatch(/^gmaps:review:[0-9a-f]{64}$/);
     expect(review!.location?.latitude).toBeCloseTo(33.5256569, 5);
     expect(review!.timestamp?.toISOString()).toBe('2025-01-20T21:49:34.812Z');
   });
@@ -173,8 +173,8 @@ describe('Google Maps (your places) datasource', () => {
     });
 
     it('still tells two reviews of the SAME place on the same day apart', async () => {
-      // The key spans name+address+date+rating+text, so an edited review is a
-      // different row and two distinct reviews never collide.
+      // The key spans name+address+url+rating+text, so two reviews that differ
+      // in anything a reader would notice stay two rows.
       const sameDay = '2025-03-03T08:00:00.000Z';
       const ids = await idsFor([
         review('One Place', 'First visit.', sameDay),
@@ -182,6 +182,67 @@ describe('Google Maps (your places) datasource', () => {
       ]);
 
       expect(new Set(ids).size).toBe(2);
+    });
+
+    it('does not move a review id when only the raw date changes', async () => {
+      // The date is deliberately NOT in the key. Takeout writes it at
+      // microsecond precision and nothing downstream stores that string
+      // (ci.content has no time column), so a key containing it could never be
+      // re-keyed by a migration — see contentKey. The user-visible half of the
+      // same decision: a review re-exported with a jittered date converges onto
+      // the row it already has instead of minting a second one.
+      const [a] = await idsFor([review('Same Cafe', 'Unchanged.', '2025-01-20T21:49:34.812983Z')]);
+      const [b] = await idsFor([review('Same Cafe', 'Unchanged.', '2025-01-20T21:49:34.999999Z')]);
+
+      expect(a).toBe(b);
+    });
+
+    it('tells two nameless, textless reviews apart by the place url', async () => {
+      // Not hypothetical: three reviews in the reference corpus carry no name
+      // and no address, and two of those also carry no text, leaving the star
+      // rating as the only other field. The maps url is what they ARE — it
+      // holds the place id (`…/data=!4m2!3m1!1s0x0:<hex>`) — so it is in the
+      // key, and these two stay two rows.
+      const bare = (hex: string) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [-117.715302, 33.5256569] },
+        properties: {
+          date: '2024-08-08T08:08:08.888888Z',
+          five_star_rating_published: 5,
+          google_maps_url: `https://www.google.com/maps/place//data=!4m2!3m1!1s0x0:${hex}`,
+        },
+      });
+      const ids = await idsFor([bare('0xb047c640ba792e36'), bare('0xed44b9d290ed51fa')]);
+
+      expect(ids).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+    });
+
+    it('pins the exact digest both lanes must produce', async () => {
+      // A golden value, because this key is a stored identity: changing it
+      // re-homes every row already in ci.content / ci.events, and those rows do
+      // NOT converge on their own (INGEST_REFRESH_COLUMNS is [] for both — DO
+      // NOTHING, not DO UPDATE). If this test goes red, the change needs a
+      // re-key migration alongside it, the way
+      // 20260904023747_repair_google_maps_places_positional_ids accompanied the
+      // move off the parse index. The values are sha256 over
+      // U+001F-joined fields, and the migration recomputes them in SQL as
+      // encode(sha256(convert_to(concat_ws(chr(31), …), 'UTF8')), 'hex').
+      const [reviewId] = await idsFor([
+        {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [-118.3, 34.05] },
+          properties: {
+            date: '2025-01-20T21:49:34.812983Z',
+            five_star_rating_published: 5,
+            google_maps_url: 'https://maps.example/x',
+            location: { address: '30131 Town Center Dr', name: 'Laguna Niguel Smiles Dentistry' },
+            review_text_published: 'Great staff.',
+          },
+        },
+      ]);
+
+      expect(reviewId).toBe('gmaps:review:d33399e140ad86a780ab0fc035b1b6746868a7a2f3188fdb4e8bb3502f897289');
     });
 
     it('keys a cid-less saved place on its content too, not on the parse index', async () => {
@@ -220,7 +281,7 @@ describe('Google Maps (your places) datasource', () => {
       const before = await placeIds([second, first]);
       const after = await placeIds([place('Gamma Bar', 34.07, -118.32), second, first]);
 
-      expect(before.every((id) => /^gmaps:place:[0-9a-f]{40}$/.test(id))).toBe(true);
+      expect(before.every((id) => /^gmaps:place:[0-9a-f]{64}$/.test(id))).toBe(true);
       expect(after.slice(1)).toEqual(before);
     });
   });
@@ -276,6 +337,50 @@ describe('Google Maps (your places) datasource', () => {
       Kind: 'labeled_place',
     });
     expect(pipeline[0].item.location).toEqual({ latitude: 34.2, longitude: -118.5 });
-    expect(pipeline[0].item.id).toMatch(/^gmaps:place:[0-9a-f]{40}$/);
+    // The place lane's golden value — see 'pins the exact digest both lanes
+    // must produce' for why this is pinned rather than shape-matched. Key is
+    // name + address + url ('' here: Labeled places.json carries no url) +
+    // lat/lon at toFixed(7).
+    expect(pipeline[0].item.id).toBe(
+      'gmaps:place:987bab959a5968dc3816f67d1f999e532f4031ee477c2ac99e8789162e4044a9',
+    );
+  });
+
+  it('keeps two otherwise identical pins apart by coordinates', async () => {
+    // Coordinates are in the place key at fixed 7dp (~1cm) rather than at JS's
+    // default float rendering, so that Postgres can reproduce the same string
+    // — to_char(round(x::numeric, 7), 'FM9990.0000000') — and re-key these rows
+    // if the key ever moves again. Fixed precision must still discriminate.
+    const root = await fs.promises.mkdtemp(path.join(tmpdir(), 'google-maps-coords-'));
+    await fs.promises.writeFile(
+      path.join(root, 'Labeled places.json'),
+      JSON.stringify({
+        type: 'FeatureCollection',
+        features: [
+          {
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [-118.5, 34.2] },
+            properties: { name: 'Parking', address: 'Level 3' },
+          },
+          {
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [-118.5000001, 34.2] },
+            properties: { name: 'Parking', address: 'Level 3' },
+          },
+        ],
+      }),
+    );
+
+    const importer = new GoogleMapsPlacesFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await importer.fileImport({}, { filename: root, fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const ids = pipeline.filter((p) => p.item).map((p) => p.item.id!);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 });
