@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 
 import { REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorators';
 
+import { AgentJobsController } from '../../../domains/agent/controllers/AgentJobsController';
 import { IntentsController } from '../../../domains/agent/controllers/IntentsController';
 import { MemoryController } from '../../../domains/agent/controllers/MemoryController';
 import { FilesController } from '../../../domains/files/controllers/FilesController';
@@ -35,6 +36,9 @@ const SCOPED_CONTROLLERS = [
   FilesController,
   BulkIngestController,
   PendingActionsController,
+  // Added by #2558; every route already declared a capability, only this
+  // hand-maintained mirror had not caught up.
+  AgentJobsController,
 ];
 
 /** Every own method on a controller prototype (route handlers and helpers alike). */

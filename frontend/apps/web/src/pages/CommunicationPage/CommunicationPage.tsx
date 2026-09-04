@@ -9,12 +9,14 @@ import { useParams, Link } from 'react-router-dom';
 import { EntityEvolutionPanel } from '@/components/EntityEvolution/EntityEvolutionPanel';
 import { EntityFieldsCard, formatEntityLabel, formatEntityTimestamp } from '@/components/EntityFields';
 import { EntityEditToggle, EntityTagsDescriptionCard } from '@/components/EntityTagsDescriptionCard';
+import { ErrorState } from '@/components/ErrorState';
 import { CommunicationIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { Tag } from '@/components/Tag';
 import { gql } from '@/graphql';
 
-const GET_COMMUNICATION = gql(`
+// Exported for the colocated test, which mocks it failing.
+export const GET_COMMUNICATION = gql(`
   query GetCommunication($id: ID!) {
     communication(id: $id) {
       id
@@ -65,7 +67,7 @@ const UPDATE_COMMUNICATION_FIELDS = gql(`
 export function CommunicationPage() {
   const { id } = useParams<{ id: string }>();
 
-  const { data, loading } = useQuery(GET_COMMUNICATION, {
+  const { data, loading, error, refetch } = useQuery(GET_COMMUNICATION, {
     variables: {
       id: GlobalUID.encode('communication', id!),
     },
@@ -87,6 +89,17 @@ export function CommunicationPage() {
 
   if (loading) {
     content = <LoadingPage />;
+  } else if (error) {
+    // A failed fetch is not an absent record. Dropping `error` sent a 500, a
+    // dead connection or an expired session down the branch below, which told
+    // the owner their own communication does not exist.
+    content = (
+      <ErrorState
+        title="Could not load this communication"
+        description="This communication is still here — this device could not reach it just now."
+        onRetry={() => void refetch()}
+      />
+    );
   } else if (communication == null) {
     content = (
       <EmptyState

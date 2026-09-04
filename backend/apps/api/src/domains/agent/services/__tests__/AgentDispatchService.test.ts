@@ -1,3 +1,4 @@
+import { type AgentJobStatus } from '../../entities/AgentJobEntity';
 import { AgentDispatchService } from '../AgentDispatchService';
 
 describe('AgentDispatchService.checkpoint stop rule', () => {
@@ -12,7 +13,7 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
       harnessId: 'openclaw' as const,
       packetMode: 'both' as const,
       packet: { source: { title: 'Book the dentist' } },
-      status: 'running' as const,
+      status: 'running' as AgentJobStatus,
       failStep: null as string | null,
       failCount: 0,
       result: null,
@@ -24,6 +25,9 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
 
     const jobRepository = {
       findOne: jest.fn(async () => job),
+      // Declared here so the stale-job test can swap in its own implementation;
+      // `AgentDispatchService.failStale` is the only caller.
+      find: jest.fn() as jest.Mock,
       update: jest.fn(async (_where: unknown, patch: Partial<typeof job>) => {
         Object.assign(job, patch);
       }),

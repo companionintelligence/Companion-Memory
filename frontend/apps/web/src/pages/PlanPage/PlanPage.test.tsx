@@ -18,6 +18,17 @@ const toastError = vi.hoisted(() => vi.fn());
 // `<Toaster>`, which this page does not own — mocking the hook directly is
 // what the rest of this codebase does to assert a toast fired without
 // fighting portal/animation timing (see AsksPage's equivalent).
+// #2558 put ChatWithAgentMenu/AgentActionItems inside Task; both reach for the
+// auth hook context, which this harness does not mount. Task.test.tsx already
+// stubs them for the same reason — mirrored here so PlanPage renders at all.
+vi.mock('@/components/ChatWithAgent', () => ({
+  ChatWithAgentMenu: () => null,
+}));
+
+vi.mock('@/components/ChatWithAgent/AgentActionItems', () => ({
+  AgentActionItems: () => null,
+}));
+
 vi.mock('@ci/shadcn', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
 
@@ -968,7 +979,7 @@ describe('PlanPage mobile tabs', () => {
     expect(await screen.findByRole('dialog', { name: /edit task/i })).toBeInTheDocument();
   });
 
-  it('enters selection on a long-press and bulk-deletes without a confirm dialog', async () => {
+  it('enters selection on a long-press and bulk-deletes once the count is confirmed', async () => {
     setViewport(true);
 
     renderWithProviders(<PlanPage />, {
@@ -1009,7 +1020,12 @@ describe('PlanPage mobile tabs', () => {
     expect(screen.getByTestId('plan-selection-bar')).toHaveTextContent('2 selected');
 
     fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // The per-row trash control still deletes on the click itself; only this
+    // bulk path confirms, because nothing else says how many are about to go.
+    expect(await screen.findByRole('alertdialog')).toHaveTextContent('Delete 2 tasks?');
+    fireEvent.click(screen.getByRole('button', { name: /^delete 2 tasks$/i }));
+
     await waitFor(() => expect(screen.queryByTestId('plan-selection-bar')).not.toBeInTheDocument());
   });
 });

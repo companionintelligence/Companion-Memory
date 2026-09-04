@@ -76,7 +76,7 @@ describe('apple_photos importer', () => {
     expect(items.length).toBe(2);
 
     for (const it of items) {
-      expect(it.classification).toBe('photo');
+      expect(it.classification).toBe('media');
       // Title must be the real filename, never a bare bundle/dir name.
       expect(it.metadata.Title).toBe(it.content.filename);
       expect(it.metadata.Title).not.toBe('Sample Library.photoslibrary');

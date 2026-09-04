@@ -45,10 +45,11 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
 
-    /* Test against mobile viewports. */
-    // {
-    //   name: 'Mobile Chrome',
-    //   use: { ...devices['Pixel 5'] },
-    // },
+    // Deliberately no mobile project here. This config runs exactly one spec
+    // (the Checkly login smoke check above), so a second viewport would only
+    // re-run that same login against the deployed URL and double the Checkly
+    // bill for no extra signal. Mobile-viewport coverage is the enabled
+    // `mobile` project in playwright.e2e.config.ts (Pixel 5, tests/e2e/mobile.spec.ts),
+    // which runs against the local full-stack. Anything mobile belongs there.
   ],
 });

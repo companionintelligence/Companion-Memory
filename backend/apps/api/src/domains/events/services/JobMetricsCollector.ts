@@ -76,12 +76,14 @@ export class JobMetricsCollector {
     this.logger.setContext(JobMetricsCollector.name);
   }
 
-  @Cron(SAMPLE_CRON, { name: 'JobMetricsCollector.sampleOnSchedule' })
+  // `exclusive`: neither leg carries an overlap guard of its own, and a second
+  // sample landing on top of the first writes the same window twice.
+  @Cron(SAMPLE_CRON, { name: 'JobMetricsCollector.sampleOnSchedule', exclusive: true })
   async sampleOnSchedule(): Promise<void> {
     await this.sample();
   }
 
-  @Cron(PURGE_CRON, { name: 'JobMetricsCollector.purgeOnSchedule' })
+  @Cron(PURGE_CRON, { name: 'JobMetricsCollector.purgeOnSchedule', exclusive: true })
   async purgeOnSchedule(): Promise<void> {
     await this.purge();
   }

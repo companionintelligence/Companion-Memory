@@ -2,9 +2,9 @@ import { Button, ContextMenu, DropdownMenu } from '@ci/shadcn';
 import { useTranslation } from 'react-i18next';
 
 import type { AgentHarnessStatus } from '@/api/useAgentHarnesses';
+import type { AgentChatContext } from '@/lib/agentChat';
 
 import { useChatAboutActions } from './useChatAboutActions';
-import type { AgentChatContext } from '@/lib/agentChat';
 
 const NOT_TALKING = 'OpenClaw is not talking to Memory right now.';
 

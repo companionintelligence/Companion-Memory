@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { EmptyState, LoadingPage, usePageTitle } from '@ci/common';
-import { Button, useToast } from '@ci/shadcn';
+import { AlertDialog, Button, useToast } from '@ci/shadcn';
 import { ListTodo } from '@ci/shadcn/icons';
 
 import { useFeatures } from '@/common/feature';
@@ -88,7 +88,8 @@ export function PlanPage() {
   const [editingTask, setEditingTask] = useState<EditableTask | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [boardTab, setBoardTab] = useState<string | null>(null);
-  const { deleteTasks } = useDeleteTasks();
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  const { deleteTasks, deleting } = useDeleteTasks();
 
   const handleToggle = (id: string, done: boolean) => {
     void (done ? completeTask({ variables: { id } }) : reopenTask({ variables: { id } }));
@@ -96,6 +97,24 @@ export function PlanPage() {
 
   const handleDelete = (id: string) => {
     void deleteTasks([id]);
+  };
+
+  /**
+   * The per-row trash control deliberately has no confirm — that click IS the
+   * decision, and it removes exactly the one task under the cursor. Emptying a
+   * whole selection is a different blast radius: nothing here names what is
+   * about to go, and there is no undo behind it, so this one path asks first.
+   * A failure still toasts rather than holding the dialog open, so the
+   * confirmation closes either way and the selection survives for a retry.
+   */
+  const handleBulkDelete = () => {
+    void deleteTasks(selectedIds).then((ok) => {
+      setConfirmingBulkDelete(false);
+
+      if (ok) {
+        setSelectedIds([]);
+      }
+    });
   };
 
   const handleEdit = (task: EditableTask) => {
@@ -368,13 +387,7 @@ export function PlanPage() {
                   type="button"
                   variant="destructive"
                   size="sm"
-                  onClick={() => {
-                    void deleteTasks(selectedIds).then((ok) => {
-                      if (ok) {
-                        setSelectedIds([]);
-                      }
-                    });
-                  }}
+                  onClick={() => setConfirmingBulkDelete(true)}
                 >
                   Delete
                 </Button>
@@ -394,6 +407,47 @@ export function PlanPage() {
       {editingTask && (
         <EditTaskModal task={editingTask} onClose={() => setEditingTask(null)} onSaved={refresh} />
       )}
+
+      <AlertDialog
+        open={confirmingBulkDelete && selectedIds.length > 0}
+        onOpenChange={(open) => !open && setConfirmingBulkDelete(false)}
+      >
+        <AlertDialog.Content>
+          <AlertDialog.Header>
+            <AlertDialog.Title>
+              {selectedIds.length === 1 ? 'Delete this task?' : `Delete ${selectedIds.length} tasks?`}
+            </AlertDialog.Title>
+            <AlertDialog.Description>
+              {selectedIds.length === 1
+                ? 'This task will be permanently deleted from your plan. This cannot be undone.'
+                : `These ${selectedIds.length} tasks will be permanently deleted from your plan. This cannot be undone.`}
+            </AlertDialog.Description>
+          </AlertDialog.Header>
+          <AlertDialog.Footer>
+            <AlertDialog.Cancel disabled={deleting}>Cancel</AlertDialog.Cancel>
+            <AlertDialog.Action
+              // The confirm has to carry its own destructive styling:
+              // AlertDialog.Action renders the DEFAULT button variant, unlike
+              // the `variant="destructive"` Button the Dialog-based delete
+              // modals use.
+              className="bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
+              disabled={deleting}
+              onClick={(e) => {
+                // Radix auto-closes on Action click; keep it open so the
+                // in-flight state stays visible until the deletes finish.
+                e.preventDefault();
+                handleBulkDelete();
+              }}
+            >
+              {deleting
+                ? 'Deleting…'
+                : selectedIds.length === 1
+                  ? 'Delete task'
+                  : `Delete ${selectedIds.length} tasks`}
+            </AlertDialog.Action>
+          </AlertDialog.Footer>
+        </AlertDialog.Content>
+      </AlertDialog>
     </>
   );
 }

@@ -5,6 +5,12 @@ name: CI
 # means "nobody dispatched it", NOT "everything passed". Run it deliberately:
 #   gh workflow run <file> --ref <branch>
 # Restore a trigger by re-adding it to the `on:` block below.
+#
+# The cheap half of this file — the `lint` and `typecheck` lanes, identically
+# defined — DOES run on every PR, from `pr-gate.yml`. It lives in its own file
+# so the cost decision that gated this one stays revertible in a single move.
+# The expensive lanes here (`test`, `test-frontend`, `python`, `imports`,
+# `graphql`) remain dispatch-only.
 on:
   workflow_dispatch:
 
@@ -55,9 +61,97 @@ jobs:
     # `gh pr checks`) with no indication of which step ran out of time, and it
     # skips every remaining step, so nothing can report on the way out. A STEP
     # timeout fails that step and lets the job finish normally.
-    timeout-minutes: 15
+    #
+    # Raised from 15 when the Postgres service below landed: the job now also
+    # pays for a client install, the role/extension bootstrap and ~300
+    # migrations (~2 min), and the suite itself grew by the 57 DB-backed files
+    # that used to skip.
+    timeout-minutes: 35
     container:
       image: node:22
+    services:
+      # The appliance's OWN Postgres image, not a stock one: the migrations need
+      # TimescaleDB, PostGIS and pgvector together, and
+      # 20260611030000_use_native_uuidv7 calls PG18's native `uuidv7()`. No
+      # public image carries that combination. This package is PUBLIC, so the
+      # pull needs no credentials.
+      #
+      # Same image and same pin as `consent-path-gate.yml` — a floating tag
+      # would let an unrelated release change what the suite runs against,
+      # silently. Bump the two together:
+      #   gh api orgs/companionintelligence/packages/container/companion%2Fdatabase/versions \
+      #     --jq '.[0].metadata.container.tags'
+      postgres:
+        image: ghcr.io/companionintelligence/companion/database:2026.8.20
+        env:
+          # Throwaway credentials for an ephemeral CI database that is destroyed
+          # with the job. Not a secret, and deliberately not the dev values.
+          PASSWORD: ci_test_admin_pw
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      # Note the host: unlike `consent-path-gate.yml`, this job runs INSIDE a
+      # container, so the service is reached by its label on the job's Docker
+      # network (`postgres`) rather than through a published port on the runner.
+      # That is also why there is no `ports:` mapping above — nothing on the
+      # runner host needs to reach it.
+      #
+      # `DATABASE_URL` is what `bin/dbmate.js` reads, so the migrations and the
+      # suites cannot disagree about which database this is.
+      DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PGPASSWORD: ci_test_admin_pw
+      # EVERY ONE of the sixteen per-suite variables is enumerated below, and
+      # that is NOT redundant with `DATABASE_URL` above. Thirteen of the sixteen
+      # resolve through `domains/__tests__/support/databaseConnection.ts`, which
+      # checks the suite's own `<DOMAIN>_TEST_DATABASE_URL` FIRST and falls
+      # through to `DATABASE_URL` — for those, these lines are a restatement of
+      # the fallback. The other three read their variable DIRECTLY off
+      # `process.env` with no fallback at all, and gate `describe` on it:
+      #   PLANNING_ — planning/services/__tests__/TaskService.tenancy.integration.test.ts
+      #   NOTES_    — notes/__tests__/NoteCapture.integration.spec.ts
+      #   SCHEDULE_ — schedule/services/__tests__/CandidateService.lifecycle.integration.test.ts
+      #               (it chains `SCHEDULE_ ?? PLANNING_`, so PLANNING_ alone
+      #               would in fact cover it — set anyway, so nobody has to know)
+      # With only `DATABASE_URL` set those four `describe` blocks resolve to
+      # `describe.skip` and jest still exits 0 — the green-but-tested-nothing
+      # outcome this job exists to end. The list is enumerated in full rather
+      # than trimmed to the three so that a new suite written in either style is
+      # covered, and so nobody has to know which style each file uses. Keep it
+      # in step with the sixteen named in
+      # `docs/architecture/test-strategy.md` §3.
+      ASKS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      BROWSER_ACTIVITY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      CONNECTIONS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      EVENTS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      IMPORT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      MEMORY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      NOTES_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PEERS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PERSISTENCE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PERSONALIZATION_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PIPELINE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PLANNING_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PORTABILITY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      SCHEDULE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      SEARCH_INGRESS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      SEARCH_NEXT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      # DATABASE_ADMIN_PASSWORD is deliberately NOT set, so this is not an
+      # oversight to "fix" by adding it. SEVEN further suites gate on
+      # `scratchDatabaseAvailability()` (`domains/__tests__/support/scratchDatabase.ts`)
+      # — `user/…/AccountPurgeService.integration.spec.ts`, the four `etl/…`
+      # `ConnectionSyncJobService`/`SyncOrchestrator` specs,
+      # `pipeline/__tests__/enrichmentLoop.integration.spec.ts` and
+      # `domains/__tests__/support/__tests__/scratchDatabase.spec.ts` — and each
+      # one CREATEs a database of its own and replays every migration into it —
+      # roughly another two minutes apiece on top of the run below, against a
+      # 20-minute step ceiling. THEY STILL SKIP IN THIS JOB. That is visible,
+      # not disguised: each prints `SKIPPED — no administrative database
+      # connection configured …` naming this variable. Turning them on is a
+      # separate cost decision (and needs the step timeout revisited), not a
+      # side effect of this one.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -80,11 +174,51 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Everything below is what turns 57 silently-skipped suites into suites
+      # that run. Without a database they all resolve `describe.skip` and jest
+      # still exits 0 — a green run that executed none of the integration
+      # coverage. `docs/architecture/test-strategy.md` §3.1 calls this "a skip is
+      # not a pass" and names this job as its standing example.
+      #
+      # This is what the `ci/setup-database` init container does in compose,
+      # reduced to what a test database needs: the least-privilege application
+      # role, its database, and the extensions the migrations assume are already
+      # there. No migration issues `CREATE EXTENSION` for these — see
+      # 20250528215624_enable_pgvector, a no-op that exists to document exactly
+      # that — so a database that skips this step fails on a type it has never
+      # heard of. Keep the list in step with
+      # `infrastructure/setup-database/entrypoint.sh`.
+      #
+      # `apt-get` needs no sudo: the node:22 container runs as root.
+      - name: Bootstrap role, database and extensions
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install -y --no-install-recommends postgresql-client
+          psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE companion WITH LOGIN PASSWORD 'ci_test_app_pw';" \
+            -c "CREATE DATABASE companion OWNER companion;"
+          for ext in timescaledb postgis vector pg_stat_statements btree_gist; do
+            psql -h postgres -U postgres -d companion -v ON_ERROR_STOP=1 \
+              -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";"
+          done
+
+      # "Port open" and "schema correct" are different questions, and the suites
+      # only probe the first (test-strategy.md §3.1, trap 2). An unmigrated
+      # database therefore does not skip — it fails every DB-backed test with
+      # `relation "ci.…" does not exist`, which reads like a defect in the change
+      # under test. `migrate` also runs check-migration-versions.js, so a
+      # timestamp collision fails here rather than inside the production image.
+      - name: Run migrations
+        run: yarn workspace @ci/be-api migrate
+
       # Several times the measured cost: ~400 files in about 2.5 minutes in a
       # two-core container, so a few minutes on a runner whose cores are slower.
-      # Anything approaching ten means the suite has stopped making progress
-      # rather than merely got slower, and failing the step says so while
-      # leaving the job alive to finish and report.
+      # The ceiling was ten while every DB-backed suite skipped; it is twenty now
+      # that the 57 of them actually connect, run migrations-backed queries and
+      # truncate between cases. Anything approaching that still means the suite
+      # has stopped making progress rather than merely got slower, and failing
+      # the step says so while leaving the job alive to finish and report.
       #
       # What used to sit here was a `--detectOpenHandles --runInBand` step meant
       # to diagnose the hang on failure. It never once ran — the job timeout
@@ -93,7 +227,7 @@ jobs:
       # in the main process, which is precisely the configuration that hangs.
       # See the note in backend/apps/api/jest.config.mjs.
       - name: Run backend API tests
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: yarn workspace @ci/be-api test
 
   test-frontend:

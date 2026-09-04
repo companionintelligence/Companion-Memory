@@ -1,6 +1,8 @@
 import { Button } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
+import { useFeatures } from '@/common/feature';
+
 import { Empty } from './Empty';
 
 interface MemoryEmptyStateProps {
@@ -9,6 +11,12 @@ interface MemoryEmptyStateProps {
 }
 
 export function MemoryEmptyState({ filtered }: MemoryEmptyStateProps) {
+  const { isFeatureEnabled } = useFeatures();
+  // Same flag /sources/import is gated behind. With it off SourcesPage
+  // normalises that half away to /sources/connect, so the button would just be
+  // a second, differently-worded "Connect a source" — drop it instead.
+  const importEnabled = isFeatureEnabled('import.page');
+
   if (filtered) {
     return (
       <Empty
@@ -30,9 +38,11 @@ export function MemoryEmptyState({ filtered }: MemoryEmptyStateProps) {
         <Button asChild>
           <Link to="/sources/connect">Connect a source</Link>
         </Button>
-        <Button variant="outline" asChild>
-          <Link to="/settings/data">Import data</Link>
-        </Button>
+        {importEnabled && (
+          <Button variant="outline" asChild>
+            <Link to="/sources/import">Import data</Link>
+          </Button>
+        )}
       </div>
     </div>
   );

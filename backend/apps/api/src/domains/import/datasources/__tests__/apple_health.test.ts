@@ -55,8 +55,12 @@ describe('Apple Health datasource', () => {
     expect(pipeline.length).toBe(5);
 
     const records = pipeline.filter((p) => p.item.classification === 'health');
+    const sleep = pipeline.filter((p) => p.item.classification === 'sleep');
     const workouts = pipeline.filter((p) => p.item.classification === 'workout');
-    expect(records.length).toBe(4); // 3 records + 1 activity summary
+    // The fixture's third <Record> is HKCategoryTypeIdentifierSleepAnalysis, which
+    // the parser classifies as 'sleep' rather than 'health' (apple_health.ts:269).
+    expect(records.length).toBe(3); // 2 records + 1 activity summary
+    expect(sleep.length).toBe(1);
     expect(workouts.length).toBe(1);
   });
 

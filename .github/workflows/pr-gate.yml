@@ -1,0 +1,166 @@
+name: PR gate
+
+# ═══════════════════════════════════════════════════════════════════════════
+# THE ONE THING THAT RUNS ON EVERY PULL REQUEST.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ── Why this is a separate file and not a trigger on ci.yml ──────────────
+#
+# `docs/qa/ci-gate-proposal.md` §3.1 proposes adding `pull_request:` to
+# `ci.yml`. This implements the cheap half of that recommendation in a file of
+# its own instead, because the reason every workflow here was gated to manual is
+# COST — GitHub Actions was running at roughly $563/month for checks the org
+# already owns hardware for (`docs/CI.md`) — and a cost decision should be
+# revertible in one move. Deleting this file returns the repository to exactly
+# where it was; `ci.yml` is untouched and stays `workflow_dispatch`-only.
+#
+# ── What it runs, and what it deliberately does not ─────────────────────
+#
+# Lint (4 lanes) + typecheck (2 lanes), and nothing else. The proposal prices
+# the full `ci.yml` at ~8-14 min of runner time per PR and this subset at
+# ~2-3 min, and the subset would still have caught 3 of the 8 defect classes in
+# `docs/qa/baseline-2026-08-26.md` — including all 334 lint/format violations
+# that reached `main` in three days with nothing run.
+#
+# The unit-test and Python lanes are the expensive half and stay on dispatch:
+#
+#     gh workflow run ci.yml --ref <branch>
+#
+# ── Running is not blocking ──────────────────────────────────────────────
+#
+# `main` carries no `required_status_checks` and
+# `required_approving_review_count: 0`, so a red run here stops nothing on its
+# own. Blocking additionally requires someone with admin adding these contexts
+# to branch protection (proposal §3.4 — do it only once a green run exists on
+# `main`, since a context that never reports blocks every PR forever):
+#
+#     Lint root, Lint backend, Lint frontend, Lint format,
+#     Type check backend, Type check frontend
+#
+# Those names match `ci.yml`'s jobs on purpose. The two run identical commands,
+# so a deliberately dispatched `ci.yml` reports the same contexts and satisfies
+# the same rule rather than sitting beside it as a near-duplicate.
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Same container, corepack step and cache key as `ci.yml`, so the two share
+  # one warm cache instead of each paying for its own cold install.
+  install:
+    name: Install dependencies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: node:22
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Cache node modules
+        id: cache-modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        if: steps.cache-modules.outputs.cache-hit != 'true'
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  typecheck:
+    name: Type check ${{ matrix.name }}
+    needs: install
+    runs-on: ubuntu-latest
+    container:
+      image: node:22
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            command: yarn workspace @ci/be-api typecheck
+          - name: frontend
+            command: yarn workspace @ci/fe-web typecheck
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Type check ${{ matrix.name }}
+        run: ${{ matrix.command }}
+
+  lint:
+    name: Lint ${{ matrix.name }}
+    needs: install
+    runs-on: ubuntu-latest
+    container:
+      image: node:22
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: root
+            command: yarn lint
+          - name: backend
+            command: yarn workspace @ci/be-api lint
+          - name: frontend
+            command: yarn workspace @ci/fe-web lint
+          - name: format
+            command: yarn format:check
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Restore node modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            **/node_modules
+            .yarn/cache
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-modules-
+
+      - name: Install dependencies
+        run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint ${{ matrix.name }}
+        run: ${{ matrix.command }}

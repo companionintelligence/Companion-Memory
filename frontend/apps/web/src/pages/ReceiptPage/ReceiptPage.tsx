@@ -7,6 +7,7 @@ import { Link, useParams } from 'react-router-dom';
 
 import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import { resolveMediaUrl } from '@/components/entities/resolveMediaUrl';
+import { ErrorState } from '@/components/ErrorState';
 import { ReceiptIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
@@ -170,7 +171,7 @@ function EvidencePane({ documentContentId }: { documentContentId: string }) {
 export function ReceiptPage() {
   const { id } = useParams<{ id: string }>();
 
-  const { data, loading } = useQuery(GET_RECEIPT, {
+  const { data, loading, error, refetch } = useQuery(GET_RECEIPT, {
     variables: { id: GlobalUID.encode('receipt', id!) },
   });
 
@@ -186,6 +187,17 @@ export function ReceiptPage() {
 
   if (loading && receipt == null) {
     content = <LoadingPage />;
+  } else if (error && receipt == null) {
+    // A failed fetch is not an absent record. Dropping `error` sent a 500, a
+    // dead connection or an expired session down the branch below, which told
+    // the owner their own receipt does not exist.
+    content = (
+      <ErrorState
+        title="Could not load this receipt"
+        description="This receipt is still here — this device could not reach it just now."
+        onRetry={() => void refetch()}
+      />
+    );
   } else if (receipt == null) {
     content = <EmptyState icon={<ReceiptIcon size={48} colorized={false} />} message="Receipt not found" />;
   } else {

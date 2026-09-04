@@ -12,6 +12,7 @@ import { EntityEvolutionPanel } from '@/components/EntityEvolution/EntityEvoluti
 import { EntityGraph } from '@/components/EntityGraph';
 import { EntityRelationshipCards } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
 import { EntityEditToggle, EntityTagsDescriptionCard } from '@/components/EntityTagsDescriptionCard';
+import { ErrorState } from '@/components/ErrorState';
 import { PersonIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { AddRelationshipModal } from '@/components/modals/AddItemModal/AddRelationshipModal';
@@ -68,7 +69,8 @@ const MAX_NODE_LIMIT = 100;
 const NODE_LIMIT_STEP = 5;
 const DEFAULT_NODE_LIMIT = 25;
 
-const GET_PERSON = gql(`
+// Exported for the colocated test, which mocks it failing.
+export const GET_PERSON = gql(`
   query GetPerson($id: ID!) {
     person(id: $id) {
       id
@@ -102,7 +104,7 @@ export function PersonPage() {
   const [hopDepth, setHopDepth] = useState(DEFAULT_HOP_DEPTH);
   const [nodeLimit, setNodeLimit] = useState(DEFAULT_NODE_LIMIT);
 
-  const { data, loading } = useQuery(GET_PERSON, {
+  const { data, loading, error, refetch } = useQuery(GET_PERSON, {
     variables: {
       id: GlobalUID.encode('person', id!),
     },
@@ -124,6 +126,17 @@ export function PersonPage() {
 
   if (loading) {
     content = <LoadingPage />;
+  } else if (error) {
+    // A failed fetch is not an absent record. Dropping `error` sent a 500, a
+    // dead connection or an expired session down the branch below, which told
+    // the owner this person is not in their memory at all.
+    content = (
+      <ErrorState
+        title="Could not load this person"
+        description="This person is still here — this device could not reach them just now."
+        onRetry={() => void refetch()}
+      />
+    );
   } else if (person == null) {
     content = <EmptyState icon={<PersonIcon size={48} colorized={false} />} message="Person not found" />;
   } else {

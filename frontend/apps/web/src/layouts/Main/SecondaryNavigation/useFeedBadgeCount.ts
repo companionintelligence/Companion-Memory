@@ -67,15 +67,27 @@ interface FeedBadgeCountQueryVariables {
 export function useFeedBadgeCount() {
   const { isFeatureEnabled } = useFeatures();
   const actionsEnabled = isFeatureEnabled('actions');
+  /**
+   * Today is the only surface that lists these actions and summaries. With
+   * `today.page` off nothing can open them, so a badge would be a red dot the
+   * owner cannot clear — it counted unseen rows for months while the page that
+   * showed them was unrouted. Count nothing, and don't ask the API either.
+   */
+  const todayPageEnabled = isFeatureEnabled('today.page');
 
   const { data } = useQuery<FeedBadgeCountQueryResult, FeedBadgeCountQueryVariables>(GET_FEED_BADGE_COUNT, {
     variables: {
       actionLimit: actionsEnabled ? FEED_BADGE_ACTION_LIMIT : 0,
       summaryFirst: FEED_BADGE_SUMMARY_LIMIT,
     },
+    skip: !todayPageEnabled,
     fetchPolicy: 'no-cache',
     notifyOnNetworkStatusChange: true,
   });
+
+  if (!todayPageEnabled) {
+    return 0;
+  }
 
   const unseenActionsCount = actionsEnabled
     ? (data?.feedActions?.filter((action) => action.dismissed !== true && action.seen !== true).length ?? 0)

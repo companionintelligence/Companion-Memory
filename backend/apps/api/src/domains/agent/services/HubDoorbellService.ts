@@ -30,11 +30,13 @@ export class HubDoorbellService {
 
     if (!base) {
       this.logger.warn('Skipping OpenClaw doorbell: CI_HUB_INTERNAL_URL is empty');
+
       return false;
     }
 
     if (!secret) {
       this.logger.warn('Skipping OpenClaw doorbell: CI_HUB_FORWARD_AUTH_SECRET is empty');
+
       return false;
     }
 
@@ -58,6 +60,7 @@ export class HubDoorbellService {
 
       if (!response.ok) {
         this.logger.warn(`Hub doorbell returned ${response.status} for job ${jobId}`);
+
         return false;
       }
 
@@ -67,6 +70,7 @@ export class HubDoorbellService {
         jobId,
         error: error instanceof Error ? error.message : String(error),
       });
+
       return false;
     }
   }

@@ -10,6 +10,7 @@ import { ChatWithAgentMenu } from '@/components/ChatWithAgent';
 import { EntityEvolutionPanel } from '@/components/EntityEvolution/EntityEvolutionPanel';
 import { EntityFieldsCard, formatEntityLabel, formatEntityTimestamp } from '@/components/EntityFields';
 import { EntityEditToggle, EntityTagsDescriptionCard } from '@/components/EntityTagsDescriptionCard';
+import { ErrorState } from '@/components/ErrorState';
 import { EventIcon, PlaceIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { Map } from '@/components/Map';
@@ -23,7 +24,8 @@ import {
 
 import { EventContentGrid } from './EventContentGrid';
 
-const GET_EVENT = gql(`
+// Exported for the colocated test, which mocks it failing.
+export const GET_EVENT = gql(`
   query GetEvent($id: ID!) {
     event(id: $id) {
       id
@@ -96,7 +98,7 @@ export function EventPage() {
 
   const navigate = useNavigate();
 
-  const { data, loading } = useQuery(GET_EVENT, {
+  const { data, loading, error, refetch } = useQuery(GET_EVENT, {
     variables: {
       id: GlobalUID.encode('event', id!),
     },
@@ -116,6 +118,17 @@ export function EventPage() {
 
   if (loading) {
     content = <LoadingPage />;
+  } else if (error) {
+    // A failed fetch is not an absent record. Dropping `error` sent a 500, a
+    // dead connection or an expired session down the branch below, which told
+    // the owner their own event does not exist.
+    content = (
+      <ErrorState
+        title="Could not load this event"
+        description="This event is still here — this device could not reach it just now."
+        onRetry={() => void refetch()}
+      />
+    );
   } else if (event == null) {
     content = <EmptyState icon={<EventIcon size={48} colorized={false} />} message="Event not found" />;
   } else {

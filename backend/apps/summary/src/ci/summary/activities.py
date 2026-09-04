@@ -223,7 +223,25 @@ async def store_summary_activity(
     embedding = summary_data.get("embedding", [])
     embedding_value = json.dumps(embedding) if embedding else None
 
-    # Insert
+    # Upsert. A pg-boss retry after a delivered-but-lost callback re-runs a
+    # function whose row is already written, so this has to be idempotent: the
+    # ON CONFLICT target is summaries_user_period_unique_idx, the partial unique
+    # index over the one-per-window tiers. The predicate is repeated verbatim
+    # because Postgres needs it to infer a partial index; period types outside
+    # it ('insight', and the unwritten 'seasonal'/'yearly') are not covered by
+    # the index and so simply insert as before.
+    #
+    # `seen` and `dismissed` are deliberately not refreshed — a regenerated
+    # summary should not reappear as unread for a user who already read it.
+    #
+    # `summary_embedding` is COALESCEd rather than overwritten: a run whose
+    # embedding call failed arrives here as NULL (summarizer.py returns
+    # `embedding: []`), and a straight overwrite would drop an
+    # already-embedded summary out of vector search. NULL -> vector still
+    # upgrades when a later retry does produce one. Every other updated column
+    # is non-NULL by construction — period_end and timezone are required
+    # arguments, source_types is NOT NULL in the schema, title and content are
+    # built above — so those stay straight overwrites.
     db.execute_write(
         """
         INSERT INTO summaries (
@@ -234,6 +252,16 @@ async def store_summary_activity(
             :timezone, :source_types, :title, CAST(:content AS jsonb),
             CASE WHEN :embedding IS NULL THEN NULL ELSE CAST(:embedding AS vector) END, :seen, NOW(), NOW()
         )
+        ON CONFLICT (user_id, period_type, period_start)
+            WHERE period_type IN ('hourly', 'daily', 'weekly', 'monthly')
+        DO UPDATE SET
+            period_end = EXCLUDED.period_end,
+            timezone = EXCLUDED.timezone,
+            source_types = EXCLUDED.source_types,
+            title = EXCLUDED.title,
+            content = EXCLUDED.content,
+            summary_embedding = COALESCE(EXCLUDED.summary_embedding, summaries.summary_embedding),
+            updated_at = NOW()
         """,
         {
             "summary_id": str(summary_id),
@@ -250,9 +278,34 @@ async def store_summary_activity(
         },
     )
 
-    logger.info("summary_stored", summary_id=str(summary_id), type=summary_type)
+    # execute_write cannot surface a RETURNING row, so read the settled id back:
+    # on a retry the surviving row keeps its original summary_id, and returning
+    # the uuid minted above would hand the caller an id no row has. The first
+    # ordering term prefers our own row when the insert did land.
+    rows = db.execute_query(
+        """
+        SELECT summary_id
+        FROM summaries
+        WHERE user_id = :user_id
+          AND period_type = :period_type
+          AND period_start = :period_start
+        ORDER BY (summary_id = CAST(:summary_id AS uuid)) DESC,
+                 created_at DESC NULLS LAST,
+                 summary_id DESC
+        LIMIT 1
+        """,
+        {
+            "summary_id": str(summary_id),
+            "user_id": str(user_uuid),
+            "period_type": summary_type,
+            "period_start": start_dt,
+        },
+    )
+    stored_id = str(rows[0]["summary_id"]) if rows else str(summary_id)
 
-    return str(summary_id)
+    logger.info("summary_stored", summary_id=stored_id, type=summary_type)
+
+    return stored_id
 
 
 async def fetch_child_summaries_activity(

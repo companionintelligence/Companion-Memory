@@ -66,6 +66,9 @@ vi.mock('@/hooks', async (importOriginal) => {
       { stream: null, loading: false, error: null, streaming: false, hasStartedReceiving: null },
       { submit: h.submit, attach: h.attach, detach: h.detach, stop: h.stop, cancel: h.cancel },
     ],
+    // ChatPage reads the auth token for its stream request; the real hook is a
+    // context consumer and renderWithProviders does not mount AuthProvider.
+    useAuth: () => [{ authToken: 'test-token' }, {}],
     useModel: () => [{ selectedModel: 'llama3' }, {}],
     useCounter: () => [{ count: 0 }, { increment: vi.fn() }],
   };

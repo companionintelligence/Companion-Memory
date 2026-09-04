@@ -14,11 +14,29 @@ import { useEntityService } from '../MemoryPage/useEntityService';
 import { EntityDetails } from './Components';
 import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { applyViewFilterDefaults, readMemoryView } from './Components/ExplorerToolbar/viewFilterSupport';
-import { GalleryView } from './GalleryView';
-import { GraphView } from './GraphView';
+import { LazyView, type ViewLoader } from './Components/LazyView';
 import { ListView } from './ListView';
-import { MobileMapView } from './MapView';
-import { StoryTimelineView } from './StoryTimelineView';
+
+// Only List is bundled with the page — it is the default view, so lazy-loading
+// it would put a skeleton flash on the common path. The other four each drag in
+// a heavy dependency (leaflet, TimelineJS, force-graph + d3-force), which the
+// list-view visitor used to download without ever rendering — and on a phone
+// that is the connection least able to afford it.
+//
+// These are loaders, not lazy components: LazyView mints the React.lazy itself,
+// so it can mint a fresh one on retry — a rejected lazy payload re-throws the
+// same error forever, which would leave "Try again" permanently inert.
+const loadMapView: ViewLoader = () => import('./MapView').then((m) => ({ default: m.MobileMapView }));
+const loadStoryTimelineView: ViewLoader = () =>
+  import('./StoryTimelineView').then((m) => ({ default: m.StoryTimelineView }));
+const loadGalleryView: ViewLoader = () => import('./GalleryView').then((m) => ({ default: m.GalleryView }));
+const loadGraphView: ViewLoader = () =>
+  import('./GraphView').then((m) => {
+    // LazyView renders its component with no props, so bind the variant here.
+    const MobileGraphView = () => <m.GraphView variant="mobile" />;
+
+    return { default: MobileGraphView };
+  });
 
 export default function MobileMemoryPage() {
   const [{ activeEntity, refetch }, { setActiveEntity }] = useEntityService();
@@ -128,13 +146,13 @@ export default function MobileMemoryPage() {
               <>
                 {activeTab === 'list' && <ListView />}
 
-                {activeTab === 'map' && <MobileMapView />}
+                {activeTab === 'map' && <LazyView viewKey="map" load={loadMapView} />}
 
-                {activeTab === 'timeline' && <StoryTimelineView />}
+                {activeTab === 'timeline' && <LazyView viewKey="timeline" load={loadStoryTimelineView} />}
 
-                {activeTab === 'gallery' && <GalleryView />}
+                {activeTab === 'gallery' && <LazyView viewKey="gallery" load={loadGalleryView} />}
 
-                {activeTab === 'graph' && <GraphView variant="mobile" />}
+                {activeTab === 'graph' && <LazyView viewKey="graph" load={loadGraphView} />}
               </>
             </MemoryHubShell>
           </div>

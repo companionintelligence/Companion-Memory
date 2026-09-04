@@ -28,8 +28,44 @@ jobs:
           cache-dependency-path: scripts/benchmark/requirements.txt
       - name: Install deps
         run: pip install -r requirements.txt
+
+      # This job is the ONLY check that runs automatically on a pull request,
+      # and until now it ran pytest and no linter — which is exactly how 141
+      # ruff violations reached this directory unnoticed while `ci.yml`'s
+      # `python` lane (`uv run ruff check .`, which covers scripts/benchmark
+      # from the root config) sat undispatched. See
+      # `docs/qa/ci-gate-proposal.md` §3.2.
+      #
+      # Pinned to the version `uv.lock` resolves so this lane and `ci.yml`'s
+      # agree on what a violation is; an unpinned `pip install ruff` would let a
+      # new release turn a passing PR red with no change of ours.
+      #
+      # There is no config here: `scripts/benchmark/pyproject.toml` has no
+      # `[tool.ruff]` section, so ruff walks up and uses the repo-root one —
+      # the same rules the Python lane applies to the sidecars.
+      #
+      # HONEST NOTE, measured 2026-09-03 on this checkout: this directory is
+      # currently at 141 errors (119 of them `--fix`-able) and 22 files that
+      # `ruff format` would rewrite. So this step is RED on the first run and
+      # stays red until someone clears it, from `scripts/benchmark`:
+      #
+      #     ruff check --fix . && ruff format .
+      #
+      # That redness is the accurate state of the directory. Deliberately no
+      # `continue-on-error` and no path scoping to hide it — a check that does
+      # not fail on what it found is the false comfort this step exists to end.
+      #
+      # It runs AFTER pytest for that same reason: a failing step ends the job,
+      # and the pre-existing lint debt must not swallow the test signal that
+      # already worked.
       - name: Run pytest
         run: pytest
+
+      - name: Lint
+        run: |
+          pip install ruff==0.16.1
+          ruff check .
+          ruff format --check .
 
   # Re-runs the naive adapter on every committed persona and compares against
   # the JSON baselines under scripts/benchmark/baselines/. Naive is fully

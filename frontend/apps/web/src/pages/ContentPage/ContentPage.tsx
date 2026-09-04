@@ -10,6 +10,7 @@ import { EntityFieldsCard } from '@/components/EntityFields';
 import { EntityGraph } from '@/components/EntityGraph';
 import { EntityRelationshipCards } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
 import { EntityEditToggle, EntityTagsDescriptionCard } from '@/components/EntityTagsDescriptionCard';
+import { ErrorState } from '@/components/ErrorState';
 import { ContentIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
@@ -20,7 +21,8 @@ import {
 } from '@/pages/MemoryPage/Components/EntityDetails/EntityDetailScaffold';
 import { hasRichMedia, RichMediaCard } from '@/pages/MemoryPage/Components/EntityDetails/RichMediaCard';
 
-const GET_CONTENT = gql(`
+// Exported for the colocated test, which mocks it failing.
+export const GET_CONTENT = gql(`
   query GetContent($id: ID!) {
     content(id: $id) {
       id
@@ -62,7 +64,7 @@ const UPDATE_CONTENT_FIELDS = gql(`
 export function ContentPage() {
   const { id } = useParams<{ id: string }>();
 
-  const { data, loading } = useQuery(GET_CONTENT, {
+  const { data, loading, error, refetch } = useQuery(GET_CONTENT, {
     variables: {
       id: GlobalUID.encode('content', id!),
     },
@@ -84,6 +86,17 @@ export function ContentPage() {
 
   if (loading) {
     content = <LoadingPage />;
+  } else if (error) {
+    // A failed fetch is not an absent record. Dropping `error` sent a 500, a
+    // dead connection or an expired session down the branch below, which told
+    // the owner their own content does not exist.
+    content = (
+      <ErrorState
+        title="Could not load this content"
+        description="This content is still here — this device could not reach it just now."
+        onRetry={() => void refetch()}
+      />
+    );
   } else if (contentItem == null) {
     content = <EmptyState icon={<ContentIcon size={48} colorized={false} />} message="Content not found" />;
   } else {

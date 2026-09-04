@@ -57,6 +57,24 @@
       },
       "secret": "CI_HUB_FORWARD_AUTH_SECRET",
       "maxSkewMs": "CI_HUB_FORWARD_AUTH_MAX_SKEW_MS"
+    },
+    "loginThrottle": {
+      "enabled": {
+        "__name": "AUTH_LOGIN_THROTTLE_ENABLED",
+        "__format": "boolean"
+      },
+      "maxAttempts": {
+        "__name": "AUTH_LOGIN_THROTTLE_MAX_ATTEMPTS",
+        "__format": "json"
+      },
+      "windowSeconds": {
+        "__name": "AUTH_LOGIN_THROTTLE_WINDOW_SECONDS",
+        "__format": "json"
+      },
+      "lockoutSeconds": {
+        "__name": "AUTH_LOGIN_THROTTLE_LOCKOUT_SECONDS",
+        "__format": "json"
+      }
     }
   },
   "db": {
@@ -72,11 +90,25 @@
       "secretAccessKey": "OBJECT_STORE_PASSWORD"
     }
   },
+  "graphql": {
+    "maxDepth": {
+      "__name": "GRAPHQL_MAX_DEPTH",
+      "__format": "json"
+    }
+  },
   "llm": {
     "apiBase": "LLM_API_BASE",
     "apiKey": "LLM_API_KEY",
     "chatModel": "LLM_DEFAULT_CHAT_MODEL",
     "utilityModel": "LLM_UTILITY_MODEL",
+    "chat": {
+      "groundedRecall": {
+        "enabled": {
+          "__name": "LLM_CHAT_GROUNDED_RECALL_ENABLED",
+          "__format": "boolean"
+        }
+      }
+    },
     "tierRouting": {
       "enabled": {
         "__name": "LLM_TIER_ROUTING_ENABLED",
@@ -279,6 +311,7 @@
     "enable.system.prompt": "ENABLE_SYSTEM_PROMPT",
     "advanced.theme.tab": "ENABLE_ADVANCED_THEME_TAB",
     "require.signup.codes": "ENABLE_REQUIRE_SIGNUP_CODES",
+    "today.page": "ENABLE_TODAY_PAGE",
     "files.page": "ENABLE_FILES_PAGE",
     "insights.page": "ENABLE_INSIGHTS_PAGE",
     "chat.page": "ENABLE_CHAT_PAGE",

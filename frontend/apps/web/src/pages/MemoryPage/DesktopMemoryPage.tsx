@@ -26,11 +26,28 @@ import { ActivityTimelineRail } from './ActivityTimelineRail';
 import { EntityDetails } from './Components/EntityDetails';
 import { ExplorerToolbar } from './Components/ExplorerToolbar/ExplorerToolbar';
 import { applyViewFilterDefaults, readMemoryView } from './Components/ExplorerToolbar/viewFilterSupport';
-import { GalleryView } from './GalleryView';
-import { GraphView } from './GraphView';
+import { LazyView, type ViewLoader } from './Components/LazyView';
 import { ListView } from './ListView';
-import { DesktopMapView } from './MapView';
-import { StoryTimelineView } from './StoryTimelineView';
+
+// Only List is bundled with the page — it is the default view, so lazy-loading
+// it would put a skeleton flash on the common path. The other four each drag in
+// a heavy dependency (leaflet, TimelineJS, force-graph + d3-force), which the
+// list-view visitor used to download without ever rendering.
+//
+// These are loaders, not lazy components: LazyView mints the React.lazy itself,
+// so it can mint a fresh one on retry — a rejected lazy payload re-throws the
+// same error forever, which would leave "Try again" permanently inert.
+const loadMapView: ViewLoader = () => import('./MapView').then((m) => ({ default: m.DesktopMapView }));
+const loadStoryTimelineView: ViewLoader = () =>
+  import('./StoryTimelineView').then((m) => ({ default: m.StoryTimelineView }));
+const loadGalleryView: ViewLoader = () => import('./GalleryView').then((m) => ({ default: m.GalleryView }));
+const loadGraphView: ViewLoader = () =>
+  import('./GraphView').then((m) => {
+    // LazyView renders its component with no props, so bind the variant here.
+    const DesktopGraphView = () => <m.GraphView variant="desktop" />;
+
+    return { default: DesktopGraphView };
+  });
 
 const VIEW_TABS: Array<{
   value: string;
@@ -186,10 +203,10 @@ export default function DesktopMemoryPage() {
                 <ListView />
               </div>
             )}
-            {activeTab === 'map' && <DesktopMapView />}
-            {activeTab === 'timeline' && <StoryTimelineView />}
-            {activeTab === 'gallery' && <GalleryView />}
-            {activeTab === 'graph' && <GraphView variant="desktop" />}
+            {activeTab === 'map' && <LazyView viewKey="map" load={loadMapView} />}
+            {activeTab === 'timeline' && <LazyView viewKey="timeline" load={loadStoryTimelineView} />}
+            {activeTab === 'gallery' && <LazyView viewKey="gallery" load={loadGalleryView} />}
+            {activeTab === 'graph' && <LazyView viewKey="graph" load={loadGraphView} />}
           </div>
         </MemoryHubShell>
       </PageContent>

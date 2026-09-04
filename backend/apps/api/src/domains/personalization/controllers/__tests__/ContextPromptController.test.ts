@@ -1,8 +1,11 @@
+import { BadRequestException } from '@nestjs/common';
+
 import type { RequestContext } from '@ci/common/context';
+import { ValidationPipe } from '@ci/common/pipes';
 import type { EventService } from '@ci/domains/events';
 
 import type { ContextPromptService } from '../../services/ContextPromptService';
-import { ContextPromptController } from '../ContextPromptController';
+import { ContextPromptController, contextPromptRespondSchema } from '../ContextPromptController';
 
 /**
  * `enqueueGenerate` sent `SmartRotationWorkEvent` for `context_prompt` from
@@ -92,5 +95,42 @@ describe('ContextPromptController interactive enqueue priority', () => {
     await controller.respond(ctx, 'prompt-1', { response: 'ok' });
 
     expect(handoff(send).options?.priority).toBe(CRON_CONTEXT_PROMPT_PRIORITY);
+  });
+});
+
+/**
+ * `respond` took a bare `@Body() body: { response?: unknown }`, so a JSON string
+ * or array body reached `body.response` as `undefined` and silently answered the
+ * prompt with `null`. The envelope is now validated even though the response
+ * payload itself stays free-form.
+ */
+describe('ContextPromptController respond body validation', () => {
+  const pipe = new ValidationPipe(contextPromptRespondSchema);
+
+  it.each([
+    ['a bare string', '"yes"'],
+    ['an array', ['yes']],
+    ['null', null],
+  ])('rejects %s with 400', (_label, body) => {
+    expect(() => pipe.transform(body)).toThrow(BadRequestException);
+  });
+
+  it('accepts an object envelope with any response payload, including an absent one', () => {
+    expect(pipe.transform({ response: { choice: 'a', note: 'why' } })).toEqual({
+      response: { choice: 'a', note: 'why' },
+    });
+    expect(pipe.transform({})).toEqual({});
+  });
+
+  it('still records a valid response', async () => {
+    const { controller, contextPromptService } = makeController();
+
+    await controller.respond(ctx, 'prompt-1', pipe.transform({ response: 'ok' }) as { response?: unknown });
+
+    expect(contextPromptService.respond).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER }),
+      'prompt-1',
+      'ok',
+    );
   });
 });

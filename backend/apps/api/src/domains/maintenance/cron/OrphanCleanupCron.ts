@@ -121,7 +121,9 @@ export class OrphanCleanupCron {
    * Runs on the worker: reclamation is worker work, and in a split deployment
    * only one process should be issuing these deletes.
    */
-  @Cron(ORPHAN_CLEANUP_CRON, { name: 'OrphanCleanupCron.sweepOnSchedule', role: 'worker' })
+  // `exclusive`: the sweep has no guard of its own, and two of these deleting
+  // the same batch is contention rather than progress.
+  @Cron(ORPHAN_CLEANUP_CRON, { name: 'OrphanCleanupCron.sweepOnSchedule', role: 'worker', exclusive: true })
   async sweepOnSchedule(): Promise<void> {
     await this.sweepOnce();
   }

@@ -20,7 +20,9 @@ export class AgentDispatchStaleCron {
     this.logger.setContext(AgentDispatchStaleCron.name);
   }
 
-  @Cron(AGENT_DISPATCH_STALE_CRON, { name: 'AgentDispatchStaleCron.failStale' })
+  // `exclusive`: a per-minute tick with no guard of its own, so a `failStale`
+  // that outruns its cadence would otherwise stack copies of itself.
+  @Cron(AGENT_DISPATCH_STALE_CRON, { name: 'AgentDispatchStaleCron.failStale', exclusive: true })
   async failStale(): Promise<void> {
     const closed = await this.dispatch.failStale();
 

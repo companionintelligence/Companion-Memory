@@ -46,6 +46,7 @@ import { ConnectCodeService } from './services/ConnectCodeService';
 import { ConnectService } from './services/ConnectService';
 import { CsrfService } from './services/CsrfService';
 import { JwtStrategy } from './services/JwtStrategy';
+import { LoginThrottleService } from './services/LoginThrottleService';
 import { OidcNativeCodeService } from './services/OidcNativeCodeService';
 import { SignupCodeService } from './services/SignupCodeService';
 
@@ -71,6 +72,7 @@ import { SignupCodeService } from './services/SignupCodeService';
     SignupCodeService,
     CsrfGuard,
     CsrfService,
+    LoginThrottleService,
     ApiKeyService,
     ApiKeyStrategy,
     OidcNativeCodeService,

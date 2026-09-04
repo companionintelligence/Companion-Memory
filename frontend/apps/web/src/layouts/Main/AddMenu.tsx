@@ -261,15 +261,16 @@ export function AddMenu() {
                             // never changes, and they wait an hour to find out.
                             toast.info('Prediction is turned off on this Companion.');
                           } else if (status === 'triggered') {
-                            toast.success(
-                              'Prediction started — this can take about an hour. Watch Forecast for progress.',
-                            );
+                            // Deliberately does not name Forecast: `forecast.page`
+                            // ships false, so on a stock appliance /forecast is not
+                            // a registered route and "Watch Forecast" sent the owner
+                            // to a 404. Wording that holds either way beats making
+                            // this toast read the flag.
+                            toast.success('Prediction started — this can take about an hour.');
                           } else if (status === 'error' || !status) {
                             toast.error('Failed to trigger prediction pipeline');
                           } else {
-                            toast.success(
-                              'Prediction started — this can take about an hour. Watch Forecast for progress.',
-                            );
+                            toast.success('Prediction started — this can take about an hour.');
                           }
                         }}
                         className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"

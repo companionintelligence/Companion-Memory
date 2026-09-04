@@ -8,11 +8,13 @@ import { EntityEvolutionPanel } from '@/components/EntityEvolution/EntityEvoluti
 import { EntityGraph } from '@/components/EntityGraph';
 import { EntityRelationshipCards } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
 import { EntityEditToggle, EntityTagsDescriptionCard } from '@/components/EntityTagsDescriptionCard';
+import { ErrorState } from '@/components/ErrorState';
 import { ConceptIcon } from '@/components/icons';
 import { PageContent } from '@/components/layout';
 import { gql } from '@/graphql';
 
-const GET_CONCEPT = gql(`
+// Exported for the colocated test, which mocks it failing.
+export const GET_CONCEPT = gql(`
   query GetConcept($id: ID!) {
     concept(id: $id) {
       id
@@ -41,7 +43,7 @@ const UPDATE_CONCEPT_DESCRIPTION = gql(`
 export function ConceptPage() {
   const { id } = useParams<{ id: string }>();
 
-  const { data, loading } = useQuery(GET_CONCEPT, {
+  const { data, loading, error, refetch } = useQuery(GET_CONCEPT, {
     variables: {
       id: GlobalUID.encode('concept', id!),
     },
@@ -61,6 +63,17 @@ export function ConceptPage() {
 
   if (loading) {
     content = <LoadingPage />;
+  } else if (error) {
+    // A failed fetch is not an absent record. Dropping `error` sent a 500, a
+    // dead connection or an expired session down the branch below, which told
+    // the owner their own concept does not exist.
+    content = (
+      <ErrorState
+        title="Could not load this concept"
+        description="This concept is still here — this device could not reach it just now."
+        onRetry={() => void refetch()}
+      />
+    );
   } else if (concept == null) {
     content = <EmptyState icon={<ConceptIcon size={48} colorized={false} />} message="Concept not found" />;
   } else {

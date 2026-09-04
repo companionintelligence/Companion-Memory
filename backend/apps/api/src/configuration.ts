@@ -152,6 +152,20 @@ export const ConfigSchema = z.object({
       secret: z.string(),
       maxSkewMs: z.coerce.number().int().positive(),
     }),
+    // Brute-force throttle on the local password login. An appliance is a single
+    // account behind a single password on a box its owner may well have exposed
+    // to a tailnet or the internet, so unlimited guesses is the whole attack.
+    // On by default; the numbers are a per-identity budget, not a global one.
+    loginThrottle: z.object({
+      /** Off restores the pre-throttle behaviour: unlimited login attempts. */
+      enabled: booleanStringSchema.default(true),
+      /** Failed attempts allowed inside `windowSeconds` before the lockout starts. */
+      maxAttempts: z.coerce.number().int().positive().default(10),
+      /** Rolling window the failures are counted over. */
+      windowSeconds: z.coerce.number().int().positive().default(900),
+      /** How long further attempts are refused once the budget is spent. */
+      lockoutSeconds: z.coerce.number().int().positive().default(900),
+    }),
     session: z.object({
       fieldPepper: z.string(),
       duration: z.string(),
@@ -256,6 +270,13 @@ export const ConfigSchema = z.object({
   }),
   graphql: z.object({
     maxQueryComplexity: z.number().int(),
+    /**
+     * Maximum GraphQL query nesting depth; complements the existing complexity
+     * ceiling. Complexity alone does not bound recursion — a deeply nested but
+     * cheap-looking selection can still be walked by the resolver layer — so the
+     * two limits are enforced together.
+     */
+    maxDepth: z.coerce.number().int().positive().default(12),
   }),
   // OpenAI-compatible chat backend (Hub-injected LLM_* env, or Settings → Model).
   // When the chat port differs from Ollama's, the NestJS chat path speaks OpenAI
@@ -267,6 +288,20 @@ export const ConfigSchema = z.object({
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
       /** Background extraction/classification model. See {@link DEFAULT_UTILITY_MODEL}. */
       utilityModel: z.string().default(DEFAULT_UTILITY_MODEL),
+      chat: z
+        .object({
+          groundedRecall: z
+            .object({
+              /**
+               * When on, a chat turn pre-runs memory recall for the latest user
+               * message and inserts the result into the fenced turn-context
+               * block instead of relying on the model to call a tool.
+               */
+              enabled: booleanStringSchema.default(true),
+            })
+            .default({}),
+        })
+        .default({}),
       /**
        * Model-tier routing (`domains/model-routing`, `ModelTierRouter`) applied to
        * chat model selection in `OllamaService.resolveModel`.
@@ -846,6 +881,11 @@ export const ConfigSchema = z.object({
     'enable.system.prompt': booleanStringSchema,
     'advanced.theme.tab': booleanStringSchema,
     'require.signup.codes': booleanStringSchema,
+    /**
+     * Gates the Today home route that gives summaries, insights and derived
+     * actions a list surface again. Off by default while the surface lands.
+     */
+    'today.page': booleanStringSchema,
     'files.page': booleanStringSchema,
     /** The archive-import surface (/import): upload, run progress, the source catalogue and the guide. */
     'import.page': booleanStringSchema,

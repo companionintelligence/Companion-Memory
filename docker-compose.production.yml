@@ -76,6 +76,14 @@ services:
       database:
         condition: service_healthy
     restart: unless-stopped
+    # api, worker and gateway have no definition in docker-compose.yml, so they
+    # cannot inherit its bounded-logging block — see the note on `database`
+    # there for why an appliance must not run the json-file driver uncapped.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     profiles: [ "production" ]
 
   # The headless half of the api: same image, same code, no HTTP. Consumes the
@@ -110,6 +118,11 @@ services:
       database:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     profiles: [ "production" ]
 
   database:
@@ -131,6 +144,11 @@ services:
       object-store:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     profiles: [ "production" ]
 
   hbpe-service:

@@ -65,6 +65,34 @@ const jobControlsSchema = z.object({
 
 type JobControlsBody = z.infer<typeof jobControlsSchema>;
 
+/**
+ * The Jobs dashboard's REST surface.
+ *
+ * Everything here is APPLIANCE-WIDE rather than per-account: `JobMonitorService`
+ * and `JobQueryService` read `pgboss.job` / `ci.job_metrics` with no tenancy
+ * predicate, so any authenticated principal sees every account's job metadata.
+ * On the single-owner appliance this ships as that is the intended view, but it
+ * is not confined to one — and no guard here can confine it, because the scoping
+ * that would has to happen in the queries.
+ *
+ * {@link AdminOnlyGuard} is deliberately NOT applied, despite this being exactly
+ * the operator-shaped surface it was written for. `ci.users.role` defaults to
+ * `'user'` and no application code ever sets it otherwise: `CreateUserDto`
+ * carries no `role`, neither does `UpdateUserDto`, and the column's only writer
+ * is a one-shot backfill (`20260825233952_add_role_to_users_backfill_admin`)
+ * that promotes the earliest EXISTING row at migration time. On a fresh install
+ * migrations run before anyone has signed up, so it promotes nobody and the
+ * appliance ends up with no admin at all, permanently and with no in-app way to
+ * make one. Gating these routes on it would answer the owner's own Jobs page
+ * with a 403 they could not clear.
+ *
+ * What the guards CAN do here, and do, is keep `POST jobs/crons/run` — the one
+ * route that acts — the most strongly gated route on the controller. Every read
+ * below therefore states its capability floor explicitly instead of leaving it
+ * unstated: `read` is rank 0, so it narrows no key that reaches these routes
+ * today, but it means `full` on the acting route sits at the top of a ladder
+ * that is declared end to end rather than above silence.
+ */
 @Controller('jobs')
 export class JobsController {
   constructor(
@@ -74,6 +102,7 @@ export class JobsController {
   ) {}
 
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
   @Get('dashboard')
   getDashboard(@Context() context: RequestContext): Promise<JobDashboardDto> {
     return this.jobMonitorService.getDashboard(context);
@@ -127,6 +156,7 @@ export class JobsController {
    * state — they are stored as `created`, so without it they are unfindable.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
   @Get()
   list(
     @Context() context: RequestContext,
@@ -157,6 +187,7 @@ export class JobsController {
    * collector sampled it.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
   @Get('history')
   history(
     @Context() context: RequestContext,
@@ -183,6 +214,7 @@ export class JobsController {
    * rows on a live appliance), so only the event name in the payload survives.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
   @Get('history/categories')
   categoryHistory(
     @Context() context: RequestContext,
@@ -243,6 +275,7 @@ export class JobsController {
    * come from one source rather than a second copy in the frontend.
    */
   @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(READ_CAPABILITY)
   @Get('types')
   types(): {
     categories: string[];

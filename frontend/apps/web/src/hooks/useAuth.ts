@@ -750,7 +750,8 @@ function useAuth(): ReturnValue {
 
 function tokenRefreshAt(accessToken: string): number {
   const decoded = jwtDecode<JwtPayload>(accessToken);
-  return ((decoded.exp || 0) * 1000) - 60 * 1000;
+
+  return (decoded.exp || 0) * 1000 - 60 * 1000;
 }
 
 function useAutoRefreshToken(accessToken: string | null | undefined, onRefresh: () => Promise<void>) {

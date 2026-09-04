@@ -10,6 +10,7 @@ import { EntityEvolutionPanel } from '@/components/EntityEvolution/EntityEvoluti
 import { EntityGraph } from '@/components/EntityGraph';
 import { EntityRelationshipCards } from '@/components/EntityRelationshipCards/EntityRelationshipCards';
 import { EntityEditToggle, EntityTagsDescriptionCard } from '@/components/EntityTagsDescriptionCard';
+import { ErrorState } from '@/components/ErrorState';
 import { PlaceIcon } from '@/components/icons';
 import { InlineEditableField } from '@/components/InlineEditableField';
 import { PageContent } from '@/components/layout';
@@ -17,7 +18,8 @@ import { Map } from '@/components/Map';
 import { gql } from '@/graphql';
 import { namedChatContext } from '@/lib/agentChat';
 
-const GET_PLACE = gql(`
+// Exported for the colocated test, which mocks it failing.
+export const GET_PLACE = gql(`
   query GetPlace($id: ID!) {
     place(id: $id) {
       id
@@ -54,7 +56,7 @@ type PlaceProperties = {
 export function PlacePage() {
   const { id } = useParams<{ id: string }>();
 
-  const { data, loading } = useQuery(GET_PLACE, {
+  const { data, loading, error, refetch } = useQuery(GET_PLACE, {
     variables: {
       id: GlobalUID.encode('place', id!),
     },
@@ -99,6 +101,17 @@ export function PlacePage() {
 
   if (loading) {
     content = <LoadingPage />;
+  } else if (error) {
+    // A failed fetch is not an absent record. Dropping `error` sent a 500, a
+    // dead connection or an expired session down the branch below, which told
+    // the owner their own place does not exist.
+    content = (
+      <ErrorState
+        title="Could not load this place"
+        description="This place is still here — this device could not reach it just now."
+        onRetry={() => void refetch()}
+      />
+    );
   } else if (place == null) {
     content = <EmptyState icon={<PlaceIcon size={48} colorized={false} />} message="Place not found" />;
   } else {

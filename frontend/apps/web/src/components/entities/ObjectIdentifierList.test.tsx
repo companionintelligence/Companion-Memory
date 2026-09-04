@@ -89,7 +89,7 @@ describe('ObjectIdentifierList', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
   });
 
-  it('removes a code and asks its caller to refresh', async () => {
+  it('removes a code once the removal is confirmed, and asks its caller to refresh', async () => {
     const onChanged = vi.fn();
 
     renderWithProviders(
@@ -108,6 +108,11 @@ describe('ObjectIdentifierList', () => {
     // The accessible name tracks the displayed (raw) value, not the normalized
     // matching key underneath it — see ObjectIdentifierList's `displayValue`.
     fireEvent.click(screen.getByRole('button', { name: 'Remove 012345678905' }));
+
+    // The trash control only opens the confirmation now — a code is how the
+    // object is recognised again, and nothing restores one that is dropped.
+    expect(onChanged).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove code' }));
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
   });

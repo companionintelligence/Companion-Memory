@@ -49,6 +49,7 @@ const ConceptPage = lazy(() => import('@/pages/ConceptPage'));
 const ConnectionPage = lazy(() => import('@/pages/ConnectionPage'));
 const ContentPage = lazy(() => import('@/pages/ContentPage'));
 const EventPage = lazy(() => import('@/pages/EventPage'));
+const FeedPage = lazy(() => import('@/pages/FeedPage'));
 const AsksPage = lazy(() => import('@/pages/AsksPage'));
 const ForecastPage = lazy(() => import('@/pages/ForecastPage'));
 const ItemPage = lazy(() => import('@/pages/ItemPage'));
@@ -319,7 +320,34 @@ function AppRoutes() {
               so it still reaches the summary detail page. */}
           <Route path="/brief/:id?" element={<RedirectToCalendar />} />
           <Route path="/schedule" element={<RedirectToCalendar />} />
-          <Route path="/today/:id?" element={<RedirectToCalendar />} />
+
+          {/* Today — the brief's own home, and the only surface that can open
+              the actions, insights and summaries the engines compute all day.
+              Gated on `today.page`, which ships false.
+
+              Both branches sit at the same path rather than the usual
+              "registered only when on": /today has redirected into Calendar
+              since the brief cards were folded in there, so leaving the route
+              out with the flag off would 404 an address that used to work.
+              With the flag off the redirect is exactly what it was.
+
+              The off branch waits out `featuresLoading` for the same reason
+              "*" below does: `isFeatureEnabled` reports every flag as off until
+              the fetch settles, so deciding early would bounce a hard load of
+              /today into Calendar and leave no way back to the page that does
+              exist. */}
+          {isFeatureEnabled('today.page') ? (
+            <Route
+              path="/today/:id?"
+              element={
+                <ProtectedRoute>
+                  <FeedPage />
+                </ProtectedRoute>
+              }
+            />
+          ) : (
+            <Route path="/today/:id?" element={featuresLoading ? <LoadingPage /> : <RedirectToCalendar />} />
+          )}
 
           <Route path="/feed/summaries/:id" element={<RedirectFeedSummaryToBrief />} />
           <Route path="/feed/:id?" element={<RedirectToCalendar />} />

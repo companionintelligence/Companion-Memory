@@ -392,58 +392,81 @@ export class OllamaService implements OnModuleInit {
     return this.lastPreflight;
   }
 
-  async preflightChatModel(): Promise<ChatModelPreflight> {
+  /**
+   * The SILENT half of {@link preflightChatModel}: ask the backend what it
+   * serves, compare it with the configured id, and return the verdict — with no
+   * log line and no write to {@link lastPreflight}.
+   *
+   * Split out because the diagnosis and the check have opposite audiences. The
+   * boot check wants to be loud exactly once; a REPEATED caller — the deep
+   * health route polls this on every request, and that route is unauthenticated
+   * — must not be able to spam the log or overwrite the boot-time record that
+   * {@link chatModelPreflight} publishes.
+   *
+   * `timeoutMs` is a parameter for the same reason: a poller's budget is much
+   * shorter than boot's, and a check that outlives its caller's budget can only
+   * ever report the caller's timeout instead of naming the backend.
+   */
+  async checkChatModel(timeoutMs: number = PREFLIGHT_TIMEOUT_MS): Promise<ChatModelPreflight> {
     const model = PROMPT_MODEL;
     let served: string[];
 
     try {
       served = await withTimeout(
         this.listServedChatModelIds(),
-        PREFLIGHT_TIMEOUT_MS,
-        `the LLM backend did not list its models within ${PREFLIGHT_TIMEOUT_MS}ms`,
+        timeoutMs,
+        `the LLM backend did not list its models within ${timeoutMs}ms`,
       );
     } catch (err: unknown) {
       const reason = err instanceof Error ? err.message : String(err);
 
-      this.logger.warn(
-        `Could not verify the configured chat model "${model}" — the inference backend did not answer. ` +
-          `If it is still starting this is expected; if it stays unreachable, every LLM job will fail.`,
-        { model, reason },
-      );
-
-      return (this.lastPreflight = { model, available: false, reachable: false, servedModels: [], reason });
+      return { model, available: false, reachable: false, servedModels: [], reason };
     }
 
     if (served.includes(model)) {
-      this.logger.log(`Chat model "${model}" is served by the active LLM backend`, {
-        model,
-        servedModels: served.length,
-      });
-
-      return (this.lastPreflight = { model, available: true, reachable: true, servedModels: served });
+      return { model, available: true, reachable: true, servedModels: served };
     }
 
     // `qwen/qwen3-vl-30b` vs the served `qwen3-vl:4b` is the real case: the
-    // family is right and the spelling is not, so naming the near-misses is what
-    // makes the log line actionable rather than just accusatory.
-    const suggestions = nearestModelIds(model, served);
-
-    this.logger.error(
-      `Configured chat model "${model}" is NOT served by the active LLM backend. ` +
-        `Every background inference job (question answering, summaries, titles) will fail with ` +
-        `"Invalid model specified: ${model}" and land in ci.pipeline_dead_letters. ` +
-        `Set LLM_DEFAULT_CHAT_MODEL to one of the ${served.length} served ids` +
-        `${suggestions.length > 0 ? ` — did you mean ${suggestions.map((id) => `"${id}"`).join(' or ')}?` : ''}` +
-        `${served.length > 0 ? ` Served: ${served.join(', ')}.` : ' The backend is serving no chat models at all.'}`,
-    );
-
-    return (this.lastPreflight = {
+    // family is right and the spelling is not, so the near-misses travel with
+    // the verdict — they are what make the boot ERROR below actionable rather
+    // than just accusatory.
+    return {
       model,
       available: false,
       reachable: true,
       servedModels: served,
-      suggestions,
-    });
+      suggestions: nearestModelIds(model, served),
+    };
+  }
+
+  async preflightChatModel(): Promise<ChatModelPreflight> {
+    const preflight = await this.checkChatModel();
+    const { model, servedModels: served, suggestions = [] } = preflight;
+
+    if (!preflight.reachable) {
+      this.logger.warn(
+        `Could not verify the configured chat model "${model}" — the inference backend did not answer. ` +
+          `If it is still starting this is expected; if it stays unreachable, every LLM job will fail.`,
+        { model, reason: preflight.reason },
+      );
+    } else if (preflight.available) {
+      this.logger.log(`Chat model "${model}" is served by the active LLM backend`, {
+        model,
+        servedModels: served.length,
+      });
+    } else {
+      this.logger.error(
+        `Configured chat model "${model}" is NOT served by the active LLM backend. ` +
+          `Every background inference job (question answering, summaries, titles) will fail with ` +
+          `"Invalid model specified: ${model}" and land in ci.pipeline_dead_letters. ` +
+          `Set LLM_DEFAULT_CHAT_MODEL to one of the ${served.length} served ids` +
+          `${suggestions.length > 0 ? ` — did you mean ${suggestions.map((id) => `"${id}"`).join(' or ')}?` : ''}` +
+          `${served.length > 0 ? ` Served: ${served.join(', ')}.` : ' The backend is serving no chat models at all.'}`,
+      );
+    }
+
+    return (this.lastPreflight = preflight);
   }
 
   private get ollama(): Ollama {

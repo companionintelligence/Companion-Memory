@@ -4,6 +4,8 @@ import {
   Controller,
   Get,
   HttpCode,
+  HttpException,
+  HttpStatus,
   Post,
   Req,
   Res,
@@ -20,6 +22,7 @@ import { UserService } from '@ci/domains/user';
 import { CsrfGuard } from '../guards/CsrfGuard';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
+import { LoginThrottleService } from '../services/LoginThrottleService';
 import { JwtPayload, LoginDto } from '../types';
 import {
   clearCsrfCookie,
@@ -40,6 +43,7 @@ export class SessionController {
     private readonly userService: UserService,
     private readonly authService: AuthService,
     private readonly csrfService: CsrfService,
+    private readonly loginThrottle: LoginThrottleService,
   ) {}
 
   /**
@@ -78,16 +82,42 @@ export class SessionController {
     @Res({ passthrough: true }) res: Response,
     @Body(new ValidationPipe(localStrategySchema)) input: LoginDto,
   ) {
+    // Same metadata the session row is bound to, so the throttle keys on the
+    // proxy-trust-resolved client IP rather than on a header an attacker can
+    // vary per request to buy themselves a fresh budget every guess.
+    const metadata = this.authService.getSessionMetadata(req);
+    const throttled = this.loginThrottle.check(metadata.ip, input.username);
+
+    if (throttled.locked) {
+      res.setHeader('Retry-After', String(throttled.retryAfterSeconds));
+
+      // Deliberately says nothing about whether the account exists — the 401
+      // below is careful not to be an enumeration oracle, and a 429 that named
+      // the account would hand back exactly what that hides.
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: 'Too many login attempts. Please try again later.',
+          retryAfterSeconds: throttled.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const user = await this.userService.validatePassword(input.username, input.password);
 
     if (user == null) {
+      this.loginThrottle.recordFailure(metadata.ip, input.username);
+
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const { sessionToken, sessionId } = await this.authService.issueSessionToken(
-      user.id,
-      this.authService.getSessionMetadata(req),
-    );
+    // Only failures spend the budget: a correct password wipes the counter, so
+    // an owner who fat-fingers their way to the right password is never locked
+    // out by the attempts that preceded it.
+    this.loginThrottle.recordSuccess(metadata.ip, input.username);
+
+    const { sessionToken, sessionId } = await this.authService.issueSessionToken(user.id, metadata);
 
     const accessToken = await this.authService.issueAccessToken(user.id);
 

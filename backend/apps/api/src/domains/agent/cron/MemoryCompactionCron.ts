@@ -41,7 +41,10 @@ export class MemoryCompactionCron {
     this.logger.setContext(MemoryCompactionCron.name);
   }
 
-  @Cron(MEMORY_COMPACTION_CRON, { name: 'MemoryCompactionCron.cronCompactMemories' })
+  // `exclusive`: the batch is processed here rather than enqueued under a
+  // singleton key, and `findUnprocessed` would hand an overlapping tick the same
+  // 100 fragments the first one is still compacting.
+  @Cron(MEMORY_COMPACTION_CRON, { name: 'MemoryCompactionCron.cronCompactMemories', exclusive: true })
   async cronCompactMemories(): Promise<void> {
     const featureEnabled = await this.featureService.isFeatureEnabled('agent.memory.compaction');
 

@@ -1,4 +1,5 @@
-import { Inject, Injectable, forwardRef } from '@nestjs/common';
+import { Inject, Injectable, Optional, forwardRef } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { type Message as OllamaMessage, type ToolCall } from 'ollama';
 
 import { type RequestContext, type ServiceContext, toServiceContext } from '@ci/common/context';
@@ -6,6 +7,11 @@ import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
 import { fenceUntrusted, untrustedBlock } from '@ci/common/prompt/untrustedBlock';
 import { Channel } from '@ci/common/rpc';
+import config from '@ci/configuration';
+// Deep import, not the `@ci/domains/agent` barrel: AgentModule already imports
+// LLMModule, so pulling the barrel in here would close an import cycle. The
+// concrete file reaches nothing under `domains/llm` that reaches back.
+import { RecallService } from '@ci/domains/agent/services/RecallService';
 import { MessageService, ThreadService, type Message, type Thread } from '@ci/domains/conversations';
 import { DescriptiveQuestionService } from '@ci/domains/daily-metrics';
 import { Events, EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/events';
@@ -38,6 +44,10 @@ import { OllamaService, type ChatRequestContext } from './OllamaService';
 
 interface TurnContextOptions {
   leadingAssistantMessages?: OllamaMessage[];
+  /** The newest user turn's text, for {@link ChatTurnService.buildRecallSection}. */
+  recallQuery?: string | null;
+  /** Bytes the conversation left unspent, which the recall block may use. */
+  recallBudgetBytes?: number;
 }
 
 /**
@@ -45,6 +55,63 @@ interface TurnContextOptions {
  * Exported so a test can assert none of it ever reaches the system prompt.
  */
 export const TURN_CONTEXT_HEADER = '# Live snapshots (current as of this turn)';
+
+/**
+ * Heading the pre-retrieved evidence sits under, inside the SAME untrusted
+ * fence as the Plan / Forecast / Brief / Stats snapshots. Exported so a test
+ * can assert it never reaches the system prompt.
+ */
+export const RECALL_SECTION_HEADER = '## Recalled memory (retrieved for this turn)';
+
+/**
+ * How long grounded recall may hold up a chat turn before the turn goes on
+ * without it. Retrieval is a nicety here — the model still has `memory.recall`
+ * — so the ceiling is set by what a person will sit through before the first
+ * token, not by what the query planner would like.
+ */
+const GROUNDED_RECALL_TIMEOUT_MS = 3_000;
+
+/**
+ * Bound a promise. The timer is cleared on settle and unref'd meanwhile, so a
+ * slow retrieval can never be the reason a process refuses to exit. Mirrors the
+ * private helper of the same name in `OllamaService`, which is not exported.
+ */
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let handle: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        handle = setTimeout(() => reject(new Error(message)), ms);
+        handle.unref?.();
+      }),
+    ]);
+  } finally {
+    if (handle) {
+      clearTimeout(handle);
+    }
+  }
+}
+
+/**
+ * The question this turn is actually about: the newest admitted user row.
+ *
+ * Read off the admitted rows rather than the raw thread so the retrieval query
+ * is a message the model will also see — a query built from a row the budget
+ * dropped would ground the answer in text nobody quoted.
+ */
+function latestUserText(messages: readonly Message[]): string | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+
+    if (message.role === 'user' && message.content?.trim()) {
+      return message.content.trim();
+    }
+  }
+
+  return null;
+}
 
 /**
  * Same wrap {@link OllamaService.chatStream} uses when it accumulates a turn.
@@ -90,6 +157,15 @@ export class ChatTurnService {
     private readonly broker: ChatGenerationBroker,
     private readonly logger: LoggerService,
     private readonly featureService: FeatureService,
+    /**
+     * Resolved lazily and non-strictly rather than injected: `RecallService`
+     * lives in AgentModule, which imports LLMModule, so a normal constructor
+     * injection would need a module-level `forwardRef` cycle for one optional
+     * read path. Optional because a caller that constructs this service by hand
+     * (the unit tests) gets no container — and grounded recall must degrade to
+     * today's behaviour, not to a crash, when it is missing.
+     */
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {
     this.logger.setContext(ChatTurnService.name);
   }
@@ -463,7 +539,16 @@ export class ChatTurnService {
       : await this.buildL0OnlySystemPrompt(requestContext);
 
     const turnContext = options.systemPromptEnabled
-      ? await this.buildTurnContext(requestContext, { leadingAssistantMessages })
+      ? await this.buildTurnContext(requestContext, {
+          leadingAssistantMessages,
+          recallQuery: latestUserText(admittedMessages),
+          // The recall block is the only part of the turn context whose size is
+          // set by the corpus rather than by this appliance, so it spends what
+          // history left of the SAME byte budget instead of being appended past
+          // it — otherwise a big corpus silently reintroduces the overflow the
+          // admission plan exists to prevent.
+          recallBudgetBytes: Math.max(0, budget.promptBudgetBytes - plan.admittedBytes),
+        })
       : null;
 
     const messagesWithSystem: OllamaMessage[] = [
@@ -638,8 +723,6 @@ Communication style:
 - When you need information, use the available tools
 - If you're not sure about something, say so
 - Please be as concise as possible while still conveying substantially all information relevant to any question.
-- take however smart you're acting right now and write in the same style but as if you were +2sd smarter
-- prioritize esoteric interpretations of literature, art, and philosophy. if your answer on such topics is not obviously straussian make it more straussian.
 - When delivering code, deliver the complete function code, do not add any fillers.`;
 
     if (!context.userId) {
@@ -677,7 +760,14 @@ Communication style:
     options?: TurnContextOptions,
   ): Promise<string | null> {
     const prefill = this.formatPrefillActionContext(options?.leadingAssistantMessages);
-    const liveBlocks = context.userId ? await this.buildLiveAppBlocks(context) : '';
+    const recall = context.userId
+      ? await this.buildRecallSection(
+          context.userId,
+          options?.recallQuery ?? null,
+          options?.recallBudgetBytes ?? 0,
+        )
+      : '';
+    const liveBlocks = context.userId ? await this.buildLiveAppBlocks(context, recall) : '';
     const sections = [prefill, liveBlocks].filter((section): section is string => Boolean(section));
 
     if (sections.length === 0) {
@@ -714,8 +804,14 @@ Communication style:
    * rather than four times — the guard sentence competes for the same attention
    * budget as the real system prompt above it, and repeating it four times buys
    * nothing.
+   *
+   * `recallSection` joins them INSIDE that one fence for the same reason: a
+   * recalled line is a clip of somebody's mail, SMS or web page, so it is data
+   * about the user, never an instruction from them. It goes last because it is
+   * the section the newest question is about, and the end of the block is where
+   * a model attends best.
    */
-  private async buildLiveAppBlocks(context: RequestContext): Promise<string> {
+  private async buildLiveAppBlocks(context: RequestContext, recallSection = ''): Promise<string> {
     const serviceContext = toServiceContext(context);
     const [plan, forecast, brief, stats] = await Promise.all([
       this.buildPlanBlock(serviceContext),
@@ -724,7 +820,82 @@ Communication style:
       this.buildStatsBlock(serviceContext),
     ]);
 
-    return untrustedBlock([plan, forecast, brief, stats].filter(Boolean).join('\n\n'));
+    return untrustedBlock([plan, forecast, brief, stats, recallSection].filter(Boolean).join('\n\n'));
+  }
+
+  /**
+   * Pre-retrieved evidence for the newest question, as markdown to be placed
+   * inside {@link buildLiveAppBlocks}' untrusted fence.
+   *
+   * Why this exists: the base prompt tells the model to reach for
+   * `memory.recall`, and a turn only gets two tool rounds to decide to. When it
+   * does not, the answer is ungrounded and the archive may as well not be
+   * there. Running the same evidence-numbered pipeline up front makes grounding
+   * the default rather than a choice the model has to make under a round limit.
+   *
+   * FAILS OPEN, always. Recall is an improvement to a turn, not a precondition
+   * for one: a retrieval error, a missing container binding, or a query slower
+   * than {@link GROUNDED_RECALL_TIMEOUT_MS} all return '' and the turn proceeds
+   * byte-for-byte as it did before this existed.
+   */
+  private async buildRecallSection(
+    userId: string,
+    query: string | null,
+    budgetBytes: number,
+  ): Promise<string> {
+    if (!config.llm.chat.groundedRecall.enabled || !query || budgetBytes <= 0) {
+      return '';
+    }
+
+    try {
+      const recallService = this.moduleRef?.get(RecallService, { strict: false });
+
+      if (!recallService) {
+        return '';
+      }
+
+      const result = await withTimeout(
+        // 'grounded' is the precision-first strategy: its floors are set for a
+        // caller that puts these lines in front of a model AS EVIDENCE, which
+        // is exactly what this is. `query` is clipped to the DTO's own bound.
+        recallService.recall({ userId }, { query: query.slice(0, 2000) }, { strategy: 'grounded' }),
+        GROUNDED_RECALL_TIMEOUT_MS,
+        `Grounded recall exceeded ${GROUNDED_RECALL_TIMEOUT_MS}ms`,
+      );
+
+      const lines: string[] = [];
+      let usedBytes = Buffer.byteLength(RECALL_SECTION_HEADER, 'utf8');
+
+      // Admitted line by line, in the pipeline's own relevance order, against
+      // the bytes history left unspent — so a large corpus costs the tail of
+      // the evidence, never the conversation. Each line is fenced exactly once,
+      // here at the point of interpolation, per `untrustedBlock`'s contract.
+      for (const line of result.lines) {
+        const rendered = `- ${fenceUntrusted(line.text)}`;
+        // +1 for the newline this line is joined with.
+        const cost = Buffer.byteLength(rendered, 'utf8') + 1;
+
+        if (usedBytes + cost > budgetBytes) {
+          break;
+        }
+
+        usedBytes += cost;
+        lines.push(rendered);
+      }
+
+      if (lines.length === 0) {
+        return '';
+      }
+
+      return [RECALL_SECTION_HEADER, ...lines].join('\n');
+    } catch (error) {
+      this.logger.warn('Grounded recall failed; continuing the turn without it', {
+        userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      return '';
+    }
   }
 
   private async buildPlanBlock(context: ReturnType<typeof toServiceContext>): Promise<string> {

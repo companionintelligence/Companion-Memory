@@ -5,6 +5,7 @@ import { Module } from '@nestjs/common';
 import { GraphQLModule as NestGraphQLModule } from '@nestjs/graphql';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import config from '@ci/configuration';
 import { ActivityModule } from '@ci/domains/activity';
 import { AgentModule } from '@ci/domains/agent';
 import { AsksModule } from '@ci/domains/asks';
@@ -35,6 +36,8 @@ import { SummariesModule } from '@ci/domains/summaries';
 import { UserModule } from '@ci/domains/user';
 
 import { GraphQLController } from './controllers/GraphQLController';
+import { createDepthLimitRule } from './depthLimit';
+import { formatError } from './formatError';
 import { AttachmentFileLoader } from './loaders/AttachmentFileLoader';
 import { ConnectionLoader } from './loaders/ConnectionLoader';
 import { ContentFileLoader } from './loaders/ContentFileLoader';
@@ -131,6 +134,15 @@ import { UserResolver } from './resolvers/UserResolver';
       // "fine in dev, never in a real deployment" behaviours.
       introspection: process.env.NODE_ENV !== 'production',
       graphiql: false,
+      // Without this every throw reached the client verbatim —
+      // `GlobalExceptionsFilter` rethrows on the `graphql` context type and the
+      // driver had no formatter, so a failed query answered with its own SQL.
+      // See ./formatError.ts for what is passed through and what is masked.
+      formatError,
+      // Complexity (plugins/ComplexityPlugin) bounds how many fields a query
+      // selects; nothing bounded how deep it nests. The deepest document the
+      // web app ships measures 8, so the default 12 leaves real headroom.
+      validationRules: [createDepthLimitRule(config.graphql.maxDepth)],
     }),
     AsksModule,
     AgentModule,

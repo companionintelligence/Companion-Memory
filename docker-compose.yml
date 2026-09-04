@@ -6,6 +6,18 @@ services:
     networks:
       - ci
     restart: unless-stopped
+    # Docker's json-file driver is unbounded by default, and an appliance that
+    # nobody prunes fills its disk with container logs long before it fills it
+    # with data. 10MB x 3 rotated files is enough history to diagnose a crash
+    # loop and caps the whole stack at well under a gigabyte. Every
+    # long-running service below carries the same block, and the staging and
+    # production overrides repeat it for api/worker/gateway, which have no base
+    # definition here to inherit it from.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       # -U is required: pg_isready otherwise defaults the role to $USER (root
       # in this image), and every 5s probe logs a FATAL "role root does not
@@ -47,6 +59,24 @@ services:
       setup-database:
         condition: service_completed_successfully
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # A ceiling, not a reservation. This process holds torch, ONNX Runtime and
+    # a llama.cpp GGUF labeler at once, and an unbounded OOM here takes the
+    # whole box down with it — including `database`, which is the one service
+    # whose death loses data. Deliberately generous: nothing has measured
+    # HBPE's real peak RSS (docs/operations/gpu-model-residency.md measures GPU
+    # residency, not host memory), and a limit that kills a legitimate training
+    # run is worse than no limit at all. Set HBPE_MEM_LIMIT to tighten it on a
+    # small appliance once a real figure exists.
+    #
+    # `mem_limit`, not `deploy.resources.limits.memory`: these files carry no
+    # `version:` key and are driven by the Compose v2 CLI outside swarm, where
+    # `mem_limit` is honoured unconditionally and `deploy:` is not.
+    mem_limit: ${HBPE_MEM_LIMIT:-24g}
     profiles: [ "local", "staging", "production" ]
 
   object-store:
@@ -56,6 +86,11 @@ services:
     networks:
       - ci
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 10s
@@ -83,6 +118,16 @@ services:
       setup-database:
         condition: service_completed_successfully
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Same rationale as hbpe-service's limit above, smaller number: this
+    # sidecar holds the document parser and short LLM requests, not model
+    # weights. Also unmeasured — raise SUMMARY_MEM_LIMIT if a large PDF parse
+    # starts getting OOM-killed.
+    mem_limit: ${SUMMARY_MEM_LIMIT:-8g}
     profiles: [ "local", "staging", "production" ]
 
   # NOTE: summary-service and hbpe-service declare
@@ -139,6 +184,11 @@ services:
       setup-database:
         condition: service_completed_successfully
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # Deliberately NOT in "local". The scaffold (#1582/#1585, 2026-06-28) is
     # server-side only — no client has ever connected, and the README's client
     # phase (@powersync/web, on-device schema, upload connector) is unstarted.
