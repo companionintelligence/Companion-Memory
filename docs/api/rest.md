@@ -604,7 +604,10 @@ Import stage work is dispatched over **per-kind pg-boss queues** — `import-unp
 | `JobsController` | GET `/jobs` (`:130`) | `JwtOrApiKeyAuthGuard` | The queryable job list behind the dashboard table. Optional filters compose; `state` accepts pg-boss's own states **plus the synthetic `dead-letter`**, which selects the DLQ copies (they are stored as `created`, so without it they are unfindable). |
 | `JobsController` | GET `/jobs/history` (`:160`) | `JwtOrApiKeyAuthGuard` | Job history. |
 | `JobsController` | GET `/jobs/types` (`:246`) | `JwtOrApiKeyAuthGuard` | Distinct job types. |
-| `JobsController` | POST `/jobs/crons/run` (`:111`) | `JwtOrApiKeyAuthGuard` + `@RequireCapability('full')` | Fire every Nest `@Cron` (or one named via `?name=`) the way the scheduler would. `full`, not `write`, because the set is every registered schedule — including `AccountPurgeCron.purgeDueAccounts`, which permanently deletes accounts. Formerly unguarded and "loopback-only" via `request.socket.remoteAddress`, which is the immediate peer: both proxies in this repo (dev Caddy, Vite `/api`) dial the API on localhost, so any caller on the network passed it. |
+| `JobsController` | GET `/jobs/controls` | `JwtOrApiKeyAuthGuard` + `@RequireCapability('read')` | The persisted operator controls, plus the defaults and ceilings needed to render them honestly. Appliance-wide, not per-user. |
+| `JobsController` | POST `/jobs/crons/run` | `JwtOrApiKeyAuthGuard` + `ApplianceAdminGuard` + `@RequireCapability('full')` | Fire every Nest `@Cron` (or one named via `?name=`) the way the scheduler would. `full`, not `write`, because the set is every registered schedule — including `AccountPurgeCron.purgeDueAccounts`, which permanently deletes accounts. Formerly unguarded and "loopback-only" via `request.socket.remoteAddress`, which is the immediate peer: both proxies in this repo (dev Caddy, Vite `/api`) dial the API on localhost, so any caller on the network passed it. |
+| `JobsController` | PUT `/jobs/controls` | `JwtOrApiKeyAuthGuard` + `ApplianceAdminGuard` + `@RequireCapability('write')` | A PUT that behaves like a PATCH: names only the controls it changes. `write`, not `full` — nothing here deletes and every value is reversible. |
+| `JobsController` | POST `/jobs/clear` | `JwtOrApiKeyAuthGuard` + `ApplianceAdminGuard` + `@RequireCapability('full')` | Delete terminal jobs named by a Health verdict. `full`, not `write`, because it is a hard `DELETE` and `write` is defined as "mutating, but nothing that deletes" — and `write` is also `DEFAULT_API_KEY_CAPABILITY`. `dead-letter` deletes ONLY letters `DeadLetterReaperListener` has already copied into `ci.pipeline_dead_letters` and returns the rest as `retained`; `failed` deletes from `pgboss.archive` as well as `pgboss.job`, because the count it retires spans both. |
 | `AuditController` (`:23`, class-level `JwtOrApiKeyAuthGuard` `:24`) | GET `/audit/forward-auth/whoami` (`:41`) | **Both**: `JwtOrApiKeyAuthGuard` (class, `:24`) **then** `HubForwardAuthGuard` (method, `:42`) | Echo the verified Hub forward-auth username (HMAC `X-CI-Hub-User`). Nest **concatenates** guards `[global, class, method]` (`@nestjs/core` `helpers/context-creator.js` `createContext`, run in order by `GuardsConsumer`); a method-level guard does **not** override a class-level one. So the class guard runs first and 401s any caller without a JWT/API key before the signature is ever checked — a valid session or API key is required **in addition to** the signed header. The source comment at `:38-39` calls it an override; that is wrong. |
 | `AuditController` | GET `/audit/deltas` (`:53`) | `JwtOrApiKeyAuthGuard` | Entity-evolution deltas (`entityId`, `limit`, `changeType`, `since`/`until`). |
 | `OnboardingController` (`:15`) | GET `/onboarding/progress` (`:20`), PUT `/onboarding/progress` (`:26`), POST `/onboarding/onboard` (`:35`) | **`JwtAuthGuard`** (session only) | Read/save onboarding progress; run onboarding. |
@@ -613,6 +616,16 @@ Import stage work is dispatched over **per-kind pg-boss queues** — `import-unp
 | `FeatureController` | GET `/_internal/features/global` (`:20`) | **None — public** | All feature flags, no auth (gates the app before login). **200**. |
 | `HealthController` (`common/controllers/HealthController.ts:5`) | GET `/health` (`:7`) | **None — public** | Liveness probe. **200** `{ status: 'ok' }`. Pure liveness — does **not** check DB/Ollama/MinIO. |
 | `GraphQLController` (`domains/graphql/controllers/GraphQLController.ts:5`) | GET `/graphiql` (`:12`) | **None — public** | The GraphiQL IDE page, inlined as a string so it ships in the `tsc` `dist`. Deliberately kept **off** `/graphql` so it never collides with the Apollo mount. |
+
+> **`ApplianceAdminGuard` is the principal axis, and `@RequireCapability` is not it.**
+> `enforceApiKeyCapability` returns early when `request.apiKeyScopes` is `undefined`
+> — every JWT, Portal and session principal — so a capability alone leaves an
+> appliance-wide route open to any signed-in user. The guard requires
+> `role === 'admin'`, and admits a non-admin only on an appliance that has **no**
+> admin at all, because nothing in application code writes that role (see
+> `AdminOnlyGuard`'s doc and migration `20260825233952`). Both are needed: the
+> capability is the only control on an appliance with no admin, and the guard is
+> the only control on a session.
 
 ---
 

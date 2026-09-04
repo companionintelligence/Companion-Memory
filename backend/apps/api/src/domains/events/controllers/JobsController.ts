@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { Context, type RequestContext } from '@ci/common/context/';
 import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MAX_CONCURRENCY } from '@ci/common/job-controls';
 import { ValidationPipe } from '@ci/common/pipes';
 
@@ -113,7 +113,7 @@ export class JobsController {
    * control is worse than none. The guard is the real control, so it is the only
    * one left.
    */
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
   @RequireCapability(FULL_CAPABILITY)
   @Post('crons/run')
   runCrons(@Query('name') name?: string): {
@@ -127,15 +127,28 @@ export class JobsController {
   }
 
   /**
-   * Clear terminal jobs named by the Health card — dead-letter queue rows, or
-   * failed origin rows that have already exhausted retries.
+   * Clear terminal jobs named by the Health card — harvested dead-letter rows,
+   * or failed origin rows that have already exhausted retries.
    *
-   * `write`, not `full`: this only deletes work that has already stopped, and
-   * the Health UI confirms before posting. It does not touch live queues or
-   * schedule controls.
+   * `full`, not `write`, and the distinction is this repo's own: `write` is
+   * defined in `ApiKeyCapability.ts` as "read + mutating tools, but **nothing
+   * that deletes**". This route is a hard DELETE. It shipped on `write`, which
+   * is also the level every new api key is minted at by default
+   * (`DEFAULT_API_KEY_CAPABILITY`), so the broadest, least-considered grant on
+   * the appliance reached the one button that destroys rows. Deleting is what
+   * `full` exists to name — the same reasoning `crons/run` above already
+   * carries.
+   *
+   * {@link ApplianceAdminGuard} is the other half, and is not redundant with
+   * it. `@RequireCapability` is enforced only for api-key principals — see
+   * `enforceApiKeyCapability`, which returns early when `apiKeyScopes` is
+   * undefined — so on its own it says nothing about a signed-in session, which
+   * is how a Jobs page open in any user's browser could clear the appliance.
+   * The capability covers the key axis, the guard covers the principal axis,
+   * and each is the only control in the case the other does not see.
    */
-  @UseGuards(JwtOrApiKeyAuthGuard)
-  @RequireCapability(WRITE_CAPABILITY)
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
+  @RequireCapability(FULL_CAPABILITY)
   @Post('clear')
   clearTerminal(
     @Context() context: RequestContext,
@@ -248,11 +261,17 @@ export class JobsController {
    * first write, so a body naming one unknown queue changes nothing rather than
    * applying the valid half of itself.
    *
+   * {@link ApplianceAdminGuard} all the same, for the reason spelled out on
+   * `clear` above: these controls are APPLIANCE-WIDE — pausing a queue or
+   * disabling a schedule stops that work for everyone on the box — and the
+   * capability decorator governs api keys only, so without the guard any
+   * signed-in user could switch off the memory system for the household.
+   *
    * Returns the recomputed state rather than an ack — see `JobControlsService`
    * for why "what you asked for" and "what the appliance will do" are routinely
    * different numbers.
    */
-  @UseGuards(JwtOrApiKeyAuthGuard)
+  @UseGuards(JwtOrApiKeyAuthGuard, ApplianceAdminGuard)
   @RequireCapability(WRITE_CAPABILITY)
   @Put('controls')
   updateControls(

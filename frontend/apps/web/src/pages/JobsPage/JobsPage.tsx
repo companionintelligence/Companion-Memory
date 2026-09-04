@@ -14,7 +14,7 @@ import { DeadLettersCard } from './DeadLettersCard';
 import { FoldBody, FoldCard, FoldTrigger, cardPad, usePhone } from './Fold';
 import { categoryDot, categoryLabel, CATEGORY_LABELS } from './jobCategories';
 import { JobControlsCard } from './JobControlsCard';
-import { JobHealthCard } from './JobHealthCard';
+import { JobHealthCard, type TerminalClearResult } from './JobHealthCard';
 import { JobHistoryCharts } from './JobHistoryCharts';
 import { JobsImportActivity } from './JobsImportActivity';
 import { categoryFromPath, JOBS_SECTIONS } from './jobsSections';
@@ -59,14 +59,21 @@ export function JobsPage() {
 
   const onFilterChange = useCallback((next: Partial<JobFilters>) => setFilters(next), [setFilters]);
 
+  // Returns the server's own tally rather than swallowing it. `retained` is the
+  // number Clear deliberately did NOT delete — dead letters the reaper has not
+  // copied yet — and without it back on the page the count simply fails to reach
+  // zero and the operator clicks again.
   const clearTerminal = useCallback(
     async (scope: 'dead-letter' | 'failed') => {
-      await fetchJson<{ scope: string; deleted: number }>('/api/jobs/clear', {
+      const result = await fetchJson<TerminalClearResult>('/api/jobs/clear', {
         method: 'POST',
         headers: { ...jobsAuthHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({ scope }),
       });
+
       await Promise.all([dashboard.refresh(), list.refresh()]);
+
+      return result;
     },
     [dashboard.refresh, list.refresh, jobsAuthHeaders],
   );

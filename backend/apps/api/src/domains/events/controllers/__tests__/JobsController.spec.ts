@@ -1,15 +1,10 @@
-import { UnauthorizedException, type INestApplication } from '@nestjs/common';
+import { ForbiddenException, UnauthorizedException, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 
 import { ContextService } from '@ci/common/context';
-import {
-  FULL_CAPABILITY,
-  REQUIRE_CAPABILITY_KEY,
-  REQUIRE_SCOPES_KEY,
-  WRITE_CAPABILITY,
-} from '@ci/common/decorators';
-import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
+import { FULL_CAPABILITY, REQUIRE_CAPABILITY_KEY, REQUIRE_SCOPES_KEY } from '@ci/common/decorators';
+import { ApplianceAdminGuard, JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 
 import { JobControlsService } from '../../services/JobControlsService';
 import { JobMonitorService } from '../../services/JobMonitorService';
@@ -60,14 +55,23 @@ function makeQueryService() {
     clearTerminal: jest.fn(async (_context: unknown, scope: 'dead-letter' | 'failed') => ({
       scope,
       deleted: 3,
+      retained: scope === 'dead-letter' ? 7 : 0,
     })),
   };
+}
+
+/** Stands in for {@link ApplianceAdminGuard} on an appliance that has an admin. */
+class DenyNonAdminGuard {
+  canActivate(): boolean {
+    throw new ForbiddenException('This action requires an administrator account');
+  }
 }
 
 async function buildApp(
   guard: unknown,
   monitor: ReturnType<typeof makeMonitorService>,
   query: ReturnType<typeof makeQueryService> = makeQueryService(),
+  adminGuard: unknown = AlwaysAllowGuard,
 ) {
   const module = await Test.createTestingModule({
     controllers: [JobsController],
@@ -79,6 +83,11 @@ async function buildApp(
   })
     .overrideGuard(JwtOrApiKeyAuthGuard)
     .useClass(guard as new () => unknown)
+    // Overridden rather than provided: the real guard takes a DataSource, and
+    // what these cases assert is that the controller CONSULTS a principal check,
+    // not how that check answers. `ApplianceAdminGuard.test.ts` owns the verdict.
+    .overrideGuard(ApplianceAdminGuard)
+    .useClass(adminGuard as new () => unknown)
     .compile();
 
   const app = module.createNestApplication();
@@ -225,6 +234,20 @@ describe('POST /jobs/clear', () => {
     expect(query.clearTerminal).not.toHaveBeenCalled();
   });
 
+  it('rejects a signed-in NON-ADMIN on an appliance that has an admin', async () => {
+    // The hole this route shipped with, and the one `@RequireCapability` could
+    // never have closed: `enforceApiKeyCapability` returns early for a session
+    // principal, so the decorator said nothing about the Jobs page open in any
+    // household member's browser. Routed through a real HTTP stack rather than
+    // asserted as metadata — the point is that the request is REFUSED, not that
+    // a decorator is present.
+    app = await buildApp(AlwaysAllowGuard, makeMonitorService(), query, DenyNonAdminGuard);
+
+    await request(app.getHttpServer()).post('/jobs/clear').send({ scope: 'dead-letter' }).expect(403);
+
+    expect(query.clearTerminal).not.toHaveBeenCalled();
+  });
+
   it('forwards the scope when authenticated', async () => {
     app = await buildApp(AlwaysAllowGuard, makeMonitorService(), query);
 
@@ -233,8 +256,22 @@ describe('POST /jobs/clear', () => {
       .send({ scope: 'failed' })
       .expect(201);
 
-    expect(response.body).toEqual({ scope: 'failed', deleted: 3 });
+    expect(response.body).toEqual({ scope: 'failed', deleted: 3, retained: 0 });
     expect(query.clearTerminal).toHaveBeenCalledWith(expect.anything(), 'failed');
+  });
+
+  it('passes `retained` through, so the page can say what it kept', async () => {
+    // The dead-letter scope deliberately leaves unharvested letters behind, so
+    // the count on screen does not reach zero. Swallowing that number here is
+    // what would make a working, conservative delete read as a broken button.
+    app = await buildApp(AlwaysAllowGuard, makeMonitorService(), query);
+
+    const response = await request(app.getHttpServer())
+      .post('/jobs/clear')
+      .send({ scope: 'dead-letter' })
+      .expect(201);
+
+    expect(response.body).toEqual({ scope: 'dead-letter', deleted: 3, retained: 7 });
   });
 
   describe('auth declarations', () => {
@@ -246,8 +283,66 @@ describe('POST /jobs/clear', () => {
       expect(guards).toContain(JwtOrApiKeyAuthGuard);
     });
 
-    it('requires WRITE capability — irreversible, but only for already-stopped work', () => {
-      expect(Reflect.getMetadata(REQUIRE_CAPABILITY_KEY, handler)).toBe(WRITE_CAPABILITY);
+    it('requires FULL capability, because it DELETES', () => {
+      // `write` is defined in ApiKeyCapability.ts as "read + mutating tools, but
+      // nothing that deletes", and it is also DEFAULT_API_KEY_CAPABILITY — the
+      // level every new key is minted at. Shipping a hard DELETE on `write` put
+      // the appliance's broadest, least-considered grant on the one button that
+      // destroys rows. Fails OPEN if dropped, which is why it is pinned.
+      expect(Reflect.getMetadata(REQUIRE_CAPABILITY_KEY, handler)).toBe(FULL_CAPABILITY);
     });
+
+    it('is guarded by ApplianceAdminGuard as well, for the principals capability cannot see', () => {
+      const guards = Reflect.getMetadata('__guards__', handler) as unknown[] | undefined;
+
+      expect(guards).toContain(ApplianceAdminGuard);
+    });
+  });
+});
+
+/**
+ * The rest of the appliance-wide control plane.
+ *
+ * `clear` is not special — `crons/run` fires every schedule on the box
+ * (including an account purge) and `PUT /controls` can pause the memory system
+ * for everyone. All three carried a `@RequireCapability` that is a no-op for
+ * sessions, so all three need the principal check, and asserting it on one of
+ * them would leave the other two to be re-litigated later.
+ */
+describe('the appliance-wide control plane declares BOTH axes', () => {
+  const ROUTES: ReadonlyArray<[name: string, handler: unknown]> = [
+    ['clearTerminal', JobsController.prototype.clearTerminal],
+    ['runCrons', JobsController.prototype.runCrons],
+    ['updateControls', JobsController.prototype.updateControls],
+  ];
+
+  it.each(ROUTES)('%s is guarded by ApplianceAdminGuard', (_name, handler) => {
+    const guards = Reflect.getMetadata('__guards__', handler as object) as unknown[] | undefined;
+
+    expect(guards).toContain(JwtOrApiKeyAuthGuard);
+    expect(guards).toContain(ApplianceAdminGuard);
+  });
+
+  it.each(ROUTES)('%s still states a capability, for api-key principals', (_name, handler) => {
+    // The guard does not replace the capability axis. A `write` key belonging to
+    // an admin still must not reach a delete, and on an appliance with no admin
+    // the capability is the only control left standing.
+    expect(Reflect.getMetadata(REQUIRE_CAPABILITY_KEY, handler as object)).toBeDefined();
+  });
+
+  it('does not admin-gate the READ routes, which the page needs to render', () => {
+    // A dashboard nobody can open is not a security improvement. Only the three
+    // routes that ACT are gated.
+    for (const handler of [
+      JobsController.prototype.getDashboard,
+      JobsController.prototype.list,
+      JobsController.prototype.history,
+      JobsController.prototype.controls,
+      JobsController.prototype.types,
+    ]) {
+      const guards = Reflect.getMetadata('__guards__', handler as unknown as object) as unknown[] | undefined;
+
+      expect(guards).not.toContain(ApplianceAdminGuard);
+    }
   });
 });
