@@ -67,7 +67,6 @@ export function TagsPage() {
         <PageContent className="gap-4 p-0">
           <MemoryHubShell>
             <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
-
               {loading ? (
                 <p className="text-sm text-muted-foreground">Loading tags…</p>
               ) : error ? (

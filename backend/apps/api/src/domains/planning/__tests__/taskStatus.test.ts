@@ -62,4 +62,3 @@ describe('task status vocabulary', () => {
 // it too — in `domains/graphql/types/__tests__/TaskType.test.ts`, because
 // reaching into another domain's internals from here is a dependency-cruiser
 // error and the assertion belongs beside the enum it guards.
-

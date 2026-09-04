@@ -577,7 +577,10 @@ function topCounts(counts: Map<string, number>, limit: number, label: string): R
  */
 function clearTerminalJobs(body: unknown): Record<string, unknown> {
   const scope =
-    body && typeof body === 'object' && 'scope' in body && typeof (body as { scope: unknown }).scope === 'string'
+    body &&
+    typeof body === 'object' &&
+    'scope' in body &&
+    typeof (body as { scope: unknown }).scope === 'string'
       ? (body as { scope: string }).scope
       : null;
 

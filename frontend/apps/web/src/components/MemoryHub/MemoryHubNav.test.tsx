@@ -56,7 +56,10 @@ describe('MemoryHubNav', () => {
     // Filters and sort stay behind: the next page has its own and may not
     // understand these.
     expect(content).toHaveAttribute('href', '/memory/content?search=shell');
-    expect(screen.getByRole('link', { name: 'People' })).toHaveAttribute('href', '/memory/people?search=shell');
+    expect(screen.getByRole('link', { name: 'People' })).toHaveAttribute(
+      'href',
+      '/memory/people?search=shell',
+    );
   });
 
   it('links plainly when nothing has been searched', async () => {

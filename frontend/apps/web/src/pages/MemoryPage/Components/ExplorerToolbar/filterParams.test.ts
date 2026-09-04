@@ -106,7 +106,8 @@ describe('resolveExplorerTypes on the events browse', () => {
 
   it('keeps a narrowing inside those kinds', () => {
     expect(
-      resolveExplorerTypes(new URLSearchParams('includedEntityTypes=Communication'), '/memory/events').includeTypes,
+      resolveExplorerTypes(new URLSearchParams('includedEntityTypes=Communication'), '/memory/events')
+        .includeTypes,
     ).toEqual(['Communication']);
   });
 

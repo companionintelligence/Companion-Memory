@@ -93,7 +93,11 @@ function captureIntersectionObserver() {
   };
 }
 
-function facets({ types = ['image', 'post'], mimetypes = ['image/png', 'text/plain'], sourceSystems = ['reddit'] } = {}) {
+function facets({
+  types = ['image', 'post'],
+  mimetypes = ['image/png', 'text/plain'],
+  sourceSystems = ['reddit'],
+} = {}) {
   return {
     request: { query: GET_CONTENT_FACETS, variables: {} },
     result: {

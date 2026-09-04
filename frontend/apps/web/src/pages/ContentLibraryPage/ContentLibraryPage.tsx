@@ -180,7 +180,12 @@ export function ContentLibraryPage() {
             {/* Content-specific filters, like the Things page's category and
                 brand: each picker lists what the user's rows actually carry. */}
             <div className="flex flex-wrap items-center gap-2" data-testid="content-filters">
-              <ContentFacetFilter label="Content type" param="types" options={facets?.types ?? []} icon={Shapes} />
+              <ContentFacetFilter
+                label="Content type"
+                param="types"
+                options={facets?.types ?? []}
+                icon={Shapes}
+              />
               <ContentFacetFilter
                 label="File type"
                 param="mimetypes"

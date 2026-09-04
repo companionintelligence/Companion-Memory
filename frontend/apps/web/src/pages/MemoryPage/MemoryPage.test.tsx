@@ -120,7 +120,8 @@ describe('MemoryPage time-sort reset', () => {
   });
 
   it('keeps the Timeline view on /memory inside a When filter, and always on the events browse', () => {
-    const inWindow = '/memory?view=timeline&when=last-week&from=2026-01-01T00:00:00.000Z&to=2026-01-07T23:59:59.999Z';
+    const inWindow =
+      '/memory?view=timeline&when=last-week&from=2026-01-01T00:00:00.000Z&to=2026-01-07T23:59:59.999Z';
 
     renderAt(inWindow);
     expect(screen.getByTestId('location')).toHaveTextContent(inWindow);

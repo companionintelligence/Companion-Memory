@@ -119,12 +119,20 @@ export function isMemoryExplorerPath(pathname: string): boolean {
  * so it counts too. Notes and chat have no searchable list; the box stays a
  * launcher there.
  */
-const LIVE_SEARCH_SECTIONS = new Set(['/memory/people', '/memory/places', '/memory/things', '/memory/content', '/memory/tags']);
+const LIVE_SEARCH_SECTIONS = new Set([
+  '/memory/people',
+  '/memory/places',
+  '/memory/things',
+  '/memory/content',
+  '/memory/tags',
+]);
 
 export function isLiveSearchPath(pathname: string): boolean {
   if (isMemoryExplorerPath(pathname)) {
     return true;
   }
 
-  return MEMORY_HUB_SECTIONS.some((section) => LIVE_SEARCH_SECTIONS.has(section.to) && section.match(pathname));
+  return MEMORY_HUB_SECTIONS.some(
+    (section) => LIVE_SEARCH_SECTIONS.has(section.to) && section.match(pathname),
+  );
 }

@@ -114,7 +114,9 @@ export default function MobileMemoryPage() {
 
                 {/* Tab Navigation */}
                 <Tabs defaultValue="list" onValueChange={setActiveTab} value={activeTab}>
-                  <Tabs.List className={showTimelineView ? 'grid w-full grid-cols-5' : 'grid w-full grid-cols-4'}>
+                  <Tabs.List
+                    className={showTimelineView ? 'grid w-full grid-cols-5' : 'grid w-full grid-cols-4'}
+                  >
                     <Tabs.Trigger
                       value="list"
                       className="flex items-center gap-1 px-1 text-[11px] sm:text-sm"
