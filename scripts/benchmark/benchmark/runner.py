@@ -26,6 +26,9 @@ Scorer = Callable[[EvalQuestion, str], tuple[bool, str]]
 # Optional event sink; receives ("phase", system, payload) tuples.
 Listener = Callable[[str, str, dict[str, Any]], None]
 
+# A zero-argument adapter constructor, as stored in ``adapters.ADAPTERS``.
+AdapterFactory = Callable[[], MemoryAdapter]
+
 
 def _iter_user_messages(persona: dict[str, Any]) -> Iterable[tuple[str, str]]:
     """Yield (session_id, content) for every user message in every session."""
@@ -152,8 +155,21 @@ def run_all(
     ]
 
 
+def run_user_id(user_id: str, run_index: int) -> str:
+    """Per-run namespace for the synthetic user.
+
+    Adapters key their state on ``user_id`` (mem0 names its collection after
+    it, CI-Server writes memories against it, hindsight derives its bank), so
+    reusing one id across runs means run 2 searches a store run 1 already
+    filled and warmed. Suffixing every run — including the first, so no run
+    is privileged — makes the repeats independent. The id never appears in a
+    report, so this does not change any output.
+    """
+    return f"{user_id}__run{run_index}"
+
+
 def run_system_repeated(
-    adapter: MemoryAdapter,
+    adapter_factory: AdapterFactory,
     persona: dict[str, Any],
     user_id: str,
     scorer: Scorer,
@@ -163,26 +179,32 @@ def run_system_repeated(
 ) -> list[SystemResult]:
     """Run an adapter ``runs`` times and return one :class:`SystemResult` per run.
 
+    Takes a *factory*, not an adapter, because repeated runs have to be
+    independent to be worth aggregating. Reusing one instance carries its
+    caches, connections and accumulated per-adapter state into the next run,
+    so run 2 measures a warmed system and the spread across runs understates
+    the real variance. Each run gets a fresh instance and its own ``user_id``
+    (see :func:`run_user_id`).
+
     Why this exists as a separate function (rather than baking the loop into
     :func:`run_system`): the single-run path is exercised by every existing
-    adapter test and the locked JSON contract requires that ``--runs 1``
-    produce byte-identical output to round-3. Keeping :func:`run_system`
-    untouched is the cheapest way to honour that.
+    adapter test and the JSON contract requires that ``--runs 1``
+    produce byte-identical output to the single-run path. Keeping
+    :func:`run_system` untouched is the cheapest way to honour that.
 
     Contract:
 
-    * ``runs == 1`` returns ``[run_system(...)]`` — a single-element list whose
-      sole entry is exactly what :func:`run_system` would have produced.
+    * ``runs == 1`` returns a single-element list whose sole entry is what
+      :func:`run_system` would have produced for a fresh adapter.
     * ``runs > 1`` invokes the full lifecycle (``setup → ingest → flush →
-      search → teardown``) ``runs`` times, in sequence, against the same
-      adapter instance. Adapters are expected to be re-entrant across
-      ``setup/teardown`` pairs; if one isn't, that's a bug in the adapter,
-      not here.
+      search → teardown``) ``runs`` times, in sequence, each against its own
+      adapter instance.
     * A failure in any single run is captured on that run's
-      :class:`SystemResult` (via :func:`run_system`'s own error path) and
-      does NOT abort the remaining runs. This matches the rest of the
-      benchmark's "errors degrade, never crash" stance and lets the
-      aggregation layer compute medians over the runs that did complete.
+      :class:`SystemResult` — including a factory that raises, which is
+      recorded as a setup failure — and does NOT abort the remaining runs.
+      This matches the rest of the benchmark's "errors degrade, never crash"
+      stance. The aggregation layer then excludes those runs from its
+      statistics rather than scoring them as zeros.
     * ``runs < 1`` raises :class:`ValueError` — there is no sensible JSON
       shape for "zero runs".
     """
@@ -199,7 +221,36 @@ def run_system_repeated(
                 on_event(phase, system, {**payload, "run_index": _i})
 
         listener: Listener | None = _wrapped if on_event else None
-        results.append(run_system(adapter, persona, user_id, scorer, on_event=listener))
+        try:
+            adapter = adapter_factory()
+        except Exception as exc:
+            # A factory that can't construct is the same class of failure as
+            # a setup() that raises, and is recorded the same way so the run
+            # still occupies its slot in the returned list. The name comes
+            # from an earlier run if there was one — the factory never got
+            # far enough to supply it.
+            traceback.print_exc()
+            name = next((r.system_name for r in results if r.system_name != "?"), "?")
+            if listener:
+                listener("error", name, {"phase": "construct", "error": str(exc)})
+            results.append(
+                SystemResult(
+                    system_name=name,
+                    ingest_total_ms=0,
+                    flush_total_ms=0,
+                    error=f"setup failed: {exc}",
+                )
+            )
+            continue
+        results.append(
+            run_system(
+                adapter,
+                persona,
+                run_user_id(user_id, i),
+                scorer,
+                on_event=listener,
+            )
+        )
     return results
 
 

@@ -46,9 +46,11 @@ def test_multirun_json_has_runs_field_and_stats():
     js = build_json_report(_persona(), [runs])
     sys0 = js["systems"][0]
     assert sys0["runs"] == 3
-    # Score includes both run-0 scalar and stats fields.
-    assert sys0["score"]["hit"] == 1  # from run 0
-    assert sys0["score"]["total"] == 2
+    assert sys0["runs_ok"] == 3
+    assert sys0["runs_errored"] == 0
+    # Score pools every completed run and carries the distribution stats.
+    assert sys0["score"]["hit"] == 4  # 1 + 2 + 1
+    assert sys0["score"]["total"] == 6  # 2 questions x 3 runs
     for key in ("median", "mean", "min", "max", "iqr", "stddev"):
         assert key in sys0["score"]
         assert key in sys0["timings_ms"]["ingest"]
@@ -57,19 +59,20 @@ def test_multirun_json_has_runs_field_and_stats():
         assert key in sys0["category_stats"]["flat-recall"]
 
 
-def test_multirun_json_categories_and_questions_from_run0():
+def test_multirun_json_categories_and_questions_span_every_run():
     runs = [
         _result("naive", (True, False)),
         _result("naive", (False, True)),
     ]
     js = build_json_report(_persona(), [runs])
     sys0 = js["systems"][0]
-    # Run 0: flat-recall hit, relational miss.
-    assert sys0["categories"]["flat-recall"] == [1, 1]
-    assert sys0["categories"]["relational"] == [0, 1]
-    # Questions also from run 0.
-    assert sys0["questions"][0]["hit"] is True
-    assert sys0["questions"][1]["hit"] is False
+    # Each category was hit in one of the two runs.
+    assert sys0["categories"]["flat-recall"] == [1, 2]
+    assert sys0["categories"]["relational"] == [1, 2]
+    # Questions carry a hit count across runs, not run 0's boolean.
+    assert sys0["questions"][0]["hits"] == 1
+    assert sys0["questions"][0]["runs"] == 2
+    assert sys0["questions"][1]["hits"] == 1
 
 
 def test_singlerun_json_path_unchanged():
@@ -94,7 +97,45 @@ def test_multirun_markdown_shows_median_iqr_and_run_count():
     assert "Avg search" in md
 
 
-def test_multirun_markdown_per_question_detail_says_run0():
+def test_multirun_markdown_per_question_detail_counts_hits_across_runs():
     runs = [_result("naive", (True, False)), _result("naive", (False, False))]
     md = build_markdown_report(_persona(), [runs])
-    assert "Per-question detail (run 0)" in md
+    assert "Per-question detail" in md
+    assert "run 0" not in md
+    # q1 hit in one of two runs, q2 in neither.
+    assert "| q1 | flat-recall | 1/2 |" in md
+    assert "| q2 | relational | 0/2 |" in md
+
+
+def _errored(name: str, msg: str) -> SystemResult:
+    return SystemResult(
+        system_name=name, ingest_total_ms=0, flush_total_ms=0, error=msg
+    )
+
+
+def test_multirun_markdown_reports_how_many_runs_survived():
+    runs = [
+        _result("naive", (True, True)),
+        _errored("naive", "flush failed: boom"),
+        _result("naive", (True, True)),
+    ]
+    md = build_markdown_report(_persona(), [runs])
+    # The table must say 2 of 3 runs produced data, and name the failure —
+    # otherwise a mostly-broken system renders as a clean 100%.
+    assert "2/3" in md
+    assert "flush failed: boom" in md
+
+
+def test_multirun_markdown_categories_survive_a_failed_run0():
+    runs = [_errored("naive", "setup failed: boom"), _result("naive", (True, False))]
+    md = build_markdown_report(_persona(), [runs])
+    # Run 0 errored but run 1 scored; the row is not an ERROR row and the
+    # category cells come from the run that completed.
+    assert "ERROR" not in md
+    assert "| 1/1 |" in md
+
+
+def test_multirun_markdown_all_runs_errored_is_an_error_row():
+    runs = [_errored("naive", "setup failed: boom"), _errored("naive", "again")]
+    md = build_markdown_report(_persona(), [runs])
+    assert "ERROR" in md

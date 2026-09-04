@@ -19,7 +19,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from .aggregation import aggregate_runs, aggregated_to_json
+from .aggregation import (
+    AggregatedSystemResult,
+    aggregate_runs,
+    aggregated_questions,
+    aggregated_to_json,
+)
 from .schema import SystemResult
 from .stats import describe
 
@@ -228,10 +233,14 @@ def _build_markdown_multirun(
 ) -> str:
     """Multi-run markdown table.
 
-    The overall-score column shows "median% ±IQRpp (median ±IQR)" and a new
-    "Avg search" column shows the median search latency across runs. Category
-    cells stay as ``hit/total`` from run 0 — the contract says the locked
-    JSON keeps them that way, and the markdown follows.
+    The overall-score column shows "median% ±IQRpp"; the trailing "Runs OK"
+    column shows how many of the attempted runs actually produced data, and
+    any failures are named underneath the table. Without that column a system
+    that fell over in four runs out of five renders as whatever the surviving
+    run scored, with nothing on the page to say so.
+
+    Category cells and the per-question detail pool every completed run, so
+    they agree with the JSON rather than reporting run 0 alone.
     """
     p = persona
     categories = _ordered_categories(p)
@@ -256,59 +265,81 @@ def _build_markdown_multirun(
         "## Overall Scores",
         "",
     ]
-    headers = ["System", "Score", *categories, "Ingest", "Flush", "Avg search"]
+    headers = [
+        "System",
+        "Score",
+        *categories,
+        "Ingest",
+        "Flush",
+        "Avg search",
+        "Runs OK",
+    ]
     lines.append("| " + " | ".join(headers) + " |")
     lines.append("|" + "|".join(["---"] * len(headers)) + "|")
 
+    aggregates: list[AggregatedSystemResult] = []
     for runs in results:
         if not runs:
             continue
         agg = aggregate_runs(runs, categories=categories)
-        rep = agg.representative
-        if rep.error and all(r.error for r in runs):
+        aggregates.append(agg)
+        runs_cell = f"{agg.n_ok}/{agg.n_runs}"
+        if agg.all_errored:
             cells = (
-                [rep.system_name, "ERROR"] + ["—"] * len(categories) + ["—", "—", "—"]
+                [agg.representative.system_name, "ERROR"]
+                + ["—"] * len(categories)
+                + ["—", "—", "—", runs_cell]
             )
-            lines.append("| " + " | ".join(cells) + f" | _{rep.error}_")
+            lines.append("| " + " | ".join(cells) + f" | _{agg.representative.error}_")
             continue
         overall = describe(agg.overall_ratios)
         ingest = describe(agg.ingest_ms)
         flush = describe(agg.flush_ms)
         search = describe(agg.search_ms)
-        cat_cells = [_fmt_score(*rep.score_for_category(c)) for c in categories]
+        cat_cells = [_fmt_score(*agg.score_for_category(c)) for c in categories]
         lines.append(
             "| "
             + " | ".join(
                 [
-                    rep.system_name,
+                    agg.representative.system_name,
                     f"{overall['median']:.0%} ±{_fmt_pp(overall['iqr'])} (median ±IQR)",
                     *cat_cells,
                     f"{ingest['median']:.0f} ms",
                     f"{flush['median']:.0f} ms",
                     f"{search['median']:.0f} ms",
+                    runs_cell,
                 ]
             )
             + " |"
         )
 
+    # Name every run that fell over. These runs are excluded from the medians
+    # above, so this is the only place their existence is visible.
+    partial = [a for a in aggregates if a.n_errored and not a.all_errored]
+    if partial:
+        lines += ["", "**Failed runs (excluded from the statistics above)**", ""]
+        for agg in partial:
+            for i, run in enumerate(agg.errored_runs, start=1):
+                lines.append(
+                    f"- {agg.representative.system_name} — failure {i} of "
+                    f"{agg.n_errored}: {run.error}"
+                )
+
     if include_question_detail:
-        lines += ["", "## Per-question detail (run 0)", ""]
-        for runs in results:
-            if not runs:
+        lines += ["", "## Per-question detail", ""]
+        for agg in aggregates:
+            if agg.all_errored:
                 continue
-            rep = runs[0]
-            if rep.error:
-                continue
-            lines += [f"### {rep.system_name}", ""]
+            lines += [f"### {agg.representative.system_name}", ""]
             lines += [
-                "| Q | Category | Hit | Latency | Reason |",
+                "| Q | Category | Hits | Median latency | Reason |",
                 "|---|---|---|---|---|",
             ]
-            for q in rep.question_results:
-                reason = (q.reason or "").replace("\n", " ").replace("|", "\\|")
+            for q in aggregated_questions(agg):
+                reason = (q["reason"] or "").replace("\n", " ").replace("|", "\\|")
                 lines.append(
-                    f"| {q.question_id} | {q.category} | {'✓' if q.hit else '✗'} | "
-                    f"{q.latency_ms:.0f} ms | {reason} |"
+                    f"| {q['id']} | {q['category']} | {q['hits']}/{q['runs']} | "
+                    f"{q['latency_ms']:.0f} ms | {reason} |"
                 )
             lines.append("")
 
