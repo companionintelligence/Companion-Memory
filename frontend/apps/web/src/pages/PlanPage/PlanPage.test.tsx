@@ -24,6 +24,30 @@ vi.mock('@ci/shadcn', async (importOriginal) => {
   return { ...actual, useToast: () => ({ toast: { error: toastError, success: vi.fn(), info: vi.fn() } }) };
 });
 
+/**
+ * ═══ THE BOARD DOES NOT TEST THE DISPATCH MENU ═══
+ *
+ * #2558 hung `<ChatWithAgentMenu>` off every task card. It calls `useAuth()`,
+ * and `renderWithProviders` deliberately does not provide Auth context (it
+ * fetches on mount), so from that commit onwards every test in this file threw
+ * "undefined must be used within the associated Provider" before it could
+ * assert anything — 18 of 30, red on `main` and unnoticed because CI here is
+ * dispatch-only. `Task.test.tsx` stubs the same component for the same reason.
+ *
+ * Spread over `importOriginal()` rather than an allow-list: this is the barrel,
+ * and a bare object would also blank `ChatAbout` / `useChatAboutActions` for
+ * anything else in the tree that reaches them.
+ */
+vi.mock('@/components/ChatWithAgent', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  ChatWithAgentMenu: () => null,
+}));
+
+vi.mock('@/components/ChatWithAgent/AgentActionItems', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  AgentActionItems: () => null,
+}));
+
 vi.mock('@/common/feature', () => ({
   useFeatures: () => ({
     isFeatureEnabled: (name: string) => (name === 'planning.emptyState' ? featureState.emptyState : false),
