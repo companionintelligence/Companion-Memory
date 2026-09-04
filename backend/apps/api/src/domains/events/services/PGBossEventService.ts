@@ -1241,7 +1241,17 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
    * considered statement of how long this queue's work legitimately takes —
    * `py-fn-hbpe` says ~8 h because a GGUF labelling pass takes hours, and a
    * shorter in-process deadline would kill it. Only a queue that declares
-   * nothing falls back to the appliance-wide default, and 33 of the 39 do.
+   * nothing falls back to the appliance-wide default, and 28 of the 39 do.
+   *
+   * Note what the fallback does to a queue that declares nothing: pg-boss
+   * already gave it the constructor's `expireInHours: 12` via
+   * COALESCE(job, queue row, constructor), so the fallback does not fill a gap,
+   * it TIGHTENS an existing bound to `queues.jobTimeoutSeconds`. That is only
+   * safe where the queue's unit of work is orders of magnitude inside two
+   * hours. A queue that can legitimately run longer has to say so here — which
+   * is why the five import queues declare 12 h explicitly rather than
+   * inheriting a number that would have failed them mid-archive. See
+   * `IMPORT_STAGE_EXPIRE_SECONDS` and `docs/jobs-system.md` §1.11.
    *
    * Floored, so a misconfigured `expireInSeconds: 1` (or a config file that
    * somehow yields a tiny number) cannot turn the deadline into a machine for
@@ -1263,6 +1273,19 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
    * precisely what this is for — but `Promise.race` has already subscribed to
    * it, so a late rejection is absorbed rather than escaping as an unhandled
    * rejection (which `application.ts` turns into `process.exit(1)`).
+   *
+   * ABANDONED, NOT KILLED, and that asymmetry is what sizes every deadline.
+   * `Promise.race` cannot cancel `work`: a listener that outruns its budget
+   * keeps its sockets, its file handles and its transaction open and keeps
+   * writing, while its global slot, its per-queue slot and its `JobSlotPool`
+   * slot have all been handed back and pg-boss has re-queued the row. On a
+   * queue whose `localConcurrency` is a safety property rather than a
+   * throughput knob — `import-unpack` is 1 so two archives' disk preflights
+   * cannot both pass — a deadline that fires on healthy work does not stop
+   * that work, it ADDS a second copy beside it. A too-short deadline is
+   * therefore not a milder version of a too-long one; it is a different and
+   * worse failure. Size every budget so it can only fire on something already
+   * broken.
    */
   private withDeadline<T>(
     work: Promise<T>,
