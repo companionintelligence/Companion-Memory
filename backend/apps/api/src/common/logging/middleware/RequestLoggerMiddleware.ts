@@ -31,9 +31,7 @@ import { LoggerService } from '../services/LoggerService';
  * credential went to the log in plaintext on every delivery while a test
  * feeding the prefixed form passed.
  */
-const SECRET_PATH_SEGMENTS: readonly RegExp[] = [
-  /^((?:\/api)?\/bluebubbles\/webhook\/)[^/?#]+/,
-];
+const SECRET_PATH_SEGMENTS: readonly RegExp[] = [/^((?:\/api)?\/bluebubbles\/webhook\/)[^/?#]+/];
 
 /**
  * The request path as it is safe to write down.

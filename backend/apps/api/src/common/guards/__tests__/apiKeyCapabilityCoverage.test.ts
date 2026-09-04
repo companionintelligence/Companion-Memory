@@ -28,6 +28,7 @@ import { PendingActionsController } from '../../../domains/tools/controllers/Pen
 const SCOPED_CONTROLLERS = [
   MemoryController,
   IntentsController,
+  AgentJobsController,
   McpController,
   PersonaIntelligenceController,
   // `/v1/agent/jobs` — dispatch to an agent harness. Class-level `memory` scope,

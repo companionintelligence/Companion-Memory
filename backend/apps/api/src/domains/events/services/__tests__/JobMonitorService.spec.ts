@@ -933,7 +933,12 @@ describe('JobMonitorService schedules the answering process does not run', () =>
     const cronJobs = new Map<string, unknown>([
       [
         'DerivationCron.deriveNightly',
-        { cronTime: { source: '0 0 3 * * *', timeZone: 'UTC' }, isActive: true, nextDate: () => null, lastDate: () => null },
+        {
+          cronTime: { source: '0 0 3 * * *', timeZone: 'UTC' },
+          isActive: true,
+          nextDate: () => null,
+          lastDate: () => null,
+        },
       ],
     ]);
 
@@ -953,11 +958,16 @@ describe('JobMonitorService schedules the answering process does not run', () =>
     // process is dead, and the one that used to be hardcoded false.
     const now = Date.UTC(2026, 8, 4, 12, 0, 0);
     jest.useFakeTimers({ now });
-    const spy = jest.spyOn(CronRunStore, 'runsByName').mockResolvedValue(
-      new Map([
-        ['DerivationCron.deriveNightly', { lastRunAt: new Date(now - 3 * 24 * 60 * 60_000), lastSuccessAt: null }],
-      ]),
-    );
+    const spy = jest
+      .spyOn(CronRunStore, 'runsByName')
+      .mockResolvedValue(
+        new Map([
+          [
+            'DerivationCron.deriveNightly',
+            { lastRunAt: new Date(now - 3 * 24 * 60 * 60_000), lastSuccessAt: null },
+          ],
+        ]),
+      );
 
     try {
       CronRegistry.declare({
@@ -971,7 +981,11 @@ describe('JobMonitorService schedules the answering process does not run', () =>
       const { service } = makeService({ cronJobs: new Map() });
       const { crons } = await service.getDashboard(context);
 
-      expect(crons[0]).toMatchObject({ name: 'DerivationCron.deriveNightly', servedHere: false, overdue: true });
+      expect(crons[0]).toMatchObject({
+        name: 'DerivationCron.deriveNightly',
+        servedHere: false,
+        overdue: true,
+      });
     } finally {
       spy.mockRestore();
       jest.useRealTimers();
@@ -983,11 +997,16 @@ describe('JobMonitorService schedules the answering process does not run', () =>
     // actually evaluated, and the previous expected fire is the one recorded.
     const now = Date.UTC(2026, 8, 4, 5, 0, 0);
     jest.useFakeTimers({ now });
-    const spy = jest.spyOn(CronRunStore, 'runsByName').mockResolvedValue(
-      new Map([
-        ['DerivationCron.deriveNightly', { lastRunAt: new Date(Date.UTC(2026, 8, 4, 3, 0, 0)), lastSuccessAt: null }],
-      ]),
-    );
+    const spy = jest
+      .spyOn(CronRunStore, 'runsByName')
+      .mockResolvedValue(
+        new Map([
+          [
+            'DerivationCron.deriveNightly',
+            { lastRunAt: new Date(Date.UTC(2026, 8, 4, 3, 0, 0)), lastSuccessAt: null },
+          ],
+        ]),
+      );
 
     try {
       CronRegistry.declare({
@@ -1011,11 +1030,16 @@ describe('JobMonitorService schedules the answering process does not run', () =>
   it('reports a switched-off worker schedule as disabled, not overdue', async () => {
     const now = Date.UTC(2026, 8, 4, 12, 0, 0);
     jest.useFakeTimers({ now });
-    const spy = jest.spyOn(CronRunStore, 'runsByName').mockResolvedValue(
-      new Map([
-        ['ImportRetentionCron.runOnSchedule', { lastRunAt: new Date(now - 9 * 24 * 60 * 60_000), lastSuccessAt: null }],
-      ]),
-    );
+    const spy = jest
+      .spyOn(CronRunStore, 'runsByName')
+      .mockResolvedValue(
+        new Map([
+          [
+            'ImportRetentionCron.runOnSchedule',
+            { lastRunAt: new Date(now - 9 * 24 * 60 * 60_000), lastSuccessAt: null },
+          ],
+        ]),
+      );
 
     CronRegistry.declare({
       name: 'ImportRetentionCron.runOnSchedule',
@@ -1056,12 +1080,18 @@ describe('JobMonitorService schedules the answering process does not run', () =>
   });
 
   it('does not let a declaration with a bad expression take the dashboard down', async () => {
-    const spy = jest.spyOn(CronRunStore, 'runsByName').mockResolvedValue(
-      new Map([['Broken.tick', { lastRunAt: new Date(0), lastSuccessAt: null }]]),
-    );
+    const spy = jest
+      .spyOn(CronRunStore, 'runsByName')
+      .mockResolvedValue(new Map([['Broken.tick', { lastRunAt: new Date(0), lastSuccessAt: null }]]));
 
     try {
-      CronRegistry.declare({ name: 'Broken.tick', cron: 'not a cron', timeZone: null, role: 'worker', servedHere: false });
+      CronRegistry.declare({
+        name: 'Broken.tick',
+        cron: 'not a cron',
+        timeZone: null,
+        role: 'worker',
+        servedHere: false,
+      });
 
       const { service } = makeService({ cronJobs: new Map() });
       const { crons } = await service.getDashboard(context);

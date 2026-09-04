@@ -168,7 +168,11 @@ describe('RedditRecordWriter', () => {
     );
 
     const row = rowOf(deps.contentService.create);
-    expect(row).toMatchObject({ type: 'video', url: 'https://v.redd.it/xyz', source_id: 'reddit:comment:def' });
+    expect(row).toMatchObject({
+      type: 'video',
+      url: 'https://v.redd.it/xyz',
+      source_id: 'reddit:comment:def',
+    });
     expect(row.title).toBeUndefined();
   });
 
@@ -215,7 +219,12 @@ describe('RedditRecordWriter', () => {
       'comm-existing',
       expect.objectContaining({
         content: 'Body',
-        metadata: expect.objectContaining({ Kind: 'post', IP: '1.2.3.4', score: 42, reddit_fullname: 't3_abc' }),
+        metadata: expect.objectContaining({
+          Kind: 'post',
+          IP: '1.2.3.4',
+          score: 42,
+          reddit_fullname: 't3_abc',
+        }),
       }),
     );
   });
@@ -264,7 +273,9 @@ describe('saved listing', () => {
     expect(record.kind).toBe('saved_post');
     expect(record.media).toBeNull();
     expect(redditIdentity(record.kind, record.fullname).id).toBe('reddit:saved_post:abc');
-    expect(redditIdentity('post', record.fullname).id).not.toBe(redditIdentity(record.kind, record.fullname).id);
+    expect(redditIdentity('post', record.fullname).id).not.toBe(
+      redditIdentity(record.kind, record.fullname).id,
+    );
   });
 
   it('a saved comment is told apart by its t1_ fullname and takes its media from the body', () => {
@@ -335,7 +346,10 @@ describe('saved listing', () => {
       source_system: 'reddit',
       source_id: 'reddit:saved_post:abc',
       // The author's posting time survives as data, not as the record's time.
-      source_data: expect.objectContaining({ author: 'someone', item_created_at: '2023-11-14T22:13:20.000Z' }),
+      source_data: expect.objectContaining({
+        author: 'someone',
+        item_created_at: '2023-11-14T22:13:20.000Z',
+      }),
     });
   });
 
@@ -392,7 +406,11 @@ describe('saved listing', () => {
 
   it("does NOT touch a communication when the user's own post already exists (only saved keys are swept)", async () => {
     const deps = makeDeps();
-    deps.communicationService.findBySource.mockResolvedValue({ id: 'own-post', metadata: {}, attachments: [] } as never);
+    deps.communicationService.findBySource.mockResolvedValue({
+      id: 'own-post',
+      metadata: {},
+      attachments: [],
+    } as never);
     const { writer } = makeWriter(deps);
 
     await writer.write(ctx, postRecord(post));

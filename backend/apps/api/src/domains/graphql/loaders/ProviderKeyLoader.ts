@@ -20,6 +20,8 @@ export class ProviderKeyLoader extends Loader<ProviderKey | null, string> {
     context: UserServiceContext,
     providerKeyIds: readonly string[],
   ): Promise<readonly (ProviderKey | null)[]> {
-    return this.providerKeyService.findByIds(context, [...providerKeyIds]);
+    const providerKeys = await this.providerKeyService.findByIds(context, [...providerKeyIds]);
+
+    return this.rekey(providerKeyIds, providerKeys, (providerKey) => providerKey.id);
   }
 }

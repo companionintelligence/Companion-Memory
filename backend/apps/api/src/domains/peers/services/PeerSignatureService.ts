@@ -61,7 +61,8 @@ export type SignatureFailure =
   | 'bad-signature';
 
 export type VerificationResult =
-  { ok: true; keyThumbprint: string } | { ok: false; reason: SignatureFailure };
+  | { ok: true; keyThumbprint: string }
+  | { ok: false; reason: SignatureFailure };
 
 /**
  * Verifies and produces RFC 9421 signatures on the peer-ask surface.

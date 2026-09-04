@@ -1,4 +1,30 @@
-"""Explicit current-schema projections used by hourly summaries."""
+"""Explicit current-schema projections used by hourly summaries.
+
+Every exclusion predicate below is NULL-safe on purpose. The flags these
+queries filter on -- ci.position.is_private, ci.communications.is_archived,
+ci.messages.is_deleted, ci.browser_activity.is_incognito and
+contains_sensitive, ci.answers.is_sensitive -- are all nullable in the live ci
+schema, and `col = false` evaluates to NULL rather than true for a NULL row, so
+a plain equality drops that row from every hourly summary and logs nothing.
+Explicit NULLs do get written: bulk ingest paths enumerate columns and partial
+upserts skip them, and the column default only applies when the column is
+omitted. `col IS NOT TRUE` is used instead, so a NULL counts as "not excluded".
+
+For the privacy flags that direction is the safe one, not the lazy one. These
+columns default to false, so a NULL is an absent marking rather than an unknown
+to be feared. The filter is prompt hygiene honouring an explicit "keep this
+out" -- the summary is generated for, and read by, the same user who owns the
+row, so failing open exposes nothing to anyone else, while failing closed
+silently starves the summary. The introspection-based aggregator this registry
+replaced applied no such filter at all, so every row excluded here is a new
+exclusion; only an explicit `true` is a positive assertion of privacy, and only
+that excludes.
+
+ci.answers.answer_source is nullable for the same reason, and
+`answer_source != 'inferred'` is NULL for a NULL source, so it uses
+`IS DISTINCT FROM`. ci.events.is_deleted is NOT NULL, so its `= false` is
+already total and stays as it is.
+"""
 
 from dataclasses import dataclass
 
@@ -28,7 +54,7 @@ SUMMARY_SOURCES: tuple[SummarySource, ...] = (
         WHERE p.user_id = :user_id
           AND p.time >= :start
           AND p.time < :end
-          AND p.is_private = false
+          AND p.is_private IS NOT TRUE
         GROUP BY
             COALESCE(place.name, p.name, p.city, p.region, p.country, 'unknown'),
             p.activity_type,
@@ -65,7 +91,7 @@ SUMMARY_SOURCES: tuple[SummarySource, ...] = (
         WHERE c.user_id = :user_id
           AND c.time >= :start
           AND c.time < :end
-          AND c.is_archived = false
+          AND c.is_archived IS NOT TRUE
         ORDER BY c.time DESC
         LIMIT :limit
         """,
@@ -109,7 +135,7 @@ SUMMARY_SOURCES: tuple[SummarySource, ...] = (
           AND GREATEST(m.created_at, m.updated_at) >= :start
           AND GREATEST(m.created_at, m.updated_at) < :end
           AND m.role = 'user'
-          AND m.is_deleted = false
+          AND m.is_deleted IS NOT TRUE
         ORDER BY GREATEST(m.created_at, m.updated_at) DESC
         LIMIT :limit
         """,
@@ -238,8 +264,8 @@ SUMMARY_SOURCES: tuple[SummarySource, ...] = (
         WHERE b.user_id = :user_id
           AND b.time >= :start
           AND b.time < :end
-          AND b.is_incognito = false
-          AND b.contains_sensitive = false
+          AND b.is_incognito IS NOT TRUE
+          AND b.contains_sensitive IS NOT TRUE
         ORDER BY b.time DESC
         LIMIT :limit
         """,
@@ -372,8 +398,8 @@ SUMMARY_SOURCES: tuple[SummarySource, ...] = (
         WHERE answer.user_id = :user_id
           AND GREATEST(answer.created_at, answer.updated_at) >= :start
           AND GREATEST(answer.created_at, answer.updated_at) < :end
-          AND answer.is_sensitive = false
-          AND answer.answer_source != 'inferred'
+          AND answer.is_sensitive IS NOT TRUE
+          AND answer.answer_source IS DISTINCT FROM 'inferred'
         ORDER BY GREATEST(answer.created_at, answer.updated_at) DESC
         LIMIT :limit
         """,

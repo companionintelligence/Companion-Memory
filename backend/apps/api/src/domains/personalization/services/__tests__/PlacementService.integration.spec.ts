@@ -3,7 +3,13 @@ import { v7 as uuidv7 } from 'uuid';
 
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
-import { BaseEntity, EventBaseEntity, EventEntity, CalendarEventService, GraphDeltaWriter } from '@ci/domains/memory';
+import {
+  BaseEntity,
+  EventBaseEntity,
+  EventEntity,
+  CalendarEventService,
+  GraphDeltaWriter,
+} from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
 import { databaseAvailability, resolveConnection } from '../../../__tests__/support/databaseConnection';

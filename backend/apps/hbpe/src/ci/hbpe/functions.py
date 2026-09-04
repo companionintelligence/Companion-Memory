@@ -186,10 +186,11 @@ async def nightly(
         # exactly the state a backlog drain leaves behind: the labels are new,
         # the L1 vocabulary is not.
         #
-        # The cost is bounded and idempotent: serialize_range only walks the
-        # trailing SERIALIZE_WINDOW_DAYS, and serialize_day deletes and rewrites
-        # one (user, date) at a time, so re-running it over an unchanged corpus
-        # is a no-op with the same row count.
+        # The cost is bounded and idempotent: serialize_token_stream walks
+        # bootstrap.token_source_days, which is at most SERIALIZE_WINDOW_DAYS + 1
+        # days however far back the corpus reaches, and serialize_day deletes and
+        # rewrites one (user, date) at a time, so re-running it over an unchanged
+        # corpus is a no-op with the same row count.
         step("serialize")
         results["steps"]["serialize"] = await _safe(
             serialize_token_stream(user_id), "serialize"

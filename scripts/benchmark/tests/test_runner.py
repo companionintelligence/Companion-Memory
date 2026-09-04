@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
-
 import pytest
-
 from benchmark.adapters.base import MemoryAdapter
 from benchmark.runner import run_all, run_system
 from benchmark.scoring import score_keyword
@@ -16,25 +13,43 @@ def _persona() -> dict:
         "persona_id": "p1",
         "name": "Test",
         "sessions": [
-            {"id": "s1", "messages": [
-                {"role": "user", "content": "Jordan lives in Austin, Texas."},
-                {"role": "assistant", "content": "Noted."},  # filtered out
-                {"role": "user", "content": "Loves climbing."},
-            ]},
-            {"id": "s2", "messages": [
-                {"role": "user", "content": "Adopted a dog named Mango."},
-            ]},
+            {
+                "id": "s1",
+                "messages": [
+                    {"role": "user", "content": "Jordan lives in Austin, Texas."},
+                    {"role": "assistant", "content": "Noted."},  # filtered out
+                    {"role": "user", "content": "Loves climbing."},
+                ],
+            },
+            {
+                "id": "s2",
+                "messages": [
+                    {"role": "user", "content": "Adopted a dog named Mango."},
+                ],
+            },
         ],
         # Queries are worded so each word appears verbatim in the fragment the
         # recording adapter is supposed to surface — the toy adapter does plain
         # substring matching, not stemming.
         "eval_questions": [
-            {"id": "q1", "question": "Jordan lives where?",
-             "keywords": ["Austin"], "category": "flat-recall"},
-            {"id": "q2", "question": "dog named what?",
-             "keywords": ["Mango"], "category": "relational"},
-            {"id": "q3", "question": "submarine trivia please",
-             "keywords": ["nothing-in-context"], "category": "flat-recall"},
+            {
+                "id": "q1",
+                "question": "Jordan lives where?",
+                "keywords": ["Austin"],
+                "category": "flat-recall",
+            },
+            {
+                "id": "q2",
+                "question": "dog named what?",
+                "keywords": ["Mango"],
+                "category": "relational",
+            },
+            {
+                "id": "q3",
+                "question": "submarine trivia please",
+                "keywords": ["nothing-in-context"],
+                "category": "flat-recall",
+            },
         ],
     }
 
@@ -43,8 +58,8 @@ class _RecordingAdapter(MemoryAdapter):
     """Captures every lifecycle call so the harness can assert on the contract."""
 
     def __init__(self) -> None:
-        self.calls: List[tuple] = []
-        self._store: List[str] = []
+        self.calls: list[tuple] = []
+        self._store: list[str] = []
         self._fail_in: str | None = None
 
     @property
@@ -70,13 +85,16 @@ class _RecordingAdapter(MemoryAdapter):
 
     def search(self, query: str) -> str:
         self.calls.append(("search", query))
-        return "\n".join(t for t in self._store if any(w.lower() in t.lower() for w in query.split()))
+        return "\n".join(
+            t for t in self._store if any(w.lower() in t.lower() for w in query.split())
+        )
 
     def teardown(self) -> None:
         self.calls.append(("teardown",))
 
 
 # ── happy path ──────────────────────────────────────────────────────────────
+
 
 def test_runner_iterates_only_user_messages_then_flushes_then_searches():
     a = _RecordingAdapter()
@@ -97,8 +115,13 @@ def test_runner_iterates_only_user_messages_then_flushes_then_searches():
 def test_runner_emits_lifecycle_events():
     events: list[tuple[str, str]] = []
     a = _RecordingAdapter()
-    run_system(a, _persona(), "u1", score_keyword,
-               on_event=lambda phase, sys, _: events.append((phase, sys)))
+    run_system(
+        a,
+        _persona(),
+        "u1",
+        score_keyword,
+        on_event=lambda phase, sys, _: events.append((phase, sys)),
+    )
     phases = [p for p, _ in events]
     assert phases[0] == "start"
     assert phases.count("question") == 3
@@ -106,6 +129,7 @@ def test_runner_emits_lifecycle_events():
 
 
 # ── failure handling — adapter exceptions never crash the run ────────────────
+
 
 def test_setup_failure_records_error_and_skips_ingest():
     a = _RecordingAdapter()
@@ -125,17 +149,18 @@ def test_ingest_failure_still_calls_teardown():
 
 
 def test_run_all_returns_one_result_per_adapter():
-    results = run_all([_RecordingAdapter(), _RecordingAdapter()], _persona(), "u1", score_keyword)
+    results = run_all(
+        [_RecordingAdapter(), _RecordingAdapter()], _persona(), "u1", score_keyword
+    )
     assert len(results) == 2
 
 
 # ── scoring rollups ─────────────────────────────────────────────────────────
 
+
 def test_overall_score_and_category_score_match_question_results():
     a = _RecordingAdapter()
     result = run_system(a, _persona(), "u1", score_keyword)
     assert result.overall_score == pytest.approx(2 / 3)
-    assert result.score_for_category("flat-recall") == (1, 2)   # q1 hit, q3 miss
+    assert result.score_for_category("flat-recall") == (1, 2)  # q1 hit, q3 miss
     assert result.score_for_category("relational") == (1, 1)
-
-

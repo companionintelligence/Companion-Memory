@@ -176,7 +176,10 @@ describe('ParseStage generic-mail exclusion', () => {
   });
 
   it('keeps email when no specialised mail reader matched at all', () => {
-    const selected = dropGenericMailWhenSpecialised([at('email', `${ROOT}/yahoo_mail/Inbox`), at('calendar', ROOT)]);
+    const selected = dropGenericMailWhenSpecialised([
+      at('email', `${ROOT}/yahoo_mail/Inbox`),
+      at('calendar', ROOT),
+    ]);
 
     expect(names(selected)).toEqual(['email', 'calendar']);
   });
@@ -188,7 +191,11 @@ describe('ParseStage generic-mail exclusion', () => {
   });
 
   it('leaves every non-mail match alone', () => {
-    const selected = dropGenericMailWhenSpecialised([at('gmail', TAKEOUT_MBOX), at('google_voice', ROOT), at('generic', ROOT)]);
+    const selected = dropGenericMailWhenSpecialised([
+      at('gmail', TAKEOUT_MBOX),
+      at('google_voice', ROOT),
+      at('generic', ROOT),
+    ]);
 
     expect(names(selected)).toEqual(['gmail', 'google_voice', 'generic']);
   });

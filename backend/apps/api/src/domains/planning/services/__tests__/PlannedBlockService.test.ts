@@ -416,7 +416,6 @@ describe('PlannedBlockService', () => {
     expect(taskService.createPendingChange).not.toHaveBeenCalled();
   });
 
-
   describe('PlannedBlockService workday resolution', () => {
     // ci.planning_prefs is the new home for the workday. It must win.
     it('uses the stored preference when there is one', async () => {

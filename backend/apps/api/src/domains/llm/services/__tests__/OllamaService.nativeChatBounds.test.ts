@@ -245,7 +245,9 @@ describe('openai-compat chat generation bounds', () => {
 
   it('threads signal and maxOutputTokens through to the OpenAI-compat driver', async () => {
     const controller = new AbortController();
-    const openAiChat = jest.fn().mockResolvedValue({ model: MODEL, message: { role: 'assistant', content: '{}' } });
+    const openAiChat = jest
+      .fn()
+      .mockResolvedValue({ model: MODEL, message: { role: 'assistant', content: '{}' } });
     const service = makeOpenAiService(openAiChat);
 
     await service.chat(context, messages, {
@@ -342,7 +344,9 @@ describe('multi-tool-call round budget', () => {
       makeLogger(),
       { send: jest.fn().mockResolvedValue([]) } as any,
       {
-        evaluate: jest.fn().mockResolvedValue({ decision: 'execute', reason: 'allowed', explanation: 'open' }),
+        evaluate: jest
+          .fn()
+          .mockResolvedValue({ decision: 'execute', reason: 'allowed', explanation: 'open' }),
         propose: jest.fn(),
       } as any,
     );
@@ -386,10 +390,7 @@ describe('multi-tool-call round budget', () => {
 
     expect(toolMessages).toHaveLength(TOOL_COUNT);
 
-    const totalBytes = toolMessages.reduce(
-      (sum, m) => sum + Buffer.byteLength(m.content ?? '', 'utf8'),
-      0,
-    );
+    const totalBytes = toolMessages.reduce((sum, m) => sum + Buffer.byteLength(m.content ?? '', 'utf8'), 0);
 
     // The bug this guards: with the budget applied per call instead of per
     // round, this would be roughly TOOL_COUNT times the round budget.

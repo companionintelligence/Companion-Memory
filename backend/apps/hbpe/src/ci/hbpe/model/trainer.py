@@ -58,9 +58,7 @@ WEIGHT_DECAY = 0.01
 _NO_MASK = {SOD_IDX, EOD_IDX, PAD_IDX}
 
 
-def _note_train_progress(
-    user_id: str, phase: str, epoch: int, n_epochs: int
-) -> None:
+def _note_train_progress(user_id: str, phase: str, epoch: int, n_epochs: int) -> None:
     """Surface epoch progress on the Forecast strip (train can take ~an hour)."""
     try:
         from ci.hbpe.functions import update_pipeline_progress

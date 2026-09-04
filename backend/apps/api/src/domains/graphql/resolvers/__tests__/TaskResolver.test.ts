@@ -126,7 +126,10 @@ describe('TaskResolver placedOnCalendar field resolver', () => {
     taskService.update.mockResolvedValue(task);
     plannedBlockService.findActiveForTask.mockResolvedValue(event);
 
-    const payload = await resolver.updateTask(ownerCtx, { id: GlobalUID.encode('task', TASK_ID), title: 'x' });
+    const payload = await resolver.updateTask(ownerCtx, {
+      id: GlobalUID.encode('task', TASK_ID),
+      title: 'x',
+    });
     const placed = await resolver.placedOnCalendar(ownerCtx, payload.task!);
 
     expect(placed).toBe(true);

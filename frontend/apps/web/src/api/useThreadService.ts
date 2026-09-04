@@ -24,34 +24,37 @@ export function useThreadService(id: string | null): ReturnType {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown | null>(null);
 
-  const fetchThread = useCallback(async (opts?: { silent?: boolean }) => {
-    if (id == null || !ready) {
-      setThread(null);
-      setError(null);
-      setLoading(false);
+  const fetchThread = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (id == null || !ready) {
+        setThread(null);
+        setError(null);
+        setLoading(false);
 
-      return;
-    }
+        return;
+      }
 
-    if (!opts?.silent) {
-      setLoading(true);
-    }
+      if (!opts?.silent) {
+        setLoading(true);
+      }
 
-    try {
-      const thread = await fetchJson<Thread>(`/api/threads/${id}?includeMessages=true`, {
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
-      });
+      try {
+        const thread = await fetchJson<Thread>(`/api/threads/${id}?includeMessages=true`, {
+          headers: {
+            ...headers,
+            'Content-Type': 'application/json',
+          },
+        });
 
-      setThread(thread ?? null);
-    } catch (err) {
-      setError(err);
-    } finally {
-      setLoading(false);
-    }
-  }, [headers, id, ready]);
+        setThread(thread ?? null);
+      } catch (err) {
+        setError(err);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [headers, id, ready],
+  );
 
   useEffect(() => {
     void fetchThread();

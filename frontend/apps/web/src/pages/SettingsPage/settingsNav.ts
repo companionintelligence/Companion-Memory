@@ -1,6 +1,7 @@
 import { isIosPlatform } from '@ci/common';
 import type { LucideIcon } from '@ci/shadcn/icons';
 import {
+  Bot,
   Compass,
   Cpu,
   Globe,
@@ -38,6 +39,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { id: 'safari', label: 'Safari', icon: Compass, iosOnly: true },
   { id: 'bluebubbles', label: 'BlueBubbles', icon: MessageCircle },
   { id: 'mcp', label: 'MCP Servers', icon: Plug },
+  { id: 'agents', label: 'Agents', icon: Bot },
   { id: 'api-keys', label: 'API Keys', icon: KeyRound },
   { id: 'oauth', label: 'OAuth Credentials', icon: Key },
   { id: 'data', label: 'Your data', icon: HardDrive },

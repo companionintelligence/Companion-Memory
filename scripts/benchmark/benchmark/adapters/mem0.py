@@ -30,7 +30,8 @@ from __future__ import annotations
 import math
 import os
 import shutil
-from typing import Any, Callable, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from .base import MemoryAdapter
 
@@ -46,7 +47,7 @@ _DEFAULT_CHROMA_PATH = "/tmp/mem0_benchmark"
 # ---------------------------------------------------------------------------
 
 
-def _embed_ollama(text: str, ollama_host: str, embed_model: str) -> List[float]:
+def _embed_ollama(text: str, ollama_host: str, embed_model: str) -> list[float]:
     """POST one fragment to /api/embeddings and return the vector (or [] on error)."""
     import json
     import urllib.request
@@ -64,7 +65,7 @@ def _embed_ollama(text: str, ollama_host: str, embed_model: str) -> List[float]:
         return []
 
 
-def _cosine(a: List[float], b: List[float]) -> float:
+def _cosine(a: list[float], b: list[float]) -> float:
     n = min(len(a), len(b))
     if n == 0:
         return 0.0
@@ -82,22 +83,32 @@ def _cosine(a: List[float], b: List[float]) -> float:
 class Mem0Adapter(MemoryAdapter):
     def __init__(
         self,
-        ollama_host: Optional[str] = None,
-        llm_model: Optional[str] = None,
-        embed_model: Optional[str] = None,
-        embed_dims: Optional[int] = None,
-        chroma_path: Optional[str] = None,
+        ollama_host: str | None = None,
+        llm_model: str | None = None,
+        embed_model: str | None = None,
+        embed_dims: int | None = None,
+        chroma_path: str | None = None,
         *,
-        memory_factory: Optional[Callable[[dict], Any]] = None,
-        embed_fn: Optional[Callable[[str], List[float]]] = None,
+        memory_factory: Callable[[dict], Any] | None = None,
+        embed_fn: Callable[[str], list[float]] | None = None,
     ) -> None:
         # Resolve all env-overridable knobs once so tests can construct with
         # explicit args and skip os.environ entirely.
-        self._ollama = (ollama_host or os.environ.get("OLLAMA_HOST", _DEFAULT_OLLAMA)).rstrip("/")
-        self._llm_model = llm_model or os.environ.get("MEM0_LLM_MODEL", _DEFAULT_LLM_MODEL)
-        self._embed_model = embed_model or os.environ.get("MEM0_EMBED_MODEL", _DEFAULT_EMBED_MODEL)
-        self._embed_dims = embed_dims or int(os.environ.get("MEM0_EMBED_DIMS", str(_DEFAULT_EMBED_DIMS)))
-        self._chroma_path = chroma_path or os.environ.get("MEM0_CHROMA_PATH", _DEFAULT_CHROMA_PATH)
+        self._ollama = (
+            ollama_host or os.environ.get("OLLAMA_HOST", _DEFAULT_OLLAMA)
+        ).rstrip("/")
+        self._llm_model = llm_model or os.environ.get(
+            "MEM0_LLM_MODEL", _DEFAULT_LLM_MODEL
+        )
+        self._embed_model = embed_model or os.environ.get(
+            "MEM0_EMBED_MODEL", _DEFAULT_EMBED_MODEL
+        )
+        self._embed_dims = embed_dims or int(
+            os.environ.get("MEM0_EMBED_DIMS", str(_DEFAULT_EMBED_DIMS))
+        )
+        self._chroma_path = chroma_path or os.environ.get(
+            "MEM0_CHROMA_PATH", _DEFAULT_CHROMA_PATH
+        )
         # Optional: route Mem0's LLM at an OpenAI-compatible base URL (e.g. an
         # LM Studio / vLLM proxy) so the head-to-head holds the extraction model
         # constant with CI-Server. Embeddings stay on Ollama either way.
@@ -110,7 +121,7 @@ class Mem0Adapter(MemoryAdapter):
 
         self._user_id = ""
         self._mem: Any = None
-        self._emb_cache: dict[str, List[float]] = {}
+        self._emb_cache: dict[str, list[float]] = {}
 
     @property
     def name(self) -> str:
@@ -135,10 +146,16 @@ class Mem0Adapter(MemoryAdapter):
             raise RuntimeError("setup() must be called before search()")
 
         # top_k huge → defeat Mem0's wrong-end truncation (see module docstring).
-        results = self._mem.search(query, top_k=10000, filters={"user_id": self._user_id})
+        results = self._mem.search(
+            query, top_k=10000, filters={"user_id": self._user_id}
+        )
         if isinstance(results, dict):
             results = results.get("results", [])
-        mems = [r.get("memory", "") for r in results if isinstance(r, dict) and r.get("memory")]
+        mems = [
+            r.get("memory", "")
+            for r in results
+            if isinstance(r, dict) and r.get("memory")
+        ]
         if not mems:
             return ""
 
@@ -206,7 +223,9 @@ class Mem0Adapter(MemoryAdapter):
     def _patch_ollama_embedder_normalization() -> None:
         """Idempotently wrap Mem0's OllamaEmbedding.embed to L2-normalise output."""
         try:
-            from mem0.embeddings.ollama import OllamaEmbedding  # type: ignore[import-not-found]
+            from mem0.embeddings.ollama import (
+                OllamaEmbedding,  # type: ignore[import-not-found]
+            )
         except Exception:
             return  # mem0 not installed: tests use the factory injection seam
         if getattr(OllamaEmbedding, "_ci_bench_normalized", False):
@@ -222,7 +241,7 @@ class Mem0Adapter(MemoryAdapter):
         OllamaEmbedding.embed = embed_normalized  # type: ignore[assignment]
         OllamaEmbedding._ci_bench_normalized = True  # type: ignore[attr-defined]
 
-    def _embed(self, text: str) -> List[float]:
+    def _embed(self, text: str) -> list[float]:
         if text in self._emb_cache:
             return self._emb_cache[text]
         if self._embed_fn is not None:

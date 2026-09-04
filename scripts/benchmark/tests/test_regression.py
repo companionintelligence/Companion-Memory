@@ -6,15 +6,18 @@ these tests double-check the contract too.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from benchmark.regression import compare, format_summary
 
 
 def _system(
-    name: str, hit: int, total: int,
-    cats: Dict[str, list] | None = None, error: str | None = None,
-) -> Dict[str, Any]:
+    name: str,
+    hit: int,
+    total: int,
+    cats: dict[str, list] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
     return {
         "name": name,
         "error": error,
@@ -25,8 +28,11 @@ def _system(
     }
 
 
-def _report(systems: list[Dict[str, Any]]) -> Dict[str, Any]:
-    return {"persona": {"id": "p", "name": "P", "questions": 0, "categories": []}, "systems": systems}
+def _report(systems: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "persona": {"id": "p", "name": "P", "questions": 0, "categories": []},
+        "systems": systems,
+    }
 
 
 # ── overall + per-category classification ────────────────────────────────────
@@ -63,8 +69,12 @@ def test_gain_beyond_tolerance_is_an_improvement_and_does_not_fail():
 
 
 def test_only_categories_present_in_both_reports_are_compared():
-    base = _report([_system("ci_server", 5, 10, {"flat-recall": [3, 5], "temporal": [2, 5]})])
-    cur = _report([_system("ci_server", 5, 10, {"flat-recall": [3, 5], "new-cat": [2, 5]})])
+    base = _report(
+        [_system("ci_server", 5, 10, {"flat-recall": [3, 5], "temporal": [2, 5]})]
+    )
+    cur = _report(
+        [_system("ci_server", 5, 10, {"flat-recall": [3, 5], "new-cat": [2, 5]})]
+    )
     r = compare(base, cur)
     cats = {c.category for c in r.changes if c.system == "ci_server"}
     assert "flat-recall" in cats
@@ -125,8 +135,12 @@ def test_missing_system_in_baseline_also_fails_so_you_refresh_the_baseline():
 
 
 def test_one_category_regression_under_a_stable_overall_still_fails():
-    base = _report([_system("ci_server", 10, 20, {"flat-recall": [9, 10], "absence": [1, 10]})])
-    cur = _report([_system("ci_server", 10, 20, {"flat-recall": [3, 10], "absence": [7, 10]})])
+    base = _report(
+        [_system("ci_server", 10, 20, {"flat-recall": [9, 10], "absence": [1, 10]})]
+    )
+    cur = _report(
+        [_system("ci_server", 10, 20, {"flat-recall": [3, 10], "absence": [7, 10]})]
+    )
     r = compare(base, cur, tolerance=0.05)
     flat = next(c for c in r.changes if c.category == "flat-recall")
     overall = next(c for c in r.changes if c.category == "overall")

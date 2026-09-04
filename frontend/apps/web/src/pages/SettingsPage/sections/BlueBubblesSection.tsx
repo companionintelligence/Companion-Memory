@@ -2,7 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { fetchJson } from '@ci/common';
 import { Button, Card, Checkbox, Input, Label, Switch } from '@ci/shadcn';
-import { AlertCircle, Check, CheckCircle2, ClipboardCopy, Clock, MessageSquare, Pencil } from '@ci/shadcn/icons';
+import {
+  AlertCircle,
+  Check,
+  CheckCircle2,
+  ClipboardCopy,
+  Clock,
+  MessageSquare,
+  Pencil,
+} from '@ci/shadcn/icons';
 
 import { useAuth } from '@/hooks';
 
@@ -432,8 +440,8 @@ export function BlueBubblesSection() {
             <p className="text-sm text-muted-foreground leading-snug">
               Paste this into BlueBubbles Server under Settings → Webhooks, subscribed to{' '}
               <span className="font-mono">new-message</span> and{' '}
-              <span className="font-mono">updated-message</span>. Without it, new messages only arrive on
-              the ten-minute backstop poll.
+              <span className="font-mono">updated-message</span>. Without it, new messages only arrive on the
+              ten-minute backstop poll.
             </p>
             <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
               <span className="min-w-0 flex-1 truncate font-mono text-sm">{webhookUrl}</span>

@@ -143,6 +143,12 @@ vi.mock('./useJobControls', async (importOriginal) => {
   return { ...actual, useJobControls: () => controlsState };
 });
 
+// Health Clear posts through useJobsAuth headers. The page tests do not supply
+// the auth provider; Clear itself is covered via JobHealthCard / API specs.
+vi.mock('./useJobsAuth', () => ({
+  useJobsAuth: () => ({ ready: true, headers: {} }),
+}));
+
 vi.mock('./useJobHistory', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./useJobHistory')>();
 

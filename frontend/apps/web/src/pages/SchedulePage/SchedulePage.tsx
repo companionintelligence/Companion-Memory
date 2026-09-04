@@ -247,7 +247,14 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
 
   const { events, rhythm, generatedAt, rhythmCoversWindow, loading, fetching, error, refetch } =
     useScheduleService(start, end);
-  const [{ data: occupancy, loading: occupancyLoading, stalled: occupancyStalled }] = useForecastService();
+  // The band's retry has to come from here: a swallowed HBPE error resolves as
+  // `null`, `useForecastService` reads that as "nothing to poll for" and stops
+  // polling, so unless `refetch` is threaded down there is no way back from the
+  // unavailable state short of leaving the page and returning.
+  const [
+    { data: occupancy, loading: occupancyLoading, stalled: occupancyStalled },
+    { refetch: refetchForecast },
+  ] = useForecastService();
   const pipelineRunning = Boolean(
     hbpeEnabled && Boolean(occupancy?.systemStatus?.includes(':')) && !occupancyStalled,
   );
@@ -469,6 +476,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
             loading={occupancyLoading}
             stalled={occupancyStalled}
             showFullForecastLink={forecastPageEnabled}
+            onRetry={refetchForecast}
           />
         )}
 

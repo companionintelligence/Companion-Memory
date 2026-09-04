@@ -1548,7 +1548,13 @@ describe('Google Voice attachment truncation collision (Defect 3)', () => {
     // The real corpus shape: one bare "-.jpg" plus "-(1).jpg".."-(4).jpg" —
     // NOT the "-2-1.jpg" etc. the stubs above name. None of the five stubs
     // can resolve to any of these.
-    const collided = [`${STEM}-.jpg`, `${STEM}-(1).jpg`, `${STEM}-(2).jpg`, `${STEM}-(3).jpg`, `${STEM}-(4).jpg`];
+    const collided = [
+      `${STEM}-.jpg`,
+      `${STEM}-(1).jpg`,
+      `${STEM}-(2).jpg`,
+      `${STEM}-(3).jpg`,
+      `${STEM}-(4).jpg`,
+    ];
     for (const name of collided) {
       fs.writeFileSync(path.join(dir, 'Calls', name), `bytes-for-${name}`);
     }

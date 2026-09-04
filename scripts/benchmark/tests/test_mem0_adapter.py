@@ -10,10 +10,9 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
-from typing import Any, List
+from typing import Any
 
 import pytest
-
 from benchmark.adapters.mem0 import Mem0Adapter, _cosine
 
 
@@ -49,7 +48,9 @@ def test_setup_builds_config_with_user_namespaced_collection():
 
     a = Mem0Adapter(memory_factory=factory, embed_fn=lambda _t: [])
     a.setup("user-42")
-    assert seen["cfg"]["vector_store"]["config"]["collection_name"] == "benchmark_user-42"
+    assert (
+        seen["cfg"]["vector_store"]["config"]["collection_name"] == "benchmark_user-42"
+    )
     # LLM defaults to local Ollama unless MEM0_LLM_BASE_URL points elsewhere.
     assert seen["cfg"]["llm"]["provider"] == "ollama"
     assert seen["cfg"]["embedder"]["provider"] == "ollama"
@@ -58,8 +59,10 @@ def test_setup_builds_config_with_user_namespaced_collection():
 def test_setup_routes_llm_to_openai_compat_when_base_url_set(monkeypatch):
     monkeypatch.setenv("MEM0_LLM_BASE_URL", "http://lm-studio:1234")
     seen: dict = {}
-    a = Mem0Adapter(memory_factory=lambda c: seen.setdefault("cfg", c) or FakeMemory(),
-                    embed_fn=lambda _t: [])
+    a = Mem0Adapter(
+        memory_factory=lambda c: seen.setdefault("cfg", c) or FakeMemory(),
+        embed_fn=lambda _t: [],
+    )
     a.setup("u")
     assert seen["cfg"]["llm"]["provider"] == "openai"
     assert seen["cfg"]["llm"]["config"]["openai_base_url"] == "http://lm-studio:1234"
@@ -85,7 +88,7 @@ def test_ingest_before_setup_raises():
 # ── search ───────────────────────────────────────────────────────────────────
 
 
-def _vec_for(text: str) -> List[float]:
+def _vec_for(text: str) -> list[float]:
     """Cheap, deterministic embedding for tests: counts a few keyword markers."""
     return [
         text.lower().count("austin"),
@@ -180,7 +183,11 @@ def test_embed_cache_collapses_repeat_lookups():
 def test_teardown_removes_chroma_dir():
     tmp = tempfile.mkdtemp(prefix="bench-mem0-")
     try:
-        a = Mem0Adapter(chroma_path=tmp, memory_factory=lambda _c: FakeMemory(), embed_fn=lambda _t: [])
+        a = Mem0Adapter(
+            chroma_path=tmp,
+            memory_factory=lambda _c: FakeMemory(),
+            embed_fn=lambda _t: [],
+        )
         a.setup("u")
         assert os.path.isdir(tmp)
         a.teardown()
@@ -191,8 +198,11 @@ def test_teardown_removes_chroma_dir():
 
 
 def test_teardown_when_chroma_dir_does_not_exist_is_a_noop():
-    a = Mem0Adapter(chroma_path="/does/not/exist", memory_factory=lambda _c: FakeMemory(),
-                    embed_fn=lambda _t: [])
+    a = Mem0Adapter(
+        chroma_path="/does/not/exist",
+        memory_factory=lambda _c: FakeMemory(),
+        embed_fn=lambda _t: [],
+    )
     a.setup("u")
     a.teardown()  # must not raise
 
