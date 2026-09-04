@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import type { AgentHarnessStatus } from '@/api/useAgentHarnesses';
 import type { AgentChatContext } from '@/lib/agentChat';
 
+import { dispatchNotReadyMessage } from './dispatchNotReady';
 import { useChatAboutActions } from './useChatAboutActions';
 
 const NOT_TALKING = 'OpenClaw is not talking to Memory right now.';
@@ -22,6 +23,14 @@ function chatDisabledReason(harness: AgentHarnessStatus): string | null {
   }
 
   return null;
+}
+
+function dispatchHint(harness: AgentHarnessStatus): string | undefined {
+  if (harness.dispatchReady) {
+    return undefined;
+  }
+
+  return dispatchNotReadyMessage(harness.dispatchBlocker);
 }
 
 type Surface = 'dropdown' | 'context' | 'sheet';
@@ -69,9 +78,10 @@ export function AgentActionItems({ context, surface, onAction }: Props) {
       {openclaw ? (
         <Item
           surface={surface}
-          disabled={!openclaw.dispatchReady}
-          title={openclaw.dispatchReady ? undefined : NOT_TALKING}
+          title={dispatchHint(openclaw)}
           onSelect={() => {
+            // Always clickable: when not ready, dispatchToOpenClaw toasts the
+            // blocker (and a Hub Connect action) instead of a silent no-op.
             void dispatchToOpenClaw().then(() => onAction?.());
           }}
         >

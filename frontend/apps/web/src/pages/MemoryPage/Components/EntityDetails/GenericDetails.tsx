@@ -122,6 +122,7 @@ export function GenericDetails({ entity }: Props) {
       entity={entity}
       title={entity.name ?? 'Untitled Entity'}
       subtitle={entity.description ?? undefined}
+      subtitleKind="text"
       media={
         image ? (
           <EntityMedia

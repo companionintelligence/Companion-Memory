@@ -24,6 +24,7 @@ import {
 } from '../engine/computePlacement';
 import { PLANNING_PREFS_DEFAULTS } from '../entities/PlanningPrefsEntity';
 import type { Task } from '../entities/TaskEntity';
+import { SCHEDULABLE_TASK_STATUSES } from '../taskStatus';
 
 import { PlanningPrefsService } from './PlanningPrefsService';
 import { PlanningTimeService } from './PlanningTimeService';
@@ -230,7 +231,7 @@ export class PlannedBlockService {
    * Automation path. Trust dial decides auto-place vs a Plan-page confirmation.
    */
   async tryPlaceAfterOpen(context: UserServiceContext, task: Task, confidence = 0.8): Promise<PlaceOutcome> {
-    if (task.status !== 'open' && task.status !== 'in_progress') {
+    if (!SCHEDULABLE_TASK_STATUSES.includes(task.status)) {
       return { status: 'skipped', task };
     }
 
@@ -589,9 +590,7 @@ export class PlannedBlockService {
   }
 
   /** Pre-`ci.planning_prefs` home for the workday: a jsonb leaf on the self-Person. */
-  private async legacyWorkdayHours(
-    context: UserServiceContext,
-  ): Promise<{ start: string; end: string }> {
+  private async legacyWorkdayHours(context: UserServiceContext): Promise<{ start: string; end: string }> {
     const self = await this.userContextService.getSelfIdentity(context.userId);
 
     if (!self) {

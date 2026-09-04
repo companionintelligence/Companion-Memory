@@ -10,11 +10,16 @@ const h = vi.hoisted(() => ({
   schedule: {} as Record<string, unknown>,
   plan: {} as Record<string, unknown>,
   forecast: [
-    { data: { systemStatus: 'READY' } as { systemStatus: string } | null, stalled: false },
+    { data: { systemStatus: 'READY' } as { systemStatus: string } | null, loading: false, stalled: false },
     { refetch: vi.fn() },
-  ] as [{ data: { systemStatus: string } | null; stalled: boolean }, { refetch: ReturnType<typeof vi.fn> }],
+  ] as [
+    { data: { systemStatus: string } | null; loading: boolean; stalled: boolean },
+    { refetch: ReturnType<typeof vi.fn> },
+  ],
   reschedule: vi.fn(),
   hbpeEnabled: true,
+  forecastPageEnabled: true,
+  predictionBand: vi.fn(),
 }));
 
 vi.mock('@/api/useScheduleService', () => ({
@@ -28,7 +33,27 @@ vi.mock('@/api/useForecastService', () => ({
 // Defaults ON so the existing rhythm-copy tests exercise the resolved-data
 // branches; the off-vs-failed distinction below flips this explicitly.
 vi.mock('@/common/feature', () => ({
-  useFeatures: () => ({ isFeatureEnabled: (flag: string) => (flag === 'hbpe' ? h.hbpeEnabled : true) }),
+  useFeatures: () => ({
+    isFeatureEnabled: (flag: string) => {
+      if (flag === 'hbpe') {
+        return h.hbpeEnabled;
+      }
+
+      if (flag === 'forecast.page') {
+        return h.forecastPageEnabled;
+      }
+
+      return true;
+    },
+  }),
+}));
+
+vi.mock('./PredictionBand', () => ({
+  PredictionBand: (props: Record<string, unknown>) => {
+    h.predictionBand(props);
+
+    return <div data-testid="prediction-band" />;
+  },
 }));
 
 vi.mock('@/pages/PlanPage/usePlanTasks', () => ({
@@ -182,12 +207,64 @@ function setPlan(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   setSchedule();
   setPlan();
-  h.forecast = [{ data: { systemStatus: 'READY' }, stalled: false }, { refetch: vi.fn() }];
+  h.forecast = [{ data: { systemStatus: 'READY' }, loading: false, stalled: false }, { refetch: vi.fn() }];
   h.reschedule = vi.fn().mockResolvedValue(undefined);
   h.hbpeEnabled = true;
+  h.forecastPageEnabled = true;
 });
 
 afterEach(() => vi.clearAllMocks());
+
+describe('SchedulePage — prediction audit band', () => {
+  it('places the unchanged HBPE response above the calendar', () => {
+    const forecast = h.forecast[0].data;
+
+    renderWithProviders(<SchedulePage />);
+
+    const band = screen.getByTestId('prediction-band');
+    const calendar = screen.getByTestId('vertical-calendar');
+
+    expect(band.compareDocumentPosition(calendar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(h.predictionBand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forecast,
+        loading: false,
+        stalled: false,
+        showFullForecastLink: true,
+      }),
+    );
+  });
+
+  it('removes the band with the HBPE flag, not with the full Forecast-page flag', () => {
+    h.forecastPageEnabled = false;
+    const { rerender } = renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByTestId('prediction-band')).toBeInTheDocument();
+    expect(h.predictionBand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ showFullForecastLink: false }),
+    );
+
+    h.hbpeEnabled = false;
+    rerender(<SchedulePage />);
+
+    expect(screen.queryByTestId('prediction-band')).not.toBeInTheDocument();
+  });
+
+  it("hands the band the hook's refetch so a failed forecast is recoverable", () => {
+    // The hook stops polling as soon as the forecast is null, so the band's own
+    // retry is the only thing that will ever re-issue the query. Dropping
+    // `refetch` at this call site is what made the unavailable state terminal.
+    const refetch = vi.fn();
+    h.forecast = [{ data: null, loading: false, stalled: false }, { refetch }];
+
+    renderWithProviders(<SchedulePage />);
+
+    const props = h.predictionBand.mock.lastCall?.[0] as { onRetry: () => void };
+    props.onRetry();
+
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('SchedulePage — what the footer is allowed to claim', () => {
   it('says the rhythm is live only when it covers the window on screen', () => {
@@ -247,7 +324,10 @@ describe('SchedulePage — what the footer is allowed to claim', () => {
   });
 
   it('tells the user to wait when Predict is running and the strip is empty', () => {
-    h.forecast = [{ data: { systemStatus: 'NIGHTLY:label' }, stalled: false }, { refetch: vi.fn() }];
+    h.forecast = [
+      { data: { systemStatus: 'NIGHTLY:label' }, loading: false, stalled: false },
+      { refetch: vi.fn() },
+    ];
     setSchedule({
       generatedAt: '2026-08-28T21:00:00.000Z',
       rhythm: [{ date: '2026-08-28', dow: 'Fri', clusters: [] }],

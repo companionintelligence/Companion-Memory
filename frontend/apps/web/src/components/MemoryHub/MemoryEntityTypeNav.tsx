@@ -4,7 +4,7 @@ import { useQuery } from '@apollo/client';
 import { Button, DropdownMenu, cn } from '@ci/shadcn';
 import { ChevronDown, Shapes, Tag as TagIcon } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { AVAILABLE_ENTITY_TYPES, useDropdown } from '@/components/SearchBox/useDropdown';
 import { TagInput } from '@/components/TagInput';
@@ -14,7 +14,7 @@ import { MemoryExplorerFilterControls } from '@/pages/MemoryPage/Components/Expl
 import {
   WHAT_BAR_ICON_CLASS,
   WHAT_BAR_ITEM_ICON_CLASS,
-  WHAT_CATEGORIES,
+  whatCategoriesFor,
   entityTypesForCategory,
   type EntityTypeIcon,
   type WhatCategory,
@@ -495,6 +495,8 @@ function TagWhatDropdown({ tags, onTagsChange }: { tags: string[]; onTagsChange:
 
 /** Entity-type toggles for the Memory explorer — grouped What categories. */
 export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
+  const { pathname } = useLocation();
+  const categories = whatCategoriesFor(pathname);
   const {
     isFiltered,
     isEntityTypeSelected,
@@ -519,7 +521,7 @@ export function MemoryEntityTypeNav({ actions }: { actions?: ReactNode }) {
 
       <div className="scrollbar-none min-w-0 flex-1 overflow-x-auto overscroll-x-contain">
         <div className="flex w-max items-center gap-1 md:gap-1.5">
-          {WHAT_CATEGORIES.map((category) => {
+          {categories.map((category) => {
             if (category.kind === 'standalone') {
               const types = entityTypesForCategory(category);
 

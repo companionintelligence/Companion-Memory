@@ -3,6 +3,14 @@ Data aggregation for proactive insights generation.
 
 Collects context from graph deltas, relationships, events, summaries,
 and communications to enable LLM-powered insight generation.
+
+ci.communications.is_archived is nullable, so the archived-row filter is
+`IS NOT TRUE` rather than `= false`: the equality is NULL, not true, for a row
+whose flag was written as an explicit NULL (bulk ingest enumerating columns, a
+partial upsert), which would drop that communication from insight context with
+nothing logged. A NULL means nobody archived the row, so it stays in. The
+matching registry rule and its full argument live in summary_sources.py.
+ci.events.is_deleted is NOT NULL, so the novelty gate's `= false` is total.
 """
 
 from datetime import datetime, timedelta
@@ -90,7 +98,7 @@ class InsightAggregator:
     def has_new_data(self, user_id: UUID, since: datetime) -> bool:
         """
         Check if there's new data worth generating insights for.
-        Returns True if there are new graph deltas, events, or summaries.
+        Returns True for grounded changes since the last stored insight.
         """
         query = """
         SELECT EXISTS (
@@ -102,8 +110,14 @@ class InsightAggregator:
             WHERE user_id = :user_id AND created_at >= :since AND period_type != 'insight'
             LIMIT 1
         ) OR EXISTS (
+            SELECT 1 FROM ci.communications
+            WHERE user_id = :user_id AND time >= :since
+            LIMIT 1
+        ) OR EXISTS (
             SELECT 1 FROM ci.events
-            WHERE user_id = :user_id AND created_at >= :since
+            WHERE user_id = :user_id
+              AND GREATEST(created_at, updated_at) >= :since
+              AND is_deleted = false
             LIMIT 1
         ) as has_new_data
         """
@@ -227,7 +241,13 @@ class InsightAggregator:
         FROM ci.relationships r
         JOIN ci.entities e ON e.entity_id = r.to_entity_id
         WHERE r.owner_user_id = :user_id
-          AND r.is_active = true
+          -- IS NOT FALSE, not "= true": ci.relationships.is_active is nullable
+          -- (DEFAULT true), and "= true" is NULL — so not true — for any row
+          -- written with an explicit NULL, which drops that person from the
+          -- insight context silently. Inverse-direction twin of the exclusion
+          -- flags in summary_sources.py: there a NULL must not read as
+          -- "sensitive", here it must not read as "retired".
+          AND r.is_active IS NOT FALSE
           AND e.entity_type = 'Person'
         ORDER BY r.strength DESC
         LIMIT :limit
@@ -309,18 +329,27 @@ class InsightAggregator:
         """Get recent communications (emails, messages, etc.)."""
         query = """
         SELECT
-            id,
-            subject,
-            communication_type,
-            direction,
-            time,
-            from_entity_id,
-            to_entity_ids
-        FROM ci.communications
-        WHERE user_id = :user_id
-          AND time >= :since
-          AND time < :until
-        ORDER BY time DESC
+            LEFT(
+                COALESCE(NULLIF(comm.summary, ''), NULLIF(comm.preview, ''), NULLIF(comm.content, '')),
+                1000
+            ) AS text,
+            comm.subject,
+            comm.communication_type,
+            comm.direction,
+            sender.name AS from_name,
+            (
+                SELECT ARRAY_AGG(recipient.name ORDER BY recipient.name)
+                FROM UNNEST(comm.to_entity_ids) AS recipient_id
+                JOIN ci.entities recipient ON recipient.entity_id = recipient_id
+            ) AS to_names,
+            comm.time
+        FROM ci.communications comm
+        LEFT JOIN ci.entities sender ON sender.entity_id = comm.from_entity_id
+        WHERE comm.user_id = :user_id
+          AND comm.time >= :since
+          AND comm.time < :until
+          AND comm.is_archived IS NOT TRUE
+        ORDER BY comm.time DESC
         LIMIT 20
         """
         return db.execute_query(

@@ -6,7 +6,7 @@ import { Clock, FilterX, Search, SearchX, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
-import { isMemoryExplorerPath, isMemoryHubPath } from '@/components/MemoryHub/memoryHubSections';
+import { isMemoryExplorerPath, isLiveSearchPath, isMemoryHubPath } from '@/components/MemoryHub/memoryHubSections';
 import { DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { useRecentSearches } from '@/hooks';
 import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';
@@ -68,10 +68,21 @@ export function GlobalSearchBox() {
 
   const onMemoryExplorer = isMemoryExplorerPath(location.pathname);
   const onMemoryHub = isMemoryHubPath(location.pathname);
+  // Pages whose list reads `?search=`: the box edits the page's query in place
+  // and leaves its filters and sort alone (see isLiveSearchPath). Everywhere
+  // else it is a launcher that jumps to the explorer.
+  const onLiveSearchPage = isLiveSearchPath(location.pathname);
+  // Where the explorer's filter set (What / When / How / sort …) is honoured:
+  // on the explorer itself, whose toolbar renders it inline, and off the
+  // memory pages, where the box is a launcher that carries pinned filters to
+  // `/memory`. On the other list pages the box is a query box and nothing
+  // more — those pages have their own filters, and the explorer's would be
+  // ignored — so the panel shows none and none are counted or cleared.
+  const explorerFiltersApply = onMemoryExplorer || !onLiveSearchPage;
   const semantic = searchParams.get('semantic') === '1';
-  const activeFilterCount = countActiveFilters(searchParams);
-  // On /memory the input mirrors the live `?search` param; elsewhere it stays a
-  // transient launcher value, so we don't seed it from the URL.
+  const activeFilterCount = explorerFiltersApply ? countActiveFilters(searchParams) : 0;
+  // On a live-search page the input mirrors the page's `?search` param;
+  // elsewhere it stays a transient launcher value, so we don't seed it from the URL.
   const urlSearch = searchParams.get('search') ?? '';
 
   // Drives the suggestion query; debounced via SearchBox's autoSubmit.
@@ -131,7 +142,7 @@ export function GlobalSearchBox() {
 
       addRecentSearch(trimmed);
 
-      if (onMemoryExplorer) {
+      if (onLiveSearchPage) {
         // Already mirrored live by `handleSearch` as the user types — this
         // just fast-forwards past its debounce. Do NOT remount here: react-router
         // v7 applies `setSearchParams` as an async transition, never batched
@@ -163,10 +174,12 @@ export function GlobalSearchBox() {
         }
       }
 
-      navigate(`/memory/events?${params.toString()}`);
+      // `/memory`, not `/memory/events`: that page is scoped to happenings by its
+      // route, and a search from the header has to cover everything.
+      navigate(`/memory?${params.toString()}`);
       clearInput();
     },
-    [addRecentSearch, clearInput, navigate, onMemoryExplorer, searchParams, setSearchParams],
+    [addRecentSearch, clearInput, navigate, onLiveSearchPage, searchParams, setSearchParams],
   );
 
   // The query only — the counterpart to `clearFilters`. Remounting SearchBox
@@ -185,7 +198,7 @@ export function GlobalSearchBox() {
     setQuery(null);
     setClearQueryPending(true);
 
-    if (onMemoryExplorer) {
+    if (onLiveSearchPage) {
       setSearchParams(
         (params) => {
           params.delete('search');
@@ -195,17 +208,17 @@ export function GlobalSearchBox() {
         { replace: true },
       );
     }
-  }, [onMemoryExplorer, setSearchParams]);
+  }, [onLiveSearchPage, setSearchParams]);
 
   useEffect(() => {
-    if (!clearQueryPending || (onMemoryExplorer && urlSearch)) {
+    if (!clearQueryPending || (onLiveSearchPage && urlSearch)) {
       return;
     }
 
     setClearQueryPending(false);
     refocusOnResetRef.current = true;
     setResetKey((key) => key + 1);
-  }, [clearQueryPending, onMemoryExplorer, urlSearch]);
+  }, [clearQueryPending, onLiveSearchPage, urlSearch]);
 
   // A remount replaces the input with a fresh, unfocused one. Refocus so an
   // in-place reset (the clear-query row) keeps the user typing. `clearInput`'s
@@ -373,13 +386,14 @@ export function GlobalSearchBox() {
     ];
   }, [activeFilterCount, onMemoryExplorer, query, recentSearches, removeRecentSearch, suggestions, t, tags]);
 
-  // Live, debounced. Drives the suggestion query everywhere, and on /memory also
-  // writes `?search` so the explorer filters as you type (replace: keep history clean).
+  // Live, debounced. Drives the suggestion query everywhere, and on a live-search
+  // page also writes `?search` so the page filters as you type (replace: keep
+  // history clean).
   const handleSearch = useCallback(
     ({ query: searchQuery }: { query: string }) => {
       setQuery(searchQuery);
 
-      if (onMemoryExplorer) {
+      if (onLiveSearchPage) {
         const trimmed = searchQuery.trim();
 
         setSearchParams(
@@ -399,13 +413,29 @@ export function GlobalSearchBox() {
     [onMemoryExplorer, setSearchParams],
   );
 
-  // The X is a full reset: the query, every explorer filter (the same set as
-  // the drop area's "Clear all"), the pinned-filters state, and the expansion.
+  // The X on the explorer is a full reset: the query, every explorer filter
+  // (the same set as the drop area's "Clear all"), the pinned-filters state,
+  // and the expansion. On the other live-search pages it clears only the
+  // query — their own filters and sort are the page's business and stay put.
+  // On a hub page with no searchable list it jumps to the everything browse.
   const handleClear = useCallback(() => {
     setQuery(null);
 
+    if (onLiveSearchPage && !onMemoryExplorer) {
+      setSearchParams(
+        (params) => {
+          params.delete('search');
+
+          return params;
+        },
+        { replace: true },
+      );
+
+      return;
+    }
+
     if (onMemoryHub && !onMemoryExplorer) {
-      navigate('/memory/events', { replace: true });
+      navigate('/memory', { replace: true });
 
       return;
     }
@@ -422,7 +452,7 @@ export function GlobalSearchBox() {
       },
       { replace: true },
     );
-  }, [navigate, onMemoryExplorer, onMemoryHub, setSearchParams]);
+  }, [navigate, onLiveSearchPage, onMemoryExplorer, onMemoryHub, setSearchParams]);
 
   // Arrow-key analogue of dragging a person/place/tag row onto the explorer's
   // filter drop area: right adds the highlighted row's filter. Same
@@ -481,7 +511,7 @@ export function GlobalSearchBox() {
       // Tag suggestion → the explorer filtered to the tag (its de facto detail
       // page); fresh params, like any other detail navigation.
       if (id.startsWith(TAG_PREFIX)) {
-        navigate(`/memory/events?tags=${encodeURIComponent(id.slice(TAG_PREFIX.length))}`);
+        navigate(`/memory?tags=${encodeURIComponent(id.slice(TAG_PREFIX.length))}`);
 
         return;
       }
@@ -546,7 +576,7 @@ export function GlobalSearchBox() {
           key={resetKey}
           ref={inputRef}
           engageRef={engageSearchRef}
-          defaultQuery={onMemoryExplorer ? urlSearch : undefined}
+          defaultQuery={onLiveSearchPage ? urlSearch : undefined}
           onSearch={handleSearch}
           onSubmit={({ query: submitted }) => commitSearch(submitted)}
           onClear={handleClear}
@@ -555,15 +585,15 @@ export function GlobalSearchBox() {
           variant="compact"
           placeholder="Search memory…"
           autoSubmit
-          autoSubmitEmpty={onMemoryExplorer}
+          autoSubmitEmpty={onLiveSearchPage}
           displayResults
           openOnFocus
           loading={loading}
           error={error}
           results={results}
-          showClear={activeFilterCount > 0 || Boolean(onMemoryExplorer ? urlSearch : query?.trim())}
+          showClear={activeFilterCount > 0 || Boolean(onLiveSearchPage ? urlSearch : query?.trim())}
           panelFooter={
-            !onMemoryExplorer ? (
+            explorerFiltersApply && !onMemoryExplorer ? (
               <DropdownProvider args={[{ changeSearchParams: true }]}>
                 <SearchPanelFilters modal={false} />
               </DropdownProvider>

@@ -149,6 +149,31 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Tasks' })).toBeInTheDocument();
   });
 
+  it('opens Planning sections from the collapsed rail without widening it', () => {
+    const { container } = renderRail('/feed', { expanded: false });
+
+    expect(screen.queryByRole('link', { name: 'Tasks' })).not.toBeInTheDocument();
+    expect(container.querySelector('div.relative')).toHaveClass('w-14');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Planning' }));
+
+    expect(screen.getByRole('link', { name: 'Tasks' })).toHaveAttribute('href', '/plan/tasks');
+    expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
+    expect(container.querySelector('div.relative')).toHaveClass('w-14');
+    expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
+  });
+
+  it('opens Memory sections from the collapsed rail', () => {
+    renderRail('/feed', { expanded: false });
+
+    expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Memory' }));
+
+    expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Chat' })).toHaveAttribute('href', '/memory/chat');
+  });
+
   it('closes a route-open submenu when a peer group is opened by click', () => {
     renderRail('/plan', { expanded: true });
 
@@ -222,12 +247,21 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('button', { name: 'Colours' })).toBeInTheDocument();
   });
 
-  // Collapsed, the account is the avatar and one destination — a 56px rail is
-  // no place for a nested accordion.
+  // Collapsed, the account is the avatar — click still opens its sections in
+  // a flyout, same as every other group, rather than a dead end to /self only.
   it('collapses the account to a single link to Self', () => {
     renderRail();
 
     expect(screen.getByRole('link', { name: /Test User/ })).toHaveAttribute('href', '/self');
+    expect(screen.queryByRole('button', { name: 'Log out' })).not.toBeInTheDocument();
+  });
+
+  it('opens Self sections from the collapsed account avatar', () => {
+    renderRail('/feed', { expanded: false });
+
+    fireEvent.click(screen.getByRole('link', { name: /Test User/ }));
+
+    expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
   });
 
   // Support and Docs were two permanent rows for one question.

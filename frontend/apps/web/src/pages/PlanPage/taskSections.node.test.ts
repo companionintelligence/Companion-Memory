@@ -137,6 +137,37 @@ describe('sectionFor', () => {
     });
   });
 
+  it('never files a delegated task as overdue, however old its deadline', () => {
+    // A delegated task is in flight with an agent harness. It keeps its due
+    // date, so without an explicit branch it falls through to the dated logic
+    // below and lands in Overdue — telling the user to chase work they have
+    // already handed off and cannot act on.
+    expect(sectionFor(task({ status: 'delegated', dueAt: '2026-01-01T12:00:00Z' }), TODAY, 'UTC')).toEqual({
+      column: 'unscheduled',
+      lane: 'upcoming',
+    });
+    expect(isOverdue(task({ status: 'delegated', dueAt: '2026-01-01T12:00:00Z' }), TODAY, 'UTC')).toBe(false);
+  });
+
+  it('keeps a delegated task in the Scheduled column when a block is already placed', () => {
+    // Delegating does not un-book the calendar, so the card stays beside its
+    // block — just out of the Overdue lane.
+    expect(
+      sectionFor(
+        task({ status: 'delegated', scheduledFor: '2026-01-14', placedOnCalendar: true }),
+        TODAY,
+        'UTC',
+      ),
+    ).toEqual({ column: 'scheduled', lane: 'upcoming' });
+  });
+
+  it('shows a delegated task rather than hiding it behind a defer date', () => {
+    expect(sectionFor(task({ status: 'delegated', deferUntil: '2026-02-01' }), TODAY, 'UTC')).toEqual({
+      column: 'unscheduled',
+      lane: 'upcoming',
+    });
+  });
+
   it('hides a deferred task even when it is overdue', () => {
     // Deferring is the user saying "not yet"; nagging them anyway is the bug
     // the defer feature exists to prevent.

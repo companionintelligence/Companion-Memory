@@ -26,12 +26,15 @@ export function MemorySubmenu() {
   const { pathname } = useLocation();
   const { isFeatureEnabled } = useFeatures();
   const routeOpen = isMemoryHubPath(pathname);
-  const { open, onOpenChange, onHeadClick } = useRailSubmenuOpen('memory', routeOpen);
+  const { open, clickOpen, onOpenChange, onHeadClick } = useRailSubmenuOpen('memory', routeOpen);
 
   // Idle until the group is actually showing its contents — the rail renders
   // on every page, so an eager thread list would be a request per navigation
-  // for a menu nobody opened.
-  const { threads, loading: threadsLoading } = useRecentThreads({ enabled: open && expanded });
+  // for a menu nobody opened. Collapsed flyouts use clickOpen; the expanded
+  // accordion uses open (route or click) only while the rail is wide.
+  const { threads, loading: threadsLoading } = useRecentThreads({
+    enabled: expanded ? open : clickOpen,
+  });
 
   const visible = MEMORY_HUB_SECTIONS.filter((section) => !section.flag || isFeatureEnabled(section.flag));
   const memoryIcon = <Brain className="h-6 w-6 shrink-0" strokeWidth={1.25} />;
@@ -43,6 +46,7 @@ export function MemorySubmenu() {
       chevronLabel="Memory"
       routeOpen={routeOpen}
       open={open}
+      clickOpen={clickOpen}
       onOpenChange={onOpenChange}
       onHeadClick={onHeadClick}
       testId="memory-submenu"

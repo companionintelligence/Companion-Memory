@@ -58,7 +58,7 @@ describe('apple_photos importer', () => {
     expect(pipeline.map((g) => g.item).filter(Boolean)).toHaveLength(2);
   });
 
-  it('walks originals/ and emits one photo item per media file', async () => {
+  it('walks originals/ and emits one media item per media file', async () => {
     const importer = getImporter('apple_photos');
     const pipeline: EmittedGraph[] = [];
     await importer.fileImport(
@@ -76,6 +76,7 @@ describe('apple_photos importer', () => {
     expect(items.length).toBe(2);
 
     for (const it of items) {
+      // 'media' (not 'photo') so kindFor can branch on image vs video MIME.
       expect(it.classification).toBe('media');
       // Title must be the real filename, never a bare bundle/dir name.
       expect(it.metadata.Title).toBe(it.content.filename);

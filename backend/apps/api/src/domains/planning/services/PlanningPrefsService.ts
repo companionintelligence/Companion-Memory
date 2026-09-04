@@ -68,10 +68,7 @@ export class PlanningPrefsService {
    * Upserting on the primary key rather than read-modify-write keeps two
    * concurrent settings saves from losing one another's field.
    */
-  async update(
-    context: UserServiceContext,
-    dto: UpdatePlanningPrefsDto,
-  ): Promise<ResolvedPlanningPrefs> {
+  async update(context: UserServiceContext, dto: UpdatePlanningPrefsDto): Promise<ResolvedPlanningPrefs> {
     const patch: Partial<PlanningPrefsEntity> = { userId: context.userId };
 
     if ('workStart' in dto) {

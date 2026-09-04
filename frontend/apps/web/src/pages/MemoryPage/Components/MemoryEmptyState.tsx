@@ -1,21 +1,70 @@
 import { Button } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
-import { useFeatures } from '@/common/feature';
+import { useOptionalFeatures } from '@/common/feature';
 
 import { Empty } from './Empty';
 
 interface MemoryEmptyStateProps {
   /** True when URL filters or a search query narrowed the browse. */
   filtered: boolean;
+  /**
+   * What-picker types (display names) the When filter set aside because they
+   * carry no date — see resolveExplorerTypes. When non-empty, the empty state
+   * explains that instead of the generic "try clearing your filters".
+   */
+  whenDroppedTypes?: readonly string[];
 }
 
-export function MemoryEmptyState({ filtered }: MemoryEmptyStateProps) {
-  const { isFeatureEnabled } = useFeatures();
+// How the What bar names each type it can set aside (entityTypeCategories).
+const TYPE_LABELS: Record<string, string> = {
+  Content: 'Content',
+  File: 'Files',
+  Note: 'Notes',
+  Person: 'People',
+  Place: 'Places',
+  Product: 'Products',
+  Thing: 'Things',
+};
+
+function listNames(types: readonly string[]): string {
+  const names = types.map((type) => TYPE_LABELS[type] ?? type);
+
+  if (names.length <= 1) {
+    return names.join('');
+  }
+
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/**
+ * Why a When filter can hide a whole selection: the reader picked kinds that
+ * have no date, so no date range can ever include them. Says which kinds and
+ * what to do about it, in the What bar's own words for them.
+ */
+export function whenFilterNudge(types: readonly string[]): string {
+  const names = listNames(types);
+  // "Content" reads as a mass noun; every other label is a plural.
+  const plural = types.length > 1 || (types.length === 1 && types[0] !== 'Content');
+  const have = plural ? "don't have" : "doesn't have";
+  const them = plural ? 'them' : 'it';
+
+  return `A When filter only shows things that have a date, and ${names} ${have} one. Remove the When filter to see ${them} again.`;
+}
+
+export function MemoryEmptyState({ filtered, whenDroppedTypes = [] }: MemoryEmptyStateProps) {
+  // Optional on purpose: the "no results" branches below never read a flag,
+  // and this component is rendered bare by its own tests. Outside a
+  // FeaturesProvider the gated button simply stays hidden.
+  const features = useOptionalFeatures();
   // Same flag /sources/import is gated behind. With it off SourcesPage
   // normalises that half away to /sources/connect, so the button would just be
   // a second, differently-worded "Connect a source" — drop it instead.
-  const importEnabled = isFeatureEnabled('import.page');
+  const importEnabled = features?.isFeatureEnabled('import.page') ?? false;
+
+  if (whenDroppedTypes.length > 0) {
+    return <Empty title="No results" description={whenFilterNudge(whenDroppedTypes)} icon="🔍" />;
+  }
 
   if (filtered) {
     return (

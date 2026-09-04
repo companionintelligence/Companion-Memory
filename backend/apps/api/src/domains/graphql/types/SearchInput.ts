@@ -62,7 +62,12 @@ export class SearchInput {
   // filters they AND together (candidate-set + post-filter), and when any of
   // them is set the result is restricted to matching events.
 
-  /** "Connector" — data sources (event.source_system) to include, e.g. 'gmail','imessage','spotify'. */
+  /**
+   * "How" — data sources (`source_system`) to include, e.g. 'gmail','imessage','reddit'.
+   * Unlike who / where, this is not event-only: it narrows every browsed kind that
+   * carries a source column (events, communications, content, browser activity,
+   * receipts, products, things) and sets aside the kinds that have none.
+   */
   @Field(() => [String], { nullable: true })
   connectors?: string[];
 

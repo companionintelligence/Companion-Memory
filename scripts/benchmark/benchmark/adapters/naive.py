@@ -14,14 +14,13 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from typing import List, Tuple
 
 from .base import MemoryAdapter
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
 
 
-def _tokens(text: str) -> List[str]:
+def _tokens(text: str) -> list[str]:
     return [t.lower() for t in _TOKEN_RE.findall(text)]
 
 
@@ -30,7 +29,7 @@ class NaiveAdapter(MemoryAdapter):
 
     def __init__(self, top_k: int = 3) -> None:
         self._top_k = top_k
-        self._fragments: List[Tuple[str, str]] = []   # (session_id, text)
+        self._fragments: list[tuple[str, str]] = []  # (session_id, text)
 
     @property
     def name(self) -> str:
@@ -51,7 +50,7 @@ class NaiveAdapter(MemoryAdapter):
         if not q_tokens:
             return ""
 
-        scored: List[Tuple[float, str]] = []
+        scored: list[tuple[float, str]] = []
         for _, text in self._fragments:
             t_tokens = Counter(_tokens(text))
             # Sum of min-count overlap across query terms — a standard BoW

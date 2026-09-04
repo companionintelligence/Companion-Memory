@@ -75,18 +75,18 @@ describe('ContentService.getEntitiesForContents keyset paging', () => {
 
     expect(keyset).toBeDefined();
     expect(keyset!.sql).toBe(
-      '(content.created_at < :afterTime OR (content.created_at = :afterTime AND content.id < :afterId))',
+      '(content.updated_at < :afterTime OR (content.updated_at = :afterTime AND content.id < :afterId))',
     );
     expect(keyset!.params).toEqual({ afterTime, afterId });
   });
 
-  it('orders by created_at then id so same-timestamp rows page deterministically', async () => {
+  it('orders by updated_at then id so same-timestamp rows page deterministically', async () => {
     const { service, recorded } = makeService();
 
     await service.getEntitiesForContents(CONTEXT, { limit: 20, afterTime, afterId });
 
     expect(recorded.orderBy).toEqual([
-      ['content.created_at', 'DESC'],
+      ['content.updated_at', 'DESC'],
       ['content.id', 'DESC'],
     ]);
   });
@@ -112,9 +112,9 @@ describe('ContentService.getEntitiesForContents keyset paging', () => {
       'content.user_id = :userId',
       // Media rows belonging to a soft-deleted event are hidden alongside it.
       '(content.event_id IS NULL OR content_event.is_deleted = false)',
-      'content.created_at >= :startTime',
-      'content.created_at <= :endTime',
-      '(content.created_at < :afterTime OR (content.created_at = :afterTime AND content.id < :afterId))',
+      'content.updated_at >= :startTime',
+      'content.updated_at <= :endTime',
+      '(content.updated_at < :afterTime OR (content.updated_at = :afterTime AND content.id < :afterId))',
     ]);
   });
 });

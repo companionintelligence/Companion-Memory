@@ -23,14 +23,20 @@ def _result(name: str, hits: tuple[bool, bool]) -> SystemResult:
         QuestionResult("q1", "?", "flat-recall", ["x"], "ctx", hits[0], 12.3, ""),
         QuestionResult("q2", "?", "relational", ["y"], "ctx", hits[1], 34.5, "ok"),
     ]
-    return SystemResult(system_name=name, ingest_total_ms=100, flush_total_ms=50, question_results=qs)
+    return SystemResult(
+        system_name=name, ingest_total_ms=100, flush_total_ms=50, question_results=qs
+    )
 
 
 # ── markdown ────────────────────────────────────────────────────────────────
 
+
 def test_markdown_table_has_headers_for_each_persona_category():
     md = build_markdown_report(_persona(), [_result("naive", (True, False))])
-    assert "| System | Score | flat-recall | relational | Ingest | Flush | Avg search |" in md
+    assert (
+        "| System | Score | flat-recall | relational | Ingest | Flush | Avg search |"
+        in md
+    )
 
 
 def test_markdown_renders_error_row_for_failed_systems():
@@ -49,11 +55,14 @@ def test_markdown_includes_per_question_detail_by_default():
 
 
 def test_markdown_can_omit_per_question_detail():
-    md = build_markdown_report(_persona(), [_result("a", (True, True))], include_question_detail=False)
+    md = build_markdown_report(
+        _persona(), [_result("a", (True, True))], include_question_detail=False
+    )
     assert "## Per-question detail" not in md
 
 
 # ── json ────────────────────────────────────────────────────────────────────
+
 
 def test_json_report_carries_per_system_scores_and_timings():
     js = build_json_report(_persona(), [_result("naive", (True, False))])

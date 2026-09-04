@@ -1,32 +1,77 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
+import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import { Button, DropdownMenu } from '@ci/shadcn';
 import { ChevronDown, Database } from '@ci/shadcn/icons';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { gql } from '@/graphql';
+import { explorerSearchTypeFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
-// "Source" — the data-source dimension (gmail, imessage, spotify, ...).
-// Populated from the distinct event sources present for the user.
-const EVENT_SOURCES_QUERY = gql(`
-  query EventSources {
-    eventSources
+// "Source" — the data-source dimension (gmail, imessage, reddit, ...).
+// Populated from the distinct `source_system` values across every kind the
+// explorer browses — events, messages, content, browser activity, receipts,
+// products and things — not just events, since the search applies the
+// selection to all of them (see SearchResolver SOURCED_TYPES).
+export const SOURCE_SYSTEMS_QUERY = gql(`
+  query SourceSystems($includeTypes: [String!], $excludeTypes: [String!]) {
+    sourceSystems(includeTypes: $includeTypes, excludeTypes: $excludeTypes)
   }
 `);
+
+function toIndexableTypes(displayTypes: string[]): string[] {
+  return displayTypes.map(
+    (type) => ENTITY_TYPE_MAP[type as keyof typeof ENTITY_TYPE_MAP] ?? type.toLowerCase(),
+  );
+}
+
+/**
+ * The type filters the search itself will send, so the How list is pared to
+ * the kinds actually in play: with the What bar on Content, only content's
+ * sources are offered, and a kind that records no source offers none. Same
+ * resolution the list and heatmap use (explorerSearchTypeFilters), including
+ * the When override, so every option shown can match something.
+ */
+export function sourceSystemsVariables(
+  params: URLSearchParams,
+  pathname?: string,
+): {
+  includeTypes?: string[];
+  excludeTypes?: string[];
+} {
+  const { includeTypes, excludeTypes } = explorerSearchTypeFilters(params, pathname);
+
+  return {
+    ...(includeTypes ? { includeTypes: toIndexableTypes(includeTypes) } : {}),
+    ...(excludeTypes ? { excludeTypes: toIndexableTypes(excludeTypes) } : {}),
+  };
+}
 
 interface Props {
   modal?: boolean;
   /** When set, renders a plain "{label}: {value}" trigger (e.g. "How: all"). */
   label?: string;
+  /**
+   * The kinds to list sources for, in the search index's names, when the page
+   * is not the explorer and its What filters do not apply — the content
+   * library passes `['content']`. Without it the list follows the URL's What
+   * selection, as the explorer's does.
+   */
+  includeTypes?: string[];
 }
 
-export function ConnectorFilter({ modal = true, label }: Props) {
+export function ConnectorFilter({ modal = true, label, includeTypes }: Props) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
+  const { pathname } = useLocation();
 
-  const { data } = useQuery(EVENT_SOURCES_QUERY);
-  const availableSources = data?.eventSources ?? [];
+  const variables = useMemo(
+    () => (includeTypes ? { includeTypes } : sourceSystemsVariables(searchParams, pathname)),
+    [includeTypes, searchParams, pathname],
+  );
+  const { data } = useQuery(SOURCE_SYSTEMS_QUERY, { variables });
+  const availableSources = data?.sourceSystems ?? [];
 
   const selectedSources = searchParams.get('connectors')?.split(',').filter(Boolean) ?? [];
 

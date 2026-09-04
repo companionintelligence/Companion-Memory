@@ -14,6 +14,7 @@ import {
   JobHistoryDto,
   JobListDto,
   JobQueryService,
+  type TerminalJobClearDto,
 } from '../services/JobQueryService';
 import { JOB_CATEGORIES, JOB_TYPES } from '../taxonomy';
 
@@ -93,6 +94,13 @@ type JobControlsBody = z.infer<typeof jobControlsSchema>;
  * today, but it means `full` on the acting route sits at the top of a ladder
  * that is declared end to end rather than above silence.
  */
+
+const clearTerminalSchema = z.object({
+  scope: z.enum(['dead-letter', 'failed']),
+});
+
+type ClearTerminalBody = z.infer<typeof clearTerminalSchema>;
+
 @Controller('jobs')
 export class JobsController {
   constructor(
@@ -146,6 +154,24 @@ export class JobsController {
     const names = name?.trim() ? [name.trim()] : undefined;
 
     return this.jobMonitorService.fireCronJobs(names);
+  }
+
+  /**
+   * Clear terminal jobs named by the Health card — dead-letter queue rows, or
+   * failed origin rows that have already exhausted retries.
+   *
+   * `write`, not `full`: this only deletes work that has already stopped, and
+   * the Health UI confirms before posting. It does not touch live queues or
+   * schedule controls.
+   */
+  @UseGuards(JwtOrApiKeyAuthGuard)
+  @RequireCapability(WRITE_CAPABILITY)
+  @Post('clear')
+  clearTerminal(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(clearTerminalSchema)) body: ClearTerminalBody,
+  ): Promise<TerminalJobClearDto> {
+    return this.jobQueryService.clearTerminal(context, body.scope);
   }
 
   /**

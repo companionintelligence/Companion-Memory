@@ -1,4 +1,8 @@
-import { type AgentJobStatus } from '../../entities/AgentJobEntity';
+import { NotFoundException } from '@nestjs/common';
+
+import { TASK_STATUSES } from '@ci/domains/planning';
+
+import type { AgentJobStatus } from '../../entities/AgentJobEntity';
 import { AgentDispatchService } from '../AgentDispatchService';
 
 describe('AgentDispatchService.checkpoint stop rule', () => {
@@ -25,15 +29,24 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
 
     const jobRepository = {
       findOne: jest.fn(async () => job),
-      // Declared here so the stale-job test can swap in its own implementation;
-      // `AgentDispatchService.failStale` is the only caller.
-      find: jest.fn() as jest.Mock,
+      find: jest.fn(async (_args: { where: { status: string } }) => [] as (typeof job)[]),
       update: jest.fn(async (_where: unknown, patch: Partial<typeof job>) => {
         Object.assign(job, patch);
       }),
     };
     const messageService = { create: jest.fn() };
-    const taskService = { update: jest.fn() };
+    // `findById` as well as `update`: releaseTask READS the task before handing
+    // it back, and a stub with only `update` made that branch un-runnable —
+    // the same shape of blind spot that let `delegated` ship untested.
+    const task = { id: 'task-1', status: 'delegated' };
+    const taskService = {
+      findById: jest.fn(async () => task),
+      update: jest.fn(async (_ctx: unknown, _id: string, patch: { status: string }) => {
+        task.status = patch.status;
+
+        return task;
+      }),
+    };
     const eventService = { send: jest.fn(), completeJob: jest.fn() };
     const doorbell = { wakeOpenClaw: jest.fn() };
     const logger = { setContext: jest.fn(), debug: jest.fn(), warn: jest.fn() };
@@ -48,7 +61,7 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
       logger as never,
     );
 
-    return { job, service, jobRepository, messageService, eventService, taskService };
+    return { job, task, service, jobRepository, messageService, eventService, taskService };
   }
 
   it('blocks after two hard fails on the same step', async () => {
@@ -103,6 +116,85 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
     expect(job.status).toBe('failed');
   });
 
+  /**
+   * ═══ delegated WAS A ONE-WAY DOOR ═══
+   *
+   * `blocked` and `failed` both stamp `completedAt` — the job is over — and
+   * `finishCompleted` was the only thing that ever moved the task off
+   * `delegated`. So every dispatch that did not succeed left the task delegated
+   * forever, and `delegated` is believed by the whole Plan surface: the card
+   * hides Schedule and Reschedule, the board refuses to file it as Overdue
+   * however old its deadline, the planner will not place a block against it.
+   * The work became unreachable by the one person left who could do it.
+   */
+  it('hands the task back when the job blocks', async () => {
+    const { service, task, taskService } = setup();
+
+    await service.checkpoint(context, 'job-1', { needsUser: true });
+
+    expect(taskService.update).toHaveBeenCalledWith(context, 'task-1', { status: 'open' });
+    expect(task.status).toBe('open');
+  });
+
+  it('hands the task back when the job fails', async () => {
+    const { service, task } = setup();
+
+    await service.checkpoint(context, 'job-1', { status: 'failed', step: 'inference' });
+
+    expect(task.status).toBe('open');
+  });
+
+  it('hands the task back when the user halts the dispatch', async () => {
+    const { service, task } = setup();
+
+    await service.steer(context, 'job-1', { action: 'halt', message: 'I did it myself' });
+
+    expect(task.status).toBe('open');
+  });
+
+  it('hands back a task that never checked in, not only one that reported failure', async () => {
+    // failStale routes through checkpoint({status:'failed'}), so this is the
+    // path a dead harness actually takes — and the one most likely to strand a
+    // task, because nobody is watching when it happens.
+    const { job, task, service, jobRepository } = setup();
+    job.status = 'queued';
+    job.createdAt = new Date(Date.now() - 3 * 60 * 1000);
+    jobRepository.find = jest.fn(async ({ where }: { where: { status: string } }) =>
+      where.status === 'queued' ? [job] : [],
+    );
+
+    await service.failStale();
+
+    expect(task.status).toBe('open');
+  });
+
+  it('does not resurrect work the owner finished while the harness was away', async () => {
+    // Guarded on ACTIVE rather than on exactly `delegated`: a late check-in from
+    // a stale job must not undo a decision the user has already made. Without
+    // this the hand-back would reopen a task they completed or declined.
+    const { service, task, taskService } = setup();
+    task.status = 'done';
+
+    await service.checkpoint(context, 'job-1', { status: 'failed', step: 'inference' });
+
+    expect(taskService.update).not.toHaveBeenCalled();
+    expect(task.status).toBe('done');
+  });
+
+  it('still closes the job when the hand-back throws', async () => {
+    // The message, the events and completeJob are what stop OpenClaw retrying
+    // forever; a task write that fails must not take them down with it.
+    const { service, taskService, eventService } = setup();
+    taskService.update = jest.fn(async (_ctx: unknown, _id: string, _patch: { status: string }) => {
+      throw new Error('tasks table unreachable');
+    });
+
+    const updated = await service.checkpoint(context, 'job-1', { status: 'failed', step: 'inference' });
+
+    expect(updated.status).toBe('failed');
+    expect(eventService.completeJob).toHaveBeenCalled();
+  });
+
   it('closes the task when the job completes', async () => {
     const { service, taskService, eventService } = setup();
 
@@ -114,5 +206,103 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
     expect(updated.status).toBe('completed');
     expect(taskService.update).toHaveBeenCalledWith(context, 'task-1', { status: 'done' });
     expect(eventService.completeJob).toHaveBeenCalledWith('agent', 'pg-job-1', { status: 'completed' });
+  });
+});
+
+/**
+ * ═══ THE taskId BRANCH WAS NEVER EXECUTED ═══
+ *
+ * The suite above mocks `taskService` as `{ update }` only and never calls
+ * `dispatch()`, so the two lines that read and re-status the task ran in no
+ * test at all. That is how `status: 'delegated'` shipped in four TypeScript
+ * layers and zero migrations: nothing here could see the value, and nothing
+ * that could see it (the CHECK constraint) was reachable from a mock.
+ *
+ * These lock the shape of the call. Proving the value SURVIVES Postgres is the
+ * job of the round-trip case in
+ * `domains/planning/services/__tests__/TaskService.tenancy.integration.test.ts`.
+ */
+describe('AgentDispatchService.dispatch', () => {
+  const context = { userId: 'user-1' } as never;
+  const TASK_UUID = '018f3a2b-4c5d-7e8f-9a0b-1c2d3e4f5061';
+
+  function setup(task: { id: string } | null = { id: TASK_UUID }) {
+    const saved: Array<Record<string, unknown>> = [];
+    const jobRepository = {
+      create: jest.fn((row: Record<string, unknown>) => row),
+      save: jest.fn(async (row: Record<string, unknown>) => {
+        saved.push(row);
+
+        return row;
+      }),
+      update: jest.fn(),
+    };
+    const threadService = { create: jest.fn(async () => ({ id: 'thread-1' })) };
+    const messageService = { create: jest.fn() };
+    const taskService = {
+      findById: jest.fn(async () => task),
+      update: jest.fn(async () => task),
+    };
+    const eventService = { send: jest.fn(async () => ['pg-job-1']), completeJob: jest.fn() };
+    const logger = { setContext: jest.fn(), debug: jest.fn(), warn: jest.fn() };
+
+    const service = new AgentDispatchService(
+      jobRepository as never,
+      threadService as never,
+      messageService as never,
+      taskService as never,
+      eventService as never,
+      { wakeOpenClaw: jest.fn() } as never,
+      logger as never,
+    );
+
+    return { service, jobRepository, threadService, taskService, saved };
+  }
+
+  const input = {
+    sourceKind: 'Task',
+    sourceId: TASK_UUID,
+    title: 'Book the dentist',
+    body: 'Any Friday morning',
+    taskId: TASK_UUID,
+  };
+
+  it('marks the task delegated with a status the tasks table accepts', async () => {
+    const { service, taskService } = setup();
+
+    await service.dispatch(context, input);
+
+    expect(taskService.findById).toHaveBeenCalledWith(context, TASK_UUID);
+    expect(taskService.update).toHaveBeenCalledWith(context, TASK_UUID, { status: 'delegated' });
+    // The literal has to be a member of the vocabulary the entity, the GraphQL
+    // enum and migration 20260903225251 all agree on — not a free string.
+    expect(TASK_STATUSES).toContain('delegated');
+  });
+
+  it('links the job row and the packet to the same raw task uuid', async () => {
+    const { service, saved } = setup();
+
+    await service.dispatch(context, input);
+
+    expect(saved[0]?.taskId).toBe(TASK_UUID);
+  });
+
+  it('refuses to dispatch against a task the caller cannot see', async () => {
+    const { service, taskService, jobRepository } = setup(null);
+
+    await expect(service.dispatch(context, input)).rejects.toBeInstanceOf(NotFoundException);
+
+    expect(taskService.update).not.toHaveBeenCalled();
+    expect(jobRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('still dispatches when there is no task behind the ask', async () => {
+    const { service, taskService, saved } = setup();
+
+    await service.dispatch(context, { ...input, sourceKind: 'NoteType', taskId: null });
+
+    expect(taskService.findById).not.toHaveBeenCalled();
+    expect(taskService.update).not.toHaveBeenCalled();
+    expect(saved[0]?.taskId).toBeNull();
   });
 });

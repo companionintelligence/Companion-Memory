@@ -614,8 +614,19 @@ def _load_upcoming_events(user_id: str, horizon_days: int) -> list[dict]:
     return rows
 
 
+# ci.tasks statuses that mean "still wants doing", mirroring ACTIVE_TASK_STATUSES
+# in backend/apps/api/src/domains/planning/taskStatus.ts — the TypeScript module
+# is the source of truth and test_task_status_parity.py fails if these drift.
+#
+# 'delegated' is here because it was missing: #2558 added the status without
+# telling any filter about it, so a task handed to an agent harness — which
+# keeps its due date and is exactly the kind of upcoming commitment this query
+# reconciles against — silently stopped pinning its cluster's occurrence.
+ACTIVE_TASK_STATUSES = ("open", "in_progress", "delegated")
+
+
 def _load_upcoming_tasks(user_id: str, horizon_days: int) -> list[dict]:
-    """Open/scheduled tasks with an L1 id pin occurrence; they never train."""
+    """Active tasks with an L1 id pin occurrence; they never train."""
     sql = """
         SELECT t.l1_cluster_id::text AS cluster_id,
                c.label, c.l0_class,
@@ -626,7 +637,7 @@ def _load_upcoming_tasks(user_id: str, horizon_days: int) -> list[dict]:
         FROM ci.tasks t
         JOIN hbpe.l1_clusters c ON c.cluster_id = t.l1_cluster_id AND c.is_active
         WHERE t.user_id = %s::uuid
-          AND t.status IN ('open', 'in_progress')
+          AND t.status IN %s
           AND t.l1_cluster_id IS NOT NULL
           AND (
                 (t.due_at IS NOT NULL AND t.due_at::date >= (NOW() AT TIME ZONE 'UTC')::date
@@ -639,7 +650,10 @@ def _load_upcoming_tasks(user_id: str, horizon_days: int) -> list[dict]:
     try:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(sql, (str(user_id), horizon_days, horizon_days))
+                cur.execute(
+                    sql,
+                    (str(user_id), ACTIVE_TASK_STATUSES, horizon_days, horizon_days),
+                )
                 rows = [dict(r) for r in cur.fetchall()]
     except Exception as exc:
         log.info("upcoming tasks skipped: %s", exc)

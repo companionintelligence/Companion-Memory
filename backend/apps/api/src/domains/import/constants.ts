@@ -7,6 +7,8 @@
  * decorator cannot be reviewed in a diff or reasoned about at planning time.
  */
 
+import type { QueueOptions } from '@ci/domains/events';
+
 // ---------------------------------------------------------------------------
 // Queues
 // ---------------------------------------------------------------------------
@@ -115,4 +117,120 @@ export const IMPORT_STAGE_WEIGHTS: Record<ImportStageKindName, number> = {
   // in a beat, which the rollup handles the same way it handles a fast unpack.
   media: 30,
   push: 15,
+};
+
+// ---------------------------------------------------------------------------
+// Queue options
+// ---------------------------------------------------------------------------
+
+/**
+ * Execution deadline for ONE import stage job, in seconds.
+ *
+ * Stated rather than inherited, and the number is not a new opinion: it is the
+ * bound these five queues have always run under. pg-boss resolves a job's
+ * expiry as COALESCE(job, queue row, constructor default), and the constructor
+ * in `PGBossEventService` says `expireInHours: 12` — so a queue declaring
+ * nothing got twelve hours. `PGBossEventService.jobDeadlineMs` then made the
+ * queue's declared `expireInSeconds` the IN-PROCESS deadline too, falling back
+ * to `queues.jobTimeoutSeconds` (2 h) where nothing is declared. That silently
+ * moved the import lane from twelve hours to two. Declaring the twelve keeps
+ * the effective bound exactly where it was, in both places at once, and puts
+ * the number somewhere a diff can see it.
+ *
+ * Two hours is not enough for this lane and the corpus says so: an unpack is
+ * documented at an hour for a 350 GB Takeout before parse, media and push have
+ * started, and media — tens of thousands of photos and voicemails into the
+ * object store — is the longest leg of a photo export. Failing those at two
+ * hours would not have been a stall being cleared, it would have been healthy
+ * work being killed mid-import.
+ *
+ * The consequence of getting it wrong is worse here than elsewhere, because a
+ * deadline does not stop the work. `withDeadline` races the listener against a
+ * timer; the losing side keeps running, having released its global slot, its
+ * per-queue slot and its JobSlotPool slot. On this lane those slots ARE the
+ * safety property: `IMPORT_STAGE_CONCURRENCY.unpack` is 1 precisely so two
+ * archives' disk preflights cannot both pass and jointly fill the volume, and
+ * `push` is 1 because two runs resolving the same person at once is an
+ * untested dedup path. A premature deadline hands the freed slot to the next
+ * run while the first is still extracting — the exact pair of states those
+ * numbers exist to prevent.
+ *
+ * Liveness on this lane is not the deadline's job and never was.
+ * `ImportStageListener` heartbeats the stage claim every 30 s and
+ * `ImportRunService.resumeInterrupted` re-enqueues anything silent for
+ * `STALE_STAGE_MINUTES` (10), on boot and every fifth minute. That detects a
+ * genuinely wedged stage in minutes, against a signal the work itself emits,
+ * where a wall-clock deadline can only guess. The deadline is the catastrophe
+ * backstop underneath it — a listener wedged in a way that still heartbeats,
+ * or one whose queue slot must be reclaimed for the process to keep working —
+ * so it is sized to be unreachable by healthy work.
+ *
+ * A retry is safe but not free: `runStage` claims through
+ * `ImportRunService.beginStage`, so a redelivery of a stage still held by a
+ * live owner logs and returns rather than doing the work twice. That bounds
+ * the damage of an expiry; it does not make one harmless.
+ *
+ * Ceiling: pg-boss asserts `expireIn / 3600 < POLICY.MAX_EXPIRATION_HOURS`
+ * (24), so this may be raised but never past a day.
+ */
+export const IMPORT_STAGE_EXPIRE_SECONDS = 12 * 60 * 60;
+
+/**
+ * Queue options per stage kind, hoisted out of the `@OnEvent` decorators for
+ * the reason this file's header gives: an option that exists only as a literal
+ * inside a decorator cannot be reviewed in a diff. Keyed by
+ * {@link ImportStageKindName}, so a new stage kind cannot compile without
+ * deciding what its queue's options are — including its deadline.
+ *
+ * `policy: 'short'` makes the per-stage-id `singletonKey` that
+ * `ImportRunService.enqueueStage` sends actually refuse a duplicate; pg-boss's
+ * default `standard` policy stores the key and never enforces it.
+ * `role: 'worker'` keeps a parser's synchronous stretches out of the process
+ * serving buttons. `localConcurrency` comes from
+ * {@link IMPORT_STAGE_CONCURRENCY} rather than being restated here, so the
+ * slot counts have one home and the progress UI cannot disagree with the bus.
+ */
+export const IMPORT_STAGE_QUEUE_OPTIONS: Record<ImportStageKindName, QueueOptions> = {
+  unpack: {
+    policy: 'short',
+    role: 'worker',
+    localConcurrency: IMPORT_STAGE_CONCURRENCY.unpack,
+    expireInSeconds: IMPORT_STAGE_EXPIRE_SECONDS,
+  },
+  parse: {
+    policy: 'short',
+    role: 'worker',
+    localConcurrency: IMPORT_STAGE_CONCURRENCY.parse,
+    expireInSeconds: IMPORT_STAGE_EXPIRE_SECONDS,
+  },
+  media: {
+    policy: 'short',
+    role: 'worker',
+    localConcurrency: IMPORT_STAGE_CONCURRENCY.media,
+    expireInSeconds: IMPORT_STAGE_EXPIRE_SECONDS,
+  },
+  push: {
+    policy: 'short',
+    role: 'worker',
+    localConcurrency: IMPORT_STAGE_CONCURRENCY.push,
+    expireInSeconds: IMPORT_STAGE_EXPIRE_SECONDS,
+  },
+};
+
+/**
+ * Options for the pre-split shared queue kept as a drain.
+ *
+ * Deliberately NO `policy: 'short'`: the deleted-stage fallback in
+ * `ImportRunService.enqueueStage` is the one send that targets this queue
+ * without knowing a kind, and a queue-wide short policy collapses keyless
+ * sends together under `COALESCE(singleton_key,'')`.
+ *
+ * It carries the same deadline as the per-kind queues because it can carry the
+ * same work: a job enqueued by an older release under the shared name is a
+ * full unpack or parse, not a smaller thing.
+ */
+export const IMPORT_QUEUE_OPTIONS: QueueOptions = {
+  role: 'worker',
+  localConcurrency: 1,
+  expireInSeconds: IMPORT_STAGE_EXPIRE_SECONDS,
 };

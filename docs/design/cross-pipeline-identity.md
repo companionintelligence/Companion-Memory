@@ -93,7 +93,7 @@ This is deliberately stronger than "Gmail converges with Takeout": the same mess
 
 | Platform | `source_system` | `source_id` examples |
 |---|---|---|
-| Reddit | `reddit` | thing fullname (`t1_…`, `t3_…`) — present in both the API and the CSV export |
+| Reddit | `reddit` | `reddit:<post\|comment\|saved_post\|saved_comment>:<bare id>` (`memory/identity/reddit.ts`) — the bare base-36 id is in both the API (`id`, and prefixed as `name`) and the CSV export; the `reddit:` prefix is the importer's pre-registry staged-id spelling, kept because it is already every imported row's `source_id`. Authored posts and comments are **communications** in both pipelines (plus a content row for media); saved posts and comments are **content only** in both — the API's `created_utc` is the author's time and neither the API nor the export says when the save happened |
 | YouTube | `youtube` | video id; watch events `watch:<video id>:<timestamp>` |
 | Spotify | `spotify` | track/episode URI; play events `play:<uri>:<ts>` (extended streaming history carries `spotify_track_uri`) |
 | GitHub | `github` | commits by sha, stars/repos by full name, events by API event id where stable |

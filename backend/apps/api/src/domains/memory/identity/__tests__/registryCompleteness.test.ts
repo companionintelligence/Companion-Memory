@@ -110,9 +110,7 @@ describe('identity registry completeness', () => {
       .filter(({ literal }) => !allowlist.has(literal))
       .filter(({ literal }) => !isRegisteredSystem(canonicalSystem(literal) as string));
 
-    expect(
-      offenders.map(({ file, literal }) => `${literal} (${file})`),
-    ).toEqual([]);
+    expect(offenders.map(({ file, literal }) => `${literal} (${file})`)).toEqual([]);
   });
 
   it('every importer datasource name resolves to a registered name', () => {
@@ -120,8 +118,6 @@ describe('identity registry completeness', () => {
       ({ literal }) => !isRegisteredSystem(canonicalSystem(literal) as string),
     );
 
-    expect(
-      offenders.map(({ file, literal }) => `${literal} (${file})`),
-    ).toEqual([]);
+    expect(offenders.map(({ file, literal }) => `${literal} (${file})`)).toEqual([]);
   });
 });

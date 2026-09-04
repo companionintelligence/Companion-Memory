@@ -10,6 +10,8 @@ import { EventEntity, CalendarEventService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
 
+import { ACTIVE_TASK_STATUSES, isClosedTaskStatus } from '../taskStatus';
+
 import { TaskService } from './TaskService';
 
 // 60s, not 15 — same reasoning as InboxScanService.ts's SCAN_TIMEOUT_MS. This
@@ -303,7 +305,7 @@ export class TodoProcessService {
     const tallies = { applied: 0, pending: 0 };
 
     const tasks = await this.taskService.findAll(context, {
-      status: ['open', 'in_progress'],
+      status: [...ACTIVE_TASK_STATUSES],
       limit: 40,
     });
 
@@ -630,7 +632,7 @@ export class VerifyDoneService {
       try {
         const task = await this.taskService.findById(context, block.taskId);
 
-        if (!task || task.status === 'done' || task.status === 'archived' || task.status === 'skipped') {
+        if (!task || isClosedTaskStatus(task.status)) {
           continue;
         }
 

@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 
-import { Collapsible, Tooltip, cn } from '@ci/shadcn';
+import { Collapsible, Popover, Tooltip, cn } from '@ci/shadcn';
 import { ChevronRight } from '@ci/shadcn/icons';
 import { Link, useLocation } from 'react-router-dom';
 
@@ -12,6 +12,10 @@ import { usePowerRail } from '../PowerRailContext';
  * collapsed icon+tooltip, the head row, the chevron, and the expand/collapse
  * animation, so the four groups can only ever drift in their DATA (sections,
  * icons, badges), never in how they open, close, or look doing it.
+ *
+ * Collapsed, a head click still opens the group's children — as a flyout to
+ * the right of the icon, so the rail lane never widens and the page beside it
+ * never reflows. Expanded keeps the in-rail chevron accordion.
  *
  * Open/close state itself stays with the caller (via {@link useRailSubmenuOpen}),
  * not this component — a couple of callers (Memory, for its recent-threads
@@ -27,6 +31,11 @@ export interface RailSubmenuShellProps {
   /** Whether the current route belongs to this group — highlights the collapsed icon. */
   routeOpen: boolean;
   open: boolean;
+  /**
+   * Click-driven open only. Collapsed flyouts use this so a matching route
+   * does not keep a popover open while the rail stays narrow.
+   */
+  clickOpen: boolean;
   onOpenChange: (open: boolean) => void;
   onHeadClick: () => void;
   collapsedIcon: ReactNode;
@@ -47,6 +56,7 @@ export function RailSubmenuShell({
   chevronLabel,
   routeOpen,
   open,
+  clickOpen,
   onOpenChange,
   onHeadClick,
   collapsedIcon,
@@ -66,6 +76,8 @@ export function RailSubmenuShell({
       <Link
         to={to}
         aria-label={ariaLabel}
+        aria-expanded={clickOpen}
+        onClick={onHeadClick}
         className={cn(
           'relative flex items-center justify-center rounded-md border-l-2 border-transparent p-2 transition hover:bg-accent hover:text-accent-foreground',
           routeOpen && 'border-l-primary text-primary hover:text-primary',
@@ -77,10 +89,38 @@ export function RailSubmenuShell({
     );
 
     return (
-      <Tooltip delayDuration={600}>
-        <Tooltip.Trigger asChild>{collapsed}</Tooltip.Trigger>
-        <Tooltip.Content side="right">{ariaLabel}</Tooltip.Content>
-      </Tooltip>
+      <Popover open={clickOpen} onOpenChange={onOpenChange}>
+        <Popover.Anchor asChild>
+          <div data-testid={testId} className="relative">
+            {clickOpen ? (
+              collapsed
+            ) : (
+              <Tooltip delayDuration={600}>
+                <Tooltip.Trigger asChild>{collapsed}</Tooltip.Trigger>
+                <Tooltip.Content side="right">{ariaLabel}</Tooltip.Content>
+              </Tooltip>
+            )}
+          </div>
+        </Popover.Anchor>
+        <Popover.Content
+          side="right"
+          align="start"
+          sideOffset={8}
+          className="w-56 p-1"
+          onClick={(event) => {
+            // Picking a child is the whole point of the flyout — close it so
+            // the page is not covered by a menu the user already acted on.
+            if ((event.target as HTMLElement).closest('a')) {
+              onOpenChange(false);
+            }
+          }}
+        >
+          <div className="flex min-w-0 flex-col">
+            {children}
+            {footer}
+          </div>
+        </Popover.Content>
+      </Popover>
     );
   }
 
@@ -127,7 +167,15 @@ export function RailSubmenuShell({
 }
 
 /** Standard icon + label (+ badge) head row — everything but Self's avatar tile. */
-export function RailSubmenuHead({ icon, label, badge }: { icon: ReactNode; label: string; badge?: ReactNode }) {
+export function RailSubmenuHead({
+  icon,
+  label,
+  badge,
+}: {
+  icon: ReactNode;
+  label: string;
+  badge?: ReactNode;
+}) {
   return (
     <>
       {icon}

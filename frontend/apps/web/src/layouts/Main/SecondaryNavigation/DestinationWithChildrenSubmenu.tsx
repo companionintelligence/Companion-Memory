@@ -26,7 +26,7 @@ export function DestinationWithChildrenSubmenu({ destination }: { destination: R
   const routeOpen =
     isRailDestinationActive(destination, pathname) ||
     children.some((child) => isRailDestinationActive(child, pathname));
-  const { open, onOpenChange, onHeadClick } = useRailSubmenuOpen(destination.id, routeOpen);
+  const { open, clickOpen, onOpenChange, onHeadClick } = useRailSubmenuOpen(destination.id, routeOpen);
   const Icon = destination.icon;
   const icon = <Icon className="h-6 w-6 shrink-0" strokeWidth={1.25} />;
 
@@ -37,6 +37,7 @@ export function DestinationWithChildrenSubmenu({ destination }: { destination: R
       chevronLabel={destination.label}
       routeOpen={routeOpen}
       open={open}
+      clickOpen={clickOpen}
       onOpenChange={onOpenChange}
       onHeadClick={onHeadClick}
       testId={`${destination.id}-submenu`}

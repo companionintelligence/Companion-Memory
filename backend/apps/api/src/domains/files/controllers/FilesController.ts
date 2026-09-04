@@ -68,7 +68,8 @@ export class FilesController {
       inventoryCapture === 'true';
     const shouldSkipDescription = skipDescription === true || skipDescription === 'true';
     const selectedModel = typeof model === 'string' && model.trim().length > 0 ? model.trim() : undefined;
-    const linkedEventId = typeof eventId === 'string' && eventId.trim().length > 0 ? eventId.trim() : undefined;
+    const linkedEventId =
+      typeof eventId === 'string' && eventId.trim().length > 0 ? eventId.trim() : undefined;
     const linkedCaptureTickId =
       typeof captureTickId === 'string' && captureTickId.trim().length > 0 ? captureTickId.trim() : undefined;
 

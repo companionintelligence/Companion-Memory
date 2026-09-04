@@ -1,5 +1,4 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
-import { useLocation } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import { gql } from '@/graphql';
@@ -243,12 +242,6 @@ function pageInfo({ hasNextPage = false, endCursor = null as string | null } = {
  * search actually commits to the URL, rather than reaching into router
  * internals.
  */
-function LocationProbe() {
-  const location = useLocation();
-
-  return <div data-testid="query">{location.search}</div>;
-}
-
 /**
  * `src/test/setup.ts` stubs IntersectionObserver with a no-op for the whole
  * suite, so a sentinel can never fire on its own. Swap in a version that records
@@ -919,56 +912,14 @@ describe('PeoplePage', () => {
   });
 
   /**
-   * The search box used to be local `useState`, so it reset on every navigation
-   * away and back and could never be linked to. It now lives in the `?q=` URL
-   * param instead — same debounce-free, trim-on-query-build behavior, different
-   * storage.
+   * Search text is the header search box's `?search=` param — the page has no
+   * input of its own — so a page mounted at that URL (navigated back to from
+   * the Memory hub tabs, or opened from a shared link) runs that search, not
+   * an empty one that silently re-queries everyone.
    */
-  it('writes typed search text into the ?q= URL param', async () => {
-    renderWithProviders(
-      <>
-        <PeoplePage />
-        <LocationProbe />
-      </>,
-      {
-        mocks: [
-          ...mocks(),
-          {
-            request: { query: GET_PEOPLE, variables: { query: 'Bea', first: PAGE_SIZE } },
-            result: {
-              data: {
-                people: {
-                  __typename: 'PersonConnection' as const,
-                  totalCount: 0,
-                  pageInfo: pageInfo(),
-                  edges: [],
-                },
-              },
-            },
-          },
-        ],
-      },
-    );
-
-    expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
-    expect(screen.getByTestId('query')).toHaveTextContent('');
-
-    fireEvent.change(screen.getByPlaceholderText('Search people and communications...'), {
-      target: { value: 'Bea' },
-    });
-
-    await waitFor(() => expect(screen.getByTestId('query')).toHaveTextContent('?q=Bea'));
-  });
-
-  /**
-   * The other half of the same contract: a page freshly mounted at a `?q=`
-   * URL — e.g. navigated back to from the Memory hub tabs, or opened from a
-   * shared link — must show that search already applied, not an empty box
-   * that silently re-queries everyone.
-   */
-  it('restores the search text from the ?q= URL param on mount', async () => {
+  it('runs the search from the ?search= URL param on mount', async () => {
     renderWithProviders(<PeoplePage />, {
-      route: '/?q=Ada',
+      route: '/?search=Ada',
       mocks: [
         {
           request: { query: GET_PEOPLE, variables: { query: 'Ada', first: PAGE_SIZE } },
@@ -990,8 +941,8 @@ describe('PeoplePage', () => {
       ],
     });
 
-    expect(await screen.findByPlaceholderText('Search people and communications...')).toHaveValue('Ada');
     expect(await screen.findByText('Ada Lovelace')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Search people and communications...')).not.toBeInTheDocument();
   });
 
   /**

@@ -86,58 +86,54 @@ describe('GeoJSON datasource', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it(
-    'does not collide ids across a MultiLineString whose first line carries 100,000+ positions',
-    async () => {
-      // `lineIdx * 100000 + i` looks like a collision-safe compound index but
-      // isn't: once a single line hits 100,000 positions, its tail
-      // (lineIdx=0, i=100000) lands on the same number as the next line's
-      // start (lineIdx=1, i=0). A plain running counter across the whole
-      // feature can never collide.
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'geojson-multiline-'));
-      const fpath = path.join(dir, 'multi.geojson');
-      const longLine: number[][] = [];
-      for (let i = 0; i <= 100000; i++) {
-        longLine.push([-122 + i * 0.00001, 37 + i * 0.00001]);
-      }
+  it('does not collide ids across a MultiLineString whose first line carries 100,000+ positions', async () => {
+    // `lineIdx * 100000 + i` looks like a collision-safe compound index but
+    // isn't: once a single line hits 100,000 positions, its tail
+    // (lineIdx=0, i=100000) lands on the same number as the next line's
+    // start (lineIdx=1, i=0). A plain running counter across the whole
+    // feature can never collide.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'geojson-multiline-'));
+    const fpath = path.join(dir, 'multi.geojson');
+    const longLine: number[][] = [];
+    for (let i = 0; i <= 100000; i++) {
+      longLine.push([-122 + i * 0.00001, 37 + i * 0.00001]);
+    }
 
-      const doc = {
-        type: 'FeatureCollection',
-        features: [
-          {
-            type: 'Feature',
-            geometry: {
-              type: 'MultiLineString',
-              coordinates: [
-                longLine,
-                [
-                  [-121, 36],
-                  [-121.001, 36.001],
-                ],
+    const doc = {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          geometry: {
+            type: 'MultiLineString',
+            coordinates: [
+              longLine,
+              [
+                [-121, 36],
+                [-121.001, 36.001],
               ],
-            },
-            properties: {},
+            ],
           },
-        ],
-      };
-      fs.writeFileSync(fpath, JSON.stringify(doc));
+          properties: {},
+        },
+      ],
+    };
+    fs.writeFileSync(fpath, JSON.stringify(doc));
 
-      const fi = new GeoJSONFileImporter();
-      const pipeline: EmittedGraph[] = [];
-      await fi.fileImport({}, { filename: 'multi.geojson', fullPath: fpath }, {
-        pipeline,
-        timeframe: {},
-        log: () => {},
-      } as unknown as ImportParams);
+    const fi = new GeoJSONFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: 'multi.geojson', fullPath: fpath }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
 
-      expect(pipeline.length).toBe(longLine.length + 2);
-      const ids = pipeline.map((p) => p.item.id!);
-      expect(new Set(ids).size).toBe(ids.length);
+    expect(pipeline.length).toBe(longLine.length + 2);
+    const ids = pipeline.map((p) => p.item.id!);
+    expect(new Set(ids).size).toBe(ids.length);
 
-      fs.rmSync(dir, { recursive: true, force: true });
-    },
-    20000,
-  );
+    fs.rmSync(dir, { recursive: true, force: true });
+  }, 20000);
 
   it('promotes lower-case name/description props to capitalised metadata keys', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'geojson-name-'));

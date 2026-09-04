@@ -7,7 +7,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { MessageService, ThreadService } from '@ci/domains/conversations';
 import { EventService, INTERACTIVE_JOB_PRIORITY } from '@ci/domains/events';
-import { TaskService } from '@ci/domains/planning';
+import { TaskService, isActiveTaskStatus } from '@ci/domains/planning';
 
 import { AGENT_DISPATCH_QUEUE, DISPATCH_QUEUED_STALE_MS, DISPATCH_RUNNING_STALE_MS } from '../constants';
 import { buildDispatchPacket } from '../dispatchPacket';
@@ -346,6 +346,8 @@ export class AgentDispatchService {
       content: `Dispatch blocked. ${reason}`,
     });
 
+    await this.releaseTask(context, job);
+
     await this.eventService.send(AgentTaskBlockedEvent, {
       userId: context.userId,
       jobId: job.id,
@@ -364,6 +366,8 @@ export class AgentDispatchService {
   }
 
   private async finishFailed(context: UserServiceContext, job: AgentJob, reason: string): Promise<void> {
+    await this.releaseTask(context, job);
+
     await this.messageService.create(context, {
       threadId: job.threadId,
       role: 'assistant',
@@ -380,6 +384,49 @@ export class AgentDispatchService {
       reason,
     });
     await this.completeEventJob(job, { status: 'failed', reason });
+  }
+
+  /**
+   * ═══ A DISPATCH THAT ENDS BADLY MUST HAND THE TASK BACK ═══
+   *
+   * `blocked` and `failed` are terminal for the job — both stamp `completedAt`,
+   * and `finishCompleted` is the only thing that ever moved the task off
+   * `delegated`. So every dispatch that did not succeed left the task delegated
+   * forever, which is worse than it sounds: `delegated` means "an agent has
+   * this", and the whole Plan surface believes it. The card hides Schedule and
+   * Reschedule, the board refuses to file it as Overdue however old its
+   * deadline, and the planner will not place a calendar block against it. The
+   * work became unreachable by the one person left who could do it.
+   *
+   * Returning it to `open` says the truth: nobody has this, it is yours again.
+   *
+   * Guarded on the task still being ACTIVE, not on it being exactly
+   * `delegated`, so this cannot resurrect work the owner has since completed,
+   * declined or archived while the harness was away — a stale job checking in
+   * late must not undo a decision the user has already made.
+   */
+  private async releaseTask(context: UserServiceContext, job: AgentJob): Promise<void> {
+    if (!job.taskId) {
+      return;
+    }
+
+    try {
+      const task = await this.taskService.findById(context, job.taskId);
+
+      if (!task || !isActiveTaskStatus(task.status)) {
+        return;
+      }
+
+      await this.taskService.update(context, job.taskId, { status: 'open' });
+    } catch (error) {
+      // Never let the hand-back stop the job from closing: the message, the
+      // events and completeJob below are what stop OpenClaw retrying forever.
+      this.logger.warn('Could not release the task from a failed dispatch', {
+        jobId: job.id,
+        taskId: job.taskId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async finishCompleted(context: UserServiceContext, job: AgentJob): Promise<void> {

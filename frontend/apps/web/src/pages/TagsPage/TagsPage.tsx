@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
 import { EmptyState, usePageTitle } from '@ci/common';
-import { IconButton, Input } from '@ci/shadcn';
+import { IconButton } from '@ci/shadcn';
 import { Pencil, Trash } from '@ci/shadcn/icons';
 import { Link, useSearchParams } from 'react-router-dom';
 
@@ -39,25 +39,12 @@ export { GET_TAGS_WITH_USAGE };
 export function TagsPage() {
   usePageTitle('Tags - Companion Intelligence');
 
-  // Search text lives in the URL (`?q=`), like every other Memory hub page,
-  // so it survives navigation/reload instead of resetting on remount. The
-  // query itself takes no search variable — this is a pure client-side
-  // filter over the already-fetched list.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const searchQuery = searchParams.get('q') ?? '';
-  const setSearchQuery = (value: string) => {
-    setSearchParams((params) => {
-      const next = new URLSearchParams(params);
-
-      if (value) {
-        next.set('q', value);
-      } else {
-        next.delete('q');
-      }
-
-      return next;
-    });
-  };
+  // Search text is the header search box's `?search=` — it edits this page's
+  // query in place (see GlobalSearchBox / isLiveSearchPath), so the page has
+  // no input of its own. The query itself takes no search variable — this is
+  // a pure client-side filter over the already-fetched list.
+  const [searchParams] = useSearchParams();
+  const searchQuery = searchParams.get('search') ?? '';
 
   const [tagToEdit, setTagToEdit] = useState<TagListItem | null>(null);
   const [tagToDelete, setTagToDelete] = useState<TagListItem | null>(null);
@@ -80,11 +67,6 @@ export function TagsPage() {
         <PageContent className="gap-4 p-0">
           <MemoryHubShell>
             <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
-              <Input
-                placeholder="Filter tags..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
 
               {loading ? (
                 <p className="text-sm text-muted-foreground">Loading tags…</p>

@@ -60,6 +60,7 @@ describe('JobsController gating', () => {
     // every assertion below vacuously passing.
     expect(handlers.map(({ name }) => name).sort()).toEqual([
       'categoryHistory',
+      'clearTerminal',
       'controls',
       'getDashboard',
       'history',

@@ -205,6 +205,10 @@ export const RelationshipMap = {
     item: [RelationshipType.MENTIONS],
     event: [RelationshipType.DOCUMENTS, RelationshipType.PART_OF],
     content: [RelationshipType.DERIVED_FROM],
+    // A content row that rode a message as its attachment (a reddit post's
+    // picture, catalogued as ci.content rather than stored as a file). Same
+    // edge the file half of an attachment writes.
+    communication: [RelationshipType.ATTACHED_TO],
     concept: [RelationshipType.ABOUT],
   },
   communication: {

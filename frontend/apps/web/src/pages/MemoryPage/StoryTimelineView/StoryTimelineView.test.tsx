@@ -48,7 +48,10 @@ vi.mock('@/components/TimelineJs', () => ({
       <button type="button" onClick={() => onSlideChange?.(data.events[0]?.unique_id ?? '')}>
         land
       </button>
-      <button type="button" onClick={() => onSlideChange?.(data.events[1]?.unique_id ?? data.events[0]?.unique_id ?? '')}>
+      <button
+        type="button"
+        onClick={() => onSlideChange?.(data.events[1]?.unique_id ?? data.events[0]?.unique_id ?? '')}
+      >
         next
       </button>
       {data.events.map((slide) => (

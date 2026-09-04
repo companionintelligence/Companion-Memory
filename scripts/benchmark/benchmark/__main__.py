@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import sys
@@ -22,14 +23,16 @@ from . import (
     get_adapter,
     make_llm_scorer,
     run_all,
+    run_system_repeated,
     score_keyword,
     validate_persona,
 )
 from .judge_cache import JudgeCache, cached_scorer
+from .stats import describe
 
 
 def _load_persona(path: Path) -> dict:
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         data = json.load(fh)
     errors = validate_persona(data)
     if errors:
@@ -41,7 +44,9 @@ def _load_persona(path: Path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="python -m benchmark", description="CI-Server memory benchmark")
+    p = argparse.ArgumentParser(
+        prog="python -m benchmark", description="CI-Server memory benchmark"
+    )
     p.add_argument("--persona", type=Path, required=True, help="persona JSON file")
     p.add_argument(
         "--systems",
@@ -64,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=None,
         help="persist LLM-judge verdicts to this JSON file; identical (question, context, model)"
-             " tuples are read from cache instead of re-queried",
+        " tuples are read from cache instead of re-queried",
     )
     p.add_argument(
         "--baseline",
@@ -78,7 +83,20 @@ def main(argv: list[str] | None = None) -> int:
         default=0.05,
         help="regression tolerance in score-ratio units (default: 0.05 = 5pp)",
     )
+    p.add_argument(
+        "--runs",
+        type=int,
+        default=1,
+        help="repeat each adapter N times and aggregate (median/IQR/etc.) into the"
+        " report; 1 = single-run, byte-identical to round-3 output",
+    )
     args = p.parse_args(argv)
+    if args.runs < 1 or args.runs > 50:
+        print(
+            f"[error] --runs must be between 1 and 50 (got {args.runs})",
+            file=sys.stderr,
+        )
+        return 2
 
     persona = _load_persona(args.persona)
 
@@ -87,12 +105,14 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         print(f"[error] unknown adapter(s): {unknown}", file=sys.stderr)
         return 2
-    adapters = [get_adapter(n) for n in names]
 
     judge_cache: JudgeCache | None = None
     if args.scorer == "llm":
         if not args.judge_url or not args.judge_model:
-            print("[error] --scorer llm requires --judge-url and --judge-model", file=sys.stderr)
+            print(
+                "[error] --scorer llm requires --judge-url and --judge-model",
+                file=sys.stderr,
+            )
             return 2
         scorer = make_llm_scorer(args.judge_url, args.judge_model, args.judge_key)
         if args.judge_cache:
@@ -101,7 +121,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         scorer = score_keyword
         if args.judge_cache:
-            print("[warn] --judge-cache is ignored when --scorer is not 'llm'", file=sys.stderr)
+            print(
+                "[warn] --judge-cache is ignored when --scorer is not 'llm'",
+                file=sys.stderr,
+            )
 
     def _event(phase: str, system: str, payload: dict) -> None:
         if phase == "start":
@@ -111,37 +134,95 @@ def main(argv: list[str] | None = None) -> int:
             print(f"   {mark} {payload['id']} ({payload['latency_ms']:.0f} ms)")
         elif phase == "done":
             ratio = payload["score"]
-            print(f"   score: {payload['score'] * payload['total']:.0f}/{payload['total']} ({ratio:.0%})")
+            print(
+                f"   score: {payload['score'] * payload['total']:.0f}/{payload['total']} ({ratio:.0%})"
+            )
         elif phase == "error":
-            print(f"   [ERROR @ {payload['phase']}]: {payload['error']}", file=sys.stderr)
+            print(
+                f"   [ERROR @ {payload['phase']}]: {payload['error']}", file=sys.stderr
+            )
 
-    results = run_all(adapters, persona, args.user_id, scorer, on_event=_event)
+    if args.runs == 1:
+        results = run_all(
+            [get_adapter(n) for n in names],
+            persona,
+            args.user_id,
+            scorer,
+            on_event=_event,
+        )
+        report_input: object = results
+        # Errors: any adapter erroring is a failure.
+        any_error = any(r.error for r in results)
+    else:
+        multi: list = []
+        for name in names:
+            # A factory, not an instance: each repeat needs its own adapter
+            # (and its own user_id) or the runs are not independent samples.
+            runs = run_system_repeated(
+                functools.partial(get_adapter, name),
+                persona,
+                args.user_id,
+                scorer,
+                runs=args.runs,
+                on_event=_event,
+            )
+            ok = [r for r in runs if not r.error]
+            # Statistics come from the runs that completed. An errored run
+            # has no score and no timing, and folding it in as a zero would
+            # understate latency and invent variance.
+            d = describe([r.overall_score for r in ok])
+            sd = describe([r.avg_search_latency_ms for r in ok])
+            median_pct = d.get("median", 0.0) * 100
+            iqr_pp = d.get("iqr", 0.0) * 100
+            print(
+                f"   runs={len(ok)}/{len(runs)} ok median={median_pct:.0f}%"
+                f" iqr={iqr_pp:.0f}pp median_search={sd.get('median', 0.0):.0f}ms"
+            )
+            if len(ok) < len(runs):
+                print(
+                    f"   [warn] {len(runs) - len(ok)} of {len(runs)} runs failed and"
+                    " are excluded from the statistics above",
+                    file=sys.stderr,
+                )
+            multi.append(runs)
+        report_input = multi
+        # Errors: an adapter is "errored" only if every run errored. Partial
+        # failures are reported as runs_errored in the JSON and fail the
+        # regression gate when a baseline is supplied.
+        any_error = any(all(r.error for r in runs) for runs in multi if runs)
 
     if judge_cache is not None:
         judge_cache.save()
-        print(f"\n[judge-cache] hits={judge_cache.hits} misses={judge_cache.misses} "
-              f"entries={len(judge_cache)} ({judge_cache.path})")
+        print(
+            f"\n[judge-cache] hits={judge_cache.hits} misses={judge_cache.misses} "
+            f"entries={len(judge_cache)} ({judge_cache.path})"
+        )
 
-    md = build_markdown_report(persona, results, scorer_label=args.scorer)
-    js = build_json_report(persona, results)
+    md = build_markdown_report(persona, report_input, scorer_label=args.scorer)
+    js = build_json_report(persona, report_input)
 
     if args.out:
         args.out.write_text(md, encoding="utf-8")
-        args.out.with_suffix(".json").write_text(json.dumps(js, indent=2), encoding="utf-8")
+        args.out.with_suffix(".json").write_text(
+            json.dumps(js, indent=2), encoding="utf-8"
+        )
         print(f"\nReport: {args.out}")
         print(f"JSON:   {args.out.with_suffix('.json')}")
     else:
         print()
         print(md)
 
-    exit_code = 0 if all(not r.error for r in results) else 1
+    exit_code = 0 if not any_error else 1
 
     # Regression gate: load the baseline, compare, and surface failures.
     if args.baseline:
         try:
             baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
-            print(f"[error] could not load baseline {args.baseline}: {exc}", file=sys.stderr)
+            print(
+                f"[error] could not load baseline {args.baseline}: {exc}",
+                file=sys.stderr,
+            )
             return 2
         report = compare(baseline, js, tolerance=args.tolerance)
         print()

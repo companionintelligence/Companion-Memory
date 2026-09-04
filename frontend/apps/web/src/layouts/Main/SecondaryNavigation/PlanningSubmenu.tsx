@@ -46,7 +46,7 @@ export function PlanningSubmenu() {
     pathname.startsWith('/plan/') ||
     pathname === '/today' ||
     pathname.startsWith('/today/');
-  const { open, onOpenChange, onHeadClick } = useRailSubmenuOpen('plan', routeOpen);
+  const { open, clickOpen, onOpenChange, onHeadClick } = useRailSubmenuOpen('plan', routeOpen);
 
   const planBadgeCount = usePlanBadgeCount();
   const feedBadgeCount = useFeedBadgeCount();
@@ -72,6 +72,7 @@ export function PlanningSubmenu() {
       chevronLabel="Planning"
       routeOpen={routeOpen}
       open={open}
+      clickOpen={clickOpen}
       onOpenChange={onOpenChange}
       onHeadClick={onHeadClick}
       testId="planning-submenu"

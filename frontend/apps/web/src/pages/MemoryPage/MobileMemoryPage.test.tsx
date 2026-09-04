@@ -32,6 +32,7 @@ vi.mock('./Components/ExplorerToolbar/ExplorerToolbar', () => ({
 }));
 
 vi.mock('./ListView', () => ({ ListView: () => <div>list</div> }));
+vi.mock('./ExploreView', () => ({ ExploreView: () => <div>explore</div> }));
 vi.mock('./MapView', () => ({ MobileMapView: () => <div>map</div> }));
 vi.mock('./StoryTimelineView', () => ({ StoryTimelineView: () => <div>timeline</div> }));
 vi.mock('./GalleryView', () => ({ GalleryView: () => <div>gallery</div> }));
@@ -52,6 +53,25 @@ describe('MobileMemoryPage', () => {
     expect(screen.queryByRole('button', { name: /new event/i })).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /list/i })).toBeInTheDocument();
     expect(screen.getByTestId('explorer-filters')).toBeInTheDocument();
+  });
+
+  it('offers the Timeline view on /memory only inside a When filter', () => {
+    const { unmount } = renderWithProviders(<MobileMemoryPage />, { route: '/memory?view=list' });
+
+    expect(screen.queryByRole('tab', { name: /timeline/i })).not.toBeInTheDocument();
+    unmount();
+
+    renderWithProviders(<MobileMemoryPage />, {
+      route: '/memory?view=list&when=last-week&from=2026-01-01T00:00:00.000Z&to=2026-01-07T23:59:59.999Z',
+    });
+
+    expect(screen.getByRole('tab', { name: /timeline/i })).toBeInTheDocument();
+  });
+
+  it('always offers the Timeline view on the events browse', () => {
+    renderWithProviders(<MobileMemoryPage />, { route: '/memory/events?view=list' });
+
+    expect(screen.getByRole('tab', { name: /timeline/i })).toBeInTheDocument();
   });
 });
 

@@ -1052,7 +1052,8 @@ export const DOCTOR_CHECKS: readonly DoctorCheck[] = [
       'NULL — a generic mbox/eml or .ics import that could not name its mailbox pairs with nothing ' +
       '(record_sources.platform, migration 20260902225107); if a mailbox you DID connect shows no ' +
       'pair here, its importer is not stamping the platform the connection stamps.',
-    mirrors: 'src/domains/import/push/__tests__/crossPipelineIdentity.test.ts (the suite that defines "converges")',
+    mirrors:
+      'src/domains/import/push/__tests__/crossPipelineIdentity.test.ts (the suite that defines "converges")',
     // Three UNION ALL arms rather than one join through a unioned view, so each
     // arm hits its own table's primary key; `first_seen` is the ARRIVAL time
     // and deliberately not used — the window is over the record's own time.

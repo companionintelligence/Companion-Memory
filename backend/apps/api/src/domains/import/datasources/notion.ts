@@ -194,6 +194,12 @@ export class NotionFileImporter implements FileImporter {
         metadata: {
           Title: title || undefined,
           Source: 'Notion',
+          // The page body. A `note` routes to `content` ONLY (canonical.ts
+          // `destinationsFor`), and the content row's `text` comes from
+          // `descriptionFor(metadata)` — nothing on the push path ever calls
+          // `content.data()`. Without this key the page lands as a title and a
+          // timestamp with an empty body.
+          Text: raw,
         },
       },
     });

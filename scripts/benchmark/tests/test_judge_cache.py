@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
-
 from benchmark.judge_cache import JudgeCache, cached_scorer
 from benchmark.schema import EvalQuestion
 
 
 def _q(qid: str = "q1", *, answer: str = "Austin") -> EvalQuestion:
     return EvalQuestion(
-        id=qid, question="Where?", keywords=["Austin"], category="flat-recall", answer=answer
+        id=qid,
+        question="Where?",
+        keywords=["Austin"],
+        category="flat-recall",
+        answer=answer,
     )
 
 
@@ -34,7 +36,10 @@ def test_save_then_load_round_trips_entries(tmp_path: Path):
 
     reloaded = JudgeCache.load(tmp_path / "c.json")
     assert len(reloaded) == 2
-    assert reloaded.get("modelA", _q(), "Jordan lives in Austin.") == (True, "matches gold")
+    assert reloaded.get("modelA", _q(), "Jordan lives in Austin.") == (
+        True,
+        "matches gold",
+    )
     assert reloaded.get("modelA", _q(qid="q2"), "Unrelated.") == (False, "no match")
 
 
@@ -156,5 +161,7 @@ def test_cached_scorer_persists_negative_verdicts_too(tmp_path: Path):
     cache.save()
 
     cache2 = JudgeCache.load(tmp_path / "c.json")
-    scorer2 = cached_scorer(lambda _q, _c: pytest.fail("should not run"), cache2, model="m")
+    scorer2 = cached_scorer(
+        lambda _q, _c: pytest.fail("should not run"), cache2, model="m"
+    )
     assert scorer2(_q(), "ctx") == (False, "no match")

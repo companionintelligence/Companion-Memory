@@ -160,7 +160,60 @@ describe('GlobalSearchBox on /memory/events', () => {
   });
 });
 
-describe('GlobalSearchBox off /memory/events (jump-to launcher)', () => {
+describe('GlobalSearchBox on a hub list page (people / places / things / tags / content)', () => {
+  it('writes the typed query into the page in place, keeping its filters and sort', async () => {
+    renderAt('/memory/things?sort=NEWEST&types=image');
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'lamp' } });
+
+    await waitFor(() => expect(params().get('search')).toBe('lamp'));
+    expect(path()).toBe('/memory/things');
+    expect(params().get('sort')).toBe('NEWEST');
+    expect(params().get('types')).toBe('image');
+  });
+
+  it('Enter commits in place too — no jump to the explorer', async () => {
+    renderAt('/memory/people?tags=vacation');
+
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'Ada  ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(params().get('search')).toBe('Ada'));
+    expect(path()).toBe('/memory/people');
+    expect(params().get('tags')).toBe('vacation');
+  });
+
+  it('shows no explorer filters in its panel — the page has its own, and these would be ignored', () => {
+    renderAt('/memory/people?includedEntityTypes=Person');
+
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.queryByText('advanced filters')).not.toBeInTheDocument();
+  });
+
+  it('seeds the input from the page\'s ?search= and X clears only the query', async () => {
+    renderAt('/memory/content/42?search=shells&types=image');
+
+    expect(screen.getByRole('textbox')).toHaveValue('shells');
+
+    fireEvent.click(screen.getByRole('button', { name: /clear search and filters/i }));
+
+    await waitFor(() => expect(params().has('search')).toBe(false));
+    expect(path()).toBe('/memory/content/42');
+    expect(params().get('types')).toBe('image');
+  });
+});
+
+describe('GlobalSearchBox off the memory lists (jump-to launcher)', () => {
+  it('offers the explorer filters in its panel, since Enter carries them to /memory', () => {
+    renderAt('/dashboard');
+
+    engage(screen.getByRole('textbox'));
+
+    expect(screen.getByText('advanced filters')).toBeInTheDocument();
+  });
+
   it('does not write the current route while typing — only the "jump to" suggestions react', async () => {
     renderAt('/dashboard');
 
@@ -176,24 +229,24 @@ describe('GlobalSearchBox off /memory/events (jump-to launcher)', () => {
     expect(params().toString()).toBe('');
   });
 
-  it('Enter navigates to /memory/events?search=…, carrying forward pinned filters already on the URL', () => {
+  it('Enter navigates to /memory?search=… (everything, not the events browse), carrying forward pinned filters', () => {
     renderAt('/dashboard?tags=vacation');
 
     const input = screen.getByRole('textbox');
     fireEvent.change(input, { target: { value: 'latte' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
-    expect(path()).toBe('/memory/events');
+    expect(path()).toBe('/memory');
     expect(params().get('search')).toBe('latte');
     expect(params().get('tags')).toBe('vacation');
   });
 
-  it('X on a /memory sub-route resets back to the Events explorer, dropping its filters', () => {
-    renderAt('/memory/people/42?tags=vacation');
+  it('X on a /memory page with no searchable list resets back to the everything browse', () => {
+    renderAt('/memory/notes?tags=vacation');
 
     fireEvent.click(screen.getByRole('button', { name: /clear search and filters/i }));
 
-    expect(path()).toBe('/memory/events');
+    expect(path()).toBe('/memory');
     expect(params().toString()).toBe('');
   });
 });
@@ -230,7 +283,7 @@ describe('GlobalSearchBox suggestions', () => {
 
     fireEvent.click(await screen.findByText('#vacation'));
 
-    expect(path()).toBe('/memory/events');
+    expect(path()).toBe('/memory');
     expect(params().get('tags')).toBe('vacation');
     expect(params().has('search')).toBe(false);
   });

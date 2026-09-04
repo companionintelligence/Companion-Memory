@@ -46,6 +46,13 @@ export { calendarEventIdentity, icsRecurrenceInstant, normalizeIcsRecurrenceId }
 export { facebookPostIdentity } from './facebook';
 export { fileIdentity } from './file';
 export {
+  isRedditCommentFullname,
+  redditBareId,
+  redditIdentity,
+  redditRecordId,
+  type RedditRecordKind,
+} from './reddit';
+export {
   youtubeLikeIdentity,
   youtubePlaylistIdentity,
   youtubeSubscriptionIdentity,

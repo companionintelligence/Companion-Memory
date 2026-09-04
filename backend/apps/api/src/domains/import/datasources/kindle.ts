@@ -180,6 +180,12 @@ export class KindleFileImporter implements FileImporter {
             Author: clip.author || undefined,
             Page: clip.page || undefined,
             Location: clip.location || undefined,
+            // The highlighted passage itself. `reading.annotation` routes to
+            // `content` only, and that row's `text` comes from
+            // `descriptionFor(metadata)`, which reads `Highlight`. It also
+            // gives `titleFor` the excerpt it needs to tell two clippings from
+            // the same book apart ("<book> — <excerpt>").
+            Highlight: clip.text,
           },
         },
         entity: bookEntity,

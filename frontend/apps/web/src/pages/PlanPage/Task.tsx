@@ -136,6 +136,9 @@ export function Task({
   const task = useFragment(TaskRowFragment, taskMasked);
   const done = task.status === 'done';
   const proposed = task.status === 'proposed';
+  // Handed to an agent harness. Scheduling a block for work the user is not
+  // doing themselves would put a lie on their calendar.
+  const delegated = task.status === 'delegated';
   const overdue = isOverdue(task, localDateOf(new Date()));
   const [pickingWhen, setPickingWhen] = useState(false);
   const [descOpen, setDescOpen] = useState(false);
@@ -353,6 +356,9 @@ export function Task({
 
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             {proposed ? <span>Proposed</span> : null}
+            {/* Without this the card is indistinguishable from an open task
+                that has simply lost its Schedule button. */}
+            {delegated ? <span>Delegated</span> : null}
             {task.dueAt ? <span>Due {formatDue(task.dueAt as string)}</span> : null}
             {task.scheduledFor ? (
               <span>
@@ -390,7 +396,13 @@ export function Task({
             )
           ) : null}
 
-          {!proposed && !done && !overdue && !task.placedOnCalendar && !pendingSchedule && onSchedule ? (
+          {!proposed &&
+          !done &&
+          !delegated &&
+          !overdue &&
+          !task.placedOnCalendar &&
+          !pendingSchedule &&
+          onSchedule ? (
             <div className="mt-1 flex flex-wrap gap-2">
               <Button
                 type="button"

@@ -119,6 +119,62 @@ function isFeatureCollection(o: unknown): o is FeatureCollection {
   return !!rec && rec.type === 'FeatureCollection' && Array.isArray(rec.features);
 }
 
+/**
+ * Field separator for the natural keys below. U+001F UNIT SEPARATOR, and NOT
+ * the more obvious `\0`: Postgres TEXT cannot hold a NUL byte at all (`chr(0)`
+ * raises), so a NUL-joined key is one a migration can never recompute — see
+ * {@link contentKey}.
+ */
+const KEY_SEP = '\u001f';
+
+/**
+ * The natural key for a record this file emits: a sha256 over the fields that
+ * say what the record IS, joined by {@link KEY_SEP}.
+ *
+ * ## Every input must be a field the destination row STORES
+ *
+ * `item.id` becomes `source_id`, which is the destination's unique key — every
+ * destination index is `(user_id, source_system, source_id)`. Changing this
+ * function MOVES the identity of rows that already exist, and because
+ * `INGEST_REFRESH_COLUMNS` is `[]` for both `content` and `event`
+ * (find-or-return, never DO UPDATE) the next import does not converge onto the
+ * old row: it inserts a second one, permanently, because nothing will ever
+ * emit the old id again to reconcile them. A key change therefore REQUIRES a
+ * migration that re-keys what is already stored.
+ *
+ * That migration can only exist if the key is recomputable from the row, which
+ * is a hard constraint on what may go into it:
+ *
+ *  - **sha256, not sha1.** `sha256()` is a core Postgres function; sha1 lives
+ *    only in `digest()` from pgcrypto, which this schema does not install.
+ *  - **Only persisted fields.** The review key briefly included the raw `date`
+ *    property. Takeout writes review dates at MICROSECOND precision
+ *    (`2025-01-26T23:47:37.122457Z`) and `new Date()` truncates to
+ *    milliseconds, so the exact string survives nowhere: not in `ci.content`
+ *    (which has no time column at all), not in `staged_items.occurred_at`, not
+ *    in metadata. A key nobody can recompute can only ever be "migrated" by
+ *    DELETING the rows that carry it.
+ *  - **Coordinates at fixed precision.** `toFixed(7)` (~1cm, far finer than a
+ *    map pin needs) renders identically to Postgres
+ *    `to_char(round(x::numeric, 7), 'FM9990.0000000')`; the default float
+ *    rendering is not guaranteed to.
+ *
+ * Both halves were checked against the live SQL before this was written — see
+ * `..._repair_google_maps_places_positional_ids.sql`, which recomputes exactly
+ * these keys from `ci.content.source_data` / `ci.events.metadata`.
+ */
+function contentKey(parts: readonly (string | number | undefined)[]): string {
+  return crypto
+    .createHash('sha256')
+    .update(parts.map((p) => (p === undefined ? '' : String(p))).join(KEY_SEP))
+    .digest('hex');
+}
+
+/** A coordinate as the key sees it: fixed 7dp, or '' when there is no fix. */
+function keyCoord(v: number | undefined): string {
+  return v === undefined ? '' : v.toFixed(7);
+}
+
 export class GoogleMapsPlacesFileImporter implements FileImporter {
   async recognize(_ctx: unknown, entry: DirEntry): Promise<Recognition> {
     const root = entry.fullPath || entry.fsRoot || entry.filename;
@@ -206,24 +262,20 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
       return;
     }
 
-    let idx = 0;
     for (const feat of doc.features as Feature[]) {
       if (!feat || typeof feat !== 'object') {
-        idx++;
         continue;
       }
 
       if (base === REVIEWS_FILE) {
-        this.pushReview(feat, idx, params);
+        this.pushReview(feat, params);
       } else {
-        this.pushPlace(feat, idx, params, base === LABELED_FILE);
+        this.pushPlace(feat, params, base === LABELED_FILE);
       }
-
-      idx++;
     }
   }
 
-  private pushPlace(feat: Feature, idx: number, params: ImportParams, labeled = false): void {
+  private pushPlace(feat: Feature, params: ImportParams, labeled = false): void {
     const props = feat.properties || {};
     const ts = parseDate(props.date);
     if (!timeframeContains(params.timeframe, ts)) {
@@ -241,18 +293,33 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
     // bare filename, which is the same for every feature).
     const title = name || address || 'Saved place';
     const c = coords(feat);
-    // Stable id: the place cid from the maps url when present, else the parse
-    // index. Saved Places share the "Saved Places.json" filename and many have
-    // the [0,0] placeholder coordinate + no distinguishing timestamp, so without
-    // a per-record key they would collapse in hashItem (persistence.ts).
+    // Stable id: the place cid from the maps url when present, else a hash of
+    // what identifies the pin. Saved Places share the "Saved Places.json"
+    // filename and many have the [0,0] placeholder coordinate + no
+    // distinguishing timestamp, so without a per-record key they would collapse
+    // in hashItem (persistence.ts).
+    //
+    // SRC-06: the fallback used to be the PARSE INDEX for a non-labeled place,
+    // which is not an identity — `source_id` is the destination's unique key,
+    // and Takeout reorders. Content-derived on both lanes now.
+    //
+    // The url is IN the key, and it is what keeps a degenerate pin distinct.
+    // A saved place with no name, no address and the [0,0] placeholder would
+    // otherwise hash to a constant and collapse with every other such pin —
+    // the one way this key could lose data that the parse index did not. It
+    // cannot: a saved place IS a `?q=<address>` or `?cid=` url (that is how
+    // Google stores the pin), and the unresolved ones additionally carry an
+    // `&ftid=<hex>` place id. Measured over the reference corpus — 26 saved +
+    // 5 labeled — every pin has a url, every cid-less pin has a `?q=`, and no
+    // two rows share a key. `Comment` deliberately stays OUT: on all 18
+    // cid-less pins it is Google's own constant boilerplate ("No location
+    // information is available for this saved place"), so it discriminates
+    // nothing and would only re-key the row if Google reworded it.
     const cid = cidFromUrl(url);
-    const labeledKey = crypto
-      .createHash('sha1')
-      .update([name, address, c?.lat ?? '', c?.lon ?? ''].join('\0'))
-      .digest('hex');
+    const key = contentKey([name, address, asString(url) ?? '', keyCoord(c?.lat), keyCoord(c?.lon)]);
     params.pipeline.push({
       item: {
-        id: `gmaps:place:${cid || (labeled ? labeledKey : idx)}`,
+        id: `gmaps:place:${cid || key}`,
         classification: 'place',
         timestamp: ts,
         ...(c && { location: { latitude: c.lat, longitude: c.lon } }),
@@ -274,7 +341,7 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
     });
   }
 
-  private pushReview(feat: Feature, idx: number, params: ImportParams): void {
+  private pushReview(feat: Feature, params: ImportParams): void {
     const props = feat.properties || {};
     const ts = parseDate(props.date);
     if (!timeframeContains(params.timeframe, ts)) {
@@ -287,13 +354,40 @@ export class GoogleMapsPlacesFileImporter implements FileImporter {
     const url = props.google_maps_url;
     const rating = props.five_star_rating_published;
     const text = (asString(props.review_text_published) || '').trim();
-    // Title is the reviewed place; reviews carry no place cid in the url so key
-    // on the parse index to keep each review a distinct, idempotent row.
     const title = name || address || 'Map review';
     const c = coords(feat);
+    // SRC-06. Reviews carry no place cid in the url, so this key is hashed from
+    // what the review IS. It used to be the parse index, which is a POSITION,
+    // not an identity: `source_id` is the destination's unique key (all eight
+    // destination indexes are `(user_id, source_system, source_id)`), and
+    // Takeout writes reviews newest-first — one new review shifts every id by
+    // one and each row silently overwrites its neighbour on the next import.
+    //
+    // The url identifies the PLACE (`…/data=!4m2!3m1!1s0x0:<hex>`) and is the
+    // load-bearing input, not decoration: Google allows one review per place
+    // per account, so the place is most of the review's identity, and on the
+    // reference corpus three reviews carry no name and no address at all —
+    // two of those also have no text, leaving the star rating as the only
+    // other field. Without the url those two are one row.
+    //
+    // The raw `date` is deliberately NOT here, though it looks like the
+    // obvious discriminator. Takeout writes it at microsecond precision and
+    // nothing downstream keeps it (see contentKey), so including it makes the
+    // key unmigratable — and the date is the field most likely to drift
+    // between two exports of the same review anyway. Consequence, stated
+    // plainly: an edited review whose text or rating changed is a new row, and
+    // one re-published unchanged converges onto the old one. That is the right
+    // way round.
+    const reviewKey = contentKey([
+      name,
+      address,
+      asString(url) ?? '',
+      typeof rating === 'number' ? rating : '',
+      text,
+    ]);
     params.pipeline.push({
       item: {
-        id: `gmaps:review:${idx}`,
+        id: `gmaps:review:${reviewKey}`,
         classification: 'annotation',
         timestamp: ts,
         ...(c && { location: { latitude: c.lat, longitude: c.lon } }),

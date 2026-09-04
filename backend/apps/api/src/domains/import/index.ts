@@ -194,6 +194,7 @@ export {
 export { dataSourcesRecognize } from './datasources/registry';
 export type { DirEntry, DataSourceRecognition } from './datasources/registry';
 export { recognizePathWithinRoots } from './datasources/recognizePath';
+export { mimeForFile } from './datasources/timeline';
 export type { PathRecognition, PathRecognitionMatch } from './datasources/recognizePath';
 // Re-exported for the bluebubbles domain, whose DI-friendly sync service/webhook
 // controller drive this framework-free importer's mapping logic and must reach it
@@ -217,6 +218,12 @@ export {
   mailIncludeBulkEnabled,
 } from './datasources/human_correspondence';
 export type { LiveMailDropSlug } from './datasources/human_correspondence';
+// Same rule: leaf files. The live Gmail transform derives direction from a
+// message's own headers with the SAME function the mbox/eml importers use, so
+// an API sync and a Takeout import of one message agree, and flattens a
+// text/html body with the SAME flattener email_mime.ts uses.
+export { emailDirection } from './datasources/email_direction';
+export { htmlToText } from './datasources/htmlToText';
 export { emailThreadId } from './datasources/email_thread';
 export type {
   BlueBubblesClientConfig,
@@ -249,6 +256,8 @@ export {
   stagedNaturalKey,
 } from './staging/identity';
 export { entityTypeFor, naturalKeyFor } from './push/entities';
+export { firstRedditMediaLink, redditLinkMedia, redditMediaKind } from './push/redditMedia';
+export type { RedditMediaKind, RedditMediaRef } from './push/redditMedia';
 
 export { ImportDoctorController } from './controllers/ImportDoctorController';
 export type { DoctorCheckSummary } from './controllers/ImportDoctorController';

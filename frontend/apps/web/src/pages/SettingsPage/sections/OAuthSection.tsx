@@ -448,10 +448,10 @@ export function OAuthSection() {
       <div className="space-y-4">
         {renderProvider('facebook', 'Facebook')}
         {renderProvider('github', 'GitHub')}
-        {renderProvider('reddit', 'Reddit')}
-        {renderProvider('slack', 'Slack')}
         {renderProvider('google', 'Google')}
         {renderProvider('microsoft', 'Microsoft')}
+        {renderProvider('reddit', 'Reddit')}
+        {renderProvider('slack', 'Slack')}
         {renderProvider('spotify', 'Spotify')}
       </div>
 

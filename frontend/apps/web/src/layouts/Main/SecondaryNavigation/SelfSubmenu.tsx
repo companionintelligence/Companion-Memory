@@ -23,7 +23,7 @@ export function SelfSubmenu() {
   const { isFeatureEnabled } = useFeatures();
   const { user } = useCurrentUser();
   const routeOpen = isSelfPath(pathname);
-  const { open, onOpenChange, onHeadClick } = useRailSubmenuOpen('self', routeOpen);
+  const { open, clickOpen, onOpenChange, onHeadClick } = useRailSubmenuOpen('self', routeOpen);
 
   const currentUser = useMemo(
     () => ({
@@ -44,6 +44,7 @@ export function SelfSubmenu() {
       chevronLabel="Self"
       routeOpen={routeOpen}
       open={open}
+      clickOpen={clickOpen}
       onOpenChange={onOpenChange}
       onHeadClick={onHeadClick}
       testId="self-submenu"

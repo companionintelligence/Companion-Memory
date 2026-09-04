@@ -49,19 +49,22 @@ describe('ENTITY_SOURCE_MAP agrees with the pipeline stage sources that write th
     ['person', { schema: 'ci', table: 'entities', idColumn: 'entity_id' }],
   ];
 
-  it.each(cases)('%s resolves the same table + id column its embed stage writes', (entityType, stageSource) => {
-    const mapped = ENTITY_SOURCE_MAP[entityType];
+  it.each(cases)(
+    '%s resolves the same table + id column its embed stage writes',
+    (entityType, stageSource) => {
+      const mapped = ENTITY_SOURCE_MAP[entityType];
 
-    expect({
-      schema: mapped.schema,
-      table: mapped.table,
-      idColumn: mapped.idColumn,
-    }).toEqual({
-      schema: stageSource.schema,
-      table: stageSource.table,
-      idColumn: stageSource.idColumn,
-    });
-  });
+      expect({
+        schema: mapped.schema,
+        table: mapped.table,
+        idColumn: mapped.idColumn,
+      }).toEqual({
+        schema: stageSource.schema,
+        table: stageSource.table,
+        idColumn: stageSource.idColumn,
+      });
+    },
+  );
 });
 
 describe('ENTITY_SOURCE_MAP.file', () => {

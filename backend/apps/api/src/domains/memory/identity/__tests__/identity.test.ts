@@ -20,6 +20,7 @@ import {
 } from '../email';
 import { facebookPostIdentity } from '../facebook';
 import { fileIdentity } from '../file';
+import { isRedditCommentFullname, redditBareId, redditIdentity, redditRecordId } from '../reddit';
 import {
   FEDERATED_SYSTEMS,
   PLATFORM_SYSTEMS,
@@ -159,7 +160,9 @@ describe('email identity (federated on RFC Message-ID)', () => {
   it('the generic attachment builder is the same format under any parent, hash lowercased', () => {
     const chat = platformIdentity('twitter', 'dm', '9');
     expect(attachmentIdentity(chat, 'ABCDEF')).toEqual({ system: 'twitter', id: 'attachment:dm:9:abcdef' });
-    expect(attachmentIdentity(emailIdentity('<m@x>')!, 'abc')).toEqual(emailAttachmentIdentity(emailIdentity('<m@x>')!, 'abc'));
+    expect(attachmentIdentity(emailIdentity('<m@x>')!, 'abc')).toEqual(
+      emailAttachmentIdentity(emailIdentity('<m@x>')!, 'abc'),
+    );
   });
 });
 
@@ -167,7 +170,9 @@ describe('email thread key (Gmail hex threadId vs mbox X-GM-THRID)', () => {
   it('CONFORMANCE: the API hex and the IMAP decimal of one thread yield one key', () => {
     expect(gmailThreadKeyFromApi('18c1a2b3c4d5e6f7')).toBe('18c1a2b3c4d5e6f7');
     expect(gmailThreadKeyFromImap('1783885820400625399')).toBe('18c1a2b3c4d5e6f7');
-    expect(emailThreadKey({ 'X-GM-THRID': '1783885820400625399' })).toBe(gmailThreadKeyFromApi('18c1a2b3c4d5e6f7'));
+    expect(emailThreadKey({ 'X-GM-THRID': '1783885820400625399' })).toBe(
+      gmailThreadKeyFromApi('18c1a2b3c4d5e6f7'),
+    );
   });
 
   it('normalizes case, whitespace and leading zeros to the one spelling', () => {
@@ -196,7 +201,11 @@ describe('email thread key (Gmail hex threadId vs mbox X-GM-THRID)', () => {
 
   it('falls back to References root, then In-Reply-To, then the own Message-ID', () => {
     expect(
-      emailThreadKey({ References: '<root@x> <parent@x>', 'In-Reply-To': '<parent@x>', 'Message-ID': '<me@x>' }),
+      emailThreadKey({
+        References: '<root@x> <parent@x>',
+        'In-Reply-To': '<parent@x>',
+        'Message-ID': '<me@x>',
+      }),
     ).toBe('root@x');
     expect(emailThreadKey({ 'In-Reply-To': '<parent@x>', 'Message-ID': '<me@x>' })).toBe('parent@x');
     expect(emailThreadKey({ 'Message-ID': '<me@x>' })).toBe('me@x');
@@ -403,5 +412,34 @@ describe("browser identity (platform-scoped on the browser's own visit instant)"
     expect(canonicalSystem('firefox')).toBe('firefox');
     expect(browserVisitIdentity('firefox', URL, UNIX_MS).system).toBe('firefox');
     expect(isRegisteredSystem('safari')).toBe(true);
+  });
+});
+
+describe('reddit identities', () => {
+  it('strips the fullname prefix so the API (t3_xfkamy) and the CSV (xfkamy) agree', () => {
+    expect(redditBareId('t3_xfkamy')).toBe('xfkamy');
+    expect(redditBareId('t1_iomlcrs')).toBe('iomlcrs');
+    expect(redditBareId('xfkamy')).toBe('xfkamy');
+    // A permalink (the importer's fallback key when a CSV row has no id) passes through.
+    expect(redditBareId('/r/x/comments/abc/t/')).toBe('/r/x/comments/abc/t/');
+  });
+
+  it("mints the importer's staged-id spelling, verbatim, as the source_id", () => {
+    expect(redditRecordId('post', 'xfkamy')).toBe('reddit:post:xfkamy');
+    expect(redditIdentity('post', 't3_xfkamy')).toEqual({ system: 'reddit', id: 'reddit:post:xfkamy' });
+    expect(redditIdentity('comment', 't1_iomlcrs')).toEqual({
+      system: 'reddit',
+      id: 'reddit:comment:iomlcrs',
+    });
+  });
+
+  it('keeps authored and saved copies of the same thing distinct, as both exports do', () => {
+    expect(redditIdentity('saved_post', 't3_xfkamy').id).toBe('reddit:saved_post:xfkamy');
+    expect(redditIdentity('saved_post', 't3_xfkamy').id).not.toBe(redditIdentity('post', 't3_xfkamy').id);
+  });
+
+  it('tells a saved comment from a saved post by the fullname prefix', () => {
+    expect(isRedditCommentFullname('t1_abc')).toBe(true);
+    expect(isRedditCommentFullname('t3_abc')).toBe(false);
   });
 });

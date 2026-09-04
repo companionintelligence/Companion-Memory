@@ -22,7 +22,10 @@ function createConnection(overrides: Partial<Connection> = {}): Connection {
 }
 
 /** Mirrors the shape `BaseOAuth2Client.request` throws for a parsed Google error body. */
-function googleApiError(code: number, message: string): Error & { details: { code: number; message: string } } {
+function googleApiError(
+  code: number,
+  message: string,
+): Error & { details: { code: number; message: string } } {
   const err = new Error(message) as Error & { details: { code: number; message: string } };
   err.details = { code, message };
 

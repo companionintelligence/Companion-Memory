@@ -38,6 +38,28 @@ export type QueueOptions = {
   /** Seconds an `active` job may run before pg-boss expires (and retries) it. */
   expireInSeconds?: number;
 
+  /**
+   * Minutes an UNFINISHED job may sit on this queue before pg-boss throws it
+   * away. Overrides the appliance-wide default the pg-boss implementation
+   * stamps on every queue; ignored by LocalEventService.
+   *
+   * This is not the finished-job window. pg-boss's `archive()` deletes from
+   * `pgboss.job` on three predicates, and the third is
+   * `state < 'active' AND keep_until < now()` — `state < 'active'` covers
+   * `created` and `retry`, i.e. work that has never run. `keep_until` resolves
+   * as `start_after + COALESCE(job.keep_until, queue.retention_minutes * 60,
+   * constructor default, '14 days')`, so a queue row with a NULL
+   * `retention_minutes` silently inherits **14 days** and a job paused,
+   * disabled or simply backlogged past that is archived and then dropped
+   * `deleteAfterHours` later — no log, no dead letter, no trace.
+   *
+   * MINUTES is the only unit that survives the trip: pg-boss v10 destructures
+   * `retentionMinutes` alone in `createQueue`/`updateQueue` and its
+   * `create_queue` reads `options->>'retentionMinutes'`, so `retentionDays` is
+   * dropped on the floor and reads as a fix that did nothing.
+   */
+  retentionMinutes?: number;
+
   /** Retry attempts before the job is routed to the dead-letter queue. */
   retryLimit?: number;
 

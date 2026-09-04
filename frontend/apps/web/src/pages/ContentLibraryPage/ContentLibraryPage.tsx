@@ -2,25 +2,59 @@ import { useCallback, useMemo } from 'react';
 
 import { useQuery } from '@apollo/client';
 import { EmptyState, GlobalUID, usePageTitle } from '@ci/common';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Button } from '@ci/shadcn';
+import { FileType, Shapes } from '@ci/shadcn/icons';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 
 import { ErrorState } from '@/components/ErrorState';
 import { InfiniteListFooter } from '@/components/InfiniteList';
 import { PageContent } from '@/components/layout';
 import { MemoryHubShell } from '@/components/MemoryHub';
 import { PullToRefresh } from '@/components/PullToRefresh';
+import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
 import { gql } from '@/graphql';
 import { useInfiniteConnection } from '@/hooks/useInfiniteConnection';
 
+import { ContentFacetFilter, readFacetParam } from './ContentFacetFilter';
 import { ContentSheet } from './ContentSheet';
 import { ContentTile } from './ContentTile';
 
 /** Content is a thumbnail grid, so a page is a few rows rather than a few items. */
 export const PAGE_SIZE = 50;
 
-const GET_CONTENTS = gql(`
-  query GetContents($first: Int, $after: String) {
-    contents(first: $first, after: $after) {
+// The library's three filters live in the URL: `types`, `mimetypes` and
+// `connectors` (the How filter, the same param the explorer uses), each a
+// comma-separated list. They are sent as query variables only when set, so an
+// unfiltered library asks for exactly what it always did.
+const CONTENT_FILTER_PARAMS = ['types', 'mimetypes', 'connectors'] as const;
+
+export const GET_CONTENT_FACETS = gql(`
+  query GetContentFacets {
+    contentFacets {
+      types
+      mimetypes
+      sourceSystems
+    }
+  }
+`);
+
+export const GET_CONTENTS = gql(`
+  query GetContents(
+    $first: Int
+    $after: String
+    $query: String
+    $types: [String!]
+    $mimetypes: [String!]
+    $connectors: [String!]
+  ) {
+    contents(
+      first: $first
+      after: $after
+      query: $query
+      types: $types
+      mimetypes: $mimetypes
+      connectors: $connectors
+    ) {
       totalCount
       pageInfo {
         hasNextPage
@@ -51,12 +85,43 @@ export function ContentLibraryPage() {
   // carries the RAW uuid, matching /people/:id and /places/:id; the GraphQL
   // `id` is the base64 global id, so each direction converts explicitly.
   const { contentId } = useParams<{ contentId: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const filterVariables = useMemo(() => {
+    // The header search box's `?search=` (see isLiveSearchPath): title, text or URL.
+    const query = searchParams.get('search')?.trim() ?? '';
+    const types = readFacetParam(searchParams, 'types');
+    const mimetypes = readFacetParam(searchParams, 'mimetypes');
+    const connectors = readFacetParam(searchParams, 'connectors');
+
+    return {
+      ...(query ? { query } : {}),
+      ...(types.length > 0 ? { types } : {}),
+      ...(mimetypes.length > 0 ? { mimetypes } : {}),
+      ...(connectors.length > 0 ? { connectors } : {}),
+    };
+  }, [searchParams]);
+  const filtered = Object.keys(filterVariables).some((key) => key !== 'query');
 
   const { data, loading, error, fetchMore, refetch } = useQuery(GET_CONTENTS, {
-    variables: { first: PAGE_SIZE },
+    variables: { first: PAGE_SIZE, ...filterVariables },
     fetchPolicy: 'cache-and-network',
     notifyOnNetworkStatusChange: true,
   });
+  const { data: facetData } = useQuery(GET_CONTENT_FACETS);
+  const facets = facetData?.contentFacets;
+
+  const clearFilters = useCallback(
+    () =>
+      setSearchParams((params) => {
+        for (const param of CONTENT_FILTER_PARAMS) {
+          params.delete(param);
+        }
+
+        return params;
+      }),
+    [setSearchParams],
+  );
 
   const contents = useMemo(() => (data?.contents.edges ?? []).map((edge) => edge.node), [data]);
 
@@ -112,6 +177,24 @@ export function ContentLibraryPage() {
       <PageContent ref={pagination.scrollRef} className="gap-4 p-0">
         <MemoryHubShell>
           <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
+            {/* Content-specific filters, like the Things page's category and
+                brand: each picker lists what the user's rows actually carry. */}
+            <div className="flex flex-wrap items-center gap-2" data-testid="content-filters">
+              <ContentFacetFilter label="Content type" param="types" options={facets?.types ?? []} icon={Shapes} />
+              <ContentFacetFilter
+                label="File type"
+                param="mimetypes"
+                options={facets?.mimetypes ?? []}
+                icon={FileType}
+              />
+              <ConnectorFilter modal={false} label="How" includeTypes={['content']} />
+              {filtered && (
+                <Button type="button" variant="ghost" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              )}
+            </div>
+
             {loading && contents.length === 0 ? (
               <p className="text-sm text-muted-foreground">Loading content…</p>
             ) : error && contents.length === 0 ? (
@@ -126,7 +209,13 @@ export function ContentLibraryPage() {
                 onRetry={() => void refetch()}
               />
             ) : contents.length === 0 ? (
-              <EmptyState message="Nothing here yet. Content appears as your sources sync and files finish parsing." />
+              <EmptyState
+                message={
+                  filtered || filterVariables.query
+                    ? 'Nothing matches this search. Clear a filter or change the query to widen the library.'
+                    : 'Nothing here yet. Content appears as your sources sync and files finish parsing.'
+                }
+              />
             ) : (
               <>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">

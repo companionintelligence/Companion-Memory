@@ -777,19 +777,21 @@ export class BulkIngestController {
       materialize: (recs) =>
         this.communicationService.createMany(
           serviceContext,
-          recs.map((record): CreateCommunicationDto => ({
-            ...record,
-            // The zod enum vocabulary IS the CommunicationType value set; the
-            // cast bridges string-literal union → TS enum (same as the GraphQL
-            // createCommunications resolver).
-            communication_type: record.communication_type as CommunicationType,
-            time: new Date(record.time),
-            // Stored verbatim; default to 'inbound' when omitted — mirrors the
-            // GraphQL createCommunications resolver.
-            direction: record.direction ?? 'inbound',
-            source_system: adoptIngestIdentity(record.source_system, record.source_id).system,
-            source_id: adoptIngestIdentity(record.source_system, record.source_id).id,
-          })),
+          recs.map(
+            (record): CreateCommunicationDto => ({
+              ...record,
+              // The zod enum vocabulary IS the CommunicationType value set; the
+              // cast bridges string-literal union → TS enum (same as the GraphQL
+              // createCommunications resolver).
+              communication_type: record.communication_type as CommunicationType,
+              time: new Date(record.time),
+              // Stored verbatim; default to 'inbound' when omitted — mirrors the
+              // GraphQL createCommunications resolver.
+              direction: record.direction ?? 'inbound',
+              source_system: adoptIngestIdentity(record.source_system, record.source_id).system,
+              source_id: adoptIngestIdentity(record.source_system, record.source_id).id,
+            }),
+          ),
         ),
     });
   }
@@ -1043,37 +1045,39 @@ export class BulkIngestController {
       materialize: async (recs) => {
         const receipts = await this.receiptService.createMany(
           serviceContext,
-          recs.map((record): CreateReceiptDto => ({
-            id: record.id,
-            merchantName: record.merchant_name,
-            merchantEntityId: record.merchant_entity_id,
-            placeEntityId: record.place_entity_id,
-            purchasedAt: record.purchased_at != null ? new Date(record.purchased_at) : record.purchased_at,
-            currency: record.currency,
-            subtotalMinor: record.subtotal_minor,
-            taxMinor: record.tax_minor,
-            tipMinor: record.tip_minor,
-            shippingMinor: record.shipping_minor,
-            discountMinor: record.discount_minor,
-            totalMinor: record.total_minor,
-            paymentMethod: record.payment_method,
-            paymentLast4: record.payment_last4,
-            orderNumber: record.order_number,
-            channel: record.channel,
-            documentContentId: record.document_content_id,
-            sourceFileId: record.source_file_id,
-            sourceMessageId: record.source_message_id,
-            extractionState: record.extraction_state,
-            extractionConfidence: record.extraction_confidence,
-            extractionModel: record.extraction_model,
-            extractionError: record.extraction_error,
-            rawText: record.raw_text,
-            eventId: record.event_id,
-            metadata: record.metadata,
-            sourceType: record.source_type,
-            sourceSystem: adoptIngestIdentity(record.source_system, record.source_id).system,
-            sourceId: adoptIngestIdentity(record.source_system, record.source_id).id,
-          })),
+          recs.map(
+            (record): CreateReceiptDto => ({
+              id: record.id,
+              merchantName: record.merchant_name,
+              merchantEntityId: record.merchant_entity_id,
+              placeEntityId: record.place_entity_id,
+              purchasedAt: record.purchased_at != null ? new Date(record.purchased_at) : record.purchased_at,
+              currency: record.currency,
+              subtotalMinor: record.subtotal_minor,
+              taxMinor: record.tax_minor,
+              tipMinor: record.tip_minor,
+              shippingMinor: record.shipping_minor,
+              discountMinor: record.discount_minor,
+              totalMinor: record.total_minor,
+              paymentMethod: record.payment_method,
+              paymentLast4: record.payment_last4,
+              orderNumber: record.order_number,
+              channel: record.channel,
+              documentContentId: record.document_content_id,
+              sourceFileId: record.source_file_id,
+              sourceMessageId: record.source_message_id,
+              extractionState: record.extraction_state,
+              extractionConfidence: record.extraction_confidence,
+              extractionModel: record.extraction_model,
+              extractionError: record.extraction_error,
+              rawText: record.raw_text,
+              eventId: record.event_id,
+              metadata: record.metadata,
+              sourceType: record.source_type,
+              sourceSystem: adoptIngestIdentity(record.source_system, record.source_id).system,
+              sourceId: adoptIngestIdentity(record.source_system, record.source_id).id,
+            }),
+          ),
         );
 
         // `bulkInsertIdempotent` returns ONE entry per input entity IN INPUT
@@ -1104,22 +1108,24 @@ export class BulkIngestController {
           await this.receiptService.replaceLineItems(
             serviceContext,
             receipt.id,
-            record.line_items.map((line): ReceiptLineItemInput => ({
-              lineNumber: line.line_number,
-              description: line.description,
-              quantity: line.quantity,
-              unitPriceMinor: line.unit_price_minor,
-              totalPriceMinor: line.total_price_minor,
-              currency: line.currency,
-              productId: line.product_id,
-              brand: line.brand,
-              modelNumber: line.model_number,
-              category: line.category,
-              isPhysical: line.is_physical,
-              identifierCodes: line.identifier_codes,
-              serials: line.serials,
-              metadata: line.metadata,
-            })),
+            record.line_items.map(
+              (line): ReceiptLineItemInput => ({
+                lineNumber: line.line_number,
+                description: line.description,
+                quantity: line.quantity,
+                unitPriceMinor: line.unit_price_minor,
+                totalPriceMinor: line.total_price_minor,
+                currency: line.currency,
+                productId: line.product_id,
+                brand: line.brand,
+                modelNumber: line.model_number,
+                category: line.category,
+                isPhysical: line.is_physical,
+                identifierCodes: line.identifier_codes,
+                serials: line.serials,
+                metadata: line.metadata,
+              }),
+            ),
           );
         }
 
@@ -1145,30 +1151,32 @@ export class BulkIngestController {
       materialize: (recs) =>
         this.productModelService.createMany(
           serviceContext,
-          recs.map((record): CreateProductModelDto => ({
-            id: record.id,
-            title: record.title,
-            brand: record.brand,
-            manufacturer: record.manufacturer,
-            modelNumber: record.model_number,
-            category: record.category,
-            subcategory: record.subcategory,
-            productType: record.product_type,
-            description: record.description,
-            variantAttributes: record.variant_attributes,
-            spec: record.spec,
-            msrpMinor: record.msrp_minor,
-            currency: record.currency,
-            imageContentId: record.image_content_id,
-            manualContentIds: record.manual_content_ids,
-            isDigital: record.is_digital,
-            identityConfidence: record.identity_confidence,
-            productEntityId: record.product_entity_id,
-            metadata: record.metadata,
-            sourceType: record.source_type,
-            sourceSystem: adoptIngestIdentity(record.source_system, record.source_id).system,
-            sourceId: adoptIngestIdentity(record.source_system, record.source_id).id,
-          })),
+          recs.map(
+            (record): CreateProductModelDto => ({
+              id: record.id,
+              title: record.title,
+              brand: record.brand,
+              manufacturer: record.manufacturer,
+              modelNumber: record.model_number,
+              category: record.category,
+              subcategory: record.subcategory,
+              productType: record.product_type,
+              description: record.description,
+              variantAttributes: record.variant_attributes,
+              spec: record.spec,
+              msrpMinor: record.msrp_minor,
+              currency: record.currency,
+              imageContentId: record.image_content_id,
+              manualContentIds: record.manual_content_ids,
+              isDigital: record.is_digital,
+              identityConfidence: record.identity_confidence,
+              productEntityId: record.product_entity_id,
+              metadata: record.metadata,
+              sourceType: record.source_type,
+              sourceSystem: adoptIngestIdentity(record.source_system, record.source_id).system,
+              sourceId: adoptIngestIdentity(record.source_system, record.source_id).id,
+            }),
+          ),
         ),
     });
   }
@@ -1195,28 +1203,30 @@ export class BulkIngestController {
         (
           await this.objectObservationService.createMany(
             serviceContext,
-            recs.map((record): CreateObjectObservationDto => ({
-              id: record.id,
-              observedAt: new Date(record.observed_at),
-              sourceKind: record.source_kind,
-              label: record.label,
-              labelSource: record.label_source,
-              detector: record.detector,
-              detectorVersion: record.detector_version,
-              detectionConfidence: record.detection_confidence,
-              bbox: record.bbox,
-              contentId: record.content_id,
-              fileId: record.file_id,
-              eventId: record.event_id,
-              cropContentId: record.crop_content_id,
-              placeEntityId: record.place_entity_id,
-              coordinates: record.coordinates,
-              attributes: record.attributes,
-              metadata: record.metadata,
-              sourceType: record.source_type,
-              sourceSystem: adoptIngestIdentity(record.source_system, record.source_id).system,
-              sourceId: adoptIngestIdentity(record.source_system, record.source_id).id,
-            })),
+            recs.map(
+              (record): CreateObjectObservationDto => ({
+                id: record.id,
+                observedAt: new Date(record.observed_at),
+                sourceKind: record.source_kind,
+                label: record.label,
+                labelSource: record.label_source,
+                detector: record.detector,
+                detectorVersion: record.detector_version,
+                detectionConfidence: record.detection_confidence,
+                bbox: record.bbox,
+                contentId: record.content_id,
+                fileId: record.file_id,
+                eventId: record.event_id,
+                cropContentId: record.crop_content_id,
+                placeEntityId: record.place_entity_id,
+                coordinates: record.coordinates,
+                attributes: record.attributes,
+                metadata: record.metadata,
+                sourceType: record.source_type,
+                sourceSystem: adoptIngestIdentity(record.source_system, record.source_id).system,
+                sourceId: adoptIngestIdentity(record.source_system, record.source_id).id,
+              }),
+            ),
           )
         ).written,
     });

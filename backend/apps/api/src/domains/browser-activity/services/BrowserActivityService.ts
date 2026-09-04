@@ -32,6 +32,8 @@ interface Options {
   order?: FindOptionsOrder<BrowserActivityEntity>;
   startTime?: Date;
   endTime?: Date;
+  /** The How filter: `source_system` values to keep (the explorer's connectors). */
+  connectors?: string[];
   /** Composite keyset cursor for the timed search path (see CalendarEventService). */
   afterTime?: Date;
   afterId?: string;
@@ -400,6 +402,12 @@ export class BrowserActivityService {
       );
     }
 
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('browser-activity.source_system IN (:...connectors)', {
+        connectors: options.connectors,
+      });
+    }
+
     if (options.startTime) {
       query = query.andWhere('browser-activity.time >= :startTime', { startTime: options.startTime });
     }
@@ -423,12 +431,18 @@ export class BrowserActivityService {
    */
   async countEntitiesForBrowserActivities(
     context: ServiceContext,
-    options: Pick<Options, 'startTime' | 'endTime'>,
+    options: Pick<Options, 'startTime' | 'endTime' | 'connectors'>,
   ): Promise<number> {
     let query = this.dataSource
       .getRepository(BrowserActivityEntity)
       .createQueryBuilder('browser-activity')
       .where('browser-activity.user_id = :userId', { userId: context.userId });
+
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('browser-activity.source_system IN (:...connectors)', {
+        connectors: options.connectors,
+      });
+    }
 
     if (options.startTime) {
       query = query.andWhere('browser-activity.time >= :startTime', { startTime: options.startTime });

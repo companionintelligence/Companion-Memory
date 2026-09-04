@@ -8,6 +8,8 @@ import {
   fileIdentity,
   gmailThreadKeyFromApi,
   messageIdFromHeaders,
+  redditIdentity,
+  redditRecordId,
   unixMsFromApiMillis,
   youtubeLikeIdentity,
   youtubeSubscriptionIdentity,
@@ -215,6 +217,108 @@ describe('facebook posts: Meta archive import vs Graph connection', () => {
   });
 });
 
+describe('reddit posts/comments: GDPR CSV import vs OAuth listing connection', () => {
+  // One post, two arrival shapes. posts.csv carries the bare id (`xfkamy`) and
+  // datasources/reddit.ts stamps redditRecordId(kind, id) as the item id, which
+  // becomes the staged content_hash and so the source_id. The API carries the
+  // same id bare as `id` and prefixed as `name` (`t3_xfkamy`); the connection's
+  // RedditRecordWriter mints redditIdentity(kind, name).
+  const postRecord = () =>
+    recordFor({
+      dataSource: 'reddit',
+      classification: 'social',
+      contentHash: redditRecordId('post', 'xfkamy'),
+      occurredAt: new Date('2022-09-15T20:11:00Z'),
+      metadata: {
+        Title: 'Made a shopping district experience',
+        Body: 'the body',
+        Subreddit: 'ecommerce',
+        Permalink: 'https://www.reddit.com/r/ecommerce/comments/xfkamy/made_a_shopping_district_experience/',
+        Kind: 'post',
+        Source: 'Reddit',
+      },
+    });
+
+  it("routes an archived post to /communications — the connection's table — with no content row", () => {
+    expect(destinationsFor(postRecord())).toEqual(['communications']);
+  });
+
+  it('CONVERGES: both pipelines key the post on (reddit, reddit:post:<bare id>)', () => {
+    const input = toCommunicationInput(postRecord());
+    const etl = redditIdentity('post', 't3_xfkamy');
+
+    expect(input.communication_type).toBe('post');
+    expect(input.direction).toBe('outbound');
+    expect(input.thread_id).toBe('r/ecommerce');
+    expect(input.source_system).toBe(etl.system);
+    expect(input.source_id).toBe(etl.id);
+    expect(input.source_id).toBe('reddit:post:xfkamy');
+  });
+
+  it('a comment converges the same way, and a SAVED one keys separately and reads inbound', () => {
+    const comment = recordFor({
+      dataSource: 'reddit',
+      classification: 'social',
+      contentHash: redditRecordId('comment', 'iomlcrs'),
+      metadata: { Body: 'nice', Subreddit: 'ecommerce', Kind: 'comment', Source: 'Reddit' },
+    });
+    expect(toCommunicationInput(comment).source_id).toBe(redditIdentity('comment', 't1_iomlcrs').id);
+
+    const saved = recordFor({
+      dataSource: 'reddit',
+      classification: 'social',
+      contentHash: redditRecordId('saved_post', 'xfkamy'),
+      metadata: {
+        Permalink: 'https://www.reddit.com/r/x/comments/xfkamy/s/',
+        Kind: 'saved_post',
+        Source: 'Reddit',
+      },
+    });
+    const savedInput = toCommunicationInput(saved);
+    expect(savedInput.direction).toBe('inbound');
+    expect(savedInput.source_id).toBe(redditIdentity('saved_post', 't3_xfkamy').id);
+    expect(savedInput.source_id).not.toBe(redditIdentity('post', 't3_xfkamy').id);
+  });
+
+  it('a link post pointing at media adds a content row under the SAME key (both pipelines)', () => {
+    const record = recordFor({
+      dataSource: 'reddit',
+      classification: 'social',
+      contentHash: redditRecordId('post', 'abc'),
+      metadata: {
+        Title: 'Cat',
+        URL: 'https://i.redd.it/cat.png',
+        Subreddit: 'pics',
+        Kind: 'post',
+        Source: 'Reddit',
+      },
+    });
+
+    expect(destinationsFor(record)).toEqual(['communications', 'content']);
+    const content = toContentInput(record);
+    expect(content.type).toBe('image');
+    expect(content.url).toBe('https://i.redd.it/cat.png');
+    expect(content.source_id).toBe(redditIdentity('post', 't3_abc').id);
+  });
+
+  it('an undated saved post stays content-only (communications.time is NOT NULL)', () => {
+    const undated = recordFor({
+      dataSource: 'reddit',
+      classification: 'social',
+      contentHash: redditRecordId('saved_post', 'xfkamy'),
+      occurredAt: null as unknown as Date,
+      metadata: {
+        Permalink: 'https://www.reddit.com/r/x/comments/xfkamy/s/',
+        Kind: 'saved_post',
+        Source: 'Reddit',
+      },
+    });
+
+    expect(destinationsFor(undated)).toEqual(['content']);
+    expect(toContentInput(undated).source_id).toBe(redditIdentity('saved_post', 't3_xfkamy').id);
+  });
+});
+
 describe('browser: Takeout Chrome / History SQLite import vs the browser extension', () => {
   // One visit, three producers. The importer datasources (google_chrome.ts,
   // chromium.ts) stamp the builder's id as the item id, which becomes the
@@ -333,7 +437,10 @@ describe('files: archive upload vs OneDrive Graph listing', () => {
 
   it('CONVERGES with the pair the OneDrive connection mints from the Graph sha256Hash', () => {
     const importInput = toContentInput(
-      recordFor({ dataSource: 'microsoft_account', metadata: { FileId: 'f', FileSha256: SHA256.toUpperCase() } }),
+      recordFor({
+        dataSource: 'microsoft_account',
+        metadata: { FileId: 'f', FileSha256: SHA256.toUpperCase() },
+      }),
     );
     const etlIdentity = fileIdentity(SHA256.toUpperCase());
 

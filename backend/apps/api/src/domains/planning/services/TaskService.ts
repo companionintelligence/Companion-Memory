@@ -12,6 +12,7 @@ import { EventService } from '@ci/domains/events';
 import { type Task, TaskEntity } from '../entities/TaskEntity';
 import { type TaskPendingChange, TaskPendingChangeEntity } from '../entities/TaskPendingChangeEntity';
 import { TaskCreatedEvent, TaskUpdatedEvent, TaskRemovedEvent } from '../events';
+import { TITLE_MATCH_TASK_STATUSES } from '../taskStatus';
 import type { CreateTaskDto, CreateTaskPendingChangeDto, FindTasksOptions, UpdateTaskDto } from '../types';
 
 /**
@@ -136,7 +137,7 @@ export class TaskService {
       .createQueryBuilder('task')
       .where('task.user_id = :userId', { userId: context.userId })
       .andWhere('task.status IN (:...statuses)', {
-        statuses: ['proposed', 'open', 'in_progress', 'delegated', 'done'],
+        statuses: [...TITLE_MATCH_TASK_STATUSES],
       })
       .andWhere('lower(trim(task.title)) = :title', { title: normalized })
       .orderBy('task.updated_at', 'DESC')

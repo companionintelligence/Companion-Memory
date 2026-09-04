@@ -10,12 +10,16 @@ from benchmark.scoring import JUDGE_SYSTEM_PROMPT, make_llm_scorer, score_keywor
 
 def _q() -> EvalQuestion:
     return EvalQuestion(
-        id="q1", question="Where does Jordan live?",
-        keywords=["Austin", "Texas"], category="flat-recall", answer="Austin, Texas",
+        id="q1",
+        question="Where does Jordan live?",
+        keywords=["Austin", "Texas"],
+        category="flat-recall",
+        answer="Austin, Texas",
     )
 
 
 # ── keyword ─────────────────────────────────────────────────────────────────
+
 
 def test_keyword_hit_is_case_insensitive():
     hit, _ = score_keyword(_q(), "Jordan moved to austin last spring.")
@@ -32,6 +36,7 @@ def test_keyword_treats_empty_context_as_miss():
 
 
 # ── LLM judge ───────────────────────────────────────────────────────────────
+
 
 def _stub_post(response_json: dict):
     """Return an http_post callable that records the request and returns ``response_json``."""
@@ -60,7 +65,9 @@ def _verdict_response(correct: bool, reason: str = "") -> dict:
 
 def test_llm_scorer_passes_system_prompt_and_gold_answer():
     post, captured = _stub_post(_verdict_response(True, "yes"))
-    scorer = make_llm_scorer("http://judge:1234", "test-model", "secret", http_post=post)
+    scorer = make_llm_scorer(
+        "http://judge:1234", "test-model", "secret", http_post=post
+    )
     hit, reason = scorer(_q(), "Jordan moved to Austin, Texas last spring.")
     assert hit and reason == "yes"
     assert captured["url"] == "http://judge:1234/v1/chat/completions"

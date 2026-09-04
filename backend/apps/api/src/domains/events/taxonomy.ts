@@ -443,8 +443,7 @@ export const JOB_TYPES: Readonly<Record<string, JobTypeDescriptor>> = {
   'agent.task.blocked': {
     label: 'OpenClaw dispatch blocked',
     category: JOB_CATEGORIES.planning,
-    description:
-      'OpenClaw stopped: two hard fails on the same step, or it needs the user. Memory counters.',
+    description: 'OpenClaw stopped: two hard fails on the same step, or it needs the user. Memory counters.',
     interactive: true,
   },
   'planning.task_result': {
