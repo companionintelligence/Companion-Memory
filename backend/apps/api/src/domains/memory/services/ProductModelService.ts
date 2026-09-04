@@ -285,6 +285,7 @@ export class ProductModelService {
       limit?: number;
       startTime?: Date;
       endTime?: Date;
+      connectors?: string[];
       afterTime?: Date;
       afterId?: string;
       order?: 'ASC' | 'DESC';
@@ -296,25 +297,33 @@ export class ProductModelService {
       .where('product.user_id = :userId', { userId: context.userId })
       .andWhere('product.merged_into_product_id IS NULL');
 
+    // The How filter: keep rows from the named sources. Every browsed table
+    // with a source_system column applies this same clause (see
+    // SearchResolver.searchByTimedEntities), so a source selected on /memory
+    // narrows every kind it can, not just events.
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('product.source_system IN (:...connectors)', { connectors: options.connectors });
+    }
+
     if (options.startTime) {
-      query = query.andWhere('product.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('product.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('product.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('product.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     // Composite keyset: page strictly past (afterTime, afterId) in
-    // (created_at DESC, product_id DESC) — see ItemService.getEntitiesForItems.
+    // (updated_at DESC, product_id DESC) — see ItemService.getEntitiesForItems.
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(product.created_at < :afterTime OR (product.created_at = :afterTime AND product.product_id < :afterId))',
+        '(product.updated_at < :afterTime OR (product.updated_at = :afterTime AND product.product_id < :afterId))',
         { afterTime: options.afterTime, afterId: options.afterId },
       );
     }
 
     query = query
-      .orderBy('product.created_at', options.order ?? 'DESC')
+      .orderBy('product.updated_at', options.order ?? 'DESC')
       .addOrderBy('product.product_id', 'DESC');
 
     if (options.limit) {
@@ -333,7 +342,7 @@ export class ProductModelService {
    */
   async countEntitiesForProducts(
     context: ServiceContext,
-    options: { startTime?: Date; endTime?: Date } = {},
+    options: { startTime?: Date; endTime?: Date; connectors?: string[] } = {},
   ): Promise<number> {
     let query = this.repository
       .createQueryBuilder('product')
@@ -342,12 +351,20 @@ export class ProductModelService {
       // the page it is supposed to describe.
       .andWhere('product.merged_into_product_id IS NULL');
 
+    // The How filter: keep rows from the named sources. Every browsed table
+    // with a source_system column applies this same clause (see
+    // SearchResolver.searchByTimedEntities), so a source selected on /memory
+    // narrows every kind it can, not just events.
+    if (options.connectors && options.connectors.length > 0) {
+      query = query.andWhere('product.source_system IN (:...connectors)', { connectors: options.connectors });
+    }
+
     if (options.startTime) {
-      query = query.andWhere('product.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('product.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('product.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('product.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     return query.getCount();

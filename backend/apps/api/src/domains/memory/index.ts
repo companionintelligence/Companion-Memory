@@ -104,6 +104,7 @@ import { PlaceMergeService } from './services/PlaceMergeService';
 import { PlaceService } from './services/PlaceService';
 import { ProductModelService } from './services/ProductModelService';
 import { ReceiptService } from './services/ReceiptService';
+import { SourceSystemService } from './services/SourceSystemService';
 import { UserContextService } from './services/UserContextService';
 
 /**
@@ -149,6 +150,7 @@ import { UserContextService } from './services/UserContextService';
     CommunicationService,
     ContentService,
     CalendarEventService,
+    SourceSystemService,
     GraphEventService,
     GraphUtilityService,
     GraphQueryService,
@@ -189,6 +191,7 @@ import { UserContextService } from './services/UserContextService';
     ContentService,
     GraphDeltaWriter,
     CalendarEventService,
+    SourceSystemService,
     GraphEventService,
     ItemService,
     PersonService,
@@ -253,6 +256,7 @@ export {
   ContentService,
   GraphDeltaWriter,
   CalendarEventService,
+  SourceSystemService,
   CommunicationService,
   GraphEventService,
   ItemService,

@@ -1,5 +1,4 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { useLocation } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { GetItemDuplicatesQuery } from '@/graphql/graphql';
@@ -31,12 +30,6 @@ const THING_A = btoa('item:a');
 const THING_B = btoa('item:b');
 
 /** Renders `pathname + search` so a test can assert what the router URL holds. */
-function LocationProbe() {
-  const location = useLocation();
-
-  return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
-}
-
 /** See PeoplePage.test.tsx / PlacesPage.test.tsx — stubs IntersectionObserver with a no-op. */
 function captureIntersectionObserver() {
   const callbacks: IntersectionObserverCallback[] = [];
@@ -197,46 +190,17 @@ describe('ThingsPage', () => {
       ],
     });
 
-    expect(
-      await screen.findByPlaceholderText('Search things by name, brand, model or category...'),
-    ).toBeInTheDocument();
     expect(await screen.findByText('42 things')).toBeInTheDocument();
     expect(await screen.findByText('Drill')).toBeInTheDocument();
   });
 
-  it('sends the typed query to the server rather than filtering on the client', async () => {
-    renderWithProviders(<ThingsPage />, {
-      route: '/memory/things',
-      mocks: [
-        mockQuery(GET_THINGS, BASE_VARIABLES, makeThingsResult([makeThing(THING_A, 'Drill')]), {
-          maxUsageCount: 3,
-        }),
-        mockQuery(
-          GET_THINGS,
-          { ...BASE_VARIABLES, query: 'lamp' },
-          makeThingsResult([makeThing(THING_B, 'Desk lamp')]),
-          { maxUsageCount: 3 },
-        ),
-        duplicatesMock(NO_DUPLICATES),
-      ],
-    });
-
-    const search = await screen.findByPlaceholderText('Search things by name, brand, model or category...');
-
-    fireEvent.change(search, { target: { value: 'lamp' } });
-
-    expect(await screen.findByText('Desk lamp')).toBeInTheDocument();
-  });
-
   /**
-   * Search text lives in the URL's `?q=` param, not local state, so it
-   * survives navigating away to a thing and back. Covers both directions of
-   * the round trip: a `?q=` deep link restores into the input, and typing
-   * writes back out to the URL.
+   * Search text is the header search box's `?search=` param (the page has no
+   * input of its own), so a deep link runs that search on mount.
    */
-  it('restores search text from a ?q= deep link', async () => {
+  it('runs the search from a ?search= deep link', async () => {
     renderWithProviders(<ThingsPage />, {
-      route: '/memory/things?q=lamp',
+      route: '/memory/things?search=lamp',
       mocks: [
         mockQuery(
           GET_THINGS,
@@ -248,43 +212,8 @@ describe('ThingsPage', () => {
       ],
     });
 
-    expect(
-      await screen.findByPlaceholderText('Search things by name, brand, model or category...'),
-    ).toHaveValue('lamp');
     expect(await screen.findByText('Desk lamp')).toBeInTheDocument();
-  });
-
-  it('writes typed search text into the URL so it survives navigating away and back', async () => {
-    renderWithProviders(
-      <>
-        <ThingsPage />
-        <LocationProbe />
-      </>,
-      {
-        route: '/memory/things',
-        mocks: [
-          mockQuery(GET_THINGS, BASE_VARIABLES, makeThingsResult([makeThing(THING_A, 'Drill')]), {
-            maxUsageCount: 3,
-          }),
-          mockQuery(
-            GET_THINGS,
-            { ...BASE_VARIABLES, query: 'lamp' },
-            makeThingsResult([makeThing(THING_B, 'Desk lamp')]),
-            { maxUsageCount: 3 },
-          ),
-          duplicatesMock(NO_DUPLICATES),
-        ],
-      },
-    );
-
-    expect(screen.getByTestId('location')).toHaveTextContent('/memory/things');
-
-    const search = await screen.findByPlaceholderText('Search things by name, brand, model or category...');
-
-    fireEvent.change(search, { target: { value: 'lamp' } });
-
-    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/memory/things?q=lamp'));
-    expect(await screen.findByText('Desk lamp')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Search things/)).not.toBeInTheDocument();
   });
 
   it('sends the code filter as the tri-state Boolean the resolver takes', async () => {

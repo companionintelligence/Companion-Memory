@@ -1,5 +1,8 @@
 import type { FilterDragKind } from '@/components/SearchBox/filterDrag';
-import { AVAILABLE_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
+import { AVAILABLE_ENTITY_TYPES, HIDDEN_ENTITY_TYPES } from '@/components/SearchBox/useDropdown';
+import { EVENTS_EXPLORER_TYPES, isEventsExplorer } from '@/pages/MemoryPage/explorerRoute';
+
+import { isRollingDatePreset } from './datePresets';
 
 // Every URL param the explorer toolbar can set. The full-reset affordances —
 // the header search box's X and the drop area's `Clear all` — remove all of
@@ -48,7 +51,58 @@ export function narrowedEntityTypes(params: URLSearchParams): string[] | null {
 }
 
 /**
- * Type filters for the explorer `search` query.
+ * Whether a When filter is in force: an explicit `from`/`to` range, or a
+ * rolling preset (`?when=last-week`) that resolves to one. Mirrors the rule
+ * the toolbar's date chip renders on, so "the chip is showing" and "the When
+ * override is applied" can never disagree.
+ */
+export function hasWhenFilter(params: URLSearchParams): boolean {
+  return Boolean(params.get('from') || params.get('to') || isRollingDatePreset(params.get('when')));
+}
+
+/**
+ * The What-picker types whose rows carry a real moment in time, so a When
+ * filter can mean something for them:
+ *
+ * - Event (`startTime`), Communication and Browser (`time`) are things that
+ *   happened.
+ * - Receipt has `purchasedAt` — nullable, but the domain time when it is set.
+ *
+ * Everything else in the picker has no time of its own. Content, File, Note,
+ * Thing and Product only carry a row-write time — when they were imported, not
+ * when anything happened. Person and Place are the same: the server can stamp
+ * them with `appearedAt` (first activity inside a date window) on the timed
+ * browse, but that is a derived moment, not part of the record, and the text
+ * search path never stamps it. A When filter therefore sets all of those
+ * types aside rather than showing them under "No date".
+ */
+export const DATED_ENTITY_TYPES: readonly string[] = ['Browser', 'Communication', 'Event', 'Receipt'];
+
+/** The picker types a When filter sets aside, in picker order. */
+export const UNDATED_ENTITY_TYPES: readonly string[] = AVAILABLE_ENTITY_TYPES.filter(
+  (type) => !DATED_ENTITY_TYPES.includes(type),
+);
+
+export interface ExplorerTypeResolution {
+  includeTypes?: string[];
+  excludeTypes?: string[];
+  /**
+   * The types the user selected in the What picker that the When filter set
+   * aside (display names, picker order). Empty when no When filter is active
+   * or nothing the user picked was undated. The empty state reads this to
+   * explain why a Content-only browse with a date range shows nothing.
+   */
+  droppedByWhen: string[];
+  /**
+   * True when the When filter left no type to ask for — every selected type
+   * was undated. The page must then render the explanation instead of
+   * querying, because an empty include list means "everything" to the server.
+   */
+  nothingLeft: boolean;
+}
+
+/**
+ * Type filters for the explorer `search` query, with the When override applied.
  *
  * The What picker writes an *exclude* list (`?excludedEntityTypes=`). The timed
  * browse only fetches opt-in types (Person, Place, Thing, Product, Receipt)
@@ -57,18 +111,70 @@ export function narrowedEntityTypes(params: URLSearchParams): string[] | null {
  * already converted the same URL to includes via {@link narrowedEntityTypes}.
  * When the picker has narrowed the set, send the remaining types as includes
  * and drop the exclude list so both sides of the page agree.
+ *
+ * A When filter then narrows further, to {@link DATED_ENTITY_TYPES}: a date
+ * range can only ever match things that have a date, and the alternative —
+ * letting Content/Files/Notes through on their import time — put them under
+ * a "No date" heading at the foot of a dated list, where the next page's rows
+ * inserted themselves above the reader. With no picker selection the override
+ * is an exclude list, so the server's default browse set is otherwise
+ * untouched (opt-in types stay opt-in). With a selection it intersects, and
+ * reports what it set aside in `droppedByWhen`.
+ *
+ * On `/memory/events` (pass the `pathname`) the universe is smaller still:
+ * only the kinds with a moment of their own (EVENTS_EXPLORER_TYPES). The What
+ * bar there offers only those, and a deep link naming anything else is
+ * clipped to them — never widened back to everything, and never emptied. That
+ * clipping happens before the When override, and every one of those kinds
+ * is dated, so the two never fight.
  */
-export function explorerSearchTypeFilters(params: URLSearchParams): {
+export function resolveExplorerTypes(params: URLSearchParams, pathname?: string): ExplorerTypeResolution {
+  let narrowed = narrowedEntityTypes(params);
+
+  if (pathname != null && isEventsExplorer(pathname)) {
+    const kept = (narrowed ?? EVENTS_EXPLORER_TYPES).filter((type) => EVENTS_EXPLORER_TYPES.includes(type));
+
+    narrowed = kept.length > 0 ? kept : [...EVENTS_EXPLORER_TYPES];
+  }
+
+  if (!hasWhenFilter(params)) {
+    return narrowed
+      ? { includeTypes: narrowed, droppedByWhen: [], nothingLeft: false }
+      : { droppedByWhen: [], nothingLeft: false };
+  }
+
+  if (!narrowed) {
+    return {
+      excludeTypes: [...UNDATED_ENTITY_TYPES, ...HIDDEN_ENTITY_TYPES],
+      droppedByWhen: [],
+      nothingLeft: false,
+    };
+  }
+
+  const kept = narrowed.filter((type) => DATED_ENTITY_TYPES.includes(type));
+  const droppedByWhen = narrowed.filter((type) => !DATED_ENTITY_TYPES.includes(type));
+
+  if (kept.length === 0) {
+    return { droppedByWhen, nothingLeft: true };
+  }
+
+  return { includeTypes: kept, droppedByWhen, nothingLeft: false };
+}
+
+/** Just the include/exclude pair of {@link resolveExplorerTypes}. */
+export function explorerSearchTypeFilters(
+  params: URLSearchParams,
+  pathname?: string,
+): {
   includeTypes?: string[];
   excludeTypes?: string[];
 } {
-  const narrowed = narrowedEntityTypes(params);
+  const { includeTypes, excludeTypes } = resolveExplorerTypes(params, pathname);
 
-  if (narrowed) {
-    return { includeTypes: narrowed };
-  }
-
-  return {};
+  return {
+    ...(includeTypes ? { includeTypes } : {}),
+    ...(excludeTypes ? { excludeTypes } : {}),
+  };
 }
 
 export function normalizeFilterValue(value: string): string {

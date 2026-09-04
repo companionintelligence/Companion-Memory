@@ -153,24 +153,50 @@ export class GPXFileImporter implements FileImporter {
       // names the element shape; the parse itself is untyped by nature.
       const ensureArray = <T>(v: unknown): T[] =>
         Array.isArray(v) ? (v as T[]) : ([v].filter(Boolean) as T[]);
+      // U-22: every trkpt/wpt read is counted, and every one that does not
+      // become a row names the reason. Without this a .gpx whose whole track
+      // fell outside the timeframe reported consumed 0 / produced 0 / dropped 0
+      // — a perfectly reconciled ledger that accounted for nothing.
+      //
+      // `createLocationItem`/`createWaypointItem` return null only when the
+      // point has no usable lat/lon, which is what `position_without_fix` names.
+
       // Tracks
       for (const track of ensureArray<GPXTrack>(gpxData.gpx.trk)) {
         for (const segment of ensureArray<GPXTrackSegment>(track?.trkseg)) {
           for (const trkpt of ensureArray<GPXTrackPoint>(segment?.trkpt)) {
+            params.pipeline.consumed?.(1);
             const item = this.createLocationItem(trkpt, track?.type?.[0], track?.name?.[0], fpath);
-            if (item && timeframeContains(params.timeframe, item.timestamp)) {
-              params.pipeline.push({ item });
+            if (!item) {
+              params.pipeline.drop?.('position_without_fix');
+              continue;
             }
+
+            if (!timeframeContains(params.timeframe, item.timestamp)) {
+              params.pipeline.drop?.('outside_timeframe');
+              continue;
+            }
+
+            params.pipeline.push({ item });
           }
         }
       }
 
       // Waypoints
       for (const wpt of ensureArray<GPXWaypoint>(gpxData.gpx.wpt)) {
+        params.pipeline.consumed?.(1);
         const item = this.createWaypointItem(wpt, fpath);
-        if (item && timeframeContains(params.timeframe, item.timestamp)) {
-          params.pipeline.push({ item });
+        if (!item) {
+          params.pipeline.drop?.('position_without_fix');
+          continue;
         }
+
+        if (!timeframeContains(params.timeframe, item.timestamp)) {
+          params.pipeline.drop?.('outside_timeframe');
+          continue;
+        }
+
+        params.pipeline.push({ item });
       }
     } catch (error) {
       params.log?.('error', 'Failed to parse GPX file', {

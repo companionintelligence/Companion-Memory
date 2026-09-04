@@ -74,14 +74,31 @@ export class ActivityTimelineService {
 
     const eventScoped =
       (filters.eventTypes != null && filters.eventTypes.length > 0) ||
-      (filters.connectors != null && filters.connectors.length > 0) ||
       (filters.people != null && filters.people.length > 0) ||
       (filters.places != null && filters.places.length > 0);
 
-    // Who / where / connector / how are event-only dimensions — mirror the search
-    // path, which drops every other entity type while one of these is active.
+    // Who / where / how are event-only dimensions — mirror the search path,
+    // which drops every other entity type while one of these is active.
     if (eventScoped) {
       return this.getFilteredEventDailyCounts(context, start, end, timezone, filters);
+    }
+
+    // A source (the How filter) is not event-only: the search applies it to
+    // every kind with a source_system column and sets the rest aside
+    // (SearchResolver SOURCED_TYPES), so the heatmap counts the same rows —
+    // straight from each table, since the rollup cannot split by source.
+    const connectors = filters.connectors?.filter(Boolean) ?? [];
+
+    if (connectors.length > 0) {
+      return this.getSourceScopedDailyCounts(
+        context,
+        start,
+        end,
+        timezone,
+        includedTypes,
+        connectors,
+        filters,
+      );
     }
 
     const hasEventTypeFilter = filters.eventTypes != null && filters.eventTypes.length > 0;
@@ -188,6 +205,62 @@ export class ActivityTimelineService {
       .sort((a, b) => a.date.localeCompare(b.date));
   }
 
+  /**
+   * Per-day counts under the How filter: one direct query per included kind
+   * that records a source, each on the column the explorer dates that kind by
+   * (see SearchResolver.getEntityTimestamp), summed per day.
+   */
+  private async getSourceScopedDailyCounts(
+    context: UserServiceContext,
+    start: string,
+    end: string,
+    timezone: string,
+    includedTypes: IndexableEntity[],
+    sourceSystems: string[],
+    filters: ActivityTimelineFilters,
+  ): Promise<ActivityDailyCount[]> {
+    const parts: ActivityDailyCount[][] = [];
+
+    if (includedTypes.includes('event')) {
+      // Handles the source clause itself, alongside the event-only dimensions.
+      parts.push(await this.getFilteredEventDailyCounts(context, start, end, timezone, filters));
+    }
+
+    const sourced: Array<[IndexableEntity, { table: string; timeColumn: string; extraWhere?: string }]> = [
+      ['browser-activity', { table: 'ci.browser_activity', timeColumn: 'time' }],
+      ['communication', { table: 'ci.communications', timeColumn: 'time' }],
+      // Event-linked content is a facet of its event, which is counted above.
+      ['content', { table: 'ci.content', timeColumn: 'updated_at', extraWhere: 'event_id IS NULL' }],
+      [
+        'item',
+        { table: 'ci.objects', timeColumn: 'updated_at', extraWhere: 'merged_into_object_id IS NULL' },
+      ],
+      ['receipt', { table: 'ci.receipts', timeColumn: 'COALESCE(purchased_at, updated_at)' }],
+      [
+        'product',
+        {
+          table: 'ci.product_models',
+          timeColumn: 'updated_at',
+          extraWhere: 'merged_into_product_id IS NULL',
+        },
+      ],
+    ];
+
+    for (const [type, spec] of sourced) {
+      if (includedTypes.includes(type)) {
+        parts.push(
+          await this.dailyCountsByTimestampColumn(context, start, end, timezone, {
+            ...spec,
+            userColumn: 'user_id',
+            sourceSystems,
+          }),
+        );
+      }
+    }
+
+    return mergeDailyCounts(parts);
+  }
+
   private async getBrowserDailyCounts(
     context: UserServiceContext,
     start: string,
@@ -210,7 +283,9 @@ export class ActivityTimelineService {
     return this.dailyCountsByTimestampColumn(context, start, end, timezone, {
       table: 'ci.objects',
       userColumn: 'user_id',
-      timeColumn: 'created_at',
+      // The row's last write, matching ItemService.getEntitiesForItems so the
+      // heatmap counts a thing on the day the list shows it.
+      timeColumn: 'updated_at',
     });
   }
 
@@ -222,14 +297,14 @@ export class ActivityTimelineService {
     entityTypes: string[],
   ): Promise<ActivityDailyCount[]> {
     const rows = await this.dataSource.query<Array<{ date: string; count: number }>>(
-      `SELECT to_char(created_at AT TIME ZONE $4, 'YYYY-MM-DD') AS date,
+      `SELECT to_char(updated_at AT TIME ZONE $4, 'YYYY-MM-DD') AS date,
               COUNT(*)::int AS count
        FROM ci.entities
        WHERE owner_user_id = $1
          AND is_active IS DISTINCT FROM FALSE
          AND entity_type = ANY($5)
-         AND created_at >= ($2::date::timestamp AT TIME ZONE $4)
-         AND created_at < (($3::date + 1)::timestamp AT TIME ZONE $4)
+         AND updated_at >= ($2::date::timestamp AT TIME ZONE $4)
+         AND updated_at < (($3::date + 1)::timestamp AT TIME ZONE $4)
        GROUP BY 1
        ORDER BY 1`,
       [context.userId, start, end, timezone, entityTypes],
@@ -310,8 +385,28 @@ export class ActivityTimelineService {
     start: string,
     end: string,
     timezone: string,
-    spec: { table: string; userColumn: string; timeColumn: string },
+    spec: {
+      table: string;
+      userColumn: string;
+      timeColumn: string;
+      /** Keep rows whose `source_system` is one of these (the How filter). */
+      sourceSystems?: string[];
+      /** Extra SQL predicate, already scoped to the table's own columns. */
+      extraWhere?: string;
+    },
   ): Promise<ActivityDailyCount[]> {
+    const params: unknown[] = [context.userId, start, end, timezone];
+    const clauses: string[] = [];
+
+    if (spec.sourceSystems && spec.sourceSystems.length > 0) {
+      params.push(spec.sourceSystems);
+      clauses.push(`AND source_system = ANY($${params.length})`);
+    }
+
+    if (spec.extraWhere) {
+      clauses.push(`AND ${spec.extraWhere}`);
+    }
+
     const rows = await this.dataSource.query<Array<{ date: string; count: number }>>(
       `SELECT to_char(${spec.timeColumn} AT TIME ZONE $4, 'YYYY-MM-DD') AS date,
               COUNT(*)::int AS count
@@ -319,16 +414,26 @@ export class ActivityTimelineService {
        WHERE ${spec.userColumn} = $1
          AND ${spec.timeColumn} >= ($2::date::timestamp AT TIME ZONE $4)
          AND ${spec.timeColumn} < (($3::date + 1)::timestamp AT TIME ZONE $4)
+         ${clauses.join('\n         ')}
        GROUP BY 1
        ORDER BY 1`,
-      [context.userId, start, end, timezone],
+      params,
     );
 
     return rows.map((row) => ({ date: row.date, count: row.count }));
   }
 
   private readEntityTimestamp(entity: Record<string, unknown>): Date | null {
-    const value = entity.time ?? entity.startTime ?? entity.createdAt ?? entity.answeredAt ?? null;
+    // Same column priority as SearchResolver.getEntityTimestamp, so a day on
+    // the heatmap holds the rows the list files under that day.
+    const value =
+      entity.time ??
+      entity.startTime ??
+      entity.purchasedAt ??
+      entity.answeredAt ??
+      entity.updatedAt ??
+      entity.createdAt ??
+      null;
 
     if (value instanceof Date) {
       return value;

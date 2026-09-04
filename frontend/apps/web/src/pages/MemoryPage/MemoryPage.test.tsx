@@ -55,7 +55,7 @@ describe('MemoryPage default filters', () => {
     expect(screen.getByTestId('explorer-body')).toBeInTheDocument();
   });
 
-  it('redirects a bare /memory/events URL to the list view filtered to events', () => {
+  it('redirects a bare /memory/events URL to the list view — the route itself scopes the kinds', () => {
     renderAt('/memory/events');
 
     expect(screen.getByTestId('location')).toHaveTextContent(
@@ -86,5 +86,52 @@ describe('MemoryPage default filters', () => {
     renderAt('/memory/events?view=timeline');
 
     expect(screen.getByTestId('location')).toHaveTextContent('/memory/events?view=timeline');
+  });
+});
+
+describe('MemoryPage time-sort reset', () => {
+  it('drops a time sort from /memory once no When filter is active', () => {
+    renderAt('/memory?view=list&sortBy=time&sortOrder=desc');
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/memory?view=list');
+  });
+
+  it('keeps a time sort on /memory while a When filter is active', () => {
+    const url =
+      '/memory?view=list&when=last-week&from=2026-01-01T00:00:00.000Z&to=2026-01-07T23:59:59.999Z&sortBy=time&sortOrder=asc';
+
+    renderAt(url);
+
+    expect(screen.getByTestId('location')).toHaveTextContent(url);
+  });
+
+  it('never touches the events browse, which is a chronology', () => {
+    renderAt('/memory/events?view=list&sortBy=time&sortOrder=desc');
+
+    expect(screen.getByTestId('location')).toHaveTextContent(
+      '/memory/events?view=list&sortBy=time&sortOrder=desc',
+    );
+  });
+
+  it('walks a stale Timeline view on /memory back to List once no When filter is active', () => {
+    renderAt('/memory?view=timeline&sortBy=time&sortOrder=desc');
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/memory?view=list');
+  });
+
+  it('keeps the Timeline view on /memory inside a When filter, and always on the events browse', () => {
+    const inWindow = '/memory?view=timeline&when=last-week&from=2026-01-01T00:00:00.000Z&to=2026-01-07T23:59:59.999Z';
+
+    renderAt(inWindow);
+    expect(screen.getByTestId('location')).toHaveTextContent(inWindow);
+
+    renderAt('/memory/events?view=timeline');
+    expect(screen.getAllByTestId('location').at(-1)).toHaveTextContent('/memory/events?view=timeline');
+  });
+
+  it('leaves a name sort alone', () => {
+    renderAt('/memory?view=list&sortBy=name&sortOrder=asc');
+
+    expect(screen.getByTestId('location')).toHaveTextContent('/memory?view=list&sortBy=name&sortOrder=asc');
   });
 });

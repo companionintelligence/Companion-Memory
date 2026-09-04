@@ -12,6 +12,8 @@ import {
 import { type Person } from '@ci/domains/memory';
 
 import { AttachmentFileLoader } from '../loaders/AttachmentFileLoader';
+import { ContentFileLoader } from '../loaders/ContentFileLoader';
+import { ContentLoader } from '../loaders/ContentLoader';
 import { PersonLoader } from '../loaders/PersonLoader';
 import { TagLoader } from '../loaders/TagLoader';
 import { CommunicationAttachmentType } from '../types/CommunicationAttachmentType';
@@ -36,6 +38,8 @@ export class CommunicationResolver {
   constructor(
     private readonly communicationService: CommunicationService,
     private readonly attachmentFileLoader: AttachmentFileLoader,
+    private readonly contentLoader: ContentLoader,
+    private readonly contentFileLoader: ContentFileLoader,
     private readonly personLoader: PersonLoader,
     private readonly tagLoader: TagLoader,
   ) {}
@@ -251,6 +255,17 @@ export class CommunicationResolver {
    * entry rather than being dropped — the column predates the writer, and a
    * reference nobody can explain is better shown than silently swallowed.
    *
+   * A content ref with no file half is not an oddity, though: it is how a
+   * reddit post carries its picture. That importer attaches the post image as
+   * a `ci.content` row holding the image's URL and mimetype, and stores no
+   * file. Such an entry used to come back with only `contentId` set, which the
+   * drawer could neither render (no url, no content type) nor list (no
+   * filename), so the picture vanished. Now the content row is read too: a row
+   * that points at a stored file (`external_id_kind = 'file'`) renders that
+   * file's original and preview, and a row that only knows a URL renders the
+   * URL with its mimetype. The file half still wins when both are present —
+   * it carries dimensions, a preview and a real filename.
+   *
    * Empty for every message in an import that ran before the attachment leg
    * existed: those files were deleted with the run's scratch tree, so there is
    * nothing to point at until the archive is imported again.
@@ -272,7 +287,10 @@ export class CommunicationResolver {
     const fileIds = attachmentRefIds(refs, 'file');
     const contentIds = attachmentRefIds(refs, 'content');
 
-    const files = await this.attachmentFileLoader.loadMany(serviceContext, fileIds);
+    const [files, contentMedia] = await Promise.all([
+      this.attachmentFileLoader.loadMany(serviceContext, fileIds),
+      this.mediaForContentRefs(serviceContext, contentIds),
+    ]);
     const total = Math.max(fileIds.length, contentIds.length);
     const attachments: CommunicationAttachmentType[] = [];
 
@@ -280,7 +298,7 @@ export class CommunicationResolver {
       const file = files[i];
       // `loadMany` resolves a failed key to an Error rather than rejecting, so a
       // single unreadable file cannot take the whole message's list with it.
-      const media = file instanceof Error || file == null ? null : file;
+      const media = file instanceof Error || file == null ? (contentMedia[i] ?? null) : file;
 
       attachments.push({
         fileId: fileIds[i] ?? null,
@@ -298,6 +316,75 @@ export class CommunicationResolver {
     return attachments;
   }
 
+  /**
+   * What each `content` reference can show, index-aligned with `contentIds`
+   * (null where the row is gone or has nothing renderable). Two hops at most,
+   * both batched: the content rows in one query, then the stored files behind
+   * the rows that have one in another — a message with ten reddit pictures
+   * costs two queries, not twenty.
+   */
+  private async mediaForContentRefs(
+    context: ReturnType<typeof toServiceContext>,
+    contentIds: string[],
+  ): Promise<(AttachmentMedia | null)[]> {
+    if (contentIds.length === 0) {
+      return [];
+    }
+
+    const loaded = await this.contentLoader.loadMany(context, contentIds);
+    const rows = loaded.map((row) => (row instanceof Error || row == null ? null : row));
+
+    // The file id a row points at, when it points at one — see ContentFileLoader.
+    const storedFileIds = rows.map((row) =>
+      row?.externalIdKind === 'file' && row.externalId ? row.externalId : null,
+    );
+    const wanted = storedFileIds.filter((id): id is string => id != null);
+    const storedFiles = wanted.length > 0 ? await this.contentFileLoader.loadMany(context, wanted) : [];
+
+    let storedCursor = 0;
+
+    return rows.map((row, index) => {
+      if (row == null) {
+        return null;
+      }
+
+      if (storedFileIds[index] != null) {
+        const stored = storedFiles[storedCursor];
+        storedCursor += 1;
+
+        if (stored != null && !(stored instanceof Error)) {
+          return {
+            filename: stored.filename,
+            contentType: stored.contentType,
+            url: stored.mediaUrl,
+            previewUrl: stored.previewUrl,
+            width: null,
+            height: null,
+            size: stored.size,
+          };
+        }
+        // A purged or unreadable file: fall through to whatever URL the row
+        // itself carries, which for a stored-file row is usually nothing.
+      }
+
+      const url = row.url ?? row.sourceUrl ?? null;
+
+      if (!url) {
+        return null;
+      }
+
+      return {
+        filename: filenameFromUrl(url) ?? row.title ?? null,
+        contentType: row.mimetype ?? null,
+        url,
+        previewUrl: null,
+        width: null,
+        height: null,
+        size: null,
+      };
+    });
+  }
+
   @ResolveField(() => [EntityTagType])
   async tags(
     @Context() context: RequestContext,
@@ -311,6 +398,27 @@ export class CommunicationResolver {
     });
 
     return tags.map((tag) => EntityTagType.toType(tag));
+  }
+}
+
+/** The displayable half of an attachment, from whichever side could provide it. */
+type AttachmentMedia = Pick<
+  CommunicationAttachmentType,
+  'filename' | 'contentType' | 'url' | 'previewUrl' | 'width' | 'height' | 'size'
+>;
+
+/**
+ * The last path segment of a URL, as a display name for a picture that lives
+ * only at that URL (`https://i.redd.it/wu4xdo8if75h1.png` -> `wu4xdo8if75h1.png`).
+ * Null when the URL does not parse or ends in a bare host or slash.
+ */
+function filenameFromUrl(url: string): string | null {
+  try {
+    const segment = new URL(url).pathname.split('/').filter(Boolean).pop();
+
+    return segment ? decodeURIComponent(segment) : null;
+  } catch {
+    return null;
   }
 }
 

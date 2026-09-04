@@ -163,12 +163,19 @@ class Settings(BaseSettings):
     #
     # The width of that window is bootstrap.SERIALIZE_WINDOW_DAYS, NOT
     # recurrence.HISTORY_DAYS (180). A label reaches the profiler only via
-    # hbpe.token_stream, and the only writer of that table serializes the
-    # trailing SERIALIZE_WINDOW_DAYS; a day that fell out of that window before
-    # its events were labeled is never revisited. Labeling the 90–180-day band
-    # therefore produces zero token_stream rows — on the dev corpus that is
-    # 5,775 of the 7,192 unlabeled events inside 180 days, i.e. most of a
-    # reserved budget share spent for no forecast at all. A value *smaller*
+    # hbpe.token_stream, and the only writer of that table serializes the days
+    # bootstrap.content_source_days returns; a day that fell out of that list
+    # before its events were labeled is never revisited. On a DENSE corpus that
+    # list is the trailing SERIALIZE_WINDOW_DAYS, so labeling the 90–180-day
+    # band produces zero token_stream rows — on the dev corpus that is 5,775 of
+    # the 7,192 unlabeled events inside 180 days, i.e. most of a reserved budget
+    # share spent for no forecast at all.
+    #
+    # That equivalence is no longer unconditional: the list is days-with-data
+    # under a tiered budget, so on a SPARSE-event corpus tier A's reserved event
+    # days can reach into and past the 90–180-day band, and those days ARE
+    # serialized. The setting is still kept equal to the serialize window
+    # because a value *smaller*
     # than the serialize window is the harmful direction: it hands days that
     # serialize will write to the oldest-first historical phase, which reaches
     # them last. Kept equal by a test in tests/test_label_drain.py.

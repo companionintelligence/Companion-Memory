@@ -44,6 +44,29 @@ describe('MemoryHubNav', () => {
   // way to reach People/Places/Things/etc. that isn't three taps into the
   // drawer. Only page actions ("New thing" — Create lives in the top-bar Add
   // menu on a phone) still hide, to avoid a duplicate control.
+  it('carries the search query to the next section, and nothing else', async () => {
+    stubViewport(false);
+
+    renderWithProviders(<MemoryHubNav />, {
+      route: '/memory/events?search=shell&sortBy=time&sortOrder=desc&includedEntityTypes=Event',
+    });
+
+    const content = await screen.findByRole('link', { name: 'Content' });
+
+    // Filters and sort stay behind: the next page has its own and may not
+    // understand these.
+    expect(content).toHaveAttribute('href', '/memory/content?search=shell');
+    expect(screen.getByRole('link', { name: 'People' })).toHaveAttribute('href', '/memory/people?search=shell');
+  });
+
+  it('links plainly when nothing has been searched', async () => {
+    stubViewport(false);
+
+    renderWithProviders(<MemoryHubNav />, { route: '/memory/things?types=image' });
+
+    expect(await screen.findByRole('link', { name: 'Content' })).toHaveAttribute('href', '/memory/content');
+  });
+
   it('keeps the section menu but hides page actions on mobile', async () => {
     stubViewport(true);
 

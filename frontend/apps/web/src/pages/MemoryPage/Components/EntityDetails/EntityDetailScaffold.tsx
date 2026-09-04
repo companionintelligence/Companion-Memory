@@ -39,6 +39,14 @@ interface EntityDetailScaffoldProps {
   entity: MemoryEntity;
   title: string;
   subtitle?: ReactNode;
+  /**
+   * How the subtitle reads. `label` (the default) is the small-caps eyebrow
+   * for a kind word — "Event", "Person", "Receipt". `text` is for a sentence
+   * of the entity's own words, such as a message preview under its subject or
+   * a description: those keep their case, because capitals turn a sentence
+   * into shouting and hide proper nouns.
+   */
+  subtitleKind?: 'label' | 'text';
   /** Media (image/video) rendered at the top, above everything else. */
   media?: ReactNode;
   /** Extra read-only content rendered under the media (e.g. a content snippet). */
@@ -321,6 +329,7 @@ export function EntityDetailScaffold({
   entity,
   title,
   subtitle,
+  subtitleKind = 'label',
   media,
   children,
   detailSections,
@@ -500,7 +509,12 @@ export function EntityDetailScaffold({
         {/* Always render a description so Radix has an accessible description to
             point `aria-describedby` at (otherwise it logs a console warning). */}
         {subtitle != null && subtitle !== '' ? (
-          <Sheet.Description className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <Sheet.Description
+            className={cn(
+              'text-xs text-muted-foreground',
+              subtitleKind === 'label' ? 'font-medium uppercase tracking-wide' : 'break-words',
+            )}
+          >
             {subtitle}
           </Sheet.Description>
         ) : (

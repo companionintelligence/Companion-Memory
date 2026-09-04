@@ -70,6 +70,26 @@ describe('Evernote datasource', () => {
     expect(text2).toContain('Discussed roadmap and budget.');
   });
 
+  // SRC-01. See notion.test.ts for the reasoning: a `note` routes to `content`
+  // only, and that row's `text` comes from metadata via `descriptionFor` — the
+  // content blob attached to the item is never read on the push path.
+  it('carries the note body in metadata.Text, not only in the content loader', async () => {
+    const root = path.join(FIXTURES_DIR, 'evernote-export');
+    const fi = new EvernoteFileImporter();
+    const pipeline: EmittedGraph[] = [];
+    await fi.fileImport({}, { filename: 'evernote-export', fullPath: root }, {
+      pipeline,
+      timeframe: {},
+      log: () => {},
+    } as unknown as ImportParams);
+
+    const first = pipeline[0].item;
+    expect(first.metadata.Text).toContain('Buy milk & eggs');
+    // Plain text, not the raw ENML the note stored.
+    expect(first.metadata.Text).not.toContain('<en-note>');
+    expect(first.metadata.Text).toBe((await first.content!.data!()).toString('utf8'));
+  });
+
   it('respects the timeframe filter', async () => {
     const root = path.join(FIXTURES_DIR, 'evernote-export');
     const fi = new EvernoteFileImporter();

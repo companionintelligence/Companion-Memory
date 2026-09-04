@@ -95,6 +95,13 @@ describe('getEntityTimestamp', () => {
     expect(getEntityTimestamp(entity({ __typename: 'PlaceType', bucketAppearedAt: date }))).toEqual(date);
   });
 
+  it('reads bucketPurchasedAt for receipts, and leaves one with no purchase date undated', () => {
+    const date = new Date('2024-03-04T12:00:00Z');
+
+    expect(getEntityTimestamp(entity({ __typename: 'ReceiptType', bucketPurchasedAt: date }))).toEqual(date);
+    expect(getEntityTimestamp(entity({ __typename: 'ReceiptType', bucketPurchasedAt: null }))).toBeNull();
+  });
+
   it('treats an ingest-sourced event as undated rather than sorting by the import instant', () => {
     // The motivating bug: a Google Maps saved place ("Home") carries a real
     // (non-null) startTime — the moment the import ran, because ci.events.

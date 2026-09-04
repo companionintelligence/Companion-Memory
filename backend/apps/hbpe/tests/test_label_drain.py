@@ -187,6 +187,51 @@ def _run_phases(corpus, labeler, *, cutoff, budget, share, clock):
 # ── The cutoff ────────────────────────────────────────────────────────────────
 
 
+def _order_desc(body: str) -> bool:
+    """
+    Whether a tier's own ``ORDER BY`` runs newest-first.
+
+    Direction is policy, not formatting, so the fake reads it off the query
+    instead of assuming it. A fake that assumed DESC could not see the mutation
+    at all: flipping the fill tier to ASC on a bimodal corpus returns a full
+    91-day budget spanning 2023 with ZERO days inside the last 90 — strictly
+    worse than the eviction the tiers exist to prevent — and every test here
+    stayed green.
+    """
+    return "DESC" in body.rsplit("ORDER BY", 1)[1].split("LIMIT")[0]
+
+
+def _tier(days, limit: int, *, desc: bool, exclude=()) -> list[dt.date]:
+    """``ORDER BY source_date <dir> LIMIT n`` over a day set, minus ``exclude``."""
+    kept = sorted(set(days) - set(exclude), reverse=desc)
+    return kept[: max(limit, 0)]
+
+
+def _cte_body(flat: str, name: str) -> str:
+    """
+    The text of one CTE, so a tier's SOURCE can be read off the query instead of
+    assumed. Which set a tier selects from is the policy — tier A reserving from
+    the event branch ALONE is the entire fix — so a fake that hardcoded it would
+    keep answering correctly for a query that had stopped doing it.
+    """
+    start = flat.index(f"{name} AS (") + len(name) + 5
+    depth, i = 1, start
+    while depth:
+        depth += {"(": 1, ")": -1}.get(flat[i], 0)
+        i += 1
+    return flat[start : i - 1]
+
+
+def _pool(body: str, events, summaries) -> set:
+    """The day set a tier's CTE body actually draws from."""
+    pool = set()
+    if "event_days" in body:
+        pool |= set(events)
+    if "summary_days" in body:
+        pool |= set(summaries)
+    return pool
+
+
 class _DayQueryCursor:
     """
     Postgres stand-in for bootstrap's two day queries.
@@ -196,36 +241,103 @@ class _DayQueryCursor:
     a fake that returned the same days whatever the query said could not tell a
     correct day list from one that had dropped a source branch, which is how
     ``token_source_days`` lost the emptied-day purge in the first place. The
-    LIMIT and the clamp are read off the bound parameters for the same reason —
+    LIMITs and the clamp are read off the bound parameters for the same reason —
     the production values, not the test's idea of them.
+
+    Which *policy* it applies is read off the SQL too. The day query is tiered
+    (``reserved`` / ``fill`` / ``purge`` CTEs); a query without those CTEs is
+    the flat ``ORDER BY source_date DESC LIMIT n`` this replaced, and the fake
+    evaluates whichever one it was handed. So deleting a tier from the
+    production SQL does not quietly keep the tiered answers here — the fake
+    drops to the flat policy and the bimodal expectations go red.
     """
 
     _TABLES = ("FROM ci.events", "FROM ci.summaries", "FROM hbpe.token_stream")
+
+    # Days whose ONLY events are planning's own suggested blocks. Both reads the
+    # day query predicts — the serializer's (get_token_events_for_day) and the
+    # drain's (_unlabeled_events_where) — filter ``event_type IS DISTINCT FROM
+    # 'planned_block'``, so such a day yields no event tokens and no labels. It
+    # is therefore visible to the event branch here only when that branch
+    # forgets the same predicate, which is exactly the mutation to catch.
+    _PLANNED_ONLY = "FROM ci.events (planned blocks only)"
 
     def __init__(self, sources: dict[str, list[dt.date]], calls: list) -> None:
         self._sources = sources
         self._calls = calls
         self._result = None
 
+    def _days(self, flat: str, table: str, end: dt.date) -> list[dt.date]:
+        if table not in flat:
+            return []
+        days = {d for d in self._sources.get(table, ()) if d <= end}
+        if table == "FROM ci.events" and "planned_block" not in flat:
+            days |= {d for d in self._sources.get(self._PLANNED_ONLY, ()) if d <= end}
+        return sorted(days)
+
     def execute(self, sql, params=None):
         flat = " ".join(str(sql).split())
         params = tuple(params or ())
         self._calls.append((flat, params))
-        days = sorted(
-            {
-                day
-                for table in self._TABLES
-                if table in flat
-                for day in self._sources.get(table, ())
-            }
-        )
+
         if "MIN(source_date)" in flat:
+            days = sorted(
+                {
+                    day
+                    for table in self._TABLES
+                    for day in self._days(flat, table, dt.date.max)
+                }
+            )
             self._result = (days[0], days[-1]) if days else (None, None)
             return
+
         end = next(p for p in params if isinstance(p, dt.date))
-        limit = params[-1]
-        visible = sorted((d for d in days if d <= end), reverse=True)[:limit]
-        self._result = [(d.isoformat(),) for d in visible]
+        limits = [p for p in params if isinstance(p, int)]
+        events = self._days(flat, "FROM ci.events", end)
+        summaries = self._days(flat, "FROM ci.summaries", end)
+        stale = self._days(flat, "FROM hbpe.token_stream", end)
+
+        tiered = (
+            "reserved AS (" in flat and "fill AS (" in flat and "purge AS (" in flat
+        )
+        if tiered:
+            floor_days, budget, purge_cap = limits
+            reserved_body = _cte_body(flat, "reserved")
+            reserved = _tier(
+                _pool(reserved_body, events, summaries),
+                floor_days,
+                desc=_order_desc(reserved_body),
+            )
+            fill_body = _cte_body(flat, "fill")
+            fill = _tier(
+                _pool(fill_body, events, summaries),
+                budget - len(reserved),
+                desc=_order_desc(fill_body),
+                exclude=reserved,
+            )
+            content = set(reserved) | set(fill)
+            # What the purge tier excludes is policy too: source-less days, not
+            # "days outside the budget". token_stream holds far more history
+            # than the budget, and a day that still has an event or a summary
+            # behind it is history, not staleness.
+            purge_body = _cte_body(flat, "purge")
+            excluded = _pool(purge_body, events, summaries)
+            if "FROM content" in purge_body:
+                excluded |= content
+            purge = _tier(
+                stale, purge_cap, desc=_order_desc(purge_body), exclude=excluded
+            )
+        else:
+            (budget,) = limits
+            content = set(
+                _tier(set(events) | set(summaries) | set(stale), budget, desc=True)
+            )
+            purge = []
+        # Content and purge come back TAGGED and disjoint, as the final UNION
+        # ALL does: label_recency_start reads only the content half.
+        rows = [(d.isoformat(), True) for d in content]
+        rows += [(d.isoformat(), False) for d in purge]
+        self._result = sorted(rows, reverse=True)
 
     def fetchone(self):
         return self._result
@@ -283,6 +395,409 @@ def _pin_corpus(monkeypatch, bounds, today=TODAY):
     days = [] if bounds is None else _dense_between(*bounds)
     monkeypatch.setattr(
         db, "get_conn", lambda: _DayQueryConn({"FROM ci.events": days}, [])
+    )
+
+
+# ── The tiered day budget (bootstrap.token_source_days) ───────────────────────
+#
+# The budget is still ``window_days + 1`` content days; what changed is how they
+# are allocated. A flat ``ORDER BY source_date DESC LIMIT 91`` over the union of
+# the sources is correct on every corpus whose newest 91 days-with-data hold the
+# events — which is every corpus EXCEPT the bimodal one, where hourly summaries
+# accrue a day-with-data per calendar day and evict the imported event days ~91
+# days after the import. Events carry hard L0/L1 labels; summary tokens are the
+# SUMMARY_SOFT_PROB (0.7) gap-filler, so that eviction spends the whole corpus on
+# the weaker source. Hence the tiers — and hence these tests, four fifths of
+# which exist to pin that the tiers change NOTHING anywhere else.
+
+
+def _run_back(end: dt.date, n: int) -> list[dt.date]:
+    """``n`` consecutive days ending at ``end``, i.e. one day-with-data each."""
+    return [end - dt.timedelta(days=i) for i in range(n)]
+
+
+def _day_list(monkeypatch, sources, today=TODAY, **kwargs) -> list[dt.date]:
+    """Run the real day query against a fake corpus, one day set per table."""
+    monkeypatch.setattr(bs, "_utc_today", lambda: today)
+    monkeypatch.setattr(db, "get_conn", lambda: _DayQueryConn(sources, []))
+    return bs.token_source_days(USER, **kwargs)
+
+
+BUDGET = bs.SERIALIZE_WINDOW_DAYS + 1
+
+
+def test_event_floor_reserves_at_most_half_the_budget():
+    """
+    The floor is a reservation carved out of a fixed budget, so its size is the
+    whole trade-off: too small and an archival corpus still starves, too large
+    and recent context does. Half is the largest value that cannot starve the
+    recent end — the fill tier always keeps the majority of the slots.
+    """
+    assert 0 < bs.EVENT_DAY_FLOOR * 2 <= BUDGET
+
+
+def test_day_list_is_the_newest_days_when_every_day_holds_both_sources(monkeypatch):
+    """
+    The normal live appliance: an event and an hourly summary on every day. The
+    two tiers draw from overlapping sets, so the answer is the newest 91 days —
+    byte for byte what the flat LIMIT returned. No behaviour change.
+    """
+    days = _run_back(TODAY, 200)
+    got = _day_list(
+        monkeypatch,
+        {"FROM ci.events": days, "FROM ci.summaries": days},
+    )
+    assert got == sorted(_run_back(TODAY, BUDGET))
+
+
+def test_day_list_is_the_newest_event_days_with_no_summaries(monkeypatch):
+    """Events only: the reservation and the fill both draw from one set."""
+    got = _day_list(monkeypatch, {"FROM ci.events": _run_back(TODAY, 200)})
+    assert got == sorted(_run_back(TODAY, BUDGET))
+
+
+def test_day_list_is_the_newest_summary_days_with_no_events(monkeypatch):
+    """
+    Summaries only (a fresh appliance capturing before anything is imported):
+    the reservation finds no event day, so the fill takes the whole budget. A
+    floor that consumed its slots whether or not events existed would leave 45
+    of them empty here.
+    """
+    got = _day_list(monkeypatch, {"FROM ci.summaries": _run_back(TODAY, 200)})
+    assert got == sorted(_run_back(TODAY, BUDGET))
+
+
+def test_day_list_reserves_event_days_on_a_bimodal_corpus(monkeypatch):
+    """
+    THE FIX. Archival import (events stop 2024-01-15) plus continuous live
+    capture (hourly summaries every day since). Under the flat LIMIT the 120
+    summary days are all newer than every event day, so the budget is spent
+    entirely on them and ZERO events reach hbpe.token_stream — the hard-labeled
+    corpus is silently replaced by the 0.7-confidence gap-filler.
+
+    With the floor, the newest EVENT_DAY_FLOOR event days are reserved first and
+    the remaining slots go to the newest content days of either kind.
+    """
+    last_event = dt.date(2024, 1, 15)
+    got = _day_list(
+        monkeypatch,
+        {
+            "FROM ci.events": _run_back(last_event, 200),
+            "FROM ci.summaries": _run_back(TODAY, 120),
+        },
+    )
+
+    reserved = sorted(_run_back(last_event, bs.EVENT_DAY_FLOOR))
+    fill = sorted(_run_back(TODAY, BUDGET - bs.EVENT_DAY_FLOOR))
+    assert got == reserved + fill
+    assert len(got) == BUDGET
+    # The two ends the flat budget could not hold at once.
+    assert got[0] == last_event - dt.timedelta(days=bs.EVENT_DAY_FLOOR - 1)
+    assert got[-1] == TODAY
+
+
+def test_event_reservation_shrinks_to_the_event_days_that_exist(monkeypatch):
+    """
+    Ten event days and a floor of 45: the reservation takes what there is and
+    the fill takes the other 81 slots. A fixed-size carve-out would waste 35.
+    """
+    last_event = dt.date(2024, 1, 15)
+    got = _day_list(
+        monkeypatch,
+        {
+            "FROM ci.events": _run_back(last_event, 10),
+            "FROM ci.summaries": _run_back(TODAY, 120),
+        },
+    )
+
+    assert len(got) == BUDGET
+    assert got[:10] == sorted(_run_back(last_event, 10))
+    assert got[10:] == sorted(_run_back(TODAY, BUDGET - 10))
+
+
+def test_event_floor_never_outgrows_a_shortened_window(monkeypatch):
+    """
+    ``window_days`` is a parameter — HBPE_LABEL_RECENCY_DAYS reaches this
+    through label_recency_start — so the floor has to scale with the budget it
+    is carved out of. A literal 45 against an 11-day budget would return 45 days
+    of 2024 and no recent day at all: MORE work than the budget allows, and the
+    inverse of the starvation it exists to prevent.
+    """
+    last_event = dt.date(2024, 1, 15)
+    got = _day_list(
+        monkeypatch,
+        {
+            "FROM ci.events": _run_back(last_event, 200),
+            "FROM ci.summaries": _run_back(TODAY, 120),
+        },
+        window_days=10,
+    )
+
+    assert len(got) == 11
+    assert got[:5] == sorted(_run_back(last_event, 5))
+    assert got[5:] == sorted(_run_back(TODAY, 6))
+
+
+def test_purge_days_are_added_on_top_of_the_content_budget(monkeypatch):
+    """
+    A day that emptied out is delete-only work — serialize_day's DELETE is the
+    only purge of hbpe.token_stream there is — and a day whose stale rows are
+    never purged keeps nudging the forecast forever. Taking those visits out of
+    the content budget would let a handful of deletions evict real days, so they
+    ride on top of it.
+    """
+    live = _run_back(TODAY, 200)
+    emptied = _run_back(dt.date(2020, 5, 1), 5)
+    got = _day_list(
+        monkeypatch,
+        {
+            "FROM ci.events": live,
+            "FROM hbpe.token_stream": [*live, *emptied],
+        },
+    )
+
+    assert got[5:] == sorted(_run_back(TODAY, BUDGET))
+    assert got[:5] == sorted(emptied)
+    assert len(got) == BUDGET + 5
+
+
+def test_purge_tier_leaves_token_stream_history_that_still_has_a_source(
+    monkeypatch,
+):
+    """
+    The purge tier selects SOURCE-LESS days, not "days the budget did not
+    select" — and on top of a budget rather than inside it, that distinction is
+    the difference between a purge and a nightly amnesia.
+
+    hbpe.token_stream deliberately holds far more history than the 91-day
+    serialize budget: recurrence.HISTORY_DAYS reads 180 days of it and
+    seasonal.MAX_HISTORY_DAYS 800, and every one of those days still has its
+    event behind it. Here 200 days hold both an event and tokens, so 109 of them
+    are outside the content budget — and none of them may be visited, because
+    serialize_day's DELETE is what a visit means.
+    """
+    live = _run_back(TODAY, 200)
+    got = _day_list(
+        monkeypatch,
+        {"FROM ci.events": live, "FROM hbpe.token_stream": live},
+    )
+
+    assert got == sorted(_run_back(TODAY, BUDGET))
+
+
+def test_purge_days_are_capped_so_one_bulk_delete_cannot_run_all_night(
+    monkeypatch,
+):
+    """
+    The cap is why "on top of the budget" is safe: a year of events deleted at
+    once cannot turn one night into an unbounded serialize_day run. The set only
+    ever shrinks — every day visited is purged and never returns — so the
+    leftovers converge over subsequent nights.
+    """
+    live = _run_back(TODAY, 200)
+    emptied = _run_back(dt.date(2020, 5, 1), 500)
+    got = _day_list(
+        monkeypatch,
+        {
+            "FROM ci.events": live,
+            "FROM hbpe.token_stream": [*live, *emptied],
+        },
+    )
+
+    assert len(got) == BUDGET + bs.PURGE_DAY_CAP
+    # Newest-first within the purge tier: the stale days closest to the live
+    # window are the ones a forecast can still read.
+    assert got[: bs.PURGE_DAY_CAP] == sorted(
+        _run_back(dt.date(2020, 5, 1), bs.PURGE_DAY_CAP)
+    )
+
+
+# ── Tier A must agree with the reads it predicts ──────────────────────────────
+
+
+PLANNED_ONLY = _DayQueryCursor._PLANNED_ONLY
+
+
+def test_reserved_tier_ignores_days_whose_only_events_are_planned_blocks(monkeypatch):
+    """
+    A reserved slot is only worth something if the day it reserves produces
+    tokens. Both reads this query predicts — the serializer's
+    (data_client.get_token_events_for_day) and the drain's
+    (data_client._unlabeled_events_where) — carry ``event_type IS DISTINCT FROM
+    'planned_block'``, so a day whose only events are planning's own suggested
+    blocks serializes to ZERO event tokens and has nothing to label.
+
+    Without the same predicate here, an appliance that uses planning writes one
+    such day per calendar day and they are the NEWEST event days there are, so
+    tier A spends all 45 reserved slots on them and the fill takes the rest —
+    the archival corpus tier A exists to protect is evicted anyway, on exactly
+    the bimodal shape it targets. Here the 60 planned-block days would take 60
+    of the 91 slots and leave 31 real event days; with the predicate the budget
+    is 91 real event days and no planned-block day at all.
+    """
+    last_event = dt.date(2024, 1, 15)
+    got = _day_list(
+        monkeypatch,
+        {
+            "FROM ci.events": _run_back(last_event, 200),
+            PLANNED_ONLY: _run_back(TODAY, 60),
+        },
+    )
+
+    assert got == sorted(_run_back(last_event, BUDGET))
+
+
+def test_purge_tier_reclaims_a_day_left_holding_only_planned_blocks(monkeypatch):
+    """
+    The same predicate on the other side of the query. 2024-06-03 held a real
+    event, serialize wrote its tokens, and the event was later replaced by (or
+    reduced to) a planned block. Nothing the serializer reads is left on that
+    day, so its rows are stale — but an ``event_days`` that counts planned
+    blocks as a source excludes the day from tier C, and those rows then feed
+    pipeline.recurrence forever with no way to ever remove them.
+    """
+    live = _run_back(TODAY, 200)
+    stranded = dt.date(2024, 6, 3)
+    got = _day_list(
+        monkeypatch,
+        {
+            "FROM ci.events": live,
+            PLANNED_ONLY: [stranded],
+            "FROM hbpe.token_stream": [*live, stranded],
+        },
+    )
+
+    assert stranded in got
+    assert got == [stranded, *sorted(_run_back(TODAY, BUDGET))]
+
+
+# ── Each tier's ORDER BY direction ────────────────────────────────────────────
+#
+# The direction is policy, and it is the cheapest thing in the query to get
+# wrong: ASC parses, runs, returns a full budget, and is silently worse than the
+# bug the tiers were added to fix. These three pin one direction each.
+
+
+def test_reservation_takes_the_newest_event_days_not_the_oldest(monkeypatch):
+    """
+    Tier A reserves the event days ADJACENT to the live window. Flipped to ASC
+    it reserves the oldest 45 days the import ever recorded — the least
+    predictive history there is — and drops the recent end of the event corpus,
+    which is the half a forecast can still use.
+    """
+    last_event = dt.date(2024, 1, 15)
+    events = _run_back(last_event, 200)
+    got = _day_list(
+        monkeypatch,
+        {"FROM ci.events": events, "FROM ci.summaries": _run_back(TODAY, 120)},
+    )
+
+    assert got[: bs.EVENT_DAY_FLOOR] == sorted(
+        _run_back(last_event, bs.EVENT_DAY_FLOOR)
+    )
+    assert min(events) not in got
+
+
+def test_fill_tier_takes_the_newest_content_days_not_the_oldest(monkeypatch):
+    """
+    Tier B is what keeps recent context in the budget at all. Flipped to ASC on
+    a bimodal corpus it spends its 46 slots on the OLDEST event days instead, so
+    the whole 91-day budget lands in 2023 and not one selected day falls inside
+    the last 90 — every live summary day is evicted, which is strictly worse
+    than the summary-eviction the tiers were added to prevent.
+    """
+    got = _day_list(
+        monkeypatch,
+        {
+            "FROM ci.events": _run_back(dt.date(2024, 1, 15), 200),
+            "FROM ci.summaries": _run_back(TODAY, 120),
+        },
+    )
+
+    recent = [d for d in got if d > TODAY - dt.timedelta(days=90)]
+    assert max(got) == TODAY
+    assert len(recent) == BUDGET - bs.EVENT_DAY_FLOOR
+
+
+def test_purge_tier_takes_the_newest_stale_days_not_the_oldest(monkeypatch):
+    """
+    Tier C is capped, so on a large backlog its direction decides which emptied
+    days are cleaned first. Newest-first is the only useful order: the stale
+    rows closest to the live window are the ones pipeline.recurrence still
+    reads, so ASC would spend every night's cap on rows no forecast can see
+    while the ones that skew it survive.
+    """
+    live = _run_back(TODAY, 200)
+    emptied = _run_back(dt.date(2020, 12, 31), 500)
+    got = _day_list(
+        monkeypatch,
+        {"FROM ci.events": live, "FROM hbpe.token_stream": [*live, *emptied]},
+    )
+
+    assert max(emptied) in got
+    assert min(emptied) not in got
+
+
+# ── The purge tier's bounds: count, and reach ─────────────────────────────────
+
+
+def test_purge_cap_scales_with_a_shortened_window(monkeypatch):
+    """
+    ``window_days`` is a caller parameter, so a flat purge cap breaks the bound
+    it exists to hold. An 11-day budget with a literal cap of 91 makes a night
+    of 11 content days and 91 purge days — eight times the work the caller asked
+    for — where the constant's own claim is "at worst twice the content budget".
+    EVENT_DAY_FLOOR is clamped for the same reason; so is this.
+    """
+    live = _run_back(TODAY, 200)
+    emptied = _run_back(dt.date(2020, 12, 31), 300)
+    got = _day_list(
+        monkeypatch,
+        {"FROM ci.events": live, "FROM hbpe.token_stream": [*live, *emptied]},
+        window_days=10,
+    )
+
+    assert len(got) == 11 + 11
+    assert got[11:] == sorted(_run_back(TODAY, 11))
+    assert got[:11] == sorted(_run_back(dt.date(2020, 12, 31), 11))
+
+
+def test_label_cutoff_reads_the_oldest_content_day_not_the_oldest_purge_day(
+    monkeypatch,
+):
+    """
+    THE SECOND FIX. The purge tier is capped in COUNT but deliberately not in
+    REACH — reaching back is the whole point, since a day that emptied out below
+    the 91st newest was never revisited under the old policy. That makes the
+    oldest day of the merged list an arbitrarily old source-less day.
+
+    ``label_recency_start`` returns that oldest day, and
+    ``nightly_runner._recency_cutoff`` turns it into the label drain's phase
+    boundary. Merged, this corpus — dense for 200 days, plus 300 source-less
+    2020 token_stream days — moves the boundary from 2026-06-01 to 2020, so the
+    recency phase (80% of the nightly label budget) stops being a recency phase
+    at all and the days a forecast can actually read lose their priority.
+
+    A purge day has no event and no summary on it, so there is no label on it
+    for that cutoff to protect. Serialize still visits every one of them.
+    """
+    live = _run_back(TODAY, 200)
+    emptied = _run_back(dt.date(2020, 12, 31), 300)
+    sources = {
+        "FROM ci.events": live,
+        "FROM hbpe.token_stream": [*live, *emptied],
+    }
+
+    monkeypatch.setattr(bs, "_utc_today", lambda: TODAY)
+    monkeypatch.setattr(db, "get_conn", lambda: _DayQueryConn(sources, []))
+
+    assert bs.label_recency_start(USER, 90) == dt.date(2026, 6, 1)
+    assert nr._recency_cutoff(USER, 90) == CUTOFF
+    # And the purge reach itself is untouched: clamping it would have been the
+    # wrong repair, because those 2020 days are precisely the ones whose stale
+    # rows have been feeding pipeline.recurrence unchallenged.
+    assert min(bs.token_source_days(USER)) == max(emptied) - dt.timedelta(
+        days=bs.PURGE_DAY_CAP - 1
     )
 
 
@@ -748,7 +1263,8 @@ def _run_serialize(monkeypatch, days, bounds=None, today=TODAY):
             return None
 
         def fetchall(self):
-            return [(d.isoformat(),) for d in sorted(days, reverse=True)]
+            # (source_date, is_content); this fake models content days only.
+            return [(d.isoformat(), True) for d in sorted(days, reverse=True)]
 
         def fetchone(self):
             return bounds if bounds is not None else (None, None)
@@ -882,7 +1398,15 @@ def test_serialize_revisits_a_day_whose_only_content_is_stale_tokens(monkeypatch
     result = asyncio.run(bs.serialize_token_stream(USER))
 
     assert _SERIALIZED_DAYS == ["2024-06-03", "2026-08-30"]
-    assert result["days"] == 2
+    # Both days are serialized, but they are REPORTED apart: "days" counts the
+    # content tiers the model actually trains on, "purge_days" the delete-only
+    # work riding on top. Merging them let a purge day years behind the corpus
+    # set the reported start date — the same days[0] conflation that let tier C
+    # hijack label_recency_start.
+    assert result["days"] == 1
+    assert result["purge_days"] == 1
+    assert result["start"] == "2026-08-30"
+    assert result["end"] == "2026-08-30"
 
 
 def test_serialize_reports_a_corpus_that_is_entirely_in_the_future(monkeypatch):

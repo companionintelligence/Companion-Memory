@@ -66,8 +66,13 @@ export const PROMOTE_EDGE_PLACE_STAGE_ID = 'promote.edge_place';
  * ATTACHED_TO, so a successfully uploaded message attachment is reachable
  * from the message it arrived in (previously nothing ever wrote this edge,
  * even though the graph domain already declared it a valid pair).
+ *
+ * Generation 6: `communication.has_content_attachment` — Content→Communication
+ * ATTACHED_TO, the content half of the same column. The reddit connection
+ * attaches a post's picture as a ci.content row and no file, so generation 5
+ * left every such post with no edge to its picture.
  */
-export const EDGE_PROJECTION_RULE_GENERATION = 5;
+export const EDGE_PROJECTION_RULE_GENERATION = 6;
 
 /**
  * Communication-leg version: this stage's edges are a COPY of what

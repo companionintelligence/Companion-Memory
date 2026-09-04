@@ -66,46 +66,17 @@ function renderTagsPage(mocks: MockedResponse[], route = '/tags') {
 }
 
 describe('TagsPage — search state lives in the URL', () => {
-  it('reads the initial filter from ?q= and applies it via the existing client-side filter', async () => {
+  it('reads the filter from the header search box\'s ?search= and applies it client-side', async () => {
     renderTagsPage(
       [tagsMock([tagNode({ id: 't1', label: 'holiday' }), tagNode({ id: 't2', label: 'work' })])],
-      '/tags?q=holi',
+      '/tags?search=holi',
     );
-
-    // The input reflects the URL, not blank local state.
-    expect(await screen.findByDisplayValue('holi')).toBeInTheDocument();
 
     // Filtering itself is unchanged: only a tag matching the URL's text shows.
     await waitFor(() => expect(screen.getByText('holiday')).toBeInTheDocument());
     expect(screen.queryByText('work')).not.toBeInTheDocument();
-  });
-
-  it('writes typed text into ?q= and the client-side filter keeps narrowing the fetched list from it', async () => {
-    renderTagsPage([
-      tagsMock([tagNode({ id: 't1', label: 'holiday' }), tagNode({ id: 't2', label: 'work' })]),
-    ]);
-
-    const input = await screen.findByPlaceholderText('Filter tags...');
-
-    // Both rows are present before any filter, and the URL starts clean.
-    await waitFor(() => expect(screen.getByText('holiday')).toBeInTheDocument());
-    expect(screen.getByText('work')).toBeInTheDocument();
-    expect(screen.getByTestId('params').textContent).toBe('');
-
-    fireEvent.change(input, { target: { value: 'work' } });
-
-    // The text lands in `?q=`, not in component-local state.
-    await waitFor(() => expect(screen.getByTestId('params').textContent).toBe('q=work'));
-
-    // And the same client-side .filter() over the already-fetched list is
-    // still what narrows the rows — now driven by the URL instead of
-    // useState.
-    expect(screen.getByText('work')).toBeInTheDocument();
-    expect(screen.queryByText('holiday')).not.toBeInTheDocument();
-
-    // Clearing the input removes `q` entirely rather than leaving `q=`.
-    fireEvent.change(input, { target: { value: '' } });
-    await waitFor(() => expect(screen.getByTestId('params').textContent).toBe(''));
+    // The page carries no input of its own — the header search box owns the text.
+    expect(screen.queryByPlaceholderText('Filter tags...')).not.toBeInTheDocument();
   });
 });
 

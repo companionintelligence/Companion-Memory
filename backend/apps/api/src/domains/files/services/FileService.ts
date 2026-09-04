@@ -375,23 +375,23 @@ export class FileService implements OnModuleInit {
       .andWhere('file.variant = :variant', { variant: FileVariant.ORIGINAL });
 
     if (options.startTime) {
-      query = query.andWhere('file.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('file.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('file.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('file.updated_at <= :endTime', { endTime: options.endTime });
     }
 
-    // Composite keyset: page strictly past (afterTime, afterId) in (created_at DESC, id DESC).
+    // Composite keyset: page strictly past (afterTime, afterId) in (updated_at DESC, id DESC).
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(file.created_at < :afterTime OR (file.created_at = :afterTime AND file.id < :afterId))',
+        '(file.updated_at < :afterTime OR (file.updated_at = :afterTime AND file.id < :afterId))',
         { afterTime: options.afterTime, afterId: options.afterId },
       );
     }
 
     // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('file.created_at', options.order ?? 'DESC').addOrderBy('file.id', 'DESC');
+    query = query.orderBy('file.updated_at', options.order ?? 'DESC').addOrderBy('file.id', 'DESC');
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -417,11 +417,11 @@ export class FileService implements OnModuleInit {
       .andWhere('file.variant = :variant', { variant: FileVariant.ORIGINAL });
 
     if (options.startTime) {
-      query = query.andWhere('file.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('file.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('file.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('file.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     return query.getCount();

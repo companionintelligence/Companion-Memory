@@ -286,28 +286,43 @@ export interface FacebookVideo {
   };
 }
 
+/**
+ * One node of a Gmail API message's MIME tree.
+ *
+ * `parts` is RECURSIVE because the tree is. `SyncGmail` fetches
+ * `/gmail/v1/users/me/messages/{id}` with no `format` param — Gmail's default
+ * `format=full` — so the whole MIME structure arrives. Rich-text mail with an
+ * attachment comes back as
+ * `multipart/mixed → [multipart/alternative → [text/plain, text/html], …]`,
+ * putting the body leaves two levels down. This type used to declare a single
+ * flat level, which made a depth-first body walk unwriteable; such messages
+ * silently stored Gmail's ~200-character snippet as their body instead.
+ *
+ * `filename` is what separates an inline body leaf (Gmail sends `""`) from an
+ * attached `.txt`/`.html` file, so the walk can skip attachments.
+ */
+export interface GmailPart {
+  partId?: string;
+  mimeType?: string;
+  filename?: string;
+  headers?: Array<{
+    name: string;
+    value: string;
+  }>;
+  body?: {
+    size?: number;
+    data?: string;
+    attachmentId?: string;
+  };
+  parts?: GmailPart[];
+}
+
 export interface GmailMessage {
   id?: string;
   threadId?: string;
   labelIds?: string[];
   snippet?: string;
-  payload?: {
-    headers?: Array<{
-      name: string;
-      value: string;
-    }>;
-    body?: {
-      size?: number;
-      data?: string;
-    };
-    parts?: Array<{
-      mimeType?: string;
-      body?: {
-        size?: number;
-        data?: string;
-      };
-    }>;
-  };
+  payload?: GmailPart;
   sizeEstimate?: number;
   historyId?: string;
   internalDate?: string;

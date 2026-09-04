@@ -35,7 +35,7 @@ import {
   Users,
   X,
 } from '@ci/shadcn/icons';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
 import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
@@ -71,17 +71,8 @@ import {
   writeCsvFilterParam,
 } from './filterParams';
 import { SavedSearchPicker } from './SavedSearchPicker';
+import { currentSortValue, explorerSortOptions } from './sortOptions';
 import { droppedFilters, readMemoryView, unsupportedReason, type FilterDimension } from './viewFilterSupport';
-
-// Single-select sort presets that map to the backend's sortBy + sortOrder pair.
-const SORT_OPTIONS = [
-  { value: 'default', label: 'Default', sortBy: '', sortOrder: '' },
-  { value: 'relevance', label: 'Relevance', sortBy: 'relevance', sortOrder: 'desc' },
-  { value: 'newest', label: 'Newest first', sortBy: 'time', sortOrder: 'desc' },
-  { value: 'oldest', label: 'Oldest first', sortBy: 'time', sortOrder: 'asc' },
-  { value: 'name-asc', label: 'Name (A–Z)', sortBy: 'name', sortOrder: 'asc' },
-  { value: 'name-desc', label: 'Name (Z–A)', sortBy: 'name', sortOrder: 'desc' },
-] as const;
 
 const START_OF_DAY_TIME = '00:00';
 const END_OF_DAY_TIME = '23:59';
@@ -993,24 +984,26 @@ function DateControl() {
 }
 
 /**
- * Sort preset selector bound to the `sortBy`/`sortOrder` URL params. The graph
- * has no result order to sort, so there the control says so instead of
- * accepting a choice that quietly does nothing.
+ * Sort preset selector bound to the `sortBy`/`sortOrder` URL params. Which
+ * presets it offers depends on where it is: the everything browse on `/memory`
+ * defaults to relevance and only offers Newest / Oldest inside a When filter
+ * (see sortOptions). The graph has no result order to sort, so there the
+ * control says so instead of accepting a choice that quietly does nothing.
  */
 function SortControl() {
   const [{ sortBy, sortOrder }, { setSort }] = useDropdown();
   const [searchParams] = useSearchParams();
+  const { pathname } = useLocation();
   const reason = unsupportedReason(readMemoryView(searchParams.get('view')), 'sort');
 
-  const currentSort =
-    SORT_OPTIONS.find((option) => option.sortBy === sortBy && option.sortOrder === sortOrder)?.value ??
-    'default';
+  const options = explorerSortOptions(pathname, searchParams);
+  const currentSort = currentSortValue(options, sortBy, sortOrder);
 
   const select = (
     <Select
       value={currentSort}
       onValueChange={(value) => {
-        const option = SORT_OPTIONS.find((item) => item.value === value);
+        const option = options.find((item) => item.value === value);
 
         setSort(option?.sortBy || undefined, option?.sortOrder || undefined);
       }}
@@ -1020,7 +1013,7 @@ function SortControl() {
         <Select.Value placeholder="Sort" />
       </Select.Trigger>
       <Select.Content>
-        {SORT_OPTIONS.map((option) => (
+        {options.map((option) => (
           <Select.Item key={option.value} value={option.value}>
             {option.label}
           </Select.Item>

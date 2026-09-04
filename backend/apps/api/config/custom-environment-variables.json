@@ -138,6 +138,10 @@
       "__name": "CI_QUEUE_PER_QUEUE_CONCURRENCY",
       "__format": "json"
     },
+    "jobTimeoutSeconds": {
+      "__name": "CI_QUEUE_JOB_TIMEOUT_SECONDS",
+      "__format": "json"
+    },
     "replayedDeadLetterRetentionDays": {
       "__name": "CI_REPLAYED_DEAD_LETTER_RETENTION_DAYS",
       "__format": "json"

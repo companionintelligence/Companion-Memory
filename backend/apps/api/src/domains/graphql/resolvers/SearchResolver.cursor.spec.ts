@@ -9,11 +9,11 @@ import { SearchResolver } from './SearchResolver';
 const USER = '00000000-0000-0000-0000-0000000000aa';
 const CONTEXT = { userId: USER } as RequestContext;
 
-/** Import-time row stamps, mirroring a bulk import: all inside one short window. */
+/** Row stamps (updated_at, equal to the insert time on a fresh import): all inside one short window. */
 const CONTENT_ROWS = [
-  { id: '018f0000-0000-7000-8000-000000000003', createdAt: new Date('2026-08-16T07:56:56.949Z') },
-  { id: '018f0000-0000-7000-8000-000000000002', createdAt: new Date('2026-08-16T07:56:55.500Z') },
-  { id: '018f0000-0000-7000-8000-000000000001', createdAt: new Date('2026-08-16T07:56:54.100Z') },
+  { id: '018f0000-0000-7000-8000-000000000003', updatedAt: new Date('2026-08-16T07:56:56.949Z') },
+  { id: '018f0000-0000-7000-8000-000000000002', updatedAt: new Date('2026-08-16T07:56:55.500Z') },
+  { id: '018f0000-0000-7000-8000-000000000001', updatedAt: new Date('2026-08-16T07:56:54.100Z') },
 ];
 
 /** A real-world event moment, years older than the import window above. */
@@ -39,8 +39,8 @@ function makeResolver() {
         }
 
         return (
-          row.createdAt < options.afterTime ||
-          (row.createdAt.getTime() === options.afterTime.getTime() && row.id < options.afterId)
+          row.updatedAt < options.afterTime ||
+          (row.updatedAt.getTime() === options.afterTime.getTime() && row.id < options.afterId)
         );
       });
 
@@ -77,7 +77,7 @@ function makeResolver() {
             id: identifier.id,
             // Content carries only a row timestamp — and ContentType exposes no
             // time field at all, which is what used to force the epoch cursor.
-            entity: { id: row.id, createdAt: row.createdAt, type: 'media', tags: [] },
+            entity: { id: row.id, updatedAt: row.updatedAt, type: 'media', tags: [] },
           });
         }
 
@@ -155,15 +155,15 @@ describe('SearchResolver cursor / sort-key coupling', () => {
       expect(time).not.toBe('1970-01-01T00:00:00.000Z');
     }
 
-    // Newest-first, and each cursor carries that row's own createdAt.
+    // Newest-first, and each cursor carries that row's own updatedAt.
     expect(decodeCursor(page.edges[0].cursor)).toEqual({
-      time: CONTENT_ROWS[0].createdAt.toISOString(),
+      time: CONTENT_ROWS[0].updatedAt.toISOString(),
       globalId: GlobalUID.encode('content', CONTENT_ROWS[0].id),
     });
-    expect(decodeCursor(page.edges[1].cursor).time).toBe(CONTENT_ROWS[1].createdAt.toISOString());
+    expect(decodeCursor(page.edges[1].cursor).time).toBe(CONTENT_ROWS[1].updatedAt.toISOString());
   });
 
-  it('threads the cursor into the createdAt-ordered query so paging advances', async () => {
+  it('threads the cursor into the updatedAt-ordered query so paging advances', async () => {
     const { resolver, contentCalls } = makeResolver();
 
     const first = await resolver.search(CONTEXT, { first: 2, includeTypes: ['content'] } as SearchInput);
@@ -175,7 +175,7 @@ describe('SearchResolver cursor / sort-key coupling', () => {
 
     // The second call must push the keyset down to SQL rather than re-fetching
     // the same top-N window and slicing it in memory.
-    expect(contentCalls[1].afterTime).toEqual(CONTENT_ROWS[1].createdAt);
+    expect(contentCalls[1].afterTime).toEqual(CONTENT_ROWS[1].updatedAt);
     expect(contentCalls[1].afterId).toBe(CONTENT_ROWS[1].id);
 
     // ...and it must surface a row the first page did not already return.
@@ -205,7 +205,7 @@ describe('SearchResolver cursor / sort-key coupling', () => {
 
     // An epoch afterTime here is what emptied the browse: it windowed every
     // sibling type to "before 1970".
-    expect(eventCalls[1].afterTime).toEqual(CONTENT_ROWS[1].createdAt);
+    expect(eventCalls[1].afterTime).toEqual(CONTENT_ROWS[1].updatedAt);
     expect(eventCalls[1].afterTime!.getTime()).toBeGreaterThan(0);
   });
 

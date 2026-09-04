@@ -187,10 +187,21 @@ async def nightly(
         # the L1 vocabulary is not.
         #
         # The cost is bounded and idempotent: serialize_token_stream walks
-        # bootstrap.token_source_days, which is at most SERIALIZE_WINDOW_DAYS + 1
-        # days however far back the corpus reaches, and serialize_day deletes and
-        # rewrites one (user, date) at a time, so re-running it over an unchanged
-        # corpus is a no-op with the same row count.
+        # bootstrap.token_source_days, and serialize_day deletes and rewrites one
+        # (user, date) at a time, so re-running it over an unchanged corpus is a
+        # no-op with the same row count.
+        #
+        # The bound is TWO budgets, not one, however far back the corpus
+        # reaches: at most SERIALIZE_WINDOW_DAYS + 1 content days (tiers A + B)
+        # plus at most PURGE_DAY_CAP source-less days riding on top of them
+        # (tier C) — 182 serialize_day calls at the default window, not 91. The
+        # purge half is delete-only work and it converges, so in steady state
+        # the second budget goes mostly unspent. Two cases do spend it in full:
+        # a bulk delete, and — once, on deploy — the historical backlog this
+        # change newly makes reachable. Days that emptied out below the 91st
+        # newest were never revisited under the old flat window, so an appliance
+        # carrying that backlog spends the whole purge cap for
+        # ceil(backlog / cap) consecutive nights before settling.
         step("serialize")
         results["steps"]["serialize"] = await _safe(
             serialize_token_stream(user_id), "serialize"

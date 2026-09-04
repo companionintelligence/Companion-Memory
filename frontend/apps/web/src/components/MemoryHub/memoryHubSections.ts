@@ -108,3 +108,23 @@ export function isMemoryHubPath(pathname: string): boolean {
 export function isMemoryExplorerPath(pathname: string): boolean {
   return pathname === '/memory/events' || pathname === '/memory';
 }
+
+/**
+ * Memory pages whose list reads its search text from `?search=`, so the
+ * header search box writes the query into the page in place — filters and
+ * sort untouched — instead of jumping to the explorer. The explorer itself,
+ * plus every hub list that used to carry its own search input (people,
+ * places, things, tags) and the content library. A detail route under one of
+ * them (`/memory/places/42`, `/memory/content/42`) still renders that list,
+ * so it counts too. Notes and chat have no searchable list; the box stays a
+ * launcher there.
+ */
+const LIVE_SEARCH_SECTIONS = new Set(['/memory/people', '/memory/places', '/memory/things', '/memory/content', '/memory/tags']);
+
+export function isLiveSearchPath(pathname: string): boolean {
+  if (isMemoryExplorerPath(pathname)) {
+    return true;
+  }
+
+  return MEMORY_HUB_SECTIONS.some((section) => LIVE_SEARCH_SECTIONS.has(section.to) && section.match(pathname));
+}

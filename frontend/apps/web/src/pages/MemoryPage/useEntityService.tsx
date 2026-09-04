@@ -167,6 +167,13 @@ const SEARCH_QUERY = gql(`
             bucketAppearedAt: appearedAt
           }
 
+          # A receipt's purchase date is its real moment (the browse orders
+          # receipts by it); null while OCR has not found one, in which case
+          # the row is undated here rather than dated by its upload.
+          ... on ReceiptType {
+            bucketPurchasedAt: purchasedAt
+          }
+
           ... on PlaceType {
             bucketAppearedAt: appearedAt
             mapProperties: properties
@@ -301,6 +308,7 @@ function useEntityService({
   bbox,
   semantic,
   shareToken,
+  skip = false,
 }: {
   searchQuery: string;
   includeTypes?: string[];
@@ -321,6 +329,13 @@ function useEntityService({
   // public saved search as its owner and ignores every other filter above —
   // this drives the read-only /shared viewer with the same view components.
   shareToken?: string;
+  /**
+   * Render with no results and no request in flight. The explorer sets this
+   * when its filters cannot match anything by construction (a When filter over
+   * kinds that have no date), so the page shows the explanation instead of
+   * asking the server for "everything".
+   */
+  skip?: boolean;
 }): ReturnType {
   const searchVariables: SearchFilterVariables = {
     query: searchQuery,
@@ -354,6 +369,7 @@ function useEntityService({
     variables: { ...searchVariables, first: PAGE_SIZE },
     fetchPolicy: 'cache-and-network',
     notifyOnNetworkStatusChange: true,
+    skip,
   });
 
   // The node object captured when a row was clicked. Never rendered directly —

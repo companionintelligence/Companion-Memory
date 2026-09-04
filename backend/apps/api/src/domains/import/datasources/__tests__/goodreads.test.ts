@@ -82,6 +82,35 @@ describe('Goodreads datasource', () => {
     }
   });
 
+  // SRC-01. A `reading.annotation` routes to `content` only, and that row's
+  // `text` is read from metadata by `descriptionFor` — the review body attached
+  // to `item.content.data` is never loaded on the push path.
+  it('carries My Review in metadata.Text, and omits the key when there is none', async () => {
+    const tmp = path.join(
+      os.tmpdir(),
+      `goodreads_library_export-review-${Date.now()}-${Math.random().toString(36).slice(2)}.csv`,
+    );
+    fs.writeFileSync(
+      tmp,
+      `${HEADER}\n` +
+        '2001,Dune,Frank Herbert,5,4.25,Ace,Paperback,412,1965,"A desert planet and a long argument about power.",read,,2024/03/01,="0441013597",="9780441013593",sci-fi\n' +
+        `${ROWS[1]}\n`,
+    );
+    try {
+      const pipeline = await importRows(tmp);
+      expect(pipeline.length).toBe(2);
+
+      const reviewed = pipeline[0].item;
+      expect(reviewed.metadata.Text).toBe('A desert planet and a long argument about power.');
+      expect(reviewed.metadata.Text).toBe((await reviewed.content!.data!()).toString('utf8'));
+
+      // Shelved-only row: no review body to carry, so no empty Text key.
+      expect(pipeline[1].item.metadata.Text).toBeUndefined();
+    } finally {
+      await fs.promises.unlink(tmp).catch(() => {});
+    }
+  });
+
   describe('directory-based recognition (non-exact filename, header sniff)', () => {
     // recognize()/fileImport() both fall back to scanning a directory's *.csv
     // files for Goodreads-shaped headers when no exact

@@ -120,16 +120,19 @@ def _recency_cutoff(user_id: str, recency_days: int) -> datetime:
     """
     The instant separating the drain's recency phase from its historical one.
 
-    It is the first day of the window the *next* serialize run will write
+    It is the first CONTENT day the *next* serialize run will write
     (``bootstrap.label_recency_start``), not ``today - recency_days``: a label
     reaches hbpe.pipeline.recurrence — and so /forecast — only once serialize
     turns it into an hbpe.token_stream row, and serialize only ever rewrites
     that trailing window. Anchoring on the corpus rather than on the wall clock
     also keeps the two aligned when ingestion lags (see label_recency_start).
 
-    Note it is NOT recurrence.HISTORY_DAYS. The profiler reads 180 days of
-    token_stream, but nothing writes token_stream for the 90–180-day band, so
-    labeling into it cannot change any forecast.
+    Note it is NOT recurrence.HISTORY_DAYS, and not a calendar band at all: it
+    is read off the day list, because which days that list holds is
+    corpus-dependent. On a dense corpus nothing writes token_stream for the
+    90–180-day band, so labeling into it cannot change any forecast; on a sparse
+    one the reserved event tier reaches into and past that band, and those days
+    are serialized. See bootstrap.SERIALIZE_WINDOW_DAYS.
     """
     from ci.hbpe.pipeline.bootstrap import label_recency_start
 
@@ -402,17 +405,23 @@ async def label_summary_tokens(
     hbpe.summary_l1_label and merged into the token stream at serialization time.
     An explicit inclusive range may be supplied for bounded recovery.
 
-    The default target is ``bootstrap.token_source_days`` — the same day *list*
-    serialize walks, not the span between its ends.  Aiming at a span would pay
-    two Qwen calls per summary for every day in a bimodal corpus's two-year gap,
-    none of which serialize would then publish.
+    The default target is ``bootstrap.content_source_days`` — the same day
+    *list* serialize walks, not the span between its ends.  Aiming at a span
+    would pay two Qwen calls per summary for every day in a bimodal corpus's
+    two-year gap, none of which serialize would then publish.
+
+    Content days, not the full ``token_source_days``: a purge day holds no
+    summary at all (having none is what put it in that tier), so it can only
+    ever add a no-op date to the read — and ``get_unlabeled_summaries_on_days``
+    pairs its ``= ANY(...)`` match with a MIN/MAX bracket for the planner, so a
+    source-less 2020 day silently widens that bracket across the whole corpus.
     """
     import datetime
 
     def _run(should_stop) -> dict:
         from ci.hbpe.pipeline.bootstrap import (
             SERIALIZE_WINDOW_DAYS,
-            token_source_days,
+            content_source_days,
         )
         from ci.hbpe.tokenizer.summary_tokenizer import SummaryTokenizer
 
@@ -447,11 +456,11 @@ async def label_summary_tokens(
                 "days": (end - start).days + 1,
             }
 
-        days = token_source_days(user_id)
+        days = content_source_days(user_id)
         if not days:
-            # No dated source at or before today at all — no event, no hourly
-            # summary, no leftover token_stream row. NOT "the newest summary is
-            # too fresh to be listed": the day list is clamped with
+            # No dated content source at or before today at all — no event and
+            # no hourly summary. NOT "the newest summary is too fresh to be
+            # listed": the day list is clamped with
             # ``< today + 1 day``, so a summary written minutes ago is already in
             # it. Labeling yesterday therefore finds nothing either. The branch
             # is here so the step still reports a concrete day rather than

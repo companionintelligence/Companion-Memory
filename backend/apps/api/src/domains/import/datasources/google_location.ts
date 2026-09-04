@@ -86,6 +86,13 @@ export class GoogleLocationFileImporter implements FileImporter {
     }
 
     const list = parsed.locations || [];
+    // U-22: report what was READ, not just what survived. `stageSummary.ts`
+    // derives `consumed` from `produced + dropped` unless a parser measures it,
+    // so a Records.json where every fix fell outside the timeframe used to
+    // reconcile perfectly at 0 = 0 + 0 — indistinguishable from a file that was
+    // never opened. Every element below either pushes or drops, so this count
+    // is the real denominator.
+    params.pipeline.consumed?.(list.length);
     let idx = 0;
     for (const loc of list) {
       // Only divide a coordinate that's actually present — a missing axis must
@@ -117,11 +124,13 @@ export class GoogleLocationFileImporter implements FileImporter {
       }
 
       if (!timeframeContains(params.timeframe, ts)) {
+        params.pipeline.drop?.('outside_timeframe');
         continue;
       }
 
       // Need both axes; (0,0) is null island, not a real fix.
       if (lat === undefined || lon === undefined || (lat === 0 && lon === 0)) {
+        params.pipeline.drop?.('position_without_fix');
         continue;
       }
 

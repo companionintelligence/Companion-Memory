@@ -331,24 +331,24 @@ export class NoteService {
       .where('note.user_id = :userId', { userId: context.userId });
 
     if (options.startTime) {
-      query = query.andWhere('note.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('note.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('note.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('note.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     // Composite keyset: page strictly past (afterTime, afterId) in
-    // (created_at DESC, id DESC) — see ContentService.getEntitiesForContents.
+    // (updated_at DESC, id DESC) — see ContentService.getEntitiesForContents.
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(note.created_at < :afterTime OR (note.created_at = :afterTime AND note.id < :afterId))',
+        '(note.updated_at < :afterTime OR (note.updated_at = :afterTime AND note.id < :afterId))',
         { afterTime: options.afterTime, afterId: options.afterId },
       );
     }
 
     // Deterministic tiebreak so same-timestamp rows page consistently.
-    query = query.orderBy('note.created_at', options.order ?? 'DESC').addOrderBy('note.id', 'DESC');
+    query = query.orderBy('note.updated_at', options.order ?? 'DESC').addOrderBy('note.id', 'DESC');
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -373,11 +373,11 @@ export class NoteService {
       .where('note.user_id = :userId', { userId: context.userId });
 
     if (options.startTime) {
-      query = query.andWhere('note.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('note.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('note.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('note.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     return query.getCount();

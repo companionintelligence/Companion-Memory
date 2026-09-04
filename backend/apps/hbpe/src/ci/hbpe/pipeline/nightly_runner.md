@@ -7,22 +7,30 @@ by `ci.hbpe.functions`.
 
 ## Summary-label window
 
-The summary-label step defaults to `bootstrap.token_source_days` — the same day
-*list* the next token serialization will publish, not the span between its ends.
-Aiming at a span would pay two Qwen calls per summary for every day inside a
-bimodal corpus's gap, none of which serialization would then publish. It only
-processes unlabeled hourly summaries, so repeated nightly runs are cheap and
-idempotent. Optional inclusive start/end dates exist for an explicit recovery
-run. Explicit ranges cannot span more than `SERIALIZE_WINDOW_DAYS` (90 days),
-the largest label window that the token serializer can publish.
+The summary-label step defaults to `bootstrap.content_source_days` — tiers A+B
+of the day *list* the next token serialization will publish, not the span
+between its ends. Aiming at a span would pay two Qwen calls per summary for every
+day inside a bimodal corpus's gap, none of which serialization would then
+publish. It only processes unlabeled hourly summaries, so repeated nightly runs
+are cheap and idempotent. Optional inclusive start/end dates exist for an
+explicit recovery run. Explicit ranges cannot span more than
+`SERIALIZE_WINDOW_DAYS` (90 days), the largest label window that the token
+serializer can publish.
+
+It deliberately does NOT use `token_source_days`, which also carries tier C. A
+purge day is source-less by construction, so it has no summary to label, and
+handing one to `get_unlabeled_summaries_on_days` would widen that reader's
+sargable MIN/MAX bracket across the whole corpus to fetch nothing.
 
 If the day list comes back empty the step falls back to the previous UTC day.
 That is *not* a recovery path for a just-created summary — the day list is
 clamped with `< today + 1 day`, so a summary written minutes ago is already in
-it. The list is empty only when the user has no event, no hourly summary and no
-leftover `hbpe.token_stream` row at all, and labeling yesterday then finds
-nothing either. The branch is there so the step reports a concrete day instead
-of indexing an empty list; it is a no-op wherever it fires.
+it. Because this reads the CONTENT tiers, the list is empty whenever the user
+has no event and no hourly summary at or before today; leftover
+`hbpe.token_stream` rows no longer keep it non-empty (they are tier C, which
+serialize still receives). Labeling yesterday then finds nothing either. The
+branch is there so the step reports a concrete day instead of indexing an empty
+list; it is a no-op wherever it fires.
 
 ## Cancellation
 

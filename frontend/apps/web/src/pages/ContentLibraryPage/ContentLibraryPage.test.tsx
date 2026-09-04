@@ -2,10 +2,9 @@ import { act, fireEvent, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { resolveContentTileUrl } from '@/components/entities/resolveMediaUrl';
-import { gql } from '@/graphql';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
-import { ContentLibraryPage, PAGE_SIZE } from './ContentLibraryPage';
+import { ContentLibraryPage, GET_CONTENTS, GET_CONTENT_FACETS, PAGE_SIZE } from './ContentLibraryPage';
 import { contentKindFor } from './ContentTile';
 
 const navigate = vi.fn();
@@ -24,25 +23,6 @@ vi.mock('@/components/MemoryHub', () => ({
 vi.mock('./ContentSheet', () => ({
   ContentSheet: () => null,
 }));
-
-const GET_CONTENTS = gql(`
-  query GetContents($first: Int, $after: String) {
-    contents(first: $first, after: $after) {
-      totalCount
-      pageInfo {
-        hasNextPage
-        endCursor
-      }
-      edges {
-        cursor
-        node {
-          id
-          ...ContentTileFragment
-        }
-      }
-    }
-  }
-`);
 
 /**
  * `/memory/content/:contentId` carries the RAW uuid — the page re-encodes it
@@ -109,6 +89,15 @@ function captureIntersectionObserver() {
     },
     restore: () => {
       globalThis.IntersectionObserver = original;
+    },
+  };
+}
+
+function facets({ types = ['image', 'post'], mimetypes = ['image/png', 'text/plain'], sourceSystems = ['reddit'] } = {}) {
+  return {
+    request: { query: GET_CONTENT_FACETS, variables: {} },
+    result: {
+      data: { contentFacets: { __typename: 'ContentFacets' as const, types, mimetypes, sourceSystems } },
     },
   };
 }
@@ -227,6 +216,32 @@ describe('ContentLibraryPage', () => {
 
     expect(navigate).toHaveBeenCalledWith(`/memory/content/${CONTENT_UUID}`);
     expect(navigate).not.toHaveBeenCalledWith(`/memory/content/${CONTENT_GLOBAL_ID}`);
+  });
+
+  it('sends the URL filters with the query and offers to clear them', async () => {
+    const filteredPage = {
+      ...firstPage(),
+      request: {
+        query: GET_CONTENTS,
+        variables: { first: PAGE_SIZE, types: ['image'], connectors: ['reddit'] },
+      },
+    };
+
+    renderWithProviders(<ContentLibraryPage />, {
+      route: '/memory/content?types=image&connectors=reddit',
+      mocks: [filteredPage, facets()],
+    });
+
+    // The tile only appears if the request carried exactly those variables.
+    expect(await screen.findByText('Holiday photo')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Content type: image/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^File type: all/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^How: reddit/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+
+    await screen.findByRole('button', { name: /^Content type: all/ });
+    expect(screen.queryByRole('button', { name: 'Clear filters' })).not.toBeInTheDocument();
   });
 
   it('shows the shared EmptyState when the library is genuinely empty', async () => {

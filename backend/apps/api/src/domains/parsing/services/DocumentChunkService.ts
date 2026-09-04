@@ -93,21 +93,21 @@ export class DocumentChunkService {
       .where('chunk.user_id = :userId', { userId: context.userId });
 
     if (options.startTime) {
-      query = query.andWhere('chunk.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('chunk.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('chunk.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('chunk.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     if (options.afterTime && options.afterId) {
       query = query.andWhere(
-        '(chunk.created_at < :afterTime OR (chunk.created_at = :afterTime AND chunk.id < :afterId))',
+        '(chunk.updated_at < :afterTime OR (chunk.updated_at = :afterTime AND chunk.id < :afterId))',
         { afterTime: options.afterTime, afterId: options.afterId },
       );
     }
 
-    query = query.orderBy('chunk.created_at', options.order ?? 'DESC').addOrderBy('chunk.id', 'DESC');
+    query = query.orderBy('chunk.updated_at', options.order ?? 'DESC').addOrderBy('chunk.id', 'DESC');
 
     if (options.limit) {
       query = query.limit(options.limit);
@@ -133,11 +133,11 @@ export class DocumentChunkService {
       .where('chunk.user_id = :userId', { userId: context.userId });
 
     if (options.startTime) {
-      query = query.andWhere('chunk.created_at >= :startTime', { startTime: options.startTime });
+      query = query.andWhere('chunk.updated_at >= :startTime', { startTime: options.startTime });
     }
 
     if (options.endTime) {
-      query = query.andWhere('chunk.created_at <= :endTime', { endTime: options.endTime });
+      query = query.andWhere('chunk.updated_at <= :endTime', { endTime: options.endTime });
     }
 
     return query.getCount();

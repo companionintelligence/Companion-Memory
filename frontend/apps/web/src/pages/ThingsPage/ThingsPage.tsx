@@ -497,30 +497,12 @@ export function ThingsPage() {
   const navigate = useNavigate();
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Search text lives in the URL (not local state) so it survives navigating
-  // away to a thing and back, the way the filter-panel URLs elsewhere in the
-  // app already do.
-  const [searchParams, setSearchParams] = useSearchParams();
-  const searchQuery = searchParams.get('q') ?? '';
-  const setSearchQuery = useCallback(
-    (value: string) => {
-      setSearchParams(
-        (params) => {
-          const next = new URLSearchParams(params);
-
-          if (value === '') {
-            next.delete('q');
-          } else {
-            next.set('q', value);
-          }
-
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
+  // Search text is the header search box's `?search=` — it edits this page's
+  // query in place (see GlobalSearchBox / isLiveSearchPath), so the page has
+  // no input of its own. Living in the URL, it survives navigating away to a
+  // thing and back, the way the filter-panel URLs elsewhere in the app do.
+  const [searchParams] = useSearchParams();
+  const searchQuery = searchParams.get('search') ?? '';
   const [category, setCategory] = useState('');
   const [brand, setBrand] = useState('');
   const [condition, setCondition] = useState<ItemCondition | null>(null);
@@ -788,23 +770,6 @@ export function ThingsPage() {
 
               <Tabs.Content value="things" className="flex flex-col gap-4">
                 <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-                  <Input
-                    // The full phrase doesn't fit on one line at phone widths — inputs
-                    // can't wrap a placeholder, so it would just clip mid-word instead.
-                    placeholder={
-                      isMobile ? 'Search things...' : 'Search things by name, brand, model or category...'
-                    }
-                    value={searchQuery}
-                    onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      // New query, new cursor space — a stale failure must not gate it.
-                      pagination.reset();
-                    }}
-                    // Any min-width guess still clips this placeholder at SOME width —
-                    // full-width below `sm` sidesteps that: count + Filters drop to
-                    // their own line instead of squeezing the input for space.
-                    className="max-w-xl w-full flex-1 sm:w-auto"
-                  />
                   <div className="text-sm text-muted-foreground">{totalCount} things</div>
                   {isMobile ? (
                     <Button
