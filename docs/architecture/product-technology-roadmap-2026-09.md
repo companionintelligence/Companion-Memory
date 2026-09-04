@@ -2,7 +2,7 @@
 
 > **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
 >
-> **Status:** point-in-time review of `main` at `a9f5ce116` (2026-09-03), written to be re-verified rather than trusted. **A first remediation pass has landed on this branch — see §9 for what changed and what did not.** Every finding cites the file, doc, issue or screenshot it came from. Sizes are **S** (under a day), **M** (about a week), **L** (multi-week). Horizons are **Now** (to mid-October), **Next** (to the December freeze) and **Later** (2027). Nothing here is a commitment; it is the sequence the evidence argues for.
+> **Status:** point-in-time review of `main` at `a9f5ce116` (2026-09-03), written to be re-verified rather than trusted. **A first remediation pass has landed as [#2584](https://github.com/companionintelligence/CI-Server/pull/2584) — see §9 for what changed and what did not.** Every finding cites the file, doc, issue or screenshot it came from. Sizes are **S** (under a day), **M** (about a week), **L** (multi-week). Horizons are **Now** (to mid-October), **Next** (to the December freeze) and **Later** (2027). Nothing here is a commitment; it is the sequence the evidence argues for.
 >
 > **§3 describes the codebase as it was at `a9f5ce116`. A first remediation pass has since landed in the working tree — see [§9 Remediation status](#9-remediation-status-2026-09-03) for what is now fixed, and for the verification caveat that applies to all of it.** The findings below are deliberately left as written, as the audit record.
 >
@@ -349,7 +349,7 @@ Then `yarn workspace @ci/be-api typecheck`, `yarn workspace @ci/fe-web typecheck
 
 ## 9. Implementation status — 2026-09-03
 
-> **Δ 2026-09-03.** The first remediation pass landed the same day as the review, on this branch, uncommitted. Nineteen file-disjoint changes were made in parallel, adversarially reviewed (46 reviewers; 22 confirmed defects, 4 refuted), repaired, then verified against the real toolchain: both typechecks, all four lint lanes, the design canon, the migration-version check, Prettier on every touched file, ruff on the touched Python, and both full unit suites are **green** — backend 11,061 passing / 0 failing, frontend 3,524 passing / 0 failing. 94 tracked files changed (+2,414 / −273) plus 24 new files. Findings whose status changed are marked below; unmarked findings stand as written.
+> **Δ 2026-09-03.** The first remediation pass landed the same day as the review, on this branch, as [#2584](https://github.com/companionintelligence/CI-Server/pull/2584). Nineteen file-disjoint changes were made in parallel, adversarially reviewed (46 reviewers; 22 confirmed defects, 4 refuted), repaired, then verified against the real toolchain: both typechecks, all four lint lanes, the design canon, the migration-version check, Prettier on every touched file, ruff on the touched Python, and both full unit suites are **green** — backend 11,061 passing / 0 failing, frontend 3,524 passing / 0 failing. 94 tracked files changed (+2,414 / −273) plus 24 new files. Findings whose status changed are marked below; unmarked findings stand as written.
 
 ### Landed
 
