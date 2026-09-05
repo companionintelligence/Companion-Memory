@@ -33,29 +33,33 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 20px;
-        max-width: 420px;
+        gap: 18px;
+        max-width: 460px;
         padding: 32px;
         text-align: center;
       }
 
+      /* The mark itself is the loading indicator. It is the one branded surface
+         the desktop shell fully controls — everything after the redirect is
+         served by the gateway container, so this is what a user actually looks
+         at while the stack comes up. */
       .spinner {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        border: 3px solid rgba(62, 201, 224, 0.25);
-        border-top-color: #3ec9e0;
-        animation: spin 0.9s linear infinite;
+        width: min(60vw, 340px);
+        height: min(60vw, 340px);
+        filter: drop-shadow(0 0 60px rgba(30, 207, 224, 0.35));
       }
 
       .spinner.hidden {
         display: none;
       }
 
-      @keyframes spin {
-        to {
-          transform: rotate(360deg);
-        }
+      .wordmark {
+        margin-top: -18px;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: #7f97a5;
       }
 
       #status {
@@ -109,9 +113,12 @@
   <body>
     <div class="panel">
       <div id="spinner" class="spinner"></div>
+      <div class="wordmark">Companion Memory</div>
       <div id="status">Starting Companion Memory…</div>
       <div id="actions" class="actions hidden"></div>
     </div>
+    <script src="lottie.min.js"></script>
+    <script src="mark.js"></script>
     <script src="bootstrap.js"></script>
   </body>
 </html>
