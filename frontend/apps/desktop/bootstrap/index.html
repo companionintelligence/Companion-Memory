@@ -5,8 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Companion Memory</title>
     <style>
+      /*
+       * The desktop loading screen, laid out to match the web hero
+       * (frontend/apps/web/src/pages/SplashPage): the animated mark on the left,
+       * the copy on the right. This page and that one are the first thing a user
+       * sees, so they should look like the same product — the difference is only
+       * that this one is reporting on a stack coming up.
+       *
+       * Values are literals rather than CI tokens on purpose: this page ships
+       * inside the binary and loads before anything else, so it carries no
+       * stylesheet dependency. They mirror --teal-950 / --aqua / --info.
+       */
       :root {
         color-scheme: dark;
+        --ground: #041620;
+        --ink: #e8f2f4;
+        --ink-muted: #a3babf;
+        --aqua: #00a9a7;
+        --info: #38bdf8;
       }
 
       html,
@@ -16,11 +32,13 @@
       }
 
       body {
+        position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
-        background: #0b1720;
-        color: #e7f1f7;
+        overflow: hidden;
+        background: var(--ground);
+        color: var(--ink);
         font-family:
           -apple-system,
           BlinkMacSystemFont,
@@ -29,23 +47,59 @@
           sans-serif;
       }
 
+      /* Two low, wide washes of brand light, same as the hero, so the mark reads
+         as lit rather than pasted onto a flat ground. */
+      .wash {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(64px);
+        pointer-events: none;
+      }
+
+      .wash-a {
+        top: -33%;
+        left: -25%;
+        width: 80vmax;
+        height: 80vmax;
+        background: radial-gradient(circle, var(--aqua) 0%, transparent 62%);
+        opacity: 0.13;
+      }
+
+      .wash-b {
+        right: -25%;
+        bottom: -33%;
+        width: 70vmax;
+        height: 70vmax;
+        background: radial-gradient(circle, var(--info) 0%, transparent 62%);
+        opacity: 0.1;
+      }
+
       .panel {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+        gap: 48px;
+        padding: 32px;
+        width: 100%;
+        box-sizing: border-box;
+      }
+
+      .mark-column {
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 18px;
-        max-width: 460px;
-        padding: 32px;
-        text-align: center;
+        flex: none;
       }
 
-      /* The mark itself is the loading indicator. It is the one branded surface
-         the desktop shell fully controls — everything after the redirect is
-         served by the gateway container, so this is what a user actually looks
-         at while the stack comes up. */
+      /* The mark is the loading indicator. It is the one branded surface the
+         desktop shell fully controls — everything after the redirect is served by
+         the gateway container. */
       .spinner {
-        width: min(60vw, 340px);
-        height: min(60vw, 340px);
+        width: min(42vw, 30rem);
+        height: min(42vw, 30rem);
         filter: drop-shadow(0 0 60px rgba(30, 207, 224, 0.35));
       }
 
@@ -53,23 +107,43 @@
         display: none;
       }
 
+      /* The mark's box is square but the artwork inside it is an oval, so the
+         wordmark is pulled up into the slack rather than sitting adrift. */
       .wordmark {
-        margin-top: -18px;
+        margin-top: -2.5rem;
         font-size: 13px;
         font-weight: 600;
         letter-spacing: 0.2em;
         text-transform: uppercase;
-        color: #7f97a5;
+        color: var(--ink-muted);
+      }
+
+      .copy {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 14px;
+        max-width: 26rem;
+        text-align: left;
+      }
+
+      .headline {
+        margin: 0;
+        font-size: clamp(28px, 3.4vw, 44px);
+        line-height: 1.05;
+        font-weight: 700;
+        letter-spacing: -0.01em;
       }
 
       #status {
+        margin: 0;
         font-size: 15px;
         line-height: 1.5;
-        color: #b9cbd6;
+        color: var(--ink-muted);
       }
 
       #status.error {
-        color: #f2a3a3;
+        color: #ef7070;
       }
 
       .actions {
@@ -87,8 +161,8 @@
         appearance: none;
         border: 1px solid rgba(231, 241, 247, 0.18);
         background: rgba(231, 241, 247, 0.06);
-        color: #e7f1f7;
-        border-radius: 8px;
+        color: var(--ink);
+        border-radius: 10px;
         padding: 10px 16px;
         font-size: 14px;
         cursor: pointer;
@@ -99,24 +173,52 @@
       }
 
       button.primary {
-        background: #3ec9e0;
-        border-color: #3ec9e0;
-        color: #04222b;
+        background: #0e766a;
+        border-color: #0e766a;
+        color: #f0fdf4;
         font-weight: 600;
       }
 
       button.primary:hover {
-        background: #63d5e6;
+        background: #0d7a6e;
+      }
+
+      /* Narrow windows stack, exactly as the hero does below its md breakpoint. */
+      @media (max-width: 860px) {
+        .panel {
+          flex-direction: column;
+          gap: 24px;
+        }
+
+        .spinner {
+          width: min(70vw, 20rem);
+          height: min(70vw, 20rem);
+        }
+
+        .copy {
+          align-items: center;
+          text-align: center;
+        }
       }
     </style>
   </head>
   <body>
+    <div class="wash wash-a"></div>
+    <div class="wash wash-b"></div>
+
     <div class="panel">
-      <div id="spinner" class="spinner"></div>
-      <div class="wordmark">Companion Memory</div>
-      <div id="status">Starting Companion Memory…</div>
-      <div id="actions" class="actions hidden"></div>
+      <div class="mark-column">
+        <div id="spinner" class="spinner"></div>
+        <div class="wordmark">Companion Memory</div>
+      </div>
+
+      <div class="copy">
+        <h1 class="headline">Waking up your memory.</h1>
+        <p id="status">Starting Companion Memory…</p>
+        <div id="actions" class="actions hidden"></div>
+      </div>
     </div>
+
     <script src="lottie.min.js"></script>
     <script src="mark.js"></script>
     <script src="bootstrap.js"></script>
