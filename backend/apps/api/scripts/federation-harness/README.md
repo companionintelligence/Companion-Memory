@@ -556,7 +556,7 @@ it will show up.
 
 ---
 
-## A separate, real-world finding: `create-test-user.ts` had a live auth bug
+## A separate, real-world finding: a `create-test-user.ts` credential appeared not to work — investigated, did not reproduce on a clean deploy
 
 Not something this Docker-based harness itself hit — `provisionOwner()` in
 [`seed.ts`](seed.ts) shells out to
@@ -566,11 +566,28 @@ test on 2026-09-05, provisioning credentials directly against two genuinely
 separate, already-running appliances (a remote Tailscale node and a Mac) rather
 than through this harness's own compose-managed boxes.
 
-**As of this writing (2026-09-05), no PR is open against CI-Server for it.**
-Search open and merged PRs for one before relying on the script to provision a
-fresh box's credentials, and update this note once a fix lands — this
-paragraph is a pointer, not a diagnosis; the mechanism of the bug is not
-re-derived here.
+PR #2597 investigated it properly rather than patching blind: a fully real
+disposable stack (real Postgres, all migrations, the real `App` module booted
+and listening — no stubs) running the *unmodified* script could not reproduce
+a failure. Every credential set it printed authenticated correctly — password
+login, the API key via both `x-api-key` and `Authorization: Bearer`, against
+both GraphQL and REST, for a fresh user and a re-run against an existing one.
+The script's hashing was verified line-by-line against `ApiKeyService`/
+`UserService`'s own hashing and matches exactly.
+
+**Conclusion: this was very likely specific to that one beta-1 session, not a
+code defect on `origin/main`.** The same session's box-bringup notes recorded a
+stale Yarn PnP install and a port collision with a co-resident sibling
+worktree's docker stack on that exact machine — either could produce a
+credential that looks freshly minted but is checked against the wrong running
+process or a stale build. PR #2597 shipped a DB-backed regression test
+regardless (it drives the real, unmodified CLI script against a real migrated
+Postgres and authenticates with only what it printed, using the real
+`UserService`/`ApiKeyService`/`ApiKeyStrategy` — no mocks), and confirmed the
+test is load-bearing by temporarily reintroducing two plausible regressions
+(sha1-instead-of-sha256 hashing; a mutated `bcrypt.compare` input) and watching
+it fail with exactly this bug's signature before reverting them. If this
+resurfaces, suspect the deployment first, not the script.
 
 ## A side benefit: a current-schema database for the DB-backed suites
 
