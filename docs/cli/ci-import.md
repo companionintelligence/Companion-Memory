@@ -18,12 +18,12 @@ It is **not** a revival of `scripts/cli/ci-server.sh` (PR #1420, reverted in
 and had nothing to do with importing.
 
 `ci-import` is also, despite the name, no longer only about importing:
-`peers`/`grants`/`asks` (below) put the interpersonal-ask feature — one
-Companion answering another's owner's question, under consent the owner grants
-in advance — at the command line too. They share this binary, this
-credential, and this output/error convention, but talk to the appliance over
-GraphQL rather than REST; see [Peers, grants and asks](#peers-grants-and-asks-the-memory-surface-graphql)
-for why that needed a second, small client rather than a second binary.
+`peers`/`grants`/`asks` (see "Peers, grants and asks" below) put the
+interpersonal-ask feature — one Companion answering another's owner's
+question, under consent the owner grants in advance — at the command line
+too. They share this binary, this credential, and this output/error
+convention, but talk to the appliance over GraphQL rather than REST, which is
+why that section explains a second, small client rather than a second binary.
 
 ---
 
