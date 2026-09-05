@@ -11,6 +11,28 @@
 > Verified against merged `origin/main` at **`8cd68dbe6`**. Every number in the
 > "Verification" sections was measured on a real migrated Postgres (306+
 > migrations applied), not inferred from the code.
+>
+> **Δ 2026-09-05 — re-verified against current `origin/main` following a real
+> two-box federation test over genuine cross-machine Tailscale HTTPS** (one
+> appliance on a remote Tailscale node, one on a Mac, both actually live). This
+> pass re-checked, and confirms unchanged: the closed archetype vocabulary is
+> still `relationship` / `content` / `availability` / `attribute` / `identity`
+> (`ASK_ARCHETYPES`, `domains/asks/askGrammar.ts`) — there has never been a
+> `retrieval` *archetype*; `retrieval` names a disclosure *form* only
+> (`AnswerForm`), unaffected by this vocabulary; `photos` (content) and
+> `calendar` (availability) are still real example data classes. It additionally
+> found and documents a gate on the federated path that this document did not
+> previously name, independent of the `peers.audience` gate and the
+> `peerAccessToken` gap G3 already covered: `checkEgressUrl` blocks the entire
+> CGNAT range (`100.64.0.0/10`, where Tailscale addresses live) by default, so
+> two appliances reachable only over a private Tailscale mesh could not
+> federate at all until an operator opts in. See the updated G3 in §9 and
+> [`peer-federation.md`](peer-federation.md)'s new "Peering over a private
+> network" section for the fix
+> ([PR #2595](https://github.com/companionintelligence/CI-Server/pull/2595),
+> merged 2026-09-06). This was the only re-verification this pass performed —
+> the rest of the document, including its test-suite counts and screenshots,
+> was **not** independently re-run and still reflects `8cd68dbe6`.
 
 **Sibling documents. Read them; this one does not repeat them.**
 
@@ -741,6 +763,12 @@ Companion. The peer route refuses every request until it is set rather than
 falling back to the broad list. With the `ask` flag off, `POST /agent/v1/ask`
 returns 503, indistinguishable from a box with no peer surface at all.
 
+A fourth setting, `peers.allowCgnatEndpoints` /
+`CI_PEER_ALLOW_CGNAT_ENDPOINTS` (default off), gates **outbound** egress into
+CGNAT space and landed in
+[PR #2595](https://github.com/companionintelligence/CI-Server/pull/2595) — see
+`peer-federation.md` for what it does and does not widen; not repeated here.
+
 ---
 
 ## 7. Running it
@@ -1020,7 +1048,20 @@ so itself: *"asking across boxes needs an access token from the Portal that your
 Companion cannot issue from this page yet."* `sendPeerAsk` takes a
 `peerAccessToken` as a **non-nullable** field — until Portal token exchange
 (RFC 8693) lands, the caller must supply it, and this box never mints, exchanges
-or caches one.
+or caches one. **A second, independent gate exists even with a token in hand:**
+two appliances reachable only over a private Tailscale mesh are refused by
+`checkEgressUrl`'s SSRF guard by default, which blocks the entire CGNAT range
+(`100.64.0.0/10`) — confirmed live 2026-09-05, driving a real `sendPeerAsk`
+between two genuinely separate boxes over real cross-machine Tailscale HTTPS,
+refused with `"Peer endpoint not permitted"` before any application logic ran.
+[PR #2595](https://github.com/companionintelligence/CI-Server/pull/2595) (merged
+2026-09-06) added an opt-in `peers.allowCgnatEndpoints` /
+`CI_PEER_ALLOW_CGNAT_ENDPOINTS` flag, default off, scoped strictly to the CGNAT
+range — RFC1918, loopback and link-local stay blocked regardless of the flag.
+See `peer-federation.md`'s "Peering over a private network" section. Clearing
+this gate does not by itself unblock G3 — the token gap above is still there —
+but it is the difference between "cannot federate at all on a private mesh" and
+"cannot federate from the page yet".
 
 **G4 — Of eight user journeys, ONE completes through the UI:** link a peer and
 set a trust tier. The **backend is proven correct for all eight** by driving the

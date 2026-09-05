@@ -4,7 +4,24 @@
 > Feature flag: **`ask`** — **on** by default since 2026-08-17 (commit `793e618c0`), so the
 > local ask/grant GraphQL surface is live out of the box. The *inbound peer* route stays
 > dark for a separate reason: it also requires `peers.audience`, and 503s until an operator
-> binds one. Tracking: [CI-Server #1711](https://github.com/companionintelligence/CI-Server/issues/1711) → epic #1712.
+> binds one. The *outbound* path has a third, independent gate when the peer is reachable
+> only over a private mesh — see [Peering over a private network](#peering-over-a-private-network-tailscale--cgnat)
+> below. Tracking: [CI-Server #1711](https://github.com/companionintelligence/CI-Server/issues/1711) → epic #1712.
+>
+> **Δ 2026-09-05/06 — a real two-box test, over genuine cross-machine Tailscale HTTPS.**
+> One appliance on a remote Tailscale node, one on a Mac, both actually live. Driving a
+> real `sendPeerAsk` between them refused with `"Peer endpoint not permitted"` —
+> `checkEgressUrl`'s SSRF guard blocks the whole CGNAT range by default, and that is
+> exactly where Tailscale addresses live. The fix,
+> [PR #2595](https://github.com/companionintelligence/CI-Server/pull/2595), has since
+> **merged**: see [Peering over a private network](#peering-over-a-private-network-tailscale--cgnat)
+> for the flag, and [Federating two REAL boxes](#federating-two-real-boxes-end-to-end)
+> for everything else the same run measured. Re-verified at the same time and unchanged:
+> the archetype vocabulary (still relationship/content/availability/attribute/identity,
+> `askGrammar.ts` — no `retrieval` archetype exists or ever appeared here; `retrieval` is
+> a disclosure *form*, not an archetype, and is unaffected), `photos`/`calendar` as
+> example data classes, the `peers.audience` 503 gate, and the caller-supplied
+> `peerAccessToken` limitation — all exactly as this document already said.
 
 Most questions between people are really queries against the other person's memory — *"do you have photos of us?"*, *"do you know anyone at Acme?"*, *"free for lunch Friday?"*. Today those run over the worst possible protocol: interrupt the human, wait, hope they remember, get an unsourced answer.
 
@@ -41,7 +58,9 @@ Each is a separate wire shape, so a peer cannot smuggle a retrieval through an a
 | "Have you seen X content?" | `content` | existence | count/summary — **no item references** |
 | "Free for lunch Friday at X?" | `availability` | free/busy | **interval boundaries only** |
 
-Shape and vocabulary follow OID4VP/DCQL's "request specific claims, get a selectively-disclosed response" model rather than a datastore query. See [`domains/peers/protocol.ts`](../backend/apps/api/src/domains/peers/protocol.ts).
+Shape and vocabulary follow OID4VP/DCQL's "request specific claims, get a selectively-disclosed response" model rather than a datastore query. See [`domains/peers/protocol.ts`](../backend/apps/api/src/domains/peers/protocol.ts) — `PEER_ASK_ARCHETYPES`.
+
+**This is the WIRE vocabulary, not the whole one.** The general/local ask grammar (`ASK_ARCHETYPES` in [`domains/asks/askGrammar.ts`](../backend/apps/api/src/domains/asks/askGrammar.ts)) closes on **five** — the three above, plus `attribute` ("where do you live?" → a summary value) and `identity` ("are you actually X?" → confirmed/not). Those two are not yet in `peers/protocol.ts`'s discriminated union, so an `attribute` or `identity` ask cannot cross a box boundary today — only a local ask can use them. Neither vocabulary has ever included `retrieval`: that word names one of the disclosure *forms* an answer may take (`AnswerForm`, alongside `boolean`/`existence`/`attribute`/`identity`), never an archetype a request can declare.
 
 ## Availability, and why it can answer itself
 
@@ -348,6 +367,7 @@ real box's issuer — the signing key is checked in.
   entirely for a literal IP, so `checkEgressUrl`'s literal-address checks are load-bearing, not
   redundant (pinned by a test that measures it).
 - **Rate limits are per-process and in-memory.** Correct for a single-instance appliance; a shared store is needed before the ask path goes multi-instance.
+- **Peer egress into CGNAT/Tailscale space is blocked by default.** Two appliances linked only over a private Tailscale mesh cannot federate without an explicit operator opt-in — see [Peering over a private network](#peering-over-a-private-network-tailscale--cgnat) above. [PR #2595](https://github.com/companionintelligence/CI-Server/pull/2595) added the flag (merged 2026-09-06); the default posture is unchanged.
 - **The peer access token is supplied by the caller**, not minted here, until Portal token exchange lands.
 - **Nothing in GraphQL drives the collect route.** `OutboundAskService.pollForAnswer` and
   `PeerAskClient.poll` are both here and both tested, but no mutation calls them, so
@@ -447,7 +467,7 @@ Full protocol reference, with the verification-order chart and the threat table:
 
 ## Status
 
-**Both directions work, including the return trip — given a link and a token.** A box can receive, gate, and answer a federated ask; can compose and send one; and can now collect an answer its peer's owner approved after the fact. Peer-link management and the ask UI's route both landed (see the Δ note under Known limitations).
+**Both directions work, including the return trip — given a link, a token, and (for a CGNAT-only peer) the opt-in flag.** A box can receive, gate, and answer a federated ask; can compose and send one; and can now collect an answer its peer's owner approved after the fact. Peer-link management and the ask UI's route both landed (see the Δ note under Known limitations).
 
 **Δ 2026-09-06 — measured between two real boxes, not the loopback harness.** Outbound egress into a tailnet works through the real `PeerAskClient`, and every inbound gate up to and including token verification passes over real TLS against a real remote JWKS. Two things stop a complete round trip, both detailed under [Federating two REAL boxes](#federating-two-real-boxes-end-to-end): **`peer_links.peer_issuer` / `peer_subject` have no write path outside SQL**, so a link created the supported way can never match an inbound ask; and the peer access token is still passed in by hand, because CI-Portal ships a peer directory but no token exchange. Also fixed on the way through: the inbound rate limiter built its `ConsumptionStore` key with NUL separators, which Postgres rejects — a `500` on **every** inbound ask and collect for any box on the default store, ahead of any policy.
 

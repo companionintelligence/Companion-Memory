@@ -124,9 +124,22 @@ guard, and the guard is right.
 (`domains/peers/urlPolicy.ts`), which demands **https**, a port in `{'', '443'}`,
 and a host that is not `localhost`, not `*.localhost`, not `*.local`, and not a
 literal loopback or RFC1918 address. `http://127.0.0.1:13031` fails four of
-those five. There is no bypass env var, and there should not be: `memory_endpoint`
-comes from a directory descriptor, so it is attacker-influenced, and this is a
-textbook SSRF sink.
+those five. There is no bypass env var for loopback, and there should not be:
+`memory_endpoint` comes from a directory descriptor, so it is
+attacker-influenced, and this is a textbook SSRF sink.
+
+> **Δ 2026-09-05.** [PR #2595](https://github.com/companionintelligence/CI-Server/pull/2595)
+> (merged) adds an opt-in flag, `peers.allowCgnatEndpoints` /
+> `CI_PEER_ALLOW_CGNAT_ENDPOINTS`, but it does **not** change the paragraph
+> above: the flag widens exactly one range, CGNAT (`100.64.0.0/10` — where a
+> real Tailscale peer lives), and loopback/RFC1918/link-local stay refused at
+> every setting. It exists because a REAL two-box test today — one appliance on
+> a Tailscale node, one on a Mac, both genuinely live over cross-machine HTTPS —
+> hit the CGNAT leg of this same guard and was refused with `"Peer endpoint not
+> permitted"`. This harness's boxes talk over `127.0.0.1`, not a tailnet
+> address, so the flag is irrelevant to it either way; see
+> [`docs/peer-federation.md`](../../../../../docs/peer-federation.md#peering-over-a-private-network-tailscale--cgnat)
+> for what it is actually for.
 
 **Nothing was weakened to make the demo run.** What the driver replaces is who
 calls `fetch`. Everything that decides disclosure is real: a real RS256 token,
@@ -543,6 +556,22 @@ it will show up.
 
 ---
 
+## A separate, real-world finding: `create-test-user.ts` had a live auth bug
+
+Not something this Docker-based harness itself hit — `provisionOwner()` in
+[`seed.ts`](seed.ts) shells out to
+[`scripts/create-test-user.ts`](../create-test-user.ts) on every `make fed-demo`
+run and it is green (53/0, above). It surfaced instead during the real two-box
+test on 2026-09-05, provisioning credentials directly against two genuinely
+separate, already-running appliances (a remote Tailscale node and a Mac) rather
+than through this harness's own compose-managed boxes.
+
+**As of this writing (2026-09-05), no PR is open against CI-Server for it.**
+Search open and merged PRs for one before relying on the script to provision a
+fresh box's credentials, and update this note once a fix lands — this
+paragraph is a pointer, not a diagnosis; the mechanism of the bug is not
+re-derived here.
+
 ## A side benefit: a current-schema database for the DB-backed suites
 
 The opt-in Postgres suites (`GrantService.integration.spec.ts`,
@@ -586,7 +615,9 @@ copy — lives in `.federation-harness/` at the repo root and is gitignored.
 
 ## Related
 
-- [`docs/peer-federation.md`](../../../../../docs/peer-federation.md) — the design
+- [`docs/peer-federation.md`](../../../../../docs/peer-federation.md) — the design,
+  including the CGNAT/Tailscale opt-in flag this harness's loopback boxes don't need
 - [`domains/peers/`](../../src/domains/peers) — the inbound half
 - [`domains/asks/`](../../src/domains/asks) — grants, ceilings, audit
 - [`domains/peers/urlPolicy.ts`](../../src/domains/peers/urlPolicy.ts) — the egress guard
+- [PR #2595](https://github.com/companionintelligence/CI-Server/pull/2595) — the CGNAT opt-in flag (merged)
