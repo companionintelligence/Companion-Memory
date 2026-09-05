@@ -1108,6 +1108,48 @@ export const ConfigSchema = z.object({
      *     console.log(JSON.stringify(generateKeyPairSync('ed25519').privateKey.export({format:'jwk'})))"
      */
     signingKeyJwk: z.string().optional(),
+    /**
+     * OPT-IN escape hatch: let peer egress dial CGNAT space (100.64.0.0/10).
+     *
+     * OFF by default, and off is byte-identical to the pre-existing behaviour —
+     * `urlPolicy.ts`'s address table blocks the whole range exactly as before.
+     * This exists because CGNAT is also where Tailscale (and similar
+     * carrier-grade-NAT mesh overlays) live: two appliances an operator has
+     * deliberately linked over their own private tailnet fall in the SAME
+     * range a hostile directory entry would use to reach the box's own LAN,
+     * so without this knob they can never federate at all. Confirmed live: a
+     * real cross-machine `sendPeerAsk` over Tailscale refused with "Peer
+     * endpoint not permitted" before this flag existed.
+     *
+     * Deliberately narrower than "any private network". RFC1918 space (10/8,
+     * 172.16/12, 192.168/16) stays blocked regardless of this setting — that
+     * is where an appliance's OWN infrastructure typically lives (its Docker
+     * network, its Postgres, a cloud VPC's internal services), so folding it
+     * into the same switch would trade a narrow, tested federation scenario
+     * for a much larger SSRF surface against the box's own internals. A
+     * deployment that genuinely needs RFC1918 peer egress should get its own
+     * explicit flag, not inherit this one for convenience.
+     *
+     * Loopback (127.0.0.0/8), link-local (169.254.0.0/16, including cloud
+     * metadata) and 0.0.0.0/8 are NEVER gated by this flag, at any setting:
+     * those guard against dialing the box's OWN services, a different mistake
+     * than "I run a private mesh", and no operator intent should reopen them.
+     *
+     * Changes only which addresses `checkEgressUrl` treats as in range to
+     * try. The DNS-rebinding / redirect protections in `peerEgressFetch`
+     * (connect-time address pinning, zero redirects followed) apply UNCHANGED
+     * to the newly-permitted range — a CGNAT hostname that rebinds to a
+     * blocked answer is still refused, flag or no flag.
+     *
+     * `booleanStringSchema`, not `z.coerce.boolean()` — the plain coercion
+     * `requireHttpSignature` above uses treats ANY non-empty string as `true`,
+     * including the literal string `"false"` an env var would carry, which is
+     * exactly why that field still has no env mapping in
+     * `custom-environment-variables.json`. This flag is meant to be operator
+     * -set via `CI_PEER_ALLOW_CGNAT_ENDPOINTS`, so it needs the schema that
+     * actually parses `"true"`/`"false"` strings correctly.
+     */
+    allowCgnatEndpoints: booleanStringSchema.default(false),
   }),
   /**
    * Where the abuse-control counters live -- the rate-limit windows and the
@@ -1334,6 +1376,19 @@ if (/^0{64}$/i.test(parsed.auth.encryption.fieldKey)) {
   }
 
   console.warn(msg);
+}
+
+// Loud by design (see the field's own doc comment above): an operator who set
+// CI_PEER_ALLOW_CGNAT_ENDPOINTS should never have to wonder later whether they
+// did. This fires once, at boot, independent of whether the box ever actually
+// makes a peer call into that range.
+if (parsed.peers.allowCgnatEndpoints) {
+  console.warn(
+    '[configuration] CI_PEER_ALLOW_CGNAT_ENDPOINTS is set — peer egress may now dial addresses in ' +
+      '100.64.0.0/10 (CGNAT space, including Tailscale). This box will treat that range as reachable ' +
+      'peer infrastructure. Only enable this if you have deliberately linked your appliances over a ' +
+      'private network you trust; RFC1918, loopback and link-local space remain blocked regardless.',
+  );
 }
 
 export default parsed;

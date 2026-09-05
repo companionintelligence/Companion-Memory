@@ -115,7 +115,7 @@ The route deliberately does **not** use `JwtOrApiKeyAuthGuard`: its portal path 
 | **No enumeration** | Portal search returns only opt-in `discoverable` entries; resolution requires an exact handle. |
 | **Bounded blast radius** | Every outbound call is timeout-bounded; a slow or hostile peer degrades to a non-answer rather than hanging the caller. |
 | **A non-answer says nothing about why** | The wire carries `answered` or `pending`, and one constant reason. A block grant, an ask in the owner's review inbox, an ask that expired, and an `askId` this box has never seen are the SAME reply. `declined` vs `pending_review` was a one-bit read on the grant matrix, mappable at 10 probes a minute — the same oracle #2210/#2216 closed for a local asker, which this had been cited as the precedent for. The collapse is made at the **responder**: hiding it on receipt would bind only a well-behaved asker while the word stayed on the wire. |
-| **No SSRF** | Every server-side fetch goes through `peerEgressFetch()`, which is the only dialer in the domain. Three guards, not one: (1) `checkEgressUrl()` on the URL — https only, no credentials, no non-standard ports, no private/loopback/link-local/CGNAT/metadata/documentation address, no `.local`/`.internal`/bare-label name — including IPv4-mapped IPv6 in **both** spellings, since `URL` normalizes `::ffff:10.0.0.1` to hex, and every decimal/octal/hex/short IPv4 spelling, which `URL` folds to a dotted quad; (2) the resolved address is checked **at connect time** through the dispatcher's `lookup`, so there is no rebind window (see below); (3) **redirects are refused, not followed** — a peer answering `307 Location: http://127.0.0.1:11434/api/pull` used to have this box re-issue the POST, body intact, inside its own network. |
+| **No SSRF** | Every server-side fetch goes through `peerEgressFetch()`, which is the only dialer in the domain. Three guards, not one: (1) `checkEgressUrl()` on the URL — https only, no credentials, no non-standard ports, no private/loopback/link-local/CGNAT/metadata/documentation address, no `.local`/`.internal`/bare-label name — including IPv4-mapped IPv6 in **both** spellings, since `URL` normalizes `::ffff:10.0.0.1` to hex, and every decimal/octal/hex/short IPv4 spelling, which `URL` folds to a dotted quad; (2) the resolved address is checked **at connect time** through the dispatcher's `lookup`, so there is no rebind window (see below); (3) **redirects are refused, not followed** — a peer answering `307 Location: http://127.0.0.1:11434/api/pull` used to have this box re-issue the POST, body intact, inside its own network. CGNAT specifically is opt-in-permittable ([below](#peering-over-a-private-network-tailscale--cgnat)); everything else in that list is unconditional. |
 | **Token can't be replayed at another box** | The peer surface verifies the token against **this box's own `peers.audience`**, not the broad first-party list. It refuses to accept anything until that is configured. |
 | **A leaked token is not, by itself, enough** | Requests carry an **RFC 9421 HTTP message signature** over `@method`, `@target-uri` and an RFC 9530 `Content-Digest` of the body, with a nonce and a bounded window. See [Message signatures](#message-signatures) — this is what a bearer token structurally cannot give: binding to *this* request, and detectable replay. |
 | **Inbound flooding is bounded** | `PeerRateLimitService` limits on the verified `(issuer, subject)` **before** the peer-link lookup, so an unknown caller is limited too. |
@@ -150,6 +150,57 @@ now ships **`true`**. Turning it off makes `POST /agent/v1/ask` return 503 — i
 from a box with no peer surface at all.
 
 > **`peers.audience` is not optional for inbound.** Without it, a token issued for *any* first-party client would verify here — including one minted for a different Companion. The peer route refuses every request until it is set, rather than falling back to the broad list.
+
+### Peering over a private network (Tailscale / CGNAT)
+
+`checkEgressUrl` (`domains/peers/urlPolicy.ts`) refuses CGNAT space
+(`100.64.0.0/10`) by default, alongside RFC1918, loopback, and link-local —
+correct for the general case, since a hostile directory entry pointing there
+would have this box reach into whatever network it happens to sit on. The
+appliance is also routinely run **on** a Tailscale tailnet, which lives in
+that exact range, so the default posture makes it impossible to federate two
+Companions an operator has deliberately linked over their own private mesh.
+Confirmed live: a real cross-machine `sendPeerAsk` between two genuinely
+separate appliances over Tailscale refused with *"Peer endpoint not
+permitted"* before this setting existed.
+
+```jsonc
+// backend/apps/api/config/default.json
+"peers": {
+  // ...
+  "allowCgnatEndpoints": false   // CI_PEER_ALLOW_CGNAT_ENDPOINTS
+}
+```
+
+**Off by default, and off is byte-identical to before this setting existed** —
+every existing test, and every deployment that has not set the env var, sees
+no change at all. Set `CI_PEER_ALLOW_CGNAT_ENDPOINTS=true` only when you have
+personally linked this box's peers over a private network you trust (a
+Tailscale tailnet, most commonly). Turning it on is a statement that **you**
+are vouching for that address space, not the platform — it stays loud about
+it: the box logs a warning at boot while the flag is set, and again the first
+time it actually lets a peer call through that would otherwise have been
+refused.
+
+What it does **not** do, on purpose:
+
+- **RFC1918 (`10/8`, `172.16/12`, `192.168/16`) stays blocked regardless.**
+  That space is where an appliance's own infrastructure typically lives — its
+  Docker network, its Postgres, a cloud VPC's internal services — so folding
+  it into the same switch would trade a narrow, tested federation scenario for
+  a much larger SSRF surface against the box's own internals. A deployment
+  that genuinely needs RFC1918 peer egress needs its own explicit flag, not
+  this one.
+- **Loopback (`127.0.0.0/8`), link-local (`169.254.0.0/16`, including cloud
+  metadata) and `0.0.0.0/8` are never gated by this flag, at any setting.**
+  Those guard against the box dialing *its own* services — a different
+  mistake than "I run a private mesh" — and no operator intent reopens them.
+- **The DNS-rebinding and redirect protections are unaffected.** The
+  connect-time address pin (`peerEgressLookup`) and the zero-redirects rule in
+  `peerEgressFetch` apply to a CGNAT peer exactly as they do to a public one —
+  a CGNAT-looking hostname that resolves (or rebinds) to a blocked address is
+  still refused, flag or no flag; only which addresses are considered *in
+  range to try in the first place* changes.
 
 ## Known limitations
 

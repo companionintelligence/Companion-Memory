@@ -292,6 +292,7 @@
     "audience": "",
     "timeoutMs": 10000,
     "requireHttpSignature": false,
-    "signingKeyJwk": ""
+    "signingKeyJwk": "",
+    "allowCgnatEndpoints": false
   }
 }

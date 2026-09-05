@@ -59,11 +59,28 @@
  * `.dependency-cruiser.mjs`' `no-cross-domain-internals` forbids reaching into
  * `domains/embed`, and its barrel exports a whole NestJS module rather than
  * these predicates. `urlPolicy.spec.ts` pins the corpus on this side.
+ *
+ * ═══ THE ONE DELIBERATE EXCEPTION: `peers.allowCgnatEndpoints` ═══
+ *
+ * CGNAT (100.64.0.0/10) is where Tailscale lives, so the default block above
+ * — correct for an address a hostile directory entry chose — also makes it
+ * impossible to federate two appliances an operator has deliberately linked
+ * over their OWN tailnet. `peers.allowCgnatEndpoints` (env
+ * `CI_PEER_ALLOW_CGNAT_ENDPOINTS`) is an explicit, default-OFF escape hatch
+ * for exactly that, and it is scoped as narrowly as the problem: every
+ * function below that consults the address table takes an optional
+ * `{ allowCgnat }` and, unset, is byte-identical to the table above. Nothing
+ * else moves — RFC1918 stays blocked outright (see the config field's own doc
+ * comment for why), and this file's OTHER caller, `UnfurlFetcher`'s duplicate
+ * table in `domains/embed`, is untouched: this is a peers-domain-only escape
+ * hatch, not a change to what an unfurl may fetch.
  */
 import dns from 'node:dns';
 import net, { type LookupFunction } from 'node:net';
 
 import { Agent, fetch as undiciFetch } from 'undici';
+
+import config from '@ci/configuration';
 
 /** Ports a legitimate peer or directory may listen on. */
 const ALLOWED_PORTS: ReadonlySet<string> = new Set(['', '443']);
@@ -83,6 +100,16 @@ const CONNECT_TIMEOUT_MS = 10_000;
 export interface UrlPolicyResult {
   ok: boolean;
   reason?: string;
+}
+
+/**
+ * Threaded through every predicate below. Unset (or `allowCgnat: false`) is
+ * byte-identical to having no option at all — the shape every one of these
+ * functions had before `peers.allowCgnatEndpoints` existed.
+ */
+export interface EgressPolicyOptions {
+  /** See `peers.allowCgnatEndpoints` in `configuration.ts`. Default false. */
+  allowCgnat?: boolean;
 }
 
 function ipv4ToInt(ip: string): number {
@@ -105,15 +132,19 @@ function inCidr4(ip: number, base: string, bits: number): boolean {
  *
  * 100.64.0.0/10 matters here for the same reason it matters in `domains/embed`:
  * this appliance is routinely on a Tailscale tailnet, and a CGNAT address is
- * "inside" on such a box.
+ * "inside" on such a box. `options.allowCgnat` (default false — see
+ * `peers.allowCgnatEndpoints`) is the ONLY thing that can take a range back
+ * out of this table, and it takes out exactly that one range: every other
+ * entry, RFC1918 included, is unconditional.
  */
-export function isBlockedIpv4(ip: string): boolean {
+export function isBlockedIpv4(ip: string, options?: EgressPolicyOptions): boolean {
   const n = ipv4ToInt(ip);
+  const allowCgnat = options?.allowCgnat ?? false;
 
   return (
     inCidr4(n, '0.0.0.0', 8) || // "this" network
     inCidr4(n, '10.0.0.0', 8) || // RFC1918
-    inCidr4(n, '100.64.0.0', 10) || // CGNAT — Tailscale lives here
+    (!allowCgnat && inCidr4(n, '100.64.0.0', 10)) || // CGNAT — Tailscale lives here
     inCidr4(n, '127.0.0.0', 8) || // loopback
     inCidr4(n, '169.254.0.0', 16) || // link-local + cloud metadata
     inCidr4(n, '172.16.0.0', 12) || // RFC1918
@@ -138,12 +169,12 @@ export function isBlockedIpv4(ip: string): boolean {
  * groups. Handling only the first leaves the bypass wide open, because by the
  * time a host reaches here `new URL()` has usually rewritten it.
  */
-export function isBlockedIpv6(ip: string): boolean {
+export function isBlockedIpv6(ip: string, options?: EgressPolicyOptions): boolean {
   const lower = ip.toLowerCase().replace(/^\[|\]$/g, '');
 
   const mapped = /^(?:0*:)*ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
   if (mapped) {
-    return isBlockedIpv4(mapped[1]);
+    return isBlockedIpv4(mapped[1], options);
   }
 
   const mappedHex = /^(?:0*:)*ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(lower);
@@ -151,7 +182,7 @@ export function isBlockedIpv6(ip: string): boolean {
     const hi = Number.parseInt(mappedHex[1], 16);
     const lo = Number.parseInt(mappedHex[2], 16);
 
-    return isBlockedIpv4(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+    return isBlockedIpv4(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`, options);
   }
 
   if (lower === '::' || lower === '::1') {
@@ -176,21 +207,21 @@ export function isBlockedIpv6(ip: string): boolean {
  * connect-time guard runs against a RESOLVED answer, and an unparseable answer
  * is not something to give the benefit of the doubt to.
  */
-export function isBlockedAddress(address: string): boolean {
+export function isBlockedAddress(address: string, options?: EgressPolicyOptions): boolean {
   const family = net.isIP(address);
   if (family === 4) {
-    return isBlockedIpv4(address);
+    return isBlockedIpv4(address, options);
   }
 
   if (family === 6) {
-    return isBlockedIpv6(address);
+    return isBlockedIpv6(address, options);
   }
 
   return true;
 }
 
 /** Why a hostname is refused, or null when it is acceptable. */
-function hostnameRefusal(hostname: string): string | null {
+function hostnameRefusal(hostname: string, options?: EgressPolicyOptions): string | null {
   const host = hostname.toLowerCase().replace(/\.$/, '');
 
   if (!host) {
@@ -207,7 +238,7 @@ function hostnameRefusal(hostname: string): string | null {
   // into a dotted quad by this point, so one check covers every encoding.
   const literal = host.replace(/^\[|\]$/g, '');
   if (net.isIP(literal)) {
-    return isBlockedAddress(literal) ? 'must not target a private or loopback address' : null;
+    return isBlockedAddress(literal, options) ? 'must not target a private or loopback address' : null;
   }
 
   // A bare label ("intranet", "companion") is a search-domain lookup, never a
@@ -227,8 +258,13 @@ function hostnameRefusal(hostname: string): string | null {
  *
  * This is the PRE-FLIGHT half. It cannot see the address that will actually be
  * dialled; {@link peerEgressFetch} is what makes the decision stick.
+ *
+ * `options` is unset by every existing caller and every existing test, so the
+ * default (`allowCgnat: false`) keeps this byte-identical to before
+ * `peers.allowCgnatEndpoints` existed. {@link peerEgressFetch} is the only
+ * caller that ever passes it, and it reads the live config value to do so.
  */
-export function checkEgressUrl(raw: string): UrlPolicyResult {
+export function checkEgressUrl(raw: string, options?: EgressPolicyOptions): UrlPolicyResult {
   let url: URL;
   try {
     url = new URL(raw);
@@ -248,14 +284,14 @@ export function checkEgressUrl(raw: string): UrlPolicyResult {
     return { ok: false, reason: `port ${url.port} is not permitted` };
   }
 
-  const refusal = hostnameRefusal(url.hostname);
+  const refusal = hostnameRefusal(url.hostname, options);
 
   return refusal == null ? { ok: true } : { ok: false, reason: refusal };
 }
 
 /** Convenience predicate for call sites that only need a boolean. */
-export function isEgressUrlAllowed(raw: string): boolean {
-  return checkEgressUrl(raw).ok;
+export function isEgressUrlAllowed(raw: string, options?: EgressPolicyOptions): boolean {
+  return checkEgressUrl(raw, options).ok;
 }
 
 /**
@@ -292,10 +328,21 @@ export type AddressResolver = (
  * public and a private address is not a name with one usable answer; it is
  * precisely the rebind shape, and picking the public one just means losing the
  * race later.
+ *
+ * `egressOptions` is a second, static parameter (not per-call) because a
+ * lookup is built once and reused for the life of a dispatcher — see
+ * {@link peerEgressLookup}, which is where the live `peers.allowCgnatEndpoints`
+ * value actually gets read. Unset here (every existing caller) is
+ * byte-identical to before this option existed, INCLUDING for CGNAT: the flag
+ * changes what a resolved answer is checked against, never whether a blocked
+ * or mixed answer is refused.
  */
-export function createEgressLookup(resolve: AddressResolver): LookupFunction {
+export function createEgressLookup(
+  resolve: AddressResolver,
+  egressOptions?: EgressPolicyOptions,
+): LookupFunction {
   return (hostname, options, callback) => {
-    if (hostnameRefusal(hostname) != null) {
+    if (hostnameRefusal(hostname, egressOptions) != null) {
       callback(new EgressBlockedError(`${hostname} is not a permitted host`), '', 4);
 
       return;
@@ -309,11 +356,19 @@ export function createEgressLookup(resolve: AddressResolver): LookupFunction {
       }
 
       const list = Array.isArray(addresses) ? addresses : [addresses];
-      const allowed = list.filter((entry) => !isBlockedAddress(entry.address));
+      const allowed = list.filter((entry) => !isBlockedAddress(entry.address, egressOptions));
       if (allowed.length === 0 || allowed.length !== list.length) {
         callback(new EgressBlockedError(`${hostname} resolves to a blocked address`), '', 4);
 
         return;
+      }
+
+      if (egressOptions?.allowCgnat) {
+        for (const entry of allowed) {
+          if (isBlockedAddress(entry.address)) {
+            logCgnatEscapeHatchUse(hostname, entry.address);
+          }
+        }
       }
 
       // `all` was forced on above, but the caller may not have asked for it.
@@ -326,10 +381,47 @@ export function createEgressLookup(resolve: AddressResolver): LookupFunction {
   };
 }
 
-/** The production lookup: node's resolver, with blocked answers refused. */
-export const peerEgressLookup: LookupFunction = createEgressLookup((hostname, options, callback) => {
-  dns.lookup(hostname, options, callback);
-});
+let hasLoggedCgnatEscapeHatchUse = false;
+
+/**
+ * Fires once per process, the first time an address the DEFAULT policy would
+ * refuse is let through specifically because `peers.allowCgnatEndpoints` is
+ * set. The boot-time warning in `configuration.ts` already says the flag is
+ * on; this ties that to a real address it actually applied to, so an operator
+ * can never wonder whether the setting is doing anything.
+ */
+function logCgnatEscapeHatchUse(hostname: string, address: string): void {
+  if (hasLoggedCgnatEscapeHatchUse) {
+    return;
+  }
+
+  hasLoggedCgnatEscapeHatchUse = true;
+  console.warn(
+    `[peers] CI_PEER_ALLOW_CGNAT_ENDPOINTS permitted peer egress to ${hostname} (${address}), an ` +
+      'address the default policy would refuse. This box is trusting its own private network topology ' +
+      'for peer traffic.',
+  );
+}
+
+/**
+ * The production lookup: node's resolver, with blocked answers refused.
+ *
+ * `peers.allowCgnatEndpoints` is read here ONCE, at module load — the same
+ * pattern `sharedAgent` below already uses for the dispatcher itself. That is
+ * correct for production, where config is parsed once from the environment at
+ * boot and never changes for the life of the process; {@link peerEgressFetch}
+ * reads the identical config value per call for its own pre-flight check, so
+ * the two can never disagree while a process is running. A test that wants a
+ * specific value here sets up its `@ci/configuration` mock BEFORE importing
+ * this module, exactly as the existing peers specs already do for
+ * `peers.signingKeyJwk` / `peers.requireHttpSignature`.
+ */
+export const peerEgressLookup: LookupFunction = createEgressLookup(
+  (hostname, options, callback) => {
+    dns.lookup(hostname, options, callback);
+  },
+  { allowCgnat: config.peers?.allowCgnatEndpoints === true },
+);
 
 /**
  * A dispatcher that can only reach addresses {@link peerEgressLookup} approved.
@@ -374,7 +466,10 @@ export interface PeerEgressInit {
  * answer".
  */
 export async function peerEgressFetch(rawUrl: string, init: PeerEgressInit): Promise<Response> {
-  const policy = checkEgressUrl(rawUrl);
+  // Read fresh per call (see `peerEgressLookup`'s doc comment for why this and
+  // the connect-time guard can never disagree in production even though this
+  // one reads live and that one reads once at module load).
+  const policy = checkEgressUrl(rawUrl, { allowCgnat: config.peers?.allowCgnatEndpoints === true });
   if (!policy.ok) {
     throw new EgressBlockedError(policy.reason ?? 'not permitted');
   }
