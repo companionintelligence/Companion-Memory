@@ -1,6 +1,7 @@
 import type { DoctorFinding, DoctorReport } from '../../doctor/ImportDoctorService';
 import { doctorCommand } from '../commands/doctor';
 import { CliError } from '../context';
+import { GraphQLApiError } from '../graphqlClient';
 
 import { harness } from './support/harness';
 
@@ -260,5 +261,53 @@ describe('ci-import doctor', () => {
     await doctorCommand(ctx, { list: true, json: true });
 
     expect(JSON.parse(ctx.term.text())[0].id).toBe('pipeline-dead-letters');
+  });
+
+  describe('--graphql', () => {
+    it('reports who the key resolves to, and runs no REST checks at all', async () => {
+      // `runDoctor` / `listDoctorChecks` are deliberately unstubbed: the harness
+      // throws if either is called, which is the assertion that `--graphql`
+      // short-circuits before touching the REST doctor suite.
+      const ctx = harness(
+        {},
+        { me: async () => ({ id: 'user_1', name: 'Liam', email: 'liam@example.com', avatarUrl: null }) },
+      );
+
+      await doctorCommand(ctx, { graphql: true });
+
+      expect(ctx.term.text()).toBe('GraphQL reachable as Liam <liam@example.com> (user_1).');
+    });
+
+    it('says so plainly when `me` resolves to nothing', async () => {
+      const ctx = harness({}, { me: async () => null });
+
+      await doctorCommand(ctx, { graphql: true });
+
+      expect(ctx.term.text()).toContain('returned nothing');
+    });
+
+    it('emits the documented shape under --json', async () => {
+      const ctx = harness(
+        {},
+        { me: async () => ({ id: 'user_1', name: 'Liam', email: 'liam@example.com', avatarUrl: null }) },
+      );
+
+      await doctorCommand(ctx, { graphql: true, json: true });
+
+      expect(JSON.parse(ctx.term.text())).toMatchObject({ ok: true, me: { id: 'user_1' } });
+    });
+
+    it('does not swallow an auth failure — the appliance is unreachable-for-this-key, not "clean"', async () => {
+      const ctx = harness(
+        {},
+        {
+          me: async () => {
+            throw new GraphQLApiError('UNAUTHENTICATED', 'the api key was rejected', 'me');
+          },
+        },
+      );
+
+      await expect(doctorCommand(ctx, { graphql: true })).rejects.toMatchObject({ status: 401 });
+    });
   });
 });

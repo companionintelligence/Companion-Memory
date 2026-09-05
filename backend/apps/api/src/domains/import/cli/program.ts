@@ -1,16 +1,36 @@
 import { Command } from 'commander';
 
 import { ImportApiClient } from './client';
+import { asksAnswerCommand } from './commands/asks/answer';
+import { asksApproveCommand } from './commands/asks/approve';
+import { asksDeclineCommand } from './commands/asks/decline';
+import { asksHistoryCommand } from './commands/asks/history';
+import { asksInboxCommand } from './commands/asks/inbox';
+import { asksOutboxCommand } from './commands/asks/outbox';
+import { asksSendCommand } from './commands/asks/send';
+import { asksSendPeerCommand } from './commands/asks/sendPeer';
+import { asksShowCommand } from './commands/asks/show';
 import { backfillCommand } from './commands/backfill';
 import { dataSourcesCommand } from './commands/datasources';
 import { doctorCommand } from './commands/doctor';
+import { grantsCreateCommand } from './commands/grants/create';
+import { grantsHistoryCommand } from './commands/grants/history';
+import { grantsListCommand } from './commands/grants/list';
+import { grantsRevokeCommand } from './commands/grants/revoke';
+import { grantsShowCommand } from './commands/grants/show';
+import { grantsUpdateCommand } from './commands/grants/update';
 import { importCommand } from './commands/import';
 import { inboxCommand } from './commands/inbox';
+import { peersAddCommand } from './commands/peers/add';
+import { peersListCommand } from './commands/peers/list';
+import { peersRevokeCommand } from './commands/peers/revoke';
+import { peersUpdateCommand } from './commands/peers/update';
 import { pushCommand } from './commands/push';
 import { recognizeCommand } from './commands/recognize';
 import { runsCommand } from './commands/runs';
 import { statsCommand } from './commands/stats';
 import type { CliContext } from './context';
+import { MemoryGraphQLClient } from './graphqlClient';
 import type { Term } from './output';
 
 /** Where the appliance is, when nobody says. The API's own default port. */
@@ -25,6 +45,8 @@ export interface ProgramDeps {
   term: Term;
   /** Injected so tests drive the commands without a socket. */
   makeClient?: (options: GlobalOptions) => ImportApiClient;
+  /** Injected so tests drive the GraphQL-backed commands (peers/grants/asks) without a socket. */
+  makeGraphQLClient?: (options: GlobalOptions) => MemoryGraphQLClient;
   version?: string;
 }
 
@@ -68,6 +90,9 @@ export function buildProgram(deps: ProgramDeps): Command {
       client: deps.makeClient
         ? deps.makeClient(options)
         : new ImportApiClient({ baseUrl: target.baseUrl, apiKey: target.apiKey }),
+      graphql: deps.makeGraphQLClient
+        ? deps.makeGraphQLClient(options)
+        : new MemoryGraphQLClient({ baseUrl: target.baseUrl, apiKey: target.apiKey }),
     };
   };
 
@@ -156,6 +181,7 @@ export function buildProgram(deps: ProgramDeps): Command {
     .option('--check <id>', 'run only this check; repeatable', collect, [])
     .option('--timeout <ms>', 'per-statement cap; a check that exceeds it reports TIMEOUT')
     .option('--failures-only', 'hide the checks that came back clean')
+    .option('--graphql', 'skip the data-quality suite; only check that /graphql answers for this key')
     .option('--json', 'machine-readable output')
     .action((options) => doctorCommand(context(), options));
 
@@ -167,6 +193,205 @@ export function buildProgram(deps: ProgramDeps): Command {
     .option('--abort-on-error', 'stop at the first failing leg instead of carrying on')
     .option('--json', 'machine-readable output')
     .action((stages: string[], options) => backfillCommand(context(), stages, options));
+
+  // ---------------------------------------------------------------------------
+  // Peers — who this box will exchange asks with (backend/.../graphql/resolvers/PeerLinkResolver.ts)
+  // ---------------------------------------------------------------------------
+
+  const peers = program
+    .command('peers')
+    .description('Linked peer Companions, and how far this box trusts them');
+
+  peers
+    .command('list')
+    .description('Every peer this box knows, revoked ones included')
+    .option('--json', 'machine-readable output')
+    .action((options) => peersListCommand(context(), options));
+
+  peers
+    .command('add')
+    .argument('<handle>', "the peer's Portal handle")
+    .argument('<memoryEndpoint>', "the peer's appliance URL")
+    .description('Link a peer Companion by hand')
+    .option('--display-name <name>', 'a friendlier label than the handle')
+    .option('--tier <tier>', 'trust tier: family, peer, stranger (default), trusted')
+    .option('--json', 'machine-readable output')
+    .action((handle: string, memoryEndpoint: string, options) =>
+      peersAddCommand(context(), handle, memoryEndpoint, options),
+    );
+
+  peers
+    .command('update')
+    .argument('<id>', 'the peer link id, from `peers list`')
+    .description("Change a linked peer's display name or trust tier")
+    .option('--display-name <name>')
+    .option('--tier <tier>', 'trust tier: family, peer, stranger, trusted')
+    .option('--json', 'machine-readable output')
+    .action((id: string, options) => peersUpdateCommand(context(), id, options));
+
+  peers
+    .command('revoke')
+    .argument('<id>', 'the peer link id, from `peers list`')
+    .description('Stop exchanging asks with a peer')
+    .option('--json', 'machine-readable output')
+    .action((id: string, options) => peersRevokeCommand(context(), id, options));
+
+  // ---------------------------------------------------------------------------
+  // Grants — standing consent, the Grant Manager's matrix (.../resolvers/AskResolver.ts)
+  // ---------------------------------------------------------------------------
+
+  const grants = program.command('grants').description('Standing ask-grants — consent given in advance');
+
+  grants
+    .command('list')
+    .description('Active standing grants owned by the caller')
+    .option('--json', 'machine-readable output')
+    .action((options) => grantsListCommand(context(), options));
+
+  grants
+    .command('show')
+    .argument('<id>', 'the grant id, from `grants list` or `grants history`')
+    .description('One grant, in full')
+    .option('--json', 'machine-readable output')
+    .action((id: string, options) => grantsShowCommand(context(), id, options));
+
+  grants
+    .command('create')
+    .argument(
+      '<granteeHandleOrUserId>',
+      "a peer's handle (see `peers list`), or a household member's user id",
+    )
+    .argument('<queryType>', 'the ask archetype: relationship, content, availability, attribute, identity')
+    .description('Write a new standing grant')
+    .option('--data-class <class>', 'coarse data class this grant covers, e.g. photos')
+    .option('--mode <mode>', 'auto, review (default), or block')
+    .option('--max-disclosure <rung>', 'ceiling: none, boolean, count, summary, redacted, full')
+    .option('--purpose <text>', 'shown to the owner; never widens scope')
+    .option('--json', 'machine-readable output')
+    .action((granteeHandleOrUserId: string, queryType: string, options) =>
+      grantsCreateCommand(context(), granteeHandleOrUserId, queryType, options),
+    );
+
+  grants
+    .command('update')
+    .argument('<id>', 'the grant id, from `grants list`')
+    .description('Change a standing grant (writes a new version; see `grants history`)')
+    .option('--mode <mode>', 'auto, review, or block')
+    .option('--data-class <class>')
+    .option('--max-disclosure <rung>', 'none, boolean, count, summary, redacted, full')
+    .option('--purpose <text>')
+    .option('--expires-at <iso>', 'schedule a lapse')
+    .option('--clear-expiry', 'make the grant permanent again')
+    .option('--json', 'machine-readable output')
+    .action((id: string, options) => grantsUpdateCommand(context(), id, options));
+
+  grants
+    .command('revoke')
+    .argument('<id>', 'the grant id, from `grants list`')
+    .description('Revoke a standing grant (retroactive — see the command docstring)')
+    .option('--json', 'machine-readable output')
+    .action((id: string, options) => grantsRevokeCommand(context(), id, options));
+
+  grants
+    .command('history')
+    .argument('[id]', 'narrow to one grant’s own chain of changes; omit for the whole ledger')
+    .description('Every grant ever written — active, revoked and superseded')
+    .option('--json', 'machine-readable output')
+    .action((id: string | undefined, options) => grantsHistoryCommand(context(), id, options));
+
+  // ---------------------------------------------------------------------------
+  // Asks — the interpersonal-question lifecycle (.../resolvers/AskResolver.ts)
+  // ---------------------------------------------------------------------------
+
+  const asks = program
+    .command('asks')
+    .description('Interpersonal asks — send them, review them, answer them');
+
+  asks
+    .command('inbox')
+    .description('Asks awaiting this account’s decision')
+    .option('--json', 'machine-readable output')
+    .action((options) => asksInboxCommand(context(), options));
+
+  asks
+    .command('outbox')
+    .description('Asks this account has sent')
+    .option('--json', 'machine-readable output')
+    .action((options) => asksOutboxCommand(context(), options));
+
+  asks
+    .command('show')
+    .argument('<id>', 'the ask id, from `asks inbox` or `asks outbox`')
+    .description('One ask, and its answer once there is one')
+    .option('--json', 'machine-readable output')
+    .action((id: string, options) => asksShowCommand(context(), id, options));
+
+  asks
+    .command('send')
+    .argument('<recipient>', "a household member's user id — this box's own accounts only")
+    .argument('<prompt>', 'the natural-language question')
+    .description('Submit a LOCAL ask (see `asks send-peer` for a linked peer’s own appliance)')
+    .option('--query-type <type>', 'required: relationship, content, availability, attribute, identity')
+    .option('--data-class <class>', 'coarse data class, e.g. photos')
+    .option('--json', 'machine-readable output')
+    .action((recipient: string, prompt: string, options) =>
+      asksSendCommand(context(), recipient, prompt, options),
+    );
+
+  asks
+    .command('send-peer')
+    .argument('<handle>', "the linked peer's Portal handle")
+    .argument('<prompt>', 'the natural-language question')
+    .description('Submit a FEDERATED ask to a linked peer’s own appliance')
+    .option('--archetype <archetype>', 'required: relationship, content, or availability')
+    .option('--peer-access-token <token>', 'Portal-issued token scoped to the peer [CI_PEER_ACCESS_TOKEN]')
+    .option('--subject <text>', 'relationship/content: who or what is being asked about')
+    .option('--data-class <class>', 'content: coarse data class, e.g. photos')
+    .option('--from <iso>', 'availability (required) / content (optional): window start')
+    .option('--to <iso>', 'availability (required) / content (optional): window end')
+    .option('--min-minutes <n>', 'availability: minimum contiguous free block worth reporting')
+    .option('--purpose <text>', 'shown to the responder; never widens scope')
+    .option('--json', 'machine-readable output')
+    .action((handle: string, prompt: string, options) =>
+      asksSendPeerCommand(context(), handle, prompt, options),
+    );
+
+  asks
+    .command('approve')
+    .argument('<id>', 'the ask id, from `asks inbox`')
+    .description('Approve an ask under review, without answering it yet')
+    .option('--json', 'machine-readable output')
+    .action((id: string, options) => asksApproveCommand(context(), id, options));
+
+  asks
+    .command('decline')
+    .argument('<id>', 'the ask id, from `asks inbox`')
+    .description('Decline an ask under review (terminal)')
+    .option('--json', 'machine-readable output')
+    .action((id: string, options) => asksDeclineCommand(context(), id, options));
+
+  asks
+    .command('answer')
+    .argument('<id>', 'the ask id, from `asks inbox`')
+    .description('Answer an approved (or auto-authorized) ask, producing the disclosure')
+    .option('--redact <itemIds>', 'comma-separated entity ids to withhold, counted but not named')
+    .option(
+      '--disclosure-form <form>',
+      'narrow the answer shape: attribute, boolean, existence, identity, retrieval',
+    )
+    .option('--json', 'machine-readable output')
+    .action((id: string, options) => asksAnswerCommand(context(), id, options));
+
+  asks
+    .command('history')
+    .description('This account’s disclosure history — asks it has answered, declined, or that expired')
+    .option('--counterparty <key>', 'restrict to one asker/peer')
+    .option('--outcome <outcomes>', 'comma-separated: answered, auto_answered, declined, expired')
+    .option('--from <iso>')
+    .option('--to <iso>')
+    .option('--limit <n>')
+    .option('--json', 'machine-readable output')
+    .action((options) => asksHistoryCommand(context(), options));
 
   // Short lines on purpose: commander re-wraps long ones to the terminal width,
   // and a paragraph that already contains newlines comes out ragged.
@@ -191,7 +416,12 @@ export function buildProgram(deps: ProgramDeps): Command {
       '  ci-import runs',
       '  ci-import doctor',
       '  ci-import doctor --json --check comms-missing-thread-id',
+      '  ci-import doctor --graphql',
       '  ci-import backfill --list',
+      '  ci-import peers add alice@portal.example https://alice.example:3030',
+      '  ci-import grants create alice@portal.example content --mode auto --max-disclosure summary',
+      '  ci-import asks inbox',
+      '  ci-import asks answer <id> --disclosure-form boolean',
     ].join('\n'),
   );
 

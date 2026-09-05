@@ -1,6 +1,31 @@
+import type { Command } from 'commander';
+
 import { buildProgram, resolveTarget, DEFAULT_SERVER_URL } from '../program';
 
 import { recordingTerm } from './support/harness';
+
+/**
+ * `exitOverride()` on the root command is NOT enough to make a nested group's
+ * own `--help` throw instead of calling the real `process.exit` — commander
+ * copies `_exitCallback` onto a subcommand once, at the moment `.command()`
+ * creates it inside `buildProgram`, which is BEFORE the caller ever gets the
+ * chance to call `.exitOverride()` on what it returns. Every command this CLI
+ * had before `peers`/`grants`/`asks` was one level deep, so `ci-import --help`
+ * (the root's own) was the only `--help` any test ever exercised and this gap
+ * stayed latent. Setting the override on every node directly — rather than
+ * relying on the one-time inherited copy — is what makes a GROUP's `--help`
+ * (`ci-import peers --help`) testable at all instead of killing the whole
+ * Jest worker on a stray `process.exit(0)`.
+ */
+function withDeepExitOverride(command: Command): Command {
+  command.exitOverride();
+
+  for (const sub of command.commands) {
+    withDeepExitOverride(sub);
+  }
+
+  return command;
+}
 
 /**
  * The CLI's contract with whoever types `ci-import`: which commands exist, and
@@ -27,8 +52,32 @@ describe('ci-import program', () => {
       'stats',
       'doctor',
       'backfill',
+      'peers',
+      'grants',
+      'asks',
     ]) {
       expect(help).toContain(command);
+    }
+  });
+
+  it('lists every peers/grants/asks subcommand in each group’s own --help', async () => {
+    for (const [group, subcommands] of [
+      ['peers', ['list', 'add', 'update', 'revoke']],
+      ['grants', ['list', 'show', 'create', 'update', 'revoke', 'history']],
+      ['asks', ['inbox', 'outbox', 'show', 'send', 'send-peer', 'approve', 'decline', 'answer', 'history']],
+    ] as const) {
+      const term = recordingTerm();
+      const program = withDeepExitOverride(buildProgram({ term }));
+
+      await expect(program.parseAsync(['node', 'ci-import', group, '--help'])).rejects.toMatchObject({
+        code: 'commander.helpDisplayed',
+      });
+
+      const help = term.text();
+
+      for (const subcommand of subcommands) {
+        expect(help).toContain(subcommand);
+      }
     }
   });
 
@@ -55,6 +104,24 @@ describe('ci-import program', () => {
     }).exitOverride();
 
     await program.parseAsync(['node', 'ci-import', '--server', 'http://box:3030', 'datasources']);
+
+    expect(seen).toEqual(['http://box:3030']);
+  });
+
+  it('routes a global flag into the GraphQL-backed commands too', async () => {
+    const term = recordingTerm();
+    const seen: Array<string | undefined> = [];
+    const program = buildProgram({
+      term,
+      makeClient: () => ({}) as never,
+      makeGraphQLClient: (options) => {
+        seen.push(options.server);
+
+        return { myPeerLinks: async () => [] } as never;
+      },
+    }).exitOverride();
+
+    await program.parseAsync(['node', 'ci-import', '--server', 'http://box:3030', 'peers', 'list']);
 
     expect(seen).toEqual(['http://box:3030']);
   });

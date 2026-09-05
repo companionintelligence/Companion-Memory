@@ -17,6 +17,14 @@ It is **not** a revival of `scripts/cli/ci-server.sh` (PR #1420, reverted in
 `7ae057916`). That was a hub-setup / portal-registration / app-lifecycle wizard
 and had nothing to do with importing.
 
+`ci-import` is also, despite the name, no longer only about importing:
+`peers`/`grants`/`asks` (below) put the interpersonal-ask feature — one
+Companion answering another's owner's question, under consent the owner grants
+in advance — at the command line too. They share this binary, this
+credential, and this output/error convention, but talk to the appliance over
+GraphQL rather than REST; see [Peers, grants and asks](#peers-grants-and-asks-the-memory-surface-graphql)
+for why that needed a second, small client rather than a second binary.
+
 ---
 
 ## Quick start
@@ -287,6 +295,178 @@ Two implementation notes worth knowing:
 
 ---
 
+## Peers, grants and asks — the memory surface (GraphQL)
+
+Everything above is REST, because the import domain publishes REST. The
+interpersonal-ask feature (epic #1712 — one Companion answering another's
+owner's question, under standing consent the owner writes in advance) is
+**GraphQL-only**: `myPeerLinks`, `createAskGrant`, `runAsk` and the rest of it
+have no REST route at all, only resolvers on the schema at
+`backend/apps/api/src/domains/graphql/__generated__/schema.graphql`.
+
+So this CLI carries a second, much smaller client —
+`MemoryGraphQLClient` in `graphqlClient.ts` — that speaks exactly that
+schema. It is not a codegen'd Apollo Client and does not try to be one: a
+script making one call and exiting has no session to cache across, so it is
+the same `fetch` + `x-api-key` shape as `ImportApiClient`, POSTing one fixed
+document per call to `POST /graphql` (the Apollo driver's own default path;
+no `/api` prefix — that prefix is a reverse-proxy convention for *public*
+ingress, and this CLI, like the REST client, talks to the appliance
+directly). Every response shape it returns is a plain restated interface
+(`PeerLinkSummary`, `AskGrantSummary`, `AskSummary`, …), never a type reached
+into from `domains/graphql/types/*` — the same "an HTTP client is entitled to
+the response body, not to the server's internal types" rule `IngestStatus`
+follows in `client.ts`.
+
+A GraphQL-level refusal — a block grant, a malformed `queryType`, "only the
+responder may run this ask" — is a normal `200` with an `errors[]` array, not
+an HTTP failure. `GraphQLApiError` (which **extends** `client.ts`'s `ApiError`,
+so `main.ts`'s existing exit-code logic needs no new branch) turns the
+resolver's own message into exactly the sentence a REST 400/401/403/404 would
+have printed, verbatim — see `formatError.ts` for why that message is safe to
+show: a deliberate `HttpException` passes through unmasked, and only a truly
+unexpected server error is replaced with `Internal server error`.
+
+### `peers list` / `peers add` / `peers update` / `peers revoke`
+
+Linked peer Companions and the trust tier that ceilings everything they can
+ever be told (`policy.ts` maps each tier to a maximum disclosure rung). There
+is no directory lookup — `PeerLinkResolver`'s own docstring explains why
+(resolving a handle needs a Portal access token nothing in this request
+context holds) — so `peers add <handle> <memoryEndpoint>` takes the endpoint
+directly. New links default to `stranger`, the narrowest tier.
+
+```bash
+ci-import peers add alice@portal.example https://alice.example:3030
+ci-import peers add alice@portal.example https://alice.example:3030 --tier trusted --display-name Alice
+ci-import peers update <id> --tier family
+ci-import peers list
+ci-import peers revoke <id>
+```
+
+`peers list` shows revoked links too (`status revoked`) — "who did I used to
+share with" is a question `myPeerLinks` deliberately never filters out.
+
+### `grants list` / `grants show` / `grants create` / `grants update` / `grants revoke` / `grants history`
+
+Standing consent — the Grant Manager's matrix, one row per `(grantee,
+archetype)` pair. `<granteeHandleOrUserId>` on `grants create` is resolved for
+you: if it matches one of your peer links' handles (`peers list`), the grant
+addresses that peer (`granteePeerLinkId`); otherwise it is passed through as a
+raw household-member user id (`granteeId`). That resolution is what keeps this
+CLI from ever being able to trip the server's "exactly one of granteeId /
+granteePeerLinkId" 400 — it can only ever construct one or the other.
+
+```bash
+ci-import grants create alice@portal.example content --mode auto --max-disclosure summary
+ci-import grants create <userId> availability --mode review
+ci-import grants list
+ci-import grants show <id>
+ci-import grants update <id> --mode block
+ci-import grants update <id> --expires-at 2027-01-01T00:00:00.000Z
+ci-import grants revoke <id>
+ci-import grants history
+ci-import grants history <id>
+```
+
+`<queryType>` is the ask archetype — `relationship`, `content`,
+`availability`, `attribute` or `identity` — and is deliberately **not**
+validated client-side; the server's vocabulary
+(`asks/askInput.ts#parseGrantQueryType`) is the one source of truth, and its
+`BAD_USER_INPUT`/`BAD_REQUEST` message already names the valid set, verbatim.
+`--mode` defaults to `review` on `create` (matching `GrantService.create`'s own
+fallback) but is otherwise one of `auto`, `review`, `block`. `--max-disclosure`
+is the owner's own ceiling — `none`, `boolean`, `count`, `summary`, `redacted`,
+`full` — combined with the trust-tier ceiling by taking the lesser; it is never
+readable back through `grants list`/`show` today (`AskGrantType` does not
+expose `scope` on the schema), only writable.
+
+**`grants update` never widens what it does not touch.** Every field the
+command was not given is left off the GraphQL request entirely — never sent as
+an explicit `null` — because the server tells "leave this dimension alone"
+(the key absent) from "clear it" (the key present as `null`) apart
+(`UpdateAskGrantInput`'s own schema docstring explains the bug this protects
+against: a narrowing edit on one dimension used to silently delete another).
+Concretely: `grants update <id> --mode block` alone cannot un-set a ceiling an
+earlier `grants create --max-disclosure summary` wrote.
+
+A change is a **supersede**, not an in-place edit (`GrantService.supersede`) —
+the old row closes with `revocationReason: superseded` and a new one replaces
+it, so the consent history survives. `grants history` shows the whole ledger,
+newest first; `grants history <id>` narrows to that one grant's own chain
+(itself, plus whatever it superseded, plus whatever superseded it) by walking
+`supersedesGrantId` client-side — there is no server-side "just this chain"
+filter, since `myAskGrantHistory` takes no id at all.
+
+### `asks inbox` / `asks outbox` / `asks show` / `asks send` / `asks send-peer` / `asks approve` / `asks decline` / `asks answer` / `asks history`
+
+The ask lifecycle. `asks send <recipient> <prompt> --query-type <type>` is the
+**local** path (`createAsk`) — `<recipient>` is another account's opaque user
+id, Phase 0's intra-household scope (epic #1712). For a **linked peer's own
+appliance** — the federated half (epic #1725) — use `asks send-peer <handle>
+<prompt> --archetype <a> --peer-access-token <token>` instead: that is a
+different mutation (`sendPeerAsk`) with a different shape, needing a
+Portal-issued access token this box never mints (`--peer-access-token`
+/ `CI_PEER_ACCESS_TOKEN`; the token itself has to come from wherever the Portal
+token exchange for this relationship actually happens — this CLI only carries
+it through).
+
+```bash
+ci-import asks inbox
+ci-import asks outbox
+ci-import asks show <id>
+ci-import asks send <userId> "Do you have photos from the lake trip?" --query-type content --data-class photos
+ci-import asks send-peer alice@portal.example "Are you free Friday?" --archetype availability --peer-access-token $TOKEN
+ci-import asks approve <id>
+ci-import asks decline <id>
+ci-import asks answer <id>
+ci-import asks answer <id> --redact entity_1,entity_2 --disclosure-form boolean
+ci-import asks history
+ci-import asks history --outcome declined,expired --limit 50
+```
+
+`asks answer` is `runAsk` — the mutation that actually PRODUCES a disclosure,
+running as the responder. `--redact <ids>` is the owner's "deny all but these"
+set (comma-separated entity ids, counted but never named to the asker on
+refusal); `--disclosure-form` can only ever **narrow** what the ask's
+archetype already implies (`narrowerForm` in the resolver) — passing a wider
+form than the archetype allows is safe by construction, since the server
+clamps it rather than the CLI needing to. Neither flag can be used to see more
+than the grant and trust tier already permit; they only ever remove.
+
+`asks inbox`/`asks outbox`/`asks history` cannot tell "nothing here" from "the
+`ask` feature flag is off" — both read as empty, because the resolvers answer
+`[]` either way. Every **mutation** on this surface can, and does: a `{
+success: false }` from `createAsk`, `createAskGrant`, `runAsk` and friends is
+surfaced as its own clear error rather than an empty-looking success.
+
+### `doctor --graphql`
+
+Extends the existing self-check with the other protocol this CLI speaks: runs
+`{ me }` and reports who the api key resolves to. Any answer at all proves
+`/graphql` is reachable and the key authenticates there too; only an
+unreachable appliance or a rejected key fails it — the same split the REST
+`doctor` already makes, on the other transport.
+
+```bash
+ci-import doctor --graphql
+```
+
+### Verified against a live appliance
+
+The full cycle — `peers add` → `grants create` (review mode) → `asks send` →
+`asks inbox` → `asks approve` → `asks answer` → `asks show` → `asks history` —
+was run end to end against a running `ci-server-desktop` stack while this was
+built, along with the refusal paths: an unauthenticated key, a malformed
+`queryType`, a `block`-mode grant auto-declining an ask, and answering an
+already-declined ask. Every refusal came back as the resolver's own sentence,
+not a generic failure — see `graphqlClient.ts`'s `GraphQLApiError` for the
+one wrinkle that surfaced doing this: a live appliance running an image built
+before `formatError.ts`'s `BAD_USER_INPUT` remap landed answered `BAD_REQUEST`
+for the identical refusal, so both codes are treated as the same 400.
+
+---
+
 ## What was kept, what was dropped
 
 | Upstream command | Here | Why |
@@ -316,9 +496,17 @@ getting it in, and watching that happen.
 
 ## Testing
 
-`src/domains/import/cli/__tests__/` — every command, the client's request
+`src/domains/import/cli/__tests__/` — every command, both clients' request
 building and error mapping, the NDJSON reassembly, the table renderer, and the
-wait loop, all against a stubbed `fetch` and a recording terminal.
+wait loop, all against a stubbed `fetch` and a recording terminal. The
+`peers`/`grants`/`asks` commands each have their own `__tests__/{peers,grants,asks}/*.test.ts`,
+mirroring `commands/{peers,grants,asks}/*.ts` one file at a time; shared
+response fixtures (`peerLinkFixture`, `grantFixture`, `askFixture`, …) live in
+`__tests__/support/fixtures.ts`, typed as the real `MemoryGraphQLClient`
+response shapes so a fixture cannot silently drift from what the client
+actually promises. `harness()` in `__tests__/support/harness.ts` stubs both
+`client` and `graphql` the same way — throwing by name on any call a test did
+not stub.
 
 ```bash
 yarn workspace @ci/be-api test src/domains/import/cli

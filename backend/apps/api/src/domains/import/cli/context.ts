@@ -1,9 +1,19 @@
 import type { ImportApiClient } from './client';
+import type { MemoryGraphQLClient } from './graphqlClient';
 import type { Term } from './output';
 
-/** What every command is handed: somewhere to ask, somewhere to answer. */
+/**
+ * What every command is handed: somewhere to ask, somewhere to answer.
+ *
+ * Two clients, not one, because the appliance speaks two protocols for two
+ * halves of the CLI: `client` is the REST surface the import domain publishes,
+ * `graphql` is `POST /graphql` for the memory surface (peers, ask-grants, asks)
+ * that has no REST equivalent. A command uses whichever one its feature is
+ * actually served over — most use exactly one.
+ */
 export interface CliContext {
   client: ImportApiClient;
+  graphql: MemoryGraphQLClient;
   term: Term;
 }
 

@@ -13,6 +13,8 @@ export interface DoctorOptions {
   json?: boolean;
   /** Human output only: hide the checks that came back clean. */
   failuresOnly?: boolean;
+  /** Skip the data-quality suite; only check that /graphql answers for this key. */
+  graphql?: boolean;
 }
 
 /**
@@ -53,6 +55,10 @@ export interface DoctorOptions {
  * impossible (an unknown check id, no api key, no appliance).
  */
 export async function doctorCommand(ctx: CliContext, options: DoctorOptions = {}): Promise<void> {
+  if (options.graphql) {
+    return checkGraphQL(ctx, options);
+  }
+
   if (options.list) {
     return listChecks(ctx, options);
   }
@@ -73,6 +79,39 @@ export async function doctorCommand(ctx: CliContext, options: DoctorOptions = {}
     // off the front of the payload.
     throw new CliError(describeGate(report), 1);
   }
+}
+
+/**
+ * `doctor --graphql` — can this CLI reach `/graphql` at all with the given key?
+ *
+ * The REST half of this command answers "did the import run correctly"; this
+ * answers a narrower question about the OTHER protocol the CLI now speaks (see
+ * `../graphqlClient.ts`): is there a CI-Server at `--server` / `CI_SERVER_URL`,
+ * does it serve GraphQL, and does the api key authenticate there too. It runs
+ * `{ me }` — the cheapest authenticated query on the schema — and reports who
+ * it resolves to. Any answer at all, even a `null` `me`, proves reachability
+ * and a valid key; only an unreachable appliance or a rejected key fails this,
+ * exactly as `UnreachableError` / `ApiError` already report for the REST side.
+ *
+ * A short-circuit rather than a fifth check bolted onto the REST suite: the
+ * two answer unrelated questions (network/auth vs. data quality), and mixing
+ * them would mean `--check <id>` and `--failures-only` had to pretend to make
+ * sense of a check with no `severity` or `count`.
+ */
+async function checkGraphQL(ctx: CliContext, options: DoctorOptions): Promise<void> {
+  const me = await ctx.graphql.me();
+
+  if (options.json) {
+    json(ctx.term, { ok: true, me });
+
+    return;
+  }
+
+  ctx.term.out(
+    me == null
+      ? 'GraphQL reachable, but `me` returned nothing — is this key signed in as anyone?'
+      : `GraphQL reachable as ${me.name} <${me.email}> (${me.id}).`,
+  );
 }
 
 /** `--list`: the vocabulary, without running anything. */

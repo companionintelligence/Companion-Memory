@@ -397,6 +397,19 @@ async function* ndjsonLines(response: Response): AsyncGenerator<Record<string, u
 async function describeFailure(response: Response, hadKey: boolean): Promise<string> {
   const body = await response.text().catch(() => '');
 
+  return describeFailureBody(response.status, body, hadKey, response.statusText);
+}
+
+/**
+ * The body-only half of {@link describeFailure}, split out so the GraphQL
+ * client ({@link MemoryGraphQLClient} in `./graphqlClient`) can reuse the same
+ * "what does a raw HTTP failure on this appliance look like" logic without a
+ * second read of an already-consumed response body. GraphQL errors that carry
+ * their own `errors[]` array are described separately and never reach this —
+ * this is only for the transport-level failures the GraphQL endpoint shares
+ * with every REST one: a downed proxy, a body-parser rejection, a plain 5xx.
+ */
+export function describeFailureBody(status: number, body: string, hadKey: boolean, statusText = ''): string {
   let detail = body.slice(0, 400);
 
   try {
@@ -411,11 +424,11 @@ async function describeFailure(response: Response, hadKey: boolean): Promise<str
     // Not JSON — the truncated body stands.
   }
 
-  if (response.status === 401 || response.status === 403) {
+  if (status === 401 || status === 403) {
     return hadKey
-      ? `${response.status}: the api key was rejected (${detail}). Create a fresh one in the web UI under Settings → API keys.`
-      : `${response.status}: this needs an api key. Set CI_API_KEY, or pass --api-key.`;
+      ? `${status}: the api key was rejected (${detail}). Create a fresh one in the web UI under Settings → API keys.`
+      : `${status}: this needs an api key. Set CI_API_KEY, or pass --api-key.`;
   }
 
-  return `${response.status}: ${detail || response.statusText}`;
+  return `${status}: ${detail || statusText}`;
 }
