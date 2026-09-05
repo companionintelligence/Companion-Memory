@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
-import { useMemo, useRef, useState } from 'react';
+import { useMemo } from 'react';
 
 import { Button } from '@ci/shadcn';
-import Lottie, { type LottieRefCurrentProps } from 'lottie-react';
+import Lottie from 'lottie-react';
 import { Link } from 'react-router-dom';
 
 import brainAnimation from '@/assets/companion-memory-brain.lottie.json';
@@ -10,13 +10,8 @@ import brainMarkSvg from '@/assets/companion-memory-brain.svg';
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { ThemeToggle } from '@/components/ThemePicker';
 
-/** Frame the idle segment starts at — the intro (draw-in) plays once, then this loops forever. */
-const IDLE_SEGMENT: [number, number] = [84, 264];
-
 const MARK_SIZE = 'aspect-square w-[min(88vw,34rem)] md:w-[min(44vw,40rem)] lg:w-[min(48vw,48rem)]';
 const MARK_GLOW = 'drop-shadow-[0_0_90px_rgba(30,207,224,0.45)]';
-/** Swap the poster for the animation as soon as it has actually rendered a frame. */
-const POSTER_HANDOFF_FRAME = 1;
 
 function usePrefersReducedMotion() {
   return useMemo(
@@ -31,36 +26,16 @@ function usePrefersReducedMotion() {
  * `prefers-reduced-motion` gets the SVG, which matches the animation's settled state.
  */
 function BrainMark() {
-  const lottieRef = useRef<LottieRefCurrentProps>(null);
-  const [animating, setAnimating] = useState(false);
   const reducedMotion = usePrefersReducedMotion();
 
   if (reducedMotion) {
     return <img src={brainMarkSvg} alt="" className={`${MARK_SIZE} ${MARK_GLOW}`} />;
   }
 
-  return (
-    <div className={`relative ${MARK_SIZE} ${MARK_GLOW}`}>
-      {/* The SVG holds the frame until the animation has actually painted, so the
-          hero never opens on an empty box while the Lottie parses. */}
-      {!animating && <img src={brainMarkSvg} alt="" className="absolute inset-0 h-full w-full" />}
-      <Lottie
-        lottieRef={lottieRef}
-        animationData={brainAnimation}
-        loop={false}
-        autoplay
-        className="absolute inset-0 h-full w-full"
-        onEnterFrame={(event) => {
-          const frame = (event as { currentTime?: number } | undefined)?.currentTime ?? 0;
-
-          if (!animating && frame >= POSTER_HANDOFF_FRAME) {
-            setAnimating(true);
-          }
-        }}
-        onComplete={() => lottieRef.current?.playSegments(IDLE_SEGMENT, true)}
-      />
-    </div>
-  );
+  // The animation is one continuous loop that opens and closes on black, so it
+  // just repeats — no intro/idle segment handoff, and no poster frame to hold,
+  // because starting from nothing is the point.
+  return <Lottie animationData={brainAnimation} loop autoplay className={`${MARK_SIZE} ${MARK_GLOW}`} />;
 }
 
 /** Staggered entrance for the copy — skipped entirely under reduced motion. */
