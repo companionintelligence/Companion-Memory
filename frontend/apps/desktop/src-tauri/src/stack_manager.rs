@@ -9,11 +9,92 @@
 //! repo root.
 
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
+
+/// What the splash is allowed to say about a start that is still running.
+///
+/// The whole cold start used to happen inside one awaited IPC call, so the page
+/// could show exactly one sentence for the entire multi-gigabyte download and
+/// then, if it failed, one generic sentence about it having taken too long. The
+/// reason was always known — an unpullable tag, a full disk, a busy port — and
+/// always discarded. This is the channel that carries it out.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct StartupProgress {
+    /// Coarse machine-readable stage: `preflight` | `pulling` | `starting` | `ready` | `failed`.
+    pub phase: String,
+    /// One human-readable line — the compose step, or the failure.
+    pub detail: String,
+    /// Set only when the start actually failed; the message the user sees.
+    pub error: Option<String>,
+    /// True once a start has completed successfully at least once.
+    pub done: bool,
+}
+
+pub type ProgressHandle = Arc<Mutex<StartupProgress>>;
+
+pub fn new_progress() -> ProgressHandle {
+    Arc::new(Mutex::new(StartupProgress {
+        phase: "preflight".to_string(),
+        detail: "Checking your machine…".to_string(),
+        ..Default::default()
+    }))
+}
+
+fn set_progress(progress: &ProgressHandle, phase: &str, detail: impl Into<String>) {
+    if let Ok(mut guard) = progress.lock() {
+        guard.phase = phase.to_string();
+        guard.detail = detail.into();
+        guard.error = None;
+    }
+}
+
+fn fail_progress(progress: &ProgressHandle, message: impl Into<String>) {
+    if let Ok(mut guard) = progress.lock() {
+        let message = message.into();
+        guard.phase = "failed".to_string();
+        guard.detail = message.clone();
+        guard.error = Some(message);
+    }
+}
+
+/// Turn one line of `docker compose up` output into something worth showing.
+///
+/// Compose narrates itself in a shape that is almost right for a status line
+/// already ("Pulling api", "api Pulled") — the job here is to keep the lines
+/// that mark real progress and drop the per-layer noise, which changes many
+/// times a second and reads as flicker rather than information.
+fn describe_compose_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+
+    let service_step = |verb: &str| {
+        line.strip_suffix(verb)
+            .map(|name| format!("{verb} {}", name.trim()))
+    };
+
+    if let Some(step) = service_step("Pulled") {
+        return Some(step.replace("Pulled ", "Downloaded "));
+    }
+    if let Some(step) = service_step("Created").or_else(|| service_step("Started")) {
+        return Some(step);
+    }
+    if let Some(name) = line.strip_prefix("Pulling ") {
+        return Some(format!("Downloading {}…", name.trim()));
+    }
+    if line.contains("Waiting") && line.contains("healthy") {
+        return Some("Waiting for services to become healthy…".to_string());
+    }
+
+    None
+}
 
 /// The only port CI-Server's production compose stack publishes to the host
 /// (`gateway`, which serves the built web app and proxies `/api/*` — see
@@ -242,13 +323,58 @@ pub fn is_docker_available() -> bool {
         .unwrap_or(false)
 }
 
+/// `start_stack`, reporting each step into `progress` as it goes.
+///
+/// Same sequence as `start_stack`; the difference is that compose's output is
+/// streamed rather than buffered, so the splash can say which image is
+/// downloading instead of one frozen line for the length of the pull.
+pub fn start_stack_reporting(paths: &StackPaths, progress: &ProgressHandle) -> Result<(), String> {
+    let result = start_stack_inner(paths, Some(progress));
+
+    match &result {
+        Ok(()) => {
+            if let Ok(mut guard) = progress.lock() {
+                guard.phase = "ready".to_string();
+                guard.detail = "Ready".to_string();
+                guard.error = None;
+                guard.done = true;
+            }
+        }
+        Err(e) => fail_progress(progress, e.clone()),
+    }
+
+    result
+}
+
 pub fn start_stack(paths: &StackPaths) -> Result<(), String> {
-    crate::port_check::preflight_port(GATEWAY_PORT)?;
+    start_stack_inner(paths, None)
+}
+
+fn start_stack_inner(paths: &StackPaths, progress: Option<&ProgressHandle>) -> Result<(), String> {
+    if let Some(progress) = progress {
+        set_progress(progress, "preflight", "Checking your machine…");
+    }
+
+    // The app's OWN gateway holds this port whenever the stack is already up,
+    // and treating that as a foreign conflict made the error unrecoverable:
+    // every Retry hit the same check and refused before compose could run. A
+    // port held by our own healthy stack is the normal case, not a problem.
+    if !is_stack_healthy_blocking() {
+        crate::port_check::preflight_port(GATEWAY_PORT)?;
+    }
+
     if !is_docker_installed() {
         return Err("Docker is not installed.".to_string());
     }
     if !is_docker_available() {
         return Err("Docker is installed but the daemon is not running. Start Docker and try again.".to_string());
+    }
+    if let Some(version_error) = compose_version_error() {
+        return Err(version_error);
+    }
+
+    if let Some(progress) = progress {
+        return start_stack_streaming(paths, progress);
     }
 
     let output = compose_command(paths)
@@ -285,6 +411,105 @@ pub fn start_stack(paths: &StackPaths) -> Result<(), String> {
     }
     clear_user_stopped(paths);
     Ok(())
+}
+
+/// The compose args shared by both start paths. `--scale powersync=0` and the
+/// reasoning behind it are documented at the buffered call site above.
+const UP_ARGS: [&str; 5] = ["up", "-d", "--remove-orphans", "--scale", "powersync=0"];
+
+fn start_stack_streaming(paths: &StackPaths, progress: &ProgressHandle) -> Result<(), String> {
+    set_progress(progress, "pulling", "Starting Docker services…");
+
+    let mut child = compose_command(paths)
+        .args(UP_ARGS)
+        // Compose writes its progress to stderr and its results to stdout;
+        // both are merged here so the status line follows whichever is talking.
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run docker compose up: {e}"))?;
+
+    let mut transcript = Vec::new();
+
+    if let Some(stderr) = child.stderr.take() {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some(step) = describe_compose_line(&line) {
+                let phase = if step.starts_with("Downloading") { "pulling" } else { "starting" };
+                set_progress(progress, phase, step);
+            }
+            transcript.push(line);
+        }
+    }
+
+    if let Some(stdout) = child.stdout.take() {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            transcript.push(line);
+        }
+    }
+
+    let status = child
+        .wait()
+        .map_err(|e| format!("Failed to wait for docker compose up: {e}"))?;
+
+    append_desktop_log(paths, "start", &transcript.join("\n"));
+
+    if !status.success() {
+        // The last few lines are where compose says what actually went wrong
+        // (an unpullable tag, a full disk, a port already bound); the rest is
+        // the narration of everything that succeeded first.
+        let reason = transcript
+            .iter()
+            .rev()
+            .find(|line| {
+                let l = line.to_lowercase();
+                l.contains("error") || l.contains("failed") || l.contains("no space")
+            })
+            .cloned()
+            .unwrap_or_else(|| transcript.last().cloned().unwrap_or_default());
+
+        return Err(if reason.trim().is_empty() {
+            "docker compose up failed. See the desktop log for details.".to_string()
+        } else {
+            reason.trim().to_string()
+        });
+    }
+
+    clear_user_stopped(paths);
+
+    Ok(())
+}
+
+/// Whether the gateway is already answering — used to tell "our own stack holds
+/// the port" apart from "something else does".
+fn is_stack_healthy_blocking() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &format!("127.0.0.1:{GATEWAY_PORT}").parse().expect("valid loopback address"),
+        Duration::from_millis(400),
+    )
+    .is_ok()
+}
+
+/// The bundled overlay uses the Compose Specification's `!reset` tag, which
+/// needs Compose >= 2.24. Older CLIs fail on it with a YAML parse error that
+/// says nothing about versions, so check up front and say so plainly.
+fn compose_version_error() -> Option<String> {
+    let output = docker_command().args(["compose", "version", "--short"]).output().ok()?;
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let version = raw.trim().trim_start_matches('v');
+    let mut parts = version.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+    let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+
+    if major == 0 && minor == 0 {
+        return None; // unreadable version — let compose speak for itself
+    }
+
+    if (major, minor) < (2, 24) {
+        return Some(format!(
+            "Docker Compose {version} is too old — Companion Memory needs 2.24 or newer. Update Docker Desktop and try again."
+        ));
+    }
+
+    None
 }
 
 pub fn stop_stack(paths: &StackPaths) -> Result<(), String> {
@@ -341,6 +566,19 @@ pub async fn is_healthy() -> bool {
         Ok(response) => response.status().is_success(),
         Err(_) => false,
     }
+}
+
+/// Whether this machine has ever completed a start.
+///
+/// Drives the one-time disclosure on the splash: the first run downloads
+/// several gigabytes of images and mounts a folder from the user's home
+/// directory, and neither was stated anywhere before it happened.
+pub fn is_first_run(paths: &StackPaths) -> bool {
+    !paths.data_dir.join(".first-run-complete").exists()
+}
+
+pub fn mark_first_run_complete(paths: &StackPaths) {
+    let _ = fs::write(paths.data_dir.join(".first-run-complete"), "");
 }
 
 fn user_stopped_marker(paths: &StackPaths) -> PathBuf {

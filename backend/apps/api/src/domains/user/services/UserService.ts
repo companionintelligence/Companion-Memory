@@ -253,6 +253,20 @@ export class UserService {
     return !!result;
   }
 
+  /**
+   * Whether this appliance has never been claimed — no account has ever been
+   * created on it.
+   *
+   * Counts soft-deleted rows for the same reason `checkEmailAvailability` reads
+   * through the filter: a deleted account still means someone claimed this box,
+   * and re-opening signup for whoever reaches it next would be a way back in.
+   */
+  async hasNoUsers(): Promise<boolean> {
+    const count = await this.userRepository.count({ withDeleted: true });
+
+    return count === 0;
+  }
+
   async findByEmail(email: string): Promise<User | null> {
     const result = await this.userRepository.findOne({
       where: {
