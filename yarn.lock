@@ -3231,6 +3231,7 @@ __metadata:
     jwt-decode: "npm:^4.0.0"
     knip: "npm:^5.66.0"
     leaflet: "npm:^1.9.4"
+    lottie-react: "npm:^2.4.1"
     oxlint: "npm:^1.36.0"
     playwright: "npm:^1.53.0"
     postcss: "npm:^8.5.3"
@@ -20741,6 +20742,25 @@ __metadata:
   bin:
     loose-envify: cli.js
   checksum: 10c0/655d110220983c1a4b9c0c679a2e8016d4b67f6e9c7b5435ff5979ecdb20d0813f4dec0a08674fcbdd4846a3f07edbb50a36811fd37930b94aaa0d9daceb017e
+  languageName: node
+  linkType: hard
+
+"lottie-react@npm:^2.4.1":
+  version: 2.4.2
+  resolution: "lottie-react@npm:2.4.2"
+  dependencies:
+    lottie-web: "npm:^5.13.0"
+  peerDependencies:
+    react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+  checksum: 10c0/ef893073be335f8a1fc24fd49ab40db0a63722e6fd257c2d5f1e9b5853895cda708cd5293d8d6174fe0bf6057c09ca1762b21aacf193f71ef9b8a07fc02e41eb
+  languageName: node
+  linkType: hard
+
+"lottie-web@npm:^5.13.0":
+  version: 5.13.0
+  resolution: "lottie-web@npm:5.13.0"
+  checksum: 10c0/b463ad462169df3f7e04b7f3716274e269842554f1d72b8303ca7245628f2512982a59ae31698b3d57fbcda886228ae160fcb2aa518c6cecd8a95974db2458ee
   languageName: node
   linkType: hard
 
