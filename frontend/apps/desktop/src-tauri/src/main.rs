@@ -17,6 +17,10 @@ use tauri_plugin_opener::OpenerExt;
 #[derive(Clone)]
 pub struct StackPathsState(pub stack_manager::StackPaths);
 
+/// Shared startup progress, written by whichever task is running the start and
+/// read by the splash page's poll.
+pub struct StartupProgressState(pub stack_manager::ProgressHandle);
+
 /// A deep link that arrived before the frontend had a listener up — the cold-start
 /// case (app not yet running when the OS delivers the URL) and, defensively, any
 /// warm-start delivery that raced page load. `main.tsx`'s deep-link wiring drains
@@ -99,6 +103,8 @@ fn main() {
 
             let paths = stack_manager::initialize_stack(&resource_dir, &data_dir)?;
             app.manage(StackPathsState(paths.clone()));
+            let progress = stack_manager::new_progress();
+            app.manage(StartupProgressState(progress.clone()));
             app.manage(local_model::LocalModelHandles::default());
 
             tray::create_tray(app.handle())?;
@@ -124,10 +130,12 @@ fn main() {
             // racing each other to the first `docker compose up` (see that
             // method's doc comment for why the race matters here).
             let app_handle = app.handle().clone();
+            let startup_progress = progress.clone();
             tauri::async_runtime::spawn(async move {
-                let join_result =
-                    tokio::task::spawn_blocking(move || ensure_local_model_then_start_stack(&app_handle, &paths))
-                        .await;
+                let join_result = tokio::task::spawn_blocking(move || {
+                    ensure_local_model_then_start_stack(&app_handle, &paths, &startup_progress)
+                })
+                .await;
 
                 match join_result {
                     Ok(Err(e)) => log::error!("initial start_stack failed: {e}"),
@@ -161,6 +169,9 @@ fn main() {
             open_docker_downloads_command,
             read_desktop_logs_command,
             get_local_model_status_command,
+            get_startup_progress_command,
+            is_first_run_command,
+            mark_first_run_complete_command,
             open_external_url_command,
             take_pending_deep_link_command,
         ])
@@ -175,6 +186,7 @@ fn main() {
 fn ensure_local_model_then_start_stack(
     app_handle: &tauri::AppHandle,
     paths: &stack_manager::StackPaths,
+    progress: &stack_manager::ProgressHandle,
 ) -> Result<(), String> {
     let handles = app_handle.state::<local_model::LocalModelHandles>();
     let apple_bridge_binary = match app_handle.path().resource_dir() {
@@ -186,7 +198,7 @@ fn ensure_local_model_then_start_stack(
         log::error!("Local model resolution failed, continuing with defaults: {e}");
     }
 
-    stack_manager::start_stack(paths)
+    stack_manager::start_stack_reporting(paths, progress)
 }
 
 #[tauri::command]
@@ -199,17 +211,56 @@ async fn check_stack_status_command() -> bool {
     stack_manager::is_healthy().await
 }
 
-/// Routed through ensure_local_model_then_start_stack rather than calling
-/// stack_manager::start_stack directly — the bootstrap page calls this
-/// command itself moments after launch, and it must not race main.rs's own
-/// startup task to the first `docker compose up` (see
-/// LocalModelHandles::resolve_once's doc comment).
+/// Kick off a start and return immediately.
+///
+/// This used to await the whole cold start — Ollama download, model pulls, every
+/// image, and compose's own wait for `api` to become healthy — which is why the
+/// splash could only show one frozen line for the length of it: the page was
+/// blocked on this call before it ever reached its polling loop. The work now
+/// runs in the background and reports through `get_startup_progress_command`.
+///
+/// Still routed through ensure_local_model_then_start_stack rather than
+/// stack_manager::start_stack directly — the bootstrap page calls this moments
+/// after launch and must not race main.rs's own startup task to the first
+/// `docker compose up` (see LocalModelHandles::resolve_once's doc comment).
 #[tauri::command]
-async fn start_stack_command(app: tauri::AppHandle, state: tauri::State<'_, StackPathsState>) -> Result<(), String> {
+fn start_stack_command(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, StackPathsState>,
+    progress: tauri::State<'_, StartupProgressState>,
+) -> Result<(), String> {
     let paths = state.0.clone();
-    tokio::task::spawn_blocking(move || ensure_local_model_then_start_stack(&app, &paths))
-        .await
-        .map_err(|e| format!("Task join error: {e}"))?
+    let progress = progress.0.clone();
+
+    tauri::async_runtime::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            ensure_local_model_then_start_stack(&app, &paths, &progress)
+        })
+        .await;
+    });
+
+    Ok(())
+}
+
+/// What the splash renders: the current phase, the line to show, and the reason
+/// if it failed.
+#[tauri::command]
+fn get_startup_progress_command(
+    progress: tauri::State<'_, StartupProgressState>,
+) -> stack_manager::StartupProgress {
+    progress.0.lock().map(|p| p.clone()).unwrap_or_default()
+}
+
+/// Whether this machine has ever completed a start — drives the one-time
+/// disclosure of what the first run downloads and mounts.
+#[tauri::command]
+fn is_first_run_command(state: tauri::State<'_, StackPathsState>) -> bool {
+    stack_manager::is_first_run(&state.0)
+}
+
+#[tauri::command]
+fn mark_first_run_complete_command(state: tauri::State<'_, StackPathsState>) {
+    stack_manager::mark_first_run_complete(&state.0);
 }
 
 #[tauri::command]

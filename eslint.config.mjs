@@ -22,6 +22,12 @@ export default [
       // the root config instead of the per-workspace ones.
       '.claude/worktrees/**',
       '.worktrees/**',
+      // lottie-web, vendored into the desktop bootstrap page rather than loaded
+      // from a CDN: that page runs under the app's own CSP (`script-src 'self'`),
+      // so a remote script would simply be blocked. It is minified upstream
+      // output — linting it reports thousands of errors in code that is not ours
+      // and that we do not edit.
+      'frontend/apps/desktop/bootstrap/lottie.min.js',
       // The Safari Web Extension's Resources/ is filled at build time from
       // CI-Browser-Extension (see frontend/apps/ios/scripts/sync-safari-extension.sh)
       // and is gitignored — but, again, ESLint does not read .gitignore. Without

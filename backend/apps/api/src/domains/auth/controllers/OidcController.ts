@@ -429,9 +429,18 @@ export class OidcController {
         return this.finishLogin(req, res, user);
       }
 
-      // No account yet. The signup-code gate still applies: when codes are
-      // required, only users that already exist on this server may sign in.
-      const isSignupCodeRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
+      // No account yet. An appliance nobody has claimed is the one case where
+      // that is expected rather than suspicious: a freshly installed box has an
+      // empty user table, an empty signup-code table, and no way to mint a code,
+      // so every gate below would otherwise leave the owner locked out of the
+      // machine they just installed. The first account is therefore always
+      // allowed; from the second onwards the gates below apply as before.
+      const unclaimed = await this.userService.hasNoUsers();
+
+      // The signup-code gate still applies: when codes are required, only users
+      // that already exist on this server may sign in.
+      const isSignupCodeRequired =
+        !unclaimed && (await this.featureService.isFeatureEnabled('require.signup.codes'));
 
       if (isSignupCodeRequired) {
         this.logger.warn(`OIDC sign-in rejected for unknown user (signup codes required): ${userInfo.email}`);
@@ -444,8 +453,31 @@ export class OidcController {
       // Native first-time sign-in can't run the web "create account?" confirmation
       // (it lives outside the deep-link flow), so surface it as an error the app can
       // handle rather than stranding the user on a web page.
-      if (isNative) {
+      //
+      // Except on an unclaimed appliance, where that error is a dead end: the
+      // desktop app signs in as a native client, so this branch was the last
+      // door out of a box with no accounts on it. Claiming an empty appliance is
+      // exactly what the confirmation would ask about, and there is no other
+      // identity it could belong to, so the account is created directly.
+      if (isNative && !unclaimed) {
         return res.redirect(this.nativeRedirectUrl({ error: 'signup_required' }));
+      }
+
+      if (isNative) {
+        const claimed = await this.userService.create(
+          { userId: SYSTEM_USER },
+          {
+            name: userInfo.name || userInfo.email.split('@')[0],
+            email: userInfo.email,
+            // Random password — the account authenticates via OIDC, same as the
+            // web confirm-account path below.
+            password: randomBytes(32).toString('hex'),
+          },
+        );
+
+        this.logger.log(`Unclaimed appliance claimed by first OIDC sign-in: ${userInfo.email}`);
+
+        return res.redirect(this.nativeRedirectUrl({ code: this.oidcNativeCodeService.issue(claimed.id) }));
       }
 
       // First-time web sign-in: do NOT create the account silently. Stash the

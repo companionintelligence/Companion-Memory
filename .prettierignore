@@ -40,3 +40,7 @@ frontend/apps/web/src/graphql/possibleTypes.ts
 
 # Importer test fixtures (preserve vendor raw export payloads)
 backend/apps/api/src/domains/import/datasources/__tests__/fixtures/**
+
+# Vendored lottie-web for the desktop bootstrap page (see eslint.config.mjs):
+# upstream minified output, not ours to format.
+frontend/apps/desktop/bootstrap/lottie.min.js

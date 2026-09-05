@@ -114,7 +114,7 @@ export function SplashPage() {
 
           <Reveal delay={320} className="flex flex-col items-center gap-3 sm:flex-row md:items-center">
             <Button asChild size="lg" className="px-10 shadow-glow-ci">
-              <Link to="/login">Get Started</Link>
+              <Link to="/signup">Get Started</Link>
             </Button>
             <Button asChild variant="link" className="text-muted-foreground">
               <Link to="/login">I already have an account</Link>

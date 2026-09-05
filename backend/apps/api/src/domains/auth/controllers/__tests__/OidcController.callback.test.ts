@@ -46,7 +46,14 @@ function jsonResponse(ok: boolean, status: number, body: unknown) {
 const TOKEN_OK = jsonResponse(true, 200, { access_token: 'portal-access-token', token_type: 'bearer' });
 
 function makeController() {
-  const userService = { findByEmail: jest.fn(), create: jest.fn() };
+  const userService = {
+    findByEmail: jest.fn(),
+    create: jest.fn(),
+    // Default to an appliance that already has an account: these cases are
+    // about the gates, not the one-account-wide exemption that lets someone
+    // claim a box with an empty user table.
+    hasNoUsers: jest.fn().mockResolvedValue(false),
+  };
   const authService = {
     issueSessionToken: jest
       .fn()
@@ -246,6 +253,46 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
 
       expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=signup_required`);
       expect(authService.issueSignupIntentToken).not.toHaveBeenCalled();
+    });
+
+    // The desktop app signs in as a native client, so signup_required was the
+    // last door out of a freshly installed appliance: no account, no way to mint
+    // a signup code, and no web confirmation reachable from the deep-link flow.
+    it('native: claims an unclaimed appliance instead of dead-ending on signup_required', async () => {
+      const { controller, userService, oidcNativeCodeService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(
+          jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'owner@example.com', name: 'Owner' }),
+        );
+      userService.findByEmail.mockResolvedValue(null);
+      userService.hasNoUsers.mockResolvedValue(true);
+      userService.create.mockResolvedValue({ id: 'user-first' });
+      oidcNativeCodeService.issue.mockReturnValue('one-time-code');
+
+      await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
+
+      expect(userService.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ email: 'owner@example.com', name: 'Owner' }),
+      );
+      expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code`);
+    });
+
+    it('native: still refuses an unknown user once the appliance has an account', async () => {
+      const { controller, userService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-1', email: 'new@example.com' }));
+      userService.findByEmail.mockResolvedValue(null);
+      userService.hasNoUsers.mockResolvedValue(false);
+
+      await controller.callback('code-x', 'match', undefined, nativeReq(), res as never);
+
+      expect(userService.create).not.toHaveBeenCalled();
+      expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=signup_required`);
     });
 
     it('rejects an unknown user outright when signup codes are required, before minting any intent cookie', async () => {

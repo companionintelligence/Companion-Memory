@@ -33,6 +33,12 @@ if [[ -z "${ASDF_DIR:-}" && -f "${HOME}/.asdf/asdf.sh" ]]; then
   source "${HOME}/.asdf/asdf.sh"
 fi
 if [[ -f "${HOME}/.nvm/nvm.sh" ]]; then
+  # nvm refuses to load (returns 1) when npm_config_prefix is set, which aborts
+  # this script under `set -e`. npm/npx export that variable into every child
+  # process, so an xcodebuild driven from an MCP server launched via `npx`
+  # (XcodeBuildMCP, ios-simulator-mcp) always hits it. We only source nvm to put
+  # node on PATH, so drop the variable first.
+  unset npm_config_prefix
   # shellcheck disable=SC1091
   source "${HOME}/.nvm/nvm.sh"
 fi
