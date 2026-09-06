@@ -568,19 +568,6 @@ pub async fn is_healthy() -> bool {
     }
 }
 
-/// Whether this machine has ever completed a start.
-///
-/// Drives the one-time disclosure on the splash: the first run downloads
-/// several gigabytes of images and mounts a folder from the user's home
-/// directory, and neither was stated anywhere before it happened.
-pub fn is_first_run(paths: &StackPaths) -> bool {
-    !paths.data_dir.join(".first-run-complete").exists()
-}
-
-pub fn mark_first_run_complete(paths: &StackPaths) {
-    let _ = fs::write(paths.data_dir.join(".first-run-complete"), "");
-}
-
 fn user_stopped_marker(paths: &StackPaths) -> PathBuf {
     paths.data_dir.join(".user-stopped")
 }
@@ -682,23 +669,6 @@ mod tests {
             logs_dir: dir.path().join("logs"),
             import_work_dir: dir.path().join("import-work"),
         }
-    }
-
-    #[test]
-    fn first_run_marker_is_one_way() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = scratch_paths(&dir);
-
-        // A machine that has never completed a start gets the disclosure.
-        assert!(is_first_run(&paths));
-
-        mark_first_run_complete(&paths);
-        assert!(!is_first_run(&paths));
-
-        // Marking again is harmless — the splash calls it on a path that can run
-        // more than once if a start is retried.
-        mark_first_run_complete(&paths);
-        assert!(!is_first_run(&paths));
     }
 
     #[test]

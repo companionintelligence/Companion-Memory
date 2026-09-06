@@ -170,8 +170,6 @@ fn main() {
             read_desktop_logs_command,
             get_local_model_status_command,
             get_startup_progress_command,
-            is_first_run_command,
-            mark_first_run_complete_command,
             open_external_url_command,
             take_pending_deep_link_command,
         ])
@@ -249,18 +247,6 @@ fn get_startup_progress_command(
     progress: tauri::State<'_, StartupProgressState>,
 ) -> stack_manager::StartupProgress {
     progress.0.lock().map(|p| p.clone()).unwrap_or_default()
-}
-
-/// Whether this machine has ever completed a start — drives the one-time
-/// disclosure of what the first run downloads and mounts.
-#[tauri::command]
-fn is_first_run_command(state: tauri::State<'_, StackPathsState>) -> bool {
-    stack_manager::is_first_run(&state.0)
-}
-
-#[tauri::command]
-fn mark_first_run_complete_command(state: tauri::State<'_, StackPathsState>) {
-    stack_manager::mark_first_run_complete(&state.0);
 }
 
 #[tauri::command]
