@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "main": "index.ts",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "packageManager": "yarn@4.9.1",
   "dependencies": {
     "@ci/shadcn": "workspace:*",

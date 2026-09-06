@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { useMutation } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
 import {
   Badge,
   Button,
-  Calendar,
   Dialog,
   Input,
   Label,
@@ -73,6 +72,14 @@ import {
 import { SavedSearchPicker } from './SavedSearchPicker';
 import { currentSortValue, explorerSortOptions } from './sortOptions';
 import { droppedFilters, readMemoryView, unsupportedReason, type FilterDimension } from './viewFilterSupport';
+
+/* The date grid sits inside a Popover and behind `showCustomPicker`, so it can
+   never be on screen at first paint — but importing it eagerly still put
+   react-day-picker in the chunk everyone downloads, because the Main layout
+   mounts GlobalSearchBox, which reaches into this module for SearchPanelFilters. */
+const Calendar = lazy(() =>
+  import('@ci/shadcn/src/components/coalescers/calendar').then((m) => ({ default: m.Calendar })),
+);
 
 const START_OF_DAY_TIME = '00:00';
 const END_OF_DAY_TIME = '23:59';
@@ -876,25 +883,30 @@ function DateControl() {
 
         {showCustomPicker && (
           <>
-            <Calendar
-              mode="range"
-              selected={selectedRange}
-              onSelect={(range) => {
-                const fromDate = range?.from ? localDateInputValue(range.from) : '';
-                const toDate = range?.to ? localDateInputValue(range.to) : '';
-                const from = fromDate
-                  ? dateTimeIso(fromDate, timeExpanded ? fromTimeValue : START_OF_DAY_TIME, 'start')
-                  : undefined;
-                let to: string | undefined;
+            {/* Only the grid itself is deferred, not the controls beside it:
+                "Clear range" and the time fields stay synchronous so opening the
+                popover still gives you something to act on immediately. */}
+            <Suspense fallback={null}>
+              <Calendar
+                mode="range"
+                selected={selectedRange}
+                onSelect={(range) => {
+                  const fromDate = range?.from ? localDateInputValue(range.from) : '';
+                  const toDate = range?.to ? localDateInputValue(range.to) : '';
+                  const from = fromDate
+                    ? dateTimeIso(fromDate, timeExpanded ? fromTimeValue : START_OF_DAY_TIME, 'start')
+                    : undefined;
+                  let to: string | undefined;
 
-                if (toDate) {
-                  to = dateTimeIso(toDate, timeExpanded ? toTimeValue : END_OF_DAY_TIME, 'end');
-                }
+                  if (toDate) {
+                    to = dateTimeIso(toDate, timeExpanded ? toTimeValue : END_OF_DAY_TIME, 'end');
+                  }
 
-                setDateRange(from, to);
-              }}
-              numberOfMonths={1}
-            />
+                  setDateRange(from, to);
+                }}
+                numberOfMonths={1}
+              />
+            </Suspense>
             <div className="space-y-3 border-t p-3">
               <div className="flex items-center justify-between gap-3">
                 <Button

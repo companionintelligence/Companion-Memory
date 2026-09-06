@@ -1,5 +1,14 @@
-import { Button, Calendar, Popover, Select } from '@ci/shadcn';
+import { Suspense, lazy } from 'react';
+
+import { Button, Popover, Select } from '@ci/shadcn';
 import { Calendar as CalendarIcon, Save } from '@ci/shadcn/icons';
+
+/* The date picker lives inside a Popover, which Radix does not mount until it is
+   opened, so it cannot be on screen at first paint — but importing it eagerly
+   still put react-day-picker in the chunk served before first paint. */
+const Calendar = lazy(() =>
+  import('@ci/shadcn/src/components/coalescers/calendar').then((m) => ({ default: m.Calendar })),
+);
 
 import { useDropdown } from '@/components/SearchBox/useDropdown';
 import { TagInput } from '@/components/TagInput';
@@ -78,24 +87,26 @@ export function DropdownContent({ onSave, saveSupported = true }: Props) {
               </Button>
             </Popover.Trigger>
             <Popover.Content className="w-auto p-0" align="start">
-              <Calendar
-                mode="range"
-                selected={selectedRange}
-                onSelect={(range) => {
-                  const from = range?.from ? range.from.toISOString() : undefined;
-                  let to: string | undefined;
+              <Suspense fallback={null}>
+                <Calendar
+                  mode="range"
+                  selected={selectedRange}
+                  onSelect={(range) => {
+                    const from = range?.from ? range.from.toISOString() : undefined;
+                    let to: string | undefined;
 
-                  if (range?.to) {
-                    // Make the end inclusive of the whole selected day.
-                    const end = new Date(range.to);
-                    end.setHours(23, 59, 59, 999);
-                    to = end.toISOString();
-                  }
+                    if (range?.to) {
+                      // Make the end inclusive of the whole selected day.
+                      const end = new Date(range.to);
+                      end.setHours(23, 59, 59, 999);
+                      to = end.toISOString();
+                    }
 
-                  setDateRange(from, to);
-                }}
-                numberOfMonths={1}
-              />
+                    setDateRange(from, to);
+                  }}
+                  numberOfMonths={1}
+                />
+              </Suspense>
               {(dateFrom || dateTo) && (
                 <div className="border-t p-2">
                   <Button

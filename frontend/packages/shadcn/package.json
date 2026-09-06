@@ -6,6 +6,9 @@
     "shadcn": "yarn dlx shadcn@latest"
   },
   "main": "index.ts",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "packageManager": "yarn@4.9.1",
   "dependencies": {
     "@companionintelligence/tokens": "^0.3.1",

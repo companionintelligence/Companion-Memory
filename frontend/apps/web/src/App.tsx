@@ -1,4 +1,4 @@
-import { type ReactNode, lazy, useEffect } from 'react';
+import { type ReactNode, Suspense, lazy, useEffect } from 'react';
 
 import {
   ConnectionModeProvider,
@@ -21,7 +21,6 @@ import {
 } from 'react-router-dom';
 
 import { ApolloProvider } from '@/api/ApolloProvider';
-import { PowerSyncProvider } from '@/api/powersync/PowerSyncProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
 import NotFoundPage from '@/components/NotFound';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -32,6 +31,7 @@ import {
   AuthProvider,
   CaptureModalProvider,
   ModelProvider,
+  useAuth,
   useLocationTracking,
   useNativeShell,
   usePreventOverscroll,
@@ -42,6 +42,10 @@ import { CHAT_BASE, chatThreadPath } from '@/pages/ChatPage/chatPaths';
 import LoginPage from '@/pages/LoginPage';
 import SignupPage from '@/pages/SignupPage';
 import SplashPage from '@/pages/SplashPage';
+
+const LazyPowerSyncProvider = lazy(() =>
+  import('@/api/powersync/PowerSyncProvider').then((m) => ({ default: m.PowerSyncProvider })),
+);
 
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
 const CommunicationPage = lazy(() => import('@/pages/CommunicationPage'));
@@ -132,6 +136,29 @@ function RedirectProfileToSelfSettings() {
   return <Navigate to={rest ? `/self/settings/${rest}` : '/self/settings'} replace />;
 }
 
+/**
+ * PowerSync only matters once someone is signed in.
+ *
+ * It was mounted unconditionally, which put ~200 KB of sync engine in the chunk
+ * every visitor downloads before first paint and opened a WASQLite IndexedDB
+ * database for people sitting on the splash screen who may never sign in. Signed
+ * out, the tree renders without it; signed in, it loads and mounts exactly as
+ * before — every consumer of PowerSyncContext lives behind ProtectedRoute.
+ */
+function PowerSyncBoundary({ children }: { children: ReactNode }) {
+  const [{ authenticated, authToken }] = useAuth();
+
+  if (!authenticated && !authToken) {
+    return children;
+  }
+
+  return (
+    <Suspense fallback={<LoadingPage />}>
+      <LazyPowerSyncProvider>{children}</LazyPowerSyncProvider>
+    </Suspense>
+  );
+}
+
 function Providers({ children }: { children: ReactNode }) {
   return (
     <Router>
@@ -147,7 +174,7 @@ function Providers({ children }: { children: ReactNode }) {
                     <ModelProvider args={[]}>
                       <CaptureModalProvider args={[]}>
                         <ApolloProvider>
-                          <PowerSyncProvider>{children}</PowerSyncProvider>
+                          <PowerSyncBoundary>{children}</PowerSyncBoundary>
                         </ApolloProvider>
                       </CaptureModalProvider>
                     </ModelProvider>
