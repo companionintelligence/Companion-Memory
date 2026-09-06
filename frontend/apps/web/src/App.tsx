@@ -40,9 +40,9 @@ import {
 } from '@/hooks';
 import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
 import { CHAT_BASE, chatThreadPath } from '@/pages/ChatPage/chatPaths';
+import DesktopSignInPage from '@/pages/DesktopSignInPage';
 import LoginPage from '@/pages/LoginPage';
 import SignupPage from '@/pages/SignupPage';
-import DesktopSignInPage from '@/pages/DesktopSignInPage';
 import SplashPage from '@/pages/SplashPage';
 
 const LazyPowerSyncProvider = lazy(() =>
