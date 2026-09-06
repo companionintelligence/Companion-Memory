@@ -202,6 +202,109 @@ What it does **not** do, on purpose:
   still refused, flag or no flag; only which addresses are considered *in
   range to try in the first place* changes.
 
+## Federating two REAL boxes, end to end
+
+Everything below was executed on 2026-09-06 between two genuinely separate
+appliances — box A on a remote Tailscale node reached over real
+Tailscale-issued TLS, box B on a laptop — both on `main` at `06b5dac91`. It is
+recorded here because the [federation harness](../backend/apps/api/scripts/federation-harness/README.md)
+runs both boxes on one machine over loopback and therefore **cannot** exercise
+`PeerAskClient`, `checkEgressUrl`, DNS resolution or TLS at all; its driver
+calls `POST /agent/v1/ask` itself. This is the first run where the real
+outbound client made the real call.
+
+### What an operator must configure
+
+On the **sender**:
+
+| | |
+|---|---|
+| `CI_PEER_ALLOW_CGNAT_ENDPOINTS=true` | only if the peer is on a tailnet — see [above](#peering-over-a-private-network-tailscale--cgnat) |
+| a peer link naming the peer's `/agent/v1` base | `createPeerLink`, or the **People I'm linked to** tab |
+
+On the **receiver**:
+
+| | |
+|---|---|
+| `CI_PEER_AUDIENCE` | REQUIRED — without it every inbound ask is `503`, indistinguishable from no peer surface |
+| `CI_PEER_MEMORY_ENDPOINT` | the box's own `/agent/v1`; also the `@target-uri` authority if signatures are on |
+| `PORTAL_OIDC_ENABLED` / `PORTAL_OIDC_ISSUER` / `PORTAL_OIDC_JWKS_URI` | the trust anchor the peer's token is verified against |
+| the `ask` feature flag | ships `true` |
+| **`peer_links.peer_issuer` + `peer_subject`** | **SQL only — see below** |
+
+Both boxes must agree on the issuer, and the receiver must be reachable at
+`https` on port 443 or `''` (`checkEgressUrl` allows no other port).
+
+### Confirmed working over the real network
+
+Sender-side egress into CGNAT, and the whole inbound gate chain, are now proven
+against a real box rather than a loopback stand-in. The two runs below differ
+**only** in the flag, on identical code:
+
+```
+CI_PEER_ALLOW_CGNAT_ENDPOINTS=false → sendPeerAsk … reason: "Peer endpoint not permitted"
+CI_PEER_ALLOW_CGNAT_ENDPOINTS=true  → sendPeerAsk … reason: "Peer error 403"
+```
+
+A `403` means the request **left the box**: real `PeerAskClient`, real
+`checkEgressUrl`, real DNS to a `100.64.0.0/10` address, real TLS, and on the
+receiver a real `jwtVerify` against a real remote JWKS with issuer, audience and
+expiry all checked. The `403` is `PeerAskService.resolveLink` refusing an
+identity it has no link for — the one step below.
+
+### What still blocks a complete round trip
+
+**No API, CLI or UI can bind a peer link to the OIDC identity that inbound asks
+are matched on.**
+
+`PeerAskService.resolveLink` routes an inbound ask with
+`PeerLinkService.findActiveByPeerIdentity(issuer, subject)`
+(`domains/peers/services/PeerLinkService.ts:126`), reading
+`peer_links.peer_issuer` / `peer_subject`. `PeerLinkService.upsert` accepts both
+fields — but **nothing in production code ever passes them**:
+
+- `CreatePeerLinkInput` and `UpdatePeerLinkInput` carry neither field
+  (`domains/graphql/types/PeerLinkType.ts:130-167`), and
+  `PeerLinkType.ts:107` states outright that they are *"NOT exposed"*.
+- `PeerLinkResolver.createPeerLink` passes only handle, endpoint, display name,
+  person entity and tier (`PeerLinkResolver.ts:88-98`).
+- `ci-memory peers add` has no such flag either
+  (`domains/import/cli/commands/peers/add.ts`).
+- Outside tests, the **only** writers of `peerIssuer` in the whole repo are the
+  federation harness's raw SQL seed (`scripts/federation-harness/seed.ts:181`,
+  `index.ts:224,242`).
+
+So a link created the supported way is **inert for inbound asks**: it has a NULL
+issuer and subject, and no token can ever match it. Until a write path exists,
+federating two boxes requires:
+
+```sql
+UPDATE ci.peer_links
+   SET peer_issuer = '<the issuer both boxes trust>',
+       peer_subject = '<the sub claim in the peer token>'
+ WHERE peer_handle = '<handle>' AND revoked_at IS NULL;
+```
+
+Building the missing path is small and well-bounded: add the two fields to
+`CreatePeerLinkInput` / `UpdatePeerLinkInput`, pass them through
+`PeerLinkResolver` into the `upsert` that already accepts them, and decide
+whether the UI collects them or a directory lookup supplies them. The
+interesting half is the second question, not the plumbing — `peers.directoryUrl`
+exists precisely so a handle can resolve to an endpoint *and* an identity, and
+`PeerDirectoryService` does not populate a link today.
+
+**And the token is still supplied by hand.** `SendPeerAskInput.peerAccessToken`
+is non-nullable and documented as *"Supplied by the caller until Portal token
+exchange lands; this box never mints or stores it"*
+(`domains/graphql/types/AskInputs.ts:318-323`). CI-Portal has a peer
+**directory** (`apps/hono-app/src/domains/peers/` — register / resolve / search)
+but **no token-exchange endpoint and no peer audience minting**, so there is
+nothing to call. For a test run the repo's own loopback issuer
+(`scripts/federation-harness/idp.ts`) is the documented stand-in; it is a real
+RS256 issuer publishing a real JWKS, and pointing `PORTAL_OIDC_ISSUER` at it
+changes *who* the box trusts without weakening any check. It must never be a
+real box's issuer — the signing key is checked in.
+
 ## Known limitations
 
 > **Δ 2026-08-23 — two entries below were stale and are corrected in place.** Peer links and
@@ -220,7 +323,7 @@ What it does **not** do, on purpose:
   linking a peer and setting a trust tier is the one journey that completes end to end
   through the UI. `createAskGrant` likewise accepts `granteePeerLinkId` now (resolved
   through an owner-scoped read before it is stored), so a **peer grant** is no longer
-  SQL-only either. What is NOT fixed: `updatePeerLink` goes through
+  SQL-only either. What is NOT fixed: **neither mutation can set `peer_issuer` / `peer_subject`**, which is what an inbound ask is actually matched on — so a link created through the API or the UI is inert for inbound asks until someone writes those two columns by hand (see [Federating two REAL boxes](#federating-two-real-boxes-end-to-end)); `updatePeerLink` goes through
   `PeerLinkService.upsert`, which sets `revokedAt: null` unconditionally — so editing a link
   erases its revocation timestamp — a revoked link still supplies its original trust tier to
   asks already in the inbox, and `PeerLinkResolver` is not gated by the `ask` feature flag
@@ -344,7 +447,11 @@ Full protocol reference, with the verification-order chart and the threat table:
 
 ## Status
 
-**Both directions work, including the return trip — given a link and a token.** A box can receive, gate, and answer a federated ask; can compose and send one; and can now collect an answer its peer's owner approved after the fact. Peer-link management and the ask UI's route both landed (see the Δ note under Known limitations). Still open: a `pollPeerAsk` mutation so a person can press the collect button, a UI entry point for `createAskGrant`, an MCP tool so assistants can drive asks directly, and Portal token exchange so the access token is minted rather than passed in — the last of which is what stops the composer sending an ask across boxes at all.
+**Both directions work, including the return trip — given a link and a token.** A box can receive, gate, and answer a federated ask; can compose and send one; and can now collect an answer its peer's owner approved after the fact. Peer-link management and the ask UI's route both landed (see the Δ note under Known limitations).
+
+**Δ 2026-09-06 — measured between two real boxes, not the loopback harness.** Outbound egress into a tailnet works through the real `PeerAskClient`, and every inbound gate up to and including token verification passes over real TLS against a real remote JWKS. Two things stop a complete round trip, both detailed under [Federating two REAL boxes](#federating-two-real-boxes-end-to-end): **`peer_links.peer_issuer` / `peer_subject` have no write path outside SQL**, so a link created the supported way can never match an inbound ask; and the peer access token is still passed in by hand, because CI-Portal ships a peer directory but no token exchange. Also fixed on the way through: the inbound rate limiter built its `ConsumptionStore` key with NUL separators, which Postgres rejects — a `500` on **every** inbound ask and collect for any box on the default store, ahead of any policy.
+
+Still open: a `pollPeerAsk` mutation so a person can press the collect button, a UI entry point for `createAskGrant`, an MCP tool so assistants can drive asks directly, and Portal token exchange so the access token is minted rather than passed in — the last of which is what stops the composer sending an ask across boxes at all.
 
 ## See also
 
