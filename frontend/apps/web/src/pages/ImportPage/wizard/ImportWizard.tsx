@@ -174,7 +174,11 @@ export function ImportWizard({
             // Nothing picked is a legitimate answer here — most people arrive
             // without an export yet — so the button stays live and means "move
             // on" rather than going dead and pointing at Skip.
-            primaryLabel: picked.size > 0 ? `Continue → ${picked.size} selected` : 'Next',
+            // Just the count, not "N selected": the footer's primary shares a
+            // 375px row with Back and Skip, and the longer phrasing ellipsized
+            // exactly the digit that carries the information. What is selected
+            // is already on screen as ticked tiles.
+            primaryLabel: picked.size > 0 ? `Continue → ${picked.size}` : 'Next',
             onPrimary: picked.size > 0 ? goToExport : undefined,
           }
         : step === 'export'
