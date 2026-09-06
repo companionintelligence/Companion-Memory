@@ -38,11 +38,18 @@ get_secret() {
 : "${AUTH_SESSION_PEPPER:=$(get_secret AUTH_SESSION_PEPPER)}"
 : "${AUTH_FIELD_ENCRYPTION_KEY:=$(get_secret AUTH_FIELD_ENCRYPTION_KEY)}"
 : "${AUTH_CSRF_TOKEN_SECRET:=$(get_secret AUTH_CSRF_TOKEN_SECRET)}"
+# Signs the short-lived client tokens /api/powersync/token hands out; the
+# powersync service validates them against the same value. Deliberately absent
+# from the validation block below — sync is optional, and an appliance without
+# it should keep booting. When this is empty the token endpoint returns 503,
+# which is exactly what "sync is not configured" should look like.
+: "${POWERSYNC_JWT_SECRET:=$(get_secret POWERSYNC_JWT_SECRET)}"
 
 export DATABASE_PASSWORD
 export OBJECT_STORE_USERNAME OBJECT_STORE_PASSWORD
 export AUTH_TOKEN_SECRET AUTH_REFRESH_TOKEN_SECRET
 export AUTH_SESSION_PEPPER AUTH_FIELD_ENCRYPTION_KEY AUTH_CSRF_TOKEN_SECRET
+export POWERSYNC_JWT_SECRET
 
 # ── Validation ───────────────────────────────────
 
