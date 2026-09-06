@@ -353,9 +353,7 @@ export function ConnectionPage() {
   });
 
   usePageTitle(
-    connection?.name
-      ? `Connection - ${connection.name} - Companion Memory`
-      : 'Connection - Companion Memory',
+    connection?.name ? `Connection - ${connection.name} - Companion Memory` : 'Connection - Companion Memory',
   );
 
   const handleEditSubmit = async () => {

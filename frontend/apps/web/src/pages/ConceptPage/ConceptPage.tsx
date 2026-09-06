@@ -55,9 +55,7 @@ export function ConceptPage() {
 
   const [editMode, setEditMode] = useState(false);
 
-  usePageTitle(
-    concept?.name ? `Concept - ${concept.name} - Companion Memory` : 'Concept - Companion Memory',
-  );
+  usePageTitle(concept?.name ? `Concept - ${concept.name} - Companion Memory` : 'Concept - Companion Memory');
 
   let content: ReactNode | null = null;
 

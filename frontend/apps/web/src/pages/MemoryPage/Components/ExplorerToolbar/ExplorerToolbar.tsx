@@ -2,18 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react
 
 import { useMutation } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
-import {
-  Badge,
-  Button,
-  Dialog,
-  Input,
-  Label,
-  Popover,
-  Select,
-  Tooltip,
-  cn,
-  useToast,
-} from '@ci/shadcn';
+import { Badge, Button, Dialog, Input, Label, Popover, Select, Tooltip, cn, useToast } from '@ci/shadcn';
 import {
   Activity,
   ArrowUpDown,

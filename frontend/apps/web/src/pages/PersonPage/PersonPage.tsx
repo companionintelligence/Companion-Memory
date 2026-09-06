@@ -118,9 +118,7 @@ export function PersonPage() {
   const [editMode, setEditMode] = useState(false);
   const [editPersonOpen, setEditPersonOpen] = useState(false);
 
-  usePageTitle(
-    person?.name ? `Person - ${person.name} - Companion Memory` : 'Person - Companion Memory',
-  );
+  usePageTitle(person?.name ? `Person - ${person.name} - Companion Memory` : 'Person - Companion Memory');
 
   let content: ReactNode | null = null;
 

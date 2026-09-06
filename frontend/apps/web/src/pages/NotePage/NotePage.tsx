@@ -245,9 +245,7 @@ export function NotePage() {
 
   const displayTitle = note?.title ?? localTitle;
 
-  usePageTitle(
-    displayTitle ? `Note - ${displayTitle} - Companion Memory` : 'Note - Companion Memory',
-  );
+  usePageTitle(displayTitle ? `Note - ${displayTitle} - Companion Memory` : 'Note - Companion Memory');
 
   const handleUpdate = (content: string) => {
     contentRef.current = content;

@@ -29,8 +29,8 @@ export function SafariExtensionSection() {
               Portal access, sign-in cannot finish.
             </li>
             <li>
-              In Safari, open the extension → sign in with Companion Memory → choose this Memory Server.
-              That sign-in is separate from the Memory app for now.
+              In Safari, open the extension → sign in with Companion Memory → choose this Memory Server. That
+              sign-in is separate from the Memory app for now.
             </li>
           </ol>
         </Card.Content>

@@ -77,9 +77,7 @@ export function ContentPage() {
   const [editMode, setEditMode] = useState(false);
 
   usePageTitle(
-    contentItem?.title
-      ? `Content - ${contentItem.title} - Companion Memory`
-      : 'Content - Companion Memory',
+    contentItem?.title ? `Content - ${contentItem.title} - Companion Memory` : 'Content - Companion Memory',
   );
 
   let content: ReactNode | null = null;
