@@ -18,6 +18,7 @@ import { gql, useFragment } from '@/graphql';
 import { useCurrentUser } from '@/hooks';
 import { AboutYouSection } from '@/pages/SettingsPage/sections/AboutYouSection';
 import { AccountSection } from '@/pages/SettingsPage/sections/AccountSection';
+import { InvitesSection } from '@/pages/SettingsPage/sections/InvitesSection';
 
 import { ConnectionsSection } from './sections/ConnectionsSection';
 import { LifeDetailsSection } from './sections/LifeDetailsSection';
@@ -184,6 +185,8 @@ export function SelfProfileTab() {
         {rawEntityId && <ConnectionsSection entityId={rawEntityId} />}
 
         <AboutYouSection />
+
+        <InvitesSection />
 
         <AccountSection />
       </div>

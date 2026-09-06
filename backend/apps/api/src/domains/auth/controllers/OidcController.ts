@@ -28,6 +28,7 @@ import { UserService } from '@ci/domains/user';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
 import { OidcNativeCodeService } from '../services/OidcNativeCodeService';
+import { SignupCodeService } from '../services/SignupCodeService';
 import { ensureCsrfCookie, setCsrfCookie, setSessionCookie } from '../utils/authCookies';
 import {
   OIDC_ORIGIN_BOUNCE_PARAM,
@@ -55,6 +56,8 @@ const REDIRECT_COOKIE = 'oidc_redirect';
 // Holds the signed signup-intent token between the callback (first-time sign-in,
 // no account yet) and the "create account?" confirmation step.
 const SIGNUP_INTENT_COOKIE = 'oidc_signup_intent';
+/** An invite code offered at initiate, held until the callback can check it. */
+const SIGNUP_CODE_COOKIE = 'oidc_signup_code';
 const SIGNUP_INTENT_MAX_AGE = 10 * 60 * 1000;
 
 /**
@@ -141,6 +144,7 @@ export class OidcController {
     private readonly csrfService: CsrfService,
     private readonly featureService: FeatureService,
     private readonly oidcNativeCodeService: OidcNativeCodeService,
+    private readonly signupCodeService: SignupCodeService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(OidcController.name);
@@ -186,6 +190,7 @@ export class OidcController {
   initiate(
     @Query('client') client: string | undefined,
     @Query('redirect') redirectParam: string | undefined,
+    @Query('signup_code') signupCodeParam: string | undefined,
     @Req() req: Request,
     @Res() res: Response,
   ) {
@@ -251,6 +256,25 @@ export class OidcController {
         path: '/',
         maxAge: 10 * 60 * 1000,
       });
+    }
+
+    // An invitation, carried across the round-trip.
+    //
+    // The callback is where an unknown identity gets refused, but by then the
+    // request is a redirect back from the identity provider and can no longer
+    // carry anything the user supplied — so a code offered at initiate has to
+    // be parked here to still exist at the end. Same lifetime as the state and
+    // PKCE cookies, and read exactly once.
+    if (signupCodeParam) {
+      res.cookie(SIGNUP_CODE_COOKIE, signupCodeParam, {
+        httpOnly: true,
+        secure: req.secure,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 10 * 60 * 1000,
+      });
+    } else {
+      res.clearCookie(SIGNUP_CODE_COOKIE, { path: '/' });
     }
 
     // Clear any stale value when there is no redirect, so a plain sign-in never
@@ -438,9 +462,23 @@ export class OidcController {
       const unclaimed = await this.userService.hasNoUsers();
 
       // The signup-code gate still applies: when codes are required, only users
-      // that already exist on this server may sign in.
+      // that already exist on this server may sign in — or someone the owner
+      // invited, whose code rode along in a cookie from initiate.
+      //
+      // Without that second path the gate is unsatisfiable rather than strict:
+      // an OIDC redirect cannot carry a code, so before this every unknown
+      // identity was refused outright and a claimed appliance could never admit
+      // a second person at all.
+      const offeredCode = req.cookies?.[SIGNUP_CODE_COOKIE];
+      const invited =
+        typeof offeredCode === 'string' && offeredCode.length > 0
+          ? Boolean(await this.signupCodeService.findOne(offeredCode))
+          : false;
+
+      res.clearCookie(SIGNUP_CODE_COOKIE, { path: '/' });
+
       const isSignupCodeRequired =
-        !unclaimed && (await this.featureService.isFeatureEnabled('require.signup.codes'));
+        !unclaimed && !invited && (await this.featureService.isFeatureEnabled('require.signup.codes'));
 
       if (isSignupCodeRequired) {
         this.logger.warn(`OIDC sign-in rejected for unknown user (signup codes required): ${userInfo.email}`);
@@ -448,6 +486,12 @@ export class OidcController {
         return isNative
           ? res.redirect(this.nativeRedirectUrl({ error: 'signup_code_required' }))
           : res.redirect('/login?error=signup_code_required');
+      }
+
+      // Burn the invitation as soon as it has admitted someone, so it cannot be
+      // replayed by the next person to reach this appliance.
+      if (invited) {
+        await this.signupCodeService.update(offeredCode, { used: true });
       }
 
       // Native first-time sign-in can't run the web "create account?" confirmation

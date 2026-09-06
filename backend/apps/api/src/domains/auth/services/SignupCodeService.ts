@@ -22,6 +22,15 @@ export class SignupCodeService {
     return await this.signupCodeRepository.save(signupCode);
   }
 
+  /** Unused codes, newest first — what the owner sees after minting one. */
+  async findUnused(): Promise<SignupCode[]> {
+    return this.signupCodeRepository.find({
+      where: { used: false },
+      order: { createdAt: 'DESC' },
+      take: 20,
+    });
+  }
+
   async findOne(signup_code: string): Promise<SignupCode | null> {
     const result = await this.signupCodeRepository.findOne({
       where: {

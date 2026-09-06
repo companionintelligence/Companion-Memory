@@ -26,6 +26,7 @@ function makeController() {
     {} as never, // csrfService
     {} as never, // featureService
     {} as never, // oidcNativeCodeService
+    {} as never, // signupCodeService
     logger as never,
   );
 
@@ -56,7 +57,7 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     config.auth.oidc.issuerUrl = '';
 
     try {
-      controller.initiate(undefined, undefined, makeReq(), res as never);
+      controller.initiate(undefined, undefined, undefined, makeReq(), res as never);
     } finally {
       config.auth.oidc.issuerUrl = savedIssuerUrl;
     }
@@ -70,7 +71,7 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     const { controller } = makeController();
     const res = makeRes();
 
-    controller.initiate(undefined, undefined, makeReq(), res as never);
+    controller.initiate(undefined, undefined, undefined, makeReq(), res as never);
 
     const stateCall = cookieCall(res, 'oidc_state');
     const pkceCall = cookieCall(res, 'oidc_pkce');
@@ -103,7 +104,7 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     const { controller } = makeController();
     const res = makeRes();
 
-    controller.initiate(undefined, undefined, makeReq(), res as never);
+    controller.initiate(undefined, undefined, undefined, makeReq(), res as never);
 
     expect(cookieCall(res, 'oidc_client')).toBeUndefined();
   });
@@ -112,7 +113,7 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     const { controller } = makeController();
     const res = makeRes();
 
-    controller.initiate('native', undefined, makeReq(), res as never);
+    controller.initiate('native', undefined, undefined, makeReq(), res as never);
 
     const clientCall = cookieCall(res, 'oidc_client');
 
@@ -123,7 +124,7 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     const { controller } = makeController();
     const res = makeRes();
 
-    controller.initiate(undefined, '/shared/abc123', makeReq(), res as never);
+    controller.initiate(undefined, '/shared/abc123', undefined, makeReq(), res as never);
 
     const redirectCall = cookieCall(res, 'oidc_redirect');
 
@@ -136,7 +137,7 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     const res = makeRes();
 
     // Absolute cross-origin URL: exactly what safeRelativePath exists to reject.
-    controller.initiate(undefined, 'https://evil.example.com/steal', makeReq(), res as never);
+    controller.initiate(undefined, 'https://evil.example.com/steal', undefined, makeReq(), res as never);
 
     expect(cookieCall(res, 'oidc_redirect')).toBeUndefined();
     // A plain sign-in with no (valid) destination must not inherit a stale one —
@@ -148,7 +149,7 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     const { controller } = makeController();
     const res = makeRes();
 
-    controller.initiate(undefined, undefined, makeReq(), res as never);
+    controller.initiate(undefined, undefined, undefined, makeReq(), res as never);
 
     expect(res.clearCookie).toHaveBeenCalledWith('oidc_redirect', { path: '/' });
   });
@@ -160,7 +161,13 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     config.auth.oidc.publicBaseUrl = 'https://ci-memory.example.com';
 
     try {
-      controller.initiate('native', undefined, makeReq({}, { host: '192.168.1.50:8642' }), res as never);
+      controller.initiate(
+        'native',
+        undefined,
+        undefined,
+        makeReq({}, { host: '192.168.1.50:8642' }),
+        res as never,
+      );
     } finally {
       config.auth.oidc.publicBaseUrl = savedPublicBaseUrl;
     }
@@ -182,7 +189,13 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     config.auth.oidc.publicBaseUrl = 'https://ci-memory.example.com';
 
     try {
-      controller.initiate(undefined, undefined, makeReq({}, { host: '192.168.1.50:8642' }), res as never);
+      controller.initiate(
+        undefined,
+        undefined,
+        undefined,
+        makeReq({}, { host: '192.168.1.50:8642' }),
+        res as never,
+      );
     } finally {
       config.auth.oidc.publicBaseUrl = savedPublicBaseUrl;
     }

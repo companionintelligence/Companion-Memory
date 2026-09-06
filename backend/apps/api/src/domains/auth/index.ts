@@ -32,6 +32,7 @@ import { ApiKeyController } from './controllers/ApiKeyController';
 import { ConnectController } from './controllers/ConnectController';
 import { OidcController } from './controllers/OidcController';
 import { SessionController } from './controllers/SessionController';
+import { SignupCodeController } from './controllers/SignupCodeController';
 import { SignupController } from './controllers/SignupController';
 import { ApiKeyEntity } from './entities/ApiKeyEntity';
 import { ConnectCodeEntity } from './entities/ConnectCodeEntity';
@@ -83,6 +84,7 @@ import { SignupCodeService } from './services/SignupCodeService';
   controllers: [
     SessionController,
     SignupController,
+    SignupCodeController,
     AccountController,
     AccountDataController,
     ApiKeyController,
