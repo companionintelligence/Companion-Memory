@@ -17,6 +17,11 @@ export interface PickStepProps {
   onContinue: () => void;
   /** When true (default), Continue stays pinned and only the catalog scrolls. */
   pinContinue?: boolean;
+  /**
+   * When false, the host's wizard footer carries Continue and this step draws
+   * no control row of its own (onboarding). Default true for /sources/import.
+   */
+  showContinue?: boolean;
 }
 
 /**
@@ -28,7 +33,14 @@ export interface PickStepProps {
  * "we know this service and haven't finished it" is a materially different
  * answer from silence, which reads as unsupported.
  */
-export function PickStep({ catalog, picked, onToggle, onContinue, pinContinue = true }: PickStepProps) {
+export function PickStep({
+  catalog,
+  picked,
+  onToggle,
+  onContinue,
+  pinContinue = true,
+  showContinue = true,
+}: PickStepProps) {
   const [logoFailed, setLogoFailed] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState('');
   const lastImportedAt = useSourceUsage();
@@ -268,16 +280,18 @@ export function PickStep({ catalog, picked, onToggle, onContinue, pinContinue = 
           scrollport instead — same guarantee, the host's scroll model.
           Translucent-blurred like the onboarding banner so catalog tiles
           sliding beneath it read as "more below", not a hard cut. */}
-      <div
-        className={cn(
-          'flex shrink-0 justify-end border-t pt-4',
-          !pinContinue && 'sticky bottom-0 z-10 bg-background/95 pb-3 backdrop-blur-sm',
-        )}
-      >
-        <Button disabled={picked.size === 0} onClick={onContinue}>
-          Continue → {picked.size} selected
-        </Button>
-      </div>
+      {showContinue && (
+        <div
+          className={cn(
+            'flex shrink-0 justify-end border-t pt-4',
+            !pinContinue && 'sticky bottom-0 z-10 bg-background/95 pb-3 backdrop-blur-sm',
+          )}
+        >
+          <Button disabled={picked.size === 0} onClick={onContinue}>
+            Continue → {picked.size} selected
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

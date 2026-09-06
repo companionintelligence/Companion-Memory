@@ -23,6 +23,11 @@ export interface ImportSurfaceProps {
   variant?: 'page' | 'onboarding';
   /** Told the wizard's current phase, so an onboarding host can narrate it. */
   onStageChange?: (stage: ImportStage) => void;
+  /**
+   * `host` hands the wizard's forward/back controls to the surrounding
+   * wizard's footer (onboarding) instead of drawing them per phase.
+   */
+  nav?: 'inline' | 'host';
 }
 
 /**
@@ -46,7 +51,7 @@ export interface ImportSurfaceProps {
 /** The three things the import surface can be showing. */
 type Surface = 'import' | 'inbox' | 'history';
 
-export function ImportSurface({ variant = 'page', onStageChange }: ImportSurfaceProps) {
+export function ImportSurface({ variant = 'page', onStageChange, nav = 'inline' }: ImportSurfaceProps) {
   const [surface, setSurface] = useState<Surface>('import');
   const [stage, setStage] = useState<ImportStage>('pick');
   const [canExport, setCanExport] = useState(false);
@@ -150,6 +155,7 @@ export function ImportSurface({ variant = 'page', onStageChange }: ImportSurface
           onStepChange={handleStage}
           onCanExportChange={setCanExport}
           scroll="page"
+          nav={nav}
         />
       </div>
 

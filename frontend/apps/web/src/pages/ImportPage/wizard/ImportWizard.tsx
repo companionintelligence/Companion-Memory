@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { cn } from '@ci/shadcn';
 
+import { useWizardNav } from '@/components/WizardNav';
+
 import { useImportApi, type CatalogSource } from '../useImportApi';
 
 import { ExportStep } from './ExportStep';
@@ -42,6 +44,15 @@ export interface ImportWizardProps {
    * box and catalog grow with the header and steps above them.
    */
   scroll?: 'contained' | 'page';
+  /**
+   * Who draws the forward/back controls.
+   *
+   * `inline` (default, /sources/import) keeps them inside each phase. `host`
+   * hands them to the surrounding wizard's single footer via `WizardNav`, so
+   * onboarding shows one control row instead of this flow's row stacked above
+   * onboarding's own — see `WizardNav` for why that mattered.
+   */
+  nav?: 'inline' | 'host';
 }
 
 export function ImportWizard({
@@ -49,6 +60,7 @@ export function ImportWizard({
   onStepChange,
   onCanExportChange,
   scroll = 'contained',
+  nav = 'inline',
 }: ImportWizardProps = {}) {
   const api = useImportApi();
   const [ownStep, setOwnStep] = useState<Step>('pick');
@@ -132,6 +144,42 @@ export function ImportWizard({
     });
   }, []);
 
+  const hostNav = nav === 'host';
+  const lastExportIdx = Math.max(entries.length - 1, 0);
+  const clampedExportIdx = Math.min(exportIdx, lastExportIdx);
+
+  const goToExport = useCallback(() => {
+    setExportIdx(0);
+    setStep('export');
+  }, [setStep]);
+
+  // One description of "forward" and "backward" for whichever phase is showing,
+  // handed to the host footer. Nothing is registered in `inline` mode, so
+  // /sources/import keeps the controls inside the phases.
+  useWizardNav(
+    !hostNav
+      ? null
+      : step === 'pick'
+        ? {
+            // Nothing picked is a legitimate answer here — most people arrive
+            // without an export yet — so the button stays live and means "move
+            // on" rather than going dead and pointing at Skip.
+            primaryLabel: picked.size > 0 ? `Continue → ${picked.size} selected` : 'Next',
+            onPrimary: picked.size > 0 ? goToExport : undefined,
+          }
+        : step === 'export'
+          ? {
+              primaryLabel: clampedExportIdx >= lastExportIdx ? 'Finish → Sync' : 'Next →',
+              onPrimary: () =>
+                clampedExportIdx >= lastExportIdx
+                  ? setStep('sync')
+                  : setExportIdx(clampedExportIdx + 1),
+              onBack: () =>
+                clampedExportIdx === 0 ? setStep('pick') : setExportIdx(clampedExportIdx - 1),
+            }
+          : { onBack: () => setStep('export') },
+  );
+
   const pageScroll = scroll === 'page';
 
   return (
@@ -152,10 +200,8 @@ export function ImportWizard({
             picked={picked}
             onToggle={togglePicked}
             pinContinue={!pageScroll}
-            onContinue={() => {
-              setExportIdx(0);
-              setStep('export');
-            }}
+            showContinue={!hostNav}
+            onContinue={goToExport}
           />
         )}
 
@@ -168,10 +214,11 @@ export function ImportWizard({
             onIndex={setExportIdx}
             onBackToPick={() => setStep('pick')}
             onFinish={() => setStep('sync')}
+            showNav={!hostNav}
           />
         )}
 
-        {step === 'sync' && <SyncStep onBackToExport={() => setStep('export')} />}
+        {step === 'sync' && <SyncStep onBackToExport={() => setStep('export')} showNav={!hostNav} />}
       </div>
     </div>
   );

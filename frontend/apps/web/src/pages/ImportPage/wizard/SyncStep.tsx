@@ -8,6 +8,8 @@ import { LiveRunList } from './LiveRunList';
 
 export interface SyncStepProps {
   onBackToExport: () => void;
+  /** When false, the host wizard footer carries the way back (onboarding). */
+  showNav?: boolean;
 }
 
 /**
@@ -26,7 +28,7 @@ export interface SyncStepProps {
  * decided against. Discard is that way out, and because it is irreversible it
  * asks in the row rather than firing on the first click.
  */
-export function SyncStep({ onBackToExport }: SyncStepProps) {
+export function SyncStep({ onBackToExport, showNav = true }: SyncStepProps) {
   const api = useImportApi();
   const [unpushed, setUnpushed] = useState<UnpushedRun[] | null>(null);
   const [pushed, setPushed] = useState<ImportRun[] | null>(null);
@@ -191,11 +193,13 @@ export function SyncStep({ onBackToExport }: SyncStepProps) {
           </p>
         ))}
 
-      <div>
-        <Button variant="outline" onClick={onBackToExport}>
-          ← Back to export
-        </Button>
-      </div>
+      {showNav && (
+        <div>
+          <Button variant="outline" onClick={onBackToExport}>
+            ← Back to export
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

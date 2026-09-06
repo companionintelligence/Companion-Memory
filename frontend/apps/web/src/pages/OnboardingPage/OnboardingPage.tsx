@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { LoadingPage, usePageTitle } from '@ci/common';
-import { Button, Form, formDataResolver, cn, formDataSchema as s, useForm } from '@ci/shadcn';
+import { Form, formDataResolver, cn, formDataSchema as s, useForm } from '@ci/shadcn';
 import { Navigate } from 'react-router-dom';
 
-import logo from '@/assets/logo.png';
 import { useFeatures } from '@/common/feature';
+import { CompanionMark } from '@/components/CompanionMark';
 import { ThemeToggle } from '@/components/ThemePicker';
+import { WizardNavProvider } from '@/components/WizardNav';
 import { useCurrentUser } from '@/hooks';
 import { appHomePath } from '@/lib/appHome';
 
@@ -24,7 +25,7 @@ import { IdentityStep } from './IdentityStep';
 import { ImportArchivesStep } from './ImportArchivesStep';
 import { Intro } from './Intro';
 import { MoviePreferences } from './MoviePreferences';
-import { OnboardingButton } from './OnboardingButton';
+import { OnboardingNav } from './OnboardingNav';
 import { RunFirstSyncStep } from './RunFirstSyncStep';
 import { SocialConnections } from './SocialConnections';
 import { TimeAndPlaceStep } from './TimeAndPlaceStep';
@@ -280,29 +281,15 @@ export function OnboardingPage() {
   // 037d0e9b0), which put Back/Skip/Next below the fold on any step tall
   // enough to scroll; the step content scrolls, the nav does not.
   const navRow = showNav ? (
-    <div data-testid="onboarding-nav" className="mb-5 flex items-center gap-2 px-4 sm:mb-6 sm:gap-3">
-      {stepIndex > 0 && (
-        <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleBack}>
-          Back
-        </Button>
-      )}
-      <Button type="button" variant="ghost" size="lg" className="text-base" onClick={handleSkip}>
-        Skip
-      </Button>
-      <OnboardingButton
-        type="button"
-        size="lg"
-        className="px-10 sm:px-14 text-base sm:text-lg h-12"
-        onClick={handleNext}
-      >
-        Next
-      </OnboardingButton>
-    </div>
+    <OnboardingNav canGoBack={stepIndex > 0} onBack={handleBack} onSkip={handleSkip} onNext={handleNext} />
   ) : null;
 
   return (
     <Form {...form}>
-      <form
+      {/* The provider wraps the form, not just the step area: the footer lives
+          inside it too, and the footer is the thing a nested flow is driving. */}
+      <WizardNavProvider>
+        <form
         className="relative h-lvh flex flex-col"
         // Steps use type="button" CTAs; still block native submit so a mis-typed
         // control (or label→control activation) cannot navigate off the wizard.
@@ -316,7 +303,7 @@ export function OnboardingPage() {
 
         <div className="flex flex-col items-center flex-1 w-full h-full gap-1.5">
           <div className="self-start px-4 pt-[max(0.5rem,env(safe-area-inset-top))]">
-            <img src={logo} className="w-7 h-7" alt="" />
+            <CompanionMark className="h-7 w-7 rounded-full" />
           </div>
 
           {showWelcomeBackBanner && (
@@ -368,7 +355,8 @@ export function OnboardingPage() {
             )}
           </div>
         </div>
-      </form>
+        </form>
+      </WizardNavProvider>
     </Form>
   );
 }
