@@ -78,8 +78,8 @@ export function ContentPage() {
 
   usePageTitle(
     contentItem?.title
-      ? `Content - ${contentItem.title} - Companion Intelligence`
-      : 'Content - Companion Intelligence',
+      ? `Content - ${contentItem.title} - Companion Memory`
+      : 'Content - Companion Memory',
   );
 
   let content: ReactNode | null = null;

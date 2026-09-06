@@ -69,7 +69,7 @@ const DECLINE_PENDING = gql(`
 `);
 
 export function PlanPage() {
-  usePageTitle('Plan - Companion Intelligence');
+  usePageTitle('Plan - Companion Memory');
   const { isFeatureEnabled } = useFeatures();
   const showEmptyState = isFeatureEnabled('planning.emptyState');
   const { toast } = useToast();

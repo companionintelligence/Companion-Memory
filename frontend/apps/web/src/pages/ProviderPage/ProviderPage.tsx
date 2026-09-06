@@ -58,7 +58,7 @@ export const ConnectFormSchema = s.object({
 export type ConnectFormData = s.input<typeof ConnectFormSchema>;
 
 export function ProviderPage() {
-  usePageTitle('Connect - Companion Intelligence');
+  usePageTitle('Connect - Companion Memory');
 
   const { id } = useParams<{ id?: string }>();
   const navigate = useNavigate();

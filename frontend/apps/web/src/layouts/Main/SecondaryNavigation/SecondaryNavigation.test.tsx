@@ -541,7 +541,7 @@ describe('PowerRailToggle', () => {
 
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).toHaveAttribute('aria-controls', 'power-rail');
-    expect(screen.queryByRole('link', { name: /Companion Intelligence/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Companion Memory/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Memory')).not.toBeInTheDocument();
 
     fireEvent.click(toggle);

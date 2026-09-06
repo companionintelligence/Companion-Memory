@@ -119,7 +119,7 @@ export function PersonPage() {
   const [editPersonOpen, setEditPersonOpen] = useState(false);
 
   usePageTitle(
-    person?.name ? `Person - ${person.name} - Companion Intelligence` : 'Person - Companion Intelligence',
+    person?.name ? `Person - ${person.name} - Companion Memory` : 'Person - Companion Memory',
   );
 
   let content: ReactNode | null = null;

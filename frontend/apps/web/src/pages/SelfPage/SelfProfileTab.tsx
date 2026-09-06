@@ -42,7 +42,7 @@ const AUTOSAVE_DEBOUNCE_MS = 900;
  * call sites are visiting someone else's record and keep the modal.
  */
 export function SelfProfileTab() {
-  usePageTitle('Self - Companion Intelligence');
+  usePageTitle('Self - Companion Memory');
 
   const { user } = useCurrentUser();
   const entityId = user?.entity?.id ?? null;

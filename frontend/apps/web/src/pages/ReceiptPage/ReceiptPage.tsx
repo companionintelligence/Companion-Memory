@@ -179,8 +179,8 @@ export function ReceiptPage() {
 
   usePageTitle(
     receipt?.merchantName
-      ? `Receipt - ${receipt.merchantName} - Companion Intelligence`
-      : 'Receipt - Companion Intelligence',
+      ? `Receipt - ${receipt.merchantName} - Companion Memory`
+      : 'Receipt - Companion Memory',
   );
 
   let content: ReactNode | null = null;

@@ -111,7 +111,7 @@ export function EventPage() {
   const [editMode, setEditMode] = useState(false);
 
   usePageTitle(
-    event?.title ? `Event - ${event.title} - Companion Intelligence` : 'Event - Companion Intelligence',
+    event?.title ? `Event - ${event.title} - Companion Memory` : 'Event - Companion Memory',
   );
 
   let content: ReactNode | null = null;

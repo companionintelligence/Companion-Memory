@@ -25,7 +25,7 @@ import { SchedulePage } from '@/pages/SchedulePage';
  * `embedded` is what keeps it quiet and lets this page's title stand.
  */
 export function TodayPage() {
-  usePageTitle('Calendar - Companion Intelligence');
+  usePageTitle('Calendar - Companion Memory');
 
   // `schedule.page` used to gate a whole route. It still has to gate the
   // schedule itself — with it off there is nothing left to show here.

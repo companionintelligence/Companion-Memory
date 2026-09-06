@@ -92,7 +92,7 @@ function normalizePeopleDraft(people: OnboardingFormData['people']): OnboardingF
 }
 
 export function OnboardingPage() {
-  usePageTitle('Onboarding - Companion Intelligence');
+  usePageTitle('Onboarding - Companion Memory');
 
   const { user, loading: userLoading } = useCurrentUser();
   const { isFeatureEnabled } = useFeatures();

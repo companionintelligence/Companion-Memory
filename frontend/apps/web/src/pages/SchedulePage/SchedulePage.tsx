@@ -240,7 +240,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   const [colorMode, setColorMode] = useState<ColorMode>('type');
   const [slot, setSlot] = useState<CalendarSlot | null>(null);
 
-  usePageTitle(embedded ? null : 'Schedule - Companion Intelligence');
+  usePageTitle(embedded ? null : 'Schedule - Companion Memory');
 
   const { start, end } = useMemo(() => {
     const from = addDays(startOfLocalDay(new Date()), weekOffset * DAYS_IN_VIEW);

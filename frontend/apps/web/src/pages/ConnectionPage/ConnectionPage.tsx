@@ -354,8 +354,8 @@ export function ConnectionPage() {
 
   usePageTitle(
     connection?.name
-      ? `Connection - ${connection.name} - Companion Intelligence`
-      : 'Connection - Companion Intelligence',
+      ? `Connection - ${connection.name} - Companion Memory`
+      : 'Connection - Companion Memory',
   );
 
   const handleEditSubmit = async () => {

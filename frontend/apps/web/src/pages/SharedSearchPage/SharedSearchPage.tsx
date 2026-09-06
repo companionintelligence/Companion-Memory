@@ -158,8 +158,8 @@ export function SharedSearchPage() {
 
   usePageTitle(
     shared?.name
-      ? `${shared.name} (Shared) - Companion Intelligence`
-      : 'Shared Search - Companion Intelligence',
+      ? `${shared.name} (Shared) - Companion Memory`
+      : 'Shared Search - Companion Memory',
   );
 
   if (loading) {

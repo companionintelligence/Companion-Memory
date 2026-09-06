@@ -29,7 +29,7 @@ import { DESKTOP_JOB_PAGE_SIZE, MOBILE_JOB_PAGE_SIZE, useJobsList, type JobFilte
 import { useJobTypes, type JobTypesResponse } from './useJobTypes';
 
 export function JobsPage() {
-  usePageTitle('Jobs - Companion Intelligence');
+  usePageTitle('Jobs - Companion Memory');
 
   const phone = usePhone();
   const { pathname } = useLocation();

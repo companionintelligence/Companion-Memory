@@ -77,7 +77,7 @@ export const GET_CONTENTS = gql(`
  * the server, so a tile needs no second lookup to show its thumbnail.
  */
 export function ContentLibraryPage() {
-  usePageTitle('Content - Companion Intelligence');
+  usePageTitle('Content - Companion Memory');
 
   const navigate = useNavigate();
   // The open row lives in the URL rather than in local state, so it has a

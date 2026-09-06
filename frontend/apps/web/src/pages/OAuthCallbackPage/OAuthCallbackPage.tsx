@@ -8,7 +8,7 @@ import { useAuth } from '@/hooks';
 import { ONBOARDING_OAUTH_RESUME_KEY } from '@/pages/OnboardingPage/constants';
 
 export function OAuthCallbackPage() {
-  usePageTitle('Complete Connection - Companion Intelligence');
+  usePageTitle('Complete Connection - Companion Memory');
 
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
