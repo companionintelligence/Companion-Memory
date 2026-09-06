@@ -1,14 +1,16 @@
 import type { ReactNode } from 'react';
-import { useMemo } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 
 import { Button } from '@ci/shadcn';
-import Lottie from 'lottie-react';
 import { Link } from 'react-router-dom';
 
-import brainAnimation from '@/assets/companion-memory-brain.lottie.json';
 import brainMarkSvg from '@/assets/companion-memory-brain.svg';
 import { AnimatedBackground } from '@/components/AnimatedBackground';
 import { ThemeToggle } from '@/components/ThemePicker';
+
+// lottie-web is ~300 KB of player that only this surface uses, so it travels
+// with the animation it plays rather than in the chunk every page pays for.
+const Lottie = lazy(() => import('lottie-react'));
 
 const MARK_SIZE = 'aspect-square w-[min(88vw,34rem)] md:w-[min(44vw,40rem)] lg:w-[min(48vw,48rem)]';
 const MARK_GLOW = 'drop-shadow-[0_0_90px_rgba(30,207,224,0.45)]';
@@ -27,15 +29,54 @@ function usePrefersReducedMotion() {
  */
 function BrainMark() {
   const reducedMotion = usePrefersReducedMotion();
+  const [animationData, setAnimationData] = useState<object | null>(null);
+
+  // Loaded on demand rather than imported at the top of the file. Statically
+  // imported, the 1.9 MB animation lands in the app's main chunk: every user
+  // downloads it before the app can boot, and it pushed that chunk to 5.27 MB —
+  // past vite-plugin-pwa's 2 MiB precache ceiling, which fails the production
+  // build outright. As its own chunk it is fetched after first paint and only
+  // by the surface that shows it.
+  useEffect(() => {
+    if (reducedMotion) {
+      return;
+    }
+
+    let cancelled = false;
+
+    import('@/assets/companion-memory-brain.lottie.json')
+      .then((module) => {
+        if (!cancelled) {
+          setAnimationData(module.default);
+        }
+      })
+      // The mark is decoration; if its chunk fails to load the hero should
+      // still render its copy and its call to action.
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reducedMotion]);
 
   if (reducedMotion) {
     return <img src={brainMarkSvg} alt="" className={`${MARK_SIZE} ${MARK_GLOW}`} />;
   }
 
-  // The animation is one continuous loop that opens and closes on black, so it
-  // just repeats — no intro/idle segment handoff, and no poster frame to hold,
-  // because starting from nothing is the point.
-  return <Lottie animationData={brainAnimation} loop autoplay className={`${MARK_SIZE} ${MARK_GLOW}`} />;
+  // Nothing stands in for the animation while its chunk arrives. The loop opens
+  // and closes on black by design, so an empty box IS its first frame — a poster
+  // here would show the settled drawing and then cut back to black.
+  if (!animationData) {
+    return <div className={MARK_SIZE} aria-hidden="true" />;
+  }
+
+  // One continuous loop that opens and closes on black, so it just repeats — no
+  // intro/idle segment handoff, because starting from nothing is the point.
+  return (
+    <Suspense fallback={<div className={MARK_SIZE} aria-hidden="true" />}>
+      <Lottie animationData={animationData} loop autoplay className={`${MARK_SIZE} ${MARK_GLOW}`} />
+    </Suspense>
+  );
 }
 
 /** Staggered entrance for the copy — skipped entirely under reduced motion. */
