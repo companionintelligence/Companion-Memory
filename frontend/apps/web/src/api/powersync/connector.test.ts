@@ -200,6 +200,22 @@ describe('GraphQLBackendConnector.uploadData', () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
+  // events and entities are server-written mirrors of the capture lanes. A local
+  // write against either must be dropped, not sent: there is no mutation behind
+  // them, so anything that escaped here would 404 against the GraphQL endpoint
+  // on every sync and wedge the upload queue.
+  it.each(['events', 'entities'])('ignores writes against the %s mirror', async (table) => {
+    const fetchMock = stubFetch();
+    const op = fakeCrudEntry({ op: UpdateType.PUT, table, id: 'row-1', opData: { name: 'x' } });
+    const { database, complete } = fakeDatabase([op]);
+    const connector = new GraphQLBackendConnector(() => 'jwt-abc');
+
+    await connector.uploadData(database);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
+
   it('drops a permanently-rejected record (GraphQL error) and still completes', async () => {
     const fetchMock = stubFetch(jsonResponse({ errors: [{ message: 'Tag label cannot be empty' }] }));
     const op = fakeCrudEntry({ op: UpdateType.PUT, table: 'notes', id: 'local-1', opData: {} });
