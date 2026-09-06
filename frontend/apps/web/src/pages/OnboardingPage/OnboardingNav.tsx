@@ -35,14 +35,32 @@ export function OnboardingNav({ canGoBack, onBack, onSkip, onNext }: OnboardingN
   return (
     <div
       data-testid="onboarding-nav"
-      className="mb-5 flex items-center justify-center gap-2 px-4 sm:mb-6 sm:gap-3"
+      // `w-full` + `min-w-0` children: the primary's label is supplied by the
+      // step and can be long ("Continue → 12 selected"), which at 375px used to
+      // push Back off the left edge and the primary off the right — the row was
+      // centred with no width of its own, so it just overflowed both ways.
+      // Now the row owns the width, Back/Skip stay at their intrinsic size, and
+      // the primary takes what is left and ellipsizes rather than pushing.
+      className="mb-5 flex w-full items-center justify-center gap-1 px-4 sm:mb-6 sm:gap-3"
     >
       {backHandler && (
-        <Button type="button" variant="ghost" size="lg" className="text-base" onClick={backHandler}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="lg"
+          className="h-11 shrink-0 px-3 text-base sm:px-6"
+          onClick={backHandler}
+        >
           Back
         </Button>
       )}
-      <Button type="button" variant="ghost" size="lg" className="text-base" onClick={onSkip}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="lg"
+        className="h-11 shrink-0 px-3 text-base sm:px-6"
+        onClick={onSkip}
+      >
         Skip
       </Button>
       <OnboardingButton
@@ -51,11 +69,11 @@ export function OnboardingNav({ canGoBack, onBack, onSkip, onNext }: OnboardingN
         // The label is the step's own words when it has any, so the button says
         // what pressing it will do rather than a generic "Next" over a flow
         // that is really about to pick, upload or sync.
-        className="h-12 px-10 text-base sm:px-14 sm:text-lg"
+        className="h-12 min-w-0 max-w-full flex-1 px-4 text-base sm:flex-none sm:px-14 sm:text-lg"
         disabled={nav?.primaryDisabled}
         onClick={primaryHandler}
       >
-        {primaryLabel}
+        <span className="truncate">{primaryLabel}</span>
       </OnboardingButton>
     </div>
   );

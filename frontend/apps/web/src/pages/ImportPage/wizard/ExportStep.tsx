@@ -103,7 +103,9 @@ export function ExportStep({
     return (
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">No services selected yet.</p>
-        <Button onClick={onBackToPick}>← Pick services</Button>
+        {/* In host mode the footer's Back already goes to Pick; a second button
+            saying the same thing is the duplicate row this refactor removed. */}
+        {showNav && <Button onClick={onBackToPick}>← Pick services</Button>}
       </div>
     );
   }

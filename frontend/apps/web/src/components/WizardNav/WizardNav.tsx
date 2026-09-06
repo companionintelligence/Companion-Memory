@@ -85,14 +85,23 @@ export function useWizardNav(state: WizardNavState | null): void {
   const onPrimaryRef = useRef(state?.onPrimary);
   const onBackRef = useRef(state?.onBack);
 
-  onPrimaryRef.current = state?.onPrimary;
-  onBackRef.current = state?.onBack;
+  // Written in an effect, not during render: a render that React throws away
+  // (StrictMode's double invoke, a suspended sibling) must not leave the ref
+  // pointing at handlers from a render that never committed.
+  useEffect(() => {
+    onPrimaryRef.current = state?.onPrimary;
+    onBackRef.current = state?.onBack;
+  });
 
   const primaryLabel = state?.primaryLabel;
   const primaryDisabled = state?.primaryDisabled;
   // `undefined` (host default) and `null` (hidden) are different answers, and
   // both are stable across renders — unlike the function itself.
   const backMode = state == null ? 'none' : state.onBack === null ? 'hidden' : state.onBack ? 'own' : 'host';
+  // Whether a primary exists is part of what the footer paints (its label falls
+  // back to the host's "Next" without one), so it has to be a dependency. Its
+  // identity is not — that is what the ref is for.
+  const hasPrimary = state?.onPrimary != null;
 
   useEffect(() => {
     if (!register) {
@@ -108,11 +117,13 @@ export function useWizardNav(state: WizardNavState | null): void {
     register({
       primaryLabel,
       primaryDisabled,
-      onPrimary: onPrimaryRef.current ? () => onPrimaryRef.current?.() : undefined,
+      onPrimary: hasPrimary ? () => onPrimaryRef.current?.() : undefined,
       onBack: backMode === 'hidden' ? null : backMode === 'own' ? () => onBackRef.current?.() : undefined,
     });
-  }, [register, primaryLabel, primaryDisabled, backMode]);
+  }, [register, primaryLabel, primaryDisabled, backMode, hasPrimary]);
 
-  // Leaving the step must not leave its labels on the footer.
+  // Leaving the step must not leave its labels on the footer. This runs on
+  // unmount only — `register` is stable — so it cannot clear a newer step's
+  // registration, which would happen if `register` changed identity.
   useEffect(() => () => register?.(null), [register]);
 }

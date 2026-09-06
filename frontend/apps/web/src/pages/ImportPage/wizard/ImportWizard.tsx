@@ -13,6 +13,13 @@ import { SyncStep } from './SyncStep';
 
 type Step = 'pick' | 'export' | 'sync';
 
+/** What SyncStep publishes about itself so the footer's primary can be the sync. */
+interface SyncNavState {
+  canSync: boolean;
+  busy: boolean;
+  sync: () => void;
+}
+
 /**
  * The umbrella experience for "back up my life", in three steps:
  *
@@ -145,6 +152,9 @@ export function ImportWizard({
   }, []);
 
   const hostNav = nav === 'host';
+  // Published by SyncStep, because the sync handler lives there. ImportWizard
+  // stays the single owner of the footer slot — see SyncStep's onNavState.
+  const [syncNav, setSyncNav] = useState<SyncNavState | null>(null);
   const lastExportIdx = Math.max(entries.length - 1, 0);
   const clampedExportIdx = Math.min(exportIdx, lastExportIdx);
 
@@ -171,13 +181,22 @@ export function ImportWizard({
           ? {
               primaryLabel: clampedExportIdx >= lastExportIdx ? 'Finish → Sync' : 'Next →',
               onPrimary: () =>
-                clampedExportIdx >= lastExportIdx
-                  ? setStep('sync')
-                  : setExportIdx(clampedExportIdx + 1),
-              onBack: () =>
-                clampedExportIdx === 0 ? setStep('pick') : setExportIdx(clampedExportIdx - 1),
+                clampedExportIdx >= lastExportIdx ? setStep('sync') : setExportIdx(clampedExportIdx + 1),
+              onBack: () => (clampedExportIdx === 0 ? setStep('pick') : setExportIdx(clampedExportIdx - 1)),
             }
-          : { onBack: () => setStep('export') },
+          : {
+              // The primary IS the sync. It read "Next" for one revision, which
+              // made the biggest button on the last screen of an import quietly
+              // abandon the import the previous screen had promised to finish.
+              primaryLabel: syncNav?.busy
+                ? 'Starting…'
+                : syncNav && !syncNav.canSync
+                  ? 'Done'
+                  : 'Sync to my memory',
+              primaryDisabled: syncNav?.busy ?? false,
+              onPrimary: syncNav?.canSync ? syncNav.sync : undefined,
+              onBack: () => setStep('export'),
+            },
   );
 
   const pageScroll = scroll === 'page';
@@ -218,7 +237,13 @@ export function ImportWizard({
           />
         )}
 
-        {step === 'sync' && <SyncStep onBackToExport={() => setStep('export')} showNav={!hostNav} />}
+        {step === 'sync' && (
+          <SyncStep
+            onBackToExport={() => setStep('export')}
+            showNav={!hostNav}
+            onNavState={hostNav ? setSyncNav : undefined}
+          />
+        )}
       </div>
     </div>
   );

@@ -181,12 +181,31 @@ export function OnboardingPage() {
     });
   }, []);
 
+  /**
+   * Move first, save after.
+   *
+   * The save used to be awaited before the step changed, which made every
+   * footer press wait on a network write — and the footer is now the ONE
+   * control row, so a single failed PUT deadened Back, Skip and the primary at
+   * once with nothing on screen to say so. `saveProgress` no longer throws;
+   * the ref below keeps a slow write from clobbering a newer one, since two
+   * quick presses now put two PUTs in flight and they can land out of order.
+   */
+  const progressSeq = useRef(0);
+
   const goToStep = useCallback(
-    async (nextIndex: number) => {
+    (nextIndex: number) => {
       dismissWelcomeBackBanner();
-      await persistProgress(nextIndex);
       setStepIndex(nextIndex);
       scrollToTop();
+
+      const seq = ++progressSeq.current;
+
+      void persistProgress(nextIndex).then(() => {
+        if (seq !== progressSeq.current) {
+          return;
+        }
+      });
     },
     [dismissWelcomeBackBanner, persistProgress, scrollToTop],
   );
@@ -290,71 +309,71 @@ export function OnboardingPage() {
           inside it too, and the footer is the thing a nested flow is driving. */}
       <WizardNavProvider>
         <form
-        className="relative h-lvh flex flex-col"
-        // Steps use type="button" CTAs; still block native submit so a mis-typed
-        // control (or label→control activation) cannot navigate off the wizard.
-        onSubmit={(event) => event.preventDefault()}
-      >
-        <div className="absolute top-0 left-0 h-[max(0.25rem,env(safe-area-inset-top))] w-full">
-          <div className="absolute top-full right-3 z-10 text-foreground">
-            <ThemeToggle />
-          </div>
-        </div>
-
-        <div className="flex flex-col items-center flex-1 w-full h-full gap-1.5">
-          <div className="self-start px-4 pt-[max(0.5rem,env(safe-area-inset-top))]">
-            <CompanionMark className="h-7 w-7 rounded-full" />
-          </div>
-
-          {showWelcomeBackBanner && (
-            <div
-              className={cn('w-full mx-auto px-5 md:px-8 -mt-1 mb-1 flex justify-center', contentMaxWidth)}
-            >
-              <div className="max-w-lg rounded-lg border border-green-800/30 bg-background/95 px-4 py-2.5 text-sm text-foreground text-center shadow-sm backdrop-blur-sm">
-                Welcome back. Everything you&apos;ve entered is saved.
-              </div>
+          className="relative h-lvh flex flex-col"
+          // Steps use type="button" CTAs; still block native submit so a mis-typed
+          // control (or label→control activation) cannot navigate off the wizard.
+          onSubmit={(event) => event.preventDefault()}
+        >
+          <div className="absolute top-0 left-0 h-[max(0.25rem,var(--safe-area-top))] w-full">
+            <div className="absolute top-full right-3 z-10 text-foreground">
+              <ThemeToggle />
             </div>
-          )}
+          </div>
 
-          <div
-            ref={scrollRef}
-            data-testid="onboarding-scroll"
-            className={cn(
-              'relative flex-1 overflow-y-auto min-h-0 w-full mx-auto px-5 md:px-8',
-              contentMaxWidth,
+          <div className="flex flex-col items-center flex-1 w-full h-full gap-1.5">
+            <div className="self-start px-4 pt-[max(0.5rem,var(--safe-area-top))]">
+              <CompanionMark className="h-7 w-7 rounded-full" />
+            </div>
+
+            {showWelcomeBackBanner && (
+              <div
+                className={cn('w-full mx-auto px-5 md:px-8 -mt-1 mb-1 flex justify-center', contentMaxWidth)}
+              >
+                <div className="max-w-lg rounded-lg border border-green-800/30 bg-background/95 px-4 py-2.5 text-sm text-foreground text-center shadow-sm backdrop-blur-sm">
+                  Welcome back. Everything you&apos;ve entered is saved.
+                </div>
+              </div>
             )}
-          >
+
             <div
+              ref={scrollRef}
+              data-testid="onboarding-scroll"
               className={cn(
-                'flex flex-col items-center text-center w-full py-2',
-                verticallyCenterStep ? 'justify-center min-h-full' : 'justify-start',
+                'relative flex-1 overflow-y-auto min-h-0 w-full mx-auto px-5 md:px-8',
+                contentMaxWidth,
               )}
             >
-              {stepContent}
+              <div
+                className={cn(
+                  'flex flex-col items-center text-center w-full py-2',
+                  verticallyCenterStep ? 'justify-center min-h-full' : 'justify-start',
+                )}
+              >
+                {stepContent}
+              </div>
+            </div>
+
+            {navRow}
+
+            <div className="flex flex-col items-center gap-1 px-4 pb-[max(0.5rem,var(--safe-area-bottom))]">
+              <div className="flex justify-center items-center gap-1.5">
+                {stepKeys.map((key, i) => (
+                  <div
+                    key={key}
+                    className={cn(
+                      'h-1.5 w-1.5 rounded-full transition-all duration-500',
+                      i === stepIndex ? 'bg-foreground scale-125' : 'bg-muted-foreground/35',
+                    )}
+                  />
+                ))}
+              </div>
+              {stepIndex === 0 && (
+                <p className="text-xs sm:text-sm text-muted-foreground text-center">
+                  Step {stepIndex + 1} of {stepKeys.length} — every step is skippable
+                </p>
+              )}
             </div>
           </div>
-
-          {navRow}
-
-          <div className="flex flex-col items-center gap-1 px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-            <div className="flex justify-center items-center gap-1.5">
-              {stepKeys.map((key, i) => (
-                <div
-                  key={key}
-                  className={cn(
-                    'h-1.5 w-1.5 rounded-full transition-all duration-500',
-                    i === stepIndex ? 'bg-foreground scale-125' : 'bg-muted-foreground/35',
-                  )}
-                />
-              ))}
-            </div>
-            {stepIndex === 0 && (
-              <p className="text-xs sm:text-sm text-muted-foreground text-center">
-                Step {stepIndex + 1} of {stepKeys.length} — every step is skippable
-              </p>
-            )}
-          </div>
-        </div>
         </form>
       </WizardNavProvider>
     </Form>
