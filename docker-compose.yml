@@ -151,29 +151,54 @@ services:
   # PowerSync release you deploy.
   powersync:
     image: journeyapps/powersync-service:1.23.0
-    command: ["start", "-r", "unified"]
+    # Wrapped so this service can read the same generated secrets every other
+    # service does. The image's own entrypoint is `node service/lib/entry.js`;
+    # it is re-exec'd verbatim below, so this only adds environment.
+    #
+    # Without the wrapper the PS_* defaults underneath interpolate
+    # POWERSYNC_DATABASE_PASSWORD/DATABASE_PASSWORD out of the compose .env —
+    # where they do not live. generate-secrets writes them into the `secrets`
+    # volume, so a deployment that never set them by hand got empty passwords
+    # and a replicator that could not authenticate.
+    #
+    # Anything already exported wins (`:-`), so the documented override path of
+    # setting PS_REPLICATION_URI/PS_STORAGE_URI/PS_JWT_SECRET_B64URL explicitly
+    # — an external database, a managed Postgres — still takes precedence.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -a
+        . /run/secrets/.env.secrets
+        set +a
+        export PS_REPLICATION_URI="${PS_REPLICATION_URI:-postgresql://$${POWERSYNC_DATABASE_USERNAME}:$${POWERSYNC_DATABASE_PASSWORD}@database:5432/$${DATABASE_NAME}}"
+        export PS_STORAGE_URI="${PS_STORAGE_URI:-postgresql://$${DATABASE_USERNAME}:$${DATABASE_PASSWORD}@database:5432/$${DATABASE_NAME}}"
+        # The service takes the shared HS256 secret base64url-encoded. Derived
+        # here, from the one stored value, so the two cannot drift; `tr` does
+        # base64 -> base64url and strips the padding the JWKS `k` must not have.
+        if [ -z "$${PS_JWT_SECRET_B64URL:-}" ]; then
+          PS_JWT_SECRET_B64URL=$$(printf '%s' "$${POWERSYNC_JWT_SECRET}" | base64 | tr -d '\n' | tr '+/' '-_' | tr -d '=')
+          export PS_JWT_SECRET_B64URL
+        fi
+        exec node service/lib/entry.js start -r unified
     volumes:
       - ./infrastructure/powersync:/config:ro
+      # Read-only, and world-readable inside (generate-secrets chmods 644), which
+      # is what lets this image's uid 901 source it without running as root.
+      - secrets:/run/secrets:ro
     environment:
-      # POWERSYNC_CONFIG_PATH is read by the service directly. The three PS_* vars
-      # are substituted into powersync.yaml via its `!env` tag, which rejects any
-      # name not starting with `PS_` — renaming these breaks startup (exit 150).
-      # Defaults keep a fresh checkout working without POWERSYNC entries in .env.
+      # Read by the service directly, unlike the PS_* vars the wrapper above
+      # exports. Those three are substituted into powersync.yaml via its `!env`
+      # tag, which rejects any name not starting with `PS_` — renaming them
+      # breaks startup (exit 150). This one is not an `!env` reference, so it
+      # needs no prefix.
       #
-      # The two URIs deliberately use different roles. Replication connects as
-      # `powersync`, which setup-database gives the REPLICATION attribute and
-      # SELECT on the replicated tables — nothing more. Storage connects as
-      # `companion`, because the service creates and migrates its own `powersync`
-      # schema for bucket storage, which a read-only role cannot do.
+      # The two URIs the wrapper builds deliberately use different roles.
+      # Replication connects as `powersync`, which setup-database gives the
+      # REPLICATION attribute and SELECT on the replicated tables — nothing more.
+      # Storage connects as the app role, because the service creates and
+      # migrates its own `powersync` schema for bucket storage, which a
+      # read-only role cannot do.
       - POWERSYNC_CONFIG_PATH=/config/powersync.yaml
-      # The inner default (`:-`) is not cosmetic: compose interpolates every
-      # service in the file regardless of the active profile, so without it a
-      # local `up` warns about POWERSYNC_DATABASE_PASSWORD for a service that
-      # local does not even start. An empty password here fails the same way an
-      # unset one does, in staging/production where this service actually runs.
-      - PS_REPLICATION_URI=${PS_REPLICATION_URI:-postgresql://powersync:${POWERSYNC_DATABASE_PASSWORD:-}@database:5432/companion}
-      - PS_STORAGE_URI=${PS_STORAGE_URI:-postgresql://companion:${DATABASE_PASSWORD}@database:5432/companion}
-      - PS_JWT_SECRET_B64URL=${PS_JWT_SECRET_B64URL:-}
     networks:
       - ci
     depends_on:
@@ -189,14 +214,24 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    # Deliberately NOT in "local". The scaffold (#1582/#1585, 2026-06-28) is
-    # server-side only — no client has ever connected, and the README's client
-    # phase (@powersync/web, on-device schema, upload connector) is unstarted.
-    # Meanwhile the container ran on every `make dev`, crash-looping wherever
-    # .env predates the June PowerSync keys, and holding a replication slot for
-    # a reader that does not exist. The token endpoint already returns 503 until
-    # POWERSYNC_URL is set, so nothing in the app changes by not running it.
-    # Add "local" back when the client phase starts.
+    # Deliberately NOT in "local" — but no longer because the client is missing.
+    # That half has shipped: PowerSyncProvider mounts unconditionally in the web
+    # app, and the Android shell links @powersync/capacitor and drives a real
+    # native ci-powersyncSQLite.db. Driven end to end against this stack, a
+    # capture through POST /api/files/upload reaches ps_data__files on an
+    # emulator in seconds.
+    #
+    # What still stops a `local` client is server wiring, in two places:
+    #   - POWERSYNC_URL / POWERSYNC_JWT_SECRET reach the `api` service from NO
+    #     compose file, so /api/powersync/token is a permanent 503 and no client
+    #     can fetch credentials (PowerSyncTokenService throws unless both are
+    #     set). setup-secrets generates POWERSYNC_DATABASE_PASSWORD but never a
+    #     JWT secret, so there is nothing to point them at either.
+    #   - this service publishes no port and has no gateway route, so nothing
+    #     off the compose network can reach :8080 anyway.
+    # Running it in `local` before those land would still only crash-loop on a
+    # missing password and hold a replication slot for a reader that cannot
+    # authenticate. Add "local" once the two bullets above are fixed.
     profiles: [ "staging", "production" ]
 
   #############

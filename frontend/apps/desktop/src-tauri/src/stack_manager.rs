@@ -275,6 +275,19 @@ pub(crate) fn extended_path_env() -> String {
     {
         extra_dirs.push("/usr/local/bin".to_string());
         extra_dirs.push("/usr/bin".to_string());
+        // Docker's official rootless installer (`get.docker.com/rootless`) — the
+        // only way to install Docker on Linux without root, and so the norm on
+        // managed machines — puts `docker` in ~/bin, not anywhere under /usr. It
+        // tells you to add that to PATH from your shell profile, which a
+        // GUI-launched app never sources: the splash then says "Docker was not
+        // found on this machine" on a box where Docker is installed and running.
+        // Listed after the system dirs so a system-wide install still wins.
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = std::path::Path::new(&home);
+            for dir in [home.join(".local/bin"), home.join("bin")] {
+                extra_dirs.push(dir.to_string_lossy().into_owned());
+            }
+        }
     }
 
     if extra_dirs.is_empty() {
@@ -284,9 +297,78 @@ pub(crate) fn extended_path_env() -> String {
     format!("{}{separator}{existing}", extra_dirs.join(separator))
 }
 
-fn docker_command() -> Command {
+/// The `DOCKER_HOST` this app should talk to, resolved once per launch, or
+/// `None` to leave the CLI's own resolution alone.
+///
+/// Rootless Docker — the only way to install Docker on Linux without root, and
+/// so the norm on managed machines — puts its socket at
+/// `$XDG_RUNTIME_DIR/docker.sock` and tells you to export `DOCKER_HOST` at it
+/// from your shell profile. A GUI launch never sources that profile, so the CLI
+/// looks for the root daemon's `/var/run/docker.sock`, which a rootless install
+/// doesn't have, and the splash says "Docker is installed but not running" on a
+/// machine where it is both.
+///
+/// This probes rather than predicts. Reading `DOCKER_CONTEXT`/`currentContext`
+/// to decide whether the user "already chose" a daemon looks equivalent and is
+/// not: a `currentContext` left behind by an uninstalled Docker Desktop names an
+/// endpoint that no longer exists, and deferring to it strands exactly the user
+/// this is meant to help. So: let the CLI try first, and only step in when it
+/// cannot reach a daemon on its own *and* a rootless socket answers.
+#[cfg(target_os = "linux")]
+fn resolved_docker_host() -> Option<&'static str> {
+    static RESOLVED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            let candidate = choose_docker_host(
+                std::env::var_os("DOCKER_HOST").is_some(),
+                daemon_reachable(None),
+                rootless_socket_url(),
+            )?;
+            // Only take over when the fallback actually reaches a daemon, so a
+            // wrong guess can never mask the CLI's own diagnosis.
+            daemon_reachable(Some(&candidate)).then_some(candidate)
+        })
+        .as_deref()
+}
+
+/// The rootless daemon's conventional socket, if it is there at all.
+#[cfg(target_os = "linux")]
+fn rootless_socket_url() -> Option<String> {
+    let socket = std::path::Path::new(&std::env::var_os("XDG_RUNTIME_DIR")?).join("docker.sock");
+    socket
+        .exists()
+        .then(|| format!("unix://{}", socket.display()))
+}
+
+/// The decision behind [`resolved_docker_host`], split from the env, filesystem
+/// and daemon probes that feed it so it is testable without mutating process env
+/// vars — which races whatever else `cargo test` runs in parallel.
+#[cfg(target_os = "linux")]
+fn choose_docker_host(
+    explicit_host: bool,
+    reachable_unaided: bool,
+    rootless_socket: Option<String>,
+) -> Option<String> {
+    if explicit_host || reachable_unaided {
+        return None;
+    }
+    rootless_socket
+}
+
+fn daemon_reachable(host: Option<&str>) -> bool {
+    docker_command_with_host(host)
+        .arg("info")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn docker_command_with_host(host: Option<&str>) -> Command {
     let mut cmd = Command::new("docker");
     cmd.env("PATH", extended_path_env());
+    if let Some(host) = host {
+        cmd.env("DOCKER_HOST", host);
+    }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -294,6 +376,15 @@ fn docker_command() -> Command {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd
+}
+
+/// A `docker` invocation pointed at whichever daemon this app resolved.
+fn docker_command() -> Command {
+    #[cfg(target_os = "linux")]
+    let host = resolved_docker_host();
+    #[cfg(not(target_os = "linux"))]
+    let host = None;
+    docker_command_with_host(host)
 }
 
 fn compose_command(paths: &StackPaths) -> Command {
@@ -308,7 +399,10 @@ fn compose_command(paths: &StackPaths) -> Command {
 }
 
 pub fn is_docker_installed() -> bool {
-    docker_command()
+    // Deliberately unresolved: `--version` never contacts a daemon, so asking
+    // which daemon to talk to first would spend two `docker info` probes to
+    // answer a question about the binary.
+    docker_command_with_host(None)
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -661,6 +755,49 @@ pub fn read_desktop_logs(paths: &StackPaths, max_lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Docker's rootless installer puts `docker` in ~/bin, and a GUI launch's
+    /// PATH contains neither ~/bin nor ~/.local/bin — so searching only /usr
+    /// reported "Docker was not found" on machines where it was installed and
+    /// running. Reads HOME rather than setting it: mutating env vars in a
+    /// #[test] races the rest of the suite.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn extended_path_env_searches_rootless_docker_install_dirs() {
+        let home = std::env::var("HOME").expect("HOME is set for the test runner");
+        let path = extended_path_env();
+        let dirs: Vec<&str> = path.split(':').collect();
+
+        assert!(dirs.contains(&format!("{home}/bin").as_str()));
+        assert!(dirs.contains(&format!("{home}/.local/bin").as_str()));
+        // A system-wide install still wins over a rootless one.
+        let index = |dir: &str| dirs.iter().position(|d| *d == dir).unwrap();
+        assert!(index("/usr/bin") < index(&format!("{home}/bin")));
+    }
+
+    /// Exporting DOCKER_HOST outranks the CLI's own context selection, so the
+    /// rootless fallback only speaks up when the CLI cannot reach a daemon by
+    /// itself — never merely because a context is configured. A `currentContext`
+    /// left behind by an uninstalled Docker Desktop names a dead endpoint, and
+    /// deferring to it stranded the very user this exists for.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rootless_fallback_only_applies_when_the_cli_cannot_reach_a_daemon() {
+        let socket = || Some("unix:///run/user/1000/docker.sock".to_string());
+
+        // Nothing else answers, and a rootless socket does.
+        assert_eq!(
+            choose_docker_host(false, false, socket()),
+            socket(),
+            "should fall back to the rootless socket",
+        );
+        // The CLI already reaches a daemon — a stale context is not our business.
+        assert_eq!(choose_docker_host(false, true, socket()), None);
+        // The user named a daemon explicitly; that always wins.
+        assert_eq!(choose_docker_host(true, false, socket()), None);
+        // Nothing to fall back to: let the CLI's own error stand.
+        assert_eq!(choose_docker_host(false, false, None), None);
+    }
 
     #[test]
     fn writes_env_file_with_no_secrets() {

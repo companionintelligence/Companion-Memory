@@ -277,10 +277,17 @@ function AppRoutes() {
           <Route
             path="/login"
             element={
-              // Native shells always cloud-connect. Restoring `/login` from an
-              // earlier hop (or an Android deep-link cold start) used to drop
-              // Portal PKCE that only DeviceConnectPage resumes.
-              isNativePlatform() ? (
+              // Native shells cloud-connect only while they still NEED to: an
+              // unpaired shell (no server origin yet, or iOS pointed at a local
+              // appliance) must go through DeviceConnectPage, because restoring
+              // `/login` from an earlier hop (or an Android deep-link cold start)
+              // drops Portal PKCE that only DeviceConnectPage resumes.
+              //
+              // Once a self-hosted Memory Server origin IS configured, that no
+              // longer applies and this redirect was locking the owner out: the
+              // only credential form left is Portal's, so an appliance whose
+              // owner has no Portal account had no way in at all.
+              needsNativeCloudConnect() ? (
                 <Navigate to="/device-connect" replace />
               ) : (
                 <RedirectKnownUser>
