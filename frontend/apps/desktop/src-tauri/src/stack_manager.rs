@@ -417,7 +417,45 @@ fn start_stack_inner(paths: &StackPaths, progress: Option<&ProgressHandle>) -> R
 /// reasoning behind it are documented at the buffered call site above.
 const UP_ARGS: [&str; 5] = ["up", "-d", "--remove-orphans", "--scale", "powersync=0"];
 
+/// Failures that mean "the previous containers are stale", not "this machine
+/// cannot run the stack".
+///
+/// Docker restarting — or the Mac sleeping — leaves containers pointing at a
+/// network id that no longer exists, and leaves one-shot containers holding
+/// names the next run needs. `docker compose up` then fails the same way every
+/// time, so the splash's Retry button could never clear it: the user was stuck
+/// on an app that refused to start until someone ran compose by hand. Both are
+/// fixed by tearing the project down first, which is safe here because `down`
+/// without `-v` keeps every volume, and volumes are where the memory lives.
+fn is_stale_container_failure(transcript: &str) -> bool {
+    let lower = transcript.to_lowercase();
+
+    lower.contains("failed to set up container networking")
+        || lower.contains("network") && lower.contains("not found")
+        || lower.contains("is already in use by container")
+}
+
 fn start_stack_streaming(paths: &StackPaths, progress: &ProgressHandle) -> Result<(), String> {
+    match run_compose_up(paths, progress) {
+        Ok(()) => Ok(()),
+        Err(err) if is_stale_container_failure(&err) => {
+            log::warn!("compose up failed on stale containers, recreating the project: {err}");
+            set_progress(progress, "starting", "Clearing a stale container from the last run…");
+
+            let down = compose_command(paths)
+                .args(["down", "--remove-orphans"])
+                .output()
+                .map_err(|e| format!("Failed to run docker compose down: {e}"))?;
+
+            append_desktop_log(paths, "self-heal", &String::from_utf8_lossy(&down.stderr));
+
+            run_compose_up(paths, progress)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn run_compose_up(paths: &StackPaths, progress: &ProgressHandle) -> Result<(), String> {
     set_progress(progress, "pulling", "Starting Docker services…");
 
     let mut child = compose_command(paths)
@@ -593,7 +631,7 @@ fn describe_output(output: &Output) -> String {
     )
 }
 
-fn append_desktop_log(paths: &StackPaths, op: &str, message: &str) {
+pub fn append_desktop_log(paths: &StackPaths, op: &str, message: &str) {
     let log_path = paths.logs_dir.join("desktop.log");
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let line = format!("[{timestamp}] {op}: {message}\n");
@@ -645,6 +683,28 @@ mod tests {
         assert!(contents.contains("OIDC_ISSUER_URL="));
         assert!(!contents.to_lowercase().contains("secret"));
         assert!(!contents.to_lowercase().contains("password"));
+    }
+
+    #[test]
+    fn stale_container_failures_are_told_apart_from_real_ones() {
+        // The two shapes Docker actually produces after it restarts or the Mac
+        // sleeps. Both used to leave the app failing identically on every
+        // launch, with a Retry button that could not clear either.
+        assert!(is_stale_container_failure(
+            "Error response from daemon: failed to set up container networking: network 0361b91e not found"
+        ));
+        assert!(is_stale_container_failure(
+            "Error response from daemon: Conflict. The container name \"/ci-server-desktop-generate-secrets-1\" is already in use by container \"b9a8df\"."
+        ));
+
+        // Anything a teardown would not fix must NOT trigger one — tearing the
+        // project down on a genuine failure would just add a slow retry of the
+        // same error.
+        assert!(!is_stale_container_failure("no space left on device"));
+        assert!(!is_stale_container_failure(
+            "manifest for ghcr.io/companionintelligence/companion/api:2026.9.9 not found: manifest unknown"
+        ));
+        assert!(!is_stale_container_failure("Cannot connect to the Docker daemon"));
     }
 
     #[test]

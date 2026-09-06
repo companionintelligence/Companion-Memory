@@ -1,10 +1,17 @@
 {
   "identifier": "oidc-remote-deep-link",
-  "description": "Grants the real CI-Server web app (served remotely at http://127.0.0.1:8642 / http://localhost:8642 after the bootstrap page's window.location.replace()) enough Tauri IPC reachability to complete native 'Sign in with CI Portal': open_external_url_command (launch the OIDC URL in the system browser) and take_pending_deep_link_command (drain a companion://oidc/callback deep link that arrived before the page's listener was up). Both are app-level commands (see main.rs), not plugin commands, so Tauri's ACL has no per-command allow-list for them — the only lever this file has is IPC reachability itself. `permissions` is deliberately left empty so this origin gets NONE of `default.json`'s core:window:*/opener:default grants (window close/hide/show/unminimize/focus, generic URL/path opening) — see that file's own description for why those must stay bootstrap-only. The unavoidable trade-off of using IPC reachability as the only scoping lever is that this origin can also reach this app's other custom commands (stack start/stop, docker checks, log reading, etc.) since Tauri does not gate app-level commands per-command without a custom Rust permission definition (`src-tauri/permissions/*.toml` + build.rs wiring) — out of scope for this fix; a follow-up should add that for true per-command scoping.",
-  "windows": ["main"],
+  "description": "Grants the real CI-Server web app (served remotely at http://127.0.0.1:8642 / http://localhost:8642 after the bootstrap page's window.location.replace()) enough Tauri IPC reachability to complete native 'Sign in with Companion account': open_external_url_command (launch the OIDC URL in the system browser) and take_pending_deep_link_command (drain a companion://oidc/callback deep link that arrived before the page's listener was up). Both are app-level commands (see main.rs), which Tauri's ACL does not gate per-command \u2014 reachability is the lever. `opener:allow-open-url` is required and was missing: open_external_url_command is a thin wrapper over the opener PLUGIN, and plugin permissions are checked against the CALLING webview's capabilities, so with an empty permissions list the command was reachable but the open_url inside it was denied \u2014 the sign-in button did nothing, and the frontend only console.error'd the rejection. Narrower than default.json's `opener:default` on purpose: this origin may open a URL and nothing else (no revealItemInDir, no window close/hide/show/focus), so the core:window grants stay bootstrap-only. The remaining trade-off is unchanged: this origin can still reach the app's other custom commands, since per-command scoping needs custom Rust permission definitions (src-tauri/permissions/*.toml + build.rs wiring) \u2014 a follow-up.",
+  "windows": [
+    "main"
+  ],
   "local": false,
   "remote": {
-    "urls": ["http://127.0.0.1:8642", "http://localhost:8642"]
+    "urls": [
+      "http://127.0.0.1:8642",
+      "http://localhost:8642"
+    ]
   },
-  "permissions": []
+  "permissions": [
+    "opener:allow-open-url"
+  ]
 }

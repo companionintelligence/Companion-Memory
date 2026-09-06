@@ -69,6 +69,34 @@ fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
     }
 }
 
+/// Mirror everything the shell knows about itself into the log the UI can open.
+///
+/// `env_logger` writes to stderr, and a packaged .app has no stderr — macOS
+/// discards it. So every `log::error!` in this binary, and every panic, went
+/// nowhere: an app that vanished left no crash report, no system-log entry and
+/// nothing in desktop.log, which is exactly the state "it keeps crashing" is
+/// impossible to answer from. This makes the shell's own lifecycle readable.
+fn install_file_logging(paths: &stack_manager::StackPaths) {
+    let panic_paths = paths.clone();
+    let previous = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic with no message".to_string());
+
+        stack_manager::append_desktop_log(&panic_paths, "panic", &format!("{message} ({location})"));
+        previous(info);
+    }));
+}
+
 fn main() {
     env_logger::init();
 
@@ -102,6 +130,14 @@ fn main() {
             let data_dir = app.path().app_data_dir()?;
 
             let paths = stack_manager::initialize_stack(&resource_dir, &data_dir)?;
+
+            install_file_logging(&paths);
+            let paths_for_log = paths.clone();
+            stack_manager::append_desktop_log(
+                &paths,
+                "launch",
+                &format!("v{} starting", env!("CARGO_PKG_VERSION")),
+            );
             app.manage(StackPathsState(paths.clone()));
             let progress = stack_manager::new_progress();
             app.manage(StartupProgressState(progress.clone()));
@@ -145,12 +181,21 @@ fn main() {
             });
 
             // Hide to tray on close instead of quitting — the stack keeps running.
+            let paths_for_events = paths_for_log.clone();
             if let Some(window) = app.get_webview_window("main") {
                 let hide_target = window.clone();
+                let event_paths = paths_for_events.clone();
                 window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        let _ = hide_target.hide();
-                        api.prevent_close();
+                    match event {
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
+                            stack_manager::append_desktop_log(&event_paths, "window", "close requested — hiding to tray");
+                            let _ = hide_target.hide();
+                            api.prevent_close();
+                        }
+                        tauri::WindowEvent::Destroyed => {
+                            stack_manager::append_desktop_log(&event_paths, "window", "destroyed");
+                        }
+                        _ => {}
                     }
                 });
             }
