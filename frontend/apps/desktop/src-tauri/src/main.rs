@@ -339,14 +339,27 @@ fn open_docker_downloads_command(app: tauri::AppHandle) -> Result<(), String> {
 /// Restricted to http(s) so a compromised webview can't use this as a generic
 /// local-file/other-scheme open primitive.
 #[tauri::command]
-fn open_external_url_command(app: tauri::AppHandle, url: String) -> Result<(), String> {
+fn open_external_url_command(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, StackPathsState>,
+    url: String,
+) -> Result<(), String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("open_external_url_command only accepts http(s) URLs".to_string());
     }
 
-    app.opener()
-        .open_url(url, None::<String>)
-        .map_err(|e| e.to_string())
+    // Logged on both paths on purpose. This is the sign-in button: when it does
+    // nothing, the only question that matters is whether the command was reached
+    // and what the opener said — and the frontend can only console.error into a
+    // devtools nobody has open.
+    let result = app.opener().open_url(&url, None::<String>).map_err(|e| e.to_string());
+
+    match &result {
+        Ok(()) => stack_manager::append_desktop_log(&state.0, "open-url", &format!("opened {url}")),
+        Err(e) => stack_manager::append_desktop_log(&state.0, "open-url", &format!("FAILED {url}: {e}")),
+    }
+
+    result
 }
 
 /// Drain (return and clear) any deep-link URL that reached this process before the
