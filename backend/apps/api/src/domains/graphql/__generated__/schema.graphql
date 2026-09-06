@@ -861,6 +861,8 @@ input CreatePeerLinkInput {
   displayName: String
   memoryEndpoint: String!
   peerHandle: String!
+  peerIssuer: String
+  peerSubject: String
   personEntityId: ID
   trustTier: PeerTrustTier
 }
@@ -3805,6 +3807,8 @@ type UpdateNotePayload {
 input UpdatePeerLinkInput {
   displayName: String
   id: ID!
+  peerIssuer: String
+  peerSubject: String
   personEntityId: ID
   trustTier: PeerTrustTier
 }

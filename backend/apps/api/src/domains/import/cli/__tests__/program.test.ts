@@ -126,6 +126,59 @@ describe('ci-import program', () => {
     expect(seen).toEqual(['http://box:3030']);
   });
 
+  /**
+   * The one thing `peers/add.test.ts` and `peers/update.test.ts` cannot prove:
+   * they call the command FUNCTION directly and hand it an already-shaped
+   * options object, so a `--peer-issuer` that commander never parses — or
+   * parses onto a differently-spelled key — would leave both of them green
+   * while the flag silently did nothing at the terminal.
+   */
+  it('parses --peer-issuer / --peer-subject onto the options the peers commands read', async () => {
+    for (const [argv, expected] of [
+      [
+        [
+          'peers',
+          'add',
+          'alice@portal.example',
+          'https://alice.example:3030',
+          '--peer-issuer',
+          'https://portal.example',
+          '--peer-subject',
+          'alice-box-a',
+        ],
+        { peerIssuer: 'https://portal.example', peerSubject: 'alice-box-a' },
+      ],
+      [
+        ['peers', 'update', 'pl_1', '--peer-issuer', 'https://portal.example', '--peer-subject', 'alice'],
+        { peerIssuer: 'https://portal.example', peerSubject: 'alice' },
+      ],
+    ] as const) {
+      const term = recordingTerm();
+      const seen: unknown[] = [];
+      const program = buildProgram({
+        term,
+        makeClient: () => ({}) as never,
+        makeGraphQLClient: () =>
+          ({
+            createPeerLink: async (input: unknown) => {
+              seen.push(input);
+
+              return { success: true, peerLink: null };
+            },
+            updatePeerLink: async (input: unknown) => {
+              seen.push(input);
+
+              return { success: true, peerLink: null };
+            },
+          }) as never,
+      }).exitOverride();
+
+      await program.parseAsync(['node', 'ci-import', ...argv]);
+
+      expect(seen).toEqual([expect.objectContaining(expected)]);
+    }
+  });
+
   describe('resolveTarget', () => {
     it('prefers the flag, then the environment, then the default', () => {
       expect(resolveTarget({ server: 'http://flag' }, { CI_SERVER_URL: 'http://env' }).baseUrl).toBe(

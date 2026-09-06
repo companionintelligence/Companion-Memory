@@ -41,8 +41,30 @@ import {
  * Directory lookup by handle. `PeerDirectoryService.resolve` needs a CI-Portal
  * access token and nothing puts one in the request context, so wiring it needs
  * plumbing this resolver cannot honestly stand in for. An owner supplies the
- * endpoint directly for now. Better a manual step than a lookup that pretends to
- * verify an identity it never checked.
+ * endpoint directly for now — and, since this change, the peer's `(iss, sub)`
+ * directly too. Better a manual step than a lookup that pretends to verify an
+ * identity it never checked.
+ *
+ * ── Why `peerIssuer` / `peerSubject` are owner-scoped for free ─────────────
+ *
+ * They are the most dangerous fields on this surface: they decide WHICH remote
+ * identity may act as this peer, and therefore which `trustTier` ceiling a
+ * stranger's token inherits. They needed no new scoping, and it is worth saying
+ * exactly why rather than assuming it:
+ *
+ *   - `createPeerLink` hands `upsert` the CALLER's service context, and `upsert`
+ *     keys its read and its write on `context.userId` — a create can only ever
+ *     touch a row this owner owns.
+ *   - `updatePeerLink` resolves the id through `findById`, which is owner-scoped
+ *     (`where: { ownerUserId, id }`), and throws `NotFoundException` BEFORE any
+ *     write when it misses. The two new fields sit inside that same guarded
+ *     block, so "re-point someone else's link at an identity I control" fails
+ *     at the read, not at the write. `PeerLinkResolver.test.ts` pins this.
+ *
+ * What owner scoping alone does NOT give is uniqueness: two of one owner's OWN
+ * links could otherwise claim the same `(iss, sub)`, and `findActiveByIssuerSubject`
+ * is a `findOne` — so which trust tier applied would be decided by heap order.
+ * That is closed by a partial unique index; see `PeerLinkService.upsert`.
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => PeerLinkType)
@@ -94,6 +116,12 @@ export class PeerLinkResolver {
       // `peer`, which is two rungs more permissive than adding a stranger should
       // imply — see the class docstring.
       trustTier: input.trustTier ?? PeerTrustTierEnum.stranger,
+      // The identity inbound asks are matched on. `undefined` is passed through
+      // as `undefined`, NOT coerced to null: `upsert` distinguishes the two, and
+      // only `undefined` means "leave whatever is there alone" — which is what
+      // keeps re-adding an already-federated peer from silently unbinding it.
+      peerIssuer: input.peerIssuer,
+      peerSubject: input.peerSubject,
     });
 
     return { success: true, peerLink: PeerLinkType.toType(link) };
@@ -129,6 +157,12 @@ export class PeerLinkResolver {
         ? GlobalUID.parse('person', input.personEntityId)
         : existing.personEntityId,
       trustTier: input.trustTier ?? (existing.trustTier as PeerTrustTierEnum),
+      // Same rule as every other optional field on this input: absent means
+      // unchanged. `existing` is the SERVICE type, which carries the pair even
+      // though `PeerLinkType` never projects it — so reading it back here to
+      // preserve it does not put it on the wire.
+      peerIssuer: input.peerIssuer ?? existing.peerIssuer,
+      peerSubject: input.peerSubject ?? existing.peerSubject,
     });
 
     return { success: true, peerLink: PeerLinkType.toType(link) };

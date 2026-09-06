@@ -215,6 +215,11 @@ export function buildProgram(deps: ProgramDeps): Command {
     .description('Link a peer Companion by hand')
     .option('--display-name <name>', 'a friendlier label than the handle')
     .option('--tier <tier>', 'trust tier: family, peer, stranger (default), trusted')
+    // Write-only, and paired. Without both, the link is outbound-only: an
+    // inbound ask is routed by (issuer, subject), so a link that names neither
+    // can never be matched. `peers list` will not read them back.
+    .option('--peer-issuer <iss>', "the OIDC issuer of the peer's inbound token (with --peer-subject)")
+    .option('--peer-subject <sub>', "the `sub` claim of the peer's inbound token (with --peer-issuer)")
     .option('--json', 'machine-readable output')
     .action((handle: string, memoryEndpoint: string, options) =>
       peersAddCommand(context(), handle, memoryEndpoint, options),
@@ -223,9 +228,11 @@ export function buildProgram(deps: ProgramDeps): Command {
   peers
     .command('update')
     .argument('<id>', 'the peer link id, from `peers list`')
-    .description("Change a linked peer's display name or trust tier")
+    .description("Change a linked peer's display name, trust tier or inbound identity")
     .option('--display-name <name>')
     .option('--tier <tier>', 'trust tier: family, peer, stranger, trusted')
+    .option('--peer-issuer <iss>', "the OIDC issuer of the peer's inbound token (with --peer-subject)")
+    .option('--peer-subject <sub>', "the `sub` claim of the peer's inbound token (with --peer-issuer)")
     .option('--json', 'machine-readable output')
     .action((id: string, options) => peersUpdateCommand(context(), id, options));
 
@@ -419,6 +426,8 @@ export function buildProgram(deps: ProgramDeps): Command {
       '  ci-import doctor --graphql',
       '  ci-import backfill --list',
       '  ci-import peers add alice@portal.example https://alice.example:3030',
+      '  ci-import peers add alice@portal.example https://alice.example:3030 \\',
+      '      --peer-issuer https://portal.example --peer-subject alice-box-a',
       '  ci-import grants create alice@portal.example content --mode auto --max-disclosure summary',
       '  ci-import asks inbox',
       '  ci-import asks answer <id> --disclosure-form boolean',
