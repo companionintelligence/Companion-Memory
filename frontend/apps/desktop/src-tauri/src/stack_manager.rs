@@ -675,15 +675,93 @@ mod tests {
         assert!(result.unwrap_err().contains("image-tag.txt"));
     }
 
-    #[test]
-    fn user_stopped_marker_round_trips() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = StackPaths {
+    fn scratch_paths(dir: &tempfile::TempDir) -> StackPaths {
+        StackPaths {
             data_dir: dir.path().to_path_buf(),
             compose_dir: dir.path().join("compose"),
             logs_dir: dir.path().join("logs"),
             import_work_dir: dir.path().join("import-work"),
-        };
+        }
+    }
+
+    #[test]
+    fn first_run_marker_is_one_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+
+        // A machine that has never completed a start gets the disclosure.
+        assert!(is_first_run(&paths));
+
+        mark_first_run_complete(&paths);
+        assert!(!is_first_run(&paths));
+
+        // Marking again is harmless — the splash calls it on a path that can run
+        // more than once if a start is retried.
+        mark_first_run_complete(&paths);
+        assert!(!is_first_run(&paths));
+    }
+
+    #[test]
+    fn compose_progress_lines_become_status_text() {
+        // The lines worth showing, in the shapes compose actually emits.
+        assert_eq!(describe_compose_line(" Pulling api "), Some("Downloading api…".to_string()));
+        assert_eq!(describe_compose_line(" api Pulled "), Some("Downloaded api".to_string()));
+        assert_eq!(describe_compose_line(" gateway Started "), Some("Started gateway".to_string()));
+        assert_eq!(describe_compose_line(" database Created "), Some("Created database".to_string()));
+        assert_eq!(
+            describe_compose_line(" Container ci-server-desktop-api-1  Waiting until healthy "),
+            Some("Waiting for services to become healthy…".to_string()),
+        );
+    }
+
+    #[test]
+    fn per_layer_pull_noise_is_dropped() {
+        // Layer chatter changes many times a second; showing it reads as flicker
+        // rather than progress, so only the service-level lines survive.
+        assert_eq!(describe_compose_line(""), None);
+        assert_eq!(describe_compose_line("   "), None);
+        assert_eq!(describe_compose_line(" 3f4e1a2b Downloading [====>  ]  41.2MB/98MB"), None);
+        assert_eq!(describe_compose_line(" 9c1d0e77 Extracting  12.3MB/44MB"), None);
+        assert_eq!(describe_compose_line(" 9c1d0e77 Download complete"), None);
+    }
+
+    #[test]
+    fn progress_carries_the_failure_reason_out() {
+        let progress = new_progress();
+
+        // Starts in a state the splash can render before anything has happened.
+        {
+            let p = progress.lock().unwrap();
+            assert_eq!(p.phase, "preflight");
+            assert!(p.error.is_none());
+            assert!(!p.done);
+        }
+
+        set_progress(&progress, "pulling", "Downloading api…");
+        {
+            let p = progress.lock().unwrap();
+            assert_eq!(p.phase, "pulling");
+            assert_eq!(p.detail, "Downloading api…");
+            // A step that succeeds clears any earlier error rather than leaving a
+            // stale one for the page to show.
+            assert!(p.error.is_none());
+        }
+
+        fail_progress(&progress, "no space left on device");
+        {
+            let p = progress.lock().unwrap();
+            assert_eq!(p.phase, "failed");
+            // The reason reaches the user verbatim — the whole point of the
+            // channel is that this is no longer flattened into "took too long".
+            assert_eq!(p.error.as_deref(), Some("no space left on device"));
+            assert_eq!(p.detail, "no space left on device");
+        }
+    }
+
+    #[test]
+    fn user_stopped_marker_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
 
         assert!(!is_user_stopped(&paths));
         mark_user_stopped(&paths);

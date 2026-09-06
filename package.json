@@ -8,6 +8,7 @@
     "format": "prettier --write \"**/*.{ts,tsx,js,mjs}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js,mjs}\"",
     "e2e": "playwright test --config playwright.e2e.config.ts",
+    "e2e:desktop": "playwright test --config playwright.desktop.config.ts",
     "fed": "yarn workspace @ci/be-api run exec -- scripts/federation-harness/index.ts",
     "e2e:ui": "playwright test --config playwright.e2e.config.ts --ui",
     "e2e:headed": "playwright test --config playwright.e2e.config.ts --headed",
