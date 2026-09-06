@@ -1,10 +1,39 @@
 # PowerSync sync rules — what data replicates to each user's on-device SQLite.
 #
 # One bucket per user, scoped by `request.user_id()` (the JWT `sub` set by
-# CI-Server's /api/powersync/token endpoint). Notes/messages/threads/files are a
-# rolling working set: JWT `parameters.cutoff` (default last 14 days). Eviction
-# is a later cutoff (unsubscribe), not a local DELETE. Tags stay small and full.
-# Large/server-computed/PII data stays online via GraphQL.
+# CI-Server's /api/powersync/token endpoint). Large/server-computed/PII data
+# stays online via GraphQL.
+#
+# NO ROLLING CUTOFF WINDOW. These rules used to narrow notes/messages/threads/
+# files to a rolling working set with `AND updated_at >= COALESCE(
+# bucket.cutoff::timestamptz, '-infinity'::timestamptz)`, cutoff coming from the
+# JWT. That could never load: PowerSync rejected it three ways over, and the last
+# one is not a syntax slip but a constraint the design cannot be written around.
+# Measured against the pinned journeyapps/powersync-service:1.23.0 — each of
+# these exits the container 1 at "Failed to update sync config":
+#
+#   1. `Function 'coalesce' is not defined`     — use `ifnull`, or nothing.
+#   2. `CAST not supported for 'timestamptz'`   — only casts like `::text` work
+#                                                 (see entity_tag's id below).
+#   3. `Cannot use bucket parameters in expressions` — the fatal one. A bucket
+#      parameter may appear ONLY on one side of an equality (`user_id =
+#      bucket.user_id`). Any range comparison is rejected, and so is wrapping it
+#      in a function — `updated_at >= bucket.cutoff` and `ifnull(bucket.cutoff,
+#      '')` both fail. Buckets are keyed sets, so a bucket parameter selects a
+#      set; it cannot bound one. Verified by swapping `>=` for `=`, which starts
+#      cleanly, and back, which does not.
+#
+# So a cutoff cannot filter rows here at all, and the whole per-user working set
+# syncs. To actually bound it, the window has to become something equality can
+# select: a discrete period column on the row (e.g. a generated `updated_month`),
+# added to POWERSYNC_TABLES and matched with `updated_month = bucket.month`, with
+# the client subscribing to the periods it wants. That is a schema change, not a
+# sync-rules change, so it is deliberately not attempted here.
+#
+# /api/powersync/token still mints `parameters.cutoff` (PowerSyncTokenService
+# defaults it to 14 days back). Nothing reads it now — it is inert, not wired —
+# and it is left in place because the period-bucketing above would use it. Do not
+# reintroduce it into a WHERE clause expecting it to bite.
 #
 # Verified user-scoped tables (each has a uuid `id`-aliasable PK + `user_id`):
 #   - ci.notes             (id, title, content, user_id, created_at, updated_at)
@@ -46,14 +75,13 @@
 
 bucket_definitions:
   user_data:
-    # user_id from the token subject; cutoff from JWT parameters (ISO timestamptz).
-    parameters: SELECT request.user_id() AS user_id, request.parameters() ->> 'cutoff' AS cutoff
+    # user_id from the token subject. See the header on why there is no cutoff.
+    parameters: SELECT request.user_id() AS user_id
 
     data:
       - SELECT id, title, content, user_id, created_at, updated_at
         FROM ci.notes
         WHERE user_id = bucket.user_id
-          AND updated_at >= COALESCE(bucket.cutoff::timestamptz, '-infinity'::timestamptz)
 
       # Files: metadata only. No binary/extracted-text/embedding columns exist on
       # this table (the object is fetched from Minio via a fresh signed URL), so the
@@ -63,7 +91,6 @@ bucket_definitions:
                external_created_at, external_updated_at, created_at, updated_at, deleted_at
         FROM ci.files
         WHERE user_id = bucket.user_id
-          AND updated_at >= COALESCE(bucket.cutoff::timestamptz, '-infinity'::timestamptz)
 
       - SELECT id, label, description, user_id, created_at, updated_at, deleted_at
         FROM ci_search.tags
@@ -79,7 +106,6 @@ bucket_definitions:
                created_at, updated_at, last_message_at
         FROM ci.threads
         WHERE user_id = bucket.user_id
-          AND updated_at >= COALESCE(bucket.cutoff::timestamptz, '-infinity'::timestamptz)
 
       # Messages: text-only subset. PK is message_id, not id — aliased below.
       # Excludes input_tokens/output_tokens/total_tokens/estimated_cost (cost
@@ -92,7 +118,6 @@ bucket_definitions:
                sequence_number, created_at, updated_at
         FROM ci.messages
         WHERE user_id = bucket.user_id
-          AND updated_at >= COALESCE(bucket.cutoff::timestamptz, '-infinity'::timestamptz)
 
   # entity_tag has no user_id of its own — it is owned transitively via the tag it
   # points at. Sync rules don't support JOINs (see header comment), so this follows

@@ -189,14 +189,24 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    # Deliberately NOT in "local". The scaffold (#1582/#1585, 2026-06-28) is
-    # server-side only — no client has ever connected, and the README's client
-    # phase (@powersync/web, on-device schema, upload connector) is unstarted.
-    # Meanwhile the container ran on every `make dev`, crash-looping wherever
-    # .env predates the June PowerSync keys, and holding a replication slot for
-    # a reader that does not exist. The token endpoint already returns 503 until
-    # POWERSYNC_URL is set, so nothing in the app changes by not running it.
-    # Add "local" back when the client phase starts.
+    # Deliberately NOT in "local" — but no longer because the client is missing.
+    # That half has shipped: PowerSyncProvider mounts unconditionally in the web
+    # app, and the Android shell links @powersync/capacitor and drives a real
+    # native ci-powersyncSQLite.db. Driven end to end against this stack, a
+    # capture through POST /api/files/upload reaches ps_data__files on an
+    # emulator in seconds.
+    #
+    # What still stops a `local` client is server wiring, in two places:
+    #   - POWERSYNC_URL / POWERSYNC_JWT_SECRET reach the `api` service from NO
+    #     compose file, so /api/powersync/token is a permanent 503 and no client
+    #     can fetch credentials (PowerSyncTokenService throws unless both are
+    #     set). setup-secrets generates POWERSYNC_DATABASE_PASSWORD but never a
+    #     JWT secret, so there is nothing to point them at either.
+    #   - this service publishes no port and has no gateway route, so nothing
+    #     off the compose network can reach :8080 anyway.
+    # Running it in `local` before those land would still only crash-loop on a
+    # missing password and hold a replication slot for a reader that cannot
+    # authenticate. Add "local" once the two bullets above are fixed.
     profiles: [ "staging", "production" ]
 
   #############
