@@ -155,6 +155,7 @@ describe('WikidataResolver', () => {
       P2437: [{ amount: '+3' }],
       P1874: ['80100172'],
       P6467: ['2171423f-3326-4dfa-b193-b40494e60109'],
+      P13902: ['entity-0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d'],
     },
   );
   const darkness = entity(
@@ -219,6 +220,7 @@ describe('WikidataResolver', () => {
           watch_links: {
             netflix: 'https://www.netflix.com/title/80100172',
             hulu: 'https://www.hulu.com/series/2171423f-3326-4dfa-b193-b40494e60109',
+            disney_plus: 'https://www.disneyplus.com/browse/entity-0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d',
           },
         },
       },

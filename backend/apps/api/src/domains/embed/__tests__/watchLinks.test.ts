@@ -7,13 +7,13 @@ describe('watchLinksFor', () => {
         huluSeries: '2171423f-3326-4dfa-b193-b40494e60109',
         netflix: '80100172',
         primeVideo: 'B07ZTQ3TJG',
-        disneyPlusSeries: '3jLIGMDYINqD',
+        disneyPlusBrowse: 'entity-422f6dcc-226f-44e7-98d4-22de69b31cf3',
       }),
     ).toEqual({
       hulu: 'https://www.hulu.com/series/2171423f-3326-4dfa-b193-b40494e60109',
       netflix: 'https://www.netflix.com/title/80100172',
       prime_video: 'https://www.amazon.com/gp/video/detail/B07ZTQ3TJG',
-      disney_plus: 'https://www.disneyplus.com/series/wp/3jLIGMDYINqD',
+      disney_plus: 'https://www.disneyplus.com/browse/entity-422f6dcc-226f-44e7-98d4-22de69b31cf3',
     });
   });
 
@@ -33,6 +33,22 @@ describe('watchLinksFor', () => {
     expect(watchLinksFor({ disneyPlusSeries: '3jLIGMDYINqD', disneyPlusMovie: '5cWPGDlkVDpF' })).toEqual({
       disney_plus: 'https://www.disneyplus.com/series/wp/3jLIGMDYINqD',
     });
+  });
+
+  it('prefers the current Disney+ browse page over the legacy ids, and falls back without one', () => {
+    expect(
+      watchLinksFor({
+        disneyPlusBrowse: 'entity-422f6dcc-226f-44e7-98d4-22de69b31cf3',
+        disneyPlusSeries: '3jLIGMDYINqD',
+      }),
+    ).toEqual({
+      disney_plus: 'https://www.disneyplus.com/browse/entity-422f6dcc-226f-44e7-98d4-22de69b31cf3',
+    });
+    expect(watchLinksFor({ disneyPlusSeries: '3jLIGMDYINqD' })).toEqual({
+      disney_plus: 'https://www.disneyplus.com/series/wp/3jLIGMDYINqD',
+    });
+    // A browse id must be the `entity-<uuid>` form; anything else is ignored.
+    expect(watchLinksFor({ disneyPlusBrowse: 'entity-../3jLIGMDYINqD' })).toBeUndefined();
   });
 
   it('refuses ids that do not match the property format, and reports none when nothing is left', () => {
