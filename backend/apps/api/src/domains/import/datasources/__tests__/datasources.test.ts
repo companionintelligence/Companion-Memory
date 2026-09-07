@@ -20,6 +20,7 @@ const EXPECTED_DATASOURCES = [
   'claude',
   'contact_list',
   'discord',
+  'disney_plus',
   'email',
   'facebook',
   'firefox',

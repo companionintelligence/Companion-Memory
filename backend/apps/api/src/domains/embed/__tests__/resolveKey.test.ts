@@ -65,6 +65,21 @@ describe('resolveTargetFor', () => {
     });
   });
 
+  it('keys Disney+ rows the same way', () => {
+    expect(
+      resolveTargetFor({
+        sourceSystem: 'disney_plus',
+        externalId: 'disney_plus:title:0123456789abcdef',
+        externalIdKind: 'external_uri',
+        sourceTitle: 'The Mandalorian: Season 1: Chapter 2: The Child',
+      }),
+    ).toMatchObject({
+      resolver: 'wikidata',
+      key: 'wd:tv:the mandalorian',
+      work: { kind: 'tv', title: 'The Mandalorian', season: 1, episodeTitle: 'Chapter 2: The Child' },
+    });
+  });
+
   it('falls back to OpenGraph for any other web URL, canonicalized', () => {
     expect(
       resolveTargetFor({ url: 'https://www.reddit.com/r/gifs/comments/459icd/x/?utm_source=share' }),

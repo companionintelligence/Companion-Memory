@@ -9,6 +9,8 @@
  *   P6466 Hulu movie ID         https://www.hulu.com/movie/<uuid>
  *   P1874 Netflix ID            https://www.netflix.com/title/<digits>
  *   P8055 Amazon Prime Video ID https://www.amazon.com/gp/video/detail/<asin>
+ *   P7596 Disney+ series ID     https://www.disneyplus.com/series/wp/<id>
+ *   P7595 Disney+ movie ID      https://www.disneyplus.com/movies/wd/<id>
  *
  * These are the work's pages (the show, the film), not per-episode watch
  * links — Wikidata does not carry those. None of these players can be
@@ -25,24 +27,29 @@ export interface WatchLinks {
   hulu?: string;
   netflix?: string;
   prime_video?: string;
+  disney_plus?: string;
 }
 
 export const WATCH_LINK_SITE_NAMES: Readonly<Record<keyof WatchLinks, string>> = {
   hulu: 'Hulu',
   netflix: 'Netflix',
   prime_video: 'Prime Video',
+  disney_plus: 'Disney+',
 };
 
 /** Wikidata's own format constraints (P1793) for each id, so a mistyped value never becomes a URL. */
 const HULU_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NETFLIX_ID = /^\d{6,8}$/;
 const PRIME_VIDEO_ID = /^B[0-9A-Z]{9}$/;
+const DISNEY_PLUS_ID = /^[0-9A-Za-z]{12}$/;
 
 export interface ProviderIds {
   huluSeries?: string;
   huluMovie?: string;
   netflix?: string;
   primeVideo?: string;
+  disneyPlusSeries?: string;
+  disneyPlusMovie?: string;
 }
 
 /** The provider pages a Wikidata item's ids resolve to; undefined when it has none. */
@@ -63,6 +70,12 @@ export function watchLinksFor(ids: ProviderIds): WatchLinks | undefined {
 
   if (ids.primeVideo && PRIME_VIDEO_ID.test(ids.primeVideo)) {
     links.prime_video = `https://www.amazon.com/gp/video/detail/${ids.primeVideo}`;
+  }
+
+  if (ids.disneyPlusSeries && DISNEY_PLUS_ID.test(ids.disneyPlusSeries)) {
+    links.disney_plus = `https://www.disneyplus.com/series/wp/${ids.disneyPlusSeries}`;
+  } else if (ids.disneyPlusMovie && DISNEY_PLUS_ID.test(ids.disneyPlusMovie)) {
+    links.disney_plus = `https://www.disneyplus.com/movies/wd/${ids.disneyPlusMovie}`;
   }
 
   return Object.keys(links).length ? links : undefined;

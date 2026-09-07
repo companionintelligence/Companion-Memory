@@ -7,11 +7,13 @@ describe('watchLinksFor', () => {
         huluSeries: '2171423f-3326-4dfa-b193-b40494e60109',
         netflix: '80100172',
         primeVideo: 'B07ZTQ3TJG',
+        disneyPlusSeries: '3jLIGMDYINqD',
       }),
     ).toEqual({
       hulu: 'https://www.hulu.com/series/2171423f-3326-4dfa-b193-b40494e60109',
       netflix: 'https://www.netflix.com/title/80100172',
       prime_video: 'https://www.amazon.com/gp/video/detail/B07ZTQ3TJG',
+      disney_plus: 'https://www.disneyplus.com/series/wp/3jLIGMDYINqD',
     });
   });
 
@@ -25,11 +27,22 @@ describe('watchLinksFor', () => {
         huluMovie: 'c984923d-a3a8-5ab3-911c-29d68d3db58e',
       }),
     ).toEqual({ hulu: 'https://www.hulu.com/series/2171423f-3326-4dfa-b193-b40494e60109' });
+    expect(watchLinksFor({ disneyPlusMovie: '5cWPGDlkVDpF' })).toEqual({
+      disney_plus: 'https://www.disneyplus.com/movies/wd/5cWPGDlkVDpF',
+    });
+    expect(watchLinksFor({ disneyPlusSeries: '3jLIGMDYINqD', disneyPlusMovie: '5cWPGDlkVDpF' })).toEqual({
+      disney_plus: 'https://www.disneyplus.com/series/wp/3jLIGMDYINqD',
+    });
   });
 
   it('refuses ids that do not match the property format, and reports none when nothing is left', () => {
     expect(
-      watchLinksFor({ huluSeries: 'not-a-uuid', netflix: '12', primeVideo: 'B07ZTQ3TJG/../x' }),
+      watchLinksFor({
+        huluSeries: 'not-a-uuid',
+        netflix: '12',
+        primeVideo: 'B07ZTQ3TJG/../x',
+        disneyPlusSeries: '../3jLIGMDYINqD',
+      }),
     ).toBeUndefined();
     expect(watchLinksFor({})).toBeUndefined();
   });

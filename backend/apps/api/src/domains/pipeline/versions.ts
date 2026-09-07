@@ -142,6 +142,10 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * predicate (their `hulu:title:` URI is an external_uri) and were ledgered
    * `skipped / no_resolve_target` at v2 — terminal, so only a bump re-offers
    * them.
+   *
+   * Disney+ (2026-09) joined at v3 without a bump: its rows are new, so
+   * nothing was ledgered terminal, and the Disney+ watch link a shared work's
+   * cached answer lacks arrives when that row's expiry refreshes it.
    */
   [STAGE_IDS.ENRICH_UNFURL]: 3,
 
