@@ -41,14 +41,14 @@ export function OnboardingNav({ canGoBack, onBack, onSkip, onNext }: OnboardingN
       // centred with no width of its own, so it just overflowed both ways.
       // Now the row owns the width, Back/Skip stay at their intrinsic size, and
       // the primary takes what is left and ellipsizes rather than pushing.
-      className="mb-5 flex w-full items-center justify-center gap-1 px-4 sm:mb-6 sm:gap-3"
+      className="mb-5 flex w-full items-center justify-center gap-1 px-4 device:mb-6 device:gap-3"
     >
       {backHandler && (
         <Button
           type="button"
           variant="ghost"
           size="lg"
-          className="h-11 shrink-0 px-3 text-base sm:px-6"
+          className="h-11 shrink-0 px-3 text-base device:px-6"
           onClick={backHandler}
         >
           Back
@@ -58,7 +58,7 @@ export function OnboardingNav({ canGoBack, onBack, onSkip, onNext }: OnboardingN
         type="button"
         variant="ghost"
         size="lg"
-        className="h-11 shrink-0 px-3 text-base sm:px-6"
+        className="h-11 shrink-0 px-3 text-base device:px-6"
         onClick={onSkip}
       >
         Skip
@@ -69,7 +69,7 @@ export function OnboardingNav({ canGoBack, onBack, onSkip, onNext }: OnboardingN
         // The label is the step's own words when it has any, so the button says
         // what pressing it will do rather than a generic "Next" over a flow
         // that is really about to pick, upload or sync.
-        className="h-12 min-w-0 max-w-full flex-1 px-4 text-base sm:flex-none sm:px-14 sm:text-lg"
+        className="h-12 min-w-0 max-w-full flex-1 px-4 text-base device:flex-none device:px-14 device:text-lg"
         disabled={nav?.primaryDisabled}
         onClick={primaryHandler}
       >
