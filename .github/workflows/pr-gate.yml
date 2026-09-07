@@ -16,11 +16,18 @@ name: PR gate
 #
 # ── What it runs, and what it deliberately does not ─────────────────────
 #
-# Lint (4 lanes) + typecheck (2 lanes), and nothing else. The proposal prices
-# the full `ci.yml` at ~8-14 min of runner time per PR and this subset at
-# ~2-3 min, and the subset would still have caught 3 of the 8 defect classes in
+# Lint (4 lanes) + typecheck (2 lanes) + the two dependency-free mobile
+# guards, and nothing else. The proposal prices the full `ci.yml` at ~8-14 min
+# of runner time per PR and the lint/typecheck subset at ~2-3 min, and that
+# subset would still have caught 3 of the 8 defect classes in
 # `docs/qa/baseline-2026-08-26.md` — including all 334 lint/format violations
 # that reached `main` in three days with nothing run.
+#
+# The mobile guards were added for the same reason and at near-zero marginal
+# cost — see the `mobile-guards` job. Everything here is still deliberately the
+# CHEAP half: no Docker, no Postgres, no Xcode/Gradle, no secrets, no GPU. A
+# check that needs a simulator or a real `cap sync` belongs in
+# `mobile-build.yml`, which stays on dispatch.
 #
 # The unit-test and Python lanes are the expensive half and stay on dispatch:
 #
@@ -40,6 +47,11 @@ name: PR gate
 # Those names match `ci.yml`'s jobs on purpose. The two run identical commands,
 # so a deliberately dispatched `ci.yml` reports the same contexts and satisfies
 # the same rule rather than sitting beside it as a near-duplicate.
+#
+# `Mobile native guards` is deliberately NOT in that list: it has no twin in
+# `ci.yml`, so requiring it would mean only a `pull_request` run can ever
+# satisfy it, and a dispatched `ci.yml` on a hotfix could no longer clear the
+# rule. Add it only if `ci.yml` grows the same job.
 on:
   pull_request:
     branches: [main]
@@ -164,3 +176,60 @@ jobs:
 
       - name: Lint ${{ matrix.name }}
         run: ${{ matrix.command }}
+
+  # The only mobile-lane verification that runs on a pull request anywhere in
+  # this repo. `mobile-build.yml` — the workflow that would actually catch a
+  # broken Podfile or a missing `cap sync` by building the thing — is
+  # `workflow_dispatch`-only, and the guards below otherwise run ONLY from
+  # lint-staged (.lintstagedrc), i.e. only in a pre-commit hook, which is itself
+  # inert in the git worktrees the agents work in. So a PR could add a Capacitor
+  # plugin without running `cap sync`, or duplicate a top-level key in
+  # Info.plist, and merge with every check green. Both classes have actually
+  # happened here: `docs/qa/baseline-2026-08-26.md` §6.6 found the committed
+  # Capacitor generated files stale against a fresh `cap sync`, and
+  # check-plist-duplicate-keys.mjs's own header records ten duplicate top-level
+  # pairs in App/Info.plist, one of which ate a real ATS setting.
+  #
+  # Deliberately still the cheap half (see this file's header): both scripts are
+  # dependency-free Node with no imports outside `node:fs`/`node:path`, so this
+  # job skips the install entirely — no `needs: install`, no yarn, no cache. It
+  # is checkout + `node`, seconds of runner time. It does NOT run `cap sync`
+  # itself; that needs CocoaPods/Gradle and stays in `mobile-build.yml`.
+  mobile-guards:
+    name: Mobile native guards
+    runs-on: ubuntu-latest
+    # Nothing here should take more than a few seconds; a minute is already a
+    # sign something hung rather than failed.
+    timeout-minutes: 5
+    container:
+      image: node:22
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # No arguments on purpose. The script's own header documents both call
+      # shapes: lint-staged passes the staged paths (which it ignores, since the
+      # comparison is inherently cross-file), and a bare run scans the whole
+      # tree — which is what a PR gate wants. It resolves
+      # `frontend/apps/{android,ios}/...` relative to the CWD, so this must run
+      # from the repo root.
+      - name: Check Capacitor native sync
+        run: node scripts/check-capacitor-native-sync.mjs
+
+      # This one is the opposite: it checks ONLY the files named in argv (see
+      # its `for (const file of process.argv.slice(2))` loop) and exits 0 with a
+      # bare run, so the file list has to be built here. Discovered rather than
+      # hard-coded so a plist added later is covered without editing this file —
+      # and the count is asserted, because an empty list would make the step
+      # pass while checking nothing, which is exactly the failure mode this
+      # whole job exists to remove.
+      - name: Check iOS plists for duplicate top-level keys
+        run: |
+          set -euo pipefail
+          mapfile -t plists < <(find frontend/apps/ios -name '*.plist' -not -path '*/node_modules/*' | sort)
+          if [ "${#plists[@]}" -eq 0 ]; then
+            echo "::error::found no .plist files under frontend/apps/ios — the guard would have checked nothing"
+            exit 1
+          fi
+          printf 'checking %s\n' "${plists[@]}"
+          node scripts/check-plist-duplicate-keys.mjs "${plists[@]}"

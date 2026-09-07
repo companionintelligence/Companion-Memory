@@ -57,18 +57,37 @@ make build
 `packageManager`, `uv` present — any mismatch exits 1), then hard-fails unless `overmind`,
 `caddy` (admin API live on `:2019`) and `ollama` (on `:11434`) are present.
 
-**CI is `workflow_dispatch`-only, with three exceptions.** Nine of the
-twelve workflows do not run on push, pull request, tag or schedule — for
+**CI is `workflow_dispatch`-only, with four exceptions.** Ten of the
+fourteen workflows do not run on push, pull request, tag or schedule — for
 those, an absent check means nobody dispatched it, not that anything passed.
 Start one with `gh workflow run <file> --ref <branch-or-tag>`; see `docs/CI.md`
-for the full table. The exceptions (re-verified 2026-08-27):
+for the full table. The exceptions (re-verified 2026-09-07):
 
+- **`pr-gate.yml`** — `pull_request` against `main`, no path filter, so it runs
+  on **every** PR. Lint (4 lanes) + typecheck (2 lanes) + the `mobile-guards`
+  job (two dependency-free Node scripts — Capacitor native sync and iOS plist
+  duplicate keys — that otherwise run only from lint-staged, which is inert in
+  the agent worktrees). The unit-test and Python lanes stay on dispatch in
+  `ci.yml`. Its lint/typecheck jobs reuse `ci.yml`'s job names on purpose, so a
+  dispatched `ci.yml` reports the same check contexts.
+- **`benchmark-unit.yml`** — `pull_request` **and** push to `main`, but only for
+  `scripts/benchmark/**`. It runs `pytest` and *no linter*, which is how 141
+  ruff violations landed in that directory unnoticed.
 - **`mobile-release.yml`** — push `ios-v*`, `android-v*`, or
   `mobile-release-v*` to upload to TestFlight / Play internal.
 - **`desktop-release.yml`** — push `desktop-v*`.
-- **`benchmark-unit.yml`** — the only one that runs on a **pull request**, and
-  only for `scripts/benchmark/**`. It runs `pytest` and *no linter*, which is
-  how 141 ruff violations landed in that directory unnoticed.
+
+**`publish.yml` must be dispatched on a release TAG, never on `main`.** Its
+`Resolve VERSION from tag` steps do `tag="${GITHUB_REF#refs/tags/}"`, so on a
+branch ref `VERSION` becomes the literal `refs/heads/main` — not a legal image
+tag. The `Refuse to publish a non-release ref` guard — first step of both
+`verify-ci-passed` and `build`, before any checkout, matching `GITHUB_REF`
+against the workflow-level `RELEASE_TAG_RE` — now rejects that in seconds
+instead of after the two `timeout-minutes: 150` matrix legs (`ubuntu-latest`,
+`ubuntu-24.04-arm`) have built everything. The mistake is cheap now, not
+correct: the run still ends red and nothing is released. `docs/CI.md`'s
+generated "Cut a release" block still says `--ref main` — it is wrong; see the
+hand-maintained note in that file.
 
 **`codeql.yml` is now `workflow_dispatch`-only** (an earlier revision of this
 file said push/PR/cron — that is stale). It was gated because it failed every
@@ -90,11 +109,13 @@ See `README.md` for the full prerequisite setup and the complete `make` command 
 and `backend/packages/*`; never hand-resolve a conflict in it — `scripts/merge-uv-lock.sh`
 is registered as a merge driver, then run `uv lock`).
 
-`frontend/apps/ios` and `frontend/apps/android` are deliberately **excluded** from the
-Yarn workspaces (root `package.json`: `"!frontend/apps/ios"`, `"!frontend/apps/android"`)
-because Capacitor, CocoaPods and Gradle walk a real `node_modules` tree that PnP does not
-produce. Install and run from inside each app's own directory — a root install will not
-materialize them, and "fixing" the exclusion breaks the native builds.
+`frontend/apps/ios`, `frontend/apps/android` and `frontend/apps/desktop` are deliberately
+**excluded** from the Yarn workspaces (root `package.json`: `"!frontend/apps/ios"`,
+`"!frontend/apps/android"`, `"!frontend/apps/desktop"`)
+because Capacitor, CocoaPods, Gradle and Tauri walk a real `node_modules` tree that PnP does not
+produce. Each therefore carries its **own** `yarn.lock`. Install and run from inside each app's
+own directory — a root install will not materialize them, and "fixing" the exclusion breaks the
+native builds.
 
 ## Cross-repo connections
 

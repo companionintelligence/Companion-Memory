@@ -211,6 +211,32 @@ fn write_env_file(env_path: &Path, image_tag: &str, import_work_dir: &Path) -> R
     // CI_PORTAL_URL is the one operator-facing override — set it before
     // `yarn dev`/launching the packaged app to point at a non-production
     // Portal (e.g. the dev environment) instead.
+    //
+    // LLM_DEFAULT_CHAT_MODEL pins the API's chat model
+    // (backend/apps/api/config/custom-environment-variables.json maps that env
+    // var to `llm.chatModel`) to the exact tag the local-model sidecar pulls,
+    // so the two cannot silently disagree. They did: the sidecar's constant sat
+    // at `gemma3:1b` after configuration.ts's own DEFAULT_CHAT_MODEL moved to
+    // `gemma4:e4b`: every background inference path then failed with
+    // OllamaService's `Invalid model specified: <id>`, per job, forever, while
+    // interactive chat quietly ran the retired 1b tag instead via that
+    // service's resolveServedChatModel whatever-is-served fallback.
+    // configuration.ts remains the source of truth for WHICH model (see its
+    // comment on the size/capability tier); this line only guarantees the
+    // appliance asks for the one that is actually on disk.
+    //
+    // Reach, as rendered by `docker compose config` over the three bundled
+    // files: this key reaches `api` (docker-compose.production.yml) and
+    // `hbpe-service` (docker-compose.yml), but NOT `worker` — the worker keeps
+    // riding the image's compiled-in default, so a later move of
+    // configuration.ts's default that this constant does not follow would
+    // still drift there. The hbpe-service copy is not inert either: once
+    // LLM_API_BASE is also set (the Apple-on-device branch, appended by
+    // apply_llm_env_override below), HBPE's _build_labeler stops falling back
+    // to its bundled Qwen GGUF and labels through the Apple bridge instead —
+    // which is single-flight (apple_bridge.rs serializes every request), so
+    // label drains and interactive chat now share one queue on that branch.
+    let chat_model = crate::local_model::ollama_sidecar::DEFAULT_CHAT_MODEL;
     let portal_url = std::env::var("CI_PORTAL_URL").unwrap_or_else(|_| DEFAULT_PORTAL_URL.to_string());
     let contents = format!(
         "COMPOSE_PROJECT_NAME={PROJECT_NAME}\n\
@@ -218,6 +244,7 @@ fn write_env_file(env_path: &Path, image_tag: &str, import_work_dir: &Path) -> R
          APP_PUBLIC_HOSTNAME=127.0.0.1\n\
          CI_IMPORT_WORK_DIR={}\n\
          CI_LOCAL_ONLY=true\n\
+         LLM_DEFAULT_CHAT_MODEL={chat_model}\n\
          OIDC_ISSUER_URL={portal_url}\n\
          APP_BASE_URL=http://127.0.0.1:{GATEWAY_PORT}\n",
         import_work_dir.display(),
@@ -650,6 +677,14 @@ mod tests {
         assert!(contents.contains("CI_SERVER_IMAGE_TAG=2026.8.25"));
         assert!(contents.contains("CI_LOCAL_ONLY=true"));
         assert!(contents.contains("APP_BASE_URL=http://127.0.0.1:8642"));
+        // The API must be told the chat model the sidecar actually pulls, not
+        // left on its own compiled-in default — that drift is what broke every
+        // background inference job on the zero-install path (see write_env_file's
+        // comment). Asserted against the sidecar constant rather than a literal
+        // tag so bumping the model in one place keeps this test honest instead
+        // of failing it.
+        use crate::local_model::ollama_sidecar::DEFAULT_CHAT_MODEL;
+        assert!(contents.contains(&format!("LLM_DEFAULT_CHAT_MODEL={DEFAULT_CHAT_MODEL}")));
         // Not asserting a specific OIDC_ISSUER_URL value: it reads the
         // CI_PORTAL_URL env var, which this test deliberately doesn't set or
         // unset (mutating process env vars in a #[test] races against

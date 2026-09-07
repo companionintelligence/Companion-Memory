@@ -1,12 +1,18 @@
-# The only automatic store upload. Pushing a matching tag is the release action;
-# every other GitHub workflow in this repo stays workflow_dispatch-only.
+# The only automatic *store* upload. Pushing a matching tag is the release action.
+# Most workflows in this repo are workflow_dispatch-only, but "every other one is"
+# was never true and is now plainly false — verified against the files 2026-09-06:
+#   desktop-release.yml  push on `desktop-v*` tags
+#   pr-gate.yml          pull_request → main
+#   benchmark-unit.yml   pull_request + push to main, scoped to scripts/benchmark/**
+# See docs/CI.md for the full trigger table.
 #
 #   git tag -a ios-v1.0.0 -m "iOS 1.0.0" && git push origin ios-v1.0.0
 #   git tag -a android-v1.0.0 -m "Android 1.0.0" && git push origin android-v1.0.0
 #   git tag -a mobile-release-v1.0.0 -m "1.0.0" && git push origin mobile-release-v1.0.0
 #
-# Rehearsal (no store submit) is always a dispatch on a branch:
+# Rehearsal (nothing reaches a tester) is always a dispatch on a branch:
 #   gh workflow run mobile-release.yml --ref main -f dry_run=true -f platform=ios
+# On Android a rehearsal is not store-free — read the `dry_run` note below before running one.
 name: Mobile Release
 
 # Signed, store-bound builds of the Capacitor app: a TestFlight upload and a Play
@@ -20,6 +26,15 @@ name: Mobile Release
 # number on upload, so a failed submission after a successful one still costs
 # you that number.
 #
+# `dry_run` does NOT mean "never touches a store", and the two lanes differ. iOS honours
+# it literally: the rehearsal stops at `altool --validate-app`, which validates without
+# consuming anything. Android has no equivalent — r0adkll/upload-google-play offers no
+# validate-only mode — so its rehearsal commits a *draft* release ("Validate against Play
+# (draft, no rollout)"). No tester ever sees it, but Play keeps the version code of any
+# bundle it accepts, draft included. So an Android dry run costs a version code exactly
+# like a real one; that is the tradeoff for finding out about credentials, package name
+# and the pending Play declarations on a rehearsal instead of on a tag push.
+#
 # ── Required secrets ───────────────────────────────────────────────────────────
 # iOS (App Store Connect API key auth — no Apple ID, no 2FA prompt in CI):
 #   APPSTORE_ISSUER_ID          App Store Connect → Users and Access → Integrations
@@ -31,6 +46,17 @@ name: Mobile Release
 #   IOS_PROVISIONING_PROFILE_BASE64
 #                               base64 of the App Store .mobileprovision for
 #                               com.companionintelligence.app
+# iOS (OPTIONAL, but required for a build that actually ships):
+#   IOS_EXTENSION_PROVISIONING_PROFILE_BASE64
+#                               base64 of the App Store .mobileprovision for
+#                               com.companionintelligence.app.SafariWebExtension.
+#                               The archive embeds a Safari web-extension appex
+#                               (target `SafariWebExtension` in
+#                               frontend/apps/ios/ios/App/App.xcodeproj/project.pbxproj),
+#                               and under manual signing an appex needs its OWN
+#                               profile — the container app's profile does not cover
+#                               it. Without this secret the archive step warns and
+#                               signing of the appex will fail.
 # Android:
 #   ANDROID_KEYSTORE_BASE64     base64 of the upload .jks
 #   ANDROID_KEYSTORE_PASSWORD
@@ -39,8 +65,13 @@ name: Mobile Release
 #   PLAY_SERVICE_ACCOUNT_JSON   Play Console service-account JSON with
 #                               "Release to testing tracks" permission
 #
-# Each platform is skipped (not failed) when its secrets are absent, so you can wire
-# up one store before the other.
+# A platform lane is skipped (not failed) only when *every* secret it consumes is
+# absent — that is the supported way to wire up one store before the other. When some
+# but not all of a lane's secrets are set the lane FAILS immediately and names the
+# missing ones: a half-configured lane is a configuration mistake, and letting it run
+# means dying an hour later, after an archive that has already burned a build number.
+# (IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 is deliberately outside that count — it
+# is optional, and its absence downgrades to a ::warning:: at the profile-install step.)
 
 on:
   push:
@@ -51,7 +82,9 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Build and sign, but do not submit to the stores'
+        # Not "no store contact": iOS validates only, Android commits a Play *draft*
+        # (no rollout, but the version code is spent). See the header note on `dry_run`.
+        description: 'Build and sign; release to nobody (iOS validates only, Android commits a Play draft)'
         type: boolean
         default: true
       version_name:
@@ -81,6 +114,17 @@ concurrency:
 env:
   NODE_VERSION: '22'
   VITE_DISABLE_PWA: 'true'
+  # Added to github.run_number to produce the store build number. run_number ALONE is
+  # not safe as a build number: it is a per-workflow-FILE counter, it does not advance
+  # when you re-run a run, it restarts at 1 if this file is ever renamed or recreated,
+  # and it is shared by both lanes (an iOS-only run still consumes that number for
+  # Android). Apple and Google both permanently reject a build/version code that has
+  # already been seen, so any repeat is a dead run. The offset also has to clear the
+  # numbers already consumed by hand: frontend/apps/ios/ios/App/App.xcodeproj/project.pbxproj
+  # still carries CURRENT_PROJECT_VERSION = 3 from earlier manual uploads.
+  # ONLY EVER RAISE THIS. Raise it (by a comfortable margin) if this file is renamed,
+  # if run_number is ever reset, or if a build number is burned outside this workflow.
+  BUILD_NUMBER_OFFSET: '1000'
 
 jobs:
   # Resolve the version once so both stores get identical numbers for the same run.
@@ -108,10 +152,13 @@ jobs:
           else
             NAME="0.1.0"
           fi
-          # github.run_number is monotonic per workflow, which is exactly the
-          # "must never repeat, must always increase" contract both stores enforce.
+          # The store build number is run_number + BUILD_NUMBER_OFFSET, never run_number
+          # on its own — see the offset's comment in the workflow `env` block for why
+          # (re-runs repeat it, a rename resets it, and both lanes share it, while both
+          # stores permanently reject a number they have already accepted).
+          CODE=$(( ${{ github.run_number }} + BUILD_NUMBER_OFFSET ))
           echo "name=${NAME}"                        >> "$GITHUB_OUTPUT"
-          echo "code=${{ github.run_number }}"       >> "$GITHUB_OUTPUT"
+          echo "code=${CODE}"                        >> "$GITHUB_OUTPUT"
           # A tag *push* always submits. Dispatch honours the checkbox even on a tag ref.
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
@@ -137,7 +184,7 @@ jobs:
           fi
           echo "run_ios=${RUN_IOS}" >> "$GITHUB_OUTPUT"
           echo "run_android=${RUN_ANDROID}" >> "$GITHUB_OUTPUT"
-          echo "Version ${NAME} (build ${{ github.run_number }}) ios=${RUN_IOS} android=${RUN_ANDROID}"
+          echo "Version ${NAME} (build ${CODE} = run ${{ github.run_number }} + offset ${BUILD_NUMBER_OFFSET}) ios=${RUN_IOS} android=${RUN_ANDROID}"
 
   ios:
     name: iOS → TestFlight
@@ -149,18 +196,48 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Gate on EVERY secret this lane consumes, not a sample of them. The old gate
+      # checked three of the seven, so a run missing APPLE_TEAM_ID or APPSTORE_PRIVATE_KEY
+      # sailed through, spent ~40 minutes on install + archive, and only then died at the
+      # signing or upload step — with the build number already spent.
+      # All seven present → run. None present → skip green (wiring one store first).
+      # Some but not all → hard fail, naming exactly what is missing.
       - name: Check for iOS signing secrets
         id: secrets
         env:
-          CERT: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
-          PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
-          ISSUER: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
-          if [ -n "$CERT" ] && [ -n "$PROFILE" ] && [ -n "$ISSUER" ]; then
+          set -uo pipefail
+          # IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 is intentionally NOT in this list:
+          # it is optional and is handled with a warning at "Install provisioning profiles".
+          REQUIRED="APPSTORE_ISSUER_ID APPSTORE_KEY_ID APPSTORE_PRIVATE_KEY APPLE_TEAM_ID
+                    IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD IOS_PROVISIONING_PROFILE_BASE64"
+          MISSING=""
+          FOUND=0
+          TOTAL=0
+          for VAR in $REQUIRED; do
+            TOTAL=$((TOTAL + 1))
+            if [ -n "${!VAR:-}" ]; then
+              FOUND=$((FOUND + 1))
+            else
+              MISSING="${MISSING} ${VAR}"
+            fi
+          done
+          if [ "$FOUND" -eq "$TOTAL" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$FOUND" -eq 0 ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "::warning::iOS signing secrets not configured — skipping the TestFlight lane."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::error::iOS lane is half-configured (${FOUND}/${TOTAL} secrets set). Missing:${MISSING}"
+            exit 1
           fi
 
       - name: Node.js + Corepack (Yarn 4)
@@ -224,27 +301,53 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
           rm -f "$RUNNER_TEMP/dist.p12"
 
-      - name: Install provisioning profile
+      # Two profiles, because the archive embeds two bundle identifiers: the container app
+      # (com.companionintelligence.app) and the Safari web-extension appex
+      # (com.companionintelligence.app.SafariWebExtension — target `SafariWebExtension` in
+      # frontend/apps/ios/ios/App/App.xcodeproj/project.pbxproj). Under manual signing
+      # codesign needs a profile per identifier; the app's profile does not cover the appex.
+      - name: Install provisioning profiles
         if: steps.secrets.outputs.present == 'true'
         env:
           PROFILE_B64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          EXTENSION_PROFILE_B64: ${{ secrets.IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
         run: |
           set -euo pipefail
           # Xcode 16+ reads profiles from ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles;
           # older tooling reads ~/Library/MobileDevice/Provisioning Profiles. Write both.
-          for DIR in \
-            "$HOME/Library/MobileDevice/Provisioning Profiles" \
-            "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
-            mkdir -p "$DIR"
-            echo "$PROFILE_B64" | base64 --decode > "$DIR/companion.mobileprovision"
-          done
-          UUID=$(security cms -D -i "$HOME/Library/MobileDevice/Provisioning Profiles/companion.mobileprovision" \
-            | plutil -extract UUID raw -o - -)
-          NAME=$(security cms -D -i "$HOME/Library/MobileDevice/Provisioning Profiles/companion.mobileprovision" \
-            | plutil -extract Name raw -o - -)
+          install_profile() {
+            local B64="$1" FILENAME="$2"
+            for DIR in \
+              "$HOME/Library/MobileDevice/Provisioning Profiles" \
+              "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+              mkdir -p "$DIR"
+              echo "$B64" | base64 --decode > "$DIR/$FILENAME"
+            done
+          }
+          profile_field() {
+            security cms -D -i "$HOME/Library/MobileDevice/Provisioning Profiles/$1" \
+              | plutil -extract "$2" raw -o - -
+          }
+
+          install_profile "$PROFILE_B64" companion.mobileprovision
+          UUID=$(profile_field companion.mobileprovision UUID)
+          NAME=$(profile_field companion.mobileprovision Name)
           echo "PROVISIONING_PROFILE_UUID=$UUID" >> "$GITHUB_ENV"
           echo "PROVISIONING_PROFILE_NAME=$NAME" >> "$GITHUB_ENV"
-          echo "Installed profile '$NAME' ($UUID)"
+          echo "Installed app profile '$NAME' ($UUID)"
+
+          if [ -n "${EXTENSION_PROFILE_B64:-}" ]; then
+            install_profile "$EXTENSION_PROFILE_B64" companion-extension.mobileprovision
+            EXT_UUID=$(profile_field companion-extension.mobileprovision UUID)
+            EXT_NAME=$(profile_field companion-extension.mobileprovision Name)
+            echo "EXTENSION_PROVISIONING_PROFILE_UUID=$EXT_UUID" >> "$GITHUB_ENV"
+            echo "EXTENSION_PROVISIONING_PROFILE_NAME=$EXT_NAME" >> "$GITHUB_ENV"
+            echo "Installed extension profile '$EXT_NAME' ($EXT_UUID)"
+          else
+            # Say this out loud here rather than letting the archive fail with an opaque
+            # "No profile for team ... matching com.companionintelligence.app.SafariWebExtension".
+            echo "::warning::IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 is not set. Falling back to the pre-appex single-profile behaviour: every target gets the app profile, so codesign of the SafariWebExtension appex (com.companionintelligence.app.SafariWebExtension) will fail. Add that secret to ship."
+          fi
 
       # The project is checked in with CODE_SIGN_STYLE = Automatic and no DEVELOPMENT_TEAM,
       # which cannot work on a runner that has no Apple ID session. Override to manual
@@ -257,19 +360,48 @@ jobs:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          # No -allowProvisioningUpdates here. It is a boolean *flag* that takes no
+          # argument, so the old `-allowProvisioningUpdates NO` made xcodebuild read the
+          # bare `NO` as a second build ACTION and abort ("Unknown build action 'NO'")
+          # before it ever reached signing. Manual signing never wants the flag anyway —
+          # it exists to let Xcode mint profiles from a logged-in Apple ID, which a
+          # runner does not have; omitting it is exactly the "NO" that was intended.
+          SIGNING_ARGS=()
+          if [ -n "${EXTENSION_PROVISIONING_PROFILE_UUID:-}" ]; then
+            # A command-line build setting is GLOBAL — it cannot say "this profile for the
+            # app, that one for the appex", and a single global specifier is precisely why
+            # signing the SafariWebExtension target used to fail. An xcconfig can, because
+            # build settings expand recursively and $(TARGET_NAME) is per target: each
+            # target resolves PROFILE_<its own name>. Tradeoff: targets whose names are not
+            # valid setting-name characters (the CocoaPods targets, e.g. `Pods-App`) resolve
+            # to empty, which is correct — libraries and frameworks are signed with the
+            # identity and embed no profile. Passed via -xcconfig instead of on the command
+            # line because command-line settings outrank an xcconfig, so a global
+            # PROVISIONING_PROFILE_SPECIFIER here would silently win over the per-target one.
+            cat > "$RUNNER_TEMP/signing.xcconfig" <<XCCONFIG
+          PROFILE_App = ${PROVISIONING_PROFILE_UUID}
+          PROFILE_SafariWebExtension = ${EXTENSION_PROVISIONING_PROFILE_UUID}
+          PROVISIONING_PROFILE_SPECIFIER = \$(PROFILE_\$(TARGET_NAME))
+          XCCONFIG
+            SIGNING_ARGS+=(-xcconfig "$RUNNER_TEMP/signing.xcconfig")
+          else
+            # No extension profile supplied: keep the historical single-profile behaviour
+            # (the appex will fail to sign — the warning at "Install provisioning profiles"
+            # explains why) rather than changing the failure mode for the app target too.
+            SIGNING_ARGS+=(PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_UUID")
+          fi
           xcodebuild archive \
             -workspace App.xcworkspace \
             -scheme App \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/Companion.xcarchive" \
-            -allowProvisioningUpdates NO \
+            "${SIGNING_ARGS[@]}" \
             MARKETING_VERSION='${{ needs.version.outputs.name }}' \
             CURRENT_PROJECT_VERSION='${{ needs.version.outputs.code }}' \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY='Apple Distribution' \
-            PROVISIONING_PROFILE_SPECIFIER="$PROVISIONING_PROFILE_UUID"
+            CODE_SIGN_IDENTITY='Apple Distribution'
 
       - name: Export .ipa
         if: steps.secrets.outputs.present == 'true'
@@ -278,6 +410,16 @@ jobs:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
+          # Under signingStyle=manual the export step maps EVERY embedded bundle id to a
+          # profile itself; one missing entry fails the export ("provisioning profile not
+          # found for com.companionintelligence.app.SafariWebExtension"). So the appex gets
+          # its own line whenever its profile was installed. When it was not, the dict keeps
+          # only the container app — same as before — and the export fails at the appex,
+          # with the ::warning:: from "Install provisioning profiles" explaining why.
+          EXTENSION_PROFILE_ENTRY=""
+          if [ -n "${EXTENSION_PROVISIONING_PROFILE_UUID:-}" ]; then
+            EXTENSION_PROFILE_ENTRY="  <key>com.companionintelligence.app.SafariWebExtension</key><string>${EXTENSION_PROVISIONING_PROFILE_UUID}</string>"
+          fi
           cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -291,6 +433,7 @@ jobs:
             <dict>
               <key>com.companionintelligence.app</key>
               <string>${PROVISIONING_PROFILE_UUID}</string>
+          ${EXTENSION_PROFILE_ENTRY}
             </dict>
           </dict>
           </plist>
@@ -352,16 +495,42 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Same rule as the iOS gate: check all five secrets this lane consumes, not just the
+      # keystore. A keystore with no ANDROID_KEY_ALIAS used to pass here and then fail deep
+      # inside `gradlew bundleRelease`, and a missing PLAY_SERVICE_ACCOUNT_JSON only surfaced
+      # at the upload step — after the version code had been spent on a build.
       - name: Check for Android signing secrets
         id: secrets
         env:
-          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
         run: |
-          if [ -n "$KEYSTORE" ]; then
+          set -uo pipefail
+          REQUIRED="ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS
+                    ANDROID_KEY_PASSWORD PLAY_SERVICE_ACCOUNT_JSON"
+          MISSING=""
+          FOUND=0
+          TOTAL=0
+          for VAR in $REQUIRED; do
+            TOTAL=$((TOTAL + 1))
+            if [ -n "${!VAR:-}" ]; then
+              FOUND=$((FOUND + 1))
+            else
+              MISSING="${MISSING} ${VAR}"
+            fi
+          done
+          if [ "$FOUND" -eq "$TOTAL" ]; then
             echo "present=true" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$FOUND" -eq 0 ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Android signing secrets not configured — skipping the Play lane."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Android lane is half-configured (${FOUND}/${TOTAL} secrets set). Missing:${MISSING}"
+            exit 1
           fi
 
       - name: Node.js + Corepack (Yarn 4)
@@ -390,6 +559,17 @@ jobs:
       - name: Android SDK
         if: steps.secrets.outputs.present == 'true'
         uses: android-actions/setup-android@v3
+      # Pinned to 35 to match compileSdkVersion in
+      # frontend/apps/android/android/variables.gradle — that file carries the
+      # full reasoning, and the pair must move together or the runner compiles
+      # against an SDK it never installed. Play has required target API 36 since
+      # 31 Aug 2026, so this pin is what the first Play upload will be rejected
+      # for; the bump is blocked on an AGP upgrade (compileSdk 36 needs
+      # >= 8.9.1, ../../frontend/apps/android/android/build.gradle pins 8.7.2).
+      # Tracked as a P0 with the unblock sequence in
+      # frontend/apps/android/DELIVERY.md §1a. THIS lane is the one that ships,
+      # so when the bump lands change this line — and the identical one in
+      # mobile-build.yml — to "platforms;android-36" "build-tools;36.0.0".
       - name: Install SDK components
         if: steps.secrets.outputs.present == 'true'
         run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
@@ -435,6 +615,33 @@ jobs:
           name: companion-android-aab
           path: frontend/apps/android/android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
+
+      # The dry-run counterpart of the iOS `altool --validate-app`. Without it a dry run
+      # never talks to Google at all, so the FIRST contact with Play is a real tag push —
+      # and frontend/apps/android/DELIVERY.md (§1c, the "Play background-location declaration
+      # + demo video" item — cited by name, not line number, because that file grows) says
+      # that push is a hard rejection until
+      # the background-location declaration and the foreground-service `location` type
+      # declaration are both filed and approved, "before this build goes to any Play track,
+      # including internal testing". Better to learn that on a rehearsal.
+      # r0adkll/upload-google-play@v1 has no dry-run input (its inputs are
+      # serviceAccountJson[PlainText], packageName, releaseFiles, releaseName, track,
+      # inAppUpdatePriority, userFraction, whatsNewDirectory, mappingFile, debugSymbols,
+      # status, changesNotSentForReview, existingEditPatch), so `status: draft` is the
+      # non-publishing option: it exercises the credentials, the package name, the edit
+      # transaction and the declaration checks, and commits the release as a draft that
+      # rolls out to nobody. Tradeoff, and the reason BUILD_NUMBER_OFFSET exists: Play
+      # still consumes the version code of a bundle it accepted into a draft, so a dry run
+      # burns its number too — deleting the draft does not give the number back.
+      - name: Validate against Play (draft, no rollout)
+        if: steps.secrets.outputs.present == 'true' && needs.version.outputs.dry_run == 'true'
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.companionintelligence.app
+          releaseFiles: frontend/apps/android/android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+          status: draft
 
       - name: Upload to Play (internal track)
         if: steps.secrets.outputs.present == 'true' && needs.version.outputs.dry_run != 'true'

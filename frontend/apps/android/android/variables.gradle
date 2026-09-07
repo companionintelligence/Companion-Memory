@@ -1,5 +1,27 @@
 ext {
     minSdkVersion = 23
+    // ⚠️ BLOCKS THE FIRST PLAY UPLOAD — and deliberately NOT bumped here. Do not raise
+    // these two on their own.
+    //
+    // Google Play has required API 36 (Android 16) of every new app *and* every update
+    // since 31 Aug 2026. That cutover is behind us. (An extension bought until 1 Nov 2026,
+    // but it had to be requested from a Play Console account, and per ../DELIVERY.md §1e
+    // step 2 we do not have one yet — so that route was never open to this app.)
+    // So at 35 the Play Console REFUSES the .aab at upload — after the build has already
+    // consumed a version code that mobile-release.yml stamps from `github.run_number`
+    // and cannot hand back.
+    //
+    // The pin stays at 35 regardless, because compileSdk 36 requires AGP >= 8.9.1
+    // (Google's "minimum versions of tools for Android API level" table) and
+    // ../build.gradle pins AGP 8.7.2 — the Capacitor 7 template's version. Bumping only
+    // this file fails at configuration time instead of shipping. Unblocking it is an AGP
+    // upgrade, likely riding along with a Capacitor major; Gradle itself is already
+    // sufficient (gradle-wrapper.properties is 8.11.1, exactly what AGP 8.9 asks for).
+    // The matching `platforms;android-36` / `build-tools;36.0.0` must land in BOTH
+    // .github/workflows/mobile-build.yml and .github/workflows/mobile-release.yml in the
+    // same change, or the runner compiles against an SDK it never installed.
+    //
+    // Tracked as a 🔴 P0 with the full unblock sequence in ../DELIVERY.md §1a.
     compileSdkVersion = 35
     targetSdkVersion = 35
     androidxActivityVersion = '1.9.2'

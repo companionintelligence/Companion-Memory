@@ -10,9 +10,15 @@ name: Desktop Build
 # (Linux). Signed, notarized/authenticode-signed release artifacts are
 # desktop-release.yml.
 
-# GATED TO MANUAL, matching every other workflow in this repo except
-# mobile-release.yml and codeql.yml. CI silence here means "nobody
-# dispatched it", NOT "everything passed". Run it deliberately:
+# GATED TO MANUAL, like ten of this repo's fourteen workflows (the count
+# docs/CI.md keeps — its table is the canonical one). Only four run on their
+# own (verified 2026-09-07): pr-gate.yml on every pull request,
+# benchmark-unit.yml path-filtered to scripts/benchmark/**, and the two
+# tag-triggered release lanes mobile-release.yml (ios-v*/android-v*/
+# mobile-release-v*) and desktop-release.yml (desktop-v*). codeql.yml is NOT
+# among them any more — an earlier version of this comment claimed it was.
+# CI silence here therefore means "nobody dispatched it", NOT "everything
+# passed". Run it deliberately:
 #   gh workflow run desktop-build.yml --ref <branch>
 on:
   workflow_dispatch:

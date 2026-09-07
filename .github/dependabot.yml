@@ -1,21 +1,41 @@
 # Dependabot configuration for CI-Server
 # Provides recurring dependency-vulnerability-scan evidence for CASA Tier 2 / SOC 2.
 #
-# Layout notes (verified against repo):
-#   - JS/TS is a single Yarn Berry (yarn@4.9.1) workspaces monorepo with ONE
-#     root lockfile (/yarn.lock). All workspaces (backend/apps/*, frontend/apps/*,
-#     frontend/packages/*) resolve through it, so the npm ecosystem targets "/" only.
-#     Dependabot's "npm" ecosystem understands Yarn (including Berry) lockfiles.
-#   - Python is a uv workspace with ONE root lockfile (/uv.lock). All members
-#     (backend/apps/*, backend/packages/*) resolve through it, so the uv
-#     ecosystem targets "/" only, mirroring the npm entry above.
+# Layout notes (re-verified against the repo, 2026-09-06 — an earlier revision of
+# this header claimed "ONE root lockfile" for JS, which was false and left three
+# shipping apps unscanned):
+#   - JS/TS is a Yarn Berry (yarn@4.9.1) workspaces monorepo whose ROOT lockfile
+#     (/yarn.lock) covers backend/apps/*, frontend/apps/web and frontend/packages/*.
+#     It is NOT the only one. frontend/apps/{ios,android,desktop} are deliberately
+#     EXCLUDED from the workspaces (root package.json carries "!frontend/apps/ios",
+#     "!frontend/apps/android", "!frontend/apps/desktop") because Capacitor,
+#     CocoaPods, Gradle and Tauri walk a real node_modules tree that PnP does not
+#     produce — so each of those three carries its own yarn.lock and needs its own
+#     npm entry below. Dependabot's "npm" ecosystem understands Yarn (incl. Berry).
+#   - Python IS a single uv workspace with one root lockfile (/uv.lock); all
+#     members (backend/apps/{hbpe,summary}, backend/packages/*) resolve through it,
+#     so the uv ecosystem targets "/" only.
+#   - Native/container manifests that the two lockfiles above do not reach:
+#     frontend/apps/desktop/src-tauri/Cargo.lock (cargo), the Gradle project under
+#     frontend/apps/android/android (gradle), and ten Dockerfiles across eight
+#     directories (docker). Entries for all of these are below.
 #   - GitHub Actions workflows -> "github-actions" ecosystem.
 #
-# This PR is config-only: version updates are opened as PRs and remediated
-# separately with care (do not auto-merge dependency bumps here).
+# STILL NOT MONITORED, and why:
+#   - frontend/apps/ios/ios/App/Podfile.lock — Dependabot has no CocoaPods
+#     ecosystem. Pod versions have to be reviewed by hand (`pod outdated`).
+#   - frontend/apps/android/android/gradle/wrapper/ — Dependabot's gradle
+#     ecosystem updates declared dependencies, not the Gradle wrapper itself.
+#     Bump that with `./gradlew wrapper --gradle-version <x>`.
+#   - frontend/packages/capacitor-*/android/build.gradle — plugin scaffolds that
+#     are consumed through the app project, not built or shipped on their own.
+#
+# This config opens version updates as PRs; they are remediated separately with
+# care (do not auto-merge dependency bumps here). Expect the PR volume to rise:
+# the entries below take this repo from three update streams to sixteen.
 version: 2
 updates:
-  # ── JavaScript / TypeScript (Yarn Berry workspaces, single root lockfile) ──
+  # ── JavaScript / TypeScript: the root Yarn Berry workspace ──
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
@@ -24,6 +44,60 @@ updates:
     labels:
       - "dependencies"
       - "javascript"
+
+  # ── JavaScript / TypeScript: the three standalone apps (own yarn.lock each) ──
+  # Not reachable from the root lockfile — see the workspace-exclusion note above.
+  - package-ecosystem: "npm"
+    directory: "/frontend/apps/ios"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "ios"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend/apps/android"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "android"
+
+  - package-ecosystem: "npm"
+    directory: "/frontend/apps/desktop"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "desktop"
+
+  # ── Rust: the Tauri crate behind the desktop app (src-tauri/Cargo.lock) ──
+  - package-ecosystem: "cargo"
+    directory: "/frontend/apps/desktop/src-tauri"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "rust"
+      - "desktop"
+
+  # ── Gradle: the Capacitor Android app project (build.gradle + app/build.gradle) ──
+  - package-ecosystem: "gradle"
+    directory: "/frontend/apps/android/android"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "gradle"
+      - "android"
 
   # ── Python (uv workspace, single root lockfile) ──
   - package-ecosystem: "uv"
@@ -34,6 +108,84 @@ updates:
     labels:
       - "dependencies"
       - "python"
+
+  # ── Docker base images ──
+  # One entry per directory that contains a Dockerfile; Dependabot's docker
+  # ecosystem is directory-scoped, so a missing directory here means those FROM
+  # pins (nginx:1.28.0-bookworm, postgres:18.4-bookworm, node:22.15.1-slim,
+  # python:3.11.12-slim-bookworm, alpine:3.21, …) are never checked at all.
+  # backend/apps/hbpe holds three: Dockerfile, Dockerfile.cuda, Dockerfile.rocm.
+  - package-ecosystem: "docker"
+    directory: "/backend/apps/api"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/backend/apps/hbpe"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/backend/apps/summary"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/infrastructure/database"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/infrastructure/gateway"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/infrastructure/object-store"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/infrastructure/setup-database"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/infrastructure/setup-secrets"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
 
   # ── GitHub Actions ──
   - package-ecosystem: "github-actions"

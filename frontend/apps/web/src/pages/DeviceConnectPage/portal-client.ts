@@ -15,6 +15,25 @@ import { apiFetch } from '@ci/common';
 const PRODUCTION_PORTAL_URL = 'https://hub.ci.computer';
 const DEVELOPMENT_PORTAL_URL = 'https://hub.companionintelligence.com';
 
+/**
+ * Portal host a fresh install talks to, resolved most-specific-first:
+ *
+ *   1. `VITE_CI_CLOUD_URL` (or `CI_CLOUD_URL`) — an exact host baked at build
+ *      time. `frontend/apps/web/.env.development` sets this for local Vite.
+ *   2. `VITE_CI_HUB_ENVIRONMENT=development` (or `dev`) — opt in to the CI
+ *      cloud *dev* Portal, hub.companionintelligence.com.
+ *   3. Everything else, an unmarked build included — PRODUCTION.
+ *
+ * The unmarked default MUST stay production. A store-bound `vite build` loads
+ * neither `.env.development` (Vite only reads it for `mode === 'development'`)
+ * nor any `VITE_CI_HUB_ENVIRONMENT`, so while the fallback was the dev Portal
+ * every TestFlight / Play build shipped pointed at
+ * hub.companionintelligence.com: a production account signs in against the dev
+ * Portal (or fails to), `listMemoryServers` below returns nothing, and the user
+ * sees an empty device list on first launch unless they retype the Portal URL
+ * by hand. Development is the case that has to announce itself — never the
+ * other way round.
+ */
 function portalUrlFromEnv(): string {
   try {
     const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
@@ -24,15 +43,18 @@ function portalUrlFromEnv(): string {
       return baked.replace(/\/+$/, '');
     }
 
-    // Native simulator/device talks to CI cloud *dev* unless the web build was
-    // explicitly marked production. Prod is hub.ci.computer.
-    if (env?.VITE_CI_HUB_ENVIRONMENT === 'production') {
-      return PRODUCTION_PORTAL_URL;
+    const hubEnvironment = env?.VITE_CI_HUB_ENVIRONMENT?.trim().toLowerCase();
+
+    if (hubEnvironment === 'development' || hubEnvironment === 'dev') {
+      return DEVELOPMENT_PORTAL_URL;
     }
 
-    return DEVELOPMENT_PORTAL_URL;
+    return PRODUCTION_PORTAL_URL;
   } catch {
-    return DEVELOPMENT_PORTAL_URL;
+    // No `import.meta.env` at all (a non-Vite bundler, or a test/SSR context).
+    // An unmarked build is a production build — same rule as above, so this
+    // branch must never be the one that quietly reintroduces the dev Portal.
+    return PRODUCTION_PORTAL_URL;
   }
 }
 

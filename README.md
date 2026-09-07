@@ -49,6 +49,7 @@ This is a Yarn workspace monorepo, with a uv-managed Python workspace alongside 
 │   ├── web/                    # Main web application (React + Vite)
 │   ├── ios/                    # Capacitor iOS shell around the web app (not a Yarn workspace)
 │   ├── android/                # Capacitor Android shell around the web app (not a Yarn workspace)
+│   ├── desktop/                # Tauri desktop app (not a Yarn workspace) — local orchestrator: runs this repo's own Compose stack, unlike ios/android which point at a remote appliance
 │   └── mobile/                 # Pointer README left by the iOS/Android split
 └── frontend/packages/
     ├── capacitor-local-hub/    # Capacitor plugin: on-device hub bridge (iOS + Android)
@@ -557,15 +558,28 @@ docker compose exec hbpe-service python -c \
 `.github/workflows/publish.yml` builds every `companion/*` image natively per architecture, merges
 the legs into a multi-arch manifest list, and registers the result with CI-Portal.
 
-**Image publish is not triggered by pushing a tag.** The *check* workflows —
-`ci.yml`, `e2e.yml`, `migration-integrity-check.yml`, `style-canon-lint.yml`,
-`consent-path-gate.yml` — are `workflow_dispatch`-only, so an absent or green
-check means nobody dispatched it, not that anything passed. Two workflows do run
-on their own (verified 2026-08-23): `mobile-release.yml` on `ios-v*` /
-`android-v*` / `mobile-release-v*` tags, which uploads to TestFlight / Play; and
-`codeql.yml` on push/PR to `main` plus a weekly cron, which is **red on every run
-by baseline** — see [`docs/CI.md`](docs/CI.md). Cut a container release by
-tagging and then dispatching **on that tag**, since `VERSION` is parsed from the ref:
+**Image publish is not triggered by pushing a tag.** Ten of the fourteen
+workflows — including the *check* workflows `ci.yml`, `e2e.yml`,
+`desktop-e2e.yml`, `migration-integrity-check.yml`, `style-canon-lint.yml`,
+`consent-path-gate.yml` and `codeql.yml` — are `workflow_dispatch`-only, so an absent or green check
+means nobody dispatched it, not that anything passed. (`codeql.yml` used to run
+on push/PR plus a weekly cron and was **red on every run by baseline**; it was
+gated to dispatch for exactly that reason, so it no longer reports at all.) Four
+workflows do run on their own (triggers re-verified against each `on:` block,
+2026-09-07):
+
+- `pr-gate.yml` on every `pull_request` against `main` — lint, typecheck, and the dependency-free `mobile-guards` job (Capacitor native sync + iOS plist duplicate keys). No Docker, no Postgres, no Xcode/Gradle.
+- `benchmark-unit.yml` on PR and push to `main`, but only for `scripts/benchmark/**`.
+- `mobile-release.yml` on `ios-v*` / `android-v*` / `mobile-release-v*` tags, which uploads to TestFlight / Play internal.
+- `desktop-release.yml` on `desktop-v*` tags, which builds the signed desktop lanes (`frontend/apps/desktop`); lanes whose signing secrets are unset skip rather than fail.
+
+None of them block a merge: `main` carries no `required_status_checks`. See
+[`docs/CI.md`](docs/CI.md). Cut a container release by
+tagging and then dispatching **on that tag**, since `VERSION` is parsed from the ref
+(on a branch ref it resolves to the literal `refs/heads/main`, which is not a legal
+image tag — publish.yml's `Refuse to publish a non-release ref` guard rejects a
+`--ref main` dispatch in seconds, before either 150-minute build leg starts, but
+the run still ends red and publishes nothing):
 
 ```bash
 git tag v2026.7.27 && git push origin v2026.7.27

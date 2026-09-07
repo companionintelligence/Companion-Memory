@@ -2,8 +2,10 @@
 //! (backend/apps/api/config/default.json: `services.ollama.host` defaults to
 //! `http://host.docker.internal:11434`, i.e. whatever's on the HOST's port
 //! 11434) for users who don't already run Ollama themselves. This module
-//! never touches that config or stack_manager's `.env` — it only makes sure
-//! port 11434 is answering, in one of three ways, cheapest first:
+//! never writes that config or stack_manager's `.env` itself — it only makes
+//! sure port 11434 is answering, in one of three ways, cheapest first (the
+//! one value it exports into `.env` is DEFAULT_CHAT_MODEL, which
+//! stack_manager::write_env_file reads; see that constant's comment):
 //!
 //!   1. Already running (the user's own Ollama) → nothing to do.
 //!   2. `ollama` is installed but not running → launch it with its own
@@ -33,11 +35,41 @@ use sha2::{Digest, Sha256};
 /// OLLAMA_HOST override.
 pub const OLLAMA_PORT: u16 = 11434;
 
-/// Small, ungated tags confirmed to exist in Ollama's library as of this
-/// writing (ollama.com/library/gemma3, ollama.com/library/nomic-embed-text).
-/// Unlike LiteRT-LM's Android binding (see the desktop-local-model-runner
-/// research), Ollama's own Gemma tags pull without authentication.
-pub const DEFAULT_CHAT_MODEL: &str = "gemma3:1b";
+/// Ungated tags Ollama pulls without authentication — unlike LiteRT-LM's
+/// Android binding (see the desktop-local-model-runner research), Ollama's own
+/// Gemma tags need no account.
+///
+/// **`backend/apps/api/src/configuration.ts`'s `DEFAULT_CHAT_MODEL` is the
+/// source of truth for the chat tag; this must equal it.** That file explains
+/// the size/capability reasoning (the efficient e4b variant, not `gemma4:31b`,
+/// because an appliance holds an embedding model, HBPE and the summary sidecar
+/// in the same GPU) and `Makefile`'s REQUIRED_OLLAMA_MODELS carries the same
+/// pair for the `make dev` path.
+///
+/// This constant was left at `gemma3:1b` after the API moved to `gemma4:e4b`,
+/// so on the advertised zero-install path the sidecar pulled one model and the
+/// API's config named another it had never fetched. Concretely: every
+/// background inference path hands `PROMPT_MODEL` (`= llm.chatModel`) to
+/// OllamaService::validateModel, which throws `Invalid model specified: <id>`
+/// per job, forever (see that service's preflightChatModel doc comment — it
+/// exists because of exactly this class of mismatch, and does log one boot
+/// ERROR nobody reads on a desktop appliance), while interactive chat kept
+/// working *on the retired 1b tag*, since resolveServedChatModel falls back to
+/// whatever is actually served. Background features dead, chat quietly running
+/// the model configuration.ts retired for being unable to hold a JSON schema.
+/// Belt and braces against a repeat,
+/// stack_manager::write_env_file now also writes THIS constant into the
+/// generated `.env` as `LLM_DEFAULT_CHAT_MODEL` (the env var
+/// backend/apps/api/config/custom-environment-variables.json maps to
+/// `llm.chatModel`), so the API asks for whatever the sidecar actually
+/// pulled even if the two defaults diverge again.
+pub const DEFAULT_CHAT_MODEL: &str = "gemma4:e4b";
+
+/// Unchanged since this module was written, and hand-checked against
+/// ollama.com/library/nomic-embed-text then — the embedding half of the same
+/// pair `Makefile`'s REQUIRED_OLLAMA_MODELS lists, and the one model the
+/// sidecar pulls on *every* branch (the Apple-on-device bridge replaces chat
+/// only; FoundationModels has no embeddings API — see mod.rs).
 pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
 
 const OLLAMA_VERSION: &str = "v0.32.15";
@@ -94,6 +126,12 @@ pub struct RunningInstance {
     pub child: Option<Child>,
 }
 
+/// Liveness probe, deliberately over loopback on every platform even though
+/// spawn_serve binds wider on Linux (see its bind_host comment): 127.0.0.1
+/// always reaches a server bound to 0.0.0.0, and this question is "is anything
+/// answering on this host's port 11434", which is exactly what the three-tier
+/// resolution in the module doc comment needs. Container-side reachability is
+/// a separate property, fixed at the bind, not here.
 pub fn is_running(port: u16) -> bool {
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(800))
@@ -260,9 +298,41 @@ fn spawn_serve(binary: &Path, port: u16, models_dir: Option<&Path>, log_path: &P
         .map_err(|e| format!("Failed to open {}: {e}", log_path.display()))?;
     let log_file_err = log_file.try_clone().map_err(|e| format!("Failed to clone log handle: {e}"))?;
 
+    // Where the sidecar binds. Loopback is the narrowest thing that works on
+    // macOS/Windows, because Docker Desktop's VM tunnels
+    // `host.docker.internal` back to the host's loopback for us.
+    #[cfg(not(target_os = "linux"))]
+    let bind_host = "127.0.0.1";
+    // Linux is different, and it is the platform this lane's .deb/.rpm
+    // targets. The containers reach the host through
+    // `host.docker.internal:host-gateway` (docker-compose.yml,
+    // docker-compose.production.yml), and on NATIVE Docker Engine that alias
+    // resolves to the docker BRIDGE GATEWAY address, not the host's loopback —
+    // so a sidecar bound to 127.0.0.1 refuses every chat/embedding call from
+    // `api`, hbpe-service and summary-service while `docker compose ps` and
+    // is_running() above both still say healthy. (Docker Desktop for Linux
+    // tunnels like macOS and is unaffected; we can't tell the two apart from
+    // here, so the wider bind covers both.)
+    //
+    // SECURITY: 0.0.0.0 publishes an unauthenticated model server on every
+    // interface, LAN included. Ollama has no auth of its own and no bind
+    // allowlist — OLLAMA_HOST takes a single address and OLLAMA_ORIGINS is
+    // CORS, not access control — and the gateway address we'd otherwise bind
+    // differs per compose network (172.17.0.1 for docker0, a different /16 for
+    // each user-defined network), so there is no narrower address that is
+    // reliably right. A host firewall is what keeps port 11434 off the local
+    // network; narrowing this further needs a real reverse proxy in front,
+    // not another env var. This is the same trade the appliance's own
+    // recommended systemd override already makes for a host-run Ollama
+    // (`Environment="OLLAMA_HOST=0.0.0.0"`, docs/operations/
+    // gpu-model-residency.md) — the desktop sidecar is not loosening a
+    // stricter rule, it is catching up to the documented one.
+    #[cfg(target_os = "linux")]
+    let bind_host = "0.0.0.0";
+
     let mut cmd = Command::new(binary);
     cmd.arg("serve")
-        .env("OLLAMA_HOST", format!("127.0.0.1:{port}"))
+        .env("OLLAMA_HOST", format!("{bind_host}:{port}"))
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(log_file_err));

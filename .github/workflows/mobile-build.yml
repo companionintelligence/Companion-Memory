@@ -3,8 +3,8 @@ name: Mobile Build
 # Builds the native iOS + Android apps — the Capacitor thin client that wraps the
 # @ci/fe-web build (frontend/apps/ios + frontend/apps/android). Modelled on CI-Hub's desktop-build.yml.
 #
-# Runs on manual dispatch and on `mobile-v*` tags. By default it produces UNSIGNED
-# artifacts that need no secrets:
+# Runs on manual dispatch ONLY — the `mobile-v*` tag trigger it once had is gone; see
+# "GATED TO MANUAL" below. By default it produces UNSIGNED artifacts that need no secrets:
 #   • Android — a debug APK (sideload-installable; not for store distribution)
 #   • iOS     — a Simulator .app (runs in the iOS Simulator; not device-installable)
 # Signed, device-/store-ready artifacts (release APK/AAB, signed .ipa) require the
@@ -65,6 +65,12 @@ jobs:
           java-version: '21'
       - name: Android SDK
         uses: android-actions/setup-android@v3
+      # Pinned to 35 to match compileSdkVersion in frontend/apps/android/android/variables.gradle.
+      # These two move TOGETHER: Play has required target API 36 since 31 Aug 2026, but
+      # compileSdk 36 needs AGP >= 8.9.1 and the project pins 8.7.2, so the bump is blocked
+      # on an AGP upgrade (variables.gradle carries the reasoning; DELIVERY.md §1a tracks it).
+      # When that lands, this line and the identical one in mobile-release.yml both need
+      # "platforms;android-36" "build-tools;36.0.0".
       - name: Install SDK components
         run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 

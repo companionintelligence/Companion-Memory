@@ -9,15 +9,93 @@ name: Publish
 # RELEASE IMPACT: this previously published on any pushed tag. With the tag
 # trigger removed, pushing a version tag NO LONGER publishes — dispatch this
 # workflow on the TAG ref instead (VERSION is parsed from the ref, so
-# dispatching on a branch would publish garbage image tags).
+# dispatching on a branch would publish garbage image tags — the "Refuse to
+# publish a non-release ref" guard on every job below now rejects that in
+# seconds rather than after two 150-minute build legs).
 on:
   workflow_dispatch:
+    inputs:
+      skip_test_gate:
+        description: >-
+          Publish even though no successful ci.yml run exists for this commit.
+          Emergency escape hatch only — it prints a ::warning:: naming the actor
+          so the bypass is visible in the run log and the release record.
+        type: boolean
+        default: false
+        required: false
 
 concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
 
+# ONE definition of "release tag" for the whole file. Both the ref guards and
+# the :latest decision below read this, so a release-tag shape can never be
+# accepted by one and rejected by the other (they were separate literals; the
+# guard was added by reusing the :latest regex verbatim).
+# Matches CalVer tags with or without a leading v: v2026.7.27, 2026.7.27.1.
+env:
+  RELEASE_TAG_RE: '^v?[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]+)?$'
+
 jobs:
+  # ── Release gate: proof that the test suite passed for THIS commit ──
+  #
+  # Nothing else in this workflow runs a test. Re-running the suite here would
+  # re-buy the hosted compute that docs/CI.md gated these workflows to kill
+  # (~$563/month), so this job buys nothing but the *evidence*: it asks the
+  # Actions API whether a successful `ci.yml` run already exists for
+  # GITHUB_SHA, and refuses to publish when one does not. ci.yml is itself
+  # dispatch-only, so the release flow is: dispatch ci.yml on the ref, wait for
+  # green, then dispatch this. Cost: one ubuntu-latest minute.
+  verify-ci-passed:
+    name: Require a green ci.yml run for this commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # `gh run list` reads the Actions API; without actions:read the default
+      # GITHUB_TOKEN gets a 403 here and the gate fails closed on every run.
+      actions: read
+
+    steps:
+      # First step on purpose — see the identical guard on `build` below.
+      - name: Refuse to publish a non-release ref
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "${GITHUB_REF}" != refs/tags/* || ! "${tag}" =~ ${RELEASE_TAG_RE} ]]; then
+            echo "::error::${GITHUB_REF} is not a release tag. Dispatch this workflow on a tag matching ${RELEASE_TAG_RE} (e.g. v2026.7.27) — VERSION is parsed from the ref."
+            exit 1
+          fi
+          echo "Release tag ${tag} accepted."
+
+      - name: Check for a successful ci.yml run at ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout in this job, so gh cannot infer the repo from a git
+          # remote — name it explicitly.
+          GH_REPO: ${{ github.repository }}
+          SKIP_TEST_GATE: ${{ inputs.skip_test_gate }}
+        run: |
+          if [[ "${SKIP_TEST_GATE}" == "true" ]]; then
+            echo "::warning::Test gate BYPASSED by ${GITHUB_ACTOR} (skip_test_gate=true). Publishing ${GITHUB_REF} without proof that ci.yml passed for ${GITHUB_SHA}."
+            exit 0
+          fi
+
+          # --commit filters on the run's head SHA, so a ci.yml run dispatched
+          # on the branch the tag points at counts — same commit, same tree.
+          count=$(gh run list \
+            --workflow ci.yml \
+            --commit "${GITHUB_SHA}" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq 'length')
+
+          if [[ "${count}" == "0" ]]; then
+            echo "::error::No successful ci.yml run for ${GITHUB_SHA}. Run 'gh workflow run ci.yml --ref ${GITHUB_REF#refs/*/}', wait for it to pass, then re-dispatch this workflow. In an emergency, re-dispatch with skip_test_gate=true."
+            exit 1
+          fi
+          echo "Found a successful ci.yml run for ${GITHUB_SHA} — proceeding."
+
   # ── Per-architecture native builds ──────────────────────────────────
   #
   # Each leg builds every companion/* image natively (no QEMU — the HBPE
@@ -29,6 +107,9 @@ jobs:
     name: Build & push (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
+    # Blocking: no images are built until a green ci.yml run for this exact
+    # commit has been found (or the documented skip_test_gate bypass used).
+    needs: verify-ci-passed
     strategy:
       fail-fast: true
       matrix:
@@ -49,6 +130,22 @@ jobs:
       NODE_AUTH_TOKEN: ${{ secrets.GHPR_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
     steps:
+      # FIRST step, before the checkout, and cheap on purpose. "Resolve VERSION
+      # from tag" below strips `refs/tags/` off GITHUB_REF and nothing else, so
+      # a dispatch on a branch — which is exactly what docs/CI.md's examples
+      # show (`--ref main`) — yields VERSION=refs/heads/main. That is not
+      # rejected until publish.sh reaches `docker image tag`, i.e. AFTER up to
+      # 150 minutes of native image builds on each of two runners. Fail in
+      # seconds instead. Same regex as the :latest decision in the merge job.
+      - name: Refuse to publish a non-release ref
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "${GITHUB_REF}" != refs/tags/* || ! "${tag}" =~ ${RELEASE_TAG_RE} ]]; then
+            echo "::error::${GITHUB_REF} is not a release tag. Dispatch this workflow on a tag matching ${RELEASE_TAG_RE} (e.g. v2026.7.27) — VERSION is parsed from the ref."
+            exit 1
+          fi
+          echo "Release tag ${tag} accepted."
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -147,6 +244,18 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
+      # Same guard as `build` (and the gate job): kept here so this job can
+      # never register a `refs/heads/…` "version" with CI-Portal if it is ever
+      # re-run on its own, or reached by a future edit to `needs`.
+      - name: Refuse to publish a non-release ref
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "${GITHUB_REF}" != refs/tags/* || ! "${tag}" =~ ${RELEASE_TAG_RE} ]]; then
+            echo "::error::${GITHUB_REF} is not a release tag. Dispatch this workflow on a tag matching ${RELEASE_TAG_RE} (e.g. v2026.7.27) — VERSION is parsed from the ref."
+            exit 1
+          fi
+          echo "Release tag ${tag} accepted."
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -171,15 +280,20 @@ jobs:
           fi
 
       # :latest tracks the newest release only. Two guards, both earned by this
-      # repo's tag history: the trigger is `tags: ['*']`, and tags like
-      # `0.0.0-test1` and `mobile-v0.1.0-appstoreprep-…` have been pushed here —
-      # neither should move :latest. The newest-check additionally stops a
-      # re-cut or back-tagged older release from regressing it.
+      # repo's tag history: this workflow is dispatch-only and a maintainer can
+      # dispatch it on ANY ref, and tags like `0.0.0-test1` and
+      # `mobile-v0.1.0-appstoreprep-…` have been pushed here — neither should
+      # move :latest. (The shape check is now also enforced up front by the
+      # "Refuse to publish a non-release ref" guard, so a non-release tag never
+      # reaches this step; it stays here because the newest-check below reads
+      # the same regex.) The newest-check additionally stops a re-cut or
+      # back-tagged older release from regressing :latest.
       - name: Decide whether this tag moves :latest
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           version="${tag#v}"
-          release_re='^v?[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]+)?$'
+          # Workflow-level env — the single definition the ref guards use too.
+          release_re="${RELEASE_TAG_RE}"
 
           # Re-read tags as late as possible. Releases pushed close together
           # build in parallel, so the checkout's tag list can already be stale

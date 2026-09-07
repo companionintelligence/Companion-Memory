@@ -676,6 +676,56 @@ health: ## Check the repository for prerequisites
 		printf "$(GREEN)✓$(RESET) uv found at $$UV ($$(uv --version | cut -d' ' -f2))\n\n"; \
 	fi
 
+	@# The pre-commit guards must actually FIRE in a linked worktree. `yarn
+	@# prepare` (husky, see package.json) points core.hooksPath at `.husky/_` —
+	@# a RELATIVE path, which git resolves against the root of the working tree
+	@# the hook runs in. That directory only exists in the checkout husky was
+	@# installed in, and it is gitignored, so every `git worktree add` produces
+	@# a tree where core.hooksPath names a directory that is simply not there.
+	@# Git's response to that is to run NO hooks at all, with no message —
+	@# which is exactly where parallel agent work happens. Everything
+	@# .husky/pre-commit drives goes with it: the Info.plist duplicate-key
+	@# check, the Capacitor native-sync check, and bin/check-migration-versions.js,
+	@# the guard that stops two branches committing the same dbmate timestamp
+	@# prefix and breaking `yarn migrate` for everyone.
+	@#
+	@# Repair by pinning an ABSOLUTE hooksPath in this worktree's own config.
+	@# `git config --worktree` (not --local) is what makes it stick: the value
+	@# lands in this worktree's .git/config.worktree and outranks the shared
+	@# one, so the next `yarn prepare` in the main checkout cannot reset it to
+	@# the relative form. husky's `_/h` derives the script it runs from its own
+	@# location (dirname of dirname of $$0), so pointing at the main checkout's
+	@# .husky/_ runs the main checkout's .husky/pre-commit — and git runs hooks
+	@# with the cwd set to THIS worktree's root, so lint-staged still sees this
+	@# worktree's staged files.
+	@#
+	@# Warn, never fail. `dev` calls `health` from its recipe and `production`
+	@# and `staging` take it as a prerequisite (`publish` does not — it depends
+	@# on `init` alone), so a non-zero exit here refuses to start a stack, and a
+	@# missing hook is not a reason to do that.
+	@hooks=$$(git config --get core.hooksPath 2>/dev/null); \
+	if [ -z "$$hooks" ]; then \
+		printf "$(GREEN)✓$(RESET) git hooks: repository default (no core.hooksPath override)\n\n"; \
+	else \
+		case "$$hooks" in \
+			/*) resolved="$$hooks" ;; \
+			*) resolved="$$(git rev-parse --show-toplevel 2>/dev/null)/$$hooks" ;; \
+		esac; \
+		main_hooks="$$(cd "$$(dirname "$$(git rev-parse --git-common-dir 2>/dev/null)")" 2>/dev/null && pwd)/.husky/_"; \
+		if [ -f "$$resolved/pre-commit" ]; then \
+			printf "$(GREEN)✓$(RESET) git hooks resolve ($$resolved)\n\n"; \
+		elif [ -f "$$main_hooks/pre-commit" ] && git config --worktree core.hooksPath "$$main_hooks" 2>/dev/null; then \
+			printf "$(YELLOW)•$(RESET) core.hooksPath was '$$hooks', which does not exist in this worktree — commits here were running NO pre-commit checks.\n"; \
+			printf "  Repaired: this worktree now uses $$main_hooks\n\n"; \
+		else \
+			printf "$(YELLOW)•$(RESET) core.hooksPath is '$$hooks', which does not exist here, so commits in this worktree run NO pre-commit checks\n"; \
+			printf "  (no migration-version guard, no plist or Capacitor sync check). Repair it with either:\n"; \
+			printf "    $(YELLOW)yarn prepare$(RESET)                                                  # re-creates .husky/_ in this worktree\n"; \
+			printf "    $(YELLOW)git config extensions.worktreeConfig true$(RESET) && \\\\\n"; \
+			printf "      $(YELLOW)git config --worktree core.hooksPath \"$$main_hooks\"$(RESET)\n\n"; \
+		fi; \
+	fi
+
 	@# Report on per-stack data volumes (convention: <project>-local-*). Purely
 	@# informational — flags volumes whose key has no live worktree so orphans
 	@# from deleted worktrees are visible; never removes anything.
@@ -721,7 +771,21 @@ init: ## Initialize repository after checkout
 	@yarn prepare
 
 	@printf "\n"
-	@uv sync --all-packages
+	@# --locked, never a bare sync. A bare `uv sync` treats a stale uv.lock as
+	@# something to REPAIR: it re-resolves against the live index and writes the
+	@# new resolution back. `publish` depends on this target and only reaches
+	@# `build`'s `uv lock --check` afterwards, so on a release runner the lock
+	@# would be silently refreshed first and the freshness gate would then pass
+	@# against a file this same run just rewrote — unreviewed dependency
+	@# versions baked into the summary and hbpe images, and two publishes of one
+	@# commit on different days quietly differing. A build must not mutate its
+	@# own inputs; --locked makes a stale lock an error instead.
+	@#
+	@# For a developer whose lock is legitimately stale this is now a hard stop
+	@# rather than an invisible fix. uv's own message names the remedy — run
+	@# `uv lock`, review the resolution diff, commit it, and re-run. Reviewing
+	@# that diff is the whole point.
+	@uv sync --all-packages --locked
 
 	@if [ ! -f .env ]; then \
 		printf "Copying dotenv template file... "; \
@@ -737,7 +801,11 @@ install: ## Install project dependencies
 
 	@printf "\n"
 
-	@uv sync --all-packages
+	@# --locked for the same reason as `init` above: installing must never
+	@# re-resolve and rewrite uv.lock behind the operator's back. If this stops
+	@# with "the lockfile is not up-to-date", run `uv lock`, review the diff and
+	@# commit it — that is the intended workflow, not a bug in this target.
+	@uv sync --all-packages --locked
 
 	@printf "\n"
 
@@ -818,11 +886,128 @@ smoke-api: ## Verify the API image can run `migrate` with production-only depend
 
 	@printf "\nAPI image can migrate. ✅\n\n"
 
+# `smoke-api` above proves one process can resolve its imports. It never BOOTS
+# the API, so until this target existed nothing in the repo started the
+# assembled stack from the images `build` had just produced: Nest's dependency
+# graph, entrypoint.sh's secrets loading, the migration run against a fresh
+# database and infrastructure/gateway/nginx.conf were all first exercised by a
+# user at first launch, on the appliance, after the images shipped.
+#
+# Deliberately a THROWAWAY compose project, not $(PROJECT_NAME): this target
+# ends in `down -v`, and sharing the project name with a real stack would
+# delete that stack's ${COMPOSE_PROJECT_NAME}-production-db-data volume.
+SMOKE_PROJECT_NAME := $(PROJECT_NAME)-smoke
+
+# Seconds to wait for the gateway to answer /api/health once the containers are
+# up. Bump it on a cold machine where the first migration run is slow.
+SMOKE_TIMEOUT ?= 120
+
+# The compose invocation the smoke uses everywhere, including in its teardown
+# trap. CI_IMPORT_WORK_DIR / CI_REPO_DIR are redirected at $SMOKE_TMP (set by
+# the recipe) because their defaults are `./import-work` and `~/Downloads`:
+# docker CREATES a missing bind source, so the defaults would drop an untracked
+# import-work/ into the repo root on every publish.
+SMOKE_COMPOSE = COMPOSE_PROJECT_NAME=$(SMOKE_PROJECT_NAME) \
+	CI_IMPORT_WORK_DIR="$$SMOKE_TMP/import-work" CI_REPO_DIR="$$SMOKE_TMP/repo" \
+	docker compose -f docker-compose.yml -f docker-compose.production.yml --profile production
+
+.PHONY: smoke-stack
+smoke-stack: ## Boot the built production images and prove the gateway answers /api/health
+	@printf "$(call task_icon,smoke-stack,🚦) Smoke-testing the assembled production stack...\n\n"
+
+# Every image the smoke touches must already exist locally. Compose would
+# otherwise try to PULL ci/api from a registry, and a green run would then say
+# nothing about what `build` just produced — the same "a gate that verified
+# nothing must not report green" rule smoke-api follows above.
+	@for img in $(API_REPO) $(GATEWAY_REPO) $(DATABASE_REPO) $(OBJECT_STORE_REPO) $(SETUP_DATABASE_REPO) $(SETUP_SECRETS_REPO); do \
+		docker image inspect "$$img:latest" >/dev/null 2>&1 || { \
+			printf "  $(RED)✗$(RESET) $$img:latest not found — run 'make build ENV=production' first.\n\n"; \
+			exit 1; \
+		}; \
+	done
+
+# nginx resolves `upstream api { server api:3030; }` and the object-store
+# proxy_pass at CONFIG LOAD time, so a bare `nginx -t` outside the compose
+# network dies with "host not found in upstream" and tells you nothing about
+# the config itself. The two --add-host entries give those names something to
+# resolve to; what is under test is nginx.conf's syntax and directives, not
+# connectivity. Seconds of work, and it fails here instead of as a
+# crash-looping gateway on someone's appliance.
+	@printf "➤ Validating the gateway's nginx.conf...\n\n"
+	@docker run --rm --add-host api:127.0.0.1 --add-host object-store:127.0.0.1 \
+		--entrypoint nginx $(GATEWAY_REPO):latest -t
+
+# docker-compose.production.yml publishes the gateway on a FIXED host port, so
+# anything already holding 8642 (a running `make production`, the desktop app)
+# turns this into an opaque bind failure. Name it up front. `nc` is only
+# advisory here — skip the check rather than fail when it is absent.
+	@if command -v nc >/dev/null 2>&1 && nc -z localhost 8642 >/dev/null 2>&1; then \
+		printf "\n  $(RED)✗$(RESET) Port 8642 is already in use — stop whatever holds it ('make stop') and retry.\n\n"; \
+		exit 1; \
+	fi
+
+# One shell for boot + poll + teardown, so the trap owns the containers for the
+# whole span: the stack comes down on success, on a failed assertion, and on a
+# Ctrl-C, and a leaked stack can never sit on 8642 and poison the next run.
+#
+# EVERY command in the teardown ends in `|| true`, the `rm` included, and that
+# is load-bearing rather than tidy: under `set -e` a failing LAST command in an
+# EXIT trap becomes the shell's exit status, so an unguarded teardown error
+# both masks a real health failure AND turns a fully passing smoke into a
+# failed `make publish`. The `rm` is the one that actually trips: on a rootful
+# daemon docker creates a missing bind source as root, and the api creates
+# inbox/ under /var/lib/ci-import at startup (see the mount comment in
+# docker-compose.production.yml) — so the leftovers are root-owned and `rm -rf`
+# exits 1 with "Permission denied". Pre-creating the two bind sources below
+# keeps that parent directory owned by the invoking user, which is what lets
+# the trap remove the empty root-owned children it finds inside; `|| true`
+# covers the case where it still cannot, at the cost of one stray mktemp dir.
+#
+# Only `gateway` is named, so compose starts just its dependency closure —
+# object-store, api, and through api generate-secrets, migrate-database and
+# database. hbpe-service, summary-service, powersync and worker stay down: they
+# are not what is under test, and hbpe would drag GPU device nodes and a model
+# download into a release gate. setup-database runs first and synchronously
+# (`run` waits and propagates the exit code) because it creates the application
+# role and database that migrate-database then connects as, and nothing in the
+# compose graph orders those two.
+	@set -e; \
+	SMOKE_TMP=$$(mktemp -d); \
+	mkdir -p "$$SMOKE_TMP/import-work" "$$SMOKE_TMP/repo"; \
+	trap '$(SMOKE_COMPOSE) down -v --remove-orphans >/dev/null 2>&1 || true; rm -rf "$$SMOKE_TMP" 2>/dev/null || true' EXIT INT TERM; \
+	printf "\n➤ Creating the application role and database...\n\n"; \
+	$(SMOKE_COMPOSE) run --rm -T setup-database; \
+	printf "\n➤ Starting database, api and gateway from the local images...\n\n"; \
+	$(SMOKE_COMPOSE) up -d gateway || { \
+		printf "\n  $(RED)✗$(RESET) The stack did not start. Logs:\n\n"; \
+		$(SMOKE_COMPOSE) logs --tail 80 || true; \
+		exit 1; \
+	}; \
+	printf "\n➤ Polling http://localhost:8642/api/health (up to $(SMOKE_TIMEOUT)s)...\n\n"; \
+	deadline=$$(( $$(date +%s) + $(SMOKE_TIMEOUT) )); \
+	until curl -fsS http://localhost:8642/api/health >/dev/null 2>&1; do \
+		if [ "$$(date +%s)" -ge "$$deadline" ]; then \
+			printf "  $(RED)✗$(RESET) The gateway never answered /api/health within $(SMOKE_TIMEOUT)s. Logs:\n\n"; \
+			$(SMOKE_COMPOSE) logs --tail 80 api gateway || true; \
+			exit 1; \
+		fi; \
+		sleep 2; \
+	done; \
+	printf "$(GREEN)✓$(RESET) gateway served /api/health from the built images\n"
+
+	@printf "\nProduction stack boots. ✅\n\n"
+
 .PHONY: publish
 publish: init ## Publish CI-Server images and metadata to the CI-Portal store
 	@$(MAKE) build ENV=production GPU=$(GPU)
 
 	@$(MAKE) smoke-api
+
+	@# smoke-api only proves the image's imports resolve. This one boots the
+	@# stack it is about to publish and requires a real 200 from the gateway,
+	@# so a DI fault, a broken entrypoint or a bad nginx.conf stops the release
+	@# here rather than at a user's first launch.
+	@$(MAKE) smoke-stack
 
 	@printf "$(call task_icon,publish,📦) Publishing to CI-Portal registry...\n\n"
 

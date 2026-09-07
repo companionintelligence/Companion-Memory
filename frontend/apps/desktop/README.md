@@ -117,8 +117,25 @@ working. Resolved once per launch, cheapest option first:
 3. **Bundled Ollama** — otherwise, this app finds (`ollama` already on PATH)
    or downloads (Ollama's own official release archive, checksum-verified,
    into this app's data directory) a copy of Ollama, runs it on port 11434,
-   and pulls two small, ungated models: `gemma3:1b` for chat (skipped in
-   configuration 2) and `nomic-embed-text` for embeddings.
+   and pulls two ungated models: `gemma4:e4b` for chat (skipped in
+   configuration 2) and `nomic-embed-text` for embeddings. The chat tag must
+   equal `DEFAULT_CHAT_MODEL` in `backend/apps/api/src/configuration.ts`, which
+   is the source of truth — the sidecar also writes it into the generated
+   `.env` as `LLM_DEFAULT_CHAT_MODEL` so the API cannot ask for a model that
+   was never pulled. It is the efficient `e4b` tier, not a 1B model: a tag too
+   small to hold a JSON schema silently disables the schema-bound features
+   (titles, task breakdown, summaries), which is why the earlier `gemma3:1b`
+   default was retired.
+
+   On **Linux** the sidecar binds `0.0.0.0`, not loopback. Containers reach the
+   host through `host.docker.internal:host-gateway`, which on native Docker
+   Engine is the bridge gateway rather than the host's loopback, so a
+   loopback-bound sidecar refuses every call from `api`/`hbpe-service` while
+   the stack still reports healthy. That does publish an unauthenticated model
+   server on the LAN — the same trade `docs/operations/gpu-model-residency.md`
+   already documents for a host-run Ollama, and narrower than the appliance
+   itself, which publishes `8642` on every interface. A host firewall is what
+   keeps the port private.
 
 See `src-tauri/src/local_model/mod.rs` for the exact resolution logic and
 `ollama_sidecar.rs`/`apple_bridge.rs` for each backend. Known v1 limitations:

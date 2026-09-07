@@ -1,0 +1,307 @@
+name: Desktop E2E
+
+# Playwright against the DESKTOP APPLIANCE — the only end-to-end check of what
+# a person who downloaded the app actually gets: the PUBLISHED images, an empty
+# database, and no seeded account to borrow (tests/desktop, driven by
+# playwright.desktop.config.ts). `e2e.yml` deliberately covers the opposite
+# configuration — a locally built database, migrated and seeded, with
+# jsmith@example.com already in it — so neither workflow substitutes for the
+# other, and the first-run bugs this suite exists for (signup impossible on a
+# fresh appliance; a splash whose only call to action led to a login page a new
+# user could not use) live only in this one.
+#
+# It brings the stack up exactly the way the Tauri shell does — same three -f
+# files, same `--profile production`, same `--scale powersync=0` — so that a
+# failure here is a failure of the real product and not of a CI-only
+# arrangement. `frontend/apps/desktop/src-tauri/src/stack_manager.rs` is the
+# authority for every one of those flags; see the step comments below, which
+# name the function each mirrors.
+
+# GATED TO MANUAL, matching this repo's convention: ten of its fourteen
+# workflows are `workflow_dispatch`-only — this file is one of them, and adding
+# it is what moved that count from nine to ten — and only pr-gate.yml,
+# benchmark-unit.yml and the two tag-triggered release lanes run on their own.
+# docs/CI.md's table is the canonical list; keep this line in step with it. CI
+# silence here means "nobody dispatched it", NOT "everything passed". Run it
+# deliberately:
+#   gh workflow run desktop-e2e.yml --ref <branch-or-tag>
+#   gh workflow run desktop-e2e.yml --ref <branch> -f image_tag=2026.8.26
+# It is a release gate in the sense of `docs/qa/ci-gate-proposal.md` §3.3 — one
+# of the dispatches that should be green before a `v*` tag — not a merge gate.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: >-
+          CI-Server image tag to test (e.g. 2026.8.26). Leave empty to resolve
+          the newest fully-published release the same way the shipped app does.
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop-e2e:
+    name: Desktop appliance E2E
+    runs-on: ubuntu-latest
+    # Generous because the first `up` pulls the whole appliance from GHCR
+    # (api, database, gateway, object-store, and the two Python sidecars) before
+    # a single spec runs, and the suite's own per-test timeout is 120s.
+    timeout-minutes: 60
+    env:
+      # The first two are fixed by stack_manager.rs (`PROJECT_NAME`) and by
+      # `GATEWAY_PORT`, the one port the production compose stack publishes.
+      # Kept as job-level env so the compose steps, the health check and the
+      # teardown cannot drift apart from each other.
+      COMPOSE_PROJECT_NAME: ci-server-desktop
+      GATEWAY_URL: http://127.0.0.1:8642
+      # COMPOSE_DIR is read by exactly ONE step — the `.env` writer below, which
+      # is the only place that needs this path spelled out from
+      # $GITHUB_WORKSPACE instead of as a step `working-directory:`. Every
+      # compose step names the same directory literally in its
+      # `working-directory:`, so if the resources directory ever moves, this
+      # value and those four literals have to move together; a mismatch would
+      # write the .env somewhere compose never looks and fail at `--env-file`.
+      COMPOSE_DIR: frontend/apps/desktop/src-tauri/resources
+    steps:
+      # Full history + tags: the tag resolution below walks ancestor release
+      # tags (`git tag --merged HEAD`), and a shallow clone has none — which
+      # that script treats as a hard failure under CI rather than baking in an
+      # unpullable dev-<sha>.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      # Only needed for @playwright/test itself — nothing in tests/desktop
+      # imports application code. The stack under test is pulled, not built.
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      # Mirrors `yarn build`'s own pre-step in frontend/apps/desktop: it copies
+      # docker-compose.yml + docker-compose.production.yml from the repo root
+      # into src-tauri/resources/ (next to the checked-in
+      # docker-compose.desktop.yml) and resolves the image tag, writing it to
+      # resources/image-tag.txt. Using it rather than hand-rolling a `git
+      # describe` here buys the exact algorithm the shipped app was built with,
+      # including the GHCR completeness check — every image the desktop overlay
+      # names must actually exist at the tag, because a release can partially
+      # publish. `CI` is set on every runner, so any degraded outcome is a hard
+      # failure instead of a warning; an unresolvable or unpublished tag stops
+      # the job here rather than 40 minutes later as a skipped suite.
+      #
+      # An explicit `image_tag` input is passed straight through as
+      # CI_SERVER_IMAGE_TAG, which that script treats as a pin that always wins
+      # (and still verifies). Empty means "resolve it", since '' is falsy there.
+      - name: Resolve the CI-Server image tag
+        id: image
+        working-directory: frontend/apps/desktop
+        env:
+          CI_SERVER_IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          node scripts/sync-compose-resources.cjs
+          tag="$(tr -d '[:space:]' < src-tauri/resources/image-tag.txt)"
+          if [ -z "$tag" ]; then
+            echo "::error::sync-compose-resources.cjs produced an empty image-tag.txt"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Testing ghcr.io/companionintelligence/companion/*:$tag"
+
+      # The same file stack_manager.rs::write_env_file generates into the app's
+      # data directory, with the same keys and the same values, so compose
+      # interpolates identically here and there. Two additions CI needs and a
+      # desktop does not:
+      #   - CI_REPO_DIR, because docker-compose.production.yml defaults the api's
+      #     read-only archive mount to `~/Downloads`, which does not exist on a
+      #     runner and is not a path compose expands.
+      #   - absolute paths for both bind mounts, for the same reason
+      #     write_env_file uses one for CI_IMPORT_WORK_DIR: relative sources
+      #     would resolve against the compose project directory, not the
+      #     workspace.
+      # One key write_env_file writes and this does NOT: LLM_DEFAULT_CHAT_MODEL,
+      # which it pins to the tag the Tauri shell's own Ollama sidecar pulls.
+      # There is no sidecar here and nothing serving models, so naming a model
+      # would only make the API ask for one that cannot exist. tests/desktop
+      # covers first-run and navigation, not chat, so nothing in the suite
+      # depends on it — add it here the day a spec does.
+      #
+      # No secrets are written — the `generate-secrets` service in the
+      # production profile mints every DB/auth credential into a Docker volume
+      # on first boot, exactly as it does for a real install.
+      - name: Write the desktop compose .env
+        run: |
+          set -euo pipefail
+          import_work="$GITHUB_WORKSPACE/desktop-e2e-import-work"
+          repo_dir="$GITHUB_WORKSPACE/desktop-e2e-repo"
+          mkdir -p "$import_work" "$repo_dir"
+          cat > "$GITHUB_WORKSPACE/$COMPOSE_DIR/.env" <<EOF
+          COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME
+          CI_SERVER_IMAGE_TAG=${{ steps.image.outputs.tag }}
+          APP_PUBLIC_HOSTNAME=127.0.0.1
+          CI_IMPORT_WORK_DIR=$import_work
+          CI_REPO_DIR=$repo_dir
+          CI_LOCAL_ONLY=true
+          OIDC_ISSUER_URL=https://hub.ci.computer
+          APP_BASE_URL=$GATEWAY_URL
+          EOF
+
+      # Byte-for-byte the invocation stack_manager.rs::compose_command +
+      # UP_ARGS build: `--env-file .env`, `--project-name ci-server-desktop`,
+      # the three -f files in that order (base, production, desktop overlay —
+      # the overlay MUST be last, it is what rewrites every `ci/<name>` image to
+      # the published `companion/<name>` one), `--profile production`, and
+      # `up -d --remove-orphans --scale powersync=0`.
+      #
+      # `--scale powersync=0` is not cosmetic: powersync is in the production
+      # profile but its PS_STORAGE_URI/PS_JWT_SECRET_B64URL come from env vars
+      # this secrets model never populates, so left running it crash-loops
+      # (exit 150) forever. See the long comment at that call site in
+      # stack_manager.rs for why `--scale` and not a profiles override.
+      #
+      # Deliberately NO `docker login`: a downloaded app holds no registry
+      # credentials, so these images have to be anonymously pullable. If a pull
+      # 401s here, that is a real finding about the release, not a CI setup gap
+      # — authenticating would hide exactly the failure this suite exists to
+      # catch.
+      - name: Start the desktop stack
+        working-directory: frontend/apps/desktop/src-tauri/resources
+        run: |
+          set -euo pipefail
+          docker compose --env-file .env --project-name "$COMPOSE_PROJECT_NAME" \
+            -f docker-compose.yml \
+            -f docker-compose.production.yml \
+            -f docker-compose.desktop.yml \
+            --profile production \
+            up -d --remove-orphans --scale powersync=0
+
+      # THIS STEP IS THE POINT. playwright.desktop.config.ts has no `webServer`
+      # and tests/desktop/fixtures/appliance.ts skips every spec (an `auto`
+      # fixture calling testInfo.skip) when nothing answers at the gateway — a
+      # deliberate choice for a developer who simply has not started the app,
+      # and a trap in CI, where a stack that never came up produces a run with
+      # zero executed tests and a green check. So the job asserts the appliance
+      # is answering BEFORE Playwright is allowed to decide anything, and fails
+      # here on timeout.
+      #
+      # Polls the same URL stack_manager.rs::is_healthy polls — gateway's
+      # nginx.conf proxies /api/ to the api container's own /health — rather
+      # than a bare TCP connect, so "the port is bound" cannot be mistaken for
+      # "the API is serving". 20 minutes because `up -d` returns the moment the
+      # containers are created, and on a cold runner everything after that is
+      # image pulls, `generate-secrets`, and `migrate-database` running the
+      # whole migration history against an empty database.
+      - name: Wait for the appliance to answer
+        working-directory: frontend/apps/desktop/src-tauri/resources
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 240); do
+            if curl -fsS "$GATEWAY_URL/api/health" >/dev/null 2>&1; then
+              echo "appliance is healthy after $((i * 5))s"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::The desktop stack never answered at $GATEWAY_URL/api/health — failing here on purpose, because tests/desktop would have SKIPPED every spec and reported green."
+          # All three -f files again: `api`, `worker` and `gateway` exist only in
+          # docker-compose.production.yml, so a compose invocation that loaded
+          # the base file alone would print logs for everything except the
+          # services most likely to be the reason this timed out.
+          docker compose --env-file .env --project-name "$COMPOSE_PROJECT_NAME" \
+            -f docker-compose.yml \
+            -f docker-compose.production.yml \
+            -f docker-compose.desktop.yml \
+            --profile production \
+            ps --all || true
+          docker compose --env-file .env --project-name "$COMPOSE_PROJECT_NAME" \
+            -f docker-compose.yml \
+            -f docker-compose.production.yml \
+            -f docker-compose.desktop.yml \
+            --profile production \
+            logs --no-color --tail 200 || true
+          exit 1
+
+      - name: Install Playwright browser
+        run: yarn playwright install --with-deps chromium
+
+      # `--reporter=list,html` on the command line, not in the config: that file
+      # ships `reporter: [['list']]` for the local case it was written for, and
+      # a CI run needs an artifact someone can open. PLAYWRIGHT_HTML_OPEN=never
+      # stops the html reporter trying to serve the report on a runner with
+      # nobody to look at it.
+      - name: Run desktop E2E
+        env:
+          PLAYWRIGHT_HTML_OPEN: never
+          DESKTOP_E2E_BASE_URL: ${{ env.GATEWAY_URL }}
+        run: yarn e2e:desktop --reporter=list,html
+
+      # Both paths: playwright-report/ is the html reporter's output, and
+      # test-results-desktop/ is this config's own `outputDir`, holding the
+      # screenshots, videos and traces it keeps on failure.
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-desktop
+          path: |
+            playwright-report/
+            test-results-desktop/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # Container logs are usually the only place a first-run failure explains
+      # itself — a migration that did not apply, a sidecar that never came up —
+      # and they are gone the moment the runner is recycled.
+      - name: Upload stack logs
+        if: always()
+        working-directory: frontend/apps/desktop/src-tauri/resources
+        run: |
+          docker compose --env-file .env --project-name "$COMPOSE_PROJECT_NAME" \
+            -f docker-compose.yml \
+            -f docker-compose.production.yml \
+            -f docker-compose.desktop.yml \
+            --profile production \
+            logs --no-color --tail 2000 \
+            > "$GITHUB_WORKSPACE/desktop-stack.log" 2>&1 || true
+
+      - name: Upload stack log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-stack-logs
+          path: desktop-stack.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # `-v` because the volumes hold the appliance's database and its generated
+      # secrets: a re-run on a self-hosted runner must start from an EMPTY
+      # database or 01-ftue.spec.ts's first-account path skips itself (an
+      # appliance only ever permits one account — see tests/desktop/fixtures/
+      # appliance.ts), which is the same silent-green failure the health check
+      # above exists to prevent.
+      - name: Tear down the desktop stack
+        if: always()
+        working-directory: frontend/apps/desktop/src-tauri/resources
+        run: |
+          docker compose --env-file .env --project-name "$COMPOSE_PROJECT_NAME" \
+            -f docker-compose.yml \
+            -f docker-compose.production.yml \
+            -f docker-compose.desktop.yml \
+            --profile production \
+            down -v --remove-orphans || true

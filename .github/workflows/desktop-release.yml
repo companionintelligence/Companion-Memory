@@ -1,14 +1,24 @@
 # Signed, tag-triggered release of the desktop app (frontend/apps/desktop):
 #   git tag -a desktop-v0.1.0 -m "Desktop 0.1.0" && git push origin desktop-v0.1.0
 #
-# Every other GitHub workflow in this repo stays workflow_dispatch-only
-# except this one and mobile-release.yml — a tag push always builds AND
-# publishes a GitHub Release; there is no dry-run for this workflow (unlike
-# mobile-release.yml, there is no app-store submission step to rehearse
-# separately from the build itself).
+# This is one of only four workflows in this repo (of fourteen — the count
+# docs/CI.md keeps) that run without someone dispatching them: pr-gate.yml on
+# every PR, benchmark-unit.yml on scripts/benchmark/** changes, and the two
+# tag-triggered release lanes, mobile-release.yml and this one. Keep this list
+# and docs/CI.md's table in step; that table is the canonical one.
+#
+# A tag push here always builds AND publishes a GitHub Release; there is no
+# dry-run for this workflow (unlike mobile-release.yml, there is no app-store
+# submission step to rehearse separately from the build itself).
 #
 # desktop-build.yml remains the credential-free lane that produces unsigned
 # artifacts on manual dispatch. This is the DISTRIBUTION lane.
+#
+# The desktop marketing version (desktop-v0.1.0 → 0.1.0) versions the APP
+# only. The SERVER images the bundled compose file pulls are tagged
+# independently (date-shaped release tags like 2026.9.5) and are resolved by
+# frontend/apps/desktop/scripts/sync-compose-resources.cjs; use the
+# `server_image_tag` dispatch input if one must be pinned by hand.
 #
 # ── Required secrets ────────────────────────────────────────────────────
 # macOS (Developer ID signing + notarization — names match what CI-Hub's own
@@ -37,6 +47,15 @@ on:
     inputs:
       version_name:
         description: 'Marketing version (e.g. 0.1.0). Defaults to the tag or 0.1.0.'
+        type: string
+        required: false
+      # The desktop marketing version is NOT a server image tag — see the
+      # macOS "Sync compose resources" step below for the whole story. This
+      # input is the ONLY way to override the resolver, and it must name a tag
+      # that really exists under ghcr.io/companionintelligence/companion/*
+      # (date-shaped release tags like 2026.9.5, or latest).
+      server_image_tag:
+        description: 'Optional: pin the bundled CI-Server image tag (e.g. 2026.9.5). Leave blank to let sync-compose-resources.cjs resolve a verified, fully-published release.'
         type: string
         required: false
 
@@ -106,12 +125,28 @@ jobs:
         with:
           node-version: '22'
 
+      # CI_SERVER_IMAGE_TAG is the tag of the SERVER images the bundled compose
+      # file pulls at first launch — it is NOT the desktop app's marketing
+      # version. This step used to pass `needs.version.outputs.name` here, so a
+      # `desktop-v0.1.0` tag baked `ghcr.io/companionintelligence/companion/*:0.1.0`
+      # into resources/docker-compose.desktop.yml; no such tag is published
+      # (only date-shaped release tags like 2026.9.5 and :latest exist), so
+      # every signed artifact died at its first `docker compose` pull. Setting
+      # the variable at all takes the *unverified override* branch of
+      # resolveImageTag() in scripts/sync-compose-resources.cjs; leaving it
+      # blank runs that script's ancestor-release walk, which checks each
+      # candidate against GHCR with `docker manifest inspect` before choosing
+      # it. An empty string is falsy in the script's
+      # `if (process.env.CI_SERVER_IMAGE_TAG)` guard, so on a tag push (where
+      # the inputs context is empty) and on a dispatch that leaves the input
+      # blank, the verified path is what runs. The input exists only so an
+      # operator can deliberately pin an already-published server release.
       - name: Sync compose resources
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
         run: node scripts/sync-compose-resources.cjs
         env:
-          CI_SERVER_IMAGE_TAG: ${{ needs.version.outputs.name }}
+          CI_SERVER_IMAGE_TAG: ${{ inputs.server_image_tag }}
 
       - name: Bump version
         if: steps.secrets.outputs.present == 'true'
@@ -124,6 +159,10 @@ jobs:
             conf.version = '${{ needs.version.outputs.name }}';
             fs.writeFileSync('tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
           "
+          # BSD sed (macos-15 runner) — `-i` REQUIRES the backup-suffix
+          # argument, hence the empty ''. The identical steps in the windows
+          # and linux jobs run GNU sed, where `-i ''` would be read as the
+          # script and clobber the edit, so they use a bare `-i`.
           sed -i '' 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml
 
       # A dedicated keychain, unlocked and set as the default search list, is
@@ -233,12 +272,34 @@ jobs:
         with:
           node-version: '22'
 
+      # Deliberately NOT the desktop marketing version — see the long comment
+      # on the macOS job's copy of this step for the pull failure that caused.
       - name: Sync compose resources
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
         run: node scripts/sync-compose-resources.cjs
         env:
-          CI_SERVER_IMAGE_TAG: ${{ needs.version.outputs.name }}
+          CI_SERVER_IMAGE_TAG: ${{ inputs.server_image_tag }}
+
+      # Same bump as the macOS job, and it must exist in every platform job:
+      # tauri.conf.json/Cargo.toml are checked in at 0.1.0, so without this the
+      # Windows installer would carry 0.1.0 no matter which desktop-v* tag
+      # triggered the release. `shell: bash` because windows-latest defaults to
+      # pwsh; git-bash ships GNU sed, so `-i` takes NO backup-suffix argument
+      # (the macOS lane's `-i ''` would be parsed as the sed script here).
+      - name: Bump version
+        if: steps.secrets.outputs.present == 'true'
+        shell: bash
+        working-directory: frontend/apps/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('node:fs');
+            const conf = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            conf.version = '${{ needs.version.outputs.name }}';
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
+          "
+          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml
 
       - name: Decode signing certificate
         if: steps.secrets.outputs.present == 'true'
@@ -314,11 +375,31 @@ jobs:
         with:
           node-version: '22'
 
+      # Deliberately NOT the desktop marketing version — see the long comment
+      # on the macOS job's copy of this step for the pull failure that caused.
       - name: Sync compose resources
         working-directory: frontend/apps/desktop
         run: node scripts/sync-compose-resources.cjs
         env:
-          CI_SERVER_IMAGE_TAG: ${{ needs.version.outputs.name }}
+          CI_SERVER_IMAGE_TAG: ${{ inputs.server_image_tag }}
+
+      # Same bump as the macOS job. This lane matters most: macOS and Windows
+      # skip while their signing secrets are unprovisioned, so the .deb/.rpm
+      # produced here is usually the ONLY artifact a release ships — and until
+      # this step existed it always reported the checked-in 0.1.0. GNU sed on
+      # ubuntu-22.04: `-i` takes no backup-suffix argument (the macOS lane's
+      # `-i ''` would be parsed as the sed script and edit nothing).
+      - name: Bump version
+        working-directory: frontend/apps/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('node:fs');
+            const conf = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            conf.version = '${{ needs.version.outputs.name }}';
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
+          "
+          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml
 
       # No signing convention exists for .deb/.rpm in this codebase — this
       # lane always runs, unsigned, per standard Linux distribution practice.
@@ -342,7 +423,28 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [version, macos, windows, linux]
-    if: always() && needs.linux.result == 'success'
+    # The old gate was `always() && needs.linux.result == 'success'` alone,
+    # which published a release even when macOS or Windows genuinely FAILED
+    # (compile error, signing failure, notarization rejection). Nothing else
+    # caught it: download-artifact tolerates a missing pattern match and the
+    # release action does not fail on unmatched files by default, so a broken
+    # platform silently became "a release without that platform".
+    #
+    # Note what the documented "no signing secrets" case actually looks like
+    # here: macos/windows carry no job-level `if:` — only their steps do — so
+    # those jobs RUN, skip everything after the secret check, and report
+    # 'success', NOT 'skipped'. It therefore passes this gate on the
+    # `!= 'failure'` clauses, and only a real failure blocks the release.
+    # `always()` is kept because a genuinely skipped `needs` (a job-level
+    # `if:` added later, or `version` failing) would otherwise skip this job
+    # before any clause below is evaluated. A cancelled run reports
+    # 'cancelled', which is likewise not 'failure' — deliberate: a cancel is
+    # an operator action, not a broken build.
+    if: >-
+      always()
+      && needs.linux.result == 'success'
+      && needs.macos.result != 'failure'
+      && needs.windows.result != 'failure'
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
@@ -351,12 +453,71 @@ jobs:
           path: artifacts
           pattern: release-*
 
+      # A release missing macOS/Windows because their signing secrets aren't
+      # provisioned is legitimate (see this file's header), but it must never
+      # be PRESENTED as a complete one — someone downloading "Desktop 0.1.0"
+      # has to see, without opening the assets list, which platforms are in it.
+      #
+      # Ground truth is the DOWNLOADED ARTIFACT, deliberately NOT
+      # needs.<job>.result. The macos/windows jobs carry no job-level `if:` —
+      # only their individual steps do (`steps.secrets.outputs.present ==
+      # 'true'`) — so with signing secrets absent those jobs still RUN, skip
+      # every step after the secret check, and report **success**, never
+      # 'skipped'. Keying off that result would have advertised "macOS —
+      # signed, notarized .dmg" on exactly the releases that ship no .dmg at
+      # all, i.e. every release cut today, which is the mis-presentation this
+      # step exists to prevent. artifacts/release-<platform>/ exists iff that
+      # job's upload-artifact step actually ran, so it answers the only
+      # question the release notes are making a claim about. The job result is
+      # still printed, because it is what tells a reader WHY a platform is
+      # absent.
+      - name: Describe included platforms
+        id: platforms
+        env:
+          MACOS_RESULT: ${{ needs.macos.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+        run: |
+          set -euo pipefail
+          NAMES=""
+          if [ -d artifacts/release-macos ]; then
+            NAMES="macOS"
+            LINES="- macOS — signed, notarized universal .dmg"
+          else
+            LINES="- macOS — NOT INCLUDED (no release-macos artifact; macOS job result: ${MACOS_RESULT}. Usual cause: the APPLE_* signing secrets are unprovisioned, which makes every build/sign/notarize step skip.)"
+          fi
+          if [ -d artifacts/release-windows ]; then
+            NAMES="${NAMES:+$NAMES, }Windows"
+            LINES="${LINES}"$'\n'"- Windows — signed .msi and setup .exe"
+          else
+            LINES="${LINES}"$'\n'"- Windows — NOT INCLUDED (no release-windows artifact; Windows job result: ${WINDOWS_RESULT}. Usual cause: the WINDOWS_CERTIFICATE_* signing secrets are unprovisioned, which makes every build/sign step skip.)"
+          fi
+          # Linux is unconditional here: the job gate above already required
+          # needs.linux.result == 'success'.
+          NAMES="${NAMES:+$NAMES, }Linux"
+          LINES="${LINES}"$'\n'"- Linux — unsigned .deb and .rpm"
+          echo "names=${NAMES}" >> "$GITHUB_OUTPUT"
+          {
+            echo "body<<PLATFORMS_EOF"
+            echo "Platforms in this release:"
+            echo
+            printf '%s\n' "$LINES"
+            echo "PLATFORMS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: desktop-v${{ needs.version.outputs.name }}
-          name: Desktop ${{ needs.version.outputs.name }}
+          name: Desktop ${{ needs.version.outputs.name }} (${{ steps.platforms.outputs.names }})
+          # GitHub appends the generated notes AFTER this body, so the platform
+          # inventory stays at the top where it is actually read.
+          body: ${{ steps.platforms.outputs.body }}
           generate_release_notes: true
           # macOS/Windows assets may legitimately be absent if their signing
-          # secrets aren't provisioned yet — see this file's header comment.
+          # secrets aren't provisioned yet — see this file's header comment —
+          # which is why the pattern stays a glob. `fail_on_unmatched_files`
+          # still catches the other failure mode: artifacts/**/* matching
+          # NOTHING, i.e. an empty release, which the action would otherwise
+          # publish happily (its default is false).
+          fail_on_unmatched_files: true
           files: artifacts/**/*

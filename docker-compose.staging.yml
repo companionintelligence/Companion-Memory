@@ -126,11 +126,17 @@ services:
       LLM_API_BASE: ${LLM_API_BASE:-http://host.docker.internal:11434/v1}
       LLM_API_KEY: ${LLM_API_KEY:-ollama}
       LLM_DEFAULT_CHAT_MODEL: ${LLM_DEFAULT_CHAT_MODEL:-}
-    devices:
-      - /dev/kfd
-      - /dev/dri
-    group_add:
-      - video
+    # NO `devices:`/`group_add:` here on purpose — same reasoning as
+    # docker-compose.production.yml. These used to pass /dev/kfd + /dev/dri and
+    # group_add: [video] through unconditionally, so `make staging` refused to
+    # start on any host without AMD device nodes: a `devices:` entry that does
+    # not exist on the host is a hard start failure, not a graceful
+    # degradation. Passthrough belongs to the opt-in docker-compose.rocm.yml
+    # overlay, which carries the same device nodes plus the numeric
+    # AMD_RENDER_GID/AMD_VIDEO_GID groups and seccomp:unconfined:
+    #
+    #   docker compose -f docker-compose.yml -f docker-compose.staging.yml \
+    #                  -f docker-compose.rocm.yml --profile staging up -d
 
   object-store:
     environment:
