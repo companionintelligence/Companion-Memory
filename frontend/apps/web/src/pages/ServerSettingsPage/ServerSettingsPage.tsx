@@ -1,6 +1,6 @@
 import { type FormEvent, useState } from 'react';
 
-import { getApiBaseUrl, isLocalApplianceOrigin } from '@ci/common';
+import { getApiBaseUrl, isIosPlatform, isLocalApplianceOrigin } from '@ci/common';
 import { Button, Card, Input, Label, LoadingButton, PasswordInput } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
@@ -91,7 +91,8 @@ export function ServerSettingsPage() {
                 aria-label="Companion URL"
               />
               <p className="text-muted-foreground text-xs">
-                Safari signs in here. Then the app lists Memory Servers on this account.
+                {isIosPlatform() ? 'Safari' : 'Your browser'} signs in here. Then the app lists Memory Servers
+                on this account.
               </p>
             </div>
             <LoadingButton type="submit" variant="outline" className={TOUCH}>
