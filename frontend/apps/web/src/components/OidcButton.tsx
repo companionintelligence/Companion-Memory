@@ -84,7 +84,16 @@ export function OidcButton({
           {label}
         </a>
       </Button>
-      {openError && <p className="mt-2 text-sm text-destructive">{openError}</p>}
+      {/* `role="alert"` so the failure is announced: focus stays on the link
+          after the click, and a paragraph appearing below it is otherwise
+          silent — which is the same dead button, for a screen-reader user.
+          Matches the inline-error shape used elsewhere (DeviceConnectPage,
+          TaskSlate); `<Alert>` is this app's page-level banner, not this. */}
+      {openError && (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {openError}
+        </p>
+      )}
     </>
   );
 }

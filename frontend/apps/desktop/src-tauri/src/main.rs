@@ -5,7 +5,9 @@ mod port_check;
 mod stack_manager;
 mod tray;
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use tauri::Manager;
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -69,15 +71,58 @@ fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
     }
 }
 
-/// Mirror everything the shell knows about itself into the log the UI can open.
+/// Where the `log::` bridge and the panic hook append, once the data dir is known.
+///
+/// Set once, early in `setup` — before `initialize_stack` runs, so a failure
+/// inside that call is captured rather than being the one thing that still
+/// vanishes.
+static DESKTOP_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Sends `log::` records to the same file the UI's "View Logs" button opens.
 ///
 /// `env_logger` writes to stderr, and a packaged .app has no stderr — macOS
-/// discards it. So every `log::error!` in this binary, and every panic, went
-/// nowhere: an app that vanished left no crash report, no system-log entry and
-/// nothing in desktop.log, which is exactly the state "it keeps crashing" is
-/// impossible to answer from. This makes the shell's own lifecycle readable.
-fn install_file_logging(paths: &stack_manager::StackPaths) {
-    let panic_paths = paths.clone();
+/// discards it. A panic hook alone did not fix that: it captured panics while
+/// every `log::error!` and `log::warn!` in this binary still went nowhere, so
+/// the failures the shell actually reports about itself (a compose start that
+/// returned non-zero, a self-heal that could not clear the conflict) remained
+/// invisible. Records still go to stderr as well, which is what a `yarn dev`
+/// run reads.
+struct ShellLogger {
+    level: log::LevelFilter,
+}
+
+impl log::Log for ShellLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= self.level
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+
+        let line = format!("[{}] {}", record.target(), record.args());
+        eprintln!("{} {line}", record.level());
+
+        if let Some(dir) = DESKTOP_LOG_DIR.get() {
+            stack_manager::append_desktop_log_in(dir, &record.level().to_string().to_lowercase(), &line);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Mirror everything the shell knows about itself into the log the UI can open.
+///
+/// Installed as early as the data dir is knowable, which is the point: the
+/// hook used to go up *after* `initialize_stack`, so the most likely silent
+/// launch failure — a panic while creating the app-data layout or copying the
+/// bundled compose files — was the one case it could not explain.
+fn install_file_logging(logs_dir: &Path) {
+    let _ = std::fs::create_dir_all(logs_dir);
+    let _ = DESKTOP_LOG_DIR.set(logs_dir.to_path_buf());
+
+    let panic_dir = logs_dir.to_path_buf();
     let previous = std::panic::take_hook();
 
     std::panic::set_hook(Box::new(move |info| {
@@ -92,13 +137,21 @@ fn install_file_logging(paths: &stack_manager::StackPaths) {
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_else(|| "panic with no message".to_string());
 
-        stack_manager::append_desktop_log(&panic_paths, "panic", &format!("{message} ({location})"));
+        stack_manager::append_desktop_log_in(&panic_dir, "panic", &format!("{message} ({location})"));
         previous(info);
     }));
 }
 
 fn main() {
-    env_logger::init();
+    // Installed before anything can log. The file half stays dormant until
+    // `install_file_logging` learns the data dir a few lines into `setup`.
+    let level = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|v| v.parse::<log::LevelFilter>().ok())
+        .unwrap_or(log::LevelFilter::Info);
+    if log::set_boxed_logger(Box::new(ShellLogger { level })).is_ok() {
+        log::set_max_level(level);
+    }
 
     tauri::Builder::default()
         .manage(PendingDeepLink::default())
@@ -129,9 +182,12 @@ fn main() {
             let resource_dir = app.path().resource_dir()?;
             let data_dir = app.path().app_data_dir()?;
 
-            let paths = stack_manager::initialize_stack(&resource_dir, &data_dir)?;
+            // Before initialize_stack, not after: the logs dir is just
+            // <data_dir>/logs, so it is knowable here, and a panic inside
+            // initialize_stack is exactly the failure this is meant to explain.
+            install_file_logging(&data_dir.join("logs"));
 
-            install_file_logging(&paths);
+            let paths = stack_manager::initialize_stack(&resource_dir, &data_dir)?;
             let paths_for_log = paths.clone();
             stack_manager::append_desktop_log(
                 &paths,
