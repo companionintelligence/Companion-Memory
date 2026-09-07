@@ -8,6 +8,7 @@ ext {
     junitVersion = project.hasProperty('junitVersion') ? rootProject.ext.junitVersion : '4.13.2'
     androidxAppCompatVersion = project.hasProperty('androidxAppCompatVersion') ? rootProject.ext.androidxAppCompatVersion : '1.7.0'
     androidxJunitVersion = project.hasProperty('androidxJunitVersion') ? rootProject.ext.androidxJunitVersion : '1.2.1'
+    androidxTestRunnerVersion = project.hasProperty('androidxTestRunnerVersion') ? rootProject.ext.androidxTestRunnerVersion : '1.6.1'
     androidxEspressoCoreVersion = project.hasProperty('androidxEspressoCoreVersion') ? rootProject.ext.androidxEspressoCoreVersion : '3.6.1'
 }
 
@@ -91,5 +92,12 @@ dependencies {
 
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    // Declared explicitly, not left to arrive transitively. `testInstrumentationRunner`
+    // above names androidx.test.runner.AndroidJUnitRunner, so this artifact has to be on
+    // the androidTest runtime classpath or every instrumented run in this module dies with
+    // "Unable to find instrumentation info". Until this line existed it resolved only as a
+    // transitive of espresso-core, which no test here imports -- dropping that unused
+    // dependency would have silently taken the runner with it.
+    androidTestImplementation "androidx.test:runner:$androidxTestRunnerVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
 }
