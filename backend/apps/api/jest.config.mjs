@@ -17,8 +17,18 @@ export default {
     '\\.pnp\\.cjs$',
   ],
 
+  // Mirrors the `paths` block in tsconfig.json — enumerated for the same
+  // reason: '^@ci/(.*)$' swallowed the whole @ci scope, so a real workspace
+  // dependency named @ci/<anything> would have been redirected into src/ and
+  // failed to resolve. Keep the two lists in sync.
   moduleNameMapper: {
-    '^@ci/(.*)$': '<rootDir>/src/$1',
+    '^@ci/common$': '<rootDir>/src/common',
+    '^@ci/common/(.*)$': '<rootDir>/src/common/$1',
+    '^@ci/domains$': '<rootDir>/src/domains',
+    '^@ci/domains/(.*)$': '<rootDir>/src/domains/$1',
+    '^@ci/application$': '<rootDir>/src/application',
+    '^@ci/configuration$': '<rootDir>/src/configuration',
+    '^@ci/instrument$': '<rootDir>/src/instrument',
   },
 
   testMatch: ['**/__tests__/**/*.test.ts', '**/?(*.)+(spec|test).ts'],

@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "shadcn": "yarn dlx shadcn@latest"
+    "shadcn": "yarn dlx shadcn@latest",
+    "typecheck": "tsc --noEmit"
   },
   "main": "index.ts",
   "sideEffects": [

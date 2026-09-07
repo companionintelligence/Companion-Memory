@@ -18,6 +18,7 @@
   "packageManager": "yarn@4.9.1",
   "workspaces": [
     "backend/apps/*",
+    "backend/packages/*",
     "frontend/apps/*",
     "frontend/packages/*",
     "!frontend/apps/ios",

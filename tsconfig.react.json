@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  // Shared settings for browser-side TypeScript (the web app and every
+  // frontend/packages/* library). See tsconfig.node.json for why these presets
+  // exist at all.
+  //
+  // These projects are consumed as raw source by Vite — the packages set
+  // "main": "index.ts" and are never built independently — so everything here
+  // is check-only and the bundler owns module resolution.
+  //
+  // Deliberately NOT here: verbatimModuleSyntax and noUncheckedSideEffectImports.
+  // Only the web app has ever been checked with them, and hoisting them would
+  // impose a new bar on eight packages that have never had a typecheck run at
+  // all — in the same change that gives them one. They stay in
+  // frontend/apps/web's own config until someone measures what each package
+  // would owe.
+  "extends": "./tsconfig.base.json",
+
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "resolveJsonModule": true
+  }
+}

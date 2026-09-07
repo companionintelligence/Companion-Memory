@@ -407,7 +407,13 @@ build: ## Build images. ENV=local|staging|production (default local) GPU=cpu|cud
 	@printf "$(call task_icon,build,🧱) Building $(ENV) images...\n"
 
 	@# API, gateway and web frontend are only built for staging/production
-	@if [ "$(ENV)" != "local" ]; then printf "\n➤ Compiling API...\n\n" && ( cd backend/apps/api && yarn clean && yarn build ) && printf "\n➤ Compiling web frontend...\n\n" && ( cd frontend/apps/web && yarn clean && yarn build ) && printf "\n➤ Building API image...\n\n" && docker build -f backend/apps/api/Dockerfile $(call versioned_tag,$(API_REPO)) -t $(API_REPO):latest . && printf "\n➤ Building gateway image...\n\n" && docker build -f infrastructure/gateway/Dockerfile $(call versioned_tag,$(GATEWAY_REPO)) -t $(GATEWAY_REPO):latest . ; fi
+	@#
+	@# The API is no longer compiled here: backend/apps/api/Dockerfile is a
+	@# multi-stage build that compiles from source in its own builder stage, so
+	@# the image no longer depends on a dist/ produced by whatever toolchain the
+	@# host happens to have. The web frontend IS still host-built, because
+	@# infrastructure/gateway/Dockerfile copies frontend/apps/web/dist.
+	@if [ "$(ENV)" != "local" ]; then printf "\n➤ Compiling web frontend...\n\n" && ( cd frontend/apps/web && yarn clean && yarn build ) && printf "\n➤ Building API image...\n\n" && docker build -f backend/apps/api/Dockerfile $(call versioned_tag,$(API_REPO)) -t $(API_REPO):latest . && printf "\n➤ Building gateway image...\n\n" && docker build -f infrastructure/gateway/Dockerfile $(call versioned_tag,$(GATEWAY_REPO)) -t $(GATEWAY_REPO):latest . ; fi
 
 	@printf "\n➤ Building database setup image...\n\n"
 	@docker build -f infrastructure/setup-database/Dockerfile $(call versioned_tag,$(SETUP_DATABASE_REPO)) -t $(SETUP_DATABASE_REPO):latest infrastructure/setup-database
@@ -762,6 +768,22 @@ lint: ## Check the source for lint and formatting errors, both stacks
 	@node scripts/check-capacitor-native-sync.mjs
 
 	@printf "\nNo lint errors found.\n\n"
+
+.PHONY: typecheck
+typecheck: ## Typecheck every JS/TS workspace that declares a typecheck script
+	@printf "$(call task_icon,typecheck,🧾) Typechecking...\n\n"
+
+	@# JS/TS only — Python types are already checked by `uv run mypy` in `make lint`.
+	@#
+	@# Until now the eight frontend/packages/* were never typechecked on their
+	@# own: none of them declared a script, and `foreach` silently skips a
+	@# workspace that has nothing to run. They were only ever checked as a side
+	@# effect of `yarn workspace @ci/fe-web build` pulling their source through
+	@# the bundler, which means a package with no importer in web was checked by
+	@# nothing at all.
+	@yarn workspaces foreach --all run typecheck
+
+	@printf "\nTypes check out.\n\n"
 
 .PHONY: test
 test: ## Run the unit tests, both stacks
