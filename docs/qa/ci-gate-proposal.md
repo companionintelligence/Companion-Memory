@@ -75,6 +75,8 @@ It already runs on every PR touching `scripts/benchmark/**`. Add the lint it is 
 
 `e2e.yml`, `mobile-build.yml`, `desktop-build.yml` and `migration-integrity-check.yml` stay dispatch-only. Instead, make them mandatory before a `v*` tag, recorded in the programme's sign-off table:
 
+> **Addendum, 2026-09-07.** Two of those lanes now carry unit tests as well as builds: `mobile-build.yml` runs the Android JVM suites (100 tests, four modules) after `assembleDebug`, and `desktop-build.yml` runs `cargo test` (36 tests) on each host-native matrix entry. Both are near-free — the toolchain and cache are already paid for by the build in the same job. This **strengthens** §3.3 rather than changing it: the native suites now exist, so the release-gate dispatch list below is the only thing standing between them and a release, and they remain worth nothing until someone dispatches them. Locally they are `make test-android` and `make test-desktop`.
+
 ```bash
 gh workflow run ci.yml                       --repo companionintelligence/CI-Server --ref <sha>
 gh workflow run e2e.yml                      --repo companionintelligence/CI-Server --ref <sha>

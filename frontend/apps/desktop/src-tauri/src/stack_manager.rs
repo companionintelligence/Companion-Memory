@@ -653,29 +653,42 @@ fn run_compose_up(paths: &StackPaths, progress: &ProgressHandle) -> Result<(), S
     append_desktop_log(paths, "start", &transcript.join("\n"));
 
     if !status.success() {
-        // The last few lines are where compose says what actually went wrong
-        // (an unpullable tag, a full disk, a port already bound); the rest is
-        // the narration of everything that succeeded first.
-        let reason = transcript
-            .iter()
-            .rev()
-            .find(|line| {
-                let l = line.to_lowercase();
-                l.contains("error") || l.contains("failed") || l.contains("no space")
-            })
-            .cloned()
-            .unwrap_or_else(|| transcript.last().cloned().unwrap_or_default());
-
-        return Err(if reason.trim().is_empty() {
-            "docker compose up failed. See the desktop log for details.".to_string()
-        } else {
-            reason.trim().to_string()
-        });
+        return Err(describe_compose_failure(&transcript));
     }
 
     clear_user_stopped(paths);
 
     Ok(())
+}
+
+/// The one line out of a failed `docker compose up` worth putting on the splash.
+///
+/// Compose narrates every step that succeeded before it stopped, so the last
+/// error-ish line is the one that actually explains the failure — an unpullable
+/// tag, a full disk, a port already bound. Searching from the end matters:
+/// compose commonly emits a transient early "error" while retrying a registry
+/// connection it then recovers from, and reporting *that* sends the user after
+/// the wrong problem.
+///
+/// Split out of [`run_compose_up`] because the surrounding function needs a
+/// spawned `docker` to reach it at all, while this — the part that decides what
+/// the user is told — is pure.
+fn describe_compose_failure(transcript: &[String]) -> String {
+    let reason = transcript
+        .iter()
+        .rev()
+        .find(|line| {
+            let l = line.to_lowercase();
+            l.contains("error") || l.contains("failed") || l.contains("no space")
+        })
+        .cloned()
+        .unwrap_or_else(|| transcript.last().cloned().unwrap_or_default());
+
+    if reason.trim().is_empty() {
+        "docker compose up failed. See the desktop log for details.".to_string()
+    } else {
+        reason.trim().to_string()
+    }
 }
 
 /// Whether the gateway is already answering — used to tell "our own stack holds
@@ -693,14 +706,28 @@ fn is_stack_healthy_blocking() -> bool {
 /// says nothing about versions, so check up front and say so plainly.
 fn compose_version_error() -> Option<String> {
     let output = docker_command().args(["compose", "version", "--short"]).output().ok()?;
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let version = raw.trim().trim_start_matches('v');
-    let mut parts = version.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
-    let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+    compose_version_error_in(&String::from_utf8_lossy(&output.stdout))
+}
 
-    if major == 0 && minor == 0 {
-        return None; // unreadable version — let compose speak for itself
-    }
+/// The version comparison itself, split from the `docker compose version` call
+/// so the boundary (2.23 refused, 2.24 accepted) and the unreadable-output
+/// escape hatch can be covered without a Docker daemon.
+fn compose_version_error_in(raw: &str) -> Option<String> {
+    let version = raw.trim().trim_start_matches('v');
+    let mut parts = version.split('.');
+
+    // The major component must actually parse. Coercing a failed parse to 0 (as this
+    // used to) reads a *newer* Compose as an older one whenever the output is not the
+    // bare `--short` form: "Docker Compose version v2.39.1" splits into
+    // ["Docker Compose version v2", "39", "1"], which became (0, 39) — not (0, 0), so
+    // the escape hatch below did not fire — and a current CLI was refused with a
+    // message quoting its own version back at it.
+    let major = parts.next().and_then(|p| p.parse::<u32>().ok());
+    let minor = parts.next().and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
+
+    // Unreadable version — let compose speak for itself. `Some(0)` is kept in this
+    // branch because no Compose that can run the bundled overlay reports major 0.
+    let major = major.filter(|&major| major > 0 || minor > 0)?;
 
     if (major, minor) < (2, 24) {
         return Some(format!(
@@ -1068,6 +1095,168 @@ mod tests {
             assert_eq!(p.error.as_deref(), Some("no space left on device"));
             assert_eq!(p.detail, "no space left on device");
         }
+    }
+
+    /// Compose narrates every step that succeeded before it stopped, and it
+    /// routinely logs a transient "error" while retrying a registry connection
+    /// it then recovers from. Searching from the end is what separates the
+    /// failure from the noise that preceded it — dropping the `.rev()` leaves
+    /// the splash confidently naming the wrong problem.
+    #[test]
+    fn the_last_error_line_is_what_reaches_the_splash_not_the_first() {
+        let transcript: Vec<String> = [
+            " Container ci-server-desktop-database-1  Started",
+            "#4 ERROR: failed to do request: connection reset by peer (retrying)",
+            " Container ci-server-desktop-api-1  Created",
+            "failed to solve: no space left on device",
+        ]
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+
+        assert_eq!(describe_compose_failure(&transcript), "failed to solve: no space left on device");
+    }
+
+    #[test]
+    fn a_failure_with_nothing_error_shaped_in_it_still_says_something_useful() {
+        // Nothing matches the error vocabulary: the last line compose printed
+        // is still a far better guess than a generic sentence.
+        let quiet: Vec<String> = ["Pulling api", " api Pulled", " Container x  Recreate"]
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert_eq!(describe_compose_failure(&quiet), "Container x  Recreate");
+
+        // A compose that exited non-zero having said nothing at all — and one
+        // whose last line is only whitespace — must not surface as an empty
+        // error, which renders on the splash as a failure with no explanation.
+        assert_eq!(
+            describe_compose_failure(&[]),
+            "docker compose up failed. See the desktop log for details."
+        );
+        assert_eq!(
+            describe_compose_failure(&["   ".to_string()]),
+            "docker compose up failed. See the desktop log for details."
+        );
+    }
+
+    /// The bundled overlay uses the Compose Specification's `!reset` tag, which
+    /// needs 2.24. Below that, compose fails with a YAML parse error that never
+    /// mentions versions, so this check is the only place the real reason gets
+    /// said — and the boundary has to be exactly right, or it either rejects
+    /// working installs or lets the unreadable error through.
+    #[test]
+    fn compose_older_than_2_24_is_refused_and_2_24_itself_is_not() {
+        assert!(compose_version_error_in("2.23.9").is_some());
+        assert!(compose_version_error_in("2.24.0").is_none());
+        assert!(compose_version_error_in("2.24").is_none());
+        assert!(compose_version_error_in("1.29.2").is_some());
+
+        // The `v` prefix and the trailing newline are what `docker compose
+        // version --short` actually emits, in that order.
+        assert!(compose_version_error_in("v2.39.1\n").is_none());
+        assert!(compose_version_error_in(" v2.20.3 \n").is_some());
+
+        // Two-digit minors must not be compared as strings — "2.9" is older
+        // than "2.24" numerically and newer lexically.
+        assert!(compose_version_error_in("2.9.0").is_some());
+        assert!(compose_version_error_in("3.0.0").is_none());
+
+        let message = compose_version_error_in("2.23.9").expect("2.23.9 is too old");
+        assert!(message.contains("2.23.9"), "the user should see their own version: {message}");
+        assert!(message.contains("2.24"), "and what they need: {message}");
+    }
+
+    /// An unparseable version must not become a hard stop. A Compose CLI that
+    /// prints something this cannot read is far more likely to be newer than
+    /// older, and blocking launch on it would strand the user behind an error
+    /// about a version we never actually determined.
+    #[test]
+    fn an_unreadable_compose_version_lets_compose_speak_for_itself() {
+        // Empty stdout — the shape left behind by a CLI that does not
+        // understand `--short` and wrote its complaint to stderr — and a
+        // version with no digits in it at all both reach the (0, 0) guard.
+        assert!(compose_version_error_in("").is_none());
+        assert!(compose_version_error_in("   \n").is_none());
+        assert!(compose_version_error_in("unknown").is_none());
+
+        // Long-form output — what `docker compose version` prints WITHOUT
+        // `--short`. This is the case that used to be silently wrong: the
+        // major component ("Docker Compose version v2") does not parse, and
+        // coercing it to 0 left minor = 39, so the (0, 0) escape hatch missed
+        // it and a *current* Compose was refused as too old. Unreachable while
+        // the one caller passes `--short`, which is exactly why it needs a test
+        // rather than a comment: the day someone drops the flag, or a CLI stops
+        // honouring it, the failure is a launch blocked on a version that was
+        // never actually read.
+        assert!(compose_version_error_in("Docker Compose version v2.39.1").is_none());
+        assert!(compose_version_error_in("Docker Compose version v2.20.3").is_none());
+
+        // A trailing component that does not parse is not the same thing: the
+        // major and minor are readable, so the comparison still applies.
+        assert!(compose_version_error_in("2.23.0-rc1").is_some());
+        assert!(compose_version_error_in("2.24.0-rc1").is_none());
+    }
+
+    /// desktop.log is append-only for the life of the install, so without the
+    /// size cap it is unbounded — and it is written from a `log::` bridge that
+    /// fires on every warning the shell produces. Rotation here is "start
+    /// over", so what matters is that it actually triggers and that the line
+    /// which triggered it survives; losing that one would hide the very event
+    /// that was being logged.
+    #[test]
+    fn the_desktop_log_starts_over_once_it_passes_its_size_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs_dir = dir.path();
+        let log_path = logs_dir.join("desktop.log");
+
+        append_desktop_log_in(logs_dir, "launch", "v0.1.0 starting");
+        let first = fs::read_to_string(&log_path).unwrap();
+        assert!(first.contains("launch: v0.1.0 starting"));
+
+        // Still well under the cap: the second line joins the first.
+        append_desktop_log_in(logs_dir, "start", "compose up");
+        let both = fs::read_to_string(&log_path).unwrap();
+        assert!(both.contains("v0.1.0 starting") && both.contains("compose up"));
+        assert_eq!(both.lines().count(), 2);
+
+        // Now push it past the cap and write once more.
+        fs::write(&log_path, vec![b'x'; (MAX_LOG_BYTES + 1) as usize]).unwrap();
+        append_desktop_log_in(logs_dir, "panic", "something went wrong (main.rs:1)");
+
+        let rotated = fs::read_to_string(&log_path).unwrap();
+        assert!(rotated.len() < MAX_LOG_BYTES as usize, "the log should have been rotated away");
+        assert!(rotated.contains("panic: something went wrong (main.rs:1)"));
+        assert_eq!(rotated.lines().count(), 1, "rotation starts over rather than trimming");
+    }
+
+    /// What the UI's log pane renders. The tail is the interesting end — a
+    /// crash is at the bottom of the file — and asking for more lines than
+    /// exist is the normal case on a fresh install, where an off-by-one would
+    /// panic on a slice rather than showing the log.
+    #[test]
+    fn reading_the_desktop_log_returns_the_newest_lines_and_never_panics_when_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        fs::create_dir_all(&paths.logs_dir).unwrap();
+
+        // Nothing written yet — the pane must render empty, not fail.
+        assert_eq!(read_desktop_logs(&paths, 200), "");
+
+        for n in 1..=10 {
+            append_desktop_log_in(&paths.logs_dir, "start", &format!("line {n}"));
+        }
+
+        let tail = read_desktop_logs(&paths, 3);
+        assert_eq!(tail.lines().count(), 3);
+        assert!(tail.contains("line 8") && tail.contains("line 10"));
+        assert!(!tail.contains("line 7"), "only the newest lines belong in the tail");
+
+        // Asking for more than exist returns everything, in order.
+        let everything = read_desktop_logs(&paths, 200);
+        assert_eq!(everything.lines().count(), 10);
+        assert!(everything.lines().next().unwrap().contains("line 1"));
+        assert!(everything.lines().last().unwrap().contains("line 10"));
     }
 
     #[test]

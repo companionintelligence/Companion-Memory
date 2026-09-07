@@ -68,6 +68,30 @@ android {
     kotlinOptions {
         jvmTarget = "21"
     }
+    testOptions {
+        unitTests {
+            // Robolectric locates the merged manifest, resources and assets through the
+            // `com.android.tools.test_config.properties` file AGP only emits when this is on.
+            // Deliberately NOT paired with `returnDefaultValues = true`: Robolectric already
+            // supplies real implementations (org.json in particular), and default-returning
+            // stubs would let a test pass against framework calls that never actually ran.
+            includeAndroidResources = true
+        }
+        unitTests.all {
+            // Gradle forks the test JVM with a 512m default heap; Robolectric's
+            // android-all-instrumented jar for API 35 plus WorkManager's Room database do not
+            // fit in it. (org.gradle.jvmargs in gradle.properties governs the daemon, not this.)
+            maxHeapSize = '2g'
+        }
+    }
+}
+
+// LocalLlmModelsTest reads ../src/definitions.ts off disk to check that the file the JS
+// catalogue downloads is the file this one writes and loads. Gradle cannot see that
+// dependency — the file is on no classpath and in no source set — so without declaring it
+// the test task stays UP-TO-DATE through exactly the TypeScript edit it exists to catch.
+tasks.withType(Test).configureEach {
+    inputs.file("${projectDir}/../src/definitions.ts").withPropertyName('localLlmPluginDefinitions')
 }
 
 repositories {
@@ -94,6 +118,20 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1'
 
     testImplementation "junit:junit:$junitVersion"
+
+    // Robolectric is the single load-bearing test dependency here. Every seam worth testing in
+    // this module goes through org.json (the intent catalog, the tool descriptions, the MCP
+    // frames), which AGP's mockable android.jar stubs to throw on call — Robolectric supplies
+    // the real AOSP implementation, the same one that runs on the device, plus Context,
+    // NotificationManager and PowerManager. 4.14.1 is the first line with stable API 35 support,
+    // matching this module's compileSdk.
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+
+    // TestListenableWorkerBuilder, for running ModelDownloadWorker.doWork() off-device. Version
+    // must track work-runtime-ktx above exactly: its POM declares work-runtime [2.10.0] as a
+    // hard range, so a mismatch fails resolution rather than degrading quietly.
+    testImplementation 'androidx.work:work-testing:2.10.0'
+
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
 }

@@ -66,6 +66,35 @@ LICENSE_DIRS := \
 	infrastructure/setup-database \
 	infrastructure/setup-secrets
 
+# ---------------------------------------------------------------------------
+# Native test toolchains (`test-android`, `test-desktop`)
+# ---------------------------------------------------------------------------
+
+ANDROID_APP_DIR := frontend/apps/android/android
+DESKTOP_TAURI_DIR := frontend/apps/desktop/src-tauri
+
+# Mirrors of what the Gradle build actually declares: `compileSdkVersion` in
+# $(ANDROID_APP_DIR)/variables.gradle, and the `jvmTarget`/`JavaVersion` lines in
+# each module's build.gradle. They exist only so the precondition messages can
+# name the version they want and the sdkmanager line that installs it.
+ANDROID_JDK_MAJOR := 21
+ANDROID_COMPILE_SDK := 35
+ANDROID_BUILD_TOOLS := 35.0.0
+
+# Where the Android SDK is, resolved the way every Android tool resolves it and
+# NEVER hard-coded: ANDROID_HOME, then the deprecated-but-still-common
+# ANDROID_SDK_ROOT, then the `sdk.dir` Android Studio writes into the project's
+# git-ignored local.properties. Empty when the machine has told us nothing —
+# which `test-android` reports as an error with the fix in it, rather than
+# guessing a path and failing somewhere less obvious.
+android_sdk_dir = $(strip $(or $(ANDROID_HOME),$(ANDROID_SDK_ROOT),$(shell sed -n 's/^ *sdk\.dir *= *//p' $(ANDROID_APP_DIR)/local.properties 2>/dev/null | head -n1)))
+
+# System libraries the Tauri crate links on Linux, as pkg-config names (what the
+# *-sys build scripts actually query) and as the apt line that installs them —
+# the same set desktop-build.yml installs on its ubuntu runner.
+DESKTOP_LINUX_PKGCONFIG := glib-2.0 gtk+-3.0 webkit2gtk-4.1 libsoup-3.0
+DESKTOP_LINUX_APT_PACKAGES := pkg-config libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
 # Helper: emoji $(2) when goal $(1) is the one invoked at top level, else ➤.
 # The MAKELEVEL/MAKECMDGOALS guard keeps the icon to the directly-requested
 # target, so recursive sub-makes fall back to the plain arrow.
@@ -798,6 +827,121 @@ test: ## Run the unit tests, both stacks
 	@uv run pytest
 
 	@printf "\nAll tests passed.\n\n"
+
+	@# The native suites are deliberately not part of this target (see the
+	@# comment above `test-android`), so say where they are rather than let
+	@# "All tests passed" imply more than it means.
+	@printf "$(BLUE)ⓘ$(RESET)  Native suites are separate: $(YELLOW)make test-android$(RESET), $(YELLOW)make test-desktop$(RESET)\n\n"
+
+.PHONY: test-android
+test-android: ## Run the Android native unit tests (JVM; no emulator needed)
+	@printf "$(call task_icon,test-android,🤖) Running Android unit tests...\n\n"
+
+	@# Kept out of `make test` on purpose: this needs a JDK $(ANDROID_JDK_MAJOR) and an Android
+	@# SDK, which a backend-only machine has no reason to carry. Folding it in
+	@# would turn `make test` red for everyone who never touches the app.
+	@#
+	@# Preconditions are checked the way `dev` checks overmind/caddy/ollama —
+	@# name the missing thing and the command that fixes it, rather than let
+	@# Gradle fail 300 lines later.
+	@JAVA=$$(command -v java 2>/dev/null); \
+	if [ -z "$$JAVA" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'java' installed or it is not in your PATH. The Android build needs JDK $(ANDROID_JDK_MAJOR) (point $(YELLOW)JAVA_HOME$(RESET) at one — Android Studio bundles a JBR).\n\n"; \
+		exit 1; \
+	fi; \
+	major=$$(java -version 2>&1 | sed -n 's/^[a-zA-Z ]*version "\([0-9][0-9]*\).*/\1/p' | head -n1); \
+	if [ "$$major" != "$(ANDROID_JDK_MAJOR)" ]; then \
+		printf "$(RED)✗$(RESET) JDK version mismatch. Expected $(ANDROID_JDK_MAJOR) (AGP 8.7.2 and jvmTarget 21 accept nothing else), but got $${major:-unknown}. Point $(YELLOW)JAVA_HOME$(RESET) at a JDK $(ANDROID_JDK_MAJOR).\n\n"; \
+		exit 1; \
+	fi; \
+	printf "$(GREEN)✓$(RESET) JDK $$major found at $$JAVA\n\n"
+
+	@# The SDK's location is the machine's business, never this file's: honour
+	@# ANDROID_HOME, then ANDROID_SDK_ROOT, then the sdk.dir Android Studio
+	@# writes into the project's (git-ignored) local.properties. Nothing is
+	@# guessed, and no path is hard-coded — an unset SDK is an error with a fix
+	@# in it, not a default that silently points somewhere wrong.
+	@SDK="$(android_sdk_dir)"; \
+	if [ -z "$$SDK" ]; then \
+		printf "$(RED)✗$(RESET) No Android SDK found. Set $(YELLOW)ANDROID_HOME$(RESET) (or ANDROID_SDK_ROOT) to your SDK root, or put $(YELLOW)sdk.dir=/path/to/sdk$(RESET) in $(ANDROID_APP_DIR)/local.properties.\n\n"; \
+		exit 1; \
+	elif [ ! -d "$$SDK" ]; then \
+		printf "$(RED)✗$(RESET) Android SDK path '$$SDK' is not a directory. Fix $(YELLOW)ANDROID_HOME$(RESET) / ANDROID_SDK_ROOT.\n\n"; \
+		exit 1; \
+	elif [ ! -d "$$SDK/platforms/android-$(ANDROID_COMPILE_SDK)" ]; then \
+		printf "$(RED)✗$(RESET) SDK at $$SDK has no $(YELLOW)platforms;android-$(ANDROID_COMPILE_SDK)$(RESET) (the project's compileSdk). Install it:\n"; \
+		printf "    $(YELLOW)sdkmanager \"platform-tools\" \"platforms;android-$(ANDROID_COMPILE_SDK)\" \"build-tools;$(ANDROID_BUILD_TOOLS)\"$(RESET)\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) Android SDK at $$SDK (platforms;android-$(ANDROID_COMPILE_SDK))\n\n"; \
+	fi
+
+	@# The three :ci-capacitor-* modules reach the Gradle build through yarn
+	@# `portal:` symlinks under this app's own node_modules, which a root PnP
+	@# install does not materialize (see CLAUDE.md → Package manager). Without
+	@# them, settings.gradle resolves nothing and the failure names a generated
+	@# file instead of the missing install.
+	@if [ ! -d $(ANDROID_APP_DIR)/../node_modules/@ci ]; then \
+		printf "$(RED)✗$(RESET) $(ANDROID_APP_DIR)/../node_modules/@ci is missing — the native modules are not linked. Run $(YELLOW)yarn install$(RESET) inside frontend/apps/android (it is a standalone project, not a workspace).\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) Native plugin modules linked\n\n"; \
+	fi
+
+	@# `testDebugUnitTest` with no module prefix runs every module that has a
+	@# unit-test source set, so a new plugin package is picked up without a line
+	@# here — the same reasoning as `foreach --all` in `test` above. Instrumented
+	@# (androidTest) suites are NOT here: they need a running device. Run those
+	@# with `./gradlew connectedDebugAndroidTest` against a booted emulator.
+	@cd $(ANDROID_APP_DIR) && ANDROID_HOME="$(android_sdk_dir)" ./gradlew testDebugUnitTest $(GRADLE_ARGS)
+
+	@# Each module writes its own report, and three of the four modules live
+	@# outside the app directory (they are pulled in over `portal:` symlinks),
+	@# so name both roots rather than one glob that misses most of them.
+	@printf "\n$(GREEN)✓$(RESET) Android unit tests passed. HTML reports:\n"
+	@printf "    $(ANDROID_APP_DIR)/app/build/reports/tests/testDebugUnitTest/index.html\n"
+	@printf "    frontend/packages/capacitor-*/android/build/reports/tests/testDebugUnitTest/index.html\n\n"
+
+.PHONY: test-desktop
+test-desktop: ## Run the desktop (Tauri/Rust) unit tests
+	@printf "$(call task_icon,test-desktop,🖥️) Running desktop tests...\n\n"
+
+	@CARGO=$$(command -v cargo 2>/dev/null); \
+	if [ -z "$$CARGO" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'cargo' installed or it is not in your PATH. Install the Rust toolchain from https://rustup.rs.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) cargo found at $$CARGO ($$(cargo --version | cut -d' ' -f2))\n\n"; \
+	fi
+
+	@# Linux only: the crate links GTK/WebKit through *-sys build scripts, so the
+	@# tests do not even COMPILE without the -dev packages — and the failure is
+	@# 200 lines of build-script output that never names the package to install.
+	@# pkg-config is exactly how those build scripts look, so ask it the same
+	@# question first and answer with the apt line desktop-build.yml already uses.
+	@if [ "$$(uname -s)" = "Linux" ]; then \
+		if ! command -v pkg-config >/dev/null 2>&1; then \
+			printf "$(RED)✗$(RESET) 'pkg-config' is not installed — the Rust *-sys build scripts need it to find GTK/WebKit.\n"; \
+			printf "    $(YELLOW)sudo apt-get install -y $(DESKTOP_LINUX_APT_PACKAGES)$(RESET)\n\n"; \
+			exit 1; \
+		fi; \
+		missing=""; \
+		for pkg in $(DESKTOP_LINUX_PKGCONFIG); do \
+			pkg-config --exists "$$pkg" 2>/dev/null || missing="$$missing $$pkg"; \
+		done; \
+		if [ -n "$$missing" ]; then \
+			printf "$(RED)✗$(RESET) Missing system libraries for the Tauri crate:$$missing\n"; \
+			printf "    $(YELLOW)sudo apt-get install -y $(DESKTOP_LINUX_APT_PACKAGES)$(RESET)\n"; \
+			printf "    (or set $(YELLOW)PKG_CONFIG_PATH$(RESET) if they live outside the default search path)\n\n"; \
+			exit 1; \
+		else \
+			printf "$(GREEN)✓$(RESET) GTK/WebKit development libraries found\n\n"; \
+		fi; \
+	fi
+
+	@cd $(DESKTOP_TAURI_DIR) && cargo test $(CARGO_ARGS)
+
+	@printf "\n$(GREEN)✓$(RESET) Desktop tests passed.\n\n"
 
 .PHONY: migrate
 migrate: ## Run database migrations

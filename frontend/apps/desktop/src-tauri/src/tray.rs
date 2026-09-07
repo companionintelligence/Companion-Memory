@@ -128,3 +128,42 @@ fn describe_status(status: &stack_manager::StackStatus) -> (String, bool, bool) 
         Running => ("Running".to_string(), false, true),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stack_manager::StackStatus;
+
+    /// The whole tray menu's enable/disable behaviour lives in this one
+    /// function, and getting it wrong is silently bad rather than loud: the
+    /// user sees a menu item that looks pressable and does nothing, or — worse
+    /// — a Start that fires `docker compose up` on a machine with no daemon and
+    /// dead-ends in the log instead of on screen.
+    ///
+    /// Asserted as the full table because the interesting content is the
+    /// *pattern* across states, not any single row: Start is offered in exactly
+    /// one state (Stopped), Stop in exactly the two where something is up or
+    /// coming up, and neither is offered while Docker itself is unusable.
+    #[test]
+    fn the_tray_offers_start_only_when_the_stack_is_actually_stopped() {
+        let row = |status| {
+            let (label, start, stop) = describe_status(&status);
+            (label, start, stop)
+        };
+
+        assert_eq!(
+            row(StackStatus::DockerNotInstalled),
+            ("Docker not installed".to_string(), false, false)
+        );
+        assert_eq!(
+            row(StackStatus::DockerNotRunning),
+            ("Docker not running".to_string(), false, false)
+        );
+        assert_eq!(row(StackStatus::Stopped), ("Stopped".to_string(), true, false));
+        // Starting keeps Stop live on purpose: a cold start pulling several GB
+        // of images is the one time a user most wants a way out of it, and
+        // Start would be a no-op while an `up` is already running.
+        assert_eq!(row(StackStatus::Starting), ("Starting…".to_string(), false, true));
+        assert_eq!(row(StackStatus::Running), ("Running".to_string(), false, true));
+    }
+}

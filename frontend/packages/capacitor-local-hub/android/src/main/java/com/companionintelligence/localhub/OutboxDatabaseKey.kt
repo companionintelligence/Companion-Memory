@@ -32,7 +32,7 @@ class OutboxKeyLostException(message: String, cause: Throwable? = null) : Runtim
  * runs on those bytes, so the `PRAGMA key` and `sqlite3_key()` paths are equivalent here.
  */
 class OutboxDatabaseKey(
-    private val store: CompanionSecureStore,
+    private val store: SecureValueStore,
     private val entryName: String = DEFAULT_ENTRY_NAME,
 ) {
     /**

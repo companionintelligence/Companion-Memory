@@ -85,6 +85,38 @@ jobs:
         working-directory: frontend/apps/desktop
         run: node scripts/sync-compose-resources.cjs
 
+      # The crate's own unit tests (`#[cfg(test)]` modules in src/), run before
+      # the bundle so a logic failure is reported in seconds rather than after a
+      # full release build. Cheap here: the toolchain, the system libraries and
+      # the rust-cache above are already in place.
+      #
+      # Skipped for x86_64-apple-darwin, the one CROSS-compiled entry in the
+      # matrix — macos-latest is arm64, so an x86_64 test binary would need
+      # Rosetta to run. `cargo test` with no --target builds for the host, which
+      # is what every other entry already is. The remaining three still cover all
+      # three operating systems, which matters: the sidecar's release-asset
+      # resolution and the stack manager's path handling are per-OS.
+      #
+      # --no-fail-fast so one failure does not hide the rest of the suite.
+      # Locally this is `make test-desktop`.
+      - name: Cargo test
+        if: matrix.target != 'x86_64-apple-darwin'
+        working-directory: frontend/apps/desktop/src-tauri
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --no-fail-fast 2>&1 | tee cargo-test.log
+
+      # cargo emits no report file, so the captured log IS the report. Failure
+      # only — on a green run it is the same text the step above already printed.
+      - name: Upload test log
+        if: failure() && matrix.target != 'x86_64-apple-darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-server-desktop-test-log-${{ matrix.target }}
+          path: frontend/apps/desktop/src-tauri/cargo-test.log
+          if-no-files-found: ignore
+
       - name: Build (Tauri, unsigned)
         working-directory: frontend/apps/desktop
         shell: bash

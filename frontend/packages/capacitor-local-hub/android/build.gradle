@@ -42,6 +42,16 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+    testOptions {
+        unitTests {
+            // Robolectric reads the merged manifest through the
+            // com/android/tools/test_config.properties AGP only writes when this is on.
+            includeAndroidResources = true
+            // Left off deliberately: a stray android.* call from a JVM test must fail loudly
+            // rather than quietly return 0/null/false and make a test pass for the wrong reason.
+            returnDefaultValues = false
+        }
+    }
     lintOptions {
         abortOnError false
     }
@@ -90,6 +100,17 @@ dependencies {
     implementation 'androidx.sqlite:sqlite:2.6.2'
 
     testImplementation "junit:junit:$junitVersion"
+
+    // JVM router tests for LocalHubServer (src/test). Robolectric is here for exactly one
+    // reason: LocalHubServer speaks org.json, and AGP's mockable android.jar stubs every
+    // org.json method into a "not mocked" thrower. Robolectric's sandbox supplies the real AOSP
+    // implementation -- the same one the device runs, which matters because the router's strict
+    // typing (`opt("ok") as? Boolean`) is exactly where org.json implementations differ.
+    // 4.14.1 is the first line that supports compileSdk/targetSdk 35.
+    //
+    // NanoHTTPD and capacitor-android are already on this classpath: testImplementation
+    // extends implementation. The key/shredder tests need nothing beyond junit.
+    testImplementation 'org.robolectric:robolectric:4.14.1'
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
 }

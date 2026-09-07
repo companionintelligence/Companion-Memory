@@ -84,6 +84,38 @@ jobs:
         working-directory: frontend/apps/android/android
         run: ./gradlew assembleDebug --no-daemon
 
+      # The JVM unit suites for the four modules this repo owns — :app plus the
+      # three :ci-capacitor-* plugins (Robolectric, no emulator, no device). They
+      # cost well under a minute on top of a toolchain and a Gradle cache the
+      # assembleDebug step above has already paid for, which is the whole reason
+      # they live here rather than in a job of their own.
+      #
+      # `testDebugUnitTest` with no module prefix runs every module that has a
+      # unit-test source set, so a new plugin package is covered without an edit
+      # here. Locally this is `make test-android`, which checks the same
+      # toolchain preconditions first.
+      #
+      # --continue: report every module's failures in one run instead of
+      # stopping at the first, so the uploaded reports below are complete.
+      - name: Gradle unit tests
+        working-directory: frontend/apps/android/android
+        run: ./gradlew testDebugUnitTest --no-daemon --continue
+
+      # Only on failure — a green run's reports say nothing the log does not, and
+      # the modules live under two different roots (the three plugins reach the
+      # build over `portal:` symlinks from frontend/packages), so both are listed.
+      - name: Upload unit test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-reports
+          path: |
+            frontend/apps/android/android/app/build/reports/tests/testDebugUnitTest/**
+            frontend/apps/android/android/app/build/test-results/testDebugUnitTest/**
+            frontend/packages/capacitor-*/android/build/reports/tests/testDebugUnitTest/**
+            frontend/packages/capacitor-*/android/build/test-results/testDebugUnitTest/**
+          if-no-files-found: ignore
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

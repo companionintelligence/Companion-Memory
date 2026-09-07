@@ -33,8 +33,24 @@ other six:
 | `mobile-release.yml` | **`push` on `ios-v*` / `android-v*` / `mobile-release-v*` tags**, plus dispatch | NOT gated for tags. Never runs on a PR. Signed TestFlight / Play internal lane. |
 | `desktop-release.yml` | **`push` on `desktop-v*` tags**, plus dispatch | NOT gated for tags. Signed macOS/Windows lanes skip (not fail) until their signing secrets are provisioned — see that workflow's header comment. |
 | `consent-path-gate.yml` | `workflow_dispatch` | The merge gate for the federated-ask consent path. `gh workflow run "Consent path gate" --ref <branch>`. Ships dispatch-only on purpose - see [`asks-system-guide.md` §7.3](asks-system-guide.md). |
-| `mobile-build.yml` | `workflow_dispatch` | Debug APK + iOS Simulator `.app`. |
-| `desktop-build.yml` | `workflow_dispatch` | Unsigned dmg/deb/rpm/AppImage/msi — the desktop local-orchestrator app (`frontend/apps/desktop`). |
+| `mobile-build.yml` | `workflow_dispatch` | Debug APK + iOS Simulator `.app`. The Android job also runs the **Android JVM unit tests** (`./gradlew testDebugUnitTest` — `:app` plus the three `:ci-capacitor-*` plugin modules; Robolectric, no emulator) straight after `assembleDebug`, and uploads the HTML/XML reports as `android-unit-test-reports` **on failure only**. Locally: `make test-android`. |
+| `desktop-build.yml` | `workflow_dispatch` | Unsigned dmg/deb/rpm/AppImage/msi — the desktop local-orchestrator app (`frontend/apps/desktop`). Each host-native matrix entry also runs **`cargo test`** before bundling (skipped for `x86_64-apple-darwin`, the one cross-compiled entry — `macos-latest` is arm64), uploading the captured log **on failure only**. Locally: `make test-desktop`. |
+
+### Native suites are not in `make test`
+
+`make test` covers the JS and Python stacks only. The two native suites need
+toolchains a backend-only machine has no reason to carry, so they are their own
+targets — each checks its prerequisites first and names the fix when one is
+missing:
+
+| Target | Runs | Needs |
+|---|---|---|
+| `make test-android` | `./gradlew testDebugUnitTest` in `frontend/apps/android/android` — 100 JVM tests across `:app`, `:ci-capacitor-local-hub`, `:ci-capacitor-local-llm`, `:ci-capacitor-speech` | JDK 21, an Android SDK with `platforms;android-35` located via `ANDROID_HOME` / `ANDROID_SDK_ROOT` / `local.properties`, and `yarn install` having been run inside `frontend/apps/android` |
+| `make test-desktop` | `cargo test` in `frontend/apps/desktop/src-tauri` — 36 tests | A Rust toolchain, plus (Linux) the GTK/WebKit `-dev` packages `desktop-build.yml` installs |
+
+The **instrumented** Android suites (`src/androidTest`) are in neither the make
+targets nor CI: they need a booted device. Run them by hand against an emulator
+with `./gradlew connectedDebugAndroidTest`.
 
 ---
 

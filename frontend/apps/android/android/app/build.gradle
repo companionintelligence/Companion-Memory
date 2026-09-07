@@ -53,6 +53,34 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+
+    // Robolectric needs AGP to emit com/android/tools/test_config.properties, which points the
+    // test JVM at the MERGED manifest, resources and assets. Without this the RobolectricTestRunner
+    // tests in src/test fail at startup with "No such manifest file"; the plain JUnit tests in the
+    // same source set do not need it. Groovy DSL spelling -- `includeAndroidResources`, not the
+    // Kotlin `isIncludeAndroidResources`.
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+        }
+    }
+}
+
+// The contract tests in src/test read these files straight off disk (see ProjectFiles) to pin
+// declarations that span repositories-within-the-repo: the deep-link scheme against the web and
+// iOS sides, the API base against the backend config, the FcmStatus plugin id against its only
+// JS consumer. None of them is on a classpath or in a source set, so Gradle sees no dependency
+// and would leave testDebugUnitTest UP-TO-DATE through exactly the edits these tests exist to
+// catch -- a test that does not run cannot fail. Declaring them as inputs is what makes an edit
+// on the far side of one of these boundaries re-run the check.
+def crossBoundaryTestInputs = files(
+    "${projectDir}/../../../../packages/common/src/utils/oidcNative.ts",
+    "${projectDir}/../../../../apps/ios/ios/App/App/Info.plist",
+    "${projectDir}/../../../../apps/web/src/lib/registerNativePushToken.ts",
+    "${projectDir}/../../../../../backend/apps/api/config/default.json"
+)
+tasks.withType(Test).configureEach {
+    inputs.files(crossBoundaryTestInputs).withPropertyName('crossBoundaryContractSources')
 }
 
 // Fail at configuration time rather than shipping an unsigned release artifact that
@@ -84,6 +112,16 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
+    // JSObject extends org.json.JSONObject. In a plain (non-Robolectric) unit test the only
+    // org.json on the classpath would otherwise be AGP's mockable android.jar stub, whose
+    // methods all throw "not mocked". @capacitor/android declares this same coordinate for
+    // exactly the same reason in its own build.gradle.
+    testImplementation "org.json:json:20240303"
+    // Needed only by the two tests that require a real Activity / merged manifest
+    // (MainActivityPluginRegistrationTest, MergedManifestPermissionsTest). 4.14.x is the
+    // generation that supports compileSdk 35; it pulls the shadows framework and
+    // Robolectric.buildActivity transitively.
+    testImplementation "org.robolectric:robolectric:4.14.1"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

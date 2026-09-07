@@ -63,6 +63,40 @@ sealed class EnqueueOutcome {
 }
 
 /**
+ * The queue operations [LocalHubServer] routes onto.
+ *
+ * Named as an interface so the router can be exercised without SQLCipher: every storage
+ * behaviour below this line lives behind `libsqlcipher.so`, which has no host build, so a
+ * [LocalHubServer] that could only be handed a real [OutboxStore] could not be tested off a
+ * device at all. [OutboxStore] is the only production implementation and its behaviour is
+ * unchanged.
+ *
+ * `open()` is deliberately absent: it is a lifecycle concern rather than a queue operation, and
+ * only `LocalHubPlugin` calls it, on the concrete type.
+ */
+interface OutboxQueue {
+    /** Hard cap on stored items; echoed to callers so a full queue is a reported condition. */
+    val maxItems: Int
+
+    /** The depth at which callers should start warning; echoed alongside [maxItems]. */
+    val warnAt: Int
+
+    fun enqueue(kind: String, payloadJson: String, capturedAt: String, idempotencyKey: String): EnqueueOutcome
+
+    fun list(statusFilter: String?): List<OutboxItem>
+
+    fun get(id: String): OutboxItem?
+
+    fun delete(id: String): Boolean
+
+    fun recordFailedAttempt(id: String, error: String, permanent: Boolean): OutboxItem?
+
+    fun retry(id: String): OutboxItem?
+
+    fun counts(): OutboxCounts
+}
+
+/**
  * Durable, **encrypted**, on-disk store behind the Local Hub's `/api/outbox` routes.
  *
  * **Durability is the entire point of this class**, so a few properties are load-bearing
@@ -123,7 +157,7 @@ class OutboxStore(
      * 5000 rows over HTTP per test run would be slow enough that the capacity path would end
      * up untested instead.
      */
-    val maxItems: Int = MAX_ITEMS,
+    override val maxItems: Int = MAX_ITEMS,
     /**
      * Plaintext database left behind by a pre-encryption install, imported and then shredded
      * on first open. `null` disables the import entirely (used by tests that want a store with
@@ -149,10 +183,11 @@ class OutboxStore(
     // Write-ahead logging left off, matching the pre-encryption behaviour: the queue's write
     // rate is low and rollback-journal mode keeps `synchronous = FULL` semantics on commit.
     false,
-) {
+),
+    OutboxQueue {
 
     /** 80% of [maxItems]; reported to callers so queue pressure is visible before the wall. */
-    val warnAt: Int = maxItems * 8 / 10
+    override val warnAt: Int = maxItems * 8 / 10
 
     private val appContext = context.applicationContext
     private val legacyDatabaseFile: File? =
@@ -217,7 +252,7 @@ class OutboxStore(
      * replaced with server/device-receive time, or the timeline the user sees would shift
      * whenever a capture sat in the queue.
      */
-    fun enqueue(
+    override fun enqueue(
         kind: String,
         payloadJson: String,
         capturedAt: String,
@@ -261,7 +296,7 @@ class OutboxStore(
     }
 
     /** Oldest-first (FIFO) list. [statusFilter] of `null` means every status. Payloads omitted. */
-    fun list(statusFilter: String?): List<OutboxItem> {
+    override fun list(statusFilter: String?): List<OutboxItem> {
         val db = database()
         val cursor = db.query(
             TABLE_NAME,
@@ -282,10 +317,10 @@ class OutboxStore(
     }
 
     /** One item *including* its payload, or `null` if [id] is unknown. */
-    fun get(id: String): OutboxItem? = queryOne(database(), "$COLUMN_ID = ?", id, includePayload = true)
+    override fun get(id: String): OutboxItem? = queryOne(database(), "$COLUMN_ID = ?", id, includePayload = true)
 
     /** Removes one item. Returns false if [id] was already gone. */
-    fun delete(id: String): Boolean = synchronized(writeLock) {
+    override fun delete(id: String): Boolean = synchronized(writeLock) {
         database().delete(TABLE_NAME, "$COLUMN_ID = ?", arrayOf(id)) > 0
     }
 
@@ -298,7 +333,7 @@ class OutboxStore(
      * point, so the only ways out are an explicit retry ([retry]) or an explicit discard
      * ([delete]).
      */
-    fun recordFailedAttempt(id: String, error: String, permanent: Boolean): OutboxItem? = synchronized(writeLock) {
+    override fun recordFailedAttempt(id: String, error: String, permanent: Boolean): OutboxItem? = synchronized(writeLock) {
         val db = database()
         db.beginTransactionNonExclusive()
         try {
@@ -331,7 +366,7 @@ class OutboxStore(
      * deliberately kept: it is the only record of why the item stalled, and the next failed
      * attempt overwrites it anyway.
      */
-    fun retry(id: String): OutboxItem? = synchronized(writeLock) {
+    override fun retry(id: String): OutboxItem? = synchronized(writeLock) {
         val db = database()
         db.beginTransactionNonExclusive()
         try {
@@ -349,7 +384,7 @@ class OutboxStore(
         }
     }
 
-    fun counts(): OutboxCounts {
+    override fun counts(): OutboxCounts {
         val db = database()
         val pending = countWhere(db, STATUS_PENDING)
         val needsAttention = countWhere(db, STATUS_NEEDS_ATTENTION)
@@ -416,7 +451,7 @@ class OutboxStore(
 
         plaintext.use { copyLegacyRows(it, db) }
 
-        shred(legacy)
+        PlaintextShredder.shred(legacy)
     }
 
     private fun copyLegacyRows(from: PlaintextSQLiteDatabase, to: SQLiteDatabase) {
@@ -472,52 +507,6 @@ class OutboxStore(
             arrayOf(TABLE_NAME),
         )
         return cursor.use { it.moveToFirst() }
-    }
-
-    /**
-     * Overwrites a file's bytes before unlinking it. `File.delete()` only detaches the inode --
-     * the pages stay on flash until they happen to be reused, which for a database that held
-     * unencrypted user captures is the difference between "deleted" and "recoverable".
-     *
-     * Best-effort by nature: wear-levelling means the controller may write the overwrite to a
-     * fresh block and leave the original untouched. It is the right gesture, not a guarantee,
-     * and it is the reason encryption-at-rest -- not deletion -- is the control this design
-     * actually leans on.
-     */
-    private fun shred(databaseFile: File) {
-        for (file in listOf(
-            File(databaseFile.path + "-journal"),
-            File(databaseFile.path + "-wal"),
-            File(databaseFile.path + "-shm"),
-            databaseFile,
-        )) {
-            overwrite(file)
-            file.delete()
-        }
-    }
-
-    private fun overwrite(file: File) {
-        if (!file.exists() || file.length() == 0L) {
-            return
-        }
-        try {
-            // "rws" writes through to the device rather than the page cache.
-            RandomAccessFile(file, "rws").use { handle ->
-                val length = handle.length()
-                val buffer = ByteArray(SHRED_BUFFER_BYTES)
-                SecureRandom().nextBytes(buffer)
-                handle.seek(0)
-                var written = 0L
-                while (written < length) {
-                    val chunk = minOf(buffer.size.toLong(), length - written).toInt()
-                    handle.write(buffer, 0, chunk)
-                    written += chunk
-                }
-                handle.fd.sync()
-            }
-        } catch (e: IOException) {
-            // Nothing actionable: the delete below is still worth doing.
-        }
     }
 
     // ------------------------------------------------------------------ queries
@@ -604,8 +593,6 @@ class OutboxStore(
          */
         const val MAX_ITEMS = 5000
 
-        private const val SHRED_BUFFER_BYTES = 64 * 1024
-
         private val LIST_COLUMNS = arrayOf(
             COLUMN_SEQ,
             COLUMN_ID,
@@ -621,4 +608,65 @@ class OutboxStore(
         /** Everything, including the idempotency key, which the API projections never expose. */
         private val MIGRATION_COLUMNS = FULL_COLUMNS + COLUMN_IDEMPOTENCY_KEY
     }
+}
+
+/**
+ * Overwrites a database file's bytes before unlinking it. `File.delete()` only detaches the
+ * inode -- the pages stay on flash until they happen to be reused, which for a database that
+ * held unencrypted user captures is the difference between "deleted" and "recoverable".
+ *
+ * Best-effort by nature: wear-levelling means the controller may write the overwrite to a fresh
+ * block and leave the original untouched. It is the right gesture, not a guarantee, and it is
+ * the reason encryption-at-rest -- not deletion -- is the control this design actually leans on.
+ *
+ * A top-level object rather than a pair of private [OutboxStore] methods so it can be tested on
+ * the JVM: this is pure `java.io`, while everything else in the store is behind
+ * `libsqlcipher.so`, which has no host build. The bodies moved verbatim; the only caller is
+ * still [OutboxStore.importLegacyPlaintextOutbox].
+ */
+object PlaintextShredder {
+
+    /** Scrubs and unlinks [databaseFile] together with its journal/WAL/shm sidecars. */
+    fun shred(databaseFile: File) {
+        for (file in listOf(
+            File(databaseFile.path + "-journal"),
+            File(databaseFile.path + "-wal"),
+            File(databaseFile.path + "-shm"),
+            databaseFile,
+        )) {
+            overwrite(file)
+            file.delete()
+        }
+    }
+
+    /**
+     * Replaces every byte of [file] with `SecureRandom` output, in place and to the last byte.
+     * A missing or already-empty file is left exactly as it is -- notably it is *not* created,
+     * which matters because [shred] names sidecars that usually do not exist.
+     */
+    fun overwrite(file: File) {
+        if (!file.exists() || file.length() == 0L) {
+            return
+        }
+        try {
+            // "rws" writes through to the device rather than the page cache.
+            RandomAccessFile(file, "rws").use { handle ->
+                val length = handle.length()
+                val buffer = ByteArray(SHRED_BUFFER_BYTES)
+                SecureRandom().nextBytes(buffer)
+                handle.seek(0)
+                var written = 0L
+                while (written < length) {
+                    val chunk = minOf(buffer.size.toLong(), length - written).toInt()
+                    handle.write(buffer, 0, chunk)
+                    written += chunk
+                }
+                handle.fd.sync()
+            }
+        } catch (e: IOException) {
+            // Nothing actionable: the delete in shred() is still worth doing.
+        }
+    }
+
+    private const val SHRED_BUFFER_BYTES = 64 * 1024
 }

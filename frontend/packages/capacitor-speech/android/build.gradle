@@ -62,6 +62,16 @@ android {
     }
 }
 
+// SpeechRecognitionLogicTest reads ../src/definitions.ts off disk to check that the
+// RecognitionTier wire values are members of the TypeScript SpeechRecognitionTier union.
+// Gradle cannot see that dependency — the file is on no classpath and in no source set — so
+// without declaring it the test task stays UP-TO-DATE through exactly the TypeScript edit it
+// exists to catch. Verified: renaming a union member left the task skipped and the build
+// green until this was added.
+tasks.withType(Test).configureEach {
+    inputs.file("${projectDir}/../src/definitions.ts").withPropertyName('speechPluginDefinitions')
+}
+
 repositories {
     google()
     mavenCentral()

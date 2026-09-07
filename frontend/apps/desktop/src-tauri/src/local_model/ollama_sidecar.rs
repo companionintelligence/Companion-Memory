@@ -395,17 +395,178 @@ mod tests {
         assert!(verify_checksum(&path, &actual).is_ok());
     }
 
-    /// Exercises real process spawning against whatever `ollama` binary is
-    /// actually on this machine's PATH — not mocked. Ignored by default (needs
-    /// a real Ollama install), run explicitly with `cargo test -- --ignored`.
-    /// Deliberately does not call ensure_available()/pull_model(): that would
-    /// pull several hundred MB on a bare CI runner. This only proves the
-    /// spawn_serve/wait_until_ready/is_running lifecycle plumbing works
-    /// against a real binary.
+    /// A real HTTP server on a real ephemeral loopback port.
+    ///
+    /// Not a mock, because the thing under test *is* the HTTP conversation:
+    /// reqwest's client construction, the status-code check, and the
+    /// newline-framed NDJSON body Ollama streams back. A stub that returned a
+    /// canned `Result` would test nothing that has ever broken here.
+    fn serve(handler: impl Fn(tiny_http::Request) + Send + 'static) -> u16 {
+        let server = tiny_http::Server::http(("127.0.0.1", 0)).expect("bind a loopback test server");
+        let port = server.server_addr().to_ip().expect("an IP address").port();
+        std::thread::spawn(move || {
+            for request in server.incoming_requests() {
+                handler(request);
+            }
+        });
+        port
+    }
+
+    fn respond(request: tiny_http::Request, status: u16, body: &str) {
+        let _ = request.respond(tiny_http::Response::from_string(body).with_status_code(status));
+    }
+
+    /// `is_running` decides the whole three-tier resolution: a false positive
+    /// here means the sidecar is never started and CI-Server is left pointing
+    /// at a port that answers nothing it understands, with no error anywhere.
+    /// So an open socket is not enough — the response has to succeed.
     #[test]
-    #[ignore]
+    fn a_port_that_answers_but_is_not_ollama_does_not_count_as_running() {
+        let healthy = serve(|request| respond(request, 200, r#"{"version":"0.32.15"}"#));
+        assert!(is_running(healthy));
+
+        let someone_else = serve(|request| respond(request, 404, "not found"));
+        assert!(!is_running(someone_else));
+
+        let server_error = serve(|request| respond(request, 500, "internal server error"));
+        assert!(!is_running(server_error));
+
+        let nobody = crate::port_check::find_free_port().expect("a free port");
+        assert!(!is_running(nobody));
+    }
+
+    /// The wire shape Ollama's own `/api/pull` expects. `model` is the current
+    /// field name (the older `name` is what a from-memory rewrite reaches for),
+    /// and `stream: true` is what makes the NDJSON progress this function reads
+    /// line-by-line exist at all.
+    #[test]
+    fn a_pull_asks_ollama_for_the_named_model_over_its_streaming_endpoint() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let port = serve(move |mut request| {
+            let mut body = String::new();
+            let _ = request.as_reader().read_to_string(&mut body);
+            let _ = tx.send((request.method().to_string(), request.url().to_string(), body));
+            respond(request, 200, "{\"status\":\"pulling manifest\"}\n{\"status\":\"success\"}\n");
+        });
+
+        pull_model(port, DEFAULT_EMBED_MODEL).expect("a clean progress stream should succeed");
+
+        let (method, url, body) = rx.recv_timeout(Duration::from_secs(5)).expect("the pull request");
+        assert_eq!(method, "POST");
+        assert_eq!(url, "/api/pull");
+        let sent: serde_json::Value = serde_json::from_str(&body).expect("a JSON request body");
+        assert_eq!(sent["model"], DEFAULT_EMBED_MODEL);
+        assert_eq!(sent["stream"], true);
+    }
+
+    /// A refused pull must not read as a completed one. It used to be possible
+    /// for this to pass silently and leave the app running with no embedding
+    /// model at all, which surfaces much later as empty search results rather
+    /// than as a start-up failure.
+    #[test]
+    fn a_pull_refused_outright_fails_with_the_status_code_and_the_model_name() {
+        let port = serve(|request| respond(request, 500, "internal server error"));
+
+        let err = pull_model(port, DEFAULT_CHAT_MODEL).expect_err("HTTP 500 is not a successful pull");
+
+        assert!(err.contains("500"), "the status code should reach the user: {err}");
+        assert!(err.contains(DEFAULT_CHAT_MODEL), "the model should reach the user: {err}");
+    }
+
+    /// Ollama's progress stream is chatty and only loosely structured: blank
+    /// lines, per-layer digest/total records with no `status` field at all, and
+    /// (on some builds) plain text. None of that is a failure, and treating an
+    /// unparseable line as one would turn most successful pulls into a start-up
+    /// error. A `status` of "error" is the one line that must stop the pull —
+    /// matched case-insensitively, because the casing is not contractual.
+    #[test]
+    fn pull_progress_noise_is_tolerated_but_an_error_status_is_not() {
+        let chatty = serve(|request| {
+            respond(
+                request,
+                200,
+                "{\"status\":\"pulling manifest\"}\n\
+                 \n   \n\
+                 not json at all\n\
+                 {\"digest\":\"sha256:abc\",\"total\":1024,\"completed\":512}\n\
+                 {\"status\":\"success\"}\n",
+            )
+        });
+        assert!(
+            pull_model(chatty, DEFAULT_EMBED_MODEL).is_ok(),
+            "progress chatter must not abort a pull that finished",
+        );
+
+        let failing = serve(|request| {
+            respond(request, 200, "{\"status\":\"pulling manifest\"}\n{\"status\":\"ERROR\"}\n")
+        });
+        let err = pull_model(failing, DEFAULT_EMBED_MODEL).expect_err("an error status must fail the pull");
+        assert!(err.contains("reported an error"), "{err}");
+    }
+
+    /// Which decompressor runs is chosen purely from the asset filename, and
+    /// the filenames come from release_asset() above — so a bad suffix match
+    /// shows up as "ollama-darwin.tgz did not contain ollama", blaming the
+    /// download for a dispatch bug. The .tgz archive here is built on the spot
+    /// rather than checked in, so this covers the real flate2 -> tar wiring.
+    #[test]
+    fn an_archive_is_unpacked_by_its_extension_and_an_unknown_one_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = b"#!/bin/sh\necho ollama\n";
+
+        let tgz_path = dir.path().join("ollama-darwin.tgz");
+        {
+            let file = std::fs::File::create(&tgz_path).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+            let mut builder = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, binary_name(), &payload[..]).unwrap();
+            builder.into_inner().unwrap().finish().unwrap();
+        }
+
+        let dest = dir.path().join("unpacked");
+        std::fs::create_dir_all(&dest).unwrap();
+        extract_archive(&tgz_path, "ollama-darwin.tgz", &dest).expect("a .tgz should unpack");
+        assert_eq!(std::fs::read(dest.join(binary_name())).unwrap(), payload);
+
+        // Nothing handles this suffix, and failing loudly is the point: a
+        // silent no-op would leave the caller reporting a missing binary.
+        let err = extract_archive(&tgz_path, "ollama-linux-amd64.deb", &dest)
+            .expect_err("an unhandled archive format must be an error");
+        assert!(err.contains("Unrecognized archive format"), "{err}");
+    }
+
+    /// Exercises real process spawning against whatever `ollama` binary is
+    /// actually on this machine's PATH — not mocked. Deliberately does not call
+    /// ensure_available()/pull_model(): that would pull several hundred MB on a
+    /// bare CI runner. This only proves the spawn_serve/wait_until_ready/
+    /// is_running lifecycle plumbing works against a real binary.
+    ///
+    /// This was `#[ignore]`d, which meant it ran nowhere: an ignored test is
+    /// only reached by `cargo test -- --ignored`, and nothing in this repo
+    /// invokes that (see docs/CI.md — the desktop workflow is dispatch-only and
+    /// runs a plain `cargo test`). It now runs.
+    ///
+    /// A missing `ollama` is a hard failure rather than a quiet `return`,
+    /// deliberately. `cargo test` prints no marker for an early return, so a
+    /// skip is indistinguishable from a pass in the summary — anyone reading a
+    /// green run would believe the sidecar lifecycle was exercised when on a
+    /// bare host nothing was. The cost is that this file demands Ollama on the
+    /// test host; the benefit is that "37 passed" means what it says.
+    ///
+    /// Safe against a user's own Ollama: it serves on an ephemeral port, never
+    /// OLLAMA_PORT, and passes no OLLAMA_MODELS override, so it only ever reads
+    /// the existing model directory.
+    #[test]
     fn spawn_serve_on_an_alternate_port_becomes_ready() {
-        let binary = find_on_path().expect("expected `ollama` on PATH for this test host");
+        let binary = find_on_path().expect(
+            "this test spawns a real `ollama serve`, so it needs the binary on PATH \
+             (or on stack_manager::extended_path_env). Install Ollama on this host \
+             rather than making the assertion conditional — a silent skip reads as a pass.",
+        );
         let port = crate::port_check::find_free_port().expect("a free port");
         assert!(!is_running(port));
 

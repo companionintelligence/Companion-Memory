@@ -158,14 +158,11 @@ fn resolve_and_start(
 ) -> Result<(LocalModelResolution, LlmEnvOverride), String> {
     let host_ollama_running = ollama_sidecar::is_running(ollama_sidecar::OLLAMA_PORT);
 
-    let chat_backend = if host_ollama_running {
-        ChatBackend::HostOllama
-    } else if apple_chat_available(apple_bridge_binary) {
-        ChatBackend::AppleOnDevice
-    } else {
-        ChatBackend::BundledOllama
-    };
+    let chat_backend = choose_chat_backend(host_ollama_running, || apple_chat_available(apple_bridge_binary));
 
+    // `mut` only on macOS: the Apple-bridge arm just below is the sole writer,
+    // and it is compiled out on every other host.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut env = LlmEnvOverride::default();
     if chat_backend == ChatBackend::AppleOnDevice {
         #[cfg(target_os = "macos")]
@@ -200,6 +197,28 @@ fn resolve_and_start(
     Ok((LocalModelResolution { chat_backend, detail }, env))
 }
 
+/// Which backend answers chat, split from the probes that feed it so the
+/// precedence is testable on any host — the same shape (and the same reason)
+/// as stack_manager::choose_docker_host.
+///
+/// The order is the point. A user who already runs their own Ollama has chosen
+/// their models and keeps them; nothing here may quietly move their chat onto
+/// Apple's on-device model instead. Apple only wins the fallback, and the
+/// bundled small models are the last resort.
+///
+/// `apple_chat_available` is a closure rather than a `bool` so it stays lazy:
+/// on macOS the real probe spawns `ci-apple-bridge --check` as a subprocess,
+/// and the first arm's whole job is to make that unnecessary.
+fn choose_chat_backend(host_ollama_running: bool, apple_chat_available: impl FnOnce() -> bool) -> ChatBackend {
+    if host_ollama_running {
+        ChatBackend::HostOllama
+    } else if apple_chat_available() {
+        ChatBackend::AppleOnDevice
+    } else {
+        ChatBackend::BundledOllama
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn apple_chat_available(bridge_binary: &Path) -> bool {
     apple_bridge::is_available(bridge_binary)
@@ -208,4 +227,39 @@ fn apple_chat_available(bridge_binary: &Path) -> bool {
 #[cfg(not(target_os = "macos"))]
 fn apple_chat_available(_bridge_binary: &Path) -> bool {
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The user's own Ollama outranks everything. Getting this order wrong is
+    /// not a crash — the app would come up looking fine while chat silently
+    /// ran on a different model than the one the user installed and pulled
+    /// weights for, which is the kind of thing nobody reports as a bug.
+    #[test]
+    fn a_users_own_ollama_outranks_the_apple_on_device_model() {
+        assert_eq!(choose_chat_backend(true, || true), ChatBackend::HostOllama);
+        assert_eq!(choose_chat_backend(true, || false), ChatBackend::HostOllama);
+        assert_eq!(choose_chat_backend(false, || true), ChatBackend::AppleOnDevice);
+        assert_eq!(choose_chat_backend(false, || false), ChatBackend::BundledOllama);
+    }
+
+    /// The first arm exists precisely so the Apple probe — which spawns
+    /// `ci-apple-bridge --check` and waits on it — never runs when the answer
+    /// is already known. Turning the closure into an eagerly evaluated `bool`
+    /// argument would keep every assertion above passing while adding a
+    /// subprocess to every launch on the most common macOS path.
+    #[test]
+    fn the_apple_probe_is_not_run_once_a_host_ollama_has_answered() {
+        let probes = std::cell::Cell::new(0);
+
+        let backend = choose_chat_backend(true, || {
+            probes.set(probes.get() + 1);
+            true
+        });
+
+        assert_eq!(backend, ChatBackend::HostOllama);
+        assert_eq!(probes.get(), 0, "the Apple bridge should not have been probed at all");
+    }
 }
