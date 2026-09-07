@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Injectable } from '@nestjs/common';
 import { z } from 'zod';
 
@@ -16,6 +15,48 @@ const getStreamingAvailabilityInputSchema = z.object({
 });
 
 type GetStreamingAvailabilityInput = z.infer<typeof getStreamingAvailabilityInputSchema>;
+
+// The slices of TMDB's payloads this tool reads (https://developer.themoviedb.org/reference).
+interface TmdbGenre {
+  id: number;
+  name: string;
+}
+
+interface TmdbGenreList {
+  genres?: TmdbGenre[];
+}
+
+/** One trending / discover result; films carry `title`, series `name`. */
+interface TmdbItem {
+  id: number;
+  media_type?: 'movie' | 'tv' | 'person';
+  title?: string;
+  name?: string;
+  overview?: string;
+  release_date?: string;
+  first_air_date?: string;
+  genre_ids?: number[];
+  vote_average?: number;
+  poster_path?: string | null;
+}
+
+interface TmdbPage {
+  results?: TmdbItem[];
+}
+
+interface TmdbProvider {
+  provider_name: string;
+}
+
+interface TmdbCountryProviders {
+  flatrate?: TmdbProvider[];
+  rent?: TmdbProvider[];
+  buy?: TmdbProvider[];
+}
+
+interface TmdbWatchProviders {
+  results?: Record<string, TmdbCountryProviders | undefined>;
+}
 
 // Output interfaces
 interface StreamingTitle {
@@ -201,11 +242,11 @@ export class GetStreamingAvailabilityTool extends BaseTool<
         return null;
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as TmdbGenreList;
       const normalizedGenre = genreName.toLowerCase().trim();
 
       // Find matching genre (flexible matching)
-      const matchingGenre = data.genres?.find((g: any) => {
+      const matchingGenre = data.genres?.find((g) => {
         const genreNameLower = g.name.toLowerCase();
 
         return (
@@ -246,10 +287,10 @@ export class GetStreamingAvailabilityTool extends BaseTool<
         return [];
       }
 
-      const data = await response.json();
-      const genreMap = new Map(data.genres?.map((g: any) => [g.id, g.name]) || []);
+      const data = (await response.json()) as TmdbGenreList;
+      const genreMap = new Map((data.genres ?? []).map((g): [number, string] => [g.id, g.name]));
 
-      return genreIds.map((id) => genreMap.get(id)).filter(Boolean) as string[];
+      return genreIds.map((id) => genreMap.get(id)).filter((name): name is string => name != null);
     } catch {
       return [];
     }
@@ -258,7 +299,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
   /**
    * Fetch data from TMDB API (reliable, documented API)
    */
-  private async fetchFromTMDB(input: GetStreamingAvailabilityInput): Promise<any> {
+  private async fetchFromTMDB(input: GetStreamingAvailabilityInput): Promise<TmdbPage> {
     const TMDB_API_KEY = process.env.TMDB_API_KEY || 'demo-key';
 
     if (TMDB_API_KEY === 'demo-key') {
@@ -287,13 +328,13 @@ export class GetStreamingAvailabilityTool extends BaseTool<
       throw new Error(`TMDB API error: ${response.status}`);
     }
 
-    return await response.json();
+    return (await response.json()) as TmdbPage;
   }
 
   /**
    * Fetch content by genre using TMDB discover endpoint
    */
-  private async fetchByGenre(input: GetStreamingAvailabilityInput, apiKey: string): Promise<any> {
+  private async fetchByGenre(input: GetStreamingAvailabilityInput, apiKey: string): Promise<TmdbPage> {
     const contentType = input.contentType;
 
     // Handle mixed content type by fetching both and combining
@@ -323,7 +364,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
     input: GetStreamingAvailabilityInput,
     mediaType: 'movie' | 'tv',
     apiKey: string,
-  ): Promise<any> {
+  ): Promise<TmdbPage> {
     // Get genre ID from name
     const genreId = await this.getGenreId(input.genre!, mediaType);
 
@@ -332,7 +373,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
       const url = `https://api.themoviedb.org/3/trending/${mediaType}/week?api_key=${apiKey}`;
       const response = await fetch(url);
 
-      return response.ok ? await response.json() : { results: [] };
+      return response.ok ? ((await response.json()) as TmdbPage) : { results: [] };
     }
 
     // Use discover endpoint with genre filter
@@ -350,10 +391,10 @@ export class GetStreamingAvailabilityTool extends BaseTool<
       return { results: [] };
     }
 
-    const data = await response.json();
+    const data = (await response.json()) as TmdbPage;
     // Add media_type for consistency with trending endpoint
     if (data.results) {
-      data.results.forEach((item: any) => {
+      data.results.forEach((item) => {
         item.media_type = mediaType;
       });
     }
@@ -389,7 +430,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
         return []; // Return empty on error
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as TmdbWatchProviders;
       const usProviders = data.results?.US; // in the future we should chain calls to get providers local to where the user currently is
 
       if (!usProviders) {
@@ -445,7 +486,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
    * Process TMDB API response into our format
    */
   private async processTMDBResponse(
-    apiResponse: any,
+    apiResponse: TmdbPage,
     input: GetStreamingAvailabilityInput,
   ): Promise<StreamingTitle[]> {
     if (!apiResponse?.results) {
@@ -461,7 +502,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
     for (let i = 0; i < items.length; i += batchSize) {
       const batch = items.slice(i, i + batchSize);
 
-      const batchPromises = batch.map(async (item: any) => {
+      const batchPromises = batch.map(async (item): Promise<StreamingTitle> => {
         // Determine type
         const type: 'movie' | 'tv' = item.media_type === 'movie' || item.title ? 'movie' : 'tv';
 
@@ -474,7 +515,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
 
         return {
           id: item.id.toString(),
-          title: item.title || item.name,
+          title: item.title || item.name || '',
           type,
           year: item.release_date
             ? new Date(item.release_date).getFullYear()
@@ -498,7 +539,7 @@ export class GetStreamingAvailabilityTool extends BaseTool<
     return titles;
   }
 
-  protected sanitizeInputForLogging(input: unknown): any {
+  protected sanitizeInputForLogging(input: unknown): unknown {
     // No sensitive data in streaming availability input
     return input;
   }

@@ -78,7 +78,7 @@
 import dns from 'node:dns';
 import net, { type LookupFunction } from 'node:net';
 
-import { Agent, fetch as undiciFetch } from 'undici';
+import { Agent, fetch as undiciFetch, type Response as UndiciResponse } from 'undici';
 
 import config from '@ci/configuration';
 
@@ -435,9 +435,9 @@ export function createPeerEgressAgent(lookup: LookupFunction = peerEgressLookup)
   return new Agent({
     connect: { lookup, timeout: CONNECT_TIMEOUT_MS },
     keepAliveTimeout: 4_000,
-    // Belt and braces with `redirect: 'manual'` below: this stops a redirect
-    // being followed underneath fetch, at the dispatcher level.
-    maxRedirections: 0,
+    // Nothing follows a redirect underneath fetch either: in undici 8 that is
+    // an opt-in interceptor (`interceptors.redirect`), and this agent composes
+    // none — `redirect: 'manual'` in `peerEgressFetch` is the whole story.
   });
 }
 
@@ -465,7 +465,7 @@ export interface PeerEgressInit {
  * threw, so callers can keep telling "we refused" apart from "they did not
  * answer".
  */
-export async function peerEgressFetch(rawUrl: string, init: PeerEgressInit): Promise<Response> {
+export async function peerEgressFetch(rawUrl: string, init: PeerEgressInit): Promise<UndiciResponse> {
   // Read fresh per call (see `peerEgressLookup`'s doc comment for why this and
   // the connect-time guard can never disagree in production even though this
   // one reads live and that one reads once at module load).
@@ -474,7 +474,7 @@ export async function peerEgressFetch(rawUrl: string, init: PeerEgressInit): Pro
     throw new EgressBlockedError(policy.reason ?? 'not permitted');
   }
 
-  let response: Response;
+  let response: UndiciResponse;
   try {
     response = await undiciFetch(rawUrl, {
       method: init.method,
