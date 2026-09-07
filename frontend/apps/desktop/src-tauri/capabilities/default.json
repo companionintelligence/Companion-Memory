@@ -1,8 +1,18 @@
 {
   "identifier": "default",
-  "description": "Bootstrap-page-only capabilities. No remote.urls: after window.location.replace() navigates to http://127.0.0.1:8642/, that page is the real CI-Server web app and gets NO Tauri IPC access by design — it has no legitimate need for native commands, and granting any would be an unnecessary privilege-escalation surface for a future XSS there.",
-  "windows": ["main"],
+  "description": "Bootstrap-page-only capabilities. No remote.urls: after window.location.replace() navigates to http://127.0.0.1:8642/, that page is the real CI-Server web app and gets only what capabilities/oidc-remote-deep-link.json grants it. `allow-bootstrap-commands` is load-bearing rather than tidy-up: once any src-tauri/permissions/*.toml exists, tauri-build sets has_app_manifest and the webview ACL gate starts applying to the LOCAL origin too, so the splash's own invokes must be granted explicitly or the stack never starts.",
+  "windows": [
+    "main"
+  ],
   "permissions": [
+    "allow-check-docker-available-command",
+    "allow-check-docker-installed-command",
+    "allow-check-stack-status-command",
+    "allow-get-gateway-url-command",
+    "allow-get-startup-progress-command",
+    "allow-open-docker-downloads-command",
+    "allow-open-logs-dir-command",
+    "allow-start-stack-command",
     "core:default",
     "core:window:allow-close",
     "core:window:allow-hide",

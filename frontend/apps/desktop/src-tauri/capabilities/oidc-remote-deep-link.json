@@ -1,6 +1,6 @@
 {
   "identifier": "oidc-remote-deep-link",
-  "description": "Grants the real CI-Server web app (served remotely at http://127.0.0.1:8642 / http://localhost:8642 after the bootstrap page's window.location.replace()) enough Tauri IPC reachability to complete native 'Sign in with Companion account': open_external_url_command (launch the OIDC URL in the system browser) and take_pending_deep_link_command (drain a companion://oidc/callback deep link that arrived before the page's listener was up). Both are app-level commands (see main.rs), which Tauri's ACL does not gate per-command \u2014 reachability is the lever. `opener:allow-open-url` is required and was missing: open_external_url_command is a thin wrapper over the opener PLUGIN, and plugin permissions are checked against the CALLING webview's capabilities, so with an empty permissions list the command was reachable but the open_url inside it was denied \u2014 the sign-in button did nothing, and the frontend only console.error'd the rejection. Narrower than default.json's `opener:default` on purpose: this origin may open a URL and nothing else (no revealItemInDir, no window close/hide/show/focus), so the core:window grants stay bootstrap-only. The remaining trade-off is unchanged: this origin can still reach the app's other custom commands, since per-command scoping needs custom Rust permission definitions (src-tauri/permissions/*.toml + build.rs wiring) \u2014 a follow-up.",
+  "description": "Grants the real CI-Server web app (served remotely at http://127.0.0.1:8642 / http://localhost:8642 after the bootstrap page's window.location.replace()) exactly the two app-level commands native 'Sign in with Companion account' needs: open_external_url_command (launch the OIDC URL in the system browser) and take_pending_deep_link_command (drain a companion://oidc/callback deep link that arrived before the page's listener was up). Tauri DOES gate app-level commands per-command \u2014 but only once an app manifest exists, which is what src-tauri/permissions/*.toml provides; with no manifest the remote origin could reach nothing, since the gate rejects any command whose invoke.acl is None. A plugin permission cannot stand in for this: `opener:allow-open-url` registers plugin:opener|open_url, which nothing invokes \u2014 the frontend calls the app command, whose inner app.opener().open_url() is the Rust OpenerExt API and never consults the ACL. That grant is also deliberately NOT taken: opener's scope is app-wide, so it would hand this origin an unwrapped open primitive (mailto:, tel:) and bypass open_external_url_command's http(s)-only guard. This origin now reaches these two commands and nothing else.",
   "windows": [
     "main"
   ],
@@ -12,6 +12,7 @@
     ]
   },
   "permissions": [
-    "opener:allow-open-url"
+    "allow-open-external-url-command",
+    "allow-take-pending-deep-link-command"
   ]
 }
