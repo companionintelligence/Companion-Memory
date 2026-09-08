@@ -587,10 +587,14 @@ dev: ## Run the development environment locally
 	@# also binds a tailnet address, which looks reachable and is not.
 	@#
 	@# A warning, not a hard failure: OLLAMA_HOST may legitimately point at
-	@# another machine, and a host with no docker bridge skips the check.
+	@# another machine, and a host with no docker bridge skips the check. Use
+	@# curl with explicit connect and total timeouts rather than netcat here:
+	@# macOS netcat can leave a SYN to the Docker Desktop gateway pending well
+	@# past its -w value, making `make dev` appear hung on a normal loopback-only
+	@# Ollama install.
 	@GW=$$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null); \
 	if [ -n "$$GW" ]; then \
-		if nc -z -w 2 "$$GW" 11434 > /dev/null 2>&1; then \
+		if curl -fsS --noproxy '*' --connect-timeout 2 --max-time 3 "http://$$GW:11434/api/tags" > /dev/null 2>&1; then \
 			printf "  $(GREEN)✓$(RESET) ollama is reachable from containers (via $$GW)\n\n"; \
 		else \
 			printf "  $(YELLOW)•$(RESET) ollama is listening on loopback only, so containers cannot reach it\n"; \
