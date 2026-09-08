@@ -48,10 +48,18 @@ struct PendingDeepLink(Mutex<Option<String>>);
 fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
     // Never log the full URL — the OIDC callback's `code` query param is a short-lived
     // credential. Everything before the first `?` is enough to confirm delivery.
-    log::info!(
-        "deep link received: {}",
-        url.split('?').next().unwrap_or(url)
-    );
+    let redacted = url.split('?').next().unwrap_or(url);
+
+    // Two sinks, and the file one is the sink that matters. `log::info!` goes to
+    // env_logger, which writes to stderr — and a packaged .app has no stderr, so
+    // in the only build a user ever runs this line vanished. The return half of
+    // sign-in is precisely the half that is hardest to observe from outside the
+    // process (it starts at an OS URL handoff), so it has to land in the same
+    // file `open-url` already writes to, next to the outbound half.
+    log::info!("deep link received: {redacted}");
+    if let Some(state) = app.try_state::<StackPathsState>() {
+        stack_manager::append_desktop_log(&state.0, "deep-link", &format!("received {redacted}"));
+    }
 
     if let Ok(mut pending) = app.state::<PendingDeepLink>().0.lock() {
         *pending = Some(url.to_string());
@@ -62,10 +70,29 @@ fn dispatch_deep_link(app: &tauri::AppHandle, url: &str) {
         // string literal — the safe way to splice an arbitrary URL (OAuth `code`/
         // `state` params included) into an eval'd script.
         if let Ok(js_literal) = serde_json::to_string(url) {
-            let _ = window.eval(format!(
+            // Whether the eval reached the page is the other half of the answer:
+            // a delivered-but-not-dispatched link and a never-delivered one look
+            // identical from the frontend, and they have completely different fixes.
+            let dispatched = window.eval(format!(
                 "window.dispatchEvent(new CustomEvent('companion-deep-link', {{ detail: {js_literal} }}));"
             ));
+
+            if let Some(state) = app.try_state::<StackPathsState>() {
+                let outcome = match &dispatched {
+                    Ok(()) => "dispatched to the webview".to_string(),
+                    Err(e) => format!("FAILED to dispatch to the webview: {e}"),
+                };
+                stack_manager::append_desktop_log(&state.0, "deep-link", &outcome);
+            }
         }
+    } else if let Some(state) = app.try_state::<StackPathsState>() {
+        // The pending slot above still holds it, so this is recoverable rather
+        // than lost — take_pending_deep_link_command hands it over on mount.
+        stack_manager::append_desktop_log(
+            &state.0,
+            "deep-link",
+            "no main window yet; held for take_pending_deep_link_command",
+        );
     }
 }
 

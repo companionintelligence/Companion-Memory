@@ -1,0 +1,23 @@
+[[permission]]
+identifier = "allow-oidc-ipc"
+description = """
+The two app commands the CI-Server web UI invokes once the bootstrap page has
+navigated away from tauri://localhost to the gateway at http://127.0.0.1:8642.
+
+Tauri 2 gates APP commands, not just plugin commands: a command reached from a
+REMOTE origin must be named in a permission the capability grants, or the IPC
+layer rejects it before the Rust handler runs. That is why "Sign in with
+Companion account" did nothing — the capability granted `opener:allow-open-url`
+(the plugin call INSIDE the command), but never the command itself, so
+open_external_url_command was denied one layer earlier and never logged a thing.
+CI-Hub's desktop shell hit the identical wall; see its allow-desktop-ipc.toml.
+
+Deliberately just these two. Every other command in main.rs (start/stop the
+stack, read logs, docker checks) belongs to the local bootstrap page, which is
+same-origin with the shell and needs no grant. Listing them here would hand a
+future XSS in the product UI the ability to stop the user's stack.
+"""
+commands.allow = [
+  "open_external_url_command",
+  "take_pending_deep_link_command",
+]

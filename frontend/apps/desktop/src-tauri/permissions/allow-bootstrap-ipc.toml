@@ -1,0 +1,30 @@
+[[permission]]
+identifier = "allow-bootstrap-ipc"
+description = """
+The app commands the bootstrap splash (bootstrap/bootstrap.js, served locally at
+tauri://localhost) invokes to bring the Docker stack up and report on it.
+
+This list looks redundant and is not. Tauri 2's app-command ACL is INERT while a
+crate defines no command permissions of its own — every #[tauri::command] is
+reachable from every window, which is why the splash worked for months with only
+`core:*` and `opener:*` grants. Adding the first permissions/*.toml (allow-oidc-ipc,
+for the remote origin) switches that check on for the WHOLE app, so the local page
+that never needed a grant suddenly does: without this the splash dies immediately
+on "Command check_docker_installed_command not allowed by ACL" and the app cannot
+start at all.
+
+Scoped to the eight commands the splash actually calls. stop_stack_command,
+get_stack_status_command, read_desktop_logs_command and get_local_model_status_command
+are deliberately absent: they are driven from the native tray, which is Rust calling
+Rust and is not subject to the webview ACL.
+"""
+commands.allow = [
+  "check_docker_installed_command",
+  "check_docker_available_command",
+  "open_docker_downloads_command",
+  "start_stack_command",
+  "get_gateway_url_command",
+  "check_stack_status_command",
+  "get_startup_progress_command",
+  "open_logs_dir_command",
+]
