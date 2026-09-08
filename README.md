@@ -462,6 +462,21 @@ make reset
 
 Run `make` from the project root to see all available commands with descriptions.
 
+Six of those targets — `build`, `dev`, `test`, `lint`, `format` and `reset` — are
+one-line delegations to a TypeScript program at [`scripts/xtask/`](scripts/xtask),
+run through `tsx` (`yarn tsx scripts/xtask/index.ts <command> ...`). The `make`
+targets stay the documented entry point and still take the variables they always
+did — `ENV`, `GPU`, `REBUILD`, and overrides like `AMDGPU_TARGETS` or
+`FLASH_ATTN_WHEEL_IMAGE=`, which a `make build VAR=value` still hands through as
+environment even though the Makefile no longer declares most of them. The program
+is where the logic those recipes used to carry as shell now lives — the image set
+and its build order, the GPU/wheel-image tag derivation, the `ci.source-tree`
+staleness stamp `dev` reads before deciding to rebuild — and every subcommand
+takes `--help`. `make health` is deliberately *not* one of them: a prerequisite
+checker must not require the prerequisites, so it stays pure shell in the
+Makefile and `xtask dev` shells back out to `make health` before anything else.
+Every other `make` target is unchanged.
+
 ### Setup & Initialization
 
 | Command | Description |
@@ -511,13 +526,36 @@ source scripts/gh-packages-auth.sh
 
 | Command | Description |
 |---------|-------------|
-| `make build` | Build images (`ENV=local\|staging\|production`, default `local`; `GPU=cpu\|cuda\|rocm`, auto-detected from this host's GPU if not passed — see `scripts/detect-gpu.sh`) |
+| `make build` | Build images (`ENV=local\|staging\|production`, default `local`; `GPU=cpu\|cuda\|rocm`, auto-detected from this host's GPU if not passed — see `scripts/detect-gpu.sh`; `IMAGE=<name>` builds a single image; `DRY_RUN=1` prints the plan instead of building) |
 | `make smoke-api` | Verify the built API image can run `migrate` with production-only dependencies (a devDependency in either half fails the container at startup). Runs as part of `make publish` |
 | `make staging` | Run the staging deployment |
 | `make production` | Run the production deployment |
 | `make publish` | Publish CI-Server images and metadata to the CI-Portal store (builds `ENV=production`, then `smoke-api`) |
 | `make publish-quiet` | Publish to the CI-Portal store in quiet mode (skips the build/smoke steps) |
 | `make seed-production` | Seed the production database via an ephemeral proxy |
+
+#### Building one image, and seeing what a build would do
+
+With no `IMAGE`, `make build` builds the `ENV`-appropriate set, in this order:
+
+```
+local        setup-database database object-store summary hbpe
+staging      api gateway setup-database database object-store summary hbpe
+production   api gateway setup-database database object-store setup-secrets summary hbpe
+```
+
+```bash
+make build IMAGE=hbpe    # just this one — api, gateway, setup-database, database,
+                         #   object-store, setup-secrets, summary or hbpe
+make build DRY_RUN=1     # print the exact docker build commands — every --build-arg
+                         #   and, on a cuda/rocm host, the wheel-image tags — and build nothing
+```
+
+`IMAGE=` bypasses the `ENV` set rather than filtering it, so any of the eight can
+be built from any `ENV`. `DRY_RUN=1` touches no Docker daemon and skips the
+`uv lock --check` freshness gate, so it also answers what a wheel-pin bump would
+compose from a host that cannot build that variant — `make build DRY_RUN=1 GPU=cuda`
+prints the CUDA wheel-image tags with no NVIDIA hardware in sight.
 
 #### GPU acceleration (HBPE)
 
@@ -644,6 +682,14 @@ The `make` targets cover **both stacks** — the TypeScript one and the Python o
 | `make lint` | `yarn lint` + `yarn format:check`, then `ruff check`, `ruff format --check`, `mypy`, `uv lock --check` (catches a stale lockfile) and the `ci.*` namespace guard |
 | `make format` | `prettier --write` across the JS/TS sources, then `ruff format` and `ruff check --fix` |
 | `make test` | `yarn workspaces foreach --all run test`, then `uv run pytest` |
+
+The repo root now declares `test` and `typecheck` scripts of its own: `yarn test`
+runs the xtask unit suite (`tsx --test "scripts/xtask/**/*.test.ts"`), and
+`yarn typecheck` runs `tsc --noEmit` over what the root `tsconfig.json` includes —
+`scripts/**`, `tests/**` and the Playwright config, which nothing ran before.
+Neither needs naming anywhere else: `foreach --all` stopped excluding the root
+workspace the moment those scripts existed, so `make test` runs the suite and
+pr-gate's `Type check packages` lane runs the type-check.
 
 The underlying Yarn scripts are still there if you only want the JS half:
 
