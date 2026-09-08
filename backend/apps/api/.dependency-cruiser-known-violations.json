@@ -116,6 +116,15 @@
   },
   {
     "type": "dependency",
+    "from": "src/domains/llm/services/ChatTurnService.ts",
+    "to": "src/domains/agent/services/RecallService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
     "from": "src/domains/memory/index.ts",
     "to": "src/domains/graph/entities/ObjectIdentifierEntity.ts",
     "rule": {

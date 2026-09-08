@@ -66,11 +66,13 @@ export {
   HOME_GEOFENCE_RADIUS_METERS,
   LOCATION_ENABLED_STORAGE_KEY,
   LOCATION_MODE_CHANGE_EVENT,
+  LOCATION_NEEDS_SETTINGS_EVENT,
   LOCATION_MODE_STORAGE_KEY,
   LOCATION_TRACKING_MODES,
   isLocationTrackingEnabled,
   isLocationTrackingMode,
   publishLocationTrackingMode,
+  publishLocationNeedsSettingsUpgrade,
   readLocationTrackingMode,
   writeLocationTrackingMode,
 } from './locationMode';

@@ -3,9 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "shadcn": "yarn dlx shadcn@latest"
+    "shadcn": "yarn dlx shadcn@latest",
+    "typecheck": "tsc --noEmit"
   },
   "main": "index.ts",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "packageManager": "yarn@4.9.1",
   "dependencies": {
     "@companionintelligence/tokens": "^0.3.1",

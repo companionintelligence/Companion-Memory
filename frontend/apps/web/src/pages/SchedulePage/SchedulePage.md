@@ -2,23 +2,23 @@
 
 ## Intent
 
-`SchedulePage` is the calendar half of the combined Calendar surface. It owns the visible week, committed events, the learned weekly rhythm, task placement, and the fixed day-ahead prediction band above the calendar.
+`SchedulePage` is the calendar half of the combined Calendar surface. It owns the visible week, committed events, the learned weekly rhythm, and task placement. The day-ahead HBPE histogram is not a second strip above the calendar or a gutter of boxes — its 96 quarter-hour bins wash the day column behind committed events so the hours themselves read as color-coded time.
 
 ## Data contracts
 
 - `useScheduleService(start, end)` supplies committed events and the seven-day recurrence forecast for the week currently on screen.
-- `useForecastService()` supplies the HBPE `/histogram` response: tomorrow's 96 quarter-hour occupancy bins plus model and pipeline status. This response is passed unchanged to `PredictionBand`; calendar events never substitute for it. Its `refetch` is passed down as the band's `onRetry`.
+- `useForecastService()` supplies the HBPE `/histogram` response: tomorrow's 96 quarter-hour occupancy bins plus model and pipeline status. Calendar events never substitute for those bins. The page passes `buckets` into `VerticalCalendar`; pipeline status still drives the waiting shimmer on empty strips.
 - `usePlanTasks(refetch)` supplies tasks that can be placed onto the calendar.
 - `useRescheduleEvent(refetch)` moves committed events.
 
 ## Composition
 
-The page can render standalone or embedded at the top of `TodayPage`. In the embedded form, the host owns scrolling, safe-area padding, and the document title. The day-ahead band stays visible when the displayed calendar is paged to another week because its heading explicitly identifies its independent, fixed horizon.
+The page can render standalone or embedded at the top of `TodayPage`. In the embedded form, the host owns scrolling, safe-area padding, and the document title.
+
+Occupancy is a fixed 24h horizon. Bins only light strips in the week (or phone day) currently on screen; paging away does not keep a floating "tomorrow" band above an unrelated week.
 
 ## Failure behavior
 
-The schedule and prediction calls fail independently. Schedule failures retain any usable events or rhythm. Prediction failures remain visible inside `PredictionBand` so a missing audit surface cannot be mistaken for an intentional UI removal.
+The schedule and prediction calls fail independently. Schedule failures retain any usable events or rhythm. A missing occupancy histogram leaves the week-forecast climate on the strips; a missing week forecast still lets occupancy paint the day it covers.
 
-A failed prediction call is recoverable only from here. The resolver answers `null` on an HBPE error and `useForecastService` stops polling on a null forecast, so the band's retry has to be the hook's own `refetch` — without it the failed state lasts until the user leaves the page.
-
-The `hbpe` feature flag owns the band itself. `forecast.page` controls only the optional link to the larger Forecast page, so disabling that secondary destination does not remove the primary audit strip from Calendar.
+The `hbpe` feature flag owns both the occupancy bins and the climate layer. `forecast.page` is only the richer `/forecast` destination and does not gate the calendar strips.

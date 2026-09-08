@@ -51,7 +51,7 @@ export const DEFAULT_MEMORY_EVENTS_SEARCH = 'view=list';
  * are marked as such in the toolbar — see Components/ExplorerToolbar/viewFilterSupport.
  */
 export function MemoryPage() {
-  usePageTitle('Memory - Companion Intelligence');
+  usePageTitle('Memory - Companion Memory');
   const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
 

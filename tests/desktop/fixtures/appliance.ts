@@ -127,7 +127,12 @@ export async function signInAsTestAccount(
     throw new Error(
       `Cannot sign in as ${TEST_ACCOUNT.email} and this appliance is already claimed by another ` +
         `account, so a new one cannot be created. Point DESKTOP_E2E_BASE_URL at a fresh appliance, ` +
-        `or set DESKTOP_E2E_EMAIL/DESKTOP_E2E_PASSWORD to an account that exists on this one.`,
+        `or set DESKTOP_E2E_EMAIL/DESKTOP_E2E_PASSWORD to an account that exists on this one.\n\n` +
+        `To actually empty an appliance, note that \`docker compose down -v\` is NOT enough: ` +
+        `db-data and object-data declare an explicit \`name:\` in docker-compose.production.yml, ` +
+        `so Compose treats them as externally named and leaves them behind. Remove them by hand:\n` +
+        `  docker compose -p <project> --profile production down --remove-orphans\n` +
+        `  docker volume rm <project>-production-db-data <project>-production-object-data`,
     );
   }
 

@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 
-import { Collapsible, Popover, Tooltip, cn } from '@ci/shadcn';
+import { Collapsible, Tooltip, cn } from '@ci/shadcn';
 import { ChevronRight } from '@ci/shadcn/icons';
 import { Link, useLocation } from 'react-router-dom';
 
@@ -13,9 +13,9 @@ import { usePowerRail } from '../PowerRailContext';
  * animation, so the four groups can only ever drift in their DATA (sections,
  * icons, badges), never in how they open, close, or look doing it.
  *
- * Collapsed, a head click still opens the group's children — as a flyout to
- * the right of the icon, so the rail lane never widens and the page beside it
- * never reflows. Expanded keeps the in-rail chevron accordion.
+ * Collapsed, a head click still opens the group's children — in the same
+ * rail lane, icons only, same row padding as the expanded accordion. The
+ * page beside it never reflows. Expanded keeps labels and the chevron.
  *
  * Open/close state itself stays with the caller (via {@link useRailSubmenuOpen}),
  * not this component — a couple of callers (Memory, for its recent-threads
@@ -32,8 +32,8 @@ export interface RailSubmenuShellProps {
   routeOpen: boolean;
   open: boolean;
   /**
-   * Click-driven open only. Collapsed flyouts use this so a matching route
-   * does not keep a popover open while the rail stays narrow.
+   * Click-driven open only. The collapsed rail uses this so merely *being*
+   * on the group's route does not pin a stack of child icons open.
    */
   clickOpen: boolean;
   onOpenChange: (open: boolean) => void;
@@ -89,38 +89,25 @@ export function RailSubmenuShell({
     );
 
     return (
-      <Popover open={clickOpen} onOpenChange={onOpenChange}>
-        <Popover.Anchor asChild>
-          <div data-testid={testId} className="relative">
-            {clickOpen ? (
-              collapsed
-            ) : (
-              <Tooltip delayDuration={600}>
-                <Tooltip.Trigger asChild>{collapsed}</Tooltip.Trigger>
-                <Tooltip.Content side="right">{ariaLabel}</Tooltip.Content>
-              </Tooltip>
-            )}
-          </div>
-        </Popover.Anchor>
-        <Popover.Content
-          side="right"
-          align="start"
-          sideOffset={8}
-          className="w-56 p-1"
-          onClick={(event) => {
-            // Picking a child is the whole point of the flyout — close it so
-            // the page is not covered by a menu the user already acted on.
-            if ((event.target as HTMLElement).closest('a')) {
-              onOpenChange(false);
-            }
-          }}
-        >
-          <div className="flex min-w-0 flex-col">
-            {children}
-            {footer}
-          </div>
-        </Popover.Content>
-      </Popover>
+      <div data-testid={testId} className="min-w-0 w-full overflow-hidden">
+        <Collapsible open={clickOpen} onOpenChange={onOpenChange} className="min-w-0 w-full">
+          {clickOpen ? (
+            collapsed
+          ) : (
+            <Tooltip delayDuration={600}>
+              <Tooltip.Trigger asChild>{collapsed}</Tooltip.Trigger>
+              <Tooltip.Content side="right">{ariaLabel}</Tooltip.Content>
+            </Tooltip>
+          )}
+
+          <Collapsible.Content className="min-w-0 overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">
+            <div className="flex min-w-0 flex-col">
+              {children}
+              {footer}
+            </div>
+          </Collapsible.Content>
+        </Collapsible>
+      </div>
     );
   }
 
@@ -199,21 +186,38 @@ export function RailSubmenuRow({
   icon: ReactNode;
   badge?: ReactNode;
 }) {
-  return (
+  const { expanded } = usePowerRail();
+
+  const link = (
     <Link
       to={to}
       aria-label={label}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'flex min-w-0 items-center gap-2 rounded-md border-l-2 border-transparent px-2 py-0 text-sm leading-tight transition hover:bg-accent hover:text-accent-foreground',
+        'relative flex min-w-0 items-center rounded-md border-l-2 border-transparent px-2 py-0 text-sm leading-tight transition hover:bg-accent hover:text-accent-foreground',
+        expanded ? 'gap-2' : 'justify-center',
         active && 'border-l-primary text-primary hover:text-primary',
       )}
     >
       <span className="grid size-6 shrink-0 place-items-center" aria-hidden>
         {icon}
       </span>
-      <span className="truncate">{label}</span>
-      {badge}
+      {expanded ? <span className="truncate">{label}</span> : null}
+      {expanded ? badge : null}
+      {!expanded && badge ? (
+        <span className="pointer-events-none absolute right-0 top-0">{badge}</span>
+      ) : null}
     </Link>
+  );
+
+  if (expanded) {
+    return link;
+  }
+
+  return (
+    <Tooltip delayDuration={600}>
+      <Tooltip.Trigger asChild>{link}</Tooltip.Trigger>
+      <Tooltip.Content side="right">{label}</Tooltip.Content>
+    </Tooltip>
   );
 }

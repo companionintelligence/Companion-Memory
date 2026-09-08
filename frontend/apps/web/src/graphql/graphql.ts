@@ -904,6 +904,8 @@ export type CreatePeerLinkInput = {
   displayName?: InputMaybe<Scalars['String']['input']>;
   memoryEndpoint: Scalars['String']['input'];
   peerHandle: Scalars['String']['input'];
+  peerIssuer?: InputMaybe<Scalars['String']['input']>;
+  peerSubject?: InputMaybe<Scalars['String']['input']>;
   personEntityId?: InputMaybe<Scalars['ID']['input']>;
   trustTier?: InputMaybe<PeerTrustTier>;
 };
@@ -4822,6 +4824,8 @@ export type UpdateNotePayload = {
 export type UpdatePeerLinkInput = {
   displayName?: InputMaybe<Scalars['String']['input']>;
   id: Scalars['ID']['input'];
+  peerIssuer?: InputMaybe<Scalars['String']['input']>;
+  peerSubject?: InputMaybe<Scalars['String']['input']>;
   personEntityId?: InputMaybe<Scalars['ID']['input']>;
   trustTier?: InputMaybe<PeerTrustTier>;
 };

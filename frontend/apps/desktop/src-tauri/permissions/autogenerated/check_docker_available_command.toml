@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-check-docker-available-command"
+description = "Enables the check_docker_available_command command without any pre-configured scope."
+commands.allow = ["check_docker_available_command"]
+
+[[permission]]
+identifier = "deny-check-docker-available-command"
+description = "Denies the check_docker_available_command command without any pre-configured scope."
+commands.deny = ["check_docker_available_command"]

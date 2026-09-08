@@ -58,6 +58,27 @@ services:
       CI_TELEMETRY: ${CI_TELEMETRY:-}
       CI_LOCAL_ONLY: ${CI_LOCAL_ONLY:-}
       CI_SERVER_VERSION: ${CI_SERVER_VERSION:-}
+      # Where clients should reach the sync engine. /api/powersync/token returns
+      # this verbatim as `powersync_url`, and refuses to issue a token at all
+      # while it is empty — so without it sync is a permanent 503 no matter what
+      # else is running. Only this web role needs it; the worker serves no HTTP.
+      #
+      # The gateway proxies the engine at /powersync on the app's own origin
+      # (infrastructure/gateway/nginx.conf), which is not a convenience: the CSP
+      # served with the app pins connect-src to 'self', so a client cannot reach
+      # sync on any other origin.
+      #
+      # `:+` and not `:-` — this stays EMPTY unless APP_BASE_URL is set, rather
+      # than defaulting to a bare "/powersync" that would read as configured and
+      # hand every client a host-less URL. Sync stays off until the deployment
+      # says where it is, which is the honest failure. Override POWERSYNC_URL
+      # directly for a sync service on its own hostname — which then also needs
+      # that origin added to the CSP.
+      POWERSYNC_URL: ${POWERSYNC_URL:-${APP_BASE_URL:+${APP_BASE_URL}/powersync}}
+      # POWERSYNC_JWT_SECRET is deliberately absent here: it is a generated
+      # secret, so it arrives from /run/secrets/.env.secrets the way
+      # DATABASE_PASSWORD does. generate-secrets mints it and the powersync
+      # container derives its base64url JWKS key from that same value.
     networks:
       - ci
     extra_hosts:

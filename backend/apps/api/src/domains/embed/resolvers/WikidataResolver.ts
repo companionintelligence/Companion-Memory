@@ -85,6 +85,9 @@ interface WikidataEntity {
   huluMovie?: string;
   netflix?: string;
   primeVideo?: string;
+  disneyPlusBrowse?: string;
+  disneyPlusSeries?: string;
+  disneyPlusMovie?: string;
 }
 
 type Fail = Exclude<UnfurlOutcome, { status: 'ok' }>;
@@ -255,6 +258,9 @@ export function parseEntity(raw: Record<string, unknown>): WikidataEntity {
     huluMovie: text('P6466'),
     netflix: text('P1874'),
     primeVideo: text('P8055'),
+    disneyPlusBrowse: text('P13902'),
+    disneyPlusSeries: text('P7596'),
+    disneyPlusMovie: text('P7595'),
   };
 }
 

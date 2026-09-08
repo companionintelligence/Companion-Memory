@@ -218,7 +218,7 @@ function PersonRow({ person, onOpen }: { person: PersonNode; onOpen: () => void 
 }
 
 export function PeoplePage() {
-  usePageTitle('People & communications - Companion Intelligence');
+  usePageTitle('People & communications - Companion Memory');
 
   const navigate = useNavigate();
   // The header search box's `?search=`: it edits this page's query in place

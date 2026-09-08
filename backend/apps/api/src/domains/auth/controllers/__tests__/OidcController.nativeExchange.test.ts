@@ -20,6 +20,7 @@ function makeController() {
     {} as never, // csrfService
     {} as never, // featureService
     oidcNativeCodeService as never,
+    {} as never, // signupCodeService — unused by nativeExchange
     logger as never,
   );
 

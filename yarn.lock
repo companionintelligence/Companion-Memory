@@ -3102,6 +3102,7 @@ __metadata:
     "@types/react-dom": "npm:^19.1.5"
     react: "npm:^19.1.0"
     react-dom: "npm:^19.1.0"
+    typescript: "npm:^5.8.3"
   languageName: unknown
   linkType: soft
 
@@ -3144,6 +3145,7 @@ __metadata:
     "@types/react-dom": "npm:^19.1.5"
     react: "npm:^19.1.0"
     react-dom: "npm:^19.1.0"
+    typescript: "npm:^5.8.3"
   languageName: unknown
   linkType: soft
 
@@ -3164,6 +3166,7 @@ __metadata:
     "@types/react-dom": "npm:^19.1.5"
     react: "npm:^19.1.0"
     react-dom: "npm:^19.1.0"
+    typescript: "npm:^5.8.3"
   languageName: unknown
   linkType: soft
 
@@ -3332,6 +3335,7 @@ __metadata:
     "@types/react-dom": "npm:^19.1.5"
     react: "npm:^19.1.0"
     react-dom: "npm:^19.1.0"
+    typescript: "npm:^5.8.3"
   languageName: unknown
   linkType: soft
 

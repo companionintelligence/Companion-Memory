@@ -9,10 +9,12 @@ import {
   useState,
 } from 'react';
 
-import { Button, Input, cn } from '@ci/shadcn';
+import { Button, Input, Tooltip, cn } from '@ci/shadcn';
 
+import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 import { combineDateAndClock } from '@/components/EventForm';
+import { SlotTooltip } from '@/components/ForecastStrip';
 import {
   type ColorMode,
   CLASS_LABEL,
@@ -37,6 +39,8 @@ import {
   dropInstant,
   eventUrl,
   movedStart,
+  occupancyClaims,
+  occupancyLabel,
   rhythmClaims,
   rhythmLabel,
   rhythmWaitingLabel,
@@ -50,9 +54,6 @@ const HOURS_PER_DAY = 24;
 const HOUR_HEIGHT_PX = 52;
 const GRID_HEIGHT_PX = HOUR_HEIGHT_PX * HOURS_PER_DAY;
 const AXIS_HOURS = Array.from({ length: HOURS_PER_DAY }, (_, hour) => hour);
-
-/** Gap between 15-minute rhythm cells, in px — enough to read texture, not so much the strip is mostly gap. */
-const RHYTHM_CELL_GAP_PX = 1;
 
 function formatHour(hour: number): string {
   return new Date(2000, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric' });
@@ -498,84 +499,98 @@ function AllDayChip({
   );
 }
 
-interface RhythmStripProps {
+interface RhythmWashProps {
   dayStart: Date;
   lookup: (utcDate: string) => RhythmDay | undefined;
   colorMode: ColorMode;
+  /** Day-ahead 96-bin histogram. Bins whose startTime falls on this day replace climate. */
+  occupancy?: ForecastBucket[] | null;
   /** True while nightly/Predict is in a named step and this day has no ink yet. */
   waiting?: boolean;
 }
 
 /**
- * Pattern rhythm (HBPE) for one day, stood on end beside the hours.
+ * Pattern rhythm (HBPE) for one day, painted behind the hours.
  *
- * The same reading the horizon draws as a lane, rotated to match this geometry:
- * one cell per 15-minute slot, the colour of the behaviour that claims it, the
- * weight in the ink. It sits immediately LEFT of the time labels rather than
- * behind the day column for two reasons — a wash under committed time is read
- * as a highlight on the chips sitting over it, and a rhythm cell only says
- * something once you can see which o'clock it belongs to.
- *
- * Cells are positioned rather than flexed so every one lands exactly on the
- * 15-minute slot it describes; a gapped flex column drifts by a cell over 96 slots.
+ * One cell per 15-minute slot, the colour of the behaviour that claims it,
+ * the weight in the ink. It sits under committed chips so the day itself
+ * reads as color-coded time rather than as a second gutter of boxes.
+ * Cells are positioned rather than flexed so every one lands on the slot
+ * it describes.
  */
-function RhythmStrip({ dayStart, lookup, colorMode, waiting = false }: RhythmStripProps) {
-  const claims = useMemo(() => rhythmClaims(dayStart, lookup), [dayStart, lookup]);
+function RhythmWash({ dayStart, lookup, colorMode, occupancy = null, waiting = false }: RhythmWashProps) {
+  const occupancyCells = useMemo(
+    () => (occupancy?.length ? occupancyClaims(dayStart, occupancy) : null),
+    [dayStart, occupancy],
+  );
+  const climateClaims = useMemo(() => rhythmClaims(dayStart, lookup), [dayStart, lookup]);
+  const claims = occupancyCells ?? climateClaims;
   const slotCount = claims.length || 1;
   const clusters = useMemo(() => topClusters(lookup(utcDateKey(dayStart))), [dayStart, lookup]);
   const hasRhythm = claims.some((claim) => claim.weight >= RHYTHM_NOISE_FLOOR);
   const waitingForRhythm = waiting && !hasRhythm;
-  // Both names are day-scoped: the week draws one strip per day and they can
-  // all be waiting at once, so a constant waiting name would give a screen
-  // reader seven focusable images sharing a single name.
-  const label = waitingForRhythm ? rhythmWaitingLabel(dayStart) : rhythmLabel(dayStart, clusters);
+  const usingOccupancy = occupancyCells !== null;
+  const label = waitingForRhythm
+    ? rhythmWaitingLabel(dayStart)
+    : usingOccupancy
+      ? occupancyLabel(dayStart)
+      : rhythmLabel(dayStart, clusters);
 
-  const strip = (
+  const wash = (
     <div
-      data-testid="vertical-rhythm-strip"
-      className="relative w-2 shrink-0 rounded-[3px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      style={{ height: GRID_HEIGHT_PX }}
-      // The cells carry no text, so collapsing them to one named image loses
-      // nothing and gains a name. A strip with no signal is decoration unless
-      // Predict is still running — then the shimmer is the only status.
-      {...(hasRhythm || waitingForRhythm
-        ? { role: 'img', 'aria-label': label, tabIndex: 0 }
-        : { 'aria-hidden': true })}
+      data-testid="vertical-rhythm-wash"
+      className={cn(
+        'absolute inset-0 z-0',
+        hasRhythm && !usingOccupancy && !waitingForRhythm ? 'pointer-events-auto' : 'pointer-events-none',
+      )}
+      {...(hasRhythm || waitingForRhythm ? { role: 'img', 'aria-label': label } : { 'aria-hidden': true })}
     >
       {claims.map((claim, slot) => {
         const lit = claim.weight >= RHYTHM_NOISE_FLOOR;
+        const inspect = occupancyCells?.[slot];
+        const show = lit || waitingForRhythm;
 
-        return (
-          <div
-            key={slot}
-            className={cn(
-              'absolute inset-x-0 rounded-[1px]',
-              !lit && !waitingForRhythm && 'bg-foreground/[0.06]',
-              !lit && waitingForRhythm && 'rhythm-cell-waiting',
-            )}
-            style={{
-              top: `${(slot / slotCount) * 100}%`,
-              height: `calc(${100 / slotCount}% - ${RHYTHM_CELL_GAP_PX}px)`,
-              animationDelay: waitingForRhythm ? `${slot * 12}ms` : undefined,
-              ...(lit
-                ? {
-                    // Type mode lets the cell wear the class of the behaviour
-                    // that claims it. Source mode has nothing to say about a
-                    // prediction — it came from no calendar — so it stays on
-                    // the theme colour rather than inventing an answer.
-                    backgroundColor: colorMode === 'type' ? classColor(claim.l0Class) : 'var(--primary)',
-                    opacity: cellOpacity(claim.weight),
-                  }
-                : {}),
-            }}
-          />
+        if (!show) {
+          return null;
+        }
+
+        const cellClass = cn(
+          'absolute inset-x-0',
+          !lit && waitingForRhythm && 'rhythm-cell-waiting',
+          inspect?.bucket && inspect.bucket.l0Probs.length > 0 && 'pointer-events-auto',
         );
+        const cellStyle = {
+          top: `${(slot / slotCount) * 100}%`,
+          height: `${100 / slotCount}%`,
+          animationDelay: waitingForRhythm ? `${slot * 12}ms` : undefined,
+          ...(lit
+            ? {
+                backgroundColor: colorMode === 'type' ? classColor(claim.l0Class) : 'var(--primary)',
+                opacity: cellOpacity(claim.weight),
+              }
+            : {}),
+        };
+
+        if (inspect?.bucket && inspect.bucket.l0Probs.length > 0) {
+          return (
+            <Tooltip key={slot}>
+              <Tooltip.Trigger asChild>
+                <div data-testid="occupancy-bin" tabIndex={-1} className={cellClass} style={cellStyle} />
+              </Tooltip.Trigger>
+              <Tooltip.Content side="right" sideOffset={6} className="max-w-none p-3">
+                <SlotTooltip bucket={inspect.bucket} localMin={inspect.localMin} minutes={inspect.minutes} />
+              </Tooltip.Content>
+            </Tooltip>
+          );
+        }
+
+        return <div key={slot} className={cellClass} style={cellStyle} />;
       })}
     </div>
   );
 
-  if (!hasRhythm) {
-    return strip;
+  if (!hasRhythm || usingOccupancy || waitingForRhythm) {
+    return wash;
   }
 
   return (
@@ -607,7 +622,7 @@ function RhythmStrip({ dayStart, lookup, colorMode, waiting = false }: RhythmStr
         </div>
       }
     >
-      {strip}
+      {wash}
     </EventPeek>
   );
 }
@@ -618,6 +633,9 @@ interface DayLaneProps {
   isToday: boolean;
   nowPct: number | null;
   colorMode: ColorMode;
+  lookup: (utcDate: string) => RhythmDay | undefined;
+  occupancy?: ForecastBucket[] | null;
+  waiting?: boolean;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
   selectedSlot?: CalendarSlot | null;
   onSelectSlot?: (slot: CalendarSlot) => void;
@@ -629,6 +647,9 @@ const DayLane = memo(function DayLane({
   isToday,
   nowPct,
   colorMode,
+  lookup,
+  occupancy = null,
+  waiting = false,
   onMoveEvent,
   selectedSlot,
   onSelectSlot,
@@ -725,6 +746,14 @@ const DayLane = memo(function DayLane({
           : undefined
       }
     >
+      <RhythmWash
+        dayStart={dayStart}
+        lookup={lookup}
+        colorMode={colorMode}
+        occupancy={occupancy}
+        waiting={waiting}
+      />
+
       {AXIS_HOURS.map((hour) => (
         <div
           key={hour}
@@ -806,6 +835,8 @@ interface VerticalCalendarProps {
   selectedDay?: Date;
   onSelectDay?: (dayStart: Date) => void;
   colorMode?: ColorMode;
+  /** Day-ahead HBPE histogram. Bins land on the local day their startTime falls in. */
+  occupancy?: ForecastBucket[] | null;
   /** Nightly/Predict is in a named step (`NIGHTLY:label`, …). Empty cells shimmer. */
   pipelineRunning?: boolean;
   footer?: ReactNode;
@@ -819,8 +850,8 @@ interface VerticalCalendarProps {
  * Outlook. Timed blocks sit on a 24-hour column; all-day rows sit above it,
  * outside the scroll, so a busy all-day lane cannot shove one day's hours out
  * of line. This is the one schedule surface on the page: what the day is
- * predicted to hold rides in as a {@link RhythmStrip} beside the time axis
- * rather than as a second view of the same week.
+ * predicted to hold rides in as a {@link RhythmWash} behind the hours so the
+ * column itself is the forecast, not a second gutter of boxes.
  */
 export function VerticalCalendar({
   start,
@@ -833,6 +864,7 @@ export function VerticalCalendar({
   selectedDay,
   onSelectDay,
   colorMode = 'type',
+  occupancy = null,
   pipelineRunning = false,
   footer,
   className,
@@ -965,12 +997,7 @@ export function VerticalCalendar({
           const dayLabel = dayStart.toLocaleDateString([], { weekday: 'long' });
 
           return (
-            // Mirrors the rhythm-strip + gap leading each day lane below, with
-            // an unlabeled spacer in place of the strip, so the all-day chips
-            // and the timed grid share the same left edge instead of the
-            // all-day row drifting a rhythm-strip's width left of it.
-            <div key={key} className="flex min-w-0 flex-1 gap-1 pl-1">
-              <div aria-hidden className="w-2 shrink-0" />
+            <div key={key} className="min-w-0 flex-1">
               <div
                 role="list"
                 aria-label={`All day on ${dayLabel}`}
@@ -1010,10 +1037,8 @@ export function VerticalCalendar({
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" data-testid="vertical-calendar-scroll">
         <div className="flex min-w-0">
-          {/* The hours the rhythm and the days both read against. Reading
-              order per day is rhythm, then time, then what was committed —
-              see the per-day wrapper below, where each day gets its own
-              strip rather than one shared strip speaking for all of them. */}
+          {/* Hours the days read against. Predicted colour lives in each
+              column, behind committed time, so the axis stays a clock. */}
           <div className="sticky left-0 z-10 flex w-16 shrink-0 items-start justify-end bg-card pr-1.5">
             <div className="relative w-full" style={{ height: GRID_HEIGHT_PX }}>
               {AXIS_HOURS.map((hour) => (
@@ -1034,19 +1059,16 @@ export function VerticalCalendar({
               const isToday = sameLocalDay(dayStart, today);
 
               return (
-                <div key={key} className="flex min-w-0 flex-1 gap-1 pl-1">
-                  <RhythmStrip
-                    dayStart={dayStart}
-                    lookup={lookup}
-                    colorMode={colorMode}
-                    waiting={pipelineRunning}
-                  />
+                <div key={key} className="min-w-0 flex-1">
                   <DayLane
                     dayStart={dayStart}
                     dayEvents={eventsByDayKey.get(key) ?? []}
                     isToday={isToday}
                     nowPct={isToday ? nowPct : null}
                     colorMode={colorMode}
+                    lookup={lookup}
+                    occupancy={occupancy}
+                    waiting={pipelineRunning}
                     onMoveEvent={onMoveEvent ? handleMoveEvent : undefined}
                     selectedSlot={selectedSlot}
                     onSelectSlot={onSelectSlot}

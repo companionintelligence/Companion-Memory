@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
@@ -26,6 +26,73 @@ export interface CreatePeerLinkDto {
 }
 
 /**
+ * The partial unique index this service can violate, by name.
+ *
+ * See `20260906120000_add_peer_link_identity_uniq.sql`. Checked by name rather than
+ * treating any `23505` on the table as an identity clash, because
+ * `peer_links_owner_handle_uniq` and `peer_links_owner_key_live_uniq` are also
+ * live here and reporting either of those as "another link already claims that
+ * identity" would be a lie that survives every test.
+ */
+const IDENTITY_CONSTRAINT = 'peer_links_owner_identity_live_uniq';
+
+/**
+ * Was this write refused because another LIVE link of this owner's already
+ * claims the same `(peer_issuer, peer_subject)`?
+ *
+ * The constraint name is accepted as ABSENT, matching `PipelineRunService`'s
+ * reading of the same question: node-postgres populates it from the server's
+ * error fields and a pooler in between is not required to. An absent name on a
+ * write that supplied an identity is read as the identity clash; a `23505`
+ * naming some other constraint is rethrown untouched, so a handle collision
+ * keeps surfacing as itself.
+ */
+function isIdentityConflict(err: unknown): boolean {
+  const candidate = err as {
+    code?: unknown;
+    constraint?: unknown;
+    driverError?: { code?: unknown; constraint?: unknown };
+  } | null;
+
+  if ((candidate?.driverError?.code ?? candidate?.code) !== '23505') {
+    return false;
+  }
+
+  const constraint = candidate?.driverError?.constraint ?? candidate?.constraint;
+
+  return constraint == null || constraint === IDENTITY_CONSTRAINT;
+}
+
+/**
+ * Normalize one half of the peer identity, or reject it.
+ *
+ * `undefined` means "the caller said nothing" and is preserved as such — only
+ * that is allowed to mean "leave whatever is stored alone". Everything else is
+ * trimmed, and a value that trims to nothing is refused rather than stored:
+ * `PortalTokenService.verifyClaims` returns null unless BOTH claims are
+ * non-empty, so a blank column can never be matched by a verified token. Storing
+ * one would leave the owner looking at a link that says it is bound and behaves
+ * as if it is not.
+ */
+function normalizeIdentityPart(value: string | null | undefined, field: string): string | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (value === null) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  if (trimmed === '') {
+    throw new BadRequestException(`${field} must not be blank`);
+  }
+
+  return trimmed;
+}
+
+/**
  * Owns the local half of the trust graph: which peers this box knows, how much
  * it trusts them, and which person in the owner's memory each one is.
  */
@@ -39,7 +106,33 @@ export class PeerLinkService {
     this.logger.setContext(PeerLinkService.name);
   }
 
-  /** Link a peer (idempotent on (owner, handle) — re-linking refreshes it). */
+  /**
+   * Link a peer (idempotent on (owner, handle) — re-linking refreshes it).
+   *
+   * ═══ `peerIssuer` / `peerSubject`: WHAT THEY ARE, AND WHAT GUARDS THEM ═══
+   *
+   * The pair `PeerAskService.resolveLink` matches an inbound ask on. Setting it
+   * is the gesture that decides WHICH REMOTE IDENTITY MAY ACT AS THIS PEER, and
+   * therefore which `trustTier` ceiling a stranger's token inherits — so it is
+   * the most consequential thing this method writes. Three guards, in the order
+   * they run:
+   *
+   *   1. **Owner scoping**, inherited rather than added: the read below and the
+   *      row it creates are both keyed on `context.userId`, so a caller can
+   *      only ever bind THEIR OWN link. `PeerLinkResolver.updatePeerLink` adds
+   *      the matching refusal for an id it cannot read.
+   *   2. **Both or neither, never blank** — a half-set pair is inert while
+   *      looking bound.
+   *   3. **One LIVE link per (owner, identity)**, enforced by a partial unique
+   *      index because a read-then-write check races.
+   *
+   * `undefined` means "the caller said nothing", and is the only value that
+   * leaves a stored binding alone — matching how this method already treats
+   * `displayName` and `trustTier`. Clearing a binding is therefore not
+   * expressible here (`null` reads as absent, as it does for every other
+   * optional field); re-binding to the right identity, or revoking the link, is
+   * the gesture that corrects a wrong one.
+   */
   async upsert(context: UserServiceContext, data: CreatePeerLinkDto): Promise<PeerLink> {
     // The DB CHECK on `trust_tier` is the real boundary, and it fails as a
     // `23514` the driver raises after the statement — surfaced to a caller as a
@@ -51,6 +144,11 @@ export class PeerLinkService {
       throw new BadRequestException(`Unknown peer trust tier: ${String(data.trustTier)}`);
     }
 
+    // Trimmed, and blank refused, BEFORE the pairing check below reads them —
+    // otherwise `peerIssuer: '   '` would count as "supplied" and satisfy it.
+    const peerIssuer = normalizeIdentityPart(data.peerIssuer, 'peerIssuer');
+    const peerSubject = normalizeIdentityPart(data.peerSubject, 'peerSubject');
+
     const existing = await this.repository.findOne({
       where: { ownerUserId: context.userId, peerHandle: data.peerHandle },
     });
@@ -59,15 +157,57 @@ export class PeerLinkService {
       ...(existing ?? { id: uuidv7(), ownerUserId: context.userId, peerHandle: data.peerHandle }),
       memoryEndpoint: data.memoryEndpoint,
       displayName: data.displayName ?? existing?.displayName ?? null,
-      peerIssuer: data.peerIssuer ?? existing?.peerIssuer ?? null,
-      peerSubject: data.peerSubject ?? existing?.peerSubject ?? null,
+      peerIssuer: peerIssuer ?? existing?.peerIssuer ?? null,
+      peerSubject: peerSubject ?? existing?.peerSubject ?? null,
       personEntityId: data.personEntityId ?? existing?.personEntityId ?? null,
       trustTier: data.trustTier ?? existing?.trustTier ?? 'peer',
       status: data.status ?? existing?.status ?? 'active',
       revokedAt: null,
     });
 
-    return PeerLinkEntity.toEgressType(await this.repository.save(record));
+    // ═══ BOTH OR NEITHER — CHECKED ON THE MERGED ROW, NOT THE INPUT ═══
+    //
+    // `findActiveByPeerIdentity` filters on BOTH columns, so a link carrying
+    // only one of them can never match anything: it is inert while looking
+    // bound. The check is on the row that is about to be WRITTEN rather than on
+    // `data`, because the merge above is what decides the outcome — supplying
+    // only `peerSubject` on a link that already has an issuer is a legitimate
+    // half-write, and supplying only `peerSubject` on a link that has neither
+    // is the mistake.
+    //
+    // Scoped to writes that TOUCH the identity. A link whose columns were left
+    // half-set by hand-written SQL (the only way to set them before this
+    // change, per `docs/peer-federation.md`) can still have its display name or
+    // tier edited; only a write that means to change the binding has to leave
+    // it coherent. Refusing every unrelated edit to such a row would turn a
+    // legacy inconsistency into an outage.
+    const touchesIdentity = peerIssuer !== undefined || peerSubject !== undefined;
+
+    if (touchesIdentity && (record.peerIssuer == null) !== (record.peerSubject == null)) {
+      throw new BadRequestException(
+        'peerIssuer and peerSubject must be set together — one alone can never match an inbound ask',
+      );
+    }
+
+    try {
+      return PeerLinkEntity.toEgressType(await this.repository.save(record));
+    } catch (err) {
+      // ═══ ONE LIVE LINK PER (OWNER, IDENTITY) — WHY THE DB DECIDES ═══
+      //
+      // A read-then-write check here would race: two concurrent binds both read
+      // "nothing claims it" and both insert. `peer_links_owner_identity_live_uniq`
+      // is the only place that cannot be lost to a race, so the check lives
+      // there and this catch exists to give it an honest status code instead of
+      // the bare 500 an unhandled `23505` becomes.
+      if (touchesIdentity && isIdentityConflict(err)) {
+        throw new ConflictException(
+          'Another active peer link already claims that (peerIssuer, peerSubject) — ' +
+            'revoke it first, or re-bind that link instead',
+        );
+      }
+
+      throw err;
+    }
   }
 
   async findAll(context: UserServiceContext): Promise<PeerLink[]> {

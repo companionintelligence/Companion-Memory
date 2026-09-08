@@ -9,6 +9,7 @@
  * tested directly rather than through a rendered grid.
  */
 
+import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 import { type ActivityClass, normalizeClass } from '@/lib/activityPalette';
 import { weekClusterVisible } from '@/lib/forecastDisplay';
@@ -45,13 +46,13 @@ type DaypartName = (typeof DAYPART_NAMES)[number];
 const RHYTHM_NOISE_FLOOR = 0.05;
 
 /**
- * Ink range for a rhythm cell. The floor keeps a weak-but-real pattern visible;
- * the ceiling keeps the layer ambient so it never competes with committed time.
- * Weight maps linearly across the range rather than being clamped, so a 0.9 cell
- * still reads darker than a 0.6 one.
+ * Ink range for a rhythm wash behind committed time. The floor keeps a
+ * weak-but-real pattern visible; the ceiling stays ambient so chips still
+ * read as the foreground. Weight maps linearly across the range rather than
+ * being clamped, so a 0.9 cell still reads darker than a 0.6 one.
  */
-const MIN_CELL_INK = 0.14;
-const MAX_CELL_INK = 0.85;
+const MIN_CELL_INK = 0.12;
+const MAX_CELL_INK = 0.42;
 
 function cellOpacity(intensity: number): number {
   return MIN_CELL_INK + (MAX_CELL_INK - MIN_CELL_INK) * Math.min(intensity, 1);
@@ -355,6 +356,106 @@ function rhythmWaitingLabel(dayStart: Date): string {
   return `Predicted rhythm for ${day}: still being built. This can take a while.`;
 }
 
+/** One occupancy slot from the day-ahead histogram, already on the local clock. */
+interface OccupancyCell extends RhythmClaim {
+  bucket: ForecastBucket | null;
+  localMin: number;
+  minutes: number;
+}
+
+function dominantOccupancyClass(bucket: ForecastBucket | null | undefined): ActivityClass {
+  if (!bucket?.l0Probs.length) {
+    return 'UNKNOWN';
+  }
+
+  const top = bucket.l0Probs.reduce((best, cur) => (cur.probability > best.probability ? cur : best));
+
+  return normalizeClass(top.label);
+}
+
+/**
+ * The day-ahead HBPE histogram, clipped onto one local calendar day.
+ *
+ * Returns null when no bucket's `startTime` falls on this day — the strip then
+ * keeps the week-forecast climate. Occupancy is a 24h histogram that can
+ * straddle two local dates, so each day's strip only paints the bins that
+ * actually belong to it.
+ */
+function occupancyClaims(dayStart: Date, buckets: ForecastBucket[]): OccupancyCell[] | null {
+  if (buckets.length === 0) {
+    return null;
+  }
+
+  const dayEnd = addDays(dayStart, 1);
+  const bySlot = new Map<number, OccupancyCell>();
+
+  for (const bucket of buckets) {
+    if (!bucket.startTime) {
+      continue;
+    }
+
+    const at = new Date(bucket.startTime);
+
+    if (Number.isNaN(at.getTime()) || at < dayStart || at >= dayEnd) {
+      continue;
+    }
+
+    const slot = Math.min(BUCKETS_PER_DAY - 1, Math.floor(localMinutes(at) / BUCKET_MINUTES));
+
+    bySlot.set(slot, {
+      weight: bucket.q50,
+      l0Class: dominantOccupancyClass(bucket),
+      bucket,
+      localMin: slot * BUCKET_MINUTES,
+      minutes: BUCKET_MINUTES,
+    });
+  }
+
+  if (bySlot.size === 0) {
+    return null;
+  }
+
+  return Array.from({ length: BUCKETS_PER_DAY }, (_, slot) => {
+    return (
+      bySlot.get(slot) ?? {
+        weight: 0,
+        l0Class: 'UNKNOWN' as ActivityClass,
+        bucket: null,
+        localMin: slot * BUCKET_MINUTES,
+        minutes: BUCKET_MINUTES,
+      }
+    );
+  });
+}
+
+function occupancyLabel(dayStart: Date): string {
+  const day = dayStart.toLocaleDateString([], { weekday: 'long' });
+
+  return `Predicted occupancy for ${day}: 96 quarter-hour bins from HBPE.`;
+}
+
+/**
+ * Whether any occupancy bin in `from`…`to` is strong enough to light a cell.
+ *
+ * The histogram is a fixed 24h horizon, not the drawn week, so a later week
+ * must not inherit tomorrow's signal — that is how a footer would claim a
+ * live layer over seven empty strips.
+ */
+function occupancySignalInRange(buckets: ForecastBucket[], from: Date, to: Date): boolean {
+  const fromMs = from.getTime();
+  const toMs = to.getTime();
+
+  return buckets.some((bucket) => {
+    if (!bucket.startTime || bucket.q50 < RHYTHM_NOISE_FLOOR) {
+      return false;
+    }
+
+    const at = new Date(bucket.startTime).getTime();
+
+    return Number.isFinite(at) && at >= fromMs && at < toMs;
+  });
+}
+
 function visibleClusters(day: RhythmDay | undefined): RhythmCluster[] {
   return (day?.clusters ?? []).filter((cluster) =>
     weekClusterVisible({
@@ -446,6 +547,9 @@ export {
   rhythmClaims,
   rhythmLabel,
   rhythmWaitingLabel,
+  occupancyClaims,
+  occupancyLabel,
+  occupancySignalInRange,
   topClusters,
   cellOpacity,
   utcDateKey,
@@ -457,4 +561,4 @@ export {
   BUCKETS_PER_DAY,
 };
 
-export type { RhythmClaim, RhythmCluster };
+export type { OccupancyCell, RhythmClaim, RhythmCluster };

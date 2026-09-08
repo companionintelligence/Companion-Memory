@@ -9,6 +9,15 @@
  *   P6466 Hulu movie ID         https://www.hulu.com/movie/<uuid>
  *   P1874 Netflix ID            https://www.netflix.com/title/<digits>
  *   P8055 Amazon Prime Video ID https://www.amazon.com/gp/video/detail/<asin>
+ *   P13902 Disney+ browse ID    https://www.disneyplus.com/browse/entity-<uuid>
+ *   P7596 Disney+ series ID     https://www.disneyplus.com/series/wp/<id>
+ *   P7595 Disney+ movie ID      https://www.disneyplus.com/movies/wd/<id>
+ *
+ * Disney+ has two schemes. The browse id is the current one and the one
+ * Wikidata keeps filling in (a 2025 film has a browse id and nothing else);
+ * the series / movie ids are the legacy scheme, which disneyplus.com still
+ * answers with a permanent redirect to the browse page. Browse first, then
+ * whichever legacy id the item carries.
  *
  * These are the work's pages (the show, the film), not per-episode watch
  * links — Wikidata does not carry those. None of these players can be
@@ -25,24 +34,31 @@ export interface WatchLinks {
   hulu?: string;
   netflix?: string;
   prime_video?: string;
+  disney_plus?: string;
 }
 
 export const WATCH_LINK_SITE_NAMES: Readonly<Record<keyof WatchLinks, string>> = {
   hulu: 'Hulu',
   netflix: 'Netflix',
   prime_video: 'Prime Video',
+  disney_plus: 'Disney+',
 };
 
 /** Wikidata's own format constraints (P1793) for each id, so a mistyped value never becomes a URL. */
 const HULU_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const NETFLIX_ID = /^\d{6,8}$/;
 const PRIME_VIDEO_ID = /^B[0-9A-Z]{9}$/;
+const DISNEY_PLUS_ID = /^[0-9A-Za-z]{12}$/;
+const DISNEY_PLUS_BROWSE_ID = /^entity-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface ProviderIds {
   huluSeries?: string;
   huluMovie?: string;
   netflix?: string;
   primeVideo?: string;
+  disneyPlusBrowse?: string;
+  disneyPlusSeries?: string;
+  disneyPlusMovie?: string;
 }
 
 /** The provider pages a Wikidata item's ids resolve to; undefined when it has none. */
@@ -63,6 +79,14 @@ export function watchLinksFor(ids: ProviderIds): WatchLinks | undefined {
 
   if (ids.primeVideo && PRIME_VIDEO_ID.test(ids.primeVideo)) {
     links.prime_video = `https://www.amazon.com/gp/video/detail/${ids.primeVideo}`;
+  }
+
+  if (ids.disneyPlusBrowse && DISNEY_PLUS_BROWSE_ID.test(ids.disneyPlusBrowse)) {
+    links.disney_plus = `https://www.disneyplus.com/browse/${ids.disneyPlusBrowse}`;
+  } else if (ids.disneyPlusSeries && DISNEY_PLUS_ID.test(ids.disneyPlusSeries)) {
+    links.disney_plus = `https://www.disneyplus.com/series/wp/${ids.disneyPlusSeries}`;
+  } else if (ids.disneyPlusMovie && DISNEY_PLUS_ID.test(ids.disneyPlusMovie)) {
+    links.disney_plus = `https://www.disneyplus.com/movies/wd/${ids.disneyPlusMovie}`;
   }
 
   return Object.keys(links).length ? links : undefined;

@@ -65,6 +65,7 @@ function makeController() {
   const csrfService = { generateToken: jest.fn().mockReturnValue('new-csrf-token') };
   const featureService = { isFeatureEnabled: jest.fn().mockResolvedValue(false) };
   const oidcNativeCodeService = { issue: jest.fn().mockReturnValue('one-time-code'), redeem: jest.fn() };
+  const signupCodeService = { findOne: jest.fn().mockResolvedValue(null), update: jest.fn() };
   const logger = { setContext: jest.fn(), warn: jest.fn(), error: jest.fn(), log: jest.fn() };
 
   const controller = new OidcController(
@@ -73,10 +74,20 @@ function makeController() {
     csrfService as never,
     featureService as never,
     oidcNativeCodeService as never,
+    signupCodeService as never,
     logger as never,
   );
 
-  return { controller, userService, authService, csrfService, featureService, oidcNativeCodeService, logger };
+  return {
+    controller,
+    userService,
+    authService,
+    csrfService,
+    featureService,
+    oidcNativeCodeService,
+    signupCodeService,
+    logger,
+  };
 }
 
 function makeRes() {
@@ -293,6 +304,54 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
 
       expect(userService.create).not.toHaveBeenCalled();
       expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=signup_required`);
+    });
+
+    it('lets an invited identity in when the code the owner issued rides along, and burns it', async () => {
+      const { controller, userService, signupCodeService, featureService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com' }));
+      userService.findByEmail.mockResolvedValue(null);
+      userService.hasNoUsers.mockResolvedValue(false);
+      featureService.isFeatureEnabled.mockResolvedValue(true);
+      signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
+
+      await controller.callback(
+        'code-x',
+        'match',
+        undefined,
+        webReq({ oidc_signup_code: 'invite-1' }),
+        res as never,
+      );
+
+      // Not refused, and the invitation cannot be replayed by whoever arrives next.
+      expect(res.redirect).not.toHaveBeenCalledWith('/login?error=signup_code_required');
+      expect(signupCodeService.update).toHaveBeenCalledWith('invite-1', { used: true });
+    });
+
+    it('refuses a code that is not a real invitation, and burns nothing', async () => {
+      const { controller, userService, signupCodeService, featureService } = makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com' }));
+      userService.findByEmail.mockResolvedValue(null);
+      userService.hasNoUsers.mockResolvedValue(false);
+      featureService.isFeatureEnabled.mockResolvedValue(true);
+      signupCodeService.findOne.mockResolvedValue(null);
+
+      await controller.callback(
+        'code-x',
+        'match',
+        undefined,
+        webReq({ oidc_signup_code: 'made-up' }),
+        res as never,
+      );
+
+      expect(res.redirect).toHaveBeenCalledWith('/login?error=signup_code_required');
+      expect(signupCodeService.update).not.toHaveBeenCalled();
+      expect(userService.create).not.toHaveBeenCalled();
     });
 
     it('rejects an unknown user outright when signup codes are required, before minting any intent cookie', async () => {

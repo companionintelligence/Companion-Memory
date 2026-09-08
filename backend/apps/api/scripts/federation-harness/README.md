@@ -243,6 +243,35 @@ seven have since been fixed *because* the run demonstrated them; those are
 marked ✅ and the assertions that pinned the old behaviour have been replaced by
 assertions that pin the new. The rest are still true and still pinned.
 
+### 0. What this harness structurally cannot test — and what a real two-box run found
+
+The driver POSTs to `/agent/v1/ask` itself (see
+[The outbound half](#the-outbound-half-and-why-the-driver-plays-it)), so a green
+run says **nothing** about `PeerAskClient`, `checkEgressUrl`, DNS, or TLS. Both
+boxes also run on one machine, so the `consumption` store is the only piece of
+per-box infrastructure that is genuinely shared.
+
+A live run on 2026-09-06 between two real appliances — one remote Tailscale node
+over real Tailscale TLS, one laptop, both on `main` at `06b5dac91` — closed that
+gap and found two things this harness could not have:
+
+**The inbound rate limiter 500'd every peer request on the default store.**
+`PeerRateLimitService` built its `ConsumptionStore` key by joining
+`(bucket, issuer, subject)` with NUL. That is free in the process-local `Map` the
+budget used to live in, and impossible in the Postgres column it lives in now
+(G8 / #2365): `invalid byte sequence for encoding "UTF8": 0x00`, raised inside
+`PostgresConsumptionStore.takeWindow`. Because `consume` deliberately runs
+**before** the peer-link lookup, that was a `500` on every inbound ask and every
+collect for any box using `consumption.store: postgres` — the default in
+`config/default.json`, with **no** entry in
+`custom-environment-variables.json`, so it cannot even be switched to `memory`
+from the environment. Every suite missed it because they all use
+`InMemoryConsumptionStore`. Fixed, with a regression test that captures the key
+and asserts no NUL.
+
+**`peer_issuer` / `peer_subject` have no write path but this harness's SQL.**
+See finding 5 below.
+
 ### 1. ✅ FIXED — the federated audit under-reported what crossed
 
 `ci.ask_audit.disclosed_count` was added (migration `20260821013030`) precisely
@@ -355,9 +384,22 @@ What the asker loses is a real answer to "should I wait?", which was the honest
 argument for keeping `pending_review`. It is answered instead by the ask being
 pollable — see finding 3.
 
-### 5. No API creates a peer grant, and none creates a peer link
+### 5. ✅ PARTLY FIXED — peer grants and peer links have APIs now; the peer IDENTITY still does not
 
-`createAskGrant` takes only `granteeId` (a **user** global id) and hard-codes
+> **Δ 2026-09-06.** The first half of this finding is stale: `createAskGrant`
+> now takes `granteePeerLinkId` (resolved through an owner-scoped read before it
+> is stored — `AskResolver.ts:738-752`), and `PeerLinkResolver` ships the full
+> `createPeerLink` / `updatePeerLink` / `revokePeerLink` set. What replaced it is
+> narrower and worse: **neither peer-link mutation can set `peer_issuer` /
+> `peer_subject`**, and those are the columns
+> `PeerLinkService.findActiveByPeerIdentity` matches an inbound ask on. Outside
+> tests, the only writers of `peerIssuer` in the repo are `seed.ts:181` and
+> `index.ts:224,242` — i.e. **this harness**. So a link made the supported way is
+> inert for inbound asks, and the SQL below is still the only way to bind one.
+> See [`docs/peer-federation.md`](../../../../../docs/peer-federation.md)
+> § *Federating two REAL boxes*.
+
+The original finding, for the record: `createAskGrant` took only `granteeId` (a **user** global id) and hard-coded
 `granteeUserId`, even though `GrantService.create`, the DTO and the DB CHECK all
 support `granteePeerLinkId`. So a grant addressed to a peer is unreachable from
 GraphQL — the harness writes them as SQL, and so must anyone else.
@@ -451,7 +493,7 @@ did not exist. The comparison now uses the real reply captured in (b) — a
 fixture cannot notice something the fixture author did not know.
 
 **The inbound rate limit is 10 asks per 60 seconds**, per `(issuer, subject)`,
-in-memory per process (`PeerRateLimitService`). A run spends 7. Two runs inside
+backed by `ConsumptionStore` since G8 / #2365, so it is shared across replicas and survives a restart (`PeerRateLimitService`) — it was in-memory per process when this line was written. A run spends 7. Two runs inside
 one minute will 429, which the driver reports by name rather than letting it
 surface as a mystery assertion failure. Restarting box B clears the window.
 

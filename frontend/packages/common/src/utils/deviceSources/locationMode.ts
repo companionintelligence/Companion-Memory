@@ -2,7 +2,7 @@
  * Per-device location-consent mode. Off / while-using / always (background).
  *
  * Stored on the device, not the account — the same rule as the old boolean toggle.
- * `always` is an iOS capability; Android and web treat it as `when_in_use`.
+ * `always` is native-only (iOS and Android); web treats it as `when_in_use`.
  *
  * The legacy key `ci-location-tracking-enabled` is still written so older readers
  * do not silently disable a user who already opted in. Reading prefers the new
@@ -20,6 +20,9 @@ export const LOCATION_ENABLED_STORAGE_KEY = 'ci-location-tracking-enabled';
 
 /** Keeps the settings screen and the app-level watcher on the same mode. */
 export const LOCATION_MODE_CHANGE_EVENT = 'ci:location-tracking-changed';
+
+/** Settings page watches this so Open Settings appears after Always is not granted. */
+export const LOCATION_NEEDS_SETTINGS_EVENT = 'ci:location-needs-settings';
 
 /** Background persist gate — looser than the foreground 50 m / 5 min sampler. */
 export const BACKGROUND_MIN_DISTANCE_METERS = 150;
@@ -73,4 +76,12 @@ export function publishLocationTrackingMode(mode: LocationTrackingMode): void {
   }
 
   window.dispatchEvent(new CustomEvent(LOCATION_MODE_CHANGE_EVENT, { detail: mode }));
+}
+
+export function publishLocationNeedsSettingsUpgrade(needs: boolean): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(new CustomEvent(LOCATION_NEEDS_SETTINGS_EVENT, { detail: needs }));
 }

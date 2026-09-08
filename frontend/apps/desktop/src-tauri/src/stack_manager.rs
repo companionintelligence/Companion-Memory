@@ -302,6 +302,19 @@ pub(crate) fn extended_path_env() -> String {
     {
         extra_dirs.push("/usr/local/bin".to_string());
         extra_dirs.push("/usr/bin".to_string());
+        // Docker's official rootless installer (`get.docker.com/rootless`) — the
+        // only way to install Docker on Linux without root, and so the norm on
+        // managed machines — puts `docker` in ~/bin, not anywhere under /usr. It
+        // tells you to add that to PATH from your shell profile, which a
+        // GUI-launched app never sources: the splash then says "Docker was not
+        // found on this machine" on a box where Docker is installed and running.
+        // Listed after the system dirs so a system-wide install still wins.
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = std::path::Path::new(&home);
+            for dir in [home.join(".local/bin"), home.join("bin")] {
+                extra_dirs.push(dir.to_string_lossy().into_owned());
+            }
+        }
     }
 
     if extra_dirs.is_empty() {
@@ -311,9 +324,78 @@ pub(crate) fn extended_path_env() -> String {
     format!("{}{separator}{existing}", extra_dirs.join(separator))
 }
 
-fn docker_command() -> Command {
+/// The `DOCKER_HOST` this app should talk to, resolved once per launch, or
+/// `None` to leave the CLI's own resolution alone.
+///
+/// Rootless Docker — the only way to install Docker on Linux without root, and
+/// so the norm on managed machines — puts its socket at
+/// `$XDG_RUNTIME_DIR/docker.sock` and tells you to export `DOCKER_HOST` at it
+/// from your shell profile. A GUI launch never sources that profile, so the CLI
+/// looks for the root daemon's `/var/run/docker.sock`, which a rootless install
+/// doesn't have, and the splash says "Docker is installed but not running" on a
+/// machine where it is both.
+///
+/// This probes rather than predicts. Reading `DOCKER_CONTEXT`/`currentContext`
+/// to decide whether the user "already chose" a daemon looks equivalent and is
+/// not: a `currentContext` left behind by an uninstalled Docker Desktop names an
+/// endpoint that no longer exists, and deferring to it strands exactly the user
+/// this is meant to help. So: let the CLI try first, and only step in when it
+/// cannot reach a daemon on its own *and* a rootless socket answers.
+#[cfg(target_os = "linux")]
+fn resolved_docker_host() -> Option<&'static str> {
+    static RESOLVED: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    RESOLVED
+        .get_or_init(|| {
+            let candidate = choose_docker_host(
+                std::env::var_os("DOCKER_HOST").is_some(),
+                daemon_reachable(None),
+                rootless_socket_url(),
+            )?;
+            // Only take over when the fallback actually reaches a daemon, so a
+            // wrong guess can never mask the CLI's own diagnosis.
+            daemon_reachable(Some(&candidate)).then_some(candidate)
+        })
+        .as_deref()
+}
+
+/// The rootless daemon's conventional socket, if it is there at all.
+#[cfg(target_os = "linux")]
+fn rootless_socket_url() -> Option<String> {
+    let socket = std::path::Path::new(&std::env::var_os("XDG_RUNTIME_DIR")?).join("docker.sock");
+    socket
+        .exists()
+        .then(|| format!("unix://{}", socket.display()))
+}
+
+/// The decision behind [`resolved_docker_host`], split from the env, filesystem
+/// and daemon probes that feed it so it is testable without mutating process env
+/// vars — which races whatever else `cargo test` runs in parallel.
+#[cfg(target_os = "linux")]
+fn choose_docker_host(
+    explicit_host: bool,
+    reachable_unaided: bool,
+    rootless_socket: Option<String>,
+) -> Option<String> {
+    if explicit_host || reachable_unaided {
+        return None;
+    }
+    rootless_socket
+}
+
+fn daemon_reachable(host: Option<&str>) -> bool {
+    docker_command_with_host(host)
+        .arg("info")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn docker_command_with_host(host: Option<&str>) -> Command {
     let mut cmd = Command::new("docker");
     cmd.env("PATH", extended_path_env());
+    if let Some(host) = host {
+        cmd.env("DOCKER_HOST", host);
+    }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -321,6 +403,15 @@ fn docker_command() -> Command {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd
+}
+
+/// A `docker` invocation pointed at whichever daemon this app resolved.
+fn docker_command() -> Command {
+    #[cfg(target_os = "linux")]
+    let host = resolved_docker_host();
+    #[cfg(not(target_os = "linux"))]
+    let host = None;
+    docker_command_with_host(host)
 }
 
 fn compose_command(paths: &StackPaths) -> Command {
@@ -335,7 +426,10 @@ fn compose_command(paths: &StackPaths) -> Command {
 }
 
 pub fn is_docker_installed() -> bool {
-    docker_command()
+    // Deliberately unresolved: `--version` never contacts a daemon, so asking
+    // which daemon to talk to first would spend two `docker info` probes to
+    // answer a question about the binary.
+    docker_command_with_host(None)
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -404,6 +498,13 @@ fn start_stack_inner(paths: &StackPaths, progress: Option<&ProgressHandle>) -> R
         return start_stack_streaming(paths, progress);
     }
 
+    // The tray's Start lands here (no progress handle). It goes through the
+    // same self-heal as the splash: before this, a stale container left the
+    // menu item permanently dead while the splash could recover from it.
+    with_stale_container_retry(paths, None, || compose_up_blocking(paths))
+}
+
+fn compose_up_blocking(paths: &StackPaths) -> Result<(), String> {
     let output = compose_command(paths)
         // --scale powersync=0: powersync is in the "production" profile in
         // docker-compose.yml, so it's otherwise created by this `up`, but its
@@ -444,7 +545,105 @@ fn start_stack_inner(paths: &StackPaths, progress: Option<&ProgressHandle>) -> R
 /// reasoning behind it are documented at the buffered call site above.
 const UP_ARGS: [&str; 5] = ["up", "-d", "--remove-orphans", "--scale", "powersync=0"];
 
+/// Failures that mean "the previous containers are stale", not "this machine
+/// cannot run the stack".
+///
+/// Docker restarting — or the Mac sleeping — leaves containers pointing at a
+/// network id that no longer exists, and leaves one-shot containers holding
+/// names the next run needs. `docker compose up` then fails the same way every
+/// time, so the splash's Retry button could never clear it: the user was stuck
+/// on an app that refused to start until someone ran compose by hand. Both are
+/// fixed by tearing the project down first, which is safe here because `down`
+/// without `-v` keeps every volume, and volumes are where the memory lives.
+fn is_stale_container_failure(transcript: &str) -> bool {
+    let lower = transcript.to_lowercase();
+
+    lower.contains("failed to set up container networking")
+        || lower.contains("network") && lower.contains("not found")
+        || lower.contains("is already in use by container")
+}
+
+/// Run an `up`, and if it failed on a stale container or network, tear the
+/// project down once and run it again.
+///
+/// Shared by BOTH start paths deliberately. This retry lived inside the
+/// streaming path, so the splash could recover but the tray's "Start Stack"
+/// hit the identical conflict with no way out — the same dead end the retry
+/// exists to remove, reachable from a different button.
+///
+/// `down` without `-v` keeps every volume, and volumes are where the memory
+/// lives, so the recovery cannot cost the user data.
+fn with_stale_container_retry<F>(
+    paths: &StackPaths,
+    progress: Option<&ProgressHandle>,
+    attempt: F,
+) -> Result<(), String>
+where
+    F: FnMut() -> Result<(), String>,
+{
+    let teardown = || {
+        let down = compose_command(paths)
+            .args(["down", "--remove-orphans"])
+            .output()
+            .map_err(|e| format!("Failed to run docker compose down: {e}"))?;
+
+        // Log the whole result, not just stderr: a `down` that exits non-zero
+        // is why the retry is about to fail the same way, and stderr alone does
+        // not say whether it even ran.
+        append_desktop_log(paths, "self-heal", &describe_output(&down));
+
+        if !down.status.success() {
+            return Err(describe_output(&down));
+        }
+
+        Ok(())
+    };
+
+    with_stale_container_retry_using(progress, attempt, teardown)
+}
+
+/// The retry logic itself, with the teardown injected.
+///
+/// Split out so the decision — retry on a stale container, never on anything
+/// else — is testable without a Docker daemon. The production teardown is a
+/// real `docker compose down`; a test passes a closure.
+fn with_stale_container_retry_using<F, D>(
+    progress: Option<&ProgressHandle>,
+    mut attempt: F,
+    teardown: D,
+) -> Result<(), String>
+where
+    F: FnMut() -> Result<(), String>,
+    D: FnOnce() -> Result<(), String>,
+{
+    match attempt() {
+        Ok(()) => Ok(()),
+        Err(err) if is_stale_container_failure(&err) => {
+            log::warn!("compose up failed on stale containers, recreating the project: {err}");
+
+            if let Some(progress) = progress {
+                set_progress(progress, "starting", "Clearing a stale container from the last run…");
+            }
+
+            // A teardown that could not run is not fatal: retrying costs one
+            // more `up`, and the ORIGINAL conflict is the error worth showing
+            // the user — not "Failed to run docker compose down", which is
+            // what propagating this hid the first error behind.
+            if let Err(e) = teardown() {
+                log::warn!("self-heal teardown did not complete: {e}");
+            }
+
+            attempt()
+        }
+        Err(err) => Err(err),
+    }
+}
+
 fn start_stack_streaming(paths: &StackPaths, progress: &ProgressHandle) -> Result<(), String> {
+    with_stale_container_retry(paths, Some(progress), || run_compose_up(paths, progress))
+}
+
+fn run_compose_up(paths: &StackPaths, progress: &ProgressHandle) -> Result<(), String> {
     set_progress(progress, "pulling", "Starting Docker services…");
 
     let mut child = compose_command(paths)
@@ -481,29 +680,42 @@ fn start_stack_streaming(paths: &StackPaths, progress: &ProgressHandle) -> Resul
     append_desktop_log(paths, "start", &transcript.join("\n"));
 
     if !status.success() {
-        // The last few lines are where compose says what actually went wrong
-        // (an unpullable tag, a full disk, a port already bound); the rest is
-        // the narration of everything that succeeded first.
-        let reason = transcript
-            .iter()
-            .rev()
-            .find(|line| {
-                let l = line.to_lowercase();
-                l.contains("error") || l.contains("failed") || l.contains("no space")
-            })
-            .cloned()
-            .unwrap_or_else(|| transcript.last().cloned().unwrap_or_default());
-
-        return Err(if reason.trim().is_empty() {
-            "docker compose up failed. See the desktop log for details.".to_string()
-        } else {
-            reason.trim().to_string()
-        });
+        return Err(describe_compose_failure(&transcript));
     }
 
     clear_user_stopped(paths);
 
     Ok(())
+}
+
+/// The one line out of a failed `docker compose up` worth putting on the splash.
+///
+/// Compose narrates every step that succeeded before it stopped, so the last
+/// error-ish line is the one that actually explains the failure — an unpullable
+/// tag, a full disk, a port already bound. Searching from the end matters:
+/// compose commonly emits a transient early "error" while retrying a registry
+/// connection it then recovers from, and reporting *that* sends the user after
+/// the wrong problem.
+///
+/// Split out of [`run_compose_up`] because the surrounding function needs a
+/// spawned `docker` to reach it at all, while this — the part that decides what
+/// the user is told — is pure.
+fn describe_compose_failure(transcript: &[String]) -> String {
+    let reason = transcript
+        .iter()
+        .rev()
+        .find(|line| {
+            let l = line.to_lowercase();
+            l.contains("error") || l.contains("failed") || l.contains("no space")
+        })
+        .cloned()
+        .unwrap_or_else(|| transcript.last().cloned().unwrap_or_default());
+
+    if reason.trim().is_empty() {
+        "docker compose up failed. See the desktop log for details.".to_string()
+    } else {
+        reason.trim().to_string()
+    }
 }
 
 /// Whether the gateway is already answering — used to tell "our own stack holds
@@ -521,14 +733,28 @@ fn is_stack_healthy_blocking() -> bool {
 /// says nothing about versions, so check up front and say so plainly.
 fn compose_version_error() -> Option<String> {
     let output = docker_command().args(["compose", "version", "--short"]).output().ok()?;
-    let raw = String::from_utf8_lossy(&output.stdout);
-    let version = raw.trim().trim_start_matches('v');
-    let mut parts = version.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
-    let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+    compose_version_error_in(&String::from_utf8_lossy(&output.stdout))
+}
 
-    if major == 0 && minor == 0 {
-        return None; // unreadable version — let compose speak for itself
-    }
+/// The version comparison itself, split from the `docker compose version` call
+/// so the boundary (2.23 refused, 2.24 accepted) and the unreadable-output
+/// escape hatch can be covered without a Docker daemon.
+fn compose_version_error_in(raw: &str) -> Option<String> {
+    let version = raw.trim().trim_start_matches('v');
+    let mut parts = version.split('.');
+
+    // The major component must actually parse. Coercing a failed parse to 0 (as this
+    // used to) reads a *newer* Compose as an older one whenever the output is not the
+    // bare `--short` form: "Docker Compose version v2.39.1" splits into
+    // ["Docker Compose version v2", "39", "1"], which became (0, 39) — not (0, 0), so
+    // the escape hatch below did not fire — and a current CLI was refused with a
+    // message quoting its own version back at it.
+    let major = parts.next().and_then(|p| p.parse::<u32>().ok());
+    let minor = parts.next().and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
+
+    // Unreadable version — let compose speak for itself. `Some(0)` is kept in this
+    // branch because no Compose that can run the bundled overlay reports major 0.
+    let major = major.filter(|&major| major > 0 || minor > 0)?;
 
     if (major, minor) < (2, 24) {
         return Some(format!(
@@ -595,19 +821,6 @@ pub async fn is_healthy() -> bool {
     }
 }
 
-/// Whether this machine has ever completed a start.
-///
-/// Drives the one-time disclosure on the splash: the first run downloads
-/// several gigabytes of images and mounts a folder from the user's home
-/// directory, and neither was stated anywhere before it happened.
-pub fn is_first_run(paths: &StackPaths) -> bool {
-    !paths.data_dir.join(".first-run-complete").exists()
-}
-
-pub fn mark_first_run_complete(paths: &StackPaths) {
-    let _ = fs::write(paths.data_dir.join(".first-run-complete"), "");
-}
-
 fn user_stopped_marker(paths: &StackPaths) -> PathBuf {
     paths.data_dir.join(".user-stopped")
 }
@@ -633,8 +846,19 @@ fn describe_output(output: &Output) -> String {
     )
 }
 
-fn append_desktop_log(paths: &StackPaths, op: &str, message: &str) {
-    let log_path = paths.logs_dir.join("desktop.log");
+pub fn append_desktop_log(paths: &StackPaths, op: &str, message: &str) {
+    append_desktop_log_in(&paths.logs_dir, op, message);
+}
+
+/// Same as [`append_desktop_log`], addressed by logs directory rather than by
+/// [`StackPaths`].
+///
+/// The `log::` bridge and the panic hook both need to write before
+/// `initialize_stack` has returned a `StackPaths` — and the whole point of
+/// installing them early is to capture a failure *inside* that call. The logs
+/// dir is just `<data_dir>/logs`, which is knowable from the app handle alone.
+pub fn append_desktop_log_in(logs_dir: &Path, op: &str, message: &str) {
+    let log_path = logs_dir.join("desktop.log");
     let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
     let line = format!("[{timestamp}] {op}: {message}\n");
 
@@ -663,6 +887,49 @@ pub fn read_desktop_logs(paths: &StackPaths, max_lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Docker's rootless installer puts `docker` in ~/bin, and a GUI launch's
+    /// PATH contains neither ~/bin nor ~/.local/bin — so searching only /usr
+    /// reported "Docker was not found" on machines where it was installed and
+    /// running. Reads HOME rather than setting it: mutating env vars in a
+    /// #[test] races the rest of the suite.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn extended_path_env_searches_rootless_docker_install_dirs() {
+        let home = std::env::var("HOME").expect("HOME is set for the test runner");
+        let path = extended_path_env();
+        let dirs: Vec<&str> = path.split(':').collect();
+
+        assert!(dirs.contains(&format!("{home}/bin").as_str()));
+        assert!(dirs.contains(&format!("{home}/.local/bin").as_str()));
+        // A system-wide install still wins over a rootless one.
+        let index = |dir: &str| dirs.iter().position(|d| *d == dir).unwrap();
+        assert!(index("/usr/bin") < index(&format!("{home}/bin")));
+    }
+
+    /// Exporting DOCKER_HOST outranks the CLI's own context selection, so the
+    /// rootless fallback only speaks up when the CLI cannot reach a daemon by
+    /// itself — never merely because a context is configured. A `currentContext`
+    /// left behind by an uninstalled Docker Desktop names a dead endpoint, and
+    /// deferring to it stranded the very user this exists for.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn rootless_fallback_only_applies_when_the_cli_cannot_reach_a_daemon() {
+        let socket = || Some("unix:///run/user/1000/docker.sock".to_string());
+
+        // Nothing else answers, and a rootless socket does.
+        assert_eq!(
+            choose_docker_host(false, false, socket()),
+            socket(),
+            "should fall back to the rootless socket",
+        );
+        // The CLI already reaches a daemon — a stale context is not our business.
+        assert_eq!(choose_docker_host(false, true, socket()), None);
+        // The user named a daemon explicitly; that always wins.
+        assert_eq!(choose_docker_host(true, false, socket()), None);
+        // Nothing to fall back to: let the CLI's own error stand.
+        assert_eq!(choose_docker_host(false, false, None), None);
+    }
 
     #[test]
     fn writes_env_file_with_no_secrets() {
@@ -696,6 +963,95 @@ mod tests {
     }
 
     #[test]
+    fn stale_container_failures_are_told_apart_from_real_ones() {
+        // The two shapes Docker actually produces after it restarts or the Mac
+        // sleeps. Both used to leave the app failing identically on every
+        // launch, with a Retry button that could not clear either.
+        assert!(is_stale_container_failure(
+            "Error response from daemon: failed to set up container networking: network 0361b91e not found"
+        ));
+        assert!(is_stale_container_failure(
+            "Error response from daemon: Conflict. The container name \"/ci-server-desktop-generate-secrets-1\" is already in use by container \"b9a8df\"."
+        ));
+
+        // Anything a teardown would not fix must NOT trigger one — tearing the
+        // project down on a genuine failure would just add a slow retry of the
+        // same error.
+        assert!(!is_stale_container_failure("no space left on device"));
+        assert!(!is_stale_container_failure(
+            "manifest for ghcr.io/companionintelligence/companion/api:2026.9.9 not found: manifest unknown"
+        ));
+        assert!(!is_stale_container_failure("Cannot connect to the Docker daemon"));
+    }
+
+    /// The retry must be reachable from BOTH start paths, not just the splash.
+    ///
+    /// It used to live inside `start_stack_streaming`, so the tray's "Start
+    /// Stack" — which runs with no progress handle — hit the same stale
+    /// container and dead-ended, while the splash recovered from it. This
+    /// drives the shared helper the way the tray does (`progress: None`) and
+    /// asserts the second attempt actually happens.
+    #[test]
+    fn the_stale_container_retry_covers_the_tray_start_path_too() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = StackPaths {
+            data_dir: dir.path().to_path_buf(),
+            compose_dir: dir.path().join("compose"),
+            logs_dir: dir.path().join("logs"),
+            import_work_dir: dir.path().join("import-work"),
+        };
+        std::fs::create_dir_all(&paths.logs_dir).expect("logs dir");
+
+        let attempts = std::cell::Cell::new(0);
+        let teardowns = std::cell::Cell::new(0);
+        let result = with_stale_container_retry_using(None, || {
+            attempts.set(attempts.get() + 1);
+
+            if attempts.get() == 1 {
+                Err("Error response from daemon: Conflict. The container name \"/x\" is already in use by container \"y\".".to_string())
+            } else {
+                Ok(())
+            }
+        }, || {
+            teardowns.set(teardowns.get() + 1);
+            Ok(())
+        });
+
+        assert!(result.is_ok(), "the retry should have recovered: {result:?}");
+        assert_eq!(attempts.get(), 2, "the up should have been attempted twice");
+        assert_eq!(teardowns.get(), 1, "the project should have been torn down once");
+    }
+
+    /// The other half of the same contract: a failure a teardown cannot fix
+    /// must not be retried at all, or every genuine error costs a slow
+    /// `down` plus an identical second failure.
+    #[test]
+    fn an_unrelated_failure_is_not_retried() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = StackPaths {
+            data_dir: dir.path().to_path_buf(),
+            compose_dir: dir.path().join("compose"),
+            logs_dir: dir.path().join("logs"),
+            import_work_dir: dir.path().join("import-work"),
+        };
+        std::fs::create_dir_all(&paths.logs_dir).expect("logs dir");
+
+        let attempts = std::cell::Cell::new(0);
+        let teardowns = std::cell::Cell::new(0);
+        let result = with_stale_container_retry_using(None, || {
+            attempts.set(attempts.get() + 1);
+            Err("no space left on device".to_string())
+        }, || {
+            teardowns.set(teardowns.get() + 1);
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(attempts.get(), 1, "a non-stale failure must not be retried");
+        assert_eq!(teardowns.get(), 0, "and must not tear the project down");
+    }
+
+    #[test]
     fn initialize_stack_fails_clearly_without_a_bundled_image_tag() {
         let resource_dir = tempfile::tempdir().unwrap();
         let data_dir = tempfile::tempdir().unwrap();
@@ -717,23 +1073,6 @@ mod tests {
             logs_dir: dir.path().join("logs"),
             import_work_dir: dir.path().join("import-work"),
         }
-    }
-
-    #[test]
-    fn first_run_marker_is_one_way() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = scratch_paths(&dir);
-
-        // A machine that has never completed a start gets the disclosure.
-        assert!(is_first_run(&paths));
-
-        mark_first_run_complete(&paths);
-        assert!(!is_first_run(&paths));
-
-        // Marking again is harmless — the splash calls it on a path that can run
-        // more than once if a start is retried.
-        mark_first_run_complete(&paths);
-        assert!(!is_first_run(&paths));
     }
 
     #[test]
@@ -791,6 +1130,168 @@ mod tests {
             assert_eq!(p.error.as_deref(), Some("no space left on device"));
             assert_eq!(p.detail, "no space left on device");
         }
+    }
+
+    /// Compose narrates every step that succeeded before it stopped, and it
+    /// routinely logs a transient "error" while retrying a registry connection
+    /// it then recovers from. Searching from the end is what separates the
+    /// failure from the noise that preceded it — dropping the `.rev()` leaves
+    /// the splash confidently naming the wrong problem.
+    #[test]
+    fn the_last_error_line_is_what_reaches_the_splash_not_the_first() {
+        let transcript: Vec<String> = [
+            " Container ci-server-desktop-database-1  Started",
+            "#4 ERROR: failed to do request: connection reset by peer (retrying)",
+            " Container ci-server-desktop-api-1  Created",
+            "failed to solve: no space left on device",
+        ]
+        .iter()
+        .map(|l| l.to_string())
+        .collect();
+
+        assert_eq!(describe_compose_failure(&transcript), "failed to solve: no space left on device");
+    }
+
+    #[test]
+    fn a_failure_with_nothing_error_shaped_in_it_still_says_something_useful() {
+        // Nothing matches the error vocabulary: the last line compose printed
+        // is still a far better guess than a generic sentence.
+        let quiet: Vec<String> = ["Pulling api", " api Pulled", " Container x  Recreate"]
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        assert_eq!(describe_compose_failure(&quiet), "Container x  Recreate");
+
+        // A compose that exited non-zero having said nothing at all — and one
+        // whose last line is only whitespace — must not surface as an empty
+        // error, which renders on the splash as a failure with no explanation.
+        assert_eq!(
+            describe_compose_failure(&[]),
+            "docker compose up failed. See the desktop log for details."
+        );
+        assert_eq!(
+            describe_compose_failure(&["   ".to_string()]),
+            "docker compose up failed. See the desktop log for details."
+        );
+    }
+
+    /// The bundled overlay uses the Compose Specification's `!reset` tag, which
+    /// needs 2.24. Below that, compose fails with a YAML parse error that never
+    /// mentions versions, so this check is the only place the real reason gets
+    /// said — and the boundary has to be exactly right, or it either rejects
+    /// working installs or lets the unreadable error through.
+    #[test]
+    fn compose_older_than_2_24_is_refused_and_2_24_itself_is_not() {
+        assert!(compose_version_error_in("2.23.9").is_some());
+        assert!(compose_version_error_in("2.24.0").is_none());
+        assert!(compose_version_error_in("2.24").is_none());
+        assert!(compose_version_error_in("1.29.2").is_some());
+
+        // The `v` prefix and the trailing newline are what `docker compose
+        // version --short` actually emits, in that order.
+        assert!(compose_version_error_in("v2.39.1\n").is_none());
+        assert!(compose_version_error_in(" v2.20.3 \n").is_some());
+
+        // Two-digit minors must not be compared as strings — "2.9" is older
+        // than "2.24" numerically and newer lexically.
+        assert!(compose_version_error_in("2.9.0").is_some());
+        assert!(compose_version_error_in("3.0.0").is_none());
+
+        let message = compose_version_error_in("2.23.9").expect("2.23.9 is too old");
+        assert!(message.contains("2.23.9"), "the user should see their own version: {message}");
+        assert!(message.contains("2.24"), "and what they need: {message}");
+    }
+
+    /// An unparseable version must not become a hard stop. A Compose CLI that
+    /// prints something this cannot read is far more likely to be newer than
+    /// older, and blocking launch on it would strand the user behind an error
+    /// about a version we never actually determined.
+    #[test]
+    fn an_unreadable_compose_version_lets_compose_speak_for_itself() {
+        // Empty stdout — the shape left behind by a CLI that does not
+        // understand `--short` and wrote its complaint to stderr — and a
+        // version with no digits in it at all both reach the (0, 0) guard.
+        assert!(compose_version_error_in("").is_none());
+        assert!(compose_version_error_in("   \n").is_none());
+        assert!(compose_version_error_in("unknown").is_none());
+
+        // Long-form output — what `docker compose version` prints WITHOUT
+        // `--short`. This is the case that used to be silently wrong: the
+        // major component ("Docker Compose version v2") does not parse, and
+        // coercing it to 0 left minor = 39, so the (0, 0) escape hatch missed
+        // it and a *current* Compose was refused as too old. Unreachable while
+        // the one caller passes `--short`, which is exactly why it needs a test
+        // rather than a comment: the day someone drops the flag, or a CLI stops
+        // honouring it, the failure is a launch blocked on a version that was
+        // never actually read.
+        assert!(compose_version_error_in("Docker Compose version v2.39.1").is_none());
+        assert!(compose_version_error_in("Docker Compose version v2.20.3").is_none());
+
+        // A trailing component that does not parse is not the same thing: the
+        // major and minor are readable, so the comparison still applies.
+        assert!(compose_version_error_in("2.23.0-rc1").is_some());
+        assert!(compose_version_error_in("2.24.0-rc1").is_none());
+    }
+
+    /// desktop.log is append-only for the life of the install, so without the
+    /// size cap it is unbounded — and it is written from a `log::` bridge that
+    /// fires on every warning the shell produces. Rotation here is "start
+    /// over", so what matters is that it actually triggers and that the line
+    /// which triggered it survives; losing that one would hide the very event
+    /// that was being logged.
+    #[test]
+    fn the_desktop_log_starts_over_once_it_passes_its_size_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs_dir = dir.path();
+        let log_path = logs_dir.join("desktop.log");
+
+        append_desktop_log_in(logs_dir, "launch", "v0.1.0 starting");
+        let first = fs::read_to_string(&log_path).unwrap();
+        assert!(first.contains("launch: v0.1.0 starting"));
+
+        // Still well under the cap: the second line joins the first.
+        append_desktop_log_in(logs_dir, "start", "compose up");
+        let both = fs::read_to_string(&log_path).unwrap();
+        assert!(both.contains("v0.1.0 starting") && both.contains("compose up"));
+        assert_eq!(both.lines().count(), 2);
+
+        // Now push it past the cap and write once more.
+        fs::write(&log_path, vec![b'x'; (MAX_LOG_BYTES + 1) as usize]).unwrap();
+        append_desktop_log_in(logs_dir, "panic", "something went wrong (main.rs:1)");
+
+        let rotated = fs::read_to_string(&log_path).unwrap();
+        assert!(rotated.len() < MAX_LOG_BYTES as usize, "the log should have been rotated away");
+        assert!(rotated.contains("panic: something went wrong (main.rs:1)"));
+        assert_eq!(rotated.lines().count(), 1, "rotation starts over rather than trimming");
+    }
+
+    /// What the UI's log pane renders. The tail is the interesting end — a
+    /// crash is at the bottom of the file — and asking for more lines than
+    /// exist is the normal case on a fresh install, where an off-by-one would
+    /// panic on a slice rather than showing the log.
+    #[test]
+    fn reading_the_desktop_log_returns_the_newest_lines_and_never_panics_when_short() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+        fs::create_dir_all(&paths.logs_dir).unwrap();
+
+        // Nothing written yet — the pane must render empty, not fail.
+        assert_eq!(read_desktop_logs(&paths, 200), "");
+
+        for n in 1..=10 {
+            append_desktop_log_in(&paths.logs_dir, "start", &format!("line {n}"));
+        }
+
+        let tail = read_desktop_logs(&paths, 3);
+        assert_eq!(tail.lines().count(), 3);
+        assert!(tail.contains("line 8") && tail.contains("line 10"));
+        assert!(!tail.contains("line 7"), "only the newest lines belong in the tail");
+
+        // Asking for more than exist returns everything, in order.
+        let everything = read_desktop_logs(&paths, 200);
+        assert_eq!(everything.lines().count(), 10);
+        assert!(everything.lines().next().unwrap().contains("line 1"));
+        assert!(everything.lines().last().unwrap().contains("line 10"));
     }
 
     #[test]

@@ -81,8 +81,8 @@ export function CommunicationPage() {
 
   usePageTitle(
     communication?.subject
-      ? `Communication - ${communication.subject || renderTypeSubject(communication.type)} - Companion Intelligence`
-      : 'Communication - Companion Intelligence',
+      ? `Communication - ${communication.subject || renderTypeSubject(communication.type)} - Companion Memory`
+      : 'Communication - Companion Memory',
   );
 
   let content: ReactNode | null = null;

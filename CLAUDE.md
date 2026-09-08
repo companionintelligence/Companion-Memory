@@ -48,6 +48,11 @@ make test
 # Run one app's tests directly (only a slice of `make test`)
 cd backend/apps/api && yarn test
 
+# The native suites, which `make test` does NOT cover (each checks its own
+# toolchain first — JDK 21 + an Android SDK via ANDROID_HOME; cargo + GTK/WebKit)
+make test-android   # gradlew testDebugUnitTest — :app + the 3 :ci-capacitor-* modules
+make test-desktop   # cargo test in frontend/apps/desktop/src-tauri
+
 # Build images (ENV=local|staging|production, default local;
 # GPU=cpu|cuda|rocm, auto-detected)
 make build

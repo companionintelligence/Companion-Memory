@@ -45,17 +45,22 @@ interface SubRowProps {
 
 /** A row inside an opened submenu — smaller than a top-level rail entry. */
 function SubRow({ icon, label, onClick }: SubRowProps) {
+  const { expanded } = usePowerRail();
+
   return (
     <button
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-accent hover:text-accent-foreground"
+      className={cn(
+        'flex w-full cursor-pointer items-center rounded-md px-2 py-0 text-left text-sm transition hover:bg-accent hover:text-accent-foreground',
+        expanded ? 'gap-3 py-1.5' : 'justify-center',
+      )}
     >
-      <span className="grid size-8 shrink-0 place-items-center" aria-hidden>
+      <span className={cn('grid shrink-0 place-items-center', expanded ? 'size-8' : 'size-6')} aria-hidden>
         {icon}
       </span>
-      <span className="truncate">{label}</span>
+      {expanded ? <span className="truncate">{label}</span> : null}
     </button>
   );
 }
@@ -70,16 +75,22 @@ function SubRow({ icon, label, onClick }: SubRowProps) {
  */
 function ThemeSubmenu() {
   const { themeState, setTheme } = useTheme();
-  const { setHoldOpen } = usePowerRail();
+  const { expanded, setHoldOpen } = usePowerRail();
 
   return (
     <Collapsible>
-      <Collapsible.Trigger className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-accent hover:text-accent-foreground [&[data-state=open]>svg:last-child]:rotate-90">
-        <span className="grid size-8 shrink-0 place-items-center" aria-hidden>
+      <Collapsible.Trigger
+        aria-label="Theme"
+        className={cn(
+          'flex w-full items-center rounded-md px-2 text-left text-sm transition hover:bg-accent hover:text-accent-foreground [&[data-state=open]>svg:last-child]:rotate-90',
+          expanded ? 'gap-3 py-1.5' : 'justify-center py-0',
+        )}
+      >
+        <span className={cn('grid shrink-0 place-items-center', expanded ? 'size-8' : 'size-6')} aria-hidden>
           <Palette className="h-4 w-4 shrink-0" strokeWidth={1.25} />
         </span>
-        <span className="flex-1 truncate">Theme</span>
-        <ChevronRight className="h-4 w-4 shrink-0 transition-transform duration-200" />
+        {expanded ? <span className="flex-1 truncate">Theme</span> : null}
+        {expanded ? <ChevronRight className="h-4 w-4 shrink-0 transition-transform duration-200" /> : null}
       </Collapsible.Trigger>
 
       <Collapsible.Content className="overflow-hidden data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down">

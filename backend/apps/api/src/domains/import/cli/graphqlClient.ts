@@ -57,6 +57,8 @@ export class MemoryGraphQLClient {
     memoryEndpoint: string;
     displayName?: string;
     trustTier?: string;
+    peerIssuer?: string;
+    peerSubject?: string;
   }): Promise<PeerLinkPayload> {
     return this.mutate<{ createPeerLink: PeerLinkPayload }>(
       'createPeerLink',
@@ -67,7 +69,13 @@ export class MemoryGraphQLClient {
     ).then((data) => data.createPeerLink);
   }
 
-  updatePeerLink(input: { id: string; displayName?: string; trustTier?: string }): Promise<PeerLinkPayload> {
+  updatePeerLink(input: {
+    id: string;
+    displayName?: string;
+    trustTier?: string;
+    peerIssuer?: string;
+    peerSubject?: string;
+  }): Promise<PeerLinkPayload> {
     return this.mutate<{ updatePeerLink: PeerLinkPayload }>(
       'updatePeerLink',
       `mutation UpdatePeerLink($input: UpdatePeerLinkInput!) {

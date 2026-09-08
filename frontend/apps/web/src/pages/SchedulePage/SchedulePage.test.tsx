@@ -10,16 +10,26 @@ const h = vi.hoisted(() => ({
   schedule: {} as Record<string, unknown>,
   plan: {} as Record<string, unknown>,
   forecast: [
-    { data: { systemStatus: 'READY' } as { systemStatus: string } | null, loading: false, stalled: false },
+    {
+      data: { systemStatus: 'READY', buckets: [] as unknown[] } as {
+        systemStatus: string;
+        generatedAt?: string;
+        buckets: unknown[];
+      } | null,
+      loading: false,
+      stalled: false,
+    },
     { refetch: vi.fn() },
   ] as [
-    { data: { systemStatus: string } | null; loading: boolean; stalled: boolean },
+    {
+      data: { systemStatus: string; generatedAt?: string; buckets: unknown[] } | null;
+      loading: boolean;
+      stalled: boolean;
+    },
     { refetch: ReturnType<typeof vi.fn> },
   ],
   reschedule: vi.fn(),
   hbpeEnabled: true,
-  forecastPageEnabled: true,
-  predictionBand: vi.fn(),
 }));
 
 vi.mock('@/api/useScheduleService', () => ({
@@ -39,21 +49,9 @@ vi.mock('@/common/feature', () => ({
         return h.hbpeEnabled;
       }
 
-      if (flag === 'forecast.page') {
-        return h.forecastPageEnabled;
-      }
-
       return true;
     },
   }),
-}));
-
-vi.mock('./PredictionBand', () => ({
-  PredictionBand: (props: Record<string, unknown>) => {
-    h.predictionBand(props);
-
-    return <div data-testid="prediction-band" />;
-  },
 }));
 
 vi.mock('@/pages/PlanPage/usePlanTasks', () => ({
@@ -76,11 +74,13 @@ vi.mock('@/components/HorizonGrid', () => ({
   VerticalCalendar: ({
     footer,
     colorMode,
+    occupancy,
     onMoveEvent,
     onSelectSlot,
   }: {
     footer?: string;
     colorMode?: string;
+    occupancy?: unknown[];
     onMoveEvent: (id: string, at: Date) => void;
     onSelectSlot?: (slot: { instant: Date; allDay: boolean }) => void;
   }) => (
@@ -95,6 +95,7 @@ vi.mock('@/components/HorizonGrid', () => ({
         stub-move
       </button>
       <p data-testid="stub-color-mode">{colorMode}</p>
+      <p data-testid="stub-occupancy">{occupancy?.length ?? 0}</p>
       <p>{footer}</p>
     </div>
   ),
@@ -207,62 +208,56 @@ function setPlan(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   setSchedule();
   setPlan();
-  h.forecast = [{ data: { systemStatus: 'READY' }, loading: false, stalled: false }, { refetch: vi.fn() }];
+  h.forecast = [
+    { data: { systemStatus: 'READY', buckets: [] }, loading: false, stalled: false },
+    { refetch: vi.fn() },
+  ];
   h.reschedule = vi.fn().mockResolvedValue(undefined);
   h.hbpeEnabled = true;
-  h.forecastPageEnabled = true;
 });
 
 afterEach(() => vi.clearAllMocks());
 
-describe('SchedulePage — prediction audit band', () => {
-  it('places the unchanged HBPE response above the calendar', () => {
-    const forecast = h.forecast[0].data;
+describe('SchedulePage — occupancy belongs on the day strip', () => {
+  function todayBucket() {
+    const at = new Date();
+    at.setHours(9, 0, 0, 0);
+
+    return {
+      bucketIndex: 36,
+      startTime: at.toISOString(),
+      l0Probs: [{ label: 'WORK', probability: 0.8 }],
+      l1Probs: [],
+      l2Probs: null,
+      q10: 0.5,
+      q50: 0.8,
+      q90: 0.9,
+    };
+  }
+
+  it('hands the 96-bin histogram to the calendar instead of a band above it', () => {
+    h.forecast = [
+      { data: { systemStatus: 'READY', buckets: [todayBucket()] }, loading: false, stalled: false },
+      { refetch: vi.fn() },
+    ];
 
     renderWithProviders(<SchedulePage />);
-
-    const band = screen.getByTestId('prediction-band');
-    const calendar = screen.getByTestId('vertical-calendar');
-
-    expect(band.compareDocumentPosition(calendar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(h.predictionBand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        forecast,
-        loading: false,
-        stalled: false,
-        showFullForecastLink: true,
-      }),
-    );
-  });
-
-  it('removes the band with the HBPE flag, not with the full Forecast-page flag', () => {
-    h.forecastPageEnabled = false;
-    const { rerender } = renderWithProviders(<SchedulePage />);
-
-    expect(screen.getByTestId('prediction-band')).toBeInTheDocument();
-    expect(h.predictionBand).toHaveBeenLastCalledWith(
-      expect.objectContaining({ showFullForecastLink: false }),
-    );
-
-    h.hbpeEnabled = false;
-    rerender(<SchedulePage />);
 
     expect(screen.queryByTestId('prediction-band')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Tomorrow's prediction band/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('stub-occupancy')).toHaveTextContent('1');
   });
 
-  it("hands the band the hook's refetch so a failed forecast is recoverable", () => {
-    // The hook stops polling as soon as the forecast is null, so the band's own
-    // retry is the only thing that will ever re-issue the query. Dropping
-    // `refetch` at this call site is what made the unavailable state terminal.
-    const refetch = vi.fn();
-    h.forecast = [{ data: null, loading: false, stalled: false }, { refetch }];
+  it('withholds occupancy when the HBPE flag is off', () => {
+    h.hbpeEnabled = false;
+    h.forecast = [
+      { data: { systemStatus: 'READY', buckets: [todayBucket()] }, loading: false, stalled: false },
+      { refetch: vi.fn() },
+    ];
 
     renderWithProviders(<SchedulePage />);
 
-    const props = h.predictionBand.mock.lastCall?.[0] as { onRetry: () => void };
-    props.onRetry();
-
-    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('stub-occupancy')).toHaveTextContent('0');
   });
 });
 
@@ -325,7 +320,7 @@ describe('SchedulePage — what the footer is allowed to claim', () => {
 
   it('tells the user to wait when Predict is running and the strip is empty', () => {
     h.forecast = [
-      { data: { systemStatus: 'NIGHTLY:label' }, loading: false, stalled: false },
+      { data: { systemStatus: 'NIGHTLY:label', buckets: [] }, loading: false, stalled: false },
       { refetch: vi.fn() },
     ];
     setSchedule({
@@ -336,7 +331,7 @@ describe('SchedulePage — what the footer is allowed to claim', () => {
 
     renderWithProviders(<SchedulePage />);
 
-    expect(screen.getByText(/Predict is still running/)).toBeInTheDocument();
+    expect(screen.getByText(/the day colours will fill in/)).toBeInTheDocument();
     expect(screen.queryByText(/Pattern rhythm \(HBPE\) from your history/)).not.toBeInTheDocument();
   });
 
@@ -347,6 +342,39 @@ describe('SchedulePage — what the footer is allowed to claim', () => {
     renderWithProviders(<SchedulePage />);
 
     expect(screen.getByText(/HBPE rhythm forecast is off/)).toBeInTheDocument();
+  });
+
+  it('treats in-window occupancy as a live layer when week clusters are empty', () => {
+    const at = new Date();
+    at.setHours(9, 0, 0, 0);
+    h.forecast = [
+      {
+        data: {
+          systemStatus: 'READY',
+          generatedAt: '2026-09-06T03:00:00.000Z',
+          buckets: [
+            {
+              bucketIndex: 36,
+              startTime: at.toISOString(),
+              l0Probs: [{ label: 'WORK', probability: 0.8 }],
+              l1Probs: [],
+              l2Probs: null,
+              q10: 0.5,
+              q50: 0.8,
+              q90: 0.9,
+            },
+          ],
+        },
+        loading: false,
+        stalled: false,
+      },
+      { refetch: vi.fn() },
+    ];
+    setSchedule({ generatedAt: null, rhythm: [], rhythmCoversWindow: false });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByText(/Pattern rhythm \(HBPE\) from your history, updated/)).toBeInTheDocument();
   });
 
   it('says the call failed — not "off" — when the flag is on but the resolver returned nothing', () => {
@@ -770,7 +798,7 @@ describe('SchedulePage — colour mode only once colour means something', () => 
 
     expect(screen.getByRole('radio', { name: 'Source' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('radio', { name: 'Activity' })).toHaveAttribute('aria-checked', 'false');
-    // The grid (eventColor, RhythmStrip) is told, and the legend re-keys from
+    // The grid (eventColor, rhythm wash) is told, and the legend re-keys from
     // activity classes to connectors.
     expect(screen.getByTestId('stub-color-mode')).toHaveTextContent('source');
     expect(screen.getByText('Google')).toBeInTheDocument();

@@ -390,7 +390,7 @@ function ChatPageContent() {
 }
 
 export default function ChatPage() {
-  usePageTitle('Chat - Companion Intelligence');
+  usePageTitle('Chat - Companion Memory');
 
   return <ChatPageContent />;
 }

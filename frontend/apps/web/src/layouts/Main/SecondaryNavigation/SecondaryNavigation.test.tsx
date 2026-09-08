@@ -159,6 +159,8 @@ describe('SecondaryNavigation', () => {
 
     expect(screen.getByRole('link', { name: 'Tasks' })).toHaveAttribute('href', '/plan/tasks');
     expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
+    expect(screen.queryByText('Tasks')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot="popover-content"]')).not.toBeInTheDocument();
     expect(container.querySelector('div.relative')).toHaveClass('w-14');
     expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
   });
@@ -247,8 +249,9 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('button', { name: 'Colours' })).toBeInTheDocument();
   });
 
-  // Collapsed, the account is the avatar — click still opens its sections in
-  // a flyout, same as every other group, rather than a dead end to /self only.
+  // Collapsed, the account is the avatar — click still opens its sections
+  // as icons in the rail, same as every other group, rather than a dead end
+  // to /self only.
   it('collapses the account to a single link to Self', () => {
     renderRail();
 
@@ -538,7 +541,7 @@ describe('PowerRailToggle', () => {
 
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).toHaveAttribute('aria-controls', 'power-rail');
-    expect(screen.queryByRole('link', { name: /Companion Intelligence/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Companion Memory/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Memory')).not.toBeInTheDocument();
 
     fireEvent.click(toggle);

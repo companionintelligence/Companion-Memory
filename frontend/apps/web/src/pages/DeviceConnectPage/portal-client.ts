@@ -13,26 +13,27 @@ import { apiFetch } from '@ci/common';
  */
 
 const PRODUCTION_PORTAL_URL = 'https://hub.ci.computer';
-const DEVELOPMENT_PORTAL_URL = 'https://hub.companionintelligence.com';
 
 /**
  * Portal host a fresh install talks to, resolved most-specific-first:
  *
  *   1. `VITE_CI_CLOUD_URL` (or `CI_CLOUD_URL`) — an exact host baked at build
- *      time. `frontend/apps/web/.env.development` sets this for local Vite.
- *   2. `VITE_CI_HUB_ENVIRONMENT=development` (or `dev`) — opt in to the CI
- *      cloud *dev* Portal, hub.companionintelligence.com.
- *   3. Everything else, an unmarked build included — PRODUCTION.
+ *      time, and only when it is NOT a `companionintelligence.com` host: the
+ *      internal cloud is not the user-facing Companion Portal.
+ *   2. Everything else, an unmarked build included — PRODUCTION.
  *
- * The unmarked default MUST stay production. A store-bound `vite build` loads
- * neither `.env.development` (Vite only reads it for `mode === 'development'`)
- * nor any `VITE_CI_HUB_ENVIRONMENT`, so while the fallback was the dev Portal
- * every TestFlight / Play build shipped pointed at
+ * The unmarked default MUST stay production, and there is deliberately no
+ * build-time flag that selects the internal Portal. A store-bound `vite build`
+ * loads neither `.env.development` (Vite reads it only for
+ * `mode === 'development'`) nor any other opt-in, so while the fallback was the
+ * dev Portal every TestFlight / Play build shipped pointed at
  * hub.companionintelligence.com: a production account signs in against the dev
  * Portal (or fails to), `listMemoryServers` below returns nothing, and the user
  * sees an empty device list on first launch unless they retype the Portal URL
- * by hand. Development is the case that has to announce itself — never the
- * other way round.
+ * by hand. The internal host is now filtered on BOTH paths into this client —
+ * the baked value here, and the persisted value in `readPersistedPortalUrl`
+ * below — so no build-time or runtime setting can quietly aim a shipped app at
+ * it. Development is the case that has to announce itself, never the reverse.
  */
 function portalUrlFromEnv(): string {
   try {
@@ -40,13 +41,11 @@ function portalUrlFromEnv(): string {
     const baked = env?.VITE_CI_CLOUD_URL?.trim() || env?.CI_CLOUD_URL?.trim();
 
     if (baked) {
-      return baked.replace(/\/+$/, '');
-    }
-
-    const hubEnvironment = env?.VITE_CI_HUB_ENVIRONMENT?.trim().toLowerCase();
-
-    if (hubEnvironment === 'development' || hubEnvironment === 'dev') {
-      return DEVELOPMENT_PORTAL_URL;
+      const next = baked.replace(/\/+$/, '');
+      // Internal/dev cloud host is not the user-facing Companion URL.
+      if (next && !next.includes('companionintelligence.com')) {
+        return next;
+      }
     }
 
     return PRODUCTION_PORTAL_URL;
@@ -59,6 +58,34 @@ function portalUrlFromEnv(): string {
 }
 
 export const DEFAULT_PORTAL_URL = portalUrlFromEnv();
+const PORTAL_URL_STORAGE_KEY = 'ci.deviceConnect.portalUrl';
+
+/** Portal Hub URL for the next Safari OIDC hop. Independent of the Memory origin. */
+export function readPersistedPortalUrl(): string {
+  try {
+    const stored = typeof localStorage === 'undefined' ? null : localStorage.getItem(PORTAL_URL_STORAGE_KEY);
+
+    if (stored && !stored.includes('companionintelligence.com')) {
+      return normalizePortalUrl(stored);
+    }
+
+    return DEFAULT_PORTAL_URL;
+  } catch {
+    return DEFAULT_PORTAL_URL;
+  }
+}
+
+export function persistPortalUrl(url: string): string {
+  const next = normalizePortalUrl(url);
+
+  try {
+    localStorage.setItem(PORTAL_URL_STORAGE_KEY, next);
+  } catch {
+    /* private mode / quota */
+  }
+
+  return next;
+}
 
 export interface PortalAuth {
   token: string | null;

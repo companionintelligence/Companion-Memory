@@ -1,6 +1,7 @@
 import { createEvent, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 import { EVENT_DRAG_TYPE } from '@/lib/scheduleDrag';
 
@@ -256,21 +257,20 @@ describe('VerticalCalendar — empty-slot selection', () => {
 });
 
 /**
- * Pattern rhythm used to be a wash painted behind the day column, where it read
- * as a highlight on whatever chip sat over it and had no name at all. It is now
- * a strip on the time axis: same reading, somewhere it can be read.
+ * Predicted colour lives in the day column, behind committed chips — not as a
+ * gutter of boxes to the left of the hours.
  */
-describe('VerticalCalendar — the rhythm strip', () => {
-  it('sits left of the hours instead of behind the day', () => {
+describe('VerticalCalendar — the rhythm wash', () => {
+  it('paints inside the day column, behind committed time', () => {
     render(<VerticalCalendar start={MONDAY} days={1} events={[event()]} rhythm={rhythmFor(MONDAY)} />);
 
-    const strip = screen.getByTestId('vertical-rhythm-strip');
+    const wash = screen.getByTestId('vertical-rhythm-wash');
     const lane = screen.getByTestId('vertical-day-lane');
+    const chip = screen.getByRole('listitem', { name: /Standup/ });
 
-    expect(strip.children).toHaveLength(96);
-    expect(strip.compareDocumentPosition(lane) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // Nothing paints the forecast inside the column any more.
-    expect(lane.querySelector('[style*="--primary"]')).toBeNull();
+    expect(lane.contains(wash)).toBe(true);
+    expect(wash.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId('vertical-rhythm-strip')).not.toBeInTheDocument();
   });
 
   it('names what the day usually holds, so the cells are not the only telling', () => {
@@ -283,33 +283,28 @@ describe('VerticalCalendar — the rhythm strip', () => {
     render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} />);
 
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
-    expect(screen.getByTestId('vertical-rhythm-strip')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByTestId('vertical-rhythm-wash')).toHaveAttribute('aria-hidden', 'true');
   });
 
   it('shimmers empty cells while Predict is still running', () => {
     render(<VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={[]} pipelineRunning />);
 
-    const strip = screen.getByTestId('vertical-rhythm-strip');
+    const wash = screen.getByTestId('vertical-rhythm-wash');
 
     expect(screen.getByRole('img', { name: /still being built/i })).toBeInTheDocument();
-    expect(strip.querySelectorAll('.rhythm-cell-waiting')).toHaveLength(96);
+    expect(wash.querySelectorAll('.rhythm-cell-waiting')).toHaveLength(96);
   });
 
-  it('names every waiting strip for its own day rather than seven times the same', () => {
-    // #2481 moved the strip from one shared element in the gutter to one per
-    // day column. The waiting name was still a constant, so a week that is
-    // still computing handed a screen reader seven focusable images sharing a
-    // single name — and there is nothing else tabbable in an empty grid.
+  it('names every waiting wash for its own day rather than seven times the same', () => {
     render(<VerticalCalendar start={MONDAY} days={7} events={[]} rhythm={[]} pipelineRunning />);
 
-    const strips = screen.getAllByTestId('vertical-rhythm-strip');
-    const names = strips.map((strip) => strip.getAttribute('aria-label'));
+    const washes = screen.getAllByTestId('vertical-rhythm-wash');
+    const names = washes.map((wash) => wash.getAttribute('aria-label'));
 
-    expect(strips).toHaveLength(7);
-    expect(strips.every((strip) => strip.getAttribute('role') === 'img')).toBe(true);
+    expect(washes).toHaveLength(7);
+    expect(washes.every((wash) => wash.getAttribute('role') === 'img')).toBe(true);
     expect(names.every((name) => /still being built/i.test(name ?? ''))).toBe(true);
     expect(new Set(names).size).toBe(7);
-    // Day-scoped the same way the has-rhythm name is, so both read alike.
     expect(
       screen.getByRole('img', { name: /^Predicted rhythm for Monday: still being built/ }),
     ).toBeInTheDocument();
@@ -320,13 +315,13 @@ describe('VerticalCalendar — the rhythm strip', () => {
       <VerticalCalendar start={MONDAY} days={1} events={[]} rhythm={rhythmFor(MONDAY)} pipelineRunning />,
     );
 
-    expect(screen.getByTestId('vertical-rhythm-strip').querySelectorAll('.rhythm-cell-waiting')).toHaveLength(
+    expect(screen.getByTestId('vertical-rhythm-wash').querySelectorAll('.rhythm-cell-waiting')).toHaveLength(
       0,
     );
     expect(screen.getByRole('img', { name: /Morning gym/ })).toBeInTheDocument();
   });
 
-  it('draws every day its own pattern, not one strip for the whole week', () => {
+  it('draws every day its own pattern, not one wash for the whole week', () => {
     const thursday = addDays(MONDAY, 3);
 
     const { rerender } = render(
@@ -334,13 +329,10 @@ describe('VerticalCalendar — the rhythm strip', () => {
     );
 
     const withPattern = () =>
-      screen.getAllByTestId('vertical-rhythm-strip').filter((strip) => strip.getAttribute('role') === 'img');
+      screen.getAllByTestId('vertical-rhythm-wash').filter((wash) => wash.getAttribute('role') === 'img');
 
-    // Thursday's data lights up its own strip without anything being selected.
     expect(withPattern().length).toBeGreaterThan(0);
 
-    // Selecting a different day used to move the single shared strip's focus.
-    // Each day now draws its own pattern regardless, so selection changes nothing.
     const before = withPattern().length;
     rerender(
       <VerticalCalendar
@@ -353,6 +345,61 @@ describe('VerticalCalendar — the rhythm strip', () => {
     );
 
     expect(withPattern().length).toBe(before);
+  });
+
+  function occupancyAt(day: Date, hour: number, label = 'WORK'): ForecastBucket[] {
+    const at = new Date(day);
+    at.setHours(hour, 0, 0, 0);
+
+    return [
+      {
+        bucketIndex: hour * 4,
+        startTime: at.toISOString(),
+        l0Probs: [{ label, probability: 0.85 }],
+        l1Probs: [{ label: 'focus block', probability: 0.7 }],
+        l2Probs: null,
+        q10: 0.6,
+        q50: 0.85,
+        q90: 0.95,
+      },
+    ];
+  }
+
+  it('paints occupancy bins on the day they fall on, not a second strip above the grid', () => {
+    render(
+      <VerticalCalendar start={MONDAY} days={2} events={[]} rhythm={[]} occupancy={occupancyAt(MONDAY, 9)} />,
+    );
+
+    const washes = screen.getAllByTestId('vertical-rhythm-wash');
+
+    expect(washes).toHaveLength(2);
+    expect(washes[0]).toHaveAttribute('aria-label', expect.stringMatching(/occupancy/i));
+    expect(washes[0].querySelectorAll('[data-testid="occupancy-bin"]')).toHaveLength(1);
+    expect(washes[1].querySelectorAll('[data-testid="occupancy-bin"]')).toHaveLength(0);
+    expect(screen.queryByText(/Tomorrow's prediction band/)).not.toBeInTheDocument();
+  });
+
+  it('lets occupancy override climate on the day the histogram covers', () => {
+    const { container } = render(
+      <VerticalCalendar
+        start={MONDAY}
+        days={1}
+        events={[]}
+        rhythm={rhythmFor(MONDAY)}
+        occupancy={occupancyAt(MONDAY, 9, 'WORK')}
+        colorMode="type"
+      />,
+    );
+
+    const occupancyBin = screen.getByTestId('occupancy-bin') as HTMLElement;
+
+    expect(occupancyBin.style.backgroundColor).toBe('var(--activity-1)');
+    // Climate-only EXERCISE would have painted every cell --activity-2.
+    expect(
+      [...container.querySelectorAll('[data-testid="vertical-rhythm-wash"] [style*="opacity"]')].some(
+        (cell) => (cell as HTMLElement).style.backgroundColor === 'var(--activity-2)',
+      ),
+    ).toBe(false);
   });
 });
 
@@ -688,7 +735,7 @@ describe('VerticalCalendar — colorMode reaches the ink', () => {
 
   function litRhythmCell(container: HTMLElement): HTMLElement {
     const cell = container.querySelector(
-      '[data-testid="vertical-rhythm-strip"] [style*="opacity"]',
+      '[data-testid="vertical-rhythm-wash"] [style*="opacity"]',
     ) as HTMLElement | null;
 
     expect(cell).not.toBeNull();

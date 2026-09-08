@@ -21,12 +21,15 @@ node_modules
 # the iOS/Android package gitignores already cover these, but Prettier scans the
 # working tree and does not read .gitignore, so the paths are repeated here.
 # (Keep in sync with .oxlintrc.json + eslint.config.mjs, which need them too.)
+# Safari Web Extension `Resources/` is the same class: bundled/minified JS the
+# extension build emits, not source we format by hand.
 frontend/apps/ios/ios/App/App/public/
 frontend/apps/ios/ios/App/Pods/
 frontend/apps/ios/ios/App/build/
 frontend/apps/ios/ios/App/DerivedData/
 frontend/apps/ios/ios/DerivedData/
 frontend/apps/ios/ios/capacitor-cordova-ios-plugins/
+frontend/apps/ios/ios/App/SafariWebExtension/Resources/
 frontend/apps/android/android/app/src/main/assets/public/
 frontend/apps/android/android/app/build/
 frontend/apps/android/android/build/

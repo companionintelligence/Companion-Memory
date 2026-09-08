@@ -1,6 +1,6 @@
 // Bootstrap splash state machine:
-//   first-run notice -> docker checks -> starting (live progress) -> ready (redirect)
-//                                                                 -> failed / timeout
+//   docker checks -> starting (live progress) -> ready (redirect)
+//                                              -> failed / timeout
 //
 // This page only ever talks to the app through Tauri IPC commands — it never
 // makes an HTTP call itself (check_stack_status_command runs the health probe in
@@ -24,7 +24,6 @@ const statusEl = document.getElementById('status');
 const headlineEl = document.getElementById('headline');
 const spinnerEl = document.getElementById('spinner');
 const actionsEl = document.getElementById('actions');
-const noticeEl = document.getElementById('notice');
 
 function invoke(command, args) {
   return window.__TAURI_INTERNALS__.invoke(command, args);
@@ -47,11 +46,6 @@ function setSpinning(spinning) {
   spinnerEl.classList.toggle('hidden', !spinning);
 }
 
-function showNotice(html) {
-  noticeEl.innerHTML = html;
-  noticeEl.classList.toggle('hidden', !html);
-}
-
 function showActions(buttons) {
   actionsEl.innerHTML = '';
   for (const button of buttons) {
@@ -65,52 +59,8 @@ function showActions(buttons) {
   actionsEl.classList.toggle('hidden', buttons.length === 0);
 }
 
-/**
- * What the first run is about to do, said before it does it.
- *
- * It downloads several gigabytes of container images and mounts a folder from
- * the user's home directory into one of them. Neither was stated anywhere, and
- * both are the kind of thing someone is entitled to know before it starts
- * rather than after.
- */
-async function confirmFirstRun() {
-  let firstRun = false;
-  try {
-    firstRun = await invoke('is_first_run_command');
-  } catch {
-    // Unknown — treat as a normal launch rather than blocking on a notice.
-  }
-
-  if (!firstRun) {
-    return;
-  }
-
-  setHeadline('Setting up Companion Memory.');
-  setStatus('One-time setup on this machine.');
-  showNotice(
-    '<ul>' +
-      '<li>Downloads about <strong>8–10&nbsp;GB</strong> of container images. Later launches start in seconds.</li>' +
-      '<li>Runs entirely on this machine — nothing is sent anywhere.</li>' +
-      '<li>Mounts your <strong>Downloads</strong> folder read-only, so you can import archives you have already saved.</li>' +
-      '</ul>',
-  );
-
-  await new Promise((resolve) => {
-    showActions([{ label: 'Set up Companion Memory', primary: true, onClick: resolve }]);
-  });
-
-  showNotice('');
-  showActions([]);
-  try {
-    await invoke('mark_first_run_complete_command');
-  } catch {
-    // A missed marker only costs the notice showing once more.
-  }
-}
-
 async function boot() {
   showActions([]);
-  showNotice('');
   setSpinning(true);
   setHeadline('Waking up your memory.');
   setStatus('Checking Docker…');
@@ -129,8 +79,6 @@ async function boot() {
       { label: 'Retry', primary: true, onClick: boot },
     ]);
   }
-
-  await confirmFirstRun();
 
   setHeadline('Waking up your memory.');
   setStatus('Starting Companion Memory…');

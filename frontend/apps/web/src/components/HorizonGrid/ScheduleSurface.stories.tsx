@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import type { Meta, StoryObj } from '@storybook/react';
 
+import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 import { VerticalCalendar } from '@/components/HorizonGrid';
 import type { ColorMode } from '@/lib/activityPalette';
@@ -106,6 +107,25 @@ const RHYTHM: RhythmDay[] = Array.from({ length: 7 }, (_, i) => {
   };
 });
 
+/** Monday's day-ahead histogram — a wash behind that day's hours, not a band above the week. */
+const OCCUPANCY: ForecastBucket[] = Array.from({ length: 96 }, (_, i) => {
+  const at = new Date(START);
+  at.setHours(Math.floor(i / 4), (i % 4) * 15, 0, 0);
+  const l0 = i < 28 ? 'SLEEP' : i < 68 ? 'WORK' : i < 84 ? 'LEISURE' : 'SLEEP';
+  const probability = 0.55 + Math.min(i % 8, 7 - (i % 8)) * 0.05;
+
+  return {
+    bucketIndex: i,
+    startTime: at.toISOString(),
+    l0Probs: [{ label: l0, probability }],
+    l1Probs: [{ label: l0.toLowerCase(), probability }],
+    l2Probs: null,
+    q10: Math.max(0, probability - 0.2),
+    q50: probability,
+    q90: Math.min(1, probability + 0.1),
+  };
+});
+
 /** Live wiring, so a move actually lands during a manual drag or from the dialog. */
 function Surface({ colorMode = 'type' }: { colorMode?: ColorMode }) {
   const [events, setEvents] = useState(EVENTS);
@@ -116,6 +136,7 @@ function Surface({ colorMode = 'type' }: { colorMode?: ColorMode }) {
       days={7}
       events={events}
       rhythm={RHYTHM}
+      occupancy={OCCUPANCY}
       colorMode={colorMode}
       footer="Rhythm from your own patterns, updated Aug 4."
       onMoveEvent={(id, startTime) =>

@@ -53,6 +53,10 @@ interface LocalHubPlugin {
    */
   getCurrentLocation?(): Promise<NativeCurrentLocation>;
   openAppSettings?(): Promise<void>;
+  getLocationAuthorization?(): Promise<{ status: NativeLocationAuthorization }>;
+  requestLocationAuthorization?(options: {
+    always: boolean;
+  }): Promise<{ status: NativeLocationAuthorization }>;
 }
 
 export interface BackgroundGeolocationError {
@@ -92,6 +96,15 @@ export interface NativeCurrentLocation {
   longitude: number;
   accuracy?: number;
 }
+
+/** Core Location authorization — iOS Always two-step. `unsupported` on web/Android. */
+export type NativeLocationAuthorization =
+  | 'notDetermined'
+  | 'denied'
+  | 'restricted'
+  | 'whenInUse'
+  | 'always'
+  | 'unsupported';
 
 export type DeviceLocationErrorCode = 'denied' | 'unavailable' | 'timeout';
 
@@ -233,12 +246,51 @@ export interface LocalNotification {
 
 const noop = () => {};
 
-function plugins(): CapacitorPlugins | undefined {
+function capacitorBridge():
+  | {
+      Plugins?: CapacitorPlugins;
+      registerPlugin?: (name: string) => unknown;
+    }
+  | undefined {
   if (typeof window === 'undefined') {
     return undefined;
   }
 
-  return (window as unknown as { Capacitor?: { Plugins?: CapacitorPlugins } }).Capacitor?.Plugins;
+  return (
+    window as unknown as {
+      Capacitor?: { Plugins?: CapacitorPlugins; registerPlugin?: (name: string) => unknown };
+    }
+  ).Capacitor;
+}
+
+function plugins(): CapacitorPlugins | undefined {
+  return capacitorBridge()?.Plugins;
+}
+
+/**
+ * LocalHub may live on `Plugins` already, or only after `registerPlugin` (same
+ * pattern as CapacitorHttp). `openUrl` must go through this plugin — Capacitor
+ * Browser is in-app Safari and breaks `companion://` OIDC handoff.
+ */
+function resolveLocalHub(): LocalHubPlugin | undefined {
+  const cap = capacitorBridge();
+  const existing = cap?.Plugins?.LocalHub;
+
+  if (existing?.openUrl) {
+    return existing;
+  }
+
+  try {
+    const registered = cap?.registerPlugin?.('LocalHub') as LocalHubPlugin | undefined;
+
+    if (registered?.openUrl) {
+      return registered;
+    }
+  } catch {
+    /* native binary does not expose the plugin */
+  }
+
+  return existing;
 }
 
 /**
@@ -440,9 +492,9 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
  * Open a URL outside the app's webview: the system browser on native (so OAuth/OIDC
  * runs in Safari / Chrome, not the in-app webview), or a normal navigation on web.
  *
- * iOS prefers LocalHub.openUrl (`UIApplication.shared.open`) over Capacitor Browser.
- * Browser presents SFSafariViewController from the Capacitor bridge VC, which never
- * appears under our UIScene SceneDelegate — Sign in then spins with no Safari window.
+ * iOS uses LocalHub.openUrl (`UIApplication.shared.open`) — never Capacitor Browser.
+ * Browser presents SFSafariViewController, which swallows `companion://` and breaks
+ * OIDC token handoff (and never appears under our UIScene SceneDelegate).
  *
  * Desktop (Tauri) is a third, distinct native shell — see isTauriPlatform's doc
  * comment for why it isn't folded into the isNativePlatform() checks above. Same
@@ -450,17 +502,14 @@ async function tauriInvoke<T>(command: string, args?: Record<string, unknown>): 
  * trusts and may already be signed into, never this app's own embedded webview.
  */
 export async function openExternalUrl(url: string): Promise<void> {
-  const hub = plugins()?.LocalHub;
-  const browser = plugins()?.Browser;
+  if (isNativePlatform()) {
+    const hub = resolveLocalHub();
 
-  if (isNativePlatform() && hub?.openUrl) {
+    if (!hub?.openUrl) {
+      throw new Error('Could not open the system browser for sign-in.');
+    }
+
     await hub.openUrl({ url });
-
-    return;
-  }
-
-  if (isNativePlatform() && browser) {
-    await browser.open({ url });
 
     return;
   }
@@ -488,7 +537,7 @@ export async function openExternalUrl(url: string): Promise<void> {
  * `null` if no watcher was started.
  */
 export async function addBackgroundLocationWatcher(
-  options: { background: boolean; distanceFilter?: number },
+  options: { background: boolean; distanceFilter?: number; requestPermissions?: boolean },
   onLocation: (location: BackgroundGeolocationLocation) => void,
   onError: (error: BackgroundGeolocationError) => void,
 ): Promise<string | null> {
@@ -500,7 +549,7 @@ export async function addBackgroundLocationWatcher(
 
   return plugin.addWatcher(
     {
-      requestPermissions: true,
+      requestPermissions: options.requestPermissions ?? true,
       distanceFilter: options.distanceFilter,
       ...(options.background
         ? {
@@ -570,6 +619,63 @@ export async function getNativeCurrentLocation(): Promise<NativeCurrentLocation 
   }
 
   return hub.getCurrentLocation();
+}
+
+const LOCATION_AUTH_STATUSES: readonly NativeLocationAuthorization[] = [
+  'notDetermined',
+  'denied',
+  'restricted',
+  'whenInUse',
+  'always',
+  'unsupported',
+];
+
+function asLocationAuthorization(status: string | undefined): NativeLocationAuthorization {
+  if (status && (LOCATION_AUTH_STATUSES as readonly string[]).includes(status)) {
+    return status as NativeLocationAuthorization;
+  }
+
+  return 'unsupported';
+}
+
+/** iOS Core Location authorization. `unsupported` on web and Android. */
+export async function getNativeLocationAuthorization(): Promise<NativeLocationAuthorization> {
+  const hub = plugins()?.LocalHub;
+
+  if (!isIosPlatform() || !hub?.getLocationAuthorization) {
+    return 'unsupported';
+  }
+
+  try {
+    const result = await hub.getLocationAuthorization();
+
+    return asLocationAuthorization(result.status);
+  } catch {
+    return 'unsupported';
+  }
+}
+
+/**
+ * Prompt When In Use (`always: false`) or Always (`always: true`).
+ * iOS 13+ shows When In Use first when status is still not determined; call
+ * again with `always: true` after that grant. `unsupported` on web/Android.
+ */
+export async function requestNativeLocationAuthorization(options: {
+  always: boolean;
+}): Promise<NativeLocationAuthorization> {
+  const hub = plugins()?.LocalHub;
+
+  if (!isIosPlatform() || !hub?.requestLocationAuthorization) {
+    return 'unsupported';
+  }
+
+  try {
+    const result = await hub.requestLocationAuthorization(options);
+
+    return asLocationAuthorization(result.status);
+  } catch {
+    return 'unsupported';
+  }
 }
 
 /**

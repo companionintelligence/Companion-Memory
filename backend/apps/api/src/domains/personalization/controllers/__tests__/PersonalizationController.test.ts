@@ -2,8 +2,6 @@ import { BadRequestException } from '@nestjs/common';
 
 import type { RequestContext } from '@ci/common/context';
 import { ValidationPipe } from '@ci/common/pipes';
-import type { BrowserActivityInsightPreferenceService } from '@ci/domains/llm/browser-activity-insight-preference.module';
-import type { ImageDescriptionPreferenceService } from '@ci/domains/llm/image-description-preference.module';
 
 import type { PersonalizationService } from '../../services/PersonalizationService';
 import { TRUST_MODES, type TrustMode } from '../../types';
@@ -23,8 +21,8 @@ function makeController() {
 
   const controller = new PersonalizationController(
     { updateTrustMode } as unknown as PersonalizationService,
-    { setEnabled: setImageDescription } as unknown as ImageDescriptionPreferenceService,
-    { setEnabled: setBrowserActivityInsight } as unknown as BrowserActivityInsightPreferenceService,
+    { setEnabled: setImageDescription } as never,
+    { setEnabled: setBrowserActivityInsight } as never,
   );
 
   return { controller, updateTrustMode, setImageDescription, setBrowserActivityInsight };

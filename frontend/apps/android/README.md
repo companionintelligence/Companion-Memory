@@ -84,6 +84,68 @@ adb shell am start -n com.companionintelligence.app/.MainActivity
 
 (Debug builds need no release keystore. List AVDs with `emulator -list-avds`.)
 
+## Tests
+
+Two kinds, and the difference is whether a device is involved.
+
+### Unit tests (JVM — no emulator, no device)
+
+**100 tests across four modules**, run from the repo root:
+
+```bash
+make test-android
+```
+
+That checks the prerequisites first (JDK 21; an Android SDK with
+`platforms;android-35`, found through `ANDROID_HOME`, then `ANDROID_SDK_ROOT`, then
+`android/local.properties`'s `sdk.dir`; and this project's own `yarn install`, which is
+what materializes the `portal:` symlinks the three plugin modules reach the build
+through) and then runs, from `frontend/apps/android/android`:
+
+```bash
+./gradlew testDebugUnitTest
+```
+
+No module prefix, so every module with a unit-test source set is picked up — a new
+plugin package needs no edit anywhere.
+
+| Module | Source set | Tests |
+|---|---|---|
+| `:app` | `app/src/test/java/com/companionintelligence/app` | 14 |
+| `:ci-capacitor-local-hub` | [`frontend/packages/capacitor-local-hub/android/src/test`](../../packages/capacitor-local-hub/android/src/test) | 35 |
+| `:ci-capacitor-local-llm` | [`frontend/packages/capacitor-local-llm/android/src/test`](../../packages/capacitor-local-llm/android/src/test) | 35 |
+| `:ci-capacitor-speech` | [`frontend/packages/capacitor-speech/android/src/test`](../../packages/capacitor-speech/android/src/test) | 16 |
+
+Reports land in each module's `build/reports/tests/testDebugUnitTest/index.html`.
+Pass extra Gradle flags through the make target, e.g.
+`make test-android GRADLE_ARGS="--rerun"` to defeat Gradle's up-to-date check, or run
+a single module directly:
+
+```bash
+cd frontend/apps/android/android
+./gradlew :ci-capacitor-speech:testDebugUnitTest --tests '*SpeechRecognitionLogicTest*'
+```
+
+Several of these tests read files from **outside** the Gradle build — `definitions.ts`
+in the plugin packages, the iOS `Info.plist`, the backend's `config/default.json` — to
+pin declarations that span the two sides of a boundary. Those files are declared as
+task `inputs` in the relevant `build.gradle` so an edit on the far side actually
+re-runs the check; without that, Gradle would report the task UP-TO-DATE through
+exactly the change the test exists to catch.
+
+### Instrumented tests (need a booted device)
+
+`src/androidTest` in `capacitor-local-hub` and `capacitor-speech` — real sockets, a real
+SQLCipher database, the real AndroidKeyStore, the real speech framework. They are in
+**neither** `make test-android` nor CI, because both would need an emulator. Run them
+by hand against a booted device:
+
+```bash
+cd frontend/apps/android/android
+./gradlew connectedDebugAndroidTest                                  # everything
+./gradlew :ci-capacitor-local-hub:connectedDebugAndroidTest          # one module
+```
+
 ## CI builds (GitHub Actions)
 
 `.github/workflows/mobile-build.yml` builds both apps in CI (modelled on CI-Hub's
@@ -109,6 +171,14 @@ Two jobs run in parallel and upload their output as run artifacts:
 Each job runs: root `yarn install` → `yarn workspace @ci/fe-web build` (PWA disabled via
 the `VITE_DISABLE_PWA` env) → mobile `yarn install` → `cap sync` → native build
 (`gradlew assembleDebug` / `xcodebuild -sdk iphonesimulator`) → `upload-artifact`.
+
+The **Android** job adds one step the iOS job has no equivalent for: right after
+`assembleDebug` it runs `./gradlew testDebugUnitTest --continue`, the same 100 JVM
+tests as `make test-android`. It is nearly free — the JDK, the SDK and the Gradle
+cache are already warm from the build above — and on a red run it uploads the HTML
+and XML reports from all four modules as **`android-unit-test-reports`**. On a green
+run it uploads nothing, because the log already says everything the reports would.
+
 Download the artifacts from the run's summary page, then:
 
 ```bash

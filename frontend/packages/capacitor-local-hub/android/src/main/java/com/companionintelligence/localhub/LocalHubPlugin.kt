@@ -221,6 +221,21 @@ class LocalHubPlugin : Plugin() {
         }
     }
 
+    /** Always-authorization two-step is iOS-only. Android uses background-geolocation. */
+    @PluginMethod
+    fun getLocationAuthorization(call: PluginCall) {
+        val ret = JSObject()
+        ret.put("status", "unsupported")
+        call.resolve(ret)
+    }
+
+    @PluginMethod
+    fun requestLocationAuthorization(call: PluginCall) {
+        val ret = JSObject()
+        ret.put("status", "unsupported")
+        call.resolve(ret)
+    }
+
     /**
      * Lazy, not a field initializer: a `Plugin` is constructed before Capacitor attaches its
      * `Context`, so `context` is only safe to read once a method has actually been called.

@@ -41,7 +41,7 @@ export interface FeedPageProps {
 }
 
 export function FeedPage({ embedded = false }: FeedPageProps = {}) {
-  usePageTitle(embedded ? null : 'Brief - Companion Intelligence');
+  usePageTitle(embedded ? null : 'Brief - Companion Memory');
 
   const { t } = useTranslation();
 

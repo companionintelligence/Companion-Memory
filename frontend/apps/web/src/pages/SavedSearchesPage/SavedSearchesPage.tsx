@@ -46,7 +46,7 @@ const GET_SAVED_SEARCHES = gql(`
 type SavedSearchNode = FragmentType<typeof SavedSearchGridItemFragment>;
 
 export function SavedSearchesPage() {
-  usePageTitle('Saved Searches - Companion Intelligence');
+  usePageTitle('Saved Searches - Companion Memory');
 
   const [searchParams, setSearchParams] = useSearchParams();
   const searchText = searchParams.get('q') ?? '';

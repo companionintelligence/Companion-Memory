@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 
 import { addDays, startOfLocalDay } from './nowNext';
@@ -9,6 +10,8 @@ import {
   dropInstant,
   eventUrl,
   movedStart,
+  occupancyClaims,
+  occupancySignalInRange,
   packLanes,
   rhythmCells,
   slotForecastLine,
@@ -406,6 +409,65 @@ describe('rhythmCells — 15-minute intensities across a local day', () => {
     // the previous UTC date opened. Slot 40 is 10:00; slot 88 is 22:00.
     expect(cells[40]).toBeCloseTo(0.81, 2);
     expect(cells[88]).toBeCloseTo(0.09, 2);
+  });
+});
+
+describe('occupancyClaims — 96-bin histogram clipped onto a local day', () => {
+  function bucket(overrides: Partial<ForecastBucket> = {}): ForecastBucket {
+    return {
+      bucketIndex: 36,
+      startTime: new Date(2026, 7, 3, 9, 0).toISOString(),
+      l0Probs: [{ label: 'WORK', probability: 0.8 }],
+      l1Probs: [{ label: 'focus', probability: 0.7 }],
+      l2Probs: null,
+      q10: 0.5,
+      q50: 0.8,
+      q90: 0.9,
+      ...overrides,
+    };
+  }
+
+  it('returns null when nothing lands on the day', () => {
+    expect(occupancyClaims(MONDAY, [])).toBeNull();
+    expect(occupancyClaims(MONDAY, [bucket({ startTime: addDays(MONDAY, 2).toISOString() })])).toBeNull();
+  });
+
+  it('emits 96 cells and places a 09:00 bin at slot 36', () => {
+    const cells = occupancyClaims(MONDAY, [bucket()]);
+
+    expect(cells).toHaveLength(96);
+    expect(cells?.[36].weight).toBe(0.8);
+    expect(cells?.[36].l0Class).toBe('WORK');
+    expect(cells?.[36].bucket?.l1Probs[0]?.label).toBe('focus');
+    expect(cells?.filter((cell) => cell.bucket !== null)).toHaveLength(1);
+  });
+
+  it('keeps a UTC histogram on the local day the instant actually falls in', () => {
+    // 02:00 UTC on the 4th is 22:00 the previous evening in New York in August.
+    const cells = withTimeZone('America/New_York', () => {
+      const monday = startOfLocalDay(new Date(2026, 7, 3));
+
+      return occupancyClaims(monday, [
+        bucket({
+          bucketIndex: 8,
+          startTime: '2026-08-04T02:00:00.000Z',
+          l0Probs: [{ label: 'SLEEP', probability: 0.9 }],
+          q50: 0.9,
+        }),
+      ]);
+    });
+
+    expect(cells).not.toBeNull();
+    expect(cells?.[88].l0Class).toBe('SLEEP');
+    expect(cells?.[88].weight).toBe(0.9);
+  });
+
+  it('only counts occupancy that falls inside the drawn window', () => {
+    const bins = [bucket()];
+
+    expect(occupancySignalInRange(bins, MONDAY, addDays(MONDAY, 1))).toBe(true);
+    expect(occupancySignalInRange(bins, addDays(MONDAY, 1), addDays(MONDAY, 8))).toBe(false);
+    expect(occupancySignalInRange([bucket({ q50: 0.01 })], MONDAY, addDays(MONDAY, 1))).toBe(false);
   });
 });
 

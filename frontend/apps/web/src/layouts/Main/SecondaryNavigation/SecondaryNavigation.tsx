@@ -123,7 +123,9 @@ function HelpSubmenu() {
  */
 function OverlayRailHeader({ closeOverlay }: { closeOverlay: () => void }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 pt-2 pb-1.5">
+    // Same inset as a nav row (`border-l-2` + `px-2 py-2`) so the mark sits on
+    // the same left edge as Capture / Planning instead of hugging the pane.
+    <div className="flex min-w-0 items-center border-l-2 border-transparent px-2 py-2">
       <PowerRailWordmark />
       <RailEdgeToggle open onClick={closeOverlay} className="ml-auto shrink-0" />
     </div>

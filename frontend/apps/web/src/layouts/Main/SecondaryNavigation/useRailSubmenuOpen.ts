@@ -16,9 +16,9 @@ import { usePowerRail } from '../PowerRailContext';
  * A chevron close stays closed — even on that group's own route — until the
  * route changes or the group is clicked open again.
  *
- * `clickOpen` is the click-driven half only. The collapsed rail uses it for a
- * flyout so merely *being* on the group's route does not pin a popover open
- * forever while the icons stay narrow.
+ * `clickOpen` is the click-driven half only. The collapsed rail uses it so
+ * merely *being* on the group's route does not pin a stack of child icons
+ * open while the rail stays narrow.
  */
 export function useRailSubmenuOpen(id: string, routeOpen: boolean) {
   const { pathname } = useLocation();

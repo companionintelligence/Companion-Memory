@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-gateway-url-command"
+description = "Enables the get_gateway_url_command command without any pre-configured scope."
+commands.allow = ["get_gateway_url_command"]
+
+[[permission]]
+identifier = "deny-get-gateway-url-command"
+description = "Denies the get_gateway_url_command command without any pre-configured scope."
+commands.deny = ["get_gateway_url_command"]

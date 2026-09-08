@@ -1,4 +1,4 @@
-import { type ReactNode, lazy, useEffect } from 'react';
+import { type ReactNode, Suspense, lazy, useEffect } from 'react';
 
 import {
   ConnectionModeProvider,
@@ -6,6 +6,7 @@ import {
   LoadingPage,
   OutboxQueueProvider,
   isNativePlatform,
+  isTauriPlatform,
   needsNativeCloudConnect,
   useDeviceLayout,
 } from '@ci/common';
@@ -21,7 +22,6 @@ import {
 } from 'react-router-dom';
 
 import { ApolloProvider } from '@/api/ApolloProvider';
-import { PowerSyncProvider } from '@/api/powersync/PowerSyncProvider';
 import { FeaturesProvider, useFeatures } from '@/common/feature';
 import NotFoundPage from '@/components/NotFound';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
@@ -32,6 +32,7 @@ import {
   AuthProvider,
   CaptureModalProvider,
   ModelProvider,
+  useAuth,
   useLocationTracking,
   useNativeShell,
   usePreventOverscroll,
@@ -39,9 +40,14 @@ import {
 } from '@/hooks';
 import { Centered as CenteredLayout, Main as MainLayout } from '@/layouts';
 import { CHAT_BASE, chatThreadPath } from '@/pages/ChatPage/chatPaths';
+import DesktopSignInPage from '@/pages/DesktopSignInPage';
 import LoginPage from '@/pages/LoginPage';
 import SignupPage from '@/pages/SignupPage';
 import SplashPage from '@/pages/SplashPage';
+
+const LazyPowerSyncProvider = lazy(() =>
+  import('@/api/powersync/PowerSyncProvider').then((m) => ({ default: m.PowerSyncProvider })),
+);
 
 const ChatPage = lazy(() => import('@/pages/ChatPage'));
 const CommunicationPage = lazy(() => import('@/pages/CommunicationPage'));
@@ -132,6 +138,29 @@ function RedirectProfileToSelfSettings() {
   return <Navigate to={rest ? `/self/settings/${rest}` : '/self/settings'} replace />;
 }
 
+/**
+ * PowerSync only matters once someone is signed in.
+ *
+ * It was mounted unconditionally, which put ~200 KB of sync engine in the chunk
+ * every visitor downloads before first paint and opened a WASQLite IndexedDB
+ * database for people sitting on the splash screen who may never sign in. Signed
+ * out, the tree renders without it; signed in, it loads and mounts exactly as
+ * before — every consumer of PowerSyncContext lives behind ProtectedRoute.
+ */
+function PowerSyncBoundary({ children }: { children: ReactNode }) {
+  const [{ authenticated, authToken }] = useAuth();
+
+  if (!authenticated && !authToken) {
+    return children;
+  }
+
+  return (
+    <Suspense fallback={<LoadingPage />}>
+      <LazyPowerSyncProvider>{children}</LazyPowerSyncProvider>
+    </Suspense>
+  );
+}
+
 function Providers({ children }: { children: ReactNode }) {
   return (
     <Router>
@@ -147,7 +176,7 @@ function Providers({ children }: { children: ReactNode }) {
                     <ModelProvider args={[]}>
                       <CaptureModalProvider args={[]}>
                         <ApolloProvider>
-                          <PowerSyncProvider>{children}</PowerSyncProvider>
+                          <PowerSyncBoundary>{children}</PowerSyncBoundary>
                         </ApolloProvider>
                       </CaptureModalProvider>
                     </ModelProvider>
@@ -181,11 +210,15 @@ function AppRoutes() {
   // the user has enabled it in Settings -> Location. Inert when disabled.
   useLocationTracking();
 
-  // Native pairing: `/device-connect` is Portal cloud-connect; `/server` is the
-  // Advanced URL fallback. iOS always uses cloud-connect (a leftover docker/LAN
-  // origin does not skip it). `/connect` is Sources and must not be used here.
+  // Native pairing: `/device-connect` is Portal cloud-connect; `/device-connect/advanced`
+  // (and the leftover `/server` alias) are Hub URL / offline-unlock settings. iOS always
+  // uses cloud-connect (a leftover docker/LAN origin does not skip it). `/connect` is
+  // Sources and must not be used here.
   useEffect(() => {
-    const pairing = location.pathname === '/device-connect' || location.pathname === '/server';
+    const pairing =
+      location.pathname === '/device-connect' ||
+      location.pathname === '/device-connect/advanced' ||
+      location.pathname === '/server';
 
     if (needsNativeCloudConnect() && !pairing) {
       navigate('/device-connect', { replace: true });
@@ -199,9 +232,18 @@ function AppRoutes() {
           path="/"
           element={
             <RedirectKnownUser>
-              {/* Native: Safari / cold start always reopens `/`. The marketing
-                  splash is web-only; the phone's first screen is cloud-connect. */}
-              {isNativePlatform() ? <Navigate to="/device-connect" replace /> : <SplashPage />}
+              {/* The marketing splash is for a browser visitor who has not decided
+                  yet. Someone inside the desktop app or the phone app has already
+                  installed the thing — they get a way in, not a pitch. Native goes
+                  to cloud-connect (it must find an appliance first); desktop is
+                  already looking at its own, so it goes straight to sign-in. */}
+              {isNativePlatform() ? (
+                <Navigate to="/device-connect" replace />
+              ) : isTauriPlatform() ? (
+                <DesktopSignInPage />
+              ) : (
+                <SplashPage />
+              )}
             </RedirectKnownUser>
           }
         />
@@ -224,17 +266,28 @@ function AppRoutes() {
           }
         />
 
+        {/* Full-bleed splash on sign-in; the picker centers itself. Do not wrap
+            this in CenteredLayout — that card column is what hid the Lottie. */}
+        <Route path="/device-connect" element={<DeviceConnectPage />} />
+
         <Route element={<CenteredLayout />}>
-          <Route path="/device-connect" element={<DeviceConnectPage />} />
-          <Route path="/server" element={<ServerSettingsPage />} />
+          <Route path="/device-connect/advanced" element={<ServerSettingsPage />} />
+          <Route path="/server" element={<Navigate to="/device-connect/advanced" replace />} />
 
           <Route
             path="/login"
             element={
-              // Native shells always cloud-connect. Restoring `/login` from an
-              // earlier hop (or an Android deep-link cold start) used to drop
-              // Portal PKCE that only DeviceConnectPage resumes.
-              isNativePlatform() ? (
+              // Native shells cloud-connect only while they still NEED to: an
+              // unpaired shell (no server origin yet, or iOS pointed at a local
+              // appliance) must go through DeviceConnectPage, because restoring
+              // `/login` from an earlier hop (or an Android deep-link cold start)
+              // drops Portal PKCE that only DeviceConnectPage resumes.
+              //
+              // Once a self-hosted Memory Server origin IS configured, that no
+              // longer applies and this redirect was locking the owner out: the
+              // only credential form left is Portal's, so an appliance whose
+              // owner has no Portal account had no way in at all.
+              needsNativeCloudConnect() ? (
                 <Navigate to="/device-connect" replace />
               ) : (
                 <RedirectKnownUser>

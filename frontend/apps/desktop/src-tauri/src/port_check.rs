@@ -12,6 +12,12 @@ pub fn is_port_available(port: u16) -> bool {
 /// The tiny TOCTOU window between this returning and the real bind is
 /// acceptable for a single-user local desktop app with no other process
 /// racing for ports on 127.0.0.1.
+///
+/// Its only shipping caller is macOS-only, so a Linux/Windows build otherwise
+/// warns this dead. It stays compiled on every host because the sidecar tests
+/// use it to find a port nothing is listening on, which is not a macOS
+/// question.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn find_free_port() -> Option<u16> {
     std::net::TcpListener::bind(("127.0.0.1", 0))
         .ok()

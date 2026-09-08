@@ -10,7 +10,7 @@ interface Call {
 function stubFetch(responder: (call: Call) => Response | Promise<Response>) {
   const calls: Call[] = [];
 
-  const fetchImpl = (async (input: URL | RequestInfo, init?: RequestInit) => {
+  const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const call: Call = {
       url: String(input),
       method: init?.method ?? 'GET',
