@@ -462,7 +462,7 @@ make reset
 
 Run `make` from the project root to see all available commands with descriptions.
 
-Six of those targets — `build`, `dev`, `test`, `lint`, `format` and `reset` — are
+Three of those targets — `build`, `dev` and `test` — are
 one-line delegations to a TypeScript program at [`scripts/xtask/`](scripts/xtask),
 run through `tsx` (`yarn tsx scripts/xtask/index.ts <command> ...`). The `make`
 targets stay the documented entry point and still take the variables they always

@@ -1,9 +1,11 @@
 # xtask
 
 The repo's build/dev automation as a real program, run via `tsx` (the `xtask` pattern
-from `ratatui`). Six root `Makefile` targets — `build`, `dev`, `test`, `lint`, `format`,
-`reset` — are now one-line delegations to it. Every other target, `make help` included,
-is untouched shell.
+from `ratatui`). Three root `Makefile` targets — `build`, `dev` and `test` — are now one-line
+delegations to it. Every other target, `make help` included, is untouched shell:
+`format`, `lint` and `reset` are sequences of shell commands with no branching, where
+a program would add only indirection, and `health` has to keep working on a checkout
+too broken to run this program.
 
 ## Why
 
@@ -26,17 +28,15 @@ make build ENV=local GPU=cuda      # ENV defaults to local; GPU is auto-detected
 make build IMAGE=api               # one image instead of the whole set
 make build DRY_RUN=1               # print the plan, touch nothing
 make dev REBUILD=1
-make test / make lint / make format / make reset
+make test
 ```
 
-Or directly, which is the only way to reach flags Make does not forward (`reset
---dry-run`) and the per-command help:
+Or directly, which is how you reach the per-command help:
 
 ```bash
 yarn tsx scripts/xtask/index.ts --help
 yarn tsx scripts/xtask/index.ts build --help
 yarn tsx scripts/xtask/index.ts build api --env staging --gpu cuda --dry-run
-yarn tsx scripts/xtask/index.ts reset --dry-run
 ```
 
 Run from the repo root either way: `process.cwd()` is the root every command resolves
@@ -49,9 +49,6 @@ paths against.
 | `build [image]` | `--env local\|staging\|production` (default `local`), `--gpu cpu\|cuda\|rocm` (default: `scripts/detect-gpu.sh`), `--dry-run` | With no `[image]`, builds the ENV-appropriate set: `setup-database database object-store summary hbpe`, plus `api gateway` when ENV is not `local`, plus `setup-secrets` on `production`. `[image]` builds exactly one of `api, gateway, setup-database, database, object-store, setup-secrets, summary, hbpe`, regardless of ENV. |
 | `dev` | `--gpu`, `--rebuild` | Shells out to `make health` and `make init`, checks overmind/caddy/ollama, pulls the two required ollama models, rebuilds when a local image is missing or a sidecar's `ci.source-tree` label no longer matches HEAD, then hands off to `scripts/dev-stack/index.ts up`. |
 | `test` | — | `yarn workspaces foreach --all run test`, then `node --test` over `frontend/apps/desktop/scripts/**/*.test.cjs` (excluded from the workspaces, so `foreach` cannot see it), then `uv run pytest`. Reports workspaces that declare no `test` script, which `foreach` skips silently. |
-| `lint` | — | `yarn lint`, `yarn format:check`, ruff check/format, mypy, `uv lock --check`, `check-ci-namespace.sh`, `check-capacitor-native-sync.mjs`. |
-| `format` | — | `yarn format`, then `ruff format` and `ruff check --fix`. |
-| `reset` | `--dry-run` | Destructive: `make stop`, `overmind quit`, then removes every Docker volume and network matching this worktree's `PROJECT_NAME`. `--dry-run` lists them without removing anything. |
 
 Every subcommand takes `--help`, and unknown values for `--env`, `--gpu` and `[image]`
 are rejected with the valid list rather than passed to Docker.
@@ -62,7 +59,7 @@ are rejected with the valid list rather than passed to Docker.
 index.ts              subcommand dispatch, --help, SIGINT/SIGTERM handling
 commands/build.ts     computeBuildPlan (no Docker; reads files+git) + the build loop
 commands/dev.ts       prerequisite checks, image staleness, dev-stack handoff
-commands/{test,lint,format,reset}.ts
+commands/test.ts      workspace suites, the desktop node --test pass, pytest, coverage report
 lib/exec.ts           run() (inherit stdio, throw on nonzero) / tryRun() (capture, never throw) / which()
 lib/gpu.ts            GPU detection, Dockerfile pin parsing, wheel-image tag composition
 lib/images.ts         *_REPO names, the TAG-derived extra tag, the ci.source-tree sidecar stamp

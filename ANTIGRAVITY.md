@@ -33,7 +33,7 @@ make test      # both stacks (yarn workspaces test + pytest)
 make build     # Build images. ENV=local|staging|production GPU=cpu|cuda|rocm IMAGE=<one image> DRY_RUN=1
 ```
 
-`build`, `dev`, `test`, `lint`, `format` and `reset` are one-line delegations to the TypeScript
+`build`, `dev` and `test` are one-line delegations to the TypeScript
 program in `scripts/xtask/` (run via tsx) — change the logic there. (Two pieces stay in the Makefile on purpose: the
 `distribute-license`/`clean-license` targets xtask calls back into, and the four wheel pins
 `lib/gpu.ts` reads out of it by name.) `health`

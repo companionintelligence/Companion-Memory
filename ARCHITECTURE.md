@@ -32,7 +32,7 @@ tests/                     Root-level Playwright end-to-end tests
 ```
 
 Everything else at the root is repo-wide configuration: `Makefile` (still the
-entry point for every workflow, though six of its targets are now one-line
+entry point for every workflow, though three of its targets are now one-line
 delegations to `scripts/xtask/` — see [Build and run](#build-and-run)),
 `Procfile` (the three host processes `make dev` runs),
 `docker-compose.yml` plus its `.local`/`.staging`/`.production`/`.rocm`
@@ -283,8 +283,8 @@ it.
 ## Build and run
 
 `make` is still the entry point and `make help` still lists every target with
-its description. What changed is what sits behind six of them — `build`, `dev`,
-`test`, `lint`, `format` and `reset` are now one-line delegations to **xtask**,
+its description. What changed is what sits behind three of them — `build`, `dev`
+and `test` are now one-line delegations to **xtask**,
 a TypeScript program under `scripts/xtask/` run through `tsx`:
 
 ```make
@@ -295,7 +295,7 @@ build:
 The Makefile keeps the interface, xtask holds the logic, and the other
 forty-odd targets are untouched.
 
-Those six were ported for what they had grown into: GPU auto-detection, an
+Those three were ported for what they had grown into: GPU auto-detection, an
 `ENV`-gated ordered set of images, a `ci.source-tree` comparison against the
 images already on the box, a lockfile freshness gate. In a Make recipe each of
 those is shell with `$$` on every variable and a process per line, with no way

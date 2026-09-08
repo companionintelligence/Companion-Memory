@@ -63,8 +63,8 @@ make build DRY_RUN=1    # print the exact docker build commands — every --buil
                         # and, on a cuda/rocm host, the wheel-image tags — without running Docker
 ```
 
-**Six of those targets are one-line delegations to `scripts/xtask/`, a TypeScript program
-run under `tsx`: `build`, `dev`, `test`, `lint`, `format`, `reset`.** Their logic is no
+**Three of those targets are one-line delegations to `scripts/xtask/`, a TypeScript program
+run under `tsx`: `build`, `dev` and `test`.** Their logic is no
 longer in the Makefile — read the recipe before editing it. Dispatch, `--help` and signal
 handling are in `scripts/xtask/index.ts`; one file per subcommand under `commands/`; shared
 pieces under `lib/` — `exec.ts` (`run()` fail-fast / `tryRun()` tolerant), `gpu.ts` (GPU

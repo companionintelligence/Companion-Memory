@@ -288,7 +288,30 @@ clean-license:
 
 .PHONY: reset
 reset: ## Reset the local development environment
-	@yarn tsx scripts/xtask/index.ts reset
+	@printf "$(call task_icon,reset,🧹) Resetting Docker environment INCLUDING ALL DATA...\n\n"
+
+	@$(MAKE) stop
+
+	@if [ -S .overmind.sock ]; then \
+		printf "\n➤ Stopping Overmind dev session...\n\n"; \
+		overmind quit 2>/dev/null || true; \
+	fi
+
+	@VOLS=$$(docker volume ls -q --filter "name=$(PROJECT_NAME)"); \
+	if [ -n "$$VOLS" ]; then \
+		printf "\n➤ Removing project volumes...\n"; \
+		printf "$$VOLS\n"; \
+		echo "$$VOLS" | xargs docker volume rm -f >/dev/null 2>&1 || true; \
+	fi
+
+	@NETS=$$(docker network ls -q --filter "name=$(PROJECT_NAME)"); \
+	if [ -n "$$NETS" ]; then \
+		printf "\n➤ Removing project networks...\n"; \
+		printf "$$NETS\n"; \
+		echo "$$NETS" | xargs docker network rm -f >/dev/null 2>&1 || true; \
+	fi
+
+	@printf "\n$(GREEN)✓$(RESET) Reset complete.\n\n"
 
 .PHONY: build
 build: ## Build images. ENV=local|staging|production GPU=cpu|cuda|rocm IMAGE=<one image> DRY_RUN=1
@@ -383,7 +406,16 @@ tunnel: ## Expose this running stack at https://dev.companionintelligence.com vi
 
 .PHONY: format
 format: ## Format the source, both stacks
-	@yarn tsx scripts/xtask/index.ts format
+	@printf "$(call task_icon,format,🧹) Formatting source...\n\n"
+
+	@yarn format
+
+	@printf "\n"
+
+	@uv run ruff format .
+	@uv run ruff check --fix .
+
+	@printf "\nSource successfully formatted.\n\n"
 
 .PHONY: graphql
 graphql: ## Generate GraphQL schema and frontend types
@@ -576,7 +608,25 @@ install: ## Install project dependencies
 
 .PHONY: lint
 lint: ## Check the source for lint and formatting errors, both stacks
-	@yarn tsx scripts/xtask/index.ts lint
+	@printf "$(call task_icon,lint,🔎) Checking formatting...\n\n"
+
+	@yarn lint
+	@yarn format:check
+
+	@printf "\n"
+
+	@uv run ruff check .
+	@uv run ruff format --check .
+	@uv run mypy
+
+	@# Catches a uv.lock left stale after the merge driver kept one side
+	@# (see scripts/merge-uv-lock.sh) or a manifest edit without a relock.
+	@uv lock --check || { printf "$(RED)✗$(RESET) uv.lock is out of date with the manifests. Run 'uv lock' and retry.\n\n"; exit 1; }
+
+	@sh scripts/check-ci-namespace.sh
+	@node scripts/check-capacitor-native-sync.mjs
+
+	@printf "\nNo lint errors found.\n\n"
 
 .PHONY: typecheck
 typecheck: ## Typecheck every JS/TS workspace that declares a typecheck script

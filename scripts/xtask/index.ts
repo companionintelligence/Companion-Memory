@@ -1,11 +1,14 @@
 /**
- * xtask — the repo's build/dev automation as a real program, run via `tsx`
- * (mirrors the `xtask` pattern from the `ratatui` project). Ports `build`,
- * `dev`, `test`, `lint`, `format` and `reset` out of the root Makefile, whose
- * six matching targets now just delegate to
- * `yarn tsx scripts/xtask/index.ts <command> ...`. Every other Makefile target
- * is untouched — including `help`, and including `health`, which stays shell on
- * purpose so it can still diagnose a toolchain too broken to run this program.
+ * xtask — the repo's build automation as a real program, run via `tsx`
+ * (mirrors the `xtask` pattern from the `ratatui` project). It holds the three
+ * Makefile targets that had grown real logic — `build`, `dev` and `test` —
+ * whose recipes now just delegate to
+ * `yarn tsx scripts/xtask/index.ts <command> ...`.
+ *
+ * Everything else stays in the Makefile, deliberately. `format`, `lint` and
+ * `reset` are sequences of shell commands with no branching, and a program adds
+ * only indirection to those. `health` is the toolchain diagnostic, so it must
+ * keep working on a checkout too broken to run this program at all.
  *
  * Every thrown Error surfaces here as a single `✗ <message>` line before the
  * process exits nonzero — commands throw rather than calling `process.exit()`
@@ -14,9 +17,6 @@
  */
 import { main as buildMain } from './commands/build';
 import { main as devMain } from './commands/dev';
-import { main as formatMain } from './commands/format';
-import { main as lintMain } from './commands/lint';
-import { main as resetMain } from './commands/reset';
 import { main as testMain } from './commands/test';
 import { fail } from '../dev-stack/log';
 
@@ -29,9 +29,6 @@ const COMMANDS: Record<string, Command> = {
   build: { main: buildMain, summary: 'Build images (ENV=local|staging|production, GPU=cpu|cuda|rocm)' },
   dev: { main: devMain, summary: 'Run the development environment locally' },
   test: { main: testMain, summary: 'Run the unit tests, both stacks' },
-  lint: { main: lintMain, summary: 'Check the source for lint and formatting errors, both stacks' },
-  format: { main: formatMain, summary: 'Format the source, both stacks' },
-  reset: { main: resetMain, summary: 'Reset the local development environment' },
 };
 
 function printHelp(): void {
