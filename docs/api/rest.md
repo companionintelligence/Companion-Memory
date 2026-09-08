@@ -578,7 +578,7 @@ Import stage work is dispatched over **per-kind pg-boss queues** — `import-unp
 | `ImportUploadsController` (`:68`) | POST `/import/uploads` (`:109`), GET `/import/uploads` (`:168`), DELETE `/import/uploads/:dropId` (`:183`) | Multipart upload of an archive (this is the route `server.requestTimeout = 0` exists for), listing, and removal. |
 | `ImportDoctorController` (`:41`) | GET `/import/doctor/checks` (`:53`), GET `/import/doctor` (`:69`) | The post-import integrity checks and their results. |
 
-> The CLI counterpart is `ci-import`, whose run-listing command is **`runs`** (there is no `jobs` subcommand — that name belongs to the pg-boss operator page at `/jobs`). See [docs/cli/ci-import.md](../cli/ci-import.md).
+> The CLI counterpart is `ci`, whose run-listing command is **`runs`** (there is no `jobs` subcommand — that name belongs to the pg-boss operator page at `/jobs`). See [docs/cli/ci.md](../cli/ci.md).
 
 ---
 

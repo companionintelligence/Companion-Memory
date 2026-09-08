@@ -119,7 +119,7 @@ How a personal archive becomes rows in `ci.*`, and how to work on that safely.
 | Doc | Covers |
 |---|---|
 | [import/etl-agent-guide.md](import/etl-agent-guide.md) | **Start here to fix an import bug.** The stage spine (`unpack → parse → media → push`) and what one-stage-at-a-time costs on a real corpus; the routing rules (`destinationsFor`) and the provenance triple; **`INGEST_REFRESH_COLUMNS` — why a re-import does NOT repair most columns**; the six recurring failure modes with the PR/migration for each; how to verify a fix (count before/after, and a test that fails with the fix reverted); local setup; the QA baseline queries |
-| [cli/ci-import.md](cli/ci-import.md) | The `ci-import` command line: every command, what was kept/dropped from the retired standalone importer, and why it is an HTTP client rather than an embedded server |
+| [cli/ci.md](cli/ci.md) | The `ci` command line (`backend/apps/cli`, formerly `ci-import` inside the API): every command, what was kept/dropped from the retired standalone importer, and why it is an HTTP client rather than an embedded server |
 | [runbooks/import-acceptance-2026-08.md](runbooks/import-acceptance-2026-08.md) | The August 2026 acceptance pass against a live stack: a 2.7GB Takeout end to end, four defects found and fixed, the per-row→batched push measurement (1,000 → 73,000 rows/min), and gotchas |
 
 ## Frontend conventions — [`docs/frontend/`](frontend/)

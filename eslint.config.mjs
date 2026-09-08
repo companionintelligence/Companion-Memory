@@ -76,11 +76,15 @@ export default [
   },
 
   {
-    // eslint.shared.mjs's `**/*.js` glob doesn't match `.cjs`, so this plain
-    // CommonJS build script (deliberately dependency-free, same reasoning as
-    // bin/check-migration-versions.js) gets neither Node globals nor an
+    // eslint.shared.mjs's `**/*.js` glob doesn't match `.cjs`, so these plain
+    // CommonJS entry points (deliberately dependency-free, same reasoning as
+    // bin/check-migration-versions.js) get neither Node globals nor an
     // exemption from the ESM-authoring `no-require-imports` rule.
-    files: ['frontend/apps/desktop/scripts/*.cjs'],
+    //
+    // @ci/cli's is the `ci-import` deprecation shim: it prints a notice to
+    // stderr and requires the bundle, so it has to run from `bin/` in the
+    // installed package before any resolution the bundle would do for itself.
+    files: ['frontend/apps/desktop/scripts/*.cjs', 'backend/apps/cli/bin/*.cjs'],
 
     languageOptions: {
       globals: globals.node,

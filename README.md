@@ -28,7 +28,7 @@ Full index: [`docs/README.md`](docs/README.md)
 - **Architecture:** [`docs/architecture/architecture.md`](docs/architecture/architecture.md) (platform, services, data flows) and [`docs/architecture/Database.md`](docs/architecture/Database.md) (schemas, idempotency design, indexing, hypertables, migration workflow).
 - **Backend developer guide:** [`backend/apps/api/README.md`](backend/apps/api/README.md) — domain/module layout, common infrastructure, the event bus, config system, DB workflow.
 - **Runbooks:** [bulk load](backend/apps/api/db/postgres/BULK_LOAD_RUNBOOK.md) · [ingest reset](backend/apps/api/db/postgres/INGEST_RESET_RUNBOOK.md).
-- **Import & ETL:** [`docs/import/etl-agent-guide.md`](docs/import/etl-agent-guide.md) (how a personal archive becomes rows in `ci.*`, and how to fix an import bug) and [`docs/cli/ci-import.md`](docs/cli/ci-import.md) (the `ci-import` command line). Import is a domain inside this repo — `backend/apps/api/src/domains/import/` — not a separate service.
+- **Import & ETL:** [`docs/import/etl-agent-guide.md`](docs/import/etl-agent-guide.md) (how a personal archive becomes rows in `ci.*`, and how to fix an import bug) and [`docs/cli/ci.md`](docs/cli/ci.md) (the `ci` command line, its own workspace at `backend/apps/cli`). Import is a domain inside this repo — `backend/apps/api/src/domains/import/` — not a separate service.
 - **Features:** [`docs/saved-search-sharing.md`](docs/saved-search-sharing.md) (sharing + filter capture + read-only viewer) · [`docs/peer-federation.md`](docs/peer-federation.md) (asking questions across two Companion memories — Portal discovery, the three ask archetypes, free/busy without leaking a calendar).
 - **The consent path (`/asks`):** [`docs/asks-system-guide.md`](docs/asks-system-guide.md) is the reference document — **read it before changing anything on the consent path**: grants, the disclosure ladder and its four ceilings, the capture-at-consent-time rule, the ask lifecycle local and federated, how to run the `/asks` page and the two-box federation harness, and the current gap list. Its companion [`docs/asks-threat-model.md`](docs/asks-threat-model.md) states what the feature does *not* defend against. Neither was linked from here before 2026-08-23.
 - **Screenshots & the nav map:** [`docs/screenshots.md`](docs/screenshots.md) — the Power Rail, the Memory and Self hubs, every route that is now a redirect, and how the committed shots were captured and compressed.
@@ -657,13 +657,25 @@ yarn dev                    # Start development server with nodemon
 yarn migrate:make <name>    # Create a new migration file
 yarn migrate:down           # Roll back the last migration
 yarn depcheck               # Check import boundaries / cycles (dependency-cruiser)
-yarn ci-import <cmd>        # The import CLI, run from source (datasources, recognize,
-                            #   import, inbox, runs, push, stats, doctor, backfill).
-                            #   Shipped as the `ci-import` bin from the built package.
 yarn test                   # Run the backend Jest suite
 yarn typecheck              # Type-check without emitting
 yarn lint                   # Lint backend code
 yarn lint:fix               # Auto-fix backend linting issues
+```
+
+### CLI Commands (`backend/apps/cli`)
+
+The `ci` command line — its own workspace, one dependency, no NestJS. Full
+reference: [`docs/cli/ci.md`](docs/cli/ci.md).
+
+```bash
+yarn dev <cmd>              # Run from source via tsx (datasources, recognize, import,
+                            #   inbox, runs, push, stats, doctor, backfill, peers,
+                            #   grants, asks). From the root:
+                            #   yarn workspace @ci/cli dev <cmd>
+yarn build                  # Bundle to a single file at dist/ci.cjs
+yarn test                   # Run the Vitest suite
+yarn typecheck              # Type-check without emitting
 ```
 
 ### Frontend SPA Commands (`frontend/apps/web`)

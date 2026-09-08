@@ -105,8 +105,8 @@ claude mcp add --transport http companion-memory https://ci-memory.example.com/a
 ```
 
 Do not commit a real key. Use the environment-variable form and export
-`CI_API_KEY` in your shell, the same variable `ci-import` already reads
-(see [`docs/cli/ci-import.md`](../cli/ci-import.md)).
+`CI_API_KEY` in your shell, the same variable the `ci` CLI already reads
+(see [`docs/cli/ci.md`](../cli/ci.md)).
 
 Against a local dev stack the URL is your worktree's Caddy host — `make dev`
 prints it, and it looks like `https://<project>.localhost/api/mcp`.
@@ -173,11 +173,10 @@ editing.
 > publishing this section.** A CLI subcommand that speaks stdio to the client
 > and streamable HTTP to the appliance is being added concurrently by another
 > change. Nothing in the tree implements it as this was written: a search for
-> `mcp serve` and `--stdio` across the repo returns nothing, and the only CLI
-> binary declared today is `ci-import`
-> (`backend/apps/api/package.json` → `bin`). **Confirm the actual command name,
-> its binary, and its flags against the landed code before anyone follows this
-> recipe.**
+> `mcp serve` and `--stdio` across the repo returns nothing, and the CLI
+> binary is `ci` (`backend/apps/cli/package.json` → `bin`; `ci-import` is a
+> deprecated alias of it). **Confirm the actual command name, its binary, and
+> its flags against the landed code before anyone follows this recipe.**
 
 ### What it is for
 
@@ -217,13 +216,13 @@ Expressed against the only two flags that have been agreed —
 
 Open questions on that block, all of which the landed implementation settles:
 
-- **The binary name.** Today's binary is `ci-import`, so the subcommand may
-  land as `ci-import mcp serve --stdio` or under a new `ci` binary. Check
-  `backend/apps/api/package.json` → `bin`.
+- **The binary name.** Settled since this was written: the binary is `ci`, in
+  its own workspace, so the subcommand would land as `ci mcp serve --stdio`.
+  Check `backend/apps/cli/package.json` → `bin`.
 - **How it takes its configuration.** `CI_SERVER_URL` and `CI_API_KEY` are the
-  variables `ci-import` already uses (`docs/cli/ci-import.md`), which makes them
-  the obvious choice, but nothing has been read that confirms the bridge reads
-  them. It may take flags instead.
+  variables `ci` already uses (`docs/cli/ci.md`), which makes them the obvious
+  choice, but nothing has been read that confirms the bridge reads them. It may
+  take flags instead.
 
 Do not add flags to that command beyond `--stdio` on the strength of this
 document. Read the implementation.

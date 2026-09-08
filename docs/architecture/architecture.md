@@ -212,7 +212,7 @@ The table below is grouped roughly by concern rather than alphabetically.
 | `onboarding` | First-run flow and account bootstrap |
 | `connections` | OAuth clients (Google, MS, Facebook, Spotify, Slack, Reddit, …), token storage |
 | `etl` | Per-provider sync services (`Google/`, `Microsoft/`, `Facebook/`, `Spotify/`, `Steam/`, `GitHub/`, `Slack/`, `Reddit/`, `Signal/`), `SyncOrchestrator`, `PromoteService` (raw → graph) |
-| `import` | **The native import/ETL subsystem** (ported from the retired CI-Import-Tools): file datasources, the `unpack → parse → media → push` stage machine over the `ci_import` staging schema, the `ci-import` CLI, and `doctor` data-quality checks |
+| `import` | **The native import/ETL subsystem** (ported from the retired CI-Import-Tools): file datasources, the `unpack → parse → media → push` stage machine over the `ci_import` staging schema, and `doctor` data-quality checks. The `ci` CLI that drives it is its own workspace, `backend/apps/cli` |
 | `ingest` | The REST bulk-ingest plane (`/v1/*`): NDJSON + JSON-envelope batches for events, communications, contents, inventory, browser-activity, notes, positions, receipts, product-models and observations, plus `/v1/ingest/finish` + `/v1/ingest/status` |
 | `graph` | Graph primitives over the relational `ci.entities`/`ci.relationships` tables (no graph extension), plus `entity_identifiers`, `object_identifiers`, `item_relationships`, and bulk graph ingest |
 | `memory` | High-level domain services: `PersonService`, `PlaceService`, `EventService`, `ContentService`, `FileService`, `ItemService`, `ConceptService`, `CommunicationService`, `UserContextService`, the merge/duplicate services (`PersonMergeService`, `ObjectMergeService`, `MergeCandidateService`, …), the object-identity services (`ObjectMintService`, `ObjectResolutionService`, `ProductModelService`, `ReceiptService`) and `GraphDeltaWriter` |
@@ -386,7 +386,7 @@ throughput, and rows become searchable when the pipeline's `index.*` stages (or 
 `/api/maintenance/search-index/backfill` safety net) reach them. See
 [api/rest.md](../api/rest.md#ingest-bulk-capture-write-path),
 [api/graphql.md §4.7](../api/graphql.md#47-bulk-ingest-mutations-the-importer-surface--detailed),
-[docs/cli/ci-import.md](../cli/ci-import.md),
+[docs/cli/ci.md](../cli/ci.md),
 and the [bulk load runbook](../../backend/apps/api/db/postgres/BULK_LOAD_RUNBOOK.md).
 
 ---

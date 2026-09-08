@@ -17,7 +17,7 @@ any other very large (~1M-row) historical load. Companion to the
 
 Which one you are on depends on who is loading:
 
-- **The native import domain** (`ci-import`, and the `/sources/import` wizard) uses no HTTP
+- **The native import domain** (the `ci` CLI, and the `/sources/import` wizard) uses no HTTP
   at all. `PushStage` injects the destination services and calls them in-process —
   `CommunicationService`, `ContentService`, `EventService`, `ItemService`, `PositionService`,
   `BrowserActivityService`, `GraphIngestService` — reading and pushing staged rows
@@ -117,7 +117,7 @@ large load, recreate them after (one bulk build beats N row-by-row updates).
 #    ./.bulk-load-indexes.json so recreate is byte-for-byte reversible
 yarn workspace @ci/be-api run exec scripts/bulk-load-indexes.ts drop
 
-# 2. run the import (ci-import, /v1/*, or the GraphQL bulk mutations)
+# 2. run the import (the `ci` CLI, /v1/*, or the GraphQL bulk mutations)
 
 # 3. after the load — recreate every dropped index from the saved defs
 yarn workspace @ci/be-api run exec scripts/bulk-load-indexes.ts recreate
@@ -242,7 +242,7 @@ Guidance for a very large historical `position` load:
 #    compression policy in psql
 # 1. drop deferrable secondary indexes
 yarn workspace @ci/be-api run exec scripts/bulk-load-indexes.ts drop
-# 2. push the data, time-ordered — `ci-import` for an archive, or NDJSON to
+# 2. push the data, time-ordered — `ci` for an archive, or NDJSON to
 #    POST /v1/{events,communications,contents,inventory,browser-activity,positions},
 #    or the GraphQL bulk mutations (createEvents / createCommunications /
 #    createContents / createInventoryItems / createBrowserActivities); then sync

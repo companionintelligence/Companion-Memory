@@ -2,11 +2,7 @@
   "name": "@ci/be-api",
   "version": "0.0.0",
   "private": true,
-  "bin": {
-    "ci-import": "dist/src/domains/import/cli/main.js"
-  },
   "scripts": {
-    "ci-import": "ts-node -r tsconfig-paths/register -r @swc/register src/domains/import/cli/main.ts",
     "dev": "DOTENV_CONFIG_PATH=../../../.env nodemon --watch src --watch config --watch ../../../.env --exec ts-node -r tsconfig-paths/register -r @swc/register src/main.ts",
     "build": "yarn tsc --build --verbose && yarn tsc-alias --verbose",
     "clean": "rimraf dist",

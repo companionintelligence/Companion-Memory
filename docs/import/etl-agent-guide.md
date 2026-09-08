@@ -31,7 +31,7 @@ because the next agent will act on it.
 > `entities.unresolved`.
 
 > **This file has already been wrong once, in the worst direction.** The revision
-> written against `5f29d3fdb` told you that `ci-import doctor` did not exist and
+> written against `5f29d3fdb` told you that `ci doctor` did not exist and
 > not to cite it. It had merged as [#2105](https://github.com/companionintelligence/CI-Server/pull/2105)
 > a few hours later, so every reader who believed §6 hand-typed a fifteen-query
 > baseline instead of running the nineteen-check suite that already existed. Two
@@ -40,7 +40,7 @@ because the next agent will act on it.
 > stage queue per kind and made the inbox per-user. Re-verify before you cite;
 > correcting what you find is part of your change.
 
-**Companion docs.** The command line: [`docs/cli/ci-import.md`](../cli/ci-import.md).
+**Companion docs.** The command line: [`docs/cli/ci.md`](../cli/ci.md).
 The last full acceptance pass, with real archive numbers:
 [`docs/runbooks/import-acceptance-2026-08.md`](../runbooks/import-acceptance-2026-08.md).
 The enrichment half that runs *after* an import:
@@ -59,11 +59,11 @@ this document.
 
 | Question | Answer lives in | Get it with |
 |---|---|---|
-| **Is the data it wrote sound?** | 23 checks over `ci.*`, `ci_search.*`, `ci.pipeline_*` | `ci-import doctor` — see [§6](#6-what-to-measure--ci-import-doctor). Ask this first; the four below are the drill-downs |
+| **Is the data it wrote sound?** | 23 checks over `ci.*`, `ci_search.*`, `ci.pipeline_*` | `ci doctor` — see [§6](#6-what-to-measure--ci-doctor). Ask this first; the four below are the drill-downs |
 | What ran? | `ci_import.import_runs.data_sources`, `ci_import.import_stages.kind` | `select label, status, percent, data_sources from ci_import.import_runs order by started_at;` |
 | How long? | `import_stages.duration_ms`, `.items_per_sec`, `.started_at/.finished_at` | `select kind, processed, total, round(duration_ms/1000.0,1) secs, items_per_sec from ci_import.import_stages where run_id = '…' order by seq;` |
 | What did it produce? | `import_stages.detail` (per stage), then the `ci.*` tables | `select jsonb_pretty(detail) from ci_import.import_stages where kind='push' and run_id='…';` |
-| **What did it drop?** | `detail->'summary'` on **every** stage (`consumed`/`produced`/`dropped`, `dropsByReason`, `gaps`); the older per-stage keys are still there — `detail->'sources'->N->'drops'` (parse), `detail->'rejected'` (unpack), `staged_items.push_status='failed'` + `.push_error` (push) | `ci-import doctor`, then the drop-ledger queries in [§6.2](#62-what-did-it-drop--the-single-most-useful-query-here) |
+| **What did it drop?** | `detail->'summary'` on **every** stage (`consumed`/`produced`/`dropped`, `dropsByReason`, `gaps`); the older per-stage keys are still there — `detail->'sources'->N->'drops'` (parse), `detail->'rejected'` (unpack), `staged_items.push_status='failed'` + `.push_error` (push) | `ci doctor`, then the drop-ledger queries in [§6.2](#62-what-did-it-drop--the-single-most-useful-query-here) |
 | Why? | `import_stages.error` **and `detail->'summary'->'failure'`** (the same facts as fields: `dataSource`, `file`, `destination`, `phase`), `staged_items.push_error`, `staged_entities.push_error`, then `ci.pipeline_dead_letters` for the enrichment half | `select kind, status, error, detail->'summary'->'failure' from ci_import.import_stages where error is not null;` |
 
 If the answer to any of those is "the table does not say", that is itself the
@@ -134,9 +134,9 @@ way round.
 | Per-service inbox drop folders | `.../import/sources/inboxFolders.ts`, fed by `.../import/sources/guides.ts` |
 | Acquisition (rename, EXDEV copy fallback, crash recovery) | `.../import/sources/localAcquire.ts` |
 | Scratch tree lifecycle | `.../import/services/ImportScratchService.ts` |
-| **Data-quality checks** (`ci-import doctor`) | `.../import/doctor/checks.ts`, `.../import/doctor/ImportDoctorService.ts` |
+| **Data-quality checks** (`ci doctor`) | `.../import/doctor/checks.ts`, `.../import/doctor/ImportDoctorService.ts` |
 | REST surface | `.../import/controllers/{ImportRunsController,ImportInboxController,ImportUploadsController,ImportDoctorController}.ts` |
-| CLI | `.../import/cli/` (see [`docs/cli/ci-import.md`](../cli/ci-import.md)) |
+| CLI | `backend/apps/cli/` — its own workspace, `@ci/cli` (see [`docs/cli/ci.md`](../cli/ci.md)) |
 | Web UI | `frontend/apps/web/src/pages/ImportPage/` (`StageBar.tsx`, `RunPipeline.tsx`, `wizard/LiveRun.tsx`, `useImportApi.ts`) and `frontend/apps/web/src/components/ImportActivity/` (the region pinned to the Import and Jobs pages) |
 
 ### 1.3 The four stages, and what each one can lose
@@ -1000,7 +1000,7 @@ yarn workspace @ci/be-api typecheck
 yarn workspace @ci/fe-web typecheck
 
 yarn workspace @ci/be-api test src/domains/import              # the whole import domain
-yarn workspace @ci/be-api test src/domains/import/cli          # just the CLI
+yarn workspace @ci/cli test                                    # the CLI (its own workspace)
 yarn workspace @ci/be-api test src/domains/import/push         # routing + mappers
 
 yarn prettier --write <every file you changed>                 # CI checks ts/tsx/js/mjs formatting separately from eslint
@@ -1078,7 +1078,7 @@ cd frontend/apps/web && API_PROXY_TARGET=http://127.0.0.1:3030 yarn dev --port 5
 
 The web app calls `/api/*`; Caddy (and the Vite dev proxy, `vite.config.ts`)
 **strips the `/api` prefix**. The API's own routes are `/import/*`, not
-`/api/import/*` — which is what the `ci-import` CLI and any direct `curl` must
+`/api/import/*` — which is what the `ci` CLI and any direct `curl` must
 use.
 
 ### 5.2 The environment variables
@@ -1089,7 +1089,7 @@ in `config/default.json`:
 | Variable | Default | What |
 |---|---|---|
 | `CI_IMPORT_INBOX_DIR` | `/var/lib/ci-import/inbox` | The **root** of the inbox. `ImportInboxService` scans only `<root>/<user>/` — see §5.3. Importer-owned; readable without any root configured |
-| `CI_IMPORT_INBOX_HOST_DIR` | *(empty)* | Where `CI_IMPORT_INBOX_DIR` lives **on the host** when the API is a container and the inbox is a bind mount. The scan returns it re-rooted per user as `displayDir`, which the import page and `ci-import inbox` show instead of the in-container `inboxDir`. A label only — never resolved, never handed to the resolvers. Empty on bare metal |
+| `CI_IMPORT_INBOX_HOST_DIR` | *(empty)* | Where `CI_IMPORT_INBOX_DIR` lives **on the host** when the API is a container and the inbox is a bind mount. The scan returns it re-rooted per user as `displayDir`, which the import page and `ci inbox` show instead of the in-container `inboxDir`. A label only — never resolved, never handed to the resolvers. Empty on bare metal |
 | `CI_IMPORT_UPLOADS_DIR` | `/var/lib/ci-import/uploads` | Where `POST /import/uploads` lands multipart bytes |
 | `CI_IMPORT_SCRATCH_DIR` | `/var/tmp/ci-import` | Per-run working tree. **Not `/tmp`** — `/tmp` is tmpfs on a stock appliance, so a large export would consume RAM until the machine died |
 | `CI_IMPORT_ROOTS` | `[]` | Host paths an API caller may name. **Parsed as JSON** (`"__format": "json"`), so it must be a JSON array literal: `CI_IMPORT_ROOTS=["/path/one","/path/two"]`. A bare path silently yields nothing |
@@ -1169,7 +1169,7 @@ cp -Rc /path/to/corpus/* "$INBOX"/           # macOS: -c is an APFS clone — in
 cp -r --reflink=auto /path/to/corpus/* "$INBOX"/   # Linux equivalent on btrfs/XFS
 ```
 
-The upload path (`ci-import import <file>`, or the web drop zone) copies instead
+The upload path (`ci import <file>`, or the web drop zone) copies instead
 and leaves the original alone.
 
 There is one deliberate exception that saves you: `ImportStageListener` will
@@ -1179,12 +1179,12 @@ disk; the alternative costs the archive. If you see
 `Import staged no records; keeping its scratch tree rather than reclaiming it` in
 the logs, your data is still on disk under `CI_IMPORT_SCRATCH_DIR`.
 
-`ci-import inbox` also **scans by default** and imports only with `--start`, for
+`ci inbox` also **scans by default** and imports only with `--start`, for
 the same reason — a mistake is not a re-run away.
 
 ### 5.4 The CLI
 
-Full reference: [`docs/cli/ci-import.md`](../cli/ci-import.md). It is an HTTP
+Full reference: [`docs/cli/ci.md`](../cli/ci.md). It is an HTTP
 client against a running appliance, never an embedded server (running
 `ImportModule` in a CLI process would start a *second* set of stage workers
 racing the server's for the same claims).
@@ -1192,7 +1192,7 @@ racing the server's for the same claims).
 ```bash
 export CI_SERVER_URL=http://localhost:3030
 export CI_API_KEY=…                       # web UI → Settings → API keys, or `make testuser`
-yarn workspace @ci/be-api ci-import <command>
+yarn workspace @ci/cli dev <command>          # or `ci <command>` once installed
 ```
 
 | Command | Does |
@@ -1204,12 +1204,12 @@ yarn workspace @ci/be-api ci-import <command>
 | `runs [runId] [--wait]` | Runs and their stage bars |
 | `push [--run <id>] [--dry-run]` | Appends a `push` stage to every run whose rows are staged and uncommitted |
 | `stats` | `ci.*` row counts, search-index coverage, queue depth, run rollup |
-| **`doctor [--list] [--check <id>] [--failures-only] [--timeout <ms>] [--json]`** | **The twenty-three data-quality checks over what the import actually wrote. See [§6](#6-what-to-measure--ci-import-doctor)** |
+| **`doctor [--list] [--check <id>] [--failures-only] [--timeout <ms>] [--json]`** | **The twenty-three data-quality checks over what the import actually wrote. See [§6](#6-what-to-measure--ci-doctor)** |
 | `backfill [stages…] [--list]` | The post-import enrichment chain via `POST /api/maintenance/orchestrate` (NDJSON-streamed, because a `search_index` backfill outlives undici's 300s headers timeout) |
 
 Exit codes: **0** success, **2** a failure you can fix (bad path, missing key,
 unreachable server, an unknown `--check` id), **1** a failure the appliance owns.
-`doctor` also exits **1** when its gate trips — see [§6](#6-what-to-measure--ci-import-doctor);
+`doctor` also exits **1** when its gate trips — see [§6](#6-what-to-measure--ci-doctor);
 distinguish the two by whether stdout carried a report.
 
 `--stages` warns when it omits `media`, because that stage uploads the archive's
@@ -1253,23 +1253,23 @@ select n.nspname, t.typname from pg_type t
 
 ---
 
-## 6. What to measure — `ci-import doctor`
+## 6. What to measure — `ci doctor`
 
 **Start here. Do not hand-type a baseline.**
 [#2105](https://github.com/companionintelligence/CI-Server/pull/2105) shipped the
 audit that used to live in a scratch `psql` buffer as a nineteen-check suite; the
 registry holds **23** today. Each check is a regression detector for a defect
 that really shipped (the ones in §3, mostly), and where a live predicate exists
-the check **mirrors** it, so the two are maintained together. `ci-import doctor
+the check **mirrors** it, so the two are maintained together. `ci doctor
 --list` is the authoritative count — do not trust the number in this file, or in
 any other, over the registry.
 
 ```bash
-yarn workspace @ci/be-api ci-import doctor                 # the table
-yarn workspace @ci/be-api ci-import doctor --failures-only # hide the clean ones
-yarn workspace @ci/be-api ci-import doctor --list          # the vocabulary, running nothing
-yarn workspace @ci/be-api ci-import doctor --json          # for a loop
-yarn workspace @ci/be-api ci-import doctor --check comms-missing-thread-id --json
+yarn workspace @ci/cli dev doctor                 # the table
+yarn workspace @ci/cli dev doctor --failures-only # hide the clean ones
+yarn workspace @ci/cli dev doctor --list          # the vocabulary, running nothing
+yarn workspace @ci/cli dev doctor --json          # for a loop
+yarn workspace @ci/cli dev doctor --check comms-missing-thread-id --json
 ```
 
 Under it are two GET routes, so an agent holding an api key and no database
@@ -1488,7 +1488,7 @@ theory on it, and was wrong. Handle-based sources resolve through `name`
 identifiers; there is no `handle` row in `ci.entity_identifiers` and none is
 needed.
 
-So: run `ci-import backfill extract_people link_communications` (or the whole
+So: run `ci backfill extract_people link_communications` (or the whole
 chain) and only then believe a participant, vector, or geocode finding. Each
 check's `remedy` names the leg that repairs it — read it before concluding a
 parser is at fault.
@@ -1773,7 +1773,7 @@ Full pipeline operations: [`docs/runbooks/pipeline-operations.md`](../runbooks/p
 
 ### 6.5 The same invariants by hand, when you have psql and no api key
 
-**`ci-import doctor` runs these for you** — `position-not-a-place-name` and
+**`ci doctor` runs these for you** — `position-not-a-place-name` and
 `person-name-garbage` are the same predicates, maintained next to the guards they
 mirror, and the doctor's version is the one that will not drift. Reach for the
 queries below only when you have a psql prompt and no api key, or when you are
@@ -1868,7 +1868,7 @@ Listed so the next agent does not mistake silence for confidence.
    index the other eight tables in that list carry, is not written down anywhere
    in the tree. The stale comments in `PushStage.ts` suggest the second reading;
    treat that as a hypothesis, not a finding.
-3. **The doctor's `medium` checks have no agreed target.** `ci-import doctor`
+3. **The doctor's `medium` checks have no agreed target.** `ci doctor`
    exists and is the baseline (§6) — the previous revision of this list said it
    did not exist, which was wrong from the day
    [#2105](https://github.com/companionintelligence/CI-Server/pull/2105) merged.
@@ -1897,7 +1897,7 @@ Listed so the next agent does not mistake silence for confidence.
 
 If you read nothing else:
 
-- **Run `ci-import doctor` before you believe an import.** Twenty-one checks, six
+- **Run `ci doctor` before you believe an import.** Twenty-one checks, six
   of them mirroring a live guard (one more mirrors a migration; the other
   fourteen have no twin); exit 1 on any `high` finding **or** any `high`
   check that could not answer. `--json` for a loop. `--list` is the
@@ -1945,7 +1945,7 @@ _Written 2026-08-19 against `origin/main` `5f29d3fdb`; **re-verified and
 corrected against `93fc6d8a9` the same day**, with every file path, table,
 column, env var, command, flag and cited PR re-checked against the tree, and
 every number re-measured against a live appliance. The corrections that pass
-were: `ci-import doctor` exists (§6, §7.3); the stage queue is per kind, not one
+were: `ci doctor` exists (§6, §7.3); the stage queue is per kind, not one
 appliance-wide slot (§1.1, §1.4, §6.1); the inbox is per user with per-service
 folders (§5.2, §5.3); the inbox budget table lost a constant that no longer
 exists (§3.5)._

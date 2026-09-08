@@ -6,7 +6,7 @@
 # ---------------
 # Acceptance testing the importers needs a corpus, and the best corpus is the
 # machine you are sitting at. Assembling it by hand is a half-hour of `cp` and
-# `ci-import` invocations that nobody remembers exactly the same way twice, and
+# `ci` invocations that nobody remembers exactly the same way twice, and
 # two of the steps are genuinely dangerous to improvise:
 #
 #   - THE INBOX CONSUMES WHAT IT IMPORTS, by rename. Point it at
@@ -109,7 +109,7 @@ list_sources() {
 
 # Stage a source into the inbox and echo the unit path it created.
 #
-# The path matters: `ci-import inbox --start` with no `--units` starts EVERY
+# The path matters: `ci inbox --start` with no `--units` starts EVERY
 # ready unit under one label, so a unit left behind by an interrupted run gets
 # swept into the next source's label. That is how 118,391 Spotify items were
 # once recorded as a Twitter import.
@@ -148,7 +148,7 @@ stage() {
       ;;
   esac
 
-  # The BASENAME, not the absolute path: `ci-import inbox --units` matches
+  # The BASENAME, not the absolute path: `ci inbox --units` matches
   # against the unit paths the scan reports, and the scan reports them relative
   # to the inbox root. Passing an absolute path fails with "Not in the inbox
   # scan" and imports nothing.
@@ -173,7 +173,7 @@ import_one() {
   # `--units` pins this run to the unit just staged. Without it the run would
   # also claim anything else sitting in the inbox and label it as this source.
   printf '  %-12s importing...\n' "$name"
-  (cd "$REPO_ROOT" && yarn workspace @ci/be-api ci-import inbox --start \
+  (cd "$REPO_ROOT" && yarn workspace @ci/cli dev inbox --start \
       --units "$unit" --label "local-$name" --wait --timeout 7200) 2>&1 | tail -3
 
   elapsed=$(( $(date +%s) - started ))
