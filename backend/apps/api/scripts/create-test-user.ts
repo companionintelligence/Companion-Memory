@@ -4,6 +4,7 @@ import bcrypt from 'bcrypt';
 import { DataSource } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
+import { serverTimezone } from '@ci/common/time/zoned';
 import config from '@ci/configuration';
 import { ApiKeyEntity } from '@ci/domains/auth/entities/ApiKeyEntity';
 import { UserEntity } from '@ci/domains/user';
@@ -20,6 +21,7 @@ import { UserEntity } from '@ci/domains/user';
  *   TEST_USER_PASSWORD  [generated and printed]
  *   TEST_KEY_NAME       [test-client]
  *   TEST_KEY_SCOPES     [""]  comma-separated; "" means full user authority
+ *   TEST_USER_TIMEZONE  [this process's zone, i.e. TZ, else UTC]
  *
  * The scope default is empty on purpose, and it is not the lazy choice. Scope
  * enforcement is deny-by-default (see RequireScopes): a key with a NON-EMPTY scope
@@ -66,6 +68,13 @@ function mintKey() {
   const name = process.env.TEST_USER_NAME ?? 'Test User';
   const keyName = process.env.TEST_KEY_NAME ?? 'test-client';
 
+  // The account is flagged onboarded below and is driven by an API key, so
+  // neither the FTUE wizard nor ClientTimezoneInterceptor will ever fill this
+  // in — leaving `ci.users.timezone` on its 'UTC' column default and the
+  // planner placing this user's work against a 09:00-17:00 UTC workday. The
+  // box's own zone is the best guess available without a browser to ask.
+  const timezone = process.env.TEST_USER_TIMEZONE ?? serverTimezone();
+
   // Empty is both the default and a meaningful value — the grandfathered "full user
   // authority" key. See the scope note in the header before narrowing this.
   const rawScopes = process.env.TEST_KEY_SCOPES ?? '';
@@ -110,6 +119,7 @@ function mintKey() {
           name,
           email,
           password: await bcrypt.hash(password, config.auth.local.saltRounds),
+          timezone,
           // Skip the FTUE wizard: a client authenticating with an API key never walks
           // it, and an un-onboarded user trips guards on some surfaces.
           onboarded: true,

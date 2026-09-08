@@ -7,6 +7,7 @@ import { LoggerService } from '@ci/common/logging';
 import {
   EventEntity,
   CalendarEventService,
+  LIVE_EVENT_SQL,
   PersonService,
   UserContextService,
   type Event,
@@ -56,8 +57,14 @@ const REVISABLE_BLOCK_STATUSES = new Set(['cancelled', 'no_show', 'skipped']);
  * null-status block from `list`, `findActiveForTask` and `listActiveTaskIds`.
  * A block with no status has not been cancelled; it is confirmed by default,
  * which is how `dailyAggregateSql` reads the same column.
+ *
+ * Aliased to the calendar's own {@link LIVE_EVENT_SQL} rather than restating
+ * it: this file and `CalendarEventService.findInRange` used to carry separate
+ * literals, and they drifted — findInRange forgot `skipped`, so a skipped block
+ * was invisible to every read here while still occupying its slot in the gap
+ * solver. One constant, one vocabulary.
  */
-const LIVE_BLOCK_SQL = "COALESCE(event.status, 'confirmed') NOT IN ('cancelled', 'no_show', 'skipped')";
+const LIVE_BLOCK_SQL = LIVE_EVENT_SQL;
 
 /**
  * Floor on how long a single owner-local calendar day can be: 24 hours less the

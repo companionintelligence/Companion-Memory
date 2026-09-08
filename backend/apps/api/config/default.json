@@ -241,7 +241,7 @@
     "import.page": true,
     "planning.enabled": true,
     "planning.page": true,
-    "planning.emptyState": false,
+    "planning.emptyState": true,
     "self.page": true,
     "stats.page": true,
     "schedule.page": true,

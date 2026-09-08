@@ -752,3 +752,101 @@ describe('slotForecastLine — what the drawer is allowed to claim', () => {
     });
   });
 });
+
+/**
+ * The zone the grid draws in is the OWNER'S, not the browser's.
+ *
+ * Every case here pins the process to a zone that disagrees with the profile
+ * one being passed in — the browser zone is exactly what the old
+ * `getHours()`-based geometry read, so a test that let the two coincide would
+ * pass against the bug this closes.
+ */
+describe('scheduleGeometry — drawn in the profile zone, not the browser one', () => {
+  const PROFILE = 'America/New_York';
+
+  /** 09:00–09:30 in New York on Mon 03 Aug 2026, exactly as the placer books it. */
+  const placedAtNine = event({
+    startTime: '2026-08-03T13:00:00Z',
+    endTime: '2026-08-03T13:30:00Z',
+  });
+
+  it('puts a block the placer booked at 09:00 on the 09:00 row', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+      const span = spanForDay(placedAtNine, monday, PROFILE);
+
+      expect(span?.leftPct).toBeCloseTo((9 * 60 * 100) / 1440, 5);
+    });
+  });
+
+  it('is the wrong hour — and the wrong day — when the browser zone is used instead', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      // Tokyo is nine hours ahead of UTC, so the same instant reads 22:00 there
+      // and the Monday row does not even contain it. This is what the owner saw.
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'));
+
+      expect(spanForDay(placedAtNine, monday)?.leftPct).toBeCloseTo((22 * 60 * 100) / 1440, 5);
+    });
+  });
+
+  it('keeps a late-evening block on the profile day rather than the UTC one', () => {
+    withTimeZone('UTC', () => {
+      // 22:00 Monday in New York is Tuesday 02:00 UTC.
+      const lateEvening = event({
+        startTime: '2026-08-04T02:00:00Z',
+        endTime: '2026-08-04T03:00:00Z',
+      });
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+      const tuesday = addDays(monday, 1, PROFILE);
+
+      expect(spanForDay(lateEvening, monday, PROFILE)?.leftPct).toBeCloseTo((22 * 60 * 100) / 1440, 5);
+      expect(spanForDay(lateEvening, tuesday, PROFILE)).toBeNull();
+    });
+  });
+
+  it('drops a chip at the profile wall-clock time the cursor was over', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+      const at = dropInstant(monday, 15 / 24, PROFILE);
+
+      // 15:00 in New York on 03 Aug 2026 (EDT, UTC-4).
+      expect(at.toISOString()).toBe('2026-08-03T19:00:00.000Z');
+    });
+  });
+
+  it('moves a dragged chip by the grab delta in profile wall clock', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+      const at = movedStart(monday, 15 / 24, 30 * 60_000, PROFILE);
+
+      expect(at.toISOString()).toBe('2026-08-03T18:30:00.000Z');
+    });
+  });
+
+  it('paints the rhythm strip against the profile day, not the browser one', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      // 12:00–18:00 UTC is the 'afternoon' daypart; 08:00–14:00 in New York.
+      const day: RhythmDay = {
+        date: '2026-08-03',
+        dow: 'Mon',
+        clusters: [
+          {
+            clusterId: 'c1',
+            name: 'Deep work',
+            l0Class: 'WORK',
+            pOccur: 1,
+            scheduled: false,
+            daypartProbs: [{ label: 'afternoon', probability: 1 }],
+          },
+        ],
+      };
+      const monday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+      const cells = rhythmCells(monday, (key) => (key === '2026-08-03' ? day : undefined), PROFILE);
+
+      // Slot 36 is 09:00 profile time = 13:00 UTC, inside the band.
+      expect(cells[36]).toBe(1);
+      // Slot 4 is 01:00 profile time = 05:00 UTC, outside it.
+      expect(cells[4]).toBe(0);
+    });
+  });
+});

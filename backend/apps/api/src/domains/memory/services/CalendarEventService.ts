@@ -166,6 +166,50 @@ const MAX_RANGE_EVENTS = 2000;
 const SCHEDULE_EVENT_TYPES = ['calendar_event', 'meeting', 'appointment', 'planned_block'] as const;
 
 /**
+ * "This event did not happen" — the one status vocabulary the calendar and the
+ * planner share.
+ *
+ * It is exported because it used to be duplicated, and the copies drifted:
+ * `findInRange` excluded ('cancelled', 'no_show') while the planner's own
+ * LIVE_BLOCK_SQL excluded ('cancelled', 'no_show', 'skipped'). A `skipped`
+ * block was therefore invisible to every planned-block read while still
+ * occupying its slot in the gap solver's occupancy set — the solver refused to
+ * place into a window that nothing would ever draw.
+ *
+ * Always compare through COALESCE: `ci.events.status` was nullable until
+ * 20260908000139 and `NULL NOT IN (...)` is UNKNOWN, not TRUE, so a bare
+ * `NOT IN` silently drops null-status rows.
+ */
+export const DEAD_EVENT_STATUSES = ['cancelled', 'no_show', 'skipped'] as const;
+
+/** SQL fragment for "this event still counts", for `event`-aliased builders. */
+export const LIVE_EVENT_SQL = `COALESCE(event.status, 'confirmed') NOT IN (${DEAD_EVENT_STATUSES.map(
+  (s) => `'${s}'`,
+).join(', ')})`;
+
+/**
+ * Whether a planned block is still one the calendar would draw.
+ *
+ * A block dies two ways and BOTH have to be recognised here, because the
+ * planning identity (`task:<uuid>`) is derived and therefore single-use:
+ * `unschedule` tombstones it, while an accepted `event_revise` confirmation
+ * leaves `is_deleted = false` and writes `status = 'cancelled'`. Matching only
+ * the tombstone meant a cancelled block was handed back verbatim by the dedup
+ * below — so the task reported itself placed, nothing rendered, and every retry
+ * re-matched the same dead row. That is the same permanent failure the
+ * tombstone branch was written for, reached through the status door.
+ */
+function isLivePlannedBlock(row: EventEntity): boolean {
+  if (row.isDeleted) {
+    return false;
+  }
+
+  const status = row.status ?? 'confirmed';
+
+  return !(DEAD_EVENT_STATUSES as readonly string[]).includes(status);
+}
+
+/**
  * Spanning-aggregate service for the events CTI split: an event is ONE logical
  * entity persisted as a `ci.entities` base row (discriminated 'Event', the
  * SOLE owner of title/description — see {@link EventBaseEntity}) plus a
@@ -439,7 +483,7 @@ export class CalendarEventService {
         // Restore and retime it instead. The return-verbatim contract above is
         // unchanged for capture sources, where the identity comes from the
         // provider and a deletion must outlive the next sync.
-        if (existing.isDeleted && item.source_type === 'planning') {
+        if (item.source_type === 'planning' && !isLivePlannedBlock(existing)) {
           return this.restorePlannedBlock(context, existing.id, item);
         }
 
@@ -793,7 +837,7 @@ export class CalendarEventService {
       // NULL, not TRUE — the event would exist, be returned by every other
       // read, and be missing from the calendar with nothing to explain why.
       // Same guard as dailyAggregateSql's meeting counts.
-      .andWhere("COALESCE(event.status, 'confirmed') NOT IN ('cancelled', 'no_show')")
+      .andWhere(LIVE_EVENT_SQL)
       .andWhere('event.start_time >= :lowerBound', { lowerBound })
       .andWhere('event.start_time < :to', { to })
       .andWhere('COALESCE(event.end_time, event.start_time) >= :from', { from })

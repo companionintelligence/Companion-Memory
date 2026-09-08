@@ -7,7 +7,7 @@ import { EventService } from '@ci/domains/events';
 
 import { EventBaseEntity } from '../../entities/EventBaseEntity';
 import { EventEntity } from '../../entities/EventEntity';
-import { CalendarEventService } from '../CalendarEventService';
+import { CalendarEventService, DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from '../CalendarEventService';
 import { GraphDeltaWriter } from '../GraphDeltaWriter';
 
 import { noopGraphDeltaWriter } from './harness/noopGraphDeltaWriter';
@@ -138,13 +138,19 @@ describe('CalendarEventService.findInRange — the calendar read path', () => {
     expect(take).toBe(2000);
   });
 
-  it('excludes cancelled and no-show but keeps tentative', async () => {
+  it('excludes every "did not happen" status but keeps tentative', async () => {
     await setup();
 
     await service.findInRange(ctx, from, to);
 
     const status = clauseWith('event.status');
-    expect(status).toContain("NOT IN ('cancelled', 'no_show')");
+    // One vocabulary, shared with the planner: this clause and the planned-block
+    // reads used to carry separate literals and drifted apart over `skipped`, so
+    // a skipped block was invisible to every read while still occupying its slot
+    // in the gap solver. Assert through the constant, not a copy of it.
+    for (const dead of DEAD_EVENT_STATUSES) {
+      expect(status).toContain(`'${dead}'`);
+    }
     // A maybe on the calendar is still a claim on the slot.
     expect(status).not.toContain('tentative');
   });
@@ -154,13 +160,13 @@ describe('CalendarEventService.findInRange — the calendar read path', () => {
 
     await service.findInRange(ctx, from, to);
 
-    // ci.events.status is still nullable in the database, and `NOT IN` is
-    // three-valued: without the COALESCE a NULL-status row makes the predicate
-    // NULL, so the event exists, is returned by every other read, and is
-    // missing from the calendar with nothing to explain why.
-    expect(clauseWith('event.status')).toBe(
-      "COALESCE(event.status, 'confirmed') NOT IN ('cancelled', 'no_show')",
-    );
+    // `NOT IN` is three-valued: without the COALESCE a NULL-status row makes
+    // the predicate NULL, so the event exists, is returned by every other read,
+    // and is missing from the calendar with nothing to explain why.
+    // 20260908000139 has since made the column NOT NULL, but the COALESCE stays
+    // — it is what keeps this read correct against a database that has not
+    // taken that migration yet.
+    expect(clauseWith('event.status')).toBe(LIVE_EVENT_SQL);
   });
 
   it('excludes soft-deleted rows', async () => {

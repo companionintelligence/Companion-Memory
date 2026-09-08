@@ -14,7 +14,7 @@ Checked against the workflow files in this checkout on 2026-09-07, not from memo
 | 3.2 | Lint `scripts/benchmark/` | **Applied**, and pinned harder than proposed: `ruff==0.16.1` rather than the bare `pip install ruff` written below, so a new ruff release cannot turn a passing PR red on its own. The pin is the version the root `uv.lock` resolves. |
 | 3.3 | Fix `e2e.yml`'s services | **Applied for `object-store`; `hbpe-service` deliberately rejected.** See the note in §3.3 — the workflow now carries a specific, sourced argument that the seed does not need the sidecar, which contradicts the 2026-08-26 baseline. That contradiction is unresolved. |
 | 3.3 | Dispatch the expensive lanes as a release gate | **Not applied.** Nothing enforces it; it is a procedure in §7 of the QA programme, and only as good as whoever fills that table in. |
-| 3.4 | Branch protection | **Not applied.** Re-verified today via the API (command in §3.4): no `required_status_checks` key at all, `required_approving_review_count: 0`. |
+| 3.4 | Branch protection | **APPLIED 2026-09-08.** `main` now requires six contexts — `Lint root`, `Lint backend`, `Lint frontend`, `Lint format`, `Type check backend`, `Type check frontend` — with `strict: false` and `enforce_admins: false`. `required_approving_review_count` is still 0; reviews were not part of this recommendation. |
 | 3.5 | Mandatory `ci-local` per PR | **Not applied**, and now largely moot for lint/typecheck, which §3.1 covers automatically. |
 
 ## 1. What actually runs today
@@ -24,7 +24,7 @@ Checked against the workflow files in this checkout on 2026-09-07, not from memo
 The two facts this argument actually rests on, both re-checked 2026-09-07:
 
 - **Most workflows still do not self-trigger.** As of today, four of fourteen do (`pr-gate`, `benchmark-unit`, `mobile-release`, `desktop-release`); the rest are `workflow_dispatch`-only, so an absent check means nobody started it. Re-derive before quoting: `grep -lE '^[[:space:]]+(pull_request|push|schedule):' .github/workflows/*.yml`.
-- **`main`'s branch protection carries no `required_status_checks` and `required_approving_review_count: 0`.** So a PR can still merge with nothing run and nobody's approval — including a PR whose `pr-gate.yml` run is red. §3.1 shipping changed what *runs*; it changed nothing about what *blocks*.
+- **`main`'s branch protection carried no `required_status_checks` and `required_approving_review_count: 0`** — so a PR could merge with nothing run and nobody's approval, including one whose `pr-gate.yml` run was red. §3.1 shipping changed what *runs* and changed nothing about what *blocks*; §3.4, applied 2026-09-08, is what closed that gap for the six lint/typecheck contexts. Approvals are still not required.
 
 Why it is like this: GitHub Actions was costing the org roughly **$563/month**, almost all hosted compute for checks that run on hardware the org already owns (`docs/CI.md`). Gating was a reasonable response to a real bill. The problem is not that it was gated — it is what the gating left behind.
 
@@ -114,15 +114,20 @@ If the sidecar does turn out to be needed, note that `hbpe-service` has no host 
 
 ### 3.4 Branch protection
 
-**Still open.** Re-verified 2026-09-07 — this is the one claim in the document that cannot be checked from the tree, so check it from the API rather than trusting this line:
+**Applied 2026-09-08.** This is the one claim in the document that cannot be checked from the tree, so check it from the API rather than trusting this line:
 
 ```bash
 gh api repos/companionintelligence/CI-Server/branches/main/protection --jq 'keys'
 ```
 
-Today that returns `required_pull_request_reviews`, `required_signatures`, `enforce_admins`, `required_linear_history`, `allow_force_pushes`, `allow_deletions`, `block_creations`, `required_conversation_resolution`, `lock_branch`, `allow_fork_syncing` — **no `required_status_checks`** — with `required_approving_review_count: 0`.
+It now returns a `required_status_checks` block carrying the six contexts below. Two deliberate choices in it:
 
-Repository settings, not a file change — someone with admin has to do this in the GitHub UI or via the API:
+- **`strict: false`** — a PR is not forced to rebase every time an unrelated commit lands on `main`. On a repo merging this often, `strict: true` would mean near-continuous rebasing for no correctness gain, since these six lanes do not depend on the merge base.
+- **`enforce_admins: false`** — an admin can still force an emergency fix through. The point of the gate is to stop an accident, not to remove the escape hatch.
+
+Three contexts were deliberately EXCLUDED, and the reasoning matters if anyone widens this later. `Mobile native guards`, `Desktop native guards`, `Build web bundle`, `Type check packages` and `Migration versions` have no `ci.yml` twin, so requiring them would mean only a `pull_request` run could ever satisfy the rule and a dispatched `ci.yml` on a hotfix could not clear it. `Run frontend tests` is sharded here (`(1/4)`..`(4/4)`) and unsharded in `ci.yml`, so the names do not coincide. And `unit`/`regression` from `benchmark-unit.yml` are path-filtered to `scripts/benchmark/**`, so they do not report at all on most PRs — requiring them would block every PR that does not touch that directory.
+
+Repository settings, not a file change — it was applied with:
 
 ```jsonc
 // PATCH /repos/companionintelligence/CI-Server/branches/main/protection

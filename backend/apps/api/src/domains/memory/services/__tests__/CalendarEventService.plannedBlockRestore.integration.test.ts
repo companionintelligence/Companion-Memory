@@ -148,6 +148,38 @@ describeWithDb('CalendarEventService — re-placing a tombstoned planned block (
     await expect(service.findById(ctx, first.id)).resolves.not.toBeNull();
   });
 
+  it('re-places a CANCELLED block too — a block dies by status as well as by tombstone', async () => {
+    const [first] = await service.create(ctx, placement(FIRST_START, FIRST_END));
+
+    // What an accepted `event_revise` confirmation does: it does NOT tombstone,
+    // it writes a dead status and leaves is_deleted false. Matching only the
+    // tombstone left this row to be handed back verbatim, so the task reported
+    // itself placed with nothing on the calendar — the same permanent failure,
+    // reached through the status door.
+    await dataSource.query('UPDATE ci.events SET status = $2 WHERE event_id = $1', [first.id, 'cancelled']);
+
+    const [second] = await service.create(ctx, placement(SECOND_START, SECOND_END));
+
+    expect(second.id).toBe(first.id);
+    expect(second.startTime).toEqual(SECOND_START);
+
+    const [row] = await dataSource.query('SELECT status, is_deleted FROM ci.events WHERE event_id = $1', [
+      first.id,
+    ]);
+    expect(row).toEqual({ status: 'planned', is_deleted: false });
+  });
+
+  it('leaves a LIVE planned block alone, so a double-place is still idempotent', async () => {
+    const [first] = await service.create(ctx, placement(FIRST_START, FIRST_END));
+    const [second] = await service.create(ctx, placement(SECOND_START, SECOND_END));
+
+    // Nothing died, so the dedup contract still holds: same row, original slot.
+    // Without this the restore branch would quietly become a re-timing write on
+    // every duplicate create.
+    expect(second.id).toBe(first.id);
+    expect(second.startTime).toEqual(FIRST_START);
+  });
+
   it('still returns a tombstoned CAPTURE row untouched, so a deleted import stays deleted', async () => {
     // The identity a real calendar sync mints, built through the same
     // constructor the ETL uses — `source_system`/`source_id` are branded types,

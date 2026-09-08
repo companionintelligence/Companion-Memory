@@ -7,16 +7,25 @@
  * They are kept apart from {@link VerticalCalendar} because they are pure
  * date/geometry functions with no React in them — that is what lets them be
  * tested directly rather than through a rendered grid.
+ *
+ * ═══ WHICH CLOCK ═══
+ * Every day boundary and minute-of-day here is read in the OWNER'S PROFILE
+ * ZONE — the same zone the backend places planned blocks in. See
+ * {@link ./zonedClock} for the whole argument and for the read/write helpers.
+ * The trailing `zone` argument defaults to the browser's so a caller with no
+ * profile zone keeps today's behaviour rather than silently moving to UTC.
  */
 
 import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
 import { type ActivityClass, normalizeClass } from '@/lib/activityPalette';
 import { weekClusterVisible } from '@/lib/forecastDisplay';
+import { detectBrowserTimeZone } from '@/lib/timezone';
 
 import { addDays, sameLocalDay } from './nowNext';
 import { packItemLanes, type EventSpan } from './scheduleClusters';
 import { localDayKey } from './scheduleToTimeline';
+import { instantAtDayMinutes, zonedMinutesOfDay, zonedStartOfDay } from './zonedClock';
 
 /** An empty place on the calendar the user pointed at. */
 export interface CalendarSlot {
@@ -67,31 +76,11 @@ const DROP_SNAP_MINUTES = 15;
 
 // ── Instants ──────────────────────────────────────────────────────────────────
 
-/**
- * The instant `minutes` of WALL CLOCK into the day `dayStart` opens.
- *
- * Deliberately not `dayStart.getTime() + minutes * 60_000`. Chips are positioned
- * by wall clock (`localMinutes`), so on a DST transition day absolute-millisecond
- * arithmetic disagrees with what the user is looking at: on a 23-hour day the
- * visual noon guide books 13:00, and the right-hand end of the row lands on the
- * following date. Setting the clock on the row's own calendar date keeps both
- * readings in agreement whatever the day's real length.
- */
-function atLocalMinutes(dayStart: Date, minutes: number): Date {
-  const whole = Math.floor(minutes);
-  const at = new Date(dayStart);
-  at.setHours(Math.floor(whole / 60), whole % 60, 0, 0);
-
-  // The sub-minute remainder is a fraction of a pointer position rather than a
-  // crossing, so adding it as elapsed time cannot straddle a transition.
-  return new Date(at.getTime() + Math.round((minutes - whole) * 60_000));
-}
-
 /** Unsnapped instant for a ratio across a day row. Zero when the ratio is unusable. */
-function rawInstant(dayStart: Date, ratio: number): Date {
+function rawInstant(dayStart: Date, ratio: number, zone: string): Date {
   const clamped = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
 
-  return atLocalMinutes(dayStart, clamped * MINUTES_PER_DAY);
+  return instantAtDayMinutes(dayStart, clamped * MINUTES_PER_DAY, zone);
 }
 
 /** Round an instant to the drop grain. */
@@ -108,7 +97,7 @@ function snapInstant(instant: Date): Date {
  * the start of the day rather than producing an Invalid Date, which would
  * otherwise travel all the way to the accept mutation.
  */
-function dropInstant(dayStart: Date, ratio: number): Date {
+function dropInstant(dayStart: Date, ratio: number, zone: string = detectBrowserTimeZone()): Date {
   const clamped = Number.isFinite(ratio) ? Math.max(0, Math.min(1, ratio)) : 0;
   const raw = clamped * MINUTES_PER_DAY;
   const snapped = Math.round(raw / DROP_SNAP_MINUTES) * DROP_SNAP_MINUTES;
@@ -116,7 +105,7 @@ function dropInstant(dayStart: Date, ratio: number): Date {
   // Capped one grain short of the row's end so a drop at the far right stays on
   // the day it was made on. The cap is in wall-clock minutes, so it holds on a
   // 23- or 25-hour day too — 23:45 is the last slot of every calendar date.
-  return atLocalMinutes(dayStart, Math.min(snapped, MINUTES_PER_DAY - DROP_SNAP_MINUTES));
+  return instantAtDayMinutes(dayStart, Math.min(snapped, MINUTES_PER_DAY - DROP_SNAP_MINUTES), zone);
 }
 
 /**
@@ -128,8 +117,13 @@ function dropInstant(dayStart: Date, ratio: number): Date {
  * pointer — and for a chip that is only the clipped tail of an overnight event,
  * a delta is the sole interpretation that does not teleport it a day.
  */
-function movedStart(dayStart: Date, ratio: number, grabOffsetMs: number): Date {
-  return snapInstant(new Date(rawInstant(dayStart, ratio).getTime() - grabOffsetMs));
+function movedStart(
+  dayStart: Date,
+  ratio: number,
+  grabOffsetMs: number,
+  zone: string = detectBrowserTimeZone(),
+): Date {
+  return snapInstant(new Date(rawInstant(dayStart, ratio, zone).getTime() - grabOffsetMs));
 }
 
 // ── Event copy ────────────────────────────────────────────────────────────────
@@ -169,10 +163,6 @@ function eventUrl(event: ScheduleEvent): string | null {
 
 // ── Day geometry ──────────────────────────────────────────────────────────────
 
-function localMinutes(date: Date): number {
-  return date.getHours() * 60 + date.getMinutes();
-}
-
 /** UTC calendar date of an instant — how forecast days are keyed. */
 function utcDateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -210,11 +200,11 @@ function isUtcMidnight(date: Date): boolean {
  * before it is read; an event with no end at all names the single date it
  * starts on.
  */
-function allDayCoversDay(start: Date, end: Date, dayStart: Date): boolean {
+function allDayCoversDay(start: Date, end: Date, dayStart: Date, zone: string): boolean {
   const anchoredToUtc = isUtcMidnight(start);
-  const dateKey = (instant: Date) => (anchoredToUtc ? utcDateKey(instant) : localDayKey(instant));
+  const dateKey = (instant: Date) => (anchoredToUtc ? utcDateKey(instant) : localDayKey(instant, zone));
   const lastInstant = new Date(Math.max(end.getTime() - 1, start.getTime()));
-  const day = localDayKey(dayStart);
+  const day = localDayKey(dayStart, zone);
 
   return day >= dateKey(start) && day <= dateKey(lastInstant);
 }
@@ -227,8 +217,12 @@ function allDayCoversDay(start: Date, end: Date, dayStart: Date): boolean {
  * a floor width so they stay clickable; an all-day event takes the whole row on
  * each date it names.
  */
-function spanForDay(event: ScheduleEvent, dayStart: Date): EventSpan | null {
-  const dayEnd = addDays(dayStart, 1);
+function spanForDay(
+  event: ScheduleEvent,
+  dayStart: Date,
+  zone: string = detectBrowserTimeZone(),
+): EventSpan | null {
+  const dayEnd = addDays(dayStart, 1, zone);
   const start = new Date(event.startTime);
 
   if (Number.isNaN(start.getTime())) {
@@ -244,7 +238,7 @@ function spanForDay(event: ScheduleEvent, dayStart: Date): EventSpan | null {
   // All-day rows are decided by date before any instant test — an overlap test
   // cannot answer this correctly; see `allDayCoversDay`.
   if (event.isAllDay) {
-    return allDayCoversDay(start, end, dayStart)
+    return allDayCoversDay(start, end, dayStart, zone)
       ? { event, leftPct: 0, widthPct: 100, continuesFrom: false, continuesTo: false }
       : null;
   }
@@ -263,8 +257,8 @@ function spanForDay(event: ScheduleEvent, dayStart: Date): EventSpan | null {
   const clippedStart = start < dayStart ? dayStart : start;
   const clippedEnd = end > dayEnd ? dayEnd : end;
 
-  const startMin = sameLocalDay(clippedStart, dayStart) ? localMinutes(clippedStart) : 0;
-  const endMin = clippedEnd >= dayEnd ? MINUTES_PER_DAY : localMinutes(clippedEnd);
+  const startMin = sameLocalDay(clippedStart, dayStart, zone) ? zonedMinutesOfDay(clippedStart, zone) : 0;
+  const endMin = clippedEnd >= dayEnd ? MINUTES_PER_DAY : zonedMinutesOfDay(clippedEnd, zone);
 
   const widthMin = Math.max(endMin - startMin, 20);
 
@@ -342,11 +336,15 @@ function daypartWeights(day: RhythmDay | undefined): number[] {
  * the hour. Each slot asks which UTC instant it is, so no band has to be
  * split at local midnight by hand.
  */
-function rhythmClaims(dayStart: Date, lookup: (utcDate: string) => RhythmDay | undefined): RhythmClaim[] {
+function rhythmClaims(
+  dayStart: Date,
+  lookup: (utcDate: string) => RhythmDay | undefined,
+  zone: string = detectBrowserTimeZone(),
+): RhythmClaim[] {
   const claimCache = new Map<string, RhythmClaim[]>();
 
   return Array.from({ length: BUCKETS_PER_DAY }, (_, slot) => {
-    const instant = atLocalMinutes(dayStart, slot * BUCKET_MINUTES);
+    const instant = instantAtDayMinutes(dayStart, slot * BUCKET_MINUTES, zone);
     const key = utcDateKey(instant);
 
     if (!claimCache.has(key)) {
@@ -360,8 +358,12 @@ function rhythmClaims(dayStart: Date, lookup: (utcDate: string) => RhythmDay | u
 }
 
 /** Intensities alone — the shape the layout maths and its tests work in. */
-function rhythmCells(dayStart: Date, lookup: (utcDate: string) => RhythmDay | undefined): number[] {
-  return rhythmClaims(dayStart, lookup).map((claim) => claim.weight);
+function rhythmCells(
+  dayStart: Date,
+  lookup: (utcDate: string) => RhythmDay | undefined,
+  zone: string = detectBrowserTimeZone(),
+): number[] {
+  return rhythmClaims(dayStart, lookup, zone).map((claim) => claim.weight);
 }
 
 /** Top behaviours for a day, for the row tooltip. */
@@ -387,8 +389,12 @@ function topClusters(day: RhythmDay | undefined, limit = 4): RhythmCluster[] {
  * behaviours the tooltip lists, is what makes the layer legible to anyone not
  * using a mouse.
  */
-function rhythmLabel(dayStart: Date, clusters: RhythmCluster[]): string {
-  const day = dayStart.toLocaleDateString([], { weekday: 'long' });
+function rhythmLabel(
+  dayStart: Date,
+  clusters: RhythmCluster[],
+  zone: string = detectBrowserTimeZone(),
+): string {
+  const day = dayStart.toLocaleDateString([], { weekday: 'long', timeZone: zone });
 
   if (clusters.length === 0) {
     return `Predicted rhythm for ${day}: no established pattern yet.`;
@@ -409,8 +415,8 @@ function rhythmLabel(dayStart: Date, clusters: RhythmCluster[]): string {
  * its own. Same seven-day (or single-day) window, so a weekday alone is unique
  * here for exactly the reason it is unique there.
  */
-function rhythmWaitingLabel(dayStart: Date): string {
-  const day = dayStart.toLocaleDateString([], { weekday: 'long' });
+function rhythmWaitingLabel(dayStart: Date, zone: string = detectBrowserTimeZone()): string {
+  const day = dayStart.toLocaleDateString([], { weekday: 'long', timeZone: zone });
 
   return `Predicted rhythm for ${day}: still being built. This can take a while.`;
 }
@@ -440,12 +446,16 @@ function dominantOccupancyClass(bucket: ForecastBucket | null | undefined): Acti
  * straddle two local dates, so each day's strip only paints the bins that
  * actually belong to it.
  */
-function occupancyClaims(dayStart: Date, buckets: ForecastBucket[]): OccupancyCell[] | null {
+function occupancyClaims(
+  dayStart: Date,
+  buckets: ForecastBucket[],
+  zone: string = detectBrowserTimeZone(),
+): OccupancyCell[] | null {
   if (buckets.length === 0) {
     return null;
   }
 
-  const dayEnd = addDays(dayStart, 1);
+  const dayEnd = addDays(dayStart, 1, zone);
   const bySlot = new Map<number, OccupancyCell>();
 
   for (const bucket of buckets) {
@@ -459,7 +469,7 @@ function occupancyClaims(dayStart: Date, buckets: ForecastBucket[]): OccupancyCe
       continue;
     }
 
-    const slot = Math.min(BUCKETS_PER_DAY - 1, Math.floor(localMinutes(at) / BUCKET_MINUTES));
+    const slot = Math.min(BUCKETS_PER_DAY - 1, Math.floor(zonedMinutesOfDay(at, zone) / BUCKET_MINUTES));
 
     bySlot.set(slot, {
       weight: bucket.q50,
@@ -487,8 +497,8 @@ function occupancyClaims(dayStart: Date, buckets: ForecastBucket[]): OccupancyCe
   });
 }
 
-function occupancyLabel(dayStart: Date): string {
-  const day = dayStart.toLocaleDateString([], { weekday: 'long' });
+function occupancyLabel(dayStart: Date, zone: string = detectBrowserTimeZone()): string {
+  const day = dayStart.toLocaleDateString([], { weekday: 'long', timeZone: zone });
 
   return `Predicted occupancy for ${day}: 96 quarter-hour bins from HBPE.`;
 }
@@ -535,14 +545,15 @@ function visibleClusters(day: RhythmDay | undefined): RhythmCluster[] {
 function slotForecastLine(
   slot: CalendarSlot,
   lookup: (utcDate: string) => RhythmDay | undefined,
+  zone: string = detectBrowserTimeZone(),
 ): string | null {
-  const weekday = slot.instant.toLocaleDateString([], { weekday: 'long' });
+  const weekday = slot.instant.toLocaleDateString([], { weekday: 'long', timeZone: zone });
 
   if (slot.allDay) {
-    const start = new Date(slot.instant);
-    start.setHours(0, 0, 0, 0);
-    const noon = new Date(start);
-    noon.setHours(12, 0, 0, 0);
+    // Midnight and noon of the same local day, because one local day touches up
+    // to two UTC dates and the rhythm lane is keyed on UTC.
+    const start = zonedStartOfDay(slot.instant, zone);
+    const noon = instantAtDayMinutes(start, 12 * 60, zone);
     const merged = new Map<string, RhythmCluster>();
 
     for (const key of new Set([utcDateKey(start), utcDateKey(noon)])) {

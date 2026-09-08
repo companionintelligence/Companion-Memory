@@ -47,20 +47,17 @@ jobs:
       # `[tool.ruff]` section, so ruff walks up and uses the repo-root one —
       # the same rules the Python lane applies to the sidecars.
       #
-      # HONEST NOTE, measured 2026-09-03 on this checkout: this directory is
-      # currently at 141 errors (119 of them `--fix`-able) and 22 files that
-      # `ruff format` would rewrite. So this step is RED on the first run and
-      # stays red until someone clears it, from `scripts/benchmark`:
+      # The 141-error debt this step was added against is CLEARED: measured
+      # 2026-09-07 with the pinned ruff, `ruff check scripts/benchmark` is "All
+      # checks passed!" and `ruff format --check` is "36 files already
+      # formatted". A red run here is therefore a real finding in the change
+      # under review, not pre-existing debt to wave through. Deliberately no
+      # `continue-on-error` and no path scoping — a check that does not fail on
+      # what it found is the false comfort this step exists to end.
       #
-      #     ruff check --fix . && ruff format .
-      #
-      # That redness is the accurate state of the directory. Deliberately no
-      # `continue-on-error` and no path scoping to hide it — a check that does
-      # not fail on what it found is the false comfort this step exists to end.
-      #
-      # It runs AFTER pytest for that same reason: a failing step ends the job,
-      # and the pre-existing lint debt must not swallow the test signal that
-      # already worked.
+      # It still runs AFTER pytest: a failing step ends the job, and a lint
+      # failure must not swallow the test signal, which is the older and more
+      # expensive of the two.
       - name: Run pytest
         run: pytest
 

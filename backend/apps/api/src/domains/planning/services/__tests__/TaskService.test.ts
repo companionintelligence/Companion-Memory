@@ -415,6 +415,73 @@ describe('TaskService', () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // Proposed intake — the Plan page's Accept and Dismiss.
+  //
+  // The `status !== 'proposed'` guard these two share is not just input
+  // validation: it is the write-time check standing behind two cron-driven bulk
+  // archivers. ProposedTaskReconcileService.reconcileStaleProposed and
+  // TodoScanService.collapseDuplicateProposed both pick their victims from a
+  // findAll snapshot and then hand ids to declineProposed one at a time, so a
+  // proposal the user accepted in between is only saved from being archived by
+  // this re-read. Relax the guard, or let the status string drift, and a daily
+  // cron silently archives open work with no undo path.
+  // ---------------------------------------------------------------------------
+  describe('acceptProposed / declineProposed', () => {
+    it('promotes a proposal into the backlog', async () => {
+      await setup([makeTask({ status: 'proposed' })]);
+
+      const result = await service.acceptProposed(ALICE, 'task-1');
+
+      expect(result?.status).toBe('open');
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: { id: 'task-1', userId: ALICE.userId },
+      });
+      expect(signalling.send).toHaveBeenCalledWith(TaskUpdatedEvent, {
+        taskId: 'task-1',
+        userId: ALICE.userId,
+      });
+    });
+
+    it('does not re-accept work that is already open', async () => {
+      await setup([makeTask({ status: 'open' })]);
+
+      expect(await service.acceptProposed(ALICE, 'task-1')).toBeNull();
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(signalling.send).not.toHaveBeenCalled();
+    });
+
+    it('archives a declined proposal', async () => {
+      await setup([makeTask({ status: 'proposed' })]);
+
+      const result = await service.declineProposed(ALICE, 'task-1');
+
+      expect(result?.status).toBe('archived');
+      expect(signalling.send).toHaveBeenCalledWith(TaskUpdatedEvent, {
+        taskId: 'task-1',
+        userId: ALICE.userId,
+      });
+    });
+
+    it('refuses to archive a task that is no longer a proposal', async () => {
+      await setup([makeTask({ status: 'open' })]);
+
+      expect(await service.declineProposed(ALICE, 'task-1')).toBeNull();
+      expect(repository.save).not.toHaveBeenCalled();
+      expect(signalling.send).not.toHaveBeenCalled();
+    });
+
+    it("cannot archive another user's proposal", async () => {
+      await setup([]);
+
+      expect(await service.declineProposed(BOB, 'task-1')).toBeNull();
+      expect(repository.findOne).toHaveBeenCalledWith({
+        where: { id: 'task-1', userId: BOB.userId },
+      });
+      expect(repository.save).not.toHaveBeenCalled();
+    });
+  });
+
   describe('defer', () => {
     it('sets the new local date and counts the push', async () => {
       await setup([makeTask({ deferCount: 2 })]);

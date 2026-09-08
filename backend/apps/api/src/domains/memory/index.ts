@@ -287,6 +287,7 @@ export {
 
 export type { Content } from './entities/ContentEntity';
 export type { MapPin } from './services/CalendarEventService';
+export { DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from './services/CalendarEventService';
 export type { PlaceKind } from './entities/PlaceEntity';
 export type { PlaceVisitStats } from './services/PlaceService';
 export { EntityMergeBlockEntity, orderPair, pairKey } from './entities/EntityMergeBlockEntity';

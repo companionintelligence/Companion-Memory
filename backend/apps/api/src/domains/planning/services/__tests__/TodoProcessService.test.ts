@@ -553,6 +553,130 @@ describe('TodoProcessService', () => {
     expect(dataSource.query).toHaveBeenCalledWith(expect.any(String), [[HIT_ID], CTX_USER]);
   });
 
+  // ═══ the line between "asks you" and "closes your task for you" ═══
+  //
+  // `complete` is the only suggestion routed through the `task_complete` gate
+  // (0.85 in balanced) instead of `task_mutate`'s autoPromoteThreshold (0.55),
+  // and clampConfidence's 0.75 default — what a small model returning a bare
+  // {"action":"complete"} gets — sits between the two. So mis-routing that
+  // suggestion does not fail loudly: it silently turns a Plan-page
+  // confirmation into the appliance closing the user's task from a keyword
+  // recall hit, with VerifyDoneService then stamping the block done.
+  describe('a completion suggestion', () => {
+    function buildService(opts: {
+      trustMode: 'cautious' | 'balanced' | 'hands_off';
+      suggestion: Record<string, unknown>;
+    }) {
+      const searchService = makeSearchService([{ id: HIT_ID, type: 'communication' }]);
+      const dataSource = makeDataSource([
+        {
+          id: HIT_ID,
+          entity_type: 'communication',
+          name: 'Text to Alex',
+          snippet: 'Picked the passport up from the office this morning.',
+          occurred_at: new Date(Date.now() - HOUR_MS),
+        },
+      ]);
+      const chat = jest.fn(async () => ({
+        message: { role: 'assistant', content: JSON.stringify(opts.suggestion) },
+      })) as unknown as OllamaService['chat'];
+      const complete = jest.fn(async () => ({ id: 'task-1', status: 'done' }));
+      const createPendingChange = jest.fn(async () => null);
+      const taskService = {
+        findAll: jest.fn(async () => [{ id: 'task-1', title: 'Renew passport', description: null }]),
+        complete,
+        createPendingChange,
+        appendNotes: jest.fn(),
+        update: jest.fn(),
+        findByTitleMatch: jest.fn(async () => null),
+      } as unknown as TaskService;
+      const personalizationService = makePersonalizationService(opts.trustMode);
+
+      return {
+        complete,
+        createPendingChange,
+        personalizationService,
+        service: new TodoProcessService(
+          taskService,
+          searchService,
+          { chat } as unknown as OllamaService,
+          personalizationService as never,
+          dataSource as never,
+          makeLogger(),
+        ),
+      };
+    }
+
+    it('asks rather than closing the task in the default trust mode', async () => {
+      const { service, complete, createPendingChange, personalizationService } = buildService({
+        trustMode: 'balanced',
+        // No `confidence`: the bare answer a utility model actually returns,
+        // which clampConfidence turns into 0.75.
+        suggestion: { action: 'complete', rationale: 'Alex was told the passport arrived.' },
+      });
+
+      const result = await service.runForUser(CTX_USER);
+
+      expect(personalizationService.decideAction).toHaveBeenCalledWith(CTX_USER, {
+        kind: 'task_complete',
+        confidence: 0.75,
+      });
+      expect(complete).not.toHaveBeenCalled();
+      expect(createPendingChange).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: CTX_USER }),
+        expect.objectContaining({
+          taskId: 'task-1',
+          kind: 'complete',
+          patch: {},
+          rationale: 'Alex was told the passport arrived.',
+          confidence: 0.75,
+        }),
+      );
+      expect(result).toEqual({ applied: 0, pending: 1 });
+    });
+
+    it('closes the task under hands_off', async () => {
+      const { service, complete, createPendingChange, personalizationService } = buildService({
+        trustMode: 'hands_off',
+        suggestion: { action: 'complete', confidence: 0.92, rationale: 'Passport collected.' },
+      });
+
+      const result = await service.runForUser(CTX_USER);
+
+      expect(personalizationService.decideAction).toHaveBeenCalledWith(CTX_USER, {
+        kind: 'task_complete',
+        confidence: 0.92,
+      });
+      expect(complete).toHaveBeenCalledWith(expect.objectContaining({ userId: CTX_USER }), 'task-1');
+      expect(createPendingChange).not.toHaveBeenCalled();
+      expect(result).toEqual({ applied: 1, pending: 0 });
+    });
+
+    it('still asks under hands_off when the model is unsure', async () => {
+      // ALWAYS_REVIEW_BELOW_CONFIDENCE (0.55) is a floor under every trust
+      // mode, so the most permissive dial there is still cannot close a task
+      // on a hedge.
+      const { service, complete, createPendingChange, personalizationService } = buildService({
+        trustMode: 'hands_off',
+        suggestion: { action: 'complete', confidence: 0.4 },
+      });
+
+      const result = await service.runForUser(CTX_USER);
+
+      expect(personalizationService.decideAction).toHaveBeenCalledWith(CTX_USER, {
+        kind: 'task_complete',
+        confidence: 0.4,
+      });
+      expect(complete).not.toHaveBeenCalled();
+      expect(createPendingChange).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: CTX_USER }),
+        // The model gave no rationale, so the user still gets a sentence.
+        expect.objectContaining({ kind: 'complete', rationale: 'Looks like this may be done.' }),
+      );
+      expect(result).toEqual({ applied: 0, pending: 1 });
+    });
+  });
+
   // ═══ every active task gets a turn ═══
   //
   // `findAll` orders by due_at ASC NULLS LAST and an overdue date never

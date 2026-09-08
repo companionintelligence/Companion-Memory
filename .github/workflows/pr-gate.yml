@@ -603,3 +603,32 @@ jobs:
           fi
           printf 'running %s\n' "${suites[@]}"
           node --test "${suites[@]}"
+
+  migration-guard:
+    name: Migration versions
+    runs-on: ubuntu-latest
+    # Seconds, like the other guards. No install, no cache, no services.
+    timeout-minutes: 5
+    container:
+      image: node:22
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The guard whose absence is already documented as having cost this repo a
+      # real outage. dbmate keys `schema_migrations` on the numeric filename
+      # prefix, so two branches that each hand-pick a round timestamp merge into
+      # a duplicate prefix that makes `migrate` fail for everyone — including on
+      # an installed appliance mid-upgrade. The script's own header names the
+      # 20260628120000 collision that did exactly that, and 57 migrations in the
+      # tree still carry hand-written `…120000`-shaped stamps.
+      #
+      # `check:migrations` already runs from lint-staged and from `yarn migrate`
+      # (inside the production image), and `migration-integrity-check.yml` runs
+      # it too — but that workflow is `workflow_dispatch`-only, so before this
+      # job the check ran on no pull request anywhere. It resolves the migrations
+      # directory from its own `__dirname` rather than the CWD, so the line below
+      # is the whole invocation, and it imports only `node:fs`/`node:path` —
+      # which is why it needs no install.
+      - name: Check migration versions
+        run: node backend/apps/api/bin/check-migration-versions.js

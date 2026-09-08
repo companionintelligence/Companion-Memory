@@ -233,9 +233,20 @@ jobs:
       # could not have helped if it had: both of those flags force jest to run
       # in the main process, which is precisely the configuration that hangs.
       # See the note in backend/apps/api/jest.config.mjs.
+      #
+      # `--coverage` is load-bearing, not a report nobody reads. The scoped
+      # ratchet in jest.config.mjs (`./src/domains/planning/`: statements 88 /
+      # branches 76 / functions 76 / lines 90) is only evaluated when coverage
+      # is collected, so without the flag the one floor this repo has was
+      # enforced in NO workflow — a threshold that cannot fail is the same
+      # false comfort as no threshold. The frontend lane below has always run
+      # with it. This is the right job for it: the floor is set just under what
+      # planning reaches with no database, and the env block above gives the
+      # DB-backed planning suites a real connection, so the number measured
+      # here is at or above the one the floor was calibrated against.
       - name: Run backend API tests
         timeout-minutes: 20
-        run: yarn workspace @ci/be-api test
+        run: yarn workspace @ci/be-api test --coverage
 
   test-frontend:
     name: Run frontend tests

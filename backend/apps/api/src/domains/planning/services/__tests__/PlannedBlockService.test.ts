@@ -83,13 +83,18 @@ describe('PlannedBlockService', () => {
       findById: jest.fn(),
       findByIds: jest.fn(),
       findInRange: jest.fn().mockResolvedValue([]),
-      create: jest.fn().mockResolvedValue([
+      // Echoes the DTO back rather than answering with one canned row: a test
+      // that reads `outcome.event` is otherwise asserting the fixture, not the
+      // placement, and would keep passing if the solver handed `create` a
+      // different slot than the one it reported.
+      create: jest.fn(async (_ctx: unknown, dto: Record<string, unknown>) => [
         {
           id: 'evt-1',
-          title: OPEN_TASK.title,
-          eventType: 'planned_block',
-          startTime: new Date(`${TODAY}T09:00:00.000Z`),
-          endTime: new Date(`${TODAY}T09:30:00.000Z`),
+          title: dto.title,
+          eventType: dto.event_type,
+          startTime: dto.start_time,
+          endTime: dto.end_time,
+          taskId: dto.task_id,
         },
       ]),
       remove: jest.fn(),
@@ -158,6 +163,13 @@ describe('PlannedBlockService', () => {
       }),
     );
     expect(outcome.status).toBe('placed');
+
+    // The event handed back is the one that was written. `create` echoes its
+    // DTO, so this is a real link between the slot the solver chose and the
+    // slot the caller is told about — it cannot pass against a canned row.
+    const [, created] = eventService.create.mock.calls[0];
+
+    expect(outcome.status === 'placed' && outcome.event.startTime).toEqual(created.start_time);
   });
 
   it('automation review writes a pending schedule instead of placing', async () => {
@@ -309,6 +321,38 @@ describe('PlannedBlockService', () => {
       new Set([OPEN_TASK.id]),
     );
     await expect(service.listActiveTaskIds(CTX, [])).resolves.toEqual(new Set());
+  });
+
+  // ═══ unschedule — the Undo of the whole feature ═══
+  //
+  // Two writes, and BOTH have to happen: the block comes off the calendar and
+  // the task loses its date. Dropping the second leaves a task dated to a day
+  // with nothing on it, which `sectionFor` files under Overdue — the same
+  // confusion a calendar drag that forgets `scheduledFor` produces.
+
+  it('unschedule removes the block and clears the task’s date', async () => {
+    eventRepository.createQueryBuilder = jest.fn(() => makeEventQb({ id: 'evt-existing' } as EventEntity));
+    eventService.findById.mockResolvedValue({ id: 'evt-existing', taskId: OPEN_TASK.id });
+    taskService.update.mockResolvedValue({ ...OPEN_TASK, scheduledFor: null });
+
+    const result = await service.unschedule(CTX, OPEN_TASK.id);
+
+    expect(eventService.remove).toHaveBeenCalledWith(CTX, 'evt-existing');
+    expect(taskService.update).toHaveBeenCalledWith(CTX, OPEN_TASK.id, { scheduledFor: null });
+    expect(result?.scheduledFor).toBeNull();
+  });
+
+  // Unscheduling a task that never had a block is the ordinary case for work
+  // dated by a scan rather than placed by the planner: nothing to remove, and
+  // the date still has to go.
+  it('unschedule is a safe no-op on a task with no block, and still clears the date', async () => {
+    taskService.update.mockResolvedValue({ ...OPEN_TASK, scheduledFor: null });
+
+    const result = await service.unschedule(CTX, OPEN_TASK.id);
+
+    expect(eventService.remove).not.toHaveBeenCalled();
+    expect(taskService.update).toHaveBeenCalledWith(CTX, OPEN_TASK.id, { scheduledFor: null });
+    expect(result?.scheduledFor).toBeNull();
   });
 
   it('planAsUnscheduled declines a pending date, opens a proposal, and clears the block', async () => {

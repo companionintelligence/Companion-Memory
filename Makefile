@@ -178,6 +178,22 @@ REBUILD ?=
 LOCAL_IMAGES := $(SETUP_DATABASE_REPO) $(DATABASE_REPO) $(OBJECT_STORE_REPO) \
 	$(SUMMARY_REPO) $(HBPE_REPO)
 
+# Identity of the source a Python sidecar image was built from, stamped onto
+# the image as the `ci.source-tree` label by `build` and compared by `dev`.
+#
+# $(1) is the app directory under backend/apps. The three inputs are exactly
+# what a sidecar image's content depends on: the service's own subtree, the
+# ci-telemetry package both of them install, and the lock their `uv sync
+# --frozen` resolves from. Git tree/blob hashes, so the stamp changes when one
+# of those changes and never otherwise — a warm spin-up that touched neither
+# sidecar still reuses its images.
+#
+# Read from HEAD, not the working tree: an uncommitted edit to a sidecar does
+# NOT trigger a rebuild. That is the deliberate trade — hashing the working
+# tree would mean re-hashing thousands of files on every `make dev`, and
+# REBUILD=1 covers the uncommitted case.
+sidecar_stamp = $(shell git rev-parse HEAD:backend/apps/$(1) HEAD:backend/packages/telemetry HEAD:uv.lock 2>/dev/null | tr '\n' '-')
+
 VALID_ENVS := local staging production
 VALID_GPUS := cpu cuda rocm
 
@@ -457,7 +473,9 @@ build: ## Build images. ENV=local|staging|production (default local) GPU=cpu|cud
 	@if [ "$(ENV)" = "production" ]; then printf "\n➤ Building setup secrets image...\n\n" && docker build -f infrastructure/setup-secrets/Dockerfile $(call versioned_tag,$(SETUP_SECRETS_REPO)) -t $(SETUP_SECRETS_REPO):latest infrastructure/setup-secrets ; fi
 
 	@printf "\n➤ Building summary service image...\n\n"
-	@docker build -f backend/apps/summary/Dockerfile --build-arg UV_VERSION=$(UV_VERSION) $(call versioned_tag,$(SUMMARY_REPO)) -t $(SUMMARY_REPO):latest .
+	@# --label ci.source-tree: what `dev` reads to decide the image on disk is
+	@# still the code under review. See sidecar_stamp above.
+	@docker build -f backend/apps/summary/Dockerfile --build-arg UV_VERSION=$(UV_VERSION) --label ci.source-tree=$(call sidecar_stamp,summary) $(call versioned_tag,$(SUMMARY_REPO)) -t $(SUMMARY_REPO):latest .
 
 	@printf "\n➤ Building HBPE service image ($(GPU)$(if $(filter rocm,$(GPU)),$(if $(AMDGPU_TARGETS), $(AMDGPU_TARGETS), no-gfx-target)))...\n\n"
 ifeq ($(GPU),rocm)
@@ -467,7 +485,7 @@ ifeq ($(GPU),rocm)
 		printf "  to compile for it explicitly ($(YELLOW)rocminfo | grep gfx$(RESET) reports it).\n\n"; \
 	}
 endif
-	@docker build -f backend/apps/hbpe/$(HBPE_DOCKERFILE) --build-arg UV_VERSION=$(UV_VERSION) --build-arg LLAMA_CPP_PYTHON_REF=$(LLAMA_CPP_PYTHON_REF) $(HBPE_GPU_BUILD_ARGS) $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest .
+	@docker build -f backend/apps/hbpe/$(HBPE_DOCKERFILE) --build-arg UV_VERSION=$(UV_VERSION) --build-arg LLAMA_CPP_PYTHON_REF=$(LLAMA_CPP_PYTHON_REF) $(HBPE_GPU_BUILD_ARGS) --label ci.source-tree=$(call sidecar_stamp,hbpe) $(call versioned_tag,$(HBPE_REPO)) -t $(HBPE_REPO):latest .
 
 	@$(MAKE) clean-license
 
@@ -573,13 +591,28 @@ dev: ## Run the development environment locally
 	@$(MAKE) init
 
 	@# The supervisor runs `docker compose up` (not build), so the local images
-	@# must exist first. Build them only when one is missing or REBUILD=1 — a warm
+	@# must exist first. Build them only when one is missing, a Python sidecar
+	@# image was built from source other than this commit's, or REBUILD=1 — a warm
 	@# spin-up reuses them.
+	@#
+	@# The staleness half exists because "present" used to be the whole test: an
+	@# hbpe-service image a month older than the routes the API calls satisfied
+	@# it, so every worktree on the box ran a sidecar that was not the code under
+	@# review, and no amount of manual QA could have noticed.
 	@missing=""; for img in $(LOCAL_IMAGES); do \
 		docker image inspect "$$img:latest" >/dev/null 2>&1 || missing="$$missing $$img"; \
 	done; \
-	if [ -n "$(REBUILD)" ] || [ -n "$$missing" ]; then \
+	stale=""; \
+	for pair in "$(SUMMARY_REPO):$(call sidecar_stamp,summary)" "$(HBPE_REPO):$(call sidecar_stamp,hbpe)"; do \
+		img="$${pair%%:*}"; want="$${pair#*:}"; \
+		case " $$missing " in *" $$img "*) continue ;; esac; \
+		[ -n "$$want" ] || continue; \
+		have=$$(docker image inspect --format '{{index .Config.Labels "ci.source-tree"}}' "$$img:latest" 2>/dev/null); \
+		[ "$$have" = "$$want" ] || stale="$$stale $$img"; \
+	done; \
+	if [ -n "$(REBUILD)" ] || [ -n "$$missing" ] || [ -n "$$stale" ]; then \
 		[ -n "$$missing" ] && printf "$(YELLOW)•$(RESET) building — missing image(s):$$missing\n\n" || true; \
+		[ -n "$$stale" ] && printf "$(YELLOW)•$(RESET) building — sidecar image(s) built from other source:$$stale\n\n" || true; \
 		$(MAKE) build ENV=local GPU=$(GPU); \
 	else \
 		printf "$(GREEN)✓$(RESET) Reusing existing local images (set $(YELLOW)REBUILD=1$(RESET) to rebuild)\n\n"; \

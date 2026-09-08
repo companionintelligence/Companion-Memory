@@ -772,3 +772,122 @@ describe('VerticalCalendar — colorMode reaches the ink', () => {
     expect(litRhythmCell(container).style.backgroundColor).toBe('var(--primary)');
   });
 });
+
+/**
+ * The grid draws in the OWNER'S zone.
+ *
+ * The backend places a block at 09:00 in `ci.users.timezone`; the browser here
+ * is Asia/Tokyo, nine hours ahead of UTC. Reading the same instant on the
+ * browser's clock — which is what the grid used to do — puts the chip at 22:00
+ * and, at the edges of the day, on the wrong column entirely.
+ */
+describe('VerticalCalendar — the profile zone is the clock', () => {
+  const PROFILE = 'America/New_York';
+  const SYSTEM_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  function withTimeZone(timeZone: string, run: () => void) {
+    const previous = process.env.TZ;
+    process.env.TZ = timeZone;
+
+    try {
+      run();
+    } finally {
+      process.env.TZ = previous ?? SYSTEM_TIME_ZONE;
+    }
+  }
+
+  /** 09:00–09:30 New York on Mon 03 Aug 2026, as the placer books it. */
+  const placedAtNine = event({
+    startTime: '2026-08-03T13:00:00Z',
+    endTime: '2026-08-03T13:30:00Z',
+  });
+  const profileMonday = startOfLocalDay(new Date('2026-08-03T13:00:00Z'), PROFILE);
+
+  it('sits a 09:00 profile-zone block on the 09:00 row from a browser nine hours away', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      render(
+        <VerticalCalendar
+          start={profileMonday}
+          days={1}
+          events={[placedAtNine]}
+          rhythm={[]}
+          timeZone={PROFILE}
+        />,
+      );
+
+      expect(screen.getByRole('listitem', { name: /Standup/ }).style.top).toBe('37.5%');
+    });
+  });
+
+  it('names the block’s hour in the profile zone in its accessible label', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      render(
+        <VerticalCalendar
+          start={profileMonday}
+          days={1}
+          events={[placedAtNine]}
+          rhythm={[]}
+          timeZone={PROFILE}
+        />,
+      );
+
+      expect(screen.getByRole('listitem', { name: /Standup, 9:00 AM to 9:30 AM/ })).toBeInTheDocument();
+    });
+  });
+
+  it('keeps a late-evening block in the owner’s column rather than tomorrow’s', () => {
+    withTimeZone('UTC', () => {
+      // 22:00 Monday in New York is Tuesday 02:00 UTC — the day the browser
+      // clock would file it under.
+      const lateEvening = event({
+        id: 'late',
+        title: 'Wind down',
+        startTime: '2026-08-04T02:00:00Z',
+        endTime: '2026-08-04T03:00:00Z',
+      });
+
+      render(
+        <VerticalCalendar
+          start={profileMonday}
+          days={2}
+          events={[lateEvening]}
+          rhythm={[]}
+          timeZone={PROFILE}
+        />,
+      );
+
+      const [monday, tuesday] = screen.getAllByTestId('vertical-day-lane');
+      expect(within(monday).getByRole('listitem', { name: /Wind down/ })).toBeInTheDocument();
+      expect(within(tuesday).queryByRole('listitem', { name: /Wind down/ })).not.toBeInTheDocument();
+    });
+  });
+
+  it('sends a typed move back as a profile-zone wall time', () => {
+    const onMove = vi.fn();
+
+    withTimeZone('Asia/Tokyo', () => {
+      render(
+        <VerticalCalendar
+          start={profileMonday}
+          days={1}
+          events={[placedAtNine]}
+          rhythm={[]}
+          timeZone={PROFILE}
+          onMoveEvent={onMove}
+        />,
+      );
+
+      fireEvent.click(screen.getByLabelText(/^Standup,/));
+
+      const dialog = screen.getByRole('dialog');
+      // Pre-filled from the profile clock, not the browser's 22:00.
+      expect(within(dialog).getByLabelText('Move to time')).toHaveValue('09:00');
+
+      fireEvent.change(within(dialog).getByLabelText('Move to time'), { target: { value: '14:30' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }));
+    });
+
+    // 14:30 in New York on 03 Aug 2026 (EDT, UTC-4).
+    expect(onMove.mock.calls[0][1].toISOString()).toBe('2026-08-03T18:30:00.000Z');
+  });
+});
