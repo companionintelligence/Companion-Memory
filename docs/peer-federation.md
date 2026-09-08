@@ -233,7 +233,7 @@ On the **receiver**:
 | `CI_PEER_MEMORY_ENDPOINT` | the box's own `/agent/v1`; also the `@target-uri` authority if signatures are on |
 | `PORTAL_OIDC_ENABLED` / `PORTAL_OIDC_ISSUER` / `PORTAL_OIDC_JWKS_URI` | the trust anchor the peer's token is verified against |
 | the `ask` feature flag | ships `true` |
-| **`peer_links.peer_issuer` + `peer_subject`** | `createPeerLink` / `updatePeerLink`, or `ci-import peers add --peer-issuer … --peer-subject …` — see [below](#binding-a-link-to-the-peers-identity) |
+| **`peer_links.peer_issuer` + `peer_subject`** | `createPeerLink` / `updatePeerLink`, or `ci peers add --peer-issuer … --peer-subject …` — see [below](#binding-a-link-to-the-peers-identity) |
 
 Both boxes must agree on the issuer, and the receiver must be reachable at
 `https` on port 443 or `''` (`checkEgressUrl` allows no other port).
@@ -390,10 +390,10 @@ mutation { createPeerLink(input: {
 ```
 
 ```bash
-ci-import peers add alice@portal.example https://alice.example/agent/v1 \
+ci peers add alice@portal.example https://alice.example/agent/v1 \
   --peer-issuer https://portal.example --peer-subject alice-box-a
 # or, on a link that already exists:
-ci-import peers update <id> --peer-issuer https://portal.example --peer-subject alice-box-a
+ci peers update <id> --peer-issuer https://portal.example --peer-subject alice-box-a
 ```
 
 Four things about this surface are deliberate:
@@ -476,7 +476,7 @@ dead end for the asker's *records*.
 polls the peer, absorbs the answer and moves the local ask to `answered`. It is
 written, documented and unit-tested, and **nothing calls it**: no GraphQL
 mutation (`AskResolver` wires only `outboundAskService.send`), no REST route, no
-`ci-import asks` subcommand. A repo-wide search finds two hits, its own
+`ci asks` subcommand. A repo-wide search finds two hits, its own
 definition and its own docstring.
 
 The consequence is visible in the run above. The reviewed ask was approved on
@@ -645,7 +645,7 @@ Full protocol reference, with the verification-order chart and the threat table:
 
 **Both directions work, including the return trip — given a link and a token.** A box can receive, gate, and answer a federated ask; can compose and send one; and the responder serves an approved answer on the collect route. Peer-link management and the ask UI's route both landed (see the Δ note under Known limitations). The *asker's* half of that return trip exists as a service method with no caller — see the Δ below.
 
-**Δ 2026-09-06 — measured between two real boxes, not the loopback harness.** Outbound egress into a tailnet works through the real `PeerAskClient`, and every inbound gate up to and including token verification passes over real TLS against a real remote JWKS. Two things stopped a complete round trip, both detailed under [Federating two REAL boxes](#federating-two-real-boxes-end-to-end). **The first is now fixed:** `peer_links.peer_issuer` / `peer_subject` are writable through `createPeerLink` / `updatePeerLink` and `ci-import peers add|update`, so a link created the supported way can match an inbound ask — see [Binding a link to the peer's identity](#binding-a-link-to-the-peers-identity). The second remains: the peer access token is still passed in by hand, because CI-Portal ships a peer directory but no token exchange. Also fixed on the way through: the inbound rate limiter built its `ConsumptionStore` key with NUL separators, which Postgres rejects — a `500` on **every** inbound ask and collect for any box on the default store, ahead of any policy.
+**Δ 2026-09-06 — measured between two real boxes, not the loopback harness.** Outbound egress into a tailnet works through the real `PeerAskClient`, and every inbound gate up to and including token verification passes over real TLS against a real remote JWKS. Two things stopped a complete round trip, both detailed under [Federating two REAL boxes](#federating-two-real-boxes-end-to-end). **The first is now fixed:** `peer_links.peer_issuer` / `peer_subject` are writable through `createPeerLink` / `updatePeerLink` and `ci peers add|update`, so a link created the supported way can match an inbound ask — see [Binding a link to the peer's identity](#binding-a-link-to-the-peers-identity). The second remains: the peer access token is still passed in by hand, because CI-Portal ships a peer directory but no token exchange. Also fixed on the way through: the inbound rate limiter built its `ConsumptionStore` key with NUL separators, which Postgres rejects — a `500` on **every** inbound ask and collect for any box on the default store, ahead of any policy.
 
 **Δ 2026-09-07 — the full ask lifecycle now runs between the two real boxes, and all four consent outcomes were driven live.** `auto`, `review`, `decline` and a disclosure `ceiling` were each exercised from Bob's real `sendPeerAsk` over real TLS into a tailnet, and verified in the databases on **both** boxes — the tables and raw payloads are under [The four consent outcomes, driven live](#the-four-consent-outcomes-driven-live). The identity binding this needed was written through the real GraphQL API (`updatePeerLink` with `peerIssuer` / `peerSubject`), not by hand-written SQL. Two gaps remain and are now stated precisely, with what each one costs, under [What a real operator still cannot do](#what-a-real-operator-still-cannot-do): CI-Portal still has **no token minting endpoint**, so the peer access token was minted from the repo's checked-in fixture key; and `OutboundAskService.pollForAnswer` still has **no caller anywhere**, so the reviewed answer had to be collected by hand with `curl` and Bob's own row stayed `delivered`.
 

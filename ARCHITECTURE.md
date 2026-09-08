@@ -50,7 +50,8 @@ and explicitly excludes `backend` and `frontend`.
 Today those directories hold:
 
 - `backend/apps/` — `api` (NestJS 11: REST, GraphQL, MCP, jobs, crons),
-  `hbpe` and `summary` (the two Python/FastAPI sidecars).
+  `cli` (the `ci` command line — a bundled HTTP client, no NestJS), `hbpe` and
+  `summary` (the two Python/FastAPI sidecars).
 - `backend/packages/` — `telemetry` (`ci-telemetry`, Sentry wiring shared by
   both sidecars). One member so far.
 - `frontend/apps/` — `web` (React 19 / Vite SPA), `ios` and `android`
@@ -96,6 +97,7 @@ JavaScript workspaces are `@ci/`-scoped and private. Apps carry a stack prefix:
 | Workspace | Package name |
 |---|---|
 | `backend/apps/api` | `@ci/be-api` |
+| `backend/apps/cli` | `@ci/cli` |
 | `frontend/apps/web` | `@ci/fe-web` |
 | `frontend/apps/ios` | `@ci/fe-ios` |
 | `frontend/apps/android` | `@ci/fe-android` |
@@ -181,8 +183,11 @@ The API exposes the same underlying capabilities through three surfaces:
 - **MCP** — `backend/apps/api/src/domains/mcp`, a `@Controller('mcp')` with a
   `POST` for requests and a `GET` for the event stream, so an external model
   host can discover and call the same capabilities.
-- **CLI** — `backend/apps/api/src/domains/import/cli`, published as the
-  `ci-import` bin from `@ci/be-api`.
+- **CLI** — `backend/apps/cli` (`@ci/cli`), published as the `ci` bin. It was
+  `backend/apps/api/src/domains/import/cli`, shipping as a bin from
+  `@ci/be-api`, until it was extracted: a private package with ~60 production
+  dependencies is not a way to distribute a command-line tool, and the tool had
+  outgrown the domain it lived in anyway.
 
 The capability core is `domains/tools`. Every tool is also an intent: a tool
 class declares its `IntentDefinition` (dotted name, domain, privacy label,
@@ -207,10 +212,14 @@ against this:
    executor — that plane never touches `ToolRegistry`, and so does not share
    its policy or its invocation ledger.
 2. The CLI is not a transport over the core at all. It is an HTTP client of the
-   REST and GraphQL surfaces, scoped to the import domain, and it lives inside
-   that domain rather than in a package of its own. Its own source says so, and
-   argues the position: an HTTP client is entitled to the response body, not to
-   the server's internal types.
+   REST and GraphQL surfaces. Its own source says so, and argues the position:
+   an HTTP client is entitled to the response body, not to the server's internal
+   types. It has at least stopped contradicting itself — it lived inside
+   `domains/import` and reached into three sibling domains for their types until
+   it was extracted to `backend/apps/cli`, and now restates the response shapes
+   it reads in `src/wire.ts`. The remaining copy is a known cost, and the
+   follow-up that removes it is a shared `@ci/api-client` under
+   `backend/packages/` generated from the published schemas.
 3. `domains/tools` sits *above* the domains, not below them. `ToolsModule`
    imports fifteen other domain modules to construct the native tools. That is a
    composition root, not a shared kernel, so "the core" is not something a lower

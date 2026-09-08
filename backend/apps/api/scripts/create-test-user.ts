@@ -11,7 +11,7 @@ import { UserEntity } from '@ci/domains/user';
 
 /**
  * Provision a user and an API key in one step, for pointing an external client
- * (the `ci-import` CLI, a script, a REST client) at a local stack.
+ * (the `ci` CLI, a script, a REST client) at a local stack.
  *
  * Unlike the other scripts in this directory this one takes no prompts, so it can run
  * unattended in a test harness. Everything is overridable by environment variable:
@@ -163,7 +163,7 @@ API key   ${rawKey}
   name    ${keyName}
   scopes  ${scopes.length > 0 ? scopes.join(', ') : '(none — full user authority)'}
 
-The key is shown once. For the \`ci-import\` CLI (docs/cli/ci-import.md), export:
+The key is shown once. For the \`ci\` CLI (docs/cli/ci.md), export:
 
   CI_SERVER_URL=http://localhost:3030
   CI_API_KEY=${rawKey}

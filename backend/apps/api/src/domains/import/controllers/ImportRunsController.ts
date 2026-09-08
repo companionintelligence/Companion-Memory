@@ -214,7 +214,7 @@ export class ImportRunsController {
    * controller cannot answer: everywhere else an archive is opaque bytes until a
    * run unpacks it, so `runs/:runId/recognized` reports what the parse stage
    * found — after the import. This answers first, which is what makes
-   * `ci-import recognize` (and the identical `import.recognize_path` MCP tool,
+   * `ci recognize` (and the identical `import.recognize_path` MCP tool,
    * which shares the implementation) able to say "that folder is a Google
    * Takeout" before anything is written.
    *
