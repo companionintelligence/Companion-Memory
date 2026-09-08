@@ -428,11 +428,21 @@ gate worth turning on: [`docs/qa/`](docs/qa/README.md).
 - **A new shared library** — `<stack>/packages/<name>`, only once it has a
   second consumer. Python members under `backend/packages/*` are already
   covered by the uv workspace glob and are checked strictly by mypy. A
-  TypeScript member needs a `tsconfig.json` with `composite: true` and a
-  `references` entry from each consumer, or its sources are pulled into the
-  consumer's own program and move where that consumer's `dist/` lands —
-  `@ci/tool-core` is the worked example, and `backend/apps/api/Dockerfile`
-  shows the three lines an image needs when it gains one.
+  TypeScript member needs three things there, and the first is the one that
+  bites:
+  - **An entry in `[tool.uv.workspace] exclude` in the root `pyproject.toml`.**
+    `backend/packages/` is a mixed-language directory and the uv `members` glob
+    is `backend/packages/*`, so a member with no `pyproject.toml` does not get
+    ignored — uv fails the whole workspace with `missing a pyproject.toml`. That
+    takes out `uv sync --all-packages --locked`, and with it `make install`,
+    `make lint` and `ci.yml`'s `python` lane, none of them anywhere near the
+    JavaScript change that caused it.
+  - A `tsconfig.json` with `composite: true` and a `references` entry from each
+    consumer, or its sources are pulled into the consumer's own program and move
+    where that consumer's `dist/` lands. `@ci/tool-core` is the worked example.
+  - Three lines in any image that ships a consumer — see
+    `backend/apps/api/Dockerfile`: the manifest before `yarn workspaces focus`,
+    the sources into the builder, the built `dist` into the runtime stage.
 - **A new capability in the API** — a tool in `domains/tools`, so all three
   surfaces get it, rather than a controller on one of them.
 - **A new API domain** — a directory under `src/domains/` with an `index.ts`
