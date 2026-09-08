@@ -40,12 +40,13 @@ name: PR gate
 # and from `docs/qa/baseline-2026-08-29.md` §3.2, which measured the same suite
 # at 673s of wall clock on a developer machine:
 #
-#     test-frontend   ~10-15 min   (381 files / 3,714 cases, no coverage)
+#     test-frontend   ~7-10 min each x 4 shards  (381 files / 3,714 cases,
+#                     no coverage; ~28-40 runner-min total, ~7-10 wall)
 #     build-web       ~8-12 min    (two full `tsc && vite build` runs)
 #     typecheck pkgs  ~3-5 min     (re-runs the two lanes above it, by design)
 #
-# So roughly 20-30 runner-minutes on top of the ~10 the six lint/typecheck
-# lanes and the guards already cost — call it three times this workflow's
+# So roughly 40-55 runner-minutes on top of the ~10 the six lint/typecheck
+# lanes and the guards already cost — call it five times this workflow's
 # previous per-PR bill. That is a real number against the ~$563/month that
 # gated every workflow here in the first place (`docs/CI.md`), and it buys the
 # only automated proof on a PR that the React app compiles into a shippable
@@ -67,13 +68,21 @@ name: PR gate
 # `main`, since a context that never reports blocks every PR forever):
 #
 #     Lint root, Lint backend, Lint frontend, Lint format,
-#     Type check backend, Type check frontend, Run frontend tests
+#     Type check backend, Type check frontend
 #
-# Those names match `ci.yml`'s jobs on purpose. The two run the same commands —
-# `Run frontend tests` is the one near-miss, since `ci.yml`'s copy adds
-# `--coverage` and uploads the report — so a deliberately dispatched `ci.yml`
-# reports the same contexts and satisfies the same rule rather than sitting
-# beside it as a near-duplicate.
+# Those six names match `ci.yml`'s jobs on purpose, so a deliberately dispatched
+# `ci.yml` reports the same contexts and satisfies the same rule rather than
+# sitting beside it as a near-duplicate.
+#
+# `Run frontend tests` is NO LONGER in that list, and the reason is the sharding
+# below. This copy reports four contexts — `Run frontend tests (1/4)` through
+# `(4/4)` — while `ci.yml` runs the suite unsharded as a single
+# `Run frontend tests`. The names therefore no longer coincide, so requiring the
+# sharded four would mean only a `pull_request` run can ever satisfy them and a
+# dispatched `ci.yml` on a hotfix could not clear the rule. Require them anyway
+# if you accept that trade — they ARE the more thorough check — but do it with
+# eyes open, and require all four or none, since each shard covers a disjoint
+# quarter of the files and any single one passing proves nothing about the rest.
 #
 # `Mobile native guards`, `Desktop native guards`, `Build web bundle` and
 # `Type check packages` are deliberately NOT in that list: none of the four has
@@ -256,8 +265,26 @@ jobs:
   # got a 20s `testTimeout` — every one of the 7 failures in the QA baseline was
   # a 5s timeout under parallel load, not an assertion, and each passed on an
   # isolated re-run. A gate that goes red at random teaches people to ignore it.
+  # SHARDED, and the shard count is not decoration — it is the fix for a
+  # measured failure. The first real run of this job on a hosted runner
+  # (run 34180056712, 2026-09-08) was killed by its own 20-minute step ceiling
+  # while still executing tests, having got nowhere near the end: not a test
+  # failure, just a suite that does not fit a 2-core runner in one job.
+  #
+  # Measured, so the next person does not have to re-derive it. Locally the
+  # whole suite is 27s on a 128-core box; constrained to two workers to
+  # approximate the runner it is 355s wall / 14m28s of CPU, and the profile is
+  # dominated by `collect` (311s) — module transform and load, not the 79s the
+  # assertions themselves cost. A hosted 2-core runner is slower per core than
+  # that box, which is how 20 minutes was not enough.
+  #
+  # Four shards rather than one bigger timeout: `--shard=i/4` splits the FILE
+  # set, so each job pays its own fixed setup but a quarter of the collect cost,
+  # landing around 7-10 minutes and leaving real headroom under the ceiling.
+  # Total runner-minutes are similar to one long job; wall-clock is a quarter,
+  # and a flake re-runs one shard instead of all 381 files.
   test-frontend:
-    name: Run frontend tests
+    name: Run frontend tests (${{ matrix.shard }}/4)
     needs: install
     runs-on: ubuntu-latest
     # Headroom over the step ceiling below, the same split `ci.yml`'s backend
@@ -265,9 +292,15 @@ jobs:
     # reported as `cancelled`, names no step and skips every remaining step, so
     # nothing can report on the way out. A STEP timeout fails that step and lets
     # the job finish normally.
-    timeout-minutes: 30
+    timeout-minutes: 25
     container:
       image: node:22
+    strategy:
+      # Every shard reports. One slow or broken shard must not hide the other
+      # three, which is the whole point of splitting the file set.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -295,12 +328,18 @@ jobs:
       # artifact — and v8 instrumentation would only make the gate slower here
       # to produce a report that is thrown away with the runner.
       #
-      # 20 minutes against 673s measured on a developer machine
-      # (`docs/qa/baseline-2026-08-29.md` §3.2). Anything near the ceiling means
-      # the suite has stopped making progress rather than merely got slower.
-      - name: Run frontend unit/component tests
-        timeout-minutes: 20
-        run: yarn workspace @ci/fe-web test
+      # 18 minutes against a shard expected to take 7-10 (see the sharding note
+      # on the job). The previous single-job form used 20 against the WHOLE
+      # suite and was killed by it mid-run; if a quarter of the files now
+      # approaches this ceiling, the suite has stopped making progress rather
+      # than merely got slower.
+      #
+      # `--shard` splits by file, so the four jobs together cover the suite
+      # exactly once. Vitest exits non-zero on an empty shard, so a mis-typed
+      # denominator fails loudly instead of silently testing nothing.
+      - name: Run frontend unit/component tests (shard ${{ matrix.shard }}/4)
+        timeout-minutes: 18
+        run: yarn workspace @ci/fe-web test --shard=${{ matrix.shard }}/4
 
   # The PWA guard, and the only thing in this repo that proves the web app still
   # BUILDS on a pull request.

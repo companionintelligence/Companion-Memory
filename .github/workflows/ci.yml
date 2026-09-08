@@ -247,7 +247,7 @@ jobs:
     # that it is blocking and `publish.yml` gates on this workflow, a hung suite
     # would sit on GitHub's 360-minute default and hold a release for six hours
     # before anyone saw a result.
-    timeout-minutes: 35
+    timeout-minutes: 50
     container:
       image: node:22
     # This job is BLOCKING, and that is load-bearing rather than tidiness.
@@ -284,15 +284,27 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 25 rather than the 20 `pr-gate.yml`'s copy of this job uses, because
-      # this one adds `--coverage`: v8 instrumentation plus the html/lcov
-      # reporters over ~800 source files is real overhead the gate copy does not
-      # pay. Measured 673s of wall clock without coverage on a developer machine
-      # (`docs/qa/baseline-2026-08-29.md` §3.2), so the ceiling is a hang
-      # detector, not a performance budget — and failing the STEP leaves the job
-      # alive so `Upload coverage report` below still runs and says what it got.
+      # 40 minutes, and the number is measured rather than guessed. `pr-gate.yml`
+      # ran this suite unsharded on a hosted runner once (run 34180056712,
+      # 2026-09-08) and its 20-minute ceiling killed it mid-run — not a test
+      # failure, just a suite that does not fit a 2-core runner in one job.
+      # Constrained locally to two workers to approximate that runner it is 355s
+      # wall / 14m28s CPU, dominated by `collect` (311s of module transform and
+      # load) rather than by the 79s the assertions cost.
+      #
+      # This copy is SLOWER than the one that died, because `--coverage` adds v8
+      # instrumentation and the html/lcov reporters over the widened include set
+      # (src plus every frontend/packages/*/src). It is not sharded, unlike the
+      # gate copy: this workflow is dispatch-only so wall clock is cheap here,
+      # and a single job keeps one coverage report instead of needing a merge
+      # step. The ceiling is a hang detector, not a performance budget.
+      #
+      # Getting this wrong is expensive now: `publish.yml`'s release gate reads
+      # whether THIS workflow concluded success, so a timeout here blocks
+      # releases. Failing the STEP rather than the job leaves `Upload coverage
+      # report` below alive to say what it got.
       - name: Run frontend unit/component tests
-        timeout-minutes: 25
+        timeout-minutes: 40
         run: yarn workspace @ci/fe-web test --coverage
 
       - name: Upload coverage report

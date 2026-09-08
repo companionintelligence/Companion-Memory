@@ -101,8 +101,12 @@ touching a workflow (re-verified 2026-09-07):
   *backend* unit suite and the Python lanes stay on dispatch in `ci.yml`; the
   frontend one no longer does, so this file's earlier "the unit-test and Python
   lanes stay on dispatch" was only half true and is corrected here. Its
-  lint/typecheck/`Run frontend tests` jobs reuse `ci.yml`'s job names on
-  purpose, so a dispatched `ci.yml` reports the same check contexts.
+  lint and typecheck jobs reuse `ci.yml`'s job names on purpose, so a dispatched
+  `ci.yml` reports the same check contexts. `Run frontend tests` is the one
+  exception: `pr-gate.yml` shards it four ways (`Run frontend tests (1/4)`..
+  `(4/4)`) after an unsharded run was killed by its own 20-minute step ceiling
+  on a hosted runner, while `ci.yml` runs it unsharded, so those two do **not**
+  report interchangeable contexts.
 - **`benchmark-unit.yml`** — `pull_request` **and** push to `main`, path-filtered
   to `scripts/benchmark/**` and to the workflow file itself. It runs `pytest`
   and then a **pinned `ruff==0.16.1`** (`check` + `format --check`), added
