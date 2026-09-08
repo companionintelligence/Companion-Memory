@@ -1,10 +1,12 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { MoreThan } from 'typeorm';
 
 import { SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { EventService } from '@ci/domains/events';
+import { CalendarEventService, EventEntity } from '@ci/domains/memory';
 
 import { TaskEntity } from '../../entities/TaskEntity';
 import { TaskPendingChangeEntity } from '../../entities/TaskPendingChangeEntity';
@@ -88,8 +90,11 @@ describe('TaskService', () => {
     findOne: jest.Mock;
     createQueryBuilder: jest.Mock;
   };
+  /** `ci.events` rows for planned blocks — the delete path reads and tombstones these. */
+  let blockRepo: { find: jest.Mock };
+  let calendarEvents: { remove: jest.Mock };
 
-  async function setup(rows: TaskEntity[] = []) {
+  async function setup(rows: TaskEntity[] = [], blocks: Array<{ id: string }> = []) {
     qb = makeQueryBuilder(rows);
     repository = {
       create: jest.fn((data: Partial<TaskEntity>) => data as TaskEntity),
@@ -113,12 +118,17 @@ describe('TaskService', () => {
       })),
     };
 
+    blockRepo = { find: jest.fn(async () => blocks) };
+    calendarEvents = { remove: jest.fn(async () => true) };
+
     const moduleRef = await Test.createTestingModule({
       providers: [
         TaskService,
         { provide: getRepositoryToken(TaskEntity), useValue: repository },
         { provide: getRepositoryToken(TaskPendingChangeEntity), useValue: pendingRepo },
+        { provide: getRepositoryToken(EventEntity), useValue: blockRepo },
         { provide: EventService, useValue: signalling },
+        { provide: CalendarEventService, useValue: calendarEvents },
         { provide: LoggerService, useValue: { setContext: jest.fn(), warn: jest.fn(), log: jest.fn() } },
       ],
     }).compile();
@@ -263,7 +273,8 @@ describe('TaskService', () => {
 
       expect(repository.findOne).toHaveBeenCalledWith({
         where: { id: 'parent-1', userId: ALICE.userId },
-        select: { id: true },
+        // `parentId` too: the ancestor walk that refuses a cycle starts from it.
+        select: { id: true, parentId: true },
       });
 
       const [created] = repository.create.mock.calls[0] as [Partial<TaskEntity>];
@@ -293,6 +304,65 @@ describe('TaskService', () => {
       const result = await service.update(ALICE, 'task-1', { parentId: 'parent-1' });
 
       expect(result?.parentId).toBe('parent-1');
+    });
+
+    // -------------------------------------------------------------------------
+    // parentId cycles.
+    //
+    // `tasks_no_self_parent` rejects the one-hop edge and nothing else, so a
+    // two-hop cycle was accepted by the database AND by the ownership check —
+    // and the Plan board builds its columns from the tasks with no parent, so
+    // both rows vanished from every column at once while the nav badge kept
+    // counting them. TodoProcessService's `reparent` suggestion is the path
+    // that produces one: it only guards `parent.id !== task.id`.
+    // -------------------------------------------------------------------------
+    it('refuses a parent that is a direct child of the task', async () => {
+      await setup([makeTask()]);
+      repository.findOne
+        .mockResolvedValueOnce(makeTask()) // the task being updated: task-1
+        .mockResolvedValueOnce(makeTask({ id: 'child-1', parentId: 'task-1' })); // the proposed parent
+
+      await expect(service.update(ALICE, 'task-1', { parentId: 'child-1' })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(repository.save).not.toHaveBeenCalled();
+    });
+
+    it('refuses a parent further down the same subtree', async () => {
+      await setup([makeTask()]);
+      repository.findOne
+        .mockResolvedValueOnce(makeTask()) // task-1
+        .mockResolvedValueOnce(makeTask({ id: 'grandchild-1', parentId: 'child-1' })) // proposed parent
+        .mockResolvedValueOnce(makeTask({ id: 'child-1', parentId: 'task-1' })); // one step up
+
+      await expect(service.update(ALICE, 'task-1', { parentId: 'grandchild-1' })).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(repository.save).not.toHaveBeenCalled();
+    });
+
+    it('refuses the task itself as its own parent, which the CHECK constraint would too', async () => {
+      await setup([makeTask()]);
+      repository.findOne.mockResolvedValueOnce(makeTask()).mockResolvedValueOnce(makeTask({ id: 'task-1' }));
+
+      await expect(service.update(ALICE, 'task-1', { parentId: 'task-1' })).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('terminates on a cycle that already exists among the ancestors', async () => {
+      // A pair written before this check existed would otherwise spin the walk
+      // forever and hang the request rather than rejecting the edge.
+      await setup([makeTask()]);
+      repository.findOne
+        .mockResolvedValueOnce(makeTask()) // task-1
+        .mockResolvedValueOnce(makeTask({ id: 'loop-a', parentId: 'loop-b' })) // proposed parent
+        .mockResolvedValueOnce(makeTask({ id: 'loop-b', parentId: 'loop-a' }))
+        .mockResolvedValue(makeTask({ id: 'loop-a', parentId: 'loop-b' }));
+
+      const result = await service.update(ALICE, 'task-1', { parentId: 'loop-a' });
+
+      expect(result?.parentId).toBe('loop-a');
     });
   });
 
@@ -421,6 +491,46 @@ describe('TaskService', () => {
 
       expect(await service.remove(ALICE, 'task-1')).toBe(false);
       expect(signalling.send).not.toHaveBeenCalled();
+    });
+
+    // -------------------------------------------------------------------------
+    // The planned block goes with the task.
+    //
+    // `ci.events.task_id` is ON DELETE SET NULL, so deleting the task alone
+    // left the block on the calendar under the dead task's title, still
+    // occupying the slot propose() reads as busy — and with a null task_id no
+    // path in the product could reach it again (findActiveForTask matches on
+    // task_id). TaskRemovedEvent's only listener is the search indexer.
+    // -------------------------------------------------------------------------
+    it("tombstones the task's planned blocks before the row goes", async () => {
+      await setup([], [{ id: 'event-1' }, { id: 'event-2' }]);
+
+      expect(await service.remove(ALICE, 'task-1')).toBe(true);
+
+      const [{ where }] = blockRepo.find.mock.calls[0] as [{ where: Record<string, unknown> }];
+
+      expect(where).toEqual({
+        userId: ALICE.userId,
+        taskId: 'task-1',
+        eventType: 'planned_block',
+        isDeleted: false,
+      });
+      expect(calendarEvents.remove.mock.calls.map(([, id]) => id)).toEqual(['event-1', 'event-2']);
+      // Before, not after: once the delete lands, task_id is NULL and the block
+      // is unfindable.
+      expect(calendarEvents.remove.mock.invocationCallOrder[0]).toBeLessThan(
+        repository.delete.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('leaves the task in place when the block cannot be taken off the calendar', async () => {
+      // Deleting the task anyway is precisely the orphan this guards against,
+      // so the failure surfaces instead of being swallowed.
+      await setup([], [{ id: 'event-1' }]);
+      calendarEvents.remove.mockRejectedValueOnce(new Error('events table unreachable'));
+
+      await expect(service.remove(ALICE, 'task-1')).rejects.toThrow('events table unreachable');
+      expect(repository.delete).not.toHaveBeenCalled();
     });
   });
 
@@ -587,6 +697,35 @@ describe('TaskService', () => {
         expect(repository.save).not.toHaveBeenCalled();
         expect(task?.id).toBe('task-1');
         expect(change?.status).toBe('accepted');
+      });
+    });
+
+    describe('hasDeclinedChangeSince', () => {
+      it('asks for the declined rows resolved after the instant given', async () => {
+        // The producers' only way to see a dismissal: createPendingChange
+        // de-dupes against `pending` alone, so nothing else in the codebase
+        // reads `declined` and every cron tick re-filed the same prompt.
+        await setup([makeTask()]);
+        const since = new Date('2026-01-05T09:30:00.000Z');
+
+        expect(await service.hasDeclinedChangeSince(ALICE, 'task-1', 'complete', since)).toBe(false);
+
+        const [{ where }] = pendingRepo.findOne.mock.calls[0] as [{ where: Record<string, unknown> }];
+
+        expect(where).toMatchObject({
+          taskId: 'task-1',
+          userId: ALICE.userId,
+          kind: 'complete',
+          status: 'declined',
+        });
+        expect(where.resolvedAt).toEqual(MoreThan(since));
+      });
+
+      it('reports a standing decline', async () => {
+        await setup([makeTask()]);
+        pendingRepo.findOne.mockResolvedValue(makePendingChange({ status: 'declined' }));
+
+        expect(await service.hasDeclinedChangeSince(ALICE, 'task-1', 'complete', new Date(0))).toBe(true);
       });
     });
 

@@ -149,6 +149,20 @@ describe('CalendarEventService.findInRange — the calendar read path', () => {
     expect(status).not.toContain('tentative');
   });
 
+  it('treats a NULL status as confirmed rather than filtering the row away', async () => {
+    await setup();
+
+    await service.findInRange(ctx, from, to);
+
+    // ci.events.status is still nullable in the database, and `NOT IN` is
+    // three-valued: without the COALESCE a NULL-status row makes the predicate
+    // NULL, so the event exists, is returned by every other read, and is
+    // missing from the calendar with nothing to explain why.
+    expect(clauseWith('event.status')).toBe(
+      "COALESCE(event.status, 'confirmed') NOT IN ('cancelled', 'no_show')",
+    );
+  });
+
   it('excludes soft-deleted rows', async () => {
     await setup();
 

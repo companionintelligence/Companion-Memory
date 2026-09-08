@@ -131,6 +131,82 @@ describe('spanForDay — clipping committed events onto a day row', () => {
     expect(span?.widthPct).toBe(100);
   });
 
+  /** Which local day columns of that week an event claims, by day of month. */
+  function coveredDays(entry: ScheduleEvent): number[] {
+    return [1, 2, 3, 4, 5]
+      .map((day) => startOfLocalDay(new Date(2026, 7, day)))
+      .filter((day) => spanForDay(entry, day) !== null)
+      .map((day) => day.getDate());
+  }
+
+  /**
+   * A Google all-day row is date-only in the payload, so it is stored UTC
+   * midnight to UTC midnight. Clipped by instant overlap it claimed TWO
+   * adjacent columns in every zone — Aug 3 and Aug 4 under UTC and east of it,
+   * Aug 2 and Aug 3 across the Americas — so one birthday drew two chips.
+   */
+  it('puts a UTC-midnight all-day event on exactly one day column, in every zone', () => {
+    for (const zone of ['UTC', 'Asia/Tokyo', 'Pacific/Auckland', 'America/New_York', 'America/Los_Angeles']) {
+      withTimeZone(zone, () => {
+        const birthday = event({
+          title: 'Ada’s birthday',
+          startTime: '2026-08-03T00:00:00.000Z',
+          endTime: '2026-08-04T00:00:00.000Z',
+          isAllDay: true,
+        });
+
+        expect(coveredDays(birthday)).toEqual([3]);
+      });
+    }
+  });
+
+  /** The other shape: EventForm writes all-day events at LOCAL midnight. */
+  it('puts a local-midnight all-day event on exactly one day column', () => {
+    withTimeZone('Asia/Tokyo', () => {
+      const holiday = event({
+        startTime: new Date(2026, 7, 3).toISOString(),
+        endTime: new Date(2026, 7, 4).toISOString(),
+        isAllDay: true,
+      });
+
+      expect(coveredDays(holiday)).toEqual([3]);
+    });
+  });
+
+  it('spans an all-day event over every date it names, exclusive end and all', () => {
+    const trip = event({
+      startTime: '2026-08-03T00:00:00.000Z',
+      endTime: '2026-08-06T00:00:00.000Z',
+      isAllDay: true,
+    });
+
+    expect(coveredDays(trip)).toEqual([3, 4, 5]);
+  });
+
+  it('leaves an event that ends exactly at midnight off the following day', () => {
+    const lateShift = event({
+      title: 'Close the bar',
+      startTime: new Date(2026, 7, 2, 23, 0).toISOString(),
+      endTime: new Date(2026, 7, 3, 0, 0).toISOString(),
+    });
+
+    // The old `end < dayStart` test admitted it, then clipped it to zero
+    // minutes and widened it to the 20-minute floor: a phantom chip pinned to
+    // the top of a day the event never touched.
+    expect(spanForDay(lateShift, MONDAY)).toBeNull();
+    expect(spanForDay(lateShift, addDays(MONDAY, -1))).not.toBeNull();
+  });
+
+  it('keeps a zero-length event that starts at midnight on its own day', () => {
+    const span = spanForDay(
+      event({ startTime: new Date(2026, 7, 3, 0, 0).toISOString(), endTime: null }),
+      MONDAY,
+    );
+
+    expect(span?.leftPct).toBe(0);
+    expect(span?.widthPct).toBeGreaterThan(0);
+  });
+
   it('gives a zero-length event a floor width so it stays visible', () => {
     const span = spanForDay(
       event({ startTime: new Date(2026, 7, 3, 9, 0).toISOString(), endTime: null }),

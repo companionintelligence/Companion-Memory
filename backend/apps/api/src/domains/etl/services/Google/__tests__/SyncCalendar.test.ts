@@ -109,3 +109,49 @@ describe('syncCalendar — incremental syncToken handling', () => {
     ).rejects.toThrow('Internal error');
   });
 });
+
+describe('syncCalendar — series masters, not per-occurrence expansion', () => {
+  // Locks the two halves of an invariant that has now been re-proposed once as
+  // a bug fix ("expand recurring events so the planner can see them"). Both
+  // halves are load-bearing:
+  //
+  //  1. singleEvents=false is a deliberate cross-pipeline identity decision
+  //     (docs/design/cross-pipeline-identity.md §10, post-verification fixes).
+  //     The ICS importer does not expand instances either — datasources/
+  //     calendar.ts:179, "the canonical row represents the series master" — so
+  //     flipping this mints a `uid#instant` row per occurrence that converges
+  //     with nothing on the Takeout side and duplicates every recurring series.
+  //  2. Google rejects timeMin/timeMax alongside syncToken, so the bounded
+  //     forward window that would make expansion affordable cannot coexist
+  //     with this branch's incremental token.
+  //
+  // A change that trips either assertion needs to answer both, not just the
+  // planner's complaint.
+  function endpointOf(client: BaseClient): string {
+    return (client.request as jest.Mock).mock.calls[0][1] as string;
+  }
+
+  it('asks the historical branch for masters within the pre-connection window', async () => {
+    const client = createMockClient(() => ({ items: [] }));
+    const connection = createConnection();
+
+    await syncCalendar({ connection, client, nextCursor: {}, historical: true });
+
+    const params = new URLSearchParams(endpointOf(client).split('?')[1]);
+    expect(params.get('singleEvents')).toBe('false');
+    expect(params.get('timeMax')).toBe(connection.createdAt.toISOString());
+  });
+
+  it('asks the incremental branch for masters and sends no time window with a syncToken', async () => {
+    const client = createMockClient(() => ({ items: [], nextSyncToken: 'fresh' }));
+    const connection = createConnection();
+
+    await syncCalendar({ connection, client, nextCursor: { syncToken: 'token' }, historical: false });
+
+    const params = new URLSearchParams(endpointOf(client).split('?')[1]);
+    expect(params.get('singleEvents')).toBe('false');
+    // Google answers 400 for either of these next to a syncToken.
+    expect(params.get('timeMin')).toBeNull();
+    expect(params.get('timeMax')).toBeNull();
+  });
+});

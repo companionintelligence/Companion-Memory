@@ -48,6 +48,24 @@ export class EventResolver {
     private readonly eventContentsLoader: EventContentsLoader,
   ) {}
 
+  /**
+   * Refuse a reversed interval before it reaches the writer.
+   *
+   * `ci.events` carries `valid_time_range CHECK (end_time IS NULL OR
+   * start_time <= end_time)` and formatError reduces the 23514 it raises to a
+   * bare `Internal server error`, so an event minted end-before-start answers
+   * user input with an unclassified 500. Equal instants stay legal — the
+   * constraint allows them, and a zero-length marker is a real thing to store.
+   *
+   * Only decidable when the request names both ends: `updateEvent` may move
+   * one edge of a stored row, and the other edge is not in the arguments.
+   */
+  private assertTimeOrder(startTime?: Date, endTime?: Date): void {
+    if (startTime && endTime && endTime < startTime) {
+      throw new BadRequestException('`endTime` must not precede `startTime`');
+    }
+  }
+
   /** Map a CreateEventInput (GraphQL) to the service's CreateEventDto. */
   private toDto(input: CreateEventInput) {
     return {
@@ -83,6 +101,8 @@ export class EventResolver {
     @Context() context: RequestContext,
     @Args('input') input: CreateEventInput,
   ): Promise<EventType> {
+    this.assertTimeOrder(input.startTime, input.endTime);
+
     const serviceContext = toServiceContext(context);
 
     const entity = await this.eventService.create(serviceContext, this.toDto(input));
@@ -102,6 +122,8 @@ export class EventResolver {
     @Args({ name: 'input', type: () => [CreateEventInput] }, new MaxArraySizePipe())
     input: CreateEventInput[],
   ): Promise<EventType[]> {
+    input.forEach((i) => this.assertTimeOrder(i.startTime, i.endTime));
+
     const serviceContext = toServiceContext(context);
 
     const entities = await this.eventService.create(
@@ -117,6 +139,8 @@ export class EventResolver {
     @Context() context: RequestContext,
     @Args('input') input: UpdateEventInput,
   ): Promise<EventType | null> {
+    this.assertTimeOrder(input.startTime, input.endTime);
+
     const serviceContext = toServiceContext(context);
 
     const id = GlobalUID.parse('event', input.id);
@@ -217,14 +241,21 @@ export class EventResolver {
   ): Promise<EventConnection> {
     const serviceContext = toServiceContext(context);
 
-    const entities = await this.eventService.findAll(serviceContext);
+    // Keyset, not slice-in-memory: this used to `findAll` the user's entire
+    // event table — photos, visits and every ETL row, not just calendar
+    // entries — and then discard all but `first` of them. The cursors stay
+    // GlobalUID-encoded row ids, so the wire contract is unchanged.
+    const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.eventService.findPage(
+      serviceContext,
+      {
+        first: pagination.first,
+        last: pagination.last,
+        afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
+        beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
+      },
+    );
 
-    const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
-      ...pagination,
-      getId: (entity) => GlobalUID.encode('event', entity.id),
-    });
-
-    const edges: EventEdge[] = slice.map((entity) => {
+    const edges: EventEdge[] = entities.map((entity) => {
       const node = EventType.toType(entity);
 
       return {
@@ -235,7 +266,12 @@ export class EventResolver {
 
     return {
       edges,
-      pageInfo,
+      pageInfo: {
+        hasNextPage,
+        hasPreviousPage,
+        startCursor: edges.length > 0 ? edges[0].cursor : null,
+        endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
+      },
       totalCount,
     };
   }
@@ -289,9 +325,7 @@ export class EventResolver {
     @Args('startTime', { type: () => Date }) startTime: Date,
     @Args('endTime', { type: () => Date, nullable: true }) endTime?: Date,
   ): Promise<EventType | null> {
-    if (endTime && endTime < startTime) {
-      throw new BadRequestException('`endTime` must not precede `startTime`');
-    }
+    this.assertTimeOrder(startTime, endTime);
 
     const serviceContext = toServiceContext(context);
     const id = GlobalUID.parse('event', gid);

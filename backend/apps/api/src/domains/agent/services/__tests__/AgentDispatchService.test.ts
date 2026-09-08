@@ -38,11 +38,19 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
     // `findById` as well as `update`: releaseTask READS the task before handing
     // it back, and a stub with only `update` made that branch un-runnable —
     // the same shape of blind spot that let `delegated` ship untested.
-    const task = { id: 'task-1', status: 'delegated' };
+    const task = { id: 'task-1', status: 'delegated', completedAt: null as Date | null };
     const taskService = {
       findById: jest.fn(async () => task),
       update: jest.fn(async (_ctx: unknown, _id: string, patch: { status: string }) => {
         task.status = patch.status;
+
+        return task;
+      }),
+      // The real `complete` stamps the instant; a stub with only `update` could
+      // not tell a raw `{ status: 'done' }` write apart from a real completion.
+      complete: jest.fn(async () => {
+        task.status = 'done';
+        task.completedAt = task.completedAt ?? new Date();
 
         return task;
       }),
@@ -196,7 +204,7 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
   });
 
   it('closes the task when the job completes', async () => {
-    const { service, taskService, eventService } = setup();
+    const { service, task, taskService, eventService } = setup();
 
     const updated = await service.checkpoint(context, 'job-1', {
       status: 'completed',
@@ -204,8 +212,32 @@ describe('AgentDispatchService.checkpoint stop rule', () => {
     });
 
     expect(updated.status).toBe('completed');
-    expect(taskService.update).toHaveBeenCalledWith(context, 'task-1', { status: 'done' });
+    // Through `complete`, not a raw `update({ status: 'done' })`: that wrote the
+    // status and nothing else, so a delegated task finished with completed_at
+    // NULL — no completion time on the Plan card, and invisible to every
+    // consumer keyed on that instant (HBPE's daily rollup among them).
+    expect(taskService.complete).toHaveBeenCalledWith(context, 'task-1');
+    expect(taskService.update).not.toHaveBeenCalled();
+    expect(task.status).toBe('done');
+    expect(task.completedAt).toBeInstanceOf(Date);
     expect(eventService.completeJob).toHaveBeenCalledWith('agent', 'pg-job-1', { status: 'completed' });
+  });
+
+  it('does not close work the owner already archived while the harness was away', async () => {
+    // The same guard releaseTask takes, for the same reason: the harness
+    // reports in whenever it finishes, and a late success must not overwrite a
+    // decision the user has since made.
+    const { service, task, taskService } = setup();
+    task.status = 'archived';
+
+    const updated = await service.checkpoint(context, 'job-1', {
+      status: 'completed',
+      result: { summary: 'Booked Friday at 9' },
+    });
+
+    expect(updated.status).toBe('completed');
+    expect(taskService.complete).not.toHaveBeenCalled();
+    expect(task.status).toBe('archived');
   });
 });
 

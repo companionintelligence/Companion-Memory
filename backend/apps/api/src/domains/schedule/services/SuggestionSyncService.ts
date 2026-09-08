@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { localDateInTZ, localHourInTZ, zonedWallTimeToUTC } from '@ci/common/time/zoned';
 import { ActionEntity } from '@ci/domains/intelligence';
 import {
   estimateActivityDurationMinutes,
@@ -20,6 +21,21 @@ import { CandidateService } from './CandidateService';
 
 /** Cap per source so one noisy generator cannot flood the slate. */
 const MAX_PER_SOURCE = 25;
+
+/**
+ * The waking band an auto-accepted block may start inside, as local hours.
+ *
+ * Auto-accept runs from a queue job as well as from the page, so "soon" has to
+ * be qualified: a 03:00 sweep must not commit the user to a 03:05 block.
+ */
+const AUTO_ACCEPT_FIRST_HOUR = 8;
+const AUTO_ACCEPT_LAST_HOUR = 20;
+
+/** Where a block lands when the band has not opened yet, or has closed. */
+const AUTO_ACCEPT_OFFERED_TIME = '10:00';
+
+/** Enough lead that a block accepted right now is not already under way. */
+const AUTO_ACCEPT_LEAD_MS = 5 * 60_000;
 
 /**
  * The one `feedback_reason` that retires an *idea* rather than one proposal of it.
@@ -129,6 +145,50 @@ function splitLabelled(text: string): { title: string; detail: string } {
 }
 
 /**
+ * When an auto-accepted candidate should actually start.
+ *
+ * `window_start` is the earliest EDGE of the seven-day flex window — local
+ * midnight today for everything {@link SuggestionSyncService.sync} mints, see
+ * `flexWindow` — and never a proposed time. Passing it straight to
+ * `CandidateService.accept` minted a `confirmed` 00:00 block, already hours in
+ * the past for anyone whose sync ran during the day; and because accept claims
+ * the row, the idea was consumed and could not be re-offered at a usable hour.
+ * The window only constrains which day the block may not precede. The hour has
+ * to come from somewhere else, and this is that somewhere.
+ *
+ * `notBefore` is the tail of the previous auto-accept in the same pass, so
+ * successive blocks queue up rather than collide.
+ */
+function autoAcceptStart(timezone: string, windowStart: Date | null, now: Date, notBefore: Date): Date {
+  const earliest = new Date(
+    Math.max(now.getTime() + AUTO_ACCEPT_LEAD_MS, notBefore.getTime(), windowStart?.getTime() ?? 0),
+  );
+  const hour = localHourInTZ(earliest, timezone);
+
+  if (hour >= AUTO_ACCEPT_FIRST_HOUR && hour < AUTO_ACCEPT_LAST_HOUR) {
+    return earliest;
+  }
+
+  const day = localDateInTZ(earliest, timezone);
+  const offered = zonedWallTimeToUTC(day, AUTO_ACCEPT_OFFERED_TIME, timezone);
+
+  if (offered.getTime() >= earliest.getTime()) {
+    return offered;
+  }
+
+  // Past the band on that day, so the block belongs on the next one. The next
+  // date is read back off local noon plus 24 hours rather than by incrementing
+  // the string: noon is far enough from either DST boundary that the shift
+  // cannot land on the same date or skip one.
+  const nextDay = localDateInTZ(
+    new Date(zonedWallTimeToUTC(day, '12:00', timezone).getTime() + 24 * 60 * 60_000),
+    timezone,
+  );
+
+  return zonedWallTimeToUTC(nextDay, AUTO_ACCEPT_OFFERED_TIME, timezone);
+}
+
+/**
  * Projects the things the system has already decided are worth doing —
  * `ci.actions` and the `key_actions` of insight summaries — into schedule
  * candidates.
@@ -190,7 +250,7 @@ export class SuggestionSyncService {
 
     await this.retireStale(context);
 
-    await this.tryAutoAccept(context);
+    await this.tryAutoAccept(context, timezone, now);
 
     this.logger.log('Synced schedule suggestions', {
       proposed: proposed.length,
@@ -435,7 +495,7 @@ export class SuggestionSyncService {
   }
 
   /** hands_off users with estimate-bearing candidates may auto-accept high-confidence items. */
-  private async tryAutoAccept(context: UserServiceContext): Promise<void> {
+  private async tryAutoAccept(context: UserServiceContext, timezone: string, now: Date): Promise<void> {
     const profile = await this.personalizationService.getProfile(context.userId!);
     if (!profile.autoSchedule) {
       return;
@@ -446,6 +506,11 @@ export class SuggestionSyncService {
       order: { confidence: 'DESC' },
       take: 3,
     });
+
+    // Carries the end of the last block committed in this pass, so a run of
+    // auto-accepts comes out as a sequence instead of three confirmed events
+    // stacked on one instant.
+    let notBefore = now;
 
     for (const candidate of open) {
       if (candidate.durationMinutes == null) {
@@ -462,9 +527,11 @@ export class SuggestionSyncService {
         continue;
       }
 
+      const startTime = autoAcceptStart(timezone, candidate.windowStart, now, notBefore);
+
       try {
-        const startTime = candidate.windowStart ?? new Date();
         await this.candidateService.accept(context, candidate.id, startTime);
+        notBefore = new Date(startTime.getTime() + candidate.durationMinutes * 60_000);
       } catch {
         // Concurrent accept or missing window — skip silently.
       }

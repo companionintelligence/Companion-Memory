@@ -298,7 +298,14 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
   // A run-unique marker folded into every seeded job's queue/name so this
   // suite's assertions never see another worker's (or a live appliance's) rows
   // in the same shared `pgboss.job` table.
-  const marker = uuidv7().slice(0, 8);
+  //
+  // Deliberately NOT a uuid prefix. `search` also matches `job.id::text ILIKE`,
+  // and uuidv7 is time-ordered — so a marker taken from the first 8 hex digits
+  // of one uuid matches the id of every other uuid minted in the same window,
+  // including this suite's own fixtures. That made the pagination assertions
+  // fail intermittently against a row nobody searched for. The `zz` prefix
+  // cannot appear in a uuid, so the term can only match what it was folded into.
+  const marker = `zzjq-${uuidv7().slice(-8)}`;
   const searchTerm = `zzsearch-${marker}`;
   const otherUserId = uuidv7();
   // Two rows whose category comes from their QUEUE rather than their event

@@ -87,12 +87,14 @@ type JobControlsBody = z.infer<typeof jobControlsSchema>;
  * make one. Gating these routes on it would answer the owner's own Jobs page
  * with a 403 they could not clear.
  *
- * What the guards CAN do here, and do, is keep `POST jobs/crons/run` — the one
- * route that acts — the most strongly gated route on the controller. Every read
- * below therefore states its capability floor explicitly instead of leaving it
- * unstated: `read` is rank 0, so it narrows no key that reaches these routes
- * today, but it means `full` on the acting route sits at the top of a ladder
- * that is declared end to end rather than above silence.
+ * What the guards CAN do here, and do, is keep the routes that ACT — `POST
+ * jobs/crons/run`, which fires every cron, and `POST jobs/clear-terminal`,
+ * which deletes the dead-letter/failed queues — the most strongly gated routes
+ * on the controller. Every read below therefore states its capability floor
+ * explicitly instead of leaving it unstated: `read` is rank 0, so it narrows no
+ * key that reaches these routes today, but it means `full` on the acting routes
+ * sits at the top of a ladder that is declared end to end rather than above
+ * silence.
  */
 
 const clearTerminalSchema = z.object({

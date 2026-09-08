@@ -9,7 +9,14 @@ import { PlanPage } from './PlanPage';
 import { SELECT_HOLD_MS } from './Task';
 import { addLocalDays, dueAtFromLocalDate, localDateOf } from './taskSections';
 import { DELETE_TASK } from './useDeleteTasks';
-import { ACCEPT_PROPOSED, DECLINE_PROPOSED, GET_TASKS, PLAN_TASK, SCHEDULE_TASK } from './usePlanTasks';
+import {
+  ACCEPT_PROPOSED,
+  DECLINE_PROPOSED,
+  GET_TASKS,
+  PLAN_TASK,
+  SCHEDULE_TASK,
+  SCHEDULE_TASK_AT,
+} from './usePlanTasks';
 
 const featureState = vi.hoisted(() => ({ emptyState: false }));
 const toastError = vi.hoisted(() => vi.fn());
@@ -450,6 +457,158 @@ describe('PlanPage', () => {
     await waitFor(() => {
       expect(screen.queryByRole('heading', { name: /^overdue/i })).not.toBeInTheDocument();
     });
+  });
+
+  /**
+   * ═══ RESCHEDULE USED TO MOVE THE DUE DATE AND NOTHING ELSE ═══
+   *
+   * Overdue work very often already has a planned block, and the date-only
+   * `scheduleTask` cannot move one — the server finds the existing block and
+   * answers `already_placed` without running the gap solver. The due date had
+   * already been written by then, so the block stayed on the day that had
+   * passed, the card stayed in Overdue, and `already_placed` was reported as a
+   * success, i.e. said nothing at all. A placed task goes through
+   * `SCHEDULE_TASK_AT`, which reschedules the block it finds.
+   *
+   * The mocks match on variables, so sending the old pair would find no mock,
+   * throw, and toast — which is why `toastError` is asserted on too.
+   */
+  it('moves the calendar block when rescheduling an already-placed task', async () => {
+    const today = new Date();
+    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+    const yesterdayDate = localDateOf(yesterday);
+    const tomorrowDate = addLocalDays(localDateOf(today), 1);
+    const movedAt = vi.fn();
+    let afterMove = false;
+
+    const block = (overrides: Record<string, unknown>) =>
+      node({ id: 'a', title: 'Overdue thing', placedOnCalendar: true, ...overrides });
+
+    const stillOverdue = block({ dueAt: yesterday.toISOString(), scheduledFor: yesterdayDate });
+    const rescheduled = block({
+      dueAt: dueAtFromLocalDate(tomorrowDate),
+      scheduledFor: tomorrowDate,
+    });
+
+    // The board is refetched after the move, and that read is what the user
+    // ends up looking at — `newData` is the refetch's answer, so the fixture
+    // has to move with the task rather than answering "still overdue" forever.
+    const board = (task: ReturnType<typeof node>) => ({
+      data: {
+        tasks: {
+          __typename: 'TaskConnection',
+          edges: [{ __typename: 'TaskEdge', node: task }],
+          totalCount: 1,
+        },
+        taskPendingChanges: [],
+      },
+    });
+
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        {
+          request: { query: GET_TASKS, variables: { first: 200 } },
+          maxUsageCount: Number.POSITIVE_INFINITY,
+          result: () => board(afterMove ? rescheduled : stillOverdue),
+          newData: () => board(afterMove ? rescheduled : stillOverdue),
+        },
+        {
+          request: {
+            query: UPDATE_TASK,
+            // `scheduledFor` travels with the due date on this path only:
+            // moving the event leaves the task's own date untouched server-side,
+            // and `sectionFor` takes the EARLIEST of the two, so without it the
+            // card would sit in Overdue on the strength of the stale one.
+            variables: {
+              input: {
+                id: 'a',
+                dueAt: dueAtFromLocalDate(tomorrowDate),
+                scheduledFor: tomorrowDate,
+              },
+            },
+          },
+          result: {
+            data: {
+              updateTask: {
+                __typename: 'UpdateTaskPayload',
+                success: true,
+                task: rescheduled,
+              },
+            },
+          },
+        },
+        {
+          request: {
+            query: SCHEDULE_TASK_AT,
+            variables: { id: 'a', startTime: dueAtFromLocalDate(tomorrowDate) },
+          },
+          result: () => {
+            movedAt();
+            afterMove = true;
+
+            return {
+              data: {
+                scheduleTask: {
+                  __typename: 'ScheduleTaskPayload',
+                  success: true,
+                  status: 'placed',
+                  task: rescheduled,
+                  event: {
+                    __typename: 'EventType',
+                    id: 'event-1',
+                    startTime: dueAtFromLocalDate(tomorrowDate),
+                    endTime: dueAtFromLocalDate(tomorrowDate),
+                  },
+                },
+              },
+            };
+          },
+          maxUsageCount: Number.POSITIVE_INFINITY,
+        },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /reschedule overdue thing/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^tomorrow$/i }));
+
+    await waitFor(() => expect(movedAt).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: /^overdue/i })).not.toBeInTheDocument();
+    });
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `already_placed` was silent alongside `placed`. It is not a success —
+   * nothing moved — and the board reaching it means the card was stale, which
+   * is precisely when the user needs telling rather than shown a dead button.
+   */
+  it('says so when the server refuses because the task is already on the calendar', async () => {
+    renderWithProviders(<PlanPage />, {
+      mocks: [
+        tasksMock([node()]),
+        {
+          request: { query: SCHEDULE_TASK, variables: { id: 'dGFzazoxMTE=' } },
+          result: {
+            data: {
+              scheduleTask: {
+                __typename: 'ScheduleTaskPayload',
+                success: false,
+                status: 'already_placed',
+                task: null,
+              },
+            },
+          },
+        },
+        tasksMock([node()]),
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /^schedule$/i }));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(expect.stringMatching(/already has a block/i)),
+    );
   });
 
   it('moves a yellow-date pending schedule into Unscheduled when Plan is clicked', async () => {

@@ -184,6 +184,16 @@ export class EventEntity {
   @Column({ type: 'integer', nullable: true, name: 'energy_level' })
   energyLevel!: number | null;
 
+  /**
+   * Non-null in the database as well as here, as of
+   * 20260908000139_events_status_not_null. The column had carried DEFAULT
+   * 'confirmed' since creation but not NOT NULL, so an explicit NULL write
+   * produced a row no calendar surface could see: every read filters with
+   * `status NOT IN (...)`, which SQL evaluates to UNKNOWN — not TRUE — for a
+   * NULL, silently dropping the row from the schedule grid, the planner's
+   * occupied set and peer free/busy alike. The reads COALESCE defensively so
+   * they stay correct against a database that has not taken that migration yet.
+   */
   @Column({ type: 'text', default: 'confirmed' })
   status!: string;
 
