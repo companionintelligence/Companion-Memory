@@ -98,6 +98,10 @@ on:
 
 permissions:
   contents: read
+  # Two separate needs, both real: the root `yarn install` reads the private
+  # @companionintelligence/tokens package from GitHub Packages (see that step),
+  # and the compose stack pulls ghcr.io/companionintelligence/companion/*.
+  packages: read
 
 concurrency:
   group: desktop-e2e-${{ github.ref }}
@@ -147,8 +151,19 @@ jobs:
 
       # Only needed for @playwright/test itself — nothing in tests/desktop
       # imports application code. The stack under test is pulled, not built.
+      #
+      # NODE_AUTH_TOKEN is still required despite that narrow need: `yarn
+      # install --immutable` resolves the WHOLE workspace, which includes the
+      # private `@companionintelligence/tokens` from npm.pkg.github.com
+      # (.yarnrc.yml maps that scope to ${NODE_AUTH_TOKEN}). Without it yarn
+      # fetches anonymously and dies with `YN0041: Invalid authentication`
+      # 28 seconds in, before a single container is pulled — which is exactly
+      # how this workflow failed on its first ever run (34187471301,
+      # 2026-09-08). The `packages: read` permission above is the other half.
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Mirrors `yarn build`'s own pre-step in frontend/apps/desktop: it copies
       # docker-compose.yml + docker-compose.production.yml from the repo root

@@ -19,6 +19,13 @@ name: E2E
 on:
   workflow_dispatch:
 
+# `packages: read` is not optional here — see the install step's comment. The
+# root install fetches a private GitHub Packages dependency, and the job's
+# GITHUB_TOKEN cannot read it without this.
+permissions:
+  contents: read
+  packages: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -75,8 +82,19 @@ jobs:
       - name: Provide .env (dev defaults)
         run: cp .env.default .env
 
+      # NODE_AUTH_TOKEN and the `packages: read` permission above are both
+      # required, and their absence is why this workflow could never get past
+      # its own install: the root install pulls the PRIVATE
+      # `@companionintelligence/tokens` from npm.pkg.github.com (.yarnrc.yml
+      # maps that scope to ${NODE_AUTH_TOKEN}), and without a token yarn fetches
+      # it as an anonymous user and dies with
+      # `YN0041: Invalid authentication (as an anonymous user)` — 27 seconds in,
+      # before a single service starts. Verified in run 34187462801, 2026-09-08.
+      # Same shape `pr-gate.yml` and `ci.yml` already use.
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # The Postgres image bundles TimescaleDB + PostGIS + pgvector and the role
       # bootstrap, which a stock pgvector image lacks — build the project's own.

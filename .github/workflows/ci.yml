@@ -21,6 +21,18 @@ name: CI
 on:
   workflow_dispatch:
 
+# Workflow-level default so every job that runs `yarn install` can read the
+# private @companionintelligence/tokens package from GitHub Packages. Jobs that
+# declare their own `permissions:` block override this entirely rather than
+# merging, so any such job needs `packages: read` repeated in it — today only
+# the `install` job does, and it already has it. Without this, a job whose
+# actions/cache lookup MISSES falls back to a real install and dies with
+# `YN0041: Invalid authentication (as an anonymous user)`; the lanes that pass
+# today pass because the cache is warm, which is not a guarantee.
+permissions:
+  contents: read
+  packages: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

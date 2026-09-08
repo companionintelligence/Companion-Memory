@@ -30,6 +30,16 @@ on:
           - fix
           - squash
 
+# The root install reads the private @companionintelligence/tokens package
+# from GitHub Packages. This job passed historically only on a warm
+# actions/cache; a cold cache would fail at `yarn install` with
+# `YN0041: Invalid authentication`. It is a release-gate precondition now
+# (publish.yml requires it green at the commit), so it must not depend on
+# cache luck.
+permissions:
+  contents: read
+  packages: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -59,6 +69,8 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check migration versions
         run: yarn workspace @ci/be-api check:migrations
