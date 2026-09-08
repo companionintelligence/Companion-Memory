@@ -154,10 +154,26 @@ run for reasons unrelated to any change: the scan completes, then the upload is
 rejected with `Code Security must be enabled for this repository to use code
 scanning`. TestFlight is `mobile-release.yml` (tag or dispatch), not Xcode Cloud.
 
-**Nothing gates a merge.** `main`'s branch protection has no
-`required_status_checks` block and `required_approving_review_count: 0`, so no
-red check blocks anything either. See `docs/qa/` for the release QA programme,
-the measured baseline, and a proposal for the minimum gate worth turning on.
+**Six checks gate a merge; reviews do not.** `main`'s branch protection requires
+`Lint root`, `Lint backend`, `Lint frontend`, `Lint format`, `Type check
+backend` and `Type check frontend` (`strict: false`, `enforce_admins: false`) —
+read back from the API 2026-09-07. An earlier revision of this file said
+"**Nothing gates a merge**", and that half is stale: `docs/CI.md` and
+`docs/qa/ci-gate-proposal.md` §3.4 already record the gate, both dating it
+2026-09-08. All six are `pr-gate.yml` job names, which is why they are the ones
+that run on every PR; because `ci.yml` reuses those names on purpose (see
+above), a dispatched `ci.yml` reports the same contexts and can satisfy them
+too. `pr-gate.yml`'s **other** contexts still block nothing — `Type check
+packages`, `Run frontend tests (1/4)`..`(4/4)`, `Build web bundle`, `Mobile
+native guards`, `Desktop native guards` and `Migration versions` all run on
+every PR, and a red one merges. Reviews are not required at all: the API returns
+`required_pull_request_reviews: null`, so the old paragraph's
+`required_approving_review_count: 0` half still holds. The required list has
+already changed once and this file is not where it lives — re-derive it rather
+than quoting this paragraph: `gh api
+repos/companionintelligence/CI-Server/branches/main/protection --jq
+'.required_status_checks.contexts'`. See `docs/qa/` for the release QA
+programme, the measured baseline, and what a wider gate would cost.
 
 See `README.md` for the full prerequisite setup and the complete `make` command reference.
 
