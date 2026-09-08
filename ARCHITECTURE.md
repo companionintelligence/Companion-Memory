@@ -53,7 +53,8 @@ Today those directories hold:
   `cli` (the `ci` command line — a bundled HTTP client, no NestJS), `hbpe` and
   `summary` (the two Python/FastAPI sidecars).
 - `backend/packages/` — `telemetry` (`ci-telemetry`, Sentry wiring shared by
-  both sidecars). One member so far.
+  both sidecars) and `tool-core` (`@ci/tool-core`, the tool/intent vocabulary,
+  execution policy and registry, with no NestJS in it).
 - `frontend/apps/` — `web` (React 19 / Vite SPA), `ios` and `android`
   (Capacitor shells around the web build, pointed at a remote appliance),
   `desktop` (Tauri local orchestrator), and `mobile`, which is a README
@@ -98,6 +99,7 @@ JavaScript workspaces are `@ci/`-scoped and private. Apps carry a stack prefix:
 |---|---|
 | `backend/apps/api` | `@ci/be-api` |
 | `backend/apps/cli` | `@ci/cli` |
+| `backend/packages/tool-core` | `@ci/tool-core` |
 | `frontend/apps/web` | `@ci/fe-web` |
 | `frontend/apps/ios` | `@ci/fe-ios` |
 | `frontend/apps/android` | `@ci/fe-android` |
@@ -117,6 +119,13 @@ Shared packages should carry the same stack prefix as apps do —
 bare (`@ci/common`, `@ci/shadcn`, `@ci/editor`, `@ci/capture`, `@ci/template`,
 `@ci/capacitor-*`). Renaming is mechanical but touches every import site, so
 treat the prefix as the rule for **new** packages and rename opportunistically.
+
+`@ci/tool-core` is a knowing exception and the rule is not softened for it: it
+should be `@ci/be-tool-core`. The bare name was already written into
+`backend/apps/api/tsconfig.json` as the package this repo intended to extract,
+and was carried through unchanged rather than diverging from the name the
+extraction was planned under. Rename it with the next opportunistic sweep; the
+import surface is one specifier in ten files.
 
 One trap, now mostly disarmed. Inside `backend/apps/api`, imports like
 `@ci/domains/tools` or `@ci/common/logging` are path aliases into that app's own
@@ -162,7 +171,7 @@ sweep.
 **The baseline is not clean.**
 `backend/apps/api/.dependency-cruiser-known-violations.json` currently holds 42
 grandfathered entries — 41 `no-cross-domain-internals` and 1 `no-circular` —
-of which 16 come from spec files. `yarn workspace @ci/be-api depcheck` runs
+of which 15 come from spec files. `yarn workspace @ci/be-api depcheck` runs
 with `--ignore-known`, so those 42 pass silently; only *new* violations fail.
 Accepting a new baseline is `yarn workspace @ci/be-api depcheck:accept`, which
 should be a deliberate, reviewed act, not a way to get a branch green. The
@@ -189,14 +198,35 @@ The API exposes the same underlying capabilities through three surfaces:
   dependencies is not a way to distribute a command-line tool, and the tool had
   outgrown the domain it lived in anyway.
 
-The capability core is `domains/tools`. Every tool is also an intent: a tool
-class declares its `IntentDefinition` (dotted name, domain, privacy label,
+The capability core is `domains/tools`, and its framework-free half is now
+`backend/packages/tool-core` (`@ci/tool-core`). Every tool is also an intent: a
+tool class declares its `IntentDefinition` (dotted name, domain, privacy label,
 natural-language phrases, parameters) inline beside its implementation, with no
-separate catalog to drift. `ToolRegistry` holds every tool from every provider
-and is the single execution entry point; `IntentCatalogService` is the read API
-over the catalog; `domains/tools/policy` holds one implementation of "may this
-caller run this intent, here?" (`resolveDispatch`, `resolveToolGate`) that every
-dispatcher is meant to share.
+separate catalog to drift. `ToolRegistryCore` holds every tool from every
+provider and is the single execution entry point; `IntentCatalogService` is the
+read API over the catalog; `@ci/tool-core`'s policy holds one implementation of
+"may this caller run this intent, here?" (`capabilityAllows`, `resolveDispatch`,
+`resolveToolGate`) that every dispatcher is meant to share.
+
+**What is in the package and what is not.** The package holds the vocabulary
+(`IntentDefinition`, `JSONSchema`, `ToolResult`, `ToolInvocationContext`), the
+policy, the registry, and the shape of a `tool.invoked` ledger row. It imports
+no `@nestjs/*` and has no runtime dependencies; its tsconfig turns decorator
+support off so that stays true by construction. The 33 native tools stay in the
+API — each is a thin wrapper over another domain's services — along with
+`BaseTool`, `ci.pending_actions`, `IntentCatalogService` and every module,
+controller and entity. `domains/tools` keeps re-export shims so its public
+barrel exports the same names from the same place it always did, and
+`registry/ToolRegistry.ts` is now a `@Injectable()` subclass that supplies the
+core's three seams: a logger, a `ToolInvocationSink` (this appliance sends
+`tool.invoked` on the `telemetry` queue) and a `ToolGate` (`PendingActionService`).
+
+The package restates three types the API owns — `ApiKeyCapability`,
+`RequestContext`, `PersonalizationDecision` — because each arrives with Nest
+attached. That is a real cost, and it is paid with compile-time assertions in
+`domains/tools/toolCoreContract.ts` and `domains/tools/policy/toolGate.ts`
+rather than with a comment: one of the three is a security vocabulary, and two
+copies of a security rule are two rules.
 
 **The target** is that these three are thin transports over that core: a
 transport parses its own protocol, resolves a caller, and hands the intent to
@@ -220,16 +250,31 @@ against this:
    it reads in `src/wire.ts`. The remaining copy is a known cost, and the
    follow-up that removes it is a shared `@ci/api-client` under
    `backend/packages/` generated from the published schemas.
-3. `domains/tools` sits *above* the domains, not below them. `ToolsModule`
-   imports fifteen other domain modules to construct the native tools. That is a
-   composition root, not a shared kernel, so "the core" is not something a lower
-   layer can depend on — and one of those edges already had to be worked around
-   by providing `PersonalizationService` directly rather than importing its
-   module, because the module edge would have closed a cycle.
+3. `domains/tools` still sits *above* the domains, not below them.
+   `ToolsModule` imports fifteen other domain modules to construct the native
+   tools; that is a composition root, not a shared kernel, and one of those
+   edges already had to be worked around by providing `PersonalizationService`
+   directly rather than importing its module, because the module edge would have
+   closed a cycle. What changed is that "the core" is no longer only that
+   composition root: the rules underneath it — vocabulary, policy, registry —
+   are `@ci/tool-core`, which sits below everything and depends on nothing, so a
+   lower layer *can* now depend on them. The composition root above it is what
+   still cannot be depended on.
 
-Directionally: move CLI commands onto intents, collapse the GraphQL MCP plane
-into the registry so policy and ledgering apply uniformly, and keep new
-capabilities arriving as tools rather than as one-off controllers.
+Directionally: move CLI commands onto intents — `@ci/cli` can now depend on
+`@ci/tool-core` for the vocabulary and the policy without acquiring NestJS, which
+is what makes that move affordable — collapse the GraphQL MCP plane into the
+registry so policy and ledgering apply uniformly, and keep new capabilities
+arriving as tools rather than as one-off controllers.
+
+Note also what the package is not yet: a shared library with a second consumer.
+`@ci/be-api` is its only importer today. It is the one place in this repo where
+the [apps-vs-packages rule](#the-apps-vs-packages-rule)'s "wait for the second
+consumer" clause was knowingly spent in advance, because the second and third
+consumers (MCP over a non-Nest host, the CLI) are the point of the extraction
+rather than a hoped-for use — and because the boundary it draws is a security
+boundary that was worth making unambiguous whether or not anyone else crosses
+it.
 
 ## Build and run
 
@@ -382,7 +427,12 @@ gate worth turning on: [`docs/qa/`](docs/qa/README.md).
   glob.
 - **A new shared library** — `<stack>/packages/<name>`, only once it has a
   second consumer. Python members under `backend/packages/*` are already
-  covered by the uv workspace glob and are checked strictly by mypy.
+  covered by the uv workspace glob and are checked strictly by mypy. A
+  TypeScript member needs a `tsconfig.json` with `composite: true` and a
+  `references` entry from each consumer, or its sources are pulled into the
+  consumer's own program and move where that consumer's `dist/` lands —
+  `@ci/tool-core` is the worked example, and `backend/apps/api/Dockerfile`
+  shows the three lines an image needs when it gains one.
 - **A new capability in the API** — a tool in `domains/tools`, so all three
   surfaces get it, rather than a controller on one of them.
 - **A new API domain** — a directory under `src/domains/` with an `index.ts`

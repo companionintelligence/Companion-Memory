@@ -257,6 +257,21 @@ jobs:
       # planning reaches with no database, and the env block above gives the
       # DB-backed planning suites a real connection, so the number measured
       # here is at or above the one the floor was calibrated against.
+      # Before the API suite, because it is ~0.5s against ~3 minutes and covers
+      # the rules everything else stands on. `@ci/tool-core` holds the 75 cases
+      # for the capability check, the dispatch tiers, the confirmation gate and
+      # the registry that applies them — they used to live in
+      # `src/domains/tools` and run inside the step below, and this workflow
+      # names workspaces one at a time, so extracting the package without this
+      # line would have quietly stopped running them. `publish.yml` gates a
+      # release on this workflow, which is what makes "quietly" expensive.
+      #
+      # Not a `foreach`: that would also re-run @ci/be-api's suite here without
+      # coverage and pick up @ci/fe-web's, which has its own job.
+      - name: Run tool-core tests
+        timeout-minutes: 5
+        run: yarn workspace @ci/tool-core test
+
       - name: Run backend API tests
         timeout-minutes: 20
         run: yarn workspace @ci/be-api test --coverage
@@ -352,6 +367,8 @@ jobs:
         include:
           - name: backend
             command: yarn workspace @ci/be-api typecheck
+          - name: tool-core
+            command: yarn workspace @ci/tool-core typecheck
           - name: frontend
             command: yarn workspace @ci/fe-web typecheck
     steps:
@@ -393,6 +410,8 @@ jobs:
             command: yarn lint
           - name: backend
             command: yarn workspace @ci/be-api lint
+          - name: tool-core
+            command: yarn workspace @ci/tool-core lint
           - name: frontend
             command: yarn workspace @ci/fe-web lint
           - name: format

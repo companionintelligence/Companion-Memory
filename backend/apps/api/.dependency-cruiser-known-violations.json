@@ -359,15 +359,6 @@
   },
   {
     "type": "dependency",
-    "from": "src/domains/tools/policy/__tests__/toolGate.test.ts",
-    "to": "src/domains/personalization/types.ts",
-    "rule": {
-      "severity": "error",
-      "name": "no-cross-domain-internals"
-    }
-  },
-  {
-    "type": "dependency",
     "from": "src/domains/tools/policy/toolGate.ts",
     "to": "src/domains/personalization/types.ts",
     "rule": {

@@ -7,9 +7,9 @@
   "types": "dist/index.d.ts",
   "packageManager": "yarn@4.9.1",
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build tsconfig.build.json",
     "clean": "rimraf dist",
-    "typecheck": "tsc -p tsconfig.typecheck.json",
+    "typecheck": "tsc --noEmit",
     "test": "jest",
     "lint": "oxlint && eslint --cache"
   },

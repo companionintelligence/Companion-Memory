@@ -236,7 +236,7 @@ The table below is grouped roughly by concern rather than alphabetically.
 | `maintenance` | Post-ingest enrichment + operator endpoints (`/api/maintenance/*`): geocoding, linking backfills, search-index backfill (now deferring to the pipeline ledger for types it owns), index deferral, ingest reset |
 | `geocode` | Forward/reverse geocoding + `ci.geocode_cache` |
 | `agent` | Agent memory (`/memory/*`) and the intent catalog (`GET /api/intents`, `GET /api/agent/intents`) |
-| `tools` | The shared **ToolRegistry** — `IntentDefinition` is the canonical tool schema; feeds MCP, the intent catalog and the on-device tool layers |
+| `tools` | The shared **ToolRegistry** — `IntentDefinition` is the canonical tool schema; feeds MCP, the intent catalog and the on-device tool layers. The framework-free half (vocabulary, execution policy, registry) is `@ci/tool-core` in `backend/packages/tool-core`; this domain holds the 33 tools, the pending-action queue and the Nest wiring |
 | `mcp` | The MCP server (`POST /mcp`) — every registered tool exposed as a privacy-labelled MCP tool |
 | `asks` | The interpersonal **Ask**: bounded questions against another user's memory, gated by standing consent grants, with a per-ask audit log |
 | `peers` | Peer federation — two appliances exchanging asks (`POST /agent/v1/ask`); discovery is CI-Portal's job, the relationship and every answer stay on the two boxes |

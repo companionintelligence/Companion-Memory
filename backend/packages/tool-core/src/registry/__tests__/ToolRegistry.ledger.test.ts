@@ -47,7 +47,12 @@ function fakeProvider(name: string, tools: Record<string, any>) {
     getAvailableTools: jest.fn(async () => [...map.values()].map((t) => t.schema)),
     getTool: (n: string) => map.get(n),
     canHandle: (n: string) => map.has(n),
-    getHealthStatus: jest.fn(async () => ({ name, status: 'healthy', toolCount: map.size, lastCheck: new Date() })),
+    getHealthStatus: jest.fn(async () => ({
+      name,
+      status: 'healthy',
+      toolCount: map.size,
+      lastCheck: new Date(),
+    })),
   } as any;
 }
 
@@ -164,9 +169,13 @@ describe('ToolRegistry → tool.invoked payload (the ledger row)', () => {
       }),
     );
 
-    await registry.executeTool('memory_recall', { userId: 'u', capability: 'full' }, {
-      query: 'my therapist said',
-    });
+    await registry.executeTool(
+      'memory_recall',
+      { userId: 'u', capability: 'full' },
+      {
+        query: 'my therapist said',
+      },
+    );
 
     const serialized = JSON.stringify(record.mock.calls[0][0]);
     expect(serialized).not.toContain('my therapist said');
@@ -177,13 +186,15 @@ describe('ToolRegistry → tool.invoked payload (the ledger row)', () => {
 describe('outcomeOf', () => {
   it('maps success, plain failure, and every timeout spelling', () => {
     expect(outcomeOf({ success: true })).toBe('success');
-    expect(outcomeOf({ success: false, error: { code: 'NOPE', message: '', retryable: false } })).toBe('error');
+    expect(outcomeOf({ success: false, error: { code: 'NOPE', message: '', retryable: false } })).toBe(
+      'error',
+    );
     expect(outcomeOf({ success: false })).toBe('error');
     expect(outcomeOf({ success: false, error: { code: 'ETIMEDOUT', message: '', retryable: true } })).toBe(
       'timeout',
     );
-    expect(outcomeOf({ success: false, error: { code: 'REQUEST_TIMED_OUT', message: '', retryable: true } })).toBe(
-      'timeout',
-    );
+    expect(
+      outcomeOf({ success: false, error: { code: 'REQUEST_TIMED_OUT', message: '', retryable: true } }),
+    ).toBe('timeout');
   });
 });

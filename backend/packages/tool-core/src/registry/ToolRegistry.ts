@@ -7,7 +7,11 @@ import {
   type ToolResult,
   type ToolSchema,
 } from '../core/types';
-import { TOOL_INVOCATION_ERROR_MAX_LENGTH, type ToolInvocationOutcome, type ToolInvokedPayload } from '../events';
+import {
+  TOOL_INVOCATION_ERROR_MAX_LENGTH,
+  type ToolInvocationOutcome,
+  type ToolInvokedPayload,
+} from '../events';
 import type { ToolCoreLogger } from '../logging';
 import { capabilityAllows, capabilityRequiredFor } from '../policy';
 import type { ToolGateRuling } from '../policy/toolGate';

@@ -23,9 +23,13 @@ import { McpExecutorService } from './McpExecutorService';
 
 // `capabilityAllows` used to be defined here, which made the privacy label mean something only to
 // callers who arrived over MCP — the LLM dispatcher reached the same tools through a door with no
-// lock on it. The rule now lives in the tools domain (see `domains/tools/policy`) and is enforced
-// inside ToolRegistry.executeTool for every transport; MCP keeps its pre-check because it owes its
-// client a 403 with a specific message, not because it is the only thing standing there.
+// lock on it. The rule now lives in `@ci/tool-core` (re-exported through `domains/tools/policy`,
+// which is where it landed first) and is enforced inside ToolRegistry.executeTool for every
+// transport; MCP keeps its pre-check because it owes its client a 403 with a specific message, not
+// because it is the only thing standing there. Moving it into a Nest-free package was the same
+// step taken once more: a transport that does not run inside this process — the CLI, an on-device
+// dispatcher — can now apply the identical function instead of re-deriving it, which is how the
+// rule stopped being MCP's in the first place.
 
 @Injectable()
 export class McpToolService implements OnModuleInit {

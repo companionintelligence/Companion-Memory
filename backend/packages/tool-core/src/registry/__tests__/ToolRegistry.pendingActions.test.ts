@@ -6,7 +6,13 @@ import type { ToolGateRuling } from '../../policy/toolGate';
 import { ToolRegistryCore } from '../ToolRegistry';
 
 function makeLogger() {
-  return { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as any;
+  return {
+    setContext: jest.fn(),
+    debug: jest.fn(),
+    log: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  } as any;
 }
 
 function schema(name: string, privacy: Partial<IntentDefinition['privacy']> = {}): IntentDefinition {
@@ -44,9 +50,10 @@ function fakeTool(definition: IntentDefinition, execute = jest.fn(async () => ({
 
 async function harness(definition: IntentDefinition, ruling: ToolGateRuling) {
   const tool = fakeTool(definition);
-  const propose = jest.fn(
-    async (..._args: unknown[]) => ({ id: 'pa-77', expiresAt: new Date('2026-08-27T00:00:00.000Z') }),
-  );
+  const propose = jest.fn(async (..._args: unknown[]) => ({
+    id: 'pa-77',
+    expiresAt: new Date('2026-08-27T00:00:00.000Z'),
+  }));
   const evaluate = jest.fn(async (..._args: unknown[]) => ruling);
   const record = jest.fn().mockResolvedValue([]);
 
@@ -78,11 +85,7 @@ describe('ToolRegistry.executeTool — the capability check still comes first', 
   it('refuses a read-only caller a delete and writes NOTHING to the queue', async () => {
     const { registry, tool, propose, evaluate } = await harness(FORGET, QUEUE_RULING);
 
-    const result = await registry.executeTool(
-      'memory_forget',
-      context({ capability: READ_CAPABILITY }),
-      {},
-    );
+    const result = await registry.executeTool('memory_forget', context({ capability: READ_CAPABILITY }), {});
 
     expect(result.success).toBe(false);
     expect(result.error?.code).toBe('TOOL_FORBIDDEN');

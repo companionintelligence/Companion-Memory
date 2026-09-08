@@ -41,10 +41,12 @@ This is a Yarn workspace monorepo, with a uv-managed Python workspace alongside 
 ```
 ├── backend/apps/
 │   ├── api/                    # Main backend API service (NestJS)
+│   ├── cli/                    # The `ci` command line (bundled HTTP client — no NestJS)
 │   ├── hbpe/                   # HBPE behavioral-prediction sidecar (Python/FastAPI, ONNX)
 │   └── summary/                # Summarization + document-parser sidecar (Python/FastAPI)
 ├── backend/packages/
-│   └── telemetry/              # Shared Python library: Sentry error reporting for the sidecars
+│   ├── telemetry/              # Shared Python library: Sentry error reporting for the sidecars
+│   └── tool-core/              # `@ci/tool-core` — the tool/intent vocabulary, execution policy and registry, with no NestJS in it, so MCP, the LLM dispatcher and the CLI can share one implementation of "may this caller run this intent?"
 ├── frontend/apps/
 │   ├── web/                    # Main web application (React + Vite)
 │   ├── ios/                    # Capacitor iOS shell around the web app (not a Yarn workspace)

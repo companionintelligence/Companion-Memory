@@ -28,6 +28,11 @@ COPY yarn.lock ./
 
 COPY backend/apps/api/package.json ./backend/apps/api/package.json
 COPY backend/apps/api/.yarnrc.yml ./backend/apps/api/.yarnrc.yml
+# @ci/tool-core is a workspace DEPENDENCY of @ci/be-api, so `workspaces focus`
+# cannot resolve without its manifest present. Its own devDependencies
+# (jest, eslint) are not focused and are not needed: `tsc --build` below runs
+# the API's compiler over the referenced project.
+COPY backend/packages/tool-core/package.json ./backend/packages/tool-core/package.json
 
 # The full (non-production) dependency set for this one workspace:
 # typescript and tsc-alias are devDependencies. Deliberately not
@@ -36,12 +41,18 @@ COPY backend/apps/api/.yarnrc.yml ./backend/apps/api/.yarnrc.yml
 RUN yarn workspaces focus @ci/be-api
 
 # Sources last. tsconfig.json compiles `src` and `scripts` (see its
-# `include`) and has no project `references`, so no other workspace has
-# to be built first — but it DOES extend the repo-root presets, so those
-# two files are part of the build context whether or not they look like
-# source. Without them tsc fails at config-load time with a message about
-# a missing extends target, before it reads a single .ts file.
+# `include`) and it DOES extend the repo-root presets, so those two files
+# are part of the build context whether or not they look like source.
+# Without them tsc fails at config-load time with a message about a
+# missing extends target, before it reads a single .ts file.
+#
+# It also now REFERENCES @ci/tool-core, a composite project. `tsc --build`
+# builds that first and compiles the API against its emitted .d.ts, which
+# is what keeps this image's dist/ laid out as dist/src/... — the path the
+# CMD at the bottom names. Its sources therefore belong in this stage.
 COPY tsconfig.base.json tsconfig.node.json ./
+COPY backend/packages/tool-core/tsconfig.json backend/packages/tool-core/tsconfig.build.json ./backend/packages/tool-core/
+COPY backend/packages/tool-core/src ./backend/packages/tool-core/src
 COPY backend/apps/api/tsconfig.json ./backend/apps/api/tsconfig.json
 COPY backend/apps/api/src ./backend/apps/api/src
 COPY backend/apps/api/scripts ./backend/apps/api/scripts
@@ -117,6 +128,7 @@ COPY yarn.lock ./
 
 COPY backend/apps/api/package.json ./backend/apps/api/package.json
 COPY backend/apps/api/.yarnrc.yml ./backend/apps/api/.yarnrc.yml
+COPY backend/packages/tool-core/package.json ./backend/packages/tool-core/package.json
 
 RUN yarn workspaces focus --production @ci/be-api
 
@@ -126,6 +138,10 @@ RUN yarn workspaces focus --production @ci/be-api
 COPY LICENSE.md /LICENSE.md
 
 COPY --from=builder /app/backend/apps/api/dist ./backend/apps/api/dist
+# @ci/tool-core resolves to its own dist/ at runtime (package.json `main`), so
+# the compiled package has to come across too — the API's dist holds only a
+# require() of the workspace, not a copy of it.
+COPY --from=builder /app/backend/packages/tool-core/dist ./backend/packages/tool-core/dist
 COPY backend/apps/api/config ./backend/apps/api/config
 COPY backend/apps/api/db ./backend/apps/api/db
 COPY backend/apps/api/bin ./backend/apps/api/bin

@@ -315,11 +315,13 @@ describe('ToolRegistry', () => {
       ).toEqual(['mcp.github.create_issue', 'memory.recall']);
     });
 
-    it('hides another user\'s owned tool while still listing the unowned ones', async () => {
+    it("hides another user's owned tool while still listing the unowned ones", async () => {
       const { registry } = await registryWithOwnedTool();
 
       expect(registry.getAvailableTools({ userId: 'user-2' }).map((s) => s.name)).toEqual(['memory.recall']);
-      expect(registry.getAgentFacingTools({ userId: 'user-2' }).map((s) => s.name)).toEqual(['memory.recall']);
+      expect(registry.getAgentFacingTools({ userId: 'user-2' }).map((s) => s.name)).toEqual([
+        'memory.recall',
+      ]);
     });
 
     it('treats a caller with no userId as nobody, not as everybody', async () => {
@@ -329,13 +331,17 @@ describe('ToolRegistry', () => {
       expect(registry.getOutboundCatalogTools().map((s) => s.name)).toEqual(['memory.recall']);
     });
 
-    it('refuses to execute another user\'s owned tool, and does not run or record it', async () => {
+    it("refuses to execute another user's owned tool, and does not run or record it", async () => {
       const { registry, record, owned } = await registryWithOwnedTool();
 
-      const result = await registry.executeTool('mcp_github_create_issue', {
-        userId: 'user-2',
-        capability: 'full',
-      }, {});
+      const result = await registry.executeTool(
+        'mcp_github_create_issue',
+        {
+          userId: 'user-2',
+          capability: 'full',
+        },
+        {},
+      );
 
       expect(result.success).toBe(false);
       // Reported as missing, not forbidden: a distinct refusal would confirm the other account
@@ -357,10 +363,14 @@ describe('ToolRegistry', () => {
     it('still executes the owned tool for its owner', async () => {
       const { registry, record, owned } = await registryWithOwnedTool();
 
-      const result = await registry.executeTool('mcp_github_create_issue', {
-        userId: 'user-1',
-        capability: 'full',
-      }, {});
+      const result = await registry.executeTool(
+        'mcp_github_create_issue',
+        {
+          userId: 'user-1',
+          capability: 'full',
+        },
+        {},
+      );
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual({ issue: 7 });

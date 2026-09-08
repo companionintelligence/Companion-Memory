@@ -28,7 +28,7 @@ export default [
     settings: {
       'import/resolver': {
         typescript: {
-          project: './tsconfig.typecheck.json',
+          project: './tsconfig.json',
         },
       },
     },
