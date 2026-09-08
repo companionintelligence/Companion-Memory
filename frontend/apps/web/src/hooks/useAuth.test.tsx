@@ -787,12 +787,30 @@ describe('useAuth', () => {
     await waitFor(() => expect(result.current[0].authToken).toBe('tok-1'));
     expect(refreshCalls).toBe(1);
 
-    vi.mocked(jwtDecode).mockReturnValue({ sub: 'u1', iat: 0, exp: pastExp() });
+    // Expired only for the token the tab went to sleep holding. The refreshed one has to decode
+    // as valid, and a flat `mockReturnValue(pastExp())` is what made this test flaky: the hook
+    // keys its effect on `accessToken`, so a token that decodes as already-expired schedules its
+    // own refresh at `delay = 0`, which mints another already-expired token, forever. The test
+    // then raced its own storm — `waitFor` polls, and on a loaded runner the count was past 2
+    // before the first poll looked (it was observed at 606). Making the mock token-aware settles
+    // it at exactly 2 and asserts the thing that actually matters: the recovery fires ONCE and
+    // stops.
+    vi.mocked(jwtDecode).mockImplementation((token: string) => ({
+      sub: 'u1',
+      iat: 0,
+      exp: token === 'tok-1' ? pastExp() : futureExp(),
+    }));
 
     await act(async () => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
 
     await waitFor(() => expect(refreshCalls).toBe(2));
+
+    // And stays there. Without this the fix above would be indistinguishable from a slower storm.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(refreshCalls).toBe(2);
   });
 });

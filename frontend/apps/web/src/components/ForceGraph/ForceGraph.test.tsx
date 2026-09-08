@@ -121,12 +121,23 @@ async function settle() {
     expect(screen.getAllByTestId('force-node').length).toBeGreaterThan(0);
   });
 
-  // The simulation caps at MAX_TICKS; give it room to reach the settle + polish step.
+  // The simulation is bounded by TICKS, not by time: it runs until `alpha` decays below
+  // ALPHA_MIN (~96 ticks at ALPHA_DECAY 0.04) or MAX_LIFETIME_TICKS, then does the collision
+  // polish pass. Each tick costs one rAF turn, which the beforeEach above maps onto
+  // `setTimeout(..., 0)` — so the number of turns is fixed and only the wall clock PER turn
+  // varies with how loaded the machine is.
+  //
+  // That is why this budget is generous rather than tight. It settles in ~180ms locally, and
+  // 4000ms looked like a 20x margin until `pr-gate.yml` sharded this suite four ways onto a
+  // two-core runner: shards 2 and 3 starved the macrotask queue and reported one pair still
+  // overlapping mid-flight. Waiting longer cannot paper over a real defect here — a genuine
+  // layout bug leaves a STABLE overlap that no amount of patience resolves, and would fail
+  // locally too. Kept under vitest.config.ts's 20s testTimeout, which owns the real deadline.
   await waitFor(
     () => {
       expect(overlappingPairs(labelBoxes())).toEqual([]);
     },
-    { timeout: 4000, interval: 25 },
+    { timeout: 15000, interval: 25 },
   );
 }
 
