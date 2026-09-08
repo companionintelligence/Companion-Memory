@@ -16,6 +16,7 @@ import { weekClusterVisible } from '@/lib/forecastDisplay';
 
 import { addDays, sameLocalDay } from './nowNext';
 import { packItemLanes, type EventSpan } from './scheduleClusters';
+import { localDayKey } from './scheduleToTimeline';
 
 /** An empty place on the calendar the user pointed at. */
 export interface CalendarSlot {
@@ -177,28 +178,86 @@ function utcDateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+/** True when an instant sits exactly on UTC midnight — how a date-only value parses. */
+function isUtcMidnight(date: Date): boolean {
+  return (
+    date.getUTCHours() === 0 &&
+    date.getUTCMinutes() === 0 &&
+    date.getUTCSeconds() === 0 &&
+    date.getUTCMilliseconds() === 0
+  );
+}
+
+/**
+ * Whether an all-day event names this row's calendar date.
+ *
+ * An all-day event is a DATE, not an interval, and it reaches us in two shapes.
+ * A Google import is date-only in the payload, so `new Date('2026-08-04')` pins
+ * it to UTC midnight — `TransformGoogleCalendar` drops `start.timeZone`
+ * entirely, which is the `floatingAsUtc` case `TemporalRepairStage` documents.
+ * One created in this app is LOCAL midnight (`EventForm`'s
+ * `combineDateAndClock`). Asking which local days either OVERLAPS as an instant
+ * is what put a single birthday chip on two adjacent day columns: the
+ * UTC-anchored one leaks into the following column under UTC and every zone
+ * east of it and into the preceding one across the Americas, and the
+ * local-midnight one leaks forward everywhere because its exclusive end lands
+ * exactly on the next row's first instant.
+ *
+ * So read both ends as calendar dates in the zone the event's own midnight
+ * belongs to — UTC when the start sits exactly on UTC midnight, local
+ * otherwise — and compare those against the row's own date. The end is
+ * exclusive (Google's `end.date` is the morning after), hence the step back
+ * before it is read; an event with no end at all names the single date it
+ * starts on.
+ */
+function allDayCoversDay(start: Date, end: Date, dayStart: Date): boolean {
+  const anchoredToUtc = isUtcMidnight(start);
+  const dateKey = (instant: Date) => (anchoredToUtc ? utcDateKey(instant) : localDayKey(instant));
+  const lastInstant = new Date(Math.max(end.getTime() - 1, start.getTime()));
+  const day = localDayKey(dayStart);
+
+  return day >= dateKey(start) && day <= dateKey(lastInstant);
+}
+
 /**
  * Clip an event to a single local day and express it as percentages of that row.
  *
  * A flight that departs Sunday night and lands Monday morning must appear on
- * both rows; that is why this clips rather than filters. Zero-length and all-day
- * events get a floor width so they stay clickable.
+ * both rows; that is why this clips rather than filters. Zero-length events get
+ * a floor width so they stay clickable; an all-day event takes the whole row on
+ * each date it names.
  */
 function spanForDay(event: ScheduleEvent, dayStart: Date): EventSpan | null {
   const dayEnd = addDays(dayStart, 1);
   const start = new Date(event.startTime);
-  const end = event.endTime ? new Date(event.endTime) : start;
 
   if (Number.isNaN(start.getTime())) {
     return null;
   }
 
-  if (start >= dayEnd || end < dayStart) {
-    return null;
+  // An unparseable end does not disqualify the event — the start is what places
+  // it — but it must not reach the date arithmetic below, where it would either
+  // throw out of `toISOString` or spread NaN through the percentages.
+  const declaredEnd = event.endTime ? new Date(event.endTime) : start;
+  const end = Number.isNaN(declaredEnd.getTime()) ? start : declaredEnd;
+
+  // All-day rows are decided by date before any instant test — an overlap test
+  // cannot answer this correctly; see `allDayCoversDay`.
+  if (event.isAllDay) {
+    return allDayCoversDay(start, end, dayStart)
+      ? { event, leftPct: 0, widthPct: 100, continuesFrom: false, continuesTo: false }
+      : null;
   }
 
-  if (event.isAllDay) {
-    return { event, leftPct: 0, widthPct: 100, continuesFrom: false, continuesTo: false };
+  // The end instant is exclusive: an event finishing at 00:00 finished on the
+  // day before. Letting it through minted a phantom chip at the top of the next
+  // day — clipped to zero minutes, then widened to the 20-minute floor below,
+  // clickable and titled. A zero-length event has no interval to be exclusive
+  // about, so it keeps the day its start falls on.
+  const extent = end > start ? end : new Date(start.getTime() + 1);
+
+  if (start >= dayEnd || extent <= dayStart) {
+    return null;
   }
 
   const clippedStart = start < dayStart ? dayStart : start;

@@ -22,6 +22,7 @@ import {
   GET_TASKS,
   PLAN_TASK,
   SCHEDULE_TASK,
+  SCHEDULE_TASK_AT,
   usePlanTasks,
 } from './usePlanTasks';
 
@@ -84,6 +85,7 @@ export function PlanPage() {
   const [declinePending] = useMutation(DECLINE_PENDING);
   const [planTask] = useMutation(PLAN_TASK);
   const [scheduleTask] = useMutation(SCHEDULE_TASK);
+  const [scheduleTaskAt] = useMutation(SCHEDULE_TASK_AT);
   const [updateTask] = useMutation(UPDATE_TASK);
   const [editingTask, setEditingTask] = useState<EditableTask | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -149,10 +151,19 @@ export function PlanPage() {
     no_gap:
       'No free slot in your working hours over the next week — try a specific day, or shorten the estimate.',
     skipped: 'That task can no longer be scheduled — it may already be done or removed.',
+    already_placed: 'That task already has a block on your calendar — move it from the calendar.',
   };
 
+  /**
+   * `already_placed` used to be silent, alongside `placed`. It is not a
+   * success: the gap solver never ran and nothing moved. Every path that can
+   * legitimately reach it now names a destination (see `handleReschedule`), so
+   * the only ways left are a stale board — the card says unplaced, the server
+   * disagrees — and a lost race, and both of those are exactly what the user
+   * needs told rather than shown as a button that does nothing.
+   */
   const reportScheduleOutcome = (status: string | null | undefined) => {
-    if (!status || status === 'placed' || status === 'already_placed') {
+    if (!status || status === 'placed') {
       return;
     }
 
@@ -183,16 +194,48 @@ export function PlanPage() {
     })();
   };
 
+  /**
+   * ═══ RESCHEDULING A PLACED TASK USED TO MOVE ONLY THE DUE DATE ═══
+   *
+   * Reschedule is the recovery affordance for overdue work, and overdue work
+   * very often already HAS a planned block — Task renders the picker for any
+   * overdue task, placed or not. `SCHEDULE_TASK`'s date-only path cannot move
+   * one: `PlannedBlockService.place` finds the existing block and returns
+   * `already_placed` before the gap solver runs. So the `updateTask` above
+   * landed, the block stayed on the day that has already passed, the card
+   * stayed in Overdue, and `already_placed` was silent — the user moved their
+   * due date by pressing a button that told them it had done nothing.
+   *
+   * `SCHEDULE_TASK_AT` is the mutation that MOVES a block: `scheduleTaskAt`
+   * reschedules the existing event (preserving its duration) instead of
+   * refusing. The instant it is given is the same local noon the new due date
+   * is set to, because a day picker names a day and there is no time of day to
+   * honour — the block's own start is not on the board to reuse. An unplaced
+   * task still goes through the gap solver, which is the better answer when
+   * there is nothing to move and working hours are the only constraint.
+   *
+   * `scheduledFor` is written alongside `dueAt` on that path and only on that
+   * path: `CalendarEventService.reschedule` moves the event and nothing
+   * updates the task, so without it `sectionFor` — which takes the EARLIEST of
+   * dueAt and scheduledFor — would keep the card in Overdue on the strength of
+   * the stale date. The gap-solver path needs no such help; `placeAt` sets
+   * `scheduledFor` from where it actually placed the block.
+   */
   const handleReschedule = (id: string, date: string) => {
+    const placed = nodes.find((task) => task.id === id)?.placedOnCalendar === true;
+    const dueAt = dueAtFromLocalDate(date);
+
     void (async () => {
       try {
         await updateTask({
           variables: {
-            input: { id, dueAt: dueAtFromLocalDate(date) },
+            input: placed ? { id, dueAt, scheduledFor: date } : { id, dueAt },
           },
         });
 
-        const result = await scheduleTask({ variables: { id, date } });
+        const result = placed
+          ? await scheduleTaskAt({ variables: { id, startTime: dueAt } })
+          : await scheduleTask({ variables: { id, date } });
 
         reportScheduleOutcome(result.data?.scheduleTask.status);
       } catch {

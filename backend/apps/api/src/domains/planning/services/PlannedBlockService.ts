@@ -40,11 +40,32 @@ const PLANNED_BLOCK = 'planned_block';
  * Statuses an accepted `event_revise` confirmation may write to a planned
  * block. `EventNowService` only ever proposes `cancelled`; the other two are
  * the same "this did not happen" family the block queries already filter on
- * (`status NOT IN ('cancelled', 'no_show', 'skipped')`). Anything else is a
- * patch this pathway did not author, and is refused rather than written blind
- * into a CHECK-constrained column.
+ * ({@link LIVE_BLOCK_SQL}). Anything else is a patch this pathway did not
+ * author, and is refused rather than written blind into a CHECK-constrained
+ * column.
  */
 const REVISABLE_BLOCK_STATUSES = new Set(['cancelled', 'no_show', 'skipped']);
+
+/**
+ * "This block still counts" — the status predicate every planned-block read
+ * shares.
+ *
+ * The COALESCE is the whole point. `ci.events.status` is nullable and plenty of
+ * writers leave it unset, and `NULL NOT IN (...)` is UNKNOWN, not TRUE — so the
+ * bare `status NOT IN (...)` this used to carry silently dropped every
+ * null-status block from `list`, `findActiveForTask` and `listActiveTaskIds`.
+ * A block with no status has not been cancelled; it is confirmed by default,
+ * which is how `dailyAggregateSql` reads the same column.
+ */
+const LIVE_BLOCK_SQL = "COALESCE(event.status, 'confirmed') NOT IN ('cancelled', 'no_show', 'skipped')";
+
+/**
+ * Floor on how long a single owner-local calendar day can be: 24 hours less the
+ * largest DST step any zone takes (an hour). Used to reject a span as "cannot
+ * be an all-day row" before paying for a zone conversion.
+ */
+const SHORTEST_LOCAL_DAY_MS = 23 * 60 * 60_000;
+const DAY_MS = 24 * 60 * 60_000;
 
 export type PlaceOutcome =
   | { status: 'placed'; event: Event; task: Task }
@@ -80,7 +101,7 @@ export class PlannedBlockService {
       .where('event.user_id = :userId', { userId: context.userId })
       .andWhere('event.event_type = :type', { type: PLANNED_BLOCK })
       .andWhere('event.is_deleted = false')
-      .andWhere("event.status NOT IN ('cancelled', 'no_show', 'skipped')")
+      .andWhere(LIVE_BLOCK_SQL)
       .andWhere('event.start_time < :to', { to })
       .andWhere('COALESCE(event.end_time, event.start_time) >= :from', { from })
       .orderBy('event.start_time', 'ASC')
@@ -107,7 +128,7 @@ export class PlannedBlockService {
       .andWhere('event.task_id = :taskId', { taskId })
       .andWhere('event.event_type = :type', { type: PLANNED_BLOCK })
       .andWhere('event.is_deleted = false')
-      .andWhere("event.status NOT IN ('cancelled', 'no_show', 'skipped')")
+      .andWhere(LIVE_BLOCK_SQL)
       .orderBy('event.start_time', 'ASC')
       .getOne();
 
@@ -131,7 +152,7 @@ export class PlannedBlockService {
       .andWhere('event.task_id IN (:...taskIds)', { taskIds })
       .andWhere('event.event_type = :type', { type: PLANNED_BLOCK })
       .andWhere('event.is_deleted = false')
-      .andWhere("event.status NOT IN ('cancelled', 'no_show', 'skipped')")
+      .andWhere(LIVE_BLOCK_SQL)
       .getRawMany<{ taskId?: string; task_id?: string }>();
 
     return new Set(rows.map((row) => row.taskId ?? row.task_id).filter((id): id is string => Boolean(id)));
@@ -214,9 +235,19 @@ export class PlannedBlockService {
       // `findActiveForTask` and here) or a cross-user id — both genuinely
       // "nothing to place", so falling back to the old already_placed status
       // is honest rather than claiming a move that did not happen.
-      return moved
-        ? { status: 'placed', event: moved, task }
-        : { status: 'already_placed', event: existing, task };
+      if (!moved) {
+        return { status: 'already_placed', event: existing, task };
+      }
+
+      // The block moved and the TASK did not: `scheduledFor` kept the day the
+      // block used to sit on, so a card dragged forward rendered in the Overdue
+      // lane (taskSections.ts reads `scheduledFor`, not the block), and the
+      // stale past date later made `proposedTimeIsPast` strip the task's dueAt.
+      // `placeAt` is the only other writer of this field — mirror it.
+      const scheduledFor = await this.planningTime.localDate(context, start);
+      const updated = (await this.taskService.update(context, task.id, { scheduledFor })) ?? task;
+
+      return { status: 'placed', event: moved, task: updated };
     }
 
     const minutes = estimatedMinutes ?? task.estimatedMinutes ?? undefined;
@@ -251,6 +282,11 @@ export class PlannedBlockService {
       return { status: 'no_gap', task };
     }
 
+    // A proposal reserves nothing — no event is created until the user
+    // confirms — so two tasks scanned in the same run are both offered the same
+    // slot. That is deliberate (a suggestion is not a booking); the re-solve in
+    // `applyPendingSchedule` is what keeps two accepts from landing on top of
+    // each other.
     if (decision === 'review') {
       await this.taskService.createPendingChange(context, {
         taskId: task.id,
@@ -270,6 +306,32 @@ export class PlannedBlockService {
     return this.placeAt(context, task, proposal.start, proposal.end);
   }
 
+  /**
+   * Accept a pending `schedule` confirmation.
+   *
+   * ═══ THE STORED INSTANT IS A SUGGESTION, NOT A RESERVATION ═══
+   *
+   * A `schedule` patch is written once, by `tryPlaceAfterOpen` at task-creation
+   * time, and is only ever accepted later — often much later, since `review` is
+   * the default trust outcome for `schedule_accept`. Nothing refreshes the row
+   * while it waits, and filing it reserves no calendar time, so by the time the
+   * user taps Confirm the stored slot may be two things it was not when it was
+   * computed: in the past, or taken.
+   *
+   * Both were real. Replaying the instant blind booked Monday morning from a
+   * Wednesday tap — straight past `computePlacement`'s not-before-now clamp,
+   * the one invariant it exists to own. And because `propose` is deterministic
+   * against an unchanged calendar and the `review` branch reserves nothing, one
+   * scan run that opened five tasks filed five proposals for the SAME half
+   * hour; accepting them all stacked five blocks on one slot.
+   *
+   * So the stored slot is honoured only while it is still true. Otherwise this
+   * re-solves through `scheduleTask` — `propose` -> `computePlacement`, which
+   * owns both the clamp and the occupancy check — keeping the confirmed day as
+   * the preferred one and the confirmed window as the estimate. That also
+   * defuses the pile-up on its own: each accept re-solves against the blocks
+   * the previous accepts have by then committed.
+   */
   async applyPendingSchedule(
     context: UserServiceContext,
     taskId: string,
@@ -288,7 +350,37 @@ export class PlannedBlockService {
       return this.scheduleTask(context, taskId);
     }
 
+    if (await this.slotIsStale(context, start, end)) {
+      return this.scheduleTask(context, taskId, {
+        date: await this.planningTime.localDate(context, start),
+        estimatedMinutes: Math.max(1, Math.round((end.getTime() - start.getTime()) / 60_000)),
+      });
+    }
+
     return this.placeAt(context, task, start, end);
+  }
+
+  /**
+   * True when a stored `schedule` window can no longer be placed verbatim:
+   * it has fallen into the past, or something has since taken the slot.
+   *
+   * `findInRange`'s predicate is `COALESCE(end_time, start_time) >= :from`, so a
+   * row that ends exactly when this window opens comes back from it — touching
+   * is not overlapping, hence the strict comparison rather than a bare
+   * "anything returned means busy".
+   */
+  private async slotIsStale(context: UserServiceContext, start: Date, end: Date): Promise<boolean> {
+    if (start.getTime() <= Date.now()) {
+      return true;
+    }
+
+    const spans = await this.occupiedSpans(
+      context,
+      await this.eventService.findInRange(context, start, end),
+      DEFAULT_ESTIMATED_MINUTES,
+    );
+
+    return spans.some((span) => span.start.getTime() < end.getTime() && span.end.getTime() > start.getTime());
   }
 
   /**
@@ -523,11 +615,11 @@ export class PlannedBlockService {
       hours.start,
     );
 
-    const occupiedEvents = await this.eventService.findInRange(context, windowStart, windowEnd);
-    const occupied: OccupiedSpan[] = occupiedEvents.map((event) => ({
-      start: event.startTime,
-      end: event.endTime ?? new Date(event.startTime.getTime() + (event.plannedMinutes ?? estimate) * 60_000),
-    }));
+    const occupied = await this.occupiedSpans(
+      context,
+      await this.eventService.findInRange(context, windowStart, windowEnd),
+      estimate,
+    );
 
     for (let day = 0; day < flexDays; day += 1) {
       const date = shiftLocalDate(startDate, day);
@@ -558,6 +650,79 @@ export class PlannedBlockService {
     });
 
     return { kind: 'no_gap' };
+  }
+
+  /**
+   * The calendar rows that genuinely occupy time, as spans the placer can use.
+   *
+   * All-day rows are dropped, and that is the whole reason this is a method
+   * rather than a `.map`. A holiday calendar, a birthday, or a week of PTO
+   * arrives as a midnight-to-midnight span, which covers the user's entire
+   * workday: one such row per day made `computePlacement` return `no_gap` for
+   * every task across the whole flex window — a total, permanent planning
+   * outage whose only explanation was a `logger.debug`. An all-day entry is a
+   * label on the day, not a claim on the hours; `LifeStatsService` refuses to
+   * count these as attended time for the same reason (`isSpanDuration`).
+   *
+   * Two legs, in that order of authority — the same shape lifeStats uses:
+   *  1. the importer's own `isAllDay` flag, when the row carries one;
+   *  2. a span that both starts AND ends on midnight, which is what catches the
+   *     rows already in the database, whose flag was not always read back with
+   *     them (see {@link spansWholeLocalDays} for which midnight).
+   */
+  private async occupiedSpans(
+    context: UserServiceContext,
+    events: readonly Event[],
+    fallbackMinutes: number,
+  ): Promise<OccupiedSpan[]> {
+    const spans: OccupiedSpan[] = [];
+
+    for (const event of events) {
+      const start = event.startTime;
+      const end =
+        event.endTime ?? new Date(start.getTime() + (event.plannedMinutes ?? fallbackMinutes) * 60_000);
+
+      if (event.isAllDay || (await this.spansWholeLocalDays(context, start, end))) {
+        continue;
+      }
+
+      spans.push({ start, end });
+    }
+
+    return spans;
+  }
+
+  /**
+   * Midnight to midnight — an all-day row's shape, in either of the two zones
+   * one can be written in.
+   *
+   * The length gate is not only a fast path around two zone conversions per
+   * event: it is what keeps an ordinary meeting out of this test at all. A
+   * whole local day is 24 hours, or short by the DST step on a spring-forward
+   * one, so nothing briefer can begin and end on midnight.
+   *
+   * UTC midnight is checked first and separately because that is what the
+   * importer actually stores: `TransformGoogleCalendar` runs Google's bare
+   * `start.date` through `new Date('2026-09-08')`, which is UTC midnight no
+   * matter where the owner lives — so for anyone outside UTC the row is not
+   * owner-local-midnight-aligned at all, and the owner-local leg alone would
+   * miss every PTO row already in the database.
+   */
+  private async spansWholeLocalDays(context: UserServiceContext, start: Date, end: Date): Promise<boolean> {
+    if (end.getTime() - start.getTime() < SHORTEST_LOCAL_DAY_MS) {
+      return false;
+    }
+
+    if (start.getTime() % DAY_MS === 0 && end.getTime() % DAY_MS === 0) {
+      return true;
+    }
+
+    const [startWall, endWall] = await Promise.all([
+      this.planningTime.wallTime(context, start),
+      this.planningTime.wallTime(context, end),
+    ]);
+
+    return startWall === '00:00' && endWall === '00:00';
   }
 
   /**

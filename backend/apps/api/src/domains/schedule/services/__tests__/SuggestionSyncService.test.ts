@@ -453,7 +453,8 @@ describe('SuggestionSyncService — tryAutoAccept', () => {
       status: 'open',
       confidence: 0.95,
       durationMinutes: 30,
-      windowStart: new Date('2026-08-20T09:00:00Z'),
+      // What flexWindow actually writes: local midnight of the day the sync ran.
+      windowStart: new Date('2026-08-20T00:00:00.000Z'),
       generator: 'adapter/action',
       dedupeKey: 'action:act-1',
       ...overrides,
@@ -507,13 +508,91 @@ describe('SuggestionSyncService — tryAutoAccept', () => {
   const HANDS_OFF_PROFILE = { trustMode: 'hands_off', autoSchedule: true, autoPromoteThreshold: 0.7 };
   const BALANCED_PROFILE = { trustMode: 'balanced', autoSchedule: false, autoPromoteThreshold: 0.85 };
 
+  /**
+   * Mid-afternoon, and the mocked PlacementService resolves the zone as UTC, so
+   * every expected instant below is also the user's wall clock. The clock is
+   * frozen because the slot these tests are about is derived from it.
+   */
+  const AFTERNOON = new Date('2026-08-20T14:30:00.000Z');
+
+  /** The start these fixtures should land on: now, plus the five-minute lead. */
+  const SOON = new Date('2026-08-20T14:35:00.000Z');
+
+  const acceptedStarts = () => candidateService.accept.mock.calls.map((call) => call[2] as Date);
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(AFTERNOON);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('auto-accepts a high-confidence candidate for a hands_off, autoSchedule user', async () => {
-    const candidate = openCandidate({ confidence: 0.95 });
+    await setup([openCandidate({ confidence: 0.95 })], HANDS_OFF_PROFILE);
+
+    await service.sync(ctx);
+
+    expect(candidateService.accept).toHaveBeenCalledWith(ctx, 'cand-1', SOON);
+  });
+
+  /**
+   * `window_start` is the earliest EDGE of the seven-day flex window — local
+   * midnight today — not a proposal. Committing a hands_off user to it minted a
+   * confirmed 00:00 block that was already hours in the past, and accept's
+   * claim consumed the candidate so the idea could never be re-offered.
+   */
+  it('never starts the block on the flex-window edge, which is local midnight', async () => {
+    const candidate = openCandidate();
     await setup([candidate], HANDS_OFF_PROFILE);
 
     await service.sync(ctx);
 
-    expect(candidateService.accept).toHaveBeenCalledWith(ctx, 'cand-1', candidate.windowStart);
+    const [start] = acceptedStarts();
+    expect(start).not.toEqual(candidate.windowStart);
+    expect(start.getTime()).toBeGreaterThan(AFTERNOON.getTime());
+  });
+
+  it('honours a window that has not opened yet rather than booking before it', async () => {
+    await setup([openCandidate({ windowStart: new Date('2026-08-23T00:00:00.000Z') })], HANDS_OFF_PROFILE);
+
+    await service.sync(ctx);
+
+    // Midnight is outside the waking band, so the block is offered at 10:00 on
+    // the first day the window actually allows.
+    expect(acceptedStarts()[0]).toEqual(new Date('2026-08-23T10:00:00.000Z'));
+  });
+
+  it('offers 10:00 instead of the small hours when the sync runs overnight', async () => {
+    jest.setSystemTime(new Date('2026-08-20T03:00:00.000Z'));
+    await setup([openCandidate()], HANDS_OFF_PROFILE);
+
+    await service.sync(ctx);
+
+    // sync() also runs off a queue job, so 03:05 is a reachable start.
+    expect(acceptedStarts()[0]).toEqual(new Date('2026-08-20T10:00:00.000Z'));
+  });
+
+  it('rolls on to the next day once the waking band has closed', async () => {
+    jest.setSystemTime(new Date('2026-08-20T22:00:00.000Z'));
+    await setup([openCandidate()], HANDS_OFF_PROFILE);
+
+    await service.sync(ctx);
+
+    expect(acceptedStarts()[0]).toEqual(new Date('2026-08-21T10:00:00.000Z'));
+  });
+
+  it('queues successive auto-accepts instead of stacking them on one instant', async () => {
+    await setup(
+      [openCandidate({ id: 'cand-1' }), openCandidate({ id: 'cand-2', confidence: 0.9 })],
+      HANDS_OFF_PROFILE,
+    );
+
+    await service.sync(ctx);
+
+    // The second starts where the first's 30 minutes end.
+    expect(acceptedStarts()).toEqual([SOON, new Date('2026-08-20T15:05:00.000Z')]);
   });
 
   it('does nothing when the profile has autoSchedule off (the projection-test default)', async () => {
@@ -540,29 +619,26 @@ describe('SuggestionSyncService — tryAutoAccept', () => {
     expect(candidateService.accept).not.toHaveBeenCalled();
   });
 
-  it('falls back to "now" as the start time when the candidate has no windowStart', async () => {
+  it('still places a candidate that carries no window at all', async () => {
     await setup([openCandidate({ windowStart: null })], HANDS_OFF_PROFILE);
 
-    const before = Date.now();
     await service.sync(ctx);
-    const after = Date.now();
 
-    const [, , startTime] = candidateService.accept.mock.calls[0] as [unknown, unknown, Date];
-    expect(startTime.getTime()).toBeGreaterThanOrEqual(before);
-    expect(startTime.getTime()).toBeLessThanOrEqual(after);
+    expect(acceptedStarts()[0]).toEqual(SOON);
   });
 
   it('swallows a candidateService.accept failure and still processes the remaining candidates', async () => {
-    const first = openCandidate({ id: 'cand-1', confidence: 0.95 });
-    const second = openCandidate({ id: 'cand-2', confidence: 0.9 });
-    await setup([first, second], HANDS_OFF_PROFILE);
+    await setup(
+      [openCandidate({ id: 'cand-1', confidence: 0.95 }), openCandidate({ id: 'cand-2', confidence: 0.9 })],
+      HANDS_OFF_PROFILE,
+    );
     candidateService.accept.mockRejectedValueOnce(new Error('concurrent accept')).mockResolvedValueOnce({});
 
     await expect(service.sync(ctx)).resolves.not.toThrow();
 
     expect(candidateService.accept).toHaveBeenCalledTimes(2);
-    expect(candidateService.accept).toHaveBeenNthCalledWith(1, ctx, 'cand-1', first.windowStart);
-    expect(candidateService.accept).toHaveBeenNthCalledWith(2, ctx, 'cand-2', second.windowStart);
+    // The failed accept committed no time, so it does not push the next one out.
+    expect(acceptedStarts()).toEqual([SOON, SOON]);
   });
 
   it('queries only open candidates, newest-confidence-first, capped at 3', async () => {

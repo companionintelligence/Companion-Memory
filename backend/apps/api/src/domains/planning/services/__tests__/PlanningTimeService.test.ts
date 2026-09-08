@@ -73,14 +73,28 @@ describe('PlanningTimeService', () => {
       expect(findOne).toHaveBeenCalledTimes(1);
     });
 
-    it('re-reads after invalidate', async () => {
+    /**
+     * The cache used to be unbounded, so a zone changed in Settings was ignored
+     * by every later placement until both api and worker were restarted. There
+     * is no invalidation hook to test in its place: the worker is a separate
+     * process that would never receive one, so the entry expires on its own.
+     */
+    it('re-reads the column once the cached zone has aged out', async () => {
       await setup('America/New_York');
-
-      await service.timezoneFor(USER.userId);
-      service.invalidate(USER.userId);
       await service.timezoneFor(USER.userId);
 
-      expect(findOne).toHaveBeenCalledTimes(2);
+      jest.useFakeTimers();
+
+      try {
+        // The user changes their zone; only the TTL makes the change visible.
+        findOne.mockResolvedValue({ id: USER.userId, timezone: 'Australia/Sydney' });
+        jest.setSystemTime(Date.now() + 61_000);
+
+        expect(await service.timezoneFor(USER.userId)).toBe('Australia/Sydney');
+        expect(findOne).toHaveBeenCalledTimes(2);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 

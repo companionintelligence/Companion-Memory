@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
@@ -16,8 +16,11 @@ import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/c
 import { HbpeNotifyService } from '@ci/common/hbpe';
 import {
   type BulkInsertResult,
+  type KeysetPage,
+  type KeysetPageArgs,
   appendRecordSources,
   bulkInsertIdempotent,
+  keysetPaginate,
   INGEST_REFRESH_COLUMNS,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
@@ -335,6 +338,44 @@ export class CalendarEventService {
       toCreate.plannedMinutes = item.planned_minutes;
     }
 
+    // Calendar shape and confidence — the same silent-drop mechanism as the
+    // provenance block above, and the reason it went unnoticed for so long:
+    // ci.events DEFAULTs all four (is_all_day false, is_recurring false,
+    // confidence_score 1.0), so a dropped write lands on a plausible-looking
+    // default instead of erroring. Google's all-day Christmas was stored as a
+    // midnight point event, an RRULE series master was stored as a one-off, and
+    // a 0.4-confidence geocode claimed 1.0 to HBPE/RAG — the exact outcome
+    // TransformGoogleCalendar computes that number to prevent.
+    //
+    // Compared against `undefined`, not truthiness: `is_all_day: false` and
+    // `confidence_score: 0` are assertions, not omissions.
+    if (item.is_all_day !== undefined) {
+      toCreate.isAllDay = item.is_all_day;
+    }
+
+    if (item.is_recurring !== undefined) {
+      toCreate.isRecurring = item.is_recurring;
+    }
+
+    if (item.recurrence_pattern !== undefined) {
+      toCreate.recurrencePattern = item.recurrence_pattern;
+    }
+
+    if (item.confidence_score !== undefined) {
+      toCreate.confidenceScore = item.confidence_score;
+    }
+
+    // `status` needs no rename (the column and the property share a name), but
+    // it does need an explicit null dropped: `repository.create()` would write
+    // that NULL over the column DEFAULT, and every calendar read is a
+    // three-valued `status NOT IN (...)`, which a NULL-status row never
+    // satisfies — the event would exist and be invisible on every schedule
+    // surface. EventResolver forwards a nullable `status` verbatim, so this is
+    // reachable from the public API.
+    if (item.status == null) {
+      delete (toCreate as Record<string, unknown>).status;
+    }
+
     return toCreate;
   }
 
@@ -343,7 +384,25 @@ export class CalendarEventService {
    * the per-row path (a re-ingest / flaky-client retry returns the existing row);
    * the array path below uses a set-based insert for bulk importer pushes.
    */
+  /**
+   * Reject an inverted time pair before it reaches the `events_time_order`
+   * CHECK, which would surface as an opaque 500.
+   *
+   * Lives here rather than in each caller because there are four of them —
+   * `createEvent`/`updateEvent`, `scheduleTask`, `rescheduleEvent`, and
+   * `CandidateService.accept`, which had no guard of its own at all. Equal
+   * instants stay legal: the constraint is `start_time <= end_time`, and a
+   * zero-length marker is a real thing a calendar carries.
+   */
+  private assertTimeOrder(startTime?: Date | null, endTime?: Date | null): void {
+    if (startTime && endTime && endTime < startTime) {
+      throw new BadRequestException('`endTime` must not precede `startTime`');
+    }
+  }
+
   private async createOne(context: UserServiceContext, item: CreateEventDto): Promise<Event> {
+    this.assertTimeOrder(item.start_time, item.end_time);
+
     const toCreate = this.toEntityFields(item);
 
     // Idempotency: (source_type, source_system, source_id) is the stable
@@ -371,6 +430,19 @@ export class CalendarEventService {
     if (sourceWhere) {
       const existing = await this.eventRepository.findOne({ where: sourceWhere });
       if (existing) {
+        // A tombstoned PLANNING row is the one case where returning the match
+        // verbatim is wrong. Its identity is derived, not carried
+        // (`platformIdentity('planning', 'task', id)` → `task:<uuid>`), so it is
+        // single-use: after `PlannedBlockService.unschedule` tombstones the
+        // block, the next place() matches that same dead row, reports the task
+        // placed, and renders nothing — for good, since every retry re-matches.
+        // Restore and retime it instead. The return-verbatim contract above is
+        // unchanged for capture sources, where the identity comes from the
+        // provider and a deletion must outlive the next sync.
+        if (existing.isDeleted && item.source_type === 'planning') {
+          return this.restorePlannedBlock(context, existing.id, item);
+        }
+
         await this.ledgerArrival(context, existing.id, item);
 
         return this.composeOne(existing);
@@ -441,6 +513,44 @@ export class CalendarEventService {
       name: item.title,
       description: item.description ?? null,
     });
+  }
+
+  /**
+   * Bring a tombstoned planned block back at the slot the placer just chose.
+   *
+   * Clears the tombstone through {@link restore} (so the search index and the
+   * graph delta are re-published exactly as an Undo would), then writes the new
+   * timing over the stale one. The write goes straight at the repository rather
+   * than through {@link update}, because the fields that matter here —
+   * `status`, `planned_minutes` — are the ones a partial update is entitled to
+   * leave alone, and a restored block must not keep the previous placement's.
+   */
+  private async restorePlannedBlock(
+    context: UserServiceContext,
+    id: string,
+    item: CreateEventDto,
+  ): Promise<Event> {
+    const restored = await this.restore(context, id);
+
+    await this.eventRepository.update(
+      { id },
+      {
+        startTime: item.start_time,
+        endTime: item.end_time ?? null,
+        status: item.status ?? 'planned',
+        plannedMinutes: item.planned_minutes ?? null,
+        taskId: item.task_id ?? null,
+      },
+    );
+
+    await this.eventBaseRepository.update(
+      { id },
+      { name: item.title, description: item.description ?? null },
+    );
+
+    const reloaded = await this.eventRepository.findOne({ where: { id } });
+
+    return reloaded ? this.composeOne(reloaded) : (restored as Event);
   }
 
   /**
@@ -678,7 +788,12 @@ export class CalendarEventService {
       .getRepository(EventEntity)
       .createQueryBuilder('event')
       .where('event.is_deleted = false')
-      .andWhere("event.status NOT IN ('cancelled', 'no_show')")
+      // COALESCE because `NOT IN` is three-valued: ci.events.status is still
+      // nullable in the database, and a NULL-status row makes the predicate
+      // NULL, not TRUE — the event would exist, be returned by every other
+      // read, and be missing from the calendar with nothing to explain why.
+      // Same guard as dailyAggregateSql's meeting counts.
+      .andWhere("COALESCE(event.status, 'confirmed') NOT IN ('cancelled', 'no_show')")
       .andWhere('event.start_time >= :lowerBound', { lowerBound })
       .andWhere('event.start_time < :to', { to })
       .andWhere('COALESCE(event.end_time, event.start_time) >= :from', { from })
@@ -731,6 +846,8 @@ export class CalendarEventService {
       return null;
     }
 
+    this.assertTimeOrder(startTime, endTime);
+
     // Duration is the thing being preserved: a 90-minute meeting dragged to
     // Thursday is still 90 minutes, even though the caller only names a start.
     const priorSpanMs =
@@ -764,6 +881,37 @@ export class CalendarEventService {
     const result = await query.getMany();
 
     return this.composeMany(result);
+  }
+
+  /**
+   * Keyset-paginated page for the GraphQL connection — ordered by (start_time,
+   * event_id) DESC, reading one page (+1 sentinel) instead of the whole table.
+   *
+   * {@link findAll} loads every event the user owns and the resolver then threw
+   * all but `first` of them away. `ci.events` is the timeline for photos,
+   * visits and every ETL connector as well as calendar entries, so on a real
+   * library that is six figures of rows hydrated to serve a page of 20.
+   *
+   * The scope repeats findAll's two predicates rather than sharing them,
+   * because `keysetPaginate` runs its own COUNT for `totalCount`: if the count
+   * and the page disagreed on which rows exist, the connection would advertise
+   * pages that never arrive.
+   */
+  async findPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Event>> {
+    const page = await keysetPaginate(this.eventRepository, args, {
+      alias: 'event',
+      timeProp: 'startTime',
+      userId: context.userId,
+      scope: (qb) =>
+        qb
+          .andWhere("(event.event_type IS NULL OR event.event_type <> 'planned_block')")
+          .andWhere('event.is_deleted = false'),
+    });
+
+    return {
+      ...page,
+      entities: await this.composeMany(page.entities),
+    };
   }
 
   /**
@@ -831,7 +979,11 @@ export class CalendarEventService {
       updateData.startTime = data.start_time;
     }
 
-    if (data.end_time) {
+    // `!== undefined` from here down wherever false/0/null is a real value: a
+    // partial update distinguishes "not mentioned" from "cleared", and
+    // truthiness collapses the two. `end_time: null` is how an event
+    // mis-imported with a bogus end is made open-ended again.
+    if (data.end_time !== undefined) {
       updateData.endTime = data.end_time;
     }
 
@@ -875,27 +1027,34 @@ export class CalendarEventService {
       updateData.sourceId = data.source_id;
     }
 
-    if (data.confidence_score) {
+    // Every field below is one whose falsy value is the interesting one:
+    // `confidence_score: 0` is "no confidence", `priority: 0` is the baseline a
+    // de-prioritized event must be able to return to, and each boolean's `false`
+    // is the correction. Guarded on truthiness, a flag could be set and never
+    // cleared — the all-day toggle in EditEventModal turned on but not off.
+    if (data.confidence_score !== undefined) {
       updateData.confidenceScore = data.confidence_score;
     }
 
-    if (data.is_recurring) {
+    if (data.is_recurring !== undefined) {
       updateData.isRecurring = data.is_recurring;
     }
 
-    if (data.recurrence_pattern) {
+    // Null clears the pattern, which is what turning a series back into a
+    // one-off means; the column is nullable for exactly that.
+    if (data.recurrence_pattern !== undefined) {
       updateData.recurrencePattern = data.recurrence_pattern;
     }
 
-    if (data.is_all_day) {
+    if (data.is_all_day !== undefined) {
       updateData.isAllDay = data.is_all_day;
     }
 
-    if (data.is_private) {
+    if (data.is_private !== undefined) {
       updateData.isPrivate = data.is_private;
     }
 
-    if (data.priority) {
+    if (data.priority !== undefined) {
       updateData.priority = data.priority;
     }
 
@@ -903,11 +1062,14 @@ export class CalendarEventService {
       updateData.metadata = data.metadata;
     }
 
-    if (data.is_predicted) {
+    // `is_predicted: false` is the write that promotes a suggestion the user
+    // committed to — the same assertion toEntityFields spells out on the create
+    // side — so it must not be read as an omission here either.
+    if (data.is_predicted !== undefined) {
       updateData.isPredicted = data.is_predicted;
     }
 
-    if (data.is_inferred) {
+    if (data.is_inferred !== undefined) {
       updateData.isInferred = data.is_inferred;
     }
 
@@ -919,11 +1081,13 @@ export class CalendarEventService {
       updateData.tags = data.tags;
     }
 
-    if (data.sentiment_score) {
+    // 0 is a real reading for both: neutral sentiment, and the flat end of the
+    // energy scale toEntityFields already calls "a legal energy_level".
+    if (data.sentiment_score !== undefined) {
       updateData.sentimentScore = data.sentiment_score;
     }
 
-    if (data.energy_level) {
+    if (data.energy_level !== undefined) {
       updateData.energyLevel = data.energy_level;
     }
 
@@ -931,6 +1095,10 @@ export class CalendarEventService {
       updateData.status = data.status;
     }
 
+    // Deliberately still truthiness, unlike the booleans above: `is_deleted:
+    // false` must NOT be settable here. Clearing a tombstone is `restore`,
+    // which re-publishes the search index and the graph delta; doing it through
+    // a field patch would bring the row back invisible to both.
     if (data.is_deleted) {
       updateData.isDeleted = data.is_deleted;
     }

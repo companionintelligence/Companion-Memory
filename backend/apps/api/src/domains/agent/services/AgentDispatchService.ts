@@ -429,9 +429,28 @@ export class AgentDispatchService {
     }
   }
 
+  /**
+   * ═══ A SUCCESSFUL DISPATCH CLOSES THE TASK THE SAME WAY A PERSON DOES ═══
+   *
+   * This used to write `{ status: 'done' }` through `update`, which is a raw
+   * `Object.assign` onto the row: the task landed in the Done column with
+   * `completed_at` still NULL, so the card showed no completion time and every
+   * consumer keyed on that instant (HBPE's daily rollup among them) could never
+   * see the agent's work. `TaskService.complete` is the documented path and
+   * stamps it.
+   *
+   * Guarded on the task still being ACTIVE for the same reason
+   * {@link releaseTask} is: the harness reports in whenever it finishes, and a
+   * late success must not overwrite a decision the owner made in the meantime —
+   * archiving the task, or completing it themselves.
+   */
   private async finishCompleted(context: UserServiceContext, job: AgentJob): Promise<void> {
     if (job.taskId) {
-      await this.taskService.update(context, job.taskId, { status: 'done' });
+      const task = await this.taskService.findById(context, job.taskId);
+
+      if (task && isActiveTaskStatus(task.status)) {
+        await this.taskService.complete(context, job.taskId);
+      }
     }
 
     const resultText =
