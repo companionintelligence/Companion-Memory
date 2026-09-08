@@ -567,6 +567,39 @@ dev: ## Run the development environment locally
 		exit 1; \
 	fi
 
+	@# ...and reachable the way the CONTAINERS reach it, which is not the same
+	@# question. The check above proves ollama answers on loopback; the sidecars
+	@# resolve it through `host.docker.internal` (docker-compose gives them
+	@# `extra_hosts: host-gateway`), and ollama binds 127.0.0.1 by DEFAULT. So a
+	@# box where ollama is plainly running still hands the summary service an
+	@# unreachable LLM_API_BASE.
+	@#
+	@# That failure is not quiet in a useful way. `.env.default` deliberately
+	@# leaves LLM_DEFAULT_CHAT_MODEL unset — CI Hub injects it on a real
+	@# appliance, and the sidecar otherwise DISCOVERS a model from
+	@# LLM_API_BASE/models — so when discovery times out the summary service
+	@# raises at import and the container crash-loops. Before it had a compose
+	@# healthcheck it sat there reporting `Up`.
+	@#
+	@# The probe is the container's own question, asked from the host: connect to
+	@# the docker bridge GATEWAY, which is what `host.docker.internal` resolves
+	@# to. Testing for "any non-loopback listener" is not good enough — this box
+	@# also binds a tailnet address, which looks reachable and is not.
+	@#
+	@# A warning, not a hard failure: OLLAMA_HOST may legitimately point at
+	@# another machine, and a host with no docker bridge skips the check.
+	@GW=$$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null); \
+	if [ -n "$$GW" ]; then \
+		if nc -z -w 2 "$$GW" 11434 > /dev/null 2>&1; then \
+			printf "  $(GREEN)✓$(RESET) ollama is reachable from containers (via $$GW)\n\n"; \
+		else \
+			printf "  $(YELLOW)•$(RESET) ollama is listening on loopback only, so containers cannot reach it\n"; \
+			printf "    through host.docker.internal and the summary service will crash-loop on model\n"; \
+			printf "    discovery. Restart it bound to all interfaces:  $(YELLOW)OLLAMA_HOST=0.0.0.0 ollama serve$(RESET)\n"; \
+			printf "    (or pin $(YELLOW)LLM_DEFAULT_CHAT_MODEL$(RESET) in .env to skip discovery entirely).\n\n"; \
+		fi; \
+	fi
+
 	@# Every required model, pulled if absent. `ollama pull` streams its own
 	@# progress and blocks until the blobs are on disk, so boot simply waits here
 	@# on a cold machine instead of failing and leaving the operator to run the

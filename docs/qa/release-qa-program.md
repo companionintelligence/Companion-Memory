@@ -128,6 +128,23 @@ yarn workspace @ci/be-api migrate   # from empty — must apply all, in order
 
 Then repeat against a **restored copy of a populated database**. Fresh-seed success proves nothing about a re-key migration: those move a row's natural key, so run each new migration twice and confirm the second is a no-op, and confirm no `ci_search` rows are left pointing at retyped entities.
 
+The restore half has two traps that both present as "the dump is broken" and are not. Both were hit and measured on 2026-09-08 while running this gate against `20260908000139_events_status_not_null` (244 events, 60 of them deliberately NULLed to simulate a pre-migration appliance; applied in 6.05 ms, second apply a clean no-op):
+
+```bash
+docker exec <db> pg_dump -U postgres -Fc companion > /tmp/populated.dump
+docker exec <db> psql -U postgres -c "CREATE DATABASE companion_migtest OWNER companion;"
+docker exec <db> pg_restore -U postgres -d companion_migtest --no-owner --disable-triggers /tmp/populated.dump
+# REQUIRED — see below, or dbmate starts from migration #1
+docker exec <db> psql -U postgres -d companion_migtest \
+  -c "GRANT ALL ON SCHEMA ci,public,hbpe,ci_search TO companion;" \
+  -c "GRANT ALL ON ALL TABLES IN SCHEMA ci,public,hbpe,ci_search TO companion;"
+DATABASE_URL="postgres://companion:<pw>@localhost:<port>/companion_migtest?sslmode=disable" \
+  yarn workspace @ci/be-api migrate
+```
+
+- **TimescaleDB hypertables make `pg_restore` exit non-zero on a healthy dump.** Expect `ONLY option not supported on hypertable operations` (6 of them, on `ci.position`) and `table "position" is not a hypertable`. The `ci.*` tables restore completely regardless — verify with a row count rather than the exit code, or use `timescaledb_pre_restore()` / `timescaledb_post_restore()` to avoid them.
+- **Restoring as `postgres` silently defeats the whole test.** `public.schema_migrations` ends up owned by `postgres`, the `companion` role gets `permission denied` reading it, and dbmate concludes NOTHING is applied and begins re-running all 363 migrations against a populated database. It applied one before erroring. The `GRANT` above is not optional tidying; without it this gate measures nothing and looks like it passed a fresh-database run.
+
 > Dropping only the `ci` / `ci_search` schemas is **not** a reset — enum types such as `job_status` live outside them and the next `migrate` dies on `type "job_status" already exists`. Use `docker compose … down -v`.
 
 ### 3.4 Full-stack E2E
@@ -145,6 +162,11 @@ yarn e2e --grep-invert @llm
 - **`object-store` (Minio, :9000)** — the API exits at boot without it (`ECONNREFUSED`), so Playwright's `webServer` never comes up. **Non-negotiable**, and no longer a difference from CI: `e2e.yml` was fixed on 2026-09-06 to start it and to fail the job outright if `http://localhost:9000/minio/health/live` never answers. This used to read "`e2e.yml` currently starts two [services], which is why it cannot pass"; it starts three.
 - **`hbpe-service` (:8002)** — **keep it in the command above, but know that CI does not.** The 2026-08-26 baseline §4 measured the seed exiting 1 with `TypeError: fetch failed` from `ensure_bootstrap` and leaving zero events without it; `e2e.yml` now deliberately omits it, with a comment arguing from the source that the seed writes `hbpe.*` rows over its own `DataSource` and never calls the sidecar. Both cannot be right. Until someone re-runs the seed without it and records the exit code and `SELECT count(*) FROM ci.events` — see [`ci-gate-proposal.md`](ci-gate-proposal.md) §3.3 for the procedure — start it locally, because a run that seeds nothing is the more expensive mistake. It has no host port mapping in the committed compose files; add one via an override.
 - `@llm`-tagged specs need a model and are excluded.
+- **`yarn playwright install chromium` fails outright on Ubuntu 26.04** with `Playwright does not support chromium on ubuntu26.04-x64` (Playwright 1.57). CI is unaffected — `e2e.yml` runs in a container — but on such a host the suite cannot be run as written. Symlinking the expected revision under `~/.cache/ms-playwright` to a cached newer build works and is what the 2026-09-08 run below used; treat that as a local workaround, not a supported configuration.
+
+**First recorded result (2026-09-08): 30 passed, 11 failed of 41.** The suite is no longer "structurally unable to run" — but reaching that number needed a fix, because `auth.spec.ts` clicked a `Log In` link the FTUE hero rebuild had replaced with *"I already have an account"*. Since the `auth` project is a declared `dependencies` entry for the `chromium` and `mobile` projects, that one stale selector reported as **`1 failed, 39 did not run`** — a whole-suite outage presenting as a single failure. It had been that way since the splash work merged, undetected because nothing dispatches this workflow. When reading a red run here, check whether `auth` failed before believing anything about the other 39.
+
+The 11 remaining failures were NOT triaged into real-versus-environmental and that work is outstanding: `chat.spec.ts` (`@llm`, needs a model), `import.spec.ts`, `memory-people.spec.ts`, `nav-shell.spec.ts` (5 failures sharing one cause — `#power-rail` reporting `collapsed` where the spec expects `expanded`) and `things.spec.ts` (3). None is in a file the planning/calendar work touched, and all three spec files predate it, so they are believed pre-existing — but that is inference from file history, not a measured comparison against an earlier commit.
 
 > `e2e.yml` is not the only E2E lane, and the other one covers what this procedure cannot. `desktop-e2e.yml` drives Playwright against the desktop **appliance** — published images, empty database, no seeded account — i.e. exactly the first-run path a locally built, migrated, seeded stack can never exercise. It is `workflow_dispatch`-only and takes a published image tag, so it can only run after `publish.yml`. Dispatch it against the release tag as part of G6 and record the run in §7.
 
