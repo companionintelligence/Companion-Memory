@@ -197,7 +197,20 @@ jobs:
       # `infrastructure/setup-database/entrypoint.sh`.
       #
       # `apt-get` needs no sudo: the node:22 container runs as root.
+      #
+      # `shell: bash` is load-bearing. This job runs in the `node:22` container,
+      # where the default shell for a `run:` block is `sh -e` — that is dash,
+      # which has no `set -o pipefail`. Without this line the step died on its
+      # very first command with `set: Illegal option -o pipefail` (exit 2)
+      # before creating the role, so the whole backend lane had never passed
+      # since the Postgres service landed: run 34184853130, 2026-09-08. The
+      # image ships bash, so ask for it rather than dropping `pipefail`.
+      #
+      # Same defect and same fix as `pr-gate.yml`'s plist guard. If you add a
+      # `run:` block to a containerized job here, either keep it POSIX or say
+      # `shell: bash`.
       - name: Bootstrap role, database and extensions
+        shell: bash
         run: |
           set -euo pipefail
           apt-get update
