@@ -223,7 +223,15 @@ jobs:
       # and the count is asserted, because an empty list would make the step
       # pass while checking nothing, which is exactly the failure mode this
       # whole job exists to remove.
+      # `shell: bash` is load-bearing, not decoration. Every job in this file
+      # runs in the `node:22` container, where the default shell for a `run:`
+      # block is `sh -e` — that is dash, which has neither `set -o pipefail`
+      # nor `mapfile`, and the first run of this job failed with
+      # `set: Illegal option -o pipefail` before checking a single plist. The
+      # image does ship bash, so ask for it explicitly rather than rewriting
+      # the array handling in POSIX sh.
       - name: Check iOS plists for duplicate top-level keys
+        shell: bash
         run: |
           set -euo pipefail
           mapfile -t plists < <(find frontend/apps/ios -name '*.plist' -not -path '*/node_modules/*' | sort)
