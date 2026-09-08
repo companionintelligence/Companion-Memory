@@ -127,15 +127,22 @@ working. Resolved once per launch, cheapest option first:
    (titles, task breakdown, summaries), which is why the earlier `gemma3:1b`
    default was retired.
 
-   On **Linux** the sidecar binds `0.0.0.0`, not loopback. Containers reach the
-   host through `host.docker.internal:host-gateway`, which on native Docker
-   Engine is the bridge gateway rather than the host's loopback, so a
-   loopback-bound sidecar refuses every call from `api`/`hbpe-service` while
-   the stack still reports healthy. That does publish an unauthenticated model
-   server on the LAN — the same trade `docs/operations/gpu-model-residency.md`
-   already documents for a host-run Ollama, and narrower than the appliance
-   itself, which publishes `8642` on every interface. A host firewall is what
-   keeps the port private.
+   On **Linux** the sidecar currently binds `0.0.0.0`, not loopback. Containers
+   reach the host through `host.docker.internal:host-gateway`, which on native
+   Docker Engine is the bridge gateway rather than the host's loopback, so a
+   loopback-bound sidecar refuses every call from `api`/`hbpe-service` while the
+   stack still reports healthy.
+
+   > ⚠️ **This bind is known to be too wide and is tracked for narrowing before
+   > the first desktop release.** Ollama has no server-side authentication, and
+   > binding non-loopback also disables its own host-header guard, so any LAN
+   > peer can run inference on your GPU and — more seriously — delete and
+   > recreate models, which the API's "use whatever model is served" fallback
+   > turns into a persistent model-substitution foothold. There is no direct
+   > read path to your data from that port. The fix is loopback plus a relay
+   > bound only to the discovered host-gateway address; see the TODO in
+   > `src-tauri/src/local_model/ollama_sidecar.rs`. Until then, keep port 11434
+   > off untrusted networks with a host firewall.
 
 See `src-tauri/src/local_model/mod.rs` for the exact resolution logic and
 `ollama_sidecar.rs`/`apple_bridge.rs` for each backend. Known v1 limitations:

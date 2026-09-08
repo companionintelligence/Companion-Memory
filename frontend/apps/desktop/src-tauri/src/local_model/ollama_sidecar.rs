@@ -314,19 +314,49 @@ fn spawn_serve(binary: &Path, port: u16, models_dir: Option<&Path>, log_path: &P
     // tunnels like macOS and is unaffected; we can't tell the two apart from
     // here, so the wider bind covers both.)
     //
-    // SECURITY: 0.0.0.0 publishes an unauthenticated model server on every
-    // interface, LAN included. Ollama has no auth of its own and no bind
-    // allowlist — OLLAMA_HOST takes a single address and OLLAMA_ORIGINS is
-    // CORS, not access control — and the gateway address we'd otherwise bind
-    // differs per compose network (172.17.0.1 for docker0, a different /16 for
-    // each user-defined network), so there is no narrower address that is
-    // reliably right. A host firewall is what keeps port 11434 off the local
-    // network; narrowing this further needs a real reverse proxy in front,
-    // not another env var. This is the same trade the appliance's own
-    // recommended systemd override already makes for a host-run Ollama
-    // (`Environment="OLLAMA_HOST=0.0.0.0"`, docs/operations/
-    // gpu-model-residency.md) — the desktop sidecar is not loosening a
-    // stricter rule, it is catching up to the documented one.
+    // ⚠️ SECURITY — KNOWN TOO WIDE. This is a deliberate interim state, not a
+    // settled design, and it must be narrowed before the first desktop release
+    // ships. Nothing is exposed today only because desktop-release.yml has
+    // never run.
+    //
+    // What 0.0.0.0 actually costs, verified against the pinned Ollama
+    // v0.32.15 source rather than assumed:
+    //   * Ollama has NO server-side auth on any route. `OLLAMA_AUTH` is a
+    //     CLIENT-side request-signing flag (api/client.go); the server
+    //     registers exactly two middlewares, CORS and allowedHosts.
+    //   * Binding non-loopback DISABLES the one guard it does have:
+    //     allowedHostsMiddleware short-circuits (`if !addr.Addr().IsLoopback()
+    //     { c.Next(); return }`), so the wide bind is strictly worse than the
+    //     bind plus that check. OLLAMA_ORIGINS is CORS, irrelevant to a
+    //     non-browser client.
+    //   * Any LAN peer therefore gets unauthenticated /api/generate, /api/chat
+    //     and /api/embed (free use of this machine's GPU), AND destructive
+    //     /api/delete + /api/create. That last pair matters here beyond the
+    //     obvious: OllamaService::resolveServedChatModel falls back to
+    //     "whatever model is served" when the configured tag is absent, so
+    //     deleting gemma4:e4b and creating a substitute under that name is a
+    //     persistent model-substitution foothold in the component this
+    //     appliance hands its memory to. There is no direct read path to the
+    //     database — the sidecar holds no credentials and Postgres publishes
+    //     no port — but that is a smaller comfort than it sounds.
+    //
+    // Two things an earlier revision of this comment asserted are FALSE:
+    //   * "the gateway address differs per compose network, so there is no
+    //     narrower address that is reliably right" — wrong. `host-gateway` is
+    //     a single daemon-global value (moby's setHostGatewayIP uses the
+    //     DEFAULT bridge's IP), so containers on a user-defined compose
+    //     network still arrive from 172.17.0.1. It is discoverable before
+    //     compose runs via `docker network inspect bridge`.
+    //   * "the same trade docs/operations/gpu-model-residency.md already
+    //     makes" — that is a systemd tuning override an operator applies to
+    //     their OWN server-class host, not a bind this app chooses on a
+    //     user's laptop. The precedent does not transfer.
+    //
+    // TODO(desktop-release): bind Ollama to loopback and add a ~40-line raw
+    // TCP relay listening ONLY on the discovered host-gateway address, with a
+    // loud, documented fallback when it cannot be discovered (rootless Docker
+    // resolves host-gateway to an address in RootlessKit's namespace — see
+    // moby#47684 — so the fallback path is real and needs its own answer).
     #[cfg(target_os = "linux")]
     let bind_host = "0.0.0.0";
 

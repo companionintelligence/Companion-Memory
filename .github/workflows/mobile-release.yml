@@ -564,9 +564,13 @@ jobs:
       # full reasoning, and the pair must move together or the runner compiles
       # against an SDK it never installed. Play has required target API 36 since
       # 31 Aug 2026, so this pin is what the first Play upload will be rejected
-      # for; the bump is blocked on an AGP upgrade (compileSdk 36 needs
-      # >= 8.9.1, ../../frontend/apps/android/android/build.gradle pins 8.7.2).
-      # Tracked as a P0 with the unblock sequence in
+      # for. The bump is NOT just an AGP upgrade: Capacitor forbids a custom
+      # target SDK outright (7.x is pinned to 35, 8.x to 36), so it is a
+      # Capacitor 8 migration — which itself is blocked on the unmaintained
+      # @capacitor-community/background-geolocation, the plugin providing the
+      # background location this app ships. (The AGP floor is 8.10.0, not the
+      # 8.9.1 an earlier revision of this comment claimed — AGP 8.9 tops out at
+      # API 35.) Tracked as a P0 with the unblock sequence in
       # frontend/apps/android/DELIVERY.md §1a. THIS lane is the one that ships,
       # so when the bump lands change this line — and the identical one in
       # mobile-build.yml — to "platforms;android-36" "build-tools;36.0.0".
@@ -624,15 +628,40 @@ jobs:
       # the background-location declaration and the foreground-service `location` type
       # declaration are both filed and approved, "before this build goes to any Play track,
       # including internal testing". Better to learn that on a rehearsal.
-      # r0adkll/upload-google-play@v1 has no dry-run input (its inputs are
-      # serviceAccountJson[PlainText], packageName, releaseFiles, releaseName, track,
-      # inAppUpdatePriority, userFraction, whatsNewDirectory, mappingFile, debugSymbols,
-      # status, changesNotSentForReview, existingEditPatch), so `status: draft` is the
-      # non-publishing option: it exercises the credentials, the package name, the edit
-      # transaction and the declaration checks, and commits the release as a draft that
-      # rolls out to nobody. Tradeoff, and the reason BUILD_NUMBER_OFFSET exists: Play
-      # still consumes the version code of a bundle it accepted into a draft, so a dry run
-      # burns its number too — deleting the draft does not give the number back.
+      # r0adkll/upload-google-play@v1 has no dry-run input. Its real inputs are
+      # serviceAccountJson, serviceAccountJsonPlainText, packageName, releaseFile,
+      # releaseFiles, releaseName, track, tracks, inAppUpdatePriority, userFraction,
+      # status, whatsNewDirectory, mappingFile, debugSymbols, changesNotSentForReview,
+      # versionCodesToRetain. (An earlier revision of this comment listed a nonexistent
+      # `existingEditPatch` and omitted `tracks` — the plural input that selects
+      # `internalsharing`, which matters below.)
+      #
+      # So `status: draft` is the non-publishing option available here: it exercises the
+      # credentials, the package name, the edit transaction and the API-enforced
+      # declaration checks, and commits the release as a draft that rolls out to nobody.
+      # Tradeoff, and the reason BUILD_NUMBER_OFFSET exists: `status` only sets the
+      # release status INSIDE the edit — the action calls `edits.commit` unconditionally
+      # (verified in its src/edits.ts), so Play consumes the version code exactly as a
+      # real submission does, and deleting the draft does not give the number back.
+      #
+      # TWO THINGS TO KNOW BEFORE RELYING ON THIS STEP:
+      #   1. It cannot run at all yet. The Play Publishing API refuses every call until
+      #      at least one APK has been uploaded BY HAND through the Play Console ("you
+      #      will have to upload at least one APK through the Play Console before you
+      #      can use this API" — developers.google.com/android-publisher/edits). The
+      #      same precondition makes the real upload below fail too, and `status:
+      #      completed` is additionally refused for an app that has never been
+      #      published. Until someone creates the Console account and hand-uploads
+      #      once, no version of this rehearsal — or of the release — can succeed.
+      #   2. There IS a genuinely non-consuming alternative worth switching to once (1)
+      #      is done: fastlane `supply --validate_only` swaps `edits.commit` for
+      #      `edits.validate` (supply/lib/supply/uploader.rb), and validate-time is late
+      #      enough to surface API-enforced declaration errors — fastlane#22204 shows
+      #      the health-apps declaration failing exactly there. Human-reviewed
+      #      declarations (background location, foreground-service `location`) are never
+      #      caught by any rehearsal, only by review. `track: internalsharing` is a
+      #      third option, documented as explicitly version-code-free, but it runs no
+      #      declaration checks at all.
       - name: Validate against Play (draft, no rollout)
         if: steps.secrets.outputs.present == 'true' && needs.version.outputs.dry_run == 'true'
         uses: r0adkll/upload-google-play@v1

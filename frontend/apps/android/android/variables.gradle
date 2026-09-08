@@ -11,15 +11,34 @@ ext {
     // consumed a version code that mobile-release.yml stamps from `github.run_number`
     // and cannot hand back.
     //
-    // The pin stays at 35 regardless, because compileSdk 36 requires AGP >= 8.9.1
-    // (Google's "minimum versions of tools for Android API level" table) and
-    // ../build.gradle pins AGP 8.7.2 — the Capacitor 7 template's version. Bumping only
-    // this file fails at configuration time instead of shipping. Unblocking it is an AGP
-    // upgrade, likely riding along with a Capacitor major; Gradle itself is already
-    // sufficient (gradle-wrapper.properties is 8.11.1, exactly what AGP 8.9 asks for).
-    // The matching `platforms;android-36` / `build-tools;36.0.0` must land in BOTH
-    // .github/workflows/mobile-build.yml and .github/workflows/mobile-release.yml in the
-    // same change, or the runner compiles against an SDK it never installed.
+    // The pin stays at 35 because reaching 36 is a CAPACITOR MAJOR UPGRADE, not an SDK
+    // edit and not merely an AGP bump. Verified 2026-09-07:
+    //
+    //   * Capacitor forbids it outright at 7.x. capacitorjs.com/docs/android/setting-target-sdk:
+    //     "Capacitor Android does not support custom target SDK versions. Each version of
+    //     Capacitor Android requires a specific target SDK version and support is only
+    //     provided for that matching version." Its matrix is 7.x -> 35, 8.x -> 36. So no
+    //     AGP version unblocks this while @capacitor/android is ^7.0.0.
+    //   * The AGP floor is 8.10.0, NOT 8.9.1 as an earlier revision of this comment and
+    //     ../DELIVERY.md both claimed. AGP 8.9's release notes give "Maximum API Level: 35";
+    //     8.10.0's give 36. Capacitor 8 itself ships AGP 8.13.0 (read from the published
+    //     @capacitor/android 8.5.1 tarball, capacitor/build.gradle) and moves the wrapper to
+    //     Gradle 8.14.3 — so "the wrapper is already sufficient at 8.11.1" was also wrong for
+    //     the path we would actually take.
+    //
+    // Capacitor 8 additionally requires Kotlin 2.2.20, google-services 4.4.4, Java 21, Node
+    // 22+, cordovaAndroidVersion 14.0.1 (from 10.1.1 below) and minSdk 24 — which DROPS
+    // Android 6.0/6.0.1, a product call, not a build one.
+    //
+    // 🚧 The real blocker sits upstream of all of that: @capacitor-community/background-
+    // geolocation has no Capacitor 8 release and is effectively unmaintained, and it is what
+    // provides this app's background location AND its foreground-service `location` type —
+    // precisely the two features whose Play declarations already gate the first upload
+    // (see ../DELIVERY.md §1c). Migrating means replacing, forking or vendoring it first.
+    //
+    // When it does land, the matching `platforms;android-36` / `build-tools;36.0.0` must
+    // land in BOTH .github/workflows/mobile-build.yml and mobile-release.yml in the same
+    // change, or the runner compiles against an SDK it never installed.
     //
     // Tracked as a 🔴 P0 with the full unblock sequence in ../DELIVERY.md §1a.
     compileSdkVersion = 35

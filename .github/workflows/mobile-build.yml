@@ -67,8 +67,11 @@ jobs:
         uses: android-actions/setup-android@v3
       # Pinned to 35 to match compileSdkVersion in frontend/apps/android/android/variables.gradle.
       # These two move TOGETHER: Play has required target API 36 since 31 Aug 2026, but
-      # compileSdk 36 needs AGP >= 8.9.1 and the project pins 8.7.2, so the bump is blocked
-      # on an AGP upgrade (variables.gradle carries the reasoning; DELIVERY.md §1a tracks it).
+      # Capacitor forbids a custom target SDK (7.x is pinned to 35, 8.x to 36), so the bump
+      # is a Capacitor 8 migration rather than the AGP-only upgrade an earlier revision of
+      # this comment described — and that migration is blocked on the unmaintained
+      # @capacitor-community/background-geolocation (variables.gradle carries the full
+      # reasoning; DELIVERY.md §1a tracks it).
       # When that lands, this line and the identical one in mobile-release.yml both need
       # "platforms;android-36" "build-tools;36.0.0".
       - name: Install SDK components
