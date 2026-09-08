@@ -298,4 +298,17 @@ export type Event = Readonly<Omit<EventEntity, 'user' | 'entityType'>> & {
   readonly title: string | null;
   readonly description: string | null;
   user?: User;
+
+  /**
+   * Set only on an occurrence synthesized by read-time RRULE expansion
+   * (`domains/memory/recurrence`): the `event_id` of the series master this
+   * occurrence was computed from. Absent on every stored row.
+   *
+   * It has no column and never will — occurrences are ephemeral. Anything that
+   * needs to reach the backing row (tag/content/media batching, a future write
+   * path) must follow this rather than `id`, which addresses no row.
+   */
+  readonly seriesMasterId?: string | null;
+  /** RECURRENCE-ID of a synthesized occurrence (`YYYYMMDDTHHMMSSZ`); absent on stored rows. */
+  readonly recurrenceId?: string | null;
 };

@@ -374,6 +374,15 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
     (eventId: string, startTime: Date) => {
       const moved = events.find((entry) => entry.id === eventId);
 
+      // An expanded occurrence has no row behind it, so `rescheduleEvent`'s
+      // findOne misses, the mutation resolves null, the refetch puts the chip
+      // back where it was and nothing explains why. Say so instead.
+      if (moved?.seriesMasterId) {
+        setActionError("Recurring occurrences can't be moved yet.");
+
+        return;
+      }
+
       if (moved?.eventType === PLANNED_BLOCK && moved.taskId) {
         run(placeOnDay(moved.taskId, startTime), 'Could not move that. Try again shortly.');
 

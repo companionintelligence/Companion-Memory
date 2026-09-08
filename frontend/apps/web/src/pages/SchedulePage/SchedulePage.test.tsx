@@ -930,6 +930,28 @@ describe('SchedulePage — dragging a planned block moves its task too', () => {
 
     expect(await screen.findByText(/Could not move that/)).toBeInTheDocument();
   });
+
+  /**
+   * An expanded recurring occurrence backs no row.
+   *
+   * The server computes these from the series' RRULE at read time, so the id on
+   * the chip addresses nothing: `rescheduleEvent`'s findOne misses, the mutation
+   * resolves null WITHOUT throwing, `run`'s catch never fires, and the refetch
+   * puts the chip back where it was with nothing on screen to explain it. Say so
+   * instead — and the grid drops `draggable` on these chips as well.
+   */
+  it('refuses to move an expanded recurring occurrence, and says why', async () => {
+    const placeOnDay = vi.fn().mockResolvedValue(undefined);
+    setSchedule({ events: [event({ seriesMasterId: 'master-1' })] });
+    setPlan({ placeOnDay });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move'));
+
+    expect(await screen.findByText(/Recurring occurrences can't be moved yet/)).toBeInTheDocument();
+    expect(h.reschedule).not.toHaveBeenCalled();
+    expect(placeOnDay).not.toHaveBeenCalled();
+  });
 });
 
 /**

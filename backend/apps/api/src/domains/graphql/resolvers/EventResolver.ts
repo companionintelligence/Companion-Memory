@@ -36,6 +36,19 @@ import { Paginator } from '../utils/Paginator';
 /** Widest window eventsInRange will serve — a quarter, enough for the month view. */
 const MAX_RANGE_DAYS = 92;
 
+/**
+ * The `ci.events` row a node's batched fields must be looked up by.
+ *
+ * An occurrence expanded from an RRULE (`domains/memory/recurrence`) carries a
+ * synthetic id that backs no row, so every DataLoader keyed on it would return
+ * empty: a recurring meeting's chip would open with no tags, no attachments and
+ * no thumbnail, and nothing on screen would say why. The series master is the
+ * row all three actually live on.
+ */
+function backingEventId(parent: EventType): string {
+  return parent.__source.seriesMasterId ?? parent.__source.id;
+}
+
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => EventType)
 export class EventResolver {
@@ -444,7 +457,7 @@ export class EventResolver {
 
     const tags = await this.tagLoader.load(serviceContext, {
       type: 'event',
-      id: parent.__source.id,
+      id: backingEventId(parent),
     });
 
     return tags.map((tag) => EntityTagType.toType(tag));
@@ -462,7 +475,7 @@ export class EventResolver {
   ): Promise<ContentConnection> {
     const serviceContext = entityOwnerScope(context, parent.__source.userId);
 
-    const entities = await this.eventContentsLoader.load(serviceContext, parent.__source.id);
+    const entities = await this.eventContentsLoader.load(serviceContext, backingEventId(parent));
 
     const { slice, pageInfo, totalCount } = Paginator.paginate(entities, {
       ...pagination,
@@ -491,7 +504,10 @@ export class EventResolver {
    * page of events resolves its media in a single batch.
    */
   private resolveMedia(context: RequestContext, parent: EventType): Promise<EventMedia | null> {
-    return this.eventMediaLoader.load(entityOwnerScope(context, parent.__source.userId), parent.__source.id);
+    return this.eventMediaLoader.load(
+      entityOwnerScope(context, parent.__source.userId),
+      backingEventId(parent),
+    );
   }
 
   /** Thumbnail (PREVIEW variant) URL for a photo/video event. */

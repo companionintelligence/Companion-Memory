@@ -32,6 +32,7 @@ const GET_SCHEDULE = gql(`
       category
       eventType
       taskId
+      seriesMasterId
       locationName
       sourceSystem
       externalSyncStatus
@@ -78,6 +79,12 @@ export interface ScheduleEvent {
   eventType?: string | null;
   /** The task a planned block belongs to; null for anything else. */
   taskId?: string | null;
+  /**
+   * Set when this chip is an occurrence the server expanded from an RRULE at
+   * read time rather than a stored row. Its `id` addresses nothing, so it
+   * cannot be moved or edited — the grid disables both affordances on it.
+   */
+  seriesMasterId?: string | null;
   locationName: string | null;
   /** Connector this came from, or null when it was created here. */
   sourceSystem?: string | null;

@@ -1240,6 +1240,16 @@ type EventType implements Node & Taggable {
   """
   plannedMinutes: Int
   previewUrl: String
+
+  """
+  RECURRENCE-ID (`YYYYMMDDTHHMMSSZ`) of an expanded occurrence; null on stored rows.
+  """
+  recurrenceId: String
+
+  """
+  Series master of an occurrence expanded from an RRULE at read time. Non-null means this node backs no stored row: its `id` addresses nothing, and it cannot be rescheduled or edited.
+  """
+  seriesMasterId: ID
   sourceId: ID
   sourceSystem: String
   sourceType: String

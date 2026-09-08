@@ -491,11 +491,21 @@ describeWithDatabase(`JobQueryService — against real Postgres (${availability.
   });
 
   it('resolves category through the JOB_TYPES taxonomy, not a literal string match', async () => {
-    const result = await service.list(CTX, { category: 'search' });
+    // Both filters, deliberately. `category: 'search'` alone returns a page of
+    // every search-category job the user owns, and against a database with real
+    // traffic in it this suite's own `note.created` row is simply not on the
+    // first page — the assertion then fails for a reason that has nothing to do
+    // with the taxonomy. Pinning `type` to the exact event name scopes the read
+    // to the seeded row while still proving the point: `note.created` is not the
+    // literal string 'search', so a category filter that string-matched instead
+    // of resolving through JOB_TYPES would return nothing here.
+    const mapped = await service.list(CTX, { category: 'search', type: 'note.created' });
+    expect(mapped.items.map((i) => i.event)).toContain('note.created');
 
-    const events = result.items.map((i) => i.event);
-    expect(events).toContain('note.created'); // mapped to category 'search'
-    expect(events).not.toContain(`${marker}.uncategorized`); // not in JOB_TYPES at all
+    // And the other direction: an event absent from JOB_TYPES entirely must not
+    // be swept into a category by a loose match.
+    const unmapped = await service.list(CTX, { category: 'search', search: marker });
+    expect(unmapped.items.map((i) => i.event)).not.toContain(`${marker}.uncategorized`);
   });
 
   it('never returns a row this same response labels with a DIFFERENT category', async () => {

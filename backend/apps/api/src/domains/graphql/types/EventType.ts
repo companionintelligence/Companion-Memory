@@ -115,6 +115,20 @@ export class EventType implements Node, Taggable {
 
   @Field(() => ID, {
     nullable: true,
+    description:
+      'Series master of an occurrence expanded from an RRULE at read time. Non-null means this node ' +
+      'backs no stored row: its `id` addresses nothing, and it cannot be rescheduled or edited.',
+  })
+  seriesMasterId!: string | null;
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'RECURRENCE-ID (`YYYYMMDDTHHMMSSZ`) of an expanded occurrence; null on stored rows.',
+  })
+  recurrenceId!: string | null;
+
+  @Field(() => ID, {
+    nullable: true,
     description: 'Task this planned block schedules (`event_type = planned_block`).',
   })
   taskId!: string | null;
@@ -162,6 +176,8 @@ export class EventType implements Node, Taggable {
       metadata: event.metadata,
       status: event.status,
       parentEventId: event.parentEventId ? GlobalUID.encode('event', event.parentEventId) : null,
+      seriesMasterId: event.seriesMasterId ? GlobalUID.encode('event', event.seriesMasterId) : null,
+      recurrenceId: event.recurrenceId ?? null,
       taskId: event.taskId ? GlobalUID.encode('task', event.taskId) : null,
       plannedMinutes: event.plannedMinutes,
       tags: [], // Hydrated by resolver

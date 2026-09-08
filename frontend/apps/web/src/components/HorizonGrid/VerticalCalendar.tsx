@@ -390,7 +390,9 @@ function TimedBlock({
   const { event, leftPct, widthPct, continuesFrom, continuesTo } = item.span;
   const color = eventColor(event, colorMode);
   const url = eventUrl(event);
-  const movable = Boolean(onMoveEvent);
+  // An expanded recurring occurrence backs no row, so there is nothing to
+  // reschedule: offering the drag would only ever end in a snap-back.
+  const movable = Boolean(onMoveEvent) && !event.seriesMasterId;
   const short = widthPct < (45 / MINUTES_PER_DAY) * 100;
   const label = blockLabel(event, colorMode, zone);
 
@@ -402,7 +404,7 @@ function TimedBlock({
         <EventTooltipBody event={event} color={color} colorMode={colorMode} movable={movable} zone={zone} />
       }
       actions={
-        onMoveEvent
+        movable && onMoveEvent
           ? (close) => <MoveEventForm event={event} zone={zone} onMoveEvent={onMoveEvent} onDone={close} />
           : undefined
       }
@@ -496,7 +498,8 @@ function AllDayChip({
   const color = eventColor(event, colorMode);
   const url = eventUrl(event);
   const label = blockLabel(event, colorMode, zone);
-  const movable = Boolean(onMoveEvent);
+  // See TimedBlock: an expanded occurrence has no row to move.
+  const movable = Boolean(onMoveEvent) && !event.seriesMasterId;
 
   return (
     <EventPeek
@@ -508,7 +511,7 @@ function AllDayChip({
       // The all-day row sits outside the hour grid, so nothing drops onto it and
       // an all-day event had no move path on ANY pointer — this is the only one.
       actions={
-        onMoveEvent
+        movable && onMoveEvent
           ? (close) => <MoveEventForm event={event} zone={zone} onMoveEvent={onMoveEvent} onDone={close} />
           : undefined
       }
