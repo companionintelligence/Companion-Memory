@@ -1,10 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { FULL_CAPABILITY, READ_CAPABILITY } from '@ci/common/decorators';
-
-import type { BaseTool } from '../../core/BaseTool';
+import { FULL_CAPABILITY, READ_CAPABILITY } from '../../capability';
+import type { ToolHandle } from '../../core/ToolHandle';
 import type { IntentDefinition, ToolInvocationContext } from '../../core/types';
 import type { ToolGateRuling } from '../../policy/toolGate';
-import { ToolRegistry } from '../ToolRegistry';
+import { ToolRegistryCore } from '../ToolRegistry';
 
 function makeLogger() {
   return { setContext: jest.fn(), debug: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() } as any;
@@ -28,7 +27,7 @@ function schema(name: string, privacy: Partial<IntentDefinition['privacy']> = {}
   };
 }
 
-function fakeProvider(tools: BaseTool[]) {
+function fakeProvider(tools: ToolHandle[]) {
   return {
     name: 'fake',
     initialize: jest.fn(async () => undefined),
@@ -40,7 +39,7 @@ function fakeProvider(tools: BaseTool[]) {
 }
 
 function fakeTool(definition: IntentDefinition, execute = jest.fn(async () => ({ success: true }))) {
-  return { schema: definition, execute } as unknown as BaseTool & { execute: jest.Mock };
+  return { schema: definition, execute } as unknown as ToolHandle & { execute: jest.Mock };
 }
 
 async function harness(definition: IntentDefinition, ruling: ToolGateRuling) {
@@ -49,12 +48,12 @@ async function harness(definition: IntentDefinition, ruling: ToolGateRuling) {
     async (..._args: unknown[]) => ({ id: 'pa-77', expiresAt: new Date('2026-08-27T00:00:00.000Z') }),
   );
   const evaluate = jest.fn(async (..._args: unknown[]) => ruling);
-  const send = jest.fn().mockResolvedValue([]);
+  const record = jest.fn().mockResolvedValue([]);
 
-  const registry = new ToolRegistry(makeLogger(), { send } as any, { evaluate, propose } as any);
+  const registry = new ToolRegistryCore(makeLogger(), { record }, { evaluate, propose } as any);
   await registry.registerProvider(fakeProvider([tool]));
 
-  return { registry, tool, propose, evaluate, send };
+  return { registry, tool, propose, evaluate, record };
 }
 
 const QUEUE_RULING: ToolGateRuling = {
@@ -113,7 +112,7 @@ describe('ToolRegistry.executeTool — the capability check still comes first', 
 
 describe('ToolRegistry.executeTool — a queue ruling parks the call', () => {
   it('returns TOOL_QUEUED naming the row, and does not run the tool', async () => {
-    const { registry, tool, propose, send } = await harness(FORGET, QUEUE_RULING);
+    const { registry, tool, propose, record } = await harness(FORGET, QUEUE_RULING);
 
     const result = await registry.executeTool('memory_forget', context(), { entityId: 'e-1' });
 
@@ -133,7 +132,7 @@ describe('ToolRegistry.executeTool — a queue ruling parks the call', () => {
 
     // A queued proposal is not an invocation: feeding it into the behavioural
     // signal would teach prediction that the user did this.
-    expect(send).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('refuses rather than executing when a queue ruling arrives with no owner to ask', async () => {
@@ -153,14 +152,14 @@ describe('ToolRegistry.executeTool — a queue ruling parks the call', () => {
 
 describe('ToolRegistry.executeTool — an execute ruling is the unchanged path', () => {
   it('runs the tool and still emits the behavioural signal', async () => {
-    const { registry, tool, propose, send } = await harness(FORGET, EXECUTE_RULING);
+    const { registry, tool, propose, record } = await harness(FORGET, EXECUTE_RULING);
 
     const result = await registry.executeTool('memory_forget', context(), {});
 
     expect(result.success).toBe(true);
     expect((tool as any).execute).toHaveBeenCalledTimes(1);
     expect(propose).not.toHaveBeenCalled();
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledTimes(1);
   });
 
   it('passes the whole invocation context — tier and confirmation id included — to the gate', async () => {

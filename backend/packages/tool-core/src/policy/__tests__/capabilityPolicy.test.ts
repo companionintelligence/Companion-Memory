@@ -1,5 +1,4 @@
-import type { ApiKeyCapability } from '@ci/common/decorators';
-
+import type { ToolCapability } from '../../capability';
 import type { IntentPrivacy } from '../../core/types';
 import { capabilityAllows, capabilityRequiredFor, removesData } from '../capabilityPolicy';
 
@@ -7,7 +6,7 @@ function privacy(overrides: Partial<IntentPrivacy> = {}): IntentPrivacy {
   return { access: 'read', sensitivity: 'personal', destructive: false, external: false, ...overrides };
 }
 
-const CAPABILITIES: ApiKeyCapability[] = ['read', 'write', 'full'];
+const CAPABILITIES: ToolCapability[] = ['read', 'write', 'full'];
 
 describe('capabilityAllows', () => {
   it('lets full authority run anything', () => {
@@ -103,7 +102,7 @@ describe('capabilityRequiredFor', () => {
       privacy({ access: 'delete', destructive: true }),
       privacy({ access: 'read', destructive: true }),
     ];
-    const rank: Record<ApiKeyCapability, number> = { read: 0, write: 1, full: 2 };
+    const rank: Record<ToolCapability, number> = { read: 0, write: 1, full: 2 };
 
     for (const label of labels) {
       const required = capabilityRequiredFor(label);

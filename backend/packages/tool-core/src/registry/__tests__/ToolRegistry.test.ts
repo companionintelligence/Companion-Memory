@@ -1,10 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { ApiKeyCapability } from '@ci/common/decorators';
-
+import type { ToolCapability } from '../../capability';
 import type { IntentPrivacy, ToolInvocationContext } from '../../core/types';
-import { ToolRegistry } from '../ToolRegistry';
+import { ToolRegistryCore } from '../ToolRegistry';
 
-import { openGate } from './gateDouble';
+import { openGate, recordingSink } from './gateDouble';
 
 function makeLogger() {
   return {
@@ -75,16 +74,16 @@ function fakeProvider(tools: Record<string, any>) {
 
 const context: ToolInvocationContext = { userId: 'user-1', capability: 'full' };
 
-function asCapability(capability: ApiKeyCapability): ToolInvocationContext {
+function asCapability(capability: ToolCapability): ToolInvocationContext {
   return { userId: 'user-1', capability };
 }
 
 describe('ToolRegistry', () => {
   function makeRegistry() {
-    const send = jest.fn().mockResolvedValue([]);
-    const registry = new ToolRegistry(makeLogger(), { send } as any, openGate().double);
+    const { double: sink, record } = recordingSink();
+    const registry = new ToolRegistryCore(makeLogger(), sink, openGate().double);
 
-    return { registry, send };
+    return { registry, record };
   }
 
   it('keys tools by the executable (underscored) name while exposing the dotted intent name', async () => {
@@ -111,7 +110,7 @@ describe('ToolRegistry', () => {
   });
 
   it('executes a tool by its executable name and emits tool.invoked via EventService', async () => {
-    const { registry, send } = makeRegistry();
+    const { registry, record } = makeRegistry();
     const tool = fakeTool('memory.recall', { hits: [] });
     await registry.registerProvider(fakeProvider({ 'memory.recall': tool }));
 
@@ -120,9 +119,8 @@ describe('ToolRegistry', () => {
     expect(result.success).toBe(true);
     expect(result.data).toEqual({ hits: [] });
     expect(tool.execute).toHaveBeenCalledWith(context, { q: 1 });
-    expect(send).toHaveBeenCalledTimes(1);
-    const [eventName, payload, options] = send.mock.calls[0];
-    expect(eventName).toBe('tool.invoked');
+    expect(record).toHaveBeenCalledTimes(1);
+    const [payload] = record.mock.calls[0];
     expect(payload).toMatchObject({
       intent: 'memory.recall',
       tool: 'memory_recall',
@@ -137,29 +135,28 @@ describe('ToolRegistry', () => {
       source: 'fake',
     });
     expect(typeof (payload as { occurredAt?: unknown }).occurredAt).toBe('string');
-    expect(options).toEqual({ queue: 'telemetry' });
   });
 
   it('never fails the tool call when telemetry emission throws', async () => {
-    const send = jest.fn().mockRejectedValue(new Error('bus down'));
-    const registry = new ToolRegistry(makeLogger(), { send } as any, openGate().double);
+    const record = jest.fn().mockRejectedValue(new Error('bus down'));
+    const registry = new ToolRegistryCore(makeLogger(), { record }, openGate().double);
     await registry.registerProvider(fakeProvider({ 'memory.recall': fakeTool('memory.recall', { ok: 1 }) }));
 
     const result = await registry.executeTool('memory_recall', context, {});
 
     expect(result.success).toBe(true);
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledTimes(1);
   });
 
   it('returns TOOL_NOT_FOUND (and does not emit) for an unknown tool', async () => {
-    const { registry, send } = makeRegistry();
+    const { registry, record } = makeRegistry();
     await registry.registerProvider(fakeProvider({ 'memory.recall': fakeTool('memory.recall') }));
 
     const result = await registry.executeTool('does_not_exist', context, {});
 
     expect(result.success).toBe(false);
     expect(result.error?.code).toBe('TOOL_NOT_FOUND');
-    expect(send).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
   });
 
   /**
@@ -171,15 +168,15 @@ describe('ToolRegistry', () => {
    */
   describe('capability enforcement (the floor every dispatcher stands on)', () => {
     async function registryWithForget() {
-      const { registry, send } = makeRegistry();
+      const { registry, record } = makeRegistry();
       const forget = fakeTool('memory.forget', { archived: 1 }, DESTRUCTIVE_PRIVACY);
       await registry.registerProvider(fakeProvider({ 'memory.forget': forget }));
 
-      return { registry, send, forget };
+      return { registry, record, forget };
     }
 
     it('refuses a destructive tool to a read-only caller without executing it', async () => {
-      const { registry, send, forget } = await registryWithForget();
+      const { registry, record, forget } = await registryWithForget();
 
       const result = await registry.executeTool('memory_forget', asCapability('read'), {});
 
@@ -194,8 +191,8 @@ describe('ToolRegistry', () => {
       // user never made — is preserved by the outcome value rather than by the silence: a
       // behavioural consumer filters `outcome <> 'refused'`, while an operator can finally see the
       // denied call.
-      expect(send).toHaveBeenCalledTimes(1);
-      const [, payload] = send.mock.calls[0];
+      expect(record).toHaveBeenCalledTimes(1);
+      const [payload] = record.mock.calls[0];
       expect(payload).toMatchObject({
         intent: 'memory.forget',
         tool: 'memory_forget',
@@ -219,14 +216,14 @@ describe('ToolRegistry', () => {
     });
 
     it('lets a full-capability caller run the destructive tool exactly as before', async () => {
-      const { registry, send, forget } = await registryWithForget();
+      const { registry, record, forget } = await registryWithForget();
 
       const result = await registry.executeTool('memory_forget', asCapability('full'), {});
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual({ archived: 1 });
       expect(forget.execute).toHaveBeenCalled();
-      expect(send).toHaveBeenCalledTimes(1);
+      expect(record).toHaveBeenCalledTimes(1);
     });
 
     it('still allows a read-only caller the read tools it is entitled to', async () => {
@@ -298,13 +295,13 @@ describe('ToolRegistry', () => {
    */
   describe('per-user tool ownership', () => {
     async function registryWithOwnedTool() {
-      const { registry, send } = makeRegistry();
+      const { registry, record } = makeRegistry();
       const owned = ownedTool('mcp.github.create_issue', 'user-1', { issue: 7 });
       await registry.registerProvider(
         fakeProvider({ 'mcp.github.create_issue': owned, 'memory.recall': fakeTool('memory.recall') }),
       );
 
-      return { registry, send, owned };
+      return { registry, record, owned };
     }
 
     it('lists an owned tool to its owner alongside the unowned ones', async () => {
@@ -333,7 +330,7 @@ describe('ToolRegistry', () => {
     });
 
     it('refuses to execute another user\'s owned tool, and does not run or record it', async () => {
-      const { registry, send, owned } = await registryWithOwnedTool();
+      const { registry, record, owned } = await registryWithOwnedTool();
 
       const result = await registry.executeTool('mcp_github_create_issue', {
         userId: 'user-2',
@@ -345,7 +342,7 @@ describe('ToolRegistry', () => {
       // has a server by that name.
       expect(result.error?.code).toBe('TOOL_NOT_FOUND');
       expect(owned.execute).not.toHaveBeenCalled();
-      expect(send).not.toHaveBeenCalled();
+      expect(record).not.toHaveBeenCalled();
     });
 
     it('refuses it to an unauthenticated caller too (naming it directly is not a way in)', async () => {
@@ -358,7 +355,7 @@ describe('ToolRegistry', () => {
     });
 
     it('still executes the owned tool for its owner', async () => {
-      const { registry, send, owned } = await registryWithOwnedTool();
+      const { registry, record, owned } = await registryWithOwnedTool();
 
       const result = await registry.executeTool('mcp_github_create_issue', {
         userId: 'user-1',
@@ -368,7 +365,7 @@ describe('ToolRegistry', () => {
       expect(result.success).toBe(true);
       expect(result.data).toEqual({ issue: 7 });
       expect(owned.execute).toHaveBeenCalledTimes(1);
-      expect(send).toHaveBeenCalledTimes(1);
+      expect(record).toHaveBeenCalledTimes(1);
     });
 
     it('leaves unowned native tools reachable by any user, including one with no userId', async () => {
@@ -385,7 +382,7 @@ describe('ToolRegistry', () => {
 
   it('logs an egress warning when an external intent runs, and none when it does not', async () => {
     const logger = makeLogger();
-    const registry = new ToolRegistry(logger, { send: jest.fn().mockResolvedValue([]) } as any, openGate().double);
+    const registry = new ToolRegistryCore(logger, recordingSink().double, openGate().double);
     const external: IntentPrivacy = { ...READ_PRIVACY, external: true, sensitivity: 'low' };
     await registry.registerProvider(
       fakeProvider({

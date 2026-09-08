@@ -29,6 +29,12 @@ export default {
     '^@ci/application$': '<rootDir>/src/application',
     '^@ci/configuration$': '<rootDir>/src/configuration',
     '^@ci/instrument$': '<rootDir>/src/instrument',
+    // A real workspace package rather than a path alias, so this is not part of
+    // the tsconfig `paths` mirror above. It is mapped anyway, at its SOURCE:
+    // package.json points `main` at dist/, which jest would otherwise resolve —
+    // running the suite against whatever was last built, or failing outright on
+    // a clean checkout.
+    '^@ci/tool-core$': '<rootDir>/../../packages/tool-core/src/index.ts',
   },
 
   testMatch: ['**/__tests__/**/*.test.ts', '**/?(*.)+(spec|test).ts'],

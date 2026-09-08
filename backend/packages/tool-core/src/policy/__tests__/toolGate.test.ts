@@ -1,9 +1,7 @@
-import { FULL_CAPABILITY, READ_CAPABILITY, WRITE_CAPABILITY } from '@ci/common/decorators';
-import type { PersonalizationDecision } from '@ci/domains/personalization/types';
-
+import { FULL_CAPABILITY, READ_CAPABILITY, WRITE_CAPABILITY } from '../../capability';
 import type { IntentPrivacy } from '../../core/types';
 import type { DispatchableIntent } from '../dispatchPolicy';
-import { needsConfirmation, resolveToolGate } from '../toolGate';
+import { needsConfirmation, resolveToolGate, type TrustDecision } from '../toolGate';
 
 function intent(name: string, privacy: Partial<IntentPrivacy>, localCapable = true): DispatchableIntent {
   return {
@@ -37,7 +35,7 @@ describe('resolveToolGate — a denial is never laundered into a queue', () => {
   // orders capability before tier so a refusal cannot become "allowed after one
   // extra tap"; resolveToolGate must preserve that ordering, in BOTH tiers and
   // under EVERY trust mode.
-  const trustModes: (PersonalizationDecision | null)[] = ['auto', 'review', 'skip', null];
+  const trustModes: (TrustDecision | null)[] = ['auto', 'review', 'skip', null];
 
   it.each(trustModes)('refuses a read-only key a delete on the appliance (trust=%s)', (trust) => {
     const ruling = resolveToolGate(DESTRUCTIVE, {
@@ -107,7 +105,7 @@ describe('resolveToolGate — the local tier', () => {
 
 describe('resolveToolGate — the appliance-tier trust dial', () => {
   it('is not consulted at all for ordinary reads and writes', () => {
-    for (const trust of ['review', 'skip'] as PersonalizationDecision[]) {
+    for (const trust of ['review', 'skip'] as TrustDecision[]) {
       expect(
         resolveToolGate(READ_ONLY, { tier: 'appliance', capability: FULL_CAPABILITY, trust }).decision,
       ).toBe('execute');

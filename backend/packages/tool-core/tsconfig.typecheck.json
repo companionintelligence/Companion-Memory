@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  // `yarn typecheck` — the build project plus the specs it excludes.
+  // `composite` has to be turned back off because a composite project may not
+  // set `noEmit`.
+  "extends": "./tsconfig.json",
+
+  "compilerOptions": {
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "noEmit": true
+  },
+
+  "include": ["src"],
+  "exclude": ["dist", "node_modules"]
+}

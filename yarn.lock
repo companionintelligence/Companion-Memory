@@ -2949,6 +2949,7 @@ __metadata:
     "@as-integrations/express5": "npm:^1.1.2"
     "@aws-sdk/client-s3": "npm:^3.823.0"
     "@aws-sdk/s3-request-presigner": "npm:^3.823.0"
+    "@ci/tool-core": "workspace:^"
     "@inquirer/prompts": "npm:^7.5.3"
     "@modelcontextprotocol/sdk": "npm:^1.29.0"
     "@nestjs/apollo": "npm:^13.2.1"
@@ -3337,6 +3338,27 @@ __metadata:
     react: "npm:^19.1.0"
     react-dom: "npm:^19.1.0"
     typescript: "npm:^5.8.3"
+  languageName: unknown
+  linkType: soft
+
+"@ci/tool-core@workspace:^, @ci/tool-core@workspace:backend/packages/tool-core":
+  version: 0.0.0-use.local
+  resolution: "@ci/tool-core@workspace:backend/packages/tool-core"
+  dependencies:
+    "@swc/core": "npm:^1.10.8"
+    "@swc/jest": "npm:^0.2.39"
+    "@types/jest": "npm:^30.0.0"
+    "@types/node": "npm:^22.15.21"
+    eslint: "npm:^9.27.0"
+    eslint-config-prettier: "npm:^10.1.5"
+    eslint-import-resolver-typescript: "npm:^4.4.4"
+    eslint-plugin-import: "npm:^2.32.0"
+    globals: "npm:^16.1.0"
+    jest: "npm:^30.0.4"
+    oxlint: "npm:^1.36.0"
+    rimraf: "npm:^6.0.1"
+    typescript: "npm:^5.8.3"
+    typescript-eslint: "npm:^8.32.1"
   languageName: unknown
   linkType: soft
 

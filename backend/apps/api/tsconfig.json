@@ -46,6 +46,17 @@
     "noUnusedParameters": false
   },
 
+  // @ci/tool-core is a composite project, so `tsc --build` builds it first and
+  // then compiles this one against its emitted `.d.ts` — which is what keeps
+  // dist/ laid out as dist/src/... (the path the Dockerfile's CMD and the
+  // `ci-import` bin entry both name) instead of the package's sources being
+  // pulled in as extra program inputs and moving the common root.
+  //
+  // The reference is also what makes `yarn typecheck` work on a clean tree: it
+  // lets tsc redirect the package's declaration paths back to its sources
+  // rather than requiring a build first.
+  "references": [{ "path": "../../packages/tool-core" }],
+
   "include": ["src", "scripts"],
   "exclude": ["dist", "node_modules"],
   "ts-node": {

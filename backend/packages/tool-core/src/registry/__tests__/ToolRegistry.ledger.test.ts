@@ -1,9 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { IntentPrivacy, ToolInvocationContext, ToolResult } from '../../core/types';
 import { TOOL_INVOCATION_ERROR_MAX_LENGTH } from '../../events';
-import { ToolRegistry, outcomeOf } from '../ToolRegistry';
+import { ToolRegistryCore, outcomeOf } from '../ToolRegistry';
 
-import { openGate } from './gateDouble';
+import { openGate, recordingSink } from './gateDouble';
 
 function makeLogger() {
   return {
@@ -52,11 +52,11 @@ function fakeProvider(name: string, tools: Record<string, any>) {
 }
 
 function makeRegistry() {
-  const send = jest.fn().mockResolvedValue([]);
+  const { double: sink, record } = recordingSink();
   const { double: pendingActions } = openGate();
-  const registry = new ToolRegistry(makeLogger(), { send } as any, pendingActions);
+  const registry = new ToolRegistryCore(makeLogger(), sink, pendingActions);
 
-  return { registry, send };
+  return { registry, record };
 }
 
 /**
@@ -65,7 +65,7 @@ function makeRegistry() {
  */
 describe('ToolRegistry → tool.invoked payload (the ledger row)', () => {
   it('threads the actor identity (apiKeyId) and the correlation id off the request context', async () => {
-    const { registry, send } = makeRegistry();
+    const { registry, record } = makeRegistry();
     await registry.registerProvider(
       fakeProvider('native', { 'memory.recall': fakeTool('memory.recall', { success: true, data: {} }) }),
     );
@@ -79,7 +79,7 @@ describe('ToolRegistry → tool.invoked payload (the ledger row)', () => {
 
     await registry.executeTool('memory_recall', context, {});
 
-    const [, payload] = send.mock.calls[0];
+    const [payload] = record.mock.calls[0];
     // WHICH key called, not merely which user: on a single-owner appliance every agent key
     // resolves to the same account, so userId alone cannot tell two agents apart.
     expect(payload.apiKeyId).toBe('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
@@ -88,18 +88,18 @@ describe('ToolRegistry → tool.invoked payload (the ledger row)', () => {
   });
 
   it('records the provider that served the tool as `source`', async () => {
-    const { registry, send } = makeRegistry();
+    const { registry, record } = makeRegistry();
     await registry.registerProvider(
       fakeProvider('mcp-client', { 'mcp.thing': fakeTool('mcp.thing', { success: true, data: {} }) }),
     );
 
     await registry.executeTool('mcp_thing', { userId: 'u', capability: 'full' }, {});
 
-    expect(send.mock.calls[0][1].source).toBe('mcp-client');
+    expect(record.mock.calls[0][0].source).toBe('mcp-client');
   });
 
   it('carries a failing tool through as outcome=error with its code and message', async () => {
-    const { registry, send } = makeRegistry();
+    const { registry, record } = makeRegistry();
     await registry.registerProvider(
       fakeProvider('native', {
         'memory.recall': fakeTool('memory.recall', {
@@ -112,7 +112,7 @@ describe('ToolRegistry → tool.invoked payload (the ledger row)', () => {
 
     await registry.executeTool('memory_recall', { userId: 'u', capability: 'full' }, {});
 
-    expect(send.mock.calls[0][1]).toMatchObject({
+    expect(record.mock.calls[0][0]).toMatchObject({
       outcome: 'error',
       errorCode: 'UPSTREAM_DOWN',
       error: 'ollama refused the connection',
@@ -121,7 +121,7 @@ describe('ToolRegistry → tool.invoked payload (the ledger row)', () => {
   });
 
   it('separates a deadline from a defect: a TIMEOUT code becomes outcome=timeout', async () => {
-    const { registry, send } = makeRegistry();
+    const { registry, record } = makeRegistry();
     await registry.registerProvider(
       fakeProvider('native', {
         'messaging.send': fakeTool('messaging.send', {
@@ -133,11 +133,11 @@ describe('ToolRegistry → tool.invoked payload (the ledger row)', () => {
 
     await registry.executeTool('messaging_send', { userId: 'u', capability: 'full' }, {});
 
-    expect(send.mock.calls[0][1].outcome).toBe('timeout');
+    expect(record.mock.calls[0][0].outcome).toBe('timeout');
   });
 
   it('truncates the error at the emit, so an unbounded message is never copied into pgboss.job', async () => {
-    const { registry, send } = makeRegistry();
+    const { registry, record } = makeRegistry();
     const long = 'x'.repeat(TOOL_INVOCATION_ERROR_MAX_LENGTH + 250);
     await registry.registerProvider(
       fakeProvider('native', {
@@ -150,11 +150,11 @@ describe('ToolRegistry → tool.invoked payload (the ledger row)', () => {
 
     await registry.executeTool('memory_recall', { userId: 'u', capability: 'full' }, {});
 
-    expect(send.mock.calls[0][1].error).toHaveLength(TOOL_INVOCATION_ERROR_MAX_LENGTH);
+    expect(record.mock.calls[0][0].error).toHaveLength(TOOL_INVOCATION_ERROR_MAX_LENGTH);
   });
 
   it('carries NO tool input and NO tool output — the whole reason ci.api_logs was dropped', async () => {
-    const { registry, send } = makeRegistry();
+    const { registry, record } = makeRegistry();
     await registry.registerProvider(
       fakeProvider('native', {
         'memory.recall': fakeTool('memory.recall', {
@@ -168,7 +168,7 @@ describe('ToolRegistry → tool.invoked payload (the ledger row)', () => {
       query: 'my therapist said',
     });
 
-    const serialized = JSON.stringify(send.mock.calls[0][1]);
+    const serialized = JSON.stringify(record.mock.calls[0][0]);
     expect(serialized).not.toContain('my therapist said');
     expect(serialized).not.toContain('the user private note');
   });

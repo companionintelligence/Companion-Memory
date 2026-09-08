@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+
+  // The BUILD project. `composite` is what lets @ci/be-api reference this
+  // package instead of resolving it as an opaque npm dependency: with a
+  // reference in place, `tsc --build` in the API builds this first and then
+  // compiles against `dist/*.d.ts`, so the API's own emit layout
+  // (dist/src/main.js, which the Dockerfile's CMD names) is untouched.
+  //
+  // Tests are excluded here on purpose — they are typechecked by
+  // tsconfig.typecheck.json and run by jest off the sources, and a composite
+  // project emits everything it includes, which would otherwise ship the
+  // specs into dist/.
+  "extends": "../../../tsconfig.node.json",
+
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+
+    // Deliberately NOT inherited-and-disabled the way backend/apps/api does:
+    // this package is new, so every strictness flag in tsconfig.base.json is
+    // satisfied from day one rather than left as a cleanup for later.
+
+    // Nothing here is a Nest provider, so the decorator metadata the shared
+    // node preset turns on has nothing to emit for. Off, so that a decorator
+    // arriving in this package is a compile error rather than a silent
+    // dependency on reflect-metadata.
+    "emitDecoratorMetadata": false,
+    "experimentalDecorators": false
+  },
+
+  "include": ["src"],
+  "exclude": ["dist", "node_modules", "**/__tests__/**"]
+}
