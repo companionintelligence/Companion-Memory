@@ -261,6 +261,37 @@ jobs:
         timeout-minutes: 20
         run: yarn workspace @ci/be-api test --coverage
 
+      # @ci/cli's 200 tests across 33 files, which until now ran in NO workflow.
+      # PR #2632 moved the CLI out of `domains/import/cli` into its own
+      # workspace and reasoned that CI needed no new lanes because `make test`
+      # and pr-gate's `packages` typecheck lane both loop over every workspace
+      # declaring the script. That is true of those two and false of this file:
+      # the job above names its workspaces one at a time, and `pr-gate.yml` has
+      # no backend test lane at all, so `grep -rn "@ci/cli" .github/workflows/`
+      # returned nothing. It matters here specifically because `publish.yml`
+      # gates a release on THIS workflow (`ci.yml` is `required` in its
+      # `GATED_WORKFLOWS` block), so the suite was absent from the one place a
+      # release actually reads.
+      #
+      # A named workspace rather than `yarn workspaces foreach --all run test`,
+      # for the same reason the step above names one: `--all` would re-run
+      # @ci/be-api's jest suite a second time WITHOUT `--coverage` — silently
+      # dropping the planning ratchet that the flag above exists to enforce —
+      # and re-run the whole @ci/fe-web vitest suite that `test-frontend` below
+      # already owns. `foreach` also has no `--no-bail` here, so it would stop
+      # at the first failing workspace and hide the rest.
+      #
+      # Five minutes is generous by two orders of magnitude: the suite is pure
+      # unit tests (the clients take an injected `fetch`, the commands an
+      # injected context, the waits an injected clock) and runs in ~1.2s
+      # locally. The ceiling is there to catch a hang, not to bound normal work.
+      # It needs none of the Postgres service, bootstrap or migrations above —
+      # it sits in this job because this is the job the release gate reads, and
+      # last so that a CLI failure cannot mask the larger suite's result.
+      - name: Run CLI tests
+        timeout-minutes: 5
+        run: yarn workspace @ci/cli test
+
   test-frontend:
     name: Run frontend tests
     needs: install
@@ -354,6 +385,35 @@ jobs:
             command: yarn workspace @ci/be-api typecheck
           - name: frontend
             command: yarn workspace @ci/fe-web typecheck
+          # Same gap as the `Run CLI tests` step in the `test` job above, and
+          # closed here for the same reason. @ci/cli IS typechecked on every PR
+          # — `pr-gate.yml`'s `packages` lane runs
+          # `yarn workspaces foreach --all run typecheck`, which picks up any
+          # workspace declaring the script — but that lane is advisory in BOTH
+          # directions, so until this line a CLI type error could reach a
+          # release unchallenged:
+          #   * it cannot block a merge. `main` does require status checks
+          #     (verified against the API 2026-09-07, not read off a doc), but
+          #     the required list is exactly six contexts — `Lint root`,
+          #     `Lint backend`, `Lint frontend`, `Lint format`,
+          #     `Type check backend`, `Type check frontend`. `Type check
+          #     packages` is deliberately not among them.
+          #   * it cannot block a release either: `publish.yml`'s
+          #     `GATED_WORKFLOWS` reads `ci.yml`, and `pr-gate.yml` is not in
+          #     that list.
+          # So the workspace the release gate reads was typechecked by no lane
+          # in this file at all.
+          #
+          # A `cli` entry rather than mirroring pr-gate's `foreach --all` lane:
+          # this file's header notes that every lane added here can block a
+          # release, so mirroring is a decision to take deliberately per lane.
+          # This one is scoped to the workspace with the demonstrated gap and
+          # exits 0 on this branch, measured 2026-09-07. Note it reports a NEW
+          # context, `Type check cli`, which is not in the six required above —
+          # adding it here gates the RELEASE, not the merge. Making it block a
+          # merge too is a separate, deliberate branch-protection change.
+          - name: cli
+            command: yarn workspace @ci/cli typecheck
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -397,6 +457,14 @@ jobs:
             command: yarn workspace @ci/fe-web lint
           - name: format
             command: yarn format:check
+          # No `cli` lane on purpose, unlike `typecheck` above. @ci/cli declares
+          # no `lint` script, and it does not need one: the `root` lane's
+          # `eslint` ignore list names `backend/apps/api/*` and
+          # `frontend/apps/web/*` — the two workspaces with their own lanes — but
+          # not `backend/apps/cli`, and `.oxlintrc.json` does not ignore it
+          # either, so `yarn lint` already covers all 75 files under it (counted
+          # 2026-09-07 with `yarn eslint --no-cache backend/apps/cli`, 0
+          # problems). Adding a script and a lane would lint that tree twice.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
