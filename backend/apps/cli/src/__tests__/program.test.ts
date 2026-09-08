@@ -52,6 +52,7 @@ describe('ci program', () => {
       'stats',
       'doctor',
       'backfill',
+      'memory',
       'peers',
       'grants',
       'asks',
@@ -60,8 +61,9 @@ describe('ci program', () => {
     }
   });
 
-  it('lists every peers/grants/asks subcommand in each group’s own --help', async () => {
+  it('lists every grouped subcommand in its own --help', async () => {
     for (const [group, subcommands] of [
+      ['memory', ['status', 'check', 'configure']],
       ['peers', ['list', 'add', 'update', 'revoke']],
       ['grants', ['list', 'show', 'create', 'update', 'revoke', 'history']],
       ['asks', ['inbox', 'outbox', 'show', 'send', 'send-peer', 'approve', 'decline', 'answer', 'history']],

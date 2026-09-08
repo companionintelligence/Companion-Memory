@@ -25,8 +25,10 @@ It is **not** a revival of `scripts/cli/ci-server.sh` (PR #1420, reverted in
 and had nothing to do with importing.
 
 The old name had stopped being true, which is why it changed. `stats`, `doctor`
-and `backfill` are appliance-wide, and `peers`/`grants`/`asks` (see "Peers,
-grants and asks" below) put the interpersonal-ask feature — one Companion
+and `backfill` are appliance-wide, `memory` (see "Memory inference setup"
+below) configures Companion Memory's inference backend, and
+`peers`/`grants`/`asks` (see "Peers, grants and asks" below) put the
+interpersonal-ask feature — one Companion
 answering another's owner's question, under consent the owner grants in advance
 — at the command line too. Those three share this binary, this credential, and
 this output/error convention, but talk to the appliance over GraphQL rather than
@@ -134,6 +136,37 @@ reads the same piped as it does in a terminal.
 ---
 
 ## Commands
+
+### Memory inference setup
+
+`memory` is the first-run companion to the existing import and GraphQL surfaces.
+It configures or verifies the **inference backend used by Companion Memory**;
+it does not import records and it does not replace CI-Hub's app setup flow.
+
+```bash
+ci memory status
+ci memory check
+ci memory configure --backend ollama --port 11434
+ci memory configure --backend openai-compatible --port 8000 --backend-api-key '…'
+```
+
+- `memory status [--json]` prints the effective backend, endpoint, management
+  mode, and whether a credential is configured. Backend credentials are
+  write-only and never appear in output.
+- `memory check [--json]` asks the **Memory API process** to contact the current
+  backend and list models. This catches the host-`localhost` / container-network
+  mismatch a shell-side `curl` misses. It exits **2** when the backend cannot be
+  reached or rejects the request.
+- `memory configure --backend <ollama|openai-compatible> --port <port>
+[--backend-api-key <key>|--clear-api-key] [--json]` updates an
+  appliance-owned endpoint. `--api-key` remains the credential for the
+  CI-Server API; `--backend-api-key` is the separate write-only inference
+  credential. Hub/host-managed endpoints refuse this mutation with **409** so a
+  CLI cannot quietly detach Memory from Hub.
+
+Run `memory check` before selecting a model. A reachable server with no exposed
+models is not ready for chat. Full setup paths and troubleshooting are in
+[Companion Memory setup](../setup/companion-memory.md).
 
 ### `datasources [--catalog] [--json]`
 

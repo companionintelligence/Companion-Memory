@@ -23,6 +23,35 @@ import type {
 // surface and a caller should not have to know which file a body's type sits in.
 export type { IngestStatus } from './wire';
 
+/** Safe wire contract for Memory's inference configuration. Credentials are never returned. */
+export interface LlmEndpointConfig {
+  backend: 'ollama' | 'openai_compatible';
+  port: number;
+  hostGateway: string;
+  locked: boolean;
+  endpoint: string;
+  apiKeyConfigured: boolean;
+}
+
+/** The bounded API-container reachability check exposed by `GET /llm/endpoint/preflight`. */
+export interface LlmEndpointPreflight {
+  backend: 'ollama' | 'openai_compatible';
+  endpoint: string;
+  ok: boolean;
+  models: string[];
+  message?: string;
+  status?: number;
+}
+
+export interface LlmEndpointUpdate {
+  backend: 'ollama' | 'openai_compatible';
+  port: number;
+  /** Write-only replacement for the backend credential. */
+  apiKey?: string;
+  /** Remove the appliance-saved credential and fall back to runtime config. */
+  clearApiKey?: boolean;
+}
+
 /** A non-2xx answer from the appliance, carrying its status and its own message. */
 export class ApiError extends Error {
   constructor(
@@ -57,7 +86,7 @@ export interface ClientOptions {
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PATCH';
   body?: unknown;
   form?: FormData;
   query?: Record<string, string | number | undefined>;
@@ -145,6 +174,22 @@ export class ImportApiClient {
 
   startPush(runIds?: string[]): Promise<{ runs: RunSummary[] }> {
     return this.request('/import/push', { method: 'POST', body: runIds ? { runIds } : {} });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Memory inference setup
+  // ---------------------------------------------------------------------------
+
+  getLlmEndpoint(): Promise<LlmEndpointConfig> {
+    return this.request('/llm/endpoint');
+  }
+
+  preflightLlmEndpoint(): Promise<LlmEndpointPreflight> {
+    return this.request('/llm/endpoint/preflight');
+  }
+
+  updateLlmEndpoint(settings: LlmEndpointUpdate): Promise<LlmEndpointConfig> {
+    return this.request('/llm/endpoint', { method: 'PATCH', body: settings });
   }
 
   // ---------------------------------------------------------------------------
