@@ -9,6 +9,16 @@ name: Desktop Build
 # secrets — dmg/app (macOS), msi/nsis-setup.exe (Windows), deb/rpm/AppImage
 # (Linux). Signed, notarized/authenticode-signed release artifacts are
 # desktop-release.yml.
+#
+# THIS WORKFLOW IS THE DESKTOP RELEASE GATE. desktop-release.yml's first job,
+# `verify-desktop-build-passed`, refuses to build or publish anything unless a
+# successful run of THIS workflow exists for the same commit SHA — the Cargo
+# test step below is the only place the desktop crate's tests run at all, and
+# the release lane runs none of its own. Two consequences for anyone editing
+# this file: a release now requires `gh workflow run desktop-build.yml --ref
+# <branch>` to have gone green on that exact commit first, and deleting or
+# permanently `if:`-disabling the test step silently converts the gate into a
+# rubber stamp.
 
 # GATED TO MANUAL, like ten of this repo's fourteen workflows (the count
 # docs/CI.md keeps — its table is the canonical one). Only four run on their
@@ -105,6 +115,23 @@ jobs:
       #
       # --no-fail-fast so one failure does not hide the rest of the suite.
       # Locally this is `make test-desktop`.
+      #
+      # THE SUITE MUST STAY RUNNABLE ON A BARE RUNNER. Nothing above installs
+      # Ollama, Docker images, models or any other external service, and that
+      # is a contract, not an oversight: this step is now desktop-release.yml's
+      # only test gate, so a test that hard-requires a tool absent from a
+      # GitHub-hosted runner turns the very first dispatch red for an
+      # environment reason, and the predictable reaction to an
+      # environment-red gate is to delete the step — losing all ~40 tests
+      # rather than the one that could not run.
+      # local_model/ollama_sidecar.rs had exactly that shape
+      # (`find_on_path().expect(...)` in spawn_serve_on_an_alternate_port_
+      # becomes_ready); a test needing a binary the runner does not have must
+      # skip itself LOUDLY in the crate, not be propped up by an install step
+      # here. Deliberately do NOT add one: `ollama serve` on a hosted runner
+      # buys minutes of setup and a model download to exercise process
+      # plumbing, and it would make the gate depend on a third-party
+      # installer's uptime.
       - name: Cargo test
         if: matrix.target != 'x86_64-apple-darwin'
         working-directory: frontend/apps/desktop/src-tauri

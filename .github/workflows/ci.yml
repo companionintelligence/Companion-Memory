@@ -9,8 +9,15 @@ name: CI
 # The cheap half of this file — the `lint` and `typecheck` lanes, identically
 # defined — DOES run on every PR, from `pr-gate.yml`. It lives in its own file
 # so the cost decision that gated this one stays revertible in a single move.
-# The expensive lanes here (`test`, `test-frontend`, `python`, `imports`,
-# `graphql`) remain dispatch-only.
+# `pr-gate.yml` also carries a copy of `test-frontend` (without `--coverage`,
+# since only this file uploads the report) plus two jobs with no twin here: a
+# `build-web` PWA guard and a third `Type check packages` lane over
+# `frontend/packages/*`. Those two are deliberately NOT mirrored here:
+# `publish.yml`'s release gate reads whether THIS workflow concluded success, so
+# every lane added here is a lane that can block a release — mirroring one is a
+# release decision to take deliberately, once it has a green history on `main`.
+# The remaining expensive lanes here (`test`, `python`, `imports`, `graphql`)
+# are dispatch-only.
 on:
   workflow_dispatch:
 
@@ -234,12 +241,27 @@ jobs:
     name: Run frontend tests
     needs: install
     runs-on: ubuntu-latest
+    # Headroom over the step ceiling below, the same job-vs-step split the
+    # backend `test` job above explains at length. This job had NO ceiling of
+    # either kind while it was `continue-on-error` and therefore harmless; now
+    # that it is blocking and `publish.yml` gates on this workflow, a hung suite
+    # would sit on GitHub's 360-minute default and hold a release for six hours
+    # before anyone saw a result.
+    timeout-minutes: 35
     container:
       image: node:22
-    # Non-blocking while the suite stabilizes: the job runs and reports, but a
-    # failure does not fail the workflow. Promote to blocking (drop this line and
-    # add the check to branch protection) once coverage is established.
-    continue-on-error: true
+    # This job is BLOCKING, and that is load-bearing rather than tidiness.
+    # `publish.yml`'s `verify-ci-passed` gate asks GitHub one question — did the
+    # latest `ci.yml` run for this SHA conclude `success` — and a job-level
+    # `continue-on-error: true` makes the *run* succeed no matter how the job
+    # ends. This job carried that line, so a fully red frontend suite (381 files
+    # / 3,714 cases when measured on 2026-09-07) satisfied the release gate and
+    # an image could ship on top of it. Nothing else in the pipeline looks at the
+    # frontend result, so if this job cannot fail the workflow, the suite cannot
+    # stop a release. Do not re-add the line; if the
+    # suite is flaky, fix the flake (the 5s-timeout flake that motivated the
+    # original "while the suite stabilizes" note is fixed in
+    # frontend/apps/web/vitest.config.ts).
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -262,7 +284,15 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # 25 rather than the 20 `pr-gate.yml`'s copy of this job uses, because
+      # this one adds `--coverage`: v8 instrumentation plus the html/lcov
+      # reporters over ~800 source files is real overhead the gate copy does not
+      # pay. Measured 673s of wall clock without coverage on a developer machine
+      # (`docs/qa/baseline-2026-08-29.md` §3.2), so the ceiling is a hang
+      # detector, not a performance budget — and failing the STEP leaves the job
+      # alive so `Upload coverage report` below still runs and says what it got.
       - name: Run frontend unit/component tests
+        timeout-minutes: 25
         run: yarn workspace @ci/fe-web test --coverage
 
       - name: Upload coverage report

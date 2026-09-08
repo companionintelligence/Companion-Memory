@@ -1,8 +1,20 @@
 # CI-Server release QA programme
 
 > Run this before every release. It assumes a clean checkout and nothing else.
-> The measured state it was written against is [`baseline-2026-08-26.md`](baseline-2026-08-26.md);
-> CI posture and the gates worth turning on are in [`ci-gate-proposal.md`](ci-gate-proposal.md).
+> The measured state it was written against is [`baseline-2026-08-26.md`](baseline-2026-08-26.md),
+> partly superseded by [`baseline-2026-08-29.md`](baseline-2026-08-29.md) — where the two
+> disagree, the later one wins, and §7 says how to re-derive the open set.
+> CI posture and the gates worth turning on are in [`ci-gate-proposal.md`](ci-gate-proposal.md);
+> which workflows run on their own is in [`docs/CI.md`](../CI.md), which is the
+> only place that table is maintained.
+>
+> **Counts in this document drift, and several already have.** Numbers that are
+> re-derivable from the tree are given with the command that re-derives them
+> rather than as a figure to quote — recount at the start of every release pass.
+> Corrections applied 2026-09-07: the backend/frontend suite sizes (§3.2), the
+> untested page list (§3.5), the `e2e.yml` service count (§3.4), the iOS build
+> caveat (§5), the open-P0 set (§7), and the workflow trigger counts, which now
+> live only in `docs/CI.md`.
 
 ## 1. The release gate
 
@@ -10,7 +22,7 @@ A release is **go** when all of the following hold. Anything not met is either f
 
 | # | Gate | How it is satisfied |
 |---|---|---|
-| G1 | Both typecheckers, all four lint lanes, and `lint-canon` are green | §3.1 |
+| G1 | **All three** typecheck lanes, all four lint lanes, and `lint-canon` are green | §3.1 |
 | G2 | Backend, frontend and Python unit suites are green, or every failure is a **classified, waived** pre-existing item | §3.2 |
 | G3 | Migrations apply clean from an empty database **and** onto a copy of a populated one | §3.3 |
 | G4 | The full-stack E2E suite is green | §3.4 |
@@ -19,7 +31,11 @@ A release is **go** when all of the following hold. Anything not met is either f
 | G7 | The UI-refactor rubric passes | §6 |
 | G8 | No unresolved P0 in §7 | §7 |
 
-**The single most important rule in this document:** a check that did not run is not a check that passed. Nine of twelve workflows here are `workflow_dispatch`-only, so an absent GitHub check means *nobody started it*. Record the run, not the absence of a failure.
+**The single most important rule in this document:** a check that did not run is not a check that passed. Most workflows here are `workflow_dispatch`-only, so an absent GitHub check means *nobody started it*. Record the run, not the absence of a failure.
+
+Which workflows those are is **not** restated here — that line read "nine of twelve" for two weeks after it stopped being true, which is the exact failure this rule warns about. [`docs/CI.md`](../CI.md) carries the hand-maintained trigger table, per-workflow, with the two `grep` commands that re-derive it from the `on:` blocks. Check it against the tree at the start of every release pass; if it disagrees with the tree, fix the table there rather than adding a fourth copy.
+
+One consequence worth stating plainly, because it is easy to misread now that `pr-gate.yml` runs on every PR: **a green PR covers lint, typecheck, the frontend unit suite and a web-bundle build — and nothing else.** The *backend* and Python suites, E2E, migrations and every native build lane remain dispatch-only. So a green PR page contributes to G1 and to the frontend third of G2, and to nothing else; G3 through G6 are satisfied by a recorded run and never by a green PR page. Do not read the frontend half of G2 as covering the rest of it, and check [`docs/CI.md`](../CI.md)'s `pr-gate.yml` row rather than this sentence — that job list has grown twice in two days.
 
 ## 2. Feature inventory and risk ranking
 
@@ -52,6 +68,16 @@ P1/P2 (verify, but a single failure is not release-blocking on its own): Plan/Ca
 ```bash
 yarn workspace @ci/be-api typecheck
 yarn workspace @ci/fe-web typecheck
+# The eight frontend/packages/* workspaces — the shared layer web, both
+# Capacitor shells and the Tauri desktop app all compile into their bundles.
+# Nothing typechecked them until pr-gate.yml grew a `packages` lane on
+# 2026-09-07. It went in RED — three of the eight failed on
+# `Cannot find module '@/lib/utils'` from two @ci/shadcn sources using an alias
+# only @ci/shadcn's own tsconfig declares — and was green the same day once
+# both imports were made relative (exit 0, measured). `foreach` has no
+# --no-bail, so it stops at the FIRST failing workspace: a green run means all
+# of them passed, but a red one tells you about exactly one.
+yarn workspaces foreach --all run typecheck
 yarn lint
 yarn workspace @ci/be-api lint
 yarn workspace @ci/fe-web lint
@@ -65,10 +91,26 @@ node scripts/lint-canon.mjs .
 ### 3.2 Unit / component
 
 ```bash
-yarn workspace @ci/be-api test          # jest, ~750 files
-yarn workspace @ci/fe-web test          # vitest, ~337 files
+yarn workspace @ci/be-api test          # jest
+yarn workspace @ci/fe-web test          # vitest
 uv run pytest                           # hbpe + summary + benchmark
 ```
+
+**Count the suites, do not quote a count.** These figures moved by ~200 files in under two weeks — this block said `~750` backend / `~337` frontend; on 2026-09-07 the tree held **918** and **381**, and the frontend figure moved by six *during the afternoon this correction was written*. A number in prose here is stale before the next release, so re-derive it and record *that* number in §7, alongside how many actually ran:
+
+```bash
+# backend — jest.config.mjs sets roots to src + scripts, testMatch **/*.{spec,test}.ts
+find backend/apps/api/src backend/apps/api/scripts \
+  -type f \( -name '*.test.ts' -o -name '*.spec.ts' \) | wc -l
+
+# frontend — vitest's two projects both scope `include` to src/**
+find frontend/apps/web/src \
+  -type f \( -name '*.test.ts' -o -name '*.test.tsx' -o -name '*.spec.ts' -o -name '*.spec.tsx' \) | wc -l
+```
+
+A file count is a denominator, not a result: what matters at sign-off is *files collected vs files expected*. A suite that silently collects 40 fewer files than the tree holds is the failure mode this recount exists to catch — a moved `roots` entry or a broken `moduleNameMapper` makes jest report a clean green over a fraction of the suite.
+
+> The native suites are counted the same way and are **not** in `make test` — see the "Native suites" section of [`docs/CI.md`](../CI.md) for the recount recipes and the current figures. Six of the Rust tests are platform-gated (4 macOS-only, 2 Linux-only), so three hosts legitimately report three different totals and that section gives the expected number for each. A difference from those numbers is a lost test, not a `cfg`. They are covered by G6, not G2.
 
 **Re-run every failure serially before believing it.** On macOS the SWC transform intermittently dies under jest's worker concurrency with `failed printing to stderr: Resource temporarily unavailable (os error 35)`. That is EAGAIN, not your code. In the baseline this accounted for 3 of 7 failing suites:
 
@@ -90,8 +132,6 @@ Then repeat against a **restored copy of a populated database**. Fresh-seed succ
 
 ### 3.4 Full-stack E2E
 
-Bring up **four** services — `e2e.yml` currently starts two, which is why it cannot pass (see baseline §4):
-
 ```bash
 cp .env.default .env
 docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local \
@@ -102,9 +142,11 @@ yarn playwright install chromium
 yarn e2e --grep-invert @llm
 ```
 
-- **`object-store` (Minio, :9000)** — the API exits at boot without it (`ECONNREFUSED`), so Playwright's `webServer` never comes up.
-- **`hbpe-service` (:8002)** — the seed's `ensure_bootstrap` hard-fails without it, leaving a database with **zero events**. It has no host port mapping in the committed compose files; add one via an override.
+- **`object-store` (Minio, :9000)** — the API exits at boot without it (`ECONNREFUSED`), so Playwright's `webServer` never comes up. **Non-negotiable**, and no longer a difference from CI: `e2e.yml` was fixed on 2026-09-06 to start it and to fail the job outright if `http://localhost:9000/minio/health/live` never answers. This used to read "`e2e.yml` currently starts two [services], which is why it cannot pass"; it starts three.
+- **`hbpe-service` (:8002)** — **keep it in the command above, but know that CI does not.** The 2026-08-26 baseline §4 measured the seed exiting 1 with `TypeError: fetch failed` from `ensure_bootstrap` and leaving zero events without it; `e2e.yml` now deliberately omits it, with a comment arguing from the source that the seed writes `hbpe.*` rows over its own `DataSource` and never calls the sidecar. Both cannot be right. Until someone re-runs the seed without it and records the exit code and `SELECT count(*) FROM ci.events` — see [`ci-gate-proposal.md`](ci-gate-proposal.md) §3.3 for the procedure — start it locally, because a run that seeds nothing is the more expensive mistake. It has no host port mapping in the committed compose files; add one via an override.
 - `@llm`-tagged specs need a model and are excluded.
+
+> `e2e.yml` is not the only E2E lane, and the other one covers what this procedure cannot. `desktop-e2e.yml` drives Playwright against the desktop **appliance** — published images, empty database, no seeded account — i.e. exactly the first-run path a locally built, migrated, seeded stack can never exercise. It is `workflow_dispatch`-only and takes a published image tag, so it can only run after `publish.yml`. Dispatch it against the release tag as part of G6 and record the run in §7.
 
 **Authentication in the suite.** Specs that run signed in import `test` from `tests/e2e/fixtures/authenticated.ts`, which signs in inside each test's own context. Do not reintroduce a shared `storageState` file: sessions are bound to `ip + user_agent` **and** rotate on the `/api/authenticate/refresh` the app makes on load, honouring the old token for only `auth.session.refreshGracePeriod` (**30s**). A shared file goes stale partway through a serial suite and every later spec fails on a page assertion while the real cause is an unseen 401. Specs that must start signed *out* (`auth`, `onboarding`) keep importing `@playwright/test`.
 
@@ -114,7 +156,15 @@ yarn e2e --grep-invert @llm
 
 Known gaps to cover by hand (§4) until they are closed:
 
-- **Eleven page directories have zero tests:** `CommunicationPage`, `ConceptPage`, `ContentPage`, `EventPage`, `OAuthCallbackPage`, `OpenIDCallbackPage`, `PersonPage`, `PlacePage`, `SharedSearchPage`, `SplashPage`, `SummaryDetailPage`. The two OAuth/OpenID callbacks and `SharedSearchPage` (an unauthenticated public surface) are the ones that matter most.
+- **Page directories with zero tests: three of 46, recounted 2026-09-07** — `SharedSearchPage`, `SplashPage`, `SummaryDetailPage`. This list read *eleven* on 2026-08-26; eight of them (`CommunicationPage`, `ConceptPage`, `ContentPage`, `EventPage`, `OAuthCallbackPage`, `OpenIDCallbackPage`, `PersonPage`, `PlacePage`) have since gained a `*.test.tsx`, including both OAuth/OpenID callbacks that the old entry singled out. **`SharedSearchPage` is now the one that matters** — it is the only unauthenticated public surface left with no test at all, so M4 and the manual scripts are its only coverage. Recount rather than trusting this list:
+
+  ```bash
+  for d in frontend/apps/web/src/pages/*/; do
+    if [ "$(find "$d" -name '*.test.ts*' -o -name '*.spec.ts*' | wc -l)" -eq 0 ]; then basename "$d"; fi
+  done
+  ```
+
+  A file existing is not coverage — this counts directories, not assertions.
 - **No E2E for** the nav shell itself, Plan, Self/Profile, Reflections, Saved Searches, Asks, Jobs, or Sources.
 - **Provider-stubbed tests hide DI faults, and this has bitten twice.** `ActivityRollupService.test.ts` stubs every provider as `{ aggregateHourlyActivity }` and so cannot fail for the duplicate-`FileService` bug that breaks it at runtime (baseline §6.4); `AnswerInferenceListener.test.ts` supplies its own `ollamaService` double and so cannot fail for the barrel-cycle bug that makes `this.ollamaService.chat is not a function` on every cron run (§6.4b). **Both were found by running the app, not by any suite.** When a service's job is *wiring*, at least one test must exercise the real module graph — and the smoke check for it is simply: does the seed run clean, and is the cron log empty?
 
@@ -193,9 +243,9 @@ Install from **inside each app directory**. `ios`, `android` and `desktop` are e
 | **iOS** | In `frontend/apps/ios`: `yarn install && yarn cap sync ios`; then in `ios/App`: `./Frameworks/fetch-clitertlm-xcframework.sh` and `xcodebuild -workspace App.xcworkspace -scheme App -configuration Debug -sdk iphonesimulator …` | `.app` produced; installs on a simulator; launches to device-connect |
 | **Desktop** | In `frontend/apps/desktop`: `yarn install && yarn build` | `.app` + `.dmg` produced (7m33s on Apple Silicon); launches; tray works; splash reaches a healthy stack |
 
-Two standing caveats, both confirmed in the baseline and neither yet fixed:
+Two standing caveats. Re-checked 2026-09-07 — one of the two iOS workarounds has since been landed into the workflow, the other has not and cannot be fixed from this repo:
 
-- **iOS needs two workarounds** or it will not link: `CI_BROWSER_EXTENSION_DIR=<path to a CI-Browser-Extension checkout>` (the pinned release fallback is broken), and an arm64-only build (`ARCHS=arm64 ONLY_ACTIVE_ARCH=YES`, or a specific simulator destination) because `CLiteRTLM.xcframework` ships no x86_64 simulator slice. See baseline §6.2.
+- **iOS: the arm64 workaround is now in the lane; the extension one is not.** `mobile-build.yml`'s simulator step carries `ARCHS=arm64 ONLY_ACTIVE_ARCH=YES` explicitly, with the reason inline — the generic `iOS Simulator` destination otherwise resolves both slices and `CLiteRTLM.xcframework` ships no x86_64 simulator slice. **A local `xcodebuild` still needs it**, since nothing outside that workflow supplies it. `CI_BROWSER_EXTENSION_DIR=<path to a CI-Browser-Extension checkout>` is still required for any build whose Safari extension must be real: `frontend/apps/ios/scripts/sync-safari-extension.sh`'s own header records why the pinned-release fallback cannot work from here (CI-Browser-Extension is private, this repo holds no cross-repo credential, and no release has ever shipped a `*safari-mobile.zip` asset), so the Debug/simulator lane deliberately warns, drops a `SAFARI_EXTENSION_MISSING.txt` marker into `Resources/`, and exits 0. **Treat a CI simulator `.app` as shell-only** — the marker is the tell — and never ship one. Release/archive builds still fail closed. Unblocking it is an action in the *other* repo. See baseline §6.2.
 - **Desktop pulls images, it does not build them.** Off a non-release commit the bundled tag is `dev-<sha>`, which has never been published — the app builds and then cannot start. Either dispatch `publish.yml` first and test against the real tag, or pass `CI_SERVER_IMAGE_TAG=<published tag>` and record the result as **shell-only**, explicitly not feature coverage. See baseline §6.3.
 
 ## 6. UI-refactor rubric
@@ -225,7 +275,12 @@ Two standing caveats, both confirmed in the baseline and neither yet fixed:
 | G7 UI rubric | | | | |
 | G8 no open P0 | | | | |
 
-**Open P0s must be listed here by name.** As of 2026-08-26 the open set is: the `useAuth`/Android `getLaunchUrl` contradiction (baseline §6.1) and the iOS build lane (§6.2). Both need a decision, not a test edit.
+**Open P0s must be listed here by name.** Do not carry a stale set forward — this line named two, and one of them has since closed:
+
+- `useAuth`/Android `getLaunchUrl` (baseline-2026-08-26 §6.1) — **closed.** [`baseline-2026-08-29.md`](baseline-2026-08-29.md) §6.1 records the fix (`useAuth.ts` gates on `isIosPlatform()`) *and* the confirming test run: the named spec does not appear in that pass's failures at all.
+- The iOS build lane (§6.2) — **still open, and half of it is not ours.** The arm64 half landed in `mobile-build.yml` (§5). The Safari-extension sourcing half is blocked on a release in `companionintelligence/CI-Browser-Extension`, so it is a decision — ship an iOS build with a stubbed extension, or hold the release — not a test edit.
+
+The open set is whatever the **newest** `baseline-<date>.md` says is open, not what this line says. Re-derive it in step 2 of §8 and rewrite these bullets; two baselines already exist (2026-08-26, 2026-08-29) and the later one supersedes the earlier wherever they disagree.
 
 ## 8. Re-running this next release
 

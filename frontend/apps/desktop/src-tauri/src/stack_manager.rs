@@ -525,7 +525,14 @@ fn compose_up_blocking(paths: &StackPaths) -> Result<(), String> {
         // means "no restriction — always active," the opposite of exclusion
         // (verified against this Compose CLI directly before choosing this
         // approach).
-        .args(["up", "-d", "--remove-orphans", "--scale", "powersync=0"])
+        //
+        // Taken from UP_ARGS rather than re-typed here: this list used to be
+        // duplicated as a literal, so the tray's start path and the splash's
+        // streaming path could drift apart with nothing to catch it — and
+        // .github/workflows/desktop-e2e.yml hand-mirrors the same list a third
+        // time. One constant means the_compose_invocation_and_up_args_are_pinned
+        // covers both in-process call sites.
+        .args(UP_ARGS)
         .output()
         .map_err(|e| format!("Failed to run docker compose up: {e}"))?;
 
@@ -960,6 +967,147 @@ mod tests {
         assert!(contents.contains("OIDC_ISSUER_URL="));
         assert!(!contents.to_lowercase().contains("secret"));
         assert!(!contents.to_lowercase().contains("password"));
+    }
+
+    /// Every key write_env_file generates, in one list.
+    ///
+    /// ⚠️ `.github/workflows/desktop-e2e.yml` ("Write the desktop compose .env")
+    /// re-types this file by hand into the runner's compose directory, so that
+    /// the E2E suite boots the published images through the same interpolation
+    /// the shipped app produces. Nothing but this constant connects the two,
+    /// and they have already diverged in both directions: that workflow adds
+    /// CI_REPO_DIR (docker-compose.production.yml defaults the api's read-only
+    /// archive mount to `~/Downloads`, which no runner has) and omits
+    /// LLM_DEFAULT_CHAT_MODEL (there is no model server in that job, so naming
+    /// a model would only make the API ask for one that cannot exist). Both
+    /// divergences are deliberate and explained in the workflow's own comment —
+    /// what had no enforcement at all was noticing when THIS side moves.
+    ///
+    /// So: adding or removing a key here fails this test, and the fix is to
+    /// update desktop-e2e.yml's heredoc (or its comment saying why the key is
+    /// deliberately absent) in the same change. Otherwise the E2E suite quietly
+    /// exercises a stack the app never produces.
+    const EXPECTED_ENV_KEYS: [&str; 8] = [
+        "COMPOSE_PROJECT_NAME",
+        "CI_SERVER_IMAGE_TAG",
+        "APP_PUBLIC_HOSTNAME",
+        "CI_IMPORT_WORK_DIR",
+        "CI_LOCAL_ONLY",
+        "LLM_DEFAULT_CHAT_MODEL",
+        "OIDC_ISSUER_URL",
+        "APP_BASE_URL",
+    ];
+
+    /// Pins the key SET, not the values or the line order: compose does not
+    /// care what order `.env` lines arrive in, and the values that can be
+    /// asserted without racing the process environment already are, in
+    /// writes_env_file_with_no_secrets above. What nothing else checks is
+    /// *which keys exist* — see EXPECTED_ENV_KEYS for who mirrors this file.
+    #[test]
+    fn the_generated_env_file_holds_exactly_the_keys_desktop_e2e_yml_mirrors() {
+        let dir = tempfile::tempdir().unwrap();
+        let env_path = dir.path().join(".env");
+
+        write_env_file(&env_path, "2026.8.25", &dir.path().join("import-work")).unwrap();
+        let contents = fs::read_to_string(&env_path).unwrap();
+
+        // split_once, not split: only the FIRST `=` separates the key, so a
+        // value that ever contains one (a URL with a query string, say) is not
+        // silently truncated into a bogus assertion.
+        let entries: Vec<(&str, &str)> = contents
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.split_once('=').expect("every generated line is KEY=VALUE"))
+            .collect();
+
+        // Sorted on both sides so a reordering of write_env_file's format!
+        // block — which changes nothing compose can observe — does not fail
+        // this. A duplicate key still does: it survives the sort as an extra
+        // element, and a duplicate is a real fault (apply_llm_env_override
+        // APPENDS to this file and relies on write_env_file never writing
+        // LLM_API_BASE/LLM_API_KEY itself).
+        let mut keys: Vec<&str> = entries.iter().map(|&(key, _)| key).collect();
+        keys.sort_unstable();
+        let mut expected = EXPECTED_ENV_KEYS;
+        expected.sort_unstable();
+        assert_eq!(
+            keys, expected,
+            "write_env_file's keys changed — update EXPECTED_ENV_KEYS *and* the \
+             \"Write the desktop compose .env\" step in .github/workflows/desktop-e2e.yml",
+        );
+
+        // A key with no value is not an error to compose: it interpolates as an
+        // empty string, so an emptied APP_BASE_URL yields an OIDC redirect_uri
+        // with no origin at runtime rather than a failure here. OIDC_ISSUER_URL
+        // is exempt because its value comes from the CI_PORTAL_URL env var,
+        // which this test deliberately neither sets nor unsets (mutating
+        // process env vars in a #[test] races the rest of the suite).
+        for &(key, value) in &entries {
+            if key == "OIDC_ISSUER_URL" {
+                continue;
+            }
+            assert!(!value.is_empty(), "{key} was written with an empty value");
+        }
+    }
+
+    /// The compose invocation itself, pinned argument for argument.
+    ///
+    /// The `-f` order is load-bearing: docker-compose.desktop.yml MUST be last,
+    /// because it is the overlay that rewrites every `ci/<name>` image
+    /// reference to the published `companion/<name>` one — moved earlier, the
+    /// base file wins and the app tries to run images that only exist on a
+    /// developer's machine. `--profile production` is what makes the
+    /// production-only services (generate-secrets among them, which mints every
+    /// credential on first boot) exist at all.
+    ///
+    /// ⚠️ `.github/workflows/desktop-e2e.yml` re-types this entire invocation by
+    /// hand in five places spread over four steps ("Start the desktop stack",
+    /// "Wait for the appliance to answer" — which holds two, its `ps` and
+    /// `logs` failure dumps — "Upload stack logs", and "Tear down the desktop
+    /// stack"); grep that file for `--project-name` before believing you have
+    /// found them all, because counting steps stops you one short —
+    /// `--env-file .env`, `--project-name
+    /// ci-server-desktop`, the three `-f` files in this order,
+    /// `--profile production`, then the UP_ARGS tail. A change here that is not
+    /// mirrored there leaves that suite testing a stack the app does not build.
+    /// Asserted against literals rather than the constants they come from on
+    /// purpose: the workflow's copy is literals, so a test reading the same
+    /// constants the code reads would pass through any rename.
+    #[test]
+    fn the_compose_invocation_and_up_args_are_pinned() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = scratch_paths(&dir);
+
+        // Construction only — nothing is spawned here. (On Linux, building the
+        // command resolves the docker host once, which probes `docker info`;
+        // that is the same work the app does at launch, and it degrades to
+        // "leave the CLI alone" when no daemon answers.)
+        let cmd = compose_command(&paths);
+        let args: Vec<String> = cmd.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
+
+        assert_eq!(
+            args,
+            [
+                "compose",
+                "--env-file",
+                ".env",
+                "--project-name",
+                "ci-server-desktop",
+                "-f",
+                "docker-compose.yml",
+                "-f",
+                "docker-compose.production.yml",
+                "-f",
+                "docker-compose.desktop.yml",
+                "--profile",
+                "production",
+            ],
+        );
+
+        // The tail both start paths append, and the reason `--scale` is spelled
+        // out rather than expressed as a profile override, are documented at
+        // compose_up_blocking.
+        assert_eq!(UP_ARGS, ["up", "-d", "--remove-orphans", "--scale", "powersync=0"]);
     }
 
     #[test]

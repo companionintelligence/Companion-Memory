@@ -558,23 +558,38 @@ docker compose exec hbpe-service python -c \
 `.github/workflows/publish.yml` builds every `companion/*` image natively per architecture, merges
 the legs into a multi-arch manifest list, and registers the result with CI-Portal.
 
-**Image publish is not triggered by pushing a tag.** Ten of the fourteen
-workflows — including the *check* workflows `ci.yml`, `e2e.yml`,
-`desktop-e2e.yml`, `migration-integrity-check.yml`, `style-canon-lint.yml`,
-`consent-path-gate.yml` and `codeql.yml` — are `workflow_dispatch`-only, so an absent or green check
+**Image publish is not triggered by pushing a tag.** Most workflows — including
+the *check* workflows `ci.yml`, `e2e.yml`, `desktop-e2e.yml`,
+`migration-integrity-check.yml`, `style-canon-lint.yml`, `consent-path-gate.yml`
+and `codeql.yml` — are `workflow_dispatch`-only, so an absent or green check
 means nobody dispatched it, not that anything passed. (`codeql.yml` used to run
 on push/PR plus a weekly cron and was **red on every run by baseline**; it was
-gated to dispatch for exactly that reason, so it no longer reports at all.) Four
-workflows do run on their own (triggers re-verified against each `on:` block,
-2026-09-07):
+gated to dispatch for exactly that reason, so it no longer reports at all.) A
+handful do run on their own — as of 2026-09-07, `pr-gate.yml` on every
+`pull_request` against `main` (lint, typecheck, **the frontend unit suite, a
+web-bundle build**, and the dependency-free `mobile-guards` job — still no
+Docker, no Postgres, no Xcode/Gradle, but no longer the two-minute lane it
+started as) and `benchmark-unit.yml` for `scripts/benchmark/**`.
 
-- `pr-gate.yml` on every `pull_request` against `main` — lint, typecheck, and the dependency-free `mobile-guards` job (Capacitor native sync + iOS plist duplicate keys). No Docker, no Postgres, no Xcode/Gradle.
-- `benchmark-unit.yml` on PR and push to `main`, but only for `scripts/benchmark/**`.
-- `mobile-release.yml` on `ios-v*` / `android-v*` / `mobile-release-v*` tags, which uploads to TestFlight / Play internal.
-- `desktop-release.yml` on `desktop-v*` tags, which builds the signed desktop lanes (`frontend/apps/desktop`); lanes whose signing secrets are unset skip rather than fail.
+**The *client* release lanes are the exception to this section's headline, and
+that asymmetry catches people out.** Unlike container images, pushing a tag
+*does* release them: `mobile-release.yml` on `ios-v*` / `android-v*` /
+`mobile-release-v*` uploads to TestFlight / Play internal, and
+`desktop-release.yml` on `desktop-v*` builds the signed desktop lanes
+(`frontend/apps/desktop`; a lane whose signing secrets are unset skips rather
+than fails). Push one of those tags only when you mean to ship.
 
-None of them block a merge: `main` carries no `required_status_checks`. See
-[`docs/CI.md`](docs/CI.md). Cut a container release by
+**[`docs/CI.md`](docs/CI.md) carries the maintained per-workflow trigger table,
+and is the only place it is maintained** — the full list is deliberately not
+repeated here, because the same counts were restated in four files and went
+stale in three of them. It also ships the `grep` that re-derives the table from
+the `on:` blocks, so check there rather than trusting this paragraph's summary.
+
+**No check gates a merge**, whether it ran or not: `main` carries no
+`required_status_checks` and `required_approving_review_count: 0`, so a red
+`pr-gate.yml` stops nothing (verify with
+`gh api repos/companionintelligence/CI-Server/branches/main/protection --jq 'keys'`).
+Cut a container release by
 tagging and then dispatching **on that tag**, since `VERSION` is parsed from the ref
 (on a branch ref it resolves to the literal `refs/heads/main`, which is not a legal
 image tag — publish.yml's `Refuse to publish a non-release ref` guard rejects a

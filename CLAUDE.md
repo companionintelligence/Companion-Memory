@@ -62,37 +62,87 @@ make build
 `packageManager`, `uv` present — any mismatch exits 1), then hard-fails unless `overmind`,
 `caddy` (admin API live on `:2019`) and `ollama` (on `:11434`) are present.
 
-**CI is `workflow_dispatch`-only, with four exceptions.** Ten of the
-fourteen workflows do not run on push, pull request, tag or schedule — for
-those, an absent check means nobody dispatched it, not that anything passed.
-Start one with `gh workflow run <file> --ref <branch-or-tag>`; see `docs/CI.md`
-for the full table. The exceptions (re-verified 2026-09-07):
+**CI is `workflow_dispatch`-only, with four exceptions.** Most workflows do not
+run on push, pull request, tag or schedule — for those, an absent check means
+nobody dispatched it, not that anything passed. Start one with
+`gh workflow run <file> --ref <branch-or-tag>`.
+
+**`docs/CI.md` holds the only maintained trigger table** — per workflow, plus
+the two `grep` commands that re-derive it from the `on:` blocks. Do not restate
+counts here: this file, `README.md` and two QA documents each carried their own
+copy and three of the four went stale (one still read "twelve workflows, nine
+dispatch-only" long after the tree held fourteen and ten). At the time of
+writing it is ten of fourteen dispatch-only; recount before quoting that:
+`grep -lE '^[[:space:]]+(pull_request|push|schedule):' .github/workflows/*.yml`.
+
+The four exceptions are listed here only because an agent must know them before
+touching a workflow (re-verified 2026-09-07):
 
 - **`pr-gate.yml`** — `pull_request` against `main`, no path filter, so it runs
-  on **every** PR. Lint (4 lanes) + typecheck (2 lanes) + the `mobile-guards`
-  job (two dependency-free Node scripts — Capacitor native sync and iOS plist
-  duplicate keys — that otherwise run only from lint-staged, which is inert in
-  the agent worktrees). The unit-test and Python lanes stay on dispatch in
-  `ci.yml`. Its lint/typecheck jobs reuse `ci.yml`'s job names on purpose, so a
-  dispatched `ci.yml` reports the same check contexts.
-- **`benchmark-unit.yml`** — `pull_request` **and** push to `main`, but only for
-  `scripts/benchmark/**`. It runs `pytest` and *no linter*, which is how 141
-  ruff violations landed in that directory unnoticed.
+  on **every** PR. Seven jobs: `install`, lint (4 lanes), typecheck (**3**
+  lanes: backend, frontend and `packages`, the last covering the eight
+  `frontend/packages/*` workspaces via
+  `yarn workspaces foreach --all run typecheck`), `test-frontend` (**the whole
+  frontend vitest suite**), `build-web` (two `tsc && vite build` runs, PWA on
+  and off), `mobile-guards` (two dependency-free Node scripts — Capacitor
+  native sync and iOS plist duplicate keys — that otherwise run only from
+  lint-staged, which is inert in the agent worktrees) and `desktop-guards`
+  (`node --test` over `frontend/apps/desktop/scripts/*.test.cjs`, the suite
+  covering the resolver that decides which server images a shipped desktop app
+  pulls — also dependency-free, no `needs: install`). This set has grown three
+  times in two days; re-derive it before relying on it —
+  `grep -nE '^  [a-z][a-z0-9_-]*:$' .github/workflows/pr-gate.yml`.
+  `Type check packages` was red when it landed (`Cannot find module
+  '@/lib/utils'`, raised from two @ci/shadcn sources that used the `@/` alias
+  only @ci/shadcn's own tsconfig declares); both now import relatively and the
+  lane exits 0 on this branch, measured 2026-09-07 (`pr-gate.yml`'s own comment
+  records the same fix — an earlier revision of this paragraph called that
+  comment stale, which it no longer is). The
+  *backend* unit suite and the Python lanes stay on dispatch in `ci.yml`; the
+  frontend one no longer does, so this file's earlier "the unit-test and Python
+  lanes stay on dispatch" was only half true and is corrected here. Its
+  lint/typecheck/`Run frontend tests` jobs reuse `ci.yml`'s job names on
+  purpose, so a dispatched `ci.yml` reports the same check contexts.
+- **`benchmark-unit.yml`** — `pull_request` **and** push to `main`, path-filtered
+  to `scripts/benchmark/**` and to the workflow file itself. It runs `pytest`
+  and then a **pinned `ruff==0.16.1`** (`check` + `format --check`), added
+  2026-09-06 — earlier revisions of this file said "*no linter*", which was how
+  141 ruff violations landed in that directory unnoticed. The pin matches what
+  the root `uv.lock` resolves; keep the two in step or this lane and `ci.yml`'s
+  `python` lane will disagree about what a violation is. Expect the lane to be
+  red until that pre-existing debt is cleared.
 - **`mobile-release.yml`** — push `ios-v*`, `android-v*`, or
   `mobile-release-v*` to upload to TestFlight / Play internal.
-- **`desktop-release.yml`** — push `desktop-v*`.
+- **`desktop-release.yml`** — push `desktop-v*`. **Gated since 2026-09-07:**
+  its first job `verify-desktop-build-passed` refuses to build or publish unless
+  a successful `desktop-build.yml` run exists for the same SHA — that workflow is
+  where `cargo test` lives and it is dispatch-only, so a desktop release is
+  `gh workflow run desktop-build.yml --ref <branch>`, wait for green, then push the
+  tag. Bypass is `skip_test_gate=true` **plus a non-blank `bypass_reason`**, and it
+  is dispatch-only — a tag push cannot bypass.
 
 **`publish.yml` must be dispatched on a release TAG, never on `main`.** Its
 `Resolve VERSION from tag` steps do `tag="${GITHUB_REF#refs/tags/}"`, so on a
 branch ref `VERSION` becomes the literal `refs/heads/main` — not a legal image
-tag. The `Refuse to publish a non-release ref` guard — first step of both
-`verify-ci-passed` and `build`, before any checkout, matching `GITHUB_REF`
+tag. The `Refuse to publish a non-release ref` guard — first step of **all three**
+of its jobs (`verify-ci-passed`, `build`, `merge-and-register`; this said "both"
+when there were two), before any checkout, matching `GITHUB_REF`
 against the workflow-level `RELEASE_TAG_RE` — now rejects that in seconds
 instead of after the two `timeout-minutes: 150` matrix legs (`ubuntu-latest`,
 `ubuntu-24.04-arm`) have built everything. The mistake is cheap now, not
 correct: the run still ends red and nothing is released. `docs/CI.md`'s
 generated "Cut a release" block still says `--ref main` — it is wrong; see the
 hand-maintained note in that file.
+
+**The release gate is a LIST now, not just `ci.yml`.** `verify-ci-passed` loops
+over a `GATED_WORKFLOWS` env block in `publish.yml` (`<workflow>:<required|advisory>`
+per line) and fails closed on a malformed entry. Required today: `ci.yml` and
+`migration-integrity-check.yml`; `e2e.yml` is **advisory** — it only warns, because
+its last green run predates its gating to `workflow_dispatch`, so until someone
+flips that one word the gate does NOT prove the app works end to end at the
+published commit. `skip_test_gate=true` now REFUSES a blank `bypass_reason` and
+writes the reason into the run's step summary. Read the list from the file rather
+than from this paragraph; adding a gate is one line there.
 
 **`codeql.yml` is now `workflow_dispatch`-only** (an earlier revision of this
 file said push/PR/cron — that is stale). It was gated because it failed every

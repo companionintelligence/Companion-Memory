@@ -104,10 +104,13 @@ function git(args) {
 // docker-compose.desktop.yml — the authoritative source (see that file's own
 // header comment) — rather than hand-maintaining a second copy of the list
 // here that could drift from it. Returns null if the file can't be read.
-function getRequiredImageNames() {
+// `overlayPath` defaults to the real overlay and is parameterised only so the
+// test suite can point the real parser at a fixture (see the test-seam note
+// below) — no caller passes it.
+function getRequiredImageNames(overlayPath = DESKTOP_COMPOSE_OVERLAY) {
   let overlay;
   try {
-    overlay = fs.readFileSync(DESKTOP_COMPOSE_OVERLAY, 'utf8');
+    overlay = fs.readFileSync(overlayPath, 'utf8');
   } catch {
     return null;
   }
@@ -145,11 +148,45 @@ function imagePublished(name, tag) {
   }
 }
 
+// --- test seam ---------------------------------------------------------
+//
+// resolveImageTag() decides which server images a SHIPPED desktop app will
+// pull, and getting it wrong bricks the app at first launch with a 404 out of
+// `docker compose pull` — the one place nobody can fix it. It has already
+// produced two shipped-class bugs, both of which used to be guarded by prose
+// comments alone:
+//   (a) an unpublished `dev-<sha>` tag emitted with exit 0, and
+//   (b) `git describe --tags --exact-match` returning the release's OWN tag,
+//       so pushing `desktop-v0.1.0` baked `companion/*:0.1.0` in.
+// Both are now covered by sync-compose-resources.test.cjs, which needs to
+// drive the resolver through git histories and GHCR states that don't exist on
+// the machine running the test. So every side effect the resolver has — git,
+// docker, the environment, and the hard-failure path — goes through this `io`
+// object, which every function below takes as an optional last argument
+// DEFAULTING to the real implementation. Production call sites pass nothing
+// and behave exactly as before; the tests pass fakes, and swap `fail` for one
+// that throws so a hard failure is observable instead of killing the test
+// runner with process.exit(1).
+//
+// `fail` must never return: production exits the process, the test double
+// throws. Callers treat it as terminal.
+const defaultIo = {
+  git,
+  hasDocker,
+  imagePublished,
+  getRequiredImageNames,
+  env: process.env,
+  fail: (message) => {
+    console.error(message);
+    process.exit(1);
+  },
+};
+
 // Returns the name of the first required image missing at `tag` on GHCR, or
 // null if every required image is present there.
-function findMissingImage(tag, requiredImages) {
+function findMissingImage(tag, requiredImages, io = defaultIo) {
   for (const name of requiredImages) {
-    if (!imagePublished(name, tag)) {
+    if (!io.imagePublished(name, tag)) {
       return name;
     }
   }
@@ -159,8 +196,8 @@ function findMissingImage(tag, requiredImages) {
 // True when this build must not ship an image tag whose existence on GHCR
 // nobody confirmed. Every GitHub Actions runner sets CI, and
 // REQUIRE_PUBLISHED_IMAGE_TAG=1 opts a local build into the same rule.
-function requiresPublishedTag() {
-  return Boolean(process.env.CI) || process.env.REQUIRE_PUBLISHED_IMAGE_TAG === '1';
+function requiresPublishedTag(io = defaultIo) {
+  return Boolean(io.env.CI) || io.env.REQUIRE_PUBLISHED_IMAGE_TAG === '1';
 }
 
 // A KNOWN-BAD resolution: a tag nothing has ever published (the dev-<sha>
@@ -180,26 +217,29 @@ function requiresPublishedTag() {
 // the Linux job in the same workflow had just verified — and an explicit
 // CI_SERVER_IMAGE_TAG pin could not rescue it either, which made this
 // message's own "pass CI_SERVER_IMAGE_TAG" advice circular there.
-function degrade(message) {
-  if (requiresPublishedTag()) {
-    console.error(`  ✗ ${message}`);
-    console.error(
-      '    Refusing to continue because CI or REQUIRE_PUBLISHED_IMAGE_TAG=1 is set. Pass ' +
+function degrade(message, io = defaultIo) {
+  if (requiresPublishedTag(io)) {
+    // One io.fail() rather than two console.error()s — the joined string is
+    // byte-identical on stderr, and routing it through the seam is what lets
+    // the test observe the refusal as a throw instead of a process exit.
+    io.fail(
+      `  ✗ ${message}\n` +
+        '    Refusing to continue because CI or REQUIRE_PUBLISHED_IMAGE_TAG=1 is set. Pass ' +
         'CI_SERVER_IMAGE_TAG=<a tag published under ' +
         'ghcr.io/companionintelligence/companion/*> explicitly, or cut and publish a real ' +
         'release, so the bundled image-tag.txt names an image that actually exists.',
     );
-    process.exit(1);
+    return;
   }
   console.warn(`  ⚠ ${message}`);
 }
 
-function resolveImageTag() {
+function resolveImageTag(io = defaultIo) {
   // An explicit override always wins (advanced/CI use — e.g. pinning to a
   // specific prior release without checking it out; README.md documents it as
   // the escape hatch for developing off a non-release commit).
-  if (process.env.CI_SERVER_IMAGE_TAG) {
-    const pinned = process.env.CI_SERVER_IMAGE_TAG;
+  if (io.env.CI_SERVER_IMAGE_TAG) {
+    const pinned = io.env.CI_SERVER_IMAGE_TAG;
 
     // ...but "wins" used to mean "returns unchecked": this was the one branch
     // that skipped the `docker manifest inspect` completeness check every
@@ -212,7 +252,7 @@ function resolveImageTag() {
     // docker CLI to check it with, so failing here would leave the macOS lane
     // of desktop-release.yml with no way to build at all — not even by pinning
     // a tag that really is published.
-    if (!hasDocker()) {
+    if (!io.hasDocker()) {
       console.warn(
         `  ⚠ docker is not on PATH; the explicit CI_SERVER_IMAGE_TAG="${pinned}" pin is being ` +
           `baked in UNVERIFIED — nothing has confirmed that every image ` +
@@ -221,7 +261,7 @@ function resolveImageTag() {
       return pinned;
     }
 
-    const requiredImages = getRequiredImageNames();
+    const requiredImages = io.getRequiredImageNames();
     if (!requiredImages) {
       console.warn(
         `  ⚠ Could not read required image names from ${DESKTOP_COMPOSE_OVERLAY}; the explicit ` +
@@ -230,9 +270,9 @@ function resolveImageTag() {
       return pinned;
     }
 
-    const missing = findMissingImage(pinned, requiredImages);
+    const missing = findMissingImage(pinned, requiredImages, io);
     if (missing) {
-      console.error(
+      io.fail(
         `  ✗ CI_SERVER_IMAGE_TAG="${pinned}" is pinned explicitly, but ` +
           `ghcr.io/companionintelligence/companion/${missing}:${pinned} does not exist on ` +
           `GHCR. Baking it in would produce a bundle that builds fine and then fails to pull ` +
@@ -240,13 +280,14 @@ function resolveImageTag() {
           `has pushed, e.g. 2026.8.26 — note a desktop/mobile release version like 0.1.0 is ` +
           `NOT a server image tag), or unset CI_SERVER_IMAGE_TAG to resolve one from git.`,
       );
-      process.exit(1);
+      // io.fail is terminal (process.exit(1) in production, a throw under
+      // test), so nothing below runs — the pin is never returned.
     }
 
     return pinned;
   }
 
-  const exactTag = git(['describe', '--tags', '--exact-match']);
+  const exactTag = io.git(['describe', '--tags', '--exact-match']);
   // Only a RELEASE-shaped tag (v2026.8.26 — RELEASE_TAG_RE, the same filter
   // the ancestor walk below applies) names a published SERVER image. HEAD
   // routinely carries tags that are not server releases at all: every release
@@ -277,15 +318,16 @@ function resolveImageTag() {
   // doesn't, and the tag still gets cut). So walk ancestor release tags
   // newest-first and use the first one where every required image is
   // actually present, rather than trusting the nearest tag blindly.
-  const ancestorTags = git(['tag', '--merged', 'HEAD', '--sort=-v:refname'])
+  const ancestorTags = io
+    .git(['tag', '--merged', 'HEAD', '--sort=-v:refname'])
     .split('\n')
     .filter((t) => RELEASE_TAG_RE.test(t))
     .slice(0, MAX_ANCESTOR_TAGS_TO_CHECK);
 
   if (ancestorTags.length > 0) {
-    const requiredImages = hasDocker() ? getRequiredImageNames() : null;
+    const requiredImages = io.hasDocker() ? io.getRequiredImageNames() : null;
 
-    if (!hasDocker()) {
+    if (!io.hasDocker()) {
       // Can't shell out to `docker manifest inspect` to check completeness —
       // a missing Docker binary during this SYNC step is plausible even
       // though the RUNTIME app requires Docker (e.g. a build machine with no
@@ -319,7 +361,7 @@ function resolveImageTag() {
 
     for (const candidateTag of ancestorTags) {
       const resolved = candidateTag.replace(/^v/, '');
-      const missing = findMissingImage(resolved, requiredImages);
+      const missing = findMissingImage(resolved, requiredImages, io);
       if (!missing) {
         console.warn(
           `  ⚠ HEAD is not an exact release tag; falling back to the nearest fully-published ` +
@@ -349,22 +391,22 @@ function resolveImageTag() {
   // most degraded outcome of all, so degrade() turns it into a hard failure
   // under CI/REQUIRE_PUBLISHED_IMAGE_TAG rather than shipping a bundle whose
   // very first `docker compose pull` is guaranteed to 404.
-  const shortSha = git(['rev-parse', '--short', 'HEAD']);
+  const shortSha = io.git(['rev-parse', '--short', 'HEAD']);
   if (shortSha) {
     degrade(
       `No release tag reachable from HEAD (shallow clone?); falling back to ` +
         `"dev-${shortSha}", which has almost certainly NOT been published to GHCR and will ` +
         `fail to pull at first launch.`,
+      io,
     );
     return `dev-${shortSha}`;
   }
 
-  console.error(
+  io.fail(
     '  ✗ Could not resolve a CI_SERVER_IMAGE_TAG: not a git checkout and CI_SERVER_IMAGE_TAG ' +
       'is not set. Pass CI_SERVER_IMAGE_TAG=<a tag published under ' +
       'ghcr.io/companionintelligence/companion/*> explicitly.',
   );
-  process.exit(1);
 }
 
 function writeImageTag(tag) {
@@ -373,7 +415,27 @@ function writeImageTag(tag) {
   console.log(`  image tag: ${tag}`);
 }
 
-console.log('Syncing desktop compose resources...');
-copyComposeFiles();
-writeImageTag(resolveImageTag());
-console.log('Done.');
+// Only sync when run as a script (`yarn sync`, and the dev/build scripts that
+// chain it). Guarded so sync-compose-resources.test.cjs can `require` this
+// file for its exports without copying compose files, shelling out to git and
+// docker, or overwriting the real src-tauri/resources/image-tag.txt as an
+// import side effect.
+if (require.main === module) {
+  console.log('Syncing desktop compose resources...');
+  copyComposeFiles();
+  writeImageTag(resolveImageTag());
+  console.log('Done.');
+}
+
+// Exported for sync-compose-resources.test.cjs only — nothing in the product
+// requires this file. See the test-seam note above defaultIo.
+module.exports = {
+  RELEASE_TAG_RE,
+  MAX_ANCESTOR_TAGS_TO_CHECK,
+  defaultIo,
+  getRequiredImageNames,
+  findMissingImage,
+  requiresPublishedTag,
+  degrade,
+  resolveImageTag,
+};

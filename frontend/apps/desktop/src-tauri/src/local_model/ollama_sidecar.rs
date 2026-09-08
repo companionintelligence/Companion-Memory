@@ -648,25 +648,63 @@ mod tests {
     /// This was `#[ignore]`d, which meant it ran nowhere: an ignored test is
     /// only reached by `cargo test -- --ignored`, and nothing in this repo
     /// invokes that (see docs/CI.md — the desktop workflow is dispatch-only and
-    /// runs a plain `cargo test`). It now runs.
+    /// runs a plain `cargo test`). It now runs — wherever the binary exists.
     ///
-    /// A missing `ollama` is a hard failure rather than a quiet `return`,
-    /// deliberately. `cargo test` prints no marker for an early return, so a
-    /// skip is indistinguishable from a pass in the summary — anyone reading a
-    /// green run would believe the sidecar lifecycle was exercised when on a
-    /// bare host nothing was. The cost is that this file demands Ollama on the
-    /// test host; the benefit is that "37 passed" means what it says.
+    /// A missing `ollama` used to be a hard `expect()` failure rather than a
+    /// quiet `return`, on the argument that `cargo test` prints no marker for
+    /// an early return, so a skip is indistinguishable from a pass in the
+    /// summary. That is true of cargo and wrong about the consequence here:
+    /// `.github/workflows/desktop-build.yml` now runs `cargo test
+    /// --no-fail-fast` on macos-latest, ubuntu-22.04 and windows-latest, and
+    /// none of those runners has Ollama — nor should that workflow install a
+    /// multi-hundred-MB inference engine to prove process plumbing. So the very
+    /// first dispatch of that workflow would have gone red for a purely
+    /// environmental reason, and the cheapest way for whoever read that log to
+    /// get a green run is to delete the `Cargo test` step, taking the ~40
+    /// genuine tests in this crate with it. Losing the whole suite to protect
+    /// one test's honesty is the worse trade.
+    ///
+    /// So the skip is made loud instead of silent: stable Rust still has no
+    /// test-skip primitive, so this returns early after writing a SKIPPED line
+    /// straight to the process's stderr handle — NOT `eprintln!`, which would
+    /// print nothing at all here. libtest installs an output capture for the
+    /// `print!`/`eprint!` macros and replays what they wrote only for tests
+    /// that FAIL (or for every test under `--nocapture`/`--show-output`, which
+    /// neither desktop-build.yml's `cargo test --no-fail-fast` nor `make
+    /// test-desktop` passes) — so on the green run where the skip is the whole
+    /// point, a macro line is swallowed and the skip is exactly the silent pass
+    /// the paragraph above warns about. The capture is wired into the macros
+    /// alone, so `writeln!(std::io::stderr(), …)` bypasses it and the line
+    /// lands in the step's own log — readable in the Actions UI on a GREEN run,
+    /// which is the case that matters — and in the cargo-test.log that step
+    /// `tee`s, uploaded as an artifact only when the run fails. (Measured both
+    /// ways with a one-test `rustc --test` binary before choosing this: the
+    /// `eprintln!` line does not appear at all for a passing test; this one
+    /// does.) Where the binary IS present — any developer machine that runs the
+    /// sidecar, and any runner someone provisions on purpose — the test is
+    /// unchanged and still asserts the full spawn/ready/kill lifecycle.
     ///
     /// Safe against a user's own Ollama: it serves on an ephemeral port, never
     /// OLLAMA_PORT, and passes no OLLAMA_MODELS override, so it only ever reads
     /// the existing model directory.
     #[test]
     fn spawn_serve_on_an_alternate_port_becomes_ready() {
-        let binary = find_on_path().expect(
-            "this test spawns a real `ollama serve`, so it needs the binary on PATH \
-             (or on stack_manager::extended_path_env). Install Ollama on this host \
-             rather than making the assertion conditional — a silent skip reads as a pass.",
-        );
+        let Some(binary) = find_on_path() else {
+            // The stderr HANDLE, not eprintln! — see the doc comment: libtest
+            // captures the print macros and shows them only for failing tests,
+            // so eprintln! here would leave the skip invisible on the very run
+            // that needs to disclose it. The result is deliberately ignored:
+            // a closed stderr must not turn a skip into a panic.
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr(),
+                "SKIPPED spawn_serve_on_an_alternate_port_becomes_ready: no `ollama` binary on \
+                 PATH (or on stack_manager::extended_path_env), so there is nothing to spawn. \
+                 Install Ollama on this host to exercise the real sidecar lifecycle; see this \
+                 test's doc comment for why a bare CI runner skips rather than fails."
+            );
+            return;
+        };
         let port = crate::port_check::find_free_port().expect("a free port");
         assert!(!is_running(port));
 

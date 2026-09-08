@@ -16,6 +16,63 @@ name: Desktop E2E
 # arrangement. `frontend/apps/desktop/src-tauri/src/stack_manager.rs` is the
 # authority for every one of those flags; see the step comments below, which
 # name the function each mirrors.
+#
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║ SOURCE OF TRUTH: frontend/apps/desktop/src-tauri/src/stack_manager.rs ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+# This workflow HAND-RETYPES two things that file owns. Enforcement now
+# exists, but it is ONE-DIRECTIONAL — understand that before trusting it.
+# stack_manager.rs's own `#[cfg(test)]` module pins its half against literals,
+# in two tests:
+#     the_generated_env_file_holds_exactly_the_keys_desktop_e2e_yml_mirrors
+#     the_compose_invocation_and_up_args_are_pinned
+# so a change made THERE goes red under `make test-desktop` with a failure
+# message naming this file. But nothing parses THIS file: a change made only
+# HERE is still silently unenforced, and those tests can only prove the Rust
+# side has not moved — never that the copy below was updated to match it.
+# The retyped things are:
+#   * `write_env_file()` — the exact key list and values of the `.env` compose
+#     interpolates from. Retyped in "Write the desktop compose .env" below.
+#   * `COMPOSE_FILES` (3 entries, ORDER SIGNIFICANT — the desktop overlay must
+#     be last, it is what rewrites every `ci/<name>` image to the published
+#     `companion/<name>` one), plus `compose_command()`'s `--env-file`/
+#     `--project-name`/`--profile production` and `UP_ARGS`
+#     (`up -d --remove-orphans --scale powersync=0`). Retyped in FIVE places
+#     below, spread over FOUR steps — "Start the desktop stack", "Wait for the
+#     appliance to answer" (which holds two of them, its `ps` and `logs`
+#     failure dumps), "Upload stack logs", and "Tear down the desktop stack".
+#     Grep for `--project-name` before you believe you have found them all.
+#
+# The copies HAVE ALREADY DRIFTED. Known divergences, all believed deliberate
+# today. Only 1 and 2 are written down on the Rust side as well (in
+# EXPECTED_ENV_KEYS' doc comment); 3 to 5 are recorded nowhere but here:
+#   1. This file ADDS `CI_REPO_DIR`, which write_env_file never writes —
+#      docker-compose.production.yml defaults the api's read-only archive
+#      mount to `~/Downloads`, which exists on a desktop and not on a runner.
+#   2. This file OMITS `LLM_DEFAULT_CHAT_MODEL`, which write_env_file pins to
+#      the sidecar's DEFAULT_CHAT_MODEL. There is no Ollama sidecar here, so
+#      naming a model would only make the API ask for one that cannot exist —
+#      but it also means this suite cannot catch the model-mismatch class of
+#      bug that pin was added for.
+#   3. This file hard-codes `OIDC_ISSUER_URL=https://hub.ci.computer` where
+#      write_env_file reads `CI_PORTAL_URL` defaulting to DEFAULT_PORTAL_URL.
+#      Identical today; if that constant ever moves, this diverges silently.
+#   4. GATEWAY_URL hard-codes port 8642 where stack_manager.rs has
+#      `GATEWAY_PORT`, and COMPOSE_PROJECT_NAME hard-codes what `PROJECT_NAME`
+#      defines.
+#   5. Nothing here exercises `apply_llm_env_override()`'s appended
+#      LLM_API_BASE/LLM_API_KEY (the Apple-on-device-chat branch), so that
+#      shape of `.env` is untested by this suite.
+# THESE MUST BE RECONCILED, not left to rot: every divergence is a way for
+# this suite to report green on a configuration no shipped app ever runs,
+# which is precisely the failure mode the workflow exists to rule out. The
+# tests named above close the "Rust moved and nobody told CI" half; the
+# durable fix for the other half still belongs on the Rust side — have
+# stack_manager.rs emit its env and compose spec in a form this workflow can
+# CONSUME (a `--print-env`-style command, or a generated fixture the workflow
+# diffs against) so the copy below stops existing rather than merely being
+# watched. Until then: change stack_manager.rs and you MUST re-read this file,
+# and change this file and nothing will tell you if you got it wrong.
 
 # GATED TO MANUAL, matching this repo's convention: ten of its fourteen
 # workflows are `workflow_dispatch`-only — this file is one of them, and adding
@@ -126,7 +183,10 @@ jobs:
 
       # The same file stack_manager.rs::write_env_file generates into the app's
       # data directory, with the same keys and the same values, so compose
-      # interpolates identically here and there. Two additions CI needs and a
+      # interpolates identically here and there. That function is the SOURCE OF
+      # TRUTH and this is a hand-typed copy of it — see the boxed block in this
+      # file's header for the full list of ways the two already differ and for
+      # what would end the duplication. Two additions CI needs and a
       # desktop does not:
       #   - CI_REPO_DIR, because docker-compose.production.yml defaults the api's
       #     read-only archive mount to `~/Downloads`, which does not exist on a

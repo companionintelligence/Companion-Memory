@@ -892,13 +892,67 @@ test: ## Run the unit tests, both stacks
 
 	@printf "\n"
 
+	@# Named explicitly because `foreach` cannot reach it: frontend/apps/desktop
+	@# is deliberately EXCLUDED from the Yarn workspaces (root package.json —
+	@# Tauri walks a real node_modules tree that PnP does not produce), so it is
+	@# invisible both to the line above and to the untested-workspace warning at
+	@# the end of this target. Without this line the suite that covers which
+	@# server images a shipped desktop app pulls would run in CI
+	@# (`desktop-guards` in pr-gate.yml) and nowhere a developer can see before
+	@# pushing. Dependency-free — node's own runner, no install, ~60ms.
+	@#
+	@# The file list is discovered and asserted non-empty rather than passed as
+	@# a glob, matching the CI lane: `node --test 'path/*.test.cjs'` with zero
+	@# matches exits 0 reporting `# pass 0`, so the obvious form would go green
+	@# having run nothing the moment the suite is renamed. The bare directory
+	@# form is worse still — it does not recurse on this repo's pinned Node and
+	@# reports a bogus MODULE_NOT_FOUND failure instead.
+	@suites=$$(find frontend/apps/desktop/scripts -name '*.test.cjs' -not -path '*/node_modules/*' | sort); \
+	if [ -z "$$suites" ]; then \
+		printf "$(RED)✗$(RESET) Found no *.test.cjs under frontend/apps/desktop/scripts — this step would have checked nothing.\n\n"; \
+		exit 1; \
+	fi; \
+	node --test $$suites
+
+	@printf "\n"
+
 	@uv run pytest
 
-	@printf "\nAll tests passed.\n\n"
+	@printf "\nAll the tests that exist passed.\n\n"
+
+	@# "All tests passed" used to be a lie of omission, and this block is the
+	@# correction: `foreach` SILENTLY SKIPS a workspace that declares no `test`
+	@# script — no line of output, no warning, no non-zero exit. All eight
+	@# frontend/packages/* are in exactly that state, so the line above was
+	@# reporting on two workspaces while sounding like it reported on all
+	@# eleven. `typecheck` above already learned this lesson from the same
+	@# `foreach` behaviour; this target learns the reporting half of it.
+	@#
+	@# It does NOT fail the build: a package may legitimately have nothing
+	@# worth testing yet, and the root workspace's only suites are the
+	@# Playwright e2e configs that `make test` deliberately does not run. It
+	@# just refuses to let silence read as coverage — naming them is what makes
+	@# a package that quietly lost its tests visible in the place it went quiet.
+	@#
+	@# node, not jq: `make health` already guarantees node; jq is not a
+	@# prerequisite of this repo. The `sed` pulls the location out of yarn's
+	@# JSON-lines output (one object per line, no nesting).
+	@untested=$$(yarn workspaces list --json \
+		| sed -n 's/.*"location":"\([^"]*\)".*/\1/p' \
+		| while read -r loc; do \
+			node -e 'const fs=require("node:fs"),p=require("node:path").join(process.argv[1],"package.json");const j=fs.existsSync(p)?JSON.parse(fs.readFileSync(p,"utf8")):{};process.exit(j.scripts&&j.scripts.test?0:1)' "$$loc" \
+				|| printf "%s\n" "$$loc"; \
+		done); \
+	if [ -n "$$untested" ]; then \
+		printf "$(YELLOW)⚠$(RESET)  %s workspace(s) declare no 'test' script and were skipped, silently, by 'yarn workspaces foreach':\n" "$$(printf "%s\n" "$$untested" | wc -l | tr -d ' ')"; \
+		printf "%s\n" "$$untested" \
+			| sed -e 's|^\.$$|. (repo root — its only suites are the Playwright e2e configs)|' -e 's/^/       /'; \
+		printf "\n"; \
+	fi
 
 	@# The native suites are deliberately not part of this target (see the
 	@# comment above `test-android`), so say where they are rather than let
-	@# "All tests passed" imply more than it means.
+	@# "All the tests that exist passed" imply more than it means.
 	@printf "$(BLUE)ⓘ$(RESET)  Native suites are separate: $(YELLOW)make test-android$(RESET), $(YELLOW)make test-desktop$(RESET)\n\n"
 
 .PHONY: test-android
@@ -1068,6 +1122,26 @@ SMOKE_PROJECT_NAME := $(PROJECT_NAME)-smoke
 # up. Bump it on a cold machine where the first migration run is slow.
 SMOKE_TIMEOUT ?= 120
 
+# Seconds to leave the worker running before judging it healthy. The worker has
+# `restart: unless-stopped`, so a process that dies at DI-graph construction
+# comes straight back and a snapshot taken immediately after `up -d` sees a
+# "Running" container either way. Waiting lets the crash loop show itself in the
+# restart count.
+SMOKE_WORKER_WATCH ?= 30
+
+# What counts as "the worker did not boot cleanly", as an ERE for grep -Ei.
+# These are the fingerprints of the two DI faults docs/qa/release-qa-program.md
+# §6.4/§6.4b records — a duplicate FileService provider and an import-barrel
+# cycle — both of which shipped because the unit tests stub the providers and so
+# could not fail, and both of which were found only by running the app:
+#   ExceptionHandler / "Nest can't resolve" — Nest's own boot-time DI failure
+#   is not a function                      — the barrel-cycle symptom exactly
+#                                            (`this.ollamaService.chat is not a
+#                                            function`)
+#   unhandledRejection                     — anything that escaped a handler
+# Apostrophe written as `.` so the value needs no quoting inside the recipe.
+SMOKE_WORKER_FATAL_RE ?= ExceptionHandler|Nest can.t resolve|UnhandledPromiseRejection|unhandledRejection|is not a function
+
 # The compose invocation the smoke uses everywhere, including in its teardown
 # trap. CI_IMPORT_WORK_DIR / CI_REPO_DIR are redirected at $SMOKE_TMP (set by
 # the recipe) because their defaults are `./import-work` and `~/Downloads`:
@@ -1078,7 +1152,7 @@ SMOKE_COMPOSE = COMPOSE_PROJECT_NAME=$(SMOKE_PROJECT_NAME) \
 	docker compose -f docker-compose.yml -f docker-compose.production.yml --profile production
 
 .PHONY: smoke-stack
-smoke-stack: ## Boot the built production images and prove the gateway answers /api/health
+smoke-stack: ## Boot the built production images and prove the gateway serves the API, the SPA and a healthy worker
 	@printf "$(call task_icon,smoke-stack,🚦) Smoke-testing the assembled production stack...\n\n"
 
 # Every image the smoke touches must already exist locally. Compose would
@@ -1129,22 +1203,50 @@ smoke-stack: ## Boot the built production images and prove the gateway answers /
 # the trap remove the empty root-owned children it finds inside; `|| true`
 # covers the case where it still cannot, at the cost of one stray mktemp dir.
 #
-# Only `gateway` is named, so compose starts just its dependency closure —
-# object-store, api, and through api generate-secrets, migrate-database and
-# database. hbpe-service, summary-service, powersync and worker stay down: they
-# are not what is under test, and hbpe would drag GPU device nodes and a model
-# download into a release gate. setup-database runs first and synchronously
-# (`run` waits and propagates the exit code) because it creates the application
-# role and database that migrate-database then connects as, and nothing in the
-# compose graph orders those two.
+# `gateway` and `worker` are named, so compose starts those two dependency
+# closures — object-store, api, and through both of them generate-secrets,
+# migrate-database and database. hbpe-service, summary-service and powersync
+# stay down: they are not what is under test, and hbpe would drag GPU device
+# nodes and a model download into a release gate. setup-database runs first and
+# synchronously (`run` waits and propagates the exit code) because it creates
+# the application role and database that migrate-database then connects as, and
+# nothing in the compose graph orders those two.
+#
+# `worker` is here — it used to be in the "stay down" list — because it is the
+# ONLY thing in this repo that boots the real module graph in the shape the two
+# defects in docs/qa/release-qa-program.md §6.4/§6.4b took: a duplicate provider
+# and an import-barrel cycle, both invisible to the unit tests (which stub the
+# providers) and both found by running the app. It is the same ci/api image with
+# CI_ROLE=worker, so it costs one more container and no new image, and unlike
+# the api it constructs the eleven `role: 'worker'` schedules. Watching it for
+# $(SMOKE_WORKER_WATCH)s is a boot-time check: it catches a graph that cannot be
+# constructed, NOT a fault that only fires when a cron later runs (the
+# barrel-cycle bug's actual trigger). Widen SMOKE_WORKER_WATCH, or trigger a
+# job, if you want the latter too.
+#
+# The /api/health poll is necessary and not sufficient: nginx PROXIES that path
+# to the api container, so it is green whenever the API is green and says
+# nothing at all about the gateway's own payload. Until the GET / assertions
+# below existed, a gateway image whose web root was empty or stale passed this
+# target and printed success — and an empty root is a realistic build outcome,
+# because infrastructure/gateway/Dockerfile is a bare
+# `COPY frontend/apps/web/dist /usr/share/nginx/html/ci/web` and COPY of an
+# empty-but-present directory succeeds silently. So: GET / must be 200, must
+# carry the SPA shell's `id="root"` div, and must reference at least one hashed
+# /assets/ bundle that the gateway then actually serves. The last check is the
+# one that separates "shipped a Vite build" from "shipped the dev index.html".
+#
+# NOTE for anyone editing the block below: it is ONE `\`-continued shell line,
+# so a `#` shell comment inside it would comment out everything after it. Put
+# rationale up here at column 0 instead.
 	@set -e; \
 	SMOKE_TMP=$$(mktemp -d); \
 	mkdir -p "$$SMOKE_TMP/import-work" "$$SMOKE_TMP/repo"; \
 	trap '$(SMOKE_COMPOSE) down -v --remove-orphans >/dev/null 2>&1 || true; rm -rf "$$SMOKE_TMP" 2>/dev/null || true' EXIT INT TERM; \
 	printf "\n➤ Creating the application role and database...\n\n"; \
 	$(SMOKE_COMPOSE) run --rm -T setup-database; \
-	printf "\n➤ Starting database, api and gateway from the local images...\n\n"; \
-	$(SMOKE_COMPOSE) up -d gateway || { \
+	printf "\n➤ Starting database, api, worker and gateway from the local images...\n\n"; \
+	$(SMOKE_COMPOSE) up -d gateway worker || { \
 		printf "\n  $(RED)✗$(RESET) The stack did not start. Logs:\n\n"; \
 		$(SMOKE_COMPOSE) logs --tail 80 || true; \
 		exit 1; \
@@ -1159,9 +1261,52 @@ smoke-stack: ## Boot the built production images and prove the gateway answers /
 		fi; \
 		sleep 2; \
 	done; \
-	printf "$(GREEN)✓$(RESET) gateway served /api/health from the built images\n"
+	printf "$(GREEN)✓$(RESET) gateway served /api/health from the built images\n"; \
+	printf "\n➤ Asserting the gateway serves the web app, not an empty root...\n\n"; \
+	curl -fsS -o "$$SMOKE_TMP/index.html" http://localhost:8642/ || { \
+		printf "  $(RED)✗$(RESET) GET / did not return 200 — the gateway image has no web root. infrastructure/gateway/Dockerfile COPYs frontend/apps/web/dist, and COPY of an empty-but-present directory SUCCEEDS, so this is what a gateway built without a web build looks like. Rebuild with 'make build ENV=production'. Logs:\n\n"; \
+		$(SMOKE_COMPOSE) logs --tail 40 gateway || true; \
+		exit 1; \
+	}; \
+	grep -q 'id="root"' "$$SMOKE_TMP/index.html" || { \
+		printf "  $(RED)✗$(RESET) GET / returned 200 but the body is not the SPA shell — no <div id=\"root\"> (see frontend/apps/web/index.html; Vite leaves that div untouched, so its absence means the served file is not our index.html at all). First 20 lines:\n\n"; \
+		head -n 20 "$$SMOKE_TMP/index.html" || true; \
+		printf "\n"; \
+		exit 1; \
+	}; \
+	asset=$$(grep -o '/assets/[A-Za-z0-9._-]\{1,\}' "$$SMOKE_TMP/index.html" | head -n 1); \
+	if [ -z "$$asset" ]; then \
+		printf "  $(RED)✗$(RESET) The served index.html references no /assets/ bundle, so nothing would ever mount into #root. An UNBUILT index.html (script src=/src/main.tsx) was shipped instead of a Vite build.\n\n"; \
+		exit 1; \
+	fi; \
+	curl -fsS -o /dev/null "http://localhost:8642$$asset" || { \
+		printf "  $(RED)✗$(RESET) index.html references $$asset but the gateway will not serve it — nginx.conf's /assets/ location is 'try_files \$$uri = 404', so the web root is stale or partially copied.\n\n"; \
+		exit 1; \
+	}; \
+	printf "$(GREEN)✓$(RESET) gateway served the SPA shell and its hashed bundle $$asset\n"; \
+	printf "\n➤ Watching the worker for $(SMOKE_WORKER_WATCH)s...\n\n"; \
+	sleep $(SMOKE_WORKER_WATCH); \
+	worker_cid=$$($(SMOKE_COMPOSE) ps -aq worker); \
+	if [ -z "$$worker_cid" ]; then \
+		printf "  $(RED)✗$(RESET) There is no worker container — it never started. Logs:\n\n"; \
+		$(SMOKE_COMPOSE) logs --tail 80 worker || true; \
+		exit 1; \
+	fi; \
+	worker_state=$$(docker inspect -f '{{.State.Running}} {{.State.RestartCount}}' "$$worker_cid"); \
+	if [ "$$worker_state" != "true 0" ]; then \
+		printf "  $(RED)✗$(RESET) The worker did not stay up for $(SMOKE_WORKER_WATCH)s (Running/RestartCount = '$$worker_state', wanted 'true 0'). 'restart: unless-stopped' means a crash loop still shows a Running container, which is why the restart count is checked too. Logs:\n\n"; \
+		$(SMOKE_COMPOSE) logs --tail 80 worker || true; \
+		exit 1; \
+	fi; \
+	if $(SMOKE_COMPOSE) logs --no-color worker 2>&1 | grep -Eqi "$(SMOKE_WORKER_FATAL_RE)"; then \
+		printf "  $(RED)✗$(RESET) The worker is up but logged a fatal-looking error while constructing the real module graph:\n\n"; \
+		$(SMOKE_COMPOSE) logs --no-color worker 2>&1 | grep -Ei "$(SMOKE_WORKER_FATAL_RE)" | head -n 20 || true; \
+		printf "\n"; \
+		exit 1; \
+	fi; \
+	printf "$(GREEN)✓$(RESET) worker stayed up $(SMOKE_WORKER_WATCH)s with no DI or unhandled-rejection errors in its log\n"
 
-	@printf "\nProduction stack boots. ✅\n\n"
+	@printf "\nProduction stack boots, serves the web app, and keeps a worker alive. ✅\n\n"
 
 .PHONY: publish
 publish: init ## Publish CI-Server images and metadata to the CI-Portal store
@@ -1170,9 +1315,11 @@ publish: init ## Publish CI-Server images and metadata to the CI-Portal store
 	@$(MAKE) smoke-api
 
 	@# smoke-api only proves the image's imports resolve. This one boots the
-	@# stack it is about to publish and requires a real 200 from the gateway,
-	@# so a DI fault, a broken entrypoint or a bad nginx.conf stops the release
-	@# here rather than at a user's first launch.
+	@# stack it is about to publish and requires a real 200 from the gateway on
+	@# BOTH /api/health and the SPA shell, plus a worker that survives its own
+	@# DI graph — so a DI fault, a broken entrypoint, a bad nginx.conf or a
+	@# gateway image with an empty web root stops the release here rather than
+	@# at a user's first launch.
 	@$(MAKE) smoke-stack
 
 	@printf "$(call task_icon,publish,📦) Publishing to CI-Portal registry...\n\n"
