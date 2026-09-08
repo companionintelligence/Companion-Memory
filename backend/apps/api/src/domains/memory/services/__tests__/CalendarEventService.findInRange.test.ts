@@ -151,6 +151,7 @@ describe('CalendarEventService.findInRange — the calendar read path', () => {
     for (const dead of DEAD_EVENT_STATUSES) {
       expect(status).toContain(`'${dead}'`);
     }
+
     // A maybe on the calendar is still a claim on the slot.
     expect(status).not.toContain('tentative');
   });
