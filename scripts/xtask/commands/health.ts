@@ -27,7 +27,9 @@ function checkNode(root: string): boolean {
       ? fs.readFileSync(path.join(root, '.nvmrc'), 'utf8').trim()
       : '[unknown]';
 
-    fail(`You do not have 'node' installed or it is not in your path. Please install NodeJS v${nvmrc} first.`);
+    fail(
+      `You do not have 'node' installed or it is not in your path. Please install NodeJS v${nvmrc} first.`,
+    );
     console.log('');
 
     return false;
@@ -53,7 +55,9 @@ function checkNode(root: string): boolean {
 }
 
 function checkYarn(root: string): boolean {
-  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as { packageManager?: string };
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as {
+    packageManager?: string;
+  };
   const required = pkg.packageManager?.split('@')[1] ?? '';
   const current = tryRun('yarn', ['--version']).stdout.trim();
 
@@ -135,7 +139,8 @@ function checkGitHooks(root: string): string | null {
   if (fs.existsSync(path.join(mainHooks, 'pre-commit'))) {
     tryRun('git', ['config', 'extensions.worktreeConfig', 'true'], { cwd: root });
 
-    const repaired = tryRun('git', ['config', '--worktree', 'core.hooksPath', mainHooks], { cwd: root }).status === 0;
+    const repaired =
+      tryRun('git', ['config', '--worktree', 'core.hooksPath', mainHooks], { cwd: root }).status === 0;
 
     if (repaired) {
       const msg = `core.hooksPath was '${hooks}', which does not exist in this worktree — commits here were running NO pre-commit checks.\n  Repaired: this worktree now uses ${mainHooks}`;
@@ -198,8 +203,9 @@ function reportOrphanVolumes(root: string): string | null {
   const orphanVolCount = orphans.reduce(
     (sum, k) =>
       sum +
-      tryRun('docker', ['volume', 'ls', '-q', '--filter', `name=${k}-local-`]).stdout.split('\n').filter(Boolean)
-        .length,
+      tryRun('docker', ['volume', 'ls', '-q', '--filter', `name=${k}-local-`])
+        .stdout.split('\n')
+        .filter(Boolean).length,
     0,
   );
 
@@ -207,7 +213,8 @@ function reportOrphanVolumes(root: string): string | null {
     `${orphanVolCount} volume(s) with no live worktree:${orphans.join(' ')}`,
     '  remove a dead stack (its stopped containers + volumes) with:',
     ...orphans.map(
-      (k) => `    COMPOSE_PROJECT_NAME=${k} docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local down -v`,
+      (k) =>
+        `    COMPOSE_PROJECT_NAME=${k} docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local down -v`,
     ),
   ].join('\n');
 

@@ -128,7 +128,11 @@ export function flashAttnWheelImageDefault(meta: HbpeCudaMeta, flashAttnVersion:
   return `ghcr.io/companionintelligence/companion/flash-attn-wheel:${flashAttnVersion}-cu${meta.cudaMajor}torch${torchMinor}cxx11abitrue-${pyTag(meta.pyVersion)}`;
 }
 
-export function llamaCppWheelImageDefault(meta: HbpeCudaMeta, llamaCppVersion: string, llamaCppRef: string): string {
+export function llamaCppWheelImageDefault(
+  meta: HbpeCudaMeta,
+  llamaCppVersion: string,
+  llamaCppRef: string,
+): string {
   return `ghcr.io/companionintelligence/companion/llama-cpp-wheel:${llamaCppVersion}-${llamaCppRef.slice(0, 12)}-cu${meta.cudaMajor}-${archTag(meta.cudaArchs)}-${pyTag(meta.pyVersion)}`;
 }
 
@@ -172,7 +176,12 @@ export function computeHbpeBuildConfig(root: string, gpu: Gpu, uvVersion: string
   const llamaCppRef = readLlamaCppPythonRefPin(makefileText);
   const llamaCppVersion = readLlamaCppPythonVersionPin(makefileText);
 
-  const buildArgs = ['--build-arg', `UV_VERSION=${uvVersion}`, '--build-arg', `LLAMA_CPP_PYTHON_REF=${llamaCppRef}`];
+  const buildArgs = [
+    '--build-arg',
+    `UV_VERSION=${uvVersion}`,
+    '--build-arg',
+    `LLAMA_CPP_PYTHON_REF=${llamaCppRef}`,
+  ];
   let warning: string | null = null;
 
   if (gpu === 'rocm') {
@@ -180,7 +189,9 @@ export function computeHbpeBuildConfig(root: string, gpu: Gpu, uvVersion: string
     const meta = parseHbpeRocmMeta(dockerfileRocm);
 
     if (!meta.rocmVersion) {
-      throw new Error('could not read the ROCm version from the FROM line in backend/apps/hbpe/Dockerfile.rocm');
+      throw new Error(
+        'could not read the ROCm version from the FROM line in backend/apps/hbpe/Dockerfile.rocm',
+      );
     }
 
     if (!meta.pyVersion) {
@@ -188,7 +199,8 @@ export function computeHbpeBuildConfig(root: string, gpu: Gpu, uvVersion: string
     }
 
     const amdgpuTargets = process.env.AMDGPU_TARGETS ?? detectAmdgpuArch(root);
-    const amdgpuWheelTargets = process.env.AMDGPU_WHEEL_TARGETS ?? readAmdgpuWheelTargetsDefaultPin(makefileText);
+    const amdgpuWheelTargets =
+      process.env.AMDGPU_WHEEL_TARGETS ?? readAmdgpuWheelTargetsDefaultPin(makefileText);
 
     if (!amdgpuWheelTargets) {
       throw new Error('AMDGPU_WHEEL_TARGETS is empty — a published wheel needs an explicit gfx target list');
@@ -221,7 +233,9 @@ export function computeHbpeBuildConfig(root: string, gpu: Gpu, uvVersion: string
     }
 
     if (!meta.cudaMajor) {
-      throw new Error('could not read the CUDA major from the FROM line in backend/apps/hbpe/Dockerfile.cuda');
+      throw new Error(
+        'could not read the CUDA major from the FROM line in backend/apps/hbpe/Dockerfile.cuda',
+      );
     }
 
     if (!meta.cudaArchs) {
@@ -234,7 +248,8 @@ export function computeHbpeBuildConfig(root: string, gpu: Gpu, uvVersion: string
 
     const flashAttnVersion = process.env.FLASH_ATTN_VERSION ?? readFlashAttnVersionPin(makefileText);
     const flashAttnWheel = process.env.FLASH_ATTN_WHEEL ?? '';
-    const flashAttnWheelImage = process.env.FLASH_ATTN_WHEEL_IMAGE ?? flashAttnWheelImageDefault(meta, flashAttnVersion);
+    const flashAttnWheelImage =
+      process.env.FLASH_ATTN_WHEEL_IMAGE ?? flashAttnWheelImageDefault(meta, flashAttnVersion);
     const llamaCppWheelImage =
       process.env.LLAMA_CPP_WHEEL_IMAGE ?? llamaCppWheelImageDefault(meta, llamaCppVersion, llamaCppRef);
 

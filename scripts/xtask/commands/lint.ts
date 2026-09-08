@@ -35,7 +35,11 @@ export async function runLint(root: string): Promise<void> {
 }
 
 export async function main(argv: string[]): Promise<void> {
-  const { values } = parseArgs({ args: argv, options: { help: { type: 'boolean' } }, allowPositionals: false });
+  const { values } = parseArgs({
+    args: argv,
+    options: { help: { type: 'boolean' } },
+    allowPositionals: false,
+  });
 
   if (values.help) {
     console.log('Usage: xtask lint\n\nCheck the source for lint and formatting errors, both stacks.');

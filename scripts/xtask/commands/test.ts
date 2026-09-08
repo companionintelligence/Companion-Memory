@@ -129,7 +129,11 @@ export async function runTest(root: string): Promise<void> {
 }
 
 export async function main(argv: string[]): Promise<void> {
-  const { values } = parseArgs({ args: argv, options: { help: { type: 'boolean' } }, allowPositionals: false });
+  const { values } = parseArgs({
+    args: argv,
+    options: { help: { type: 'boolean' } },
+    allowPositionals: false,
+  });
 
   if (values.help) {
     console.log('Usage: xtask test\n\nRun the unit tests, both stacks.');

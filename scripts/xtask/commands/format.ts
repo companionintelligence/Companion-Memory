@@ -21,7 +21,11 @@ export async function runFormat(root: string): Promise<void> {
 }
 
 export async function main(argv: string[]): Promise<void> {
-  const { values } = parseArgs({ args: argv, options: { help: { type: 'boolean' } }, allowPositionals: false });
+  const { values } = parseArgs({
+    args: argv,
+    options: { help: { type: 'boolean' } },
+    allowPositionals: false,
+  });
 
   if (values.help) {
     console.log('Usage: xtask format\n\nFormat the source, both stacks (yarn + ruff).');

@@ -13,7 +13,14 @@ import { parseArgs } from 'node:util';
 import { run, tryRun, which } from '../lib/exec';
 import { detectGpu, type Gpu } from '../lib/gpu';
 import { computeProjectName } from '../lib/identity';
-import { DATABASE_REPO, HBPE_REPO, OBJECT_STORE_REPO, SETUP_DATABASE_REPO, SUMMARY_REPO, sidecarStamp } from '../lib/images';
+import {
+  DATABASE_REPO,
+  HBPE_REPO,
+  OBJECT_STORE_REPO,
+  SETUP_DATABASE_REPO,
+  SUMMARY_REPO,
+  sidecarStamp,
+} from '../lib/images';
 import { runBuild } from './build';
 import { runHealth } from './health';
 import { ok, note } from '../../dev-stack/log';
@@ -99,7 +106,9 @@ function checkOllamaReachableFromContainers(): void {
 
   console.log(`  ${YELLOW}•${RESET} ollama is listening on loopback only, so containers cannot reach it`);
   console.log('    through host.docker.internal and the summary service will crash-loop on model');
-  console.log(`    discovery. Restart it bound to all interfaces:  ${YELLOW}OLLAMA_HOST=0.0.0.0 ollama serve${RESET}`);
+  console.log(
+    `    discovery. Restart it bound to all interfaces:  ${YELLOW}OLLAMA_HOST=0.0.0.0 ollama serve${RESET}`,
+  );
   console.log(`    (or pin ${YELLOW}LLM_DEFAULT_CHAT_MODEL${RESET} in .env to skip discovery entirely).\n`);
 }
 
@@ -166,7 +175,13 @@ function imageSourceTreeLabel(repo: string): string {
  * own source.
  */
 function checkImagesNeedBuild(root: string): { missing: string[]; stale: string[] } {
-  const localImages = [SETUP_DATABASE_REPO(), DATABASE_REPO(), OBJECT_STORE_REPO(), SUMMARY_REPO(), HBPE_REPO()];
+  const localImages = [
+    SETUP_DATABASE_REPO(),
+    DATABASE_REPO(),
+    OBJECT_STORE_REPO(),
+    SUMMARY_REPO(),
+    HBPE_REPO(),
+  ];
   const missing = localImages.filter((img) => !imageExists(img));
 
   const sidecarPairs: Array<[string, string]> = [

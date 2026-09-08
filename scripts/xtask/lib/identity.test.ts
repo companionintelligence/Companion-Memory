@@ -26,7 +26,10 @@ test('projectNameFor: the main checkout gets the bare repo name', () => {
 test('projectNameFor: a linked worktree gets repo-<lowercased dir basename>', () => {
   // The worktree's own directory is just "feat-Foo" — Makefile:20's comment
   // gives exactly this shape as its example ("ci-server-feat-a").
-  assert.equal(projectNameFor('/home/dev/worktrees/feat-Foo', '/home/dev/ci-server', 'ci-server'), 'ci-server-feat-foo');
+  assert.equal(
+    projectNameFor('/home/dev/worktrees/feat-Foo', '/home/dev/ci-server', 'ci-server'),
+    'ci-server-feat-foo',
+  );
 });
 
 test('projectNameFor: an unknown worktree root (empty mainRoot lookup failed) falls back to bare repo', () => {

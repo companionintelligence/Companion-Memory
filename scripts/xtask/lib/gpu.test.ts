@@ -105,7 +105,12 @@ test('llamaCppRocmWheelImageDefault composes the documented tag shape', () => {
   const meta = parseHbpeRocmMeta(DOCKERFILE_ROCM);
 
   assert.equal(
-    llamaCppRocmWheelImageDefault(meta, '0.3.46', '81190b03f6d177988112dad5fc919491a77705d1', 'gfx1030;gfx1100'),
+    llamaCppRocmWheelImageDefault(
+      meta,
+      '0.3.46',
+      '81190b03f6d177988112dad5fc919491a77705d1',
+      'gfx1030;gfx1100',
+    ),
     'ghcr.io/companionintelligence/companion/llama-cpp-rocm-wheel:0.3.46-81190b03f6d1-rocm7.2-gfx1030_1100-cp311',
   );
 });

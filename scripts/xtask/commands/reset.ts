@@ -89,7 +89,7 @@ export async function main(argv: string[]): Promise<void> {
 
   if (values.help) {
     console.log(
-      'Usage: xtask reset [--dry-run]\n\nReset the local development environment (stops the stack, removes this worktree\'s Docker volumes and networks — ALL local data). --dry-run lists what would be removed.',
+      "Usage: xtask reset [--dry-run]\n\nReset the local development environment (stops the stack, removes this worktree's Docker volumes and networks — ALL local data). --dry-run lists what would be removed.",
     );
 
     return;
