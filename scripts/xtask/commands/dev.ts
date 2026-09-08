@@ -1,12 +1,11 @@
 /**
- * dev — ports the `dev` target, Makefile:526-658.
+ * dev — ports the `dev` target.
  *
- * Calls the ported `health`/`build` in-process rather than shelling back out
- * to `make health`/`make build` — but `health`'s git-hooks and volume-orphan
- * checks are advisory (Makefile:803,832: "warn, never fail"), so only
- * `health`'s fatal result (node/yarn/uv) can stop `dev` here, exactly as
- * today. `make init` stays a subprocess call — it isn't one of the 7 ported
- * targets.
+ * `build` is called in-process (it is ported); `health` and `init` are not, and
+ * are invoked as `make` subprocesses exactly as the original recipe did.
+ * `health` staying in the Makefile is deliberate rather than incidental: it is
+ * the toolchain diagnostic, so it has to keep working on a checkout where the
+ * JS toolchain is the thing that is broken.
  */
 import { parseArgs } from 'node:util';
 
@@ -22,7 +21,6 @@ import {
   sidecarStamp,
 } from '../lib/images';
 import { runBuild } from './build';
-import { runHealth } from './health';
 import { ok, note } from '../../dev-stack/log';
 
 const GREEN = '\x1b[0;32m';
@@ -32,7 +30,7 @@ const RESET = '\x1b[0m';
 // The embedding model (`embedding.model` in backend/apps/api/config/default.json)
 // and the chat model every LLM-backed feature falls back to
 // (`DEFAULT_CHAT_MODEL` in backend/apps/api/src/configuration.ts). Keep this
-// list in step with those two sources of truth — Makefile:52-58's own comment.
+// list in step with those two sources of truth — the pre-port Makefile's own comment.
 const REQUIRED_OLLAMA_MODELS = ['nomic-embed-text', 'gemma4:e4b'];
 
 function checkOvermind(): void {
@@ -84,7 +82,7 @@ function checkOllama(): void {
  * `host.docker.internal`, not localhost, and ollama binds 127.0.0.1 by
  * default. Warning-only — OLLAMA_HOST may legitimately point elsewhere, and
  * a host with no docker bridge skips the check entirely, silently, matching
- * Makefile:591's bare `if [ -n "$$GW" ]; then ... fi` with no else. */
+ * the pre-port Makefile's bare `if [ -n "$$GW" ]; then ... fi` with no else. */
 function checkOllamaReachableFromContainers(): void {
   const gw = tryRun('docker', [
     'network',
@@ -166,9 +164,9 @@ function imageSourceTreeLabel(repo: string): string {
 
 /**
  * Missing takes priority over stale (an image already flagged missing is
- * never also flagged stale — Makefile:641's `case " $$missing " in ...
+ * never also flagged stale — the pre-port Makefile's `case " $$missing " in ...
  * continue`), and an unreadable stamp means "skip the staleness judgment",
- * not "assume stale" (Makefile:642). Only `summary`/`hbpe` are
+ * not "assume stale" (the pre-port Makefile). Only `summary`/`hbpe` are
  * staleness-checked via their `ci.source-tree` label — `setup-database`/
  * `database`/`object-store` are missing-checked only, since `sidecar_stamp`
  * is only meaningful for the two Python services built from this repo's
@@ -212,13 +210,12 @@ export interface DevOptions {
 export async function runDev(root: string, opts: DevOptions): Promise<void> {
   console.log('🧑‍💻 Starting development environment...\n');
 
-  const health = await runHealth(root);
-
-  if (!health.fatalOk) {
-    process.exitCode = 1;
-
-    return;
-  }
+  // `make health`, not an in-process call: health is the toolchain diagnostic,
+  // so it stays pure shell in the Makefile and must keep working on a checkout
+  // where node/yarn/uv are missing or mismatched — the exact case it exists to
+  // report. It exits nonzero on a fatal check, which aborts `dev` here just as
+  // the original `@$(MAKE) health` line did.
+  run('make', ['health'], { cwd: root });
 
   checkOvermind();
   checkCaddy();

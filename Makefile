@@ -49,6 +49,15 @@ JOHN_SMITH_USER_ID := b3b8c7e2-1c2d-4e5f-8a6b-9c0d1e2f3a4b
 
 export TAG ?= $(shell git describe --tags --exact-match 2>/dev/null)
 
+# Subdirectory build contexts that need a copy of LICENSE. Images built
+# from the repo root (api, gateway, and the Python services) read LICENSE.md
+# directly and are not listed here.
+LICENSE_DIRS := \
+	infrastructure/database \
+	infrastructure/object-store \
+	infrastructure/setup-database \
+	infrastructure/setup-secrets
+
 # ---------------------------------------------------------------------------
 # Native test toolchains (`test-android`, `test-desktop`)
 # ---------------------------------------------------------------------------
@@ -259,13 +268,31 @@ help: ## List make commands with their descriptions
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 	@printf "\n"
 
+# Kept as shell, and kept PUBLIC: these are not private helpers of `build`.
+# `.github/workflows/e2e.yml`, `video/stage.sh` and `video/stage.real-corpus.sh`
+# all run `make distribute-license` directly before their own `docker build`
+# lines, and `video/README.md` documents it as a hand-run step. `xtask build`
+# calls back into these two rather than reimplementing the copy, so there is
+# exactly one implementation and no yarn/tsx dependency on a `cp` loop.
+.PHONY: distribute-license
+distribute-license:
+	@for dir in $(LICENSE_DIRS); do \
+		cp LICENSE.md "$$dir/LICENSE.md"; \
+	done
+
+.PHONY: clean-license
+clean-license:
+	@for dir in $(LICENSE_DIRS); do \
+		rm -f "$$dir/LICENSE.md"; \
+	done
+
 .PHONY: reset
 reset: ## Reset the local development environment
 	@yarn tsx scripts/xtask/index.ts reset
 
 .PHONY: build
-build: ## Build images. ENV=local|staging|production (default local) GPU=cpu|cuda|rocm (default: auto-detected)
-	@yarn tsx scripts/xtask/index.ts build --env $(ENV) --gpu $(GPU)
+build: ## Build images. ENV=local|staging|production GPU=cpu|cuda|rocm IMAGE=<one image> DRY_RUN=1
+	@yarn tsx scripts/xtask/index.ts build --env $(ENV) --gpu $(GPU) $(if $(DRY_RUN),--dry-run) $(IMAGE)
 
 .PHONY: dbclear
 dbclear: ## Clear the data stored in the PostgreSQL database
@@ -372,7 +399,123 @@ graphql: ## Generate GraphQL schema and frontend types
 
 .PHONY: health
 health: ## Check the repository for prerequisites
-	@yarn tsx scripts/xtask/index.ts health
+	@printf "$(call task_icon,health,🩺) Checking repository health...\n\n"
+
+	@NODEJS=$$(which node 2>/dev/null); \
+	if [ -z "$$NODEJS" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'node' installed or it is not in your path. Please install NodeJS v$(shell cat .nvmrc 2>/dev/null || echo '[unknown]') first.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) NodeJS found at $$NODEJS\n\n"; \
+	fi
+
+	@required_version=$$(cat .nvmrc); \
+	current_version=$$(node -v | cut -c2-); \
+	if [ "$$current_version" != "$$required_version" ]; then \
+		printf "$(RED)✗$(RESET) Node version mismatch. Expected $$required_version, but got $$current_version.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) Node version matches ($$current_version)\n\n"; \
+	fi
+
+	@required_yarn=$$(grep '"packageManager"' package.json | sed 's/.*yarn@\([^"]*\)".*/\1/'); \
+	current_yarn=$$(yarn --version 2>/dev/null); \
+	if [ -z "$$current_yarn" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'yarn' installed or it is not in your PATH.\n\n"; \
+		exit 1; \
+	elif [ "$$current_yarn" != "$$required_yarn" ]; then \
+		printf "$(RED)✗$(RESET) Yarn version mismatch. Expected $$required_yarn, but got $$current_yarn.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) Yarn version matches ($$current_yarn)\n\n"; \
+	fi
+
+	@# uv provisions its own interpreter from .python-version, so there is no
+	@# separate Python check here. The floor is `required-version` in
+	@# pyproject.toml, which uv enforces itself on every invocation.
+	@UV=$$(which uv 2>/dev/null); \
+	if [ -z "$$UV" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'uv' installed or it is not in your path. Install it with 'brew install uv'.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) uv found at $$UV ($$(uv --version | cut -d' ' -f2))\n\n"; \
+	fi
+
+	@# The pre-commit guards must actually FIRE in a linked worktree. `yarn
+	@# prepare` (husky, see package.json) points core.hooksPath at `.husky/_` —
+	@# a RELATIVE path, which git resolves against the root of the working tree
+	@# the hook runs in. That directory only exists in the checkout husky was
+	@# installed in, and it is gitignored, so every `git worktree add` produces
+	@# a tree where core.hooksPath names a directory that is simply not there.
+	@# Git's response to that is to run NO hooks at all, with no message —
+	@# which is exactly where parallel agent work happens. Everything
+	@# .husky/pre-commit drives goes with it: the Info.plist duplicate-key
+	@# check, the Capacitor native-sync check, and bin/check-migration-versions.js,
+	@# the guard that stops two branches committing the same dbmate timestamp
+	@# prefix and breaking `yarn migrate` for everyone.
+	@#
+	@# Repair by pinning an ABSOLUTE hooksPath in this worktree's own config.
+	@# `git config --worktree` (not --local) is what makes it stick: the value
+	@# lands in this worktree's .git/config.worktree and outranks the shared
+	@# one, so the next `yarn prepare` in the main checkout cannot reset it to
+	@# the relative form. husky's `_/h` derives the script it runs from its own
+	@# location (dirname of dirname of $$0), so pointing at the main checkout's
+	@# .husky/_ runs the main checkout's .husky/pre-commit — and git runs hooks
+	@# with the cwd set to THIS worktree's root, so lint-staged still sees this
+	@# worktree's staged files.
+	@#
+	@# Warn, never fail. `dev` calls `health` from its recipe and `production`
+	@# and `staging` take it as a prerequisite (`publish` does not — it depends
+	@# on `init` alone), so a non-zero exit here refuses to start a stack, and a
+	@# missing hook is not a reason to do that.
+	@hooks=$$(git config --get core.hooksPath 2>/dev/null); \
+	if [ -z "$$hooks" ]; then \
+		printf "$(GREEN)✓$(RESET) git hooks: repository default (no core.hooksPath override)\n\n"; \
+	else \
+		case "$$hooks" in \
+			/*) resolved="$$hooks" ;; \
+			*) resolved="$$(git rev-parse --show-toplevel 2>/dev/null)/$$hooks" ;; \
+		esac; \
+		main_hooks="$$(cd "$$(dirname "$$(git rev-parse --git-common-dir 2>/dev/null)")" 2>/dev/null && pwd)/.husky/_"; \
+		if [ -f "$$resolved/pre-commit" ]; then \
+			printf "$(GREEN)✓$(RESET) git hooks resolve ($$resolved)\n\n"; \
+		elif [ -f "$$main_hooks/pre-commit" ] && git config --worktree core.hooksPath "$$main_hooks" 2>/dev/null; then \
+			printf "$(YELLOW)•$(RESET) core.hooksPath was '$$hooks', which does not exist in this worktree — commits here were running NO pre-commit checks.\n"; \
+			printf "  Repaired: this worktree now uses $$main_hooks\n\n"; \
+		else \
+			printf "$(YELLOW)•$(RESET) core.hooksPath is '$$hooks', which does not exist here, so commits in this worktree run NO pre-commit checks\n"; \
+			printf "  (no migration-version guard, no plist or Capacitor sync check). Repair it with either:\n"; \
+			printf "    $(YELLOW)yarn prepare$(RESET)                                                  # re-creates .husky/_ in this worktree\n"; \
+			printf "    $(YELLOW)git config extensions.worktreeConfig true$(RESET) && \\\\\n"; \
+			printf "      $(YELLOW)git config --worktree core.hooksPath \"$$main_hooks\"$(RESET)\n\n"; \
+		fi; \
+	fi
+
+	@# Report on per-stack data volumes (convention: <project>-local-*). Purely
+	@# informational — flags volumes whose key has no live worktree so orphans
+	@# from deleted worktrees are visible; never removes anything.
+	@if docker volume ls >/dev/null 2>&1; then \
+		main_root=$$(cd "$$(dirname "$$(git rev-parse --git-common-dir 2>/dev/null)")" 2>/dev/null && pwd); \
+		active=$$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | while read -r p; do \
+			if [ "$$p" = "$$main_root" ]; then echo "$(REPO)"; else echo "$(REPO)-$$(basename "$$p" | tr '[:upper:]' '[:lower:]')"; fi; \
+		done); \
+		vols=$$(docker volume ls -q --filter name="$(REPO)" 2>/dev/null | grep -- '-local-'); \
+		total=$$(printf '%s\n' "$$vols" | grep -c .); \
+		keys=$$(printf '%s\n' "$$vols" | sed -n 's/-local-.*//p' | sort -u); \
+		stacks=$$(printf '%s\n' "$$keys" | grep -c .); \
+		printf "$(BLUE)ⓘ$(RESET)  %s project data volume(s) across %s stack(s)\n\n" "$$total" "$$stacks"; \
+		orphans=""; for k in $$keys; do echo "$$active" | grep -qxF "$$k" || orphans="$$orphans $$k"; done; \
+		if [ -n "$$orphans" ]; then \
+			orphan_vols=$$(for k in $$orphans; do docker volume ls -q --filter name="$$k-local-"; done | tr '\n' ' '); \
+			n=$$(printf '%s' "$$orphan_vols" | wc -w | tr -d ' '); \
+			printf "  $(YELLOW)•$(RESET) %s volume(s) with no live worktree:%s\n" "$$n" "$$orphans"; \
+			printf "    remove a dead stack (its stopped containers + volumes) with:\n"; \
+			for k in $$orphans; do \
+				printf "      $(YELLOW)COMPOSE_PROJECT_NAME=%s docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local down -v$(RESET)\n" "$$k"; \
+			done; \
+			printf "\n"; \
+		fi; \
+	fi
 
 .PHONY: init
 init: ## Initialize repository after checkout

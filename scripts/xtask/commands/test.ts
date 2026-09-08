@@ -1,5 +1,5 @@
 /**
- * test — ports the `test` target, Makefile:951-1022.
+ * test — ports the `test` target, the pre-port Makefile.
  *
  * The untested-workspace report (1006-1017) is reimplemented natively here
  * (`yarn workspaces list --json` + `JSON.parse` each package.json) rather
@@ -53,8 +53,8 @@ interface WorkspaceListEntry {
 }
 
 /** Every workspace `yarn workspaces foreach --all run test` silently skips
- * because it declares no `test` script — Makefile:1006-1017's own fix for
- * `foreach`'s silent skip, which `typecheck` (Makefile:947) already had to
+ * because it declares no `test` script — the pre-port Makefile's own fix for
+ * `foreach`'s silent skip, which `typecheck` (the pre-port Makefile) already had to
  * learn the same lesson from. */
 function findUntestedWorkspaces(root: string): string[] {
   const out = tryRun('yarn', ['workspaces', 'list', '--json'], { cwd: root }).stdout;
@@ -115,7 +115,11 @@ export async function runTest(root: string): Promise<void> {
     );
 
     for (const loc of untested) {
-      const text = loc === '.' ? '. (repo root — its only suites are the Playwright e2e configs)' : loc;
+      // The root workspace used to be listed here permanently with a note that
+      // its only suites were the Playwright e2e configs. It now declares a
+      // `test` script (the xtask suite), so it no longer reaches this branch —
+      // the label is kept only for the case where that script is removed again.
+      const text = loc === '.' ? '. (repo root)' : loc;
 
       console.log(`       ${text}`);
     }

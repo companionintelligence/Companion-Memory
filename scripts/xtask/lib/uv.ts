@@ -1,6 +1,6 @@
 /**
  * uv — the uv version pin, read from `required-version` in the root
- * pyproject.toml. Mirrors Makefile:209's
+ * pyproject.toml. Mirrors the pre-port Makefile's
  * `sed -n 's/^required-version = "==\(.*\)"$/\1/p' pyproject.toml`.
  */
 import fs from 'node:fs';

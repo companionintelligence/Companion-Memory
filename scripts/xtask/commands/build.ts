@@ -1,5 +1,5 @@
 /**
- * build — ports the `build` target, Makefile:436-492.
+ * build — ports the `build` target, the pre-port Makefile.
  *
  * The addressability the task asks for: an optional `[image]` positional
  * builds just that one image, bypassing the ENV-based inclusion gate (which
@@ -18,7 +18,6 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { run } from '../lib/exec';
-import { distributeLicense, cleanLicense } from '../lib/license';
 import { readUvVersion } from '../lib/uv';
 import { computeHbpeBuildConfig, detectGpu, VALID_GPUS, type Gpu } from '../lib/gpu';
 import {
@@ -49,7 +48,7 @@ export type ImageKey =
   | 'summary'
   | 'hbpe';
 
-/** Build order — matches Makefile:454-488 exactly. */
+/** Build order — matches the pre-port Makefile exactly. */
 export const IMAGE_ORDER: ImageKey[] = [
   'api',
   'gateway',
@@ -76,7 +75,7 @@ export interface BuildPlan {
   needsFrontendBuild: boolean;
 }
 
-/** The ENV-appropriate default set, Makefile:454(api/gateway),464-470
+/** The ENV-appropriate default set, the pre-port Makefile(api/gateway),464-470
  * (always),473(production only). */
 function defaultImageKeys(env: Env): ImageKey[] {
   const keys: ImageKey[] = ['setup-database', 'database', 'object-store', 'summary', 'hbpe'];
@@ -268,7 +267,11 @@ export async function runBuild(root: string, opts: BuildOptions): Promise<void> 
 
   console.log(`🧱 Building ${opts.env} images...`);
 
-  distributeLicense(root);
+  // Delegated back to the Makefile rather than reimplemented here: the two
+  // targets are PUBLIC (e2e.yml, video/stage.sh, video/stage.real-corpus.sh and
+  // video/README.md all invoke `make distribute-license` directly), so they have
+  // to keep existing anyway — and one implementation beats two that can drift.
+  run('make', ['distribute-license'], { cwd: root });
 
   try {
     if (plan.needsFrontendBuild) {
@@ -305,8 +308,9 @@ export async function runBuild(root: string, opts: BuildOptions): Promise<void> 
     // Makefile, where `clean-license` was only reached if every earlier
     // recipe line succeeded (Make aborts a recipe at its first failing
     // line), so a build failure partway through could leave LICENSE.md
-    // copies sitting in the infra dirs.
-    cleanLicense(root);
+    // copies sitting in the infra dirs. index.ts's signal handler is what
+    // extends that guarantee to Ctrl-C.
+    run('make', ['clean-license'], { cwd: root });
   }
 
   console.log('');

@@ -77,3 +77,35 @@ test('GPU=cpu never emits a warning for hbpe', () => {
   assert.equal(hbpe?.warning, undefined);
   assert.equal(hbpe?.dockerfile, 'backend/apps/hbpe/Dockerfile');
 });
+
+// The cases above all pass gpu:'cpu', which returns from computeHbpeBuildConfig
+// before either GPU Dockerfile or any Makefile pin is read — so on their own
+// they would not notice a pin that stopped resolving. These two exercise the
+// real Dockerfiles and the real Makefile pins end to end.
+for (const gpu of ['cuda', 'rocm'] as const) {
+  test(`GPU=${gpu} composes a complete wheel-image build arg from the real Dockerfiles and pins`, () => {
+    const plan = computeBuildPlan(ROOT, 'local', gpu, '0.9.17');
+    const hbpe = plan.steps.find((s) => s.key === 'hbpe');
+
+    assert.ok(hbpe, 'hbpe step is present');
+    assert.equal(hbpe.dockerfile, `backend/apps/hbpe/Dockerfile.${gpu}`);
+
+    const args = hbpe.extraBuildArgs;
+
+    // Every --build-arg must carry a non-empty value. An unresolvable pin used
+    // to yield `KEY=` here and compose an image tag with a hole in it.
+    for (let i = 0; i < args.length; i += 1) {
+      if (args[i] === '--build-arg') {
+        const [key, value] = (args[i + 1] ?? '').split(/=(.*)/s);
+
+        assert.ok(value, `--build-arg ${key} has an empty value`);
+      }
+    }
+
+    const wheelArg = args.find((a) => a.includes('WHEEL_IMAGE='));
+
+    assert.ok(wheelArg, `${gpu} passes a wheel image`);
+    // A tag with an empty component looks like `...wheel:-cu12...` or `--cu12`.
+    assert.doesNotMatch(wheelArg, /:-|--|-$/, `${gpu} wheel tag has an empty component: ${wheelArg}`);
+  });
+}

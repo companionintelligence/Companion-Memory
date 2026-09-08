@@ -1,4 +1,4 @@
-/** lint — ports the `lint` target, Makefile:913-933. Straight sequential,
+/** lint — ports the `lint` target, the pre-port Makefile. Straight sequential,
  * fail-fast port; the only branching is the uv.lock freshness gate's custom
  * error message. */
 import { parseArgs } from 'node:util';

@@ -1,6 +1,6 @@
 /**
  * gpu — GPU auto-detection and the HBPE image's GPU-variant build-arg/tag
- * logic, ported from Makefile:200-370.
+ * logic, ported from the pre-port Makefile.
  *
  * Four values below (FLASH_ATTN_VERSION, LLAMA_CPP_PYTHON_REF,
  * LLAMA_CPP_PYTHON_VERSION, AMDGPU_WHEEL_TARGETS's default) are NOT
@@ -32,7 +32,7 @@ export function detectGpu(root: string): Gpu {
 }
 
 /** This host's AMD gfx architecture (e.g. `gfx1100`), or `''` when it can't
- * be determined — an empty answer is deliberate (Makefile:229-231's
+ * be determined — an empty answer is deliberate (the pre-port Makefile's
  * comment), not a failure. */
 export function detectAmdgpuArch(root: string): string {
   return tryRun('scripts/detect-gpu.sh', ['--amdgpu-arch'], { cwd: root }).stdout.trim();
@@ -44,26 +44,54 @@ export function readMakefile(root: string): string {
   return fs.readFileSync(path.join(root, 'Makefile'), 'utf8');
 }
 
-/** Pure: mirrors one `sed -n` read of a `NAME := value` / `NAME ?= value`
- * line out of the Makefile's text. `operator` is `:=` for a plain pin, `?=`
- * for one with a default. */
+/**
+ * Pure: reads a `NAME := value` / `NAME ?= value` line out of the Makefile's
+ * text. `operator` is `:=` for a plain pin, `?=` for one with a default.
+ *
+ * Whitespace around the operator is matched loosely (`\s*`), NOT as the single
+ * literal space the sibling wheel-publish scripts' seds require. Make treats
+ * `NAME := v`, `NAME  := v` and `NAME\t:= v` as identical, and the pins sit
+ * next to column-aligned neighbours — so a whitespace-only realignment must not
+ * change what this reads. The strict form silently returned '' for exactly that
+ * edit, which would have composed an image tag with a hole in it
+ * (`flash-attn-wheel:-cu12torch...`) on the path `make publish` builds every
+ * released image from. Callers must still guard for '' — see readPinOrThrow.
+ */
 function readPin(makefileText: string, name: string, operator: ':=' | '?='): string {
   const escapedOp = operator.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = makefileText.match(new RegExp(`^${name} ${escapedOp} *(.*)$`, 'm'));
+  const match = makefileText.match(new RegExp(`^${name}\\s*${escapedOp}\\s*(.*)$`, 'm'));
 
-  return match?.[1] ?? '';
+  return (match?.[1] ?? '').trim();
+}
+
+/**
+ * A pin that has no meaningful empty value. Mirrors the `:?` guards the
+ * wheel-publish scripts already apply to the same four lines (e.g.
+ * build-flash-attn-wheel.sh's
+ * `: "${flash_attn_version:?could not read FLASH_ATTN_VERSION from Makefile}"`),
+ * so a pin this file can no longer find fails loudly here instead of being
+ * interpolated into a build arg as an empty string.
+ */
+function readPinOrThrow(makefileText: string, name: string, operator: ':=' | '?='): string {
+  const value = readPin(makefileText, name, operator);
+
+  if (!value) {
+    throw new Error(`could not read ${name} from the Makefile`);
+  }
+
+  return value;
 }
 
 export const readFlashAttnVersionPin = (makefileText: string): string =>
-  readPin(makefileText, 'FLASH_ATTN_VERSION', ':=');
+  readPinOrThrow(makefileText, 'FLASH_ATTN_VERSION', ':=');
 export const readLlamaCppPythonRefPin = (makefileText: string): string =>
-  readPin(makefileText, 'LLAMA_CPP_PYTHON_REF', ':=');
+  readPinOrThrow(makefileText, 'LLAMA_CPP_PYTHON_REF', ':=');
 export const readLlamaCppPythonVersionPin = (makefileText: string): string =>
-  readPin(makefileText, 'LLAMA_CPP_PYTHON_VERSION', ':=');
+  readPinOrThrow(makefileText, 'LLAMA_CPP_PYTHON_VERSION', ':=');
 export const readAmdgpuWheelTargetsDefaultPin = (makefileText: string): string =>
-  readPin(makefileText, 'AMDGPU_WHEEL_TARGETS', '?=');
+  readPinOrThrow(makefileText, 'AMDGPU_WHEEL_TARGETS', '?=');
 
-// ── Values derived from the HBPE Dockerfiles (Makefile:305-340) ─────────────
+// ── Values derived from the HBPE Dockerfiles ───────────────────────────────
 
 export interface HbpeCudaMeta {
   torchVersion: string;
@@ -73,7 +101,7 @@ export interface HbpeCudaMeta {
 }
 
 /** Pure: mirrors the four `sed -n '...' | head -1` reads of Dockerfile.cuda
- * at Makefile:305-308. */
+ * the pre-port `build` target did. */
 export function parseHbpeCudaMeta(dockerfileCuda: string): HbpeCudaMeta {
   return {
     torchVersion: dockerfileCuda.match(/^ *torch==([0-9.]*).*/m)?.[1] ?? '',
@@ -89,7 +117,7 @@ export interface HbpeRocmMeta {
 }
 
 /** Pure: mirrors the two `sed -n '...' | head -1` reads of Dockerfile.rocm
- * at Makefile:333-334. */
+ * the pre-port `build` target did. */
 export function parseHbpeRocmMeta(dockerfileRocm: string): HbpeRocmMeta {
   return {
     rocmVersion: dockerfileRocm.match(/^FROM rocm\/dev-ubuntu-22\.04:([0-9]*\.[0-9]*).*/m)?.[1] ?? '',
@@ -97,14 +125,14 @@ export function parseHbpeRocmMeta(dockerfileRocm: string): HbpeRocmMeta {
   };
 }
 
-/** `cp` + version with the dots stripped: "3.11" -> "cp311" (Makefile:309,335). */
+/** `cp` + version with the dots stripped: "3.11" -> "cp311". */
 export const pyTag = (pyVersion: string): string => `cp${pyVersion.replace(/\./g, '')}`;
 
 /**
  * GNU Make's `$(basename ...)` strips the LAST dot-segment of a string
  * ("2.13.0" -> "2.13") — this has nothing to do with Node's `path.basename`,
  * which strips a directory prefix and only touches an extension when one is
- * passed explicitly. Makefile:313's comment: "torch's local-version segment
+ * passed explicitly. the pre-port Makefile put it: "torch's local-version segment
  * is MAJOR.MINOR — basename drops the patch."
  */
 export function makeBasenameStyle(version: string): string {
@@ -113,14 +141,14 @@ export function makeBasenameStyle(version: string): string {
   return parts.length > 1 ? parts.slice(0, -1).join('.') : version;
 }
 
-/** "8.6;8.9;12.0" -> "sm86_89_120" (Makefile:315: dots dropped, then `;` -> `_`). */
+/** "8.6;8.9;12.0" -> "sm86_89_120" (dots dropped, then `;` -> `_`). */
 export const archTag = (cudaArchs: string): string => `sm${cudaArchs.replace(/\./g, '').replace(/;/g, '_')}`;
 
-/** "gfx1030;gfx1100" -> "gfx1030_1100" (Makefile:338: "gfx" dropped, then `;` -> `_`). */
+/** "gfx1030;gfx1100" -> "gfx1030_1100" ("gfx" dropped, then `;` -> `_`). */
 export const gfxTag = (amdgpuWheelTargets: string): string =>
   `gfx${amdgpuWheelTargets.replace(/gfx/g, '').replace(/;/g, '_')}`;
 
-// ── Wheel-image tag composition (Makefile:325-326,340) ──────────────────────
+// ── Wheel-image tag composition ────────────────────────────────────────────
 
 export function flashAttnWheelImageDefault(meta: HbpeCudaMeta, flashAttnVersion: string): string {
   const torchMinor = makeBasenameStyle(meta.torchVersion);
@@ -160,7 +188,7 @@ export interface HbpeBuildConfig {
  * Computes the HBPE image's Dockerfile variant and full `--build-arg` list
  * for one GPU flavor, including the 5 documented escape hatches
  * (AMDGPU_TARGETS, FLASH_ATTN_WHEEL, FLASH_ATTN_WHEEL_IMAGE,
- * LLAMA_CPP_WHEEL_IMAGE, LLAMA_CPP_ROCM_WHEEL_IMAGE — Makefile:343-344's
+ * LLAMA_CPP_WHEEL_IMAGE, LLAMA_CPP_ROCM_WHEEL_IMAGE — the pre-port Makefile's
  * `make build GPU=cuda FLASH_ATTN_WHEEL_IMAGE=` pattern), read straight off
  * `process.env` with `??`: unset means "compute the default", an explicit
  * empty string means "the operator asked for the source compile, honor it".
@@ -168,13 +196,23 @@ export interface HbpeBuildConfig {
  * command-line-provided `VAR=value` to the recipe's shell even when the
  * Makefile itself never mentions that variable.
  *
- * Throws with the same wording as Makefile:351-359's `$(error ...)` guards
- * when a Dockerfile's pins can't be read.
+ * The same `process.env.X ?? <pin>` treatment is applied to the three pins the
+ * Makefile still declares (FLASH_ATTN_VERSION, LLAMA_CPP_PYTHON_REF,
+ * LLAMA_CPP_PYTHON_VERSION), so `make build LLAMA_CPP_PYTHON_REF=<sha>` keeps
+ * working — a command-line assignment overrode a `:=` in Make, and dropping the
+ * env read silently ignored it. ONE deliberate difference from Make: a `:=`
+ * also beat an AMBIENT environment variable, and from here the two are
+ * indistinguishable, so an exported LLAMA_CPP_PYTHON_REF now wins where it
+ * previously lost. Uniform across all three rather than half-and-half.
+ *
+ * Throws when a Dockerfile pin or a Makefile pin can't be read, matching both
+ * the `$(error ...)` guards the `build` target used and the `:?` guards the
+ * wheel-publish scripts apply to the same Makefile lines.
  */
 export function computeHbpeBuildConfig(root: string, gpu: Gpu, uvVersion: string): HbpeBuildConfig {
   const makefileText = readMakefile(root);
-  const llamaCppRef = readLlamaCppPythonRefPin(makefileText);
-  const llamaCppVersion = readLlamaCppPythonVersionPin(makefileText);
+  const llamaCppRef = process.env.LLAMA_CPP_PYTHON_REF ?? readLlamaCppPythonRefPin(makefileText);
+  const llamaCppVersion = process.env.LLAMA_CPP_PYTHON_VERSION ?? readLlamaCppPythonVersionPin(makefileText);
 
   const buildArgs = [
     '--build-arg',

@@ -35,14 +35,28 @@ export function run(cmd: string, args: string[] = [], opts: RunOptions = {}): vo
   }
 
   if (res.status !== 0) {
-    throw new Error(`${cmd} ${args.join(' ')} exited ${res.status}`);
+    // `res.signal`, not just the status: a child killed by a signal reports
+    // status null, so an OOM-killed docker build read as "exited null" and
+    // lost the SIGKILL that Make surfaced as "Error 137".
+    throw new Error(
+      `${cmd} ${args.join(' ')} ${res.signal ? `was killed by ${res.signal}` : `exited ${res.status}`}`,
+    );
   }
 }
 
 /** Capture output, never throw — for a `2>/dev/null` / `|| true` site, or a
  * probe whose failure is itself meaningful (e.g. "is X running"). */
 export function tryRun(cmd: string, args: string[] = [], opts: RunOptions = {}): TryResult {
-  const res = spawnSync(cmd, args, { encoding: 'utf8', cwd: opts.cwd, env: opts.env ?? process.env });
+  const res = spawnSync(cmd, args, {
+    encoding: 'utf8',
+    cwd: opts.cwd,
+    env: opts.env ?? process.env,
+    // The shell threw these payloads away with `>/dev/null`, so their size
+    // could never affect the exit status being tested. Capturing them means
+    // node's 1 MiB default would kill the child and make a healthy probe
+    // (a large `docker image inspect`, a chatty caddy config) read as failure.
+    maxBuffer: 64 * 1024 * 1024,
+  });
 
   return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
 }

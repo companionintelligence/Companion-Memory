@@ -1,5 +1,5 @@
 /**
- * reset — ports the `reset` target, Makefile:409-434. Destructive (removes
+ * reset — ports the `reset` target, the pre-port Makefile. Destructive (removes
  * this worktree's Docker volumes and networks, i.e. all local data), so it
  * supports `--dry-run` to list what would be removed without touching
  * anything, and `stop`/`overmind quit`/the removals are all skipped under it.

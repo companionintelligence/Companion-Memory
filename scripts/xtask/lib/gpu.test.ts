@@ -66,6 +66,29 @@ test('the 4 wheel-publish pins are read from the Makefile text by exact name', (
   );
 });
 
+test('a pin survives whitespace realignment — Make treats these as identical, so this must too', () => {
+  // The pins sit next to column-aligned neighbours, so aligning them is a
+  // plausible edit. The original strict `NAME := ` regex returned '' for every
+  // form below except the first, silently composing an image tag with a hole
+  // in it on the path `make publish` builds released images from.
+  for (const line of [
+    'FLASH_ATTN_VERSION := 2.8.3.post1',
+    'FLASH_ATTN_VERSION  := 2.8.3.post1',
+    'FLASH_ATTN_VERSION\t:= 2.8.3.post1',
+    'FLASH_ATTN_VERSION :=  2.8.3.post1',
+  ]) {
+    assert.equal(readFlashAttnVersionPin(line), '2.8.3.post1', `failed for: ${JSON.stringify(line)}`);
+  }
+});
+
+test('a pin that cannot be read throws instead of yielding an empty build arg', () => {
+  assert.throws(
+    () => readFlashAttnVersionPin('# FLASH_ATTN_VERSION was renamed\nSOMETHING_ELSE := 1.0\n'),
+    /could not read FLASH_ATTN_VERSION from the Makefile/,
+  );
+  assert.throws(() => readLlamaCppPythonRefPin('nothing here'), /could not read LLAMA_CPP_PYTHON_REF/);
+});
+
 test('pyTag strips the dot: "3.11" -> "cp311"', () => {
   assert.equal(pyTag('3.11'), 'cp311');
 });

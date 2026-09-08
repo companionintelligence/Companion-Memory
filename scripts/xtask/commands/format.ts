@@ -1,4 +1,4 @@
-/** format — ports the `format` target, Makefile:711-722. No branching logic
+/** format — ports the `format` target, the pre-port Makefile. No branching logic
  * to speak of: a straight sequential, fail-fast port. */
 import { parseArgs } from 'node:util';
 
