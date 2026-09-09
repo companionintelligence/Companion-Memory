@@ -63,7 +63,12 @@ interface OAuthState {
   oauth: Record<string, ProviderFields>;
 }
 
-const EMPTY_FIELDS: ProviderFields = { clientId: '', clientSecret: '', hasClientSecret: false, clientSecretHint: null };
+const EMPTY_FIELDS: ProviderFields = {
+  clientId: '',
+  clientSecret: '',
+  hasClientSecret: false,
+  clientSecretHint: null,
+};
 
 /** Trailing characters shown in the secret field's placeholder once a secret is stored. */
 function storedSecretPlaceholder(hint: string | null): string {
@@ -315,7 +320,10 @@ export function OAuthSection() {
       } else {
         const typedSecret = clientSecret.trim();
         const result = await updateProviderKey({
-          variables: { id: providerKeyId, input: { clientId, ...(typedSecret ? { clientSecret: typedSecret } : {}) } },
+          variables: {
+            id: providerKeyId,
+            input: { clientId, ...(typedSecret ? { clientSecret: typedSecret } : {}) },
+          },
         });
         const updated = result.data?.updateProviderKey;
 
@@ -443,7 +451,9 @@ export function OAuthSection() {
                 type={showKeys[`${provider}ClientSecret`] ? 'text' : 'password'}
                 value={providerData.clientSecret}
                 placeholder={
-                  providerData.hasClientSecret ? storedSecretPlaceholder(providerData.clientSecretHint) : undefined
+                  providerData.hasClientSecret
+                    ? storedSecretPlaceholder(providerData.clientSecretHint)
+                    : undefined
                 }
                 onChange={(e) => updateSetting(`oauth.${provider}.clientSecret`, e.target.value)}
                 className="flex-1"
@@ -466,7 +476,8 @@ export function OAuthSection() {
             </div>
             {providerData.hasClientSecret && !providerData.clientSecret && (
               <p className="text-sm text-muted-foreground">
-                A secret is stored and is never shown. Leave blank to keep it, or enter a new one to replace it.
+                A secret is stored and is never shown. Leave blank to keep it, or enter a new one to replace
+                it.
               </p>
             )}
             {errors.clientSecret &&

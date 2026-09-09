@@ -65,7 +65,12 @@ const DELETE_PROVIDER_KEY = gql(`
 interface ProviderFixture {
   id: string;
   name: string;
-  providerKeys?: { id: string; clientId: string; hasClientSecret: boolean; clientSecretHint: string | null } | null;
+  providerKeys?: {
+    id: string;
+    clientId: string;
+    hasClientSecret: boolean;
+    clientSecretHint: string | null;
+  } | null;
 }
 
 function providersMock(providers: ProviderFixture[]) {
@@ -221,7 +226,12 @@ describe('OAuthSection', () => {
           {
             id: 'prov-google',
             name: 'Google',
-            providerKeys: { id: 'pk-google', clientId: 'old-id', hasClientSecret: true, clientSecretHint: 'cret' },
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'old-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
           },
         ]),
         {
@@ -266,7 +276,12 @@ describe('OAuthSection', () => {
           {
             id: 'prov-google',
             name: 'Google',
-            providerKeys: { id: 'pk-google', clientId: 'the-id', hasClientSecret: true, clientSecretHint: 'cret' },
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'the-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
           },
         ]),
         {
@@ -303,7 +318,12 @@ describe('OAuthSection', () => {
           {
             id: 'prov-google',
             name: 'Google',
-            providerKeys: { id: 'pk-google', clientId: 'the-id', hasClientSecret: true, clientSecretHint: 'cret' },
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'the-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
           },
         ]),
         // No DELETE_PROVIDER_KEY mock: an unexpected send would surface as an
@@ -329,7 +349,12 @@ describe('OAuthSection', () => {
           {
             id: 'prov-google',
             name: 'Google',
-            providerKeys: { id: 'pk-google', clientId: 'the-id', hasClientSecret: true, clientSecretHint: 'cret' },
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'the-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
           },
         ]),
       ],
@@ -358,7 +383,12 @@ describe('OAuthSection', () => {
           {
             id: 'prov-google',
             name: 'Google',
-            providerKeys: { id: 'pk-google', clientId: 'the-id', hasClientSecret: true, clientSecretHint: 'cret' },
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'the-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
           },
         ]),
         {
@@ -367,7 +397,10 @@ describe('OAuthSection', () => {
             variables: { id: 'pk-google', input: { clientId: 'the-id', clientSecret: 'brand-new-secret' } },
           },
           result: () => {
-            updateCalled = { id: 'pk-google', input: { clientId: 'the-id', clientSecret: 'brand-new-secret' } };
+            updateCalled = {
+              id: 'pk-google',
+              input: { clientId: 'the-id', clientSecret: 'brand-new-secret' },
+            };
 
             return {
               data: {
@@ -388,12 +421,16 @@ describe('OAuthSection', () => {
     await screen.findByText('Google');
     const google = providerCard('Google');
 
-    fireEvent.change(within(google).getByLabelText('Client Secret'), { target: { value: 'brand-new-secret' } });
+    fireEvent.change(within(google).getByLabelText('Client Secret'), {
+      target: { value: 'brand-new-secret' },
+    });
     fireEvent.click(within(google).getByRole('button', { name: /save credentials/i }));
 
     await waitFor(() => expect(updateCalled).toBeDefined());
     // The typed secret is cleared from the field after saving; the hint takes over again.
-    await waitFor(() => expect(within(providerCard('Google')).getByLabelText('Client Secret')).toHaveValue(''));
+    await waitFor(() =>
+      expect(within(providerCard('Google')).getByLabelText('Client Secret')).toHaveValue(''),
+    );
   });
 
   it('flags a half-filled pair for an existing key, and does not blame the field the user is still typing into', async () => {
@@ -403,7 +440,12 @@ describe('OAuthSection', () => {
           {
             id: 'prov-google',
             name: 'Google',
-            providerKeys: { id: 'pk-google', clientId: 'the-id', hasClientSecret: true, clientSecretHint: 'cret' },
+            providerKeys: {
+              id: 'pk-google',
+              clientId: 'the-id',
+              hasClientSecret: true,
+              clientSecretHint: 'cret',
+            },
           },
         ]),
       ],
