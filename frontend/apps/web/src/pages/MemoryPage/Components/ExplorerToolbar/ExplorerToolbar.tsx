@@ -14,6 +14,7 @@ import {
   Filter,
   Map as MapIcon,
   MapPin,
+  MessageSquare,
   Save,
   Scan,
   Shapes,
@@ -26,7 +27,9 @@ import {
 import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
+import { ActivityFilter } from '@/components/SearchBox/ActivityFilter';
 import { ConnectorFilter } from '@/components/SearchBox/ConnectorFilter';
+import { MESSAGE_DIRECTION_LABELS, readMessageDirection } from '@/components/SearchBox/DirectionToggle';
 import { EntityTypeFilter } from '@/components/SearchBox/EntityTypeFilter';
 import {
   FILTER_DRAG_TYPE,
@@ -34,6 +37,7 @@ import {
   readFilterDrag,
   type FilterDragKind,
 } from '@/components/SearchBox/filterDrag';
+import { EntityNameFilter } from '@/components/SearchBox/NameFilter';
 import { AVAILABLE_ENTITY_TYPES, useDropdown } from '@/components/SearchBox/useDropdown';
 import { type FragmentType } from '@/graphql';
 
@@ -52,8 +56,10 @@ import {
   FILTER_PARAMS,
   addEntityFilter,
   countActiveFilters,
+  eventsInPlay,
   filterValueKey,
   narrowedEntityTypes,
+  peopleInPlay,
   readCsvParam,
   removeEntityFilter,
   writeCsvFilterParam,
@@ -332,6 +338,7 @@ function FilterDropArea() {
   const hasLocation = searchParams.get('hasLocation') === '1';
   const semantic = searchParams.get('semantic') === '1';
   const hasMapArea = Boolean(searchParams.get('bbox'));
+  const direction = readMessageDirection(searchParams.get('direction'));
   // Which view the chips are being read against: a filter this view cannot
   // apply is shown struck through rather than quietly ignored.
   const view = readMemoryView(searchParams.get('view'));
@@ -344,6 +351,7 @@ function FilterDropArea() {
     hasLocation ||
     semantic ||
     hasMapArea ||
+    direction != null ||
     Object.values(selections).some((values) => values.length > 0);
   const [error, setError] = useState<string | null>(null);
   // Counts nested dragenter/dragleave pairs so the highlight doesn't flicker
@@ -559,6 +567,21 @@ function FilterDropArea() {
                     onRemove={() => removeCsvValue('eventTypes', name)}
                   />
                 ))}
+                {direction != null && (
+                  <FilterChip
+                    icon={MessageSquare}
+                    label={`${MESSAGE_DIRECTION_LABELS[direction]} only`}
+                    removeLabel="Remove message direction"
+                    inactiveReason={reasonFor('direction')}
+                    onRemove={() =>
+                      setSearchParams((params) => {
+                        params.delete('direction');
+
+                        return params;
+                      })
+                    }
+                  />
+                )}
                 {hasDateRange && (
                   <FilterChip
                     icon={CalendarIcon}
@@ -1051,7 +1074,7 @@ function SortControl() {
   );
 }
 
-/** When / How / toggles / sort — shared by the inline explorer toolbar and header panel. */
+/** When / How / Activity / Who / Where / toggles / sort — shared by the inline explorer toolbar and header panel. */
 function FilterControlsRow({
   modal,
   includeEntityTypeFilter = false,
@@ -1063,12 +1086,24 @@ function FilterControlsRow({
   /** Save sits with the filter chip row on `/memory`; stays here in the header panel. */
   showSave?: boolean;
 }) {
+  const [searchParams] = useSearchParams();
+  const { pathname } = useLocation();
+  // Where / Activity (`places` / `eventTypes`) narrow events only, and Who
+  // (`people`) narrows events and communications, so each picker is offered
+  // just while a kind it can act on is in play — never on a browse the What
+  // bar (or a `/memory/<kind>` page) has pointed away from all of them.
+  const showEventDimensions = eventsInPlay(searchParams, pathname);
+  const showWho = peopleInPlay(searchParams, pathname);
+
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
       {includeEntityTypeFilter && <EntityTypeFilter modal={modal} label="What" />}
       <DateControl />
 
       <ConnectorFilter modal={modal} label="How" />
+      {showEventDimensions && <ActivityFilter modal={modal} label="Activity" />}
+      {showWho && <EntityNameFilter kind="person" modal={modal} />}
+      {showEventDimensions && <EntityNameFilter kind="place" modal={modal} />}
 
       <ToggleChip
         param="hasLocation"
@@ -1109,8 +1144,8 @@ export function SearchPanelFilters({ modal }: { modal: boolean }) {
 }
 
 /**
- * When / How / toggles / sort for the Memory explorer — rendered inline after
- * the What categories in MemoryEntityTypeNav.
+ * When / How / Activity / Who / Where / toggles / sort for the Memory explorer
+ * — rendered inline after the What categories in MemoryEntityTypeNav.
  */
 export function MemoryExplorerFilterControls() {
   return <FilterControlsRow modal={false} showSave={false} />;
@@ -1118,7 +1153,7 @@ export function MemoryExplorerFilterControls() {
 
 /**
  * Inline explorer filters: applied-filter chip drop area with Save on the same
- * row. When / How / toggles / sort live in MemoryEntityTypeNav beside What.
+ * row. When / How / Activity / Who / Where / toggles / sort live in MemoryEntityTypeNav beside What.
  */
 export function AdvancedFilters() {
   return <FilterDropArea />;

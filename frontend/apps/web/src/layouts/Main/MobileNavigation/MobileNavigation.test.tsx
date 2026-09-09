@@ -209,7 +209,7 @@ describe('MobileNavigation', () => {
     expect(screen.getByRole('link', { name: 'Asks' })).toHaveAttribute('href', '/asks');
   });
 
-  it('puts Capture first in the drawer and Help, the user tile, and Settings at the foot', async () => {
+  it('puts Capture first in the drawer and Help and the user tile at the foot', async () => {
     renderMobileNav();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
@@ -227,6 +227,24 @@ describe('MobileNavigation', () => {
     expect(capture.compareDocumentPosition(plan) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(plan.compareDocumentPosition(help) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(help.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Settings' })).not.toBeInTheDocument();
+  });
+
+  it('puts Settings in the Self submenu, not as its own drawer row', async () => {
+    renderMobileNav();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand Self sections' }));
+
+    const self = screen.getByTestId('self-submenu');
+
+    expect(within(self).getByRole('link', { name: 'Settings' })).toBeInTheDocument();
+    expect(within(self).getByRole('link', { name: 'Profile' })).toHaveAttribute('href', '/self');
+    expect(within(self).getByRole('link', { name: 'Stats' })).toHaveAttribute('href', '/self/stats');
+    expect(within(self).getByRole('link', { name: 'Reflections' })).toHaveAttribute(
+      'href',
+      '/self/reflections',
+    );
   });
 
   // D13: the phone drawer used to have no route to support or docs at all.

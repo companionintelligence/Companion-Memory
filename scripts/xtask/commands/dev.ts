@@ -96,7 +96,23 @@ function checkOllamaReachableFromContainers(): void {
     return;
   }
 
-  if (tryRun('nc', ['-z', '-w', '2', gw, '11434']).status === 0) {
+  // curl with explicit connect and total timeouts rather than netcat: macOS
+  // netcat can leave a SYN to the Docker Desktop gateway pending well past its
+  // -w value, making `make dev` appear hung on a normal loopback-only Ollama
+  // install. (Carried over from #2643, which fixed this in the shell recipe
+  // this function replaced.)
+  const probe = tryRun('curl', [
+    '-fsS',
+    '--noproxy',
+    '*',
+    '--connect-timeout',
+    '2',
+    '--max-time',
+    '3',
+    `http://${gw}:11434/api/tags`,
+  ]);
+
+  if (probe.status === 0) {
     console.log(`  ${GREEN}✓${RESET} ollama is reachable from containers (via ${gw})\n`);
 
     return;

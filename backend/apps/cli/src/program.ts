@@ -21,6 +21,7 @@ import { grantsShowCommand } from './commands/grants/show';
 import { grantsUpdateCommand } from './commands/grants/update';
 import { importCommand } from './commands/import';
 import { inboxCommand } from './commands/inbox';
+import { memoryCheckCommand, memoryConfigureCommand, memoryStatusCommand } from './commands/memory';
 import { peersAddCommand } from './commands/peers/add';
 import { peersListCommand } from './commands/peers/list';
 import { peersRevokeCommand } from './commands/peers/revoke';
@@ -201,6 +202,36 @@ export function buildProgram(deps: ProgramDeps): Command {
     .option('--abort-on-error', 'stop at the first failing leg instead of carrying on')
     .option('--json', 'machine-readable output')
     .action((stages: string[], options) => backfillCommand(context(), stages, options));
+
+  // ---------------------------------------------------------------------------
+  // Memory inference — the endpoint and first-run reachability check
+  // ---------------------------------------------------------------------------
+
+  const memory = program
+    .command('memory')
+    .description('Inspect, test, or configure Memory’s inference backend');
+
+  memory
+    .command('status')
+    .description('Show the inference endpoint Memory is using (credentials stay write-only)')
+    .option('--json', 'machine-readable output')
+    .action((options) => memoryStatusCommand(context(), options));
+
+  memory
+    .command('check')
+    .description('Test the inference endpoint from the Memory API container')
+    .option('--json', 'machine-readable output')
+    .action((options) => memoryCheckCommand(context(), options));
+
+  memory
+    .command('configure')
+    .description('Configure an appliance-owned inference endpoint')
+    .requiredOption('--backend <kind>', 'ollama or openai-compatible')
+    .requiredOption('--port <port>', 'port exposed to the Memory API container')
+    .option('--backend-api-key <key>', 'write-only credential for an OpenAI-compatible backend')
+    .option('--clear-api-key', 'remove the appliance-saved backend credential')
+    .option('--json', 'machine-readable output')
+    .action((options) => memoryConfigureCommand(context(), options));
 
   // ---------------------------------------------------------------------------
   // Peers — who this box will exchange asks with (backend/.../graphql/resolvers/PeerLinkResolver.ts)

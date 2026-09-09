@@ -179,18 +179,21 @@ export function RailSubmenuRow({
   active,
   icon,
   badge,
+  state,
 }: {
   to: string;
   label: string;
   active: boolean;
   icon: ReactNode;
   badge?: ReactNode;
+  state?: unknown;
 }) {
   const { expanded } = usePowerRail();
 
   const link = (
     <Link
       to={to}
+      state={state}
       aria-label={label}
       aria-current={active ? 'page' : undefined}
       className={cn(

@@ -33,11 +33,21 @@ export function ModelSection() {
     { toggleThinking, toggleTools, refetch: refetchModels },
   ] = useModel();
 
-  const { config, loading: endpointLoading, saving, error: endpointError, saveEndpoint } = useLlmEndpoint();
+  const {
+    config,
+    loading: endpointLoading,
+    saving,
+    testing,
+    error: endpointError,
+    preflight,
+    saveEndpoint,
+    checkEndpoint,
+  } = useLlmEndpoint();
 
   const [backend, setBackend] = useState<LlmBackendKind>('ollama');
   const [port, setPort] = useState('11434');
   const [apiKey, setApiKey] = useState('');
+  const [clearApiKey, setClearApiKey] = useState(false);
   const [saved, setSaved] = useState(false);
   const [imageDescriptionEnabled, setImageDescriptionEnabled] = useState(false);
   const [imageDescriptionLoading, setImageDescriptionLoading] = useState(true);
@@ -51,7 +61,10 @@ export function ModelSection() {
 
     setBackend(config.backend);
     setPort(String(config.port));
-    setApiKey(config.apiKey ?? '');
+    // Keys are write-only. An empty field means "keep the saved key", never
+    // "the browser received no key" — the server never sends one back.
+    setApiKey('');
+    setClearApiKey(false);
   }, [config]);
 
   useEffect(() => {
@@ -95,7 +108,7 @@ export function ModelSection() {
   const endpointDirty =
     config != null &&
     !config.locked &&
-    (backend !== config.backend || port !== String(config.port) || apiKey !== (config.apiKey ?? ''));
+    (backend !== config.backend || port !== String(config.port) || apiKey.trim().length > 0 || clearApiKey);
 
   const handleBackendChange = (value: LlmBackendKind) => {
     setBackend(value);
@@ -117,11 +130,20 @@ export function ModelSection() {
       backend,
       port: parsedPort,
       ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+      ...(clearApiKey ? { clearApiKey: true } : {}),
     });
 
     if (savedConfig) {
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2500);
+      refetchModels();
+    }
+  };
+
+  const handleCheckEndpoint = async () => {
+    const result = await checkEndpoint();
+
+    if (result?.ok) {
       refetchModels();
     }
   };
@@ -176,9 +198,12 @@ export function ModelSection() {
               <h3 className="text-base font-semibold text-foreground">Inference server</h3>
               <p className="text-sm text-muted-foreground leading-snug">
                 {config?.locked
-                  ? `Managed by the host environment (${config.hostGateway}:${config.port}).`
-                  : `Reachable from the API via ${config?.hostGateway ?? 'host.docker.internal'}.`}
+                  ? 'Managed by Companion Hub or the host environment. Change it there, then test it here.'
+                  : 'This appliance stores the connection locally. The check runs from the Memory API container.'}
               </p>
+              {config ? (
+                <code className="block break-all pt-1 text-xs text-muted-foreground">{config.endpoint}</code>
+              ) : null}
             </div>
           </div>
 
@@ -225,12 +250,35 @@ export function ModelSection() {
                     type="password"
                     autoComplete="off"
                     value={apiKey}
-                    onChange={(event) => setApiKey(event.target.value)}
-                    placeholder="vllm-local"
+                    onChange={(event) => {
+                      setApiKey(event.target.value);
+                      setClearApiKey(false);
+                    }}
+                    placeholder={config.apiKeyConfigured ? 'Replace saved API key' : 'Optional API key'}
+                    disabled={clearApiKey}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Leave blank to use the server default. vLLM often expects a bearer token even locally.
+                    {config.apiKeyConfigured
+                      ? 'A credential is already available. It is never shown here; leave this blank to keep it.'
+                      : 'Leave blank to use the server default. vLLM often expects a bearer token even locally.'}
                   </p>
+                  {config.apiKeyConfigured ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="w-fit px-0 text-xs text-muted-foreground hover:text-destructive"
+                      onClick={() => setClearApiKey((current) => !current)}
+                    >
+                      {clearApiKey ? 'Keep current API key' : 'Remove appliance-saved API key'}
+                    </Button>
+                  ) : null}
+                  {clearApiKey ? (
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      Saving will remove the key stored by this appliance and fall back to any deployment
+                      default.
+                    </p>
+                  ) : null}
                 </div>
               )}
 
@@ -244,6 +292,35 @@ export function ModelSection() {
                 </Button>
                 {saved && <span className="text-sm text-teal-700 dark:text-teal-300">Saved</span>}
               </div>
+            </div>
+          ) : null}
+
+          {!endpointLoading && config ? (
+            <div className="flex flex-wrap items-center gap-3 border-t border-border pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={testing || endpointDirty}
+                onClick={() => void handleCheckEndpoint()}
+                title={endpointDirty ? 'Save endpoint changes before testing them.' : undefined}
+              >
+                {testing ? 'Testing connection…' : 'Test connection'}
+              </Button>
+              {endpointDirty ? (
+                <span className="text-xs text-muted-foreground">
+                  Save changes before testing this endpoint.
+                </span>
+              ) : null}
+              {preflight ? (
+                <p
+                  role="status"
+                  className={
+                    preflight.ok ? 'text-sm text-teal-700 dark:text-teal-300' : 'text-sm text-destructive'
+                  }
+                >
+                  {preflight.message ?? (preflight.ok ? 'Connected.' : 'Connection failed.')}
+                </p>
+              ) : null}
             </div>
           ) : null}
 

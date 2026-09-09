@@ -275,9 +275,14 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * shared: it re-opens every row, INCLUDING the ones already carrying a
    * partial link, so a message whose other four recipients finally have
    * contacts gets them.
+   *
+   * v2 — PERSON_PROJECTION_RULE_GENERATION 2: the plural projection merges into
+   * the column instead of replacing it (see PersonLinkStage.ts). The bump
+   * re-links every row under the merge, which also repairs the rows v1 cut
+   * down to a single recipient.
    */
-  [STAGE_IDS.ENRICH_PERSON_LINK]: 1,
-  [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: 1,
+  [STAGE_IDS.ENRICH_PERSON_LINK]: 2,
+  [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: 2,
 
   /**
    * v1 — initial self-claim producer (PERSON_SELF_CLAIM_GENERATION in
@@ -376,8 +381,12 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * v6 = matrix generation 6: communication.has_content_attachment (Content
    * -ATTACHED_TO-> Communication), the content half of the same column.
    */
-  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 6,
-  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 6,
+  // v7 for the two person-fed legs: PERSON_LINK_VERSION moved 1 -> 2 (the
+  // plural projection merges instead of replacing), and these legs derive
+  // their version from it, so the edges are re-projected from the repaired
+  // link columns. The other legs have no person producer and stay at 6.
+  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 7,
+  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 7,
   [STAGE_IDS.PROMOTE_EDGE_CONTENT]: 6,
   [STAGE_IDS.PROMOTE_EDGE_OBJECT]: 6,
   [STAGE_IDS.PROMOTE_EDGE_RECEIPT]: 6,

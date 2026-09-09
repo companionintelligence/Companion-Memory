@@ -17,9 +17,9 @@ const THEME_MODES = [
 /**
  * Theme and log out — nested under the Self user tile.
  *
- * Settings used to have its own row here too; it's now a standalone
- * bottom-anchored rail row (SettingsRailButton) instead of a second level of
- * nesting under Self's chevron, so it isn't repeated here.
+ * Settings lives with Profile / Stats / Reflections in Self's section list
+ * (see selfSections.ts), not here. Repeating it under Theme would be a
+ * second path to the same place.
  */
 export function NavUserMenu() {
   const [, { logout }] = useAuth();

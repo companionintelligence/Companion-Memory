@@ -26,7 +26,8 @@ describe('visibleRailDestinations', () => {
   // ═══ THE ACCOUNT TILE IS NOT A STATISTICS PAGE ═══
   //
   // Self used to be gated on `stats.page`, and the tile is the ONLY mount point
-  // for `NavUserMenu` — the only Settings / Theme / Log out cluster in the app.
+  // for `NavUserMenu` — the Theme / Log out cluster, with Settings beside
+  // Profile in the same submenu.
   // Turning off a flag named for a statistics page therefore removed the user's
   // avatar, their whole identity surface, the theme switcher, Settings, and
   // every way to sign out. Both directions are asserted, because it is the

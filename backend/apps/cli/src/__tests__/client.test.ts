@@ -69,6 +69,28 @@ describe('ImportApiClient', () => {
     expect(calls[1].url).toBe('http://box:3030/import/runs?limit=10');
   });
 
+  it('uses PATCH for the write-only Memory inference endpoint update', async () => {
+    const { fetchImpl, calls } = stubFetch(() =>
+      json({
+        backend: 'openai_compatible',
+        port: 8000,
+        hostGateway: 'host.docker.internal',
+        locked: false,
+        endpoint: 'http://host.docker.internal:8000/v1',
+        apiKeyConfigured: true,
+      }),
+    );
+    const client = new ImportApiClient({ baseUrl: 'http://box:3030', apiKey: 'secret', fetchImpl });
+
+    await client.updateLlmEndpoint({ backend: 'openai_compatible', port: 8000, apiKey: 'write-only' });
+
+    expect(calls[0]).toMatchObject({
+      url: 'http://box:3030/llm/endpoint',
+      method: 'PATCH',
+      body: JSON.stringify({ backend: 'openai_compatible', port: 8000, apiKey: 'write-only' }),
+    });
+  });
+
   it('turns a 401 into the one-line fix', async () => {
     const { fetchImpl } = stubFetch(() => json({ message: 'Unauthorized' }, 401));
     const client = new ImportApiClient({ baseUrl: 'http://box:3030', apiKey: null, fetchImpl });

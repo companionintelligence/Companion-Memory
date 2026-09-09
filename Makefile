@@ -820,6 +820,13 @@ SMOKE_TIMEOUT ?= 120
 # comes straight back and a snapshot taken immediately after `up -d` sees a
 # "Running" container either way. Waiting lets the crash loop show itself in the
 # restart count.
+#
+# That count is read as `{{.RestartCount}}`, NOT `{{.State.RestartCount}}`:
+# docker puts it at the TOP LEVEL of the inspect object, a sibling of `State`.
+# The wrong path does not read empty — text/template aborts the whole render
+# with `map has no entry for key "RestartCount"` and exits non-zero, which is
+# how the first run of this check took `make publish` down with it instead of
+# reporting on the worker.
 SMOKE_WORKER_WATCH ?= 30
 
 # What counts as "the worker did not boot cleanly", as an ERE for grep -Ei.
@@ -985,7 +992,11 @@ smoke-stack: ## Boot the built production images and prove the gateway serves th
 		$(SMOKE_COMPOSE) logs --tail 80 worker || true; \
 		exit 1; \
 	fi; \
-	worker_state=$$(docker inspect -f '{{.State.Running}} {{.State.RestartCount}}' "$$worker_cid"); \
+	worker_state=$$(docker inspect -f '{{.State.Running}} {{.RestartCount}}' "$$worker_cid") || { \
+		printf "  $(RED)✗$(RESET) Could not inspect the worker container ($$worker_cid). Logs:\n\n"; \
+		$(SMOKE_COMPOSE) logs --tail 80 worker || true; \
+		exit 1; \
+	}; \
 	if [ "$$worker_state" != "true 0" ]; then \
 		printf "  $(RED)✗$(RESET) The worker did not stay up for $(SMOKE_WORKER_WATCH)s (Running/RestartCount = '$$worker_state', wanted 'true 0'). 'restart: unless-stopped' means a crash loop still shows a Running container, which is why the restart count is checked too. Logs:\n\n"; \
 		$(SMOKE_COMPOSE) logs --tail 80 worker || true; \

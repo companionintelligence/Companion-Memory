@@ -2,23 +2,34 @@ import { useMemo, useState } from 'react';
 
 import { useQuery } from '@apollo/client';
 import { ENTITY_TYPE_MAP } from '@ci/common/src/constants';
-import { Button, DropdownMenu } from '@ci/shadcn';
-import { ChevronDown, Database } from '@ci/shadcn/icons';
+import { Database } from '@ci/shadcn/icons';
 import { useLocation, useSearchParams } from 'react-router-dom';
 
 import { gql } from '@/graphql';
-import { explorerSearchTypeFilters } from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
+import {
+  explorerSearchTypeFilters,
+  readCsvParam,
+  validateExactFilterValue,
+  writeCsvFilterParam,
+} from '@/pages/MemoryPage/Components/ExplorerToolbar/filterParams';
 
-// "Source" — the data-source dimension (gmail, imessage, reddit, ...).
-// Populated from the distinct `source_system` values across every kind the
-// explorer browses — events, messages, content, browser activity, receipts,
-// products and things — not just events, since the search applies the
-// selection to all of them (see SearchResolver SOURCED_TYPES).
+import { FilterValuePicker } from './FilterValuePicker';
+
+// "How" — the data-source dimension (gmail, imessage, reddit, ...), written
+// to `?connectors=`. Populated from the distinct `source_system` values across
+// every kind the explorer browses — events, messages, content, browser
+// activity, receipts, products and things — not just events, since the search
+// applies the selection to all of them (see SearchResolver SOURCED_TYPES).
+// The backend matches the selection exactly, so the picker is confined to
+// that list: no free text, and a URL-carried name the list no longer holds
+// is flagged rather than silently matching nothing.
 export const SOURCE_SYSTEMS_QUERY = gql(`
   query SourceSystems($includeTypes: [String!], $excludeTypes: [String!]) {
     sourceSystems(includeTypes: $includeTypes, excludeTypes: $excludeTypes)
   }
 `);
+
+export const CONNECTORS_PARAM = 'connectors';
 
 function toIndexableTypes(displayTypes: string[]): string[] {
   return displayTypes.map(
@@ -50,7 +61,7 @@ export function sourceSystemsVariables(
 
 interface Props {
   modal?: boolean;
-  /** When set, renders a plain "{label}: {value}" trigger (e.g. "How: all"). */
+  /** Dimension name on the trigger ("How: all"). */
   label?: string;
   /**
    * The kinds to list sources for, in the search index's names, when the page
@@ -61,116 +72,53 @@ interface Props {
   includeTypes?: string[];
 }
 
-export function ConnectorFilter({ modal = true, label, includeTypes }: Props) {
-  const [isOpen, setIsOpen] = useState(false);
+export function ConnectorFilter({ modal = true, label = 'How', includeTypes }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const { pathname } = useLocation();
+  const [open, setOpen] = useState(false);
 
   const variables = useMemo(
     () => (includeTypes ? { includeTypes } : sourceSystemsVariables(searchParams, pathname)),
     [includeTypes, searchParams, pathname],
   );
-  const { data } = useQuery(SOURCE_SYSTEMS_QUERY, { variables });
-  const availableSources = data?.sourceSystems ?? [];
+  // Fetched only once the picker has been opened, like the name pickers, so a
+  // page that mounts several pickers pays for none until one is used.
+  const { data, loading } = useQuery(SOURCE_SYSTEMS_QUERY, { variables, skip: !open });
 
-  const selectedSources = searchParams.get('connectors')?.split(',').filter(Boolean) ?? [];
+  const values = readCsvParam(searchParams, CONNECTORS_PARAM);
 
-  const { CheckboxItem, Content, Label, Separator, Trigger } = DropdownMenu;
-
-  const selectedCount = selectedSources.length;
-
-  const getDisplayText = () => {
-    if (label) {
-      const value =
-        selectedCount === 0 ? 'all' : selectedCount === 1 ? selectedSources[0] : `${selectedCount} selected`;
-
-      return `${label}: ${value}`;
-    }
-
-    if (selectedCount === 0) {
-      return 'All Sources';
-    }
-
-    if (selectedCount === 1) {
-      return selectedSources[0];
-    }
-
-    return `${selectedCount} Sources`;
-  };
-
-  const setConnectors = (next: string[]) => {
+  const write = (next: string[]) =>
     setSearchParams((params) => {
-      if (next.length === 0) {
-        params.delete('connectors');
-      } else {
-        params.set('connectors', next.join(','));
-      }
+      writeCsvFilterParam(params, CONNECTORS_PARAM, next);
 
       return params;
     });
-  };
-
-  const toggleConnector = (source: string) => {
-    if (selectedSources.includes(source)) {
-      setConnectors(selectedSources.filter((value) => value !== source));
-    } else {
-      setConnectors([...selectedSources, source]);
-    }
-  };
 
   return (
-    <DropdownMenu modal={modal} open={isOpen} onOpenChange={setIsOpen}>
-      <Trigger asChild>
-        <Button type="button" variant="outline">
-          {label && <Database className="mr-2 h-4 w-4 text-muted-foreground" />}
-          {getDisplayText()}
-          <ChevronDown
-            className={`ml-2 h-4 w-4 opacity-50 transition-transform ${isOpen ? 'rotate-180' : ''}`}
-          />
-        </Button>
-      </Trigger>
+    <FilterValuePicker
+      variant="toolbar"
+      label={label}
+      icon={Database}
+      modal={modal}
+      values={values}
+      options={data?.sourceSystems ?? []}
+      optionsKnown={data != null}
+      loading={loading}
+      onOpenChange={setOpen}
+      onAdd={(value) => {
+        const problem = validateExactFilterValue(value);
 
-      <Content
-        id="connector-filters"
-        align="start"
-        sideOffset={4}
-        className="z-[9999] max-h-80 w-64 overflow-y-auto rounded-md border border-border bg-background p-1 shadow-lg"
-      >
-        <div className="flex items-center justify-between gap-3 px-2 py-1.5">
-          <Label className="text-sm font-medium">Source</Label>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => setConnectors([])}
-            className="h-7 px-2 text-xs text-muted-foreground"
-          >
-            Clear
-          </Button>
-        </div>
-        <Separator />
-        {availableSources.length === 0 ? (
-          <div className="p-2 text-xs text-muted-foreground">No sources yet</div>
-        ) : (
-          availableSources.map((source) => {
-            const isChecked = selectedSources.includes(source);
+        if (!problem) {
+          write([...values, value]);
+        }
 
-            return (
-              <CheckboxItem
-                key={source}
-                checked={isChecked}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  toggleConnector(source);
-                }}
-              >
-                {source}
-              </CheckboxItem>
-            );
-          })
-        )}
-      </Content>
-    </DropdownMenu>
+        return problem;
+      }}
+      onRemove={(value) => write(values.filter((item) => item !== value))}
+      onClear={() => write([])}
+      searchPlaceholder="Search sources…"
+      emptyText="No sources match"
+      unknownValueHint="No connected source has this name, so this filter matches nothing."
+    />
   );
 }

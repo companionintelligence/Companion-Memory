@@ -63,6 +63,10 @@ import {
   EventParticipantBackfillService,
 } from '../services/EventParticipantBackfillService';
 import {
+  type EntityIdentifierBackfillResult,
+  EntityIdentifierBackfillService,
+} from '../services/EntityIdentifierBackfillService';
+import {
   type ExternalIdKindIntegrityReport,
   ExternalIdKindIntegrityService,
 } from '../services/ExternalIdKindIntegrityService';
@@ -334,6 +338,15 @@ const extractPeopleFromCommunicationsSchema = linkCommunicationsSchema;
 
 type ExtractPeopleFromCommunicationsRequest = z.infer<typeof extractPeopleFromCommunicationsSchema>;
 
+// Body for POST /api/maintenance/index-entity-identifiers. The scan is over
+// ordinary entity rows, not a hypertable, so a bounded page size is sufficient.
+const indexEntityIdentifiersSchema = z.object({
+  /** Maximum active Person rows read per page (default 1000). */
+  pageSize: z.coerce.number().int().min(1).max(5000).optional(),
+});
+
+type IndexEntityIdentifiersRequest = z.infer<typeof indexEntityIdentifiersSchema>;
+
 // Body for POST /api/maintenance/materialize-edges. All optional: with no time
 // range each matrix rule derives its own bounds from its candidates' MIN/MAX
 // time and walks the whole history in windows. `rules` restricts the run to a
@@ -401,6 +414,7 @@ const orchestrateSchema = z.object({
   options: z
     .object({
       extractPeople: extractPeopleFromCommunicationsSchema.optional(),
+      indexEntityIdentifiers: indexEntityIdentifiersSchema.optional(),
       linkCommunications: linkCommunicationsSchema.optional(),
       linkEvents: linkEventsSchema.optional(),
       healSelfCollation: healSelfCollationSchema.optional(),
@@ -460,13 +474,18 @@ const MEDIA_DIMENSIONS_DEFAULT_LIMIT = 500;
  * to process out-of-band.
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
-@Controller('api/maintenance')
+// The appliance gateway and the standalone Vite proxy both strip the public
+// `/api` prefix before forwarding to Nest. Keep the controller path aligned
+// with the path the API actually receives so `/api/maintenance/*` works in
+// every supported local and deployed entry point.
+@Controller('maintenance')
 export class MaintenanceController {
   constructor(
     private readonly signallingEventService: SignallingEventService,
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly indexDeferralService: IndexDeferralService,
     private readonly orphanCleanupService: OrphanCleanupService,
+    private readonly entityIdentifierBackfillService: EntityIdentifierBackfillService,
     private readonly communicationLinkBackfillService: CommunicationLinkBackfillService,
     private readonly personStubBackfillService: PersonStubBackfillService,
     private readonly eventParticipantBackfillService: EventParticipantBackfillService,
@@ -536,6 +555,33 @@ export class MaintenanceController {
       estimatedEventCount,
       status: jobIds.length > 0 ? 'enqueued' : 'noop',
     };
+  }
+
+  /**
+   * Rebuild the derived email/phone/name index from existing Person properties
+   * and repair/provision the owner's self Person. This is additive and
+   * idempotent: source entities are not deleted or merged.
+   */
+  @Post('index-entity-identifiers')
+  async indexEntityIdentifiers(
+    @Context() context: RequestContext,
+    @Body(new ValidationPipe(indexEntityIdentifiersSchema)) body: IndexEntityIdentifiersRequest,
+  ): Promise<EntityIdentifierBackfillResult> {
+    const serviceContext = toServiceContext(context);
+    const userId = serviceContext.userId;
+
+    if (typeof userId !== 'string') {
+      return {
+        examined: 0,
+        identifiersSeen: 0,
+        entitiesWithIdentifiers: 0,
+        identifiersIndexed: 0,
+        selfEntityId: null,
+        errors: [],
+      };
+    }
+
+    return this.entityIdentifierBackfillService.backfill(userId, { pageSize: body.pageSize });
   }
 
   /**

@@ -43,6 +43,9 @@ export class SavedSearchFiltersType implements SavedSearchFilters {
   @Field(() => Boolean, { nullable: true })
   semantic?: boolean;
 
+  @Field(() => String, { nullable: true })
+  direction?: string;
+
   static toType(filters: SavedSearchFilters | null | undefined): SavedSearchFiltersType | null {
     if (filters == null) {
       return null;
@@ -60,6 +63,7 @@ export class SavedSearchFiltersType implements SavedSearchFilters {
       places: filters.places,
       hasLocation: filters.hasLocation,
       semantic: filters.semantic,
+      direction: filters.direction,
     };
   }
 }
@@ -98,4 +102,7 @@ export class SavedSearchFiltersInput implements SavedSearchFilters {
 
   @Field(() => Boolean, { nullable: true })
   semantic?: boolean;
+
+  @Field(() => String, { nullable: true })
+  direction?: string;
 }

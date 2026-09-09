@@ -3,6 +3,8 @@
  * query / entityTypes / tags. Field names match the backend SavedSearchFiltersInput
  * and the SearchInput filter fields (date is split into startTime/endTime).
  */
+import { readMessageDirection } from '@/components/SearchBox/DirectionToggle';
+
 import { isRollingDatePreset } from './Components/ExplorerToolbar/datePresets';
 export interface SavedSearchFiltersInput {
   eventTypes?: string[];
@@ -16,6 +18,7 @@ export interface SavedSearchFiltersInput {
   places?: string[];
   hasLocation?: boolean;
   semantic?: boolean;
+  direction?: string;
 }
 
 /**
@@ -46,6 +49,7 @@ export function buildSavedSearchFilters(params: URLSearchParams): SavedSearchFil
     sortOrder: params.get('sortOrder') || undefined,
     hasLocation: params.get('hasLocation') === '1' ? true : undefined,
     semantic: params.get('semantic') === '1' ? true : undefined,
+    direction: readMessageDirection(params.get('direction')) ?? undefined,
   };
 
   return Object.values(filters).some((value) => value !== undefined) ? filters : undefined;

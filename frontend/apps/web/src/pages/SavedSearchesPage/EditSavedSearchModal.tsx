@@ -13,6 +13,7 @@ import { SavedSearchGridItemFragment } from '../SavedSearchesPage/SavedSearch';
 
 import { toFiltersInput, type EditableFilters } from './savedSearchFiltersEdit';
 import { SavedSearchFiltersEditor } from './SavedSearchFiltersEditor';
+import { useSavedSearchVocabulary } from './useSavedSearchVocabulary';
 
 interface Props {
   savedSearch: FragmentType<typeof SavedSearchGridItemFragment>;
@@ -42,6 +43,7 @@ export const UPDATE_SAVED_SEARCH = gql(`
           places
           hasLocation
           semantic
+          direction
         }
       }
     }
@@ -55,6 +57,7 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
   const [description, setDescription] = useState(savedSearch.description);
   const [query, setQuery] = useState(savedSearch.query);
   const [filters, setFilters] = useState<EditableFilters>(savedSearch.filters ?? {});
+  const vocabulary = useSavedSearchVocabulary();
   // `TagInput` is a controlled display list driven by callbacks, not an
   // uncontrolled field — it never owned this state itself, and this form
   // never gave it any: `onTagAdded={() => true}` accepted every add into
@@ -201,7 +204,7 @@ export function EditSavedSearchModal({ savedSearch: savedSearchMask, onClose }: 
               The who / where / when / how / sort captured with this search. Editing here keeps it in sync
               everywhere it runs — including a shared link.
             </p>
-            <SavedSearchFiltersEditor value={filters} onChange={setFilters} />
+            <SavedSearchFiltersEditor value={filters} onChange={setFilters} vocabulary={vocabulary} />
           </div>
         </div>
 

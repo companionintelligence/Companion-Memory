@@ -68,6 +68,20 @@ function makeService() {
       return { examined: 0, peopleCreated: 0 };
     }),
   };
+  const entityIdentifierBackfill = {
+    backfill: jest.fn(async () => {
+      callOrder.push('index_entity_identifiers');
+
+      return {
+        examined: 0,
+        identifiersSeen: 0,
+        entitiesWithIdentifiers: 0,
+        identifiersIndexed: 0,
+        selfEntityId: null,
+        errors: [],
+      };
+    }),
+  };
   const commLink = {
     // Params kept so mockImplementationOnce overrides below can type their (userId, options) impls.
 
@@ -180,6 +194,7 @@ function makeService() {
     dataSource as never,
     events as never,
     logger as never,
+    entityIdentifierBackfill as never,
     personStub as never,
     commLink as never,
     eventPart as never,
@@ -208,6 +223,7 @@ function makeService() {
     skipCountQb,
     send,
     personStub,
+    entityIdentifierBackfill,
     commLink,
     eventPart,
     graphEnrich,
@@ -235,12 +251,20 @@ describe('MaintenanceOrchestratorService', () => {
     const summary = await service.orchestrate(
       USER_ID,
       {
-        stages: ['search_index', 'link_events', 'extract_people', 'extract_graph', 'link_communications'],
+        stages: [
+          'search_index',
+          'link_events',
+          'extract_people',
+          'extract_graph',
+          'link_communications',
+          'index_entity_identifiers',
+        ],
       },
       emit,
     );
 
     expect(callOrder).toEqual([
+      'index_entity_identifiers',
       'extract_people',
       'link_communications',
       'link_events',
@@ -248,6 +272,7 @@ describe('MaintenanceOrchestratorService', () => {
       'search_index',
     ]);
     expect(lines.filter((l) => l.type === 'leg-start').map((l) => l.leg)).toEqual([
+      'index_entity_identifiers',
       'extract_people',
       'link_communications',
       'link_events',
@@ -255,6 +280,7 @@ describe('MaintenanceOrchestratorService', () => {
       'search_index',
     ]);
     expect(summary.legs.map((l) => l.leg)).toEqual([
+      'index_entity_identifiers',
       'extract_people',
       'link_communications',
       'link_events',
@@ -262,6 +288,17 @@ describe('MaintenanceOrchestratorService', () => {
       'search_index',
     ]);
     expect(summary.ok).toBe(true);
+  });
+
+  it('forwards identifier-index options to the repair stage', async () => {
+    const { service, entityIdentifierBackfill } = makeService();
+
+    await service.orchestrate(USER_ID, {
+      stages: ['index_entity_identifiers'],
+      options: { indexEntityIdentifiers: { pageSize: 25 } },
+    });
+
+    expect(entityIdentifierBackfill.backfill).toHaveBeenCalledWith(USER_ID, { pageSize: 25 });
   });
 
   it('defaults to ALL stages, numbering leg-start index/of over the full canonical set', async () => {

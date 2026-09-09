@@ -34,10 +34,12 @@ import { RetrievalQueryLogEntity } from './entities/RetrievalQueryLogEntity';
 import { CommunicationParticipantLinkListener } from './listeners/CommunicationParticipantLinkListener';
 import { DerivationRunListener } from './listeners/DerivationRunListener';
 import { EstimateLocationBatchListener } from './listeners/EstimateLocationBatchListener';
+import { PersonStubBackfillRequestListener } from './listeners/PersonStubBackfillRequestListener';
 import { RetrievalQueryLogListener } from './listeners/RetrievalQueryLogListener';
 import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
 import { DerivedRelationshipService } from './services/DerivedRelationshipService';
 import { DeterministicEdgeBackfillService } from './services/DeterministicEdgeBackfillService';
+import { EntityIdentifierBackfillService } from './services/EntityIdentifierBackfillService';
 import { EmbedCoverageTelemetryService } from './services/EmbedCoverageTelemetryService';
 import { EntityTypeAuditService } from './services/EntityTypeAuditService';
 import { EventParticipantBackfillService } from './services/EventParticipantBackfillService';
@@ -102,6 +104,7 @@ import { SummaryBackfillService } from './services/SummaryBackfillService';
     ExternalIdKindIntegrityService,
     IngestResetService,
     CommunicationLinkBackfillService,
+    EntityIdentifierBackfillService,
     PersonStubBackfillService,
     EventParticipantBackfillService,
     DeterministicEdgeBackfillService,
@@ -127,6 +130,9 @@ import { SummaryBackfillService } from './services/SummaryBackfillService';
     ObjectReverseService,
     EstimateLocationBatchListener,
     CommunicationParticipantLinkListener,
+    // The post-push people pass (PersonStubBackfillRequestEvent, emitted by the
+    // import domain's PushStage after it bulk-writes communications).
+    PersonStubBackfillRequestListener,
     OrphanCleanupCron,
     DerivationRunListener,
     DerivationCron,
@@ -135,6 +141,7 @@ import { SummaryBackfillService } from './services/SummaryBackfillService';
     IndexDeferralService,
     ExternalIdKindIntegrityService,
     CommunicationLinkBackfillService,
+    EntityIdentifierBackfillService,
     PersonStubBackfillService,
     EventParticipantBackfillService,
     DeterministicEdgeBackfillService,
@@ -167,6 +174,11 @@ export {
   type OrchestrateSummary,
 } from './services/MaintenanceOrchestratorService';
 export { GraphEnrichmentService, type GraphEnrichmentOptions } from './services/GraphEnrichmentService';
+export {
+  EntityIdentifierBackfillService,
+  type EntityIdentifierBackfillOptions,
+  type EntityIdentifierBackfillResult,
+} from './services/EntityIdentifierBackfillService';
 export {
   GraphEnrichmentReviewService,
   type GraphEnrichmentProposalPage,

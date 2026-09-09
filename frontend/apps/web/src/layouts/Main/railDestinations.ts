@@ -143,8 +143,9 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
   // ═══ THIS USED TO RIDE `stats.page`, AND THAT REMOVED LOG OUT ═══
   //
   // The tile is the only mount point for `NavUserMenu` (SelfSubmenu renders it;
-  // nothing else does), and `NavUserMenu` is the only Settings / Theme / Log out
-  // cluster in the shell. The other two logout call sites both live inside the
+  // nothing else does), and that menu is the only Theme / Log out cluster in
+  // the shell. Settings sits beside Profile in the same submenu. The other two
+  // logout call sites both live inside the
   // `/self/*` subtree, which was gated on the same flag. So turning off a flag
   // named for a STATISTICS PAGE removed the user's avatar, their whole identity
   // surface, the theme switcher, Settings, and every way to sign out — leaving

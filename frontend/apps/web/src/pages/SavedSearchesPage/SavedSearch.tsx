@@ -21,6 +21,7 @@ function activeFilterDimensions(
     datePreset?: string | null;
     eventTypes?: string[] | null;
     semantic?: boolean | null;
+    direction?: string | null;
   } | null,
 ): string[] {
   if (!filters) {
@@ -33,8 +34,9 @@ function activeFilterDimensions(
     [Boolean(filters.people?.length), 'Who'],
     [Boolean(filters.places?.length || filters.hasLocation), 'Where'],
     [Boolean(filters.startTime || filters.endTime || filters.datePreset), 'When'],
-    [Boolean(filters.eventTypes?.length), 'How'],
-    [Boolean(filters.connectors?.length), 'Source'],
+    [Boolean(filters.eventTypes?.length), 'Activity'],
+    [Boolean(filters.connectors?.length), 'How'],
+    [Boolean(filters.direction), 'Direction'],
     [Boolean(filters.semantic), 'Semantic'],
   ];
 
@@ -68,6 +70,7 @@ export const SavedSearchGridItemFragment = gql(`
       places
       hasLocation
       semantic
+      direction
     }
     isPublic
     shareToken
