@@ -1,5 +1,11 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import {
+  Injectable,
+  Optional,
+  type OnApplicationBootstrap,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
+import { EventEmitter2, EventEmitterReadinessWatcher } from '@nestjs/event-emitter';
 import { InjectDataSource } from '@nestjs/typeorm';
 import plimit from 'p-limit';
 import PgBoss, { JobWithMetadata } from 'pg-boss';
@@ -148,7 +154,10 @@ export class JobTimeoutError extends Error {
 }
 
 @Injectable()
-export class PGBossEventService extends EventService implements OnModuleInit, OnModuleDestroy {
+export class PGBossEventService
+  extends EventService
+  implements OnApplicationBootstrap, OnModuleInit, OnModuleDestroy
+{
   // Global in-flight job ceiling across ALL queues (bounds total DB/Ollama load).
   // Configurable (CI_QUEUE_CONCURRENCY) so the decoupled embedding/index workers
   // can be scaled for bulk imports, and overridable at runtime from the Jobs page
@@ -247,6 +256,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
   private running = false;
 
+  /** Set once the delayed worker start has been scheduled or completed. */
+  private workerStartScheduled = false;
+
+  /** Prevents a readiness callback from starting workers during shutdown. */
+  private shutdownRequested = false;
+
   private stopTasks: Promise<void>[] = [];
 
   private readonly backoffWhenFull = 150;
@@ -276,6 +291,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     protected readonly eventEmitter: EventEmitter2,
     protected readonly logger: LoggerService,
     @InjectDataSource() private readonly dataSource: DataSource,
+    @Optional() private readonly eventEmitterReadinessWatcher?: EventEmitterReadinessWatcher,
   ) {
     super();
     this.logger.setContext(PGBossEventService.name);
@@ -426,6 +442,47 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     // restart, i.e. the window an operator who just capped a hot box is watching.
     this.syncConcurrencyLimits();
 
+    // Queue rows and semaphores are ready now, but workers deliberately start
+    // later. `@nestjs/event-emitter` attaches `@OnEvent` methods during its own
+    // `onApplicationBootstrap`; starting pg-boss here lets a queued job win the
+    // race and be completed by `executeJob` as "no listeners found".
+  }
+
+  /**
+   * Start consumers only after Nest has attached every `@OnEvent` listener.
+   *
+   * The readiness promise is intentionally observed without awaiting it from
+   * this hook. Nest invokes bootstrap hooks in module order; waiting here
+   * would deadlock if this service happened to run before the event-emitter
+   * loader, while observing it lets the loader finish and then starts workers
+   * before the application becomes meaningfully live.
+   */
+  onApplicationBootstrap(): void {
+    if (this.workerStartScheduled) {
+      return;
+    }
+
+    this.workerStartScheduled = true;
+
+    const ready = this.eventEmitterReadinessWatcher?.waitUntilReady() ?? Promise.resolve();
+
+    void ready
+      .then(() => {
+        if (this.shutdownRequested) {
+          return;
+        }
+
+        this.startWorkers();
+      })
+      .catch((err: unknown) => {
+        this.logger.error(
+          'Event listener bootstrap failed; work queues will not start',
+          err instanceof Error ? err : new Error(String(err)),
+        );
+      });
+  }
+
+  private startWorkers(): void {
     try {
       this.logger.debug('Initializing work queues...');
 
@@ -435,6 +492,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       // the headless worker process, where a parser's synchronous stretches
       // cannot stutter the web process's event loop.
       let started = 0;
+      const discoveredQueues = this.getRegisteredQueues();
 
       for (const queue of discoveredQueues) {
         const queueRole = EventListenerRegistry.getQueueOptions(queue)?.role ?? 'web';
@@ -468,12 +526,12 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         'Failed to initialize work queue client',
         err instanceof Error ? err : new Error(String(err)),
       );
-
-      throw err;
     }
   }
 
   async onModuleDestroy() {
+    this.shutdownRequested = true;
+
     try {
       this.logger.debug('Flushing work queues...');
 
