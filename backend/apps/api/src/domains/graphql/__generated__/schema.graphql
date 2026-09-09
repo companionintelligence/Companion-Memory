@@ -2700,8 +2700,9 @@ type ProviderEndpointType {
 
 type ProviderKeyType implements Node {
   clientId: String!
-  clientSecret: String!
+  clientSecretHint: String
   createdAt: DateTime!
+  hasClientSecret: Boolean!
   id: ID!
   providerId: ID!
   updatedAt: DateTime!
