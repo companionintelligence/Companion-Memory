@@ -86,7 +86,9 @@ async function main() {
     await client.end();
   }
 
-  console.log(`ensure-pgboss-schema: '${SCHEMA}' schema, '${DEAD_LETTER_QUEUE}' queue and catch-all job partition are present.`);
+  console.log(
+    `ensure-pgboss-schema: '${SCHEMA}' schema, '${DEAD_LETTER_QUEUE}' queue and catch-all job partition are present.`,
+  );
 }
 
 main().catch((error) => {
