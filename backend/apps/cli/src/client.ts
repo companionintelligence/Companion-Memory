@@ -105,9 +105,10 @@ interface RequestOptions {
  * equivalent: they are the same `ImportRunService.startRun` call, in the same
  * process, against the same queue.
  *
- * The paths carry no `/api` prefix because the API has no global one; the two
- * maintenance calls carry it literally, because those routes declare it
- * themselves.
+ * The paths carry no `/api` prefix because the API has no global one. The
+ * streaming orchestration call carries `/api` literally because that route
+ * declares it itself; ingest status lives on the authenticated `/v1` lifecycle
+ * surface.
  */
 export class ImportApiClient {
   private readonly fetchImpl: typeof fetch;
@@ -234,11 +235,14 @@ export class ImportApiClient {
   }
 
   // ---------------------------------------------------------------------------
-  // Maintenance — the `/api`-prefixed exceptions
+  // Ingest lifecycle
   // ---------------------------------------------------------------------------
 
   ingestStatus(): Promise<IngestStatus> {
-    return this.request('/api/maintenance/ingest-status');
+    // The old global maintenance route was removed when status moved beside
+    // the bulk-ingest lifecycle. Appliance-wide stats are still intentional
+    // here: `ci stats` reports the whole local appliance, not one account.
+    return this.request('/v1/ingest/status', { query: { scope: 'appliance' } });
   }
 
   /**

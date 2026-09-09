@@ -438,9 +438,9 @@ export const IMPORT_STAGE_KINDS = ['unpack', 'parse', 'media', 'push'] as const;
 export type ImportStageKindName = (typeof IMPORT_STAGE_KINDS)[number];
 
 // ---------------------------------------------------------------------------
-// GET /api/maintenance/ingest-status
-// The maintenance domain does not publish this shape at all; it has always been
-// stated here rather than imported.
+// GET /v1/ingest/status?scope=appliance
+// The ingest domain publishes this shape at runtime; it remains stated here so
+// the CLI wire contract does not import the API application.
 // ---------------------------------------------------------------------------
 
 /**
