@@ -3,13 +3,13 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
 import { toServiceContext } from '@ci/common/context';
+import { LoggerService } from '@ci/common/logging';
 import {
   EntityIdentifierService,
   GraphIngestService,
   normalizeIdentifier,
   type EntityIdentifierBatchEntry,
 } from '@ci/domains/graph';
-import { LoggerService } from '@ci/common/logging';
 
 const DEFAULT_PAGE_SIZE = 1000;
 const MAX_PAGE_SIZE = 5000;

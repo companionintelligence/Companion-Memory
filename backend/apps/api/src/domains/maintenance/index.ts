@@ -39,8 +39,8 @@ import { RetrievalQueryLogListener } from './listeners/RetrievalQueryLogListener
 import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
 import { DerivedRelationshipService } from './services/DerivedRelationshipService';
 import { DeterministicEdgeBackfillService } from './services/DeterministicEdgeBackfillService';
-import { EntityIdentifierBackfillService } from './services/EntityIdentifierBackfillService';
 import { EmbedCoverageTelemetryService } from './services/EmbedCoverageTelemetryService';
+import { EntityIdentifierBackfillService } from './services/EntityIdentifierBackfillService';
 import { EntityTypeAuditService } from './services/EntityTypeAuditService';
 import { EventParticipantBackfillService } from './services/EventParticipantBackfillService';
 import { ExternalIdKindIntegrityService } from './services/ExternalIdKindIntegrityService';

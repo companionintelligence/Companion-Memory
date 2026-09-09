@@ -58,14 +58,14 @@ import {
   EmbedCoverageTelemetryService,
 } from '../services/EmbedCoverageTelemetryService';
 import {
+  type EntityIdentifierBackfillResult,
+  EntityIdentifierBackfillService,
+} from '../services/EntityIdentifierBackfillService';
+import {
   type EventParticipantBackfillProgress,
   type EventParticipantBackfillResult,
   EventParticipantBackfillService,
 } from '../services/EventParticipantBackfillService';
-import {
-  type EntityIdentifierBackfillResult,
-  EntityIdentifierBackfillService,
-} from '../services/EntityIdentifierBackfillService';
 import {
   type ExternalIdKindIntegrityReport,
   ExternalIdKindIntegrityService,
