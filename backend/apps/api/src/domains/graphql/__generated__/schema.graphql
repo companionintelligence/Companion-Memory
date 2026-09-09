@@ -3229,6 +3229,7 @@ type SavedSearchEdge implements Edge {
 input SavedSearchFiltersInput {
   connectors: [String!]
   datePreset: String
+  direction: String
   endTime: String
   eventTypes: [String!]
   hasLocation: Boolean
@@ -3243,6 +3244,7 @@ input SavedSearchFiltersInput {
 type SavedSearchFiltersType {
   connectors: [String!]
   datePreset: String
+  direction: String
   endTime: String
   eventTypes: [String!]
   hasLocation: Boolean
@@ -3314,6 +3316,7 @@ input SearchInput {
   after: String
   bbox: [Float!]
   connectors: [String!]
+  direction: String
   endTime: String
   eventTypes: [String!]
   excludeTypes: [String!]

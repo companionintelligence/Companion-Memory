@@ -365,10 +365,13 @@ export class CommunicationLinkBackfillService {
             `UPDATE ci.communications c
               SET from_entity_id = COALESCE(u.from_id, c.from_entity_id),
                   to_entity_ids   = CASE
-                                      WHEN u.to_ids IS NOT NULL
-                                           AND (c.to_entity_ids IS NULL OR cardinality(c.to_entity_ids) = 0)
-                                      THEN u.to_ids
-                                      ELSE c.to_entity_ids
+                                      WHEN u.to_ids IS NULL THEN c.to_entity_ids
+                                      ELSE ARRAY(
+                                        SELECT m.id
+                                          FROM unnest(COALESCE(c.to_entity_ids, '{}'::uuid[]) || u.to_ids)
+                                               WITH ORDINALITY AS m(id, ord)
+                                         GROUP BY m.id
+                                         ORDER BY min(m.ord))
                                     END
              FROM (
                SELECT t.id,

@@ -34,6 +34,7 @@ import { RetrievalQueryLogEntity } from './entities/RetrievalQueryLogEntity';
 import { CommunicationParticipantLinkListener } from './listeners/CommunicationParticipantLinkListener';
 import { DerivationRunListener } from './listeners/DerivationRunListener';
 import { EstimateLocationBatchListener } from './listeners/EstimateLocationBatchListener';
+import { PersonStubBackfillRequestListener } from './listeners/PersonStubBackfillRequestListener';
 import { RetrievalQueryLogListener } from './listeners/RetrievalQueryLogListener';
 import { CommunicationLinkBackfillService } from './services/CommunicationLinkBackfillService';
 import { DerivedRelationshipService } from './services/DerivedRelationshipService';
@@ -127,6 +128,9 @@ import { SummaryBackfillService } from './services/SummaryBackfillService';
     ObjectReverseService,
     EstimateLocationBatchListener,
     CommunicationParticipantLinkListener,
+    // The post-push people pass (PersonStubBackfillRequestEvent, emitted by the
+    // import domain's PushStage after it bulk-writes communications).
+    PersonStubBackfillRequestListener,
     OrphanCleanupCron,
     DerivationRunListener,
     DerivationCron,

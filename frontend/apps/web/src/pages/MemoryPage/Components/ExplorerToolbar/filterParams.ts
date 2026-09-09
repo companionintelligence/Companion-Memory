@@ -25,6 +25,7 @@ export const FILTER_PARAMS = [
   'hasLocation',
   'semantic',
   'bbox',
+  'direction',
 ] as const;
 
 /**
@@ -177,6 +178,45 @@ export function explorerSearchTypeFilters(
   };
 }
 
+/**
+ * Whether events are among the kinds the explorer will search, and so whether
+ * an event-scoped control has anything to act on. The Activity picker
+ * (`?eventTypes=`) only narrows rows of kind `event` — SearchInput.eventTypes
+ * is documented as event-only — so offering it while the What bar has left
+ * events out (say `/memory` narrowed to Content) would be a filter that can
+ * never match. Follows the same resolution the search sends, including the
+ * events-browse clip and the When override.
+ */
+export function eventsInPlay(params: URLSearchParams, pathname?: string): boolean {
+  return kindsInPlay(params, pathname, ['Event']);
+}
+
+/**
+ * Whether any kind that links to people is among the kinds the explorer will
+ * search — the Who picker's (`?people=`) precondition. The backend narrows
+ * events (participants / organizer) and communications (sender / recipients)
+ * by Who and sets every other kind aside, so the picker is offered while
+ * either of those two is in play.
+ */
+export function peopleInPlay(params: URLSearchParams, pathname?: string): boolean {
+  return kindsInPlay(params, pathname, ['Event', 'Communication']);
+}
+
+/** Whether at least one of `kinds` (display names) survives the current type resolution. */
+function kindsInPlay(params: URLSearchParams, pathname: string | undefined, kinds: string[]): boolean {
+  const { includeTypes, excludeTypes, nothingLeft } = resolveExplorerTypes(params, pathname);
+
+  if (nothingLeft) {
+    return false;
+  }
+
+  if (includeTypes) {
+    return kinds.some((kind) => includeTypes.includes(kind));
+  }
+
+  return kinds.some((kind) => !(excludeTypes ?? []).includes(kind));
+}
+
 export function normalizeFilterValue(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
@@ -198,6 +238,24 @@ export function writeCsvFilterParam(params: URLSearchParams, key: string, next: 
   } else {
     params.set(key, normalized.join(','));
   }
+}
+
+/**
+ * Validation for the exact-match list dimensions (How / Activity): a value is
+ * one of the backend's own names, so only the CSV framing can go wrong.
+ */
+export function validateExactFilterValue(value: string): string | null {
+  const normalized = normalizeFilterValue(value);
+
+  if (!normalized) {
+    return 'Enter a value first.';
+  }
+
+  if (normalized.includes(',')) {
+    return 'Values cannot include commas.';
+  }
+
+  return null;
 }
 
 function validatePersonFilterValue(value: string): string | null {
@@ -329,6 +387,10 @@ export function countActiveFilters(params: URLSearchParams): number {
   }
 
   if (params.get('from') || params.get('to')) {
+    count += 1;
+  }
+
+  if (params.get('direction')) {
     count += 1;
   }
 

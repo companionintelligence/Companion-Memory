@@ -1,8 +1,11 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
-import { Badge, IconButton, Input, Label, Select, Switch, Tooltip } from '@ci/shadcn';
-import { Plus, X } from '@ci/shadcn/icons';
-import { useTranslation } from 'react-i18next';
+import { Input, Label, Select, Switch } from '@ci/shadcn';
+import { Activity, Database, MapPin, Users } from '@ci/shadcn/icons';
+
+import { DirectionToggle, readMessageDirection } from '@/components/SearchBox/DirectionToggle';
+import { FilterValuePicker } from '@/components/SearchBox/FilterValuePicker';
+import { noNameSuggestions, type NameSuggestionHook } from '@/components/SearchBox/useNameSuggestions';
 
 import {
   addListValue,
@@ -14,9 +17,105 @@ import {
   type ListField,
 } from './savedSearchFiltersEdit';
 
+/**
+ * What the editor may offer for each list dimension, matching what the memory
+ * toolbar offers. Everything is optional so the editor stays presentational:
+ * without a vocabulary it accepts free text everywhere (stories, tests).
+ * The suggestion hooks are called as hooks, so they must be stable functions.
+ */
+export interface SavedSearchVocabulary {
+  /** Every source system the search can match; when known, How refuses other text and flags stale values. */
+  sources?: string[];
+  /** Every event type the search can match; likewise for Activity. */
+  eventTypes?: string[];
+  usePersonSuggestions?: NameSuggestionHook;
+  usePlaceSuggestions?: NameSuggestionHook;
+}
+
 interface Props {
   value: EditableFilters;
   onChange: (next: EditableFilters) => void;
+  vocabulary?: SavedSearchVocabulary;
+}
+
+interface ListFieldHandlers {
+  values: string[];
+  onAdd: (value: string) => string | null;
+  onRemove: (value: string) => void;
+  onClear: () => void;
+}
+
+/** Who / Where: name patterns, with live suggestions when the host provides them. */
+function NamePatternField({
+  label,
+  icon,
+  useSuggestions,
+  searchPlaceholder,
+  emptyText,
+  footer,
+  field,
+}: {
+  label: string;
+  icon: typeof Users;
+  useSuggestions: NameSuggestionHook;
+  searchPlaceholder: string;
+  emptyText: string;
+  footer?: ReactNode;
+  field: ListFieldHandlers;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const { names, loading } = useSuggestions(query, open);
+
+  return (
+    <FilterValuePicker
+      variant="field"
+      label={label}
+      icon={icon}
+      options={names}
+      loading={loading}
+      onSearch={setQuery}
+      onOpenChange={setOpen}
+      searchPlaceholder={searchPlaceholder}
+      emptyText={emptyText}
+      footer={footer}
+      hint="Matches any name containing the text, like the memory page's drag-in filters."
+      {...field}
+    />
+  );
+}
+
+/** How / Activity: exact values from the search's own vocabulary, once it is known. */
+function ExactValueField({
+  label,
+  icon,
+  options,
+  searchPlaceholder,
+  emptyText,
+  unknownValueHint,
+  field,
+}: {
+  label: string;
+  icon: typeof Users;
+  options?: string[];
+  searchPlaceholder: string;
+  emptyText: string;
+  unknownValueHint: string;
+  field: ListFieldHandlers;
+}) {
+  return (
+    <FilterValuePicker
+      variant="field"
+      label={label}
+      icon={icon}
+      options={options ?? []}
+      optionsKnown={options != null}
+      searchPlaceholder={searchPlaceholder}
+      emptyText={options == null ? 'Type a value and press Enter' : emptyText}
+      unknownValueHint={unknownValueHint}
+      {...field}
+    />
+  );
 }
 
 /** ISO timestamp -> the yyyy-mm-dd a <input type="date"> expects (local date). */
@@ -30,88 +129,31 @@ function toDateInput(iso?: string | null): string {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
 }
 
-/** A removable-chip list with a free-text add — used for who/where/how/source. */
-function ChipListField({
-  label,
-  items,
-  placeholder,
-  onAdd,
-  onRemove,
-}: {
-  label: string;
-  items: string[];
-  placeholder: string;
-  onAdd: (value: string) => void;
-  onRemove: (value: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [draft, setDraft] = useState('');
-
-  const commit = () => {
-    onAdd(draft);
-    setDraft('');
-  };
-
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {items.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {items.map((item) => (
-            <Badge key={item} variant="secondary" className="max-w-[220px] gap-1">
-              <span className="truncate">{item}</span>
-              <Tooltip delayDuration={600}>
-                <Tooltip.Content>{t('SAVED_SEARCH_FILTER_REMOVE', { name: item })}</Tooltip.Content>
-                <Tooltip.Trigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => onRemove(item)}
-                    aria-label={t('SAVED_SEARCH_FILTER_REMOVE', { name: item })}
-                    className="hover:bg-background/60 -mr-1 rounded p-0.5"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </Tooltip.Trigger>
-              </Tooltip>
-            </Badge>
-          ))}
-        </div>
-      )}
-      <div className="flex gap-2">
-        <Input
-          value={draft}
-          placeholder={placeholder}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              commit();
-            }
-          }}
-        />
-        <IconButton
-          type="button"
-          variant="outline"
-          label={t('SAVED_SEARCH_FILTER_ADD', { label })}
-          onClick={commit}
-        >
-          <Plus className="h-4 w-4" />
-        </IconButton>
-      </div>
-    </div>
-  );
-}
-
 /**
  * Edit the secondary explorer dimensions a saved search carries (who / where /
  * when / how / sort / semantic). Presentational: it owns no data, just edits the
  * passed `value` and reports changes — so it stories and unit-tests cleanly.
  */
-export function SavedSearchFiltersEditor({ value, onChange }: Props) {
-  const listField = (field: ListField) => ({
-    items: value[field] ?? [],
-    onAdd: (raw: string) => onChange(addListValue(value, field, raw)),
+export function SavedSearchFiltersEditor({ value, onChange, vocabulary = {} }: Props) {
+  const listField = (field: ListField): ListFieldHandlers => ({
+    values: value[field] ?? [],
+    onAdd: (raw: string) => {
+      const trimmed = raw.trim();
+
+      if (!trimmed) {
+        return 'Enter a value first.';
+      }
+
+      if (trimmed.includes(',')) {
+        return 'Values cannot include commas.';
+      }
+
+      onChange(addListValue(value, field, trimmed));
+
+      return null;
+    },
     onRemove: (item: string) => onChange(removeListValue(value, field, item)),
+    onClear: () => onChange({ ...value, [field]: [] }),
   });
 
   const setDate = (field: 'startTime' | 'endTime', dateStr: string) => {
@@ -128,17 +170,45 @@ export function SavedSearchFiltersEditor({ value, onChange }: Props) {
 
   return (
     <div className="space-y-4">
-      <ChipListField label="Who (people)" placeholder="Add a person name…" {...listField('people')} />
-      <ChipListField label="Where (places)" placeholder="Add a place name…" {...listField('places')} />
-      <ChipListField
-        label="How (event types)"
-        placeholder="e.g. visited, messaged…"
-        {...listField('eventTypes')}
+      <NamePatternField
+        label="Who"
+        icon={Users}
+        useSuggestions={vocabulary.usePersonSuggestions ?? noNameSuggestions}
+        searchPlaceholder="Search people…"
+        emptyText="No people match"
+        footer={
+          <DirectionToggle
+            value={readMessageDirection(value.direction)}
+            onChange={(next) => onChange({ ...value, direction: next ?? undefined })}
+          />
+        }
+        field={listField('people')}
       />
-      <ChipListField
-        label="Source (connectors)"
-        placeholder="e.g. gmail, imessage…"
-        {...listField('connectors')}
+      <NamePatternField
+        label="Where"
+        icon={MapPin}
+        useSuggestions={vocabulary.usePlaceSuggestions ?? noNameSuggestions}
+        searchPlaceholder="Search places…"
+        emptyText="No places match"
+        field={listField('places')}
+      />
+      <ExactValueField
+        label="How"
+        icon={Database}
+        options={vocabulary.sources}
+        searchPlaceholder="Search sources…"
+        emptyText="No sources match"
+        unknownValueHint="No connected source has this name, so this filter matches nothing."
+        field={listField('connectors')}
+      />
+      <ExactValueField
+        label="Activity"
+        icon={Activity}
+        options={vocabulary.eventTypes}
+        searchPlaceholder="Search activities…"
+        emptyText="No activities match"
+        unknownValueHint="No event has this activity type, so this filter matches nothing."
+        field={listField('eventTypes')}
       />
 
       <div className="grid grid-cols-2 gap-3">

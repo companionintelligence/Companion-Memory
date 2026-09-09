@@ -197,7 +197,10 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
     expect(updates[0].params).toEqual([USER, COMM_ID, EXISTING_FROM, [NEW_TO_1], COMM_TIME]);
   });
 
-  it('is a no-op when both link sides are already populated', async () => {
+  it('writes nothing when the sender is set and every recipient is already linked', async () => {
+    // A populated recipient list is no longer taken as "done" — the listener
+    // still resolves every name — but when the column already carries each
+    // one there is nothing to add, and no UPDATE is issued.
     const comm: FakeCommunication = {
       id: COMM_ID,
       time: COMM_TIME,
@@ -206,14 +209,48 @@ describe('CommunicationParticipantLinkListener.handleCreated', () => {
       toEntityIds: [NEW_TO_1],
       participantsMetadata: { from: 'sender@example.com', to: ['known@example.com'] },
     };
-
-    const { listener, identifierService, graphIngestService, ds } = makeListener(comm, {});
+    const { listener, graphIngestService, ds } = makeListener(comm, {
+      'email:sender@example.com': EXISTING_FROM,
+      'email:known@example.com': NEW_TO_1,
+    });
 
     await listener.handleCreated({ communicationId: COMM_ID });
 
-    expect(identifierService.findEntityIdsByIdentifiers).not.toHaveBeenCalled();
     expect(graphIngestService.ingest).not.toHaveBeenCalled();
     expect(updateCalls(ds)).toHaveLength(0);
+  });
+
+  it('MERGES a newly resolved recipient into a partial list instead of skipping the row', async () => {
+    // The regression this guards: an inbound group message whose list held
+    // only the owner (the one name the index knew at the time) was treated as
+    // linked, so the other recipient never landed on it.
+    const comm: FakeCommunication = {
+      id: COMM_ID,
+      time: COMM_TIME,
+      userId: USER,
+      fromEntityId: EXISTING_FROM,
+      toEntityIds: [EXISTING_FROM],
+      participantsMetadata: { from: 'sender@example.com', to: ['me@example.com', 'brianne@example.com'] },
+    };
+    const { listener, ds } = makeListener(comm, {
+      'email:sender@example.com': EXISTING_FROM,
+      'email:me@example.com': EXISTING_FROM,
+      'email:brianne@example.com': NEW_TO_1,
+    });
+
+    await listener.handleCreated({ communicationId: COMM_ID });
+
+    const updates = updateCalls(ds);
+
+    expect(updates).toHaveLength(1);
+    // Only the ids the column lacks are bound; the SQL appends them after the
+    // existing ones and never replaces the list.
+    expect(updates[0].params).toEqual([USER, COMM_ID, null, [NEW_TO_1], COMM_TIME]);
+    expect(updates[0].sql.replace(/\s+/g, ' ')).toMatch(
+      /WHEN \$4::uuid\[\] IS NULL THEN to_entity_ids ELSE ARRAY\(/,
+    );
+    expect(updates[0].sql).toMatch(/WITH ORDINALITY/);
+    expect(updates[0].sql).not.toMatch(/cardinality\(to_entity_ids\) = 0/);
   });
 
   it('seeds stub Person entities for cc/bcc but does not write them back to any link column', async () => {

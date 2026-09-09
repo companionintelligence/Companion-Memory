@@ -13,8 +13,8 @@ const Calendar = lazy(() =>
 import { useDropdown } from '@/components/SearchBox/useDropdown';
 import { TagInput } from '@/components/TagInput';
 
+import { ActivityFilter } from './ActivityFilter';
 import { EntityTypeFilter } from './EntityTypeFilter';
-import { HowFilter } from './HowFilter';
 
 interface Props {
   saveSupported?: boolean;
@@ -77,7 +77,7 @@ export function DropdownContent({ onSave, saveSupported = true }: Props) {
 
         <div className="flex flex-wrap items-center gap-2">
           <EntityTypeFilter modal={false} />
-          <HowFilter modal={false} />
+          <ActivityFilter modal={false} />
 
           <Popover>
             <Popover.Trigger asChild>
