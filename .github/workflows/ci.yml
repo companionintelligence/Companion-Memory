@@ -232,6 +232,20 @@ jobs:
       - name: Run migrations
         run: yarn workspace @ci/be-api migrate
 
+      # pg-boss builds its own tables at boot, not through dbmate, so a migrated
+      # database still has no `pgboss.job` until the API starts once. CI never
+      # starts it. `DeadLetterReaperListener.spec.ts` guards on that table and
+      # deliberately FAILS rather than skips when the database is present but the
+      # table is not — and that block went live the moment this file gained
+      # `PIPELINE_TEST_DATABASE_URL` (#2584), which is why this workflow has been
+      # red ever since and releases have been shipping on `skip_test_gate=true`.
+      #
+      # Uses pg-boss's own start/stop rather than hand-written DDL, so the schema
+      # tracks the resolved pg-boss version instead of drifting from it.
+      - name: Install the pg-boss schema
+        timeout-minutes: 3
+        run: yarn workspace @ci/be-api pgboss:ensure
+
       # Several times the measured cost: ~400 files in about 2.5 minutes in a
       # two-core container, so a few minutes on a runner whose cores are slower.
       # The ceiling was ten while every DB-backed suite skipped; it is twenty now
