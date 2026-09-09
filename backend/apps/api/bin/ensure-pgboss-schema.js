@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 /**
  * Create the `pgboss` schema against DATABASE_URL, then exit.
  *
