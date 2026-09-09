@@ -25,7 +25,11 @@ const routingRequestSchema = z
  * hard call — instead of unconditionally escalating to a third-party API.
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
-@Controller('api/model-routing')
+// Mounted without the `api/` prefix its public URL carries: the gateway strips
+// `/api` before forwarding (nginx.conf `location /api/`), so a controller that
+// bakes it in never matches. See CI-Server#1684 and
+// common/__tests__/controllerGatewayPrefix.test.ts.
+@Controller('model-routing')
 export class ModelRoutingController {
   constructor(private readonly router: ModelTierRouter) {}
 

@@ -31,9 +31,20 @@ import {
 /**
  * Publishes the CI Intent catalog and runs those intents through ToolRegistry.
  *
- * Catalog GETs and execute POSTs mount on both `/api/intents` (legacy) and
+ * Catalog GETs and execute POSTs are reached at `/api/intents` (legacy) and
  * `/api/agent/intents` (canonical for Hermes / OpenClaw). Scope-limited connect
  * keys need the `intents` scope. Session/JWT and empty-scope keys are unaffected.
+ *
+ * The mount deliberately OMITS the `api/` those public URLs carry. The gateway
+ * proxies under `location /api/` and strips the prefix before forwarding
+ * (`rewrite ^/api/(.*)$ /$1 break`, infrastructure/gateway/nginx.conf), and the
+ * app sets no `setGlobalPrefix`, so controller paths are literal. Mounting
+ * `api/intents` here — as this controller did until CI-Server#1684 — means a
+ * client asking for `/api/agent/intents` arrives as `/agent/intents` and matches
+ * nothing; the only working URL was the absurd `/api/api/agent/intents`. Both
+ * harness plugins swallowed the resulting 404 and silently dropped the catalog,
+ * so agents fell back to raw CRUD instead of these privacy-labelled intents.
+ * `controllerGatewayPrefix.test.ts` keeps the whole class of bug out.
  *
  * GET is read-only. POST uses `@RequireCapability(READ_CAPABILITY)` as the HTTP
  * floor so a read-only key can still run read intents; ToolRegistry.executeTool
@@ -41,7 +52,7 @@ import {
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
 @RequireScopes(INTENTS_SCOPE)
-@Controller(['api/intents', 'api/agent/intents'])
+@Controller(['intents', 'agent/intents'])
 export class IntentsController {
   constructor(
     private readonly catalog: IntentCatalogService,

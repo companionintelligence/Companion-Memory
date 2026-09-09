@@ -37,7 +37,11 @@ import { PendingActionService } from '../services/PendingActionService';
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
 @RequireScopes(INTENTS_SCOPE)
-@Controller(['api/pending-actions', 'api/agent/pending-actions'])
+// Mounted without the `api/` prefix its public URL carries: the gateway strips
+// `/api` before forwarding (nginx.conf `location /api/`), so a controller that
+// bakes it in never matches. See CI-Server#1684 and
+// common/__tests__/controllerGatewayPrefix.test.ts.
+@Controller(['pending-actions', 'agent/pending-actions'])
 export class PendingActionsController {
   constructor(
     private readonly pending: PendingActionService,

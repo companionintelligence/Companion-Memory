@@ -29,7 +29,11 @@ import {
  * Rows carry no request or response bodies (see the table's migration), so neither route can
  * disclose the user's content — only which capability ran, when, and how it ended.
  */
-@Controller('api/tools')
+// Mounted without the `api/` prefix its public URL carries: the gateway strips
+// `/api` before forwarding (nginx.conf `location /api/`), so a controller that
+// bakes it in never matches. See CI-Server#1684 and
+// common/__tests__/controllerGatewayPrefix.test.ts.
+@Controller('tools')
 export class ToolInvocationsController {
   constructor(private readonly ledger: ToolInvocationLedgerService) {}
 
