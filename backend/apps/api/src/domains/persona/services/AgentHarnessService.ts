@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import { type ServiceContext } from '@ci/common/context';
+import { doorbellBlocker } from '@ci/common/hubDoorbell';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 import { ApiKeyService } from '@ci/domains/auth';
@@ -12,6 +13,15 @@ export type DispatchBlocker =
   | 'not_installed'
   | 'not_connected'
   | 'not_running'
+  /**
+   * This appliance cannot ring Hub at all — no `CI_HUB_INTERNAL_URL`, or no
+   * `CI_HUB_FORWARD_AUTH_SECRET`. Nothing to do with OpenClaw, which may be
+   * installed, connected and running perfectly.
+   *
+   * Its absence is why a dev stack offered a Dispatch button that created a job
+   * and woke nothing.
+   */
+  | 'doorbell_unconfigured'
   | 'not_wakeable'
   | 'chat_only'
   | null;
@@ -243,6 +253,13 @@ function resolveReadiness(
     dispatchBlocker = 'not_connected';
   } else if (!flags.running) {
     dispatchBlocker = 'not_running';
+  } else if (doorbellBlocker() != null) {
+    // Last of the specific reasons, deliberately. If OpenClaw is not even
+    // installed, "this appliance cannot ring Hub" is a true statement and a
+    // red herring — the actionable answer is the one about the app. Only once
+    // the harness itself is ready does the appliance's own configuration
+    // become the thing standing in the way.
+    dispatchBlocker = 'doorbell_unconfigured';
   }
 
   const wakeable = flags.installed && flags.running;
