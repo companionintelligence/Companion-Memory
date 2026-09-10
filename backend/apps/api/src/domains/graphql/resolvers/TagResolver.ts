@@ -236,6 +236,12 @@ export class TagResolver {
    * them (a one-tag saved search would start matching everything).
    */
   @Mutation(() => DeleteByIdPayload)
+  // TagService.purge runs entityTagRepository.delete({ tagId }) — unbounded, no LIMIT — then
+  // tagRepository.delete, explicitly bypassing the deleted_at column TagEntity carries. There is
+  // no createTag and no restore in the schema, and re-tagging mints a NEW id with no description,
+  // leaving every previously-tagged entity untagged. It destroys a strict superset of
+  // untagEntities, which this branch already raised to destructive.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteTag(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

@@ -7,6 +7,7 @@ import { MaxArraySizePipe } from '@ci/common/pipes';
 import { CalendarEventService, adoptIngestIdentity } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { EventContentsLoader } from '../loaders/EventContentsLoader';
 import { type EventMedia, EventMediaLoader } from '../loaders/EventMediaLoader';
 import { PersonLoader } from '../loaders/PersonLoader';
@@ -193,6 +194,8 @@ export class EventResolver {
    * convention the rest of this family uses and echoes the id it removed.
    */
   @Mutation(() => Boolean)
+  // Deprecated alias for deleteEvent; declared so deprecating it cannot quietly downgrade it.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removeEvent(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -210,6 +213,13 @@ export class EventResolver {
    * puts it back.
    */
   @Mutation(() => DeleteByIdPayload)
+  // The BASE row is a reversible tombstone (CtiAggregate softDeleteFlag: 'isDeleted'), but the
+  // gate is not resting on that. EmbeddingService.remove and VectorService.remove physically
+  // delete the embedding and tsvector rows, and restoreEvent RECOMPUTES them rather than
+  // restoring them. And no query in the schema surfaces tombstoned events: the only handle is the
+  // id echoed once in the delete payload, so a caller that discards the response has lost
+  // imported history in every way it can observe.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteEvent(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

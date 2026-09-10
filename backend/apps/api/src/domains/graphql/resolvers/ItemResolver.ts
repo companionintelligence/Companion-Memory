@@ -809,6 +809,9 @@ export class ItemResolver {
   }
 
   @Mutation(() => [ObjectIdentifierType])
+  // Same hard delete as removePersonIdentifier, via ObjectIdentifierService.removeForSubject.
+  // Declared so the two siblings cannot drift apart on a rename.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removeItemIdentifier(
     @Context() context: RequestContext,
     @Args('input') input: RemoveItemIdentifierInput,
