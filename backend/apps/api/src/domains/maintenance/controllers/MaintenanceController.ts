@@ -19,6 +19,7 @@ import { DataSource } from 'typeorm';
 import { z } from 'zod';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { FULL_CAPABILITY, READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import config from '@ci/configuration';
@@ -474,6 +475,20 @@ const MEDIA_DIMENSIONS_DEFAULT_LIMIT = 500;
  * to process out-of-band.
  */
 @UseGuards(JwtOrApiKeyAuthGuard)
+// `write` for the whole controller: every route here mutates — backfills,
+// sweeps, re-index passes — and until now NONE of them asked about capability,
+// so a key the settings UI describes as "Read-only - cannot record or change
+// anything" could run all 31. Scope enforcement does not cover this: an
+// empty-scope key skips it entirely (apiKeyScopeEnforcement returns early only
+// for non-api-key principals), which leaves capability as the only axis, and
+// nothing was reading it.
+//
+// Capability only, no `@RequireScopes`: adding one would newly refuse keys
+// carrying some other scope, which is a wider change than #1780 asks for and
+// would also pull this controller into apiKeyCapabilityCoverage.test.ts's
+// scanned set. The five GET routes below re-declare `read` so a class-level
+// `write` does not wrongly refuse a status check.
+@RequireCapability(WRITE_CAPABILITY)
 // The appliance gateway and the standalone Vite proxy both strip the public
 // `/api` prefix before forwarding to Nest. Keep the controller path aligned
 // with the path the API actually receives so `/api/maintenance/*` works in
@@ -1186,6 +1201,7 @@ export class MaintenanceController {
    * would replay.
    */
   @Get('graph-enrichment-proposals')
+  @RequireCapability(READ_CAPABILITY)
   async listGraphEnrichmentProposals(
     @Context() context: RequestContext,
     @Query(new ValidationPipe(graphEnrichmentProposalsQuerySchema)) query: GraphEnrichmentProposalsQuery,
@@ -1444,6 +1460,7 @@ export class MaintenanceController {
    * degrades gracefully if this is absent/erroring.
    */
   @Get('search-index/embedded-count')
+  @RequireCapability(READ_CAPABILITY)
   async embeddedCount(
     @Query(new ValidationPipe(embeddedCountQuerySchema)) query: EmbeddedCountQuery,
   ): Promise<EmbeddedCountResponse> {
@@ -1487,6 +1504,7 @@ export class MaintenanceController {
    * A metrics scraper can poll this and page on a non-empty `alarms`.
    */
   @Get('search/coverage')
+  @RequireCapability(READ_CAPABILITY)
   async searchCoverage(
     @Query(new ValidationPipe(coverageQuerySchema)) query: CoverageQuery,
   ): Promise<EmbedCoverageReport> {
@@ -1513,6 +1531,7 @@ export class MaintenanceController {
    * GLOBAL, matching /search/coverage.
    */
   @Get('content/external-id-kind')
+  @RequireCapability(READ_CAPABILITY)
   async contentExternalIdKindIntegrity(): Promise<ExternalIdKindIntegrityReport> {
     return this.externalIdKindIntegrityService.check();
   }
@@ -1526,6 +1545,7 @@ export class MaintenanceController {
    * endpoint hit by hand or a poller.
    */
   @Get('ingest-status')
+  @RequireCapability(READ_CAPABILITY)
   async ingestStatus(): Promise<IngestStatusResponse> {
     const [tableRows, embeddingRows, skipRows, queueRows] = await Promise.all([
       this.dataSource.query<
@@ -1601,7 +1621,13 @@ export class MaintenanceController {
    * still holds another account's data; the confirm literal proves the caller
    * meant it, not that they were entitled to everyone else's memory.
    */
+  // `full`, not the class-level `write`: this one TRUNCATES. `capabilityAllows`
+  // refuses anything that removes data below `full`, which is the same line
+  // `memory.forget` sits behind — a read-only key being able to truncate its
+  // own ingested data was the sharpest instance of the gap #1780 describes.
+  // The confirm literal proves intent; it was never an authorization check.
   @Post('ingest/reset')
+  @RequireCapability(FULL_CAPABILITY)
   async resetIngest(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(ingestResetSchema)) body: { confirm: 'RESET_ALL_INGESTED_DATA' },
