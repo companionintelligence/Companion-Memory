@@ -93,7 +93,12 @@ export function encodeCursor(cursor: ToolInvocationCursor): string {
  */
 export function decodeCursor(raw: string): ToolInvocationCursor {
   const decoded = Buffer.from(raw, 'base64url').toString('utf8');
-  const separator = decoded.lastIndexOf('|');
+  // The FIRST separator, because the timestamp is the half with the guaranteed
+  // format: `Date.toISOString()` can never contain a `|`, while the id is only
+  // "whatever the primary key happens to be" and is a uuid by convention rather
+  // than by contract. Splitting on the last one would let a separator in an id
+  // eat into the timestamp and turn a valid cursor into a 400.
+  const separator = decoded.indexOf('|');
 
   if (separator <= 0) {
     throw new Error('Malformed cursor');

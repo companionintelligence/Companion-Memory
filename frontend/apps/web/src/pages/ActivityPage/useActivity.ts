@@ -109,7 +109,9 @@ export function useActivity(filters: ActivityFilters = {}, refreshIntervalMs = 1
   }, [filters.outcome, filters.principal, filters.app]);
 
   const fetchPage = useCallback(
-    async (cursor: string | null): Promise<ActivityResponse | null> => {
+    // `fetchJson` resolves `T | undefined`, not `T | null` — which is why every
+    // read below goes through `body?.` rather than a null check.
+    async (cursor: string | null): Promise<ActivityResponse | undefined> => {
       const params = new URLSearchParams(query);
 
       if (cursor) {

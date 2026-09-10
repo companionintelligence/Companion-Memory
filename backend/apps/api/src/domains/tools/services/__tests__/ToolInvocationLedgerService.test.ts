@@ -308,11 +308,16 @@ describe('cursor codec', () => {
     expect(encoded).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
-  it('splits on the LAST separator, so a timestamp is never truncated by one in the id', () => {
-    // Belt and braces: uuids carry no `|`, but the codec should not depend on that to be correct.
+  it('splits on the FIRST separator, so a timestamp is never truncated by one in the id', () => {
+    // Belt and braces: uuids carry no `|`, but the codec should not depend on
+    // that to be correct. The timestamp is the half with a guaranteed format;
+    // the id is whatever the primary key happens to be.
     const raw = Buffer.from('2026-08-20T10:00:00.000Z|weird|id', 'utf8').toString('base64url');
 
-    expect(decodeCursor(raw).id).toBe('id');
+    const cursor = decodeCursor(raw);
+
+    expect(cursor.id).toBe('weird|id');
+    expect(cursor.occurredAt).toStrictEqual(new Date('2026-08-20T10:00:00.000Z'));
   });
 
   it('throws on a malformed cursor rather than silently meaning "first page"', () => {
