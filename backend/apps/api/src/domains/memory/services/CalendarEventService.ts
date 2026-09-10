@@ -1126,6 +1126,43 @@ export class CalendarEventService {
   }
 
   /**
+   * The tombstones — the only read path in the service that returns them.
+   *
+   * `deleteEvent` is a soft delete and `restoreEvent` genuinely reverses it, but
+   * until this existed the reversal was nominal: every other read here filters
+   * `is_deleted = false`, so the sole handle on a deleted event was the id
+   * echoed once in the delete payload. A caller that discarded that response —
+   * an agent, a failed request, a closed tab — had destroyed the event in every
+   * way it could observe, while the label said the operation was reversible.
+   *
+   * Deliberately its own method rather than an `includeDeleted` flag on
+   * {@link findPage}: a flag threaded through the normal read path is one
+   * defaulting mistake away from leaking tombstones into the timeline, and the
+   * two have opposite failure modes. This one returning nothing is an empty
+   * trash view; findPage returning tombstones is a bug users would report as
+   * "deleted events came back".
+   *
+   * Same keyset pagination and the same planned_block exclusion as
+   * {@link findPage}, so the two pages cannot disagree about what an event is.
+   */
+  async findDeletedPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Event>> {
+    const page = await keysetPaginate(this.eventRepository, args, {
+      alias: 'event',
+      timeProp: 'startTime',
+      userId: context.userId,
+      scope: (qb) =>
+        qb
+          .andWhere("(event.event_type IS NULL OR event.event_type <> 'planned_block')")
+          .andWhere('event.is_deleted = true'),
+    });
+
+    return {
+      ...page,
+      entities: await this.composeMany(page.entities),
+    };
+  }
+
+  /**
    * Batch id lookup. Tombstoned events resolve to `null` — which is also what
    * keeps a just-deleted event out of the search results: SearchResolver
    * hydrates its candidate ids through here and drops the misses, so the row

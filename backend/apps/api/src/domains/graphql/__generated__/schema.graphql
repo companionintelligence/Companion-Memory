@@ -2817,6 +2817,11 @@ type Query {
     to: String!
   ): [DailyMetricsType!]!
 
+  """
+  Events deleted by deleteEvent and not yet restored — the handle restoreEvent needs. Newest first.
+  """
+  deletedEvents(after: String, before: String, first: Int, last: Int): EventConnection!
+
   """Answers every catalog question from stored daily_metrics."""
   descriptiveAnswers(date: String): [DescriptiveAnswerType!]!
 

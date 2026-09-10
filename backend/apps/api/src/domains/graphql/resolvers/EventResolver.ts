@@ -300,6 +300,63 @@ export class EventResolver {
   }
 
   /**
+   * The trash: events tombstoned by {@link deleteEvent}, newest first.
+   *
+   * This exists so `restoreEvent` is reachable. `deleteEvent` is a soft delete
+   * and restore genuinely reverses the base row, but every other read path
+   * filters `is_deleted = false` — so the only handle on a deleted event was
+   * the id echoed once in the delete payload. Discard that response and the
+   * event was unrecoverable through the API, while its label advertised a
+   * reversible operation. A restore you cannot address is not a restore.
+   *
+   * Read-only and user-scoped like any other query here. Note what restore does
+   * NOT bring back untouched: the delete physically removes the embedding and
+   * tsvector rows, and restore re-computes them asynchronously rather than
+   * restoring them, so a restored event reappears in the timeline immediately
+   * and in semantic search once re-indexing completes.
+   */
+  @Query(() => EventConnection, {
+    description:
+      'Events deleted by deleteEvent and not yet restored — the handle restoreEvent needs. Newest first.',
+  })
+  async deletedEvents(
+    @Context() context: RequestContext,
+    @Args() pagination: PaginationArgs,
+  ): Promise<EventConnection> {
+    const serviceContext = toServiceContext(context);
+
+    const { entities, hasNextPage, hasPreviousPage, totalCount } = await this.eventService.findDeletedPage(
+      serviceContext,
+      {
+        first: pagination.first,
+        last: pagination.last,
+        afterId: pagination.after ? GlobalUID.decode(pagination.after).id : null,
+        beforeId: pagination.before ? GlobalUID.decode(pagination.before).id : null,
+      },
+    );
+
+    const edges: EventEdge[] = entities.map((entity) => {
+      const node = EventType.toType(entity);
+
+      return {
+        node,
+        cursor: node.id,
+      };
+    });
+
+    return {
+      edges,
+      pageInfo: {
+        hasNextPage,
+        hasPreviousPage,
+        startCursor: edges.length > 0 ? edges[0].cursor : null,
+        endCursor: edges.length > 0 ? edges[edges.length - 1].cursor : null,
+      },
+      totalCount,
+    };
+  }
+
+  /**
    * Committed time in a window — the schedule surface's read path.
    *
    * Returns the full set rather than a Connection: the date range is already the
