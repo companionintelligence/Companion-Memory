@@ -1,6 +1,5 @@
-import { resolveToolGate } from '../toolGate';
-
 import type { DispatchableIntent } from '../dispatchPolicy';
+import { resolveToolGate } from '../toolGate';
 
 /**
  * An installed app is confirmed before anything irreversible — whatever the

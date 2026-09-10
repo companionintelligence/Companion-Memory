@@ -1,5 +1,4 @@
 import type { ToolCapability } from '../capability';
-
 import type { ToolPrincipal } from '../core/types';
 
 import { removesData } from './capabilityPolicy';
