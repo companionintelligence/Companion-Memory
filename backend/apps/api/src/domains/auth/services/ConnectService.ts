@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 
 import { SYSTEM_USER } from '@ci/common/context';
 import {
+  FULL_CAPABILITY,
   INTENTS_SCOPE,
   MCP_SCOPE,
   MEMORY_SCOPE,
@@ -66,13 +67,30 @@ export function scopesForApp(appUrn: string): string[] {
  * `DEFAULT_API_KEY_CAPABILITY` — an authority level nobody had picked for these
  * apps, and one that would move under them if that default ever changed.
  *
- * Every app currently lands on `write`, deliberately — but chosen, not inherited:
+ * The chat agents (`ci-openclaw`, `ci-hermes`) are on `full`; everything else on
+ * `write`. Both chosen, not inherited:
  *
- * - the chat agents (`ci-openclaw`, `ci-hermes`) record as well as recall, so
- *   `read` would break them (`POST /memory/write` and `/memory/turn` are
- *   `@RequireCapability(write)`), while `full` would hand a chat agent the
- *   ability to DELETE memories — the one thing worth asking a user about
- *   separately.
+ * - the chat agents record as well as recall, so `read` would break them
+ *   (`POST /memory/write` and `/memory/turn` are `@RequireCapability(write)`).
+ *
+ *   They were on `write` for the reason this comment used to give: `full` would
+ *   hand a chat agent the ability to DELETE memories, "the one thing worth
+ *   asking a user about separately". That reasoning was right and its conclusion
+ *   is now wrong, because the missing half arrived. At `write` the harness did
+ *   not get asked about — it got a flat `TOOL_FORBIDDEN` from `capabilityAllows`
+ *   BEFORE the gate, and a deny is deliberately never laundered into a queue
+ *   (see toolGate). So there was no card, no audit trail, and no way for the
+ *   owner to say yes; "ask the user separately" had nowhere to happen.
+ *
+ *   `resolveToolGate` now queues any `needsConfirmation` intent from a
+ *   `managed-app` principal regardless of the owner's trust dial and regardless
+ *   of the pending-actions feature flag. So `full` here does not mean the
+ *   harness may delete a memory; it means the harness may ASK to, and the owner
+ *   answers. That is the separate asking this comment wanted.
+ *
+ *   The two are a pair. Reverting one without the other is unsafe in both
+ *   directions: `full` without the gate rule is unattended deletion, and the gate
+ *   rule without `full` is the flat refusal that made cards unreachable.
  * - the default branch (the bulk importer `ci-import-tools`, and any app whose
  *   needs we have not enumerated) already gets full *surface* from `scopesForApp`;
  *   it does not also need destructive authority. Bulk ingest is
@@ -88,8 +106,10 @@ export function capabilityForApp(appUrn: string): ApiKeyCapability {
   switch (appName) {
     case 'ci-openclaw':
     case 'ci-hermes':
-      // Chat-agent tier: recall AND remember, never delete.
-      return WRITE_CAPABILITY;
+      // Chat-agent tier: recall, remember, and ASK to delete — the gate turns a
+      // destructive attempt into an approval card rather than running it. Paired
+      // with the `managed-app` rule in resolveToolGate; see the docblock above.
+      return FULL_CAPABILITY;
     default:
       // Bulk importer / un-enumerated app: writes a lot, still destroys nothing.
       return WRITE_CAPABILITY;

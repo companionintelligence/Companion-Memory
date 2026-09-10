@@ -105,7 +105,16 @@ export class PendingActionService {
       // The tier is pinned rather than read from the context on purpose — a
       // `?tier=local` caller must not be able to reach a queue branch that this
       // appliance has switched off.
-      return resolveToolGate(schema, { tier: 'appliance', capability, trust: null });
+      // `principal` is passed even here, on purpose. The flag gates the DIAL-driven
+      // review; it must not also gate the harness rule, or turning it off would
+      // silently restore unattended destructive calls for installed apps — which
+      // is exactly the window `capabilityForApp`'s `full` opened.
+      return resolveToolGate(schema, {
+        tier: 'appliance',
+        capability,
+        trust: null,
+        principal: context.principal,
+      });
     }
 
     const tier = context.tier ?? 'appliance';
@@ -115,7 +124,7 @@ export class PendingActionService {
     // write skips it entirely, so turning the flag on cannot slow or change
     // them.
     const trust =
-      needsConfirmation(schema) && context.userId
+      needsConfirmation(schema) && context.userId && context.principal !== 'managed-app'
         ? await this.personalization.decideAction(context.userId, {
             // `confidence: 1` is the honest value, not a way to force `auto`.
             // The dial grades INFERENCES — how sure the appliance is that a
@@ -130,7 +139,7 @@ export class PendingActionService {
           })
         : null;
 
-    return resolveToolGate(schema, { tier, capability, trust });
+    return resolveToolGate(schema, { tier, capability, trust, principal: context.principal });
   }
 
   /**

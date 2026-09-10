@@ -5,6 +5,7 @@ import { ContextService } from '@ci/common/context';
 import { INTENTS_SCOPE, type ApiKeyCapability } from '@ci/common/decorators';
 import { type ApiKeyScopedRequest, apiKeyCapabilityOf, isScopeLimitedApiKey } from '@ci/common/guards';
 import { LoggerService } from '@ci/common/logging';
+import { isManagedAppPrincipal } from '@ci/domains/auth';
 import {
   type JSONSchema,
   type ToolInvocationContext,
@@ -206,6 +207,13 @@ export class McpToolService implements OnModuleInit {
       ...ContextService.getContext(),
       userId,
       capability,
+      // Same rule as the REST intent path: an installed app is confirmed before
+      // anything irreversible, whatever the owner's dial says.
+      principal: isManagedAppPrincipal({
+        managedBy: (context.req as ApiKeyScopedRequest).apiKeyManagedBy,
+      })
+        ? 'managed-app'
+        : 'owner',
     };
     const result = await this.toolRegistry.executeTool(name, invocationContext, args);
 

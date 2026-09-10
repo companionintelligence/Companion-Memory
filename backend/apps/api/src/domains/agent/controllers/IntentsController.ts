@@ -15,6 +15,7 @@ import {
 import { Context, type RequestContext } from '@ci/common/context';
 import { INTENTS_SCOPE, READ_CAPABILITY, RequireCapability, RequireScopes } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard, type ApiKeyScopedRequest, apiKeyCapabilityOf } from '@ci/common/guards';
+import { isManagedAppPrincipal } from '@ci/domains/auth';
 import {
   DISPATCH_TIERS,
   IntentCatalogService,
@@ -131,7 +132,15 @@ export class IntentsController {
 
     return this.registry.executeTool(
       toolName,
-      { ...context, capability: apiKeyCapabilityOf(req), tier: parseTier(tier) },
+      {
+        ...context,
+        capability: apiKeyCapabilityOf(req),
+        tier: parseTier(tier),
+        // The harnesses' own path. `managed-app` makes the gate queue anything
+        // irreversible for the owner to answer, which is what lets a connect key
+        // hold `full` without being able to spend it unattended.
+        principal: isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy }) ? 'managed-app' : 'owner',
+      },
       body ?? {},
     );
   }

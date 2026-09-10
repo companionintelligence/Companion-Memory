@@ -99,3 +99,11 @@ export class AuthModule {}
 
 export { SignupCodeService };
 export { ApiKeyService };
+
+// Provenance, for the surfaces that must tell an installed app apart from the
+// owner: the tool gate (which confirms a managed app before anything
+// irreversible) and the approval controller (which refuses to take the owner's
+// answer from one). Exported from the barrel because `no-cross-domain-internals`
+// forbids reaching into `auth/types` from another domain.
+export { isManagedAppPrincipal, CONNECT_PROVENANCE } from './types';
+export type { ApiKeyProvenance, ValidatedApiKey } from './types';
