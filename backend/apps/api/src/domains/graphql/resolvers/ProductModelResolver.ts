@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { type FindProductModelsFilter, ObjectMergeService, ProductModelService } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { ContentLoader } from '../loaders/ContentLoader';
 import { ProductIdentifierLoader } from '../loaders/ItemIdentifierLoader';
 import { TagLoader } from '../loaders/TagLoader';
@@ -18,7 +19,6 @@ import { ProductModelConnection } from '../types/ProductModelConnection';
 import { ProductModelEdge } from '../types/ProductModelEdge';
 import { ProductModelType } from '../types/ProductModelType';
 import { decodeOffsetCursor, encodeOffsetCursor } from '../utils/offsetCursor';
-import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 const DEFAULT_PRODUCT_PAGE_SIZE = 25;
 

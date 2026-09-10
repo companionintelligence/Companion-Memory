@@ -38,6 +38,7 @@ import {
 } from '@ci/domains/asks';
 import { OutboundAskService, type PeerAskRequest, type PeerLink, PeerLinkService } from '@ci/domains/peers';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { AnswerFormEnum, AskAnswerType } from '../types/AskAnswerType';
 import { AskDisclosureHistoryInput, AskDisclosureSummaryInput } from '../types/AskDisclosureInputs';
 import {
@@ -66,7 +67,6 @@ import {
 import { CreateAskBroadcastInput } from '../types/CreateAskBroadcastInput';
 import { GlobalUID } from '../types/GlobalUID';
 import { HouseholdTierType, SetHouseholdTierInput } from '../types/HouseholdTierType';
-import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 /**
  * GraphQL surface for the interpersonal ask feature (epic #1712, Phase 0). Every

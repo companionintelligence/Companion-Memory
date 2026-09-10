@@ -6,6 +6,7 @@ import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { TaskService, PlannedBlockService, type Task, type TaskStatus } from '@ci/domains/planning';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
 import { CreateTaskInput } from '../types/CreateTaskInput';
 import { CreateTaskPayload } from '../types/CreateTaskPayload';
@@ -24,7 +25,6 @@ import { TaskStatusEnum, TaskType } from '../types/TaskType';
 import { UpdateTaskInput } from '../types/UpdateTaskInput';
 import { UpdateTaskPayload } from '../types/UpdateTaskPayload';
 import { Paginator } from '../utils/Paginator';
-import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => TaskType)

@@ -12,10 +12,10 @@ import {
   type DeclineReason,
 } from '@ci/domains/schedule';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { EventType } from '../types/EventType';
 import { GlobalUID } from '../types/GlobalUID';
 import { ScheduleCandidateType } from '../types/ScheduleCandidateType';
-import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 const DECLINE_REASONS: DeclineReason[] = ['not_now', 'wrong_time', 'not_like_this', 'never'];
 

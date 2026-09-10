@@ -13,6 +13,7 @@ import {
   PlaceService,
 } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PlaceLoader } from '../loaders/PlaceLoader';
 import { PlaceVisitStatsLoader } from '../loaders/PlaceVisitStatsLoader';
 import { TagLoader } from '../loaders/TagLoader';
@@ -34,7 +35,6 @@ import { RelationshipType } from '../types/RelationshipType';
 import { UpdatePlaceInput } from '../types/UpdatePlaceInput';
 import { memoryRelToGql } from '../utils/lifeGraphRelationships';
 import { Paginator } from '../utils/Paginator';
-import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 const PLACE_KINDS: PlaceKind[] = [
   'room',

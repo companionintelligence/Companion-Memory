@@ -30,3 +30,14 @@ export {
   type ToolResult,
   type ToolSchema,
 } from '@ci/tool-core';
+
+/**
+ * The GraphQL field-extension key a resolver declares its {@link IntentPrivacy} under.
+ *
+ * Lives here, beside the privacy contract itself, rather than in `domains/graphql`: both
+ * `domains/graphql` (which writes it, via the `@GraphqlPrivacy` decorator) and `domains/mcp`
+ * (whose `GraphQLToolAdapter` reads it) need the same string, and `no-cross-domain-internals`
+ * forbids either reaching into the other's internals for it. `domains/tools` is the barrel they
+ * already share for `IntentPrivacy`.
+ */
+export const GRAPHQL_PRIVACY_EXTENSION = 'ciPrivacy' as const;

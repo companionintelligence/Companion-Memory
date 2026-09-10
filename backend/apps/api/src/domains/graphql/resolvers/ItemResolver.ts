@@ -22,6 +22,7 @@ import {
   adoptIngestIdentity,
 } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { ItemAcquisitionLoader } from '../loaders/ItemAcquisitionLoader';
 import { ItemFileLoader } from '../loaders/ItemFileLoader';
 import { ItemIdentifierLoader } from '../loaders/ItemIdentifierLoader';
@@ -56,7 +57,6 @@ import { UpdateItemInput } from '../types/UpdateItemInput';
 import { UpdateItemPayload } from '../types/UpdateItemPayload';
 import { decodeItemCursor, encodeItemCursor } from '../utils/itemCursor';
 import { Paginator } from '../utils/Paginator';
-import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 /** Rows `findPage` fetches per round trip while draining for a refinement. */
 const REFINE_CHUNK = 200;

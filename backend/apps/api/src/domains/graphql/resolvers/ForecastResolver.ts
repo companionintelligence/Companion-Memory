@@ -15,6 +15,7 @@ import {
 import { PythonFunctionService } from '@ci/domains/python-functions';
 import { UserService } from '@ci/domains/user';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { DueForecastType } from '../types/DueForecastType';
 import { ForecastHistoryDayType } from '../types/ForecastHistoryType';
 import { ForecastType } from '../types/ForecastType';
@@ -22,7 +23,6 @@ import { MetricForecastType } from '../types/MetricForecastType';
 import { PlaceForecastItemType } from '../types/PlaceForecastType';
 import { PredictionCalibrationType } from '../types/PredictionCalibrationType';
 import { WeekForecastType } from '../types/WeekForecastType';
-import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => ForecastType)

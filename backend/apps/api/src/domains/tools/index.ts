@@ -244,6 +244,7 @@ export {
   type IntentSensitivity,
   type IntentPrivacy,
   type CiEntityType,
+  GRAPHQL_PRIVACY_EXTENSION,
 } from './core/types';
 // Execution policy — one implementation of "may this caller run this intent, here?", shared by
 // every dispatcher (MCP, the in-house chat model, and the on-device tier via the manifest).

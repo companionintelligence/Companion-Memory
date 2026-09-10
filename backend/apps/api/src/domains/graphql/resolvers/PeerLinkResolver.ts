@@ -6,6 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { PersonService } from '@ci/domains/memory';
 import { PeerLinkService } from '@ci/domains/peers';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { GlobalUID } from '../types/GlobalUID';
 import {
   CreatePeerLinkInput,
@@ -14,7 +15,6 @@ import {
   PeerTrustTierEnum,
   UpdatePeerLinkInput,
 } from '../types/PeerLinkType';
-import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 /**
  * Peer links — who this box will exchange asks with, and how far it trusts them.

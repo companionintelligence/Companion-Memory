@@ -3,8 +3,7 @@ import { buildSchema, type GraphQLSchema } from 'graphql';
 
 import type { LoggerService } from '@ci/common/logging';
 
-import { GRAPHQL_PRIVACY_EXTENSION } from '@ci/domains/graphql/decorators/GraphqlPrivacy';
-import type { IntentPrivacy } from '@ci/domains/tools';
+import { GRAPHQL_PRIVACY_EXTENSION, type IntentPrivacy } from '@ci/domains/tools';
 
 import { GraphQLToolAdapter } from './GraphQLToolAdapter';
 

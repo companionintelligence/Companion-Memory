@@ -22,9 +22,7 @@ import {
 import { z, type ZodTypeAny } from 'zod';
 
 import { LoggerService } from '@ci/common/logging';
-import type { IntentPrivacy } from '@ci/domains/tools';
-
-import { GRAPHQL_PRIVACY_EXTENSION } from '@ci/domains/graphql/decorators/GraphqlPrivacy';
+import { GRAPHQL_PRIVACY_EXTENSION, type IntentPrivacy } from '@ci/domains/tools';
 
 import type { McpToolDefinition } from '../types';
 

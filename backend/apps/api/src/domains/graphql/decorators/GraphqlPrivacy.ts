@@ -1,13 +1,6 @@
 import { Extensions } from '@nestjs/graphql';
 
-import type { IntentPrivacy } from '@ci/domains/tools';
-
-/**
- * The extension key `GraphQLToolAdapter` reads a declared privacy label from.
- *
- * Exported so the adapter and this decorator cannot drift on the string.
- */
-export const GRAPHQL_PRIVACY_EXTENSION = 'ciPrivacy' as const;
+import { GRAPHQL_PRIVACY_EXTENSION, type IntentPrivacy } from '@ci/domains/tools';
 
 /**
  * Declare what a GraphQL root field actually DOES, for the MCP capability gate.

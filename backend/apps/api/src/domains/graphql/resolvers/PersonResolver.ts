@@ -26,6 +26,7 @@ import {
   serializePersonAddress,
 } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PersonIdentifiersLoader } from '../loaders/PersonIdentifiersLoader';
 import { PersonInteractionStatsLoader } from '../loaders/PersonInteractionStatsLoader';
 import { TagLoader } from '../loaders/TagLoader';
@@ -52,7 +53,6 @@ import { UpdatePersonPayload } from '../types/UpdatePersonPayload';
 import { memoryRelToGql } from '../utils/lifeGraphRelationships';
 import { Paginator } from '../utils/Paginator';
 import { contactMethodsFromPersonProperties, mergePersonIdentifiers } from '../utils/personContactMethods';
-import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 /** Map the structured input fields onto the established properties JSONB keys. */
 function structuredPropertiesPatch(

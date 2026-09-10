@@ -25,6 +25,7 @@ import {
   TagService,
 } from '@ci/domains/search-next';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagAssignmentCountLoader } from '../loaders/TagAssignmentCountLoader';
 import { ActionType } from '../types/ActionType';
 import { BrowserActivityType } from '../types/BrowserActivityType';
@@ -53,7 +54,6 @@ import { ThreadType } from '../types/ThreadType';
 import { UpdateTagInput } from '../types/UpdateTagInput';
 import { UpdateTagPayload } from '../types/UpdateTagPayload';
 import { Paginator } from '../utils/Paginator';
-import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => TagType)
