@@ -1,5 +1,7 @@
 import { Badge, Button, Card } from '@ci/shadcn';
 
+import { appLabel } from '@/lib/appLabel';
+
 import type { ApprovalReason, PendingApproval } from './useApprovals';
 
 /**
@@ -26,38 +28,6 @@ const REASON_COPY: Record<ApprovalReason, string> = {
 
 function reasonCopy(reason: ApprovalReason): string {
   return REASON_COPY[reason] ?? 'This is irreversible and needs your say-so.';
-}
-
-/**
- * Turn an api-key name into something an owner can act on.
- *
- * The row stores the fact (`app:ci-openclaw:ci-marketplace`); this is the
- * presentation half. A deliberately small map with a readable fallback rather
- * than an import from the harness registry, which lives in another domain the
- * backend may not reach into and which the frontend does not receive.
- *
- * The fallback matters more than the map: a NEW installed app must still be
- * nameable on a card the day it ships, and "app:ci-something:marketplace" is a
- * worse label than "ci-something" but a far better one than nothing.
- */
-const APP_LABELS: Record<string, string> = {
-  'ci-openclaw': 'OpenClaw',
-  'ci-hermes': 'Hermes',
-};
-
-export function appLabel(principalName: string | null): string | null {
-  if (!principalName) {
-    return null;
-  }
-
-  // `app:<slug>:<marketplace>` — take the slug.
-  const slug = principalName.startsWith('app:') ? principalName.slice(4).split(':')[0] : null;
-
-  if (!slug) {
-    return principalName;
-  }
-
-  return APP_LABELS[slug] ?? slug;
 }
 
 interface Props {

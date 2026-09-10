@@ -62,6 +62,7 @@ const ItemPage = lazy(() => import('@/pages/ItemPage'));
 const SourcesPage = lazy(() => import('@/pages/SourcesPage'));
 const JobsPage = lazy(() => import('@/pages/JobsPage'));
 const ApprovalsPage = lazy(() => import('@/pages/ApprovalsPage'));
+const ActivityPage = lazy(() => import('@/pages/ActivityPage'));
 const ThingsPage = lazy(() => import('@/pages/ThingsPage'));
 const ReceiptsPage = lazy(() => import('@/pages/ReceiptsPage'));
 const ReceiptPage = lazy(() => import('@/pages/ReceiptPage'));
@@ -602,6 +603,21 @@ function AppRoutes() {
             element={
               <ProtectedRoute>
                 <ApprovalsPage />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Activity — the tool-call ledger, including the refusals. Sibling of
+              /approvals rather than part of it: the queue is the open questions,
+              this is the record of every answer and every call that needed none.
+              Also unflagged, and for the same reason — a refusal recorded where
+              nobody can read it is what made the ledger write-only for a
+              fortnight. */}
+          <Route
+            path="/activity"
+            element={
+              <ProtectedRoute>
+                <ActivityPage />
               </ProtectedRoute>
             }
           />
