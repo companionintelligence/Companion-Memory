@@ -22,6 +22,17 @@ import { CreateUserDto, UpdateUserDto } from '../types';
  */
 const purgeGraceDays = () => config.accountDeletion.graceDays;
 
+/**
+ * Advisory-lock key serializing the "is this appliance unowned?" check in
+ * {@link UserService.claimApplianceIfUnowned}.
+ *
+ * Any stable bigint works. This one is the version of the migration that heals the appliances
+ * predating that method (20260910133657_bootstrap_first_user_as_admin) — arbitrary, but unique by
+ * construction and traceable to what it guards, so a future advisory lock in another domain can be
+ * chosen not to collide with it.
+ */
+const APPLIANCE_CLAIM_LOCK_KEY = 20260910133657;
+
 @Injectable()
 export class UserService {
   constructor(
@@ -46,11 +57,86 @@ export class UserService {
 
     const entity = await this.userRepository.save(instance);
 
+    // Before the event, so nothing observing UserCreated can read a half-claimed appliance.
+    entity.role = (await this.claimApplianceIfUnowned(entity.id)) ? 'admin' : entity.role;
+
     await this.eventService.send(UserCreatedEvent, {
       userId: entity.id,
     });
 
     return UserEntity.toEgressType(entity);
+  }
+
+  /**
+   * Makes the account that claims an unowned appliance its administrator.
+   *
+   * ── Why this exists ────────────────────────────────────────────────────────
+   *
+   * Until this method, NOTHING in application code ever wrote `role = 'admin'`. The only path was
+   * migration 20260825233952, which promotes the earliest EXISTING user and only when no admin
+   * exists: on an upgrade that finds the owner, but on a fresh install it runs against an empty
+   * `ci.users`, matches nothing, and the first signup lands on the column default `'user'`. Every
+   * appliance installed fresh was therefore permanently admin-less, which made
+   * {@link AdminOnlyGuard}'s routes — all MCP server configuration including the outbound
+   * per-tool approval UI, and `GET /api/tools/invocations/system`, the only reader of the ledger's
+   * `user_id IS NULL` rows — return 403 to every real user. Migration 20260910133657 heals the
+   * appliances that already exist; this covers every one created from here on.
+   *
+   * ── Why the FIRST account, and why automatically ───────────────────────────
+   *
+   * Because on a single-owner personal appliance "admin" is not a distinct person from "the
+   * owner", and this codebase already says so in three places that predate this method:
+   * `SignupController.isSignupCodeRequired` exempts the first account precisely because "an
+   * appliance with zero accounts has nothing to protect yet"; 20260825233952 identifies the owner
+   * as `ORDER BY created_at ASC LIMIT 1`; and {@link findAllOnboarded} attributes an
+   * appliance-wide connector's corpus to the first onboarded account, calling oldest-first "the
+   * only stable meaning 'first account' can have". Promoting the first account is not a new
+   * concept — it is the one already written down, finally applied.
+   *
+   * ── Why this TIGHTENS the appliance rather than loosening it ───────────────
+   *
+   * The instinct is that granting admin can only widen access. Here it does the opposite on net,
+   * because {@link ApplianceAdminGuard} — which gates the `/jobs` appliance-wide controls and
+   * `/signup-codes` minting — admits EVERY signed-in user when no admin exists, that being the
+   * only honest thing it could do while the role was ungrantable. So on a fresh appliance today:
+   * those routes are open to anyone with an account, and `AdminOnlyGuard`'s are open to nobody.
+   * After this, the first surface narrows from everyone to one person and the second widens from
+   * nobody to that same person. One hole closes; one route becomes usable by its intended reader.
+   *
+   * ── The unowned test, and why it matches the guard's exactly ───────────────
+   *
+   * "No LIVE admin" (`deleted_at IS NULL`), which is character-for-character the question
+   * `ApplianceAdminGuard.applianceHasAdmin()` asks. They must agree: an appliance the guard treats
+   * as unclaimed — and therefore opens to everybody — has to be one this is willing to claim, or
+   * the permissive branch becomes permanent instead of transitional. A consequence worth stating
+   * plainly: if the sole owner deletes their account, the next account created claims the box.
+   * That is deliberate and is strictly better than the alternative, which is an appliance whose
+   * control plane stays open to everyone forever.
+   *
+   * @returns whether this account was promoted.
+   */
+  private async claimApplianceIfUnowned(userId: string): Promise<boolean> {
+    // One statement, inside a transaction holding an advisory lock, because the decision reads a
+    // table it is about to write. Two signups racing on a fresh appliance would otherwise both
+    // observe "no admin" under READ COMMITTED and both promote — a small consequence (two admins
+    // on a single-owner box, both among its first two accounts) but a silent one, and the lock
+    // costs nothing on a path that runs once per account.
+    return this.userRepository.manager.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock($1)', [APPLIANCE_CLAIM_LOCK_KEY]);
+
+      const promoted = await manager.query<Array<{ id: string }>>(
+        `UPDATE ci.users
+            SET role = 'admin'
+          WHERE id = $1
+            AND NOT EXISTS (
+              SELECT 1 FROM ci.users WHERE role = 'admin' AND deleted_at IS NULL
+            )
+        RETURNING id`,
+        [userId],
+      );
+
+      return promoted.length > 0;
+    });
   }
 
   async findAll(): Promise<User[]> {

@@ -22,18 +22,30 @@ import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@
  * `__tests__/AdminOnlyGuard.test.ts`). An earlier revision of this comment claimed the portal path
  * was refused here; it is not, and that claim was being cited as a reason not to admin-gate routes.
  *
- * ═══ THE REAL CAVEAT: A FRESH APPLIANCE HAS NO ADMIN AT ALL ═══
+ * ═══ ADMIN BOOTSTRAPPING (was: THE REAL CAVEAT) ═══
  *
- * Nothing in application code ever writes `role = 'admin'` — the only path is migration
- * 20260825233952, which promotes the earliest existing user and ONLY when no admin exists. On an
- * UPGRADE that finds the owner. On a FRESH install the migration runs against an empty `ci.users`,
- * matches nothing, and the first user then signs up on the column default `'user'` — so the
- * appliance has no admin, permanently, with no in-app way to mint one.
+ * This guard used to be unreachable on a fresh appliance, and this comment used to say so. The
+ * cause: nothing in application code ever wrote `role = 'admin'`. The only path was migration
+ * 20260825233952, which promotes the earliest EXISTING user and only when no admin exists — on an
+ * upgrade that found the owner, but on a FRESH install it ran against an empty `ci.users`, matched
+ * nothing, and the first signup landed on the column default `'user'`. Those appliances had no
+ * admin, permanently, so every route here returned 403 to everybody: all MCP server configuration
+ * (including the outbound per-tool approval UI, which the web app renders and which therefore
+ * failed for every user) and `GET /api/tools/invocations/system`, the only reader of the tool
+ * ledger's `user_id IS NULL` rows.
  *
- * Every route behind this guard is therefore unreachable on a fresh appliance. That is a live
- * problem for the MCP server-config routes already, and it is the reason `/jobs`' appliance-wide
- * controls are NOT gated here yet even though they should be: gating them today would take the
- * Jobs page's switches away from every new install. Admin bootstrapping has to land first.
+ * Both halves are now closed. `UserService.claimApplianceIfUnowned` promotes the account that
+ * claims an unowned appliance, covering every appliance created from that release on, and
+ * migration 20260910133657 re-runs the backfill for the fresh installs 20260825233952 could not
+ * reach. Read those two for the reasoning; the short version is that on a single-owner personal
+ * appliance the first account IS the owner, which is what `SignupController`'s first-account
+ * exemption and `UserService.findAllOnboarded` already assumed.
+ *
+ * So a route may now be gated here without stranding new installs. `/jobs`' appliance-wide
+ * controls still use {@link ApplianceAdminGuard} rather than this guard, and deliberately: that
+ * one degrades to admitting everyone on an appliance with no live admin, which is the honest
+ * answer for a control plane, whereas these routes fail closed because stdio transport is
+ * arbitrary local command execution and "unclaimed" is not a reason to hand that out.
  */
 @Injectable()
 export class AdminOnlyGuard implements CanActivate {

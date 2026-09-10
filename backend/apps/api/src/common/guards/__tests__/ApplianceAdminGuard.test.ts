@@ -73,12 +73,15 @@ describe('ApplianceAdminGuard', () => {
   });
 
   it('admits a non-admin on an appliance that has NO admin', async () => {
-    // The deliberate, documented degradation, and the reason this guard can ship
-    // where AdminOnlyGuard cannot. Nothing in application code writes
-    // `role = 'admin'` — only migration 20260825233952, which promotes the
-    // earliest EXISTING user and so matches nothing on a fresh install. Requiring
-    // a role that cannot be granted would take the Jobs page's switches away from
-    // every new appliance, permanently.
+    // The deliberate, documented degradation. This was once the steady state on
+    // every fresh appliance, because nothing in application code wrote
+    // `role = 'admin'`; now `UserService.claimApplianceIfUnowned` promotes the
+    // first account, so the branch is transitional — it fires only before anyone
+    // can authenticate at all, or after an owner deletes their account and
+    // before the next one claims the box. Still pinned, because it is the
+    // behaviour that distinguishes this guard from AdminOnlyGuard: an
+    // appliance-wide control plane degrades open, arbitrary local command
+    // execution degrades closed.
     const { dataSource } = dataSourceAnswering(false);
 
     await expect(new ApplianceAdminGuard(dataSource).canActivate(contextFor({ role: 'user' }))).resolves.toBe(

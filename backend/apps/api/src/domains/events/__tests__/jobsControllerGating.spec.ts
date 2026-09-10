@@ -23,7 +23,9 @@ import { JobsController } from '../controllers/JobsController';
  * without a capability fails this suite rather than quietly landing under the acting one.
  *
  * `AdminOnlyGuard` is deliberately not among the guards asserted here; see the controller's own
- * doc comment for why this appliance may have no admin account at all.
+ * doc comment for why `ApplianceAdminGuard` is the right one for an appliance-wide control plane
+ * (it degrades open on an appliance with no live admin, which the arbitrary-command-execution
+ * routes behind `AdminOnlyGuard` must not).
  */
 
 /** Nest's own metadata key for a handler's route path (`@nestjs/common` PATH_METADATA). */
