@@ -6,11 +6,7 @@ import { IsNull, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
-import {
-  type ApiKeyCapability,
-  DEFAULT_API_KEY_CAPABILITY,
-  coerceApiKeyCapability,
-} from '@ci/common/decorators';
+import { DEFAULT_API_KEY_CAPABILITY, coerceApiKeyCapability } from '@ci/common/decorators';
 import { LoggerService } from '@ci/common/logging';
 
 import { ApiKey, ApiKeyEntity } from '../entities/ApiKeyEntity';
