@@ -1,6 +1,28 @@
 import type { EventPayloads } from './event-registry';
 
 export type Acknowledgement = {
+  /**
+   * The QUEUE's own id for this delivery (`pgboss.job.id`) — and the only
+   * channel for runtime job metadata.
+   *
+   * It used to be merged into the payload as `jobId`, which meant the bus wrote
+   * into a namespace it does not own. Any domain that named a field `jobId`
+   * silently lost it: `domains/agent` declares one on five payload types
+   * meaning the `ci.agent_jobs` row, so `AgentDispatchListener` rang the Hub
+   * doorbell with pg-boss's id instead, the harness 404'd fetching its packet,
+   * and the stale reaper closed the job reporting that OpenClaw had never
+   * checked in — blaming the one part of the chain that was working.
+   *
+   * Required rather than optional so that every construction site is caught by
+   * `Type check backend`, which is a merge gate. A listener that reports
+   * completion out-of-band reads the id from HERE and passes it to
+   * {@link EventService.completeJob} / {@link EventService.failJob}.
+   *
+   * Under LocalEventService this is an inline uuid with no pg-boss row behind
+   * it, and `completeJob` there is a no-op.
+   */
+  jobId: string;
+
   done: () => void;
   fail: (reason: unknown) => void;
 

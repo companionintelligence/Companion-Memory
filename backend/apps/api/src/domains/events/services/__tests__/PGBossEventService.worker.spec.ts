@@ -299,7 +299,10 @@ function makeHarness(options: {
     listen(queue, eventName, outcome = 'done') {
       emitter.on(
         `${eventName}:${queue}`,
-        (payload: { jobId: string; durationMs: number }, ack: Acknowledgement) => {
+        // The job id comes from the ACK, not the payload — the bus no longer
+        // writes into the payload. Every identity assertion below still
+        // compares the same job-id strings.
+        (payload: { durationMs: number }, ack: Acknowledgement) => {
           enter(queue);
 
           if (outcome === 'never') {
@@ -309,10 +312,10 @@ function makeHarness(options: {
           }
 
           const settle = () => {
-            exit(queue, payload.jobId);
+            exit(queue, ack.jobId);
 
             if (outcome === 'fail') {
-              ack.fail(new Error(`listener exploded on ${payload.jobId}`));
+              ack.fail(new Error(`listener exploded on ${ack.jobId}`));
 
               return;
             }
@@ -320,7 +323,7 @@ function makeHarness(options: {
             if (outcome === 'throw') {
               // A listener that never acks at all — the same failure path, but
               // reached by an exception escaping the emit() rather than by ack.
-              throw new Error(`listener threw on ${payload.jobId}`);
+              throw new Error(`listener threw on ${ack.jobId}`);
             }
 
             if (outcome === 'defer') {
@@ -404,12 +407,14 @@ describe('PGBossEventService work loop', () => {
       expect(harness.boss.fail).not.toHaveBeenCalled();
     });
 
-    it('hands the listener the job payload plus its jobId, with the routing key stripped', async () => {
+    it('hands the listener the domain payload verbatim, with the routing key stripped', async () => {
       const harness = makeHarness({ queues: ['search-index'] });
       const received: unknown[] = [];
+      const acks: Acknowledgement[] = [];
 
       harness.emitter.on('note.created:search-index', (payload: unknown, ack: Acknowledgement) => {
         received.push(payload);
+        acks.push(ack);
         ack.done();
       });
       harness.enqueue('search-index', 'note.created', [0]);
@@ -418,8 +423,13 @@ describe('PGBossEventService work loop', () => {
       await jest.advanceTimersByTimeAsync(1);
 
       // `name` is the routing key, not payload — a listener that saw it would be
-      // reading the queue's dispatch metadata as domain data.
-      expect(received).toEqual([{ durationMs: 0, jobId: 'search-index-job-1' }]);
+      // reading the queue's dispatch metadata as domain data. And the bus adds
+      // NOTHING: it used to merge `jobId` in, silently overwriting any field a
+      // domain had given that name.
+      expect(received).toEqual([{ durationMs: 0 }]);
+      // Asserted positively, so removing the payload key is not mistaken for
+      // removing the id — it moved to the acknowledgement, it did not vanish.
+      expect(acks[0]?.jobId).toBe('search-index-job-1');
     });
 
     it('fails the job with the error message AND stack persisted in the job output', async () => {

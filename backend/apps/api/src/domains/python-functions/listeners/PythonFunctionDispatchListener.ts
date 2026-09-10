@@ -13,7 +13,11 @@ import {
   type PythonFunctionTarget,
 } from '../types';
 
-type DispatchJob = PythonFunctionRunPayload & { jobId: string };
+// WAS: `type DispatchJob = PythonFunctionRunPayload & { jobId: string }` — a
+// hand-written intersection that was the repo's only written admission that the
+// event bus smuggled a runtime key through a domain payload. The bus no longer
+// writes into the payload; the queue's job id rides `ack.jobId`, where tsc can
+// see it.
 
 // The runner replies as soon as the run is accepted into its worker pool, so
 // this bounds connection/accept time only — never function runtime.
@@ -51,7 +55,7 @@ export class PythonFunctionDispatchListener {
     autoAcknowledge: false,
     queueOptions: PYTHON_FUNCTION_QUEUE_OPTIONS.summary,
   })
-  async dispatchSummary(payload: DispatchJob, ack: Acknowledgement): Promise<void> {
+  async dispatchSummary(payload: PythonFunctionRunPayload, ack: Acknowledgement): Promise<void> {
     await this.dispatch('summary', config.services.summary.host, payload, ack);
   }
 
@@ -60,14 +64,14 @@ export class PythonFunctionDispatchListener {
     autoAcknowledge: false,
     queueOptions: PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe,
   })
-  async dispatchHbpe(payload: DispatchJob, ack: Acknowledgement): Promise<void> {
+  async dispatchHbpe(payload: PythonFunctionRunPayload, ack: Acknowledgement): Promise<void> {
     await this.dispatch('hbpe', config.services.hbpe.host, payload, ack);
   }
 
   private async dispatch(
     target: PythonFunctionTarget,
     baseUrl: string,
-    payload: DispatchJob,
+    payload: PythonFunctionRunPayload,
     ack: Acknowledgement,
   ): Promise<void> {
     const url = `${baseUrl.replace(/\/+$/, '')}/functions/run`;
@@ -81,7 +85,11 @@ export class PythonFunctionDispatchListener {
         body: JSON.stringify({
           function: payload.function,
           args: payload.args,
-          job_id: payload.jobId,
+          // From the ACK: this is pg-boss's job id, which is what the sidecar
+          // hands back to PythonFunctionCallbackController and what
+          // `boss.complete(queue, jobId)` needs. The wire field name is
+          // unchanged — the sidecars' pytest suites pin `job_id`.
+          job_id: ack.jobId,
           queue: PYTHON_FUNCTION_QUEUES[target],
         }),
         signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
@@ -96,7 +104,7 @@ export class PythonFunctionDispatchListener {
       this.logger.log('Dispatched function run to python service', {
         target,
         functionName: payload.function,
-        jobId: payload.jobId,
+        jobId: ack.jobId,
       });
 
       // Completion arrives via the callback controller (or queue expiration).
@@ -105,7 +113,7 @@ export class PythonFunctionDispatchListener {
       this.logger.warn('Python function dispatch failed — job will retry', {
         target,
         functionName: payload.function,
-        jobId: payload.jobId,
+        jobId: ack.jobId,
         error: err instanceof Error ? err.message : String(err),
       });
 
