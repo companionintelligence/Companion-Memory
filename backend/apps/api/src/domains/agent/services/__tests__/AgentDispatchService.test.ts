@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 
 import { TASK_STATUSES } from '@ci/domains/planning';
 
@@ -336,5 +336,145 @@ describe('AgentDispatchService.dispatch', () => {
     expect(taskService.findById).not.toHaveBeenCalled();
     expect(taskService.update).not.toHaveBeenCalled();
     expect(saved[0]?.taskId).toBeNull();
+  });
+});
+
+/**
+ * A job that has finished, failed, or been halted does not take more work.
+ *
+ * The harness runs in another process and believes it still owns the job: it
+ * retries, and `agent_end` fires after every turn. Without a guard, a late or
+ * duplicated callback re-stamps `completedAt`, re-emits the terminal event,
+ * re-runs the finish handler, and can drive a closed job back to `running`.
+ */
+describe('AgentDispatchService terminal-state guard', () => {
+  const context = { userId: 'user-1' } as never;
+
+  function setup(overrides: { status?: AgentJobStatus; result?: unknown } = {}) {
+    const job = {
+      id: 'job-1',
+      userId: 'user-1',
+      taskId: 'task-1',
+      threadId: 'thread-1',
+      harnessId: 'openclaw' as const,
+      packetMode: 'both' as const,
+      packet: { source: { title: 'Book the dentist' } },
+      status: (overrides.status ?? 'running') as AgentJobStatus,
+      failStep: null as string | null,
+      failCount: 0,
+      result: overrides.result ?? null,
+      eventJobId: 'pg-job-1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      completedAt: null as Date | null,
+    };
+
+    const jobRepository = {
+      findOne: jest.fn(async () => job),
+      find: jest.fn(async () => [] as (typeof job)[]),
+      update: jest.fn(async (_where: unknown, patch: Partial<typeof job>) => {
+        Object.assign(job, patch);
+      }),
+    };
+    const task = { id: 'task-1', status: 'delegated', completedAt: null as Date | null };
+    const taskService = {
+      findById: jest.fn(async () => task),
+      update: jest.fn(async (_ctx: unknown, _id: string, patch: { status: string }) => {
+        task.status = patch.status;
+
+        return task;
+      }),
+      complete: jest.fn(async () => {
+        task.status = 'done';
+
+        return task;
+      }),
+    };
+    const messageService = { create: jest.fn() };
+    const eventService = { send: jest.fn(), completeJob: jest.fn() };
+    const doorbell = { wakeOpenClaw: jest.fn() };
+    const logger = { setContext: jest.fn(), debug: jest.fn(), warn: jest.fn() };
+
+    const service = new AgentDispatchService(
+      jobRepository as never,
+      { create: jest.fn() } as never,
+      messageService as never,
+      taskService as never,
+      eventService as never,
+      doorbell as never,
+      logger as never,
+    );
+
+    return { job, task, service, jobRepository, messageService, eventService, taskService, doorbell };
+  }
+
+  const HALTED = { status: 'blocked' as AgentJobStatus, result: { halted: true } };
+
+  it.each([
+    ['completed', { status: 'completed' as AgentJobStatus }],
+    ['failed', { status: 'failed' as AgentJobStatus }],
+    ['halted', HALTED],
+  ])('refuses a checkpoint on a %s job instead of reopening it', async (_label, over) => {
+    const { service, jobRepository, taskService, eventService } = setup(over);
+
+    await expect(service.checkpoint(context, 'job-1', { status: 'completed' })).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+
+    // The three things that must NOT have happened: no write, no terminal event
+    // replay, and above all no second completion of the user's task.
+    expect(jobRepository.update).not.toHaveBeenCalled();
+    expect(eventService.send).not.toHaveBeenCalled();
+    expect(taskService.complete).not.toHaveBeenCalled();
+  });
+
+  it('lets a job blocked on the USER be checkpointed — that is the reply-to-resume path', async () => {
+    // `blocked` is not terminal on its own. ChatPage renders it as "OpenClaw
+    // stopped and needs you", and answering is how the job continues. Only
+    // `result.halted` makes a blocked job final.
+    const { service, jobRepository } = setup({ status: 'blocked', result: { reason: 'needs_user' } });
+
+    await expect(service.checkpoint(context, 'job-1', { status: 'completed' })).resolves.toBeDefined();
+    expect(jobRepository.update).toHaveBeenCalled();
+  });
+
+  it('refuses to steer a halted job back to running — the owner said stop', async () => {
+    // The worst case the guard exists for. `finishBlocked` releases the task
+    // back to `open`, so `taskService.complete`'s own active-status check would
+    // PASS on a re-entry: without this, the agent the owner just halted marks
+    // their task done.
+    const { service, jobRepository, doorbell } = setup(HALTED);
+
+    await expect(
+      service.steer(context, 'job-1', { action: 'continue', message: 'carry on' } as never),
+    ).rejects.toBeInstanceOf(ConflictException);
+
+    expect(jobRepository.update).not.toHaveBeenCalled();
+    expect(doorbell.wakeOpenClaw).not.toHaveBeenCalled();
+  });
+
+  it('treats halting an already-halted job as a no-op, not an error', async () => {
+    // Pressing Stop twice is not a mistake to report. Re-running the halt would
+    // write a second thread message and release the task again.
+    const { service, jobRepository, messageService } = setup(HALTED);
+
+    await expect(service.steer(context, 'job-1', { action: 'halt' } as never)).resolves.toBeDefined();
+    expect(jobRepository.update).not.toHaveBeenCalled();
+    expect(messageService.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses the packet fetch on a halted job, which is how the harness learns it stopped', async () => {
+    // The packet body carries no status, so a 409 here is the ONLY in-band
+    // signal a halt can reach the harness by. The plugin fetches the packet
+    // before it checkpoints, so this is the point where it finds out.
+    const { service } = setup(HALTED);
+
+    await expect(service.getPacket(context, 'job-1')).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('still serves the packet for a running job', async () => {
+    const { service } = setup({ status: 'running' });
+
+    await expect(service.getPacket(context, 'job-1')).resolves.toBeDefined();
   });
 });
