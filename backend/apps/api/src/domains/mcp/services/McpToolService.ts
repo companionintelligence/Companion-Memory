@@ -142,16 +142,24 @@ export class McpToolService implements OnModuleInit {
     // from the GraphQL schema or the intent catalog, and the message should say so rather than
     // blaming the scope.
     if (!capabilityAllows(tool.privacy, capability)) {
-      throw new ForbiddenException(
-        `Tool "${name}" requires "${capabilityRequiredFor(tool.privacy)}" access, but this API key is "${capability}"`,
-      );
+      const message = `Tool "${name}" requires "${capabilityRequiredFor(tool.privacy)}" access, but this API key is "${capability}"`;
+
+      // Record the refusal. These three transport-level denials threw before anything reached the
+      // registry, so the ledger's own reason for existing — "what was the agent refused" — was the
+      // one question it could not answer on this plane. A refusal is the most interesting row in
+      // the table: it is the gate visibly working, and its absence read as "nothing happened".
+      await this.recordRefusal(tool, context.req, capability, message);
+
+      throw new ForbiddenException(message);
     }
 
     if (tool.source === 'graphql') {
       if (scopeLimited) {
-        throw new ForbiddenException(
-          `Tool "${name}" reads the knowledge graph directly, which this scope-limited API key cannot access`,
-        );
+        const message = `Tool "${name}" reads the knowledge graph directly, which this scope-limited API key cannot access`;
+
+        await this.recordRefusal(tool, context.req, capability, message);
+
+        throw new ForbiddenException(message);
       }
 
       const graphqlTool = this.graphqlAdapter.getTools().find((t) => t.name === name);
@@ -190,9 +198,11 @@ export class McpToolService implements OnModuleInit {
     }
 
     if (!this.mayRunIntents(context.req)) {
-      throw new ForbiddenException(
-        `Tool "${name}" runs a CI intent, which requires the "${INTENTS_SCOPE}" scope this API key does not carry`,
-      );
+      const message = `Tool "${name}" runs a CI intent, which requires the "${INTENTS_SCOPE}" scope this API key does not carry`;
+
+      await this.recordRefusal(tool, context.req, capability, message);
+
+      throw new ForbiddenException(message);
     }
 
     // Native tool execution. The capability travels WITH the call rather than being left behind at
@@ -244,16 +254,65 @@ export class McpToolService implements OnModuleInit {
       durationMs?: number;
     },
   ): Promise<void> {
+    await this.recordMcpInvocation(tool, req, capability, 'graphql', outcome);
+  }
+
+  /**
+   * Append a transport-level refusal — a call this service denied before the registry saw it.
+   *
+   * `source` names the plane the tool would have run on rather than the transport, so a reader
+   * filtering `outcome = 'refused'` sees native and GraphQL denials in the same list as the
+   * registry's own; `errorCode: 'TOOL_FORBIDDEN'` matches what the registry stamps for the same
+   * ruling, so the two planes are comparable rather than merely both present.
+   *
+   * Never throws (`recordInvocation` swallows), and deliberately awaited: a refusal that lost its
+   * row because the response was already on its way out is the row most worth having.
+   */
+  private async recordRefusal(
+    tool: McpRegisteredTool,
+    req: ApiKeyScopedRequest,
+    capability: ApiKeyCapability,
+    message: string,
+  ): Promise<void> {
+    await this.recordMcpInvocation(tool, req, capability, tool.source, {
+      outcome: 'refused',
+      errorCode: 'TOOL_FORBIDDEN',
+      error: message,
+    });
+  }
+
+  /**
+   * The one payload builder for this plane, so the refusal rows and the executed rows carry the
+   * same identity fields. Splitting them was how `principal` came to be recorded on the REST path
+   * and nowhere else.
+   */
+  private async recordMcpInvocation(
+    tool: McpRegisteredTool,
+    req: ApiKeyScopedRequest,
+    capability: ApiKeyCapability,
+    source: string,
+    outcome: {
+      outcome: ToolInvocationOutcome;
+      errorCode?: string;
+      error?: string;
+      durationMs?: number;
+    },
+  ): Promise<void> {
     const context = ContextService.getContext();
+    const managedApp = isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy });
 
     await this.toolRegistry.recordInvocation({
       intent: tool.name,
       tool: tool.name,
-      source: 'graphql',
+      source,
       userId: (req.user as { id?: string } | undefined)?.id ?? context?.userId,
       correlationId: context?.traceId,
       apiKeyId: req.apiKeyId ?? context?.apiKeyId,
       capability,
+      principal: managedApp ? 'managed-app' : 'owner',
+      // Only for an app. An owner-originated row recording the owner's own key name here would
+      // make the activity page attribute the owner's action to a nonexistent app.
+      principalName: managedApp ? (req.apiKeyName ?? undefined) : undefined,
       occurredAt: new Date().toISOString(),
       access: tool.privacy.access,
       external: tool.privacy.external,

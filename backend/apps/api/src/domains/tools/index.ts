@@ -227,7 +227,11 @@ export {
   ToolInvocationLedgerService,
   TOOL_INVOCATION_RETENTION_DAYS,
 } from './services/ToolInvocationLedgerService';
-export type { ToolInvocationQuery } from './services/ToolInvocationLedgerService';
+export type {
+  ToolInvocationCursor,
+  ToolInvocationPage,
+  ToolInvocationQuery,
+} from './services/ToolInvocationLedgerService';
 export type { ToolProvider, ProviderHealthStatus } from './providers/ToolProvider';
 export {
   intentToolName,

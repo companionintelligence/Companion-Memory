@@ -13,6 +13,7 @@
  */
 export {
   DISPATCH_TIERS,
+  TOOL_PRINCIPALS,
   canonicalizeExecutableToolName,
   intentToolName,
   type CiEntityType,
@@ -27,6 +28,7 @@ export {
   type ToolExample,
   type ToolExecutionContext,
   type ToolInvocationContext,
+  type ToolPrincipal,
   type ToolResult,
   type ToolSchema,
 } from '@ci/tool-core';

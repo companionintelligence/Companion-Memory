@@ -266,7 +266,14 @@ export interface ToolExecutionContext extends ToolRequestContext {
  * asks is "is this the owner, or something the owner installed?". Anything
  * finer belongs in the ledger and the approval card, not in the rule.
  */
-export type ToolPrincipal = 'owner' | 'managed-app';
+export const TOOL_PRINCIPALS = ['owner', 'managed-app'] as const;
+
+/**
+ * Derived from {@link TOOL_PRINCIPALS} rather than written twice: a reader that
+ * validates `?principal=` needs the values at runtime, and two hand-kept lists
+ * is how a third value gets added to one of them.
+ */
+export type ToolPrincipal = (typeof TOOL_PRINCIPALS)[number];
 
 export interface ToolInvocationContext extends ToolRequestContext {
   capability: ToolCapability;
