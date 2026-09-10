@@ -112,6 +112,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: android-unit-test-reports
           path: |
             frontend/apps/android/android/app/build/reports/tests/testDebugUnitTest/**
@@ -123,6 +124,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: companion-android-apk
           path: frontend/apps/android/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
@@ -202,6 +204,7 @@ jobs:
       - name: Upload iOS app
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: companion-ios-simulator-app
           path: companion-ios-simulator.app.zip
           if-no-files-found: error

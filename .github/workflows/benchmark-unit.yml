@@ -112,6 +112,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: benchmark-reports
           path: scripts/benchmark/reports/
           if-no-files-found: ignore
