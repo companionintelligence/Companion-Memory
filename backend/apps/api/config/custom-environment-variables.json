@@ -37,7 +37,9 @@
     },
     "connect": {
       "hubOrigins": "CI_HUB_ORIGINS",
-      "hubInternalUrl": "CI_HUB_INTERNAL_URL"
+      "hubInternalUrl": "CI_HUB_INTERNAL_URL",
+      "devDirectWakeUrl": "CI_DEV_DIRECT_WAKE_URL",
+      "devDirectWakeToken": "CI_DEV_DIRECT_WAKE_TOKEN"
     },
     "portal": {
       "enabled": {

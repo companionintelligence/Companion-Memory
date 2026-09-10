@@ -73,6 +73,28 @@ const booleanStringSchema = z.preprocess((val) => {
   return val;
 }, z.boolean());
 
+/**
+ * Is this URL empty, or unambiguously on this machine?
+ *
+ * Hostname-only, and an allowlist rather than a pattern: `127.0.0.1.evil.com`
+ * and `localhost.attacker.net` both CONTAIN a loopback string and resolve
+ * wherever their owner points them. A URL that does not parse is not loopback
+ * either.
+ */
+export function isEmptyOrLoopback(value: string): boolean {
+  if (value === '') {
+    return true;
+  }
+
+  try {
+    const { hostname } = new URL(value);
+
+    return ['127.0.0.1', '::1', '[::1]', 'localhost', 'host.docker.internal'].includes(hostname);
+  } catch {
+    return false;
+  }
+}
+
 export const ConfigSchema = z.object({
   host: z.string(),
   port: z.number(),
@@ -247,6 +269,38 @@ export const ConfigSchema = z.object({
       // public CI_HUB_ORIGINS list is for browser redirects; this is the
       // appliance-local hop. Override with CI_HUB_INTERNAL_URL.
       hubInternalUrl: z.string().optional().default('http://ci-os-hub:3000'),
+
+      /**
+       * DEV ONLY. Ring OpenClaw's `/hooks/wake` directly, skipping Hub.
+       *
+       * A local dev stack cannot reach Hub — `CI_HUB_INTERNAL_URL` names a
+       * Docker alias no CI-Server compose file defines, and
+       * `CI_HUB_FORWARD_AUTH_SECRET` is empty — so dispatch could not be
+       * exercised at all without a full Hub install: a private-registry token,
+       * a source build, Postgres + RabbitMQ, and OpenClaw installed THROUGH
+       * Hub, because Hub resolves wake targets only from installed app files.
+       *
+       * Skipping Hub is safe here because the wake is a DOORBELL, not a grant.
+       * The body carries no secret; all authority lives in the packet fetch the
+       * harness then makes with its own user-scoped key, and `getPacket` scopes
+       * the row by `{ id, userId }`. Hub's own leg to OpenClaw is already a
+       * plain shared bearer rather than a signature, so nothing cryptographic
+       * is given up. What IS given up is Hub's policy point — it decides which
+       * apps may be woken at all — and its sole custody of the wake token.
+       * That is why this is dev-only.
+       *
+       * LOOPBACK-ENFORCED AT PARSE TIME, deliberately. The one way this could
+       * weaken anything real is misactivation: an appliance that somehow had it
+       * set would POST a bearer to whatever host it named. Refusing to boot
+       * beats warning about it.
+       */
+      devDirectWakeUrl: z.string().optional().default('').refine(isEmptyOrLoopback, {
+        message:
+          'CI_DEV_DIRECT_WAKE_URL must be loopback (127.0.0.1, ::1, localhost or host.docker.internal). It exists to exercise dispatch on a dev stack and must never point off-box.',
+      }),
+
+      /** The static bearer OpenClaw's `/hooks/wake` compares — its `HUB_WAKE_SECRET`. */
+      devDirectWakeToken: z.string().optional().default(''),
     }),
   }),
   db: z.object({
