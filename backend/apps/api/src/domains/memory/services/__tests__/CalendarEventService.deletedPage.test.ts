@@ -64,7 +64,7 @@ describe('CalendarEventService deleted-event discovery', () => {
 
   it('findDeletedPage returns ONLY tombstones', async () => {
     const applied = await predicatesFor(() =>
-      service.findDeletedPage(context, { first: 20, last: null, afterId: null, beforeId: null }),
+      service.findDeletedPage(context, { first: 20, afterId: null, beforeId: null }),
     );
 
     expect(applied).toContain('event.is_deleted = true');
@@ -73,7 +73,7 @@ describe('CalendarEventService deleted-event discovery', () => {
 
   it('findPage still hides them — the trash must not leak into the timeline', async () => {
     const applied = await predicatesFor(() =>
-      service.findPage(context, { first: 20, last: null, afterId: null, beforeId: null }),
+      service.findPage(context, { first: 20, afterId: null, beforeId: null }),
     );
 
     expect(applied).toContain('event.is_deleted = false');
@@ -87,10 +87,10 @@ describe('CalendarEventService deleted-event discovery', () => {
     const plannedBlock = "(event.event_type IS NULL OR event.event_type <> 'planned_block')";
 
     const deleted = await predicatesFor(() =>
-      service.findDeletedPage(context, { first: 20, last: null, afterId: null, beforeId: null }),
+      service.findDeletedPage(context, { first: 20, afterId: null, beforeId: null }),
     );
     const live = await predicatesFor(() =>
-      service.findPage(context, { first: 20, last: null, afterId: null, beforeId: null }),
+      service.findPage(context, { first: 20, afterId: null, beforeId: null }),
     );
 
     expect(deleted).toContain(plannedBlock);
@@ -105,7 +105,7 @@ describe('CalendarEventService deleted-event discovery', () => {
       totalCount: 0,
     });
 
-    await service.findDeletedPage(context, { first: 20, last: null, afterId: null, beforeId: null });
+    await service.findDeletedPage(context, { first: 20, afterId: null, beforeId: null });
 
     expect(keysetPaginate).toHaveBeenCalledWith(
       expect.anything(),

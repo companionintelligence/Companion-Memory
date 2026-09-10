@@ -2,7 +2,6 @@ import type { GraphQLSchemaHost } from '@nestjs/graphql';
 import { buildSchema, type GraphQLSchema } from 'graphql';
 
 import type { LoggerService } from '@ci/common/logging';
-
 import { GRAPHQL_PRIVACY_EXTENSION, type IntentPrivacy } from '@ci/domains/tools';
 
 import { GraphQLToolAdapter } from './GraphQLToolAdapter';

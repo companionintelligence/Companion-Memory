@@ -3344,6 +3344,8 @@ export type Query = {
   contents: ContentConnection;
   /** Precomputed daily feature-store rows for the signed-in user over an inclusive yyyy-MM-dd range. */
   dailyMetrics: Array<DailyMetricsType>;
+  /** Events deleted by deleteEvent and not yet restored — the handle restoreEvent needs. Newest first. */
+  deletedEvents: EventConnection;
   /** Answers every catalog question from stored daily_metrics. */
   descriptiveAnswers: Array<DescriptiveAnswerType>;
   /** The question catalog the compute-then-narrate engine can answer. */
@@ -3604,6 +3606,14 @@ export type QueryContentsArgs = {
 export type QueryDailyMetricsArgs = {
   from: Scalars['String']['input'];
   to: Scalars['String']['input'];
+};
+
+
+export type QueryDeletedEventsArgs = {
+  after?: InputMaybe<Scalars['String']['input']>;
+  before?: InputMaybe<Scalars['String']['input']>;
+  first?: InputMaybe<Scalars['Int']['input']>;
+  last?: InputMaybe<Scalars['Int']['input']>;
 };
 
 
