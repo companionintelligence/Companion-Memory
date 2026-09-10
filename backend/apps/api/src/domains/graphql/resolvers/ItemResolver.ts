@@ -56,6 +56,7 @@ import { UpdateItemInput } from '../types/UpdateItemInput';
 import { UpdateItemPayload } from '../types/UpdateItemPayload';
 import { decodeItemCursor, encodeItemCursor } from '../utils/itemCursor';
 import { Paginator } from '../utils/Paginator';
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 /** Rows `findPage` fetches per round trip while draining for a refinement. */
 const REFINE_CHUNK = 200;
@@ -692,6 +693,9 @@ export class ItemResolver {
    * tombstones the sources. See ObjectMergeService.
    */
   @Mutation(() => MergeItemsPayload)
+  // ObjectMergeService tombstones each source and deletes the sources' search rows. One-way: the
+  // schema has no unmerge.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async mergeItems(
     @Context() context: RequestContext,
     @Args('input') input: MergeItemsInput,

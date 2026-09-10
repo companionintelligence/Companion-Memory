@@ -34,6 +34,7 @@ import { RelationshipType } from '../types/RelationshipType';
 import { UpdatePlaceInput } from '../types/UpdatePlaceInput';
 import { memoryRelToGql } from '../utils/lifeGraphRelationships';
 import { Paginator } from '../utils/Paginator';
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 const PLACE_KINDS: PlaceKind[] = [
   'room',
@@ -141,6 +142,8 @@ export class PlaceResolver {
    * fields, and tombstones the sources. See PlaceMergeService.
    */
   @Mutation(() => MergePlacesPayload)
+  // Same tombstone-and-drop-search-rows shape as mergePeople. One-way.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async mergePlaces(
     @Context() context: RequestContext,
     @Args('input') input: MergePlacesInput,

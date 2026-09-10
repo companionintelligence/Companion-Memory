@@ -52,6 +52,7 @@ import { UpdatePersonPayload } from '../types/UpdatePersonPayload';
 import { memoryRelToGql } from '../utils/lifeGraphRelationships';
 import { Paginator } from '../utils/Paginator';
 import { contactMethodsFromPersonProperties, mergePersonIdentifiers } from '../utils/personContactMethods';
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 /** Map the structured input fields onto the established properties JSONB keys. */
 function structuredPropertiesPatch(
@@ -405,6 +406,9 @@ export class PersonResolver {
    * the sources. See PersonMergeService.
    */
   @Mutation(() => MergePeoplePayload)
+  // Tombstones every source (is_active = FALSE) and drops their search rows. Takes an ARRAY of
+  // source ids, so one call at `write` could retire an unbounded number of people. One-way.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async mergePeople(
     @Context() context: RequestContext,
     @Args('input') input: MergePeopleInput,

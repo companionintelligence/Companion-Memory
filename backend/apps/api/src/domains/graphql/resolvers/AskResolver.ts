@@ -66,6 +66,7 @@ import {
 import { CreateAskBroadcastInput } from '../types/CreateAskBroadcastInput';
 import { GlobalUID } from '../types/GlobalUID';
 import { HouseholdTierType, SetHouseholdTierInput } from '../types/HouseholdTierType';
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 /**
  * GraphQL surface for the interpersonal ask feature (epic #1712, Phase 0). Every
@@ -322,6 +323,8 @@ export class AskResolver {
    * never raw node content or forwardable signed media URLs.
    */
   @Mutation(() => RunAskPayload)
+  // Emits a templated answer to the asker — data leaves the box.
+  @GraphqlPrivacy({ external: true })
   async runAsk(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -688,6 +691,9 @@ export class AskResolver {
    * outcome. A declined result is indistinguishable from an unreachable peer.
    */
   @Mutation(() => SendPeerAskPayload)
+  // Leaves the appliance for another Companion. `messaging.send` is labelled destructive for this
+  // exact reason; at minimum this is not local CRUD, and advertising openWorldHint:false was wrong.
+  @GraphqlPrivacy({ external: true })
   async sendPeerAsk(
     @Context() context: RequestContext,
     @Args('input') input: SendPeerAskInput,

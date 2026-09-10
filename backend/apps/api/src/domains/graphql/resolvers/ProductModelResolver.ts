@@ -18,6 +18,7 @@ import { ProductModelConnection } from '../types/ProductModelConnection';
 import { ProductModelEdge } from '../types/ProductModelEdge';
 import { ProductModelType } from '../types/ProductModelType';
 import { decodeOffsetCursor, encodeOffsetCursor } from '../utils/offsetCursor';
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 const DEFAULT_PRODUCT_PAGE_SIZE = 25;
 
@@ -123,6 +124,8 @@ export class ProductModelResolver {
    * folds the fields, and tombstones the sources.
    */
   @Mutation(() => MergeProductModelsPayload)
+  // Same tombstone-and-drop-search-rows shape as mergePeople. One-way.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async mergeProductModels(
     @Context() context: RequestContext,
     @Args('input') input: MergeProductModelsInput,

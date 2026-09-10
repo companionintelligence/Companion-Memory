@@ -22,6 +22,7 @@ import { MetricForecastType } from '../types/MetricForecastType';
 import { PlaceForecastItemType } from '../types/PlaceForecastType';
 import { PredictionCalibrationType } from '../types/PredictionCalibrationType';
 import { WeekForecastType } from '../types/WeekForecastType';
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => ForecastType)
@@ -208,6 +209,10 @@ export class ForecastResolver {
   @Mutation(() => String, {
     description: 'Rebuild stay-point clusters and recency-decayed transitions for the current user',
   })
+  // PlaceTransitionService.rebuild issues an unconditional whole-user DELETE before re-inserting.
+  // Derived and recomputable in principle — but if clustering yields nothing the delete still
+  // happened and the table is left empty.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async rebuildPlaces(@Context() context: RequestContext): Promise<string> {
     if (!(await this.featureService.isFeatureEnabled('hbpe'))) {
       return 'disabled';

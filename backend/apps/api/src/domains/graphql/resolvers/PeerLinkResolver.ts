@@ -14,6 +14,7 @@ import {
   PeerTrustTierEnum,
   UpdatePeerLinkInput,
 } from '../types/PeerLinkType';
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 /**
  * Peer links — who this box will exchange asks with, and how far it trusts them.
@@ -103,6 +104,8 @@ export class PeerLinkResolver {
   }
 
   @Mutation(() => PeerLinkPayload)
+  // Establishes a federation link with another appliance.
+  @GraphqlPrivacy({ external: true })
   async createPeerLink(
     @Context() context: RequestContext,
     @Args('input') input: CreatePeerLinkInput,

@@ -53,6 +53,7 @@ import { ThreadType } from '../types/ThreadType';
 import { UpdateTagInput } from '../types/UpdateTagInput';
 import { UpdateTagPayload } from '../types/UpdateTagPayload';
 import { Paginator } from '../utils/Paginator';
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => TagType)
@@ -286,6 +287,10 @@ export class TagResolver {
   }
 
   @Mutation(() => [TaggableEntityType])
+  // Deletes entity_tag join rows for every (label x entity) pair. deleteTag — a single label —
+  // already cost `full`; removing a label from ten thousand entities cost `write`. The name
+  // heuristic inverted the severity ordering.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async untagEntities(
     @Context() context: RequestContext,
     @Args('input') input: TagEntitiesInput,

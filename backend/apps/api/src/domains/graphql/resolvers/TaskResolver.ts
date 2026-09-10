@@ -24,6 +24,7 @@ import { TaskStatusEnum, TaskType } from '../types/TaskType';
 import { UpdateTaskInput } from '../types/UpdateTaskInput';
 import { UpdateTaskPayload } from '../types/UpdateTaskPayload';
 import { Paginator } from '../utils/Paginator';
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Resolver(() => TaskType)
@@ -450,6 +451,9 @@ export class TaskResolver {
     nullable: true,
     description: 'Remove the planned block for this task and clear scheduledFor.',
   })
+  // Deletes the planned block row. Its own description starts "Remove the planned block" — but the
+  // heuristic reads the FIELD NAME, not the description.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async unscheduleTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
