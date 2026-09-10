@@ -31,6 +31,23 @@ export interface ApiKeyScopedRequest extends Request {
    * non-api-key principals (sessions/JWT/Portal), who carry full authority.
    */
   apiKeyCapability?: ApiKeyCapability;
+  /**
+   * Where the key came from. `'connect'` means CI-Hub minted it for an installed
+   * app, so the caller is a borrowed harness acting for the owner rather than the
+   * owner themselves.
+   *
+   * Capability cannot express this: an owner's hand-made key and a connect-minted
+   * harness key can hold identical powers. Two rules turn on it — a harness is
+   * confirmed before anything irreversible regardless of the owner's trust dial,
+   * and it may not answer its own approval card.
+   *
+   * Provenance from `api_keys.managed_by`, never from the `app:` name prefix,
+   * which a user can hand-create.
+   */
+  apiKeyManagedBy?: 'connect' | null;
+  /** The key's name (`app:<appUrn>` for connect keys), for LABELLING a card once
+   *  {@link ApiKeyScopedRequest.apiKeyManagedBy} has already established trust. */
+  apiKeyName?: string | null;
 }
 
 /**
