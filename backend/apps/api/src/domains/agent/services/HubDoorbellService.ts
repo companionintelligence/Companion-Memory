@@ -74,11 +74,15 @@ export class HubDoorbellService {
       // engages, and two minutes later the stale reaper closes the job saying
       // "OpenClaw did not check in" — which is the precise opposite of what
       // happened. Nobody was ever asked to check in.
-      const body = (await response.json().catch(() => null)) as { ok?: unknown } | null;
+      // Named `outcome`, not `body`: `body` is the REQUEST payload declared above
+      // this try block, and re-using the name shadowed it for the whole block —
+      // so `JSON.stringify(body)` in the fetch call above referred to this
+      // variable in its temporal dead zone. tsc caught it (TS2448/TS2454).
+      const outcome = (await response.json().catch(() => null)) as { ok?: unknown } | null;
 
-      if (body?.ok !== true) {
+      if (outcome?.ok !== true) {
         this.logger.warn(`Hub accepted the doorbell but did not deliver it for job ${jobId}`, {
-          body,
+          outcome,
         });
 
         return false;
