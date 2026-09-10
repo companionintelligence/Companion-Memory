@@ -8,6 +8,7 @@ import {
   CONNECT_TIMESTAMP_HEADER,
   signConnectRequest,
 } from '@ci/common/crypto';
+import { doorbellBlocker } from '@ci/common/hubDoorbell';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 
@@ -25,20 +26,20 @@ export class HubDoorbellService {
   }
 
   async wakeOpenClaw(jobId: string): Promise<boolean> {
+    const blocker = doorbellBlocker();
+
+    if (blocker != null) {
+      this.logger.warn(
+        blocker === 'no_hub_url'
+          ? 'Skipping OpenClaw doorbell: CI_HUB_INTERNAL_URL is empty'
+          : 'Skipping OpenClaw doorbell: CI_HUB_FORWARD_AUTH_SECRET is empty',
+      );
+
+      return false;
+    }
+
     const base = config.auth.connect.hubInternalUrl?.replace(/\/$/, '') || '';
     const secret = config.auth.hubForwardAuth.secret;
-
-    if (!base) {
-      this.logger.warn('Skipping OpenClaw doorbell: CI_HUB_INTERNAL_URL is empty');
-
-      return false;
-    }
-
-    if (!secret) {
-      this.logger.warn('Skipping OpenClaw doorbell: CI_HUB_FORWARD_AUTH_SECRET is empty');
-
-      return false;
-    }
 
     const body = { appUrn: OPENCLAW_APP_URN, jobId };
     const timestampMs = Date.now();

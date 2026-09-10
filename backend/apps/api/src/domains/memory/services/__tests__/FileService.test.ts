@@ -45,7 +45,7 @@ function payload(overrides: Partial<FileUploadedPayload> = {}): FileUploadedPayl
 }
 
 function ackMock(): Acknowledgement {
-  return { done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+  return { jobId: 'test-job', done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
 }
 
 // @OnEvent's autoAcknowledge wrapper never rethrows: handleFileUploaded is

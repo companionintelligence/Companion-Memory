@@ -1401,10 +1401,11 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
       return new Promise<'completed' | 'deferred'>((resolve, reject) => {
         const { name, ...data } = job.data;
 
-        const resolvedData = {
-          ...data,
-          jobId: job.id,
-        };
+        // The payload is delivered VERBATIM. `name` — the routing key — is the
+        // only thing stripped, and the bus adds NOTHING: this used to merge
+        // `jobId: job.id` in, overwriting whatever the domain had put there.
+        // Runtime metadata rides the acknowledgement instead, so `jobId` is an
+        // ordinary domain field name again with no special meaning to the bus.
 
         this.logger.log('Executing job', {
           eventName: name,
@@ -1435,7 +1436,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         const queueSpecificEventName = `${name}:${queue}`;
 
         if (this.eventEmitter.hasListeners(queueSpecificEventName)) {
-          this.eventEmitter.emit(queueSpecificEventName, resolvedData, { done, fail, defer });
+          this.eventEmitter.emit(queueSpecificEventName, data, { jobId: job.id, done, fail, defer });
         } else {
           skip();
         }

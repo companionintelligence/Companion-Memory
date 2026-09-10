@@ -244,6 +244,19 @@ Two consequences the codebase guards explicitly:
 
 ### 1.6 Acknowledgement, retries, dead letters
 
+**The delivered payload is the domain's, verbatim.** The dispatcher strips
+`name` — the routing key — and adds nothing else. The queue's own job id is
+`ack.jobId`, and that is the id `completeJob` / `failJob` expect. A listener
+that reports completion out-of-band (`autoAcknowledge: false`) must read it
+from the acknowledgement, never from the payload.
+
+It used to be merged in as `jobId`, which meant the bus wrote into a namespace
+it does not own: any domain that named a field `jobId` silently lost it.
+`domains/agent` declares one on five payload types meaning the `ci.agent_jobs`
+row, so the dispatch listener rang OpenClaw's doorbell with pg-boss's id
+instead — the harness 404'd fetching its packet and the stale reaper closed the
+job reporting that it had never checked in.
+
 `autoAcknowledge: true` (default) wraps the handler: return → `ack.done()`,
 throw → `ack.fail()`. `autoAcknowledge: false` hands the handler an `ack` and it
 must call `done` / `fail` / `defer` itself; the wrapper tracks whether it did and
