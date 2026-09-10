@@ -3967,6 +3967,7 @@ type UserType implements Node {
   email: String!
   entity: PersonType
   id: ID!
+  isAdmin: Boolean!
   name: String!
   needsIdentityStep: Boolean!
   onboarded: Boolean!
