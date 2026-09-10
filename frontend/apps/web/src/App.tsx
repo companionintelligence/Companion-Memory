@@ -61,6 +61,7 @@ const ForecastPage = lazy(() => import('@/pages/ForecastPage'));
 const ItemPage = lazy(() => import('@/pages/ItemPage'));
 const SourcesPage = lazy(() => import('@/pages/SourcesPage'));
 const JobsPage = lazy(() => import('@/pages/JobsPage'));
+const ApprovalsPage = lazy(() => import('@/pages/ApprovalsPage'));
 const ThingsPage = lazy(() => import('@/pages/ThingsPage'));
 const ReceiptsPage = lazy(() => import('@/pages/ReceiptsPage'));
 const ReceiptPage = lazy(() => import('@/pages/ReceiptPage'));
@@ -588,6 +589,22 @@ function AppRoutes() {
               <Route path="/chat/:id?" element={<RedirectToChat />} />
             </>
           )}
+
+          {/* Approvals — the owner's answer queue for anything the capability
+              gate stopped. NOT feature-flagged: `tools.pendingActions` gates
+              whether the DIAL queues an owner's own actions, but an installed
+              app is queued unconditionally (see resolveToolGate's `managed-app`
+              rule), so cards can arrive with the flag off. A flag-gated route
+              would hide them, which is the one failure mode worse than not
+              having the page. */}
+          <Route
+            path="/approvals"
+            element={
+              <ProtectedRoute>
+                <ApprovalsPage />
+              </ProtectedRoute>
+            }
+          />
 
           {/* Admin / System */}
           {/* One page, five addresses. The section (and, for a category
