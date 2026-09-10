@@ -42,7 +42,10 @@ function makeLogger() {
 
 /** A `fetch` stand-in returning one canned response. */
 function stubFetch(response: { ok: boolean; status: number; json?: () => Promise<unknown> }) {
-  const spy = jest.fn(async () => ({
+  // The parameters are declared even though the body ignores them: without
+  // them `mock.calls` types as an empty tuple, and the assertions below read
+  // the URL and init off it.
+  const spy = jest.fn(async (_url: string, _init?: RequestInit) => ({
     ok: response.ok,
     status: response.status,
     json: response.json ?? (async () => ({})),
@@ -165,10 +168,10 @@ describe('HubDoorbellService dev direct wake', () => {
 
     expect(await new HubDoorbellService(makeLogger()).wakeOpenClaw('job-1')).toBe(true);
 
-    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    const [url, init] = spy.mock.calls[0]!;
     expect(url).toBe('http://127.0.0.1:18789/hooks/wake');
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer wake-token');
-    expect(JSON.parse(String(init.body))).toEqual({
+    expect((init!.headers as Record<string, string>).Authorization).toBe('Bearer wake-token');
+    expect(JSON.parse(String(init!.body))).toEqual({
       text: 'Memory dispatch job job-1. Fetch the packet from Memory.',
       mode: 'now',
     });
@@ -188,7 +191,7 @@ describe('HubDoorbellService dev direct wake', () => {
 
     // One call, and it went to HUB. No retry against the direct URL.
     expect(spy).toHaveBeenCalledTimes(1);
-    expect(String(spy.mock.calls[0][0])).toContain('hub.test:5002');
+    expect(String(spy.mock.calls[0]![0])).toContain('hub.test:5002');
   });
 
   it('will not fire with a URL but no bearer — that is a silent miss, not a path', async () => {
