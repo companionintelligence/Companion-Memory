@@ -18,6 +18,8 @@ import {
 } from '@ci/domains/tools';
 
 import type { McpRegisteredTool } from '../types';
+// A value, not a type — it is constructed below, so it cannot ride the type import.
+import { ToolExecutionError } from '../types';
 
 import { GraphQLToolAdapter } from './GraphQLToolAdapter';
 import { McpExecutorService } from './McpExecutorService';
@@ -229,7 +231,19 @@ export class McpToolService implements OnModuleInit {
     const result = await this.toolRegistry.executeTool(name, invocationContext, args);
 
     if (!result.success) {
-      throw new Error(result.error?.message ?? `Tool "${name}" execution failed`);
+      // Structured, not flattened. `throw new Error(message)` destroyed `code`
+      // and `details` — and `details` is where the approval queue puts
+      // `pendingActionId`. A queued call therefore reached the harness as an
+      // opaque sentence, while the dispatch packet's own stop rule tells it to
+      // "report blocked, name the pendingActionId, and stop". The REST intent
+      // path returns the whole ToolError, and both harness plugins read
+      // `error.code` / `error.details.pendingActionId` from it — this plane now
+      // presents the same shape rather than a lossier dialect of it.
+      throw new ToolExecutionError(
+        result.error?.code ?? 'TOOL_FAILED',
+        result.error?.message ?? `Tool "${name}" execution failed`,
+        result.error?.details,
+      );
     }
 
     return result.data;

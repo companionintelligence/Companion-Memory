@@ -42,7 +42,15 @@ export function buildDispatchPacket(input: {
     mode === 'details'
       ? 'Work from the context above. Use Memory intents only when you must write or look something up.'
       : [
-          'Use CI Memory intents (`/api/agent/intents`) for recall, writes, and planning updates.',
+          // Names the TOOLS first and the HTTP route second, because that is the
+          // order of preference. The curated intents reach the harness as MCP
+          // tools — OpenClaw renames every MCP tool to `<server>__<tool>`, so
+          // `memory.recall` arrives as `ci-server__memory_recall`. A capable
+          // model told only about a REST route will hand-roll HTTP calls and
+          // lose the typed parameter schemas the intent catalog exists to give
+          // it.
+          'Prefer the typed `ci-server__*` Memory tools (e.g. `ci-server__memory_recall`) for recall, writes, and planning updates.',
+          'If those tools are absent, fall back to POST `/api/agent/intents/<intent>/execute`.',
           'Queue destructive or external work as pending_actions.',
           'Checkpoint after each meaningful step so Memory can pair-program.',
         ].join(' ');

@@ -78,4 +78,27 @@ describe('buildDispatchPacket', () => {
     expect(system).toMatch(/pendingActionId/);
     expect(system).toMatch(/SECOND card/i);
   });
+
+  it('points the harness at the typed tools first, with the REST route as the fallback', () => {
+    // The packet is the harness's only in-band briefing about how to reach
+    // Memory. Naming only the HTTP route makes a capable model hand-roll
+    // requests and lose the per-intent parameter schemas the curated catalog
+    // exists to provide.
+    const packet = buildDispatchPacket({
+      jobId: 'job-1',
+      threadId: 'thread-1',
+      title: 'Book the dentist',
+      sourceKind: 'task',
+      sourceId: 'task-1',
+    });
+
+    const system = packet.turns.map((turn) => turn.content).join('\n');
+
+    // The `ci-server__` prefix is not decoration: OpenClaw renames every MCP
+    // tool to `<server>__<tool>`, so guidance naming bare intent names would be
+    // wrong the moment the MCP entry lands.
+    expect(system).toMatch(/ci-server__memory_recall/);
+    expect(system).toMatch(/fall back/i);
+    expect(system).toMatch(/agent\/intents/);
+  });
 });
