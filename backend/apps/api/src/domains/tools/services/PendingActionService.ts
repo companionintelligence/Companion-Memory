@@ -167,6 +167,9 @@ export class PendingActionService {
       reason: ruling.reason,
       origin: context.tier ?? 'appliance',
       actor: context.capability,
+      // Only meaningful for a managed app; the owner proposing their own action
+      // is not a third party the card needs to name.
+      principalName: context.principal === 'managed-app' ? (context.principalName ?? null) : null,
       status: 'proposed',
       expiresAt: new Date(now.getTime() + DEFAULT_PENDING_ACTION_TTL_HOURS * 60 * 60 * 1000),
       resolvedAt: null,

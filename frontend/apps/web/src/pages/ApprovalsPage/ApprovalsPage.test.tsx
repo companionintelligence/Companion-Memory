@@ -25,6 +25,7 @@ const card = (over: Partial<PendingApproval> = {}): PendingApproval => ({
   reason: 'destructive-requires-confirmation',
   origin: 'appliance',
   actor: 'full',
+  principalName: 'app:ci-openclaw:ci-marketplace',
   status: 'proposed',
   createdAt: '2026-09-10T00:00:00.000Z',
   expiresAt: null,
@@ -94,6 +95,34 @@ describe('ApprovalsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /approve/i }));
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/BlueBubbles unreachable/));
+  });
+
+  it('names the app that asked, not just the authority it held', () => {
+    // "full" alone asks the owner to authorise an anonymous caller holding broad
+    // authority — the least answerable form of the question.
+    state.actions = [card()];
+    renderWithProviders(<ApprovalsPage />);
+
+    expect(screen.getByText('OpenClaw')).toBeInTheDocument();
+  });
+
+  it('falls back to the slug for an app it has no label for', () => {
+    // A newly installed app must be nameable on the day it ships. The slug is a
+    // worse label than "OpenClaw" and a far better one than nothing.
+    state.actions = [card({ principalName: 'app:ci-something:ci-marketplace' })];
+    renderWithProviders(<ApprovalsPage />);
+
+    expect(screen.getByText('ci-something')).toBeInTheDocument();
+  });
+
+  it('says "You" when the owner proposed it themselves', () => {
+    // principalName is null for an owner-proposed action — not every card comes
+    // from an app, and one that says "OpenClaw" when it was the trust dial would
+    // be a lie about provenance.
+    state.actions = [card({ principalName: null })];
+    renderWithProviders(<ApprovalsPage />);
+
+    expect(screen.getByText('You')).toBeInTheDocument();
   });
 
   it('reads an empty queue as reassurance, not as a missing feature', () => {

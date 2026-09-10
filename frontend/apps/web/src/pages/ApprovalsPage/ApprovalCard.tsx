@@ -28,6 +28,38 @@ function reasonCopy(reason: ApprovalReason): string {
   return REASON_COPY[reason] ?? 'This is irreversible and needs your say-so.';
 }
 
+/**
+ * Turn an api-key name into something an owner can act on.
+ *
+ * The row stores the fact (`app:ci-openclaw:ci-marketplace`); this is the
+ * presentation half. A deliberately small map with a readable fallback rather
+ * than an import from the harness registry, which lives in another domain the
+ * backend may not reach into and which the frontend does not receive.
+ *
+ * The fallback matters more than the map: a NEW installed app must still be
+ * nameable on a card the day it ships, and "app:ci-something:marketplace" is a
+ * worse label than "ci-something" but a far better one than nothing.
+ */
+const APP_LABELS: Record<string, string> = {
+  'ci-openclaw': 'OpenClaw',
+  'ci-hermes': 'Hermes',
+};
+
+export function appLabel(principalName: string | null): string | null {
+  if (!principalName) {
+    return null;
+  }
+
+  // `app:<slug>:<marketplace>` — take the slug.
+  const slug = principalName.startsWith('app:') ? principalName.slice(4).split(':')[0] : null;
+
+  if (!slug) {
+    return principalName;
+  }
+
+  return APP_LABELS[slug] ?? slug;
+}
+
 interface Props {
   action: PendingApproval;
   onAnswer: (id: string, verdict: 'approve' | 'decline') => void;
@@ -45,7 +77,15 @@ export function ApprovalCard({ action, onAnswer, busy = false }: Props) {
           <code className="text-sm font-semibold">{action.intent}</code>
           <p className="text-sm text-muted-foreground">{reasonCopy(action.reason)}</p>
         </div>
-        <Badge variant="outline">{action.actor}</Badge>
+        {/*
+          WHO asked, when an app did. `actor` alone ("full") would ask the owner
+          to authorise an anonymous caller holding broad authority, which is the
+          least answerable form of the question. The capability rides along as a
+          title so it is still inspectable.
+        */}
+        <Badge variant="outline" title={`capability: ${action.actor}`}>
+          {appLabel(action.principalName) ?? 'You'}
+        </Badge>
       </div>
 
       {/*

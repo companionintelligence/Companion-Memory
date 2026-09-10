@@ -34,6 +34,11 @@ export interface PendingApproval {
   origin: string;
   /** The proposing caller's capability level. */
   actor: string;
+  /**
+   * Which installed app asked, as its api-key name — null when the owner did.
+   * `actor` says what authority it held; this says who it was.
+   */
+  principalName: string | null;
   status: ApprovalStatus;
   createdAt: string;
   expiresAt: string | null;

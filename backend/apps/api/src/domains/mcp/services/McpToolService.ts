@@ -214,6 +214,7 @@ export class McpToolService implements OnModuleInit {
       })
         ? 'managed-app'
         : 'owner',
+      principalName: (context.req as ApiKeyScopedRequest).apiKeyName ?? null,
     };
     const result = await this.toolRegistry.executeTool(name, invocationContext, args);
 

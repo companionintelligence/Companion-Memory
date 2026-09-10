@@ -140,6 +140,7 @@ export class IntentsController {
         // irreversible for the owner to answer, which is what lets a connect key
         // hold `full` without being able to spend it unattended.
         principal: isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy }) ? 'managed-app' : 'owner',
+        principalName: req.apiKeyName ?? null,
       },
       body ?? {},
     );

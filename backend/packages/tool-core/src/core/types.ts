@@ -299,6 +299,12 @@ export interface ToolInvocationContext extends ToolRequestContext {
    * irreversible.
    */
   principal?: ToolPrincipal;
+  /**
+   * Which installed app, when {@link ToolInvocationContext.principal} is
+   * `'managed-app'` — the api-key name, for naming it on an approval card.
+   * Ignored for an owner principal.
+   */
+  principalName?: string | null;
 
   /**
    * The `ci.pending_actions` row this call is the confirmed replay of.
