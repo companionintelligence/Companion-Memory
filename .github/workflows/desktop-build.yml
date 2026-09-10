@@ -146,6 +146,7 @@ jobs:
         if: failure() && matrix.target != 'x86_64-apple-darwin'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: ci-server-desktop-test-log-${{ matrix.target }}
           path: frontend/apps/desktop/src-tauri/cargo-test.log
           if-no-files-found: ignore
@@ -168,6 +169,7 @@ jobs:
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: ci-server-desktop-${{ matrix.target }}
           path: |
             frontend/apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
@@ -178,6 +180,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: ci-server-desktop-${{ matrix.target }}
           path: |
             frontend/apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
@@ -189,6 +192,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: ci-server-desktop-${{ matrix.target }}
           path: |
             frontend/apps/desktop/src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi

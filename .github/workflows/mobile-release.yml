@@ -450,6 +450,7 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: companion-ios-ipa
           path: ${{ runner.temp }}/export/*.ipa
           if-no-files-found: error
@@ -605,6 +606,7 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: companion-android-aab
           path: frontend/apps/android/android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error

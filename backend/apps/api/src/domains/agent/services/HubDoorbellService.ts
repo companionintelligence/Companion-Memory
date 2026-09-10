@@ -8,13 +8,16 @@ import {
   CONNECT_TIMESTAMP_HEADER,
   signConnectRequest,
 } from '@ci/common/crypto';
-import { doorbellBlocker } from '@ci/common/hubDoorbell';
+import { devDirectWake, hubBlocker } from '@ci/common/hubDoorbell';
 import { LoggerService } from '@ci/common/logging';
 import config from '@ci/configuration';
 
 import { OPENCLAW_APP_URN } from '../constants';
 
 const WAKE_PATH = '/api/agent-notify/wake';
+
+/** OpenClaw's own gateway hook, which Hub posts to on the far leg. */
+const DEV_WAKE_PATH = '/hooks/wake';
 
 /**
  * Memory rings Hub. Hub rings OpenClaw. The packet stays here.
@@ -26,18 +29,83 @@ export class HubDoorbellService {
   }
 
   async wakeOpenClaw(jobId: string): Promise<boolean> {
-    const blocker = doorbellBlocker();
+    // Hub ALWAYS wins when it is configured, and the dev path is NEVER a
+    // fallback after a Hub attempt fails. A configured appliance must not be
+    // able to silently prefer the unsigned route because Hub had a bad minute —
+    // that is exactly how a dev convenience becomes a production hole. So the
+    // branch is on whether Hub is configured, not on whether Hub worked.
+    const blocker = hubBlocker();
 
-    if (blocker != null) {
-      this.logger.warn(
-        blocker === 'no_hub_url'
-          ? 'Skipping OpenClaw doorbell: CI_HUB_INTERNAL_URL is empty'
-          : 'Skipping OpenClaw doorbell: CI_HUB_FORWARD_AUTH_SECRET is empty',
-      );
+    if (blocker == null) {
+      return this.wakeThroughHub(jobId);
+    }
+
+    const direct = devDirectWake();
+
+    if (direct != null) {
+      return this.wakeDirectly(jobId, direct);
+    }
+
+    this.logger.warn(
+      blocker === 'no_hub_url'
+        ? 'Skipping OpenClaw doorbell: CI_HUB_INTERNAL_URL is empty'
+        : 'Skipping OpenClaw doorbell: CI_HUB_FORWARD_AUTH_SECRET is empty',
+    );
+
+    return false;
+  }
+
+  /**
+   * DEV ONLY. Ring OpenClaw's own hook directly, as Hub would.
+   *
+   * Deliberately the same request Hub makes — same path, same bearer header,
+   * same `{ text, mode }` body, and the same wake TEXT, because CI-OpenClaw's
+   * `extractDispatchJobId` reads the job id back out of that sentence. A dev
+   * path that exercised a different contract would prove nothing about the
+   * real one.
+   *
+   * Warns on every use rather than once at boot: this must never be running
+   * unnoticed on a box someone later promotes.
+   */
+  private async wakeDirectly(jobId: string, direct: { url: string; token: string }): Promise<boolean> {
+    this.logger.warn(
+      `Waking OpenClaw DIRECTLY at ${direct.url} — Hub is not configured. This is a dev-only path and must not be set on an appliance.`,
+      { jobId },
+    );
+
+    try {
+      const response = await fetch(`${direct.url}${DEV_WAKE_PATH}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${direct.token}`,
+        },
+        body: JSON.stringify({
+          text: `Memory dispatch job ${jobId}. Fetch the packet from Memory.`,
+          mode: 'now',
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (!response.ok) {
+        this.logger.warn(`Direct OpenClaw wake returned ${response.status} for job ${jobId}`);
+
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      this.logger.warn('Direct OpenClaw wake failed', {
+        jobId,
+        error: error instanceof Error ? error.message : String(error),
+      });
 
       return false;
     }
+  }
 
+  /** The real path: Memory rings Hub, Hub rings OpenClaw. */
+  private async wakeThroughHub(jobId: string): Promise<boolean> {
     const base = config.auth.connect.hubInternalUrl?.replace(/\/$/, '') || '';
     const secret = config.auth.hubForwardAuth.secret;
 

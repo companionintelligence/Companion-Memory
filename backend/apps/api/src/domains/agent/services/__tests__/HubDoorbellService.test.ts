@@ -1,7 +1,11 @@
 // The house pattern for this (see ConnectService.test.ts): a getter over a
 // mutable local, because `@ci/configuration`'s default export is not safe to
 // assign to directly.
-const connect = { hubInternalUrl: 'http://hub.test:5002' };
+const connect = {
+  hubInternalUrl: 'http://hub.test:5002',
+  devDirectWakeUrl: '',
+  devDirectWakeToken: '',
+};
 const hubForwardAuth = { secret: 'a-secret' };
 
 jest.mock('@ci/configuration', () => {
@@ -38,7 +42,10 @@ function makeLogger() {
 
 /** A `fetch` stand-in returning one canned response. */
 function stubFetch(response: { ok: boolean; status: number; json?: () => Promise<unknown> }) {
-  const spy = jest.fn(async () => ({
+  // The parameters are declared even though the body ignores them: without
+  // them `mock.calls` types as an empty tuple, and the assertions below read
+  // the URL and init off it.
+  const spy = jest.fn(async (_url: string, _init?: RequestInit) => ({
     ok: response.ok,
     status: response.status,
     json: response.json ?? (async () => ({})),
@@ -54,6 +61,8 @@ describe('HubDoorbellService.wakeOpenClaw', () => {
 
   beforeEach(() => {
     connect.hubInternalUrl = 'http://hub.test:5002';
+    connect.devDirectWakeUrl = '';
+    connect.devDirectWakeToken = '';
     hubForwardAuth.secret = 'a-secret';
   });
 
@@ -125,5 +134,92 @@ describe('HubDoorbellService.wakeOpenClaw', () => {
     expect(await new HubDoorbellService(makeLogger()).wakeOpenClaw('job-1')).toBe(false);
 
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The dev-only direct wake exists so a local stack can exercise dispatch without
+ * a full Hub install. Its safety rests entirely on WHEN it fires, so that is
+ * what these test — not that it can POST.
+ */
+describe('HubDoorbellService dev direct wake', () => {
+  const realFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    connect.hubInternalUrl = '';
+    hubForwardAuth.secret = '';
+    connect.devDirectWakeUrl = 'http://127.0.0.1:18789';
+    connect.devDirectWakeToken = 'wake-token';
+  });
+
+  afterEach(() => {
+    (globalThis as { fetch: unknown }).fetch = realFetch;
+    connect.hubInternalUrl = 'http://hub.test:5002';
+    connect.devDirectWakeUrl = '';
+    connect.devDirectWakeToken = '';
+    hubForwardAuth.secret = 'a-secret';
+  });
+
+  it('rings OpenClaw the way Hub would — same path, bearer and body', async () => {
+    // Same contract as Hub's far leg on purpose. A dev path that exercised a
+    // DIFFERENT contract would prove nothing about the real one — and the wake
+    // text matters too: CI-OpenClaw reads the job id back out of that sentence.
+    const spy = stubFetch({ ok: true, status: 200 });
+
+    expect(await new HubDoorbellService(makeLogger()).wakeOpenClaw('job-1')).toBe(true);
+
+    const [url, init] = spy.mock.calls[0]!;
+    expect(url).toBe('http://127.0.0.1:18789/hooks/wake');
+    expect((init!.headers as Record<string, string>).Authorization).toBe('Bearer wake-token');
+    expect(JSON.parse(String(init!.body))).toEqual({
+      text: 'Memory dispatch job job-1. Fetch the packet from Memory.',
+      mode: 'now',
+    });
+  });
+
+  it('NEVER fires when Hub is configured, however the Hub call goes', async () => {
+    // The load-bearing safety property. If the dev path could run after a Hub
+    // FAILURE, a configured appliance would silently fall back to the unsigned
+    // route the first time Hub had a bad minute. The branch is on whether Hub
+    // is CONFIGURED, never on whether Hub worked.
+    connect.hubInternalUrl = 'http://hub.test:5002';
+    hubForwardAuth.secret = 'a-secret';
+
+    const spy = stubFetch({ ok: false, status: 503 });
+
+    expect(await new HubDoorbellService(makeLogger()).wakeOpenClaw('job-1')).toBe(false);
+
+    // One call, and it went to HUB. No retry against the direct URL.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(String(spy.mock.calls[0]![0])).toContain('hub.test:5002');
+  });
+
+  it('will not fire with a URL but no bearer — that is a silent miss, not a path', async () => {
+    connect.devDirectWakeToken = '';
+
+    const spy = stubFetch({ ok: true, status: 200 });
+
+    expect(await new HubDoorbellService(makeLogger()).wakeOpenClaw('job-1')).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('says so, loudly, every time it is used', async () => {
+    // Warned on every wake rather than once at boot: this must never be running
+    // unnoticed on a box someone later promotes.
+    stubFetch({ ok: true, status: 200 });
+    const logger = makeLogger() as unknown as { warn: jest.Mock };
+
+    await new HubDoorbellService(logger as never).wakeOpenClaw('job-1');
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('DIRECTLY'),
+      expect.objectContaining({ jobId: 'job-1' }),
+    );
+  });
+
+  it('reports a failed direct wake as a miss, so pg-boss retries it', async () => {
+    stubFetch({ ok: false, status: 500 });
+
+    expect(await new HubDoorbellService(makeLogger()).wakeOpenClaw('job-1')).toBe(false);
   });
 });
