@@ -207,6 +207,22 @@ describe('useAuth', () => {
     // The JWT was traded for a durable API key, minted via /api/keys and stored.
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/api/keys'))).toBe(true);
     expect(secureStore.get('ci.apiKey')).toBe('stored-api-key');
+
+    // Minted at `full`, ASKED FOR rather than inherited.
+    //
+    // The app issues sixteen of the schema's destructive mutations, and
+    // `capabilityAllows` refuses all of them below `full`. It worked at the
+    // inherited `write` only because the GraphQL plane asks about capability
+    // nowhere — the gap CI-Server#1780 closes. Enforcing that without this would
+    // 403 deletes on every phone, and a phone cannot promote its own key
+    // (`/api/keys` is JwtOrPortalAuthGuard, "never an api key"). So this
+    // assertion is the ordering constraint, not a preference.
+    const keyCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/api/keys'));
+    expect(JSON.parse(String(keyCall?.[1]?.body))).toMatchObject({ capability: 'full' });
+
+    // Recorded, so a key minted before this change is distinguishable from one
+    // that asked. Absent here would mean "legacy, upgrade at next sign-in".
+    expect(secureStore.get('ci.apiKeyCapability')).toBe('full');
   });
 
   it('completePortalMemoryConnect mints a Memory API key from a portal bearer', async () => {

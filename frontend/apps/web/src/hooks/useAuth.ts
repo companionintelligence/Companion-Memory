@@ -33,6 +33,33 @@ const authChannel = new BroadcastChannel('auth');
 // raw key (sent as x-api-key) and its server id (for reference/future revocation).
 const API_KEY_STORAGE = 'ci.apiKey';
 const API_KEY_ID_STORAGE = 'ci.apiKeyId';
+// What the stored key was minted with. Absent on a key issued before the app
+// started asking, which is exactly the signal `storedApiKeyCapability` reports.
+const API_KEY_CAPABILITY_STORAGE = 'ci.apiKeyCapability';
+
+/**
+ * The authority this device asks for, and why it is the widest one.
+ *
+ * A phone key is the user acting on their own appliance, not a delegated agent:
+ * the app issues sixteen of the schema's destructive mutations (deleteNote,
+ * deleteEvent, deleteTask, deletePerson, deleteTag, ...), and `capabilityAllows`
+ * refuses every one of them below `full`. Minting at the inherited
+ * DEFAULT_API_KEY_CAPABILITY of `write` meant the app worked only because the
+ * GraphQL plane asks about capability nowhere — the gap CI-Server#1780 is about.
+ * Closing that gap without this change would break deletes on every phone.
+ *
+ * Stated explicitly rather than inherited, for the reason ConnectService pins
+ * its own literals: a default nobody chose should not decide what a device may
+ * do, and should not move under it if the default changes.
+ *
+ * The cost is real and was accepted deliberately: these keys carry NO scopes, so
+ * scope enforcement is skipped for them entirely and `full` is full authority
+ * across the whole API — including the destructive intents and
+ * `POST /maintenance/ingest/reset`. Narrowing that needs the GraphQL plane to
+ * carry a scope so the key can be confined to it; until then the surface is the
+ * whole API either way, and only the verb tier changes here.
+ */
+const NATIVE_KEY_CAPABILITY = 'full';
 
 const CSRF_COOKIE_NAME = 'csrfToken';
 
@@ -253,6 +280,7 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
     },
     body: JSON.stringify({
       name: `Companion mobile · ${new Date().toISOString().slice(0, 10)}`,
+      capability: NATIVE_KEY_CAPABILITY,
     }),
   });
 
@@ -262,6 +290,7 @@ async function mintAndStoreApiKey(jwt: string, memoryOrigin?: string): Promise<s
 
   await secureStorageSet(API_KEY_STORAGE, created.key);
   await secureStorageSet(API_KEY_ID_STORAGE, created.id);
+  await secureStorageSet(API_KEY_CAPABILITY_STORAGE, NATIVE_KEY_CAPABILITY);
   setApiKey(created.key);
 
   return created.key;
@@ -496,6 +525,7 @@ function useAuth(): ReturnValue {
       setApiKey(null);
       await secureStorageRemove(API_KEY_STORAGE);
       await secureStorageRemove(API_KEY_ID_STORAGE);
+      await secureStorageRemove(API_KEY_CAPABILITY_STORAGE);
       setNativeApiKey(null);
       setAccessToken(null);
       setLoginLoading(false);
