@@ -128,7 +128,8 @@ export class ChatModelPreferenceService {
     const context = { userId } as UserServiceContext;
     const self = await this.personService.findById(context, selfIdentity.entityId);
     const planner = (self?.properties?.planner ?? {}) as Record<string, unknown>;
-    const chatModel = typeof planner.chat_model === 'string' && planner.chat_model.trim() ? planner.chat_model : null;
+    const chatModel =
+      typeof planner.chat_model === 'string' && planner.chat_model.trim() ? planner.chat_model : null;
 
     return {
       chatModel,

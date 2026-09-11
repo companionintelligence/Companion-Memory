@@ -80,7 +80,12 @@ afterEach(() => {
 describe('OllamaService vision model rule: the utility model exception', () => {
   it('uses the explicitly configured utility model for a vision turn when it reports vision', async () => {
     const FreshOllamaService = withUtilityModel(true, 'moondream:1.8b');
-    const service = buildService(FreshOllamaService, ['Qwen3-8B', 'moondream:1.8b'], ['moondream:1.8b'], 'Qwen3-8B');
+    const service = buildService(
+      FreshOllamaService,
+      ['Qwen3-8B', 'moondream:1.8b'],
+      ['moondream:1.8b'],
+      'Qwen3-8B',
+    );
 
     const resolved = await service.resolveModel(ctx, { messages: IMAGE_MESSAGES });
 
@@ -109,7 +114,12 @@ describe('OllamaService vision model rule: the utility model exception', () => {
 
   it('never reaches for the utility model when it was not explicitly configured, even if it would report vision', async () => {
     const FreshOllamaService = withUtilityModel(false, 'moondream:1.8b');
-    const service = buildService(FreshOllamaService, ['Qwen3-8B', 'moondream:1.8b'], ['moondream:1.8b'], 'Qwen3-8B');
+    const service = buildService(
+      FreshOllamaService,
+      ['Qwen3-8B', 'moondream:1.8b'],
+      ['moondream:1.8b'],
+      'Qwen3-8B',
+    );
 
     const resolved = await service.resolveModel(ctx, { messages: IMAGE_MESSAGES });
 

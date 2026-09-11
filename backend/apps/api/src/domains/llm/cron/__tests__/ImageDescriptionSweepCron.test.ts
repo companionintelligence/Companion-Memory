@@ -6,11 +6,7 @@ function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 }
 
-function makeCron(opts: {
-  candidateUserIds: string[];
-  enabledFor?: Set<string>;
-  sendImpl?: jest.Mock;
-}) {
+function makeCron(opts: { candidateUserIds: string[]; enabledFor?: Set<string>; sendImpl?: jest.Mock }) {
   const enabledFor = opts.enabledFor ?? new Set(opts.candidateUserIds);
   const fileService = {
     listUserIdsWithUndescribedImages: jest.fn(async () => opts.candidateUserIds),

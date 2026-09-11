@@ -89,6 +89,8 @@ describe('VisionRenditionService.render', () => {
     });
     const { service } = makeService(renderJpeg);
 
-    await expect(service.render(context, original, 'preview-key')).rejects.toBeInstanceOf(VipsUnavailableError);
+    await expect(service.render(context, original, 'preview-key')).rejects.toBeInstanceOf(
+      VipsUnavailableError,
+    );
   });
 });

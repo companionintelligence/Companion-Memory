@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-
 import { type UserServiceContext } from '@ci/common/context';
 import { EventListenerRegistry } from '@ci/domains/events';
 // FilePreviewService through the files PUBLIC barrel — `no-cross-domain-internals`
@@ -219,9 +218,7 @@ describe('thing-vision: the real file.uploaded producer sends keyless', () => {
 describe('image-description: live and backfill sends share one singletonKey', () => {
   // Any JPEG bytes will do: the decoder is stubbed below, since this suite is
   // about the send, not the pixels.
-  const jpeg = readFileSync(
-    join(__dirname, '../../../files/services/__tests__/__fixtures__/64x40.jpg'),
-  );
+  const jpeg = readFileSync(join(__dirname, '../../../files/services/__tests__/__fixtures__/64x40.jpg'));
 
   async function livePreviewSend(previewId: string): Promise<SendOptions> {
     const fileService = {

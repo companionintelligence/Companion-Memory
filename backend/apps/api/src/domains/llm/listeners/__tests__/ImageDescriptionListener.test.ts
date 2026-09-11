@@ -4,7 +4,10 @@ const USER = 'user-1';
 const PREVIEW_ID = 'preview-1';
 const ORIGINAL_ID = 'file-1';
 const RENDERED = Buffer.from('rendered-jpeg');
-const ANSWER = JSON.stringify({ title: 'Gray Squirrel Foraging in Leaves', description: 'A squirrel on the ground.' });
+const ANSWER = JSON.stringify({
+  title: 'Gray Squirrel Foraging in Leaves',
+  description: 'A squirrel on the ground.',
+});
 
 function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };

@@ -30,9 +30,7 @@ export const enabledSchema = z.object({ enabled: z.boolean() }).strip();
 export const nullableEnabledSchema = z.object({ enabled: z.boolean().nullable() }).strip();
 
 /** `chatModel: null` clears the override and returns to the appliance default. */
-export const chatModelSchema = z
-  .object({ chatModel: z.string().trim().min(1).nullable() })
-  .strip();
+export const chatModelSchema = z.object({ chatModel: z.string().trim().min(1).nullable() }).strip();
 
 @UseGuards(JwtOrApiKeyAuthGuard)
 @Controller('personalization')
@@ -145,7 +143,10 @@ export class PersonalizationController {
     @Context() context: RequestContext,
     @Body(new ValidationPipe(enabledSchema)) body: { enabled: boolean },
   ) {
-    const enabled = await this.chatModelPreference.setThinkingEnabled(toServiceContext(context), body.enabled);
+    const enabled = await this.chatModelPreference.setThinkingEnabled(
+      toServiceContext(context),
+      body.enabled,
+    );
 
     return { enabled };
   }

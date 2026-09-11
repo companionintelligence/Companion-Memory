@@ -53,7 +53,9 @@ describeIfVips('VipsService.probe', () => {
 
 describeIfVips('VipsService.renderJpeg', () => {
   it('applies EXIF orientation so a rotate-90 source comes out upright (40×64) and tag-free', async () => {
-    const rendered = await makeService().renderJpeg(fixture('64x40-orientation-6.jpg'), { maxDimension: 300 });
+    const rendered = await makeService().renderJpeg(fixture('64x40-orientation-6.jpg'), {
+      maxDimension: 300,
+    });
 
     expect(rendered).toMatchObject({ width: 40, height: 64 });
     expect(rendered.buffer.subarray(0, 2)).toEqual(JPEG_SOI);
@@ -74,14 +76,18 @@ describeIfVips('VipsService.renderJpeg', () => {
   });
 
   it('fits inside maxDimension and keeps the aspect ratio', async () => {
-    await expect(makeService().renderJpeg(fixture('64x40.png'), { maxDimension: 32 })).resolves.toMatchObject({
-      width: 32,
-      height: 20,
-    });
+    await expect(makeService().renderJpeg(fixture('64x40.png'), { maxDimension: 32 })).resolves.toMatchObject(
+      {
+        width: 32,
+        height: 20,
+      },
+    );
   });
 
   it('never upscales a source smaller than maxDimension', async () => {
-    await expect(makeService().renderJpeg(fixture('64x40.jpg'), { maxDimension: 1500 })).resolves.toMatchObject({
+    await expect(
+      makeService().renderJpeg(fixture('64x40.jpg'), { maxDimension: 1500 }),
+    ).resolves.toMatchObject({
       width: 64,
       height: 40,
     });
