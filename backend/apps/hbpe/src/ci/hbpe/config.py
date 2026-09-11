@@ -144,6 +144,23 @@ class Settings(BaseSettings):
     label_http_timeout_seconds: float | None = Field(
         default_factory=_label_http_timeout_seconds
     )
+    # While the GGUF fallback is active, re-probe the chat endpoint this often
+    # and switch back to it when it answers (0 disables). See inference/qwen.py.
+    label_endpoint_reprobe_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("HBPE_LABEL_REPROBE_SECONDS", "300"))
+    )
+    # GGUF fallback: prompt chunk size (n_batch = n_ubatch). Small and fixed on
+    # purpose — it bounds the backend's scratch pool. Measured 2026-09-11 on
+    # ROCm: 64 held VRAM flat after warm-up where the default 512 grew ~0.5 MiB
+    # per completion indefinitely, at the same speed.
+    qwen_gguf_batch: int = Field(
+        default_factory=lambda: int(os.getenv("QWEN_GGUF_BATCH", "64"))
+    )
+    # GGUF fallback: rebuild the llama.cpp context after this many completions
+    # to release whatever the scratch pool still accumulated (0 disables).
+    qwen_gguf_recycle_calls: int = Field(
+        default_factory=lambda: int(os.getenv("QWEN_GGUF_RECYCLE_CALLS", "500"))
+    )
 
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────
     cluster_staleness_days: int = Field(
