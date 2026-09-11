@@ -16,7 +16,9 @@
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build",
     "graphql:generate": "graphql-codegen",
-    "graphql:watch": "graphql-codegen --watch"
+    "graphql:watch": "graphql-codegen --watch",
+    "brand:sync": "node scripts/sync-brand.mjs",
+    "brand:check": "node scripts/sync-brand.mjs --check"
   },
   "packageManager": "yarn@4.9.1",
   "dependencies": {
@@ -27,7 +29,7 @@
     "@ci/common": "workspace:*",
     "@ci/editor": "workspace:*",
     "@ci/shadcn": "workspace:*",
-    "@companionintelligence/tokens": "^0.3.1",
+    "@companionintelligence/tokens": "^1.0.0",
     "@journeyapps/wa-sqlite": "^1.5.0",
     "@knight-lab/timelinejs": "^3.9.13",
     "@powersync/capacitor": "^0.5.2",
@@ -115,6 +117,7 @@
     "typescript-eslint": "^8.32.1",
     "vite": "^6.4.3",
     "vite-plugin-pwa": "^1.0.3",
-    "vitest": "^3.2.5"
+    "vitest": "^3.2.5",
+    "@companionintelligence/assets": "^1.0.0"
   }
 }
