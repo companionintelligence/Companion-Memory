@@ -221,7 +221,10 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y --no-install-recommends postgresql-client
+          # `libvips-tools`: the image decoder the files domain shells out to
+          # (VipsService). The suites that exercise real decoding skip without
+          # it, which would silently hide a decode regression here.
+          apt-get install -y --no-install-recommends postgresql-client libvips-tools
           psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 \
             -c "CREATE ROLE companion WITH LOGIN PASSWORD 'ci_test_app_pw';" \
             -c "CREATE DATABASE companion OWNER companion;"

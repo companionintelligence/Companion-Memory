@@ -1326,6 +1326,19 @@ if (!parsed.llm.chatModel) {
   parsed.llm.chatModel = DEFAULT_CHAT_MODEL;
 }
 
+// Captured BEFORE the default below overwrites it: whether an operator (or
+// the Hub installer) actually set LLM_UTILITY_MODEL, as distinct from it
+// having fallen back to the compiled-in DEFAULT_UTILITY_MODEL. `config.has`
+// reads the raw merged sources (env + config/*.json) ahead of this file's own
+// normalization, so it sees "absent" exactly when the env var was never set —
+// default.json carries no `llm.utilityModel` key at all, only
+// custom-environment-variables.json's LLM_UTILITY_MODEL mapping can put one
+// there. Exists so a vision-capable utility model is only ever used for
+// vision work when an operator asked for it: see UTILITY_MODEL_EXPLICITLY_CONFIGURED
+// in OllamaService, which is what actually reads this.
+export const UTILITY_MODEL_EXPLICITLY_CONFIGURED =
+  config.has('llm.utilityModel') && Boolean(config.get('llm.utilityModel'));
+
 // An empty LLM_UTILITY_MODEL means "not configured", not "use the empty
 // string" — same normalization chatModel gets just above. Falling back to the
 // small compiled-in default rather than to `chatModel` is deliberate: inheriting

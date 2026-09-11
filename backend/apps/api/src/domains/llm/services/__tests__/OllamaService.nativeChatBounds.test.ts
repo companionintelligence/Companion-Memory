@@ -210,6 +210,26 @@ describe('native chat generation bounds', () => {
 
     expect(chatMock.mock.calls[0]![0]).not.toHaveProperty('options');
   });
+
+  // `think` is never left to the server. Ollama's default for a
+  // thinking-capable model is ON, so an omitted flag silently bought every
+  // background job a chain of thought nobody read — most of a 7s image
+  // description on Gemma was the model thinking about the squirrel.
+  it('sends think:false explicitly when the caller did not enable thinking', async () => {
+    const service = makeService();
+
+    await service.chat(context, messages, { model: MODEL });
+
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ think: false });
+  });
+
+  it('sends think:true when the caller enabled thinking', async () => {
+    const service = makeService();
+
+    await service.chat(context, messages, { model: MODEL, enableThinking: true });
+
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ think: true });
+  });
 });
 
 /**

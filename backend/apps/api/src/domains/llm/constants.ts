@@ -33,6 +33,15 @@ export const LLM_QUEUE_OPTIONS: QueueOptions = {
  * ImageDescriptionBackfillListener (re-drive) — key on the preview id, and
  * that event has no other registered queue.
  */
+/**
+ * The rendition a vision model is shown: the ORIGINAL, downscaled to fit this
+ * square. Not the 300 px preview (too small — subjects vanish) and not the
+ * raw original (unbounded — image tokens scale with pixels on some models,
+ * and HEIC cannot be sent at all). See VisionRenditionService for the numbers.
+ */
+export const VISION_RENDITION_MAX_DIMENSION = 1500;
+export const VISION_RENDITION_JPEG_QUALITY = 85;
+
 export const IMAGE_DESCRIPTION_QUEUE = 'image-description';
 
 export const IMAGE_DESCRIPTION_QUEUE_OPTIONS: QueueOptions = {

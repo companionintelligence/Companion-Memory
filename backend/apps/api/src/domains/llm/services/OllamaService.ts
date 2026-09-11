@@ -12,7 +12,7 @@ import type { RequestContext } from '@ci/common/context';
 import { type ApiKeyCapability, FULL_CAPABILITY } from '@ci/common/decorators';
 import { FeatureService } from '@ci/common/feature';
 import { LoggerService } from '@ci/common/logging';
-import config from '@ci/configuration';
+import config, { UTILITY_MODEL_EXPLICITLY_CONFIGURED } from '@ci/configuration';
 import { ModelTierRouter, type RoutingDecision } from '@ci/domains/model-routing';
 import {
   ToolRegistry,
@@ -23,6 +23,7 @@ import {
   type ToolSchema,
 } from '@ci/domains/tools';
 
+import { ChatModelPreferenceService } from '../chat-model-preference.module';
 import { boundToolResultForPrompt, toolResultByteBudget } from '../toolResultBudget';
 import type { OllamaModel } from '../types';
 
@@ -347,6 +348,12 @@ export class OllamaService implements OnModuleInit {
     private readonly logger: LoggerService,
     private readonly featureService: FeatureService,
     private readonly modelTierRouter: ModelTierRouter,
+    // Optional so the many direct `new OllamaService(...)` unit tests that
+    // predate this preference keep compiling unchanged. Nest always supplies
+    // it in the real app (see LlmCoreModule); its absence degrades exactly to
+    // the OLD behaviour — every user gets the single appliance constant,
+    // PROMPT_MODEL — which is what those tests already assert.
+    private readonly chatModelPreference?: ChatModelPreferenceService,
   ) {
     this.logger.setContext(OllamaService.name);
   }
@@ -511,6 +518,7 @@ export class OllamaService implements OnModuleInit {
     signal,
     maxOutputTokens,
     keepAlive,
+    enableThinking = false,
   }: {
     model: string;
     messages: OllamaMessage[];
@@ -519,6 +527,7 @@ export class OllamaService implements OnModuleInit {
     signal?: AbortSignal;
     maxOutputTokens?: number;
     keepAlive?: string | number;
+    enableThinking?: boolean;
   }): Promise<ChatResponse> {
     // A signal that is ALREADY aborted must not start a generation at all.
     // `runChat` awaits `validateModel` — its own network round trip — before
@@ -536,6 +545,13 @@ export class OllamaService implements OnModuleInit {
     return await client.chat({
       model,
       messages,
+      // Always explicit. Omitting `think` hands the decision to the server,
+      // and Ollama's default for a thinking-capable model is ON — so every
+      // background call (image descriptions, thing vision, titles) was paying
+      // for a private chain of thought it never read: measured ~5s of a 7s
+      // Gemma description, and far more on a 27B model. `false` is accepted by
+      // models without the capability; only `true` is rejected.
+      think: enableThinking === true,
       ...(format && { format }),
       ...(tools && tools.length > 0 && { tools }),
       ...(keepAlive != null && { keep_alive: keepAlive }),
@@ -786,7 +802,9 @@ export class OllamaService implements OnModuleInit {
               stream: true,
               // Native Ollama: `think` is a first-class flag. vLLM is the other
               // branch above and uses chat_template_kwargs.enable_thinking.
-              ...(enableThinking && { think: true }),
+              // Sent explicitly in both directions — see runNativeChat for why
+              // an omitted flag is not "off".
+              think: enableThinking,
               ...(iterationWillCallTools && { tools: ollamaTools }),
               // Ollama sizes num_ctx from the memory it sees, which on a
               // unified-memory box means the model's full window (and a giant
@@ -983,6 +1001,7 @@ export class OllamaService implements OnModuleInit {
           signal,
           maxOutputTokens,
           keepAlive,
+          enableThinking,
         });
 
     const willCallTools =
@@ -1030,6 +1049,7 @@ export class OllamaService implements OnModuleInit {
       signal,
       maxOutputTokens,
       keepAlive,
+      enableThinking,
     });
   }
 
@@ -1050,7 +1070,7 @@ export class OllamaService implements OnModuleInit {
       resolvedTools = hasVisualContent ? false : true;
       await this.validateModel(context, resolvedModel);
     } else {
-      resolvedModel = await this.resolveServedChatModel(requestedModel, messages);
+      resolvedModel = await this.resolveServedChatModel(context, requestedModel, messages);
       resolvedModel = await this.applyTierRouting(resolvedModel, messages, resolvedThinking);
     }
 
@@ -1149,7 +1169,39 @@ export class OllamaService implements OnModuleInit {
    * id — keep that; listeners complete on a non-multimodal 400 rather than
    * inventing `llava:7b`.
    */
+  /**
+   * The chat model a user's turn actually runs on — including the model a
+   * vision turn (a turn carrying images) is shown.
+   *
+   * `effectiveChatModel` is {@link ChatModelPreferenceService}'s per-user
+   * override, falling back to the appliance's {@link PROMPT_MODEL} constant
+   * when the user has none. It is the SAME model for a text turn and an
+   * image turn — a deliberate simplification over what this method used to
+   * do, which was scan every model the backend had installed (not just
+   * loaded) for the first one reporting the `vision` capability and silently
+   * reroute an image turn onto it. That meant a household appliance with two
+   * models pulled could load-swap on every other request depending on
+   * whether the last one carried an image — the exact GPU thrash a shared
+   * appliance can least afford (each swap is a multi-second reload, and on a
+   * VRAM-constrained card it evicts the OTHER model outright).
+   *
+   * The one exception is {@link UTILITY_MODEL}, and only when
+   * {@link UTILITY_MODEL_EXPLICITLY_CONFIGURED} — an operator (or the Hub
+   * installer, on hardware with room for two resident models) set
+   * `LLM_UTILITY_MODEL` on purpose. If IT reports vision, a vision turn uses
+   * it instead of the user's chat model: background vision work (image
+   * descriptions, thing-vision extraction) is exactly the kind of job a
+   * smaller model should carry, sized to the box by whoever configured it —
+   * never guessed at by scanning what happens to be installed.
+   *
+   * If neither the utility model nor the user's chat model can do vision, this
+   * still returns the user's chat model. The two vision listeners already
+   * treat the resulting 400 (`isNonMultimodalModelError`) as "complete the
+   * job without a description" rather than a failure — silently picking some
+   * OTHER model instead would reintroduce the thrash this replaced.
+   */
   private async resolveServedChatModel(
+    context: RequestContext,
     requestedModel?: string | null,
     messages: OllamaMessage[] = [],
   ): Promise<string> {
@@ -1161,7 +1213,20 @@ export class OllamaService implements OnModuleInit {
 
     const hasVisualContent = messages.some((message) => message.images && message.images.length > 0);
 
+    // Per-model capability probing (both the explicit-request check just
+    // below and resolveVisionModel's own) is meaningless on the OpenAI-compat
+    // transport: vLLM exposes exactly one served chat id and no way to ask it
+    // "can you see" — getAvailableModels hard-codes `vision: false` for that
+    // mode. resolveVisionModel already returns the plain effective chat model
+    // in that case; skip straight past it rather than calling
+    // fetchModelCapabilities against a transport that cannot answer it.
     if (hasVisualContent && !this.llmEndpointService.getOpenAiDriver()) {
+      // An explicit, actually-vision-capable request wins outright — this is
+      // the interactive Capture flow's own model picker (a person choosing,
+      // for this one photo, right now), which must keep working exactly as
+      // before. Automatic/background vision work (image descriptions, thing
+      // vision) essentially never sets this; requestedModel is undefined and
+      // resolution falls straight through to the rule below.
       const requested = requestedModel?.trim();
 
       if (requested && served.includes(requested)) {
@@ -1172,20 +1237,61 @@ export class OllamaService implements OnModuleInit {
         }
       }
 
-      for (const id of served) {
-        const capabilities = await this.fetchModelCapabilities(id, { throwOnError: false });
+      const { model } = await this.resolveVisionModel(context.userId, served);
 
-        if (capabilities.includes('vision')) {
-          return id;
-        }
+      if (served.includes(model)) {
+        return model;
       }
     }
 
-    const candidates = [requestedModel, PROMPT_MODEL].filter((model): model is string =>
+    const userOverride = context.userId ? await this.chatModelPreference?.getChatModel(context.userId) : null;
+    const effectiveChatModel = userOverride ?? PROMPT_MODEL;
+    const candidates = [requestedModel, effectiveChatModel].filter((model): model is string =>
       Boolean(model && model.trim()),
     );
 
     return candidates.find((model) => served.includes(model)) ?? served[0];
+  }
+
+  /**
+   * The single source of truth for "what model does this user's vision work
+   * run on, and can it actually see" — shared by {@link resolveServedChatModel}
+   * (a chat turn carrying images) and {@link ImageDescriptionPreferenceService}
+   * (deciding whether "Describe images" defaults on). Both MUST agree: a
+   * setting that defaulted on for a model the chat path would never actually
+   * hand images to would describe nothing and look broken.
+   *
+   * See {@link resolveServedChatModel}'s doc comment for why this is one model
+   * for everyone's vision work (barring the opt-in utility-model exception),
+   * not a scan of every installed model.
+   */
+  async resolveVisionModel(
+    userId: string | undefined,
+    served?: string[],
+  ): Promise<{ model: string; supportsVision: boolean }> {
+    const servedIds = served ?? (await this.listServedChatModelIds());
+    const userOverride = userId ? await this.chatModelPreference?.getChatModel(userId) : null;
+    const effectiveChatModel = userOverride ?? PROMPT_MODEL;
+
+    // vLLM/OpenAI-compat exposes one served chat id with no per-model
+    // capability probe (getAvailableModels hard-codes `vision: false` for
+    // that mode) — there is no second model to prefer, and no way to ask it
+    // whether it can see.
+    if (this.llmEndpointService.getOpenAiDriver()) {
+      return { model: effectiveChatModel, supportsVision: false };
+    }
+
+    if (UTILITY_MODEL_EXPLICITLY_CONFIGURED && servedIds.includes(UTILITY_MODEL)) {
+      const utilityCaps = await this.fetchModelCapabilities(UTILITY_MODEL, { throwOnError: false });
+
+      if (utilityCaps.includes('vision')) {
+        return { model: UTILITY_MODEL, supportsVision: true };
+      }
+    }
+
+    const caps = await this.fetchModelCapabilities(effectiveChatModel, { throwOnError: false });
+
+    return { model: effectiveChatModel, supportsVision: caps.includes('vision') };
   }
 
   private async listServedChatModelIds(): Promise<string[]> {

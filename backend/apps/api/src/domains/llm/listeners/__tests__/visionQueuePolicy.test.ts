@@ -1,4 +1,6 @@
-import sharp from 'sharp';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EventListenerRegistry } from '@ci/domains/events';
@@ -215,15 +217,11 @@ describe('thing-vision: the real file.uploaded producer sends keyless', () => {
 });
 
 describe('image-description: live and backfill sends share one singletonKey', () => {
-  let jpeg: Buffer;
-
-  beforeAll(async () => {
-    jpeg = await sharp({
-      create: { width: 16, height: 16, channels: 3, background: { r: 10, g: 120, b: 200 } },
-    })
-      .jpeg()
-      .toBuffer();
-  });
+  // Any JPEG bytes will do: the decoder is stubbed below, since this suite is
+  // about the send, not the pixels.
+  const jpeg = readFileSync(
+    join(__dirname, '../../../files/services/__tests__/__fixtures__/64x40.jpg'),
+  );
 
   async function livePreviewSend(previewId: string): Promise<SendOptions> {
     const fileService = {
@@ -239,7 +237,8 @@ describe('image-description: live and backfill sends share one singletonKey', ()
       setDimensions: jest.fn(async () => {}),
       create: jest.fn(async () => ({ id: previewId })),
     };
-    const mediaDimensionsService = { fromImageBuffer: jest.fn(async () => ({ width: 16, height: 16 })) };
+    const mediaDimensionsService = { fromImageBuffer: jest.fn(async () => ({ width: 64, height: 40 })) };
+    const vips = { renderJpeg: jest.fn(async () => ({ buffer: jpeg, width: 64, height: 40 })) };
     const eventService = makeEventService();
 
     // The send under test now lives in FilePreviewService; the listener is the
@@ -248,6 +247,7 @@ describe('image-description: live and backfill sends share one singletonKey', ()
       new FilePreviewService(
         fileService as never,
         mediaDimensionsService as never,
+        vips as never,
         eventService as never,
         makeLogger() as never,
       ),

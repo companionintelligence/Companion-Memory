@@ -781,6 +781,17 @@ health: ## Check the repository for prerequisites
 		printf "$(GREEN)✓$(RESET) uv found at $$UV ($$(uv --version | cut -d' ' -f2))\n\n"; \
 	fi
 
+	@# `vips` (libvips-tools) is the image decoder behind previews, dimensions
+	@# and the vision renditions — the API shells out to it, so the host running
+	@# the API needs it, and a missing binary fails every image job loudly.
+	@VIPS=$$(which vips 2>/dev/null); \
+	if [ -z "$$VIPS" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'vips' installed or it is not in your path. Install it with 'sudo apt install libvips-tools' (Debian/Ubuntu) or 'brew install vips' (macOS).\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) vips found at $$VIPS ($$(vips --version 2>/dev/null | sed 's/^vips-//'))\n\n"; \
+	fi
+
 	@# The pre-commit guards must actually FIRE in a linked worktree. `yarn
 	@# prepare` (husky, see package.json) points core.hooksPath at `.husky/_` —
 	@# a RELATIVE path, which git resolves against the root of the working tree

@@ -382,6 +382,15 @@ make dev-down
 
 To run the api/web individually instead, see their READMEs ([api](backend/apps/api/README.md), [web](frontend/apps/web/README.md)).
 
+#### libvips (required)
+
+Image previews, image dimensions and the renditions sent to the vision model are produced by the `vips` command-line tools (`libvips-tools`). The API shells out to them, so the machine running the API needs them — `make health` checks. Debian's build decodes iPhone HEIC (its libheif carries the HEVC decoder), which is why this replaced the `sharp` npm package.
+
+```bash
+brew install vips                  # macOS
+sudo apt install libvips-tools     # Debian / Ubuntu
+```
+
 ### Reaching the right database
 
 Each worktree's stack publishes PostgreSQL on **its own host port**, but `.env`

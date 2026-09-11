@@ -410,9 +410,9 @@ export function ModelSection() {
                   Describe images
                 </Label>
                 <p className="text-xs text-muted-foreground">
-                  Run vision passes on uploads (titles and captions). Keep this off unless a loaded model
-                  actually understands images. Turning it on requeues undescribed photos that were skipped or
-                  failed earlier.
+                  Run vision passes on uploads (titles and captions). On by default when your chat model
+                  understands images, off when it does not — this switches with it. Turning it on for a model
+                  that was off requeues undescribed photos that were skipped or failed earlier.
                 </p>
               </div>
 

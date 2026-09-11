@@ -107,12 +107,20 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * recorded `skipped: probe_failed` under the old version are re-probed, which
    * is precisely what today's `width IS NULL` predicate can never express: it
    * cannot distinguish "not probed yet" from "probed and unreadable".
+   *
+   * v2 — the probe moved from sharp's bundled libvips to the system `vips`
+   * tools (VipsService). HEIC now reads: sharp's libheif had no HEVC decoder,
+   * so every iPhone original probed as unreadable.
    */
-  [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 1,
+  [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 2,
 
   /**
    * v1 — first ledger-driven run of the preview generator (`FilePreviewService`,
    * the same sharp / ffmpeg path the upload listener uses).
+   *
+   * v2 — sharp replaced by the system `vips` tools (VipsService). HEIC decodes
+   * now (52 of 53 HEIC originals in the first imported library were recorded
+   * `undecodable` under v1 and are re-offered by this bump).
    *
    * Bump when the generator can decode something it previously could not, or
    * when the preview itself changes shape (size, format, frame choice for
@@ -121,7 +129,7 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * change that must re-render existing previews needs the predicate widened
    * too — see FilePreviewStage.
    */
-  [STAGE_IDS.ENRICH_FILE_PREVIEW]: 1,
+  [STAGE_IDS.ENRICH_FILE_PREVIEW]: 2,
 
   /**
    * v1 — oEmbed (YouTube/Spotify/Vimeo/SoundCloud/Dailymotion/X), Wikidata +

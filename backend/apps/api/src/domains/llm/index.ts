@@ -21,6 +21,7 @@ import { BrowserActivityInsightPreferenceModule } from './browser-activity-insig
 import { LlmEndpointController } from './controllers/LlmEndpointController';
 import { OllamaController } from './controllers/OllamaController';
 import { LlmCoreModule } from './core.module';
+import { ImageDescriptionSweepCron } from './cron/ImageDescriptionSweepCron';
 import { ImageDescriptionPreferenceModule } from './image-description-preference.module';
 import { BrowserActivityInsightListener } from './listeners/BrowserActivityInsightListener';
 import { ChatGenerateListener } from './listeners/ChatGenerateListener';
@@ -30,6 +31,7 @@ import { ImageDescriptionListener } from './listeners/ImageDescriptionListener';
 import { ThingVisionListener } from './listeners/ThingVisionListener';
 import { ChatGenerationBroker } from './services/ChatGenerationBroker';
 import { ChatTurnService } from './services/ChatTurnService';
+import { VisionRenditionService } from './services/VisionRenditionService';
 
 /**
  * @internal
@@ -59,7 +61,9 @@ import { ChatTurnService } from './services/ChatTurnService';
     ChatGenerateListener,
     CvDetectionsListener,
     ImageDescriptionListener,
+    VisionRenditionService,
     ImageDescriptionBackfillListener,
+    ImageDescriptionSweepCron,
     ThingVisionListener,
   ],
   controllers: [OllamaController, LlmEndpointController],
