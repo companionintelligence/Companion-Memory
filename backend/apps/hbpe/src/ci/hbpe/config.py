@@ -145,6 +145,27 @@ class Settings(BaseSettings):
         default_factory=_label_http_timeout_seconds
     )
 
+    # ── Yield to chat (see label_yield.py) ────────────────────────────────────
+    # Before each chat-API label request, stand aside while any thread has a
+    # chat turn queued or running (ci.threads.generation_status). Only the HTTP
+    # backend shares Ollama with chat; the in-process GGUF backend never asks.
+    # Waiting counts against label_budget_seconds — that is the point.
+    label_yield_to_chat: bool = Field(
+        default_factory=lambda: (
+            os.getenv("HBPE_LABEL_YIELD_TO_CHAT", "true").strip().lower()
+            not in ("0", "false", "no", "off")
+        )
+    )
+    # Longest one request will wait for a turn to finish before proceeding
+    # anyway. Long on purpose: a real turn with thinking and tools on a local
+    # model takes minutes, and cutting in early re-creates the starvation.
+    label_yield_max_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("HBPE_LABEL_YIELD_MAX_SECONDS", "600"))
+    )
+    label_yield_poll_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("HBPE_LABEL_YIELD_POLL_SECONDS", "2"))
+    )
+
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────
     cluster_staleness_days: int = Field(
         default_factory=lambda: int(os.getenv("CLUSTER_STALENESS_DAYS", "90"))

@@ -9,6 +9,7 @@ import type { LoggerService } from '@ci/common/logging';
 import { EventListenerRegistry } from '../../event-registration';
 import type { JobSlotPool } from '../../jobSlotPool';
 import type { Acknowledgement } from '../../types';
+import { YieldGateRegistry } from '../../yieldGates';
 import { PGBossEventService } from '../PGBossEventService';
 
 /**
@@ -100,6 +101,9 @@ interface WorkerInternals {
   // enough of them have leaked that the queue quietly stops fetching at all.
   globalSlots: JobSlotPool;
   perQueueSemaphores: Map<string, LimitFunction>;
+  queueLanes: Map<string, string>;
+  declaredQueueCeilings: Map<string, number>;
+  provisionSemaphore(queue: string): LimitFunction;
   // The shipped ceilings the loop re-derives its semaphore sizes from on every
   // settings change. Sizing the semaphores alone is not enough any more: the
   // first loop iteration re-applies these, so a harness that only replaced the
@@ -182,6 +186,8 @@ function makeHarness(options: {
   perQueueConcurrency?: number;
   fetchBatchSize?: number;
   jobTimeoutMs?: number;
+  /** Queue → lane, provisioned the way onModuleInit would (shared semaphore). */
+  lanes?: Record<string, string>;
 }): Harness {
   const {
     queues,
@@ -189,6 +195,7 @@ function makeHarness(options: {
     perQueueConcurrency = 6,
     fetchBatchSize = 20,
     jobTimeoutMs = HARNESS_JOB_TIMEOUT_MS,
+    lanes = {},
   } = options;
 
   const logger: StubLogger = {
@@ -247,7 +254,17 @@ function makeHarness(options: {
   worker.jobTimeoutMs = jobTimeoutMs;
 
   for (const queue of queues) {
-    worker.perQueueSemaphores.set(queue, plimit(perQueueConcurrency));
+    const lane = lanes[queue];
+
+    if (lane == null) {
+      worker.perQueueSemaphores.set(queue, plimit(perQueueConcurrency));
+      continue;
+    }
+
+    // Through the real provisioning path, so the sharing under test is the
+    // service's own and not a semaphore the harness happened to hand out twice.
+    worker.queueLanes.set(queue, lane);
+    worker.perQueueSemaphores.set(queue, worker.provisionSemaphore(queue));
   }
 
   // Peak overlap is measured at the listener boundary rather than from the
@@ -1152,6 +1169,260 @@ describe('PGBossEventService work loop', () => {
       expect(harness.boss.fail).not.toHaveBeenCalled();
 
       await runUntilSettled(harness.service.onModuleDestroy());
+    });
+  });
+
+  /**
+   * `queueOptions.lane`: several queues drawing from ONE slot. Four
+   * Ollama-bound background queues each declared `localConcurrency: 1`, which
+   * is four generations in front of a single-slot runner at once — nothing
+   * breaks at Ollama, but every request's wait in that line is what the
+   * first-response deadline measures. On a lane they are one slot between
+   * them, while keeping their own backlogs and policies.
+   */
+  describe('lane', () => {
+    afterEach(() => {
+      EventListenerRegistry.clear();
+    });
+
+    it('never runs jobs from two queues on one lane at the same time', async () => {
+      EventListenerRegistry.register('preview.generated', 'DescribeListener', 'handle', 'image-description', {
+        localConcurrency: 1,
+      });
+      EventListenerRegistry.register('file.uploaded', 'ThingListener', 'handle', 'thing-vision', {
+        localConcurrency: 1,
+      });
+
+      const harness = makeHarness({
+        queues: ['image-description', 'thing-vision'],
+        perQueueConcurrency: 1,
+        lanes: { 'image-description': 'ollama-background', 'thing-vision': 'ollama-background' },
+      });
+
+      harness.listen('image-description', 'preview.generated');
+      harness.listen('thing-vision', 'file.uploaded');
+      harness.enqueue('image-description', 'preview.generated', [1_000, 1_000]);
+      harness.enqueue('thing-vision', 'file.uploaded', [1_000, 1_000]);
+      harness.start('image-description');
+      harness.start('thing-vision');
+
+      await runUntilSettled(
+        (async () => {
+          while (harness.executed.length < 4) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        })(),
+      );
+
+      expect(harness.executed).toHaveLength(4);
+      // The number that matters: one generation at the runner at a time,
+      // across BOTH queues — not one per queue.
+      expect(harness.peakTotal()).toBe(1);
+      expect(harness.peakLeased()).toBe(1);
+    });
+
+    it('sizes the lane to its smallest member, whatever the others declare', async () => {
+      EventListenerRegistry.register('a.event', 'AListener', 'handle', 'lane-a', { localConcurrency: 3 });
+      EventListenerRegistry.register('b.event', 'BListener', 'handle', 'lane-b', { localConcurrency: 1 });
+
+      const harness = makeHarness({
+        queues: ['lane-a', 'lane-b'],
+        perQueueConcurrency: 6,
+        lanes: { 'lane-a': 'shared', 'lane-b': 'shared' },
+      });
+      const worker = internals(harness.service);
+
+      worker.declaredQueueCeilings.set('lane-a', 3);
+      worker.declaredQueueCeilings.set('lane-b', 1);
+
+      // Re-provision after the ceilings are known, as onModuleInit does in
+      // declaration order: the second member lowers the pool to its own 1.
+      worker.perQueueSemaphores.set('lane-a', worker.provisionSemaphore('lane-a'));
+      worker.perQueueSemaphores.set('lane-b', worker.provisionSemaphore('lane-b'));
+
+      expect(worker.perQueueSemaphores.get('lane-a')).toBe(worker.perQueueSemaphores.get('lane-b'));
+      expect(worker.perQueueSemaphores.get('lane-a')?.concurrency).toBe(1);
+    });
+
+    it('leaves queues on different lanes, and lane-less queues, independent', async () => {
+      const harness = makeHarness({
+        queues: ['lane-x', 'solo'],
+        perQueueConcurrency: 1,
+        lanes: { 'lane-x': 'x' },
+      });
+
+      harness.listen('lane-x', 'x.event');
+      harness.listen('solo', 'solo.event');
+      harness.enqueue('lane-x', 'x.event', [1_000]);
+      harness.enqueue('solo', 'solo.event', [1_000]);
+      harness.start('lane-x');
+      harness.start('solo');
+
+      await jest.advanceTimersByTimeAsync(500);
+
+      expect(harness.peakTotal()).toBe(2);
+    });
+  });
+
+  /**
+   * `queueOptions.yieldsTo`: a queue standing aside for something more urgent
+   * — the image-description queue for an interactive chat turn, so the GPU
+   * can go idle long enough for Ollama to swap the chat model in. The
+   * mechanics under test: no lease is taken while the gate is closed, the job
+   * already running is never cut, work resumes the moment the gate opens, and
+   * a mis-wired or exploding gate leaves the queue RUNNING rather than frozen.
+   */
+  describe('yield gate', () => {
+    const BACKOFF_WHEN_YIELDING_MS = 1000;
+
+    afterEach(() => {
+      EventListenerRegistry.clear();
+      YieldGateRegistry.clear();
+    });
+
+    it('takes no lease while the gate is closed, then resumes the backlog when it opens', async () => {
+      let chatPending = true;
+
+      EventListenerRegistry.register('preview.generated', 'DescribeListener', 'handle', 'image-description', {
+        yieldsTo: 'interactive-chat',
+      });
+      YieldGateRegistry.register('interactive-chat', () => chatPending);
+
+      const harness = makeHarness({ queues: ['image-description'] });
+
+      harness.listen('image-description', 'preview.generated');
+      harness.enqueue('image-description', 'preview.generated', [0, 0]);
+      harness.start('image-description');
+
+      await jest.advanceTimersByTimeAsync(BACKOFF_WHEN_YIELDING_MS * 5);
+
+      // Standing aside is between jobs and costs a backlog, not work: nothing
+      // fetched, nothing leased, nothing run — and it is logged, once.
+      expect(harness.boss.fetch).not.toHaveBeenCalled();
+      expect(harness.executed).toEqual([]);
+      expect(harness.reservedSlots()).toBe(0);
+      expect(
+        harness.logger.log.mock.calls.filter(([line]) => String(line).includes('standing aside')),
+      ).toHaveLength(1);
+
+      chatPending = false;
+
+      await jest.advanceTimersByTimeAsync(BACKOFF_WHEN_YIELDING_MS + 1);
+
+      expect(harness.executed).toEqual(['image-description-job-1', 'image-description-job-2']);
+      expect(harness.logger.log.mock.calls.filter(([line]) => String(line).includes('resumed'))).toHaveLength(
+        1,
+      );
+    });
+
+    it('lets the job that was already running finish; only the next fetch waits', async () => {
+      let chatPending = false;
+
+      EventListenerRegistry.register('preview.generated', 'DescribeListener', 'handle', 'image-description', {
+        yieldsTo: 'interactive-chat',
+      });
+      YieldGateRegistry.register('interactive-chat', () => chatPending);
+
+      const harness = makeHarness({
+        queues: ['image-description'],
+        perQueueConcurrency: 1,
+        fetchBatchSize: 1,
+      });
+
+      harness.listen('image-description', 'preview.generated');
+      harness.enqueue('image-description', 'preview.generated', [10_000, 0]);
+      harness.start('image-description');
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(harness.boss.fetch).toHaveBeenCalledTimes(1);
+
+      // A chat turn arrives mid-description.
+      chatPending = true;
+
+      await jest.advanceTimersByTimeAsync(10_000);
+
+      expect(harness.boss.complete).toHaveBeenCalledTimes(1);
+      expect(harness.executed).toEqual(['image-description-job-1']);
+
+      await jest.advanceTimersByTimeAsync(BACKOFF_WHEN_YIELDING_MS * 3);
+
+      expect(harness.boss.fetch).toHaveBeenCalledTimes(1);
+      expect(harness.executed).toEqual(['image-description-job-1']);
+    });
+
+    it('does not yield for a gate nobody registered, and warns once', async () => {
+      EventListenerRegistry.register('preview.generated', 'DescribeListener', 'handle', 'image-description', {
+        yieldsTo: 'nobody-registered-this',
+      });
+
+      const harness = makeHarness({ queues: ['image-description'] });
+
+      harness.listen('image-description', 'preview.generated');
+      harness.enqueue('image-description', 'preview.generated', [0]);
+      harness.start('image-description');
+
+      await jest.advanceTimersByTimeAsync(BACKOFF_WHEN_EMPTY_MS * 2);
+
+      expect(harness.executed).toEqual(['image-description-job-1']);
+      expect(
+        harness.logger.warn.mock.calls.filter(([line]) =>
+          String(line).includes('no such gate is registered'),
+        ),
+      ).toHaveLength(1);
+    });
+
+    it('does not yield for a gate that throws', async () => {
+      EventListenerRegistry.register('preview.generated', 'DescribeListener', 'handle', 'image-description', {
+        yieldsTo: 'interactive-chat',
+      });
+      YieldGateRegistry.register('interactive-chat', () => {
+        throw new Error('database gone');
+      });
+
+      const harness = makeHarness({ queues: ['image-description'] });
+
+      harness.listen('image-description', 'preview.generated');
+      harness.enqueue('image-description', 'preview.generated', [0]);
+      harness.start('image-description');
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(harness.executed).toEqual(['image-description-job-1']);
+    });
+
+    it('says nothing when the gate is open from the start — no "resumed" for a queue that never stood aside', async () => {
+      EventListenerRegistry.register('preview.generated', 'DescribeListener', 'handle', 'image-description', {
+        yieldsTo: 'interactive-chat',
+      });
+      YieldGateRegistry.register('interactive-chat', () => false);
+
+      const harness = makeHarness({ queues: ['image-description'] });
+
+      harness.listen('image-description', 'preview.generated');
+      harness.enqueue('image-description', 'preview.generated', [0]);
+      harness.start('image-description');
+
+      await jest.advanceTimersByTimeAsync(BACKOFF_WHEN_EMPTY_MS);
+
+      expect(harness.executed).toEqual(['image-description-job-1']);
+      expect(
+        harness.logger.log.mock.calls.filter(([line]) => /standing aside|resumed/.test(String(line))),
+      ).toEqual([]);
+    });
+
+    it('leaves a queue that names no gate exactly as it was — lane or not', async () => {
+      YieldGateRegistry.register('interactive-chat', () => true);
+
+      const harness = makeHarness({ queues: ['search-index'] });
+
+      harness.listen('search-index', 'note.created');
+      harness.enqueue('search-index', 'note.created', [0]);
+      harness.start('search-index');
+
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(harness.executed).toEqual(['search-index-job-1']);
     });
   });
 });

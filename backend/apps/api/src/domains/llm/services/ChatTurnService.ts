@@ -22,7 +22,7 @@ import { ACTIVE_TASK_STATUSES, TaskService } from '@ci/domains/planning';
 import { HbpeService } from '@ci/domains/predictions';
 import { SummaryService } from '@ci/domains/summaries';
 
-import { LLM_QUEUE, type ThreadGenerationStatus } from '../constants';
+import { LLM_BACKGROUND_QUEUE, LLM_QUEUE, type ThreadGenerationStatus } from '../constants';
 import {
   MAX_CONTEXT_SHRINK_LEVEL,
   MAX_INLINE_IMAGES_PER_MESSAGE,
@@ -36,6 +36,7 @@ import {
   type ContextBudget,
 } from '../contextBudget';
 import { ChatGenerateEvent, type ChatGeneratePayload } from '../events';
+import { isFirstResponseTimeout } from '../firstResponseDeadline';
 import { foldHistory } from '../foldHistory';
 import { THREAD_TITLE_SYSTEM_PROMPT, sidebarTitleFromModel } from '../threadTitle';
 
@@ -121,6 +122,19 @@ function latestUserText(messages: readonly Message[]): string | null {
 export function persistedAssistantContent(thinking: string, text: string): string {
   return thinking ? `<think>${thinking}</think>${text}` : text;
 }
+
+/**
+ * How many times one turn asks the backend before giving up on it, when the
+ * backend sends NO response at all (`LlmFirstResponseTimeoutError`). A fresh
+ * request re-enters the backend's queue at the back with nothing lost —
+ * nothing was emitted — so retrying inside the job is cheap, and it rides
+ * out a runner that was merely busy (a single-slot Ollama behind a two-minute
+ * sidecar generation) without failing the job. Past this the job FAILS, so
+ * pg-boss's retry/backoff and dead-letter policy apply and the thread reads
+ * `failed` — never the fallback prose, which would tell the person the model
+ * answered when it never started.
+ */
+export const MAX_FIRST_RESPONSE_ATTEMPTS = 3;
 
 /**
  * Published and persisted when a turn otherwise ends with no user-visible
@@ -211,6 +225,7 @@ export class ChatTurnService {
     let generated: OllamaMessage[] = [];
     let model = payload.model;
     let shrinkLevel = 0;
+    let firstResponseAttempts = 0;
 
     try {
       for (;;) {
@@ -286,6 +301,27 @@ export class ChatTurnService {
           continue;
         }
 
+        // The backend never started answering. Nothing reached the viewer, so
+        // asking again costs nothing but the wait; a turn that keeps getting
+        // no answer is a failed turn, not an empty one.
+        if (streamError && nothingEmitted && !signal.aborted && isFirstResponseTimeout(streamError)) {
+          firstResponseAttempts += 1;
+
+          if (firstResponseAttempts < MAX_FIRST_RESPONSE_ATTEMPTS) {
+            this.logger.warn('LLM backend sent no response in time; asking again', {
+              threadId: payload.threadId,
+              model: prepared.model,
+              attempt: firstResponseAttempts,
+              maxAttempts: MAX_FIRST_RESPONSE_ATTEMPTS,
+              error: streamError.message,
+            });
+
+            continue;
+          }
+
+          throw streamError;
+        }
+
         generated = stream.messages;
 
         break;
@@ -341,10 +377,10 @@ export class ChatTurnService {
               ownerId: payload.ownerId,
               threadId: thread.id,
             },
-            // LLM_QUEUE_OPTIONS is `policy: 'short'`, which is queue-wide —
-            // a keyless send here would collapse with every other thread's
-            // summarization under COALESCE(singleton_key,'').
-            { queue: LLM_QUEUE, singletonKey: `chat-summarize:${thread.id}` },
+            // LLM_BACKGROUND_QUEUE_OPTIONS is `policy: 'short'`, which is
+            // queue-wide — a keyless send here would collapse with every other
+            // thread's summarization under COALESCE(singleton_key,'').
+            { queue: LLM_BACKGROUND_QUEUE, singletonKey: `chat-summarize:${thread.id}` },
           );
         }
       }

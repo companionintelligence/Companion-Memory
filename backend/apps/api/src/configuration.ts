@@ -342,6 +342,18 @@ export const ConfigSchema = z.object({
       chatModel: z.string().default(DEFAULT_CHAT_MODEL),
       /** Background extraction/classification model. See {@link DEFAULT_UTILITY_MODEL}. */
       utilityModel: z.string().default(DEFAULT_UTILITY_MODEL),
+      /**
+       * How long one model request may go without ANY response — no headers,
+       * no first token — before it is torn down (`firstResponseDeadline.ts`).
+       * Bounds the wait for a runner that never comes (a model swap the
+       * scheduler cannot make, a wedged backend), not the generation: once the
+       * backend starts answering the deadline no longer applies. Before this
+       * the only bound was undici's five-minute headers timeout, and pg-boss's
+       * 15-minute job expiry did the rest. Sized above the longest legitimate
+       * wait for a busy single-slot runner; a request cut here is retried, so
+       * too short costs churn, too long costs a person's patience.
+       */
+      firstResponseTimeoutMs: z.coerce.number().int().positive().default(90_000),
       chat: z
         .object({
           groundedRecall: z

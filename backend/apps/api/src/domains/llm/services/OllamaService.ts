@@ -24,6 +24,11 @@ import {
 } from '@ci/domains/tools';
 
 import { ChatModelPreferenceService } from '../chat-model-preference.module';
+import {
+  createFirstResponseFetch,
+  type FirstResponseFetch,
+  isFirstResponseTimeout,
+} from '../firstResponseDeadline';
 import { boundToolResultForPrompt, toolResultByteBudget } from '../toolResultBudget';
 import type { OllamaModel } from '../types';
 
@@ -481,6 +486,51 @@ export class OllamaService implements OnModuleInit {
   }
 
   /**
+   * A per-request client whose wait for the backend's FIRST response is
+   * bounded by `llm.firstResponseTimeoutMs` — see `firstResponseDeadline.ts`
+   * for the failure this closes. Every generation goes through one of these;
+   * only the metadata calls (`list`, `show`, `ps`) use the bare getter above.
+   *
+   * `Config.fetch` is the one seam the client leaves open (see runNativeChat's
+   * doc comment for the measurements), so the deadline and the caller's
+   * signal both reach the socket through it. Construction is trivial and
+   * undici pools sockets process-wide, so a client per request costs nothing.
+   */
+  private boundedClient(
+    model: string,
+    signal?: AbortSignal,
+  ): { client: Ollama; deadline: FirstResponseFetch } {
+    const deadline = createFirstResponseFetch({
+      model,
+      deadlineMs: config.llm.firstResponseTimeoutMs,
+      signal,
+    });
+
+    return {
+      client: new Ollama({ host: this.llmEndpointService.getOllamaHost(), fetch: deadline.fetch }),
+      deadline,
+    };
+  }
+
+  /**
+   * The error a caller should see when a request went through
+   * {@link boundedClient} and failed: the typed deadline error when the
+   * deadline fired (however the client re-wrapped the abort), the original
+   * otherwise.
+   */
+  private static surfaceDeadline(deadline: FirstResponseFetch, err: unknown): unknown {
+    const fired = deadline.error();
+
+    if (fired == null || isFirstResponseTimeout(err)) {
+      return err;
+    }
+
+    fired.cause = err;
+
+    return fired;
+  }
+
+  /**
    * One non-streaming native `/api/chat` turn that a signal can actually stop.
    *
    * {@link abortable} alone cannot stop one. It races the caller's promise
@@ -537,26 +587,27 @@ export class OllamaService implements OnModuleInit {
     // abort listener attached to an already-aborted signal never fires.
     signal?.throwIfAborted();
 
-    const client = new Ollama({
-      host: this.llmEndpointService.getOllamaHost(),
-      ...(signal && { fetch: (input, init) => fetch(input, { ...init, signal }) }),
-    });
+    const { client, deadline } = this.boundedClient(model, signal);
 
-    return await client.chat({
-      model,
-      messages,
-      // Always explicit. Omitting `think` hands the decision to the server,
-      // and Ollama's default for a thinking-capable model is ON — so every
-      // background call (image descriptions, thing vision, titles) was paying
-      // for a private chain of thought it never read: measured ~5s of a 7s
-      // Gemma description, and far more on a 27B model. `false` is accepted by
-      // models without the capability; only `true` is rejected.
-      think: enableThinking === true,
-      ...(format && { format }),
-      ...(tools && tools.length > 0 && { tools }),
-      ...(keepAlive != null && { keep_alive: keepAlive }),
-      ...(maxOutputTokens != null && maxOutputTokens > 0 && { options: { num_predict: maxOutputTokens } }),
-    });
+    try {
+      return await client.chat({
+        model,
+        messages,
+        // Always explicit. Omitting `think` hands the decision to the server,
+        // and Ollama's default for a thinking-capable model is ON — so every
+        // background call (image descriptions, thing vision, titles) was paying
+        // for a private chain of thought it never read: measured ~5s of a 7s
+        // Gemma description, and far more on a 27B model. `false` is accepted by
+        // models without the capability; only `true` is rejected.
+        think: enableThinking === true,
+        ...(format && { format }),
+        ...(tools && tools.length > 0 && { tools }),
+        ...(keepAlive != null && { keep_alive: keepAlive }),
+        ...(maxOutputTokens != null && maxOutputTokens > 0 && { options: { num_predict: maxOutputTokens } }),
+      });
+    } catch (err: unknown) {
+      throw OllamaService.surfaceDeadline(deadline, err);
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -633,7 +684,8 @@ export class OllamaService implements OnModuleInit {
         return;
       }
 
-      const iterator = await self.ollama.generate({
+      const { client } = self.boundedClient(model, signal);
+      const iterator = await client.generate({
         model,
         prompt,
         stream: true,
@@ -678,10 +730,16 @@ export class OllamaService implements OnModuleInit {
       return chatChunkToGenerateResponse(response);
     }
 
-    return this.ollama.generate({
-      model,
-      prompt,
-    });
+    const { client, deadline } = this.boundedClient(model);
+
+    try {
+      return await client.generate({
+        model,
+        prompt,
+      });
+    } catch (err: unknown) {
+      throw OllamaService.surfaceDeadline(deadline, err);
+    }
   }
 
   async chatStream(
@@ -731,6 +789,8 @@ export class OllamaService implements OnModuleInit {
 
         let lastChunk: ChatResponse | undefined;
         let handleAbort = () => {};
+
+        let deadline: FirstResponseFetch | undefined;
 
         textChunks.splice(0, textChunks.length);
         thinkChunks.splice(0, thinkChunks.length);
@@ -796,7 +856,11 @@ export class OllamaService implements OnModuleInit {
               yield chunk;
             }
           } else {
-            const iterator = await self.ollama.chat({
+            const bounded = self.boundedClient(model, signal);
+
+            deadline = bounded.deadline;
+
+            const iterator = await bounded.client.chat({
               model,
               messages: requestMessages,
               stream: true,
@@ -863,9 +927,10 @@ export class OllamaService implements OnModuleInit {
           }
         } catch (err) {
           if (!(err instanceof DOMException && err.name === 'AbortError')) {
-            const error = err as Error;
+            const surfaced = deadline ? OllamaService.surfaceDeadline(deadline, err) : err;
+            const error = surfaced as Error;
 
-            streamError = error instanceof Error ? error : new Error(String(err));
+            streamError = error instanceof Error ? error : new Error(String(surfaced));
 
             self.logger.error('LLM prompt evaluation completed', {
               model: lastChunk?.model ?? model,

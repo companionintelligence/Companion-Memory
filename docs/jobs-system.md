@@ -67,6 +67,8 @@ invariants are enforced at registration, i.e. before Nest even starts:
 | `retryLimit` / `retryDelay` | retries before dead-lettering; seconds between them | 3 / 10, with backoff |
 | `localConcurrency` | in-process worker slots for this queue — **can only lower**, never raise | `queues.perQueueConcurrency` (6) |
 | `role` | which process **consumes** this queue | `web` |
+| `lane` | name of a slot pool shared with other queues: members draw from ONE in-process semaphore sized to the smallest member's `localConcurrency`. The four Ollama-bound background queues share `ollama-background`, so at most one background generation is at the runner at a time | none (own semaphore) |
+| `yieldsTo` | name of a yield gate (`yieldGates.ts`); while it says "yield", the loop takes no new lease — jobs stay `created` like `paused`, the running job finishes. `image-description` names `interactive-chat`, which closes while any thread has a chat turn queued/running | none (never yields) |
 
 ### 1.2 Boot
 
@@ -542,10 +544,10 @@ bounds the damage of an expiry without making one harmless.
 | `derivation-run` | one user's graph aggregate — set-based SQL over `ci.relationships`, 1 slot, worker role | ✅ |
 
 Six queues already declared a budget and were never touched by the fallback:
-`agent-memory` 300 s, `llm` 900 s, `py-fn-summary` 1800 s, `ingest-coalesce`
+`agent-memory` 300 s, `llm` 900 s, `llm-background` 600 s, `py-fn-summary` 1800 s, `ingest-coalesce`
 3600 s, `agent` 7200 s, `py-fn-hbpe` `HBPE_LABEL_BUDGET_SECONDS +
 HBPE_POST_LABEL_SECONDS` (~8 h, pinned by [`hbpeQueueExpiry.test.ts`](../backend/apps/api/src/domains/python-functions/__tests__/hbpeQueueExpiry.test.ts)).
-With the import five, **11 of the 39 now state their own; 28 take the 2 h
+With the import five, **12 of the 40 now state their own; 28 take the 2 h
 fallback.**
 
 The lever for a queue that outgrows two hours is its own `expireInSeconds`, not
@@ -580,10 +582,11 @@ row-level expiry and the in-process execution deadline, and a blank one means
 | `pipeline-enrich` | 6 | web | — | — | Slices + sweeps for CPU / object-store / metered-provider stages |
 | `pipeline-embed` | 6 | web | — | — | Slices + sweeps for the Ollama-bound embed family |
 | `planning` | 6 | web | `short` | — | The five `planning.*` jobs |
-| `llm` | **1** | web | `short` | **900 s** | `chat.generate`, `chat.summarization`, `infer.question.answer` |
-| `image-description` | **1** | web | `short` | — | `preview.generated`, `file.image-description-backfill-request` |
-| `thing-vision` | **1** | web | — *(deliberate)* | — | `file.uploaded` → Ollama vision "thing" pass |
-| `browser-activity-insight` | **1** | web | — *(deliberate)* | — | `browseractivity.created` → Ollama insight pass |
+| `llm` | **1** | web | `short` | **900 s** | `chat.generate` only — the interactive slot; priority cannot preempt, so nothing else may run here |
+| `llm-background` | **1** | web | `short` | **600 s** | `chat.summarization`, `infer.question.answer`; `yieldsTo: interactive-chat` |
+| `image-description` | **1** | web | `short` | — | `preview.generated`, `file.image-description-backfill-request`; `yieldsTo: interactive-chat` |
+| `thing-vision` | **1** | web | — *(deliberate)* | — | `file.uploaded` → Ollama vision "thing" pass; `yieldsTo: interactive-chat` |
+| `browser-activity-insight` | **1** | web | — *(deliberate)* | — | `browseractivity.created` → Ollama insight pass; `yieldsTo: interactive-chat` |
 | `agent-memory` | **1** | web | `short` | **300 s** | `agent-memory.turn-fragments` |
 | `agent` | 6 | web | `short` | **7200 s** | `agent.task.dispatch` → OpenClaw. **Deferred completion** — stays `active` until checkpoint/complete |
 | `derivation-run` | **1** | **worker** | `short` | — | `maintenance.derivation-run-request` |
@@ -737,8 +740,8 @@ or `failStage` + rethrow.
 | Event | Queue | What it does | Triggered by |
 |---|---|---|---|
 | `chat.generate` | `llm` | One chat turn. Flips `generation_status` to running, builds the turn, streams from Ollama, persists. **Survives leaving the page; Stop cancels it.** `INTERACTIVE_JOB_PRIORITY`, `singletonKey chat-generate:<threadId>` | `POST /llm/generate` |
-| `chat.summarization` | `llm` | Sidebar title for an unnamed thread. Try/caught and only logged — never retried | Chained from a successful `chat.generate`, only when the thread has no name |
-| `infer.question.answer` | `llm` | Infer a first-person answer to an unanswered profile question from what the appliance knows, rather than asking. Embedding call + `ci_search` query + generation, 60 s timeout | `AnswerInferenceCron` (flag off) or `SmartRotationListener` (flag on) |
+| `chat.summarization` | `llm-background` | Sidebar title for an unnamed thread. Try/caught and only logged — never retried | Chained from a successful `chat.generate`, only when the thread has no name |
+| `infer.question.answer` | `llm-background` | Infer a first-person answer to an unanswered profile question from what the appliance knows, rather than asking. Embedding call + `ci_search` query + generation, 60 s timeout | `AnswerInferenceCron` (flag off) or `SmartRotationListener` (flag on) |
 | `python.function.run` | `py-fn-summary` | POST to the Summary sidecar (`/functions/run`, 30 s *accept* timeout only), then `ack.defer()`. Completed by the callback webhook | The `PythonFunctionCrons` fan-outs, `SmartRotationListener` |
 | `python.function.run` | `py-fn-hbpe` | Same, aimed at HBPE. 4 h expiry because bootstrap trains models for hours | `hbpeNightly`, `hbpeBootstrapSweep`, `ForecastResolver.triggerHbpe` |
 

@@ -24,6 +24,7 @@ import { JobSlotPool } from '../jobSlotPool';
 import { queueInventory } from '../queueInventory';
 import { EventRegistry } from '../registry';
 import type { EventSendOptions, QueueOptions } from '../types';
+import { YieldGateRegistry } from '../yieldGates';
 
 import { EventService } from './EventService';
 
@@ -173,6 +174,28 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   // (the search-index backlog stall behind image-description/embedding jobs).
   private readonly perQueueSemaphores = new Map<string, ReturnType<typeof plimit>>();
 
+  /**
+   * Lane → the one semaphore its member queues share (`queueOptions.lane`).
+   * `perQueueSemaphores` maps each member to this same instance, so the
+   * work loop's capacity arithmetic needs no lane awareness: a member sees
+   * the slot as taken whichever member took it.
+   */
+  private readonly laneSemaphores = new Map<string, ReturnType<typeof plimit>>();
+
+  /** Queue → lane, for the members only. */
+  private readonly queueLanes = new Map<string, string>();
+
+  /**
+   * Rows a loop has asked pg-boss for but not yet handed to the semaphore,
+   * per semaphore. The per-queue half of the capacity check is CLAIMED
+   * through this, not merely read — the same fix the global pool needed.
+   * Without it two loops on one lane both saw the shared slot free while the
+   * first was still awaiting its fetch, and both leased a row: one ran, the
+   * other sat `active` in pg-boss waiting for a slot it could not have, its
+   * expiry clock running on work nobody was doing.
+   */
+  private readonly fetchesInFlight = new Map<ReturnType<typeof plimit>, number>();
+
   // The shipped ceilings, held as instance fields rather than read from
   // `config` at each use. Not indirection for its own sake: the worker specs
   // need a 2-slot appliance without mutating process-wide config for every
@@ -208,6 +231,15 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   // Last mode each queue was observed in, so the worker logs a transition once
   // instead of logging "still paused" every time it wakes up.
   private readonly loggedQueueModes = new Map<string, JobMode>();
+
+  /**
+   * Whether each yielding queue was last seen standing aside, so the yield
+   * log line fires on the transition and not on every one-second re-check.
+   */
+  private readonly loggedQueueYields = new Map<string, boolean>();
+
+  /** Queues that named a yield gate nobody registered; warned about once. */
+  private readonly warnedMissingYieldGates = new Set<string>();
 
   // Queues whose drops have already been announced, and the settings revision
   // that announcement belongs to. Keeps a million-row import fan-out onto a
@@ -252,6 +284,15 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   private readonly backoffWhenFull = 150;
 
   private readonly backoffWhenEmpty = 5000;
+
+  /**
+   * Re-check cadence while a queue is standing aside for its yield gate. A
+   * chat turn ends on a token stream, not a poll, so this only bounds how
+   * long the GPU sits idle after the turn before background work resumes —
+   * one second is well inside what a person notices and far above the cost
+   * of the gate's lookup (one indexed count on `ci.threads`).
+   */
+  private readonly backoffWhenYielding = 1000;
 
   private boss = new PgBoss({
     host: config.db.host,
@@ -375,12 +416,17 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
         // Listener-requested queue-level options (expiration/retries) — used by
         // deferred-completion queues whose jobs stay active while an external
         // executor works, so their expiration must match the work's runtime.
-        // `localConcurrency` and `role` are OURS (the semaphore size below, and
-        // which process consumes — used by the worker-start loop), not
-        // pg-boss's — split them off so the queue-create call sees only real
-        // pg-boss options.
-        const { localConcurrency, role, ...queueOptions } =
-          EventListenerRegistry.getQueueOptions(queue) ?? {};
+        // `localConcurrency`, `role` and `yieldsTo` are OURS (the semaphore
+        // size below, which process consumes, and which gate the worker loop
+        // asks before fetching), not pg-boss's — split them off so the
+        // queue-create call sees only real pg-boss options.
+        const {
+          localConcurrency,
+          role,
+          yieldsTo: _yieldsTo,
+          lane,
+          ...queueOptions
+        } = EventListenerRegistry.getQueueOptions(queue) ?? {};
 
         // Retry policy first so a listener's own `queueOptions` still override
         // it. Stating it explicitly is what puts it in the queue ROW: pg-boss
@@ -407,7 +453,11 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
           this.declaredQueueCeilings.set(queue, localConcurrency);
         }
 
-        this.perQueueSemaphores.set(queue, plimit(this.effectiveQueueConcurrency(queue)));
+        if (lane != null) {
+          this.queueLanes.set(queue, lane);
+        }
+
+        this.perQueueSemaphores.set(queue, this.provisionSemaphore(queue));
         this.logger.debug(
           `Created queue: ${queue} (role=${role ?? 'web'}, deadLetter=${PGBossEventService.DEAD_LETTER_QUEUE})`,
         );
@@ -953,6 +1003,66 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   }
 
   /**
+   * The semaphore this queue draws from: its own, or its lane's shared one.
+   *
+   * A lane's semaphore is created by its first member and handed to every
+   * later one; its size is the SMALLEST member's effective concurrency, so a
+   * lane of four queues that each declare 1 is one slot, and a settings row
+   * raising one member cannot widen the pool past what another member's
+   * declared ceiling allows (the same "declared is a ceiling" rule
+   * effectiveQueueConcurrency enforces per queue).
+   */
+  private provisionSemaphore(queue: string): ReturnType<typeof plimit> {
+    const lane = this.queueLanes.get(queue);
+
+    if (lane == null) {
+      return plimit(this.effectiveQueueConcurrency(queue));
+    }
+
+    const existing = this.laneSemaphores.get(lane);
+
+    if (existing != null) {
+      existing.concurrency = this.effectiveLaneConcurrency(lane);
+
+      return existing;
+    }
+
+    const created = plimit(this.effectiveLaneConcurrency(lane));
+
+    this.laneSemaphores.set(lane, created);
+
+    return created;
+  }
+
+  /** The smallest effective concurrency among a lane's members. */
+  private effectiveLaneConcurrency(lane: string): number {
+    let lowest = Number.POSITIVE_INFINITY;
+
+    for (const [queue, memberLane] of this.queueLanes) {
+      if (memberLane === lane) {
+        lowest = Math.min(lowest, this.effectiveQueueConcurrency(queue));
+      }
+    }
+
+    return Number.isFinite(lowest) ? lowest : 1;
+  }
+
+  private releaseFetchClaim(semaphore: ReturnType<typeof plimit>, count: number): void {
+    const remaining = (this.fetchesInFlight.get(semaphore) ?? 0) - count;
+
+    if (remaining > 0) {
+      this.fetchesInFlight.set(semaphore, remaining);
+    } else {
+      this.fetchesInFlight.delete(semaphore);
+    }
+  }
+
+  /** Every distinct semaphore, lane-shared ones counted once. */
+  private distinctSemaphores(): Set<ReturnType<typeof plimit>> {
+    return new Set(this.perQueueSemaphores.values());
+  }
+
+  /**
    * Re-size the semaphores to match the current settings.
    *
    * `p-limit`'s `concurrency` setter is live in both directions: raising it
@@ -986,13 +1096,63 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
     }
 
     for (const [queue, semaphore] of this.perQueueSemaphores) {
-      const next = this.effectiveQueueConcurrency(queue);
+      const lane = this.queueLanes.get(queue);
+      const next = lane == null ? this.effectiveQueueConcurrency(queue) : this.effectiveLaneConcurrency(lane);
 
       if (semaphore.concurrency !== next) {
-        this.logger.log(`Queue ${queue} concurrency set to ${next}`);
+        this.logger.log(
+          lane == null
+            ? `Queue ${queue} concurrency set to ${next}`
+            : `Lane ${lane} concurrency set to ${next}`,
+        );
         semaphore.concurrency = next;
       }
     }
+  }
+
+  /**
+   * Whether this queue should stand aside right now, per `queueOptions.yieldsTo`.
+   *
+   * A queue that names no gate never yields. A queue that names a gate nobody
+   * registered reads as open and is warned about once: the wiring mistake
+   * should cost GPU contention (the old behaviour), never a queue that quietly
+   * stops. Logged on the transition only, in both directions, so an operator
+   * reading the log can see the queue stood aside AND that it resumed.
+   */
+  private async shouldYield(queue: string): Promise<boolean> {
+    const gate = EventListenerRegistry.getQueueOptions(queue)?.yieldsTo;
+
+    if (gate == null) {
+      return false;
+    }
+
+    if (!YieldGateRegistry.has(gate)) {
+      if (!this.warnedMissingYieldGates.has(queue)) {
+        this.warnedMissingYieldGates.add(queue);
+        this.logger.warn(
+          `Queue ${queue} yields to gate "${gate}" but no such gate is registered; it will not yield`,
+        );
+      }
+
+      return false;
+    }
+
+    const yielding = await YieldGateRegistry.shouldYield(gate);
+    // A transition, not an observation: the first check on a queue whose gate
+    // is open has nothing to report, and must not read as "resumed".
+    const previous = this.loggedQueueYields.get(queue) ?? false;
+
+    this.loggedQueueYields.set(queue, yielding);
+
+    if (previous !== yielding) {
+      this.logger.log(
+        yielding
+          ? `Queue ${queue} is standing aside for "${gate}"; jobs stay queued until it clears`
+          : `Queue ${queue} resumed after standing aside for "${gate}"`,
+      );
+    }
+
+    return yielding;
   }
 
   /** One line per mode transition, rather than one per five-second wake-up. */
@@ -1064,10 +1224,22 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
       this.logQueueMode(queueName, mode);
 
+      // The queue's yield gate, if it named one. Standing aside is deliberately
+      // the SAME mechanism as `paused` — no fetch, no lease, jobs stay `created`
+      // — so it costs a backlog, not work, and the running job is never cut.
+      if (await this.shouldYield(queueName)) {
+        await new Promise((resolve) => setTimeout(resolve, this.backoffWhenYielding));
+
+        continue;
+      }
+
       // A fetch is bounded by BOTH this queue's own ceiling and the global one,
       // so a queue can never take more than its share of the global pool (no
       // cross-queue starvation) nor push the appliance past the total cap.
-      const perQueueInFlight = perQueueSemaphore.activeCount + perQueueSemaphore.pendingCount;
+      const perQueueInFlight =
+        perQueueSemaphore.activeCount +
+        perQueueSemaphore.pendingCount +
+        (this.fetchesInFlight.get(perQueueSemaphore) ?? 0);
       const perQueueAvailable = Math.max(perQueueSemaphore.concurrency - perQueueInFlight, 0);
 
       if (perQueueAvailable === 0) {
@@ -1093,12 +1265,21 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
       let jobs: JobWithMetadata<EventData>[];
 
+      // Claimed against the semaphore for the duration of the fetch; released
+      // just before the rows are handed to it below, in the same tick, so a
+      // sibling loop on the lane never sees the slot free in between.
+      this.fetchesInFlight.set(
+        perQueueSemaphore,
+        (this.fetchesInFlight.get(perQueueSemaphore) ?? 0) + reserved,
+      );
+
       try {
         jobs = await this.boss.fetch<EventData>(queueName, {
           includeMetadata: true,
           batchSize: reserved,
         });
       } catch (err: unknown) {
+        this.releaseFetchClaim(perQueueSemaphore, reserved);
         // Nothing was leased, so nothing is coming back to release these.
         this.globalSlots.release(reserved);
 
@@ -1118,6 +1299,8 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
 
         continue;
       }
+
+      this.releaseFetchClaim(perQueueSemaphore, reserved);
 
       // A fetch may return fewer rows than asked for — usually an empty queue.
       // The slots those rows would have occupied belong to the other queues now,
@@ -1357,7 +1540,7 @@ export class PGBossEventService extends EventService implements OnModuleInit, On
   private totalInFlightJobs(): number {
     let count = 0;
 
-    for (const semaphore of this.perQueueSemaphores.values()) {
+    for (const semaphore of this.distinctSemaphores()) {
       count += semaphore.activeCount + semaphore.pendingCount;
     }
 

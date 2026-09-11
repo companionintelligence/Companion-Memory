@@ -107,6 +107,27 @@ export type QueueOptions = {
    * by LocalEventService (single-process by definition).
    */
   role?: 'web' | 'worker';
+
+  /**
+   * Name of a yield gate (see `yieldGates.ts`). While the named gate answers
+   * "yield", this queue's worker loop takes no new lease — jobs stay `created`
+   * and run the moment the gate opens, the same way `paused` leaves them. The
+   * job already running when the gate closes finishes normally. A gate nobody
+   * registered, or one that throws, reads as open. Ignored by
+   * LocalEventService.
+   */
+  yieldsTo?: string;
+
+  /**
+   * Name of a lane this queue shares with others. Queues on one lane draw
+   * from ONE in-process slot pool instead of one each, sized to the smallest
+   * `localConcurrency` among them — so four Ollama-bound queues that each
+   * declare 1 put at most one generation in front of the runner at a time,
+   * while keeping their separate backlogs and policies (which is why they are
+   * not simply one queue). The global cap and each queue's yield gate still
+   * apply on top. Ignored by LocalEventService.
+   */
+  lane?: string;
 };
 
 export type EventPayload<E extends keyof EventPayloads> = EventPayloads[E];

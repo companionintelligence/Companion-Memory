@@ -137,19 +137,25 @@ describe('native chat is cancellable', () => {
     }
 
     expect(seen).toHaveLength(1);
-    expect(seen[0].init.signal).toBe(controller.signal);
+    // The socket's signal is the deadline wrapper's own (firstResponseDeadline.ts),
+    // and the caller's abort is forwarded to it — that forwarding is the
+    // mechanism, so it is what gets driven.
+    expect(seen[0].init.signal.aborted).toBe(false);
+    controller.abort();
+    expect(seen[0].init.signal.aborted).toBe(true);
     // The wrapper must forward what it was given, not replace it.
     expect(seen[0].init.method).toBe('POST');
   });
 
-  it('leaves fetch alone when the caller passes no signal', async () => {
+  it('still injects a fetch when the caller passes no signal — the first-response deadline needs it', async () => {
     const service = makeService();
 
     await service.chat(context, messages, { model: MODEL });
 
-    // No signal means nothing to forward; overriding fetch anyway would be a
-    // behavior change for every caller that never asked for cancellation.
-    expect(chatClientConfig().fetch).toBeUndefined();
+    // Every generation is bounded now, signal or not: the wait for a backend
+    // that never answers used to end only at undici's five-minute headers
+    // timeout, as a bare `fetch failed`.
+    expect(typeof chatClientConfig().fetch).toBe('function');
   });
 
   it('does not start a generation when the signal already aborted', async () => {

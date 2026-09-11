@@ -103,6 +103,10 @@
     "apiKey": "LLM_API_KEY",
     "chatModel": "LLM_DEFAULT_CHAT_MODEL",
     "utilityModel": "LLM_UTILITY_MODEL",
+    "firstResponseTimeoutMs": {
+      "__name": "LLM_FIRST_RESPONSE_TIMEOUT_MS",
+      "__format": "json"
+    },
     "chat": {
       "groundedRecall": {
         "enabled": {

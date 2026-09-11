@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, MoreThan, Repository } from 'typeorm';
 import { v7 as uuid7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
@@ -100,6 +100,27 @@ export class ThreadService {
     }
 
     return ThreadEntity.toEgressType(result);
+  }
+
+  /**
+   * How many threads, for any user, currently have a chat turn queued or
+   * running — the signal background GPU work yields to.
+   *
+   * `generation_status` is written `queued` at enqueue and `running`/`idle`
+   * by the turn itself, so it is the app's own statement that someone is
+   * waiting on the model. Bounded by `freshWithinMs` on `updated_at` because
+   * the status is not always cleaned up: a process that dies mid-turn leaves
+   * `running` behind until pg-boss retries the job (which rewrites it) or
+   * gives up (which never does). Without the bound, one such row would hold
+   * every yielding queue off the GPU for good.
+   */
+  countPendingGenerations(freshWithinMs: number): Promise<number> {
+    return this.threadRepository.count({
+      where: {
+        generationStatus: In(['queued', 'running']),
+        updatedAt: MoreThan(new Date(Date.now() - freshWithinMs)),
+      },
+    });
   }
 
   exists(context: ServiceContext, id: string): Promise<boolean> {
