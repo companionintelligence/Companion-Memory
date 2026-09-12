@@ -71,6 +71,7 @@
     "zod": "^3.25.6"
   },
   "devDependencies": {
+    "@companionintelligence/assets": "^1.0.0",
     "@graphql-codegen/cli": "^6.1.0",
     "@graphql-codegen/client-preset": "^5.2.1",
     "@graphql-codegen/fragment-matcher": "^6.0.0",
@@ -117,7 +118,6 @@
     "typescript-eslint": "^8.32.1",
     "vite": "^6.4.3",
     "vite-plugin-pwa": "^1.0.3",
-    "vitest": "^3.2.5",
-    "@companionintelligence/assets": "^1.0.0"
+    "vitest": "^3.2.5"
   }
 }
