@@ -109,6 +109,18 @@ async function waitForReady() {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (await invoke('check_stack_status_command')) {
       setStatus('Ready — loading…');
+
+      // After an upgrade the webview still holds the previous release's
+      // service worker, which would serve the old frontend against the new
+      // API. This is the last moment before that page loads, which is why it
+      // is asked here and not at launch. The clear itself is asynchronous on
+      // WebKit, so give it a beat before navigating into the origin it is
+      // clearing; a failed call must not block the app.
+      const cleared = await invoke('forget_stale_frontend_command').catch(() => false);
+      if (cleared) {
+        await sleep(1500);
+      }
+
       window.location.replace(`${gatewayUrl}/`);
 
       return;
