@@ -322,7 +322,8 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
     // deep-linked signup_required — the web-only confirmation — so every
     // attempt cost the owner a code and let nobody in.
     it('native: an invitation is the consent, so the account is created and the code comes back — not signup_required', async () => {
-      const { controller, userService, signupCodeService, featureService, oidcNativeCodeService } = makeController();
+      const { controller, userService, signupCodeService, featureService, oidcNativeCodeService } =
+        makeController();
       const res = makeRes();
       mockFetch
         .mockResolvedValueOnce(TOKEN_OK)

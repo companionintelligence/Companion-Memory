@@ -15,7 +15,14 @@ let authError: unknown = null;
 vi.mock('@/hooks/useAuth', () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
   useAuth: () => [
-    { expired: false, authToken: null, authenticated: false, loading: false, initializing: false, error: authError },
+    {
+      expired: false,
+      authToken: null,
+      authenticated: false,
+      loading: false,
+      initializing: false,
+      error: authError,
+    },
     { login: vi.fn(), logout: vi.fn(), signup: vi.fn() },
   ],
 }));
@@ -160,7 +167,8 @@ describe('DesktopSignInPage — sign-in leaves the webview', () => {
 
     fireEvent.change(screen.getByLabelText('Invitation'), { target: { value: '  ABCD-1234 ' } });
 
-    const href = screen.getByRole('link', { name: 'Sign in with Companion account' }).getAttribute('href') ?? '';
+    const href =
+      screen.getByRole('link', { name: 'Sign in with Companion account' }).getAttribute('href') ?? '';
     expect(new URL(href, window.location.origin).searchParams.get('signup_code')).toBe('ABCD-1234');
   });
 
@@ -171,14 +179,16 @@ describe('DesktopSignInPage — sign-in leaves the webview', () => {
     fireEvent.click(screen.getByRole('button', { name: 'I have an invitation' }));
     fireEvent.change(screen.getByLabelText('Invitation'), { target: { value: 'WXYZ-9876' } });
 
-    const href = screen.getByRole('link', { name: 'Sign in with Companion account' }).getAttribute('href') ?? '';
+    const href =
+      screen.getByRole('link', { name: 'Sign in with Companion account' }).getAttribute('href') ?? '';
     expect(new URL(href, window.location.origin).searchParams.get('signup_code')).toBe('WXYZ-9876');
   });
 
   it('sends no invitation parameter at all when none was entered', () => {
     renderPage();
 
-    const href = screen.getByRole('link', { name: 'Sign in with Companion account' }).getAttribute('href') ?? '';
+    const href =
+      screen.getByRole('link', { name: 'Sign in with Companion account' }).getAttribute('href') ?? '';
     expect(new URL(href, window.location.origin).searchParams.has('signup_code')).toBe(false);
   });
 });

@@ -210,7 +210,9 @@ describe('resolveOidcOriginBounce', () => {
         'native',
         'ABCD-1234',
       ),
-    ).toBe(`${PUBLIC_BASE}${INITIATE_PATH}?client=native&signup_code=ABCD-1234&${OIDC_ORIGIN_BOUNCE_PARAM}=1`);
+    ).toBe(
+      `${PUBLIC_BASE}${INITIATE_PATH}?client=native&signup_code=ABCD-1234&${OIDC_ORIGIN_BOUNCE_PARAM}=1`,
+    );
   });
 
   it('does not add a client flag for ordinary web sign-in', () => {
