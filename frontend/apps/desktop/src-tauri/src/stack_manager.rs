@@ -1347,6 +1347,18 @@ mod tests {
         assert!(image_tag_change(dir.path(), "2026.9.6").changed, "so is a downgrade");
     }
 
+    /// Holds START_IN_FLIGHT the way an in-flight `up` does — BLOCKING, not
+    /// try_lock. The lock is one static shared by every test in this binary
+    /// and cargo runs them on parallel threads, so two tests that each
+    /// `claim_start().expect(..)` race each other: the second to arrive finds
+    /// the lock held by the first and panics. That is how this suite went red
+    /// on one CI runner and green on three others. Waiting our turn is what
+    /// the real second caller never does; a test that only wants to BE the
+    /// in-flight start can afford to.
+    fn hold_start_lock_for_test() -> std::sync::MutexGuard<'static, ()> {
+        START_IN_FLIGHT.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Two starts on one project must not both reach Compose. This holds the
     /// start lock the way an in-flight `up` does and checks that a second
     /// caller stands down: it returns Ok, and it leaves LIVE progress exactly
@@ -1365,7 +1377,7 @@ mod tests {
         };
         std::fs::create_dir_all(&paths.logs_dir).expect("logs dir");
 
-        let in_flight = claim_start().expect("nothing else in this test binary holds the start lock");
+        let in_flight = hold_start_lock_for_test();
 
         let progress = new_progress();
         set_progress(&progress, "pulling", "Pulling companion/api 3 of 9…");
@@ -1397,7 +1409,7 @@ mod tests {
         };
         std::fs::create_dir_all(&paths.logs_dir).expect("logs dir");
 
-        let in_flight = claim_start().expect("start lock");
+        let in_flight = hold_start_lock_for_test();
 
         let progress = new_progress();
         fail_progress(&progress, "Port 8642 is already in use.");
