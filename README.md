@@ -384,12 +384,15 @@ To run the api/web individually instead, see their READMEs ([api](backend/apps/a
 
 #### libvips (required)
 
-Image previews, image dimensions and the renditions sent to the vision model are produced by the `vips` command-line tools (`libvips-tools`). The API shells out to them, so the machine running the API needs them — `make health` checks. Debian's build decodes iPhone HEIC (its libheif carries the HEVC decoder), which is why this replaced the `sharp` npm package.
+Image previews, image dimensions and the renditions sent to the vision model are produced by the `vips` command-line tools (`libvips-tools`). The API shells out to them, so the machine running the API needs them — `make health` checks. This replaced the `sharp` npm package because sharp's prebuilt libvips has no HEVC decoder, the codec inside every iPhone HEIC.
 
 ```bash
-brew install vips                  # macOS
-sudo apt install libvips-tools     # Debian / Ubuntu
+brew install vips                                        # macOS
+sudo apt install libvips-tools                           # Debian (HEVC decoder is built into libheif)
+sudo apt install libvips-tools libheif-plugin-libde265   # Ubuntu 24.04 / Mint 22 (HEVC decoder is a separate plugin)
 ```
+
+On Ubuntu 24.04 the plugin is not optional: its `libheif1` used to depend on `libheif-plugin-libde265` and the current security update (1.17.6-1ubuntu4.8) demoted that to a suggestion, so a fresh or upgraded machine opens a HEIC and then fails every tile with `heif: Unsupported feature: Unsupported codec`. `make health` decodes a HEIC fixture to catch this; the Docker image is Debian and is unaffected.
 
 ### Reaching the right database
 
