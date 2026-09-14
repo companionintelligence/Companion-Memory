@@ -317,6 +317,43 @@ describe('OidcController — OIDC callback (post-token-exchange path)', () => {
       expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=signup_required`);
     });
 
+    // The desktop is a native client, and an invited person is the ONLY kind
+    // of second person it can admit. This path burned the invitation and then
+    // deep-linked signup_required — the web-only confirmation — so every
+    // attempt cost the owner a code and let nobody in.
+    it('native: an invitation is the consent, so the account is created and the code comes back — not signup_required', async () => {
+      const { controller, userService, signupCodeService, featureService, oidcNativeCodeService } =
+        makeController();
+      const res = makeRes();
+      mockFetch
+        .mockResolvedValueOnce(TOKEN_OK)
+        .mockResolvedValueOnce(
+          jsonResponse(true, 200, { sub: 'portal-sub-9', email: 'guest@example.com', name: 'Guest' }),
+        );
+      userService.findByEmail.mockResolvedValue(null);
+      userService.hasNoUsers.mockResolvedValue(false);
+      featureService.isFeatureEnabled.mockResolvedValue(true);
+      signupCodeService.findOne.mockResolvedValue({ signup_code: 'invite-1' });
+      userService.create.mockResolvedValue({ id: 'user-guest' });
+      oidcNativeCodeService.issue.mockReturnValue('one-time-code');
+
+      await controller.callback(
+        'code-x',
+        'match',
+        undefined,
+        nativeReq({ oidc_signup_code: 'invite-1' }),
+        res as never,
+      );
+
+      expect(userService.create).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ email: 'guest@example.com', name: 'Guest' }),
+      );
+      expect(signupCodeService.update).toHaveBeenCalledWith('invite-1', { used: true });
+      expect(res.redirect).toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?code=one-time-code`);
+      expect(res.redirect).not.toHaveBeenCalledWith(`${NATIVE_SCHEME}://oidc/callback?error=signup_required`);
+    });
+
     it('lets an invited identity in when the code the owner issued rides along, and burns it', async () => {
       const { controller, userService, signupCodeService, featureService } = makeController();
       const res = makeRes();

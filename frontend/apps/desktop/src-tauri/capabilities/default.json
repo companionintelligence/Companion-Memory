@@ -9,6 +9,7 @@
     "allow-check-docker-installed-command",
     "allow-check-stack-status-command",
     "allow-get-gateway-url-command",
+    "allow-forget-stale-frontend-command",
     "allow-get-startup-progress-command",
     "allow-open-docker-downloads-command",
     "allow-open-logs-dir-command",

@@ -24,6 +24,7 @@ const APP_COMMANDS: &[&str] = &[
     "open_docker_downloads_command",
     "open_logs_dir_command",
     "start_stack_command",
+    "forget_stale_frontend_command",
     // Remote CI-Server web app (capabilities/oidc-remote-deep-link.json).
     "open_external_url_command",
     "take_pending_deep_link_command",

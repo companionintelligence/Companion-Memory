@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { apiKeyHeaders, buildApiUrl, LoadingPage, usePageTitle } from '@ci/common';
 import { useToast } from '@ci/shadcn';
@@ -17,12 +17,30 @@ export function OAuthCallbackPage() {
 
   const initialRequestRef = useRef<boolean>(false);
 
+  // Whether this page is still mounted when its completion request settles. The
+  // request waits on CI Portal, and a user who navigates elsewhere meanwhile must
+  // not be pulled back to `returnPath` when it does.
+  const mountedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   // CI Cloud proxy callback params (when OAuth is proxied through CI Cloud).
   // CI Cloud puts the tokens in the URL FRAGMENT so they never reach the
   // appliance's web server or its access log; the query string is still read
   // as a fallback for a CI Cloud that predates that change. `connectionId` is
   // ours and stays in the query.
-  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  //
+  // Read ONCE, on mount: the fragment is scrubbed from the address bar as the
+  // completion request starts (below), and every later render has to see the
+  // same callback — re-reading the emptied address bar would turn it into a
+  // "direct" callback with no code.
+  const [hashParams] = useState(() => new URLSearchParams(window.location.hash.replace(/^#/, '')));
   const proxyParam = (name: string) => hashParams.get(name) ?? searchParams.get(name);
   const accessToken = proxyParam('access_token');
   const refreshToken = proxyParam('refresh_token');
@@ -37,7 +55,20 @@ export function OAuthCallbackPage() {
   const error = searchParams.get('error');
   const errorDescription = searchParams.get('error_description');
 
-  const isCloudProxyCallback = !!accessToken;
+  /*
+   * A proxied callback is recognised by what only CI Portal sends, not by the
+   * access token alone. The server now fetches the access token from CI Portal
+   * itself whenever there is a proxy refresh token (CI-Server#2676), so a Portal
+   * that stops putting the provider's access token in the fragment still lands
+   * here as a proxy callback instead of failing as a direct one. A grant CI
+   * Portal holds no refresh token for (one whose token response carries none,
+   * Facebook's for instance) still arrives with only an access token, and that
+   * is still accepted.
+   */
+  const isCloudProxyCallback = !!(refreshToken || userProviderId || accessToken);
+  const missingParams = isCloudProxyCallback
+    ? !connectionId || !userProviderId || (!refreshToken && !accessToken)
+    : !code || !state;
 
   const returnPath =
     localStorage.getItem(ONBOARDING_OAUTH_RESUME_KEY) != null ? '/onboarding' : '/sources/connect';
@@ -51,31 +82,15 @@ export function OAuthCallbackPage() {
       return;
     }
 
-    if (isCloudProxyCallback && (!connectionId || !userProviderId)) {
-      toast.error('Missing OAuth credentials from provider');
+    if (missingParams) {
+      toast.error(
+        isCloudProxyCallback ? 'Missing OAuth credentials from provider' : 'Missing OAuth credentials',
+      );
       navigate(returnPath);
 
       return;
     }
-
-    if (!isCloudProxyCallback && (!code || !state)) {
-      toast.error('Missing OAuth credentials');
-      navigate(returnPath);
-
-      return;
-    }
-  }, [
-    error,
-    errorDescription,
-    isCloudProxyCallback,
-    connectionId,
-    userProviderId,
-    code,
-    state,
-    toast,
-    navigate,
-    returnPath,
-  ]);
+  }, [error, errorDescription, isCloudProxyCallback, missingParams, toast, navigate, returnPath]);
 
   // Redirect to login if session was lost during the OAuth redirect.
   if (!authLoading && !authToken) {
@@ -90,7 +105,6 @@ export function OAuthCallbackPage() {
 
   useEffect(() => {
     const hasError = !!(error || errorDescription);
-    const missingParams = isCloudProxyCallback ? !connectionId || !userProviderId : !code || !state;
 
     if (!authToken || initialRequestRef.current || hasError || missingParams) {
       return;
@@ -100,11 +114,20 @@ export function OAuthCallbackPage() {
       initialRequestRef.current = true;
 
       try {
+        // Out of the address bar BEFORE the request, not after it: the server
+        // spends the proxy refresh token in the fragment (CI Portal rotates it on
+        // use), so a reload while the request is in flight must not find it and
+        // post it a second time. The params above were read once, on mount.
+        window.history.replaceState(window.history.state, '', window.location.pathname);
+
         const body = isCloudProxyCallback
           ? {
               flow: 'proxy' as const,
               state: connectionId,
-              accessToken,
+              // Still sent when present, so this page keeps working against a
+              // server that predates fetching it; a current server ignores it
+              // whenever there is a refresh token to fetch a fresh one with.
+              accessToken: accessToken ?? undefined,
               refreshToken: refreshToken ?? undefined,
               expiresIn: expiresIn ? parseInt(expiresIn, 10) : undefined,
               userProviderId,
@@ -135,8 +158,9 @@ export function OAuthCallbackPage() {
       } catch (err: unknown) {
         toast.error(String(err));
       } finally {
-        window.history.replaceState(null, '', window.location.pathname);
-        navigate(returnPath);
+        if (mountedRef.current) {
+          navigate(returnPath);
+        }
       }
     })();
   }, [
@@ -144,6 +168,7 @@ export function OAuthCallbackPage() {
     error,
     errorDescription,
     isCloudProxyCallback,
+    missingParams,
     connectionId,
     accessToken,
     refreshToken,

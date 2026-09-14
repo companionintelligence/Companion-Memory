@@ -170,6 +170,64 @@ pub fn initialize_stack(resource_dir: &Path, data_dir: &Path) -> Result<StackPat
     })
 }
 
+/// The bundled server image tag, for callers outside this module — the
+/// shell needs it to notice an upgrade (see `record_image_tag`).
+pub fn bundled_image_tag(resource_dir: &Path) -> Result<String, String> {
+    read_bundled_image_tag(&resource_dir.join("resources"))
+}
+
+/// What the last launch of this app pointed the webview at, and whether it
+/// has moved. Compared against a marker file, never against `.env` — `.env` is
+/// rewritten on every launch, so by the time anyone could read it the previous
+/// tag is already gone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageTagChange {
+    /// The tag the marker held before this call; None on a first launch, and
+    /// on the first launch of a shell version that writes the marker at all.
+    pub previous: Option<String>,
+    /// True whenever the webview's cached frontend can no longer be trusted:
+    /// a different tag, or no record of one.
+    pub changed: bool,
+}
+
+const IMAGE_TAG_MARKER: &str = "webview-image-tag";
+
+/// Says whether the image tag this launch runs differs from the one the
+/// webview was last cleared for. Read-only: `mark_image_tag_seen` advances the
+/// marker, and only the caller knows whether the clear that justifies
+/// advancing it actually happened.
+///
+/// The web app registers a service worker that precaches its whole bundle,
+/// and the webview keeps that worker across launches. So when the shell
+/// pulled newer server images, the page it navigated to was served from the
+/// OLD worker's cache — last release's frontend against this release's API —
+/// and nothing on screen said so: the observed failure was a blank window
+/// with not a single asset request reaching the gateway. In a browser the
+/// worker would eventually update itself; here it never got the chance,
+/// because the stale bundle broke before the registration code ran.
+///
+/// A missing marker counts as changed on purpose. Every install that predates
+/// this marker is sitting on exactly that stale worker, and the one launch
+/// that costs — a cleared session, a fresh sign-in — is the launch that fixes
+/// it.
+pub fn image_tag_change(data_dir: &Path, image_tag: &str) -> ImageTagChange {
+    let marker = data_dir.join(IMAGE_TAG_MARKER);
+    let previous = fs::read_to_string(marker).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let changed = previous.as_deref() != Some(image_tag);
+
+    ImageTagChange { previous, changed }
+}
+
+/// Records that the webview has been cleared for this tag. Called only after
+/// a clear that succeeded: a marker written before the clear would have
+/// turned one failed clear into a permanently stale worker, since the next
+/// launch would see nothing to do.
+pub fn mark_image_tag_seen(data_dir: &Path, image_tag: &str) -> Result<(), String> {
+    let marker = data_dir.join(IMAGE_TAG_MARKER);
+
+    fs::write(&marker, format!("{image_tag}\n")).map_err(|e| format!("Failed to write {}: {e}", marker.display()))
+}
+
 /// The build-time-resolved default image tag, written by
 /// scripts/sync-compose-resources.cjs (see that file for the resolution
 /// algorithm — it mirrors scripts/publish/publish.sh's own VERSION logic and
@@ -444,12 +502,60 @@ pub fn is_docker_available() -> bool {
         .unwrap_or(false)
 }
 
+/// At most one `docker compose up` for this project at a time, process-wide.
+///
+/// Three callers start the stack — main.rs's own startup task, the splash's
+/// start_stack_command a moment later, and the tray — and nothing stood between
+/// them and Compose. LocalModelHandles::resolve_once serialises only the model
+/// resolution that precedes the `up`: the moment it reports Done, the caller
+/// that was waiting on it runs its OWN `up` alongside the first. Two `up`s on
+/// one project race for the same container names; the loser reads "name already
+/// in use" as a stale-container failure and self-heals with `compose down` —
+/// tearing the winner's network out from under it mid-pull — then retries,
+/// loses again, and reports failure. The winner finishes anyway, which is how
+/// the splash showed a container-name conflict over a stack that was healthy.
+///
+/// A caller that finds the lock held returns Ok without touching Compose. The
+/// in-flight start owns the progress channel and the outcome, and every caller
+/// already learns readiness by polling health, never from this return value.
+static START_IN_FLIGHT: Mutex<()> = Mutex::new(());
+
+/// `Some(guard)` if this caller now owns the start; `None` if another start is
+/// already running and this one should stand down.
+fn claim_start() -> Option<std::sync::MutexGuard<'static, ()>> {
+    match START_IN_FLIGHT.try_lock() {
+        Ok(guard) => Some(guard),
+        // A start that panicked mid-way poisons the lock; the next start must
+        // still be able to run, or the app is wedged until relaunch.
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+    }
+}
+
 /// `start_stack`, reporting each step into `progress` as it goes.
 ///
 /// Same sequence as `start_stack`; the difference is that compose's output is
 /// streamed rather than buffered, so the splash can say which image is
 /// downloading instead of one frozen line for the length of the pull.
 pub fn start_stack_reporting(paths: &StackPaths, progress: &ProgressHandle) -> Result<(), String> {
+    let Some(_in_flight) = claim_start() else {
+        // Not "ready" and not an error: the other start will set both. Marking
+        // ready here would flash "Ready" over a stack still pulling images.
+        log::info!("start_stack: another start is already in flight; leaving it to finish");
+
+        // One thing does need touching: a failure left over from an EARLIER
+        // start. The splash treats `error` as terminal, so if a Retry stands
+        // down behind a tray-driven start (which reports nothing), the old
+        // message would sit on screen for the whole of a start that is in
+        // fact going fine. Live progress from a reporting start is left alone.
+        let stale_failure = progress.lock().map(|guard| guard.error.is_some()).unwrap_or(false);
+        if stale_failure {
+            set_progress(progress, "starting", "Starting Companion Memory…");
+        }
+
+        return Ok(());
+    };
+
     let result = start_stack_inner(paths, Some(progress));
 
     match &result {
@@ -468,6 +574,11 @@ pub fn start_stack_reporting(paths: &StackPaths, progress: &ProgressHandle) -> R
 }
 
 pub fn start_stack(paths: &StackPaths) -> Result<(), String> {
+    let Some(_in_flight) = claim_start() else {
+        log::info!("start_stack: another start is already in flight; leaving it to finish");
+        return Ok(());
+    };
+
     start_stack_inner(paths, None)
 }
 
@@ -816,6 +927,41 @@ pub async fn probe_status(paths: &StackPaths) -> StackStatus {
 /// check_stack_status_command) and by the tray's background status loop.
 /// Proxied through `gateway` to `api`'s own `/health` — see
 /// infrastructure/gateway/nginx.conf's `location /api/` block.
+/// The tag of an image reference — `ghcr.io/x/gateway:2026.9.10` -> `2026.9.10`.
+/// None when the last path segment carries no tag, so a registry port
+/// (`localhost:5000/x/gateway`) is never mistaken for one.
+pub fn image_tag_of(image_ref: &str) -> Option<&str> {
+    let last_segment = image_ref.rsplit('/').next().unwrap_or(image_ref);
+
+    last_segment.split_once(':').map(|(_, tag)| tag).filter(|tag| !tag.is_empty())
+}
+
+/// Is the gateway container that answers on the port running THIS build's
+/// images?
+///
+/// Health alone is not readiness across an upgrade. Quitting the app leaves
+/// the containers running, so the next launch — of a newer shell — finds a
+/// healthy gateway on the first poll, and the splash used to redirect into it
+/// while `compose up` was still pulling the new images. That page was the OLD
+/// release: it re-registered the old release's service worker, and when
+/// compose swapped the containers underneath it a moment later the webview
+/// was pinned to a frontend the API no longer matched. Gating on the gateway
+/// (the last service compose recreates, since it depends on `api`) means the
+/// page the shell navigates to is the one it shipped with.
+pub fn gateway_runs_image_tag(image_tag: &str) -> bool {
+    let output = docker_command()
+        .args(["inspect", "--format", "{{.Config.Image}}", &format!("{PROJECT_NAME}-gateway-1")])
+        .output();
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let image_ref = String::from_utf8_lossy(&out.stdout);
+            image_tag_of(image_ref.trim()) == Some(image_tag)
+        }
+        _ => false,
+    }
+}
+
 pub async fn is_healthy() -> bool {
     let url = format!("http://127.0.0.1:{GATEWAY_PORT}/api/health");
     let client = match reqwest::Client::builder().timeout(Duration::from_millis(2500)).build() {
@@ -1168,6 +1314,125 @@ mod tests {
         assert!(result.is_ok(), "the retry should have recovered: {result:?}");
         assert_eq!(attempts.get(), 2, "the up should have been attempted twice");
         assert_eq!(teardowns.get(), 1, "the project should have been torn down once");
+    }
+
+    /// The marker answers "was the webview cleared for the release it is
+    /// about to load?" — and a first launch has to answer no, because that
+    /// is the state every install bitten by the stale-worker blank screen is
+    /// in. It only advances when told to, so a launch whose clear failed asks
+    /// the same question again next time instead of never.
+    #[test]
+    fn the_image_tag_marker_reports_a_change_until_a_clear_is_recorded_for_that_tag() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        assert_eq!(image_tag_change(dir.path(), "2026.9.6"), ImageTagChange { previous: None, changed: true });
+
+        // Nothing recorded (the clear failed, say): still a change next launch.
+        assert!(image_tag_change(dir.path(), "2026.9.6").changed);
+
+        mark_image_tag_seen(dir.path(), "2026.9.6").expect("marker");
+        assert_eq!(
+            image_tag_change(dir.path(), "2026.9.6"),
+            ImageTagChange { previous: Some("2026.9.6".into()), changed: false }
+        );
+
+        assert_eq!(
+            image_tag_change(dir.path(), "2026.9.10"),
+            ImageTagChange { previous: Some("2026.9.6".into()), changed: true },
+            "an upgrade is a change"
+        );
+
+        mark_image_tag_seen(dir.path(), "2026.9.10").expect("marker");
+        assert!(!image_tag_change(dir.path(), "2026.9.10").changed);
+        assert!(image_tag_change(dir.path(), "2026.9.6").changed, "so is a downgrade");
+    }
+
+    /// Holds START_IN_FLIGHT the way an in-flight `up` does — BLOCKING, not
+    /// try_lock. The lock is one static shared by every test in this binary
+    /// and cargo runs them on parallel threads, so two tests that each
+    /// `claim_start().expect(..)` race each other: the second to arrive finds
+    /// the lock held by the first and panics. That is how this suite went red
+    /// on one CI runner and green on three others. Waiting our turn is what
+    /// the real second caller never does; a test that only wants to BE the
+    /// in-flight start can afford to.
+    fn hold_start_lock_for_test() -> std::sync::MutexGuard<'static, ()> {
+        START_IN_FLIGHT.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Two starts on one project must not both reach Compose. This holds the
+    /// start lock the way an in-flight `up` does and checks that a second
+    /// caller stands down: it returns Ok, and it leaves LIVE progress exactly
+    /// as it found it — the state here is deliberately not what a fresh start
+    /// would write, so an overwrite cannot hide behind a coincidence. Both
+    /// entry points, since the tray's is the one a person reaches by clicking
+    /// Start twice.
+    #[test]
+    fn a_second_start_stands_down_while_one_is_in_flight() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = StackPaths {
+            data_dir: dir.path().to_path_buf(),
+            compose_dir: dir.path().join("compose"),
+            logs_dir: dir.path().join("logs"),
+            import_work_dir: dir.path().join("import-work"),
+        };
+        std::fs::create_dir_all(&paths.logs_dir).expect("logs dir");
+
+        let in_flight = hold_start_lock_for_test();
+
+        let progress = new_progress();
+        set_progress(&progress, "pulling", "Pulling companion/api 3 of 9…");
+
+        assert_eq!(start_stack_reporting(&paths, &progress), Ok(()), "a second start must stand down quietly, not fail");
+
+        let after = progress.lock().expect("progress").clone();
+        assert_eq!(after.phase, "pulling", "the bystander must not touch a live phase");
+        assert_eq!(after.detail, "Pulling companion/api 3 of 9…", "the bystander must not overwrite a live status line");
+        assert_eq!(after.error, None);
+        assert!(!after.done, "only the in-flight start may declare the stack ready");
+
+        assert_eq!(start_stack(&paths), Ok(()), "the tray path stands down the same way");
+
+        drop(in_flight);
+    }
+
+    /// The one thing a stand-down may change: a failure left by an earlier
+    /// start. Otherwise a Retry that lands behind a tray-driven start (which
+    /// reports nothing) re-shows the old error for as long as that start runs.
+    #[test]
+    fn a_stand_down_clears_a_stale_failure_but_nothing_else() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths = StackPaths {
+            data_dir: dir.path().to_path_buf(),
+            compose_dir: dir.path().join("compose"),
+            logs_dir: dir.path().join("logs"),
+            import_work_dir: dir.path().join("import-work"),
+        };
+        std::fs::create_dir_all(&paths.logs_dir).expect("logs dir");
+
+        let in_flight = hold_start_lock_for_test();
+
+        let progress = new_progress();
+        fail_progress(&progress, "Port 8642 is already in use.");
+
+        assert_eq!(start_stack_reporting(&paths, &progress), Ok(()));
+
+        let after = progress.lock().expect("progress").clone();
+        assert_eq!(after.error, None, "the stale failure must be gone");
+        assert_ne!(after.phase, "failed");
+        assert!(!after.done);
+
+        drop(in_flight);
+    }
+
+    /// Readiness compares the gateway's running image tag with the bundled
+    /// one, and an image reference's tag is not simply "after the colon".
+    #[test]
+    fn an_image_references_tag_is_read_from_its_last_segment_only() {
+        assert_eq!(image_tag_of("ghcr.io/companionintelligence/companion/gateway:2026.9.10"), Some("2026.9.10"));
+        assert_eq!(image_tag_of("gateway:dev-abc123"), Some("dev-abc123"));
+        assert_eq!(image_tag_of("localhost:5000/companion/gateway"), None, "a registry port is not a tag");
+        assert_eq!(image_tag_of("ghcr.io/x/gateway:"), None, "an empty tag is no tag");
+        assert_eq!(image_tag_of("ghcr.io/x/gateway"), None);
     }
 
     /// The other half of the same contract: a failure a teardown cannot fix

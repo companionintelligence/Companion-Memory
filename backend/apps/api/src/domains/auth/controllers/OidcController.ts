@@ -224,6 +224,7 @@ export class OidcController {
       // Already bounced once — proceed here rather than risk a redirect loop.
       req.query[OIDC_ORIGIN_BOUNCE_PARAM] !== undefined,
       client,
+      signupCodeParam,
     );
 
     if (bounceUrl) {
@@ -514,22 +515,31 @@ export class OidcController {
       // (it lives outside the deep-link flow), so surface it as an error the app can
       // handle rather than stranding the user on a web page.
       //
-      // Except on an unclaimed appliance, where that error is a dead end: the
-      // desktop app signs in as a native client, so this branch was the last
-      // door out of a box with no accounts on it. Claiming an empty appliance is
-      // exactly what the confirmation would ask about, and there is no other
-      // identity it could belong to, so the account is created directly.
-      if (isNative && !unclaimed) {
+      // Except where the question has already been answered. On an unclaimed
+      // appliance that error is a dead end: the desktop app signs in as a native
+      // client, so this branch was the last door out of a box with no accounts
+      // on it — and claiming an empty appliance is exactly what the confirmation
+      // would ask about. An invitation answers it too: the owner chose to issue
+      // it and this person chose to present it, which is the whole of what the
+      // confirmation asks. Refusing here anyway — as this did — meant the code
+      // was burned a few lines up and the person was still turned away, so every
+      // attempt an invited person made from the desktop cost the owner an
+      // invitation and admitted nobody.
+      if (isNative && !unclaimed && !invited) {
         return res.redirect(this.nativeRedirectUrl({ error: 'signup_required' }));
       }
 
       if (isNative) {
-        const claimed = await this.createOidcUser(userInfo.email, userInfo.name);
-        await this.bindIfPossible(claimed.id, issuer, userInfo.sub, userInfo.email);
+        const created = await this.createOidcUser(userInfo.email, userInfo.name);
+        await this.bindIfPossible(created.id, issuer, userInfo.sub, userInfo.email);
 
-        this.logger.log(`Unclaimed appliance claimed by first OIDC sign-in: ${userInfo.email}`);
+        this.logger.log(
+          unclaimed
+            ? `Unclaimed appliance claimed by first OIDC sign-in: ${userInfo.email}`
+            : `Invited OIDC sign-in created Memory account for ${userInfo.email}`,
+        );
 
-        return res.redirect(this.nativeRedirectUrl({ code: this.oidcNativeCodeService.issue(claimed.id) }));
+        return res.redirect(this.nativeRedirectUrl({ code: this.oidcNativeCodeService.issue(created.id) }));
       }
 
       // Hub already admitted this person as an org member. Skip the Memory
