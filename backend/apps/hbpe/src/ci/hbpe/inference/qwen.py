@@ -39,6 +39,7 @@ import urllib.request
 from typing import Protocol
 
 from ci.hbpe.config import settings
+from ci.hbpe.label_ceiling import wait_for_request_slot
 from ci.hbpe.label_yield import wait_for_chat_idle
 
 log = logging.getLogger(__name__)
@@ -121,8 +122,11 @@ class OpenAIChatLabeler:
         )
         with self._gen_lock:
             # The runner behind this endpoint is the one chat uses. Stand aside
-            # while a person is waiting on it; see label_yield.py for why.
+            # while a person is waiting on it; see label_yield.py for why. Then
+            # keep a gap from the previous request so the runner is regularly
+            # idle and Ollama can swap it; see label_ceiling.py.
             wait_for_chat_idle()
+            wait_for_request_slot()
             try:
                 with urllib.request.urlopen(
                     req, timeout=settings.label_http_timeout_seconds

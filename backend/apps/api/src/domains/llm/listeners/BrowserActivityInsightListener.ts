@@ -12,7 +12,7 @@ import { OnEvent } from '@ci/domains/events';
 
 import { BROWSER_ACTIVITY_INSIGHT_QUEUE, BROWSER_ACTIVITY_INSIGHT_QUEUE_OPTIONS } from '../constants';
 import { BrowserActivityInsightPreferenceService } from '../services/BrowserActivityInsightPreferenceService';
-import { OllamaService, UTILITY_MODEL } from '../services/OllamaService';
+import { OllamaService } from '../services/OllamaService';
 
 /**
  * A fixed, closed set rather than an LLM-chosen free-text string. `category`
@@ -209,7 +209,7 @@ export class BrowserActivityInsightListener {
 
     try {
       const response = await this.ollamaService.chat({ userId }, [{ role: 'user', content: prompt }], {
-        model: UTILITY_MODEL,
+        tier: 'utility',
         enableTools: false,
         format: INSIGHT_JSON_SCHEMA,
       });

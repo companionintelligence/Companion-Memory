@@ -126,6 +126,29 @@
         "__name": "LLM_TIER_ROUTING_ON_DEVICE_CONTEXT_TOKENS",
         "__format": "json"
       }
+    },
+    "residency": {
+      "mode": "LLM_RESIDENCY_MODE",
+      "vramTotalBytes": {
+        "__name": "LLM_RESIDENCY_VRAM_TOTAL_BYTES",
+        "__format": "json"
+      },
+      "safetyMarginBytes": {
+        "__name": "LLM_RESIDENCY_SAFETY_MARGIN_BYTES",
+        "__format": "json"
+      },
+      "maxUtilityContextTokens": {
+        "__name": "LLM_RESIDENCY_MAX_UTILITY_CONTEXT_TOKENS",
+        "__format": "json"
+      },
+      "loadWatchdogMs": {
+        "__name": "LLM_RESIDENCY_LOAD_WATCHDOG_MS",
+        "__format": "json"
+      },
+      "cooldownMs": {
+        "__name": "LLM_RESIDENCY_COOLDOWN_MS",
+        "__format": "json"
+      }
     }
   },
   "services": {

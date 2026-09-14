@@ -29,10 +29,12 @@ import {
   type FirstResponseFetch,
   isFirstResponseTimeout,
 } from '../firstResponseDeadline';
+import type { UtilityModelChoice } from '../residency/footprint';
 import { boundToolResultForPrompt, toolResultByteBudget } from '../toolResultBudget';
 import type { OllamaModel } from '../types';
 
 import { LlmEndpointService } from './LlmEndpointService';
+import { ResidencyPlannerService } from './ResidencyPlannerService';
 
 /**
  * Appended to the REQUEST (never stored) for the forced prose round — the one
@@ -216,8 +218,7 @@ function resolveInvocationCapability(context: ChatRequestContext): ApiKeyCapabil
   return context.capability ?? FULL_CAPABILITY;
 }
 
-interface PromptOptions {
-  model: string;
+interface BasePromptOptions {
   signal?: AbortSignal;
   enableTools?: boolean;
   enableThinking?: boolean;
@@ -265,6 +266,27 @@ interface PromptOptions {
    */
   keepAlive?: string | number;
 }
+
+/**
+ * Which model a call runs on: a specific id, or the UTILITY tier.
+ *
+ * `tier: 'utility'` replaces the old `model: UTILITY_MODEL` at every background
+ * call site. The difference is that the tier is RESOLVED per call by
+ * {@link OllamaService.resolveUtilityModel} — into the utility model at a
+ * context that provably fits beside what is already on the GPU, or into the
+ * resident chat model when it cannot — instead of being a constant that asked
+ * Ollama to load whatever was configured and hoped it fit. See
+ * `residency/footprint.ts` for the wedge that hope produced.
+ */
+type ModelSelection = { model: string; tier?: undefined } | { tier: 'utility'; model?: undefined };
+
+type PromptOptions = BasePromptOptions & ModelSelection;
+
+/**
+ * Options for the paths that always name their model — the streaming chat
+ * path and the two `/api/generate` wrappers. Only {@link chat} resolves a tier.
+ */
+type NamedModelPromptOptions = BasePromptOptions & { model: string };
 
 /** Characters per token, the usual rough English/code ratio. */
 const CHARS_PER_TOKEN = 4;
@@ -359,6 +381,9 @@ export class OllamaService implements OnModuleInit {
     // the OLD behaviour — every user gets the single appliance constant,
     // PROMPT_MODEL — which is what those tests already assert.
     private readonly chatModelPreference?: ChatModelPreferenceService,
+    // Optional for the same reason. Absent, `tier: 'utility'` resolves to the
+    // bare configured UTILITY_MODEL with no context window — the old behaviour.
+    private readonly residencyPlanner?: ResidencyPlannerService,
   ) {
     this.logger.setContext(OllamaService.name);
   }
@@ -566,6 +591,7 @@ export class OllamaService implements OnModuleInit {
     format,
     tools,
     signal,
+    numCtx,
     maxOutputTokens,
     keepAlive,
     enableThinking = false,
@@ -575,6 +601,7 @@ export class OllamaService implements OnModuleInit {
     format?: string | Record<string, unknown>;
     tools?: Tool[];
     signal?: AbortSignal;
+    numCtx?: number;
     maxOutputTokens?: number;
     keepAlive?: string | number;
     enableThinking?: boolean;
@@ -603,7 +630,17 @@ export class OllamaService implements OnModuleInit {
         ...(format && { format }),
         ...(tools && tools.length > 0 && { tools }),
         ...(keepAlive != null && { keep_alive: keepAlive }),
-        ...(maxOutputTokens != null && maxOutputTokens > 0 && { options: { num_predict: maxOutputTokens } }),
+        // `num_ctx` used to be sent on the streaming path only, so every
+        // non-streaming (background) call got Ollama's VRAM-based default —
+        // 32768 on a 24 GiB card — whatever the planner or caller wanted. It
+        // shares the `options` bag with `num_predict`; neither may clobber the
+        // other (see chatStream for the same shape).
+        ...(((numCtx != null && numCtx > 0) || (maxOutputTokens != null && maxOutputTokens > 0)) && {
+          options: {
+            ...(numCtx != null && numCtx > 0 && { num_ctx: numCtx }),
+            ...(maxOutputTokens != null && maxOutputTokens > 0 && { num_predict: maxOutputTokens }),
+          },
+        }),
       });
     } catch (err: unknown) {
       throw OllamaService.surfaceDeadline(deadline, err);
@@ -659,7 +696,7 @@ export class OllamaService implements OnModuleInit {
   async generateStream(
     context: RequestContext,
     prompt: string,
-    { model, signal }: PromptOptions,
+    { model, signal }: NamedModelPromptOptions,
   ): Promise<AsyncGenerator<GenerateResponse> & { buffer: string }> {
     const chunks: string[] = [];
     const openAiDriver = this.llmEndpointService.getOpenAiDriver();
@@ -715,7 +752,7 @@ export class OllamaService implements OnModuleInit {
   async generate(
     context: RequestContext,
     prompt: string,
-    { model }: Omit<PromptOptions, 'signal'>,
+    { model }: Omit<NamedModelPromptOptions, 'signal'>,
   ): Promise<GenerateResponse> {
     await this.validateModel(context, model);
 
@@ -745,7 +782,14 @@ export class OllamaService implements OnModuleInit {
   async chatStream(
     context: ChatRequestContext,
     messages: OllamaMessage[],
-    { model, signal, enableTools = false, enableThinking = true, numCtx, maxOutputTokens }: PromptOptions,
+    {
+      model,
+      signal,
+      enableTools = false,
+      enableThinking = true,
+      numCtx,
+      maxOutputTokens,
+    }: NamedModelPromptOptions,
   ): Promise<AsyncGenerator<ChatResponse> & { messages: OllamaMessage[]; error?: Error }> {
     await this.validateModel(context, model);
 
@@ -1025,16 +1069,23 @@ export class OllamaService implements OnModuleInit {
   private async runChat(
     context: ChatRequestContext,
     messages: OllamaMessage[],
-    {
-      model,
+    options: PromptOptions,
+  ): Promise<ChatResponse> {
+    const {
       enableTools = false,
       format,
       enableThinking = false,
       signal,
       maxOutputTokens,
       keepAlive,
-    }: PromptOptions,
-  ): Promise<ChatResponse> {
+    } = options;
+    const selection: UtilityModelChoice =
+      options.tier === 'utility' ? await this.resolveUtilityModel() : { model: options.model };
+    const model = selection.model;
+    // A caller's explicit window wins over the planner's; the planner's fills
+    // the gap every background caller used to leave.
+    const numCtx = options.numCtx ?? selection.numCtx;
+
     await this.validateModel(context, model);
 
     const inputMessages = messages.slice();
@@ -1048,26 +1099,44 @@ export class OllamaService implements OnModuleInit {
 
     const accumulatedMessages: OllamaMessage[] = [];
 
-    const response = openAiDriver
-      ? await openAiDriver.chat({
-          model,
-          messages: inputMessages,
-          tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
-          format: openAiFormat,
-          enableThinking,
-          signal,
-          maxTokens: maxOutputTokens,
-        })
-      : await this.runNativeChat({
-          model,
-          messages: inputMessages,
-          format,
-          tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
-          signal,
-          maxOutputTokens,
-          keepAlive,
-          enableThinking,
-        });
+    let response: ChatResponse;
+
+    try {
+      response = openAiDriver
+        ? await openAiDriver.chat({
+            model,
+            messages: inputMessages,
+            tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
+            format: openAiFormat,
+            enableThinking,
+            signal,
+            maxTokens: maxOutputTokens,
+          })
+        : await this.runNativeChat({
+            model,
+            messages: inputMessages,
+            format,
+            tools: enableTools && ollamaTools.length > 0 ? ollamaTools : undefined,
+            signal,
+            numCtx,
+            maxOutputTokens,
+            keepAlive,
+            enableThinking,
+          });
+    } catch (err: unknown) {
+      // The planner's watchdog wants to know when the call that was supposed
+      // to bring the utility model in never got an answer — see
+      // ResidencyPlannerService.noteUtilityOutcome for what it does with it.
+      if (options.tier === 'utility') {
+        this.residencyPlanner?.noteUtilityOutcome(selection, { ok: false, error: err });
+      }
+
+      throw err;
+    }
+
+    if (options.tier === 'utility') {
+      this.residencyPlanner?.noteUtilityOutcome(selection, { ok: true });
+    }
 
     const willCallTools =
       enableTools && response.message.tool_calls && response.message.tool_calls.length > 0;
@@ -1112,10 +1181,29 @@ export class OllamaService implements OnModuleInit {
       model,
       messages: inputMessages.concat(accumulatedMessages),
       signal,
+      numCtx,
       maxOutputTokens,
       keepAlive,
       enableThinking,
     });
+  }
+
+  /**
+   * What `tier: 'utility'` runs on right now: the configured utility model at
+   * a context window that fits beside the models already resident on the GPU,
+   * or the resident chat model when that cannot be shown. Delegates to
+   * {@link ResidencyPlannerService}; without one (direct construction in unit
+   * tests, or a planner that is off) it is the plain configured id, unplanned.
+   *
+   * Never throws — a planning failure degrades to the old behaviour and the
+   * chat call itself reports whatever is actually wrong with the backend.
+   */
+  async resolveUtilityModel(): Promise<UtilityModelChoice> {
+    if (!this.residencyPlanner) {
+      return { model: UTILITY_MODEL };
+    }
+
+    return this.residencyPlanner.resolveUtilityModel();
   }
 
   async resolveModel(context: RequestContext, opts?: ValidateModelOptions): Promise<ValidateModelResult> {

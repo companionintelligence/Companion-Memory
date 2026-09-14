@@ -29,7 +29,7 @@ import { ModelTierRouter } from '@ci/domains/model-routing';
 import { ToolRegistry } from '@ci/domains/tools';
 
 import { toolResultByteBudget } from '../../toolResultBudget';
-import { OllamaService, type ChatRequestContext } from '../OllamaService';
+import { OllamaService, UTILITY_MODEL, type ChatRequestContext } from '../OllamaService';
 
 const MODEL = 'test-model';
 
@@ -215,6 +215,130 @@ describe('native chat generation bounds', () => {
     await service.chat(context, messages, { model: MODEL, maxOutputTokens: 0 });
 
     expect(chatMock.mock.calls[0]![0]).not.toHaveProperty('options');
+  });
+
+  // The non-streaming path never sent `num_ctx` — only chatStream did — so
+  // every background call ran at Ollama's VRAM-based default (32768 on a
+  // 24 GiB card), the window that made a second model's load an eviction.
+  it('sends numCtx as options.num_ctx alongside num_predict', async () => {
+    const service = makeService();
+
+    await service.chat(context, messages, { model: MODEL, numCtx: 8_192, maxOutputTokens: 400 });
+
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ options: { num_ctx: 8_192, num_predict: 400 } });
+  });
+
+  it('sends num_ctx on the follow-up turn after tool calls too', async () => {
+    const service = makeService();
+
+    chatMock
+      .mockResolvedValueOnce({
+        model: MODEL,
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ function: { name: 'nope', arguments: {} } }],
+        },
+      })
+      .mockResolvedValueOnce({ model: MODEL, message: { role: 'assistant', content: 'done' } });
+
+    await service.chat(context, messages, { model: MODEL, numCtx: 4_096, enableTools: true });
+
+    expect(chatMock).toHaveBeenCalledTimes(2);
+    expect(chatMock.mock.calls[1]![0]).toMatchObject({ options: { num_ctx: 4_096 } });
+  });
+});
+
+/**
+ * `tier: 'utility'` is resolved per call by the residency planner into a model
+ * AND a window. Without a planner (this direct construction) it must fall back
+ * to the configured utility model, unplanned — the pre-planner behaviour every
+ * `new OllamaService(...)` test in this directory already assumes.
+ */
+describe('utility tier resolution', () => {
+  function makeServiceWithPlanner(choice: {
+    model: string;
+    numCtx?: number;
+    kind?: 'resident' | 'load' | 'routed';
+  }) {
+    const llmEndpointService = {
+      getOpenAiDriver: () => null,
+      getOllamaHost: () => 'http://localhost:11434',
+    } as any;
+    const planner = { resolveUtilityModel: jest.fn(async () => choice), noteUtilityOutcome: jest.fn() };
+    const service = new OllamaService(
+      llmEndpointService,
+      new ToolRegistry(
+        makeLogger(),
+        { send: jest.fn().mockResolvedValue([]) } as any,
+        { evaluate: jest.fn(), propose: jest.fn() } as any,
+      ),
+      makeLogger(),
+      { isFeatureEnabled: jest.fn(async () => false) } as any,
+      new ModelTierRouter(),
+      undefined,
+      planner as any,
+    );
+
+    return { service, planner };
+  }
+
+  it('runs on the model and window the planner chose', async () => {
+    const { service, planner } = makeServiceWithPlanner({ model: 'routed-chat-model', numCtx: 32_768 });
+
+    listMock.mockResolvedValue({ models: [{ name: 'routed-chat-model' }] });
+
+    await service.chat(context, messages, { tier: 'utility', maxOutputTokens: 100 });
+
+    expect(planner.resolveUtilityModel).toHaveBeenCalledTimes(1);
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({
+      model: 'routed-chat-model',
+      options: { num_ctx: 32_768, num_predict: 100 },
+    });
+  });
+
+  it('tells the planner how the load-carrying call went, so its watchdog can act', async () => {
+    const { service, planner } = makeServiceWithPlanner({ model: MODEL, numCtx: 8_192, kind: 'load' });
+    const noteUtilityOutcome = jest.fn();
+
+    (planner as any).noteUtilityOutcome = noteUtilityOutcome;
+
+    await service.chat(context, messages, { tier: 'utility' });
+
+    expect(noteUtilityOutcome).toHaveBeenCalledWith(
+      { model: MODEL, numCtx: 8_192, kind: 'load' },
+      { ok: true },
+    );
+
+    const failure = new Error('boom');
+
+    chatMock.mockRejectedValueOnce(failure);
+    await expect(service.chat(context, messages, { tier: 'utility' })).rejects.toBe(failure);
+    expect(noteUtilityOutcome).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'load' }), {
+      ok: false,
+      error: failure,
+    });
+  });
+
+  it("lets a caller's explicit numCtx win over the planner's", async () => {
+    const { service } = makeServiceWithPlanner({ model: MODEL, numCtx: 32_768 });
+
+    await service.chat(context, messages, { tier: 'utility', numCtx: 2_048 });
+
+    expect(chatMock.mock.calls[0]![0]).toMatchObject({ model: MODEL, options: { num_ctx: 2_048 } });
+  });
+
+  it('falls back to the configured utility model, with no window, when there is no planner', async () => {
+    const service = makeService();
+
+    listMock.mockResolvedValue({ models: [{ name: UTILITY_MODEL }] });
+
+    await service.chat(context, messages, { tier: 'utility' });
+
+    const request = chatMock.mock.calls[0]![0];
+
+    expect(request.model).toBe(UTILITY_MODEL);
+    expect(request).not.toHaveProperty('options');
   });
 
   // `think` is never left to the server. Ollama's default for a

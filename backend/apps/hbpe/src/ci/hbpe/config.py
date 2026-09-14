@@ -183,6 +183,18 @@ class Settings(BaseSettings):
         default_factory=lambda: float(os.getenv("HBPE_LABEL_YIELD_POLL_SECONDS", "2"))
     )
 
+    # ── Request ceiling (see label_ceiling.py) ───────────────────────────────
+    # Most chat-API label requests per minute, enforced as an even gap between
+    # request starts (6 → one every 10 s). Exists so the shared chat runner is
+    # regularly idle and Ollama can evict or swap it; measured 2026-09-14 the
+    # unthrottled labeler kept a 27B runner busy all afternoon and wedged the
+    # scheduler. 0 disables. The GGUF fallback is never throttled.
+    label_max_requests_per_minute: float = Field(
+        default_factory=lambda: float(
+            os.getenv("HBPE_LABEL_MAX_REQUESTS_PER_MINUTE", "6")
+        )
+    )
+
     # ── Staleness (§1.2) ─────────────────────────────────────────────────────
     cluster_staleness_days: int = Field(
         default_factory=lambda: int(os.getenv("CLUSTER_STALENESS_DAYS", "90"))

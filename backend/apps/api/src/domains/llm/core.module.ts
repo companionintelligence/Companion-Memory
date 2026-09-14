@@ -6,6 +6,7 @@ import { ToolsModule } from '@ci/domains/tools';
 import { ChatModelPreferenceModule } from './chat-model-preference.module';
 import { LlmEndpointService } from './services/LlmEndpointService';
 import { OllamaService } from './services/OllamaService';
+import { ResidencyPlannerService } from './services/ResidencyPlannerService';
 
 /**
  * Ollama client wiring without listeners that depend on personalization.
@@ -18,7 +19,7 @@ import { OllamaService } from './services/OllamaService';
  */
 @Module({
   imports: [ToolsModule, ModelRoutingModule, ChatModelPreferenceModule],
-  providers: [LlmEndpointService, OllamaService],
-  exports: [OllamaService, LlmEndpointService],
+  providers: [LlmEndpointService, ResidencyPlannerService, OllamaService],
+  exports: [OllamaService, LlmEndpointService, ResidencyPlannerService],
 })
 export class LlmCoreModule {}

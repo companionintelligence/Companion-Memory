@@ -400,6 +400,57 @@ export const ConfigSchema = z.object({
           onDeviceContextTokens: z.number().int().nonnegative().default(0),
         })
         .default({}),
+      /**
+       * GPU co-residency planning for the utility model
+       * (`domains/llm/services/ResidencyPlannerService.ts`).
+       *
+       * Before this existed every background call asked Ollama to load
+       * `utilityModel` at Ollama's default context, and Ollama decided whether
+       * it fit from its own prediction. When it did not, Ollama tried to evict
+       * the chat model — which a busy appliance never lets go idle — and every
+       * request for a non-resident model queued behind that wait, silently.
+       * The planner reads live GPU memory and refuses to start a load it cannot
+       * prove fits, routing that call to the resident chat model instead.
+       */
+      residency: z
+        .object({
+          /** `off` restores the old behaviour: the configured utility model, unplanned, no `num_ctx`. */
+          mode: z.enum(['auto', 'off']).default('auto'),
+          /**
+           * Total GPU memory, in bytes, for machines where neither the AMD sysfs
+           * counters nor `nvidia-smi` are readable from this process. 0 = unknown,
+           * and an unknown total routes every utility call to the chat model
+           * unless the utility model is already resident.
+           */
+          vramTotalBytes: z.coerce.number().int().nonnegative().default(0),
+          /** Headroom always left unallocated. Covers the compositor, HBPE's scratch, estimate error. */
+          safetyMarginBytes: z.coerce
+            .number()
+            .int()
+            .nonnegative()
+            .default(1024 ** 3),
+          /** Top rung of the utility model's context ladder (32K → 16K → 8K → 4K). */
+          maxUtilityContextTokens: z.coerce.number().int().positive().default(32_768),
+          /**
+           * After the planner asks Ollama to load the utility model, how long
+           * it may stay absent from `/api/ps` before the planner concludes the
+           * load is stuck behind an eviction that cannot happen. A cold load of
+           * a ~10 GB model finishes in 10–20 s; the first-response deadline is
+           * 90 s. 0 disables the watchdog.
+           */
+          loadWatchdogMs: z.coerce.number().int().nonnegative().default(120_000),
+          /**
+           * How long co-residency stays off after the watchdog fires (or a
+           * planned load times out). Utility calls run on the chat model
+           * meanwhile. Long enough for the wedge to clear or be noticed.
+           */
+          cooldownMs: z.coerce
+            .number()
+            .int()
+            .positive()
+            .default(15 * 60_000),
+        })
+        .default({}),
     })
     .default({}),
   // Local-first sync (PowerSync). The server issues short-lived client tokens via
