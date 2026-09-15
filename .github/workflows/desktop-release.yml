@@ -451,6 +451,7 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: release-macos
           path: frontend/apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
@@ -573,6 +574,7 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: release-windows
           path: |
             frontend/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
@@ -676,6 +678,7 @@ jobs:
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: release-linux
           path: |
             frontend/apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb

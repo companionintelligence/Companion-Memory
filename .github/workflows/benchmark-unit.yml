@@ -13,6 +13,10 @@ on:
       - scripts/benchmark/**
       - .github/workflows/benchmark-unit.yml
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
     runs-on: ubuntu-latest
@@ -112,6 +116,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: benchmark-reports
           path: scripts/benchmark/reports/
           if-no-files-found: ignore

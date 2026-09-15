@@ -41,9 +41,9 @@ It depends on the web app only as a build artifact (`webDir`), never as an npm i
 ## Prerequisites
 
 - **Android Studio** (bundles a JDK + SDK), or a standalone **JDK 21** +
-  Android SDK with `platform-tools`, `platforms;android-35`, `build-tools;35.0.0`.
-  Capacitor 7 defaults apply: compileSdk 35, AGP 8.7.2, JDK 21 — the project builds
-  with no source changes once `platforms;android-35` is installed.
+  Android SDK with `platform-tools`, `platforms;android-36`, `build-tools;36.0.0`.
+  Play requires target API 36. The project compiles with compileSdk 36, AGP 8.10.0,
+  JDK 21 — install `platforms;android-36` before building.
 - Backend CORS already allows the native origins (`backend/apps/api/src/main.ts`:
   `capacitor://localhost`, `http(s)://localhost`, plus the `X-API-Key` header);
   operators can extend it with `CORS_ALLOWED_ORIGINS`.
@@ -79,7 +79,7 @@ echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 yarn cap sync android
 (cd android && ./gradlew assembleDebug)
 adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n com.companionintelligence.app/.MainActivity
+adb shell am start -n com.ci.memory/com.companionintelligence.app.MainActivity
 ```
 
 (Debug builds need no release keystore. List AVDs with `emulator -list-avds`.)
@@ -97,7 +97,7 @@ make test-android
 ```
 
 That checks the prerequisites first (JDK 21; an Android SDK with
-`platforms;android-35`, found through `ANDROID_HOME`, then `ANDROID_SDK_ROOT`, then
+`platforms;android-36`, found through `ANDROID_HOME`, then `ANDROID_SDK_ROOT`, then
 `android/local.properties`'s `sdk.dir`; and this project's own `yarn install`, which is
 what materializes the `portal:` symlinks the three plugin modules reach the build
 through) and then runs, from `frontend/apps/android/android`:
@@ -285,7 +285,9 @@ into `android/` with
 
 ```bash
 cd frontend/apps/android
-# assets/ holds: icon-only.png, icon-foreground.png, icon-background.png (1024²)
+# assets/ holds: icon-only.png, icon-foreground.png, icon-background.png (1024²).
+# icon-only/-foreground are verified copies of @companionintelligence/assets logos/app-icon-source.png
+# (logo.app-icon) — regenerate them with `yarn workspace @ci/fe-web brand:sync`, never hand-edit.
 #                splash.png, splash-dark.png (2732²)
 npx @capacitor/assets generate \
   --iconBackgroundColor '#ffffff' --iconBackgroundColorDark '#0b1418' \

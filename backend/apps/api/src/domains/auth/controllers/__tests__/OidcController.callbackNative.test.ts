@@ -26,6 +26,8 @@ function makeController() {
     {} as never, // featureService
     oidcNativeCodeService as never,
     signupCodeService as never,
+    { findUserId: jest.fn(), listForUser: jest.fn(), bind: jest.fn() } as never,
+    { verifyUsername: jest.fn().mockReturnValue(null) } as never,
     logger as never,
   );
 

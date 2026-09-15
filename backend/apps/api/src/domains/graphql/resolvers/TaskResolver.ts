@@ -6,6 +6,7 @@ import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { TaskService, PlannedBlockService, type Task, type TaskStatus } from '@ci/domains/planning';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
 import { CreateTaskInput } from '../types/CreateTaskInput';
 import { CreateTaskPayload } from '../types/CreateTaskPayload';
@@ -450,6 +451,9 @@ export class TaskResolver {
     nullable: true,
     description: 'Remove the planned block for this task and clear scheduledFor.',
   })
+  // Deletes the planned block row. Its own description starts "Remove the planned block" — but the
+  // heuristic reads the FIELD NAME, not the description.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async unscheduleTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

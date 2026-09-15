@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   Param,
@@ -14,6 +15,7 @@ import {
 import { Context, type RequestContext } from '@ci/common/context';
 import { INTENTS_SCOPE, READ_CAPABILITY, RequireCapability, RequireScopes } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard, type ApiKeyScopedRequest, apiKeyCapabilityOf } from '@ci/common/guards';
+import { isManagedAppPrincipal } from '@ci/domains/auth';
 
 import type { ToolResult } from '../core/types';
 import type { PendingAction } from '../entities/PendingActionEntity';
@@ -35,9 +37,37 @@ import { PendingActionService } from '../services/PendingActionService';
  * {@link PendingActionConfirmService.confirm}, which is what stops the queue
  * being a capability escalator.
  */
+/**
+ * An approval card is the OWNER's answer. Refuse to take it from an installed app.
+ *
+ * Both harnesses carry the `intents` scope this controller requires, and
+ * approve/decline sit behind `READ_CAPABILITY`, so without this a harness could
+ * list the owner's queue and answer its own card.
+ *
+ * It is not a privilege escalation — `PendingActionConfirmService.confirm`
+ * re-runs `capabilityAllows` against the CONFIRMING principal, so an app can
+ * only ever approve something it was already allowed to run. It is worse than
+ * that in a subtler way: the card exists precisely BECAUSE the caller was an
+ * installed app, so letting the app answer it turns the whole gate into a
+ * formality it performs on itself.
+ *
+ * Provenance from `managed_by`, never from the key's name.
+ */
+function refuseManagedApp(req: ApiKeyScopedRequest, action: string): void {
+  if (isManagedAppPrincipal({ managedBy: req.apiKeyManagedBy })) {
+    throw new ForbiddenException(
+      `An installed app cannot ${action} an approval card — this is the owner's decision to make`,
+    );
+  }
+}
+
 @UseGuards(JwtOrApiKeyAuthGuard)
 @RequireScopes(INTENTS_SCOPE)
-@Controller(['api/pending-actions', 'api/agent/pending-actions'])
+// Mounted without the `api/` prefix its public URL carries: the gateway strips
+// `/api` before forwarding (nginx.conf `location /api/`), so a controller that
+// bakes it in never matches. See CI-Server#1684 and
+// common/__tests__/controllerGatewayPrefix.test.ts.
+@Controller(['pending-actions', 'agent/pending-actions'])
 export class PendingActionsController {
   constructor(
     private readonly pending: PendingActionService,
@@ -70,6 +100,8 @@ export class PendingActionsController {
   ): Promise<{ action: PendingAction; result: ToolResult }> {
     const userId = requireUserId(context);
 
+    refuseManagedApp(req, 'approve');
+
     return this.confirmations.confirm(userId, id, apiKeyCapabilityOf(req));
   }
 
@@ -80,8 +112,13 @@ export class PendingActionsController {
   async decline(
     @Param('id') id: string,
     @Context() context: RequestContext,
+    @Req() req: ApiKeyScopedRequest,
   ): Promise<{ action: PendingAction }> {
     const userId = requireUserId(context);
+
+    // Declining is the owner's answer too. An app that could decline its own
+    // card could bury an action the owner never saw.
+    refuseManagedApp(req, 'decline');
 
     return { action: await this.confirmations.decline(userId, id) };
   }

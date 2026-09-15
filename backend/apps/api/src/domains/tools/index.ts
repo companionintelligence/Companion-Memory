@@ -227,7 +227,11 @@ export {
   ToolInvocationLedgerService,
   TOOL_INVOCATION_RETENTION_DAYS,
 } from './services/ToolInvocationLedgerService';
-export type { ToolInvocationQuery } from './services/ToolInvocationLedgerService';
+export type {
+  ToolInvocationCursor,
+  ToolInvocationPage,
+  ToolInvocationQuery,
+} from './services/ToolInvocationLedgerService';
 export type { ToolProvider, ProviderHealthStatus } from './providers/ToolProvider';
 export {
   intentToolName,
@@ -244,6 +248,7 @@ export {
   type IntentSensitivity,
   type IntentPrivacy,
   type CiEntityType,
+  GRAPHQL_PRIVACY_EXTENSION,
 } from './core/types';
 // Execution policy — one implementation of "may this caller run this intent, here?", shared by
 // every dispatcher (MCP, the in-house chat model, and the on-device tier via the manifest).

@@ -25,6 +25,7 @@ import {
   TagService,
 } from '@ci/domains/search-next';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagAssignmentCountLoader } from '../loaders/TagAssignmentCountLoader';
 import { ActionType } from '../types/ActionType';
 import { BrowserActivityType } from '../types/BrowserActivityType';
@@ -235,6 +236,12 @@ export class TagResolver {
    * them (a one-tag saved search would start matching everything).
    */
   @Mutation(() => DeleteByIdPayload)
+  // TagService.purge runs entityTagRepository.delete({ tagId }) — unbounded, no LIMIT — then
+  // tagRepository.delete, explicitly bypassing the deleted_at column TagEntity carries. There is
+  // no createTag and no restore in the schema, and re-tagging mints a NEW id with no description,
+  // leaving every previously-tagged entity untagged. It destroys a strict superset of
+  // untagEntities, which this branch already raised to destructive.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteTag(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,
@@ -286,6 +293,10 @@ export class TagResolver {
   }
 
   @Mutation(() => [TaggableEntityType])
+  // Deletes entity_tag join rows for every (label x entity) pair. deleteTag — a single label —
+  // already cost `full`; removing a label from ten thousand entities cost `write`. The name
+  // heuristic inverted the severity ordering.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async untagEntities(
     @Context() context: RequestContext,
     @Args('input') input: TagEntitiesInput,

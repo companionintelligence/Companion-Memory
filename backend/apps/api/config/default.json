@@ -75,7 +75,9 @@
     },
     "connect": {
       "hubOrigins": "",
-      "hubInternalUrl": "http://ci-os-hub:3000"
+      "hubInternalUrl": "http://ci-os-hub:3000",
+      "devDirectWakeUrl": "",
+      "devDirectWakeToken": ""
     },
     "portal": {
       "enabled": true,

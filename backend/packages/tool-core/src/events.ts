@@ -1,5 +1,5 @@
 import type { ToolCapability } from './capability';
-import type { IntentAccess, IntentDomainKey } from './core/types';
+import type { DispatchTier, IntentAccess, IntentDomainKey, ToolPrincipal } from './core/types';
 
 /**
  * Event emitted for every tool (intent) invocation — a behavioral signal for prediction/HBPE, and
@@ -71,6 +71,36 @@ export type ToolInvokedPayload = {
   apiKeyId?: string;
   /** The authority the caller stated. Paired with `outcome: 'refused'`, the whole story. */
   capability?: ToolCapability;
+  /**
+   * WHO called, where {@link ToolInvokedPayload.capability} says only what they
+   * were allowed to do.
+   *
+   * The registry had this on the context and did not record it, so the ledger
+   * could say a call with `full` authority deleted something and never which of
+   * the owner and an installed harness made it — the distinction the whole
+   * managed-app gate is built on. Absent on rows written before it was carried,
+   * and on any dispatcher that does not state a principal.
+   */
+  principal?: ToolPrincipal;
+  /**
+   * Which installed app, when {@link ToolInvokedPayload.principal} is
+   * `'managed-app'` — the api-key name (`app:ci-openclaw:ci-marketplace`).
+   *
+   * Stores the name, not a display label, for the same reason
+   * `ci.pending_actions.principal_name` does: the row records the fact and the
+   * reader does the presentation.
+   */
+  principalName?: string;
+  /**
+   * Which tier served the call. Absent reads as `appliance` — the documented
+   * default of {@link ToolInvocationContext.tier}, so a NULL is the default left
+   * unwritten rather than a missing fact.
+   *
+   * Worth a column because `resolveDispatch`'s queue reasons are all
+   * tier-dependent: the same intent from `local` and from `appliance` are two
+   * different rulings, and a ledger that flattens them cannot explain either.
+   */
+  tier?: DispatchTier;
   /** ISO-8601 instant the call ended. */
   occurredAt: string;
   outcome: ToolInvocationOutcome;

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  DEFAULT_PORTAL_URL,
   listMemoryServers,
   persistPortalUrl,
   probeMemoryOrigin,
@@ -109,6 +110,11 @@ describe('device-connect portal-client', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 503 })));
 
     await expect(probeMemoryOrigin('https://memory.example.com')).rejects.toThrow(/503/);
+  });
+
+  it('defaults cloud connect to production, not the internal Hub appliance Portal', () => {
+    expect(DEFAULT_PORTAL_URL).toBe('https://hub.ci.computer');
+    expect(readPersistedPortalUrl()).toBe('https://hub.ci.computer');
   });
 
   it('persists the Companion URL for the next OIDC hop', () => {

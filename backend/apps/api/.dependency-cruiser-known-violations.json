@@ -225,6 +225,15 @@
   {
     "type": "dependency",
     "from": "src/domains/personalization/controllers/PersonalizationController.ts",
+    "to": "src/domains/llm/chat-model-preference.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/personalization/controllers/PersonalizationController.ts",
     "to": "src/domains/llm/image-description-preference.module.ts",
     "rule": {
       "severity": "error",
@@ -235,6 +244,15 @@
     "type": "dependency",
     "from": "src/domains/personalization/index.ts",
     "to": "src/domains/llm/browser-activity-insight-preference.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/personalization/index.ts",
+    "to": "src/domains/llm/chat-model-preference.module.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"

@@ -12,6 +12,7 @@ import {
   type DeclineReason,
 } from '@ci/domains/schedule';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { EventType } from '../types/EventType';
 import { GlobalUID } from '../types/GlobalUID';
 import { ScheduleCandidateType } from '../types/ScheduleCandidateType';
@@ -164,6 +165,10 @@ export class ScheduleCandidateResolver {
   @Mutation(() => ScheduleCandidateType, {
     description: 'Return a placed event to the slate, deleting the event it minted',
   })
+  // CandidateService.returnToSlate ends in eventService.remove — the SDL description already says
+  // "deleting the event it minted". Started with none of the prefixes, so a `write` key refused
+  // deleteEvent could delete the same row through here.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async returnEventToSlate(
     @Context() context: RequestContext,
     @Args('eventId', { type: () => ID }) gid: string,

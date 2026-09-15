@@ -6,6 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { PersonService } from '@ci/domains/memory';
 import { PeerLinkService } from '@ci/domains/peers';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { GlobalUID } from '../types/GlobalUID';
 import {
   CreatePeerLinkInput,
@@ -103,6 +104,8 @@ export class PeerLinkResolver {
   }
 
   @Mutation(() => PeerLinkPayload)
+  // Establishes a federation link with another appliance.
+  @GraphqlPrivacy({ external: true })
   async createPeerLink(
     @Context() context: RequestContext,
     @Args('input') input: CreatePeerLinkInput,

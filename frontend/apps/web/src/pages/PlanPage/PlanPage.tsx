@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react';
 
 import { useMutation } from '@apollo/client';
-import { EmptyState, LoadingPage, usePageTitle } from '@ci/common';
-import { AlertDialog, Button, useToast } from '@ci/shadcn';
+import { EmptyState, LoadingPage, useDeviceLayout, usePageTitle } from '@ci/common';
+import { AlertDialog, Button, cn, useToast } from '@ci/shadcn';
 import { ListTodo } from '@ci/shadcn/icons';
 
 import { useFeatures } from '@/common/feature';
@@ -71,6 +71,7 @@ const DECLINE_PENDING = gql(`
 
 export function PlanPage() {
   usePageTitle('Plan - Companion Memory');
+  const { isMobile } = useDeviceLayout();
   const { isFeatureEnabled } = useFeatures();
   const showEmptyState = isFeatureEnabled('planning.emptyState');
   const { toast } = useToast();
@@ -411,7 +412,7 @@ export function PlanPage() {
   return (
     <>
       <PageContent>
-        <div className="flex h-full min-h-0 w-full flex-col gap-6">
+        <div className={cn('flex h-full min-h-0 w-full flex-col', isMobile ? 'gap-2' : 'gap-6')}>
           <div className="mx-auto w-full max-w-3xl shrink-0">
             <NewTaskForm onCreated={() => void refetch()} />
           </div>

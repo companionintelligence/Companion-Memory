@@ -23,6 +23,10 @@ pub struct StackPathsState(pub stack_manager::StackPaths);
 /// read by the splash page's poll.
 pub struct StartupProgressState(pub stack_manager::ProgressHandle);
 
+/// The server image tag this build ships with — what `.env` pins and what the
+/// splash waits for the gateway to be running before it navigates.
+pub struct BundledImageTag(pub String);
+
 /// A deep link that arrived before the frontend had a listener up — the cold-start
 /// case (app not yet running when the OS delivers the URL) and, defensively, any
 /// warm-start delivery that raced page load. `main.tsx`'s deep-link wiring drains
@@ -182,6 +186,76 @@ fn configured_log_level(raw: Option<String>) -> log::LevelFilter {
         .unwrap_or(log::LevelFilter::Info)
 }
 
+/// Drop the webview's cached frontend if the server images have moved since
+/// the webview was last cleared. Returns whether a clear was issued.
+///
+/// The web app installs a service worker that precaches its bundle, and the
+/// webview keeps it across launches — so after an upgrade the page the shell
+/// navigates to would be served by LAST release's worker: old frontend, new
+/// API, and a blank window with no asset request ever reaching the gateway.
+/// The worker never updates itself because the stale bundle fails before its
+/// registration code runs. See stack_manager::image_tag_change for the marker,
+/// including why a missing one clears too.
+///
+/// A command rather than a step in `setup`, because WHEN this runs is the whole
+/// fix. bootstrap.js calls it once check_stack_status_command says the gateway
+/// is up on the bundled tag and immediately before window.location.replace():
+/// any earlier — in `setup`, say — and a still-running previous stack could
+/// hand the webview the old worker again between the clear and the redirect.
+/// It takes cookies with it, so an upgrade costs one sign-in; that is the
+/// price of a screen that renders.
+///
+/// The clear is dispatched, not awaited: wry hands WebKit an empty completion
+/// handler. So Ok here means "asked", and the caller waits a beat before
+/// navigating. The marker moves only on Ok — written any earlier, one failed
+/// clear would leave the stale worker in place for good, since the next
+/// launch would find the marker current and do nothing.
+#[tauri::command]
+fn forget_stale_frontend_command(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, StackPathsState>,
+    bundled: tauri::State<'_, BundledImageTag>,
+) -> bool {
+    let paths = &state.0;
+    let image_tag = bundled.0.as_str();
+    if image_tag.is_empty() {
+        return false;
+    }
+
+    let change = stack_manager::image_tag_change(&paths.data_dir, image_tag);
+    if !change.changed {
+        return false;
+    }
+
+    let from = change.previous.as_deref().unwrap_or("(no record)");
+    let Some(window) = app.get_webview_window("main") else {
+        stack_manager::append_desktop_log(paths, "upgrade", &format!("{from} -> {image_tag}, but no main window to clear"));
+        return false;
+    };
+
+    match window.clear_all_browsing_data() {
+        Ok(()) => {
+            stack_manager::append_desktop_log(
+                paths,
+                "upgrade",
+                &format!("{from} -> {image_tag}: clearing the webview's cached frontend"),
+            );
+            if let Err(e) = stack_manager::mark_image_tag_seen(&paths.data_dir, image_tag) {
+                stack_manager::append_desktop_log(paths, "upgrade", &format!("could not record image tag: {e}"));
+            }
+            true
+        }
+        Err(e) => {
+            stack_manager::append_desktop_log(
+                paths,
+                "upgrade",
+                &format!("{from} -> {image_tag}: FAILED to clear the webview's cached frontend: {e}"),
+            );
+            false
+        }
+    }
+}
+
 fn main() {
     // Installed before anything can log. The file half stays dormant until
     // `install_file_logging` learns the data dir a few lines into `setup`.
@@ -235,6 +309,11 @@ fn main() {
             let progress = stack_manager::new_progress();
             app.manage(StartupProgressState(progress.clone()));
             app.manage(local_model::LocalModelHandles::default());
+            // initialize_stack has just read this same file to write .env, so a
+            // failure here is one it already reported; the fallback only keeps
+            // the shell from refusing to start over a readiness check.
+            let bundled_tag = stack_manager::bundled_image_tag(&resource_dir).unwrap_or_default();
+            app.manage(BundledImageTag(bundled_tag));
 
             tray::create_tray(app.handle())?;
 
@@ -254,10 +333,11 @@ fn main() {
             // (which, on a first run, can take minutes to pull images). The
             // bootstrap page polls check_stack_status_command until it's
             // healthy, and separately calls start_stack_command itself — both
-            // paths go through ensure_local_model_then_start_stack, whose
-            // LocalModelHandles::resolve_once guard is what keeps them from
-            // racing each other to the first `docker compose up` (see that
-            // method's doc comment for why the race matters here).
+            // paths go through ensure_local_model_then_start_stack. Two guards
+            // sit on that path and they answer different questions:
+            // LocalModelHandles::resolve_once makes the FIRST `up` wait for a
+            // finalised .env; stack_manager's START_IN_FLIGHT makes sure there
+            // is only ONE `up` at all (see its doc comment for what two did).
             let app_handle = app.handle().clone();
             let startup_progress = progress.clone();
             tauri::async_runtime::spawn(async move {
@@ -310,6 +390,7 @@ fn main() {
             get_startup_progress_command,
             open_external_url_command,
             take_pending_deep_link_command,
+            forget_stale_frontend_command,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Companion Memory desktop app");
@@ -342,9 +423,24 @@ fn get_gateway_url_command() -> String {
     format!("http://127.0.0.1:{}", stack_manager::GATEWAY_PORT)
 }
 
+/// Ready means healthy AND running this build's images. Health alone passes
+/// on the first poll after an upgrade, because Quit leaves the previous
+/// release's containers running — see stack_manager::gateway_runs_image_tag
+/// for what redirecting into that stack did to the webview.
 #[tauri::command]
-async fn check_stack_status_command() -> bool {
-    stack_manager::is_healthy().await
+async fn check_stack_status_command(bundled: tauri::State<'_, BundledImageTag>) -> Result<bool, String> {
+    if !stack_manager::is_healthy().await {
+        return Ok(false);
+    }
+
+    let image_tag = bundled.0.clone();
+    if image_tag.is_empty() {
+        return Ok(true);
+    }
+
+    tokio::task::spawn_blocking(move || stack_manager::gateway_runs_image_tag(&image_tag))
+        .await
+        .map_err(|e| format!("readiness check panicked: {e}"))
 }
 
 /// Kick off a start and return immediately.
@@ -356,9 +452,11 @@ async fn check_stack_status_command() -> bool {
 /// runs in the background and reports through `get_startup_progress_command`.
 ///
 /// Still routed through ensure_local_model_then_start_stack rather than
-/// stack_manager::start_stack directly — the bootstrap page calls this moments
-/// after launch and must not race main.rs's own startup task to the first
-/// `docker compose up` (see LocalModelHandles::resolve_once's doc comment).
+/// stack_manager::start_stack directly, so the model resolution happens before
+/// the first `up` (LocalModelHandles::resolve_once). The bootstrap page calls
+/// this moments after launch, while main.rs's own startup task is usually
+/// mid-`up`; stack_manager's START_IN_FLIGHT is what turns that second call
+/// into a no-op instead of a second, racing `docker compose up`.
 #[tauri::command]
 fn start_stack_command(
     app: tauri::AppHandle,

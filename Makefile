@@ -70,8 +70,8 @@ DESKTOP_TAURI_DIR := frontend/apps/desktop/src-tauri
 # each module's build.gradle. They exist only so the precondition messages can
 # name the version they want and the sdkmanager line that installs it.
 ANDROID_JDK_MAJOR := 21
-ANDROID_COMPILE_SDK := 35
-ANDROID_BUILD_TOOLS := 35.0.0
+ANDROID_COMPILE_SDK := 36
+ANDROID_BUILD_TOOLS := 36.0.0
 
 # Where the Android SDK is, resolved the way every Android tool resolves it and
 # NEVER hard-coded: ANDROID_HOME, then the deprecated-but-still-common
@@ -479,6 +479,35 @@ health: ## Check the repository for prerequisites
 		exit 1; \
 	else \
 		printf "$(GREEN)✓$(RESET) uv found at $$UV ($$(uv --version | cut -d' ' -f2))\n\n"; \
+	fi
+
+	@# `vips` (libvips-tools) is the image decoder behind previews, dimensions
+	@# and the vision renditions — the API shells out to it, so the host running
+	@# the API needs it, and a missing binary fails every image job loudly.
+	@VIPS=$$(which vips 2>/dev/null); \
+	if [ -z "$$VIPS" ]; then \
+		printf "$(RED)✗$(RESET) You do not have 'vips' installed or it is not in your path. Install it with 'sudo apt install libvips-tools' (Debian/Ubuntu) or 'brew install vips' (macOS).\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) vips found at $$VIPS ($$(vips --version 2>/dev/null | sed 's/^vips-//'))\n\n"; \
+	fi
+
+	@# A present `vips` is not enough: it must also decode HEVC, the codec
+	@# inside every iPhone HEIC. Debian and Homebrew link that decoder into
+	@# libheif; Ubuntu 24.04 (and Mint 22) ship it as a separate plugin package
+	@# that the current libheif1 no longer depends on, so a fresh install opens
+	@# the container and then fails every tile. Decode the repo's HEIC test
+	@# fixture the way VipsService does. `vips` exits 0 on that failure and
+	@# writes a black image, so the verdict is the tile warnings on stderr.
+	@HEIC=backend/apps/api/src/domains/files/services/__tests__/__fixtures__/64x40.heic; \
+	OUT=$$(mktemp -t ci-health-heic-XXXXXX.jpg); \
+	ERR=$$(vips thumbnail "$$HEIC[fail-on=error]" "$$OUT" 64 2>&1); STATUS=$$?; \
+	rm -f "$$OUT"; \
+	if [ $$STATUS -ne 0 ] || printf '%s' "$$ERR" | grep -qE 'error in tile|Unsupported codec'; then \
+		printf "$(RED)✗$(RESET) vips cannot decode HEIC (no HEVC decoder in libheif). On Ubuntu 24.04 / Mint 22 install it with 'sudo apt install libheif-plugin-libde265'; on Debian and macOS it comes with libvips-tools / brew vips.\n\n"; \
+		exit 1; \
+	else \
+		printf "$(GREEN)✓$(RESET) vips decodes HEIC (HEVC decoder present)\n\n"; \
 	fi
 
 	@# The pre-commit guards must actually FIRE in a linked worktree. `yarn

@@ -2,6 +2,7 @@ import type { GraphQLSchemaHost } from '@nestjs/graphql';
 import { buildSchema, type GraphQLSchema } from 'graphql';
 
 import type { LoggerService } from '@ci/common/logging';
+import { GRAPHQL_PRIVACY_EXTENSION, type IntentPrivacy } from '@ci/domains/tools';
 
 import { GraphQLToolAdapter } from './GraphQLToolAdapter';
 
@@ -40,6 +41,34 @@ function buildAdapter(schema: GraphQLSchema): GraphQLToolAdapter {
   return adapter;
 }
 
+/**
+ * Attach a declared privacy label to `updateMemory` the way `@GraphqlPrivacy` does at runtime, and
+ * return the label the adapter ends up advertising.
+ *
+ * `updateMemory` is chosen because the name heuristic infers a plain `write` for it — so anything
+ * destructive coming back proves the DECLARATION won rather than the inference.
+ */
+function buildAdapterWithDeclaredPrivacy(declared: Partial<IntentPrivacy>): IntentPrivacy {
+  const schema = buildSchema(SDL);
+  const field = schema.getMutationType()?.getFields().updateMemory;
+
+  if (!field) {
+    throw new Error('updateMemory missing from the fixture schema');
+  }
+
+  field.extensions = { ...field.extensions, [GRAPHQL_PRIVACY_EXTENSION]: declared };
+
+  const tool = buildAdapter(schema)
+    .getTools()
+    .find((t) => t.name === 'mutation_updateMemory');
+
+  if (!tool) {
+    throw new Error('mutation_updateMemory not wrapped');
+  }
+
+  return tool.privacy;
+}
+
 describe('GraphQLToolAdapter privacy label synthesis', () => {
   const adapter = buildAdapter(buildSchema(SDL));
 
@@ -55,8 +84,16 @@ describe('GraphQLToolAdapter privacy label synthesis', () => {
   it('labels every auto-wrapped tool (no unlabelled tools advertised)', () => {
     for (const tool of adapter.getTools()) {
       expect(tool.privacy).toBeDefined();
-      expect(tool.privacy.external).toBe(false);
     }
+  });
+
+  it('defaults external to false, but no longer asserts it of every field', () => {
+    // This used to assert `external === false` for EVERY wrapped tool, which locked in a claim the
+    // schema contradicts: `sendPeerAsk` and `runAsk` reach another Companion and `createPeerLink`
+    // establishes federation with one. Blanket-false surfaced to MCP clients as
+    // `openWorldHint: false` — advertising a federated send as local CRUD. Those fields now declare
+    // `external: true` via `@GraphqlPrivacy`; the DEFAULT is still false, which is what this pins.
+    expect(privacyOf('mutation_forgetMemory').external).toBe(false);
   });
 
   it('labels queries as read + non-destructive', () => {
@@ -89,9 +126,32 @@ describe('GraphQLToolAdapter privacy label synthesis', () => {
     }
   });
 
-  it('does not treat non-prefix substrings as destructive', () => {
-    // "forget" is destructive-in-spirit but not in the prefix list; it stays a plain write so the
-    // synthesis rule is conservative and predictable (prefix match only, not substring).
+  it('falls back to the name prefix for a field that declares nothing', () => {
+    // The fallback is unchanged and still prefix-only, not substring: an UNDECLARED
+    // `forgetMemory` stays a plain write.
+    //
+    // What changed is the reading of that fact. This test used to call the behaviour
+    // "conservative", which is backwards for a safety label — the conservative direction is to
+    // OVER-flag, and under-flagging is what let `returnEventToSlate` delete an event at `write`
+    // while `deleteEvent` required `full`. The prefix is now the fallback for undeclared fields
+    // rather than the whole rule, and a field whose true behaviour differs declares it.
     expect(privacyOf('mutation_forgetMemory').destructive).toBe(false);
+  });
+
+  it('lets a declared label override the name heuristic', () => {
+    // The bug class this whole mechanism exists for: a mutation that destroys data without a
+    // destructive-looking name. Declared privacy must beat the inference.
+    const declared = buildAdapterWithDeclaredPrivacy({ access: 'delete', destructive: true });
+
+    expect(declared.destructive).toBe(true);
+    expect(declared.access).toBe('delete');
+  });
+
+  it('keeps access and destructive consistent when only one is declared', () => {
+    // A partial declaration must not produce `destructive: true` with `access: 'write'`, which
+    // `capabilityRequiredFor` would price at `write` — re-opening the gap from the other side.
+    const declared = buildAdapterWithDeclaredPrivacy({ destructive: true });
+
+    expect(declared.access).toBe('delete');
   });
 });

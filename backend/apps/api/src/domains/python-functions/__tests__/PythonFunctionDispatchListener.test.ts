@@ -15,16 +15,19 @@ function makeLogger() {
 
 const logger = makeLogger();
 
+// No `jobId` here any more. It was never the domain's field — the event bus
+// used to merge pg-boss's id into every delivered payload, and this listener
+// was the one consumer that legitimately wanted it. It now rides the ack, where
+// tsc can see it.
 const payload = {
   target: 'summary' as const,
   function: 'hourly_summary',
   args: { user_id: 'user-1' },
   userId: 'user-1',
-  jobId: 'job-1',
 };
 
 function makeAck(): Acknowledgement {
-  return { done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+  return { jobId: 'job-1', done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
 }
 
 /** A json-capable stand-in for the catalog route, listing every allowlisted name. */
@@ -79,6 +82,31 @@ describe('PythonFunctionDispatchListener', () => {
     expect(ack.defer).toHaveBeenCalledTimes(1);
     expect(ack.fail).not.toHaveBeenCalled();
     expect(ack.done).not.toHaveBeenCalled();
+  });
+
+  it('takes job_id from the ACK, not from anything the payload happens to carry', async () => {
+    // The completion path depends on this exact id: the sidecar echoes it back
+    // to PythonFunctionCallbackController, which calls
+    // `boss.complete(queue, jobId)`. Send a payload carrying a DIFFERENT and
+    // plausible-looking `jobId` — the wire must ignore it.
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce(catalogResponse())
+      .mockResolvedValueOnce({ ok: true, status: 200, text: () => Promise.resolve('{}') }) as never;
+
+    const ack = makeAck();
+    ack.jobId = 'pgboss-job-2';
+
+    await new PythonFunctionDispatchListener(logger).dispatchSummary(
+      { ...payload, jobId: 'a-domain-id-that-must-not-win' } as never,
+      ack,
+    );
+
+    const runs = (global.fetch as jest.Mock).mock.calls.filter(([url]) =>
+      String(url).includes('/functions/run'),
+    );
+
+    expect(JSON.parse(String(runs[0][1].body)).job_id).toBe('pgboss-job-2');
   });
 
   it('fails the job (for pg-boss retry) when the runner rejects the dispatch', async () => {

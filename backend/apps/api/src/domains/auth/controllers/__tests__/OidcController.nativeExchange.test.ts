@@ -21,6 +21,8 @@ function makeController() {
     {} as never, // featureService
     oidcNativeCodeService as never,
     {} as never, // signupCodeService — unused by nativeExchange
+    {} as never, // federatedIdentityService
+    {} as never, // hubBridge
     logger as never,
   );
 

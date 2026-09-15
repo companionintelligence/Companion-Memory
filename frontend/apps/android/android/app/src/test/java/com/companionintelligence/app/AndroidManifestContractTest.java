@@ -41,6 +41,65 @@ public class AndroidManifestContractTest {
         manifest = SourceManifest.parse();
     }
 
+    /**
+     * Play Console registered {@code com.ci.memory}. The Java/Kotlin namespace and the
+     * iOS bundle id stay on {@code com.companionintelligence.app}. Changing applicationId
+     * in one file and not the others is how an AAB gets rejected at upload.
+     */
+    @Test
+    public void play_target_sdk_is_36() {
+        assertEquals(
+            "Play rejects uploads below target API 36. compileSdk and targetSdk move together.",
+            "36",
+            matchOne(
+                new File(ProjectFiles.appModuleDir(), "../variables.gradle"),
+                "targetSdkVersion\\s*=\\s*(\\d+)",
+                "targetSdkVersion"
+            )
+        );
+        assertEquals(
+            "compileSdkVersion must stay at 36 with targetSdk 36.",
+            "36",
+            matchOne(
+                new File(ProjectFiles.appModuleDir(), "../variables.gradle"),
+                "compileSdkVersion\\s*=\\s*(\\d+)",
+                "compileSdkVersion"
+            )
+        );
+    }
+
+    @Test
+    public void play_application_id_is_com_ci_memory() {
+        assertEquals(
+            "Android applicationId must stay com.ci.memory (the Play Console package).",
+            "com.ci.memory",
+            matchOne(new File(ProjectFiles.appModuleDir(), "build.gradle"), "applicationId\\s+\"([^\"]+)\"", "applicationId")
+        );
+        assertEquals(
+            "Android namespace must stay com.companionintelligence.app so the existing Java package does not move.",
+            "com.companionintelligence.app",
+            matchOne(new File(ProjectFiles.appModuleDir(), "build.gradle"), "namespace\\s+\"([^\"]+)\"", "namespace")
+        );
+        assertEquals(
+            "capacitor.config.ts appId must match the Play applicationId or the next cap sync will revert it.",
+            "com.ci.memory",
+            matchOne(
+                ProjectFiles.inRepo("frontend/apps/android/capacitor.config.ts"),
+                "appId:\\s*'([^']+)'",
+                "capacitor.config.ts appId"
+            )
+        );
+        assertEquals(
+            "iOS bundle id is unchanged: Play's package rename is Android-only.",
+            "com.companionintelligence.app",
+            matchOne(
+                ProjectFiles.inRepo("frontend/apps/ios/capacitor.config.ts"),
+                "appId:\\s*'([^']+)'",
+                "iOS capacitor.config.ts appId"
+            )
+        );
+    }
+
     @Test
     public void main_activity_is_exported_and_reuses_its_existing_task() {
         Element activity = mainActivity();

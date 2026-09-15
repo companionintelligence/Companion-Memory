@@ -259,6 +259,22 @@ export interface ToolExecutionContext extends ToolRequestContext {
  * acting as itself); anything driven by an outside caller must pass that caller's real
  * capability, e.g. `apiKeyCapabilityOf(req)`.
  */
+/**
+ * The kinds of caller the gate distinguishes.
+ *
+ * Deliberately two values, not a principal object: the only question the policy
+ * asks is "is this the owner, or something the owner installed?". Anything
+ * finer belongs in the ledger and the approval card, not in the rule.
+ */
+export const TOOL_PRINCIPALS = ['owner', 'managed-app'] as const;
+
+/**
+ * Derived from {@link TOOL_PRINCIPALS} rather than written twice: a reader that
+ * validates `?principal=` needs the values at runtime, and two hand-kept lists
+ * is how a third value gets added to one of them.
+ */
+export type ToolPrincipal = (typeof TOOL_PRINCIPALS)[number];
+
 export interface ToolInvocationContext extends ToolRequestContext {
   capability: ToolCapability;
   /**
@@ -274,6 +290,29 @@ export interface ToolInvocationContext extends ToolRequestContext {
    * already publishes rulings under.
    */
   tier?: DispatchTier;
+  /**
+   * WHO is calling, where capability says only what they may do.
+   *
+   * `'managed-app'` is an installed harness (CI-OpenClaw, CI-Hermes) acting on
+   * the owner's behalf, established from `api_keys.managed_by` and never from a
+   * key's name. Everything else — a session, a Portal token, the owner's own
+   * api key, an in-process dispatcher — is `'owner'`, which is also the default
+   * when unset, so no existing caller changes behaviour by omission.
+   *
+   * Load-bearing because capability CANNOT express it: an owner's hand-made key
+   * and a connect-minted harness key can carry identical scopes and identical
+   * authority. The owner's trust dial is an owner convenience; it should not be
+   * what decides whether a BORROWED agent is confirmed before doing something
+   * irreversible.
+   */
+  principal?: ToolPrincipal;
+  /**
+   * Which installed app, when {@link ToolInvocationContext.principal} is
+   * `'managed-app'` — the api-key name, for naming it on an approval card.
+   * Ignored for an owner principal.
+   */
+  principalName?: string | null;
+
   /**
    * The `ci.pending_actions` row this call is the confirmed replay of.
    *

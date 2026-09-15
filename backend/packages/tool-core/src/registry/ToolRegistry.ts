@@ -572,6 +572,17 @@ export class ToolRegistryCore<TTool extends ToolHandle = ToolHandle> {
       correlationId: context.traceId,
       apiKeyId: context.apiKeyId,
       capability: context.capability,
+      // WHO and WHERE-FROM, both of which were already on the context and both
+      // of which this builder used to drop. `capability` alone cannot tell the
+      // owner's own `full` key from an installed harness's, which is precisely
+      // the distinction the managed-app gate turns on — so a ledger without
+      // these cannot show what the gate did.
+      principal: context.principal,
+      // `?? undefined` because the context models "no app" as null while the
+      // payload models it as absent; writing the null through would put a
+      // JSON `null` into the pg-boss job body for every owner-originated call.
+      principalName: context.principalName ?? undefined,
+      tier: context.tier,
       occurredAt: new Date().toISOString(),
       access: schema.privacy.access,
       external: schema.privacy.external,

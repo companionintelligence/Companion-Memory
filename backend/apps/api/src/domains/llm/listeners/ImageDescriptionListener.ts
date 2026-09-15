@@ -9,6 +9,7 @@ import { FileService, PreviewGeneratedEvent, type PreviewGeneratedPayload } from
 import { IMAGE_DESCRIPTION_QUEUE, IMAGE_DESCRIPTION_QUEUE_OPTIONS } from '../constants';
 import { ImageDescriptionPreferenceService } from '../services/ImageDescriptionPreferenceService';
 import { OllamaService } from '../services/OllamaService';
+import { VisionRenditionService } from '../services/VisionRenditionService';
 import { isNonMultimodalModelError } from '../visionErrors';
 
 const PROMPT = `
@@ -26,6 +27,13 @@ const PROMPT = `
   }
 `;
 
+/**
+ * Output ceiling for one description. Measured titles+descriptions land at
+ * 70-170 tokens; the cap exists so a model that ignores "concise" cannot run
+ * a queue job to the backend's default length limit.
+ */
+export const IMAGE_DESCRIPTION_MAX_OUTPUT_TOKENS = 256;
+
 const ImageMetadataSchema = z.object({
   title: z.string(),
   description: z.string(),
@@ -37,6 +45,7 @@ export class ImageDescriptionListener {
     private readonly fileService: FileService,
     private readonly ollamaService: OllamaService,
     private readonly imageDescriptionPreference: ImageDescriptionPreferenceService,
+    private readonly rendition: VisionRenditionService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(ImageDescriptionListener.name);
@@ -100,13 +109,31 @@ export class ImageDescriptionListener {
       return;
     }
 
-    const fileContent = await this.fileService.getFileContent(serviceContext, thumbnail.key);
-    const base64Image = Buffer.from(fileContent).toString('base64');
+    // The preview event is the trigger, but the ORIGINAL is what the model is
+    // shown — rendered down to a bounded size, with the thumbnail only as the
+    // fallback for an original the decoder cannot read. See
+    // VisionRenditionService for why neither extreme was right.
+    const original = await this.fileService.findById(serviceContext, thumbnail.parentId);
+    const rendition = await this.rendition.render(
+      serviceContext,
+      original ?? { id: thumbnail.parentId, key: null, contentType: null },
+      thumbnail.key,
+    );
+
+    if (rendition == null) {
+      this.logger.warn('No image bytes available for description', {
+        previewId: payload.previewId,
+        parentFileId: thumbnail.parentId,
+      });
+
+      return;
+    }
+
     const messages = [
       {
         role: 'user' as const,
         content: PROMPT,
-        images: [base64Image],
+        images: [rendition.jpeg.toString('base64')],
       },
     ];
 
@@ -122,6 +149,8 @@ export class ImageDescriptionListener {
       model,
       previewId: payload.previewId,
       parentFileId: thumbnail.parentId,
+      renditionSource: rendition.source,
+      renditionBytes: rendition.jpeg.length,
     });
 
     let response;
@@ -129,7 +158,9 @@ export class ImageDescriptionListener {
       response = await this.ollamaService.chat(serviceContext, messages, {
         model,
         enableTools: false,
+        enableThinking: false,
         format: 'json',
+        maxOutputTokens: IMAGE_DESCRIPTION_MAX_OUTPUT_TOKENS,
       });
     } catch (error) {
       if (isNonMultimodalModelError(error)) {

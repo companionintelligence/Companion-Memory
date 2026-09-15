@@ -71,9 +71,16 @@ jobs:
     #
     # Raised from 15 when the Postgres service below landed: the job now also
     # pays for a client install, the role/extension bootstrap and ~300
-    # migrations (~2 min), and the suite itself grew by the 57 DB-backed files
-    # that used to skip.
-    timeout-minutes: 35
+    # migrations, and the suite itself grew by the 57 DB-backed files that used
+    # to skip. That prefix is measured, not guessed — 1m53s on run
+    # 34409425373 (container init 53s, checkout 6s, corepack 1s, cache restore
+    # 21s, install 16s, bootstrap + migrations the rest).
+    #
+    # Raised again to 65 with the test step's own ceiling: the four step
+    # ceilings below now sum to 58, and this number has to stay above their sum
+    # PLUS that prefix or the invariant the paragraph above describes is a
+    # fiction. 58 + 2 = 60, so 65 keeps five minutes of slack.
+    timeout-minutes: 65
     container:
       image: node:22
     services:
@@ -214,7 +221,10 @@ jobs:
         run: |
           set -euo pipefail
           apt-get update
-          apt-get install -y --no-install-recommends postgresql-client
+          # `libvips-tools`: the image decoder the files domain shells out to
+          # (VipsService). The suites that exercise real decoding skip without
+          # it, which would silently hide a decode regression here.
+          apt-get install -y --no-install-recommends postgresql-client libvips-tools
           psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 \
             -c "CREATE ROLE companion WITH LOGIN PASSWORD 'ci_test_app_pw';" \
             -c "CREATE DATABASE companion OWNER companion;"
@@ -232,13 +242,46 @@ jobs:
       - name: Run migrations
         run: yarn workspace @ci/be-api migrate
 
+      # pg-boss builds its own tables at boot, not through dbmate, so a migrated
+      # database still has no `pgboss.job` until the API starts once. CI never
+      # starts it. `DeadLetterReaperListener.spec.ts` guards on that table and
+      # deliberately FAILS rather than skips when the database is present but the
+      # table is not — and that block went live the moment this file gained
+      # `PIPELINE_TEST_DATABASE_URL` (#2584), which is why this workflow has been
+      # red ever since and releases have been shipping on `skip_test_gate=true`.
+      #
+      # Uses pg-boss's own start/stop rather than hand-written DDL, so the schema
+      # tracks the resolved pg-boss version instead of drifting from it.
+      - name: Install the pg-boss schema
+        timeout-minutes: 3
+        run: yarn workspace @ci/be-api pgboss:ensure
+
       # Several times the measured cost: ~400 files in about 2.5 minutes in a
       # two-core container, so a few minutes on a runner whose cores are slower.
-      # The ceiling was ten while every DB-backed suite skipped; it is twenty now
-      # that the 57 of them actually connect, run migrations-backed queries and
-      # truncate between cases. Anything approaching that still means the suite
-      # has stopped making progress rather than merely got slower, and failing
-      # the step says so while leaving the job alive to finish and report.
+      # The ceiling was ten while every DB-backed suite skipped, then twenty once
+      # the 57 of them actually connected. Twenty was still not enough, and the
+      # sentence that used to sit here — "anything approaching that means the
+      # suite has stopped making progress rather than merely got slower" — was
+      # disproven by the run that forced this change: it was killed at exactly
+      # 20:00 having completed 455 of 894 test files with ZERO failures. Steady
+      # progress, simply unfinished.
+      #
+      # Forty-five is sized off that measurement rather than guessed: the same
+      # rate extrapolates the whole suite (with `--coverage`, which this step
+      # keeps) to ~39 minutes, so this is ~15% headroom.
+      #
+      # Why a bigger ceiling and not shards, given pr-gate.yml shards the
+      # frontend suite four ways: `coverageThreshold` in jest.config.mjs is
+      # scoped to `./src/domains/planning/` and jest evaluates thresholds per
+      # invocation, so a sharded `--coverage` run measures a fraction of the
+      # planning suite against a floor calibrated on all of it and fails. The
+      # ways out — dropping `--coverage` here and re-deriving the ratchet from a
+      # narrower test set, or merging per-shard coverage — either weaken the one
+      # floor this repo has or add machinery. Sharding also measured MORE
+      # expensive, not less: ~50 runner-minutes across four legs each re-paying
+      # the ~1m53s setup, against ~41 for one job simply allowed to finish. It
+      # buys wall clock (~17 min vs ~44), which is worth revisiting the day this
+      # workflow runs on anything more frequent than a manual dispatch.
       #
       # What used to sit here was a `--detectOpenHandles --runInBand` step meant
       # to diagnose the hang on failure. It never once ran — the job timeout
@@ -273,7 +316,7 @@ jobs:
         run: yarn workspace @ci/tool-core test
 
       - name: Run backend API tests
-        timeout-minutes: 20
+        timeout-minutes: 45
         run: yarn workspace @ci/be-api test --coverage
 
       # @ci/cli's 200 tests across 33 files, which until now ran in NO workflow.

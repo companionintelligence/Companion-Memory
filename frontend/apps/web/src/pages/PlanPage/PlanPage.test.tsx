@@ -1147,11 +1147,11 @@ describe('PlanPage mobile tabs', () => {
       ],
     });
 
-    expect(
-      await screen.findByRole('button', { name: /more actions for write the migration/i }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /edit write the migration/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /delete write the migration/i })).not.toBeInTheDocument();
+    const layer = await screen.findByTestId('task-action-layer');
+
+    expect(within(layer).getByRole('button', { name: /edit write the migration/i })).toBeInTheDocument();
+    expect(within(layer).getByRole('button', { name: /delete write the migration/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/a long note/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /show description for write the migration/i }));

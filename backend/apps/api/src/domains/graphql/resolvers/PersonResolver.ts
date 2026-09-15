@@ -26,6 +26,7 @@ import {
   serializePersonAddress,
 } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PersonIdentifiersLoader } from '../loaders/PersonIdentifiersLoader';
 import { PersonInteractionStatsLoader } from '../loaders/PersonInteractionStatsLoader';
 import { TagLoader } from '../loaders/TagLoader';
@@ -405,6 +406,9 @@ export class PersonResolver {
    * the sources. See PersonMergeService.
    */
   @Mutation(() => MergePeoplePayload)
+  // Tombstones every source (is_active = FALSE) and drops their search rows. Takes an ARRAY of
+  // source ids, so one call at `write` could retire an unbounded number of people. One-way.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async mergePeople(
     @Context() context: RequestContext,
     @Args('input') input: MergePeopleInput,
@@ -500,6 +504,13 @@ export class PersonResolver {
 
   /** Remove a contact method / identifier from a person. */
   @Mutation(() => [PersonIdentifierType])
+  // Correct today only by naming accident. This is NOT the "scope detach" it looks like:
+  // EntityIdentifierService.removeForEntity is a bare repository.delete against
+  // ci.entity_identifiers, a table with no soft-delete column. addPersonIdentifier restores the
+  // row only while the (kind, value) tuple is unclaimed, and CommunicationParticipantLinkListener
+  // mints a stub Person that claims it on the next inbound communication — after which the only
+  // repair is mergePeople, which is itself destructive and has no unmerge.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removePersonIdentifier(
     @Context() context: RequestContext,
     @Args('input') input: RemovePersonIdentifierInput,

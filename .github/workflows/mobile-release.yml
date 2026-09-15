@@ -114,6 +114,8 @@ concurrency:
 env:
   NODE_VERSION: '22'
   VITE_DISABLE_PWA: 'true'
+  # Phone cloud-connect talks to production Portal, not the internal Hub appliance host.
+  VITE_CI_CLOUD_URL: 'https://hub.ci.computer'
   # Added to github.run_number to produce the store build number. run_number ALONE is
   # not safe as a build number: it is a per-workflow-FILE counter, it does not advance
   # when you re-run a run, it restarts at 1 if this file is ever renamed or recreated,
@@ -448,6 +450,7 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: companion-ios-ipa
           path: ${{ runner.temp }}/export/*.ipa
           if-no-files-found: error
@@ -559,24 +562,11 @@ jobs:
       - name: Android SDK
         if: steps.secrets.outputs.present == 'true'
         uses: android-actions/setup-android@v3
-      # Pinned to 35 to match compileSdkVersion in
-      # frontend/apps/android/android/variables.gradle — that file carries the
-      # full reasoning, and the pair must move together or the runner compiles
-      # against an SDK it never installed. Play has required target API 36 since
-      # 31 Aug 2026, so this pin is what the first Play upload will be rejected
-      # for. The bump is NOT just an AGP upgrade: Capacitor forbids a custom
-      # target SDK outright (7.x is pinned to 35, 8.x to 36), so it is a
-      # Capacitor 8 migration — which itself is blocked on the unmaintained
-      # @capacitor-community/background-geolocation, the plugin providing the
-      # background location this app ships. (The AGP floor is 8.10.0, not the
-      # 8.9.1 an earlier revision of this comment claimed — AGP 8.9 tops out at
-      # API 35.) Tracked as a P0 with the unblock sequence in
-      # frontend/apps/android/DELIVERY.md §1a. THIS lane is the one that ships,
-      # so when the bump lands change this line — and the identical one in
-      # mobile-build.yml — to "platforms;android-36" "build-tools;36.0.0".
+      # Keep this pair in lockstep with compileSdkVersion in
+      # frontend/apps/android/android/variables.gradle.
       - name: Install SDK components
         if: steps.secrets.outputs.present == 'true'
-        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Install mobile dependencies
         if: steps.secrets.outputs.present == 'true'
@@ -616,6 +606,7 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: companion-android-aab
           path: frontend/apps/android/android/app/build/outputs/bundle/release/*.aab
           if-no-files-found: error
@@ -667,7 +658,7 @@ jobs:
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: com.companionintelligence.app
+          packageName: com.ci.memory
           releaseFiles: frontend/apps/android/android/app/build/outputs/bundle/release/app-release.aab
           track: internal
           status: draft
@@ -677,7 +668,7 @@ jobs:
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          packageName: com.companionintelligence.app
+          packageName: com.ci.memory
           releaseFiles: frontend/apps/android/android/app/build/outputs/bundle/release/app-release.aab
           track: internal
           status: completed

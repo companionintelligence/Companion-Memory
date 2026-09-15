@@ -1,6 +1,6 @@
 
 <p align="center">
-    <img width="512" height="512" alt="companion-memory-logo" src="https://github.com/user-attachments/assets/e8f0d40b-3e84-44ad-85ee-55f677b08cb3" />
+    <img width="320" height="320" alt="Companion Memory" src="docs/images/companion-memory-mark.gif" />
 </p>
 
 
@@ -10,11 +10,9 @@
 ### [INSTALL FROM STORE](https://hub.ci.computer/store?category=companion-intelligence)
 
 
-#### COPYRIGHT COMPANION INTELLIGENCE - LIFESCOPE INC
+Companion Memory uses the [PolyForm Noncommercial License 1.0.0](LICENSE.md). For common questions, see the [License FAQ](docs/License-FAQ.md).
 
-#### DO NOT DISTRIBUTE
-
-## PRIVATE AND CONFIDENTIAL
+Required Notice: Copyright LifeScope INC, DBA Companion Intelligence (https://ci.computer)
 
 Front + Back End API + Web Monorepo
 
@@ -383,6 +381,18 @@ make dev-down
 ```
 
 To run the api/web individually instead, see their READMEs ([api](backend/apps/api/README.md), [web](frontend/apps/web/README.md)).
+
+#### libvips (required)
+
+Image previews, image dimensions and the renditions sent to the vision model are produced by the `vips` command-line tools (`libvips-tools`). The API shells out to them, so the machine running the API needs them — `make health` checks. This replaced the `sharp` npm package because sharp's prebuilt libvips has no HEVC decoder, the codec inside every iPhone HEIC.
+
+```bash
+brew install vips                                        # macOS
+sudo apt install libvips-tools                           # Debian (HEVC decoder is built into libheif)
+sudo apt install libvips-tools libheif-plugin-libde265   # Ubuntu 24.04 / Mint 22 (HEVC decoder is a separate plugin)
+```
+
+On Ubuntu 24.04 the plugin is not optional: its `libheif1` used to depend on `libheif-plugin-libde265` and the current security update (1.17.6-1ubuntu4.8) demoted that to a suggestion, so a fresh or upgraded machine opens a HEIC and then fails every tile with `heif: Unsupported feature: Unsupported codec`. `make health` decodes a HEIC fixture to catch this; the Docker image is Debian and is unaffected.
 
 ### Reaching the right database
 

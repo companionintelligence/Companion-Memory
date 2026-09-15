@@ -24,7 +24,8 @@ export interface ProviderKeys {
   readonly id: string;
   readonly providerId: string;
   readonly clientId: string;
-  readonly clientSecret: string;
+  readonly hasClientSecret: boolean;
+  readonly clientSecretHint: string | null;
   readonly userId: string;
 }
 

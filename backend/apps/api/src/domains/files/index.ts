@@ -30,6 +30,7 @@ import { FilePreviewService } from './services/FilePreviewService';
 import { FileService } from './services/FileService';
 import { MediaDimensionsService } from './services/MediaDimensionsService';
 import { SavedSearchService } from './services/SavedSearchService';
+import { VipsService } from './services/VipsService';
 
 /**
  * @internal
@@ -40,13 +41,14 @@ import { SavedSearchService } from './services/SavedSearchService';
     FileService,
     SavedSearchService,
     MediaDimensionsService,
+    VipsService,
     FilePreviewService,
     FilePreviewGenerationListener,
     MediaDimensionsBackfillListener,
     SeedDefaultSavedSearchesListener,
   ],
   controllers: [FilesController, BulkFilesController],
-  exports: [FileService, SavedSearchService, MediaDimensionsService, FilePreviewService],
+  exports: [FileService, SavedSearchService, MediaDimensionsService, VipsService, FilePreviewService],
 })
 export class FilesModule {}
 
@@ -58,6 +60,8 @@ export type { FilePreviewSweepRequestPayload } from './events';
 export { BulkFilesController, MAX_FILES_PER_BATCH } from './controllers/BulkFilesController';
 export type { BulkFileUploadResult } from './controllers/BulkFilesController';
 export { MediaDimensionsService } from './services/MediaDimensionsService';
+export { VipsDecodeError, VipsService, VipsUnavailableError } from './services/VipsService';
+export type { ImageProbe, JpegRenderOptions, RenderedJpeg } from './services/VipsService';
 export type { MediaDimensions } from './services/MediaDimensionsService';
 export { MEDIA_DIMENSIONS_QUEUE } from './listeners/MediaDimensionsBackfillListener';
 export type { File, SignedFile, SavedSearch };

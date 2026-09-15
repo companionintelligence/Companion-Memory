@@ -20,8 +20,17 @@ export class ProviderKeyType {
   @Field(() => String)
   clientId!: string;
 
-  @Field(() => String)
-  clientSecret!: string;
+  /**
+   * Whether a client secret is stored. The secret itself is write-only: it is
+   * accepted by the create/update inputs and never returned to a client, the
+   * same rule every other credential on the appliance follows.
+   */
+  @Field(() => Boolean)
+  hasClientSecret!: boolean;
+
+  /** Last four characters of the stored secret, so the settings UI can show which secret is in place. */
+  @Field(() => String, { nullable: true })
+  clientSecretHint!: string | null;
 
   @Field(() => ID)
   userId!: string;
@@ -32,6 +41,11 @@ export class ProviderKeyType {
   @Field(() => Date)
   updatedAt!: Date;
 
+  /** A hint is only offered for secrets long enough that four characters reveal nothing useful. */
+  static hintFor(secret: string | null | undefined): string | null {
+    return secret && secret.length >= 12 ? secret.slice(-4) : null;
+  }
+
   static toType(providerKey: ProviderKey): ProviderKeyType {
     return {
       __typename: ProviderKeyType.name,
@@ -39,7 +53,8 @@ export class ProviderKeyType {
       id: GlobalUID.encode('provider-key', providerKey.id),
       providerId: GlobalUID.encode('provider', providerKey.providerId),
       clientId: providerKey.clientId,
-      clientSecret: providerKey.clientSecret,
+      hasClientSecret: Boolean(providerKey.clientSecret),
+      clientSecretHint: ProviderKeyType.hintFor(providerKey.clientSecret),
       userId: GlobalUID.encode('user', providerKey.userId),
       createdAt: providerKey.createdAt,
       updatedAt: providerKey.updatedAt,

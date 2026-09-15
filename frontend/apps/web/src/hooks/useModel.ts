@@ -4,7 +4,12 @@ import { createHookContext, fetchJson } from '@ci/common';
 
 import { useSessionAuth } from './useSessionAuth';
 
-const ACTIVE_MODEL_KEY = 'activeModel';
+// The Capture modal's own manual model picker (choosing, for one photo right
+// now, which model analyses it) stays a per-browser convenience — it is a
+// distinct, interactive-only concept from the Settings → Model chat model
+// below, which is now a server-side preference so it survives a cleared
+// profile, follows the user across devices, and is visible to background
+// vision work (OllamaService.resolveVisionModel), not just this browser tab.
 const ACTIVE_VISION_MODEL_KEY = 'activeVisionModel';
 
 interface Model {
@@ -54,13 +59,9 @@ function useModel(): Value {
 
   const selectModel = useCallback(
     (model: string | null) => {
-      setSelectedModel(model);
+      const previous = selectedModel;
 
-      if (model) {
-        localStorage.setItem(ACTIVE_MODEL_KEY, model);
-      } else {
-        localStorage.removeItem(ACTIVE_MODEL_KEY);
-      }
+      setSelectedModel(model);
 
       const selected = activeModels.find((m) => m.model === model);
 
@@ -71,8 +72,20 @@ function useModel(): Value {
           localStorage.setItem(ACTIVE_VISION_MODEL_KEY, model);
         }
       }
+
+      // Fire-and-forget from the caller's point of view (ModelSelector calls
+      // this synchronously from an onValueChange handler) — revert the
+      // optimistic update on failure rather than leaving the UI showing a
+      // model the server never actually recorded.
+      void fetchJson('/api/personalization/chat-model', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatModel: model }),
+      }).catch(() => {
+        setSelectedModel(previous);
+      });
     },
-    [activeModels],
+    [activeModels, headers, selectedModel],
   );
 
   const selectVisionModel = useCallback((model: string | null) => {
@@ -85,8 +98,37 @@ function useModel(): Value {
     }
   }, []);
 
-  const toggleThinking = useCallback(() => setThinkingPreferred((current) => !current), []);
-  const toggleTools = useCallback(() => setToolsPreferred((current) => !current), []);
+  const toggleThinking = useCallback(() => {
+    setThinkingPreferred((current) => {
+      const next = !current;
+
+      void fetchJson('/api/personalization/thinking', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      }).catch(() => {
+        setThinkingPreferred(current);
+      });
+
+      return next;
+    });
+  }, [headers]);
+
+  const toggleTools = useCallback(() => {
+    setToolsPreferred((current) => {
+      const next = !current;
+
+      void fetchJson('/api/personalization/tools', {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      }).catch(() => {
+        setToolsPreferred(current);
+      });
+
+      return next;
+    });
+  }, [headers]);
 
   const fetchModels = useCallback(async () => {
     setActiveModels([]);
@@ -94,13 +136,23 @@ function useModel(): Value {
     setError(null);
 
     try {
-      const payload = await fetchJson<Model[]>('/api/llm/models', {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          ...headers,
-        },
-      });
+      const requestHeaders = { 'Content-Type': 'application/json', ...headers };
+      // In parallel: the served model list, and the three preferences that
+      // used to be `localStorage`. A preference fetch failing (a fresh
+      // profile, a transient 500) degrades to that preference's own
+      // long-standing default rather than failing the whole model list.
+      const [payload, chatModelPref, toolsPref, thinkingPref] = await Promise.all([
+        fetchJson<Model[]>('/api/llm/models', { method: 'GET', headers: requestHeaders }),
+        fetchJson<{ chatModel: string | null }>('/api/personalization/chat-model', {
+          headers: requestHeaders,
+        }).catch(() => ({ chatModel: null })),
+        fetchJson<{ enabled: boolean }>('/api/personalization/tools', { headers: requestHeaders }).catch(
+          () => ({ enabled: true }),
+        ),
+        fetchJson<{ enabled: boolean }>('/api/personalization/thinking', { headers: requestHeaders }).catch(
+          () => ({ enabled: true }),
+        ),
+      ]);
 
       // An empty or malformed list is a recoverable backend state, not a client
       // error: Ollama may be unreachable, have no models pulled, or the endpoint
@@ -111,15 +163,13 @@ function useModel(): Value {
       const data = Array.isArray(payload) ? payload : [];
 
       setActiveModels(data);
+      setToolsPreferred(toolsPref?.enabled !== false);
+      setThinkingPreferred(thinkingPref?.enabled !== false);
 
-      const persistedModel = localStorage.getItem(ACTIVE_MODEL_KEY);
+      const persistedModel = chatModelPref?.chatModel ?? null;
       const model = data.find((m) => m.model === persistedModel) ? persistedModel : (data[0]?.model ?? null);
 
       setSelectedModel(model);
-
-      if (model) {
-        localStorage.setItem(ACTIVE_MODEL_KEY, model);
-      }
 
       const visionModels = data.filter((m) => m.vision === true);
       const persistedVisionModel = localStorage.getItem(ACTIVE_VISION_MODEL_KEY);

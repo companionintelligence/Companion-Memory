@@ -13,6 +13,7 @@ import {
   PlaceService,
 } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PlaceLoader } from '../loaders/PlaceLoader';
 import { PlaceVisitStatsLoader } from '../loaders/PlaceVisitStatsLoader';
 import { TagLoader } from '../loaders/TagLoader';
@@ -141,6 +142,8 @@ export class PlaceResolver {
    * fields, and tombstones the sources. See PlaceMergeService.
    */
   @Mutation(() => MergePlacesPayload)
+  // Same tombstone-and-drop-search-rows shape as mergePeople. One-way.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async mergePlaces(
     @Context() context: RequestContext,
     @Args('input') input: MergePlacesInput,

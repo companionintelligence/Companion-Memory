@@ -46,6 +46,7 @@ import { AuthService } from './services/AuthService';
 import { ConnectCodeService } from './services/ConnectCodeService';
 import { ConnectService } from './services/ConnectService';
 import { CsrfService } from './services/CsrfService';
+import { HubForwardAuthBridgeService } from './services/HubForwardAuthBridgeService';
 import { JwtStrategy } from './services/JwtStrategy';
 import { LoginThrottleService } from './services/LoginThrottleService';
 import { OidcNativeCodeService } from './services/OidcNativeCodeService';
@@ -69,6 +70,7 @@ import { SignupCodeService } from './services/SignupCodeService';
   ],
   providers: [
     AuthService,
+    HubForwardAuthBridgeService,
     JwtStrategy,
     SignupCodeService,
     CsrfGuard,
@@ -97,3 +99,11 @@ export class AuthModule {}
 
 export { SignupCodeService };
 export { ApiKeyService };
+
+// Provenance, for the surfaces that must tell an installed app apart from the
+// owner: the tool gate (which confirms a managed app before anything
+// irreversible) and the approval controller (which refuses to take the owner's
+// answer from one). Exported from the barrel because `no-cross-domain-internals`
+// forbids reaching into `auth/types` from another domain.
+export { isManagedAppPrincipal, CONNECT_PROVENANCE } from './types';
+export type { ApiKeyProvenance, ValidatedApiKey } from './types';

@@ -28,14 +28,20 @@ function buildService(served: string[], { pinnedDemoModels = false } = {}) {
   return { service, driver };
 }
 
-function buildNativeService(served: string[], visionIds: readonly string[]) {
+function buildNativeService(
+  served: string[],
+  visionIds: readonly string[],
+  opts: { chatModel?: string | null } = {},
+) {
   const vision = new Set(visionIds);
+  const chatModelPreference = { getChatModel: jest.fn(async () => opts.chatModel ?? null) };
   const service = new OllamaService(
     { getOpenAiDriver: () => null, usesOpenAiDriver: () => false } as never,
     { getAgentFacingTools: () => [] } as never,
     makeLogger() as never,
     { isFeatureEnabled: jest.fn(async () => false) } as never,
     new ModelTierRouter(),
+    chatModelPreference as never,
   );
 
   const spies = service as unknown as {
@@ -95,19 +101,62 @@ describe('OllamaService.resolveModel uses the loaded backend model', () => {
     expect(resolved.model).toBe('Qwen3-8B');
   });
 
-  it('prefers a loaded Ollama vision model when the turn carries images', async () => {
-    const service = buildNativeService(['Qwen3-8B', 'llava:13b'], ['llava:13b']);
+  /**
+   * `resolveServedChatModel` used to scan every INSTALLED model (not just
+   * loaded ones) for the first reporting `vision`, and silently reroute an
+   * image turn onto it — regardless of what the user was actually talking
+   * to. A shared appliance with two models pulled could load-swap the GPU on
+   * every other request depending only on whether the last turn carried an
+   * image. That is gone: a vision turn runs on the SAME model resolution
+   * gives a text turn (the user's effective chat model, or PROMPT_MODEL with
+   * no override — see OllamaService.visionModelRule.test.ts for the one
+   * exception, an explicitly configured vision-capable utility model).
+   */
+  it('sends an image turn to the effective chat model, never to some other installed vision model', async () => {
+    const service = buildNativeService(['Qwen3-8B', 'llava:13b'], ['llava:13b'], { chatModel: 'Qwen3-8B' });
 
     const resolved = await service.resolveModel(ctx, {
       requestedModel: 'llava:7b',
       messages: [{ role: 'user', content: 'describe', images: ['abc'] as never }],
     });
 
+    expect(resolved.model).toBe('Qwen3-8B');
+  });
+
+  it('sends an image turn to the user’s chosen chat model even when it is not vision-capable', async () => {
+    const service = buildNativeService(['Qwen3-8B', 'llava:13b'], ['llava:13b'], { chatModel: 'Qwen3-8B' });
+
+    const resolved = await service.resolveModel(ctx, {
+      messages: [{ role: 'user', content: 'describe', images: ['abc'] as never }],
+    });
+
+    // Qwen3-8B cannot see; the caller's own isNonMultimodalModelError handling
+    // is what turns the resulting 400 into "skip the description", not a
+    // resolver-level reroute onto llava.
+    expect(resolved.model).toBe('Qwen3-8B');
+  });
+
+  /**
+   * The one case that still lets a caller name a DIFFERENT vision model than
+   * the user's chat model: the Capture modal's own model picker, a person
+   * choosing which model analyses this one photo, right now. Automatic
+   * background vision work (image descriptions, thing vision) essentially
+   * never sets `requestedModel`, so it always falls through to the rule
+   * above — this override exists for the interactive path alone.
+   */
+  it('honours an explicit, actually vision-capable requestedModel over the effective chat model', async () => {
+    const service = buildNativeService(['Qwen3-8B', 'llava:13b'], ['llava:13b'], { chatModel: 'Qwen3-8B' });
+
+    const resolved = await service.resolveModel(ctx, {
+      requestedModel: 'llava:13b',
+      messages: [{ role: 'user', content: 'describe', images: ['abc'] as never }],
+    });
+
     expect(resolved.model).toBe('llava:13b');
   });
 
-  it('does not send images to a loaded text chat model when a vision model is served', async () => {
-    const service = buildNativeService(['Qwen3-8B', 'llava:13b'], ['llava:13b']);
+  it('ignores an explicit requestedModel for a vision turn when that model cannot actually see', async () => {
+    const service = buildNativeService(['Qwen3-8B', 'llava:13b'], ['llava:13b'], { chatModel: 'llava:13b' });
 
     const resolved = await service.resolveModel(ctx, {
       requestedModel: 'Qwen3-8B',

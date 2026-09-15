@@ -773,10 +773,17 @@ export class FileService implements OnModuleInit {
    * Originals that are still missing a description but already have a PREVIEW
    * child — candidates to re-fire {@link PreviewGeneratedEvent} after the user
    * turns image description back on.
+   *
+   * Newest first, paged by keyset on the original's id: `afterParentFileId`
+   * returns the page strictly older than that id. Ids are UUIDv7, so id order
+   * is creation order, and a cursor on it is stable while the descriptions
+   * the previous page enqueued are still being written (an OFFSET would slide
+   * as rows leave the "undescribed" set).
    */
   async findUndescribedImagePreviews(
     userId: string,
     limit: number,
+    afterParentFileId?: string,
   ): Promise<Array<{ previewId: string; parentFileId: string }>> {
     const rows: Array<{ preview_id: string; parent_file_id: string }> = await this.fileRepository
       .createQueryBuilder('preview')
@@ -792,10 +799,41 @@ export class FileService implements OnModuleInit {
       .andWhere('original.variant = :originalVariant', { originalVariant: FileVariant.ORIGINAL })
       .andWhere('original.contentType LIKE :imagePrefix', { imagePrefix: 'image/%' })
       .andWhere("(original.description IS NULL OR btrim(original.description) = '')")
-      .orderBy('original.createdAt', 'DESC')
+      .andWhere(afterParentFileId ? 'original.id < :afterParentFileId' : 'TRUE', { afterParentFileId })
+      .orderBy('original.id', 'DESC')
       .limit(Math.max(1, Math.min(limit, 2000)))
       .getRawMany();
 
     return rows.map((row) => ({ previewId: row.preview_id, parentFileId: row.parent_file_id }));
+  }
+
+  /**
+   * Every user who owns at least one image {@link findUndescribedImagePreviews}
+   * would return a row for — an EXISTS check, not the rows themselves.
+   *
+   * Exists for {@link ImageDescriptionSweepCron}: cheap enough to run over
+   * every user before the far more expensive per-user check (a live Ollama
+   * round trip, via `ImageDescriptionPreferenceService.isEnabled`) that
+   * decides whether the setting is actually on for them. A user with nothing
+   * left to describe — or nothing that ever needed describing — never reaches
+   * that second check.
+   */
+  async listUserIdsWithUndescribedImages(): Promise<string[]> {
+    const rows: Array<{ user_id: string }> = await this.fileRepository
+      .createQueryBuilder('original')
+      .select('DISTINCT original.userId', 'user_id')
+      .innerJoin(
+        FileEntity,
+        'preview',
+        'preview.parentId = original.id AND preview.userId = original.userId AND preview.variant = :previewVariant',
+        { previewVariant: FileVariant.PREVIEW },
+      )
+      .where('original.variant = :originalVariant', { originalVariant: FileVariant.ORIGINAL })
+      .andWhere('original.contentType LIKE :imagePrefix', { imagePrefix: 'image/%' })
+      .andWhere("(original.description IS NULL OR btrim(original.description) = '')")
+      .andWhere('original.userId IS NOT NULL')
+      .getRawMany();
+
+    return rows.map((row) => row.user_id);
   }
 }

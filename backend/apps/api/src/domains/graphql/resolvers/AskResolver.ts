@@ -38,6 +38,7 @@ import {
 } from '@ci/domains/asks';
 import { OutboundAskService, type PeerAskRequest, type PeerLink, PeerLinkService } from '@ci/domains/peers';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { AnswerFormEnum, AskAnswerType } from '../types/AskAnswerType';
 import { AskDisclosureHistoryInput, AskDisclosureSummaryInput } from '../types/AskDisclosureInputs';
 import {
@@ -322,6 +323,8 @@ export class AskResolver {
    * never raw node content or forwardable signed media URLs.
    */
   @Mutation(() => RunAskPayload)
+  // Emits a templated answer to the asker — data leaves the box.
+  @GraphqlPrivacy({ external: true })
   async runAsk(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -688,6 +691,9 @@ export class AskResolver {
    * outcome. A declined result is indistinguishable from an unreachable peer.
    */
   @Mutation(() => SendPeerAskPayload)
+  // Leaves the appliance for another Companion. `messaging.send` is labelled destructive for this
+  // exact reason; at minimum this is not local CRUD, and advertising openWorldHint:false was wrong.
+  @GraphqlPrivacy({ external: true })
   async sendPeerAsk(
     @Context() context: RequestContext,
     @Args('input') input: SendPeerAskInput,

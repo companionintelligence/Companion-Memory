@@ -29,10 +29,18 @@ export function OidcButton({
   label,
   variant,
   redirect,
+  signupCode,
 }: {
   label: string;
   variant?: ButtonVariant;
   redirect?: string;
+  /**
+   * An invitation to an appliance that already has an owner. The backend
+   * stashes it in a cookie on the initiate hop and burns it on the callback
+   * (OidcController), so it rides the same round-trip as the sign-in itself —
+   * there is no second request in which to present it.
+   */
+  signupCode?: string;
 }) {
   // A rejected open is the difference between "signing you in" and nothing at
   // all, so it has to be visible. This was console.error only, which on the
@@ -46,6 +54,10 @@ export function OidcButton({
 
   if (redirect) {
     params.set('redirect', redirect);
+  }
+
+  if (signupCode?.trim()) {
+    params.set('signup_code', signupCode.trim());
   }
 
   // Web: same-origin path, anchor navigates normally (unchanged behavior).

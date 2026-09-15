@@ -37,6 +37,7 @@ export type { ToolCoreLogger } from './logging';
 export type { ToolHandle } from './core/ToolHandle';
 export {
   DISPATCH_TIERS,
+  TOOL_PRINCIPALS,
   canonicalizeExecutableToolName,
   intentToolName,
   type CiEntityType,
@@ -51,6 +52,7 @@ export {
   type ToolExample,
   type ToolExecutionContext,
   type ToolInvocationContext,
+  type ToolPrincipal,
   type ToolResult,
   type ToolSchema,
 } from './core/types';

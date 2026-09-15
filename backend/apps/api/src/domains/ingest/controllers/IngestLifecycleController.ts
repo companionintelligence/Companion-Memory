@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
+import { READ_CAPABILITY, RequireCapability, WRITE_CAPABILITY } from '@ci/common/decorators';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ValidationPipe } from '@ci/common/pipes';
 import {
@@ -40,7 +41,13 @@ export class IngestLifecycleController {
     private readonly ingestStatusService: IngestStatusService,
   ) {}
 
+  // `write`, not the class default: an empty-scope key skips scope enforcement
+  // entirely (apiKeyScopeEnforcement returns early only for non-api-key
+  // principals), so capability is the ONLY axis standing between a read-only
+  // key and this orchestration. Declared per route because `status` below is a
+  // genuine read and a class-level `write` would wrongly refuse it.
   @Post('finish')
+  @RequireCapability(WRITE_CAPABILITY)
   async finish(
     @Context() context: RequestContext,
     @Body(new ValidationPipe(ingestFinishSchema)) body: IngestFinishRequest,
@@ -63,6 +70,7 @@ export class IngestLifecycleController {
   }
 
   @Get('status')
+  @RequireCapability(READ_CAPABILITY)
   async status(
     @Context() context: RequestContext,
     @Query('scope') scope?: string,

@@ -11,6 +11,11 @@ export interface OnboardingProgress {
  * `ci.users.role` (20250925144200_enhance_users.sql) has existed since before any application
  * code read it — no field on this entity, no @Roles/@RequireRole guard anywhere — until
  * {@link AdminOnlyGuard} (MCP server config management) became the first consumer.
+ *
+ * It is also WRITTEN by application code now, in exactly one place:
+ * `UserService.claimApplianceIfUnowned` promotes the account that claims an unowned appliance to
+ * `'admin'`. Deliberately not exposed on `CreateUserDto`/`UpdateUserDto` — the appliance decides
+ * who its owner is from the ownership rule, rather than any caller passing a role in.
  */
 export type UserRole = 'admin' | 'user' | 'readonly' | 'api_only';
 

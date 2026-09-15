@@ -1,4 +1,5 @@
 import type { ToolCapability } from '../capability';
+import type { ToolPrincipal } from '../core/types';
 
 import { removesData } from './capabilityPolicy';
 import {
@@ -33,6 +34,11 @@ export interface ToolGateRuling extends Omit<DispatchRuling, 'reason'> {
 export interface ToolGateOptions {
   tier: DispatchTier;
   capability: ToolCapability;
+  /**
+   * WHO is calling. Defaults to `'owner'` when omitted, so every existing caller
+   * keeps today's behaviour exactly.
+   */
+  principal?: ToolPrincipal;
   /**
    * The owner's trust dial as the API's `PersonalizationService.decide`
    * answered it, or `null` when the dial was not consulted (feature flag off,
@@ -90,7 +96,7 @@ export function needsConfirmation(intent: DispatchableIntent): boolean {
  * safe reading of `skip` here is "ask".
  */
 export function resolveToolGate(intent: DispatchableIntent, options: ToolGateOptions): ToolGateRuling {
-  const { tier, capability, trust } = options;
+  const { tier, capability, trust, principal = 'owner' } = options;
 
   const dispatch = resolveDispatch(intent, { tier, capability });
 
@@ -98,11 +104,32 @@ export function resolveToolGate(intent: DispatchableIntent, options: ToolGateOpt
     return dispatch;
   }
 
-  if (trust == null || trust === 'auto') {
+  if (!needsConfirmation(intent)) {
     return dispatch;
   }
 
-  if (!needsConfirmation(intent)) {
+  // A borrowed agent is confirmed before anything irreversible, whatever the
+  // owner's dial says — and WITHOUT consulting the feature flag, which is why
+  // this sits above the trust check rather than inside it.
+  //
+  // The dial is an owner convenience: it grades how much of the appliance's own
+  // inference the owner wants to wave through. It was never a delegation policy,
+  // and defaulting to `balanced` means it answers `auto`. Letting that decide
+  // whether an installed harness may delete unattended would make the owner's
+  // convenience setting into the agent's authorisation.
+  //
+  // This is also the compensating control that makes `capabilityForApp`'s `full`
+  // safe (see ConnectService): the harness can now REACH destructive intents,
+  // and reaching them produces a card instead of running them.
+  if (principal === 'managed-app') {
+    return {
+      decision: 'queue',
+      reason: 'confirmation-required',
+      explanation: `"${intent.name}" ${removesData(intent.privacy) ? 'removes data' : 'sends data to a third-party service'} and an installed app must be confirmed before acting`,
+    };
+  }
+
+  if (trust == null || trust === 'auto') {
     return dispatch;
   }
 

@@ -27,6 +27,8 @@ function makeController() {
     {} as never, // featureService
     {} as never, // oidcNativeCodeService
     {} as never, // signupCodeService
+    {} as never, // federatedIdentityService
+    {} as never, // hubBridge
     logger as never,
   );
 
@@ -178,6 +180,37 @@ describe('OidcController.initiate (GET /authenticate/oidc)', () => {
     const url = new URL(bounceUrl);
 
     expect(url.origin).toBe('https://ci-memory.example.com');
+    expect(url.searchParams.get('client')).toBe('native');
+    expect(url.searchParams.get('origin_bounced')).toBe('1');
+  });
+
+  it('carries the invitation across the bounce, instead of clearing the cookie on the far side', () => {
+    // The bounced request re-enters initiate. Without the code in its query it
+    // takes the "no code offered" branch and CLEARS the invitation cookie — so
+    // a second person signing in from a LAN address was refused for lacking
+    // the invitation they had just presented.
+    const { controller } = makeController();
+    const res = makeRes();
+    const savedPublicBaseUrl = config.auth.oidc.publicBaseUrl;
+    config.auth.oidc.publicBaseUrl = 'https://ci-memory.example.com';
+
+    try {
+      controller.initiate(
+        'native',
+        undefined,
+        'ABCD-1234',
+        makeReq({}, { host: '192.168.1.50:8642' }),
+        res as never,
+      );
+    } finally {
+      config.auth.oidc.publicBaseUrl = savedPublicBaseUrl;
+    }
+
+    expect(res.redirect).toHaveBeenCalledTimes(1);
+    const [bounceUrl] = res.redirect.mock.calls[0] as [string];
+    const url = new URL(bounceUrl);
+
+    expect(url.searchParams.get('signup_code')).toBe('ABCD-1234');
     expect(url.searchParams.get('client')).toBe('native');
     expect(url.searchParams.get('origin_bounced')).toBe('1');
   });

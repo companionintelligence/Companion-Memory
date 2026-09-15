@@ -22,7 +22,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.7.2'
+        classpath 'com.android.tools.build:gradle:8.10.0'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$speechKotlinVersion"
     }
 }
@@ -32,7 +32,7 @@ apply plugin: 'org.jetbrains.kotlin.android'
 
 android {
     namespace "com.companionintelligence.speech"
-    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 35
+    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
     defaultConfig {
         // Must not exceed the app's own minSdk (23) — the manifest merger rejects a library
         // requiring a higher floor than its consumer. The API-31/33/34 speech APIs this
@@ -40,7 +40,7 @@ android {
         // call site (see SpeechRecognitionController's tier selection), with a documented
         // best-effort path for API 23–30.
         minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 23
-        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 35
+        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"

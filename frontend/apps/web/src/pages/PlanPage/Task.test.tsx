@@ -1,4 +1,4 @@
-import { act, fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
@@ -214,6 +214,14 @@ describe('Task actions', () => {
     expect(onDelete).toHaveBeenCalledWith('dGFzazoxMTE=');
   });
 
+  it('keeps chat, edit and delete on the title row on a wide screen', () => {
+    renderTask({}, { onEdit: vi.fn() });
+
+    expect(screen.queryByTestId('task-action-layer')).not.toBeInTheDocument();
+    expect(screen.getByTestId('task-overflow-actions')).toBeInTheDocument();
+    expect(screen.getByTestId('plan-task')).toHaveClass('p-3');
+  });
+
   it('reschedules to a day picked from the calendar input, not just the chips', () => {
     const onReschedule = vi.fn();
 
@@ -316,17 +324,16 @@ describe('Task on a phone', () => {
     vi.useRealTimers();
   });
 
-  it('edits from the overflow menu', () => {
+  it('edits from the action layer next to Schedule', () => {
     const onEdit = vi.fn();
 
     setViewport(true);
     renderTask({ description: 'First draft', estimatedMinutes: 30 }, { onEdit });
 
-    // Radix's DropdownMenuTrigger opens on pointerdown, not click.
-    fireEvent.pointerDown(screen.getByRole('button', { name: /more actions for write the migration/i }), {
-      button: 0,
-    });
-    fireEvent.click(screen.getByRole('menuitem', { name: /^edit$/i }));
+    const layer = screen.getByTestId('task-action-layer');
+
+    expect(within(layer).getByRole('button', { name: /^schedule$/i })).toBeInTheDocument();
+    fireEvent.click(within(layer).getByRole('button', { name: /edit write the migration/i }));
 
     expect(onEdit).toHaveBeenCalledWith({
       id: 'dGFzazoxMTE=',
@@ -359,22 +366,37 @@ describe('Task on a phone', () => {
     expect(screen.getByRole('button', { name: /^write the migration$/i })).toHaveClass('relative');
   });
 
-  it('deletes from the overflow menu', () => {
+  it('deletes from the action layer next to Schedule', () => {
     const onDelete = vi.fn();
 
     setViewport(true);
     renderTask({}, { onDelete });
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: /more actions for write the migration/i }), {
-      button: 0,
-    });
-    fireEvent.click(screen.getByRole('menuitem', { name: /^delete$/i }));
+    fireEvent.click(
+      within(screen.getByTestId('task-action-layer')).getByRole('button', {
+        name: /delete write the migration/i,
+      }),
+    );
 
     expect(onDelete).toHaveBeenCalledWith('dGFzazoxMTE=');
   });
 
   // The chevron is the ONLY way to read a description on a phone and used to be
   // shrunk to 32px next to a much larger title button that opens the edit modal.
+  it('tightens the card and sits the overflow next to Schedule', () => {
+    setViewport(true);
+    renderTask({}, { onEdit: vi.fn() });
+
+    const card = screen.getByTestId('plan-task');
+    const layer = screen.getByTestId('task-action-layer');
+
+    expect(card).toHaveClass('p-2');
+    expect(card).not.toHaveClass('p-3');
+    expect(within(layer).getByTestId('task-overflow-actions')).toBeInTheDocument();
+    expect(within(layer).getByRole('button', { name: /^schedule$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /more actions/i })).not.toBeInTheDocument();
+  });
+
   it('keeps the description chevron at the full icon-button size', () => {
     setViewport(true);
     renderTask({ description: 'First draft' });

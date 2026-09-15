@@ -21,6 +21,7 @@ import { BrowserActivityInsightPreferenceModule } from './browser-activity-insig
 import { LlmEndpointController } from './controllers/LlmEndpointController';
 import { OllamaController } from './controllers/OllamaController';
 import { LlmCoreModule } from './core.module';
+import { ImageDescriptionSweepCron } from './cron/ImageDescriptionSweepCron';
 import { ImageDescriptionPreferenceModule } from './image-description-preference.module';
 import { BrowserActivityInsightListener } from './listeners/BrowserActivityInsightListener';
 import { ChatGenerateListener } from './listeners/ChatGenerateListener';
@@ -30,6 +31,8 @@ import { ImageDescriptionListener } from './listeners/ImageDescriptionListener';
 import { ThingVisionListener } from './listeners/ThingVisionListener';
 import { ChatGenerationBroker } from './services/ChatGenerationBroker';
 import { ChatTurnService } from './services/ChatTurnService';
+import { InteractiveChatYieldGate } from './services/InteractiveChatYieldGate';
+import { VisionRenditionService } from './services/VisionRenditionService';
 
 /**
  * @internal
@@ -59,7 +62,10 @@ import { ChatTurnService } from './services/ChatTurnService';
     ChatGenerateListener,
     CvDetectionsListener,
     ImageDescriptionListener,
+    VisionRenditionService,
     ImageDescriptionBackfillListener,
+    ImageDescriptionSweepCron,
+    InteractiveChatYieldGate,
     ThingVisionListener,
   ],
   controllers: [OllamaController, LlmEndpointController],
@@ -70,7 +76,13 @@ export class LLMModule {}
 export { LlmCoreModule } from './core.module';
 export { OllamaService } from './services/OllamaService';
 export { PROMPT_MODEL, UTILITY_MODEL, type ChatRequestContext } from './services/OllamaService';
-export { LLM_QUEUE, LLM_QUEUE_OPTIONS } from './constants';
+export {
+  INTERACTIVE_CHAT_YIELD_GATE,
+  LLM_BACKGROUND_QUEUE,
+  LLM_BACKGROUND_QUEUE_OPTIONS,
+  LLM_QUEUE,
+  LLM_QUEUE_OPTIONS,
+} from './constants';
 export {
   ANSWER_SUPPORT_LEVELS,
   type AnswerSupport,

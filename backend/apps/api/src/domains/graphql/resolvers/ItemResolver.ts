@@ -22,6 +22,7 @@ import {
   adoptIngestIdentity,
 } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { ItemAcquisitionLoader } from '../loaders/ItemAcquisitionLoader';
 import { ItemFileLoader } from '../loaders/ItemFileLoader';
 import { ItemIdentifierLoader } from '../loaders/ItemIdentifierLoader';
@@ -692,6 +693,9 @@ export class ItemResolver {
    * tombstones the sources. See ObjectMergeService.
    */
   @Mutation(() => MergeItemsPayload)
+  // ObjectMergeService tombstones each source and deletes the sources' search rows. One-way: the
+  // schema has no unmerge.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async mergeItems(
     @Context() context: RequestContext,
     @Args('input') input: MergeItemsInput,
@@ -805,6 +809,9 @@ export class ItemResolver {
   }
 
   @Mutation(() => [ObjectIdentifierType])
+  // Same hard delete as removePersonIdentifier, via ObjectIdentifierService.removeForSubject.
+  // Declared so the two siblings cannot drift apart on a rename.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removeItemIdentifier(
     @Context() context: RequestContext,
     @Args('input') input: RemoveItemIdentifierInput,
