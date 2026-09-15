@@ -71,10 +71,6 @@
   --activity-6: #008300;
   --activity-7: #4a3aa7;
   --activity-none: oklch(0.554 0.046 257.526);
-
-  /* Button gradient — lighten the right stop (was #064741 / hover #022c2b). */
-  --ci-button-end: #0a6358;
-  --gradient-button: linear-gradient(135deg, var(--ci-button-start), var(--ci-button-end));
 }
 
 .dark {
@@ -92,9 +88,33 @@
   --activity-6: #008300;
   --activity-7: #9085e9;
   --activity-none: oklch(0.676 0.019 253.397);
+}
 
-  --ci-button-end: #0a6358;
-  --gradient-button: linear-gradient(135deg, var(--ci-button-start), var(--ci-button-end));
+/*
+ * Primary button gradient — a Server override of the canon surface.
+ *
+ * Canon's --gradient-button ends on --ci-button-end (#064741), which reads
+ * near-black next to the mist surfaces, so the right stop is lifted to the
+ * phthalo primary; canon ships no hover gradient at all. Both are local, so
+ * they carry the --server-* prefix: the --ci-* namespace is reserved for what
+ * @companionintelligence/tokens ships, and redefining a canon token (as this
+ * block once did with --ci-button-end) is a fork the canon lint reports
+ * (CI-Common UI-STYLE-GUIDE §11). Candidates to upstream into tokens.json.
+ *
+ * One rule for both modes: canon declares --ci-button-start in `.dark` too, so
+ * a scoped `.dark` subtree would otherwise resolve the gradient against the
+ * inherited light-mode value.
+ */
+:root,
+.dark {
+  --server-button-end: var(--phthalo);
+  --server-button-end-hover: #08665c;
+  --gradient-button: linear-gradient(135deg, var(--ci-button-start), var(--server-button-end));
+  --server-gradient-button-hover: linear-gradient(
+    135deg,
+    var(--phthalo-hover),
+    var(--server-button-end-hover)
+  );
 }
 
 @supports (color: color-mix(in lab, red, red)) {
@@ -194,7 +214,7 @@ html.ci-native #root {
 }
 
 .ci-primary-surface:hover {
-  background-image: linear-gradient(135deg, var(--phthalo-hover), #08665c);
+  background-image: var(--server-gradient-button-hover);
   color: var(--ci-button-foreground);
   box-shadow: var(--ci-button-shadow-hover);
 }
