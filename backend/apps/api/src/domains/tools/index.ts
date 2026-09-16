@@ -35,6 +35,7 @@ import { MemoryModule } from '@ci/domains/memory';
 import { NotesModule } from '@ci/domains/notes';
 import { ParsingModule } from '@ci/domains/parsing';
 import { PersonalizationService } from '@ci/domains/personalization/services/PersonalizationService';
+import { TaskModule } from '@ci/domains/planning/task.module';
 import { PredictionsModule } from '@ci/domains/predictions';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { SummariesModule } from '@ci/domains/summaries';
@@ -79,6 +80,8 @@ import { MessagingSendTool } from './tools/MessagingSendTool';
 import { PeopleFindTool } from './tools/PeopleFindTool';
 import { PlacesFindTool } from './tools/PlacesFindTool';
 import { PlacesNextTool } from './tools/PlacesNextTool';
+import { PlanningCreateTaskTool } from './tools/PlanningCreateTaskTool';
+import { PlanningFindTasksTool } from './tools/PlanningFindTasksTool';
 import { ReadKnowledgeTool } from './tools/ReadKnowledgeTool';
 import { SuggestionsFeedbackTool } from './tools/SuggestionsFeedbackTool';
 import { SuggestionsListTool } from './tools/SuggestionsListTool';
@@ -122,6 +125,11 @@ const nativeToolInstances = [
   MessagingSendTool,
   MessagingListChatsTool,
   MessagingListMessagesTool,
+  // The planning domain's intents — thin wrappers over TaskService
+  // (domains/planning), same "declared here, implemented in its own domain"
+  // pattern as import/messaging above.
+  PlanningFindTasksTool,
+  PlanningCreateTaskTool,
 ];
 
 /**
@@ -148,6 +156,15 @@ const nativeToolInstances = [
     // For MessagingSendTool/MessagingListChatsTool/MessagingListMessagesTool's
     // BlueBubblesClientService dependency.
     BlueBubblesModule,
+    // For PlanningFindTasksTool/PlanningCreateTaskTool's TaskService dependency.
+    // Imports TaskModule (domains/planning/task.module.ts) rather than the full
+    // PlanningModule (`@ci/domains/planning`): that module imports LlmCoreModule
+    // (for TodoScanService et al.), which imports ToolsModule — so importing it
+    // HERE would close tools → planning → llm → tools. TaskModule depends only
+    // on EventsModule/MemoryModule, both already imported above, so it breaks
+    // the cycle the same way PersonalizationService is provided directly below
+    // instead of through PersonalizationModule.
+    TaskModule,
     // ci.tool_invocations — the bounded invocation ledger the tool.invoked listener writes —
     // and ci.pending_actions, this domain's FIRST database access before either table existed.
     // See PendingActionEntity for why the latter has to be durable.

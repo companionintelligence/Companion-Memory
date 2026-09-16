@@ -27,6 +27,23 @@ describe('ToolsRegistrationService', () => {
     expect(registerProvider).toHaveBeenCalledWith(provider);
   });
 
+  it('passes domain validation for the planning domain (planning.findTasks/createTask)', async () => {
+    const registerProvider = jest.fn().mockResolvedValue(undefined);
+    const registry = {
+      registerProvider,
+      getAvailableTools: () => [
+        schema('planning.findTasks', 'planning'),
+        schema('planning.createTask', 'planning', {
+          privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
+        }),
+      ],
+    } as any;
+
+    const service = new ToolsRegistrationService(registry, provider, makeLogger());
+
+    await expect(service.onModuleInit()).resolves.toBeUndefined();
+  });
+
   it('fails fast when a registered tool declares an unknown domain', async () => {
     const registry = {
       registerProvider: jest.fn().mockResolvedValue(undefined),
