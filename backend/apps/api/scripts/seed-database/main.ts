@@ -6,6 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import { verifyDatabaseSchema } from '@ci/common/persistence';
 import config from '@ci/configuration';
 import { FileService } from '@ci/domains/files';
+import { PythonFunctionCrons } from '@ci/domains/python-functions/cron/PythonFunctionCrons';
 
 import { createAdminTestingModule } from '../support/admin-testing-module';
 
@@ -68,6 +69,27 @@ const logger = new LoggerService();
     // activity rollup source).
     .overrideProvider(FileService)
     .useValue({ aggregateHourlyActivity: async () => [] })
+    // Same class of problem, different hook. PythonFunctionCrons'
+    // onApplicationBootstrap arms a 30-SECOND setTimeout that fans out an
+    // `ensure_bootstrap` job per onboarded user, and the dispatch listener
+    // POSTs each one to services.hbpe.host — a sidecar no admin script runs.
+    //
+    // The cron guards its own promise, but under LocalEventService the
+    // listener executes INLINE and @nestjs/event-emitter floats that promise,
+    // so the `fetch failed` surfaces as an unhandled rejection and kills the
+    // script. Not a hypothetical: it is timing-dependent, and it only started
+    // firing once the seed got slow enough to still be running at T+30s —
+    // which is to say, once CI grew a real Ollama and the seed began
+    // generating embeddings instead of dying on the first person.
+    //
+    // Overriding the provider (rather than stubbing the module) is deliberate:
+    // PythonFunctionCrons is a leaf — nothing injects it and
+    // PythonFunctionsModule does not export it — so this removes the bootstrap
+    // hook without touching a token anything else resolves. See this file's
+    // FileService note above and the "Why a stub is not `class {}`" section in
+    // scripts/support/admin-testing-module.ts for why that distinction matters.
+    .overrideProvider(PythonFunctionCrons)
+    .useValue({})
     .compile();
 
   await module.init();

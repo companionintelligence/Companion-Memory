@@ -128,12 +128,21 @@ jobs:
       #
       # `hbpe-service` is deliberately NOT started, even though
       # docs/qa/ci-gate-proposal.md §3.3 names it. Nothing in tests/e2e/ calls
-      # the sidecar, and the seed does not either — scripts/seed-database/
+      # the sidecar, and no seeder does either — scripts/seed-database/
       # seed-hbpe.ts writes hbpe.* rows over the same DataSource as every other
-      # seeder, and main.ts stubs FileService out of the seed's module graph
-      # entirely. Starting it would mean building backend/apps/hbpe/Dockerfile
+      # seeder. Starting it would mean building backend/apps/hbpe/Dockerfile
       # (a cmake llama-cpp-python compile) on the runner for a service no
       # assertion touches. Add it here the day a spec needs it.
+      #
+      # One thing DID reach for it, and this comment used to deny it:
+      # PythonFunctionCrons.onApplicationBootstrap arms a 30-second timer that
+      # fans out `ensure_bootstrap` to services.hbpe.host, and under
+      # LocalEventService the resulting `fetch failed` became an unhandled
+      # rejection that killed the seed. It went unseen because the seed used to
+      # die on its first person, well before T+30s; a real Ollama made seeding
+      # slow enough to reach the timer. seed-database/main.ts now overrides
+      # that cron provider, so the claim above is true again rather than merely
+      # asserted.
       - name: Start Postgres, object store (+ role/extension bootstrap)
         run: |
           docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local \
