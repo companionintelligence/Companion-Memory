@@ -13,7 +13,12 @@ import { expect, test } from './fixtures/authenticated';
 // on rows that were never seeded would make this spec a seed test rather than a
 // UI test.
 
-const SEARCH_PLACEHOLDER = 'Search things by name, brand, model or category...';
+// The per-page search inputs are gone. `/memory/{people,places,things,content,
+// tags}` are `isLiveSearchPath` pages: the header's GlobalSearchBox edits their
+// `?search=` in place, so they render no input of their own (PeoplePage.tsx's
+// own comment says exactly that, and PeoplePage.test.tsx asserts the old
+// placeholder is absent). These specs kept waiting on the removed input.
+const SEARCH_PLACEHOLDER = 'Search memory…';
 
 const CARDS = '[class*="cursor-pointer"]';
 
@@ -113,8 +118,16 @@ test('a code can be claimed on a thing and shows up in its list', async ({ page 
   await expect(page.getByText(serial)).toBeVisible({ timeout: 15_000 });
 
   // And it can be taken off again, leaving the thing as it was found.
+  // Removal is CONFIRMED now (ObjectIdentifierList's AlertDialog) — the row's
+  // button only opens the dialog, and `Remove code` is the action that commits.
   await page.getByRole('button', { name: `Remove ${serial}` }).click();
-  await expect(page.getByText(serial)).toBeHidden({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'Remove code' }).click();
+
+  // `exact` matters: while the dialog is up, the serial appears twice — once in
+  // the code row and once inside the confirmation copy ("\"<serial>\" will no
+  // longer identify this thing…"), and a substring match resolves to both and
+  // fails strict mode rather than waiting.
+  await expect(page.getByText(serial, { exact: true })).toBeHidden({ timeout: 15_000 });
 });
 
 test('a duplicate group can be merged from the review card', async ({ page }) => {

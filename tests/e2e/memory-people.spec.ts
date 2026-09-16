@@ -14,12 +14,13 @@ import { expect, test } from './fixtures/authenticated';
 test('people list loads with sane, named results', async ({ page }) => {
   await page.goto('/memory/people');
 
-  // Search input is the clearest "the page finished loading" signal.
-  const search = page.getByPlaceholder('Search people and communications...');
-  await expect(search).toBeVisible();
-
-  // "N people" total count, from PeoplePage's header.
-  await expect(page.getByText(/\d+ people/)).toBeVisible();
+  // The page's own "N people" count is the "finished loading" signal. It used
+  // to be the search input, but PeoplePage has no input of its own any more —
+  // the header's GlobalSearchBox drives this page through `?search=` (see
+  // isLiveSearchPath), and PeoplePage.test.tsx asserts the old placeholder is
+  // gone. The count is a better signal anyway: it only renders once the query
+  // has resolved, whereas the input rendered before the data did.
+  await expect(page.getByText(/\d+ people/)).toBeVisible({ timeout: 15_000 });
 
   const rows = page.locator('button', { hasText: /events/ });
   await expect(rows.first()).toBeVisible({ timeout: 15_000 });

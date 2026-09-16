@@ -81,9 +81,15 @@ test('imports a vCard export end-to-end and the contacts land in Memory', async 
   // Memory People view, by name — proof the import did not just report
   // success but actually persisted to ci.* and is queryable.
   await page.goto('/memory/people');
-  await page.getByPlaceholder('Search people and communications...').fill('John Doe');
+
+  // Driven from the HEADER box, not a per-page input: /memory/people is an
+  // `isLiveSearchPath` page, so GlobalSearchBox edits its `?search=` in place
+  // and the page renders no input of its own.
+  const search = page.getByPlaceholder('Search memory…');
+
+  await search.fill('John Doe');
   await expect(page.getByText('John Doe', { exact: true })).toBeVisible({ timeout: 15_000 });
 
-  await page.getByPlaceholder('Search people and communications...').fill('Jane Smith');
+  await search.fill('Jane Smith');
   await expect(page.getByText('Jane Smith', { exact: true })).toBeVisible({ timeout: 15_000 });
 });
