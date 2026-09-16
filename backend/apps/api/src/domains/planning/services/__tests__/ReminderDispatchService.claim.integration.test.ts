@@ -195,7 +195,9 @@ describeWithDb('claimDueReminders (integration)', () => {
       );
       const now = new Date();
 
-      const results = await Promise.all(Array.from({ length: 5 }, () => claimDueReminders(dataSource, userId, now)));
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () => claimDueReminders(dataSource, userId, now)),
+      );
       const claimedIds = results.flat().map((row) => row.id);
 
       // Every reminder claimed exactly once — no duplicates, none missed.
@@ -270,7 +272,12 @@ describeWithDb('claimDueReminders (integration)', () => {
     it('does not claim a reminder on a skipped planned block', async () => {
       const task = await taskService.create(context, { title: 'Block-linked task' });
       const start = new Date(Date.now() + 3_600_000);
-      const outcome = await plannedBlocks.scheduleTaskAt(context, task!.id, start, new Date(start.getTime() + 1_800_000));
+      const outcome = await plannedBlocks.scheduleTaskAt(
+        context,
+        task!.id,
+        start,
+        new Date(start.getTime() + 1_800_000),
+      );
 
       if (outcome.status !== 'placed') {
         throw new Error(`expected a placed block, got ${outcome.status}`);
@@ -289,7 +296,12 @@ describeWithDb('claimDueReminders (integration)', () => {
     it('claims a reminder on a still-planned block', async () => {
       const task = await taskService.create(context, { title: 'Block-linked task, still live' });
       const start = new Date(Date.now() + 3_600_000);
-      const outcome = await plannedBlocks.scheduleTaskAt(context, task!.id, start, new Date(start.getTime() + 1_800_000));
+      const outcome = await plannedBlocks.scheduleTaskAt(
+        context,
+        task!.id,
+        start,
+        new Date(start.getTime() + 1_800_000),
+      );
 
       if (outcome.status !== 'placed') {
         throw new Error(`expected a placed block, got ${outcome.status}`);
@@ -313,7 +325,12 @@ describeWithDb('claimDueReminders (integration)', () => {
     it('does not claim a block-targeted reminder whose LINKED TASK is terminal, even though the block itself is still planned', async () => {
       const task = await taskService.create(context, { title: 'Task completed independently of its block' });
       const start = new Date(Date.now() + 3_600_000);
-      const outcome = await plannedBlocks.scheduleTaskAt(context, task!.id, start, new Date(start.getTime() + 1_800_000));
+      const outcome = await plannedBlocks.scheduleTaskAt(
+        context,
+        task!.id,
+        start,
+        new Date(start.getTime() + 1_800_000),
+      );
 
       if (outcome.status !== 'placed') {
         throw new Error(`expected a placed block, got ${outcome.status}`);

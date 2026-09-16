@@ -141,7 +141,9 @@ describe('WebPushService', () => {
 
   it('maps any other failure (network error, 5xx, malformed payload) to "fail" without throwing', async () => {
     config.push.vapid = { publicKey: 'pub', privateKey: 'priv', subject: 'mailto:a@b.test' };
-    sendNotification.mockRejectedValueOnce(Object.assign(new Error('Service unavailable'), { statusCode: 503 }));
+    sendNotification.mockRejectedValueOnce(
+      Object.assign(new Error('Service unavailable'), { statusCode: 503 }),
+    );
 
     const service = new WebPushService(makeLogger());
 

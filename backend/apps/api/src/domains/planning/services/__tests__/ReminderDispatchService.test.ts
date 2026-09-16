@@ -41,7 +41,9 @@ function makeHarness(): Harness {
   const taskService = { findById: jest.fn(async () => ({ title: 'Call the dentist' })) };
   const calendarEventService = { findById: jest.fn(async () => ({ title: 'Standup' })) };
   const pushSubscriptions = {
-    listForUser: jest.fn(async () => [{ id: 'sub-1', endpoint: 'https://push.example/1', p256dh: 'p', auth: 'a' }]),
+    listForUser: jest.fn(async () => [
+      { id: 'sub-1', endpoint: 'https://push.example/1', p256dh: 'p', auth: 'a' },
+    ]),
     remove: jest.fn(async () => undefined),
   };
   const webPush = { sendPush: jest.fn(async (): Promise<SendResult> => 'ok') };
@@ -129,8 +131,9 @@ describe('ReminderDispatchService', () => {
       { id: 'dead-sub', endpoint: 'https://push.example/dead', p256dh: 'p', auth: 'a' },
       { id: 'live-sub', endpoint: 'https://push.example/live', p256dh: 'p', auth: 'a' },
     ]);
-    webPush.sendPush.mockImplementation(async (sub: { endpoint: string }): Promise<SendResult> =>
-      sub.endpoint.endsWith('/dead') ? 'gone' : 'ok',
+    webPush.sendPush.mockImplementation(
+      async (sub: { endpoint: string }): Promise<SendResult> =>
+        sub.endpoint.endsWith('/dead') ? 'gone' : 'ok',
     );
     dataSource.query.mockResolvedValueOnce([
       [{ id: 'rem-4', taskId: 'task-1', blockId: null, source: 'manual', fireAt: new Date() }],

@@ -162,7 +162,10 @@ export class ReminderDispatchService {
     }
   }
 
-  private async contentFor(context: UserServiceContext, reminder: ClaimedReminder): Promise<ReminderPushPayload> {
+  private async contentFor(
+    context: UserServiceContext,
+    reminder: ClaimedReminder,
+  ): Promise<ReminderPushPayload> {
     const tag = reminderPushTag(reminder.id);
 
     if (reminder.taskId) {

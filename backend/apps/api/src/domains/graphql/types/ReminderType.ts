@@ -23,7 +23,8 @@ export enum ReminderSourceEnum {
 
 registerEnumType(ReminderSourceEnum, {
   name: 'ReminderSource',
-  description: "'auto' is reserved for a future due-date derivation engine; today every reminder is 'manual'.",
+  description:
+    "'auto' is reserved for a future due-date derivation engine; today every reminder is 'manual'.",
 });
 
 @ObjectType({ implements: () => [Node] })

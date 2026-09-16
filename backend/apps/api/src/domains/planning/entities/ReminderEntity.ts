@@ -1,6 +1,11 @@
 import { Entity, PrimaryColumn, Column, CreateDateColumn, Index } from 'typeorm';
 
-import { REMINDER_STATUSES, REMINDER_SOURCES, type ReminderStatus, type ReminderSource } from '../reminderStatus';
+import {
+  REMINDER_STATUSES,
+  REMINDER_SOURCES,
+  type ReminderStatus,
+  type ReminderSource,
+} from '../reminderStatus';
 
 export { REMINDER_STATUSES, REMINDER_SOURCES };
 export type { ReminderStatus, ReminderSource };
