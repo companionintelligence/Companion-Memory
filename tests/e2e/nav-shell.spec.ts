@@ -46,14 +46,39 @@ const DEFAULT_ROWS = [
  * DOM but never actionable, which reads as a hang rather than a miss.
  */
 async function openRail(page: Page) {
-  await page.getByRole('button', { name: 'Open menu' }).click();
-
   const drawer = page.locator('#power-rail');
-  await expect(drawer).toHaveAttribute('data-state', 'expanded');
 
-  // The rail also collapses on pointer-out (`usePowerRail`'s `setHovered`), so
-  // park the pointer on it before doing anything slow. Without this the drawer
-  // closes underneath the test and its children read as "element(s) not found".
+  // WAIT FOR THE SHELL TO MOUNT BEFORE CLICKING ANYTHING. This is the whole
+  // reason this helper used to fail. Straight after `goto` the rail and the
+  // toggle are not in the DOM at all: a probe against a real stack read
+  // `railCount: 0, toggles: [], stored: null` at the instant the old first
+  // line ran. Playwright's `click()` auto-waits for the button to APPEAR, so
+  // it did click — but it landed in the window between React putting the
+  // element in the DOM and attaching its handler, so `toggle()` never ran and
+  // `ci-power-rail-expanded` was never written. The rail then sat at
+  // `data-state="collapsed"` forever and the assertion below read as "the rail
+  // does not open", which is not true: seeding that key and reloading in the
+  // same probe gave `data-state="expanded"`, width 238, `aria-expanded="true"`.
+  await expect(drawer).toBeVisible();
+
+  const toggle = page.getByRole('button', { name: 'Open menu' });
+  await expect(toggle).toBeVisible();
+
+  // Click only while it is still collapsed, and retry the pair. A bare click
+  // races the handler as described above; a bare retry would toggle the rail
+  // shut again on the run where the first click DID land. This asserts the
+  // effect rather than the click, so a genuinely broken toggle still fails
+  // here rather than being papered over.
+  await expect(async () => {
+    if ((await drawer.getAttribute('data-state')) !== 'expanded') {
+      await toggle.click();
+    }
+
+    expect(await drawer.getAttribute('data-state')).toBe('expanded');
+  }).toPass({ timeout: 15_000 });
+
+  // Park the pointer on the rail before doing anything slow — it is a drawer
+  // that floats over the content, and the tests below walk its rows.
   await drawer.hover();
 
   // It slides in over 200ms; clicking mid-flight fails with "element is not
@@ -237,7 +262,16 @@ test.describe('application shell', () => {
   test('a retired route redirects instead of 404ing', async ({ page }) => {
     // /search was retired when search moved into the header (App.tsx keeps the
     // redirect deliberately, for old bookmarks).
+    //
+    // It lands on `/memory`, NOT `/memory/events`. App.tsx draws that
+    // distinction right below the redirect: "`/memory` is the unfiltered
+    // explorer (all kinds). `/memory/events` is the same page with the Events
+    // submenu's type filter." This asserted the filtered one, so it failed
+    // against a redirect that has been working the whole time.
+    //
+    // The `(?|$)` tail is load-bearing: a bare /\/memory/ would also match
+    // `/memory/events`, putting the wrong answer back within reach.
     await page.goto('/search');
-    await expect(page).toHaveURL(/\/memory\/events/);
+    await expect(page).toHaveURL(/\/memory(\?|$)/);
   });
 });

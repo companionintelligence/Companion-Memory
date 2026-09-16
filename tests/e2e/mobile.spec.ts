@@ -19,8 +19,13 @@ test('memory list view renders on mobile', async ({ page }) => {
 
   // MobileMemoryPage uses a Radix Tabs list (role="tab"), not the desktop
   // header's aria-labelled view buttons — "List view" is a desktop-only label.
+  // Same race as memory-search-filter-detail's row wait: assert the tablist
+  // exists before naming a tab inside it, so a slow first paint reads as
+  // "waiting for the shell" rather than "there is no List tab".
+  await expect(page.getByRole('tablist')).toBeVisible({ timeout: 15_000 });
+
   const listTab = page.getByRole('tab', { name: 'List' });
-  await expect(listTab).toBeVisible();
+  await expect(listTab).toBeVisible({ timeout: 15_000 });
   await expect(listTab).toHaveAttribute('aria-selected', 'true');
   await page.screenshot({ path: 'test-results/screenshots/memory-list-mobile.png', fullPage: true });
 });

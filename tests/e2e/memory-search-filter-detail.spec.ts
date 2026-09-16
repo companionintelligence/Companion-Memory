@@ -47,8 +47,17 @@ test('an entity-type filter is reflected in the URL', async ({ page }) => {
 test('opens the entity detail drawer from a result tile and can close it', async ({ page }) => {
   await page.goto('/memory/events');
 
+  // Wait for the results CONTAINER before the first row. ListView renders the
+  // scroll container as soon as the page mounts but its rows only after the
+  // explorer query resolves, so asserting straight on a row races the query
+  // rather than the render. Under the full suite (four workers against one
+  // API) that race is lost often enough to show up as a flake — this exact
+  // test is the `1 flaky` in CI, and it fails in a loaded local full run while
+  // passing every time in isolation.
+  await expect(page.locator('[data-list-scroll]')).toBeVisible({ timeout: 15_000 });
+
   const firstRow = page.locator('[data-list-scroll] [role="button"]').first();
-  await expect(firstRow).toBeVisible();
+  await expect(firstRow).toBeVisible({ timeout: 15_000 });
   // EntityRow's title div is tagged `entity-row-title` specifically so this
   // can read the title alone — the row's plain textContent runs the title
   // and subtitle divs together with no separator (e.g. "Pizza NightHomemade
