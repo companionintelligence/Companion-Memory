@@ -952,6 +952,22 @@ type CreateRelationshipPayload {
   success: Boolean!
 }
 
+input CreateReminderInput {
+  """A planned block (`ci.events` id). See `taskId`."""
+  blockId: ID
+
+  """The instant this reminder fires. Must be in the future."""
+  fireAt: DateTime!
+
+  """Exactly one of `taskId`/`blockId` must be set."""
+  taskId: ID
+}
+
+type CreateReminderPayload {
+  reminder: ReminderType
+  success: Boolean!
+}
+
 input CreateSavedSearchInput {
   description: String
   entityTypes: [String!]
@@ -1961,6 +1977,9 @@ type Mutation {
   bulkIngestGraph(input: BulkGraphInput!): BulkGraphPayload!
   bulkIngestItemRelationships(input: [ItemRelationshipInput!]!): BulkItemRelationshipResult!
 
+  """Soft-cancel a reminder. The row survives."""
+  cancelReminder(id: ID!): ReminderType
+
   """
   Mark a task done. Idempotent — the original completion instant is preserved.
   """
@@ -2001,6 +2020,7 @@ type Mutation {
   createQuestion(input: CreateQuestionInput!): QuestionType!
   createQuestions(input: [CreateQuestionInput!]!): [QuestionType!]!
   createRelationship(input: CreateRelationshipInput!): CreateRelationshipPayload!
+  createReminder(input: CreateReminderInput!): CreateReminderPayload!
   createSavedSearch(input: CreateSavedSearchInput!): CreateSavedSearchPayload!
   createTask(input: CreateTaskInput!): CreateTaskPayload!
   createThings(input: [CreateThingInput!]!): [ItemType!]!
@@ -2155,6 +2175,9 @@ type Mutation {
   """Defer a candidate until a future instant"""
   snoozeCandidate(id: ID!, until: DateTime!): ScheduleCandidateType!
 
+  """Register (or re-point) a browser Web Push endpoint."""
+  subscribeToPush(input: PushSubscriptionInput!): Boolean!
+
   """
   Refresh the slate from current actions and insight key_actions. Idempotent; returns rows written.
   """
@@ -2166,6 +2189,9 @@ type Mutation {
 
   """Remove the planned block for this task and clear scheduledFor."""
   unscheduleTask(id: ID!): TaskType
+
+  """Remove a browser Web Push endpoint."""
+  unsubscribeFromPush(endpoint: String!): Boolean!
   untagEntities(input: TagEntitiesInput!): [TaggableEntityType!]!
   updateAnswer(input: UpdateAnswerInput!): AnswerType
   updateAskGrant(id: ID!, input: UpdateAskGrantInput!): AskGrantPayload!
@@ -2754,6 +2780,16 @@ type ProviderType implements Node {
   theme: ProviderThemeType
 }
 
+input PushSubscriptionInput {
+  """PushSubscription.getKey("auth"), base64url-encoded."""
+  auth: String!
+  endpoint: String!
+
+  """PushSubscription.getKey("p256dh"), base64url-encoded."""
+  p256dh: String!
+  userAgent: String
+}
+
 type Query {
   action(id: ID!): ActionType
   actions(after: String, before: String, first: Int, last: Int): ActionConnection!
@@ -2998,12 +3034,20 @@ type Query {
   ): ProductModelConnection!
   provider(id: ID!): ProviderType
   providers(after: String, before: String, first: Int, last: Int): ProviderConnection!
+
+  """
+  The VAPID public key, base64url — null when push is not configured on this appliance.
+  """
+  pushPublicKey: String
   question(id: ID!): QuestionType
   questions(after: String, before: String, first: Int, last: Int): QuestionConnection!
   receipt(id: ID!): ReceiptType
   receipts(after: String, extractionState: ReceiptExtractionState, first: Int, merchantName: String, purchasedFrom: DateTime, purchasedTo: DateTime): ReceiptConnection!
   relationship(id: ID!): RelationshipType
   relationships(after: String, before: String, first: Int, last: Int): RelationshipConnection!
+
+  """Reminders not soft-cancelled, ordered by fireAt."""
+  reminders: [ReminderType!]!
   reverseGeocode(latitude: Float!, longitude: Float!): ReverseGeocodeResultType!
   savedSearch(id: ID!): SavedSearchType
   savedSearches(after: String, before: String, first: Int, isSeed: Boolean, last: Int, query: String): SavedSearchConnection!
@@ -3209,6 +3253,35 @@ type RelationshipType implements Node {
   toNodeId: ID!
   toNodeType: String!
   type: String!
+}
+
+"""
+'auto' is reserved for a future due-date derivation engine; today every reminder is 'manual'.
+"""
+enum ReminderSource {
+  auto
+  manual
+}
+
+"""
+A reminder's claim state. Fired is terminal in this milestone — there is no snooze yet.
+"""
+enum ReminderStatus {
+  cancelled
+  fired
+  pending
+}
+
+type ReminderType implements Node {
+  """A planned block — a `ci.events` row."""
+  blockId: ID
+  createdAt: DateTime!
+  fireAt: DateTime!
+  firedAt: DateTime
+  id: ID!
+  source: ReminderSource!
+  status: ReminderStatus!
+  taskId: ID
 }
 
 input RemoveItemIdentifierInput {
