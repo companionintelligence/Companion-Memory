@@ -464,7 +464,7 @@ fn docker_command_with_host(host: Option<&str>) -> Command {
 }
 
 /// A `docker` invocation pointed at whichever daemon this app resolved.
-fn docker_command() -> Command {
+pub(crate) fn docker_command() -> Command {
     #[cfg(target_os = "linux")]
     let host = resolved_docker_host();
     #[cfg(not(target_os = "linux"))]
