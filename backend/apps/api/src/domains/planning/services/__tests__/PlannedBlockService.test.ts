@@ -172,6 +172,18 @@ describe('PlannedBlockService', () => {
     expect(outcome.status === 'placed' && outcome.event.startTime).toEqual(created.start_time);
   });
 
+  it('user Schedule stamps is_auto=false and a fresh last_moved_at', async () => {
+    const before = Date.now();
+
+    await service.scheduleTask(CTX, OPEN_TASK.id);
+
+    const [, created] = eventService.create.mock.calls[0];
+
+    expect(created.is_auto).toBe(false);
+    expect(created.last_moved_at).toBeInstanceOf(Date);
+    expect((created.last_moved_at as Date).getTime()).toBeGreaterThanOrEqual(before);
+  });
+
   it('automation review writes a pending schedule instead of placing', async () => {
     personalizationService.decideAction.mockResolvedValue('review');
 
@@ -200,6 +212,12 @@ describe('PlannedBlockService', () => {
     });
     expect(outcome.status).toBe('placed');
     expect(eventService.create).toHaveBeenCalled();
+
+    // Nobody clicked anything to get here — the trust dial decided this task
+    // may be placed unattended, so the block must say so.
+    const [, created] = eventService.create.mock.calls[0];
+
+    expect(created.is_auto).toBe(true);
   });
 
   // ═══ scheduleTaskAt — the calendar-drop path ═══
@@ -229,6 +247,9 @@ describe('PlannedBlockService', () => {
     // The gap solver reads occupancy via `findInRange` — proof nothing about
     // "is there room" was ever consulted for an explicit drop.
     expect(eventService.findInRange).not.toHaveBeenCalled();
+
+    // A drag is a human action.
+    expect(eventService.create).toHaveBeenCalledWith(CTX, expect.objectContaining({ is_auto: false }));
   });
 
   it('scheduleTaskAt derives an end from the task’s own estimate when none is given', async () => {
@@ -266,7 +287,11 @@ describe('PlannedBlockService', () => {
 
     const outcome = await service.scheduleTaskAt(CTX, OPEN_TASK.id, start);
 
-    expect(eventService.reschedule).toHaveBeenCalledWith(CTX, 'evt-existing', start, undefined);
+    // `{ isAuto: false }`: a drag is a human placing this block right now,
+    // regardless of whether it was previously auto-placed.
+    expect(eventService.reschedule).toHaveBeenCalledWith(CTX, 'evt-existing', start, undefined, {
+      isAuto: false,
+    });
     expect(eventService.create).not.toHaveBeenCalled();
     expect(outcome.status).toBe('placed');
     expect('event' in outcome && outcome.event).toBe(moved);
@@ -507,6 +532,14 @@ describe('PlannedBlockService', () => {
       CTX,
       expect.objectContaining({ start_time: start, end_time: end }),
     );
+
+    // The AI computed WHERE (the stored slot came from `propose` back at
+    // task-creation time), but a human just clicked Confirm — the trust-dial
+    // `review` path exists precisely because the AI was not confident enough
+    // to write this unattended, so the click is the placement decision.
+    const [, created] = eventService.create.mock.calls[0];
+
+    expect(created.is_auto).toBe(false);
   });
 
   it('applyPendingSchedule re-solves rather than booking a stored instant that is now past', async () => {

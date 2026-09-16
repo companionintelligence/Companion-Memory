@@ -756,6 +756,11 @@ input CreateEventInput {
   endTime: DateTime
   eventType: String
   isAllDay: Boolean
+
+  """
+  CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced.
+  """
+  isLocked: Boolean
   isRecurring: Boolean
   locationCoordinates: JSON
   locationEntityId: ID
@@ -1216,7 +1221,22 @@ type EventType implements Node & Taggable {
   externalSyncStatus: String
   id: ID!
   isAllDay: Boolean
+
+  """
+  True for a planned block placed by the deterministic placer running unattended; false for anything a human action produced (the Schedule button, a calendar drag, confirming a proposal). Lets the UI label honestly, e.g. "AI Briefing" vs "Day Overview".
+  """
+  isAuto: Boolean
+
+  """
+  CI-Planning's manually-locked-block flag. Settable via `updateEvent`; nothing currently refuses to move a locked block — a future reflow engine owns enforcing that.
+  """
+  isLocked: Boolean
   isRecurring: Boolean
+
+  """
+  The last instant this row's startTime/endTime changed. Null means never observed moving.
+  """
+  lastMovedAt: DateTime
   location: PlaceType
   locationCoordinates: JSON
   locationEntityId: ID
@@ -3706,6 +3726,11 @@ input UpdateEventInput {
   eventType: String
   id: ID!
   isAllDay: Boolean
+
+  """
+  CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced.
+  """
+  isLocked: Boolean
   isRecurring: Boolean
   locationCoordinates: JSON
   locationEntityId: ID

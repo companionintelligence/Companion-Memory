@@ -236,7 +236,9 @@ export class PlannedBlockService {
     const existing = await this.findActiveForTask(context, task.id);
 
     if (existing) {
-      const moved = await this.eventService.reschedule(context, existing.id, start, end);
+      // A drag is a human placing this block right now — is_auto flips to
+      // false even if the block was originally auto-placed.
+      const moved = await this.eventService.reschedule(context, existing.id, start, end, { isAuto: false });
 
       // `reschedule` returns null only on a race (the block vanished between
       // `findActiveForTask` and here) or a cross-user id — both genuinely
@@ -310,7 +312,9 @@ export class PlannedBlockService {
       return { status: 'proposed', task };
     }
 
-    return this.placeAt(context, task, proposal.start, proposal.end);
+    // No human clicked anything to get here — the trust dial decided this
+    // task may be placed unattended.
+    return this.placeAt(context, task, proposal.start, proposal.end, undefined, true);
   }
 
   /**
@@ -364,6 +368,12 @@ export class PlannedBlockService {
       });
     }
 
+    // `isAuto` defaults to false here deliberately: a human just clicked
+    // Confirm. The AI chose the WHERE (the stored slot came from `propose` at
+    // task-creation time), but "who caused this write" is the signal `isAuto`
+    // records, matching `place()` — and a trust-dial `review` proposal exists
+    // precisely because the AI was not confident enough to write unattended,
+    // so the confirm click is the placement decision, not a rubber stamp.
     return this.placeAt(context, task, start, end);
   }
 
@@ -541,15 +551,32 @@ export class PlannedBlockService {
       return { status: 'no_gap', task };
     }
 
-    return this.placeAt(context, task, proposal.start, proposal.end, opts.estimatedMinutes);
+    return this.placeAt(
+      context,
+      task,
+      proposal.start,
+      proposal.end,
+      opts.estimatedMinutes,
+      opts.source === 'automation',
+    );
   }
 
+  /**
+   * `isAuto` records WHO caused this write, not what computed the slot — the
+   * Plan page's Schedule button and the trust dial's unattended placement both
+   * run the same gap solver (`propose`/`computePlacement`), so "did a human
+   * click something" is the only signal that actually distinguishes them.
+   * Defaults to `false` (manual) so every caller that predates this parameter
+   * — and any future one that forgets it — lands on the honest reading: a
+   * write nobody marked as unattended was not unattended.
+   */
   private async placeAt(
     context: UserServiceContext,
     task: Task,
     start: Date,
     end: Date,
     estimatedMinutes?: number | null,
+    isAuto = false,
   ): Promise<PlaceOutcome> {
     const existing = await this.findActiveForTask(context, task.id);
 
@@ -579,6 +606,11 @@ export class PlannedBlockService {
       })(),
       task_id: task.id,
       planned_minutes: minutes,
+      is_auto: isAuto,
+      // First placement is itself a placement change — there is no earlier
+      // instant to compare against, so "just now" is the correct value, not
+      // an omission to leave null.
+      last_moved_at: new Date(),
       metadata: { generator: 'planning.placer', taskId: task.id },
     });
 
