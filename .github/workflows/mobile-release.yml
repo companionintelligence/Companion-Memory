@@ -562,6 +562,15 @@ jobs:
       - name: Android SDK
         if: steps.secrets.outputs.present == 'true'
         uses: android-actions/setup-android@v3
+        with:
+          # v3 defaults `packages` to `tools platform-tools`, and Google has
+          # REMOVED the obsolete `tools` package from the SDK repository, so the
+          # default makes sdkmanager exit 1 with `Failed to find package 'tools'`
+          # — which is how this lane broke without any change on our side.
+          # Empty means "set up cmdline-tools and the env, install nothing":
+          # the next step already installs the exact components this build
+          # needs, so there was never anything for the default to add.
+          packages: ''
       # Keep this pair in lockstep with compileSdkVersion in
       # frontend/apps/android/android/variables.gradle.
       - name: Install SDK components
