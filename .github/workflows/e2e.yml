@@ -82,6 +82,35 @@ jobs:
       # "simplify" this by running ollama directly on the runner without
       # re-reading that sentence.
       OLLAMA_HOST: http://localhost:11434
+      # The import domain's writable directories. Their shipped defaults
+      # (`/var/lib/ci-import/...`, `/var/tmp/ci-import`) belong to the appliance
+      # CONTAINER, which runs as root; a host-run API on this runner cannot
+      # create the first, and tests/e2e/import.spec.ts died three times over with
+      # `EACCES: permission denied, mkdir '/var/lib/ci-import'` — surfaced to the
+      # browser as a bare 500 that names neither the directory nor the reason.
+      # `scripts/federation-harness/stack.ts` hit exactly this and pins the same
+      # set for the same reason; its README records the diagnosis.
+      #
+      # All three share one parent ON PURPOSE. configuration.ts requires
+      # uploadsDir and scratchDir to sit on the same filesystem, because
+      # consuming an upload is an atomic rename — moving only uploadsDir here
+      # and leaving scratchDir on /var/tmp would trade a loud EACCES for a
+      # cross-device EXDEV later.
+      #
+      # CI_IMPORT_INBOX_DIR is pinned although no spec runs the inbox: THE INBOX
+      # CONSUMES WHAT IT IMPORTS, BY RENAME, so the thing worth guaranteeing is
+      # that it can only ever point at a directory this job owns and discards.
+      #
+      # CI_IMPORT_ROOTS is deliberately NOT set — it already defaults to `[]`,
+      # nothing here stages files for the CLI to browse, and it is the one
+      # import variable declared `"__format": "json"`, so a bare path in it dies
+      # at startup with `invalid character 'p' at 1:2`. Leave it alone.
+      #
+      # Under `github.workspace` rather than the runner temp dir because the
+      # `runner` context is not available to a job-level `env:` block.
+      CI_IMPORT_UPLOADS_DIR: ${{ github.workspace }}/.e2e-import/uploads
+      CI_IMPORT_SCRATCH_DIR: ${{ github.workspace }}/.e2e-import/scratch
+      CI_IMPORT_INBOX_DIR: ${{ github.workspace }}/.e2e-import/inbox
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
