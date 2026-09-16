@@ -2,8 +2,15 @@
 <resources>
     <!-- styles.xml's AppTheme references these by name but never defined them, so the
          AppCompat parent theme's own library defaults (indigo/pink) were filling in.
-         Canon phthalo, from @companionintelligence/tokens (styles/colors.md): --primary /
-         --ring (light) and --phthalo-deep. -->
+         Canon phthalo, from @companionintelligence/tokens (styles/colors.md): the
+         primary / ring (light) tokens and phthalo-deep.
+
+         Those are CSS custom properties, so their real names each carry a leading
+         double hyphen. The dashes are omitted above deliberately: an XML comment
+         may not contain two consecutive hyphens anywhere, and aapt2 enforces it.
+         Writing the token names out in full is what failed
+         :app:mergeDebugResources here and left main unable to build the Android
+         app at all. Do not "restore" them. -->
     <color name="colorPrimary">#0a6358</color>
     <color name="colorPrimaryDark">#022c2b</color>
     <color name="colorAccent">#0a6358</color>

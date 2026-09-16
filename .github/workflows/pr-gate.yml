@@ -545,6 +545,31 @@ jobs:
           printf 'checking %s\n' "${plists[@]}"
           node scripts/check-plist-duplicate-keys.mjs "${plists[@]}"
 
+      # Same argv-driven shape and the same non-empty assertion as the plist
+      # step above, for the same reason.
+      #
+      # This guards a trap canon created: an XML comment may not contain two
+      # consecutive hyphens, and every canon design token's real name begins
+      # with exactly that sequence, so naming one in a comment is both the
+      # natural thing to write and a syntax error. #2686 did it in
+      # android/.../res/values/colors.xml and left `main` unable to build the
+      # Android app at all. aapt2 does catch it — from
+      # `:app:mergeDebugResources`, two minutes into a Gradle build, in
+      # `mobile-build.yml`, which is `workflow_dispatch`-only, so nobody saw it
+      # for days. Here it is milliseconds on every PR.
+      - name: Check XML comments (Android res, iOS config)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t xml < <(find frontend/apps/android frontend/apps/ios -name '*.xml' \
+            -not -path '*/node_modules/*' -not -path '*/build/*' -not -path '*/Pods/*' | sort)
+          if [ "${#xml[@]}" -eq 0 ]; then
+            echo "::error::found no .xml files under the native app dirs — the guard would have checked nothing"
+            exit 1
+          fi
+          printf 'checking %s\n' "${xml[@]}"
+          node scripts/check-xml-comments.mjs "${xml[@]}"
+
   # The desktop image-tag resolver's own test suite, on every PR.
   #
   # `frontend/apps/desktop/scripts/sync-compose-resources.cjs` decides which
