@@ -2144,8 +2144,13 @@ type Mutation {
     startTime: DateTime
   ): ScheduleTaskPayload!
   sendPeerAsk(input: SendPeerAskInput!): SendPeerAskPayload!
+  setCategoryDirectionEnabled(input: SetCategoryDirectionEnabledInput!): Boolean!
+  setEntityCategories(input: SetEntityCategoriesInput!): [TagType!]!
   setHouseholdTier(input: SetHouseholdTierInput!): HouseholdTierType!
   setSavedSearchSharing(input: SetSavedSearchSharingInput!): UpdateSavedSearchPayload!
+  setTagCategories(input: SetTagCategoriesInput!): SetTagGroupingPayload!
+  setTagDirections(input: SetTagDirectionsInput!): SetTagGroupingPayload!
+  setTagKind(input: SetTagKindInput!): SetTagKindPayload!
 
   """Defer a candidate until a future instant"""
   snoozeCandidate(id: ID!, until: DateTime!): ScheduleCandidateType!
@@ -2852,6 +2857,7 @@ type Query {
   Fetch HBPE renewal predictions: periodic behaviors coming due or overdue
   """
   dueForecast: DueForecastType
+  entityCategories(entityId: ID!): [TagType!]!
   event(id: ID!): EventType
 
   """
@@ -3396,6 +3402,17 @@ type SendPeerAskPayload {
   success: Boolean!
 }
 
+input SetCategoryDirectionEnabledInput {
+  categoryId: ID!
+  directionId: ID!
+  enabled: Boolean!
+}
+
+input SetEntityCategoriesInput {
+  categoryIds: [ID!]!
+  entityId: ID!
+}
+
 input SetHouseholdTierInput {
   memberId: ID!
 
@@ -3408,6 +3425,31 @@ input SetSavedSearchSharingInput {
   id: ID!
   isPublic: Boolean!
   maxDisclosure: String
+}
+
+input SetTagCategoriesInput {
+  categoryIds: [ID!]!
+  id: ID!
+}
+
+input SetTagDirectionsInput {
+  directionIds: [ID!]!
+  id: ID!
+}
+
+type SetTagGroupingPayload {
+  success: Boolean!
+  tags: [TagType!]!
+}
+
+input SetTagKindInput {
+  id: ID!
+  kind: TagKind!
+}
+
+type SetTagKindPayload {
+  success: Boolean!
+  tag: TagType
 }
 
 type SummaryConnection implements Connection {
@@ -3464,12 +3506,27 @@ input TagEntitiesInput {
   labels: [String!]!
 }
 
+"""
+The taxonomy LEVEL a tag sits at: a brand-set direction (Home/Work/Community), an intention grouped under directions, or a category grouped over intentions. Orthogonal to a tag application's level on EntityTagType, which is a per-entity dilution weight, not a taxonomy level.
+"""
+enum TagKind {
+  category
+  direction
+  intention
+}
+
 type TagType implements Node {
+  categories: [TagType!]!
   description: String
+  directionOptOuts: [TagType!]!
+  directions: [TagType!]!
   entities(after: String, before: String, first: Int, last: Int): TaggableEntityConnection!
   entityCount: Int!
   id: ID!
+  isBase: Boolean!
+  kind: TagKind
   label: String!
+  muted: Boolean!
 }
 
 interface Taggable {

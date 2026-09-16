@@ -12,7 +12,11 @@ import { EmbeddingModule } from '@ci/common/embeddings';
 import { EventsModule } from '@ci/domains/events';
 import { RetrievalPolicyModule } from '@ci/domains/retrieval-policy';
 
+import { CategoryDirectionOptoutEntity } from './entities/CategoryDirectionOptoutEntity';
+import { type EntityCategory, EntityCategoryEntity } from './entities/EntityCategoryEntity';
 import { type EntityTag, EntityTagEntity } from './entities/EntityTagEntity';
+import { TagCategoryEntity } from './entities/TagCategoryEntity';
+import { TagDirectionEntity } from './entities/TagDirectionEntity';
 import { type Tag, type TimestampedTag, TagEntity } from './entities/TagEntity';
 import { SearchService } from './services/SearchService';
 import { type RemoveTagResult, TagService, type UpdateTagResult } from './services/TagService';
@@ -22,7 +26,14 @@ import { type RemoveTagResult, TagService, type UpdateTagResult } from './servic
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([EntityTagEntity, TagEntity]),
+    TypeOrmModule.forFeature([
+      EntityTagEntity,
+      TagEntity,
+      TagDirectionEntity,
+      TagCategoryEntity,
+      CategoryDirectionOptoutEntity,
+      EntityCategoryEntity,
+    ]),
     EmbeddingModule,
     RetrievalPolicyModule,
     // SearchService emits `retrieval.query` onto the `telemetry` queue — the
@@ -42,9 +53,9 @@ export {
   type SemanticSearchPlan,
   type SemanticSearchScope,
 } from './services/SearchService';
-export type { EntityTag, RemoveTagResult, Tag, TimestampedTag, UpdateTagResult };
-export { INDEXABLE_ENTITIES, TAGGABLE_ENTITIES } from './types';
-export type { EntityIdentifier, IndexableEntity, PromptSearchResult, TaggableEntity } from './types';
+export type { EntityCategory, EntityTag, RemoveTagResult, Tag, TimestampedTag, UpdateTagResult };
+export { INDEXABLE_ENTITIES, TAG_KINDS, TAGGABLE_ENTITIES } from './types';
+export type { EntityIdentifier, IndexableEntity, PromptSearchResult, TagKind, TaggableEntity } from './types';
 export { buildPromptQuery } from './promptQuery';
 export { resolveAutoMode } from './services/SearchService';
 export {

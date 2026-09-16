@@ -42,6 +42,13 @@ import { NoteType } from '../types/NoteType';
 import { PaginationArgs } from '../types/PaginationArgs';
 import { PersonType } from '../types/PersonType';
 import { PlaceType } from '../types/PlaceType';
+import { SetCategoryDirectionEnabledInput } from '../types/SetCategoryDirectionEnabledInput';
+import { SetEntityCategoriesInput } from '../types/SetEntityCategoriesInput';
+import { SetTagCategoriesInput } from '../types/SetTagCategoriesInput';
+import { SetTagDirectionsInput } from '../types/SetTagDirectionsInput';
+import { SetTagGroupingPayload } from '../types/SetTagGroupingPayload';
+import { SetTagKindInput } from '../types/SetTagKindInput';
+import { SetTagKindPayload } from '../types/SetTagKindPayload';
 import { TagConnection } from '../types/TagConnection';
 import { TagEdge } from '../types/TagEdge';
 import { TagEntitiesInput } from '../types/TagEntitiesInput';
@@ -118,6 +125,31 @@ export class TagResolver {
     return entity ? TagType.toType(entity) : null;
   }
 
+  /**
+   * The categories applied to one taggable entity, in position order.
+   * Deliberately not a field on the entity's own GraphQL type (`TaskType`
+   * etc.) — `ci_search.entity_categories` is queried through the tag domain,
+   * exactly like `entity_tag` is read through `tagEntities`/`untagEntities`
+   * rather than a bespoke field on every taggable type.
+   */
+  @Query(() => [TagType])
+  async entityCategories(
+    @Context() context: RequestContext,
+    @Args('entityId', { type: () => ID }) entityId: string,
+  ): Promise<TagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const { type, id } = GlobalUID.decode(entityId);
+
+    if (!isTaggableEntity(type)) {
+      throw new Error(`Invalid entity type: ${type}`);
+    }
+
+    const categories = await this.tagService.getEntityCategories(serviceContext, { type, id });
+
+    return categories.map((tag) => TagType.toType(tag));
+  }
+
   @ResolveField(() => TaggableEntityConnection)
   async entities(
     @Context() context: RequestContext,
@@ -173,6 +205,48 @@ export class TagResolver {
     const serviceContext = toServiceContext(context);
 
     return this.tagAssignmentCountLoader.load(serviceContext, parent.__source.id);
+  }
+
+  /**
+   * The direction tags this tag belongs to. Only meaningful for a
+   * `kind: 'intention'` tag; every other kind resolves to an empty list
+   * (an intention with no membership row is "Unsorted", which looks
+   * identical from this field).
+   */
+  @ResolveField(() => [TagType])
+  async directions(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const tags = await this.tagService.getTagDirections(serviceContext, parent.__source.id);
+
+    return tags.map((tag) => TagType.toType(tag));
+  }
+
+  /**
+   * The category tags this tag belongs to. Same contract as {@link directions}
+   * on the second, orthogonal grouping axis.
+   */
+  @ResolveField(() => [TagType])
+  async categories(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const tags = await this.tagService.getTagCategories(serviceContext, parent.__source.id);
+
+    return tags.map((tag) => TagType.toType(tag));
+  }
+
+  /**
+   * The direction tags turned OFF for this tag. Only meaningful for a
+   * `kind: 'category'` tag; empty means every direction applies (see the
+   * opt-out polarity note on `category_direction_optouts`).
+   */
+  @ResolveField(() => [TagType])
+  async directionOptOuts(@Context() context: RequestContext, @Parent() parent: TagType): Promise<TagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const tags = await this.tagService.getCategoryDirectionOptouts(serviceContext, parent.__source.id);
+
+    return tags.map((tag) => TagType.toType(tag));
   }
 
   /**
@@ -322,6 +396,114 @@ export class TagResolver {
     });
 
     return this.resolveEntities(serviceContext, entities);
+  }
+
+  /** Set a tag's taxonomy level (direction / intention / category). */
+  @Mutation(() => SetTagKindPayload)
+  async setTagKind(
+    @Context() context: RequestContext,
+    @Args('input') input: SetTagKindInput,
+  ): Promise<SetTagKindPayload> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('tag', input.id);
+
+    const tag = await this.tagService.setKind(serviceContext, id, input.kind);
+
+    return tag == null ? { success: false } : { success: true, tag: TagType.toType(tag) };
+  }
+
+  /**
+   * Replace an intention tag's direction membership. Any id in
+   * `directionIds` that is not one of the caller's own direction tags is
+   * silently dropped rather than failing the whole call.
+   */
+  @Mutation(() => SetTagGroupingPayload)
+  async setTagDirections(
+    @Context() context: RequestContext,
+    @Args('input') input: SetTagDirectionsInput,
+  ): Promise<SetTagGroupingPayload> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('tag', input.id);
+    const directionIds = input.directionIds.map((gid) => GlobalUID.parse('tag', gid));
+
+    const directions = await this.tagService.setTagDirections(serviceContext, id, directionIds);
+
+    return directions == null
+      ? { success: false, tags: [] }
+      : { success: true, tags: directions.map((tag) => TagType.toType(tag)) };
+  }
+
+  /**
+   * Replace an intention tag's category membership — the second, orthogonal
+   * grouping axis. Same contract as {@link setTagDirections}.
+   */
+  @Mutation(() => SetTagGroupingPayload)
+  async setTagCategories(
+    @Context() context: RequestContext,
+    @Args('input') input: SetTagCategoriesInput,
+  ): Promise<SetTagGroupingPayload> {
+    const serviceContext = toServiceContext(context);
+
+    const id = GlobalUID.parse('tag', input.id);
+    const categoryIds = input.categoryIds.map((gid) => GlobalUID.parse('tag', gid));
+
+    const categories = await this.tagService.setTagCategories(serviceContext, id, categoryIds);
+
+    return categories == null
+      ? { success: false, tags: [] }
+      : { success: true, tags: categories.map((tag) => TagType.toType(tag)) };
+  }
+
+  /**
+   * Toggle whether a category applies under a direction. `enabled: false`
+   * writes an opt-out row; `enabled: true` removes one. Returns false when
+   * either tag does not exist, belongs to another user, or is not the kind
+   * its role requires.
+   */
+  @Mutation(() => Boolean)
+  async setCategoryDirectionEnabled(
+    @Context() context: RequestContext,
+    @Args('input') input: SetCategoryDirectionEnabledInput,
+  ): Promise<boolean> {
+    const serviceContext = toServiceContext(context);
+
+    const categoryId = GlobalUID.parse('tag', input.categoryId);
+    const directionId = GlobalUID.parse('tag', input.directionId);
+
+    return this.tagService.setCategoryDirectionEnabled(
+      serviceContext,
+      categoryId,
+      directionId,
+      input.enabled,
+    );
+  }
+
+  /**
+   * Replace one entity's category set, in the order given. Bounded to a
+   * single entity and at most three rows (`ENTITY_CATEGORY_CAP`) — unlike
+   * `untagEntities`, which fans out over an arbitrary list of entities and
+   * labels, this cannot touch more than one entity's assignments per call.
+   */
+  @Mutation(() => [TagType])
+  async setEntityCategories(
+    @Context() context: RequestContext,
+    @Args('input') input: SetEntityCategoriesInput,
+  ): Promise<TagType[]> {
+    const serviceContext = toServiceContext(context);
+
+    const { type, id } = GlobalUID.decode(input.entityId);
+
+    if (!isTaggableEntity(type)) {
+      throw new Error(`Invalid entity type: ${type}`);
+    }
+
+    const categoryIds = input.categoryIds.map((gid) => GlobalUID.parse('tag', gid));
+
+    const categories = await this.tagService.setEntityCategories(serviceContext, { type, id }, categoryIds);
+
+    return categories.map((tag) => TagType.toType(tag));
   }
 
   private async resolveEntities(
