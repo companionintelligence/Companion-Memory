@@ -131,6 +131,27 @@ jobs:
       # write the .env somewhere compose never looks and fail at `--env-file`.
       COMPOSE_DIR: frontend/apps/desktop/src-tauri/resources
     steps:
+      # The full appliance image set — api, worker, migrate-database, database,
+      # object-store, summary-service and hbpe (which carries CUDA wheels) —
+      # does not fit beside the ~23 GB of preinstalled SDKs a hosted
+      # ubuntu-latest runner ships. The 2026-09-16 run died mid-`Extracting`
+      # with `No space left on device` after pulling six of them.
+      #
+      # Nothing this job does needs any of these: it installs Node, pulls
+      # published images and runs Playwright. `$AGENT_TOOLSDIRECTORY` goes too
+      # — setup-node below simply downloads Node instead of reading it from the
+      # tool cache, which costs seconds. Done before checkout so a failure
+      # costs nothing, and `|| true` throughout because a future runner image
+      # that drops one of these paths must not turn this lane red for it.
+      - name: Reclaim runner disk space
+        run: |
+          echo "Before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" \
+                      /usr/share/swift /usr/local/.ghcup || true
+          sudo docker image prune --all --force || true
+          echo "After:"; df -h / | tail -1
+
       # Full history + tags: the tag resolution below walks ancestor release
       # tags (`git tag --merged HEAD`), and a shallow clone has none — which
       # that script treats as a hard failure under CI rather than baking in an
