@@ -48,9 +48,9 @@ import { PlannedBlockService } from './services/PlannedBlockService';
 import { PlanningPrefsService } from './services/PlanningPrefsService';
 import { PlanningTimeService } from './services/PlanningTimeService';
 import { ProposedTaskReconcileService } from './services/ProposedTaskReconcileService';
-import { TaskService } from './services/TaskService';
 import { EventNowService, TodoProcessService, VerifyDoneService } from './services/TodoProcessService';
 import { TodoScanService } from './services/TodoScanService';
+import { TaskModule, TaskService } from './task.module';
 
 /**
  * @internal
@@ -58,12 +58,15 @@ import { TodoScanService } from './services/TodoScanService';
 @Module({
   // UserEntity is read-only here: PlanningTimeService resolves ci.users.timezone,
   // the single source of truth for "the user's day".
+  //
+  // TaskEntity/TaskPendingChangeEntity are NOT registered here: TaskService now lives in
+  // TaskModule (./task.module.ts), which registers them itself. That split is what lets
+  // `domains/tools` depend on TaskService without also pulling in LlmCoreModule (below) — see
+  // TaskModule's doc comment for why that matters.
   imports: [
     TypeOrmModule.forFeature([
       PlanningPrefsEntity,
-      TaskEntity,
       TaskDependencyEntity,
-      TaskPendingChangeEntity,
       UserEntity,
       EventEntity,
       CommunicationEntity,
@@ -74,10 +77,10 @@ import { TodoScanService } from './services/TodoScanService';
     SearchNextModule,
     LlmCoreModule,
     PersonalizationModule,
+    TaskModule,
   ],
   providers: [
     PlanningPrefsService,
-    TaskService,
     PlanningTimeService,
     PlannedBlockService,
     ProposedTaskReconcileService,
@@ -89,7 +92,7 @@ import { TodoScanService } from './services/TodoScanService';
     PlanningJobsCron,
     PlanningJobsListener,
   ],
-  exports: [TaskService, PlanningTimeService, PlannedBlockService, PlanningPrefsService],
+  exports: [TaskModule, PlanningTimeService, PlannedBlockService, PlanningPrefsService],
 })
 export class PlanningModule {}
 

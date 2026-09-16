@@ -82,6 +82,11 @@ export const INTENT_DOMAINS: readonly IntentDomain[] = [
     title: 'MCP Tools',
     description: 'Tools exposed by connected external Model Context Protocol servers.',
   },
+  {
+    key: 'planning',
+    title: 'Planning',
+    description: 'Find and create tasks in the personal to-do list.',
+  },
 ] as const;
 
 const DOMAIN_KEYS = new Set<string>(INTENT_DOMAINS.map((d) => d.key));

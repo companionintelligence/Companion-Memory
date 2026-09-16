@@ -4,7 +4,13 @@ import { v7 as uuidv7 } from 'uuid';
 import type { UserServiceContext } from '@ci/common/context';
 import type { LoggerService } from '@ci/common/logging';
 import type { EventService } from '@ci/domains/events';
-import { BaseEntity, CalendarEventService, EventBaseEntity, EventEntity, GraphDeltaWriter } from '@ci/domains/memory';
+import {
+  BaseEntity,
+  CalendarEventService,
+  EventBaseEntity,
+  EventEntity,
+  GraphDeltaWriter,
+} from '@ci/domains/memory';
 import { UserEntity } from '@ci/domains/user';
 
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
@@ -286,11 +292,14 @@ describeWithDb('ci.events M3 extension (integration)', () => {
     const { event } = await placeBlock('Category-tagged block');
     const tagId = uuidv7();
 
-    await dataSource.query(
-      `INSERT INTO ci_search.tags (id, label, user_id) VALUES ($1, 'Health', $2)`,
-      [tagId, owner.userId],
-    );
-    await dataSource.query('UPDATE ci.events SET category_tag_id = $1 WHERE event_id = $2', [tagId, event.id]);
+    await dataSource.query(`INSERT INTO ci_search.tags (id, label, user_id) VALUES ($1, 'Health', $2)`, [
+      tagId,
+      owner.userId,
+    ]);
+    await dataSource.query('UPDATE ci.events SET category_tag_id = $1 WHERE event_id = $2', [
+      tagId,
+      event.id,
+    ]);
 
     expect((await eventRow(event.id)).category_tag_id).toBe(tagId);
 

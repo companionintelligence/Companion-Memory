@@ -74,7 +74,8 @@ export type IntentDomainKey =
   | 'anomalies'
   | 'suggestions'
   | 'messaging'
-  | 'mcp';
+  | 'mcp'
+  | 'planning';
 
 /** What an intent does to the user's data. Drives confirmation/guardrails. */
 export type IntentAccess = 'read' | 'write' | 'delete';
@@ -115,7 +116,8 @@ export type CiEntityType =
   | 'file'
   | 'item'
   | 'concept'
-  | 'browser-activity';
+  | 'browser-activity'
+  | 'task';
 
 /**
  * The schema for a tool — what the LLM sees, plus the curated intent metadata that makes it a

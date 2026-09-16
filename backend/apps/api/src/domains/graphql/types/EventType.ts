@@ -142,7 +142,7 @@ export class EventType implements Node, Taggable {
   @Field(() => Boolean, {
     nullable: true,
     description:
-      'CI-Planning\'s manually-locked-block flag. Settable via `updateEvent`; nothing currently ' +
+      "CI-Planning's manually-locked-block flag. Settable via `updateEvent`; nothing currently " +
       'refuses to move a locked block — a future reflow engine owns enforcing that.',
   })
   isLocked!: boolean;
@@ -150,7 +150,7 @@ export class EventType implements Node, Taggable {
   @Field(() => Boolean, {
     nullable: true,
     description:
-      "True for a planned block placed by the deterministic placer running unattended; false for " +
+      'True for a planned block placed by the deterministic placer running unattended; false for ' +
       'anything a human action produced (the Schedule button, a calendar drag, confirming a proposal). ' +
       'Lets the UI label honestly, e.g. "AI Briefing" vs "Day Overview".',
   })

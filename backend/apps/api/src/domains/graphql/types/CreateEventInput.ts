@@ -73,7 +73,7 @@ export class CreateEventInput {
 
   @Field(() => Boolean, {
     nullable: true,
-    description: 'CI-Planning\'s manually-locked-block flag; settable/readable only, not yet enforced.',
+    description: "CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced.",
   })
   isLocked?: boolean;
 }
