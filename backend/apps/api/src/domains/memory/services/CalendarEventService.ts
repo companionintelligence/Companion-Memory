@@ -404,6 +404,21 @@ export class CalendarEventService {
       toCreate.plannedMinutes = item.planned_minutes;
     }
 
+    // Booleans compared against `undefined`, matching `is_predicted` above:
+    // `is_locked: false` / `is_auto: false` are real assertions a caller can
+    // make, not omissions to fall through to the column DEFAULT.
+    if (item.is_locked !== undefined) {
+      toCreate.isLocked = item.is_locked;
+    }
+
+    if (item.is_auto !== undefined) {
+      toCreate.isAuto = item.is_auto;
+    }
+
+    if (item.last_moved_at !== undefined) {
+      toCreate.lastMovedAt = item.last_moved_at;
+    }
+
     // Calendar shape and confidence — the same silent-drop mechanism as the
     // provenance block above, and the reason it went unnoticed for so long:
     // ci.events DEFAULTs all four (is_all_day false, is_recurring false,
@@ -588,8 +603,11 @@ export class CalendarEventService {
    * graph delta are re-published exactly as an Undo would), then writes the new
    * timing over the stale one. The write goes straight at the repository rather
    * than through {@link update}, because the fields that matter here —
-   * `status`, `planned_minutes` — are the ones a partial update is entitled to
-   * leave alone, and a restored block must not keep the previous placement's.
+   * `status`, `planned_minutes`, `is_auto`, `last_moved_at` — are the ones a
+   * partial update is entitled to leave alone, and a restored block must not
+   * keep the previous placement's (a block revived by automation must not read
+   * as still manually-placed just because the dead row once was, and its
+   * "last moved" instant is now, not whenever it was tombstoned).
    */
   private async restorePlannedBlock(
     context: UserServiceContext,
@@ -606,6 +624,8 @@ export class CalendarEventService {
         status: item.status ?? 'planned',
         plannedMinutes: item.planned_minutes ?? null,
         taskId: item.task_id ?? null,
+        isAuto: item.is_auto ?? false,
+        lastMovedAt: item.last_moved_at ?? new Date(),
       },
     );
 
@@ -1035,12 +1055,23 @@ export class CalendarEventService {
    * find (CI-Server-aan) and the UI can say so honestly.
    *
    * All-day events ignore the time component: their "when" is a date.
+   *
+   * Stamps `lastMovedAt` unconditionally — this method's whole purpose is "a
+   * move happened", for every event type, not only planned blocks (the column
+   * is inert for anything else today, but the semantics are the same: this is
+   * the last instant the row's placement changed). `opts.isAuto`, when given,
+   * overrides `isAuto` too: a human dragging a block onto a new time is a
+   * manual placement from that moment on, regardless of how the block got
+   * there — `PlannedBlockService.scheduleTaskAt` passes `{ isAuto: false }` for
+   * exactly that reason. Omit it (the plain `rescheduleEvent` GraphQL mutation
+   * does) to leave `isAuto` as it was.
    */
   async reschedule(
     context: ServiceContext,
     id: string,
     startTime: Date,
     endTime?: Date,
+    opts?: { isAuto?: boolean },
   ): Promise<Event | null> {
     const event = await this.eventRepository.findOne({
       where: {
@@ -1066,6 +1097,11 @@ export class CalendarEventService {
 
     event.startTime = startTime;
     event.endTime = endTime ?? (priorSpanMs > 0 ? new Date(startTime.getTime() + priorSpanMs) : null);
+    event.lastMovedAt = new Date();
+
+    if (opts?.isAuto !== undefined) {
+      event.isAuto = opts.isAuto;
+    }
 
     if (event.sourceSystem) {
       event.externalSyncStatus = 'pending';
@@ -1235,6 +1271,15 @@ export class CalendarEventService {
       updateData.endTime = data.end_time;
     }
 
+    // "Any write that changes start_time/end_time" (roadmap M3) — not scoped
+    // to planned blocks specifically, because this is the shared partial-update
+    // path every event type goes through (`updateEvent` can retime a planned
+    // block without going via `reschedule`). Mirrors the unconditional stamp
+    // `reschedule` carries.
+    if (data.start_time || data.end_time !== undefined) {
+      updateData.lastMovedAt = new Date();
+    }
+
     if (data.duration_minutes) {
       updateData.durationMinutes = data.duration_minutes;
     }
@@ -1361,6 +1406,12 @@ export class CalendarEventService {
 
     if (data.created_by) {
       updateData.createdBy = data.created_by;
+    }
+
+    // Falsy is meaningful: `isLocked: false` unlocks a block, same reasoning
+    // as the boolean block above.
+    if (data.is_locked !== undefined) {
+      updateData.isLocked = data.is_locked;
     }
 
     // One transaction across both halves of the aggregate (see CtiAggregate).

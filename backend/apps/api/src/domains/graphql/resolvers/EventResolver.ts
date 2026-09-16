@@ -107,6 +107,7 @@ export class EventResolver {
       metadata: input.metadata,
       status: input.status,
       sharing_level: input.sharingLevel,
+      is_locked: input.isLocked,
     };
   }
 
@@ -183,6 +184,7 @@ export class EventResolver {
       is_all_day: input.isAllDay,
       metadata: input.metadata,
       status: input.status,
+      is_locked: input.isLocked,
     });
 
     return entity ? EventType.toType(entity) : entity;

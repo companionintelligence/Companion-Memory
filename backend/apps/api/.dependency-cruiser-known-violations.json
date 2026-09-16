@@ -377,6 +377,15 @@
   },
   {
     "type": "dependency",
+    "from": "src/domains/tools/index.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
     "from": "src/domains/tools/policy/toolGate.ts",
     "to": "src/domains/personalization/types.ts",
     "rule": {
@@ -406,6 +415,60 @@
     "type": "dependency",
     "from": "src/domains/tools/services/PendingActionService.ts",
     "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/__tests__/DatabaseSearchTool.taskHydration.test.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/__tests__/PlanningCreateTaskTool.test.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/__tests__/PlanningFindTasksTool.test.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/DatabaseSearchTool.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/PlanningCreateTaskTool.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/PlanningFindTasksTool.ts",
+    "to": "src/domains/planning/task.module.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
