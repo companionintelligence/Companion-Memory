@@ -9,6 +9,8 @@ export const PlanningTodoProcessEvent = 'planning.todo_process';
 export const PlanningInboxScanEvent = 'planning.inbox_scan';
 export const PlanningEventNowEvent = 'planning.event_now';
 export const PlanningVerifyDoneEvent = 'planning.verify_done';
+/** M5's sixth planning job — the reminder claim-and-deliver tick. See RemindersCron. */
+export const PlanningFireRemindersEvent = 'planning.fire_reminders';
 
 /**
  * `userId` rides on every task event because the consumers are out-of-domain and
@@ -50,6 +52,7 @@ defineEvent<PlanningUserJobPayload>(PlanningTodoProcessEvent);
 defineEvent<PlanningUserJobPayload>(PlanningInboxScanEvent);
 defineEvent<PlanningUserJobPayload>(PlanningEventNowEvent);
 defineEvent<PlanningUserJobPayload>(PlanningVerifyDoneEvent);
+defineEvent<PlanningUserJobPayload>(PlanningFireRemindersEvent);
 
 declare module '@ci/domains/events/registry' {
   interface EventRegistry {
@@ -61,5 +64,6 @@ declare module '@ci/domains/events/registry' {
     [PlanningInboxScanEvent]: PlanningUserJobPayload;
     [PlanningEventNowEvent]: PlanningUserJobPayload;
     [PlanningVerifyDoneEvent]: PlanningUserJobPayload;
+    [PlanningFireRemindersEvent]: PlanningUserJobPayload;
   }
 }

@@ -95,6 +95,7 @@
     "typeorm": "^0.3.26",
     "undici": "^8.10.0",
     "uuid": "^11.1.0",
+    "web-push": "^3.6.7",
     "xml2js": "^0.6.2",
     "zod": "^3.25.34"
   },
@@ -124,6 +125,7 @@
     "@types/passport-local": "^1.0.38",
     "@types/pg": "^8.15.2",
     "@types/supertest": "^6.0.3",
+    "@types/web-push": "^3.6.4",
     "@types/xml2js": "^0",
     "@yarnpkg/pnpify": "^4.1.4",
     "dependency-cruiser": "^17.0.2",

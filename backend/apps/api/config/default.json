@@ -296,5 +296,12 @@
     "requireHttpSignature": false,
     "signingKeyJwk": "",
     "allowCgnatEndpoints": false
+  },
+  "push": {
+    "vapid": {
+      "publicKey": "",
+      "privateKey": "",
+      "subject": "mailto:admin@companion.local"
+    }
   }
 }

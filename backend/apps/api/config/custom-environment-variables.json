@@ -418,5 +418,12 @@
     "audience": "CI_PEER_AUDIENCE",
     "timeoutMs": "CI_PEER_TIMEOUT_MS",
     "allowCgnatEndpoints": "CI_PEER_ALLOW_CGNAT_ENDPOINTS"
+  },
+  "push": {
+    "vapid": {
+      "publicKey": "VAPID_PUBLIC_KEY",
+      "privateKey": "VAPID_PRIVATE_KEY",
+      "subject": "VAPID_SUBJECT"
+    }
   }
 }
