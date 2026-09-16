@@ -7,7 +7,8 @@ import { type UserServiceContext } from '@ci/common/context';
 import { EventEntity } from '@ci/domains/memory';
 
 import { ReminderEntity, type Reminder } from '../entities/ReminderEntity';
-import { TaskEntity } from '../entities/TaskEntity';
+
+import { TaskService } from './TaskService';
 
 export interface CreateReminderDto {
   taskId?: string | null;
@@ -35,8 +36,7 @@ export class ReminderService {
   constructor(
     @InjectRepository(ReminderEntity)
     private readonly reminderRepository: Repository<ReminderEntity>,
-    @InjectRepository(TaskEntity)
-    private readonly taskRepository: Repository<TaskEntity>,
+    private readonly taskService: TaskService,
     @InjectRepository(EventEntity)
     private readonly eventRepository: Repository<EventEntity>,
   ) {}
@@ -53,9 +53,9 @@ export class ReminderService {
     // cross-user probe cannot distinguish the two, matching CI-Planning's
     // createReminderChecked (services/notifications.ts).
     if (hasTask) {
-      const owns = await this.taskRepository.exists({ where: { id: dto.taskId!, userId: context.userId } });
+      const task = await this.taskService.findById(context, dto.taskId!);
 
-      if (!owns) {
+      if (!task) {
         throw new NotFoundException('Task not found');
       }
     } else {
