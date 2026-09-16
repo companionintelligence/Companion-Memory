@@ -23,6 +23,19 @@ function emptyResolver() {
   return { findByIds: jest.fn().mockResolvedValue([]) };
 }
 
+/** A SearchService whose page is exactly `items`, uncut: hydration is what these tests are about. */
+function searchOf(items: { type: string; id: string }[]): SearchService {
+  return {
+    searchPage: jest.fn().mockResolvedValue({
+      items,
+      totalMatches: items.length,
+      truncated: false,
+      limit: 25,
+      modeTaken: 'keyword',
+    }),
+  } as unknown as SearchService;
+}
+
 function makeTool(options: { search: SearchService; task: Pick<TaskService, 'findByIds'> }) {
   const noop = emptyResolver();
 
@@ -51,9 +64,7 @@ function makeTool(options: { search: SearchService; task: Pick<TaskService, 'fin
 describe('DatabaseSearchTool — task hydration (M4 Part B)', () => {
   it('hydrates a task hit through TaskService.findByIds rather than dropping it', async () => {
     const task = { id: 'task-1', title: 'Draft the Fenwick contract redline' } as Task;
-    const search = {
-      search: jest.fn().mockResolvedValue([{ type: 'task', id: 'task-1' }]),
-    } as unknown as SearchService;
+    const search = searchOf([{ type: 'task', id: 'task-1' }]);
     const findByIds = jest.fn().mockResolvedValue([task]);
     const tool = makeTool({ search, task: { findByIds } });
 
@@ -61,17 +72,15 @@ describe('DatabaseSearchTool — task hydration (M4 Part B)', () => {
 
     expect(result.success).toBe(true);
     expect(findByIds).toHaveBeenCalledWith({ userId: CONTEXT.userId }, ['task-1']);
-    expect(result.data).toEqual([task]);
+    expect(result.data?.items).toEqual([task]);
   });
 
   it('preserves search ranking across mixed entity types (task interleaved with other hits)', async () => {
     const taskHit = { id: 't1', title: 'Task hit' } as Task;
-    const search = {
-      search: jest.fn().mockResolvedValue([
-        { type: 'task', id: 't1' },
-        { type: 'event', id: 'e1' },
-      ]),
-    } as unknown as SearchService;
+    const search = searchOf([
+      { type: 'task', id: 't1' },
+      { type: 'event', id: 'e1' },
+    ]);
     const findByIds = jest.fn().mockResolvedValue([taskHit]);
     const tool = makeTool({ search, task: { findByIds } });
 
@@ -79,19 +88,17 @@ describe('DatabaseSearchTool — task hydration (M4 Part B)', () => {
 
     // The event resolver is stubbed to return [], so only the task hit survives — proving the task
     // branch runs in the same resolution pass as every other type, in search-ranked order.
-    expect(result.data).toEqual([taskHit]);
+    expect(result.data?.items).toEqual([taskHit]);
   });
 
   it('drops a task hit that TaskService cannot find (deleted/not owned) without throwing', async () => {
-    const search = {
-      search: jest.fn().mockResolvedValue([{ type: 'task', id: 'missing' }]),
-    } as unknown as SearchService;
+    const search = searchOf([{ type: 'task', id: 'missing' }]);
     const findByIds = jest.fn().mockResolvedValue([null]);
     const tool = makeTool({ search, task: { findByIds } });
 
     const result = await tool.execute(CONTEXT, { query: 'anything' });
 
     expect(result.success).toBe(true);
-    expect(result.data).toEqual([]);
+    expect(result.data?.items).toEqual([]);
   });
 });

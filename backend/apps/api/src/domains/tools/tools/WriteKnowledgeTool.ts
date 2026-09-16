@@ -7,6 +7,7 @@ import { GraphEventService, GraphQueryService } from '@ci/domains/memory';
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
+import { booleanish } from './booleanish';
 import { coerceWriteKnowledgeInput } from './writeKnowledgeCoerce';
 
 const EntityCreateSchema = z.object({
@@ -26,7 +27,7 @@ const EntityCreateSchema = z.object({
         relationshipType: z.string().min(1),
         properties: z.record(z.unknown()).optional(),
         strength: z.number().min(0).max(1).optional(),
-        isBidirectional: z.boolean().optional(),
+        isBidirectional: booleanish().optional(),
       }),
     )
     .optional(),
@@ -39,7 +40,7 @@ const EntityUpdateSchema = z.object({
   name: z.string().optional(),
   description: z.string().optional(),
   properties: z.record(z.unknown()).optional(),
-  mergeProperties: z.boolean().optional(),
+  mergeProperties: booleanish().optional(),
   removeProperties: z.array(z.string()).optional(),
   searchContent: z.string().optional(),
   linkedTable: z.string().optional(),
@@ -61,7 +62,7 @@ const RelationshipCreateSchema = z.object({
   relationshipType: z.string().min(1),
   properties: z.record(z.unknown()).optional(),
   strength: z.number().min(0).max(1).optional(),
-  isBidirectional: z.boolean().optional(),
+  isBidirectional: booleanish().optional(),
 });
 
 const RelationshipUpdateSchema = z.object({
@@ -69,10 +70,10 @@ const RelationshipUpdateSchema = z.object({
   relationshipId: z.string().uuid(),
   relationshipType: z.string().min(1).optional(),
   properties: z.record(z.unknown()).optional(),
-  mergeProperties: z.boolean().optional(),
+  mergeProperties: booleanish().optional(),
   removeProperties: z.array(z.string()).optional(),
   strength: z.number().min(0).max(1).optional(),
-  isBidirectional: z.boolean().optional(),
+  isBidirectional: booleanish().optional(),
 });
 
 const OperationSchema = z.discriminatedUnion('kind', [
@@ -84,7 +85,7 @@ const OperationSchema = z.discriminatedUnion('kind', [
 
 const WriteKnowledgeInputSchema = z.object({
   operations: z.array(OperationSchema).min(1),
-  dryRun: z.boolean().optional(),
+  dryRun: booleanish().optional(),
 });
 
 export type WriteKnowledgeInput = z.infer<typeof WriteKnowledgeInputSchema>;

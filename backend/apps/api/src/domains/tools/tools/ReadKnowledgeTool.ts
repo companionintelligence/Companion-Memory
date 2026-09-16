@@ -9,9 +9,11 @@ import { GraphQueryService, GraphNodeEntity, RelationshipEntity } from '@ci/doma
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
+import { booleanish } from './booleanish';
+
 const ReadKnowledgeInputBaseSchema = z.object({
   // Semantic entity references (preferred for LLM usage)
-  useCurrentUser: z.boolean().optional().default(true),
+  useCurrentUser: booleanish().optional().default(true),
   personName: z.string().optional(),
 
   // Direct entity references (for advanced usage)
@@ -44,9 +46,9 @@ const ReadKnowledgeInputBaseSchema = z.object({
   // Output options
   include: z
     .object({
-      properties: z.boolean().default(false),
-      relationships: z.boolean().default(true),
-      metadata: z.boolean().default(true),
+      properties: booleanish().default(false),
+      relationships: booleanish().default(true),
+      metadata: booleanish().default(true),
     })
     .default({ properties: false, relationships: true, metadata: true }),
 });

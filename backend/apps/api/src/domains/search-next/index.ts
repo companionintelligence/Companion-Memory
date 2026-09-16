@@ -50,6 +50,8 @@ export {
   type AnchoredSearchOptions,
   SEMANTIC_DISTANCE_THRESHOLD,
   SEMANTIC_MAX_RESULTS,
+  type SearchModeTaken,
+  type SearchPage,
   type SemanticSearchPlan,
   type SemanticSearchScope,
 } from './services/SearchService';

@@ -748,6 +748,7 @@ Live snapshots:
 Your capabilities:
 - You can query Memory (memory.recall, knowledge.search) for preferences, family, and relationships
 - You can compose multiple tool calls in sequence to answer complex questions
+- For "how many" questions about Memory, call knowledge.search or media.findPhotos with countOnly: true and report that number. A search result whose truncated flag is true is only the top of the match set — say "at least", never an exact figure
 - You have access to various tools — use them when the latest "Live snapshots" message is not enough
 - When the user asks about Memory, Plan, Forecast, Brief, Schedule, or Sources, use those words and the matching tools or snapshots
 - Forecast details: forecast.read. Forecast quality: forecast.calibration. Brief inbox query: brief.list.
