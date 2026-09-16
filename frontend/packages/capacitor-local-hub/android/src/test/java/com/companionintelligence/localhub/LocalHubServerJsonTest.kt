@@ -9,6 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * How the router types the JSON it is handed, and the shape of the JSON it hands back.
@@ -22,6 +23,13 @@ import org.robolectric.RobolectricTestRunner
  * `org.json` would be testing the wrong library.
  */
 @RunWith(RobolectricTestRunner::class)
+// Pinned rather than inherited from targetSdk, the same way the app module's
+// Robolectric tests are: variables.gradle now sets targetSdkVersion 36 for Play,
+// and Robolectric 4.14.1 ships android-all images only up to 35, so an inherited
+// SDK fails the whole class at configure time with
+// `Package targetSdkVersion=36 > maxSdkVersion=35` before a single assertion runs.
+// Nothing under test here is SDK-specific.
+@Config(sdk = [34])
 class LocalHubServerJsonTest {
 
     @Test
