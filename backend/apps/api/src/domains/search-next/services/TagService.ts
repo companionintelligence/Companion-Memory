@@ -11,7 +11,15 @@ import { type EntityTag, EntityTagEntity } from '../entities/EntityTagEntity';
 import { TagCategoryEntity } from '../entities/TagCategoryEntity';
 import { TagDirectionEntity } from '../entities/TagDirectionEntity';
 import { type Tag, TagEntity, TimestampedTag } from '../entities/TagEntity';
-import { TAG_KINDS, type CreateTagDto, type EntityIdentifier, type TagKind, type TaggableEntity, type TagEntitiesDto, type UpdateTagDto } from '../types';
+import {
+  TAG_KINDS,
+  type CreateTagDto,
+  type EntityIdentifier,
+  type TagKind,
+  type TaggableEntity,
+  type TagEntitiesDto,
+  type UpdateTagDto,
+} from '../types';
 
 type FindOpts = {
   includeEntities?: boolean;
@@ -776,13 +784,17 @@ export class TagService {
   ): Promise<boolean> {
     const scope = this.userScope(context);
 
-    const category = await this.tagRepository.findOne({ where: { id: categoryTagId, kind: 'category', ...scope } });
+    const category = await this.tagRepository.findOne({
+      where: { id: categoryTagId, kind: 'category', ...scope },
+    });
 
     if (category == null) {
       return false;
     }
 
-    const direction = await this.tagRepository.findOne({ where: { id: directionTagId, kind: 'direction', ...scope } });
+    const direction = await this.tagRepository.findOne({
+      where: { id: directionTagId, kind: 'direction', ...scope },
+    });
 
     if (direction == null) {
       return false;
@@ -793,7 +805,12 @@ export class TagService {
     if (enabled) {
       await optoutRepository.delete({ categoryTagId, directionTagId });
     } else {
-      await optoutRepository.createQueryBuilder().insert().values({ categoryTagId, directionTagId }).orIgnore().execute();
+      await optoutRepository
+        .createQueryBuilder()
+        .insert()
+        .values({ categoryTagId, directionTagId })
+        .orIgnore()
+        .execute();
     }
 
     return true;
@@ -805,7 +822,10 @@ export class TagService {
    * `20260916025313_planning_tag_taxonomy.sql`'s header for why a category
    * can never leak into that read.
    */
-  async getEntityCategories(context: ServiceContext, entityId: EntityIdentifier<TaggableEntity>): Promise<Tag[]> {
+  async getEntityCategories(
+    context: ServiceContext,
+    entityId: EntityIdentifier<TaggableEntity>,
+  ): Promise<Tag[]> {
     const { type, id } = entityId;
 
     const query = this.dataSource
@@ -845,7 +865,9 @@ export class TagService {
     const candidates =
       uniqueIds.length === 0
         ? []
-        : await this.tagRepository.find({ where: { id: In(uniqueIds), kind: 'category', ...this.userScope(context) } });
+        : await this.tagRepository.find({
+            where: { id: In(uniqueIds), kind: 'category', ...this.userScope(context) },
+          });
 
     // Preserve the CALLER's order (that is what `position` records), not
     // whatever order the IN-list query happened to return.

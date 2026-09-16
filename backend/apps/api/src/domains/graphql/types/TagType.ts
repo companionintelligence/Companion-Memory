@@ -14,7 +14,7 @@ export enum TagKindEnum {
 registerEnumType(TagKindEnum, {
   name: 'TagKind',
   description:
-    'The taxonomy LEVEL a tag sits at: a brand-set direction (Home/Work/Community), an intention grouped under directions, or a category grouped over intentions. Orthogonal to a tag application\'s level on EntityTagType, which is a per-entity dilution weight, not a taxonomy level.',
+    "The taxonomy LEVEL a tag sits at: a brand-set direction (Home/Work/Community), an intention grouped under directions, or a category grouped over intentions. Orthogonal to a tag application's level on EntityTagType, which is a per-entity dilution weight, not a taxonomy level.",
 });
 
 @ObjectType({ implements: () => [Node] })

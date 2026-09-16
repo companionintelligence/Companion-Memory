@@ -472,7 +472,12 @@ export class TagResolver {
     const categoryId = GlobalUID.parse('tag', input.categoryId);
     const directionId = GlobalUID.parse('tag', input.directionId);
 
-    return this.tagService.setCategoryDirectionEnabled(serviceContext, categoryId, directionId, input.enabled);
+    return this.tagService.setCategoryDirectionEnabled(
+      serviceContext,
+      categoryId,
+      directionId,
+      input.enabled,
+    );
   }
 
   /**

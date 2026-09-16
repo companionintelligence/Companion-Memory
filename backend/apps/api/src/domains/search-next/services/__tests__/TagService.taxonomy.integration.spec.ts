@@ -272,7 +272,9 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
       expect(tagLabels(await service.getCategoryDirectionOptouts(contextA, category))).toEqual(['home']);
 
       // The OTHER direction is untouched — still applies (no opt-out row for it).
-      expect((await service.getCategoryDirectionOptouts(contextA, category)).map((t) => t.id)).not.toContain(work);
+      expect((await service.getCategoryDirectionOptouts(contextA, category)).map((t) => t.id)).not.toContain(
+        work,
+      );
     });
 
     it('re-enabling removes the opt-out row', async () => {
@@ -333,13 +335,15 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
       const health = await seedTag(userA, 'health', { kind: 'category' });
       const career = await seedTag(userA, 'career', { kind: 'category' });
 
-      const result = await service.setEntityCategories(contextA, { type: 'task', id: entityId }, [health, career]);
+      const result = await service.setEntityCategories(contextA, { type: 'task', id: entityId }, [
+        health,
+        career,
+      ]);
 
       expect(result.map((t) => t.label)).toEqual(['health', 'career']);
-      expect((await service.getEntityCategories(contextA, { type: 'task', id: entityId })).map((t) => t.label)).toEqual([
-        'health',
-        'career',
-      ]);
+      expect(
+        (await service.getEntityCategories(contextA, { type: 'task', id: entityId })).map((t) => t.label),
+      ).toEqual(['health', 'career']);
     });
 
     it('a second call replaces rather than accumulates', async () => {
@@ -350,15 +354,17 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
       await service.setEntityCategories(contextA, { type: 'task', id: entityId }, [health, career]);
       await service.setEntityCategories(contextA, { type: 'task', id: entityId }, [career]);
 
-      expect((await service.getEntityCategories(contextA, { type: 'task', id: entityId })).map((t) => t.label)).toEqual([
-        'career',
-      ]);
+      expect(
+        (await service.getEntityCategories(contextA, { type: 'task', id: entityId })).map((t) => t.label),
+      ).toEqual(['career']);
     });
 
     it('caps at three and drops the rest', async () => {
       const entityId = randomUUID();
       const ids = await Promise.all(
-        ['health', 'career', 'relationships', 'growth'].map((label) => seedTag(userA, label, { kind: 'category' })),
+        ['health', 'career', 'relationships', 'growth'].map((label) =>
+          seedTag(userA, label, { kind: 'category' }),
+        ),
       );
 
       const result = await service.setEntityCategories(contextA, { type: 'task', id: entityId }, ids);
@@ -371,7 +377,11 @@ describeWithDatabase(`TagService taxonomy against a live Postgres (${availabilit
       const entityId = randomUUID();
       const health = await seedTag(userA, 'health', { kind: 'category' });
 
-      const result = await service.setEntityCategories(contextA, { type: 'task', id: entityId }, [health, health, health]);
+      const result = await service.setEntityCategories(contextA, { type: 'task', id: entityId }, [
+        health,
+        health,
+        health,
+      ]);
 
       expect(result).toHaveLength(1);
     });
