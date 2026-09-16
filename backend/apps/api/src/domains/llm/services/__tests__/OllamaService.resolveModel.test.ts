@@ -1,6 +1,6 @@
 import { ModelTierRouter } from '@ci/domains/model-routing';
 
-import { OllamaService } from '../OllamaService';
+import { OllamaService, PROMPT_MODEL } from '../OllamaService';
 
 function makeLogger() {
   return {
@@ -173,6 +173,49 @@ describe('OllamaService.resolveModel uses the loaded backend model', () => {
  * and must survive it unchanged — the demo pin is a hard override that outranks
  * every other selection input.
  */
+describe('OllamaService ignores a stored chat model the backend no longer serves', () => {
+  // A Settings → Model preference outlives the tag it names (the tag gets
+  // removed or renamed under it). Measured 2026-09-16: a stale `qwen3.6:27b`
+  // skipped the appliance default, landed chat on whichever model `ollama
+  // list` returned first, and — because the vision default probes the stored
+  // model's capabilities — read as "cannot see" and drained every queued image
+  // description as "disabled".
+  const TEXT = [{ role: 'user' as const, content: 'hello' }];
+  const IMAGE = [{ role: 'user' as const, content: 'describe', images: ['abc'] as never }];
+
+  it('falls back to the appliance default for a text turn, not to the first served model', async () => {
+    const service = buildNativeService(['first-listed:7b', PROMPT_MODEL], [], { chatModel: 'removed:27b' });
+
+    const resolved = await service.resolveModel(ctx, { messages: TEXT });
+
+    expect(resolved.model).toBe(PROMPT_MODEL);
+  });
+
+  it('keeps the first-served fallback only when neither the override nor the default is served', async () => {
+    const service = buildNativeService(['first-listed:7b', 'second:7b'], [], { chatModel: 'removed:27b' });
+
+    const resolved = await service.resolveModel(ctx, { messages: TEXT });
+
+    expect(resolved.model).toBe('first-listed:7b');
+  });
+
+  it('evaluates the vision default against the appliance default instead of the missing model', async () => {
+    const service = buildNativeService(['first-listed:7b', PROMPT_MODEL], [PROMPT_MODEL], { chatModel: 'removed:27b' });
+
+    await expect(service.resolveVisionModel('user-1')).resolves.toEqual({ model: PROMPT_MODEL, supportsVision: true });
+    // …and an image turn goes to the same model the default was evaluated for.
+    const resolved = await service.resolveModel(ctx, { messages: IMAGE });
+    expect(resolved.model).toBe(PROMPT_MODEL);
+  });
+
+  it('still honours the override while it is served', async () => {
+    const service = buildNativeService([PROMPT_MODEL, 'chosen:9b'], ['chosen:9b'], { chatModel: 'chosen:9b' });
+
+    await expect(service.resolveVisionModel('user-1')).resolves.toEqual({ model: 'chosen:9b', supportsVision: true });
+    expect((await service.resolveModel(ctx, { messages: TEXT })).model).toBe('chosen:9b');
+  });
+});
+
 describe('OllamaService.resolveModel honours the pinned demo models', () => {
   it('pins the demo vision model (tools + thinking off) when the turn carries images', async () => {
     const { service } = buildService(['gemma3:27b', 'qwen3:14b'], { pinnedDemoModels: true });

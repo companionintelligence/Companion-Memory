@@ -9,9 +9,11 @@ import { ConversationModule } from '@ci/domains/conversations';
 import { DailyMetricsModule } from '@ci/domains/daily-metrics';
 import { EventsModule } from '@ci/domains/events';
 import { FilesModule } from '@ci/domains/files';
+import { GeocodeModule } from '@ci/domains/geocode';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { MemoryModule } from '@ci/domains/memory';
 import { PlanningModule } from '@ci/domains/planning';
+import { PositionModule } from '@ci/domains/position';
 import { PredictionsModule } from '@ci/domains/predictions';
 import { SearchNextModule } from '@ci/domains/search-next';
 import { SummariesModule } from '@ci/domains/summaries';
@@ -29,6 +31,7 @@ import { CvDetectionsListener } from './listeners/CvDetectionsListener';
 import { ImageDescriptionBackfillListener } from './listeners/ImageDescriptionBackfillListener';
 import { ImageDescriptionListener } from './listeners/ImageDescriptionListener';
 import { ThingVisionListener } from './listeners/ThingVisionListener';
+import { CaptureContextService } from './services/CaptureContextService';
 import { ChatGenerationBroker } from './services/ChatGenerationBroker';
 import { ChatTurnService } from './services/ChatTurnService';
 import { InteractiveChatYieldGate } from './services/InteractiveChatYieldGate';
@@ -46,10 +49,12 @@ import { VisionRenditionService } from './services/VisionRenditionService';
     DailyMetricsModule,
     EventsModule,
     FilesModule,
+    GeocodeModule,
     IntelligenceModule,
     ImageDescriptionPreferenceModule,
     MemoryModule,
     PlanningModule,
+    PositionModule,
     PredictionsModule,
     SearchNextModule,
     SummariesModule,
@@ -63,6 +68,7 @@ import { VisionRenditionService } from './services/VisionRenditionService';
     CvDetectionsListener,
     ImageDescriptionListener,
     VisionRenditionService,
+    CaptureContextService,
     ImageDescriptionBackfillListener,
     ImageDescriptionSweepCron,
     InteractiveChatYieldGate,

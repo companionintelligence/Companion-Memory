@@ -4,6 +4,7 @@ const USER = 'user-1';
 const PREVIEW_ID = 'preview-1';
 const ORIGINAL_ID = 'file-1';
 const RENDERED = Buffer.from('rendered-jpeg');
+const ORIGINAL = Buffer.from('original-bytes-with-exif');
 const ANSWER = JSON.stringify({
   title: 'Gray Squirrel Foraging in Leaves',
   description: 'A squirrel on the ground.',
@@ -13,9 +14,11 @@ function makeLogger() {
   return { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
 }
 
-function makeListener(opts: { enabled?: boolean; rendition?: unknown; content?: string } = {}) {
-  const { enabled = true, content = ANSWER } = opts;
-  const rendition = 'rendition' in opts ? opts.rendition : { jpeg: RENDERED, source: 'original' };
+function makeListener(
+  opts: { enabled?: boolean; rendition?: unknown; content?: string; captureContext?: { text: string; source: string } | null } = {},
+) {
+  const { enabled = true, content = ANSWER, captureContext = null } = opts;
+  const rendition = 'rendition' in opts ? opts.rendition : { jpeg: RENDERED, source: 'original', original: ORIGINAL };
   const files = new Map<string, Record<string, unknown>>([
     [PREVIEW_ID, { id: PREVIEW_ID, parentId: ORIGINAL_ID, key: 'preview-key', contentType: 'image/jpeg' }],
     [ORIGINAL_ID, { id: ORIGINAL_ID, parentId: null, key: 'orig-key', contentType: 'image/heic' }],
@@ -36,6 +39,7 @@ function makeListener(opts: { enabled?: boolean; rendition?: unknown; content?: 
   };
   const preference = { isEnabled: jest.fn(async () => enabled) };
   const renditionService = { render: jest.fn(async () => rendition) };
+  const captureContextService = { build: jest.fn(async () => captureContext) };
   const logger = makeLogger();
   const listener = new ImageDescriptionListener(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,10 +51,12 @@ function makeListener(opts: { enabled?: boolean; rendition?: unknown; content?: 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     renditionService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    captureContextService as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
   );
 
-  return { listener, fileService, ollamaService, renditionService, logger };
+  return { listener, fileService, ollamaService, renditionService, captureContextService, logger };
 }
 
 describe('ImageDescriptionListener', () => {
@@ -116,6 +122,47 @@ describe('ImageDescriptionListener', () => {
 
     expect(renditionService.render).not.toHaveBeenCalled();
     expect(ollamaService.chat).not.toHaveBeenCalled();
+  });
+
+  // Measured 2026-09-16: without a hint the model named five different cities
+  // for one Palermo photo; with the appliance's own one-line context it named
+  // the right one every time. The rule that stops guessing is always present.
+  it('always tells the model not to name places or brands it cannot actually see', async () => {
+    const { listener, ollamaService, captureContextService } = makeListener();
+
+    await listener.handle({ userId: USER, previewId: PREVIEW_ID });
+
+    const [, messages] = ollamaService.chat.mock.calls[0]!;
+    expect(messages[0].content).toContain('only when it is legible or unmistakable in the image');
+    expect(messages[0].content).not.toContain('Context:');
+    // The original's bytes went to the context builder, keyed by the ORIGINAL's id.
+    expect(captureContextService.build).toHaveBeenCalledWith(expect.objectContaining({ userId: USER }), ORIGINAL, ORIGINAL_ID);
+  });
+
+  it('adds the capture context to the prompt when the photo yields one', async () => {
+    const { listener, ollamaService } = makeListener({
+      captureContext: { text: 'Context: the photo was taken on 2024-05-05. The owner was in Palermo.', source: 'events' },
+    });
+
+    await listener.handle({ userId: USER, previewId: PREVIEW_ID });
+
+    const [, messages] = ollamaService.chat.mock.calls[0]!;
+    const content: string = messages[0].content;
+    expect(content).toContain('Context: the photo was taken on 2024-05-05. The owner was in Palermo.');
+    // Placed after the rules and before the schema, so it reads as input, not instruction.
+    expect(content.indexOf('Context:')).toBeGreaterThan(content.indexOf('only when it is legible'));
+    expect(content.indexOf('Context:')).toBeLessThan(content.indexOf('Return a JSON object'));
+  });
+
+  it('never builds context from a preview-only fallback, which has no EXIF', async () => {
+    const { listener, ollamaService, captureContextService } = makeListener({
+      rendition: { jpeg: RENDERED, source: 'preview' },
+    });
+
+    await listener.handle({ userId: USER, previewId: PREVIEW_ID });
+
+    expect(captureContextService.build).not.toHaveBeenCalled();
+    expect(ollamaService.chat).toHaveBeenCalled();
   });
 
   it('honours a capture source that already described the image', async () => {

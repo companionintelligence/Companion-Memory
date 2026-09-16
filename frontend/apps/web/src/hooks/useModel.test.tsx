@@ -138,6 +138,38 @@ describe('useModel', () => {
     await waitFor(() => expect(result.current[0].selectedModel).toBe('qwen-vl'));
   });
 
+  it('clears a stored chat-model preference that names a model no longer served', async () => {
+    const { fetchMock, state } = setFetch({ state: { ...defaultServerState(), chatModel: 'removed:27b' } });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    // The page shows the first served model, and the server is told so — no
+    // stale name left behind to steer chat or the image-description default.
+    expect(result.current[0].selectedModel).toBe('llama3');
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/personalization/chat-model',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ chatModel: null }) }),
+      ),
+    );
+    await waitFor(() => expect(state.chatModel).toBeNull());
+  });
+
+  it('does not clear a stored preference when the backend serves no models at all', async () => {
+    const { fetchMock, state } = setFetch({ models: [], state: { ...defaultServerState(), chatModel: 'qwen-vl' } });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].selectedModel).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/personalization/chat-model',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(state.chatModel).toBe('qwen-vl');
+  });
+
   it('selecting a model persists it to the server and (when vision-capable) also sets the vision model locally', async () => {
     const { fetchMock } = setFetch();
     const { result } = renderHook(() => useModel(), { wrapper });

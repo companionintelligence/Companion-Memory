@@ -367,6 +367,9 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 
 @Injectable()
 export class OllamaService implements OnModuleInit {
+  /** `${userId}:${storedModel}` pairs already warned about by resolveEffectiveChatModel. */
+  private readonly staleChatModelOverridesWarned = new Set<string>();
+
   private lastPreflight: ChatModelPreflight | null = null;
 
   constructor(
@@ -1397,13 +1400,54 @@ export class OllamaService implements OnModuleInit {
       }
     }
 
-    const userOverride = context.userId ? await this.chatModelPreference?.getChatModel(context.userId) : null;
-    const effectiveChatModel = userOverride ?? PROMPT_MODEL;
+    const effectiveChatModel = await this.resolveEffectiveChatModel(context.userId, served);
     const candidates = [requestedModel, effectiveChatModel].filter((model): model is string =>
       Boolean(model && model.trim()),
     );
 
     return candidates.find((model) => served.includes(model)) ?? served[0];
+  }
+
+  /**
+   * The chat model this user's work actually runs on: their Settings → Model
+   * override when the backend is serving it, otherwise the appliance default
+   * ({@link PROMPT_MODEL}) when THAT is served, otherwise the default anyway
+   * and the caller decides (chat falls through to the first served model; a
+   * vision probe of an unserved model reads as "cannot see").
+   *
+   * A stored override naming a model that is no longer installed — the tag
+   * was removed or renamed underneath the preference — must not steer
+   * anything. Before this it did, twice over: chat skipped the appliance
+   * default entirely and landed on whichever model `ollama list` returned
+   * first, and {@link resolveVisionModel} probed the missing model's
+   * capabilities, got none, and silently switched "Describe images" off for
+   * every job (measured 2026-09-16: a stale `qwen3.6:27b` after the tag was
+   * removed drained the whole description queue as "disabled"). The
+   * preference itself is left in place — the settings page clears it — this
+   * only stops it winning. Warned once per user and model per process, not
+   * once per queued job.
+   */
+  private async resolveEffectiveChatModel(userId: string | undefined, served: string[]): Promise<string> {
+    const userOverride = userId ? await this.chatModelPreference?.getChatModel(userId) : null;
+
+    if (userOverride && served.includes(userOverride)) {
+      return userOverride;
+    }
+
+    if (userOverride) {
+      const key = `${userId}:${userOverride}`;
+
+      if (!this.staleChatModelOverridesWarned.has(key)) {
+        this.staleChatModelOverridesWarned.add(key);
+        this.logger.warn('Stored chat model is not served by the active LLM backend; ignoring the preference', {
+          userId,
+          storedModel: userOverride,
+          fallbackModel: served.includes(PROMPT_MODEL) ? PROMPT_MODEL : (served[0] ?? null),
+        });
+      }
+    }
+
+    return PROMPT_MODEL;
   }
 
   /**
@@ -1423,8 +1467,7 @@ export class OllamaService implements OnModuleInit {
     served?: string[],
   ): Promise<{ model: string; supportsVision: boolean }> {
     const servedIds = served ?? (await this.listServedChatModelIds());
-    const userOverride = userId ? await this.chatModelPreference?.getChatModel(userId) : null;
-    const effectiveChatModel = userOverride ?? PROMPT_MODEL;
+    const effectiveChatModel = await this.resolveEffectiveChatModel(userId, servedIds);
 
     // vLLM/OpenAI-compat exposes one served chat id with no per-model
     // capability probe (getAvailableModels hard-codes `vision: false` for
