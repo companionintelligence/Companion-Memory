@@ -67,6 +67,21 @@ jobs:
       E2E_BASE_URL: http://localhost:5173
       AUTH_DEFAULT_USER_EMAIL: jsmith@example.com
       AUTH_DEFAULT_USER_PASSWORD: 'replace-me-pw-000000'
+      # The `Start Ollama` step below publishes it on the runner's own
+      # localhost. `services.ollama.host` defaults to
+      # `http://host.docker.internal:11434`, which does not resolve OUTSIDE a
+      # container — and the seed and Playwright's `webServer` api both run on
+      # the host, not in one. Without this they rely on the startup
+      # host-rewrite (`CI_LLM_HOST_REWRITE`) guessing right, which logs a
+      # warning on every boot; naming it here is the same answer, stated.
+      # `embedding.host` falls back to this, so the embedder follows it too.
+      #
+      # NOTE: OLLAMA_HOST is also the variable Ollama's OWN server reads to
+      # choose its bind address. That is not a conflict here — the server runs
+      # in a container, which does not inherit this job env — but do not
+      # "simplify" this by running ollama directly on the runner without
+      # re-reading that sentence.
+      OLLAMA_HOST: http://localhost:11434
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -123,6 +138,39 @@ jobs:
         run: |
           docker compose -f docker-compose.yml -f docker-compose.local.yml --profile local \
             up -d database setup-database object-store
+
+      # Embeddings are not optional in this lane, they were just never
+      # provided. `PersonSearchIndexListener.upsertPerson` (and its
+      # item/note/message/content siblings) calls
+      # `EmbeddingGenerationService.generateEmbedding` INLINE on every
+      # `*.created` event the seed emits, and `LocalEventService` rejects on a
+      # failed job — so with nothing answering on 11434 the seed died on its
+      # first person with `TypeError: fetch failed`, every run, back to at
+      # least 2026-07-17. It went unnoticed because the job carried
+      # `continue-on-error: true` until that flag was removed.
+      #
+      # Pinned to the SAME version the desktop sidecar downloads
+      # (`OLLAMA_VERSION` in local_model/ollama_sidecar.rs). Keep the two in
+      # step: a lane that embeds on a different build than the appliance ships
+      # is testing something nobody runs.
+      #
+      # Only the embedding model is pulled. `nomic-embed-text` is ~275 MB;
+      # the chat tag (`gemma4:e4b`) is multiple GB and this suite runs
+      # `--grep-invert @llm` precisely because nothing here exercises chat. If
+      # a spec ever needs it, pull it here and budget the runner disk.
+      - name: Start Ollama (embeddings for the seed)
+        run: |
+          docker run -d --name e2e-ollama -p 11434:11434 ollama/ollama:0.32.15
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:11434/api/version && break
+            echo "waiting for ollama ($i)…"; sleep 2
+          done
+          curl -sf http://localhost:11434/api/version > /dev/null || {
+            echo "::error::Ollama did not become ready; the seed cannot embed."
+            docker logs e2e-ollama || true
+            exit 1
+          }
+          docker exec e2e-ollama ollama pull nomic-embed-text
 
       - name: Wait for Postgres
         run: |
