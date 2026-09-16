@@ -53,10 +53,10 @@ import { ProposedTaskReconcileService } from './services/ProposedTaskReconcileSe
 import { PushSubscriptionService } from './services/PushSubscriptionService';
 import { ReminderDispatchService } from './services/ReminderDispatchService';
 import { ReminderService } from './services/ReminderService';
-import { TaskService } from './services/TaskService';
 import { EventNowService, TodoProcessService, VerifyDoneService } from './services/TodoProcessService';
 import { TodoScanService } from './services/TodoScanService';
 import { WebPushService } from './services/WebPushService';
+import { TaskModule, TaskService } from './task.module';
 
 /**
  * @internal
@@ -64,12 +64,15 @@ import { WebPushService } from './services/WebPushService';
 @Module({
   // UserEntity is read-only here: PlanningTimeService resolves ci.users.timezone,
   // the single source of truth for "the user's day".
+  //
+  // TaskEntity/TaskPendingChangeEntity are NOT registered here: TaskService now lives in
+  // TaskModule (./task.module.ts), which registers them itself. That split is what lets
+  // `domains/tools` depend on TaskService without also pulling in LlmCoreModule (below) — see
+  // TaskModule's doc comment for why that matters.
   imports: [
     TypeOrmModule.forFeature([
       PlanningPrefsEntity,
-      TaskEntity,
       TaskDependencyEntity,
-      TaskPendingChangeEntity,
       ReminderEntity,
       PushSubscriptionEntity,
       UserEntity,
@@ -82,10 +85,10 @@ import { WebPushService } from './services/WebPushService';
     SearchNextModule,
     LlmCoreModule,
     PersonalizationModule,
+    TaskModule,
   ],
   providers: [
     PlanningPrefsService,
-    TaskService,
     PlanningTimeService,
     PlannedBlockService,
     ProposedTaskReconcileService,
@@ -102,7 +105,7 @@ import { WebPushService } from './services/WebPushService';
     PlanningJobsListener,
   ],
   exports: [
-    TaskService,
+    TaskModule,
     PlanningTimeService,
     PlannedBlockService,
     PlanningPrefsService,

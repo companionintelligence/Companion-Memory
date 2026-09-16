@@ -29,6 +29,7 @@ import {
 } from '@ci/domains/memory';
 import { NoteService, type Note } from '@ci/domains/notes';
 import { FileChunkService, type FileChunk } from '@ci/domains/parsing';
+import { TaskService, type Task } from '@ci/domains/planning/task.module';
 import {
   INDEXABLE_ENTITIES,
   SearchService,
@@ -65,6 +66,7 @@ export type SearchResult =
   | Place
   | ProductModel
   | Receipt
+  | Task
   | Thread;
 
 @Injectable()
@@ -78,7 +80,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
     // re-ranking, so results degrade to keyword/recency — a worse answer, not an impossible one,
     // and this is the intent the offline surface exists for.
     localCapable: true,
-    produces: ['event', 'content', 'person', 'place', 'note', 'file'],
+    produces: ['event', 'content', 'person', 'place', 'note', 'file', 'task'],
     phrases: ['Search for $query', 'Find anything about $query'],
     description:
       'Search across all your personal data using natural language or keywords. ' +
@@ -142,6 +144,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
     private readonly placeService: PlaceService,
     private readonly productModelService: ProductModelService,
     private readonly receiptService: ReceiptService,
+    private readonly taskService: TaskService,
     private readonly threadService: ThreadService,
     private readonly searchService: SearchService,
     protected readonly logger: LoggerService,
@@ -209,6 +212,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
     const placeIds = groupedByType.get('place') || [];
     const productIds = groupedByType.get('product') || [];
     const receiptIds = groupedByType.get('receipt') || [];
+    const taskIds = groupedByType.get('task') || [];
     const threadIds = groupedByType.get('thread') || [];
 
     const [
@@ -226,6 +230,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
       places,
       products,
       receipts,
+      tasks,
       threads,
     ] = await Promise.all([
       this.answerService.findByIds(context, answerIds),
@@ -242,6 +247,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
       this.placeService.findByIds(context, placeIds),
       this.productModelService.findByIds(context, productIds),
       this.receiptService.findByIds(context, receiptIds),
+      this.taskService.findByIds(context, taskIds),
       this.threadService.findByIds(context, threadIds),
     ]);
 
@@ -270,6 +276,7 @@ export class DatabaseSearchTool extends BaseTool<DatabaseSearchInput, SearchResu
     places.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('place', d.id), d));
     products.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('product', d.id), d));
     receipts.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('receipt', d.id), d));
+    tasks.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('task', d.id), d));
     threads.filter((d) => d != null).forEach((d) => resultMap.set(makeCompositeKey('thread', d.id), d));
 
     const orderedResults = results
