@@ -13,7 +13,13 @@ import {
   type Event,
   platformIdentity,
 } from '@ci/domains/memory';
-import { PersonalizationService } from '@ci/domains/personalization';
+// Reaches into personalization's internals rather than its public barrel
+// (`@ci/domains/personalization`) deliberately: that barrel imports LlmCoreModule, which imports
+// ToolsModule, which — via `domains/tools`' TaskModule dependency — closes a cycle back to THIS
+// file now that TaskModule also provides PlannedBlockService for the curated `planning.scheduleTask`
+// / `planning.plannedBlocks` tool surface. Same trade `domains/tools/index.ts` already makes for the
+// same class, for the same reason (see its own comment on its `PersonalizationService` import).
+import { PersonalizationService } from '@ci/domains/personalization/services/PersonalizationService';
 
 import {
   computePlacement,

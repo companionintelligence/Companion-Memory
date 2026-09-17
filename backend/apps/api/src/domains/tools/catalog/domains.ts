@@ -85,7 +85,9 @@ export const INTENT_DOMAINS: readonly IntentDomain[] = [
   {
     key: 'planning',
     title: 'Planning',
-    description: 'Find and create tasks in the personal to-do list.',
+    description:
+      'Find, create, update, and complete tasks in the personal to-do list, and schedule them ' +
+      'onto the calendar.',
   },
 ] as const;
 

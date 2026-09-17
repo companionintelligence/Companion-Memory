@@ -80,8 +80,12 @@ import { MessagingSendTool } from './tools/MessagingSendTool';
 import { PeopleFindTool } from './tools/PeopleFindTool';
 import { PlacesFindTool } from './tools/PlacesFindTool';
 import { PlacesNextTool } from './tools/PlacesNextTool';
+import { PlanningCompleteTaskTool } from './tools/PlanningCompleteTaskTool';
 import { PlanningCreateTaskTool } from './tools/PlanningCreateTaskTool';
 import { PlanningFindTasksTool } from './tools/PlanningFindTasksTool';
+import { PlanningPlannedBlocksTool } from './tools/PlanningPlannedBlocksTool';
+import { PlanningScheduleTaskTool } from './tools/PlanningScheduleTaskTool';
+import { PlanningUpdateTaskTool } from './tools/PlanningUpdateTaskTool';
 import { ReadKnowledgeTool } from './tools/ReadKnowledgeTool';
 import { SuggestionsFeedbackTool } from './tools/SuggestionsFeedbackTool';
 import { SuggestionsListTool } from './tools/SuggestionsListTool';
@@ -125,11 +129,15 @@ const nativeToolInstances = [
   MessagingSendTool,
   MessagingListChatsTool,
   MessagingListMessagesTool,
-  // The planning domain's intents — thin wrappers over TaskService
+  // The planning domain's intents — thin wrappers over TaskService/PlannedBlockService
   // (domains/planning), same "declared here, implemented in its own domain"
   // pattern as import/messaging above.
   PlanningFindTasksTool,
   PlanningCreateTaskTool,
+  PlanningCompleteTaskTool,
+  PlanningUpdateTaskTool,
+  PlanningScheduleTaskTool,
+  PlanningPlannedBlocksTool,
 ];
 
 /**
@@ -156,14 +164,15 @@ const nativeToolInstances = [
     // For MessagingSendTool/MessagingListChatsTool/MessagingListMessagesTool's
     // BlueBubblesClientService dependency.
     BlueBubblesModule,
-    // For PlanningFindTasksTool/PlanningCreateTaskTool's TaskService dependency.
-    // Imports TaskModule (domains/planning/task.module.ts) rather than the full
-    // PlanningModule (`@ci/domains/planning`): that module imports LlmCoreModule
-    // (for TodoScanService et al.), which imports ToolsModule — so importing it
-    // HERE would close tools → planning → llm → tools. TaskModule depends only
-    // on EventsModule/MemoryModule, both already imported above, so it breaks
-    // the cycle the same way PersonalizationService is provided directly below
-    // instead of through PersonalizationModule.
+    // For the planning tools' TaskService/PlannedBlockService dependency (the latter for
+    // PlanningScheduleTaskTool/PlanningPlannedBlocksTool). Imports TaskModule
+    // (domains/planning/task.module.ts) rather than the full PlanningModule
+    // (`@ci/domains/planning`): that module imports LlmCoreModule (for TodoScanService et
+    // al.), which imports ToolsModule — so importing it HERE would close
+    // tools → planning → llm → tools. TaskModule's own dependencies (EventsModule/MemoryModule,
+    // plus a directly-provided PersonalizationService — see task.module.ts) are all already
+    // cycle-safe, the same way PersonalizationService is provided directly below instead of
+    // through PersonalizationModule.
     TaskModule,
     // ci.tool_invocations — the bounded invocation ledger the tool.invoked listener writes —
     // and ci.pending_actions, this domain's FIRST database access before either table existed.

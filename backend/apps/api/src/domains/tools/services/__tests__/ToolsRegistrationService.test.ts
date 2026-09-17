@@ -27,7 +27,7 @@ describe('ToolsRegistrationService', () => {
     expect(registerProvider).toHaveBeenCalledWith(provider);
   });
 
-  it('passes domain validation for the planning domain (planning.findTasks/createTask)', async () => {
+  it('passes domain validation for the full planning domain (find/create/complete/update/schedule/plannedBlocks)', async () => {
     const registerProvider = jest.fn().mockResolvedValue(undefined);
     const registry = {
       registerProvider,
@@ -36,6 +36,17 @@ describe('ToolsRegistrationService', () => {
         schema('planning.createTask', 'planning', {
           privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
         }),
+        schema('planning.completeTask', 'planning', {
+          privacy: { access: 'write', sensitivity: 'personal', destructive: true, external: false },
+          localCapable: false,
+        }),
+        schema('planning.updateTask', 'planning', {
+          privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
+        }),
+        schema('planning.scheduleTask', 'planning', {
+          privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
+        }),
+        schema('planning.plannedBlocks', 'planning'),
       ],
     } as any;
 
