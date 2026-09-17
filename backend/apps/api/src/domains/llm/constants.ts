@@ -97,8 +97,16 @@ export const LLM_BACKGROUND_QUEUE_OPTIONS: QueueOptions = {
  * square. Not the 300 px preview (too small — subjects vanish) and not the
  * raw original (unbounded — image tokens scale with pixels on some models,
  * and HEIC cannot be sent at all). See VisionRenditionService for the numbers.
+ *
+ * 1280, down from 1500, measured 2026-09-16 on qwen3.8:27b over nine photos:
+ * ~1,030 image tokens instead of ~1,340 and 1.6 s instead of 2.1 s of prefill
+ * per photo, with nothing lost that 1500 had — a RAM module's printed part
+ * number and DDR generation still read correctly, and a framed monitor was
+ * identified at 1280 where 1500 called it a mirror. 1024 was measured too and
+ * is where fine print breaks (the same label came back as DDR3 with a garbled
+ * part number) and distant subjects get confidently misnamed.
  */
-export const VISION_RENDITION_MAX_DIMENSION = 1500;
+export const VISION_RENDITION_MAX_DIMENSION = 1280;
 export const VISION_RENDITION_JPEG_QUALITY = 85;
 
 export const IMAGE_DESCRIPTION_QUEUE = 'image-description';

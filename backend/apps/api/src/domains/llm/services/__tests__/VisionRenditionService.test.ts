@@ -34,6 +34,8 @@ describe('VisionRenditionService.render', () => {
     await expect(service.render(context, original, 'preview-key')).resolves.toEqual({
       jpeg: RENDERED,
       source: 'original',
+      // The same download, handed back so the EXIF read (capture context) needs no second fetch.
+      original: ORIGINAL,
     });
 
     expect(fileService.getFileContent).toHaveBeenCalledTimes(1);

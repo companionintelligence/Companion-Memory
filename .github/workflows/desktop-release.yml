@@ -55,10 +55,55 @@
 # .deb/.rpm in this codebase.
 name: Desktop Release
 
+# >>> ci-local:gated original triggers below, restore with `ci-local restore`
+# on:
+#   push:
+#     tags:
+#       - 'desktop-v*'
+#   workflow_dispatch:
+#     inputs:
+#       version_name:
+#         description: 'Marketing version (e.g. 0.1.0). Defaults to the tag or 0.1.0.'
+#         type: string
+#         required: false
+#       # The desktop marketing version is NOT a server image tag — see the
+#       # `version` job's "Resolve the CI-Server image tag" step below (and the
+#       # macOS "Sync compose resources" step) for the whole story. This input is
+#       # read in exactly ONE place, that step; it is the only way to override
+#       # the resolver, and it must name a tag
+#       # that really exists under ghcr.io/companionintelligence/companion/*
+#       # (date-shaped release tags like 2026.9.5, or latest).
+#       server_image_tag:
+#         description: 'Optional: pin the bundled CI-Server image tag (e.g. 2026.9.5). Leave blank to let sync-compose-resources.cjs resolve a verified, fully-published release.'
+#         type: string
+#         required: false
+#       # Same escape hatch, same name, same accountability requirements as
+#       # publish.yml's input of this name — the two release lanes are operated
+#       # by the same people and must not need two different mental models.
+#       # Unavailable on a tag push (the `inputs` context is empty there), which
+#       # is deliberate: bypassing the gate has to be a conscious dispatch.
+#       skip_test_gate:
+#         description: >-
+#           Release even though no successful desktop-build.yml run exists for
+#           this commit. Emergency escape hatch only — it requires
+#           bypass_reason, prints a ::warning:: naming the actor, and writes the
+#           reason to the run summary.
+#         type: boolean
+#         default: false
+#         required: false
+#       bypass_reason:
+#         description: >-
+#           REQUIRED when skip_test_gate is true. Why signed, notarized desktop
+#           artifacts are going out without the evidence — an incident number, a
+#           link, a sentence. The gate refuses a blank reason: a bypass with no
+#           stated cause is indistinguishable from a mis-click on the dispatch
+#           form, and the run log that would otherwise be the only record of it
+#           expires.
+#         type: string
+#         default: ''
+#         required: false
+# <<< ci-local:gated
 on:
-  push:
-    tags:
-      - 'desktop-v*'
   workflow_dispatch:
     inputs:
       version_name:

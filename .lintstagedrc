@@ -5,6 +5,8 @@
     "prettier --write"
   ],
   "*.plist": ["node scripts/check-plist-duplicate-keys.mjs"],
+  "frontend/apps/android/**/*.xml": ["node scripts/check-xml-comments.mjs"],
+  "frontend/packages/capacitor-*/android/**/*.xml": ["node scripts/check-xml-comments.mjs"],
   "*.py": ["uv run ruff check --fix", "uv run ruff format"],
   "**/src/ci/__init__.py": ["sh scripts/check-ci-namespace.sh"],
   "frontend/apps/{android,ios}/package.json": ["node scripts/check-capacitor-native-sync.mjs"],

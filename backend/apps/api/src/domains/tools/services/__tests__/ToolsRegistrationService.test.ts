@@ -27,6 +27,34 @@ describe('ToolsRegistrationService', () => {
     expect(registerProvider).toHaveBeenCalledWith(provider);
   });
 
+  it('passes domain validation for the full planning domain (find/create/complete/update/schedule/plannedBlocks)', async () => {
+    const registerProvider = jest.fn().mockResolvedValue(undefined);
+    const registry = {
+      registerProvider,
+      getAvailableTools: () => [
+        schema('planning.findTasks', 'planning'),
+        schema('planning.createTask', 'planning', {
+          privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
+        }),
+        schema('planning.completeTask', 'planning', {
+          privacy: { access: 'write', sensitivity: 'personal', destructive: true, external: false },
+          localCapable: false,
+        }),
+        schema('planning.updateTask', 'planning', {
+          privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
+        }),
+        schema('planning.scheduleTask', 'planning', {
+          privacy: { access: 'write', sensitivity: 'personal', destructive: false, external: false },
+        }),
+        schema('planning.plannedBlocks', 'planning'),
+      ],
+    } as any;
+
+    const service = new ToolsRegistrationService(registry, provider, makeLogger());
+
+    await expect(service.onModuleInit()).resolves.toBeUndefined();
+  });
+
   it('fails fast when a registered tool declares an unknown domain', async () => {
     const registry = {
       registerProvider: jest.fn().mockResolvedValue(undefined),

@@ -261,3 +261,35 @@ describe('FileService.uploadWithDedupInfo', () => {
     });
   });
 });
+
+describe('FileService.describedImageCoverage', () => {
+  it('counts original images and how many carry a non-blank description, for the one user', async () => {
+    const repo = makeRepo() as ReturnType<typeof makeRepo> & { query: jest.Mock };
+    repo.query = jest.fn().mockResolvedValue([{ images: '22870', described: '5393' }]);
+    const { service } = makeService(repo);
+
+    const coverage = await service.describedImageCoverage(ownerCtx);
+
+    expect(coverage).toEqual({ images: 22_870, described: 5_393 });
+
+    const [sql, params] = repo.query.mock.calls[0];
+
+    // ORIGINALs only — previews and thumbnails are derived copies of the same
+    // picture — and a blank description is "not described", the same predicate
+    // the description sweep uses to decide what is still owed one.
+    expect(params).toEqual(['owner-1', 'ORIGINAL']);
+    expect(sql).toContain("content_type LIKE 'image/%'");
+    expect(sql).toContain('deleted_at IS NULL');
+    expect(sql).toContain("btrim(description) <> ''");
+  });
+
+  it('a user with no images is zero of zero, not NaN', async () => {
+    const repo = makeRepo() as ReturnType<typeof makeRepo> & { query: jest.Mock };
+    repo.query = jest.fn().mockResolvedValue([{ images: '0', described: '0' }]);
+
+    expect(await makeService(repo).service.describedImageCoverage(ownerCtx)).toEqual({
+      images: 0,
+      described: 0,
+    });
+  });
+});

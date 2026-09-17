@@ -15,7 +15,12 @@
 //
 // but only from `:app:mergeDebugResources`, i.e. two minutes into a full Gradle
 // build, on a lane that is `workflow_dispatch`-only. This check is milliseconds
-// and runs on every PR.
+// and runs on every commit that touches a staged Android XML file, via
+// `.lintstagedrc` — not from a GitHub Actions workflow. It briefly ran from
+// `pr-gate.yml`'s `Mobile native guards` job instead; that file was deleted
+// 2026-09-17 (cost — see docs/CI.md), so lint-staged is this check's only home
+// now, same as its siblings `check-plist-duplicate-keys.mjs` and
+// `check-capacitor-native-sync.mjs`.
 //
 // Dependency-free on purpose, like its siblings in this directory: `node:22`
 // with no install step, and no XML library — Node ships no XML parser, and
@@ -25,8 +30,8 @@
 //
 // CALL SHAPE: paths in argv, like scripts/check-plist-duplicate-keys.mjs. With
 // no arguments it exits 0 having checked nothing, so any caller must assert its
-// own file list is non-empty — see the `Mobile native guards` job in
-// .github/workflows/pr-gate.yml, which does exactly that.
+// own file list is non-empty — lint-staged does this itself, by only invoking
+// a matcher's command when at least one staged file matched its glob.
 
 import { readFileSync } from 'node:fs';
 

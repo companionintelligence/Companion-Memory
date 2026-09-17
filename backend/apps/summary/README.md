@@ -12,6 +12,9 @@ CI-Summary is a Python sidecar that creates intelligent, multi-layered summaries
 
 - **Hourly Summaries**: Detailed hour-by-hour activity digests
 - **Daily Summaries**: Day-level synthesis from hourly summaries
+- **macOS activity**: App/device observations use their original occurrence
+  windows; [snapshot import and HBPE refresh](../../../docs/import/macos-activity.md)
+  documents acquisition and historical backfill.
 - **Weekly Summaries**: Week-level insights from daily summaries
 - **Monthly Summaries**: Month-level rollups from the weekly layer
 

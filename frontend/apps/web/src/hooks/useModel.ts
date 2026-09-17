@@ -167,9 +167,28 @@ function useModel(): Value {
       setThinkingPreferred(thinkingPref?.enabled !== false);
 
       const persistedModel = chatModelPref?.chatModel ?? null;
-      const model = data.find((m) => m.model === persistedModel) ? persistedModel : (data[0]?.model ?? null);
+      const persistedIsServed = persistedModel != null && data.some((m) => m.model === persistedModel);
+      const model = persistedIsServed ? persistedModel : (data[0]?.model ?? null);
 
       setSelectedModel(model);
+
+      // A stored preference naming a model the backend no longer serves (the
+      // tag was removed or renamed under it). Showing the first served model
+      // as "selected" while the server keeps the stale name was actively
+      // misleading: the page looked right, there was no click that would
+      // rewrite it, and the server went on steering by it — chat to whatever
+      // `ollama list` returned first, and the "Describe images" default to a
+      // capability probe of a missing model, i.e. off. Clear it so the two
+      // agree; the appliance default then applies. Only when the list is
+      // non-empty — an empty list is the backend being unreachable, not the
+      // model being gone, and must not erase a valid preference.
+      if (persistedModel != null && !persistedIsServed && data.length > 0) {
+        void fetchJson('/api/personalization/chat-model', {
+          method: 'POST',
+          headers: requestHeaders,
+          body: JSON.stringify({ chatModel: null }),
+        }).catch(() => undefined);
+      }
 
       const visionModels = data.filter((m) => m.vision === true);
       const persistedVisionModel = localStorage.getItem(ACTIVE_VISION_MODEL_KEY);

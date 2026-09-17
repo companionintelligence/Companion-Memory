@@ -15,6 +15,10 @@ reads insight, daily, weekly, or monthly summaries.
 - All three share exactly the same Qwen classification, quality checks,
   vocabulary updates, and idempotent label insert logic.
 - One bad summary is logged and skipped without losing labels already stored.
+- Label writes lock and compare the current hourly summary's first 400 text
+  characters. A classification computed before a concurrent forced backfill
+  cannot be saved against its revised text. The summary-update migration
+  invalidates previous labels, so enriched macOS history is classified again.
 
 ## Cancellation
 

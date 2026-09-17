@@ -608,26 +608,27 @@ docker compose exec hbpe-service python -c \
 `.github/workflows/publish.yml` builds every `companion/*` image natively per architecture, merges
 the legs into a multi-arch manifest list, and registers the result with CI-Portal.
 
-**Image publish is not triggered by pushing a tag.** Most workflows — including
-the *check* workflows `ci.yml`, `e2e.yml`, `desktop-e2e.yml`,
+**Image publish is not triggered by pushing a tag — and, as of 2026-09-17,
+nothing else is either.** Every workflow in this repo, including the *check*
+workflows `ci.yml`, `e2e.yml`, `desktop-e2e.yml`,
 `migration-integrity-check.yml`, `style-canon-lint.yml`, `consent-path-gate.yml`
-and `codeql.yml` — are `workflow_dispatch`-only, so an absent or green check
+and `codeql.yml`, is `workflow_dispatch`-only, so an absent or green check
 means nobody dispatched it, not that anything passed. (`codeql.yml` used to run
 on push/PR plus a weekly cron and was **red on every run by baseline**; it was
-gated to dispatch for exactly that reason, so it no longer reports at all.) A
-handful do run on their own — as of 2026-09-07, `pr-gate.yml` on every
-`pull_request` against `main` (lint, typecheck, **the frontend unit suite, a
-web-bundle build**, and the dependency-free `mobile-guards` job — still no
-Docker, no Postgres, no Xcode/Gradle, but no longer the two-minute lane it
-started as) and `benchmark-unit.yml` for `scripts/benchmark/**`.
+gated to dispatch for exactly that reason, so it no longer reports at all.)
+`pr-gate.yml` — the one workflow that ran on every PR — was deleted to cut the
+GitHub Actions bill; `benchmark-unit.yml`, `mobile-release.yml` and
+`desktop-release.yml`, the other three that used to run on their own, were
+gated to dispatch-only the same day.
 
-**The *client* release lanes are the exception to this section's headline, and
-that asymmetry catches people out.** Unlike container images, pushing a tag
-*does* release them: `mobile-release.yml` on `ios-v*` / `android-v*` /
-`mobile-release-v*` uploads to TestFlight / Play internal, and
-`desktop-release.yml` on `desktop-v*` builds the signed desktop lanes
-(`frontend/apps/desktop`; a lane whose signing secrets are unset skips rather
-than fails). Push one of those tags only when you mean to ship.
+**Pushing a client-release tag no longer ships anything by itself.**
+`mobile-release.yml` (`ios-v*` / `android-v*` / `mobile-release-v*`) and
+`desktop-release.yml` (`desktop-v*`) used to submit to TestFlight/Play, or
+build the signed desktop lanes, the moment a matching tag was pushed — that
+auto-submit is gone along with every other automatic trigger. Tag, then
+dispatch the workflow on that tag; see `docs/CI.md` for the exact commands
+(mobile's dispatch defaults `dry_run: true`, so a real release needs
+`-f dry_run=false`).
 
 **[`docs/CI.md`](docs/CI.md) carries the maintained per-workflow trigger table,
 and is the only place it is maintained** — the full list is deliberately not
@@ -636,8 +637,7 @@ stale in three of them. It also ships the `grep` that re-derives the table from
 the `on:` blocks, so check there rather than trusting this paragraph's summary.
 
 **No check gates a merge**, whether it ran or not: `main` carries no
-`required_status_checks` and `required_approving_review_count: 0`, so a red
-`pr-gate.yml` stops nothing (verify with
+`required_status_checks` and `required_approving_review_count: 0` (verify with
 `gh api repos/companionintelligence/CI-Server/branches/main/protection --jq 'keys'`).
 Cut a container release by
 tagging and then dispatching **on that tag**, since `VERSION` is parsed from the ref
@@ -699,7 +699,10 @@ runs the xtask unit suite (`tsx --test "scripts/xtask/**/*.test.ts"`), and
 `scripts/**`, `tests/**` and the Playwright config, which nothing ran before.
 Neither needs naming anywhere else: `foreach --all` stopped excluding the root
 workspace the moment those scripts existed, so `make test` runs the suite and
-pr-gate's `Type check packages` lane runs the type-check.
+`make typecheck` (`yarn workspaces foreach --all run typecheck`) runs the
+type-check — locally only now; the CI lane that used to run this on every PR
+(`pr-gate.yml`'s `Type check packages`) was deleted along with the rest of
+that file, and it had no twin in `ci.yml`.
 
 The underlying Yarn scripts are still there if you only want the JS half:
 

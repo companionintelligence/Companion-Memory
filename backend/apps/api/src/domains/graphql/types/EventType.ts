@@ -139,6 +139,29 @@ export class EventType implements Node, Taggable {
   })
   plannedMinutes!: number | null;
 
+  @Field(() => Boolean, {
+    nullable: true,
+    description:
+      "CI-Planning's manually-locked-block flag. Settable via `updateEvent`; nothing currently " +
+      'refuses to move a locked block — a future reflow engine owns enforcing that.',
+  })
+  isLocked!: boolean;
+
+  @Field(() => Boolean, {
+    nullable: true,
+    description:
+      'True for a planned block placed by the deterministic placer running unattended; false for ' +
+      'anything a human action produced (the Schedule button, a calendar drag, confirming a proposal). ' +
+      'Lets the UI label honestly, e.g. "AI Briefing" vs "Day Overview".',
+  })
+  isAuto!: boolean;
+
+  @Field(() => Date, {
+    nullable: true,
+    description: "The last instant this row's startTime/endTime changed. Null means never observed moving.",
+  })
+  lastMovedAt!: Date | null;
+
   @Field(() => [EntityTagType])
   tags!: EntityTagType[];
 
@@ -180,6 +203,9 @@ export class EventType implements Node, Taggable {
       recurrenceId: event.recurrenceId ?? null,
       taskId: event.taskId ? GlobalUID.encode('task', event.taskId) : null,
       plannedMinutes: event.plannedMinutes,
+      isLocked: event.isLocked,
+      isAuto: event.isAuto,
+      lastMovedAt: event.lastMovedAt,
       tags: [], // Hydrated by resolver
     };
   }

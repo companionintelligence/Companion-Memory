@@ -13,6 +13,7 @@ import { RelationshipEdge } from '@ci/domains/graphql/types/RelationshipEdge';
 import { UpdateRelationshipPayload } from '@ci/domains/graphql/types/UpdateRelationshipPayload';
 import { Paginator } from '@ci/domains/graphql/utils/Paginator';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { CreateRelationshipInput } from '../types/CreateRelationshipInput';
 import { GlobalUID } from '../types/GlobalUID';
 import { RelationshipType } from '../types/RelationshipType';
@@ -24,6 +25,8 @@ export class RelationshipResolver {
   constructor(private readonly relationshipService: RelationshipService) {}
 
   @Mutation(() => CreateRelationshipPayload)
+  // Plain create — a new row, nothing pre-existing touched.
+  @GraphqlPrivacy({ destructive: false })
   async createRelationship(
     @Context() context: RequestContext,
     @Args('input') input: CreateRelationshipInput,
@@ -56,6 +59,9 @@ export class RelationshipResolver {
   }
 
   @Mutation(() => UpdateRelationshipPayload)
+  // relationshipService.update() Object.assign()s only strength/properties/isBidirectional/
+  // startDate/endDate onto the caller's own row; the row itself stays intact and readable.
+  @GraphqlPrivacy({ destructive: false })
   async updateRelationship(
     @Context() context: RequestContext,
     @Args('input') input: UpdateRelationshipInput,
@@ -85,6 +91,8 @@ export class RelationshipResolver {
   }
 
   @Mutation(() => DeleteByIdPayload)
+  // relationshipService.delete() hard-deletes the row with no restore path in the schema.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteRelationship(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

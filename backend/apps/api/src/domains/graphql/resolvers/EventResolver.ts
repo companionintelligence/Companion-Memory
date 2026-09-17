@@ -107,10 +107,12 @@ export class EventResolver {
       metadata: input.metadata,
       status: input.status,
       sharing_level: input.sharingLevel,
+      is_locked: input.isLocked,
     };
   }
 
   @Mutation(() => EventType)
+  @GraphqlPrivacy({ destructive: false })
   async createEvent(
     @Context() context: RequestContext,
     @Args('input') input: CreateEventInput,
@@ -131,6 +133,7 @@ export class EventResolver {
    * The clean batch equivalent of N aliased createEvent mutations.
    */
   @Mutation(() => [EventType])
+  @GraphqlPrivacy({ destructive: false })
   async createEvents(
     @Context() context: RequestContext,
     @Args({ name: 'input', type: () => [CreateEventInput] }, new MaxArraySizePipe())
@@ -149,6 +152,7 @@ export class EventResolver {
   }
 
   @Mutation(() => EventType, { nullable: true })
+  @GraphqlPrivacy({ destructive: false })
   async updateEvent(
     @Context() context: RequestContext,
     @Args('input') input: UpdateEventInput,
@@ -183,6 +187,7 @@ export class EventResolver {
       is_all_day: input.isAllDay,
       metadata: input.metadata,
       status: input.status,
+      is_locked: input.isLocked,
     });
 
     return entity ? EventType.toType(entity) : entity;
@@ -244,6 +249,8 @@ export class EventResolver {
 
   /** Undoes {@link deleteEvent}; `null` if there is no deleted event to restore. */
   @Mutation(() => EventType, { nullable: true })
+  // The undo path for deleteEvent — restorative, not destructive.
+  @GraphqlPrivacy({ destructive: false })
   async restoreEvent(
     @Context() context: RequestContext,
     @Args('input') input: RestoreByIdInput,
@@ -399,6 +406,9 @@ export class EventResolver {
       'Move an event to a new time, keeping its duration. Externally-sourced events are moved ' +
       'locally only and marked pending — the change is not pushed to the source calendar.',
   })
+  // Moves start/end time on the same row via CalendarEventService.reschedule; an ordinary field
+  // update like updateEvent, not a delete-and-recreate.
+  @GraphqlPrivacy({ destructive: false })
   async rescheduleEvent(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

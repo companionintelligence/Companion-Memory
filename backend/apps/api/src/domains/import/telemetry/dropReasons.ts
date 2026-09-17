@@ -164,6 +164,7 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   excluded_reply: 'filtered',
   excluded_retweet: 'filtered',
   outside_timeframe: 'filtered',
+  macos_unsupported_stream: 'unsupported_shape',
   non_message: 'filtered',
   // telegram.ts: a chat entry whose `type` is not 'message' (a service event —
   // "X joined the group", a call log) — the telegram-specific spelling of the

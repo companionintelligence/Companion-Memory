@@ -386,6 +386,36 @@ export const WIZARD_SOURCES: WizardSource[] = [
   // Tier 1 — Apple
   // ===========================================================================
   {
+    id: 'macos_activity',
+    title: 'macOS Activity',
+    blurb: 'App usage, device state, Safari history, and calls for your timeline and predictions.',
+    ecosystem: 'apple',
+    category: 'productivity',
+    tier: 1,
+    acquisition: 'local-file',
+    wait: 'instant',
+    steps: [
+      'On your Mac, run `python3 scripts/macos/export_activity.py --device-id my-mac --output /tmp/macos-activity` from the CI-Server checkout. Reuse the same device label for this Mac and account on each export; choose a fresh output folder.',
+      'If a source is unavailable, check the export report. Protected databases may require Full Disk Access for the terminal in System Settings → Privacy & Security.',
+      'Upload the generated macos-activity folder here. Always use the snapshot folder; the import inbox moves the files it consumes.',
+    ],
+    expectedFormat:
+      '`macos-activity.json` version 1 with knowledge.sqlite, safari.sqlite, and/or calls.sqlite snapshots.',
+    whatImported: [
+      'Knowledge app/web usage, lock and display state with original timestamps and spans',
+      'Safari visits with page titles and call history with direction and duration',
+      'Observed activity in hourly summaries, available to HBPE labeling and training',
+    ],
+    caveats: [
+      'Availability and retention vary by macOS version. Unsupported schemas and unhandled streams are reported.',
+      'Historical imports require hourly summary backfill for their original dates; use force to refresh existing summaries.',
+      'Siri, Notes, Mail, TCC, Find My and Biome are not decoded by this connection. Photos and Messages have separate importers.',
+    ],
+    inboxPath: 'apple/macos-activity',
+    importer: 'macos_activity',
+    importerReady: true,
+  },
+  {
     id: 'imessage',
     title: 'iMessage (chat.db)',
     blurb: 'Every blue and green bubble, reactions, and attachments. Mac only.',

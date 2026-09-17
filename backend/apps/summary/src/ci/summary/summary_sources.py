@@ -118,7 +118,38 @@ SUMMARY_SOURCES: tuple[SummarySource, ...] = (
           AND GREATEST(ev.created_at, ev.updated_at) >= :start
           AND GREATEST(ev.created_at, ev.updated_at) < :end
           AND ev.is_deleted = false
+          AND ev.source_system IS DISTINCT FROM 'macos_activity'
         ORDER BY GREATEST(ev.created_at, ev.updated_at) DESC
+        LIMIT :limit
+        """,
+    ),
+    SummarySource(
+        "macos_activity",
+        """
+        SELECT
+            base.name AS activity,
+            ev.metadata->>'AppBundleId' AS app,
+            ev.metadata->>'Stream' AS stream,
+            COUNT(*) AS observation_count,
+            SUM(GREATEST(0, EXTRACT(EPOCH FROM (
+                LEAST(COALESCE(ev.end_time, ev.start_time), :end)
+                - GREATEST(ev.start_time, :start)
+            )))) AS observed_seconds,
+            MIN(GREATEST(ev.start_time, :start)) AS first_seen_at,
+            MAX(LEAST(COALESCE(ev.end_time, ev.start_time), :end)) AS last_seen_at,
+            ev.metadata->>'DeviceId' AS device_id
+        FROM ci.events ev
+        JOIN ci.entities base ON base.entity_id = ev.event_id
+        WHERE ev.user_id = :user_id
+          AND ev.source_system = 'macos_activity'
+          AND ev.start_time < :end
+          AND (ev.start_time >= :start OR ev.end_time > :start)
+          AND ev.is_deleted = false
+          AND ev.is_predicted IS NOT TRUE
+          AND ev.is_inferred IS NOT TRUE
+        GROUP BY base.name, ev.metadata->>'AppBundleId', ev.metadata->>'Stream',
+                 ev.metadata->>'DeviceId'
+        ORDER BY MAX(ev.start_time) DESC, base.name, ev.metadata->>'DeviceId'
         LIMIT :limit
         """,
     ),

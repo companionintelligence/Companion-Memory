@@ -89,6 +89,7 @@ export interface PossibleTypesResultData {
       "QuestionType",
       "ReceiptType",
       "RelationshipType",
+      "ReminderType",
       "SavedSearchType",
       "SummaryType",
       "TagType",

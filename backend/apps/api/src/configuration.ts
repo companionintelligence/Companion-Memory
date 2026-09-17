@@ -1328,6 +1328,37 @@ export const ConfigSchema = z.object({
      */
     portalBaseUrl: z.string().default(''),
   }),
+  // Web Push (VAPID) for planning reminders — see docs/architecture/planning-roadmap.md
+  // M5 and WebPushService. Deliberately config-only, not a stored/generated
+  // keypair: the roadmap's "Deliberately not doing" table rules out a generic
+  // `app_config` table, and unlike CI-Planning's SQLite server (which
+  // generates and PERSISTS a keypair on first boot because it has nowhere
+  // else to put one), this appliance already has the operator-provisioned
+  // secret convention every other cryptographic key here follows —
+  // AUTH_TOKEN_SECRET, AUTH_FIELD_ENCRYPTION_KEY, AUTH_CSRF_TOKEN_SECRET — so
+  // VAPID keys follow it too rather than inventing a new persistence
+  // mechanism for one feature. Both empty (the default) means push is simply
+  // OFF: `WebPushService.isConfigured()` returns false, reminders still fire
+  // (the record still moves to 'fired'), and the resolver's `pushPublicKey`
+  // query returns null so the client never shows a "turn on push" control.
+  //
+  // Generate a pair with `npx web-push generate-vapid-keys` and set both
+  // VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY — a HALF-set pair is refused the same
+  // way an operator-supplied env keypair is refused elsewhere in this file
+  // (see the field-encryption warning above): `WebPushService` treats
+  // "exactly one of the two set" as a misconfiguration and leaves push
+  // dormant rather than guessing. Never rotate an existing pair without
+  // clearing `ci.push_subscriptions` first — a subscription is
+  // cryptographically bound to the public key it was created against, so
+  // rotating breaks push for every existing subscriber at once.
+  push: z.object({
+    vapid: z.object({
+      publicKey: z.string().default(''),
+      privateKey: z.string().default(''),
+      /** `mailto:` contact a push service may use if it needs to reach the sender. Cosmetic. */
+      subject: z.string().default('mailto:admin@companion.local'),
+    }),
+  }),
 });
 
 const parsed = ConfigSchema.parse(config);

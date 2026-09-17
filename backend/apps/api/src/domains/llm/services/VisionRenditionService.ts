@@ -11,6 +11,12 @@ export interface VisionRendition {
   /** Upright JPEG, at most {@link VISION_RENDITION_MAX_DIMENSION} on the long edge. */
   jpeg: Buffer;
   source: 'original' | 'preview';
+  /**
+   * The original's bytes, present only when `source` is 'original' — the same
+   * download the rendition was made from, so a caller that wants the file's
+   * EXIF (CaptureContextService) does not fetch a 30 MB original twice.
+   */
+  original?: Buffer;
 }
 
 /** The minimum a caller must know about a stored file to render it. */
@@ -23,8 +29,9 @@ export interface RenderableFile {
 /**
  * Turns a stored image into the JPEG a vision model actually sees.
  *
- * Renders from the ORIGINAL, capped at 1500 px, rather than either extreme
- * the code used to pick:
+ * Renders from the ORIGINAL, capped at {@link VISION_RENDITION_MAX_DIMENSION}
+ * px (1280 since 2026-09-16; the constant's own comment has that measurement),
+ * rather than either extreme the code used to pick:
  *
  *  - The 300 px PREVIEW lost subjects. Measured on the same photos, a 4B
  *    model called a squirrel thumbnail "Baby Wild Dog in Brush" and named it
@@ -35,7 +42,8 @@ export interface RenderableFile {
  *    pixels (Qwen3.6 27B: 220 tokens for a thumbnail, 4,172 for a 12 MP
  *    frame) took 18.6 s per 12 MP photo and would take far longer on the
  *    200 MP shots some phones produce; at 1500 px the same model took 9.4 s
- *    with no visible loss in the titles. Fixed-budget models (Gemma) are
+ *    with no visible loss in the titles (the later step to 1280 is measured
+ *    on the constant). Fixed-budget models (Gemma) are
  *    unaffected either way. And a raw original is often not something the
  *    model can read at all — HEIC, above all.
  *
@@ -72,7 +80,7 @@ export class VisionRenditionService {
           quality: VISION_RENDITION_JPEG_QUALITY,
         });
 
-        return { jpeg: rendered.buffer, source: 'original' };
+        return { jpeg: rendered.buffer, source: 'original', original: bytes };
       } catch (err: unknown) {
         if (!(err instanceof VipsDecodeError)) {
           throw err;

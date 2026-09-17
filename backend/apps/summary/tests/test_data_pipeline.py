@@ -20,6 +20,7 @@ def test_registry_uses_current_grounded_sources_only():
         "position",
         "communications",
         "events",
+        "macos_activity",
         "messages",
         "files",
         "content",

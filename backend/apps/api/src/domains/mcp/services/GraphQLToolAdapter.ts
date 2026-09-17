@@ -33,6 +33,18 @@ import type { McpToolDefinition } from '../types';
  */
 const DESTRUCTIVE_MUTATION_PREFIXES = ['delete', 'remove', 'destroy', 'purge', 'drop'] as const;
 
+/**
+ * Every mutation field name on `mutationType` that carries no explicit `@GraphqlPrivacy`
+ * declaration — i.e. `field.extensions[GRAPHQL_PRIVACY_EXTENSION]` is absent, not merely `{}`.
+ * Exported so the boot-time guard below and its unit test exercise the exact same check; a guard
+ * is only trustworthy if the thing verifying it is the thing that actually runs.
+ */
+export function findUndeclaredMutations(mutationType: GraphQLObjectType): string[] {
+  return Object.entries(mutationType.getFields())
+    .filter(([, field]) => field.extensions?.[GRAPHQL_PRIVACY_EXTENSION] == null)
+    .map(([name]) => name);
+}
+
 @Injectable()
 export class GraphQLToolAdapter implements OnModuleInit {
   private tools: McpToolDefinition[] = [];
@@ -71,6 +83,8 @@ export class GraphQLToolAdapter implements OnModuleInit {
     }
 
     if (mutationType) {
+      this.assertAllMutationsDeclared(mutationType);
+
       const fields = mutationType.getFields();
 
       for (const [name, field] of Object.entries(fields)) {
@@ -83,6 +97,33 @@ export class GraphQLToolAdapter implements OnModuleInit {
       mutationTools: mutationType ? Object.keys(mutationType.getFields()).length : 0,
       totalTools: this.tools.length,
     });
+  }
+
+  /**
+   * Boot-time completeness guard, the same shape as `ENTITY_SOURCE_MAP`'s module-load throw in
+   * `domains/search-ingress/entitySourceMap.ts`: a schema that grows a new mutation with no
+   * `@GraphqlPrivacy` declaration must fail loudly here rather than silently falling through to
+   * the name-prefix heuristic — the entire reason that heuristic was demoted to a fallback (see
+   * the class doc on {@link synthesizePrivacy}) is that it under-flags real deletions, which is
+   * the dangerous direction to get wrong. Every mutation in the schema is declared as of this
+   * change, so this is unconditional rather than an allowlisted escape hatch: the count of
+   * mutations still on the inferred path is zero, and this is what keeps it that way.
+   *
+   * Runs from {@link onModuleInit}, so a mutation added without a declaration fails Nest's own
+   * bootstrap — not just a test suite that happens to exercise this file.
+   */
+  private assertAllMutationsDeclared(mutationType: GraphQLObjectType): void {
+    const undeclared = findUndeclaredMutations(mutationType);
+
+    if (undeclared.length > 0) {
+      throw new Error(
+        `GraphQLToolAdapter: ${undeclared.length} mutation(s) have no @GraphqlPrivacy declaration, so ` +
+          `their MCP tool privacy would silently fall back to the name-only heuristic — the exact bug ` +
+          `class this file exists to close (see GraphqlPrivacy.ts). Add ` +
+          `@GraphqlPrivacy({ destructive: true | false, ... }) directly above the resolver method for: ` +
+          `${undeclared.join(', ')}`,
+      );
+    }
   }
 
   private fieldToTool(

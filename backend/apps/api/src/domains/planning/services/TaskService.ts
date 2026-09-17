@@ -7,6 +7,7 @@ import { v7 as uuidv7 } from 'uuid';
 
 import { UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
+import { withoutUndefined } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
 import { CalendarEventService, EventEntity } from '@ci/domains/memory';
 
@@ -261,7 +262,7 @@ export class TaskService {
       await this.assertOwnsParent(context, data.parentId, id);
     }
 
-    Object.assign(record, data);
+    Object.assign(record, withoutUndefined(data));
 
     const entity = await this.taskRepository.save(record);
 

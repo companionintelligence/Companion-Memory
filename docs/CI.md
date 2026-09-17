@@ -77,35 +77,34 @@ that directory to `PATH`.
 > `ci.yml` was red. `v2026.9.10` was the first release since 2026-08-19 to pass
 > the gate on its own merits.
 
-This repo has **fourteen** workflow files. The generated section below lists
-five of them (`ci.yml`, `e2e.yml`, `migration-integrity-check.yml`,
-`style-canon-lint.yml`, `publish.yml`). The other **nine** (triggers re-verified
-against each `on:` block, 2026-09-07):
+### `pr-gate.yml` is gone — the repo is fully manual again (2026-09-17)
 
-| Workflow | Trigger | Note |
-|---|---|---|
-| `pr-gate.yml` | **`pull_request` → `main`**, no path filter | NOT gated. The one thing that runs on every PR. **Eight jobs as of 2026-09-08** — `install`, `lint` (4 lanes: root, backend, frontend, format), `typecheck` (3 lanes: backend, frontend, and `packages`, the last covering the eight `frontend/packages/*` workspaces no job typechecked before — and, since the repo root gained a `typecheck` script, the root workspace too, which is what typechecks `scripts/**` including `scripts/xtask/`), `test-frontend` (**the frontend vitest suite — a unit suite that now runs on every PR**), `build-web` (two full `tsc && vite build` runs, PWA on and off, asserting the service worker ships only when it should), `mobile-guards` (Capacitor native sync + iOS plist duplicate keys — dependency-free Node, no `needs: install`, seconds) and `desktop-guards` (`node --test` over the `frontend/apps/desktop/scripts/*.test.cjs` suite that covers the resolver deciding which server images a shipped desktop app pulls — same dependency-free shape, and it discovers its own file list so a renamed suite fails the lane instead of passing it empty) and `migration-guard` (`check-migration-versions.js`, which before 2026-09-08 ran on no pull request anywhere — only from lint-staged, which is inert in the agents' worktrees, and from the dispatch-only `migration-integrity-check.yml`). The job list has grown three times in two days, so **re-derive rather than quote this cell**: `grep -nE '^  [a-z][a-z0-9_-]*:$' .github/workflows/pr-gate.yml`. Cost is no longer the "~2-3 min" the lint/typecheck subset was priced at — the workflow's own header estimates `test-frontend` at ~28-40 runner-min (four shards of ~7-10 min, sharded after an unsharded run was killed by its own 20-min ceiling on a hosted runner) and `build-web` at ~8-12 min, i.e. roughly five times the original per-PR bill; that is a live cost decision, not a settled one. **`Type check packages` was red when it landed and is green on this branch as of 2026-09-07** — it failed with `Cannot find module '@/lib/utils'` from two @ci/shadcn sources (`ui/kbd.tsx`, `ui/shadcn-io/spinner/index.tsx`), which used the `@/` alias that only @ci/shadcn's own tsconfig declares; both now import `lib/utils` relatively and `yarn workspaces foreach --all run typecheck` exits 0 (measured, 33s). `pr-gate.yml`'s own comment now records the same fix (an earlier revision of this row called that comment stale; it no longer is). Expect red on any branch that predates the fix. Running IS now blocking for six of these contexts: as of 2026-09-08 `main` requires `Lint root`, `Lint backend`, `Lint frontend`, `Lint format`, `Type check backend` and `Type check frontend` (`strict: false`, `enforce_admins: false`). Its lint/typecheck job names deliberately match `ci.yml`'s so a dispatched `ci.yml` reports the same contexts; `Run frontend tests` no longer does, because this copy is sharded into `Run frontend tests (1/4)`..`(4/4)` while `ci.yml` runs it unsharded; `Build web bundle`, `Mobile native guards`, `Desktop native guards` and `Type check packages` have no `ci.yml` twin and so can only ever be satisfied by a `pull_request` run. |
-| `benchmark-unit.yml` | **`pull_request` + `push` to `main`**, path-filtered to `scripts/benchmark/**` and to the workflow file itself | NOT gated for those paths. Runs `pytest`, **then a pinned `ruff==0.16.1` `check` + `format --check`** (added 2026-09-06; the pin matches what the root `uv.lock` resolves, so this lane and `ci.yml`'s `python` lane agree on what a violation is). Before that it ran pytest and no linter, which is how 141 ruff violations landed in `scripts/benchmark/` unnoticed. The lint step runs **after** pytest on purpose, so the pre-existing lint debt cannot swallow the test signal. That debt is now CLEARED — `uv run ruff check scripts/benchmark` reports 0 and `ruff format --check` reports 36 files already formatted (measured 2026-09-08) — so a red lint here is a real finding, not the expected state. |
-| `codeql.yml` | `workflow_dispatch` | Gated. Added in [#2261](https://github.com/companionintelligence/CI-Server/pull/2261) as push/PR/cron; that failed every run because this private repo has no GitHub Code Security (`SARIF` upload 403). Dispatch with `gh workflow run codeql.yml --ref <branch>`. Restore PR/push only after Code Security is enabled. |
-| `mobile-release.yml` | **`push` on `ios-v*` / `android-v*` / `mobile-release-v*` tags**, plus dispatch | NOT gated for tags. Never runs on a PR. Signed TestFlight / Play internal lane. |
-| `desktop-release.yml` | **`push` on `desktop-v*` tags**, plus dispatch | The tag push is not gated by branch protection, but **since 2026-09-07 it IS gated by a test gate inside the workflow**: its first job `verify-desktop-build-passed` refuses to build or publish unless a successful `desktop-build.yml` run exists for the same commit SHA (that is the only place `cargo test` runs). So the order is `gh workflow run desktop-build.yml --ref <branch>`, wait for green, *then* push the `desktop-v*` tag. Emergency bypass is `skip_test_gate=true` **plus a non-blank `bypass_reason`**, dispatch-only — a tag push cannot bypass. Signed macOS/Windows lanes still skip (not fail) until their signing secrets are provisioned — see that workflow's header comment. |
-| `consent-path-gate.yml` | `workflow_dispatch` | The merge gate for the federated-ask consent path. `gh workflow run "Consent path gate" --ref <branch>`. Ships dispatch-only on purpose - see [`asks-system-guide.md` §7.3](asks-system-guide.md). |
-| `mobile-build.yml` | `workflow_dispatch` | Debug APK + iOS Simulator `.app`. The Android job also runs the **Android JVM unit tests** (`./gradlew testDebugUnitTest` — `:app` plus the three `:ci-capacitor-*` plugin modules; Robolectric, no emulator) straight after `assembleDebug`, and uploads the HTML/XML reports as `android-unit-test-reports` **on failure only**. Locally: `make test-android`. |
-| `desktop-build.yml` | `workflow_dispatch` | Unsigned dmg/deb/rpm/AppImage/msi — the desktop local-orchestrator app (`frontend/apps/desktop`). Each host-native matrix entry also runs **`cargo test`** before bundling (skipped for `x86_64-apple-darwin`, the one cross-compiled entry — `macos-latest` is arm64), uploading the captured log **on failure only**. **This workflow is now `desktop-release.yml`'s test gate** — deleting or permanently `if:`-disabling that test step turns the desktop release gate into a rubber stamp. Locally: `make test-desktop`. |
-| `desktop-e2e.yml` | `workflow_dispatch` | Gated. Playwright against the desktop **appliance**: published images, empty database, no seeded account (`tests/desktop`). The deliberate opposite of `e2e.yml` (locally built, migrated, seeded), so neither substitutes for the other. A release gate to dispatch before a `v*` tag, not a merge gate. |
+From 2026-09-08 to 2026-09-17 this repo had one deliberate exception to full
+manual gating: `pr-gate.yml` ran on every `pull_request` against `main` (lint,
+typecheck, the frontend unit suite, a web-bundle build, and two dependency-free
+native guards). It grew from the "~2-3 min" lint/typecheck subset
+`docs/qa/ci-gate-proposal.md` §3.1 originally priced to roughly five times that
+per PR (the sharded frontend-test job alone ran ~28-40 runner-minutes). Deleted
+to cut the bill back down — its own header comment anticipated exactly this:
+"a cost decision should be revertible in one move... Deleting this file returns
+the repository to exactly where it was."
 
-So: **ten** of fourteen are `workflow_dispatch`-only, and **four** run on their
-own (`pr-gate`, `benchmark-unit`, `mobile-release`, `desktop-release`). The
-opening paragraph's "pushing does not start a run" is true of pushes to a feature
-branch, but *opening a PR against `main` now does* start `pr-gate.yml`.
+The other three workflows that ran on their own — `benchmark-unit.yml`
+(`pull_request` + `push` to `main`, path-filtered to `scripts/benchmark/**`),
+`mobile-release.yml` (`push` on `ios-v*` / `android-v*` / `mobile-release-v*`
+tags) and `desktop-release.yml` (`push` on `desktop-v*` tags) — were gated to
+`workflow_dispatch` the same day via `ci-local gate --repo CI-Server --apply`.
+Both release workflows already carried a `workflow_dispatch` trigger with real
+inputs, so gating them costs one extra manual step after tagging rather than
+losing the release path: `git push origin <tag>` no longer submits anything by
+itself.
 
-**This table is the one place these trigger facts are maintained.** `CLAUDE.md`,
-`README.md`, `docs/qa/release-qa-program.md` and `docs/qa/ci-gate-proposal.md`
-now point here instead of each carrying their own copy — a count restated in
-five files went stale in four of them (it read "twelve workflows, nine
-dispatch-only" as recently as 2026-09-06). Before quoting a number from this
-table, re-derive it — the whole check is two commands and no clone of
-CI-Local-CICD:
+- `mobile-release.yml`: `gh workflow run mobile-release.yml --ref <tag> -f dry_run=false -f platform=ios` (or `android` / `both`). `dry_run` defaults `true` on a bare dispatch — validates without releasing.
+- `desktop-release.yml`: `gh workflow run desktop-release.yml --ref <tag>`. No `dry_run` concept — dispatching it always builds, signs and publishes, the same as the tag push used to.
+
+**This repo now has thirteen workflow files, and all thirteen are
+`workflow_dispatch`-only.** Re-derive that rather than trusting this sentence —
+it is two commands and no clone of CI-Local-CICD:
 
 ```bash
 ls .github/workflows/*.yml | wc -l                                  # total workflow files
@@ -113,9 +112,50 @@ grep -lE '^[[:space:]]+(pull_request|push|schedule):' .github/workflows/*.yml   
 ```
 
 The `grep` reads indented trigger keys only, so `consent-path-gate.yml`'s
-commented-out `pull_request:` block does not count itself in — which is correct,
-it is still dispatch-only. Anything that command prints and this table does not,
-or vice versa, means the table is stale and this section is what needs editing.
+commented-out `pull_request:` block and the three gated workflows' commented-out
+`# >>> ci-local:gated` marker blocks don't count themselves in — which is
+correct, all three really are dispatch-only now (`ci-local restore --repo
+CI-Server` puts a gated workflow's original trigger back, reading it out of
+that same marker comment). If the `grep` prints anything, this section is
+stale.
+
+**`main`'s branch protection no longer requires any status check.** It used to
+require the six `pr-gate.yml` job names (`Lint root`, `Lint backend`, `Lint
+frontend`, `Lint format`, `Type check backend`, `Type check frontend`) —
+removed in the same change, since a required check that never runs leaves every
+PR's merge button stuck forever waiting on a status that will never arrive.
+`required_pull_request_reviews` was already `null` before this and still is, so
+**nothing gates a merge now, automatically or by review.** Re-verify with:
+
+```bash
+gh api repos/companionintelligence/CI-Server/branches/main/protection \
+  --jq '.required_status_checks, .required_pull_request_reviews'
+```
+
+`ci.yml` — the full suite `pr-gate.yml` was a cheap subset of — is still there,
+still `workflow_dispatch`-only. Dispatching it before merging something risky
+is now a deliberate judgment call rather than an automatic gate.
+
+The table below is the one place the other nine dispatch-only workflows'
+notable behavior is maintained (the triggers themselves are in the generated
+section below the second `---`; this is what a trigger alone doesn't tell you):
+
+| Workflow | Note |
+|---|---|
+| `codeql.yml` | Added in [#2261](https://github.com/companionintelligence/CI-Server/pull/2261) as push/PR/cron; that failed every run because this private repo has no GitHub Code Security (`SARIF` upload 403). Dispatch with `gh workflow run codeql.yml --ref <branch>`. Restore PR/push only after Code Security is enabled. |
+| `benchmark-unit.yml` | Runs `pytest`, then a pinned `ruff==0.16.1` `check` + `format --check` — the pin matches what the root `uv.lock` resolves, so this lane and `ci.yml`'s `python` lane agree on what a violation is. |
+| `mobile-release.yml` | Signed TestFlight / Play internal lane. See the dispatch command above — `dry_run` defaults `true`. |
+| `desktop-release.yml` | **Gated by a test gate inside the workflow since 2026-09-07**, independent of today's change: its first job `verify-desktop-build-passed` refuses to build or publish unless a successful `desktop-build.yml` run exists for the same commit SHA (that is the only place `cargo test` runs). So the order is `gh workflow run desktop-build.yml --ref <branch>`, wait for green, *then* dispatch `desktop-release.yml` on the tag. Emergency bypass is `skip_test_gate=true` plus a non-blank `bypass_reason`. Signed macOS/Windows lanes still skip (not fail) until their signing secrets are provisioned — see that workflow's header comment. |
+| `consent-path-gate.yml` | The merge gate for the federated-ask consent path. `gh workflow run "Consent path gate" --ref <branch>`. Ships dispatch-only on purpose - see [`asks-system-guide.md` §7.3](asks-system-guide.md). |
+| `mobile-build.yml` | Debug APK + iOS Simulator `.app`. The Android job also runs the Android JVM unit tests (`./gradlew testDebugUnitTest` — `:app` plus the three `:ci-capacitor-*` plugin modules; Robolectric, no emulator) straight after `assembleDebug`, and uploads the HTML/XML reports as `android-unit-test-reports` on failure only. Locally: `make test-android`. |
+| `desktop-build.yml` | Unsigned dmg/deb/rpm/AppImage/msi — the desktop local-orchestrator app (`frontend/apps/desktop`). Each host-native matrix entry also runs `cargo test` before bundling (skipped for `x86_64-apple-darwin`, the one cross-compiled entry — `macos-latest` is arm64), uploading the captured log on failure only. This workflow is `desktop-release.yml`'s test gate — deleting or permanently `if:`-disabling that test step turns the desktop release gate into a rubber stamp. Locally: `make test-desktop`. |
+| `desktop-e2e.yml` | Playwright against the desktop appliance: published images, empty database, no seeded account (`tests/desktop`). The deliberate opposite of `e2e.yml` (locally built, migrated, seeded), so neither substitutes for the other. A release gate to dispatch before a `v*` tag, not a merge gate. |
+
+**This table is the one place these trigger facts are maintained.** `CLAUDE.md`,
+`README.md`, `docs/qa/release-qa-program.md` and `docs/qa/ci-gate-proposal.md`
+point here instead of each carrying their own copy — a count restated in
+five files went stale in four of them once already. Before quoting a number
+from this section, re-derive it.
 
 ### Native suites are not in `make test`
 
@@ -177,25 +217,17 @@ Equivalent to:
 ```bash
 yarn install --immutable
 yarn run lint
-yarn workspace @ci/be-api typecheck
-yarn workspace @ci/be-api test
-yarn workspace @ci/cli typecheck
-yarn workspace @ci/cli test
-yarn workspace @ci/tool-core typecheck
-yarn workspace @ci/tool-core test
-yarn workspace @ci/fe-web typecheck
-yarn workspace @ci/fe-web test
-yarn workspace @ci/capacitor-local-hub typecheck
-yarn workspace @ci/capacitor-local-llm typecheck
-yarn workspace @ci/capacitor-speech typecheck
-yarn workspace @ci/capture typecheck
-yarn workspace @ci/common typecheck
-yarn workspace @ci/editor typecheck
-yarn workspace @ci/shadcn typecheck
-yarn workspace @ci/template typecheck
+yarn run typecheck
+yarn run test
 ```
 
 ### Run a check workflow on GitHub
+
+**Benchmark unit tests + regression gate** — `benchmark-unit.yml`
+
+```bash
+gh workflow run benchmark-unit.yml --repo companionintelligence/CI-Server --ref main
+```
 
 **CI** — `ci.yml`
 
@@ -261,17 +293,20 @@ git tag v2026.1.1 origin/main && git push origin v2026.1.1
 
 (Naming the commit rather than checking it out keeps this working from a git worktree, where the default branch may already be checked out elsewhere.)
 
+**Desktop Release** — `desktop-release.yml`
+
+```bash
+gh workflow run desktop-release.yml --repo companionintelligence/CI-Server --ref <release-tag> -f version_name=<string> -f server_image_tag=<string> -f skip_test_gate=false -f bypass_reason=<string>
+```
+
+**Mobile Release** — `mobile-release.yml`
+
+```bash
+gh workflow run mobile-release.yml --repo companionintelligence/CI-Server --ref <release-tag> -f dry_run=true -f version_name=<string> -f platform=ios
+```
+
 **Publish** — `publish.yml`
 
 ```bash
 gh workflow run publish.yml --repo companionintelligence/CI-Server --ref <release-tag> -f skip_test_gate=false -f bypass_reason=<string>
 ```
-
-### Still automatic
-
-These run without being asked - no action needed:
-
-- `benchmark-unit.yml` on pull_request, push
-- `desktop-release.yml` on push
-- `mobile-release.yml` on push
-- `pr-gate.yml` on pull_request

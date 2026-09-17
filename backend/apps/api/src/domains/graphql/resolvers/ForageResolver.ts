@@ -8,6 +8,7 @@ import { LoggerService } from '@ci/common/logging';
 import { ForageCorpusService } from '@ci/domains/agent';
 import type { ForageTrialResponse } from '@ci/domains/predictions';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { ForageTrialType } from '../types/ForageType';
 
 @UseGuards(JwtOrApiKeyAuthGuard)
@@ -34,6 +35,7 @@ export class ForageResolver {
     nullable: true,
     description: 'Read the next lake item by expected free energy; may query indexes when the lake runs thin',
   })
+  @GraphqlPrivacy({ destructive: false })
   async forageSample(@Context() context: RequestContext): Promise<ForageTrialType | null> {
     return this.run('Forage sample failed', () => this.forageCorpus.sample(toServiceContext(context)));
   }
@@ -42,6 +44,7 @@ export class ForageResolver {
     nullable: true,
     description: 'Pin a branch so the eye hunts inside it',
   })
+  @GraphqlPrivacy({ destructive: false })
   async foragePin(
     @Context() context: RequestContext,
     @Args('branch', { type: () => String }) branch: string,
@@ -53,6 +56,11 @@ export class ForageResolver {
     nullable: true,
     description: 'Rebuild the memory lake from people, places, events, and indexes',
   })
+  // Reads like a wipe, but ForageCorpusService.reset only reseeds the ephemeral HBPE "forage"
+  // trial from the user's existing people/places/events/indexes (start() -> seed() -> askForage());
+  // it deletes no source data. This is the exact false-positive the name heuristic would have
+  // produced, called out in GraphqlPrivacy's own doc comment.
+  @GraphqlPrivacy({ destructive: false })
   async forageReset(@Context() context: RequestContext): Promise<ForageTrialType | null> {
     return this.run('Forage reset failed', () => this.forageCorpus.reset(toServiceContext(context)));
   }

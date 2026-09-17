@@ -14,3 +14,6 @@ than its section contains, a section too small for a legible row drops the
 sample claim instead of leaving a fragment of it, truncation stays inside a
 one-character budget, a source named only by the counts is skipped rather than
 raising, and a communication whose every text column is NULL still renders.
+
+The registry includes the occurrence-time `macos_activity` projection alongside
+the ordinary event-change projection.

@@ -171,6 +171,8 @@ export class PlaceResolver {
   @Mutation(() => Boolean, {
     description: 'Mark a suggested duplicate group as distinct places, so it is never re-proposed',
   })
+  // Writes entity_merge_blocks rows to suppress a re-proposal; touches no place or search data.
+  @GraphqlPrivacy({ destructive: false })
   async rejectPlaceDuplicates(
     @Context() context: RequestContext,
     @Args('placeIds', { type: () => [ID] }) placeIds: string[],
@@ -184,6 +186,7 @@ export class PlaceResolver {
   }
 
   @Mutation(() => PlaceType)
+  @GraphqlPrivacy({ destructive: false })
   async createPlace(
     @Context() context: RequestContext,
     @Args('input') input: CreatePlaceInput,
@@ -238,6 +241,7 @@ export class PlaceResolver {
    * aliased createPlace mutations; returns the created rows in input order.
    */
   @Mutation(() => [PlaceType])
+  @GraphqlPrivacy({ destructive: false })
   async createPlaces(
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreatePlaceInput] }, new MaxArraySizePipe())
@@ -294,6 +298,9 @@ export class PlaceResolver {
   }
 
   @Mutation(() => PlaceType, { nullable: true })
+  // Plain field patch through PlaceService.update — no identifier-replace or list-overwrite call
+  // like updatePerson's, so unlike that one this stays a non-destructive write.
+  @GraphqlPrivacy({ destructive: false })
   async updatePlace(
     @Context() context: RequestContext,
     @Args('input') input: UpdatePlaceInput,
@@ -356,6 +363,7 @@ export class PlaceResolver {
    * convention the rest of this family uses.
    */
   @Mutation(() => Boolean)
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removePlace(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -373,6 +381,7 @@ export class PlaceResolver {
    * happened there keep their denormalised `location_name`.
    */
   @Mutation(() => DeleteByIdPayload)
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deletePlace(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

@@ -188,7 +188,7 @@ class SummaryTokenizer:
                 if is_new:
                     all_l1[l0] = get_l1_vocab(user_id, l0)
 
-                _store_summary_label(row["summary_id"], l0, l1_id)
+                _store_summary_label(row["summary_id"], l0, l1_id, summary_text)
                 labeled += 1
 
             except Exception:
@@ -236,16 +236,22 @@ def _extract_summary_text(content: object) -> str:
 
 
 def _store_summary_label(
-    summary_id: str, l0_class: str, l1_cluster_id: str | None
+    summary_id: str, l0_class: str, l1_cluster_id: str | None, summary_text: str
 ) -> None:
     sql = """
+        WITH current_summary AS MATERIALIZED (
+            SELECT summary_id FROM ci.summaries
+            WHERE summary_id = %s::uuid AND period_type = 'hourly'
+              AND LEFT(COALESCE(content->>'summary_text', ''), 400) = %s
+            FOR SHARE
+        )
         INSERT INTO hbpe.summary_l1_label (summary_id, l0_class, l1_cluster_id)
-        VALUES (%s::uuid, %s, %s::uuid)
+        SELECT summary_id, %s, %s::uuid FROM current_summary
         ON CONFLICT (summary_id) DO NOTHING
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (summary_id, l0_class, l1_cluster_id))
+            cur.execute(sql, (summary_id, summary_text, l0_class, l1_cluster_id))
 
 
 def _build_summary_tokens(rows: list[dict]) -> list[dict]:

@@ -37,6 +37,13 @@ so prompt clipping cannot hide the material being summarized.
   is NOT NULL, so its `= false` is already total and stays.
 - A broken projection must fail the job visibly. Callers do not silently turn
   schema errors into an empty hour.
+- `macos_activity` reads observed macOS events by original occurrence/span,
+  groups repeated app/stream observations, and clips durations to the hour.
+  Generic `events` excludes this source so an archive does not masquerade as
+  activity during its import hour. Inferred/predicted/deleted events are excluded.
+  Safari visits and calls use existing browser/communication occurrence queries.
+  Historical hours use the ordinary forced hourly-backfill path; HBPE already
+  reads these hourly summaries for classification and tokenization.
 
 ## Extending the registry
 
