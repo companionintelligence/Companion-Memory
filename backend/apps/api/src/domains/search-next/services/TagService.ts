@@ -5,13 +5,32 @@ import { v7 as uuid7 } from 'uuid';
 
 import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/common/context';
 
+import { CategoryDirectionOptoutEntity } from '../entities/CategoryDirectionOptoutEntity';
+import { EntityCategoryEntity } from '../entities/EntityCategoryEntity';
 import { type EntityTag, EntityTagEntity } from '../entities/EntityTagEntity';
+import { TagCategoryEntity } from '../entities/TagCategoryEntity';
+import { TagDirectionEntity } from '../entities/TagDirectionEntity';
 import { type Tag, TagEntity, TimestampedTag } from '../entities/TagEntity';
-import type { CreateTagDto, EntityIdentifier, TaggableEntity, TagEntitiesDto, UpdateTagDto } from '../types';
+import {
+  TAG_KINDS,
+  type CreateTagDto,
+  type EntityIdentifier,
+  type TagKind,
+  type TaggableEntity,
+  type TagEntitiesDto,
+  type UpdateTagDto,
+} from '../types';
 
 type FindOpts = {
   includeEntities?: boolean;
 };
+
+/**
+ * The most categories a single entity may carry (CI-Planning's `entity_categories`
+ * caps this at 3 in the service layer, not in SQL — `setEntityCategories`
+ * mirrors that rather than adding a DB constraint nothing else here has).
+ */
+const ENTITY_CATEGORY_CAP = 3;
 
 export type UpdateTagResult = {
   /** The surviving tag. On a merge this is the pre-existing target, not the edited one. */
@@ -247,6 +266,12 @@ export class TagService {
    *      blast radius is small and nothing is recoverable-in-principle anyway.
    *
    * Returns null when the tag does not exist or belongs to another user.
+   * Throws when the tag is a base direction (`is_base`) — those are
+   * documented as undeletable by design (brand-set Home/Work/Community).
+   * Nothing in this codebase can mark a tag `is_base` yet (base-direction
+   * creation is deliberately out of scope here — see the migration header),
+   * so this guard cannot change behaviour for any tag that exists today; it
+   * only makes the column's own stated meaning true once something does.
    */
   async remove(context: ServiceContext, id: string): Promise<RemoveTagResult | null> {
     const existing = await this.tagRepository.findOne({
@@ -255,6 +280,10 @@ export class TagService {
 
     if (existing == null) {
       return null;
+    }
+
+    if (existing.isBase) {
+      throw new Error('Cannot delete a base tag');
     }
 
     return this.dataSource.transaction(async (manager) => {
@@ -548,6 +577,319 @@ export class TagService {
       label: row.label,
       count: parseInt(row.count, 10),
     }));
+  }
+
+  // ── Tag taxonomy (20260916025313_planning_tag_taxonomy) ──────────────────
+  //
+  // `kind`, `tag_directions`, `tag_categories`, `category_direction_optouts`
+  // and `entity_categories` port CI-Planning's taxonomy CRUD
+  // (`server/src/services/tags.ts`, the "Tag taxonomy" sections). Every write
+  // below is owner-scoped through the SAME `userScope`/ownership pattern the
+  // rest of this file already uses, and every DELETE against these five
+  // tables lives here — nowhere else may grow its own.
+  //
+  // `entity_tag.level` deliberately gets no setter here: this milestone adds
+  // the column (default 1, so nothing that predates it changes) but nothing
+  // yet needs to write a level other than the default, and inventing an API
+  // for it ahead of a real caller would be a guess at that caller's shape.
+
+  /**
+   * Set a tag's taxonomy level (`direction` | `intention` | `category`).
+   * Returns null when the tag does not exist or belongs to another user.
+   */
+  async setKind(context: ServiceContext, id: string, kind: TagKind): Promise<Tag | null> {
+    if (!TAG_KINDS.includes(kind)) {
+      throw new Error(`Invalid tag kind: ${kind}`);
+    }
+
+    const existing = await this.tagRepository.findOne({ where: { id, ...this.userScope(context) } });
+
+    if (existing == null) {
+      return null;
+    }
+
+    await this.tagRepository.update({ id }, { kind });
+
+    const entity = await this.tagRepository.findOneOrFail({ where: { id } });
+
+    return TagEntity.toEgressType(entity);
+  }
+
+  /** The direction tags an intention tag belongs to (empty = Unsorted). */
+  async getTagDirections(context: ServiceContext, intentionTagId: string): Promise<Tag[]> {
+    const query = this.dataSource
+      .getRepository(TagEntity)
+      .createQueryBuilder('t')
+      .innerJoin(TagDirectionEntity, 'td', 'td.direction_tag_id = t.id')
+      .where('td.intention_tag_id = :intentionTagId', { intentionTagId })
+      .orderBy('t.label', 'ASC');
+
+    if (context.userId !== SYSTEM_USER) {
+      query.andWhere('t.user_id = :userId', { userId: context.userId });
+    }
+
+    const entities = await query.getMany();
+
+    return entities.map((entity) => TagEntity.toEgressType(entity));
+  }
+
+  /**
+   * Replace an intention tag's direction membership. Silently drops any id
+   * that is not one of the caller's own `kind = 'direction'` tags, the same
+   * forgiving-on-targets behaviour CI-Planning's `directionIds` helper has.
+   *
+   * Returns the resulting direction tags, or null when `intentionTagId`
+   * does not exist / belongs to another user. Throws if it exists but is not
+   * itself a `kind = 'intention'` tag — unlike an invalid target id, calling
+   * this on the wrong KIND of tag is a caller bug, not a stale reference.
+   */
+  async setTagDirections(
+    context: ServiceContext,
+    intentionTagId: string,
+    directionTagIds: string[],
+  ): Promise<Tag[] | null> {
+    const scope = this.userScope(context);
+
+    const intention = await this.tagRepository.findOne({ where: { id: intentionTagId, ...scope } });
+
+    if (intention == null) {
+      return null;
+    }
+
+    if (intention.kind !== 'intention') {
+      throw new Error('Only intention tags can belong to a direction');
+    }
+
+    const uniqueIds = [...new Set(directionTagIds)];
+
+    const directions =
+      uniqueIds.length === 0
+        ? []
+        : await this.tagRepository.find({ where: { id: In(uniqueIds), kind: 'direction', ...scope } });
+
+    return this.dataSource.transaction(async (manager) => {
+      await manager.getRepository(TagDirectionEntity).delete({ intentionTagId });
+
+      for (const direction of directions) {
+        await manager
+          .getRepository(TagDirectionEntity)
+          .createQueryBuilder()
+          .insert()
+          .values({ intentionTagId, directionTagId: direction.id })
+          .orIgnore()
+          .execute();
+      }
+
+      return directions.map((entity) => TagEntity.toEgressType(entity));
+    });
+  }
+
+  /** The category tags an intention tag belongs to (empty = Unsorted). */
+  async getTagCategories(context: ServiceContext, intentionTagId: string): Promise<Tag[]> {
+    const query = this.dataSource
+      .getRepository(TagEntity)
+      .createQueryBuilder('t')
+      .innerJoin(TagCategoryEntity, 'tc', 'tc.category_tag_id = t.id')
+      .where('tc.intention_tag_id = :intentionTagId', { intentionTagId })
+      .orderBy('t.label', 'ASC');
+
+    if (context.userId !== SYSTEM_USER) {
+      query.andWhere('t.user_id = :userId', { userId: context.userId });
+    }
+
+    const entities = await query.getMany();
+
+    return entities.map((entity) => TagEntity.toEgressType(entity));
+  }
+
+  /**
+   * Replace an intention tag's category membership. Same contract as
+   * {@link setTagDirections} on the second, orthogonal grouping axis.
+   */
+  async setTagCategories(
+    context: ServiceContext,
+    intentionTagId: string,
+    categoryTagIds: string[],
+  ): Promise<Tag[] | null> {
+    const scope = this.userScope(context);
+
+    const intention = await this.tagRepository.findOne({ where: { id: intentionTagId, ...scope } });
+
+    if (intention == null) {
+      return null;
+    }
+
+    if (intention.kind !== 'intention') {
+      throw new Error('Only intention tags can belong to a category');
+    }
+
+    const uniqueIds = [...new Set(categoryTagIds)];
+
+    const categories =
+      uniqueIds.length === 0
+        ? []
+        : await this.tagRepository.find({ where: { id: In(uniqueIds), kind: 'category', ...scope } });
+
+    return this.dataSource.transaction(async (manager) => {
+      await manager.getRepository(TagCategoryEntity).delete({ intentionTagId });
+
+      for (const category of categories) {
+        await manager
+          .getRepository(TagCategoryEntity)
+          .createQueryBuilder()
+          .insert()
+          .values({ intentionTagId, categoryTagId: category.id })
+          .orIgnore()
+          .execute();
+      }
+
+      return categories.map((entity) => TagEntity.toEgressType(entity));
+    });
+  }
+
+  /**
+   * The direction tags turned OFF for a category tag (empty = every
+   * direction applies — see the opt-out polarity note on
+   * `category_direction_optouts`).
+   */
+  async getCategoryDirectionOptouts(context: ServiceContext, categoryTagId: string): Promise<Tag[]> {
+    const query = this.dataSource
+      .getRepository(TagEntity)
+      .createQueryBuilder('t')
+      .innerJoin(CategoryDirectionOptoutEntity, 'cdo', 'cdo.direction_tag_id = t.id')
+      .where('cdo.category_tag_id = :categoryTagId', { categoryTagId })
+      .orderBy('t.label', 'ASC');
+
+    if (context.userId !== SYSTEM_USER) {
+      query.andWhere('t.user_id = :userId', { userId: context.userId });
+    }
+
+    const entities = await query.getMany();
+
+    return entities.map((entity) => TagEntity.toEgressType(entity));
+  }
+
+  /**
+   * Toggle a direction on/off for a category: `enabled: false` inserts an
+   * opt-out row, `enabled: true` removes one (a no-op if it was already
+   * enabled). Both tags must exist, belong to the caller, and carry the kind
+   * their role requires — returns false rather than throwing, since toggling
+   * a stale or mistyped id from a UI is an expected outcome, not a bug.
+   */
+  async setCategoryDirectionEnabled(
+    context: ServiceContext,
+    categoryTagId: string,
+    directionTagId: string,
+    enabled: boolean,
+  ): Promise<boolean> {
+    const scope = this.userScope(context);
+
+    const category = await this.tagRepository.findOne({
+      where: { id: categoryTagId, kind: 'category', ...scope },
+    });
+
+    if (category == null) {
+      return false;
+    }
+
+    const direction = await this.tagRepository.findOne({
+      where: { id: directionTagId, kind: 'direction', ...scope },
+    });
+
+    if (direction == null) {
+      return false;
+    }
+
+    const optoutRepository = this.dataSource.getRepository(CategoryDirectionOptoutEntity);
+
+    if (enabled) {
+      await optoutRepository.delete({ categoryTagId, directionTagId });
+    } else {
+      await optoutRepository
+        .createQueryBuilder()
+        .insert()
+        .values({ categoryTagId, directionTagId })
+        .orIgnore()
+        .execute();
+    }
+
+    return true;
+  }
+
+  /**
+   * An entity's categories, in position order (empty = none). Deliberately
+   * separate from `getTagsForEntity` / `entity_tag` — see
+   * `20260916025313_planning_tag_taxonomy.sql`'s header for why a category
+   * can never leak into that read.
+   */
+  async getEntityCategories(
+    context: ServiceContext,
+    entityId: EntityIdentifier<TaggableEntity>,
+  ): Promise<Tag[]> {
+    const { type, id } = entityId;
+
+    const query = this.dataSource
+      .getRepository(TagEntity)
+      .createQueryBuilder('t')
+      .innerJoin(EntityCategoryEntity, 'ec', 'ec.category_tag_id = t.id')
+      .where('ec.entity_id = :id', { id })
+      .andWhere('ec.entity_type = :type', { type })
+      .orderBy('ec.position', 'ASC');
+
+    if (context.userId !== SYSTEM_USER) {
+      query.andWhere('t.user_id = :userId', { userId: context.userId });
+    }
+
+    const entities = await query.getMany();
+
+    return entities.map((entity) => TagEntity.toEgressType(entity));
+  }
+
+  /**
+   * Replace an entity's category set, in the order given. De-duplicated and
+   * capped at {@link ENTITY_CATEGORY_CAP} (CI-Planning's "1-3 categories,
+   * positional" rule — enforced here, not as a DB constraint, matching how
+   * `entity_tag`'s own shape is app- rather than FK-enforced). Any id that is
+   * not one of the caller's own `kind = 'category'` tags is silently dropped.
+   * An empty array clears the entity's categories.
+   */
+  async setEntityCategories(
+    context: ServiceContext,
+    entityId: EntityIdentifier<TaggableEntity>,
+    categoryTagIds: string[],
+  ): Promise<Tag[]> {
+    const { type, id } = entityId;
+
+    const uniqueIds = [...new Set(categoryTagIds)].slice(0, ENTITY_CATEGORY_CAP);
+
+    const candidates =
+      uniqueIds.length === 0
+        ? []
+        : await this.tagRepository.find({
+            where: { id: In(uniqueIds), kind: 'category', ...this.userScope(context) },
+          });
+
+    // Preserve the CALLER's order (that is what `position` records), not
+    // whatever order the IN-list query happened to return.
+    const ordered = uniqueIds
+      .map((candidateId) => candidates.find((candidate) => candidate.id === candidateId))
+      .filter((candidate): candidate is TagEntity => candidate != null);
+
+    return this.dataSource.transaction(async (manager) => {
+      await manager.getRepository(EntityCategoryEntity).delete({ entityType: type, entityId: id });
+
+      for (const [position, category] of ordered.entries()) {
+        await manager
+          .getRepository(EntityCategoryEntity)
+          .createQueryBuilder()
+          .insert()
+          .values({ entityType: type, entityId: id, categoryTagId: category.id, position })
+          .orIgnore()
+          .execute();
+      }
+
+      return ordered.map((entity) => TagEntity.toEgressType(entity));
+    });
   }
 
   /** User-scoping fragment shared by the owner-checked reads and writes. */

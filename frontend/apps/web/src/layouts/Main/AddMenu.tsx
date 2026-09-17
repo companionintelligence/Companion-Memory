@@ -1,3 +1,5 @@
+import { Suspense, lazy } from 'react';
+
 import { useApolloClient } from '@apollo/client';
 import { DropdownMenu, IconButton, Tooltip, useToast } from '@ci/shadcn';
 import {
@@ -23,8 +25,12 @@ import { AddConceptModal } from '@/components/modals/AddItemModal/AddConceptModa
 import { CaptureModal } from '@/components/modals/CaptureModal';
 import { ScanBarcodeModal } from '@/components/modals/ScanBarcodeModal';
 import { ThingModal } from '@/components/modals/ThingModal';
-import { UploadModal } from '@/components/modals/UploadModal';
 import { useModalControls } from '@/hooks';
+
+/** Loaded when the dialog is first opened — see the mount site below. */
+const UploadModal = lazy(() =>
+  import('@/components/modals/UploadModal').then((m) => ({ default: m.UploadModal })),
+);
 
 /**
  * Primary Add control: plus button, grid menu, and the modals it opens.
@@ -261,15 +267,16 @@ export function AddMenu() {
                             // never changes, and they wait an hour to find out.
                             toast.info('Prediction is turned off on this Companion.');
                           } else if (status === 'triggered') {
-                            toast.success(
-                              'Prediction started — this can take about an hour. Watch Forecast for progress.',
-                            );
+                            // Deliberately does not name Forecast: `forecast.page`
+                            // ships false, so on a stock appliance /forecast is not
+                            // a registered route and "Watch Forecast" sent the owner
+                            // to a 404. Wording that holds either way beats making
+                            // this toast read the flag.
+                            toast.success('Prediction started — this can take about an hour.');
                           } else if (status === 'error' || !status) {
                             toast.error('Failed to trigger prediction pipeline');
                           } else {
-                            toast.success(
-                              'Prediction started — this can take about an hour. Watch Forecast for progress.',
-                            );
+                            toast.success('Prediction started — this can take about an hour.');
                           }
                         }}
                         className="h-16 w-16 flex flex-col items-center justify-center cursor-pointer rounded-md p-1"
@@ -286,14 +293,24 @@ export function AddMenu() {
         </DropdownMenu>
       </div>
 
-      <UploadModal
-        open={isUploadModalOpen}
-        onClose={() => {
-          resetUploader();
-          closeUploadModal();
-        }}
-        onSubmit={handleUpload}
-      />
+      {/* Same reasoning as CaptureModal below, plus a bundle cost: UploadModal
+          calls `useDropzone` unconditionally in its body, so an always-mounted
+          copy ran that hook on every authenticated page load AND pulled
+          react-dropzone + file-selector (~63 KB) into the chunk served before
+          first paint. AddMenu sits in the desktop header and the phone top bar,
+          so everyone paid for a dialog nobody had opened. */}
+      {isUploadModalOpen && (
+        <Suspense fallback={null}>
+          <UploadModal
+            open
+            onClose={() => {
+              resetUploader();
+              closeUploadModal();
+            }}
+            onSubmit={handleUpload}
+          />
+        </Suspense>
+      )}
 
       {/* Rendered conditionally, not merely `open={false}`. `open` guards the
           modal's OUTPUT, not its hooks: DesktopCaptureModal mounts

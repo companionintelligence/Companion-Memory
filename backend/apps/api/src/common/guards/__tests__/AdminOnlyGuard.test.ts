@@ -68,21 +68,48 @@ describe('the preconditions for gating a route behind AdminOnlyGuard', () => {
     );
   });
 
-  it('leaves admin bootstrapping to a migration that cannot fire on a fresh install', () => {
-    // The actual blocker on gating /jobs, pinned where someone will read it.
-    // 20260825233952 promotes the EARLIEST EXISTING user and only when no admin
-    // exists; on a fresh install it runs against an empty ci.users, matches
-    // nothing, and the first signup lands on the column default 'user'. So the
-    // appliance has no admin and no in-app way to mint one.
-    const migration = readFileSync(
+  it('has an admin to require, because application code promotes the first account', () => {
+    // ═══ THIS TEST USED TO ASSERT THE OPPOSITE ═══
+    //
+    // It pinned the fact that admin bootstrapping existed ONLY in migration
+    // 20260825233952, which promotes the earliest EXISTING user and therefore
+    // matched nothing on a fresh install — leaving the appliance permanently
+    // admin-less and every route behind this guard 403 for everybody. That was
+    // a real defect being pinned as if it were a design note, which is exactly
+    // how it survived: gating a route here was refused on its authority.
+    //
+    // `UserService.claimApplianceIfUnowned` is the fix, and this asserts the
+    // two properties the guard depends on — that it writes the role at all, and
+    // that its "unowned" test is the same one ApplianceAdminGuard applies.
+    const service = src('domains/user/services/UserService.ts');
+
+    expect(service).toMatch(/claimApplianceIfUnowned/);
+    expect(service).toMatch(/SET role = 'admin'/);
+    expect(service).toMatch(/role = 'admin' AND deleted_at IS NULL/);
+
+    // Called from create(), which is the single chokepoint all five user-creation
+    // sites funnel through (local signup, portal JIT-provisioning, the Hub
+    // forward-auth bridge, and both OIDC paths). Promoting in any one caller
+    // would leave the others able to create the first account unpromoted.
+    expect(service).toMatch(/await this\.claimApplianceIfUnowned\(entity\.id\)/);
+  });
+
+  it('heals the fresh installs the original backfill could not reach', () => {
+    // 20260825233952 runs once and cannot be re-run to pick up a fix, so the
+    // appliances it missed need their own migration.
+    const heal = readFileSync(
       resolve(
         __dirname,
-        '../../../../db/postgres/migrations/20260825233952_add_role_to_users_backfill_admin.sql',
+        '../../../../db/postgres/migrations/20260910133657_bootstrap_first_user_as_admin.sql',
       ),
       'utf8',
     );
 
-    expect(migration).toMatch(/AND NOT EXISTS \(\s*SELECT 1 FROM ci\.users WHERE role = 'admin'/);
-    expect(migration).toMatch(/ORDER BY created_at ASC/);
+    expect(heal).toMatch(/ORDER BY created_at ASC/);
+    // Scoped to live admins, unlike its predecessor — an appliance whose only
+    // admin had deleted their account looked "already promoted" to that one.
+    expect(heal).toMatch(
+      /NOT EXISTS \(\s*SELECT 1 FROM ci\.users WHERE role = 'admin' AND deleted_at IS NULL/,
+    );
   });
 });

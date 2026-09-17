@@ -1,185 +1,165 @@
 import { type FormEvent, useState } from 'react';
 
-import {
-  buildApiUrl,
-  getApiBaseUrl,
-  isBarcodeScanError,
-  isNativePlatform,
-  persistApiBaseUrl,
-  resolveHttpOrigin,
-  scanQrCode,
-} from '@ci/common';
-import { Button, Card, Input, Label } from '@ci/shadcn';
+import { getApiBaseUrl, isIosPlatform, isLocalApplianceOrigin } from '@ci/common';
+import { Button, Card, Input, Label, LoadingButton, PasswordInput } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
-import { probeMemoryOrigin } from '@/pages/DeviceConnectPage/portal-client';
+import { useAuth } from '@/hooks';
+import {
+  persistPortalUrl,
+  readPersistedPortalUrl,
+  DEFAULT_PORTAL_URL,
+} from '@/pages/DeviceConnectPage/portal-client';
 
-type Status = 'idle' | 'testing' | 'error';
+const TOUCH = 'min-h-[44px]';
 
 /**
- * Native-only screen for pointing the app at a self-hosted Companion Memory server.
- * Because the appliance has no single cloud URL, the native client must be told where
- * its Memory Server lives.
+ * Advanced pairing settings. Not a connect path.
  *
- * Product naming: the repo/service is CI-Server, but users never see that name — in the
- * UI it is "Companion Memory" (the product) or "Memory Server" (the box it runs on).
- * Keep new copy on those terms. The entered origin is health-checked before being persisted (via
- * `persistApiBaseUrl`, which stores it in localStorage and applies it for the
- * session). On web this screen is inert — the API origin is always same-origin.
+ * A Memory Server URL cannot pair this phone: pairing mints a Memory API key from
+ * a Companion (Portal) OIDC token after Log in. Typing an origin used to persist
+ * that URL with no key and bounce back to the splash — it never authenticated.
+ *
+ * Email/password here talks to Memory `/api/authenticate` on an origin this phone
+ * already paired. It unlocks offline SQLite. It cannot list Hub devices or attach
+ * a new box.
  */
 export function ServerSettingsPage() {
   const navigate = useNavigate();
+  const [, { completeMemoryPasswordConnect }] = useAuth();
 
-  const [url, setUrl] = useState<string>(() => getApiBaseUrl());
-  const [status, setStatus] = useState<Status>('idle');
+  const [portalUrl, setPortalUrl] = useState(readPersistedPortalUrl);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [scanning, setScanning] = useState(false);
+  const [busy, setBusy] = useState(false);
 
-  // Parse to a clean http(s) origin, dropping any path/query/hash so the persisted
-  // value is always a true origin (e.g. `https://host/app` → `https://host`) and
-  // request URLs like `${origin}/api/...` resolve correctly. Returns null if invalid.
-  function toOrigin(value: string): string | null {
-    try {
-      return resolveHttpOrigin(value);
-    } catch {
-      return null;
-    }
-  }
+  const origin = getApiBaseUrl();
+  const canOfflineUnlock = Boolean(origin) && !isLocalApplianceOrigin(origin);
 
-  // Scanning only fills in and validates the field — it never health-checks or persists
-  // itself. That keeps exactly one code path (handleSubmit, below) responsible for
-  // deciding an origin is actually reachable, so a scanned URL gets exactly the same
-  // scrutiny as a typed one, and the user gets a chance to see what was scanned (and
-  // back out) before anything is saved.
-  const handleScan = async () => {
-    setScanning(true);
-    setStatus('idle');
-    setError(null);
-
-    try {
-      const raw = await scanQrCode();
-
-      if (raw === null) {
-        // User backed out of the scanner, or scanning isn't available here — not an error.
-        return;
-      }
-
-      const candidate = toOrigin(raw);
-
-      if (!candidate) {
-        setStatus('error');
-        setError('That QR code did not contain a valid Memory Server URL.');
-
-        return;
-      }
-
-      setUrl(candidate);
-    } catch (err) {
-      setStatus('error');
-      setError(
-        isBarcodeScanError(err) && err.code === 'denied'
-          ? 'Camera access is needed to scan a QR code. Enable it in Settings, or type the URL instead.'
-          : 'Could not open the scanner. Try again, or type the URL instead.',
-      );
-    } finally {
-      setScanning(false);
-    }
+  const handleSavePortal = (event: FormEvent) => {
+    event.preventDefault();
+    persistPortalUrl(portalUrl);
+    navigate('/device-connect');
   };
 
-  const handleSubmit = async (event: FormEvent) => {
+  const handleUnlock = async (event: FormEvent) => {
     event.preventDefault();
 
-    const candidate = toOrigin(url);
-
-    if (!candidate) {
-      setStatus('error');
-      setError('Enter a full Memory Server URL, e.g. https://memory.example.com');
-
+    if (!canOfflineUnlock || !email || !password) {
       return;
     }
 
-    setStatus('testing');
+    setBusy(true);
     setError(null);
 
-    // Probe via native HTTP (same as cloud-connect). WKWebView fetch is CORS-bound
-    // and fails with TypeError "Load failed" against a Hub-published appliance.
     try {
-      await probeMemoryOrigin(candidate);
-
-      persistApiBaseUrl(candidate);
-
-      // Hand off to the normal flow; the splash route routes to login or feed.
+      await completeMemoryPasswordConnect(email, password, origin);
       navigate('/', { replace: true });
     } catch (err) {
-      setStatus('error');
-      setError(
-        err instanceof Error && err.name === 'AbortError'
-          ? 'Could not reach your Companion Memory (timed out). Check the URL and your network.'
-          : `Could not reach your Companion Memory. ${err instanceof Error ? err.message : ''}`.trim(),
-      );
+      setError(err instanceof Error ? err.message : 'Could not unlock this Memory.');
+    } finally {
+      setBusy(false);
     }
   };
-
-  // buildApiUrl reflects the currently-applied origin, shown as a hint.
-  const currentTarget = buildApiUrl('/api');
 
   return (
     <div className="w-full max-w-sm">
       <Card>
         <Card.Header>
-          <Card.Title>Advanced: Memory Server URL</Card.Title>
+          <Card.Title>Advanced</Card.Title>
           <Card.Description>
-            Type an origin for a box that is not listed in Portal. Prefer Connect this device when Hub has
-            published this Memory Server.
+            Connecting a new phone requires Log in with your Companion account. These settings only change
+            which Hub that uses, or unlock a Memory this phone already paired.
           </Card.Description>
         </Card.Header>
 
-        <Card.Content>
-          <form onSubmit={handleSubmit} className="space-y-4">
+        <Card.Content className="flex flex-col gap-6">
+          <form onSubmit={handleSavePortal} className="flex flex-col gap-3">
             <div className="space-y-2">
-              <Label htmlFor="server-url">Memory Server URL</Label>
+              <Label htmlFor="portal-url">Companion URL</Label>
               <Input
-                id="server-url"
+                id="portal-url"
                 type="url"
+                className={TOUCH}
                 inputMode="url"
                 autoCapitalize="none"
                 autoCorrect="off"
-                placeholder="https://memory.example.com"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                disabled={status === 'testing' || scanning}
+                placeholder={DEFAULT_PORTAL_URL}
+                value={portalUrl}
+                onChange={(e) => setPortalUrl(e.target.value)}
+                aria-label="Companion URL"
               />
               <p className="text-muted-foreground text-xs">
-                Currently targeting: {currentTarget || '(same origin)'}
+                {isIosPlatform() ? 'Safari' : 'Your browser'} signs in here. Then the app lists Memory Servers
+                on this account.
               </p>
             </div>
-
-            {isNativePlatform() && (
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={handleScan}
-                disabled={status === 'testing' || scanning}
-              >
-                {scanning ? 'Scanning…' : 'Scan QR Code'}
-              </Button>
-            )}
-
-            {status === 'error' && error && <p className="text-destructive text-sm">{error}</p>}
-
-            <Button type="submit" className="w-full" disabled={status === 'testing' || scanning}>
-              {status === 'testing' ? 'Testing…' : 'Test & Connect'}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              className="w-full"
-              onClick={() => navigate('/device-connect')}
-            >
-              Find a server through Portal
-            </Button>
+            <LoadingButton type="submit" variant="outline" className={TOUCH}>
+              Save URL
+            </LoadingButton>
           </form>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Memory origin</p>
+            <p className="text-muted-foreground text-xs" data-testid="memory-origin-hint">
+              {canOfflineUnlock
+                ? origin
+                : 'Not paired yet. A URL by itself cannot connect this phone — Log in sends the Companion token the box needs.'}
+            </p>
+          </div>
+
+          {canOfflineUnlock ? (
+            <form onSubmit={(event) => void handleUnlock(event)} className="flex flex-col gap-3">
+              <p className="text-muted-foreground text-xs">
+                Sign in with email and pass unlocks this already-paired Memory when you are offline. It does
+                not connect a new device.
+              </p>
+              <Input
+                type="email"
+                className={TOUCH}
+                aria-label="Email"
+                placeholder="you@example.com"
+                autoComplete="username"
+                inputMode="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+              <PasswordInput
+                className={TOUCH}
+                aria-label="Password"
+                placeholder="Password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+              {error ? (
+                <p className="text-destructive text-sm" role="alert">
+                  {error}
+                </p>
+              ) : null}
+              <LoadingButton
+                type="submit"
+                className={TOUCH}
+                loading={busy}
+                disabled={busy || !email || !password}
+                data-testid="local-unlock-submit"
+              >
+                Unlock
+              </LoadingButton>
+            </form>
+          ) : null}
+
+          <Button
+            type="button"
+            variant="ghost"
+            className={`w-full ${TOUCH}`}
+            onClick={() => navigate('/device-connect')}
+          >
+            Back to Log in
+          </Button>
         </Card.Content>
       </Card>
     </div>

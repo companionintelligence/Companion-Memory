@@ -58,6 +58,27 @@ services:
       CI_TELEMETRY: ${CI_TELEMETRY:-}
       CI_LOCAL_ONLY: ${CI_LOCAL_ONLY:-}
       CI_SERVER_VERSION: ${CI_SERVER_VERSION:-}
+      # Where clients should reach the sync engine. /api/powersync/token returns
+      # this verbatim as `powersync_url`, and refuses to issue a token at all
+      # while it is empty — so without it sync is a permanent 503 no matter what
+      # else is running. Only this web role needs it; the worker serves no HTTP.
+      #
+      # The gateway proxies the engine at /powersync on the app's own origin
+      # (infrastructure/gateway/nginx.conf), which is not a convenience: the CSP
+      # served with the app pins connect-src to 'self', so a client cannot reach
+      # sync on any other origin.
+      #
+      # `:+` and not `:-` — this stays EMPTY unless APP_BASE_URL is set, rather
+      # than defaulting to a bare "/powersync" that would read as configured and
+      # hand every client a host-less URL. Sync stays off until the deployment
+      # says where it is, which is the honest failure. Override POWERSYNC_URL
+      # directly for a sync service on its own hostname — which then also needs
+      # that origin added to the CSP.
+      POWERSYNC_URL: ${POWERSYNC_URL:-${APP_BASE_URL:+${APP_BASE_URL}/powersync}}
+      # POWERSYNC_JWT_SECRET is deliberately absent here: it is a generated
+      # secret, so it arrives from /run/secrets/.env.secrets the way
+      # DATABASE_PASSWORD does. generate-secrets mints it and the powersync
+      # container derives its base64url JWKS key from that same value.
     networks:
       - ci
     extra_hosts:
@@ -76,6 +97,14 @@ services:
       database:
         condition: service_healthy
     restart: unless-stopped
+    # api, worker and gateway have no definition in docker-compose.yml, so they
+    # cannot inherit its bounded-logging block — see the note on `database`
+    # there for why an appliance must not run the json-file driver uncapped.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     profiles: [ "production" ]
 
   # The headless half of the api: same image, same code, no HTTP. Consumes the
@@ -110,6 +139,11 @@ services:
       database:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     profiles: [ "production" ]
 
   database:
@@ -131,6 +165,11 @@ services:
       object-store:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     profiles: [ "production" ]
 
   hbpe-service:
@@ -141,11 +180,22 @@ services:
     depends_on:
       generate-secrets:
         condition: service_completed_successfully
-    devices:
-      - /dev/kfd
-      - /dev/dri
-    group_add:
-      - video
+    # NO `devices:`/`group_add:` here on purpose. This file used to pass
+    # /dev/kfd + /dev/dri and group_add: [video] through unconditionally, which
+    # meant `make production` could only ever start on an AMD ROCm host: a
+    # `devices:` entry whose node does not exist is a hard start failure, not a
+    # graceful degradation, so every Intel/NVIDIA/macOS host was refused before
+    # the container ran. GPU passthrough lives in docker-compose.rocm.yml, the
+    # opt-in overlay built for exactly this (it carries the same two device
+    # nodes plus the numeric AMD_RENDER_GID/AMD_VIDEO_GID groups and
+    # seccomp:unconfined, which literal `video` never did):
+    #
+    #   docker compose -f docker-compose.yml -f docker-compose.production.yml \
+    #                  -f docker-compose.rocm.yml --profile production up -d
+    #
+    # Without the overlay hbpe-service still starts and still answers — it just
+    # finds no HSA agent and runs on the CPU. See the README's "GPU
+    # acceleration (HBPE)" section.
 
   object-store:
     volumes:

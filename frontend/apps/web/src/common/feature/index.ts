@@ -1,1 +1,1 @@
-export { FeaturesProvider, useFeatures } from './useFeatures';
+export { FeaturesProvider, useFeatures, useOptionalFeatures } from './useFeatures';

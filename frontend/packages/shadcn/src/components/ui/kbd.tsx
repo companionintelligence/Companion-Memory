@@ -1,4 +1,12 @@
-import { cn } from '@/lib/utils';
+// Relative, not the `@/` alias the `shadcn add` CLI generates. That alias is
+// declared in THIS package's tsconfig only, so it resolves while typechecking
+// @ci/shadcn alone and fails the moment another workspace typechecks against
+// these sources — which is every consumer: @ci/common, @ci/capture, @ci/editor,
+// and through them all four shipping targets. The other 44 files in this
+// directory already import it this way; re-run of the CLI will reintroduce the
+// alias, so convert it again rather than adding a path mapping to every
+// consumer's tsconfig.
+import { cn } from '../../lib/utils';
 
 function Kbd({ className, ...props }: React.ComponentProps<'kbd'>) {
   return (

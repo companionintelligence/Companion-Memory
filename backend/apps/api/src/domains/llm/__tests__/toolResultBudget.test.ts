@@ -88,6 +88,56 @@ describe('boundToolResultForPrompt', () => {
     expect(JSON.parse(boundToolResultForPrompt(result, 2_048))).toEqual(result);
   });
 
+  it('keeps an envelope header intact and bounds only its items', () => {
+    // The search intents return { summary, totalMatches, truncated, items }.
+    // The header is where the match count lives; hard-truncating the object
+    // as a whole is exactly what would cut it off.
+    const result = {
+      summary: 'Showing the top 25 of 342 matches (exact count). Report the total, not the number shown.',
+      totalMatches: 342,
+      truncated: true,
+      limit: 25,
+      mode: 'keyword',
+      items: Array.from({ length: 25 }, (_, i) => ({ id: `${i}`, content: 'y'.repeat(300) })),
+    };
+    const text = boundToolResultForPrompt(result, 2_048);
+
+    expect(text.length).toBeLessThanOrEqual(2_048);
+
+    const parsed = JSON.parse(text) as typeof result & { items: unknown[] };
+
+    expect(parsed.summary).toBe(result.summary);
+    expect(parsed.totalMatches).toBe(342);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.items.length).toBeGreaterThan(1);
+    expect(parsed.items.length).toBeLessThan(25);
+    expect(parsed.items[parsed.items.length - 1]).toMatch(/\d+ more results omitted/);
+  });
+
+  it('passes a small envelope through unchanged, items and all', () => {
+    const result = {
+      summary: '2 matches; all shown.',
+      totalMatches: 2,
+      truncated: false,
+      items: [{ id: 'a' }, { id: 'b' }],
+    };
+
+    expect(JSON.parse(boundToolResultForPrompt(result, 2_048))).toEqual(result);
+  });
+
+  it('a count-only envelope has no items to trim and survives whole', () => {
+    const result = {
+      summary: '342 file entries match "rabbit".',
+      totalMatches: 342,
+      truncated: false,
+      limit: 0,
+      mode: 'count',
+      items: [],
+    };
+
+    expect(JSON.parse(boundToolResultForPrompt(result, 2_048))).toEqual(result);
+  });
+
   it('serializes Date fields as ISO strings, not empty objects', () => {
     // Walking a Date's entries flattens it to {} — measured live as
     // `"time": {}` on every search result handed to the model.

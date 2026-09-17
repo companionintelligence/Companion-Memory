@@ -13,6 +13,8 @@ import { type GraphEntityInputDto, GraphIngestService, ObjectIdentifierService }
 import {
   GRAPH_EDGE_BACKFILL_QUEUE,
   GraphEdgeBackfillRequestEvent,
+  PERSON_STUB_BACKFILL_QUEUE,
+  PersonStubBackfillRequestEvent,
   SEARCH_INDEX_BACKFILL_QUEUE,
   SearchIndexBackfillRequestEvent,
 } from '@ci/domains/maintenance/events';
@@ -477,6 +479,11 @@ export class PushStage implements ImportStageRunner {
     // into titles and posters, and its scheduled cadence is weekly. The Sync
     // step ends here, so this is where "import finished" meets "now enrich".
     const unfurl = await this.kickUnfurlSweep(context, counts, contentHandled);
+    // …and give the messages their people. Bulk-pushed communications name
+    // their participants only as raw strings in `participants_metadata`; the
+    // people behind those strings are created by the stub pass, and until it
+    // runs the person-link stage resolves every name to nobody.
+    const personStubs = await this.kickPersonStubs(context, counts);
 
     return {
       // Every staged row is RESOLVED one way or another, and this stage's work
@@ -546,6 +553,7 @@ export class PushStage implements ImportStageRunner {
         ...(graphEdges ? { graphEdges } : {}),
         // Same, for link previews. Absent when no content rows were written.
         ...(unfurl ? { unfurl } : {}),
+        ...(personStubs ? { personStubs } : {}),
         // Additive. `pushed`, `deduped`, `failed`, `destinations` and
         // `entities` above are read by RunPipeline and ImportRunService and
         // keep their exact meaning; this is the per-data-source, reconciled
@@ -846,6 +854,52 @@ export class PushStage implements ImportStageRunner {
       });
 
       return { requested: sources, error: message };
+    }
+  }
+
+  /**
+   * Post-push people pass: ask maintenance to create a stub Person (and its
+   * identifier) for every participant this push's communications name that
+   * the index does not know yet. Fail-soft like the sibling kicks — the rows
+   * are in `ci.*`, the pass is idempotent, and an operator can still run it
+   * by hand — so a failure to enqueue is reported in the stage detail, never
+   * thrown.
+   *
+   * Only when communications were written: events carry their own people and
+   * the other destinations name nobody. `singletonKey` collapses a burst of
+   * pushes for one owner into one pass; the pass walks the whole corpus, so a
+   * second one queued behind the first would only re-read what the first
+   * already covered.
+   */
+  private async kickPersonStubs(
+    context: StageRunContext,
+    counts: DestinationCounts,
+  ): Promise<Record<string, unknown> | null> {
+    if ((counts.communications ?? 0) === 0) {
+      return null;
+    }
+
+    try {
+      await this.signals.send(
+        PersonStubBackfillRequestEvent,
+        { userId: context.userId, requestedBy: `import-run:${context.runId}` },
+        { queue: PERSON_STUB_BACKFILL_QUEUE, singletonKey: `person-stubs:${context.userId}` },
+      );
+      this.logger.log('Post-push people-stub pass requested', {
+        runId: context.runId,
+        communications: counts.communications,
+      });
+
+      return { requested: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+
+      this.logger.warn('Post-push people-stub request failed; people wait for the operator pass', {
+        runId: context.runId,
+        error: message,
+      });
+
+      return { requested: true, error: message };
     }
   }
 

@@ -92,6 +92,12 @@ export type ImageDescriptionBackfillRequestPayload = {
   userId: string;
   /** Max originals to requeue in this batch (default: listener DEFAULT_LIMIT). */
   limit?: number;
+  /**
+   * Keyset cursor: only originals with an id below this one (ids are UUIDv7,
+   * so "below" is "older"). Absent on the request Settings fires; the listener
+   * sets it when it chains the next page after a full one.
+   */
+  afterParentFileId?: string;
 };
 
 /**

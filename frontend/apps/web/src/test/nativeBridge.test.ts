@@ -122,13 +122,18 @@ describe('nativeBridge — native uses the Capacitor plugins', () => {
     expect(await secureStorageGet('apiKey')).toBeNull();
   });
 
-  it('openExternalUrl opens the system browser', async () => {
+  it('openExternalUrl opens Safari via LocalHub, never Capacitor Browser', async () => {
+    const hubOpenUrl = vi.fn(async () => {});
     const { win, browserOpen } = fakeNativeWindow();
+    (win as { Capacitor: { Plugins: Record<string, unknown> } }).Capacitor.Plugins.LocalHub = {
+      openUrl: hubOpenUrl,
+    };
     setWindow(win);
 
     await openExternalUrl('https://idp.example.com/auth');
 
-    expect(browserOpen).toHaveBeenCalledWith({ url: 'https://idp.example.com/auth' });
+    expect(hubOpenUrl).toHaveBeenCalledWith({ url: 'https://idp.example.com/auth' });
+    expect(browserOpen).not.toHaveBeenCalled();
   });
 
   it('openExternalUrl prefers LocalHub.openUrl (system Safari) over Capacitor Browser', async () => {
@@ -144,6 +149,14 @@ describe('nativeBridge — native uses the Capacitor plugins', () => {
     expect(hubOpenUrl).toHaveBeenCalledWith({
       url: 'https://hub.companionintelligence.com/api/auth/oauth2/authorize',
     });
+    expect(browserOpen).not.toHaveBeenCalled();
+  });
+
+  it('openExternalUrl never falls back to in-app Capacitor Browser', async () => {
+    const { win, browserOpen } = fakeNativeWindow();
+    setWindow(win);
+
+    await expect(openExternalUrl('https://idp.example.com/auth')).rejects.toThrow(/system browser/);
     expect(browserOpen).not.toHaveBeenCalled();
   });
 

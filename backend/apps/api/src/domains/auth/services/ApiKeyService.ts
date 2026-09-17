@@ -6,11 +6,7 @@ import { IsNull, Repository } from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
-import {
-  type ApiKeyCapability,
-  DEFAULT_API_KEY_CAPABILITY,
-  coerceApiKeyCapability,
-} from '@ci/common/decorators';
+import { DEFAULT_API_KEY_CAPABILITY, coerceApiKeyCapability } from '@ci/common/decorators';
 import { LoggerService } from '@ci/common/logging';
 
 import { ApiKey, ApiKeyEntity } from '../entities/ApiKeyEntity';
@@ -19,6 +15,7 @@ import {
   CONNECT_PROVENANCE,
   type ApiKeyProvenance,
   type CreateApiKeyDto,
+  type ValidatedApiKey,
   type CreateApiKeyResponse,
   type UpdateApiKeyDto,
 } from '../types';
@@ -358,9 +355,7 @@ export class ApiKeyService {
     return removed;
   }
 
-  async validateKey(
-    rawKey: string,
-  ): Promise<{ keyId: string; userId: string; scopes: string[]; capability: ApiKeyCapability } | null> {
+  async validateKey(rawKey: string): Promise<ValidatedApiKey | null> {
     if (rawKey.length !== API_KEY_HEX_LENGTH || !API_KEY_HEX_REGEX.test(rawKey)) {
       return null;
     }
@@ -369,7 +364,7 @@ export class ApiKeyService {
 
     const key = await this.apiKeyRepository.findOne({
       where: { hashed_key: hashed },
-      select: ['id', 'user_id', 'expires_at', 'scopes', 'capability'],
+      select: ['id', 'user_id', 'expires_at', 'scopes', 'capability', 'name', 'managed_by'],
     });
 
     if (!key) {
@@ -394,6 +389,15 @@ export class ApiKeyService {
       userId: key.user_id,
       scopes: key.scopes ?? [],
       capability: coerceApiKeyCapability(key.capability),
+      // Provenance, not identity-by-name: `managed_by === 'connect'` is the only
+      // trustworthy signal that CI-Hub minted this key for an installed app.
+      // ApiKeyEntity's own docblock warns that the `app:` name prefix must never
+      // be inferred from — a user can hand-create a key called
+      // `app:home-assistant`. The name is carried for LABELLING (which app), and
+      // is only ever read once `managed_by` has already answered whether to
+      // trust it.
+      managedBy: key.managed_by ?? null,
+      name: key.name ?? null,
     };
   }
 

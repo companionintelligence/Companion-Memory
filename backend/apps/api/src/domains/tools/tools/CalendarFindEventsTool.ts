@@ -6,7 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
-import { DatabaseSearchTool, type SearchResult } from './DatabaseSearchTool';
+import { DatabaseSearchTool, type SearchToolResult } from './DatabaseSearchTool';
 
 const CalendarFindEventsInputSchema = z.object({
   query: z.string().min(1).max(500),
@@ -20,7 +20,7 @@ export type CalendarFindEventsInput = z.infer<typeof CalendarFindEventsInputSche
  * {@link DatabaseSearchTool} with a fixed `event` entity scope.
  */
 @Injectable()
-export class CalendarFindEventsTool extends BaseTool<CalendarFindEventsInput, SearchResult[]> {
+export class CalendarFindEventsTool extends BaseTool<CalendarFindEventsInput, SearchToolResult> {
   readonly schema: IntentDefinition = {
     name: 'calendar.findEvents',
     domain: 'calendar',
@@ -57,7 +57,7 @@ export class CalendarFindEventsTool extends BaseTool<CalendarFindEventsInput, Se
   protected async executeInternal(
     context: ToolExecutionContext,
     input: CalendarFindEventsInput,
-  ): Promise<SearchResult[]> {
+  ): Promise<SearchToolResult> {
     return this.search.run(context, {
       query: input.query,
       maxResults: input.maxResults,

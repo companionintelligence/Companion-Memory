@@ -1,14 +1,40 @@
 # Signed, tag-triggered release of the desktop app (frontend/apps/desktop):
 #   git tag -a desktop-v0.1.0 -m "Desktop 0.1.0" && git push origin desktop-v0.1.0
 #
-# Every other GitHub workflow in this repo stays workflow_dispatch-only
-# except this one and mobile-release.yml — a tag push always builds AND
-# publishes a GitHub Release; there is no dry-run for this workflow (unlike
-# mobile-release.yml, there is no app-store submission step to rehearse
-# separately from the build itself).
+# This is one of only four workflows in this repo (of fourteen — the count
+# docs/CI.md keeps) that run without someone dispatching them: pr-gate.yml on
+# every PR, benchmark-unit.yml on scripts/benchmark/** changes, and the two
+# tag-triggered release lanes, mobile-release.yml and this one. Keep this list
+# and docs/CI.md's table in step; that table is the canonical one.
+#
+# A tag push here always builds AND publishes a GitHub Release; there is no
+# dry-run for this workflow (unlike mobile-release.yml, there is no app-store
+# submission step to rehearse separately from the build itself).
 #
 # desktop-build.yml remains the credential-free lane that produces unsigned
 # artifacts on manual dispatch. This is the DISTRIBUTION lane.
+#
+# ── The release procedure (the test gate is not optional) ───────────────
+# Nothing in THIS workflow runs a test: it signs, notarizes and publishes.
+# `verify-desktop-build-passed` below is the gate that makes that safe — it
+# asks the Actions API whether a successful desktop-build.yml run (which is
+# where `cargo test` lives) already exists for this exact commit, and refuses
+# to build if one does not. desktop-build.yml is dispatch-only, so the order
+# is always:
+#   gh workflow run desktop-build.yml --ref <branch>   # wait for green
+#   git tag -a desktop-v0.1.0 -m "Desktop 0.1.0" && git push origin desktop-v0.1.0
+# Modelled deliberately on publish.yml's `verify-ci-passed`, down to the
+# skip_test_gate + bypass_reason pair (a bypass with no stated cause is
+# refused there and here), so the server and desktop release lanes are read
+# and operated the same way. If publish.yml's gate gains an accountability
+# requirement, this one is expected to gain it too.
+#
+# The desktop marketing version (desktop-v0.1.0 → 0.1.0) versions the APP
+# only. The SERVER images the bundled compose file pulls are tagged
+# independently (date-shaped release tags like 2026.9.5) and are resolved
+# ONCE, in the `version` job, by
+# frontend/apps/desktop/scripts/sync-compose-resources.cjs; use the
+# `server_image_tag` dispatch input if one must be pinned by hand.
 #
 # ── Required secrets ────────────────────────────────────────────────────
 # macOS (Developer ID signing + notarization — names match what CI-Hub's own
@@ -39,6 +65,42 @@ on:
         description: 'Marketing version (e.g. 0.1.0). Defaults to the tag or 0.1.0.'
         type: string
         required: false
+      # The desktop marketing version is NOT a server image tag — see the
+      # `version` job's "Resolve the CI-Server image tag" step below (and the
+      # macOS "Sync compose resources" step) for the whole story. This input is
+      # read in exactly ONE place, that step; it is the only way to override
+      # the resolver, and it must name a tag
+      # that really exists under ghcr.io/companionintelligence/companion/*
+      # (date-shaped release tags like 2026.9.5, or latest).
+      server_image_tag:
+        description: 'Optional: pin the bundled CI-Server image tag (e.g. 2026.9.5). Leave blank to let sync-compose-resources.cjs resolve a verified, fully-published release.'
+        type: string
+        required: false
+      # Same escape hatch, same name, same accountability requirements as
+      # publish.yml's input of this name — the two release lanes are operated
+      # by the same people and must not need two different mental models.
+      # Unavailable on a tag push (the `inputs` context is empty there), which
+      # is deliberate: bypassing the gate has to be a conscious dispatch.
+      skip_test_gate:
+        description: >-
+          Release even though no successful desktop-build.yml run exists for
+          this commit. Emergency escape hatch only — it requires
+          bypass_reason, prints a ::warning:: naming the actor, and writes the
+          reason to the run summary.
+        type: boolean
+        default: false
+        required: false
+      bypass_reason:
+        description: >-
+          REQUIRED when skip_test_gate is true. Why signed, notarized desktop
+          artifacts are going out without the evidence — an incident number, a
+          link, a sentence. The gate refuses a blank reason: a bypass with no
+          stated cause is indistinguishable from a mis-click on the dispatch
+          form, and the run log that would otherwise be the only record of it
+          expires.
+        type: string
+        default: ''
+        required: false
 
 permissions:
   contents: write
@@ -49,12 +111,116 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ── Release gate: proof that the desktop test suite passed for THIS commit ──
+  #
+  # Before this job existed, a `desktop-v*` tag push went straight to signed,
+  # notarized, PUBLISHED artifacts having run no test of any kind — the crate's
+  # ~40 `cargo test` unit tests (stack manager path handling, sidecar
+  # release-asset resolution, compose invocation) live in desktop-build.yml and
+  # nowhere else, and nothing consulted them. The first thing anyone would ever
+  # have learned about a regression is a user's failed first launch.
+  #
+  # Deliberately does NOT re-run the suite: that would re-buy the hosted
+  # compute docs/CI.md gated these workflows to kill, and would test a
+  # different (post-version-bump) tree anyway. It buys the *evidence* — the
+  # Actions API is asked whether a successful desktop-build.yml run exists for
+  # GITHUB_SHA. Structure, wording and the skip_test_gate bypass are lifted
+  # from publish.yml's `verify-ci-passed` on purpose; the two release lanes
+  # should read identically. Cost: one ubuntu-latest minute.
+  verify-desktop-build-passed:
+    name: Require a green desktop-build.yml run for this commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # `gh run list` reads the Actions API; without actions:read the default
+      # GITHUB_TOKEN gets a 403 here and the gate fails closed on every run.
+      # Job-level permissions REPLACE the workflow-level block wholesale, so
+      # `contents: read` has to be restated even though the file grants
+      # `contents: write` — this job needs no write and no checkout.
+      actions: read
+    steps:
+      - name: Check for a successful desktop-build.yml run at ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout in this job, so gh cannot infer the repo from a git
+          # remote — name it explicitly.
+          GH_REPO: ${{ github.repository }}
+          # Empty string on a tag push (no `inputs` context there), which is
+          # the enforcing path — the bypass is dispatch-only.
+          SKIP_TEST_GATE: ${{ inputs.skip_test_gate }}
+          BYPASS_REASON: ${{ inputs.bypass_reason }}
+        run: |
+          if [[ "${SKIP_TEST_GATE}" == "true" ]]; then
+            # A blank reason is refused, exactly as in publish.yml: without it
+            # a bypass is a mis-click, and the run log — which expires — would
+            # be the only record that a signed, notarized build shipped with
+            # no test evidence behind it. The `//[[:space:]]/` strip means a
+            # reason of spaces does not count as one.
+            if [[ -z "${BYPASS_REASON//[[:space:]]/}" ]]; then
+              echo "::error::skip_test_gate=true requires a non-empty bypass_reason. Re-dispatch with a reason (incident number, link, or a sentence) so the bypass is recorded in the run summary."
+              exit 1
+            fi
+
+            echo "::warning::Desktop test gate BYPASSED by ${GITHUB_ACTOR} (skip_test_gate=true): ${BYPASS_REASON}"
+
+            # $GITHUB_STEP_SUMMARY, not just the log: step summaries are part
+            # of the run's rendered record, so the bypass stays visible without
+            # digging through — or outliving — raw log retention.
+            {
+              echo "## :warning: Desktop test gate BYPASSED"
+              echo
+              echo "| | |"
+              echo "| --- | --- |"
+              echo "| Ref | \`${GITHUB_REF}\` |"
+              echo "| Commit | \`${GITHUB_SHA}\` |"
+              echo "| Actor | @${GITHUB_ACTOR} |"
+              echo "| Reason | ${BYPASS_REASON} |"
+              echo
+              echo "Signed desktop artifacts released without proof that desktop-build.yml (the only place \`cargo test\` runs) passed for this commit."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          # --commit filters on the run's head SHA, so a desktop-build.yml run
+          # dispatched on the BRANCH the tag points at counts — same commit,
+          # same tree. That is the normal flow, since desktop-build.yml is
+          # dispatch-only and the tag usually does not exist yet when it runs.
+          count=$(gh run list \
+            --workflow desktop-build.yml \
+            --commit "${GITHUB_SHA}" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq 'length')
+
+          if [[ "${count}" == "0" ]]; then
+            echo "::error::No successful desktop-build.yml run for ${GITHUB_SHA}. Run 'gh workflow run desktop-build.yml --ref ${GITHUB_REF#refs/*/}', wait for it to pass, then re-push the tag (or re-dispatch this workflow). In an emergency, dispatch this workflow with skip_test_gate=true and a bypass_reason."
+            exit 1
+          fi
+          echo "Found a successful desktop-build.yml run for ${GITHUB_SHA} — proceeding."
+
   version:
-    name: Resolve version
+    name: Resolve version and server image tag
+    # Gated so a tag pushed without a green build burns one minute, not three
+    # 60-minute platform jobs — and so nothing downstream can observe a
+    # resolved tag from an unverified commit.
+    needs: verify-desktop-build-passed
     runs-on: ubuntu-latest
     outputs:
       name: ${{ steps.v.outputs.name }}
+      server_image_tag: ${{ steps.image.outputs.tag }}
     steps:
+      # Full history + tags: sync-compose-resources.cjs resolves the image tag
+      # by walking ancestor release tags (`git tag --merged HEAD`), and a
+      # shallow clone has none — which that script treats as a hard failure
+      # under CI rather than baking in an unpullable dev-<sha>.
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
       - id: v
         run: |
           set -euo pipefail
@@ -68,9 +234,59 @@ jobs:
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
           echo "Version ${NAME}"
 
+      - name: Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # THE SERVER IMAGE TAG IS RESOLVED HERE, ONCE, AND ONLY HERE.
+      #
+      # Each platform job used to run sync-compose-resources.cjs itself, which
+      # made the resolution depend on the runner it happened to land on:
+      # GitHub's macOS runners ship NO docker CLI, so on that path the script
+      # takes its `!hasDocker()` branch and returns the nearest ancestor
+      # release tag with the GHCR completeness check SKIPPED — the check that
+      # exists because a release can partially publish (some images pushed,
+      # one not). The signed, notarized .dmg — the artifact a user is most
+      # likely to download — was therefore the one baking in a tag nobody had
+      # verified, while this file's own comments claimed the walk protected it.
+      # Windows is no better: `docker manifest inspect` on windows-latest is
+      # not something to stake a release on either.
+      #
+      # This job is ubuntu-latest and has a working docker CLI, so the
+      # verified path is guaranteed to be the one that runs. The three
+      # platform jobs consume the answer through
+      # `needs.version.outputs.server_image_tag` and never resolve anything of
+      # their own. A second benefit: all three platforms now bake the SAME
+      # tag, which independent resolution never actually guaranteed.
+      #
+      # An explicit `server_image_tag` dispatch input flows through the same
+      # place: the script treats it as a pin that always wins, and here —
+      # docker present — still verifies it against GHCR, so a typo'd pin fails
+      # in this one-minute job instead of shipping.
+      - name: Resolve the CI-Server image tag
+        id: image
+        working-directory: frontend/apps/desktop
+        env:
+          CI_SERVER_IMAGE_TAG: ${{ inputs.server_image_tag }}
+        run: |
+          set -euo pipefail
+          node scripts/sync-compose-resources.cjs
+          tag="$(tr -d '[:space:]' < src-tauri/resources/image-tag.txt)"
+          if [ -z "$tag" ]; then
+            echo "::error::sync-compose-resources.cjs produced an empty image-tag.txt"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Bundling ghcr.io/companionintelligence/companion/*:$tag"
+
   macos:
     name: macOS (signed, notarized)
-    needs: version
+    # The gate is listed explicitly as well as `version` — `version` already
+    # needs it, so this is redundant for ordering, and that is the point: a
+    # later edit that drops or reorders `version` cannot silently release an
+    # untested commit from this lane. Same on the windows and linux jobs.
+    needs: [verify-desktop-build-passed, version]
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -106,12 +322,55 @@ jobs:
         with:
           node-version: '22'
 
+      # CI_SERVER_IMAGE_TAG is the tag of the SERVER images the bundled compose
+      # file pulls at first launch — it is NOT the desktop app's marketing
+      # version. This step used to pass `needs.version.outputs.name` here, so a
+      # `desktop-v0.1.0` tag baked `ghcr.io/companionintelligence/companion/*:0.1.0`
+      # into resources/docker-compose.desktop.yml; no such tag is published
+      # (only date-shaped release tags like 2026.9.5 and :latest exist), so
+      # every signed artifact died at its first `docker compose` pull.
+      #
+      # It then passed nothing at all and let the script resolve a tag per
+      # job. THAT WAS WRONG ON THIS RUNNER SPECIFICALLY: macos-15 (like every
+      # GitHub-hosted macOS image) ships no docker CLI, so
+      # sync-compose-resources.cjs took its `!hasDocker()` branch and returned
+      # the nearest ancestor release tag with the GHCR completeness check
+      # SKIPPED — i.e. the .dmg, the primary artifact, was the ONE build baking
+      # in an unverified tag, precisely the case the check exists for (a
+      # release can partially publish). It still cannot run that check here;
+      # what changed is that it no longer has to.
+      #
+      # The tag now arrives pre-resolved and GHCR-verified from the `version`
+      # job, which runs on ubuntu-latest where docker exists. A non-empty
+      # CI_SERVER_IMAGE_TAG takes the script's explicit-pin branch, which on a
+      # docker-less runner warns "baked in UNVERIFIED" and returns the pin
+      # verbatim — accurate about ITS OWN knowledge, and harmless, because the
+      # verification already happened upstream. Do not reintroduce a per-job
+      # resolution here.
+      #
+      # The empty-string guard below is load-bearing, not paranoia. An
+      # expression that does not resolve — a renamed `version` step id, a
+      # `needs:` list someone trims, an `outputs:` key typo — expands to ""
+      # in GitHub Actions rather than erroring, and "" is falsy in the
+      # script's `if (process.env.CI_SERVER_IMAGE_TAG)` guard. The script
+      # would then quietly resume the per-job, docker-less, GHCR-UNVERIFIED
+      # ancestor walk this hand-off exists to abolish, and it would do it
+      # inside the signed, notarized .dmg, where the symptom is a user's
+      # first-launch `docker compose pull` 404 months later. Fail the lane
+      # here instead — a red release is recoverable, a shipped bad pin is not.
       - name: Sync compose resources
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
-        run: node scripts/sync-compose-resources.cjs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CI_SERVER_IMAGE_TAG}" ]; then
+            echo "::error::The version job produced no server_image_tag, so this runner would resolve one itself — and macos-15 has no docker to verify it with. Check the version job's 'Resolve the CI-Server image tag' step and this job's needs:/expression."
+            exit 1
+          fi
+          node scripts/sync-compose-resources.cjs
         env:
-          CI_SERVER_IMAGE_TAG: ${{ needs.version.outputs.name }}
+          CI_SERVER_IMAGE_TAG: ${{ needs.version.outputs.server_image_tag }}
 
       - name: Bump version
         if: steps.secrets.outputs.present == 'true'
@@ -124,6 +383,10 @@ jobs:
             conf.version = '${{ needs.version.outputs.name }}';
             fs.writeFileSync('tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
           "
+          # BSD sed (macos-15 runner) — `-i` REQUIRES the backup-suffix
+          # argument, hence the empty ''. The identical steps in the windows
+          # and linux jobs run GNU sed, where `-i ''` would be read as the
+          # script and clobber the edit, so they use a bare `-i`.
           sed -i '' 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml
 
       # A dedicated keychain, unlocked and set as the default search list, is
@@ -188,6 +451,7 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: release-macos
           path: frontend/apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
@@ -198,7 +462,8 @@ jobs:
 
   windows:
     name: Windows (signed)
-    needs: version
+    # See the macOS job for why the gate is named explicitly alongside version.
+    needs: [verify-desktop-build-passed, version]
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -233,12 +498,48 @@ jobs:
         with:
           node-version: '22'
 
+      # Deliberately NOT the desktop marketing version, and deliberately NOT
+      # resolved here — see the long comment on the macOS job's copy of this
+      # step. `version` (ubuntu, docker present) resolved and GHCR-verified
+      # this tag once; every platform bakes in that same string. The
+      # empty-string guard is the macOS job's, verbatim and for the same
+      # reason — an unresolved expression is "" here too, and windows-latest's
+      # docker is not something to fall back onto for a signed installer.
+      # `shell: bash` because windows-latest defaults to pwsh, where none of
+      # this is valid syntax.
       - name: Sync compose resources
         if: steps.secrets.outputs.present == 'true'
         working-directory: frontend/apps/desktop
-        run: node scripts/sync-compose-resources.cjs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CI_SERVER_IMAGE_TAG}" ]; then
+            echo "::error::The version job produced no server_image_tag, so this runner would resolve one itself. Check the version job's 'Resolve the CI-Server image tag' step and this job's needs:/expression."
+            exit 1
+          fi
+          node scripts/sync-compose-resources.cjs
         env:
-          CI_SERVER_IMAGE_TAG: ${{ needs.version.outputs.name }}
+          CI_SERVER_IMAGE_TAG: ${{ needs.version.outputs.server_image_tag }}
+
+      # Same bump as the macOS job, and it must exist in every platform job:
+      # tauri.conf.json/Cargo.toml are checked in at 0.1.0, so without this the
+      # Windows installer would carry 0.1.0 no matter which desktop-v* tag
+      # triggered the release. `shell: bash` because windows-latest defaults to
+      # pwsh; git-bash ships GNU sed, so `-i` takes NO backup-suffix argument
+      # (the macOS lane's `-i ''` would be parsed as the sed script here).
+      - name: Bump version
+        if: steps.secrets.outputs.present == 'true'
+        shell: bash
+        working-directory: frontend/apps/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('node:fs');
+            const conf = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            conf.version = '${{ needs.version.outputs.name }}';
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
+          "
+          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml
 
       - name: Decode signing certificate
         if: steps.secrets.outputs.present == 'true'
@@ -273,6 +574,7 @@ jobs:
         if: steps.secrets.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: release-windows
           path: |
             frontend/apps/desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
@@ -286,7 +588,8 @@ jobs:
 
   linux:
     name: Linux (unsigned)
-    needs: version
+    # See the macOS job for why the gate is named explicitly alongside version.
+    needs: [verify-desktop-build-passed, version]
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
@@ -314,11 +617,53 @@ jobs:
         with:
           node-version: '22'
 
+      # Deliberately NOT the desktop marketing version, and deliberately NOT
+      # resolved here — see the long comment on the macOS job's copy of this
+      # step. This runner does have docker, so the script re-verifies the
+      # pinned tag against GHCR; that is redundant with the `version` job's own
+      # check rather than the source of truth, and is left in place only
+      # because it costs a few registry queries and would require changing the
+      # script to suppress. What must NOT come back is a per-job *resolution*:
+      # three jobs resolving independently is how macOS ended up bundling a
+      # different, unverified tag from the one Linux had just verified.
+      #
+      # The empty-string guard is here too even though this runner's fallback
+      # would still be GHCR-verified: what it protects is the OTHER half of
+      # the invariant — that all three platforms bake the IDENTICAL string.
+      # An unresolved expression is "" (see the macOS job), and "" would leave
+      # this lane resolving from git while macOS/Windows fail loudly, i.e. a
+      # release whose .deb disagrees with nothing because there is nothing
+      # left to disagree with. Fail together instead of drifting apart.
       - name: Sync compose resources
         working-directory: frontend/apps/desktop
-        run: node scripts/sync-compose-resources.cjs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CI_SERVER_IMAGE_TAG}" ]; then
+            echo "::error::The version job produced no server_image_tag. Check the version job's 'Resolve the CI-Server image tag' step and this job's needs:/expression."
+            exit 1
+          fi
+          node scripts/sync-compose-resources.cjs
         env:
-          CI_SERVER_IMAGE_TAG: ${{ needs.version.outputs.name }}
+          CI_SERVER_IMAGE_TAG: ${{ needs.version.outputs.server_image_tag }}
+
+      # Same bump as the macOS job. This lane matters most: macOS and Windows
+      # skip while their signing secrets are unprovisioned, so the .deb/.rpm
+      # produced here is usually the ONLY artifact a release ships — and until
+      # this step existed it always reported the checked-in 0.1.0. GNU sed on
+      # ubuntu-22.04: `-i` takes no backup-suffix argument (the macOS lane's
+      # `-i ''` would be parsed as the sed script and edit nothing).
+      - name: Bump version
+        working-directory: frontend/apps/desktop/src-tauri
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('node:fs');
+            const conf = JSON.parse(fs.readFileSync('tauri.conf.json', 'utf8'));
+            conf.version = '${{ needs.version.outputs.name }}';
+            fs.writeFileSync('tauri.conf.json', JSON.stringify(conf, null, 2) + '\n');
+          "
+          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml
 
       # No signing convention exists for .deb/.rpm in this codebase — this
       # lane always runs, unsigned, per standard Linux distribution practice.
@@ -333,6 +678,7 @@ jobs:
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: release-linux
           path: |
             frontend/apps/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
@@ -341,8 +687,37 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [version, macos, windows, linux]
-    if: always() && needs.linux.result == 'success'
+    needs: [verify-desktop-build-passed, version, macos, windows, linux]
+    # The old gate was `always() && needs.linux.result == 'success'` alone,
+    # which published a release even when macOS or Windows genuinely FAILED
+    # (compile error, signing failure, notarization rejection). Nothing else
+    # caught it: download-artifact tolerates a missing pattern match and the
+    # release action does not fail on unmatched files by default, so a broken
+    # platform silently became "a release without that platform".
+    #
+    # Note what the documented "no signing secrets" case actually looks like
+    # here: macos/windows carry no job-level `if:` — only their steps do — so
+    # those jobs RUN, skip everything after the secret check, and report
+    # 'success', NOT 'skipped'. It therefore passes this gate on the
+    # `!= 'failure'` clauses, and only a real failure blocks the release.
+    # `always()` is kept because a genuinely skipped `needs` (a job-level
+    # `if:` added later, or `version` failing) would otherwise skip this job
+    # before any clause below is evaluated. A cancelled run reports
+    # 'cancelled', which is likewise not 'failure' — deliberate: a cancel is
+    # an operator action, not a broken build.
+    #
+    # The test gate is asserted HERE too, not merely inherited: `always()`
+    # makes this job run even when everything it needs was skipped, so the
+    # only thing standing between a failed gate and a published release is an
+    # explicit clause. (`success` covers both gate outcomes that are allowed
+    # to proceed — a green desktop-build.yml run was found, or the documented
+    # skip_test_gate bypass exited 0 after printing its warning.)
+    if: >-
+      always()
+      && needs.verify-desktop-build-passed.result == 'success'
+      && needs.linux.result == 'success'
+      && needs.macos.result != 'failure'
+      && needs.windows.result != 'failure'
     runs-on: ubuntu-latest
     steps:
       - name: Download artifacts
@@ -351,12 +726,71 @@ jobs:
           path: artifacts
           pattern: release-*
 
+      # A release missing macOS/Windows because their signing secrets aren't
+      # provisioned is legitimate (see this file's header), but it must never
+      # be PRESENTED as a complete one — someone downloading "Desktop 0.1.0"
+      # has to see, without opening the assets list, which platforms are in it.
+      #
+      # Ground truth is the DOWNLOADED ARTIFACT, deliberately NOT
+      # needs.<job>.result. The macos/windows jobs carry no job-level `if:` —
+      # only their individual steps do (`steps.secrets.outputs.present ==
+      # 'true'`) — so with signing secrets absent those jobs still RUN, skip
+      # every step after the secret check, and report **success**, never
+      # 'skipped'. Keying off that result would have advertised "macOS —
+      # signed, notarized .dmg" on exactly the releases that ship no .dmg at
+      # all, i.e. every release cut today, which is the mis-presentation this
+      # step exists to prevent. artifacts/release-<platform>/ exists iff that
+      # job's upload-artifact step actually ran, so it answers the only
+      # question the release notes are making a claim about. The job result is
+      # still printed, because it is what tells a reader WHY a platform is
+      # absent.
+      - name: Describe included platforms
+        id: platforms
+        env:
+          MACOS_RESULT: ${{ needs.macos.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+        run: |
+          set -euo pipefail
+          NAMES=""
+          if [ -d artifacts/release-macos ]; then
+            NAMES="macOS"
+            LINES="- macOS — signed, notarized universal .dmg"
+          else
+            LINES="- macOS — NOT INCLUDED (no release-macos artifact; macOS job result: ${MACOS_RESULT}. Usual cause: the APPLE_* signing secrets are unprovisioned, which makes every build/sign/notarize step skip.)"
+          fi
+          if [ -d artifacts/release-windows ]; then
+            NAMES="${NAMES:+$NAMES, }Windows"
+            LINES="${LINES}"$'\n'"- Windows — signed .msi and setup .exe"
+          else
+            LINES="${LINES}"$'\n'"- Windows — NOT INCLUDED (no release-windows artifact; Windows job result: ${WINDOWS_RESULT}. Usual cause: the WINDOWS_CERTIFICATE_* signing secrets are unprovisioned, which makes every build/sign step skip.)"
+          fi
+          # Linux is unconditional here: the job gate above already required
+          # needs.linux.result == 'success'.
+          NAMES="${NAMES:+$NAMES, }Linux"
+          LINES="${LINES}"$'\n'"- Linux — unsigned .deb and .rpm"
+          echo "names=${NAMES}" >> "$GITHUB_OUTPUT"
+          {
+            echo "body<<PLATFORMS_EOF"
+            echo "Platforms in this release:"
+            echo
+            printf '%s\n' "$LINES"
+            echo "PLATFORMS_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: desktop-v${{ needs.version.outputs.name }}
-          name: Desktop ${{ needs.version.outputs.name }}
+          name: Desktop ${{ needs.version.outputs.name }} (${{ steps.platforms.outputs.names }})
+          # GitHub appends the generated notes AFTER this body, so the platform
+          # inventory stays at the top where it is actually read.
+          body: ${{ steps.platforms.outputs.body }}
           generate_release_notes: true
           # macOS/Windows assets may legitimately be absent if their signing
-          # secrets aren't provisioned yet — see this file's header comment.
+          # secrets aren't provisioned yet — see this file's header comment —
+          # which is why the pattern stays a glob. `fail_on_unmatched_files`
+          # still catches the other failure mode: artifacts/**/* matching
+          # NOTHING, i.e. an empty release, which the action would otherwise
+          # publish happily (its default is false).
+          fail_on_unmatched_files: true
           files: artifacts/**/*

@@ -1,4 +1,9 @@
-import { normalizeWorkTitle, parseNetflixTitle, parsePrimeVideoTitle } from '../streamingTitle';
+import {
+  normalizeWorkTitle,
+  parseNetflixTitle,
+  parsePrimeVideoTitle,
+  parseStreamingTitle,
+} from '../streamingTitle';
 
 describe('parseNetflixTitle', () => {
   it('splits Show: Season N: Episode (Episode M)', () => {
@@ -77,6 +82,47 @@ describe('parsePrimeVideoTitle', () => {
       kind: 'movie',
       title: 'Sam Smith: Dreams Come True',
     });
+  });
+});
+
+describe('parseStreamingTitle', () => {
+  it('reads Hulu titles with the Netflix parser', () => {
+    expect(parseStreamingTitle('hulu', "Bob's Burgers: Season 16: The Keyboard Kid")).toEqual({
+      kind: 'tv',
+      title: "Bob's Burgers",
+      season: 16,
+      episode: undefined,
+      episodeTitle: 'The Keyboard Kid',
+    });
+    expect(parseStreamingTitle('hulu', 'Alien: Earth: Season 1: The Real Monsters')).toMatchObject({
+      kind: 'tv',
+      title: 'Alien: Earth',
+      season: 1,
+    });
+    expect(parseStreamingTitle('hulu', 'The Raid: Redemption')).toEqual({
+      kind: 'movie',
+      title: 'The Raid: Redemption',
+    });
+    expect(parseStreamingTitle('peacock', 'Anything')).toBeNull();
+  });
+
+  it('reads Disney+ titles with the Netflix parser', () => {
+    expect(parseStreamingTitle('disney_plus', 'Andor: Season 2: Welcome to the Rebellion')).toEqual({
+      kind: 'tv',
+      title: 'Andor',
+      season: 2,
+      episode: undefined,
+      episodeTitle: 'Welcome to the Rebellion',
+    });
+    expect(
+      parseStreamingTitle('disney_plus', 'Star Wars: Tales of the Underworld: Season 1: Friends'),
+    ).toMatchObject({
+      kind: 'tv',
+      title: 'Star Wars: Tales of the Underworld',
+      season: 1,
+    });
+    // No season printed: no tv tell, so the work is the whole string.
+    expect(parseStreamingTitle('disney_plus', 'Tron: Ares')).toEqual({ kind: 'movie', title: 'Tron: Ares' });
   });
 });
 

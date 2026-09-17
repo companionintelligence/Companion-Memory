@@ -7,7 +7,7 @@ describe('sourceSystemsVariables', () => {
     expect(sourceSystemsVariables(new URLSearchParams('view=list'))).toEqual({});
   });
 
-  it('pares the list to the kinds the What bar has selected, in the search index\'s names', () => {
+  it("pares the list to the kinds the What bar has selected, in the search index's names", () => {
     expect(sourceSystemsVariables(new URLSearchParams('includedEntityTypes=Content,Browser'))).toEqual({
       includeTypes: ['browser-activity', 'content'],
     });

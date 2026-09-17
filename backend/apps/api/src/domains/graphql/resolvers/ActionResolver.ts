@@ -6,6 +6,7 @@ import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ActionService } from '@ci/domains/intelligence';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
 import { ThreadLoader } from '../loaders/ThreadLoader';
 import { ActionConnection } from '../types/ActionConnection';
@@ -129,6 +130,8 @@ export class ActionResolver {
   }
 
   @Mutation(() => ActionType, { nullable: true, description: 'Mark an action as seen' })
+  // Flips a `seen` flag; the action row and its history are otherwise untouched.
+  @GraphqlPrivacy({ destructive: false })
   async markActionAsSeen(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -147,6 +150,8 @@ export class ActionResolver {
   }
 
   @Mutation(() => ActionType, { nullable: true, description: 'Mark an action as dismissed' })
+  // Flips a `dismissed` flag; nothing is removed and the action stays queryable.
+  @GraphqlPrivacy({ destructive: false })
   async markActionAsDismissed(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

@@ -6,6 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MAX_BULK_INPUT_SIZE } from '@ci/common/pipes';
 import { GraphIngestService } from '@ci/domains/graph';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { BulkGraphInput } from '../types/BulkGraphInput';
 import { BulkGraphPayload } from '../types/BulkGraphPayload';
 
@@ -20,6 +21,10 @@ export class GraphIngestResolver {
    * linked-key and directed-relationship unique indexes.
    */
   @Mutation(() => BulkGraphPayload)
+  // graphIngestService.ingest() only upserts entities/relationships INTO the caller's own graph
+  // (importer -> server, never the reverse) via ON CONFLICT-based set inserts; nothing is deleted
+  // and no data leaves this appliance, so this is neither destructive nor external.
+  @GraphqlPrivacy({ destructive: false })
   async bulkIngestGraph(
     @Context() context: RequestContext,
     @Args('input') input: BulkGraphInput,

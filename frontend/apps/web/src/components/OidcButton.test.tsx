@@ -1,5 +1,5 @@
 import { isNativePlatform, isTauriPlatform, openExternalUrl } from '@ci/common';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OidcButton } from './OidcButton';
@@ -85,5 +85,20 @@ describe('OidcButton', () => {
     const opened = vi.mocked(openExternalUrl).mock.calls[0][0];
     expect(opened).toContain('redirect=%2Fshared%2Fabc');
     expect(opened).toContain('client=native');
+  });
+
+  it('tells the user when the browser could not be opened, instead of looking like a dead button', async () => {
+    // The exact shape of the bug this covers: on desktop the opener call was
+    // denied by the ACL, the rejection was only console.error'd, and the button
+    // appeared to do nothing at all.
+    vi.mocked(isTauriPlatform).mockReturnValue(true);
+    vi.mocked(openExternalUrl).mockRejectedValue(new Error('opener.open_url not allowed'));
+
+    render(<OidcButton label="Sign in with Companion account" />);
+    fireEvent.click(screen.getByText('Sign in with Companion account'));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Could not open your browser to sign in/)).toBeInTheDocument();
+    });
   });
 });

@@ -293,6 +293,25 @@ function spec(overrides: Partial<SourceTimeSpec> = {}): SourceTimeSpec {
  */
 export const SOURCE_TIME_SPECS: Readonly<Record<string, SourceTimeSpec>> = {
   /**
+   * The FEDERATED calendar kind (`FEDERATED_SYSTEMS.calendar`) — where the two
+   * entries below actually land. Since cross-pipeline identity, any UID-bearing
+   * event keys on its iCalUID under `calendar`, whichever pipeline delivered it:
+   * `TransformGoogleCalendar`/`TransformOutlookCalendar` stamp it via
+   * `calendarEventIdentity`, and so does the .ics importer's push. Only a
+   * UID-LESS event keeps `google_calendar` / `outlook_calendar`.
+   *
+   * Missing this key is why the `floatingAsUtc` repair had been dead: every
+   * all-day event with a UID — i.e. nearly all of them — was skipped as
+   * `source_time_spec_missing` and kept its UTC-midnight instant, which renders
+   * the banner a day early for any user west of Greenwich.
+   *
+   * Same shape as the platform entries: no timestamp key (none of the three
+   * producers retains the start string or the zone in `metadata`), so the
+   * all-day class is the only repairable one.
+   */
+  calendar: spec({ zoneKeys: ['timeZone', 'timezone', 'TZID'], floatingAsUtc: true }),
+
+  /**
    * `TransformGoogleCalendar`. No timestamp key: the transform's `metadata`
    * carries `connectionId`, the organizer, the participants and the raw event's
    * id/summary/status — and not the start string, and not `start.timeZone`. So

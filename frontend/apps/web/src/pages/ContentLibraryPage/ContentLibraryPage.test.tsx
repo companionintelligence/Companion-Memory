@@ -93,7 +93,11 @@ function captureIntersectionObserver() {
   };
 }
 
-function facets({ types = ['image', 'post'], mimetypes = ['image/png', 'text/plain'], sourceSystems = ['reddit'] } = {}) {
+function facets({
+  types = ['image', 'post'],
+  mimetypes = ['image/png', 'text/plain'],
+  sourceSystems = ['reddit'],
+} = {}) {
   return {
     request: { query: GET_CONTENT_FACETS, variables: {} },
     result: {
@@ -267,12 +271,18 @@ describe('ContentLibraryPage', () => {
       'Nothing here yet. Content appears as your sources sync and files finish parsing.',
     );
 
-    // `EmptyState` (from `@ci/common`) wraps its message in an
-    // absolutely-positioned, pointer-events-none container — a DOM
-    // fingerprint the old bespoke `<p className="text-sm text-muted-foreground">`
-    // never had. Asserting on it proves this is genuinely the shared
-    // component now, not just visually identical bespoke markup.
-    expect(message.parentElement).toHaveClass('absolute', 'inset-0', 'pointer-events-none');
+    // `EmptyState` (from `@ci/common`) wraps its message in a
+    // pointer-events-auto content box nested inside an absolutely-positioned,
+    // pointer-events-none overlay — a DOM fingerprint the old bespoke
+    // `<p className="text-sm text-muted-foreground">` never had. Asserting on
+    // it proves this is genuinely the shared component now, not just visually
+    // identical bespoke markup. The pointer-events pair is inline style rather
+    // than a Tailwind class because `packages/common` is outside the web app's
+    // Tailwind source set, so a class authored only there is never compiled.
+    const content = message.parentElement;
+    expect(content).toHaveStyle({ pointerEvents: 'auto' });
+    expect(content?.parentElement).toHaveClass('absolute', 'inset-0');
+    expect(content?.parentElement).toHaveStyle({ pointerEvents: 'none' });
   });
 });
 

@@ -281,7 +281,17 @@ post_integrate do |installer|
       # `config` is about to be saved back with, unchanged, for the device build) are
       # never touched.
       simulator_config = Xcodeproj::Config.new
-      simulator_config.other_linker_flags[:simple] = config.other_linker_flags[:simple]
+      # Drop `$(inherited)` from the simulator value. Within one xcconfig, a
+      # conditional assignment's `$(inherited)` resolves to the unconditional
+      # OTHER_LDFLAGS defined earlier in the SAME file -- so keeping it here re-adds
+      # every `-framework` this override just removed, and the MLKit family lands back
+      # on the simulator link line as if the override were not there at all. That fails
+      # as `framework 'CapacitorMlkitBarcodeScanning' not found` (generic destination) or
+      # `building for iOS-simulator, but linking in object file ... built for iOS`
+      # (MLImage's device slice, concrete simulator destination). Nothing below this
+      # xcconfig sets OTHER_LDFLAGS for the App target, so there is nothing to inherit;
+      # the base (device) line above keeps its own `$(inherited)` untouched.
+      simulator_config.other_linker_flags[:simple] = config.other_linker_flags[:simple] - ['$(inherited)']
       simulator_config.other_linker_flags[:libraries] = config.other_linker_flags[:libraries]
       simulator_config.other_linker_flags[:frameworks] = config.other_linker_flags[:frameworks] - mlkit_product_names
       simulator_config.other_linker_flags[:weak_frameworks] = config.other_linker_flags[:weak_frameworks] - mlkit_product_names

@@ -169,6 +169,44 @@ const SOURCED_TYPES: ReadonlySet<IndexableEntity> = new Set<IndexableEntity>([
 ]);
 
 /**
+ * The kinds whose rows link to Person entities, and so can be narrowed by the
+ * Who filter (`people`): an event through its participants / organizer, a
+ * communication through its sender / recipients (`from_entity_id` /
+ * `to_entity_ids`). Every other kind sets itself aside while Who is set, the
+ * way SOURCED_TYPES works for How.
+ */
+const PEOPLE_LINKED_TYPES: ReadonlySet<IndexableEntity> = new Set<IndexableEntity>([
+  'event',
+  'communication',
+]);
+
+/** The structured event-side predicates: Who (shared with communications) and the Where family (event-only). */
+interface EventFilter {
+  people?: string[];
+  places?: string[];
+  hasLocation?: boolean;
+  bbox?: number[];
+}
+
+/** Where / located-only / map viewport: only events carry a place, so these pin the browse to events. */
+function isPlaceScoped(filter: EventFilter): boolean {
+  return filter.places != null || filter.hasLocation != null || filter.bbox != null;
+}
+
+/**
+ * The message directions the Who toggle can ask for. `ci.communication_direction`
+ * also holds internal / async / ongoing, which no toggle names; anything else
+ * on the input is ignored rather than matched. Beside a Who pattern the
+ * direction also fixes the person's role (CommunicationService.applyPeopleFilter):
+ * inbound is *from* them, outbound is *to* them.
+ */
+const MESSAGE_DIRECTIONS: ReadonlySet<string> = new Set(['inbound', 'outbound']);
+
+function messageDirection(value: string | undefined): string | undefined {
+  return value != null && MESSAGE_DIRECTIONS.has(value) ? value : undefined;
+}
+
+/**
  * Entity ids behind a page of search results, for the disclosure audit.
  *
  * `node` is a GraphQL union (`SearchResultType`) whose members all carry an
@@ -491,6 +529,7 @@ export class SearchResolver {
         places: filters.places,
         hasLocation: filters.hasLocation,
         semantic: filters.semantic,
+        direction: filters.direction,
         // Viewer paging carries over only when the ceiling permits it; sort
         // prefers the viewer's choice, falling back to the owner's saved sort.
         sortBy: input.sortBy ?? filters.sortBy,
@@ -555,10 +594,19 @@ export class SearchResolver {
       people != null || places != null || hasLocation != null || bbox != null
         ? { people, places, hasLocation, bbox }
         : undefined;
+    // Sent / received: a dimension only messages carry, so like the Where
+    // family it pins the browse — to communications (see browseWants).
+    const direction = messageDirection(input.direction);
 
     // No filter signal at all -> fall back to recent timed entities (preserves prior behavior).
     const noInputs =
-      query == null && tags == null && !hasTypes && !hasDate && eventFilter == null && connectors == null;
+      query == null &&
+      tags == null &&
+      !hasTypes &&
+      !hasDate &&
+      eventFilter == null &&
+      connectors == null &&
+      direction == null;
 
     // Build a candidate identifier set from the strongest available signal, then AND the
     // remaining filter dimensions on as post-filters so all filters combine (LifeScope parity).
@@ -610,6 +658,7 @@ export class SearchResolver {
         eventTypes,
         eventFilter,
         connectors,
+        direction,
       };
 
       [identifiers, timedTotalCount] = await Promise.all([
@@ -640,23 +689,46 @@ export class SearchResolver {
       identifiers = identifiers.filter((identifier) => taggedKeys.has(`${identifier.type}:${identifier.id}`));
     }
 
-    // who / where (when not the timed path, which pushes these down to SQL):
-    // restrict the candidate set to events matching the structured predicates.
-    // Non-event candidates drop out — these dimensions are event-only —
-    // matching the behaviour of selecting a person/place.
-    if (eventFilter != null && candidateSource !== 'timed') {
-      const allowedEvents = await this.eventService.getEntitiesForEvents(serviceContext, {
-        ...eventFilter,
-        startTime,
-        endTime,
-        eventTypes,
-        order: { startTime: 'DESC' },
-        limit: 5000,
-      });
-      const allowedIds = new Set(allowedEvents.map((event) => event.id));
+    // who / where / direction (when not the timed path, which pushes these
+    // down to SQL): restrict the candidate set to the rows matching the
+    // structured predicates. Where is event-only and direction is
+    // message-only, so each pins the survivors to its kind; Who alone keeps
+    // events *and* communications (PEOPLE_LINKED_TYPES), each matched by its
+    // own service. Every other kind drops out — it has no link to a person and
+    // no direction, so it could never match.
+    if ((eventFilter != null || direction != null) && candidateSource !== 'timed') {
+      const pinnedToEvents = eventFilter != null && isPlaceScoped(eventFilter);
+      const pinnedToMessages = direction != null;
+      const [allowedEvents, allowedCommunications] = await Promise.all([
+        eventFilter != null && !pinnedToMessages
+          ? this.eventService.getEntitiesForEvents(serviceContext, {
+              ...eventFilter,
+              startTime,
+              endTime,
+              eventTypes,
+              order: { startTime: 'DESC' },
+              limit: 5000,
+            })
+          : [],
+        !pinnedToEvents && (eventFilter?.people != null || pinnedToMessages)
+          ? this.communicationService.getEntitiesForCommunications(serviceContext, {
+              people: eventFilter?.people,
+              direction,
+              startTime,
+              endTime,
+              order: { time: 'DESC' },
+              limit: 5000,
+            })
+          : [],
+      ]);
+      const allowedKeys = new Set(
+        [...allowedEvents, ...allowedCommunications].map(
+          (identifier) => `${identifier.type}:${identifier.id}`,
+        ),
+      );
 
-      identifiers = identifiers.filter(
-        (identifier) => identifier.type === 'event' && allowedIds.has(identifier.id),
+      identifiers = identifiers.filter((identifier) =>
+        allowedKeys.has(`${identifier.type}:${identifier.id}`),
       );
     }
 
@@ -818,6 +890,7 @@ export class SearchResolver {
       eventTypes,
       eventFilter,
       connectors,
+      direction,
       limit = 25,
     }: {
       includeTypes?: IndexableEntity[];
@@ -831,19 +904,23 @@ export class SearchResolver {
       afterTime?: Date;
       afterId?: string;
       eventTypes?: string[];
-      eventFilter?: {
-        people?: string[];
-        places?: string[];
-        hasLocation?: boolean;
-        bbox?: number[];
-      };
+      eventFilter?: EventFilter;
       /** The How filter — applied to every sourced type, see SOURCED_TYPES. */
       connectors?: string[];
+      /** Sent / received — communications only, see browseWants. */
+      direction?: string;
       limit?: number;
     },
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
     const wants = (type: IndexableEntity) =>
-      this.browseWants(type, { includeTypes, excludeTypes, includeFiles, eventFilter, connectors });
+      this.browseWants(type, {
+        includeTypes,
+        excludeTypes,
+        includeFiles,
+        eventFilter,
+        connectors,
+        direction,
+      });
 
     const eventOptions: {
       limit: number;
@@ -883,6 +960,8 @@ export class SearchResolver {
       ...(connectors ? { connectors } : {}),
     };
 
+    // Who reaches communications too (their sender / recipients link to people);
+    // the Where family does not, and browseWants leaves them unfetched under it.
     const communicationOptions: {
       limit: number;
       order: FindOptionsOrder<CommunicationEntity>;
@@ -891,10 +970,14 @@ export class SearchResolver {
       afterTime?: Date;
       afterId?: string;
       connectors?: string[];
+      people?: string[];
+      direction?: string;
     } = {
       limit,
       order: { time: 'DESC' },
       ...(connectors ? { connectors } : {}),
+      ...(eventFilter?.people ? { people: eventFilter.people } : {}),
+      ...(direction ? { direction } : {}),
     };
 
     // Files and document chunks order by updated_at (their only timestamp) and
@@ -1062,6 +1145,7 @@ export class SearchResolver {
       eventTypes,
       eventFilter,
       connectors,
+      direction,
     }: {
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
@@ -1069,17 +1153,20 @@ export class SearchResolver {
       startTime?: Date;
       endTime?: Date;
       eventTypes?: string[];
-      eventFilter?: {
-        people?: string[];
-        places?: string[];
-        hasLocation?: boolean;
-        bbox?: number[];
-      };
+      eventFilter?: EventFilter;
       connectors?: string[];
+      direction?: string;
     },
   ): Promise<number> {
     const wants = (type: IndexableEntity) =>
-      this.browseWants(type, { includeTypes, excludeTypes, includeFiles, eventFilter, connectors });
+      this.browseWants(type, {
+        includeTypes,
+        excludeTypes,
+        includeFiles,
+        eventFilter,
+        connectors,
+        direction,
+      });
 
     const dateOptions = { startTime, endTime };
     // Kinds with a source_system column count under the How filter too.
@@ -1096,7 +1183,11 @@ export class SearchResolver {
         ? this.browserActivityService.countEntitiesForBrowserActivities(context, sourcedOptions)
         : 0,
       wants('communication')
-        ? this.communicationService.countEntitiesForCommunications(context, sourcedOptions)
+        ? this.communicationService.countEntitiesForCommunications(context, {
+            ...sourcedOptions,
+            ...(eventFilter?.people ? { people: eventFilter.people } : {}),
+            ...(direction ? { direction } : {}),
+          })
         : 0,
       wants('file') ? this.fileService.countEntitiesForFiles(context, dateOptions) : 0,
       wants('file-chunk') ? this.fileChunkService.countEntitiesForFileChunks(context, dateOptions) : 0,
@@ -1182,21 +1273,35 @@ export class SearchResolver {
       includeFiles,
       eventFilter,
       connectors,
+      direction,
     }: {
       includeTypes?: IndexableEntity[];
       excludeTypes?: IndexableEntity[];
       includeFiles?: boolean;
-      eventFilter?: unknown;
+      eventFilter?: EventFilter;
       connectors?: string[];
+      direction?: string;
     },
   ): boolean {
     if (!this.matchesTypeFilter(type, includeTypes, excludeTypes)) {
       return false;
     }
 
-    // who / where are event-only dimensions; restrict to events when set.
-    if (eventFilter != null && type !== 'event') {
+    // Sent / received exists only on messages; every other kind sets itself aside.
+    if (direction != null && type !== 'communication') {
       return false;
+    }
+
+    // The Where family is event-only; Who reaches every kind that links to
+    // people (events and communications). The rest cannot match either.
+    if (eventFilter != null) {
+      if (isPlaceScoped(eventFilter) && type !== 'event') {
+        return false;
+      }
+
+      if (eventFilter.people != null && !PEOPLE_LINKED_TYPES.has(type)) {
+        return false;
+      }
     }
 
     // How applies to every kind that records a source; the rest cannot match.

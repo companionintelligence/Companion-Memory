@@ -5,7 +5,7 @@ import { GraphEventListener } from '../GraphEventListener';
 type Payload = EventPayloads[Events.GRAPH_RELATIONSHIP_UPSERTED];
 
 function makeAck(): Acknowledgement {
-  return { done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+  return { jobId: 'test-job', done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
 }
 
 function makeListener() {

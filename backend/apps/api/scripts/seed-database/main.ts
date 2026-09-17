@@ -20,6 +20,7 @@ import * as messagesData from './data/messages';
 import * as notesData from './data/notes';
 import * as placesData from './data/places';
 import * as summariesData from './data/summaries';
+import * as tasksData from './data/tasks';
 import * as threadsData from './data/threads';
 import * as usersData from './data/users';
 import { findMaxDate, shiftDatesInObject } from './date-shifter';
@@ -37,6 +38,7 @@ import { seedPlaces } from './seed-places';
 import { seedRelationships } from './seed-relationships';
 import { seedSavedSearches } from './seed-saved-searches';
 import { seedSummaries } from './seed-summaries';
+import { seedTasks } from './seed-tasks';
 import { seedThreads } from './seed-threads';
 import { seedUsers } from './seed-users';
 
@@ -137,6 +139,12 @@ const logger = new LoggerService();
       'SeedDatabase',
     );
     shiftDatesInObject(allData, deltaMs);
+    // Tasks move with the corpus but are deliberately absent from `allData`
+    // above: `findMaxDate` pins the newest date in the set to yesterday, so a
+    // task dated after the last seeded event would drag the whole corpus back a
+    // day AND still land in the past. Excluded from the max, dates past the
+    // anchor stay ahead of the seeding moment — which is where a plan lives.
+    shiftDatesInObject(tasksData, deltaMs);
   }
 
   try {
@@ -152,6 +160,9 @@ const logger = new LoggerService();
     await seedPlaces(module, multibar);
     await seedConcepts(module, multibar);
     await seedEvents(module, multibar);
+    // After events: a scheduled task is placed as a `planned_block` event, so
+    // this writes into the same ci.events table the seeder has just filled.
+    await seedTasks(module, multibar);
     // Our seed content is logically incosistent and overloads concepts of other
     // entity types (e.g. Photo and Video are actually now Files). Until we have
     // refactored the data, we will skip seeding content.

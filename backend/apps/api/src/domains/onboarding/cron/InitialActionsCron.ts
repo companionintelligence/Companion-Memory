@@ -36,7 +36,10 @@ export class InitialActionsCron {
     this.logger.setContext(InitialActionsCron.name);
   }
 
-  @Cron(INITIAL_ACTIONS_CRON, { name: 'InitialActionsCron.initializeEligibleUsers' })
+  // `exclusive`: initialization runs inline rather than through a singleton-keyed
+  // job, and the eligibility query is unchanged until it commits — so an
+  // overlapping tick would pick the same users and initialize them twice.
+  @Cron(INITIAL_ACTIONS_CRON, { name: 'InitialActionsCron.initializeEligibleUsers', exclusive: true })
   async initializeEligibleUsers(): Promise<void> {
     if (!(await this.featureService.isFeatureEnabled('actions'))) {
       return;

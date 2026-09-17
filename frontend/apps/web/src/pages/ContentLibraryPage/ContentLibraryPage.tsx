@@ -77,7 +77,7 @@ export const GET_CONTENTS = gql(`
  * the server, so a tile needs no second lookup to show its thumbnail.
  */
 export function ContentLibraryPage() {
-  usePageTitle('Content - Companion Intelligence');
+  usePageTitle('Content - Companion Memory');
 
   const navigate = useNavigate();
   // The open row lives in the URL rather than in local state, so it has a
@@ -180,7 +180,12 @@ export function ContentLibraryPage() {
             {/* Content-specific filters, like the Things page's category and
                 brand: each picker lists what the user's rows actually carry. */}
             <div className="flex flex-wrap items-center gap-2" data-testid="content-filters">
-              <ContentFacetFilter label="Content type" param="types" options={facets?.types ?? []} icon={Shapes} />
+              <ContentFacetFilter
+                label="Content type"
+                param="types"
+                options={facets?.types ?? []}
+                icon={Shapes}
+              />
               <ContentFacetFilter
                 label="File type"
                 param="mimetypes"

@@ -17,6 +17,8 @@ import { UserService } from '@ci/domains/user';
 import { SessionController } from '../controllers/SessionController';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
+import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
+import { LoginThrottleService } from '../services/LoginThrottleService';
 
 import { parseCookies } from './utils/parseCookies';
 
@@ -72,6 +74,20 @@ const mockUserService = {
   findById: jest.fn().mockResolvedValue(mockUser),
 };
 
+// Transparent by default so the login assertions in this file stay about
+// cookies and CSRF; the throttle's own contract lives in
+// LoginThrottleService.test.ts and SessionController.loginThrottle.test.ts.
+const mockLoginThrottle = {
+  check: jest.fn().mockReturnValue({ locked: false }),
+  recordFailure: jest.fn(),
+  recordSuccess: jest.fn(),
+};
+
+const mockHubBridge = {
+  verifyUsername: jest.fn().mockReturnValue(null),
+  alignSession: jest.fn().mockResolvedValue({ username: null, replaced: false }),
+};
+
 @Module({
   controllers: [SessionController],
   providers: [
@@ -81,6 +97,10 @@ const mockUserService = {
     // CsrfGuard (on login/refresh/logout) injects the logger for its
     // rejection-reason warnings.
     { provide: LoggerService, useValue: mockLogger },
+    // Stubbed open so no cross-test accumulation of failed logins can start
+    // 429ing the assertions in this file.
+    { provide: LoginThrottleService, useValue: mockLoginThrottle },
+    { provide: HubForwardAuthBridgeService, useValue: mockHubBridge },
   ],
 })
 class TestModule implements NestModule {
@@ -129,6 +149,7 @@ describe('SessionController', () => {
     mockCsrfService.generateToken.mockReturnValue(MOCK_CSRF_TOKEN);
     mockCsrfService.validateToken.mockImplementation(() => {});
     mockCsrfService.verifyToken.mockReturnValue(true);
+    mockLoginThrottle.check.mockReturnValue({ locked: false });
   });
 
   describe('POST /authenticate (login)', () => {

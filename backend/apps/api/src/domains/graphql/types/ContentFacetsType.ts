@@ -14,6 +14,8 @@ export class ContentFacetsType {
   @Field(() => [String], { description: 'Distinct `mimetype` values.' })
   mimetypes!: string[];
 
-  @Field(() => [String], { description: 'Distinct `source_system` values — the How filter, over content alone.' })
+  @Field(() => [String], {
+    description: 'Distinct `source_system` values — the How filter, over content alone.',
+  })
   sourceSystems!: string[];
 }

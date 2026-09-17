@@ -9,6 +9,12 @@ export function dispatchNotReadyMessage(blocker: DispatchBlocker): string {
       return 'OpenClaw is not connected to Memory. Connect it in Hub, then try Dispatch again.';
     case 'not_running':
       return 'OpenClaw is not running. Start it in Hub, then try Dispatch again.';
+    // Names the APPLIANCE, not the app. The other four blockers are all things
+    // the user fixes in Hub; this one is a setting on this machine, and telling
+    // someone to check OpenClaw would send them to look at the one part of the
+    // chain that is working.
+    case 'doorbell_unconfigured':
+      return 'This appliance is not configured to wake OpenClaw. It needs CI_HUB_INTERNAL_URL and CI_HUB_FORWARD_AUTH_SECRET.';
     case 'not_wakeable':
       return 'Hub cannot wake OpenClaw right now. Check the app in Hub, then try again.';
     case 'chat_only':

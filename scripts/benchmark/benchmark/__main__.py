@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import sys
@@ -104,7 +105,6 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         print(f"[error] unknown adapter(s): {unknown}", file=sys.stderr)
         return 2
-    adapters = [get_adapter(n) for n in names]
 
     judge_cache: JudgeCache | None = None
     if args.scorer == "llm":
@@ -143,34 +143,52 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     if args.runs == 1:
-        results = run_all(adapters, persona, args.user_id, scorer, on_event=_event)
+        results = run_all(
+            [get_adapter(n) for n in names],
+            persona,
+            args.user_id,
+            scorer,
+            on_event=_event,
+        )
         report_input: object = results
         # Errors: any adapter erroring is a failure.
         any_error = any(r.error for r in results)
     else:
         multi: list = []
-        for adapter in adapters:
+        for name in names:
+            # A factory, not an instance: each repeat needs its own adapter
+            # (and its own user_id) or the runs are not independent samples.
             runs = run_system_repeated(
-                adapter,
+                functools.partial(get_adapter, name),
                 persona,
                 args.user_id,
                 scorer,
                 runs=args.runs,
                 on_event=_event,
             )
-            overalls = [r.overall_score for r in runs]
-            searches = [r.avg_search_latency_ms for r in runs]
-            d = describe(overalls)
-            sd = describe(searches)
+            ok = [r for r in runs if not r.error]
+            # Statistics come from the runs that completed. An errored run
+            # has no score and no timing, and folding it in as a zero would
+            # understate latency and invent variance.
+            d = describe([r.overall_score for r in ok])
+            sd = describe([r.avg_search_latency_ms for r in ok])
             median_pct = d.get("median", 0.0) * 100
             iqr_pp = d.get("iqr", 0.0) * 100
             print(
-                f"   runs={len(runs)} median={median_pct:.0f}% iqr={iqr_pp:.0f}pp"
-                f" median_search={sd.get('median', 0.0):.0f}ms"
+                f"   runs={len(ok)}/{len(runs)} ok median={median_pct:.0f}%"
+                f" iqr={iqr_pp:.0f}pp median_search={sd.get('median', 0.0):.0f}ms"
             )
+            if len(ok) < len(runs):
+                print(
+                    f"   [warn] {len(runs) - len(ok)} of {len(runs)} runs failed and"
+                    " are excluded from the statistics above",
+                    file=sys.stderr,
+                )
             multi.append(runs)
         report_input = multi
-        # Errors: an adapter is "errored" only if every run errored.
+        # Errors: an adapter is "errored" only if every run errored. Partial
+        # failures are reported as runs_errored in the JSON and fail the
+        # regression gate when a baseline is supplied.
         any_error = any(all(r.error for r in runs) for runs in multi if runs)
 
     if judge_cache is not None:

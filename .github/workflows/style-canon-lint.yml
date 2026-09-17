@@ -20,4 +20,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: node scripts/lint-canon.mjs .
+      - run: corepack enable
+      # ci-lint-canon (@companionintelligence/config) reads the canon + retired list from the
+      # tokens package; @companionintelligence/assets is the origin of the brand files.
+      - run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: yarn lint:canon

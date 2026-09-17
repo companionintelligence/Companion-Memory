@@ -37,7 +37,7 @@ const GET_TAGS_WITH_USAGE = gql(`
 export { GET_TAGS_WITH_USAGE };
 
 export function TagsPage() {
-  usePageTitle('Tags - Companion Intelligence');
+  usePageTitle('Tags - Companion Memory');
 
   // Search text is the header search box's `?search=` — it edits this page's
   // query in place (see GlobalSearchBox / isLiveSearchPath), so the page has
@@ -67,7 +67,6 @@ export function TagsPage() {
         <PageContent className="gap-4 p-0">
           <MemoryHubShell>
             <div className="flex flex-col gap-4 px-2 pb-3 sm:px-4 sm:pb-4">
-
               {loading ? (
                 <p className="text-sm text-muted-foreground">Loading tags…</p>
               ) : error ? (

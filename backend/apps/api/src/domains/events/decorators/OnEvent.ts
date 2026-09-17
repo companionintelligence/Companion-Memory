@@ -74,7 +74,16 @@ export function OnEvent<E extends string>(event: E, opts?: Opts) {
       // job as a fallback if it didn't.
       descriptor.value = async function (payload: unknown, ack?: Acknowledgement) {
         let acknowledged = false;
+        // Every field, not only the three callbacks. This wrapper REBUILDS the
+        // ack, so anything it forgets to copy is silently `undefined` for the
+        // handler — and `jobId` is what the deferring listeners hand to
+        // `completeJob`. Drop it and python-functions fails silently: the
+        // sidecar guards its callback on `if record.job_id and record.queue`,
+        // so the work runs, succeeds, reports nothing, and the job sits
+        // `active` until its 8-hour expiry and then retries forever, with no
+        // exception and no log naming the cause.
         const trackedAck: Acknowledgement | undefined = ack && {
+          jobId: ack.jobId,
           done: () => {
             acknowledged = true;
             ack.done();

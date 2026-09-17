@@ -325,9 +325,9 @@ export async function importRealData(state: HarnessState, args: string[]): Promi
 
   // ═══ THE FILES, NAMED ONE BY ONE — NOT THE DIRECTORY, AND NEVER THE INBOX ═══
   //
-  // `ci-import import` takes archive FILES. Handed a directory it refuses, and
+  // `ci import` takes archive FILES. Handed a directory it refuses, and
   // its refusal suggests the other command: "Move it into the import inbox and
-  // run `ci-import inbox --start`". Do not take that suggestion here. THE INBOX
+  // run `ci inbox --start`". Do not take that suggestion here. THE INBOX
   // CONSUMES WHAT IT IMPORTS, BY RENAME — that is the mechanism that ate 2.8GB
   // of this owner's archive in a sibling repo. Even against the staging copy it
   // would move files out from under a re-run; against anything else it is the
@@ -339,16 +339,7 @@ export async function importRealData(state: HarnessState, args: string[]): Promi
   // the archive — the appliance refuses it before any read.
   const result = spawnSync(
     'yarn',
-    [
-      'workspace',
-      '@ci/be-api',
-      'ci-import',
-      'import',
-      ...files,
-      '--label',
-      `federation-harness/${source}`,
-      '--wait',
-    ],
+    ['workspace', '@ci/cli', 'dev', 'import', ...files, '--label', `federation-harness/${source}`, '--wait'],
     {
       cwd: REPO_ROOT,
       stdio: 'inherit',
@@ -361,6 +352,6 @@ export async function importRealData(state: HarnessState, args: string[]): Promi
   );
 
   if (result.status !== 0) {
-    throw new Error(`ci-import exited ${result.status}`);
+    throw new Error(`ci exited ${result.status}`);
   }
 }

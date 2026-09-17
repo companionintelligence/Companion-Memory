@@ -38,6 +38,11 @@ jobs:
   check-versions:
     name: Check migration version collisions
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # `@companionintelligence`-scoped dependencies resolve through
+      # npm.pkg.github.com; yarn needs a token that can read them.
+      packages: read
     container:
       image: node:22
     steps:
@@ -59,6 +64,8 @@ jobs:
 
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check migration versions
         run: yarn workspace @ci/be-api check:migrations

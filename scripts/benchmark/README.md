@@ -96,9 +96,42 @@ python -m benchmark --systems ci_server,naive \
 
 The regression report distinguishes `regression` (drop beyond tolerance — fails
 the gate) from `improvement`, `stable`, `error_introduced` / `error_resolved`,
-and `missing` (system or category present in only one report — usually means
+`runs_errored` (more runs fell over than in the baseline — fails the gate), and
+`missing` (system or category present in only one report — usually means
 the baseline needs refreshing). Tolerance is in score-ratio units;
 `--tolerance 0.05` means "fail if any category drops by more than 5 pp".
+
+## Repeating a run (`--runs N`)
+
+A single number can't tell a real regression from run-to-run noise. `--runs N`
+runs each adapter N times and reports the median and IQR alongside the score:
+
+```bash
+python -m benchmark --systems ci_server,naive \
+  --persona personas/jordan_rivera.json \
+  --runs 5 \
+  --baseline reports/baseline.json \
+  --out reports/run-$(date +%F).md
+```
+
+Each repeat gets a **fresh adapter instance and its own `user_id`** (`<user-id>__runN`),
+so caches and accumulated per-user state don't leak from one run into the next
+and flatter the later ones.
+
+**A run that errored is not a zero.** It has no score and no timing to
+contribute, so it is excluded from every median, IQR and standard deviation —
+folding it in as `0.0` would both understate latency (a crash is fast) and
+invent variance between a real score and a phantom zero. The failures are
+reported alongside instead: `runs_ok` / `runs_errored` / `errors` in the JSON,
+a `Runs OK` column and a named "Failed runs" list in the Markdown, and a
+`runs_errored` failure in the regression report. A system is only marked
+`error` when *every* run failed.
+
+Scores, category cells and per-question hit counts pool **every** run that
+completed, and the regression gate compares the median — so with `--runs N`
+one lucky run can no longer speak for the set. Single-run reports (the
+default, and every committed baseline) are unaffected: they carry no median,
+and the gate falls back to `hit`/`total` for them.
 
 ## Personas
 

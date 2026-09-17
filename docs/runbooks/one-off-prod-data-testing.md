@@ -132,10 +132,28 @@ docker logs ci-memory_ci-marketplace-api-1 --tail 40
 
 After deploy you should see `pr-onboarding-test` (or your `PR_TAG`) on api, gateway, hbpe-service, and summary-service.
 
-## Backup first
+## Backup first — REQUIRED
 
-Postgres data dirs are owned by uid 999 — a plain `tar` from the host may hit permission
-errors. Use a root helper container:
+**Take a backup before every image swap and before every update.** This is not
+optional and never was in practice: `migrate-database` applies one-way schema
+changes (see [Migrations are one-way](#migrations-are-one-way)), and the secrets
+volume is the encryption root — lose it and every encrypted column becomes
+unreadable ciphertext, because `setup-secrets` is idempotent and will quietly
+generate a *new* `AUTH_FIELD_ENCRYPTION_KEY` on a rebuilt box rather than fail.
+
+The fast path is [`scripts/backup/appliance-backup.sh`](../../scripts/backup/appliance-backup.sh),
+which dumps Postgres (database plus cluster globals), copies `.env.secrets`,
+verifies the dump is readable, and writes a `COVERAGE.md` next to it:
+
+```bash
+./scripts/backup/appliance-backup.sh --project ci-memory_ci-marketplace ~/ci-backups
+```
+
+It deliberately does **not** cover object-store blobs or the HBPE model/corpus
+volumes — it is small and quick so that it actually gets run. When you need
+everything, including uploaded files, take the full data-directory tar as well.
+Postgres data dirs are owned by uid 999, so a plain `tar` from the host may hit
+permission errors; use a root helper container:
 
 ```bash
 docker run --rm \
@@ -157,7 +175,8 @@ Developer tags CI-Server (vYYYY.M.D)
   → CI-Marketplace syncs ci-memory manifest to Portal store
 
 User clicks "Update" in Hub (or update-all cron)
-  → optional backup
+  → REQUIRED backup (see § Backup first; Hub's own backup step is opt-in,
+    so on an unattended update-all this is the operator's responsibility)
   → docker compose pull (resolves :latest or pinned tag to new digest)
   → force-recreate all services
   → migrate-database → api starts
@@ -234,7 +253,14 @@ OAuth through **CI Portal** (`hub.ci.computer`):
 1. User clicks Connect → api calls Portal `/api/oauth/authorize`
 2. User signs in at Microsoft/Google → redirect to Portal `/api/oauth/callback`
 3. Portal exchanges the code and redirects back to the box:
-   `https://<your-host>/oauth/callback?connectionId=…&access_token=…`
+   `https://<your-host>/oauth/callback?connectionId=…#access_token=…&user_provider_id=…`
+   The URL fragment always carries `access_token`, `expires_in`, `provider` and
+   `user_provider_id`, plus `email` when Portal knows it and `refresh_token` (a proxy
+   refresh token) only when the provider issued one. When a proxy refresh token is
+   present, the api fetches the access token from Portal itself
+   (`/api/oauth/token/refresh`, device credentials) and stores the rotated refresh token;
+   the fragment's `access_token` is only used when there is none, i.e. for a provider
+   whose token response carries no refresh token (Facebook, for one).
 
 **Redirect URIs for the proxy path** (configured on CI Portal's OAuth apps, not on your
 box):
@@ -327,9 +353,9 @@ Rollback when finished:
 |-------------|---------|
 | **`hub-pr-test-deploy.sh --services`** | Opt-in rebuild list (api, gateway, summary, …) |
 | **Hub "dev channel" tag** | Install compose pointing at `dev-<sha>` without override files |
-| **Documented pg_dump / restore** | Smaller portable copy than 3 GB tar of PGDATA |
+| ~~**Documented pg_dump / restore**~~ | Shipped as `scripts/backup/appliance-backup.sh` — smaller portable copy than a 3 GB tar of PGDATA |
 | **Read-only DB replica profile** | Point local api at restored snapshot; skip writes |
-| **Pre-update backup hook** | Hub already supports backup-on-update; use it before one-off swaps |
+| **Pre-update backup hook** | Hub already supports backup-on-update; use it before one-off swaps. Wiring `appliance-backup.sh` into the automated upgrade path is still unstarted — it must not go into `migrate-database`, whose failure would break every appliance upgrade |
 | **Compose override in Hub UI** | First-class "local image override" for developer appliances |
 | **Separate `APP_DATA_DIR` clone script** | `rsync` + `pg_resetwal` / pg_dump restore for safe sandbox |
 

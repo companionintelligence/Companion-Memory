@@ -5,6 +5,7 @@ import { Toaster } from '@ci/shadcn';
 import { Outlet } from 'react-router-dom';
 
 import { AnimatedBackground } from '@/components/AnimatedBackground';
+import { AppErrorBoundary } from '@/components/AppErrorBoundary';
 import { useBackground, useTheme } from '@/components/ThemePicker';
 import { useUnsyncedImportsNotice } from '@/components/UnsyncedImports/useUnsyncedImportsNotice';
 
@@ -40,8 +41,13 @@ export function Main() {
           />
           <MobileTopBar />
           <main className="flex-1 min-w-0 overflow-hidden min-h-0 relative">
+            {/* Boundary INSIDE Suspense so a failed lazy chunk is caught too,
+                and around the outlet ALONE so the bottom bar and the modal
+                portals survive a page crash. */}
             <Suspense fallback={<LoadingPage />}>
-              <Outlet />
+              <AppErrorBoundary>
+                <Outlet />
+              </AppErrorBoundary>
               <Portal id="content-modal" className="absolute inset-0 empty:hidden" />
             </Suspense>
           </main>
@@ -54,6 +60,17 @@ export function Main() {
 
   return (
     <PowerRailProvider>
+      {/* First focusable thing on every desktop page: keyboard users would
+          otherwise tab through the whole rail and both navigations to reach the
+          content. `sr-only` until focused, then `fixed` — `not-sr-only` resets
+          position to static, which would drop it into the grid and shove the
+          layout sideways the moment it takes focus. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-lg focus:ring-2 focus:ring-ring"
+      >
+        Skip to content
+      </a>
       {/* Scenery, behind everything. `relative z-10` on the shell is what keeps
           it there: the background is `fixed` at z-index 0, and a positioned
           sibling later in the DOM would otherwise paint over the whole app. */}
@@ -84,8 +101,14 @@ export function Main() {
             <Toaster theme={themeState.mode} />
             <div className="flex flex-row h-full min-h-0">
               <Portal id="tertiary-navigation" className="h-full" />
-              <main className="flex-1 min-w-0 relative">
-                <Outlet />
+              {/* `tabIndex={-1}` so the skip link actually moves focus here
+                  rather than only scrolling — a plain <main> is not focusable. */}
+              <main id="main-content" tabIndex={-1} className="flex-1 min-w-0 relative">
+                {/* Around the outlet alone: the rail, both navigations and the
+                    toaster stay mounted and usable when a page throws. */}
+                <AppErrorBoundary>
+                  <Outlet />
+                </AppErrorBoundary>
                 <Portal id="content-modal" className="absolute inset-0 empty:hidden" />
               </main>
             </div>

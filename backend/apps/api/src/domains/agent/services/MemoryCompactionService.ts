@@ -20,7 +20,7 @@ import type { Message as OllamaMessage } from 'ollama';
 import { SYSTEM_USER, type ServiceContext, type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { RelationshipService } from '@ci/domains/graph';
-import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm';
+import { OllamaService } from '@ci/domains/llm';
 import {
   ConceptService,
   ItemService,
@@ -466,7 +466,7 @@ export class MemoryCompactionService {
   private async callOllamaChat(messages: OllamaMessage[]): Promise<string> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = await this.ollamaService.chat({} as any, messages, {
-      model: UTILITY_MODEL,
+      tier: 'utility',
       format: 'json',
     });
 

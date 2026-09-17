@@ -68,12 +68,12 @@ export const SUMMARIES: SeedSummary[] = [
     content: {
       tokens_used: 156,
       key_insights: [
-        "Book a 7:30 PM reservation at Carmine's Italian this weekend",
-        'Compare availability and reviews for top Mexican spots nearby',
-        'Text your babysitter to confirm availability for the night',
+        "Carmine's Italian is your most-visited dinner spot, and 7:30 PM is the table time on every past booking",
+        'Mexican food comes up more than any other cuisine in your messages with Sarah',
+        'Your last three anniversary dinners were arranged about ten days ahead — that window opens this weekend',
       ],
       summary_text:
-        "Your anniversary is coming up. You and Sarah Smith most often dine at Carmine's Italian, The Willow Bistro, and El Camino Taqueria. I can book a table at your favorite, or suggest top-rated Mexican options within 25 miles—since they love Mexican.",
+        "Your anniversary is coming up. Across your calendar, receipts and messages, you and Sarah Smith most often dine at Carmine's Italian, The Willow Bistro, and El Camino Taqueria. Open any of them to see the visits this is drawn from.",
       activity_counts: {
         total: 10,
       },
@@ -147,12 +147,12 @@ export const SUMMARIES: SeedSummary[] = [
     content: {
       tokens_used: 142,
       key_insights: [
-        'Draft an email to friends in Miami to coordinate a meetup',
-        "Plan 3 fun activities around your hotel's location and schedule",
-        'Block travel buffer time on your calendar',
+        'Ana, Marco, and Dev are the Miami contacts you have seen on every previous trip',
+        'Your hotel confirmation and two open afternoons are already linked to this trip',
+        'Past Miami trips kept about two hours of travel buffer either side; none is blocked this time',
       ],
       summary_text:
-        "I noticed a flight to Miami in two weeks. Your friends in Miami include Ana, Marco, and Dev. Would you like me to send a warm note to them, or plan a short itinerary while you're there?",
+        'I noticed a flight to Miami in two weeks on your calendar. Your Miami people are Ana, Marco, and Dev. Here is what your own records already say about the trip — the confirmations, who you usually see, and the gaps in the schedule.',
       activity_counts: {
         total: 8,
       },
@@ -240,11 +240,11 @@ export const SUMMARIES: SeedSummary[] = [
     content: {
       tokens_used: 168,
       key_insights: [
-        'Curated reading list from your recent articles and YouTube history: Product ML, experimentation, and growth analytics',
-        "A new file has been saved locally with a summary of your Google Drive activity from the last two weeks related to work. I've summarized progress and highlighted next-step opportunities for the upcoming two weeks.",
+        'Your saved articles and YouTube history this month cluster on product ML, experimentation, and growth analytics',
+        'Your Drive activity for the last two weeks keeps returning to the same three work documents',
       ],
       summary_text:
-        'Here are high-impact follow‑ups based on your recent browser activity and reading. Your recent YouTube watch history shows an interest in machine learning for product analytics, so I compiled a focused reading list on that topic.',
+        'Here is what your recent browsing and reading records show. Your YouTube history and saved articles lean toward machine learning for product analytics — open any of them to see what this is drawn from.',
       activity_counts: {
         total: 15,
       },
@@ -266,12 +266,12 @@ export const SUMMARIES: SeedSummary[] = [
     content: {
       tokens_used: 155,
       key_insights: [
-        'Weekend cooking class at Little Chefs Studio (ages 7–12), plus a family-friendly recipe pack',
-        'Summer camps short‑list based on interests (cooking, art, soccer) with registration deadlines',
-        'Library maker‑space sessions near you; I can reserve spots and add to the family calendar',
+        'Cooking is the activity your family chats mention most this month — nine mentions across three weeks',
+        'Your saved recipes and recent photos lean heavily toward dishes the kids helped make',
+        'Last summer, camp confirmations for cooking, art, and soccer landed in your files in February — that is next month',
       ],
       summary_text:
-        'From recent chats, your kids have been enjoying cooking activities. I researched nearby activities they might love and put together a few options:',
+        'From recent chats, your kids have been enjoying cooking activities. Here is what your own records show about that interest, and what happened around this time last year:',
       activity_counts: {
         total: 6,
       },
@@ -293,11 +293,12 @@ export const SUMMARIES: SeedSummary[] = [
     content: {
       tokens_used: 148,
       key_insights: [
-        'Oil change due soon for your Honda Accord (last service ~4,900 miles ago). I can book with your usual shop',
-        'Gutter cleaning recommended before the next rain—two providers have availability this week; want me to compare quotes?',
-        'Replace HVAC filter (3 months elapsed); I can order the correct size and set a recurring reminder',
+        'Oil change due soon for your Honda Accord — about 4,900 miles since the service receipt in your files',
+        'Gutter cleaning is past due: the last invoice is 14 months old, and your note on it says to do it before the rain',
+        'HVAC filter is 3 months past the change date on its receipt — the size you bought last time is on that receipt',
       ],
-      summary_text: 'Quick maintenance wins to keep things running smoothly at home and on the road:',
+      summary_text:
+        'Quick maintenance wins to keep things running smoothly at home and on the road, each traced back to the record it came from:',
       activity_counts: {
         total: 5,
       },

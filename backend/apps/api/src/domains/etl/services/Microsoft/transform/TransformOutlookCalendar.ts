@@ -340,6 +340,11 @@ export class OutlookCalendarTransformService {
             };
       })(),
       connection_id: connectionId,
+      // True for BOTH a series master and an instance Microsoft already
+      // expanded server-side (`seriesMasterId` set). That is why read-time
+      // expansion must never gate on `is_recurring` alone — it gates on a
+      // parseable RRULE in `metadata.recurrenceRule` instead, which this
+      // transform does not write, so no Outlook row is ever expanded twice.
       is_recurring: !!event.recurrence || !!event.seriesMasterId,
       is_all_day: event.isAllDay || false,
       status: this.normalizeStatus(event.isCancelled),

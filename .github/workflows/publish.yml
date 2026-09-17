@@ -9,15 +9,213 @@ name: Publish
 # RELEASE IMPACT: this previously published on any pushed tag. With the tag
 # trigger removed, pushing a version tag NO LONGER publishes — dispatch this
 # workflow on the TAG ref instead (VERSION is parsed from the ref, so
-# dispatching on a branch would publish garbage image tags).
+# dispatching on a branch would publish garbage image tags — the "Refuse to
+# publish a non-release ref" guard on every job below now rejects that in
+# seconds rather than after two 150-minute build legs).
 on:
   workflow_dispatch:
+    inputs:
+      skip_test_gate:
+        description: >-
+          Publish even though the release-gate workflows have no successful run
+          at this commit. Emergency escape hatch only — it requires
+          bypass_reason, prints a ::warning:: naming the actor, and writes the
+          reason to the run summary.
+        type: boolean
+        default: false
+        required: false
+      bypass_reason:
+        description: >-
+          REQUIRED when skip_test_gate is true. Why this release is going out
+          without the evidence — an incident number, a link, a sentence. The
+          gate refuses a blank reason: a bypass with no stated cause is
+          indistinguishable from a mis-click on the dispatch form, and the run
+          log that would otherwise be the only record expires.
+        type: string
+        default: ''
+        required: false
 
 concurrency:
   group: publish-${{ github.ref }}
   cancel-in-progress: false
 
+# ONE definition of "release tag" for the whole file. Both the ref guards and
+# the :latest decision below read this, so a release-tag shape can never be
+# accepted by one and rejected by the other (they were separate literals; the
+# guard was added by reusing the :latest regex verbatim).
+# Matches CalVer tags with or without a leading v: v2026.7.27, 2026.7.27.1.
+env:
+  RELEASE_TAG_RE: '^v?[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]+)?$'
+
 jobs:
+  # ── Release gate: proof that the release workflows passed for THIS commit ──
+  #
+  # Nothing else in this workflow runs a test. Re-running the suites here would
+  # re-buy the hosted compute that docs/CI.md gated these workflows to kill
+  # (~$563/month), so this job buys nothing but the *evidence*: it asks the
+  # Actions API whether a successful run of each gated workflow already exists
+  # for GITHUB_SHA, and refuses to publish when a REQUIRED one does not. Every
+  # gated workflow is itself dispatch-only, so the release flow is: dispatch
+  # each of them on the ref, wait for green, then dispatch this. Cost: one
+  # ubuntu-latest minute.
+  #
+  # It used to check ci.yml ALONE, which made "the tests passed" mean only
+  # "the unit/lint lanes passed" — a release could ship with migrations that
+  # collide or an E2E suite that never ran. The list lives in GATED_WORKFLOWS
+  # below; adding a gate is one line there.
+  verify-ci-passed:
+    name: Require green release-gate runs for this commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # `gh run list` reads the Actions API; without actions:read the default
+      # GITHUB_TOKEN gets a 403 here and the gate fails closed on every run.
+      actions: read
+
+    steps:
+      # First step on purpose — see the identical guard on `build` below.
+      - name: Refuse to publish a non-release ref
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "${GITHUB_REF}" != refs/tags/* || ! "${tag}" =~ ${RELEASE_TAG_RE} ]]; then
+            echo "::error::${GITHUB_REF} is not a release tag. Dispatch this workflow on a tag matching ${RELEASE_TAG_RE} (e.g. v2026.7.27) — VERSION is parsed from the ref."
+            exit 1
+          fi
+          echo "Release tag ${tag} accepted."
+
+      - name: Check for green release-gate runs at ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No checkout in this job, so gh cannot infer the repo from a git
+          # remote — name it explicitly.
+          GH_REPO: ${{ github.repository }}
+          SKIP_TEST_GATE: ${{ inputs.skip_test_gate }}
+          # Read through env, never interpolated into the script body: this is
+          # free-text a dispatcher typed, and `${{ }}` inside `run:` would
+          # splice it into the shell.
+          BYPASS_REASON: ${{ inputs.bypass_reason }}
+          # THE gate list. One `<workflow file>:<required|advisory>` per line;
+          # `#` comments and blank lines are ignored. Adding a gate is one line;
+          # promoting a soft gate to a blocking one is one word.
+          #
+          #   ci.yml                        — lint, typecheck, unit tests.
+          #   migration-integrity-check.yml — version-collision + integrity
+          #                                   check on db/postgres/migrations.
+          #                                   Cheap, and a collision here breaks
+          #                                   `migrate` for every appliance.
+          #
+          # e2e.yml is ADVISORY, deliberately, and this is the line to change:
+          # it is the only full-stack suite we have, but it has had no green run
+          # since it was gated to workflow_dispatch (last recorded success
+          # 2026-08-17, when it still ran on a schedule), so making it blocking
+          # today would stop the next release rather than protect it. It warns
+          # and annotates instead. FLIP IT TO `required` the moment someone has
+          # dispatched e2e.yml on a release ref and watched it go green — that
+          # is a deliberate decision for the team, not something to leave
+          # sitting here forever. Until then, this gate does NOT prove the app
+          # works end to end at the published commit.
+          GATED_WORKFLOWS: |
+            ci.yml:required
+            migration-integrity-check.yml:required
+            e2e.yml:advisory
+        run: |
+          if [[ "${SKIP_TEST_GATE}" == "true" ]]; then
+            # A blank reason is refused: without it a bypass is a mis-click, and
+            # the run log — which expires — would be the only record of it.
+            if [[ -z "${BYPASS_REASON//[[:space:]]/}" ]]; then
+              echo "::error::skip_test_gate=true requires a non-empty bypass_reason. Re-dispatch with a reason (incident number, link, or a sentence) so the bypass is recorded in the run summary."
+              exit 1
+            fi
+
+            echo "::warning::Release gate BYPASSED by ${GITHUB_ACTOR} (skip_test_gate=true): ${BYPASS_REASON}"
+
+            # $GITHUB_STEP_SUMMARY, not just the log: step summaries are part of
+            # the run's rendered record, so the bypass is visible without
+            # digging through — or waiting on the retention of — raw logs.
+            {
+              echo "## :warning: Release gate BYPASSED"
+              echo
+              echo "| | |"
+              echo "| --- | --- |"
+              echo "| Ref | \`${GITHUB_REF}\` |"
+              echo "| Commit | \`${GITHUB_SHA}\` |"
+              echo "| Actor | @${GITHUB_ACTOR} |"
+              echo "| Reason | ${BYPASS_REASON} |"
+              echo
+              echo "Published without proof that the release-gate workflows passed for this commit."
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          {
+            echo "## Release gate — workflow runs at \`${GITHUB_SHA}\`"
+            echo
+            echo "| Workflow | Policy | Result |"
+            echo "| --- | --- | --- |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          # Collected rather than returned on the first miss, so one dispatch
+          # tells you EVERY workflow you still have to run instead of making you
+          # discover them one 10-minute round trip at a time.
+          missing_required=()
+
+          while IFS= read -r entry; do
+            entry="${entry%%#*}"
+            entry="${entry//[[:space:]]/}"
+            if [[ -z "${entry}" ]]; then
+              continue
+            fi
+
+            workflow="${entry%%:*}"
+            policy="${entry##*:}"
+
+            # Fail CLOSED on a malformed entry, because the alternative is the
+            # precise bug this whole gate exists to stop. `${entry##*:}` on a
+            # line with no colon returns the FILENAME, and `ci.yml:Required` is
+            # not `required` — in both cases the `else` branch below would
+            # quietly demote a blocking gate to a warning and the job would
+            # still end green printing "Every required workflow has a green
+            # run". A typo in the list must break the release, not silently
+            # unlock it.
+            if [[ "${policy}" != "required" && "${policy}" != "advisory" ]] || [[ -z "${workflow}" ]]; then
+              echo "::error::Malformed GATED_WORKFLOWS entry '${entry}' — expected '<workflow file>:required' or '<workflow file>:advisory' (lowercase). Refusing to publish rather than guess which gates are blocking."
+              echo "| \`${entry}\` | — | :x: malformed gate entry |" >> "${GITHUB_STEP_SUMMARY}"
+              exit 1
+            fi
+
+            # --commit filters on the run's head SHA, so a run dispatched on the
+            # branch the tag points at counts — same commit, same tree.
+            count=$(gh run list \
+              --workflow "${workflow}" \
+              --commit "${GITHUB_SHA}" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq 'length' </dev/null)
+
+            if [[ "${count}" != "0" ]]; then
+              echo "Found a successful ${workflow} run for ${GITHUB_SHA}."
+              echo "| \`${workflow}\` | ${policy} | :white_check_mark: green |" >> "${GITHUB_STEP_SUMMARY}"
+              continue
+            fi
+
+            if [[ "${policy}" == "required" ]]; then
+              echo "::error::No successful ${workflow} run for ${GITHUB_SHA}. Run 'gh workflow run ${workflow} --ref ${GITHUB_REF#refs/*/}', wait for it to pass, then re-dispatch this workflow."
+              echo "| \`${workflow}\` | required | :x: no green run |" >> "${GITHUB_STEP_SUMMARY}"
+              missing_required+=("${workflow}")
+            else
+              echo "::warning::No successful ${workflow} run for ${GITHUB_SHA}. This gate is ADVISORY, so the release proceeds — but nothing has proven this suite passes at the published commit."
+              echo "| \`${workflow}\` | advisory | :warning: no green run (not blocking) |" >> "${GITHUB_STEP_SUMMARY}"
+            fi
+          done <<< "${GATED_WORKFLOWS}"
+
+          if [[ "${#missing_required[@]}" -gt 0 ]]; then
+            echo "::error::Release gate failed — no green run at ${GITHUB_SHA} for: ${missing_required[*]}. In an emergency, re-dispatch with skip_test_gate=true and a bypass_reason."
+            exit 1
+          fi
+          echo "Every required workflow has a green run for ${GITHUB_SHA} — proceeding."
+
   # ── Per-architecture native builds ──────────────────────────────────
   #
   # Each leg builds every companion/* image natively (no QEMU — the HBPE
@@ -29,6 +227,10 @@ jobs:
     name: Build & push (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
+    # Blocking: no images are built until every REQUIRED gate workflow has a
+    # green run at this exact commit (or the documented skip_test_gate bypass,
+    # which now demands a written reason, has been used).
+    needs: verify-ci-passed
     strategy:
       fail-fast: true
       matrix:
@@ -49,6 +251,22 @@ jobs:
       NODE_AUTH_TOKEN: ${{ secrets.GHPR_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
     steps:
+      # FIRST step, before the checkout, and cheap on purpose. "Resolve VERSION
+      # from tag" below strips `refs/tags/` off GITHUB_REF and nothing else, so
+      # a dispatch on a branch — which is exactly what docs/CI.md's examples
+      # show (`--ref main`) — yields VERSION=refs/heads/main. That is not
+      # rejected until publish.sh reaches `docker image tag`, i.e. AFTER up to
+      # 150 minutes of native image builds on each of two runners. Fail in
+      # seconds instead. Same regex as the :latest decision in the merge job.
+      - name: Refuse to publish a non-release ref
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "${GITHUB_REF}" != refs/tags/* || ! "${tag}" =~ ${RELEASE_TAG_RE} ]]; then
+            echo "::error::${GITHUB_REF} is not a release tag. Dispatch this workflow on a tag matching ${RELEASE_TAG_RE} (e.g. v2026.7.27) — VERSION is parsed from the ref."
+            exit 1
+          fi
+          echo "Release tag ${tag} accepted."
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -147,6 +365,18 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     steps:
+      # Same guard as `build` (and the gate job): kept here so this job can
+      # never register a `refs/heads/…` "version" with CI-Portal if it is ever
+      # re-run on its own, or reached by a future edit to `needs`.
+      - name: Refuse to publish a non-release ref
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "${GITHUB_REF}" != refs/tags/* || ! "${tag}" =~ ${RELEASE_TAG_RE} ]]; then
+            echo "::error::${GITHUB_REF} is not a release tag. Dispatch this workflow on a tag matching ${RELEASE_TAG_RE} (e.g. v2026.7.27) — VERSION is parsed from the ref."
+            exit 1
+          fi
+          echo "Release tag ${tag} accepted."
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -171,15 +401,20 @@ jobs:
           fi
 
       # :latest tracks the newest release only. Two guards, both earned by this
-      # repo's tag history: the trigger is `tags: ['*']`, and tags like
-      # `0.0.0-test1` and `mobile-v0.1.0-appstoreprep-…` have been pushed here —
-      # neither should move :latest. The newest-check additionally stops a
-      # re-cut or back-tagged older release from regressing it.
+      # repo's tag history: this workflow is dispatch-only and a maintainer can
+      # dispatch it on ANY ref, and tags like `0.0.0-test1` and
+      # `mobile-v0.1.0-appstoreprep-…` have been pushed here — neither should
+      # move :latest. (The shape check is now also enforced up front by the
+      # "Refuse to publish a non-release ref" guard, so a non-release tag never
+      # reaches this step; it stays here because the newest-check below reads
+      # the same regex.) The newest-check additionally stops a re-cut or
+      # back-tagged older release from regressing :latest.
       - name: Decide whether this tag moves :latest
         run: |
           tag="${GITHUB_REF#refs/tags/}"
           version="${tag#v}"
-          release_re='^v?[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}(\.[0-9]+)?$'
+          # Workflow-level env — the single definition the ref guards use too.
+          release_re="${RELEASE_TAG_RE}"
 
           # Re-read tags as late as possible. Releases pushed close together
           # build in parallel, so the checkout's tag list can already be stale

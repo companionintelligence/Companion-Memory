@@ -1,13 +1,7 @@
 {
-  "extends": "../../../tsconfig.base.json",
+  "extends": "../../../tsconfig.react.json",
+
   "compilerOptions": {
-    "noEmit": true,
-
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "verbatimModuleSyntax": true,
-    "noUncheckedSideEffectImports": true,
-
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
@@ -15,11 +9,14 @@
 
     "allowImportingTsExtensions": true,
 
-    "jsx": "react-jsx",
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "resolveJsonModule": true,
+    // Web-only for now — see the note in tsconfig.react.json. This app is the
+    // only one that has ever been checked with them.
+    "verbatimModuleSyntax": true,
+    "noUncheckedSideEffectImports": true,
+
     "types": ["vite/client", "google.maps", "node"]
   },
+
   "include": ["src", "scripts", "stories", "*.config.ts", "codegen.ts", ".storybook/**/*"],
   "exclude": ["node_modules", "dev-dist", "dist"]
 }

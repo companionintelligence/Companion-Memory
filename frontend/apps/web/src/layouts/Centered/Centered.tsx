@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router-dom';
 
+import { AppErrorBoundary } from '@/components/AppErrorBoundary';
 import { ThemeToggle } from '@/components/ThemePicker';
 
 export function Centered() {
@@ -9,7 +10,12 @@ export function Centered() {
         <ThemeToggle />
       </div>
       <div className="flex flex-1 flex-col items-stretch justify-start sm:items-center sm:justify-center">
-        <Outlet />
+        {/* Login, device-connect and server settings render here, outside the
+            app shell — a throw on any of them has no other boundary above it,
+            and these are the screens a locked-out user needs most. */}
+        <AppErrorBoundary>
+          <Outlet />
+        </AppErrorBoundary>
       </div>
     </div>
   );

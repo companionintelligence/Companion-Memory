@@ -1,10 +1,43 @@
 # PowerSync sync rules — what data replicates to each user's on-device SQLite.
 #
 # One bucket per user, scoped by `request.user_id()` (the JWT `sub` set by
-# CI-Server's /api/powersync/token endpoint). Notes/messages/threads/files are a
-# rolling working set: JWT `parameters.cutoff` (default last 14 days). Eviction
-# is a later cutoff (unsubscribe), not a local DELETE. Tags stay small and full.
-# Large/server-computed/PII data stays online via GraphQL.
+# CI-Server's /api/powersync/token endpoint). Large/server-computed/PII data
+# stays online via GraphQL.
+#
+# NO ROLLING CUTOFF WINDOW. These rules used to narrow notes/messages/threads/
+# files to a rolling working set with `AND updated_at >= COALESCE(
+# bucket.cutoff::timestamptz, '-infinity'::timestamptz)`, cutoff coming from the
+# JWT. That could never load: PowerSync rejected it three ways over, and the last
+# one is not a syntax slip but a constraint the design cannot be written around.
+# Measured against the pinned journeyapps/powersync-service:1.23.0 — each of
+# these exits the container 1 at "Failed to update sync config":
+#
+#   1. `Function 'coalesce' is not defined`     — use `ifnull`, or nothing.
+#   2. `CAST not supported for 'timestamptz'`   — only casts like `::text` work
+#                                                 (see entity_tag's id below).
+#   3. `Cannot use bucket parameters in expressions` — the fatal one. A bucket
+#      parameter may appear ONLY on one side of an equality (`user_id =
+#      bucket.user_id`). Any range comparison is rejected, and so is wrapping it
+#      in a function — `updated_at >= bucket.cutoff` and `ifnull(bucket.cutoff,
+#      '')` both fail. Buckets are keyed sets, so a bucket parameter selects a
+#      set; it cannot bound one. Verified by swapping `>=` for `=`, which starts
+#      cleanly, and back, which does not.
+#
+# So a cutoff cannot filter rows here at all, and the whole per-user working set
+# syncs. To actually bound it, the window has to become something equality can
+# select: a discrete period column on the row, added to POWERSYNC_TABLES and
+# matched with `updated_month = bucket.month`, with the client subscribing to the
+# periods it wants. It must be a PLAIN column the writer maintains — a GENERATED
+# one looks tidier and cannot work, because this publication reports
+# pubgencols='n' and PostgreSQL then never replicates generated columns (the same
+# reason ci.events.duration_minutes could not sync even if selected). That is a
+# schema change, not a sync-rules change, so it is deliberately not attempted
+# here.
+#
+# /api/powersync/token still mints `parameters.cutoff` (PowerSyncTokenService
+# defaults it to 14 days back). Nothing reads it now — it is inert, not wired —
+# and it is left in place because the period-bucketing above would use it. Do not
+# reintroduce it into a WHERE clause expecting it to bite.
 #
 # Verified user-scoped tables (each has a uuid `id`-aliasable PK + `user_id`):
 #   - ci.notes             (id, title, content, user_id, created_at, updated_at)
@@ -22,9 +55,48 @@
 #                            see the `entity_tags` bucket below)
 #
 # DELIBERATELY NOT synced (keep online): ci.events / ci.browser_activity /
-# ci.communications (TimescaleDB hypertables, high-churn, PII, embeddings),
-# ci.content (NULL user_id), ci.entities/relationships (graph), ci_search.embeddings
-# (pgvector — huge, server-computed), HBPE tables.
+# ci.communications, ci.content (NULL user_id), ci.entities/relationships (graph),
+# ci_search.embeddings (pgvector — huge, server-computed), HBPE tables.
+#
+# An earlier revision of this list justified the first three as "TimescaleDB
+# hypertables ... embeddings". Both halves are false and were checked: only
+# ci.position and hbpe.prediction_log are hypertables, and none of the three has
+# a vector or *embedding* column (event vectors live in ci_search.vectors). The
+# real reasons are below, because they are the ones that decide whether
+# CI-Capture's two event lanes — vizier system-activity snapshots and file-edit
+# events, both POSTed to /v1/events and materialized into ci.events — can ever
+# reach a device. Today they cannot, and it is not a matter of adding a table:
+#
+#   1. The rows are nameless. Migration 20260811061409_convert_events_to_cti
+#      moved title/description off ci.events onto the matching ci.entities row.
+#      A synced event is then event_type plus timestamps with no label. Unlike
+#      ci.objects below this one IS recoverable without a JOIN — ci.entities has
+#      its own owner_user_id, so its Event-typed slice can be synced as a second
+#      table and joined on-device — but that is a second table with its own PII
+#      surface (names, birth dates, geography columns), not a column addition.
+#   2. vizier_patch rows cannot be folded on a device. They are index-based JSON
+#      Patches against a session's base snapshot, and PowerSync gives a client no
+#      ordering or fold primitive; a patch whose base is missing is inert. Sync
+#      cannot fix this — the lane would have to send whole snapshots.
+#   3. Volume is unbounded and cannot be bounded here. ci.events is not a
+#      hypertable, has no retention policy, and is_deleted is a tombstone that
+#      leaves the row. The capture lane alone produces roughly 70k rows/user/year
+#      at the default 300s tick and ~700k at the 30s floor. No cutoff predicate is
+#      expressible (see the header: bucket parameters are equality-only).
+#   4. metadata is the raw capture payload spread verbatim
+#      (BulkIngestController's materialize step), which for a vizier row carries
+#      every on-screen window title, the terminal cwd, and every established TCP
+#      connection with remote address — a machine fingerprint, not the user's own
+#      authored content, and a different class of data from the notes, messages
+#      and file metadata that already sync. It would have to be projected out.
+#
+# Bounding it, if this is ever picked up: the obvious "add a generated
+# updated_month and bucket on equality" does NOT work as stated. This publication
+# reports pubgencols='n', so PostgreSQL does not replicate generated columns at
+# all — a GENERATED period column would never reach the sync service (the same
+# reason ci.events.duration_minutes could never sync). It has to be a plain
+# column maintained by the writer, or the publication has to opt in with
+# `publish_generated_columns`.
 #
 # NOT YET synced — ci.objects: as of migration 20260811061402
 # (convert_inventory_to_cti), ci.objects no longer carries name/description; that
@@ -46,24 +118,31 @@
 
 bucket_definitions:
   user_data:
-    # user_id from the token subject; cutoff from JWT parameters (ISO timestamptz).
-    parameters: SELECT request.user_id() AS user_id, request.parameters() ->> 'cutoff' AS cutoff
+    # user_id from the token subject. See the header on why there is no cutoff.
+    parameters: SELECT request.user_id() AS user_id
 
     data:
       - SELECT id, title, content, user_id, created_at, updated_at
         FROM ci.notes
         WHERE user_id = bucket.user_id
-          AND updated_at >= COALESCE(bucket.cutoff::timestamptz, '-infinity'::timestamptz)
 
       # Files: metadata only. No binary/extracted-text/embedding columns exist on
       # this table (the object is fetched from Minio via a fresh signed URL), so the
       # full row is safe to sync.
+      #
+      # capture_tick_id and event_id are the capture provenance of a screenshot:
+      # the tick it was taken in, and the ci.events row that tick materialized
+      # into. Both are plain columns already on this already-syncing table, so
+      # carrying them costs nothing and is what lets a device group a tick's
+      # screenshots and point at its activity — the only part of the capture
+      # story that can reach a device today (see the note below on why the event
+      # lanes themselves cannot).
       - SELECT id, filename, content_type, size, width, height, variant, title,
                description, bucket, key, hash, external_id, parent_id, user_id,
+               capture_tick_id, event_id,
                external_created_at, external_updated_at, created_at, updated_at, deleted_at
         FROM ci.files
         WHERE user_id = bucket.user_id
-          AND updated_at >= COALESCE(bucket.cutoff::timestamptz, '-infinity'::timestamptz)
 
       - SELECT id, label, description, user_id, created_at, updated_at, deleted_at
         FROM ci_search.tags
@@ -79,7 +158,6 @@ bucket_definitions:
                created_at, updated_at, last_message_at
         FROM ci.threads
         WHERE user_id = bucket.user_id
-          AND updated_at >= COALESCE(bucket.cutoff::timestamptz, '-infinity'::timestamptz)
 
       # Messages: text-only subset. PK is message_id, not id — aliased below.
       # Excludes input_tokens/output_tokens/total_tokens/estimated_cost (cost
@@ -92,7 +170,65 @@ bucket_definitions:
                sequence_number, created_at, updated_at
         FROM ci.messages
         WHERE user_id = bucket.user_id
-          AND updated_at >= COALESCE(bucket.cutoff::timestamptz, '-infinity'::timestamptz)
+
+      # Events — CI-Capture's vizier and file-edit lanes land here, materialized
+      # from ci.capture_events by /v1/events. Three predicates, each load-bearing:
+      #
+      #   sync_period IS NOT NULL   the device window. PowerSync cannot express a
+      #     rolling cutoff (bucket params are equality-only, and a client
+      #     parameter may not filter a table-based parameter query), so the
+      #     window is decided server-side by SyncWindowSweepCron and tested here
+      #     as a plain predicate. Clearing the marker evicts the row from every
+      #     device, because PowerSync drops a row that stops matching.
+      #   is_deleted = false        tombstone propagation, free, same mechanism.
+      #   event_type <> 'vizier_patch'   patches are index-based JSON Patches
+      #     against a session's base snapshot, and PowerSync gives a client no
+      #     ordering or fold primitive — a synced patch is inert at best and
+      #     misleading at worst. Snapshots sync; patches stay server-side until
+      #     the lane sends whole snapshots.
+      #
+      # metadata is deliberately NOT selected. It is the raw capture payload
+      # spread verbatim — every on-screen window title, the terminal cwd, and
+      # every established TCP connection with remote address. That is a machine
+      # fingerprint rather than the user's own authored content, a different
+      # class of data from the notes and messages above, and it duplicates
+      # ci.capture_events.payload. The renderable text lives on ci.entities below.
+      #
+      # duration_minutes is also absent, and cannot be added: it is GENERATED,
+      # and this publication reports pubgencols='n', so PostgreSQL never
+      # replicates it. Compute it on device from start_time/end_time.
+      - SELECT event_id AS id, user_id, event_type, category, status,
+               start_time, end_time, observed_at, sync_period,
+               source_type, source_system, source_id, capture_tick_id,
+               is_all_day, is_private, sharing_level, priority,
+               is_predicted, is_inferred, parent_event_id, task_id,
+               created_at, updated_at
+        FROM ci.events
+        WHERE user_id = bucket.user_id
+          AND sync_period IS NOT NULL
+          AND is_deleted = false
+          AND event_type <> 'vizier_patch'
+
+      # The names for those events. Migration 20260811061409_convert_events_to_cti
+      # moved title/description off ci.events onto the matching ci.entities row
+      # (entities.entity_id = events.event_id), so without this an event syncs as
+      # a type and some timestamps. Sync rules cannot JOIN — but they do not need
+      # to here, because ci.entities carries its own owner_user_id. The device
+      # joins the two locally on id, which SQLite is perfectly happy to do.
+      #
+      # sync_period is NULL for every entity_type except 'Event' (set that way by
+      # the insert trigger), so this one predicate does double duty: it is the
+      # same device window as above, AND it is what keeps people, places and
+      # things — names, birth dates, geography, dossiers — off devices entirely.
+      # The explicit entity_type check is redundant today and kept anyway, so a
+      # future change to the trigger cannot silently widen what syncs.
+      - SELECT entity_id AS id, owner_user_id AS user_id, entity_type,
+               name, description, linked_table, linked_id,
+               is_active, is_archived, sync_period, created_at, updated_at
+        FROM ci.entities
+        WHERE owner_user_id = bucket.user_id
+          AND sync_period IS NOT NULL
+          AND entity_type = 'Event'
 
   # entity_tag has no user_id of its own — it is owned transitively via the tag it
   # points at. Sync rules don't support JOINs (see header comment), so this follows

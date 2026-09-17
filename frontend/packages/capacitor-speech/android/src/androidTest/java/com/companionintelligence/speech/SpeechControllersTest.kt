@@ -12,6 +12,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -348,7 +349,11 @@ class SpeechControllersTest {
         )
 
         assertTrue("speak() must settle exactly once", latch.await(SPEAK_TIMEOUT_SECONDS, TimeUnit.SECONDS))
-        assumeTrue("engine refused the utterance: ${failure.get()}", failure.get() == null)
+        // An onError from the engine is the exact symptom a speak() regression produces, so it
+        // must fail rather than skip. This was an assumeTrue, which turned the outcome under
+        // test into a green no-op; device capability is already gated by the assumeTrue on
+        // `available` above, which is the legitimate use of one.
+        assertNull("the engine refused the utterance: ${failure.get()}", failure.get())
 
         val result = outcome.get()
         assertNotNull(result)

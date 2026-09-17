@@ -2,7 +2,7 @@ import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
 
 import type { ApiKeyCapability } from '@ci/common/decorators';
 
-import type { IntentAccess, IntentDomainKey } from '../core/types';
+import type { DispatchTier, IntentAccess, IntentDomainKey, ToolPrincipal } from '../core/types';
 import type { ToolInvocationOutcome } from '../events';
 
 /**
@@ -57,6 +57,21 @@ export class ToolInvocationEntity {
 
   @Column({ type: 'text', name: 'capability', nullable: true })
   capability!: ApiKeyCapability | null;
+
+  /**
+   * WHO called, where {@link capability} says only what they were allowed to do. NULL on rows
+   * written before the column existed, and on any dispatcher that states no principal.
+   */
+  @Column({ type: 'text', name: 'principal', nullable: true })
+  principal!: ToolPrincipal | null;
+
+  /** `ci.api_keys.name` of the installed app when {@link principal} is `managed-app`. */
+  @Column({ type: 'text', name: 'principal_name', nullable: true })
+  principalName!: string | null;
+
+  /** Dispatch tier. NULL reads as `appliance` — the default the context documents, left unwritten. */
+  @Column({ type: 'text', name: 'tier', nullable: true })
+  tier!: DispatchTier | null;
 
   @Column({ type: 'text', name: 'access', nullable: true })
   access!: IntentAccess | null;

@@ -15,7 +15,11 @@ vi.mock('@/common/feature', () => ({
   }),
 }));
 vi.mock('@/components/layout', () => ({
-  PageContent: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
+  PageContent: ({ children, className }: { children: React.ReactNode; className?: string }) => (
+    <main data-testid="page-content" className={className}>
+      {children}
+    </main>
+  ),
 }));
 
 vi.mock('@/pages/SchedulePage', () => ({
@@ -48,5 +52,15 @@ describe('TodayPage', () => {
     render(<TodayPage />);
 
     expect(screen.queryByTestId('schedule')).not.toBeInTheDocument();
+  });
+
+  it('keeps the phone flush and adds a small desktop top inset for the week range', () => {
+    render(<TodayPage />);
+
+    const frame = screen.getByTestId('page-content');
+
+    expect(frame.className).toContain('p-0');
+    expect(frame.className).toContain('device:pt-3');
+    expect(frame.className).not.toContain('device:p-6');
   });
 });

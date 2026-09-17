@@ -21,11 +21,11 @@ type Props = {
   onSelect: (filter: Partial<JobFilters>) => void;
   onOpenSchedules: () => void;
   /**
-   * Clear terminal jobs for a Health verdict. Returns when the server has
-   * deleted them so the card can refresh. Null/absent when the caller cannot
-   * clear (e.g. preview without the route).
+   * Clear terminal jobs for a Health verdict. Resolves with the server's tally
+   * once it has deleted them, so the card can refresh AND say what happened.
+   * Null/absent when the caller cannot clear (e.g. preview without the route).
    */
-  onClearTerminal?: (scope: 'dead-letter' | 'failed') => Promise<void>;
+  onClearTerminal?: (scope: 'dead-letter' | 'failed') => Promise<TerminalClearResult | undefined>;
   /** Live queue counts — the same six the page used to print in its own card. */
   summary: JobsSummary | undefined;
   refreshing: boolean;
@@ -35,6 +35,38 @@ type Props = {
   onRefresh: () => void;
   onSelectState: (state: string) => void;
 };
+
+/**
+ * What `POST /jobs/clear` did, as it reports it.
+ *
+ * `retained` is the honest half and the reason this is a shape rather than a
+ * count: the dead-letter scope deletes only letters the reaper has already
+ * copied into `ci.pipeline_dead_letters`, so during a backlog it leaves the rest
+ * behind on purpose. Without that number on screen the tile simply does not
+ * reach zero, which reads as a broken button and invites a second click.
+ */
+export type TerminalClearResult = {
+  readonly scope: 'dead-letter' | 'failed';
+  readonly deleted: number;
+  readonly retained: number;
+};
+
+/**
+ * One sentence for what a Clear actually did.
+ *
+ * Reports `retained` rather than hiding it, because that number is the whole
+ * reason the count above may not have moved to zero — and an operator who is not
+ * told will read a working, deliberately conservative delete as a broken one.
+ */
+function describeClear({ deleted, retained }: TerminalClearResult): string {
+  const removed = `Cleared ${deleted.toLocaleString()}.`;
+
+  return retained > 0
+    ? `${removed} ${retained.toLocaleString()} kept until the reaper has copied ${
+        retained === 1 ? 'it' : 'them'
+      } into Dead letters.`
+    : removed;
+}
 
 /** The six states, as `GET /jobs/dashboard` reports them. */
 export type JobsSummary = {
@@ -313,13 +345,25 @@ function VerdictRow({
   verdict: JobVerdict;
   onSelect: (filter: Partial<JobFilters>) => void;
   onOpenSchedules: () => void;
-  onClearTerminal?: (scope: 'dead-letter' | 'failed') => Promise<void>;
+  onClearTerminal?: (scope: 'dead-letter' | 'failed') => Promise<TerminalClearResult | undefined>;
 }) {
   const tone = TONE[verdict.tone];
   const Icon = tone.icon;
   const canShow = verdict.filter != null || verdict.action === 'View schedules';
   const canClear = verdict.clearScope != null && onClearTerminal != null;
   const [clearing, setClearing] = useState(false);
+  const [cleared, setCleared] = useState<TerminalClearResult | null>(null);
+  /**
+   * Why the last Clear did nothing.
+   *
+   * Previously the promise simply escaped (`onClick={() => void onClear()}`),
+   * so a rejected POST left the button looking like it had worked and the count
+   * looking like it had not — indistinguishable from the conservative
+   * dead-letter delete deliberately keeping rows. The routine rejection now is a
+   * 403: `POST /jobs/clear` is appliance-wide and admin-gated wherever an admin
+   * exists, so a non-admin pressing this must be told which of the two happened.
+   */
+  const [clearError, setClearError] = useState<string | null>(null);
 
   const onShow = () => {
     if (verdict.filter) {
@@ -336,9 +380,16 @@ function VerdictRow({
       return;
     }
 
+    // Says what will actually happen, which for dead letters is NOT "every one
+    // of them". The server deletes only the copies already harvested into the
+    // Dead letters table on this same page; anything the reaper has not reached
+    // is kept, because its payload is frequently the only surviving copy of the
+    // record. A prompt promising more than that is how an operator consents to a
+    // loss they were not offered.
     const label =
       verdict.clearScope === 'dead-letter'
-        ? 'Permanently delete every dead-lettered job on this appliance?'
+        ? 'Permanently delete the dead-lettered jobs already copied into Dead letters? ' +
+          'Any not copied yet are kept until they have been.'
         : 'Permanently delete every failed job on this appliance?';
 
     if (!window.confirm(label)) {
@@ -346,9 +397,16 @@ function VerdictRow({
     }
 
     setClearing(true);
+    setClearError(null);
 
     try {
-      await onClearTerminal(verdict.clearScope);
+      // `?? null` rather than a zeroed placeholder: a response with no body
+      // means we do not know what happened, and "Cleared 0" is a claim about
+      // the appliance, not an absence of one.
+      setCleared((await onClearTerminal(verdict.clearScope)) ?? null);
+    } catch (err: unknown) {
+      setCleared(null);
+      setClearError(err instanceof Error ? err.message : String(err));
     } finally {
       setClearing(false);
     }
@@ -360,6 +418,12 @@ function VerdictRow({
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium leading-snug">{verdict.headline}</p>
         <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
+          {clearError ? (
+            <span role="alert" className="text-destructive">
+              Nothing was cleared: {clearError}{' '}
+            </span>
+          ) : null}
+          {cleared ? <span>{describeClear(cleared)} </span> : null}
           {verdict.detail ? <span>{verdict.detail} </span> : null}
           {canShow ? (
             <button

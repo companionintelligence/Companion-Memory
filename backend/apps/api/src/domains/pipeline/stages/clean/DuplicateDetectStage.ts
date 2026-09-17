@@ -985,11 +985,33 @@ export class DuplicateDetectStage implements Stage {
    * pair from inside the slice. The window function counts the whole group, so
    * the cap means what it says regardless of how the sweep happened to page.
    *
-   * The self-join is bounded on both sides by `owner_user_id`, `kind` and
-   * `value_normalized` — the leading columns of `identifier_claims_lookup_idx`,
-   * the index the migration created for precisely this query — and the outer
-   * side by the slice's ids, so the plan is an index lookup per claim rather
-   * than a corpus cross-product.
+   * ── Why it is SET-BASED, not a correlated subquery ─────────────────────
+   *
+   * An earlier revision computed `group_size` and the other side's E.164 form
+   * as correlated subqueries — `(SELECT count(DISTINCT o.entity_id) …)` per
+   * row — on the theory that each would ride `identifier_claims_lookup_idx`.
+   * Measured against a real corpus (1.57M claims, 183-id slice, 2026-09-15)
+   * that revision did not finish in SIX HOURS, and three retries of the same
+   * slice ran concurrently on eight backends. Two things went wrong at once:
+   *
+   *  1. TimescaleDB's skip-scan planner (`enable_skipscan_for_distinct_aggregates`,
+   *     on by default since 2.20) rewrote the `count(DISTINCT entity_id)`
+   *     subquery as a skip scan over `identifier_claims_entity_idx` — the index
+   *     ordered by the DISTINCT column — with `kind` and `value_normalized`
+   *     demoted to a heap FILTER. One evaluation therefore walked most of the
+   *     table; the subquery alone timed out at 60 s for 364 rows.
+   *  2. Because the subqueries appeared in the `SELECT DISTINCT` list, the
+   *     planner evaluated them once per JOINED row (142k for that slice —
+   *     one shared name held 4,468 claims), not once per `mine` row.
+   *
+   * So the query now materialises the small sets and joins them. `mine` is the
+   * slice's identifiers; `holders` is every entity holding one of those
+   * identifiers, grouped to one row per (entity, kind, value) with its E.164
+   * form aggregated in the same pass; `sized` counts holders per value with a
+   * window function. The final join is then one row per (subject, other) pair
+   * with no correlated work and no DISTINCT. `MATERIALIZED` is deliberate:
+   * without it Postgres inlines the CTEs and is free to plan its way back into
+   * the correlated shape. Same slice, same rows, 0.4 s.
    *
    * ── Why the E.164 form is AGGREGATED, not selected ────────────────────────
    *
@@ -1007,12 +1029,9 @@ export class DuplicateDetectStage implements Stage {
    * not have a settled international form", which {@link claimScore} reads as
    * exactly that rather than picking a winner.
    *
-   * The other side is a correlated aggregate rather than a fourth CTE for the
-   * reason `group_size` is: it rides `identifier_claims_lookup_idx` per row
-   * instead of materialising the corpus. It is gated on `s.kind = 'phone'`
-   * because no other kind ever sets the column, and the majority of any real
-   * corpus's claims are emails — paying an index lookup each to learn NULL is
-   * the whole cost of the widening and it is avoidable.
+   * The other side's form comes from the same `holders` aggregate, so it costs
+   * nothing extra; `CASE WHEN s.kind = 'phone'` keeps the column NULL for every
+   * other kind, as the previous per-row lookup did.
    *
    * ── Why the block check probes ONE order, not two ─────────────────────────
    *
@@ -1030,7 +1049,7 @@ export class DuplicateDetectStage implements Stage {
    */
   private loadEvidence(userId: string, ids: string[]): Promise<SharedClaim[]> {
     return this.dataSource.query<SharedClaim[]>(
-      `WITH mine AS (
+      `WITH mine AS MATERIALIZED (
          SELECT c.entity_id AS subject_id,
                 c.kind,
                 c.value_normalized,
@@ -1042,45 +1061,41 @@ export class DuplicateDetectStage implements Stage {
             AND c.disposition IS DISTINCT FROM 'rejected'
           GROUP BY c.entity_id, c.kind, c.value_normalized
        ),
-       sized AS (
-         SELECT m.subject_id,
-                m.kind,
-                m.value_normalized,
-                m.subject_e164,
-                (SELECT count(DISTINCT o.entity_id)
-                   FROM ci.identifier_claims o
-                  WHERE o.owner_user_id = $2::uuid
-                    AND o.entity_id IS NOT NULL
-                    AND o.disposition IS DISTINCT FROM 'rejected'
-                    AND o.kind = m.kind
-                    AND o.value_normalized = m.value_normalized) AS group_size
-           FROM mine m
+       holders AS MATERIALIZED (
+         SELECT o.entity_id,
+                o.kind,
+                o.value_normalized,
+                CASE WHEN count(DISTINCT o.value_e164) = 1
+                     THEN min(o.value_e164) END AS e164
+           FROM (SELECT kind, value_normalized FROM mine GROUP BY kind, value_normalized) v
+           JOIN ci.identifier_claims o
+             ON o.owner_user_id = $2::uuid
+            AND o.kind = v.kind
+            AND o.value_normalized = v.value_normalized
+          WHERE o.entity_id IS NOT NULL
+            AND o.disposition IS DISTINCT FROM 'rejected'
+          GROUP BY o.entity_id, o.kind, o.value_normalized
+       ),
+       sized AS MATERIALIZED (
+         SELECT h.entity_id,
+                h.kind,
+                h.value_normalized,
+                h.e164,
+                count(*) OVER (PARTITION BY h.kind, h.value_normalized) AS group_size
+           FROM holders h
        )
-       SELECT DISTINCT
-              s.subject_id,
+       SELECT s.subject_id,
               o.entity_id AS other_id,
               s.kind,
               s.value_normalized,
               s.subject_e164,
-              CASE WHEN s.kind = 'phone' THEN
-                (SELECT CASE WHEN count(DISTINCT x.value_e164) = 1
-                             THEN min(x.value_e164) END
-                   FROM ci.identifier_claims x
-                  WHERE x.owner_user_id = $2::uuid
-                    AND x.entity_id = o.entity_id
-                    AND x.kind = s.kind
-                    AND x.value_normalized = s.value_normalized
-                    AND x.disposition IS DISTINCT FROM 'rejected')
-              END AS other_e164,
-              s.group_size::int AS group_size
-         FROM sized s
-         JOIN ci.identifier_claims o
-           ON o.owner_user_id = $2::uuid
-          AND o.kind = s.kind
+              CASE WHEN s.kind = 'phone' THEN o.e164 END AS other_e164,
+              o.group_size::int AS group_size
+         FROM mine s
+         JOIN sized o
+           ON o.kind = s.kind
           AND o.value_normalized = s.value_normalized
-          AND o.entity_id IS NOT NULL
           AND o.entity_id <> s.subject_id
-          AND o.disposition IS DISTINCT FROM 'rejected'
          JOIN ci.entities e
            ON e.entity_id = o.entity_id
           AND e.owner_user_id = $2::uuid

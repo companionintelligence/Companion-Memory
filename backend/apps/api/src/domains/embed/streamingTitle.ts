@@ -8,6 +8,11 @@
  *            "Patriot Act with Hasan Minhaj: Volume 5: … (Episode 7)" → tv "Patriot Act with Hasan Minhaj"
  *            "The Keepers: Limited Series: The Murder (Episode 1)" → tv    "The Keepers"
  *            "The Ballad of Buster Scruggs"                        → movie "The Ballad of Buster Scruggs"
+ *   Hulu     "Bob's Burgers: Season 16: The Keyboard Kid"           → tv    "Bob's Burgers"
+ *            "The Raid: Redemption"                                → movie "The Raid: Redemption"
+ *   Disney+  "Andor: Season 2: Welcome to the Rebellion"           → tv    "Andor"
+ *            "Star Wars Rebels: Relics of the Old Republic"        → movie "Star Wars Rebels: Relics of the Old Republic"
+ *            "Tron: Ares"                                          → movie "Tron: Ares"
  *   Prime    "The Flame of Tar Valon-The Wheel of Time - Season 1" → tv    "The Wheel of Time"
  *            "Ready, Aim, Marry Me!-Arrested Development Season 2" → tv    "Arrested Development"
  *            "Sam Smith: Dreams Come True"                         → movie "Sam Smith: Dreams Come True"
@@ -115,6 +120,15 @@ export function parsePrimeVideoTitle(raw: string): StreamingWork | null {
 export function parseStreamingTitle(sourceSystem: string, raw: string): StreamingWork | null {
   switch (sourceSystem) {
     case 'netflix':
+      return parseNetflixTitle(raw);
+    // The Hulu and Disney+ importers compose their titles in Netflix's shape
+    // on purpose (datasources/hulu.ts composeWatchTitle), minus the
+    // "(Episode N)" suffix neither report carries. A Disney+ series printed
+    // with no season ("Star Wars Rebels: Relics of the Old Republic") has no
+    // season word for the tv tell and reads as a film of that whole name;
+    // the film-first lookup then falls back to a television article.
+    case 'hulu':
+    case 'disney_plus':
       return parseNetflixTitle(raw);
     case 'prime_video':
       return parsePrimeVideoTitle(raw);

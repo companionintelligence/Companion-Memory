@@ -52,7 +52,9 @@ export class ImportRetentionCron {
    * other way round puts the raw error text in `msg` and buries the sentence in
    * `data.message`, so this cron's failures would not grep with any other's.
    */
-  @Cron(IMPORT_RETENTION_CRON, { name: 'ImportRetentionCron.runOnSchedule', role: 'worker' })
+  // `exclusive`: the sweep has no guard of its own, and a second one deleting
+  // the same expired rows buys nothing.
+  @Cron(IMPORT_RETENTION_CRON, { name: 'ImportRetentionCron.runOnSchedule', role: 'worker', exclusive: true })
   async runOnSchedule(): Promise<void> {
     try {
       await this.sweepOnce();

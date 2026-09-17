@@ -13,9 +13,11 @@ export const DELETE_TASK = gql(`
 `);
 
 /**
- * Deletes plan tasks and evicts them from the cached list. There is no
- * confirm step — the trash control (or the selection-bar Delete) is the
- * decision. Failures toast instead of opening a dialog.
+ * Deletes plan tasks and evicts them from the cached list. The hook itself
+ * never confirms: the per-row trash control is deliberately the decision (one
+ * task, one deliberate click), while PlanPage's selection-bar bulk delete
+ * confirms in an AlertDialog first, because that path can take out an entire
+ * multi-row selection at once. Failures toast instead of opening a dialog.
  */
 export function useDeleteTasks() {
   const { toast } = useToast();

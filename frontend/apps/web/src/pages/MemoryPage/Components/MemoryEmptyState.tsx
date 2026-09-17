@@ -1,6 +1,8 @@
 import { Button } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
+import { useOptionalFeatures } from '@/common/feature';
+
 import { Empty } from './Empty';
 
 interface MemoryEmptyStateProps {
@@ -51,6 +53,15 @@ export function whenFilterNudge(types: readonly string[]): string {
 }
 
 export function MemoryEmptyState({ filtered, whenDroppedTypes = [] }: MemoryEmptyStateProps) {
+  // Optional on purpose: the "no results" branches below never read a flag,
+  // and this component is rendered bare by its own tests. Outside a
+  // FeaturesProvider the gated button simply stays hidden.
+  const features = useOptionalFeatures();
+  // Same flag /sources/import is gated behind. With it off SourcesPage
+  // normalises that half away to /sources/connect, so the button would just be
+  // a second, differently-worded "Connect a source" — drop it instead.
+  const importEnabled = features?.isFeatureEnabled('import.page') ?? false;
+
   if (whenDroppedTypes.length > 0) {
     return <Empty title="No results" description={whenFilterNudge(whenDroppedTypes)} icon="🔍" />;
   }
@@ -76,9 +87,11 @@ export function MemoryEmptyState({ filtered, whenDroppedTypes = [] }: MemoryEmpt
         <Button asChild>
           <Link to="/sources/connect">Connect a source</Link>
         </Button>
-        <Button variant="outline" asChild>
-          <Link to="/settings/data">Import data</Link>
-        </Button>
+        {importEnabled && (
+          <Button variant="outline" asChild>
+            <Link to="/sources/import">Import data</Link>
+          </Button>
+        )}
       </div>
     </div>
   );

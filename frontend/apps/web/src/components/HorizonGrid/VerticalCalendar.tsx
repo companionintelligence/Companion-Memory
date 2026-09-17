@@ -9,10 +9,11 @@ import {
   useState,
 } from 'react';
 
-import { Button, Input, cn } from '@ci/shadcn';
+import { Button, Input, Tooltip, cn } from '@ci/shadcn';
 
+import type { ForecastBucket } from '@/api/useForecastService';
 import type { RhythmDay, ScheduleEvent } from '@/api/useScheduleService';
-import { combineDateAndClock } from '@/components/EventForm';
+import { SlotTooltip } from '@/components/ForecastStrip';
 import {
   type ColorMode,
   CLASS_LABEL,
@@ -25,6 +26,7 @@ import {
   sourceOf,
 } from '@/lib/activityPalette';
 import { EVENT_DRAG_TYPE, parseEventDrag } from '@/lib/scheduleDrag';
+import { detectBrowserTimeZone } from '@/lib/timezone';
 
 import { EventPeek } from './EventPeek';
 import { addDays, formatClock, sameLocalDay, startOfLocalDay } from './nowNext';
@@ -37,6 +39,8 @@ import {
   dropInstant,
   eventUrl,
   movedStart,
+  occupancyClaims,
+  occupancyLabel,
   rhythmClaims,
   rhythmLabel,
   rhythmWaitingLabel,
@@ -44,15 +48,20 @@ import {
   topClusters,
   utcDateKey,
 } from './scheduleGeometry';
+import {
+  instantAtDayMinutes,
+  zonedDayKey,
+  zonedDayOfMonth,
+  zonedMinutesOfDay,
+  zonedParts,
+  zonedWallTimeToInstant,
+} from './zonedClock';
 
 const MINUTES_PER_DAY = 24 * 60;
 const HOURS_PER_DAY = 24;
 const HOUR_HEIGHT_PX = 52;
 const GRID_HEIGHT_PX = HOUR_HEIGHT_PX * HOURS_PER_DAY;
 const AXIS_HOURS = Array.from({ length: HOURS_PER_DAY }, (_, hour) => hour);
-
-/** Gap between 15-minute rhythm cells, in px — enough to read texture, not so much the strip is mostly gap. */
-const RHYTHM_CELL_GAP_PX = 1;
 
 function formatHour(hour: number): string {
   return new Date(2000, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric' });
@@ -62,21 +71,12 @@ function isExternallyOwned(event: ScheduleEvent): boolean {
   return Boolean(event.sourceSystem);
 }
 
-/** Wall-clock instant `minutes` into `dayStart` — same reading HorizonGrid uses for grabs. */
-function atLocalMinutes(dayStart: Date, minutes: number): Date {
-  const whole = Math.floor(minutes);
-  const at = new Date(dayStart);
-  at.setHours(Math.floor(whole / 60), whole % 60, 0, 0);
-
-  return new Date(at.getTime() + Math.round((minutes - whole) * 60_000));
-}
-
-function blockLabel(event: ScheduleEvent, colorMode: ColorMode): string {
+function blockLabel(event: ScheduleEvent, colorMode: ColorMode, zone: string): string {
   const start = new Date(event.startTime);
   const end = event.endTime ? new Date(event.endTime) : null;
   const parts = [
     event.title,
-    event.isAllDay ? 'all day' : `${formatClock(start)}${end ? ` to ${formatClock(end)}` : ''}`,
+    event.isAllDay ? 'all day' : `${formatClock(start, zone)}${end ? ` to ${formatClock(end, zone)}` : ''}`,
     colorMode === 'source' ? sourceOf(event) : CLASS_LABEL[classifyEvent(event)],
   ];
 
@@ -102,8 +102,8 @@ function isScheduleChip(target: EventTarget | null): boolean {
   return Boolean((target as HTMLElement | null)?.closest?.('[data-schedule-chip]'));
 }
 
-function slotPct(instant: Date): number {
-  return ((instant.getHours() * 60 + instant.getMinutes()) / MINUTES_PER_DAY) * 100;
+function slotPct(instant: Date, zone: string): number {
+  return (zonedMinutesOfDay(instant, zone) / MINUTES_PER_DAY) * 100;
 }
 
 interface EventTooltipProps {
@@ -111,9 +111,10 @@ interface EventTooltipProps {
   color: string;
   colorMode: ColorMode;
   movable: boolean;
+  zone: string;
 }
 
-function EventTooltipBody({ event, color, colorMode, movable }: EventTooltipProps) {
+function EventTooltipBody({ event, color, colorMode, movable, zone }: EventTooltipProps) {
   const url = eventUrl(event);
 
   return (
@@ -134,8 +135,8 @@ function EventTooltipBody({ event, color, colorMode, movable }: EventTooltipProp
       <p className="text-[10px] opacity-75">
         {event.isAllDay
           ? 'All day'
-          : `${formatClock(new Date(event.startTime))}${
-              event.endTime ? ` – ${formatClock(new Date(event.endTime))}` : ''
+          : `${formatClock(new Date(event.startTime), zone)}${
+              event.endTime ? ` – ${formatClock(new Date(event.endTime), zone)}` : ''
             }`}
       </p>
       {describes(event) && <p className="text-[11px] leading-snug opacity-90">{event.description}</p>}
@@ -162,12 +163,14 @@ function ClusterBlock({
   lane,
   laneCount,
   colorMode,
+  zone,
   onMoveEvent,
 }: {
   item: Extract<PackedItem, { kind: 'cluster' }>;
   lane: number;
   laneCount: number;
   colorMode: ColorMode;
+  zone: string;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
 }) {
   const lead = item.spans[0]?.event;
@@ -187,7 +190,7 @@ function ClusterBlock({
               <li key={event.id} className="text-[11px] leading-snug">
                 <span className="font-medium">{event.title}</span>
                 <span className="ml-1.5 text-[10px] opacity-75 tabular-nums">
-                  {formatClock(new Date(event.startTime))}
+                  {formatClock(new Date(event.startTime), zone)}
                 </span>
               </li>
             ))}
@@ -206,6 +209,7 @@ function ClusterBlock({
                     key={event.id}
                     event={event}
                     name={event.title}
+                    zone={zone}
                     onMoveEvent={onMoveEvent}
                     onDone={close}
                   />
@@ -245,16 +249,52 @@ function ClusterBlock({
   );
 }
 
-/** Local-time `yyyy-mm-dd` for a Date — `toISOString` shifts the day west of Greenwich. */
-function dateInputValue(date: Date): string {
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-
-  return `${date.getFullYear()}-${month}-${String(date.getDate()).padStart(2, '0')}`;
+/** `yyyy-mm-dd` for a Date in the drawn zone — `toISOString` would say UTC's day. */
+function dateInputValue(date: Date, zone: string): string {
+  return zonedDayKey(date, zone);
 }
 
-/** Local-time `HH:mm` for a Date. */
-function clockInputValue(date: Date): string {
-  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+/** `HH:mm` for a Date in the drawn zone. */
+function clockInputValue(date: Date, zone: string): string {
+  const { hour, minute } = zonedParts(date, zone);
+
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+/**
+ * The instant a `yyyy-mm-dd` + `HH:mm` pair names in the drawn zone.
+ *
+ * Not `EventForm`'s `combineDateAndClock`, which builds the instant with the
+ * browser's `new Date(y, m, d, hh, mm)`: the form's own fields were filled from
+ * the PROFILE zone above, so reading them back in the browser's zone would move
+ * every typed move by the offset between the two.
+ */
+function instantFromInputs(date: string, clock: string, allDay: boolean, zone: string): Date | null {
+  if (date.trim() === '') {
+    return null;
+  }
+
+  const [year, month, day] = date.split('-').map(Number);
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+
+  let hours = 0;
+  let minutes = 0;
+
+  if (!allDay && clock.trim() !== '') {
+    const [rawHours, rawMinutes] = clock.split(':').map(Number);
+
+    if (Number.isFinite(rawHours) && Number.isFinite(rawMinutes)) {
+      hours = rawHours;
+      minutes = rawMinutes;
+    }
+  }
+
+  const combined = zonedWallTimeToInstant(year, month, day, hours, minutes, 0, zone);
+
+  return Number.isNaN(combined.getTime()) ? null : combined;
 }
 
 /**
@@ -273,17 +313,19 @@ function clockInputValue(date: Date): string {
 function MoveEventForm({
   event,
   name,
+  zone,
   onMoveEvent,
   onDone,
 }: {
   event: ScheduleEvent;
   name?: string;
+  zone: string;
   onMoveEvent: (eventId: string, startTime: Date) => void;
   onDone: () => void;
 }) {
   const start = new Date(event.startTime);
-  const [date, setDate] = useState(() => dateInputValue(start));
-  const [clock, setClock] = useState(() => clockInputValue(start));
+  const [date, setDate] = useState(() => dateInputValue(start, zone));
+  const [clock, setClock] = useState(() => clockInputValue(start, zone));
   const allDay = Boolean(event.isAllDay);
   const suffix = name ? ` ${name}` : '';
 
@@ -292,7 +334,7 @@ function MoveEventForm({
 
     // An all-day event has no clock to move, so it lands on midnight local —
     // the same instant the all-day row hands `onSelectSlot`.
-    const at = combineDateAndClock(date, clock, allDay);
+    const at = instantFromInputs(date, clock, allDay, zone);
 
     if (!at) {
       return;
@@ -334,6 +376,7 @@ function TimedBlock({
   laneCount,
   dayStart,
   colorMode,
+  zone,
   onMoveEvent,
 }: {
   item: Extract<PackedItem, { kind: 'single' }>;
@@ -341,23 +384,28 @@ function TimedBlock({
   laneCount: number;
   dayStart: Date;
   colorMode: ColorMode;
+  zone: string;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
 }) {
   const { event, leftPct, widthPct, continuesFrom, continuesTo } = item.span;
   const color = eventColor(event, colorMode);
   const url = eventUrl(event);
-  const movable = Boolean(onMoveEvent);
+  // An expanded recurring occurrence backs no row, so there is nothing to
+  // reschedule: offering the drag would only ever end in a snap-back.
+  const movable = Boolean(onMoveEvent) && !event.seriesMasterId;
   const short = widthPct < (45 / MINUTES_PER_DAY) * 100;
-  const label = blockLabel(event, colorMode);
+  const label = blockLabel(event, colorMode, zone);
 
   return (
     <EventPeek
       label={label}
       side="right"
-      content={<EventTooltipBody event={event} color={color} colorMode={colorMode} movable={movable} />}
+      content={
+        <EventTooltipBody event={event} color={color} colorMode={colorMode} movable={movable} zone={zone} />
+      }
       actions={
-        onMoveEvent
-          ? (close) => <MoveEventForm event={event} onMoveEvent={onMoveEvent} onDone={close} />
+        movable && onMoveEvent
+          ? (close) => <MoveEventForm event={event} zone={zone} onMoveEvent={onMoveEvent} onDone={close} />
           : undefined
       }
     >
@@ -379,7 +427,7 @@ function TimedBlock({
                 const box = e.currentTarget.getBoundingClientRect();
                 const withinChip = box.height > 0 ? (e.clientY - box.top) / box.height : 0;
                 const grabDayRatio = (leftPct + Math.max(0, Math.min(1, withinChip)) * widthPct) / 100;
-                const grabbedAt = atLocalMinutes(dayStart, grabDayRatio * MINUTES_PER_DAY);
+                const grabbedAt = instantAtDayMinutes(dayStart, grabDayRatio * MINUTES_PER_DAY, zone);
                 const grabOffsetMs = event.isAllDay
                   ? 0
                   : grabbedAt.getTime() - new Date(event.startTime).getTime();
@@ -427,8 +475,8 @@ function TimedBlock({
         )}
         {!short && (
           <span className="block truncate text-[10px] tabular-nums text-muted-foreground">
-            {formatClock(new Date(event.startTime))}
-            {event.endTime ? ` – ${formatClock(new Date(event.endTime))}` : ''}
+            {formatClock(new Date(event.startTime), zone)}
+            {event.endTime ? ` – ${formatClock(new Date(event.endTime), zone)}` : ''}
           </span>
         )}
       </div>
@@ -439,27 +487,32 @@ function TimedBlock({
 function AllDayChip({
   event,
   colorMode,
+  zone,
   onMoveEvent,
 }: {
   event: ScheduleEvent;
   colorMode: ColorMode;
+  zone: string;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
 }) {
   const color = eventColor(event, colorMode);
   const url = eventUrl(event);
-  const label = blockLabel(event, colorMode);
-  const movable = Boolean(onMoveEvent);
+  const label = blockLabel(event, colorMode, zone);
+  // See TimedBlock: an expanded occurrence has no row to move.
+  const movable = Boolean(onMoveEvent) && !event.seriesMasterId;
 
   return (
     <EventPeek
       label={label}
       side="bottom"
-      content={<EventTooltipBody event={event} color={color} colorMode={colorMode} movable={movable} />}
+      content={
+        <EventTooltipBody event={event} color={color} colorMode={colorMode} movable={movable} zone={zone} />
+      }
       // The all-day row sits outside the hour grid, so nothing drops onto it and
       // an all-day event had no move path on ANY pointer — this is the only one.
       actions={
-        onMoveEvent
-          ? (close) => <MoveEventForm event={event} onMoveEvent={onMoveEvent} onDone={close} />
+        movable && onMoveEvent
+          ? (close) => <MoveEventForm event={event} zone={zone} onMoveEvent={onMoveEvent} onDone={close} />
           : undefined
       }
     >
@@ -498,84 +551,106 @@ function AllDayChip({
   );
 }
 
-interface RhythmStripProps {
+interface RhythmWashProps {
   dayStart: Date;
   lookup: (utcDate: string) => RhythmDay | undefined;
   colorMode: ColorMode;
+  zone: string;
+  /** Day-ahead 96-bin histogram. Bins whose startTime falls on this day replace climate. */
+  occupancy?: ForecastBucket[] | null;
   /** True while nightly/Predict is in a named step and this day has no ink yet. */
   waiting?: boolean;
 }
 
 /**
- * Pattern rhythm (HBPE) for one day, stood on end beside the hours.
+ * Pattern rhythm (HBPE) for one day, painted behind the hours.
  *
- * The same reading the horizon draws as a lane, rotated to match this geometry:
- * one cell per 15-minute slot, the colour of the behaviour that claims it, the
- * weight in the ink. It sits immediately LEFT of the time labels rather than
- * behind the day column for two reasons — a wash under committed time is read
- * as a highlight on the chips sitting over it, and a rhythm cell only says
- * something once you can see which o'clock it belongs to.
- *
- * Cells are positioned rather than flexed so every one lands exactly on the
- * 15-minute slot it describes; a gapped flex column drifts by a cell over 96 slots.
+ * One cell per 15-minute slot, the colour of the behaviour that claims it,
+ * the weight in the ink. It sits under committed chips so the day itself
+ * reads as color-coded time rather than as a second gutter of boxes.
+ * Cells are positioned rather than flexed so every one lands on the slot
+ * it describes.
  */
-function RhythmStrip({ dayStart, lookup, colorMode, waiting = false }: RhythmStripProps) {
-  const claims = useMemo(() => rhythmClaims(dayStart, lookup), [dayStart, lookup]);
+function RhythmWash({
+  dayStart,
+  lookup,
+  colorMode,
+  zone,
+  occupancy = null,
+  waiting = false,
+}: RhythmWashProps) {
+  const occupancyCells = useMemo(
+    () => (occupancy?.length ? occupancyClaims(dayStart, occupancy, zone) : null),
+    [dayStart, occupancy, zone],
+  );
+  const climateClaims = useMemo(() => rhythmClaims(dayStart, lookup, zone), [dayStart, lookup, zone]);
+  const claims = occupancyCells ?? climateClaims;
   const slotCount = claims.length || 1;
   const clusters = useMemo(() => topClusters(lookup(utcDateKey(dayStart))), [dayStart, lookup]);
   const hasRhythm = claims.some((claim) => claim.weight >= RHYTHM_NOISE_FLOOR);
   const waitingForRhythm = waiting && !hasRhythm;
-  // Both names are day-scoped: the week draws one strip per day and they can
-  // all be waiting at once, so a constant waiting name would give a screen
-  // reader seven focusable images sharing a single name.
-  const label = waitingForRhythm ? rhythmWaitingLabel(dayStart) : rhythmLabel(dayStart, clusters);
+  const usingOccupancy = occupancyCells !== null;
+  const label = waitingForRhythm
+    ? rhythmWaitingLabel(dayStart, zone)
+    : usingOccupancy
+      ? occupancyLabel(dayStart, zone)
+      : rhythmLabel(dayStart, clusters, zone);
 
-  const strip = (
+  const wash = (
     <div
-      data-testid="vertical-rhythm-strip"
-      className="relative w-2 shrink-0 rounded-[3px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      style={{ height: GRID_HEIGHT_PX }}
-      // The cells carry no text, so collapsing them to one named image loses
-      // nothing and gains a name. A strip with no signal is decoration unless
-      // Predict is still running — then the shimmer is the only status.
-      {...(hasRhythm || waitingForRhythm
-        ? { role: 'img', 'aria-label': label, tabIndex: 0 }
-        : { 'aria-hidden': true })}
+      data-testid="vertical-rhythm-wash"
+      className={cn(
+        'absolute inset-0 z-0',
+        hasRhythm && !usingOccupancy && !waitingForRhythm ? 'pointer-events-auto' : 'pointer-events-none',
+      )}
+      {...(hasRhythm || waitingForRhythm ? { role: 'img', 'aria-label': label } : { 'aria-hidden': true })}
     >
       {claims.map((claim, slot) => {
         const lit = claim.weight >= RHYTHM_NOISE_FLOOR;
+        const inspect = occupancyCells?.[slot];
+        const show = lit || waitingForRhythm;
 
-        return (
-          <div
-            key={slot}
-            className={cn(
-              'absolute inset-x-0 rounded-[1px]',
-              !lit && !waitingForRhythm && 'bg-foreground/[0.06]',
-              !lit && waitingForRhythm && 'rhythm-cell-waiting',
-            )}
-            style={{
-              top: `${(slot / slotCount) * 100}%`,
-              height: `calc(${100 / slotCount}% - ${RHYTHM_CELL_GAP_PX}px)`,
-              animationDelay: waitingForRhythm ? `${slot * 12}ms` : undefined,
-              ...(lit
-                ? {
-                    // Type mode lets the cell wear the class of the behaviour
-                    // that claims it. Source mode has nothing to say about a
-                    // prediction — it came from no calendar — so it stays on
-                    // the theme colour rather than inventing an answer.
-                    backgroundColor: colorMode === 'type' ? classColor(claim.l0Class) : 'var(--primary)',
-                    opacity: cellOpacity(claim.weight),
-                  }
-                : {}),
-            }}
-          />
+        if (!show) {
+          return null;
+        }
+
+        const cellClass = cn(
+          'absolute inset-x-0',
+          !lit && waitingForRhythm && 'rhythm-cell-waiting',
+          inspect?.bucket && inspect.bucket.l0Probs.length > 0 && 'pointer-events-auto',
         );
+        const cellStyle = {
+          top: `${(slot / slotCount) * 100}%`,
+          height: `${100 / slotCount}%`,
+          animationDelay: waitingForRhythm ? `${slot * 12}ms` : undefined,
+          ...(lit
+            ? {
+                backgroundColor: colorMode === 'type' ? classColor(claim.l0Class) : 'var(--primary)',
+                opacity: cellOpacity(claim.weight),
+              }
+            : {}),
+        };
+
+        if (inspect?.bucket && inspect.bucket.l0Probs.length > 0) {
+          return (
+            <Tooltip key={slot}>
+              <Tooltip.Trigger asChild>
+                <div data-testid="occupancy-bin" tabIndex={-1} className={cellClass} style={cellStyle} />
+              </Tooltip.Trigger>
+              <Tooltip.Content side="right" sideOffset={6} className="max-w-none p-3">
+                <SlotTooltip bucket={inspect.bucket} localMin={inspect.localMin} minutes={inspect.minutes} />
+              </Tooltip.Content>
+            </Tooltip>
+          );
+        }
+
+        return <div key={slot} className={cellClass} style={cellStyle} />;
       })}
     </div>
   );
 
-  if (!hasRhythm) {
-    return strip;
+  if (!hasRhythm || usingOccupancy || waitingForRhythm) {
+    return wash;
   }
 
   return (
@@ -585,7 +660,7 @@ function RhythmStrip({ dayStart, lookup, colorMode, waiting = false }: RhythmStr
       content={
         <div className="w-52 space-y-1 text-left">
           <p className="text-xs font-medium">
-            {dayStart.toLocaleDateString([], { weekday: 'long' })} — usually
+            {dayStart.toLocaleDateString([], { weekday: 'long', timeZone: zone })} — usually
           </p>
           {clusters.map((cluster) => (
             <div key={cluster.clusterId} className="flex items-center justify-between gap-2">
@@ -607,7 +682,7 @@ function RhythmStrip({ dayStart, lookup, colorMode, waiting = false }: RhythmStr
         </div>
       }
     >
-      {strip}
+      {wash}
     </EventPeek>
   );
 }
@@ -618,6 +693,10 @@ interface DayLaneProps {
   isToday: boolean;
   nowPct: number | null;
   colorMode: ColorMode;
+  zone: string;
+  lookup: (utcDate: string) => RhythmDay | undefined;
+  occupancy?: ForecastBucket[] | null;
+  waiting?: boolean;
   onMoveEvent?: (eventId: string, startTime: Date) => void;
   selectedSlot?: CalendarSlot | null;
   onSelectSlot?: (slot: CalendarSlot) => void;
@@ -629,6 +708,10 @@ const DayLane = memo(function DayLane({
   isToday,
   nowPct,
   colorMode,
+  zone,
+  lookup,
+  occupancy = null,
+  waiting = false,
   onMoveEvent,
   selectedSlot,
   onSelectSlot,
@@ -638,27 +721,32 @@ const DayLane = memo(function DayLane({
     () =>
       dayEvents
         .filter((event) => !event.isAllDay)
-        .map((event) => spanForDay(event, dayStart))
+        .map((event) => spanForDay(event, dayStart, zone))
         .filter((span): span is NonNullable<typeof span> => span !== null)
         .sort((a, b) => a.leftPct - b.leftPct),
-    [dayEvents, dayStart],
+    [dayEvents, dayStart, zone],
   );
   const packed = useMemo(() => foldMicroClusters(timedSpans), [timedSpans]);
   const lanes = useMemo(() => packItemLanes(packed), [packed]);
   const laneCount = Math.max(1, ...lanes.map((lane) => lane + 1));
-  const dayLabel = dayStart.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+  const dayLabel = dayStart.toLocaleDateString([], {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    timeZone: zone,
+  });
   const acceptsDrops = Boolean(onMoveEvent);
 
   const carriesEvent = (types: readonly string[]) => acceptsDrops && types.includes(EVENT_DRAG_TYPE);
 
   const selectedPct =
-    selectedSlot && !selectedSlot.allDay && sameLocalDay(selectedSlot.instant, dayStart)
-      ? slotPct(selectedSlot.instant)
+    selectedSlot && !selectedSlot.allDay && sameLocalDay(selectedSlot.instant, dayStart, zone)
+      ? slotPct(selectedSlot.instant, zone)
       : null;
   const markerPct = dropPct ?? selectedPct;
   const markerAt =
     dropPct !== null
-      ? dropInstant(dayStart, dropPct / 100)
+      ? dropInstant(dayStart, dropPct / 100, zone)
       : selectedSlot && !selectedSlot.allDay
         ? selectedSlot.instant
         : null;
@@ -677,7 +765,7 @@ const DayLane = memo(function DayLane({
                 return;
               }
 
-              onSelectSlot({ instant: dropInstant(dayStart, ratioFor(click)), allDay: false });
+              onSelectSlot({ instant: dropInstant(dayStart, ratioFor(click), zone), allDay: false });
             }
           : undefined
       }
@@ -719,12 +807,21 @@ const DayLane = memo(function DayLane({
               const payload = parseEventDrag(e.dataTransfer.getData(EVENT_DRAG_TYPE));
 
               if (payload) {
-                onMoveEvent?.(payload.id, movedStart(dayStart, ratioFor(e), payload.grabOffsetMs));
+                onMoveEvent?.(payload.id, movedStart(dayStart, ratioFor(e), payload.grabOffsetMs, zone));
               }
             }
           : undefined
       }
     >
+      <RhythmWash
+        dayStart={dayStart}
+        lookup={lookup}
+        colorMode={colorMode}
+        zone={zone}
+        occupancy={occupancy}
+        waiting={waiting}
+      />
+
       {AXIS_HOURS.map((hour) => (
         <div
           key={hour}
@@ -762,7 +859,7 @@ const DayLane = memo(function DayLane({
             className="pointer-events-none absolute left-1 z-20 -translate-y-1/2 rounded bg-primary px-1 py-px text-[10px] text-primary-foreground tabular-nums"
             style={{ top: `${markerPct}%` }}
           >
-            {formatClock(markerAt)}
+            {formatClock(markerAt, zone)}
           </div>
         </>
       )}
@@ -776,6 +873,7 @@ const DayLane = memo(function DayLane({
               lane={lanes[index]}
               laneCount={laneCount}
               colorMode={colorMode}
+              zone={zone}
               onMoveEvent={onMoveEvent}
             />
           ) : (
@@ -786,6 +884,7 @@ const DayLane = memo(function DayLane({
               laneCount={laneCount}
               dayStart={dayStart}
               colorMode={colorMode}
+              zone={zone}
               onMoveEvent={onMoveEvent}
             />
           ),
@@ -806,8 +905,16 @@ interface VerticalCalendarProps {
   selectedDay?: Date;
   onSelectDay?: (dayStart: Date) => void;
   colorMode?: ColorMode;
+  /** Day-ahead HBPE histogram. Bins land on the local day their startTime falls in. */
+  occupancy?: ForecastBucket[] | null;
   /** Nightly/Predict is in a named step (`NIGHTLY:label`, …). Empty cells shimmer. */
   pipelineRunning?: boolean;
+  /**
+   * IANA zone the grid draws in — the owner's profile zone, the same one the
+   * backend places planned blocks in. Defaults to the browser's so a caller
+   * with no profile to read keeps today's reading; see {@link ./zonedClock}.
+   */
+  timeZone?: string;
   footer?: ReactNode;
   className?: string;
 }
@@ -819,8 +926,8 @@ interface VerticalCalendarProps {
  * Outlook. Timed blocks sit on a 24-hour column; all-day rows sit above it,
  * outside the scroll, so a busy all-day lane cannot shove one day's hours out
  * of line. This is the one schedule surface on the page: what the day is
- * predicted to hold rides in as a {@link RhythmStrip} beside the time axis
- * rather than as a second view of the same week.
+ * predicted to hold rides in as a {@link RhythmWash} behind the hours so the
+ * column itself is the forecast, not a second gutter of boxes.
  */
 export function VerticalCalendar({
   start,
@@ -833,21 +940,24 @@ export function VerticalCalendar({
   selectedDay,
   onSelectDay,
   colorMode = 'type',
+  occupancy = null,
   pipelineRunning = false,
+  timeZone,
   footer,
   className,
 }: VerticalCalendarProps) {
+  const zone = timeZone ?? detectBrowserTimeZone();
   const now = new Date();
-  const today = startOfLocalDay(now);
-  const nowPct = ((now.getHours() * 60 + now.getMinutes()) / MINUTES_PER_DAY) * 100;
+  const today = startOfLocalDay(now, zone);
+  const nowPct = (zonedMinutesOfDay(now, zone) / MINUTES_PER_DAY) * 100;
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const rhythmByDate = useMemo(() => new Map(rhythm.map((day) => [day.date, day])), [rhythm]);
   const lookup = useCallback((utcDate: string) => rhythmByDate.get(utcDate), [rhythmByDate]);
 
   const dayStarts = useMemo(
-    () => Array.from({ length: days }, (_, index) => addDays(start, index)),
-    [start, days],
+    () => Array.from({ length: days }, (_, index) => addDays(start, index, zone)),
+    [start, days, zone],
   );
 
   const eventsByDayKey = useMemo(() => {
@@ -857,12 +967,12 @@ export function VerticalCalendar({
       const key = dayStart.toISOString();
       map.set(
         key,
-        events.filter((entry) => spanForDay(entry, dayStart) !== null),
+        events.filter((entry) => spanForDay(entry, dayStart, zone) !== null),
       );
     }
 
     return map;
-  }, [dayStarts, events]);
+  }, [dayStarts, events, zone]);
 
   const allDayByDayKey = useMemo(() => {
     const map = new Map<string, ScheduleEvent[]>();
@@ -886,11 +996,11 @@ export function VerticalCalendar({
     }
 
     const clock = new Date();
-    const lookingAtToday = dayStarts.some((day) => sameLocalDay(day, clock));
-    const minutes = lookingAtToday ? clock.getHours() * 60 + clock.getMinutes() : 7 * 60;
+    const lookingAtToday = dayStarts.some((day) => sameLocalDay(day, clock, zone));
+    const minutes = lookingAtToday ? zonedMinutesOfDay(clock, zone) : 7 * 60;
     const y = (minutes / MINUTES_PER_DAY) * GRID_HEIGHT_PX - pane.clientHeight / 3;
     pane.scrollTop = Math.max(0, y);
-  }, [dayStarts]);
+  }, [dayStarts, zone]);
 
   const handleMoveEvent = useCallback(
     (eventId: string, startTime: Date) => {
@@ -911,12 +1021,13 @@ export function VerticalCalendar({
         <div className="flex min-w-0 border-b border-border">
           <div className="w-16 shrink-0" />
           {dayStarts.map((dayStart) => {
-            const isToday = sameLocalDay(dayStart, today);
-            const isSelected = sameLocalDay(dayStart, selectedDay ?? today);
+            const isToday = sameLocalDay(dayStart, today, zone);
+            const isSelected = sameLocalDay(dayStart, selectedDay ?? today, zone);
             const dayLabel = dayStart.toLocaleDateString([], {
               weekday: 'long',
               month: 'long',
               day: 'numeric',
+              timeZone: zone,
             });
 
             return (
@@ -938,7 +1049,7 @@ export function VerticalCalendar({
                     isSelected || isToday ? 'text-foreground' : 'text-muted-foreground',
                   )}
                 >
-                  {dayStart.toLocaleDateString([], { weekday: 'short' })}
+                  {dayStart.toLocaleDateString([], { weekday: 'short', timeZone: zone })}
                 </span>
                 <span
                   className={cn(
@@ -947,7 +1058,7 @@ export function VerticalCalendar({
                     isSelected && !isToday && 'bg-accent text-accent-foreground',
                   )}
                 >
-                  {dayStart.getDate()}
+                  {zonedDayOfMonth(dayStart, zone)}
                 </span>
               </button>
             );
@@ -962,15 +1073,10 @@ export function VerticalCalendar({
         {dayStarts.map((dayStart) => {
           const key = dayStart.toISOString();
           const allDay = allDayByDayKey.get(key) ?? [];
-          const dayLabel = dayStart.toLocaleDateString([], { weekday: 'long' });
+          const dayLabel = dayStart.toLocaleDateString([], { weekday: 'long', timeZone: zone });
 
           return (
-            // Mirrors the rhythm-strip + gap leading each day lane below, with
-            // an unlabeled spacer in place of the strip, so the all-day chips
-            // and the timed grid share the same left edge instead of the
-            // all-day row drifting a rhythm-strip's width left of it.
-            <div key={key} className="flex min-w-0 flex-1 gap-1 pl-1">
-              <div aria-hidden className="w-2 shrink-0" />
+            <div key={key} className="min-w-0 flex-1">
               <div
                 role="list"
                 aria-label={`All day on ${dayLabel}`}
@@ -979,7 +1085,7 @@ export function VerticalCalendar({
                   'flex min-h-10 min-w-0 flex-1 flex-col gap-0.5 border-l border-border/60 px-1 py-1',
                   onSelectSlot && 'cursor-cell',
                   selectedSlot?.allDay &&
-                    sameLocalDay(selectedSlot.instant, dayStart) &&
+                    sameLocalDay(selectedSlot.instant, dayStart, zone) &&
                     'bg-primary/10 ring-1 ring-inset ring-primary/40',
                 )}
                 onClick={
@@ -999,6 +1105,7 @@ export function VerticalCalendar({
                     key={event.id}
                     event={event}
                     colorMode={colorMode}
+                    zone={zone}
                     onMoveEvent={onMoveEvent ? handleMoveEvent : undefined}
                   />
                 ))}
@@ -1010,10 +1117,8 @@ export function VerticalCalendar({
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" data-testid="vertical-calendar-scroll">
         <div className="flex min-w-0">
-          {/* The hours the rhythm and the days both read against. Reading
-              order per day is rhythm, then time, then what was committed —
-              see the per-day wrapper below, where each day gets its own
-              strip rather than one shared strip speaking for all of them. */}
+          {/* Hours the days read against. Predicted colour lives in each
+              column, behind committed time, so the axis stays a clock. */}
           <div className="sticky left-0 z-10 flex w-16 shrink-0 items-start justify-end bg-card pr-1.5">
             <div className="relative w-full" style={{ height: GRID_HEIGHT_PX }}>
               {AXIS_HOURS.map((hour) => (
@@ -1031,22 +1136,20 @@ export function VerticalCalendar({
           <div role="list" aria-label="Days" className="flex min-w-0 flex-1">
             {dayStarts.map((dayStart) => {
               const key = dayStart.toISOString();
-              const isToday = sameLocalDay(dayStart, today);
+              const isToday = sameLocalDay(dayStart, today, zone);
 
               return (
-                <div key={key} className="flex min-w-0 flex-1 gap-1 pl-1">
-                  <RhythmStrip
-                    dayStart={dayStart}
-                    lookup={lookup}
-                    colorMode={colorMode}
-                    waiting={pipelineRunning}
-                  />
+                <div key={key} className="min-w-0 flex-1">
                   <DayLane
                     dayStart={dayStart}
                     dayEvents={eventsByDayKey.get(key) ?? []}
                     isToday={isToday}
                     nowPct={isToday ? nowPct : null}
                     colorMode={colorMode}
+                    zone={zone}
+                    lookup={lookup}
+                    occupancy={occupancy}
+                    waiting={pipelineRunning}
                     onMoveEvent={onMoveEvent ? handleMoveEvent : undefined}
                     selectedSlot={selectedSlot}
                     onSelectSlot={onSelectSlot}

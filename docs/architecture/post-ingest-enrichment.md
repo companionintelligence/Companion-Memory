@@ -77,7 +77,7 @@ Who actually calls it:
 | Client | What it calls | When |
 |---|---|---|
 | Device / web outbox (`frontend/packages/common/src/utils/outboxFlush.ts`) | `/v1/ingest/finish` with a **kind-scoped** stage list, debounced 60s, in-memory debt | After a successful `/v1` flush |
-| `ci-import backfill` (`docs/cli/ci-import.md`) | `POST /api/maintenance/orchestrate` (NDJSON) | **Operator command**, not automatic after push |
+| `ci backfill` (`docs/cli/ci.md`) | `POST /api/maintenance/orchestrate` (NDJSON) | **Operator command**, not automatic after push |
 | GraphQL bulk importer docs | "run the enrichment chain via orchestrate" | Same: a human/step, skippable |
 | Any `/v1` poster that never finish | nothing | Rows sit unenriched forever |
 
@@ -174,7 +174,7 @@ no place.
 
 | | Maintenance orchestrator | Pipeline |
 |---|---|---|
-| Trigger | HTTP finish / orchestrate / `ci-import backfill` | `PipelineTickCron` (~5 min) inside a nightly window |
+| Trigger | HTTP finish / orchestrate / `ci backfill` | `PipelineTickCron` (~5 min) inside a nightly window |
 | "done?" | nullability on the column it writes | `ci.pipeline_state` per `(entity_type, entity_id, stage)` + version |
 | GPS reverse | no | `enrich.position_reverse` |
 | Event geocode | yes (`ci.events`) | `GeocodeStage` |
@@ -212,7 +212,7 @@ flowchart TB
     subgraph Trigger["who starts enrichment"]
         C["client finish — keep, kind-scoped"]
         S["server coalesce job — new, same owed-stages"]
-        O["ci-import backfill / orchestrate — keep as force"]
+        O["ci backfill / orchestrate — keep as force"]
     end
 
     subgraph Work["work that must actually run"]
@@ -427,7 +427,7 @@ GPS reverse sweep.
 - No new user-facing page.
 - Device outbox: change `POSITION_FINISH_STAGES` to include `reverse_position`
   (and `search_index.position` once it exists). Keep `estimate_locations`.
-- `ci-import backfill`: add the new stage names to `STAGE_HELP` so the compiler
+- `ci backfill`: add the new stage names to `STAGE_HELP` so the compiler
   lock still holds.
 - GraphQL: not required. REST status is the contract the importer already polls.
 

@@ -159,6 +159,8 @@ describe('SecondaryNavigation', () => {
 
     expect(screen.getByRole('link', { name: 'Tasks' })).toHaveAttribute('href', '/plan/tasks');
     expect(screen.getByRole('link', { name: 'Calendar' })).toHaveAttribute('href', '/plan/calendar');
+    expect(screen.queryByText('Tasks')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-slot="popover-content"]')).not.toBeInTheDocument();
     expect(container.querySelector('div.relative')).toHaveClass('w-14');
     expect(screen.getByRole('navigation')).toHaveAttribute('data-state', 'collapsed');
   });
@@ -218,21 +220,20 @@ describe('SecondaryNavigation', () => {
   });
 
   // One row that opens for theme and log out — not five flat ones sitting
-  // level with the places you actually work. Settings itself is no longer
-  // one of the things behind that chevron: it's its own bottom-anchored rail
-  // row (SettingsRailButton), reachable without opening Self at all — the
-  // whole point being it used to have no icon in the collapsed rail at all.
+  // level with the places you actually work. Settings lives in that same
+  // submenu as Profile / Stats / Reflections, not as its own rail row.
   it('keeps the account to one user tile that opens for theme and log out', () => {
     renderRail('/feed', { expanded: true });
 
     const account = screen.getByRole('link', { name: 'Test User' });
 
     expect(account).toHaveAttribute('href', '/self');
-    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings/appearance');
+    expect(screen.queryByRole('link', { name: 'Settings' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Log out' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand Self sections' }));
 
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings/appearance');
     expect(screen.getByRole('button', { name: 'Log out' })).toBeInTheDocument();
   });
 
@@ -247,8 +248,9 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('button', { name: 'Colours' })).toBeInTheDocument();
   });
 
-  // Collapsed, the account is the avatar — click still opens its sections in
-  // a flyout, same as every other group, rather than a dead end to /self only.
+  // Collapsed, the account is the avatar — click still opens its sections
+  // as icons in the rail, same as every other group, rather than a dead end
+  // to /self only.
   it('collapses the account to a single link to Self', () => {
     renderRail();
 
@@ -364,7 +366,15 @@ describe('SecondaryNavigation', () => {
     expect(screen.getByRole('link', { name: 'Profile' })).toHaveAttribute('href', '/self');
     expect(screen.getByRole('link', { name: 'Stats' })).toHaveAttribute('href', '/self/stats');
     expect(screen.getByRole('link', { name: 'Reflections' })).toHaveAttribute('href', '/self/reflections');
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings/appearance');
     expect(screen.getByRole('link', { name: 'Stats' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('keeps Self sections open on the settings overlay and marks Settings current', () => {
+    renderRail('/settings/appearance', { expanded: true });
+
+    expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Profile' })).not.toHaveAttribute('aria-current');
   });
 
   it('opens Self sections when the account tile is clicked', () => {
@@ -513,7 +523,7 @@ describe('SecondaryNavigation', () => {
     expect(screen.queryByRole('button', { name: 'Capture' })).not.toBeInTheDocument();
   });
 
-  it('lists the spine with Forecast, Self, and Settings at the foot', () => {
+  it('lists the spine with Forecast and Self at the foot', () => {
     renderRail();
 
     const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
@@ -525,8 +535,9 @@ describe('SecondaryNavigation', () => {
     // Forecast sits below Jobs, off the primary six, while its flag ships false.
     expect(hrefs.indexOf('/jobs')).toBeLessThan(hrefs.indexOf('/forecast'));
     expect(hrefs.indexOf('/forecast')).toBeLessThan(hrefs.indexOf('/self'));
-    // Settings is the last row of all — below Self, not nested inside it.
-    expect(hrefs.indexOf('/self')).toBeLessThan(hrefs.indexOf('/settings/appearance'));
+    // Settings lives inside Self, not as its own last row.
+    expect(hrefs).not.toContain('/settings/appearance');
+    expect(hrefs).not.toContain('/self/settings');
   });
 });
 
@@ -538,7 +549,7 @@ describe('PowerRailToggle', () => {
 
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).toHaveAttribute('aria-controls', 'power-rail');
-    expect(screen.queryByRole('link', { name: /Companion Intelligence/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Companion Memory/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Memory')).not.toBeInTheDocument();
 
     fireEvent.click(toggle);

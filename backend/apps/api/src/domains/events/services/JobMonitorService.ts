@@ -7,7 +7,7 @@ import { Repository } from 'typeorm';
 import { RequestContext } from '@ci/common/context';
 import { JobControlStore } from '@ci/common/job-controls';
 import { processRole, serves, type ServedRole } from '@ci/common/roles';
-import { type CronDeclaration, CronRegistry, CronRunStore } from '@ci/common/schedule';
+import { type CronDeclaration, CronRegistry, CronRunStore, cronSkipReason } from '@ci/common/schedule';
 
 import { DEAD_LETTER_QUEUE } from '../constants';
 import { PgBossArchiveEntity } from '../entities/PgBossArchiveEntity';
@@ -338,14 +338,19 @@ export class JobMonitorService {
    * processes is not possible (`fireOnTick` is a handle on a live job), so the
    * honest outcome is an error naming the process that can.
    *
-   * **A schedule the operator disabled is skipped, not fired.** `job.fireOnTick()`
-   * invokes the same `@Cron`-wrapped body the scheduler ticks, which already
-   * checks `JobControlStore` and no-ops (recording its own skip) when the cron
-   * is disabled — but that happens inside a promise this method does not await,
-   * so without a check here the name still lands in `fired` before the body
-   * gets a chance to bail. That reports success for a run that did nothing, and
-   * double-counts the manual attempt against the setting's drop tally on top of
-   * the skip the wrapper itself already records.
+   * **A schedule the wrapper would refuse is skipped, not fired.**
+   * `job.fireOnTick()` invokes the same `@Cron`-wrapped body the scheduler
+   * ticks, and that body has its own early returns — the operator's off switch,
+   * and the `exclusive` guard when the previous tick is still running — each of
+   * which no-ops and records its own skip. But they run inside a promise this
+   * method does not await, so without a check here the name lands in `fired`
+   * before the body gets a chance to bail. That reports success for a run that
+   * did nothing, and double-counts the manual attempt against the setting's drop
+   * tally on top of the skip the wrapper itself already records.
+   *
+   * Asked through {@link cronSkipReason} rather than re-checked here, so the
+   * next early return added to the wrapper is covered by construction instead of
+   * by remembering to mirror it in this loop.
    */
   fireCronJobs(names?: readonly string[]): {
     fired: string[];
@@ -390,7 +395,10 @@ export class JobMonitorService {
         continue;
       }
 
-      if (JobControlStore.cronMode(name) === 'disabled') {
+      // Keyed on the registry name, which equals the wrapper's `runName` for
+      // every schedule that declares `name:` — an unnamed one gets a uuid
+      // registry key and is already invisible to this check, as it always was.
+      if (cronSkipReason(name) !== null) {
         skipped.push(name);
         continue;
       }

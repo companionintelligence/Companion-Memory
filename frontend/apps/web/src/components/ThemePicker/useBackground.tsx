@@ -83,6 +83,12 @@ const CONWAY_GRID_SIZE = 48;
 const CONWAY_CELL_SIZE = 6;
 const CONWAY_PATTERN_PX = CONWAY_GRID_SIZE * CONWAY_CELL_SIZE;
 const CONWAY_TICK_MS = 360;
+/**
+ * Generations run before the first paint, so the grid opens as a developed
+ * pattern rather than as seed noise. Also the still frame a reduced-motion
+ * reader gets, since they never see the board evolve into one.
+ */
+const CONWAY_SETTLE_STEPS = 4;
 
 export const TEXTURE_PATTERNS: TexturePattern[] = [
   {
@@ -340,7 +346,7 @@ function generateConwayPreview(palette: TexturePalette, opacity: number) {
   const state = createConwayState();
   const buffer = createConwayState();
   seedConwayState(state);
-  for (let i = 0; i < 4; i += 1) {
+  for (let i = 0; i < CONWAY_SETTLE_STEPS; i += 1) {
     const active = stepConway(state, buffer);
     if (active === 0) {
       seedConwayState(state);
@@ -357,6 +363,17 @@ interface DynamicTextureController {
   stop: () => void;
 }
 
+/**
+ * Drives the Conway texture by re-rasterising the whole page background as a
+ * data URL every tick — the most expensive layer this app can paint. It follows
+ * the same two rules as `AnimatedBackground`, for the same reasons:
+ *
+ *  - **`prefers-reduced-motion`.** The texture is opt-in, so blanking it would
+ *    ignore the choice the user made. Instead the board is stepped to its
+ *    settled form once and left there: same visual, no animation.
+ *  - **A hidden document.** A background tab cannot show a generation, so the
+ *    interval is paused on `visibilitychange` and resumed when the tab returns.
+ */
 class ConwayLifeAnimator implements DynamicTextureController {
   private canvas: HTMLCanvasElement | null = null;
 
@@ -373,6 +390,10 @@ class ConwayLifeAnimator implements DynamicTextureController {
   private opacity = 0.35;
 
   private root: HTMLElement | null = null;
+
+  private reducedMotion: MediaQueryList | null = null;
+
+  private listening = false;
 
   constructor() {
     if (isBrowser) {
@@ -392,26 +413,89 @@ class ConwayLifeAnimator implements DynamicTextureController {
     this.root = root;
     this.palette = palette;
     this.opacity = opacity;
+    // Resolved here rather than in the constructor: the singleton is built at
+    // import time, which can be before a test harness installs matchMedia.
+    this.reducedMotion ??= window.matchMedia?.('(prefers-reduced-motion: reduce)') ?? null;
     seedConwayState(this.state);
-    this.drawAndApply();
-    this.timer = window.setInterval(() => {
-      const active = stepConway(this.state, this.buffer);
-      if (active === 0) {
-        seedConwayState(this.state);
-      }
 
-      this.drawAndApply();
-    }, CONWAY_TICK_MS);
+    if (this.reducedMotion?.matches) {
+      // No interval will ever run it forward, so hand over a board that already
+      // looks like Life rather than the raw random seed.
+      for (let i = 0; i < CONWAY_SETTLE_STEPS; i += 1) {
+        this.step();
+      }
+    }
+
+    this.drawAndApply();
+
+    if (!this.listening) {
+      this.reducedMotion?.addEventListener('change', this.onPreferenceChange);
+      document.addEventListener('visibilitychange', this.onVisibilityChange);
+      this.listening = true;
+    }
+
+    this.resume();
   }
 
   stop() {
-    if (this.timer) {
-      window.clearInterval(this.timer);
-      this.timer = null;
+    this.pause();
+
+    if (this.listening) {
+      this.reducedMotion?.removeEventListener('change', this.onPreferenceChange);
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
+      this.listening = false;
     }
 
     this.root = null;
   }
+
+  /** Runs only while the texture is selected, the tab is visible, and motion is allowed. */
+  private resume() {
+    if (this.timer !== null || !this.root || this.reducedMotion?.matches || document.hidden) {
+      return;
+    }
+
+    this.timer = window.setInterval(() => {
+      this.step();
+      this.drawAndApply();
+    }, CONWAY_TICK_MS);
+  }
+
+  private pause() {
+    if (this.timer !== null) {
+      window.clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  private step() {
+    const active = stepConway(this.state, this.buffer);
+    if (active === 0) {
+      seedConwayState(this.state);
+    }
+  }
+
+  private onVisibilityChange = () => {
+    if (document.hidden) {
+      this.pause();
+
+      return;
+    }
+
+    this.resume();
+  };
+
+  // Toggled to "reduce" mid-session: freeze on the current generation, which is
+  // already a settled-looking board, rather than restarting from a seed.
+  private onPreferenceChange = () => {
+    if (this.reducedMotion?.matches) {
+      this.pause();
+
+      return;
+    }
+
+    this.resume();
+  };
 
   private drawAndApply() {
     if (!this.canvas || !this.ctx || !this.root) {

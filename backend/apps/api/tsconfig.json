@@ -1,14 +1,35 @@
 {
-  "compilerOptions": {
-    "target": "ES2023",
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "strict": true,
+  "extends": "../../../tsconfig.node.json",
 
+  "compilerOptions": {
     "baseUrl": "./",
+
+    // Enumerated, not "@ci/*": ["./src/*"].
+    //
+    // The wildcard shadowed the ENTIRE @ci scope inside this project, so a real
+    // workspace package published as @ci/<something> could never be imported
+    // here — tsc would resolve it to a non-existent ./src/<something> and fail
+    // with a module-not-found that points at the wrong thing. That was a live
+    // problem, not a hypothetical: @ci/common is already a real package over in
+    // frontend/packages/common, and @ci/tool-core — extracted out of
+    // domains/tools into backend/packages — would have hit it immediately.
+    //
+    // Listing the five roots that actually exist costs one line each and leaves
+    // the rest of the scope free for genuine dependencies. @ci/tool-core is a
+    // genuine one: it deliberately has NO entry here and resolves through the
+    // workspace like any other dependency, via the project reference below.
+    // Keep this in sync with the moduleNameMapper in jest.config.mjs, which
+    // mirrors it.
     "paths": {
-      "@ci/*": ["./src/*"]
+      "@ci/common": ["./src/common"],
+      "@ci/common/*": ["./src/common/*"],
+      "@ci/domains": ["./src/domains"],
+      "@ci/domains/*": ["./src/domains/*"],
+      "@ci/application": ["./src/application"],
+      "@ci/configuration": ["./src/configuration"],
+      "@ci/instrument": ["./src/instrument"]
     },
+
     "incremental": true,
     "tsBuildInfoFile": "./dist/.tsbuildinfo",
     "outDir": "./dist",
@@ -16,13 +37,29 @@
     "declaration": true,
     "sourceMap": true,
     "removeComments": true,
-    "emitDecoratorMetadata": true,
-    "experimentalDecorators": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+
+    // Inherited from tsconfig.base.json but not yet satisfied by this project,
+    // which predates the shared presets. Each is a real cleanup; none of them
+    // is this refactor's job, and turning one on blind would bury the layout
+    // change under a few hundred unrelated diagnostics. Enable them one at a
+    // time, measure, fix, delete the line.
+    "isolatedModules": false,
+    "noFallthroughCasesInSwitch": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
   },
+
+  // @ci/tool-core is a composite project, so `tsc --build` builds it first and
+  // then compiles this one against its emitted `.d.ts` — which is what keeps
+  // dist/ laid out as dist/src/... (the path the Dockerfile's CMD and the
+  // `ci-import` bin entry both name) instead of the package's sources being
+  // pulled in as extra program inputs and moving the common root.
+  //
+  // The reference is also what makes `yarn typecheck` work on a clean tree: it
+  // lets tsc redirect the package's declaration paths back to its sources
+  // rather than requiring a build first.
+  "references": [{ "path": "../../packages/tool-core/tsconfig.build.json" }],
+
   "include": ["src", "scripts"],
   "exclude": ["dist", "node_modules"],
   "ts-node": {

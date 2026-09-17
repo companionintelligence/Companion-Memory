@@ -24,6 +24,14 @@ export class EntityTagEntity {
   @JoinColumn({ name: 'tag_id' })
   tag?: TagEntity;
 
+  // Per-entity dilution weight (20260916025313_planning_tag_taxonomy):
+  // 1 = primary, >1 = secondary. UNRELATED to TagEntity.kind, which is a
+  // property of the tag itself, not of one entity's application of it. Every
+  // row that predates this column defaulted to 1 (primary), so nothing that
+  // reads this table without asking about level sees any change.
+  @Column({ type: 'smallint', default: 1 })
+  level!: number;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt!: Date;
 
@@ -36,8 +44,12 @@ export class EntityTagEntity {
   }
 }
 
+// `level` is deliberately excluded here too: nothing reads it through this
+// egress type yet (see the taxonomy section of TagService for why it has no
+// setter either), and leaving it out keeps this type's shape exactly what it
+// was before the column existed.
 export type EntityTag = Readonly<
-  Omit<EntityTagEntity, 'id' | 'tagId' | 'createdAt'> & {
+  Omit<EntityTagEntity, 'id' | 'tagId' | 'createdAt' | 'level'> & {
     taggedAt: Date;
   }
 >;

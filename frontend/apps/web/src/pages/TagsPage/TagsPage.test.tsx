@@ -66,7 +66,7 @@ function renderTagsPage(mocks: MockedResponse[], route = '/tags') {
 }
 
 describe('TagsPage — search state lives in the URL', () => {
-  it('reads the filter from the header search box\'s ?search= and applies it client-side', async () => {
+  it("reads the filter from the header search box's ?search= and applies it client-side", async () => {
     renderTagsPage(
       [tagsMock([tagNode({ id: 't1', label: 'holiday' }), tagNode({ id: 't2', label: 'work' })])],
       '/tags?search=holi',

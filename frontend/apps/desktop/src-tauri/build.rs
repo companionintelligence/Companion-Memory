@@ -1,9 +1,42 @@
 use std::path::Path;
 use std::process::Command;
 
+/// Every `#[tauri::command]` this app registers, declared so Tauri generates an
+/// app ACL manifest for them.
+///
+/// Without this, `acl-manifests.json` has no `__app__` entry, `resolve_access`
+/// answers None for every app command, and the webview gate at
+/// `tauri::webview::mod.rs` rejects them for any origin it checks. That is why
+/// the remote web app's "Sign in with Companion account" did nothing: the ACL,
+/// not the opener plugin, was refusing `open_external_url_command`.
+///
+/// Declaring commands here autogenerates an `allow-<kebab-command>` /
+/// `deny-<kebab-command>` permission per entry; capabilities/*.json reference
+/// those. Adding a command to `generate_handler!` without adding it here leaves
+/// it unreachable from every webview.
+const APP_COMMANDS: &[&str] = &[
+    // Bootstrap splash (local origin, bootstrap/bootstrap.js).
+    "check_docker_available_command",
+    "check_docker_installed_command",
+    "check_stack_status_command",
+    "get_gateway_url_command",
+    "get_startup_progress_command",
+    "open_docker_downloads_command",
+    "open_logs_dir_command",
+    "start_stack_command",
+    "forget_stale_frontend_command",
+    // Remote CI-Server web app (capabilities/oidc-remote-deep-link.json).
+    "open_external_url_command",
+    "take_pending_deep_link_command",
+];
+
 fn main() {
     build_apple_bridge();
-    tauri_build::build();
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .app_manifest(tauri_build::AppManifest::new().commands(APP_COMMANDS)),
+    )
+    .expect("failed to run tauri-build");
 }
 
 /// Compiles the Apple on-device bridge (../apple-bridge, a standalone Swift

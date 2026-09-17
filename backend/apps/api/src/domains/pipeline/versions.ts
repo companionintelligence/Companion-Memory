@@ -107,12 +107,20 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * recorded `skipped: probe_failed` under the old version are re-probed, which
    * is precisely what today's `width IS NULL` predicate can never express: it
    * cannot distinguish "not probed yet" from "probed and unreadable".
+   *
+   * v2 — the probe moved from sharp's bundled libvips to the system `vips`
+   * tools (VipsService). HEIC now reads: sharp's libheif had no HEVC decoder,
+   * so every iPhone original probed as unreadable.
    */
-  [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 1,
+  [STAGE_IDS.ENRICH_MEDIA_DIMENSIONS]: 2,
 
   /**
    * v1 — first ledger-driven run of the preview generator (`FilePreviewService`,
    * the same sharp / ffmpeg path the upload listener uses).
+   *
+   * v2 — sharp replaced by the system `vips` tools (VipsService). HEIC decodes
+   * now (52 of 53 HEIC originals in the first imported library were recorded
+   * `undecodable` under v1 and are re-offered by this bump).
    *
    * Bump when the generator can decode something it previously could not, or
    * when the preview itself changes shape (size, format, frame choice for
@@ -121,7 +129,7 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * change that must re-render existing previews needs the predicate widened
    * too — see FilePreviewStage.
    */
-  [STAGE_IDS.ENRICH_FILE_PREVIEW]: 1,
+  [STAGE_IDS.ENRICH_FILE_PREVIEW]: 2,
 
   /**
    * v1 — oEmbed (YouTube/Spotify/Vimeo/SoundCloud/Dailymotion/X), Wikidata +
@@ -134,8 +142,20 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * poster copies are real objects now (v1 wrote `ci.files` rows with no bytes).
    * v1 never shipped; its rows were cleared by hand on the one dev database
    * that had them, and this bump re-offers every row so they are re-resolved.
+   *
+   * v3 — Hulu titles resolve through Wikidata like Netflix's, and the
+   * Wikidata answer now carries the providers' own pages (`watch_links`:
+   * Hulu / Netflix / Prime Video ids, see embed/watchLinks.ts) — a changed
+   * answer for every streaming key. Hulu content rows had already matched the
+   * predicate (their `hulu:title:` URI is an external_uri) and were ledgered
+   * `skipped / no_resolve_target` at v2 — terminal, so only a bump re-offers
+   * them.
+   *
+   * Disney+ (2026-09) joined at v3 without a bump: its rows are new, so
+   * nothing was ledgered terminal, and the Disney+ watch link a shared work's
+   * cached answer lacks arrives when that row's expiry refreshes it.
    */
-  [STAGE_IDS.ENRICH_UNFURL]: 2,
+  [STAGE_IDS.ENRICH_UNFURL]: 3,
 
   /**
    * DERIVED, not chosen — the one entry in this map nobody bumps by hand.
@@ -263,9 +283,14 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * shared: it re-opens every row, INCLUDING the ones already carrying a
    * partial link, so a message whose other four recipients finally have
    * contacts gets them.
+   *
+   * v2 — PERSON_PROJECTION_RULE_GENERATION 2: the plural projection merges into
+   * the column instead of replacing it (see PersonLinkStage.ts). The bump
+   * re-links every row under the merge, which also repairs the rows v1 cut
+   * down to a single recipient.
    */
-  [STAGE_IDS.ENRICH_PERSON_LINK]: 1,
-  [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: 1,
+  [STAGE_IDS.ENRICH_PERSON_LINK]: 2,
+  [STAGE_IDS.ENRICH_EVENT_PERSON_LINK]: 2,
 
   /**
    * v1 — initial self-claim producer (PERSON_SELF_CLAIM_GENERATION in
@@ -364,8 +389,12 @@ export const STAGE_VERSIONS: Record<StageId, StageVersion> = {
    * v6 = matrix generation 6: communication.has_content_attachment (Content
    * -ATTACHED_TO-> Communication), the content half of the same column.
    */
-  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 6,
-  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 6,
+  // v7 for the two person-fed legs: PERSON_LINK_VERSION moved 1 -> 2 (the
+  // plural projection merges instead of replacing), and these legs derive
+  // their version from it, so the edges are re-projected from the repaired
+  // link columns. The other legs have no person producer and stay at 6.
+  [STAGE_IDS.PROMOTE_EDGE_COMMUNICATION]: 7,
+  [STAGE_IDS.PROMOTE_EDGE_EVENT]: 7,
   [STAGE_IDS.PROMOTE_EDGE_CONTENT]: 6,
   [STAGE_IDS.PROMOTE_EDGE_OBJECT]: 6,
   [STAGE_IDS.PROMOTE_EDGE_RECEIPT]: 6,

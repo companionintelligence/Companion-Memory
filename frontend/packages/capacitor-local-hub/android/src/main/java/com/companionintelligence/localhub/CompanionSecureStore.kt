@@ -37,6 +37,23 @@ class SecureStoreDecryptionException(message: String, cause: Throwable? = null) 
     RuntimeException(message, cause)
 
 /**
+ * The three operations [OutboxDatabaseKey] needs from a secret store.
+ *
+ * Named as an interface purely so the key-lifecycle decisions in [OutboxDatabaseKey] -- which of
+ * the four "the key is gone" outcomes fires, and whether a freshly written key is read back
+ * before anything is encrypted with it -- can be exercised without an AndroidKeyStore provider.
+ * [CompanionSecureStore] is the only production implementation and its behaviour is unchanged.
+ * `contains`/`destroyKey` stay off the interface because the key provider never calls them.
+ */
+interface SecureValueStore {
+    fun get(key: String): String?
+
+    fun set(key: String, value: String)
+
+    fun remove(key: String)
+}
+
+/**
  * AndroidKeyStore-backed value store for the few secrets this app must keep on the device:
  * the long-lived appliance API key, and the raw key the SQLCipher outbox is encrypted with.
  *
@@ -95,7 +112,7 @@ class CompanionSecureStore(
     preferencesName: String,
     /** See the class docs -- deliberately false; flipping it breaks background ingest. */
     private val requireUnlockedDevice: Boolean = false,
-) {
+) : SecureValueStore {
     private val preferences: SharedPreferences =
         context.applicationContext.getSharedPreferences(preferencesName, Context.MODE_PRIVATE)
 
@@ -110,7 +127,7 @@ class CompanionSecureStore(
      * ever converted into "no value" here -- callers that want that leniency (the JS
      * `secureStorageGet`, which treats any failure as "signed out") opt into it themselves.
      */
-    fun get(key: String): String? {
+    override fun get(key: String): String? {
         // Deliberately checked before touching the keystore: a read miss must not have the
         // side effect of generating a key that nothing will ever use.
         val stored = preferences.getString(key, null) ?: return null
@@ -147,7 +164,7 @@ class CompanionSecureStore(
      * Encrypts and commits [value]. Throws [SecureStoreUnavailableException] rather than
      * storing anything the keystore did not protect.
      */
-    fun set(key: String, value: String) {
+    override fun set(key: String, value: String) {
         val secretKey = loadOrCreateKey()
 
         val encoded = try {
@@ -176,7 +193,7 @@ class CompanionSecureStore(
     }
 
     /** Removes one value. Silent no-op if it was already gone. */
-    fun remove(key: String) {
+    override fun remove(key: String) {
         preferences.edit().remove(key).commit()
     }
 

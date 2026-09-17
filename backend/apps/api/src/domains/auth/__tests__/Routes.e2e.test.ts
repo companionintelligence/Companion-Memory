@@ -13,6 +13,8 @@ import { SessionController } from '../controllers/SessionController';
 import { SignupController } from '../controllers/SignupController';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
+import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
+import { LoginThrottleService } from '../services/LoginThrottleService';
 import { SignupCodeService } from '../services/SignupCodeService';
 
 // This file previously wired BodyParserMiddleware to a throwaway
@@ -90,6 +92,15 @@ const mockLogger = {
   error: jest.fn(),
 };
 
+// SessionController.login consults the throttle before validating the password.
+// Stubbed open — this file is about body-size enforcement, not the throttle
+// (LoginThrottleService.test.ts and SessionController.loginThrottle.test.ts).
+const mockLoginThrottle = {
+  check: jest.fn().mockReturnValue({ locked: false }),
+  recordFailure: jest.fn(),
+  recordSuccess: jest.fn(),
+};
+
 @Module({
   controllers: [SessionController, SignupController],
   providers: [
@@ -101,6 +112,14 @@ const mockLogger = {
     // CsrfGuard (on login/refresh/signup) injects the logger for its
     // rejection-reason warnings.
     { provide: LoggerService, useValue: mockLogger },
+    { provide: LoginThrottleService, useValue: mockLoginThrottle },
+    {
+      provide: HubForwardAuthBridgeService,
+      useValue: {
+        verifyUsername: jest.fn().mockReturnValue(null),
+        alignSession: jest.fn().mockResolvedValue({ username: null, replaced: false }),
+      },
+    },
   ],
 })
 class TestModule implements NestModule {
@@ -154,6 +173,7 @@ describe('Auth routes body-size enforcement (real AuthModule controllers)', () =
     mockCsrfService.verifyToken.mockReturnValue(true);
     mockSignupCodeService.findOne.mockResolvedValue({ signup_code: 'valid-code', used: false });
     mockFeatureService.isFeatureEnabled.mockResolvedValue(false);
+    mockLoginThrottle.check.mockReturnValue({ locked: false });
   });
 
   describe('POST /authenticate (SessionController.login)', () => {

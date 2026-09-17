@@ -6,6 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
 import { ConceptService } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
 import { ConceptConnection } from '../types/ConceptConnection';
 import { ConceptEdge } from '../types/ConceptEdge';
@@ -74,6 +75,9 @@ export class ConceptResolver {
   }
 
   @Mutation(() => CreateConceptPayload)
+  // Plain create, idempotent on (linkedTable, linkedId): a re-send returns the
+  // existing concept rather than inserting or overwriting anything.
+  @GraphqlPrivacy({ destructive: false })
   async createConcept(
     @Context() context: RequestContext,
     @Args('input') input: CreateConceptInput,
@@ -106,6 +110,9 @@ export class ConceptResolver {
    * concepts in input order.
    */
   @Mutation(() => [ConceptType])
+  // Batch equivalent of createConcept: idempotent INSERT ... ON CONFLICT DO
+  // NOTHING on the same linked key, nothing removed or overwritten.
+  @GraphqlPrivacy({ destructive: false })
   async createConcepts(
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreateConceptInput] }, new MaxArraySizePipe())
@@ -127,6 +134,9 @@ export class ConceptResolver {
   }
 
   @Mutation(() => UpdateConceptPayload)
+  // Patches this concept's own name/description/properties in place; the row
+  // stays intact and nothing else is touched.
+  @GraphqlPrivacy({ destructive: false })
   async updateConcept(
     @Context() context: RequestContext,
     @Args('input') input: UpdateConceptInput,
@@ -153,6 +163,9 @@ export class ConceptResolver {
   }
 
   @Mutation(() => DeleteByIdPayload)
+  // ConceptService.remove -> EntityService.delete does a HARD `repository.remove`
+  // — the row is gone with no restore path in the schema.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteConcept(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

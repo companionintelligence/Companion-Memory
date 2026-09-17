@@ -23,7 +23,10 @@ export class FeedQueueCron {
     this.logger.setContext(FeedQueueCron.name);
   }
 
-  @Cron(FEED_QUEUE_CRON, { name: 'FeedQueueCron.topUpFeedQueue' })
+  // `exclusive`: the per-user fan-out below writes directly rather than
+  // enqueuing under a singleton key, and nothing else stops a slow tick from
+  // being joined by the next one twenty minutes later.
+  @Cron(FEED_QUEUE_CRON, { name: 'FeedQueueCron.topUpFeedQueue', exclusive: true })
   async topUpFeedQueue() {
     if (await this.featureService.isFeatureEnabled('smart.rotation')) {
       return;

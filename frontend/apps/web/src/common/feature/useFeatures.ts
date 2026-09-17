@@ -177,6 +177,12 @@ function useFeatures(): ReturnValue {
   };
 }
 
-const { Provider, useHookContext } = createHookContext(useFeatures);
+const { Provider, useHookContext, useOptionalHookContext } = createHookContext(useFeatures);
 
-export { Provider as FeaturesProvider, useHookContext as useFeatures };
+export {
+  Provider as FeaturesProvider,
+  useHookContext as useFeatures,
+  // For leaf components that must render outside the app shell (tests, the
+  // shared viewer): yields `undefined` where `useFeatures` would throw.
+  useOptionalHookContext as useOptionalFeatures,
+};

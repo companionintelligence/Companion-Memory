@@ -6,6 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
 import { AnswerService } from '@ci/domains/intelligence';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { QuestionLoader } from '../loaders/QuestionLoader';
 import { AnswerConnection } from '../types/AnswerConnection';
 import { AnswerEdge } from '../types/AnswerEdge';
@@ -26,6 +27,8 @@ export class AnswerResolver {
   ) {}
 
   @Mutation(() => AnswerType)
+  // Plain create: inserts one new answer row and bumps the question's counter.
+  @GraphqlPrivacy({ destructive: false })
   async createAnswer(
     @Context() context: RequestContext,
     @Args('input') input: CreateAnswerInput,
@@ -47,6 +50,9 @@ export class AnswerResolver {
    * created answers in input order.
    */
   @Mutation(() => [AnswerType])
+  // Batch equivalent of createAnswer: a plain multi-row INSERT, nothing removed
+  // or overwritten.
+  @GraphqlPrivacy({ destructive: false })
   async createAnswers(
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreateAnswerInput] }, new MaxArraySizePipe())
@@ -68,6 +74,10 @@ export class AnswerResolver {
   }
 
   @Mutation(() => AnswerType, { nullable: true })
+  // AnswerService.update only ever patches this answer's own `text` (and, for a
+  // user correction, clears the now-stale confidence/rationale/evidence on the
+  // SAME row). The row stays intact and readable throughout.
+  @GraphqlPrivacy({ destructive: false })
   async updateAnswer(
     @Context() context: RequestContext,
     @Args('input') input: UpdateAnswerInput,
@@ -84,6 +94,9 @@ export class AnswerResolver {
   }
 
   @Mutation(() => Boolean)
+  // AnswerService.remove does a HARD `repository.delete` — the row is gone with
+  // no restore path in the schema.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removeAnswer(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

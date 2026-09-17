@@ -40,7 +40,7 @@ interface Answer {
 }
 
 export function PromptsPage() {
-  usePageTitle('Reflections - Companion Intelligence');
+  usePageTitle('Reflections - Companion Memory');
 
   const { t } = useTranslation();
   const [{ authToken }] = useAuth();

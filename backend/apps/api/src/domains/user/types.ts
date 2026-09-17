@@ -5,6 +5,13 @@ export interface CreateUserDto {
   name: string;
   email: string;
   password: string;
+  /**
+   * IANA zone name. Omitted, the column default ('UTC') stands and
+   * {@link ClientTimezoneInterceptor} adopts the first client zone it sees —
+   * which is what every interactive signup path wants. Set it only where no
+   * browser will ever reach the account, i.e. the seeder and `create-test-user`.
+   */
+  timezone?: string;
 }
 
 export interface UpdateUserDto {

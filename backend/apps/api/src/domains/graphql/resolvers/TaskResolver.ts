@@ -1,4 +1,4 @@
-import { ForbiddenException, UseGuards } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, UseGuards } from '@nestjs/common';
 import { Args, ID, Int, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
@@ -6,6 +6,7 @@ import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { TaskService, PlannedBlockService, type Task, type TaskStatus } from '@ci/domains/planning';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
 import { CreateTaskInput } from '../types/CreateTaskInput';
 import { CreateTaskPayload } from '../types/CreateTaskPayload';
@@ -54,6 +55,56 @@ export class TaskResolver {
     return { ...TaskType.toType(task), placedOnCalendar };
   }
 
+  /**
+   * The bounds `ci.tasks` enforces, restated in front of the write.
+   *
+   * Postgres is otherwise the first thing to check these arguments, and it
+   * answers with a CHECK / NOT NULL violation that formatError reduces to a
+   * bare `Internal server error` — so `priority: 9` is refused without ever
+   * naming the field, let alone the range the argument's own description
+   * states. Rejected here by name instead, the way PeerLinkService.upsert
+   * rejects an unknown trust tier in front of its `trust_tier` CHECK.
+   *
+   * `null` is schema-legal for each of these (the inputs declare them
+   * nullable) but is not a legal column value, so the null-means-clear
+   * contract the other updatable fields follow — dueAt, taskTime,
+   * scheduledFor, deferUntil, estimatedMinutes — stops here.
+   *
+   * Keep in step with `tasks_priority_check` / `tasks_estimated_minutes_check`
+   * in db/postgres/migrations/20260808150000_schedule_planning_and_hbpe.sql.
+   */
+  private assertTaskFields(input: {
+    title?: string | null;
+    status?: TaskStatusEnum | null;
+    priority?: number | null;
+    estimatedMinutes?: number | null;
+    actualMinutes?: number | null;
+  }): void {
+    if (input.title === null) {
+      throw new BadRequestException('`title` must not be null');
+    }
+
+    if (input.status === null) {
+      throw new BadRequestException('`status` must not be null');
+    }
+
+    if (input.priority === null) {
+      throw new BadRequestException('`priority` must not be null');
+    }
+
+    if (input.priority !== undefined && (input.priority < 0 || input.priority > 5)) {
+      throw new BadRequestException('`priority` must be between 0 and 5');
+    }
+
+    if (input.estimatedMinutes != null && input.estimatedMinutes < 1) {
+      throw new BadRequestException('`estimatedMinutes` must be at least 1');
+    }
+
+    if (input.actualMinutes === null) {
+      throw new BadRequestException('`actualMinutes` must not be null');
+    }
+  }
+
   @ResolveField(() => Boolean)
   async placedOnCalendar(@Context() context: RequestContext, @Parent() parent: TaskType): Promise<boolean> {
     if (typeof parent.placedOnCalendar === 'boolean') {
@@ -86,11 +137,13 @@ export class TaskResolver {
   }
 
   @Mutation(() => CreateTaskPayload)
+  @GraphqlPrivacy({ destructive: false })
   async createTask(
     @Context() context: RequestContext,
     @Args('input') input: CreateTaskInput,
   ): Promise<CreateTaskPayload> {
     await this.assertPlanningEnabled();
+    this.assertTaskFields(input);
     const serviceContext = toServiceContext(context);
     const task = await this.taskService.create(serviceContext, {
       title: input.title,
@@ -114,11 +167,13 @@ export class TaskResolver {
   }
 
   @Mutation(() => UpdateTaskPayload)
+  @GraphqlPrivacy({ destructive: false })
   async updateTask(
     @Context() context: RequestContext,
     @Args('input') input: UpdateTaskInput,
   ): Promise<UpdateTaskPayload> {
     await this.assertPlanningEnabled();
+    this.assertTaskFields(input);
     const serviceContext = toServiceContext(context);
     const id = GlobalUID.parse('task', input.id);
     const task = await this.taskService.update(serviceContext, id, {
@@ -127,7 +182,18 @@ export class TaskResolver {
       notes: input.notes,
       status: input.status as TaskStatus | undefined,
       priority: input.priority,
-      parentId: input.parentId ? GlobalUID.parse('task', input.parentId) : undefined,
+      // Three-way, not two: `undefined` is "leave the parent alone" and `null`
+      // is "detach". The old `input.parentId ? … : undefined` collapsed both
+      // onto a no-op, so promoting a subtask to top level answered
+      // `success: true` and changed nothing — there was no argument value that
+      // could ever clear parent_id. Same shape as the `tasks` query's own
+      // parentId filter below, and as PlaceResolver's parent_place_id.
+      parentId:
+        input.parentId !== undefined
+          ? input.parentId
+            ? GlobalUID.parse('task', input.parentId)
+            : null
+          : undefined,
       dueAt: input.dueAt,
       taskTime: input.taskTime,
       scheduledFor: input.scheduledFor,
@@ -144,6 +210,7 @@ export class TaskResolver {
   }
 
   @Mutation(() => DeleteByIdPayload)
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteTask(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,
@@ -164,6 +231,9 @@ export class TaskResolver {
     nullable: true,
     description: 'Mark a task done. Idempotent — the original completion instant is preserved.',
   })
+  // Reversible via reopenTask, which exists in this same resolver — unlike the mergePeople/deleteTag
+  // family, this status transition has a real undo path in the schema.
+  @GraphqlPrivacy({ destructive: false })
   async completeTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -180,6 +250,7 @@ export class TaskResolver {
   }
 
   @Mutation(() => TaskType, { nullable: true, description: 'Move a completed task back to open.' })
+  @GraphqlPrivacy({ destructive: false })
   async reopenTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -199,6 +270,7 @@ export class TaskResolver {
     description:
       'Accept a proposed task into the open backlog. Keeps any preferred date as a hint; does not place a calendar block.',
   })
+  @GraphqlPrivacy({ destructive: false })
   async acceptProposedTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -217,6 +289,10 @@ export class TaskResolver {
     nullable: true,
     description: 'Decline a proposed task (archives it).',
   })
+  // Archives the task with no unarchive mutation exposed anywhere in this schema — irreversible
+  // through this surface, the same standard PlanningCompleteTaskTool uses ("nothing exposes an
+  // uncomplete path" -> destructive:true) even though the row itself is never hard-deleted.
+  @GraphqlPrivacy({ destructive: true })
   async declineProposedTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -234,6 +310,7 @@ export class TaskResolver {
   @Mutation(() => ResolveTaskPendingChangePayload, {
     description: 'Apply a pending automation change (mutate / complete / event revise).',
   })
+  @GraphqlPrivacy({ destructive: false })
   async acceptTaskPendingChange(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -263,6 +340,8 @@ export class TaskResolver {
   @Mutation(() => ResolveTaskPendingChangePayload, {
     description: 'Dismiss a pending automation change without applying it.',
   })
+  // Discards a queued automation suggestion, not user-entered data; the task itself is untouched.
+  @GraphqlPrivacy({ destructive: false })
   async declineTaskPendingChange(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -285,6 +364,7 @@ export class TaskResolver {
     nullable: true,
     description: 'Push a task to a later user-local date (`YYYY-MM-DD`) and count the push.',
   })
+  @GraphqlPrivacy({ destructive: false })
   async deferTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -304,6 +384,10 @@ export class TaskResolver {
     description:
       'Place an open task into the next free workday gap as a planned calendar block. The click is consent — trust dial does not re-ask.',
   })
+  // scheduleTaskAt (the startTime-given path) moves an existing block via eventService.reschedule
+  // — an in-place update, not delete-then-recreate. Unlike unscheduleTask/planTask below, no block
+  // row is ever removed here.
+  @GraphqlPrivacy({ destructive: false })
   async scheduleTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -326,6 +410,18 @@ export class TaskResolver {
     endTime?: Date,
   ): Promise<ScheduleTaskPayload> {
     await this.assertPlanningEnabled();
+
+    // `ci.events` carries `valid_time_range CHECK (start_time <= end_time)`,
+    // and formatError masks the 23514 it raises as a bare `Internal server
+    // error`. A resize handle dragged past its own start is user input, not a
+    // server fault — and the byte-identical mistake sent to the sibling
+    // `rescheduleEvent` already gets a clean 400, so answer it with the same
+    // message here rather than 500-ing on one of the two mutations that back
+    // the same gesture.
+    if (startTime && endTime && endTime < startTime) {
+      throw new BadRequestException('`endTime` must not precede `startTime`');
+    }
+
     const serviceContext = toServiceContext(context);
     const taskId = GlobalUID.parse('task', gid);
 
@@ -354,6 +450,12 @@ export class TaskResolver {
     description:
       'Accept into Unscheduled: open if proposed, drop pending suggestions, remove any calendar block.',
   })
+  // Own description says "remove any calendar block", and PlannedBlockService.planAsUnscheduled
+  // confirms it: it calls the exact same `eventService.remove(context, existing.id)` unscheduleTask
+  // uses, plus discards every pending automation change on the task. Same destructive operation as
+  // unscheduleTask, reachable through a mutation named like a constructive "accept into backlog"
+  // action — the same bug class this audit exists to close.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async planTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -375,6 +477,9 @@ export class TaskResolver {
     nullable: true,
     description: 'Remove the planned block for this task and clear scheduledFor.',
   })
+  // Deletes the planned block row. Its own description starts "Remove the planned block" — but the
+  // heuristic reads the FIELD NAME, not the description.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async unscheduleTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

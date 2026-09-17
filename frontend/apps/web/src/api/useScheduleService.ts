@@ -30,6 +30,9 @@ const GET_SCHEDULE = gql(`
       isAllDay
       status
       category
+      eventType
+      taskId
+      seriesMasterId
       locationName
       sourceSystem
       externalSyncStatus
@@ -68,6 +71,20 @@ export interface ScheduleEvent {
   isAllDay: boolean;
   status: string;
   category: string | null;
+  /**
+   * What minted the row. 'planned_block' means the planner owns it and a task
+   * stands behind it, so moving it has to re-date that task too — the schedule
+   * grid keys its move path off this.
+   */
+  eventType?: string | null;
+  /** The task a planned block belongs to; null for anything else. */
+  taskId?: string | null;
+  /**
+   * Set when this chip is an occurrence the server expanded from an RRULE at
+   * read time rather than a stored row. Its `id` addresses nothing, so it
+   * cannot be moved or edited — the grid disables both affordances on it.
+   */
+  seriesMasterId?: string | null;
   locationName: string | null;
   /** Connector this came from, or null when it was created here. */
   sourceSystem?: string | null;

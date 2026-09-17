@@ -33,6 +33,9 @@ function row(overrides: Partial<PendingAction> = {}): PendingAction {
     // Proposed by a FULL-capability dispatcher. The whole point of the tests
     // below is that this value grants the confirmer nothing.
     actor: FULL_CAPABILITY,
+    // No app: proposed by the owner's own trust dial. The managed-app cases
+    // below override it.
+    principalName: null,
     status: 'proposed',
     createdAt: new Date('2026-08-26T10:00:00.000Z'),
     expiresAt: new Date('2026-08-27T10:00:00.000Z'),
@@ -78,7 +81,41 @@ describe('PendingActionConfirmService.confirm — the confirming principal is th
     // the proposing caller's.
     expect(executeTool).toHaveBeenCalledWith(
       'memory_forget',
-      { userId: 'user-1', capability: FULL_CAPABILITY, pendingActionId: 'pa-1' },
+      {
+        userId: 'user-1',
+        capability: FULL_CAPABILITY,
+        pendingActionId: 'pa-1',
+        principal: 'owner',
+        principalName: null,
+      },
+      { entityId: 'e-1' },
+    );
+  });
+
+  it('re-dispatches with the ROW\'s principal, so the ledger still names the app that asked', async () => {
+    // Two different questions, and the ledger asks both: `capability` records
+    // what authority ran the call (the owner's, always, on this path), and
+    // `principal` records who asked for it. Carried from the confirming caller
+    // instead, a confirmed OpenClaw send would be recorded as the owner having
+    // sent it themselves — the attribution erased at the one moment it matters
+    // most, since a confirmed action is by definition one that needed asking
+    // about.
+    const { service, executeTool } = harness(
+      row({ principalName: 'app:ci-openclaw:ci-marketplace' }),
+    );
+
+    await service.confirm('user-1', 'pa-1', FULL_CAPABILITY, NOW);
+
+    expect(executeTool).toHaveBeenCalledWith(
+      'memory_forget',
+      {
+        userId: 'user-1',
+        // Still the CONFIRMER's authority. Only the attribution comes from the row.
+        capability: FULL_CAPABILITY,
+        pendingActionId: 'pa-1',
+        principal: 'managed-app',
+        principalName: 'app:ci-openclaw:ci-marketplace',
+      },
       { entityId: 'e-1' },
     );
   });

@@ -72,7 +72,31 @@ export class PeerRateLimitService {
     max: number,
     now: number,
   ): Promise<void> {
-    const key = `peer:${bucket}\u0000${identity.issuer}\u0000${identity.subject}`;
+    // ═══ THE SEPARATOR CANNOT BE NUL ═══
+    //
+    // This key used a NUL (`\u0000`) between its parts while the budget lived in
+    // a process-local `Map`, where NUL is both free and unambiguous. G8 (#2365)
+    // moved the budget into `ConsumptionStore` so it would be shared across
+    // replicas and survive a restart -- and the Postgres implementation writes
+    // this string into a `text` column, which cannot hold 0x00. Postgres rejects
+    // it with `invalid byte sequence for encoding "UTF8": 0x00`, raised inside
+    // the transaction in `PostgresConsumptionStore.takeWindow`.
+    //
+    // Because `consume` runs BEFORE the peer-link lookup (deliberately -- an
+    // unlinked caller must not get a free hammer), that 500 replaced EVERY
+    // inbound peer ask and every collect on a box using the default store:
+    // `consumption.store` is `postgres` in `config/default.json` and has NO
+    // entry in `custom-environment-variables.json`, so it cannot be switched to
+    // `memory` from the environment either. Observed live against two real
+    // boxes: a token that verified against a real remote JWKS over real TLS
+    // still 500'd here, before any policy ran.
+    //
+    // The two variable components are percent-encoded rather than merely joined
+    // with a different character, so unambiguity no longer depends on the
+    // separator being absent from an issuer URL or a JWT subject --
+    // `encodeURIComponent` escapes `|` as `%7C`, so a `|` in this key can only
+    // ever be one this line put there.
+    const key = `peer:${bucket}|${encodeURIComponent(identity.issuer)}|${encodeURIComponent(identity.subject)}`;
     const decision = await this.store.takeWindow({ key, now, windowMs: WINDOW_MS, max });
 
     if (!decision.allowed) {

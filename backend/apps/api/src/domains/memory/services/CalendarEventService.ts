@@ -1,4 +1,4 @@
-import { Injectable, Optional } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   DataSource,
@@ -16,8 +16,11 @@ import { type ServiceContext, SYSTEM_USER, type UserServiceContext } from '@ci/c
 import { HbpeNotifyService } from '@ci/common/hbpe';
 import {
   type BulkInsertResult,
+  type KeysetPage,
+  type KeysetPageArgs,
   appendRecordSources,
   bulkInsertIdempotent,
+  keysetPaginate,
   INGEST_REFRESH_COLUMNS,
 } from '@ci/common/persistence';
 import { EventService } from '@ci/domains/events';
@@ -29,6 +32,9 @@ import { EventBaseEntity } from '../entities/EventBaseEntity';
 import { EventEntity, Event } from '../entities/EventEntity';
 import { PlaceEntity } from '../entities/PlaceEntity';
 import { ledgerPlatform } from '../identity';
+import { expandAll } from '../recurrence/expandAll';
+import { dropExistingOverrides, resolveExpansionZone } from '../recurrence/queries';
+import type { OccurrenceSpec } from '../recurrence/types';
 import { CreateEventDto, UpdateEventDto, SearchEventDto } from '../types';
 
 import { CtiAggregate } from './CtiAggregate';
@@ -147,6 +153,25 @@ const DAY_MS = 86_400_000;
 const MAX_RANGE_EVENTS = 2000;
 
 /**
+ * Series masters the recurring leg of {@link CalendarEventService.findInRange}
+ * may load. That leg deliberately has NO lookback floor — a weekly standup
+ * whose DTSTART is in 2023 is exactly the row that has to be reached — so this
+ * cap and `events_user_recurring_idx` are what keep it from degenerating into
+ * the whole-history scan MAX_EVENT_LOOKBACK_DAYS was added to eliminate.
+ */
+export const MAX_RECURRING_MASTERS = 500;
+
+/**
+ * Synthetic occurrences one range read may add.
+ *
+ * Applied to the spec list BEFORE anything is materialized, so an over-eager
+ * expansion cannot crowd real rows out of MAX_RANGE_EVENTS. A quarter of a
+ * daily series is 92 occurrences; a thousand is roughly ten such series, which
+ * is well past the point where the grid is unreadable anyway.
+ */
+export const MAX_EXPANDED_OCCURRENCES = 1000;
+
+/**
  * Event types the schedule calendar renders, as an allowlist.
  *
  * `ci.events` is the timeline for everything an ETL connector can flatten, not
@@ -161,6 +186,50 @@ const MAX_RANGE_EVENTS = 2000;
  * which only covered the browser fold (itself reverted in 20260812144811).
  */
 const SCHEDULE_EVENT_TYPES = ['calendar_event', 'meeting', 'appointment', 'planned_block'] as const;
+
+/**
+ * "This event did not happen" — the one status vocabulary the calendar and the
+ * planner share.
+ *
+ * It is exported because it used to be duplicated, and the copies drifted:
+ * `findInRange` excluded ('cancelled', 'no_show') while the planner's own
+ * LIVE_BLOCK_SQL excluded ('cancelled', 'no_show', 'skipped'). A `skipped`
+ * block was therefore invisible to every planned-block read while still
+ * occupying its slot in the gap solver's occupancy set — the solver refused to
+ * place into a window that nothing would ever draw.
+ *
+ * Always compare through COALESCE: `ci.events.status` was nullable until
+ * 20260908000139 and `NULL NOT IN (...)` is UNKNOWN, not TRUE, so a bare
+ * `NOT IN` silently drops null-status rows.
+ */
+export const DEAD_EVENT_STATUSES = ['cancelled', 'no_show', 'skipped'] as const;
+
+/** SQL fragment for "this event still counts", for `event`-aliased builders. */
+export const LIVE_EVENT_SQL = `COALESCE(event.status, 'confirmed') NOT IN (${DEAD_EVENT_STATUSES.map(
+  (s) => `'${s}'`,
+).join(', ')})`;
+
+/**
+ * Whether a planned block is still one the calendar would draw.
+ *
+ * A block dies two ways and BOTH have to be recognised here, because the
+ * planning identity (`task:<uuid>`) is derived and therefore single-use:
+ * `unschedule` tombstones it, while an accepted `event_revise` confirmation
+ * leaves `is_deleted = false` and writes `status = 'cancelled'`. Matching only
+ * the tombstone meant a cancelled block was handed back verbatim by the dedup
+ * below — so the task reported itself placed, nothing rendered, and every retry
+ * re-matched the same dead row. That is the same permanent failure the
+ * tombstone branch was written for, reached through the status door.
+ */
+function isLivePlannedBlock(row: EventEntity): boolean {
+  if (row.isDeleted) {
+    return false;
+  }
+
+  const status = row.status ?? 'confirmed';
+
+  return !(DEAD_EVENT_STATUSES as readonly string[]).includes(status);
+}
 
 /**
  * Spanning-aggregate service for the events CTI split: an event is ONE logical
@@ -335,6 +404,59 @@ export class CalendarEventService {
       toCreate.plannedMinutes = item.planned_minutes;
     }
 
+    // Booleans compared against `undefined`, matching `is_predicted` above:
+    // `is_locked: false` / `is_auto: false` are real assertions a caller can
+    // make, not omissions to fall through to the column DEFAULT.
+    if (item.is_locked !== undefined) {
+      toCreate.isLocked = item.is_locked;
+    }
+
+    if (item.is_auto !== undefined) {
+      toCreate.isAuto = item.is_auto;
+    }
+
+    if (item.last_moved_at !== undefined) {
+      toCreate.lastMovedAt = item.last_moved_at;
+    }
+
+    // Calendar shape and confidence — the same silent-drop mechanism as the
+    // provenance block above, and the reason it went unnoticed for so long:
+    // ci.events DEFAULTs all four (is_all_day false, is_recurring false,
+    // confidence_score 1.0), so a dropped write lands on a plausible-looking
+    // default instead of erroring. Google's all-day Christmas was stored as a
+    // midnight point event, an RRULE series master was stored as a one-off, and
+    // a 0.4-confidence geocode claimed 1.0 to HBPE/RAG — the exact outcome
+    // TransformGoogleCalendar computes that number to prevent.
+    //
+    // Compared against `undefined`, not truthiness: `is_all_day: false` and
+    // `confidence_score: 0` are assertions, not omissions.
+    if (item.is_all_day !== undefined) {
+      toCreate.isAllDay = item.is_all_day;
+    }
+
+    if (item.is_recurring !== undefined) {
+      toCreate.isRecurring = item.is_recurring;
+    }
+
+    if (item.recurrence_pattern !== undefined) {
+      toCreate.recurrencePattern = item.recurrence_pattern;
+    }
+
+    if (item.confidence_score !== undefined) {
+      toCreate.confidenceScore = item.confidence_score;
+    }
+
+    // `status` needs no rename (the column and the property share a name), but
+    // it does need an explicit null dropped: `repository.create()` would write
+    // that NULL over the column DEFAULT, and every calendar read is a
+    // three-valued `status NOT IN (...)`, which a NULL-status row never
+    // satisfies — the event would exist and be invisible on every schedule
+    // surface. EventResolver forwards a nullable `status` verbatim, so this is
+    // reachable from the public API.
+    if (item.status == null) {
+      delete (toCreate as Record<string, unknown>).status;
+    }
+
     return toCreate;
   }
 
@@ -343,7 +465,25 @@ export class CalendarEventService {
    * the per-row path (a re-ingest / flaky-client retry returns the existing row);
    * the array path below uses a set-based insert for bulk importer pushes.
    */
+  /**
+   * Reject an inverted time pair before it reaches the `events_time_order`
+   * CHECK, which would surface as an opaque 500.
+   *
+   * Lives here rather than in each caller because there are four of them —
+   * `createEvent`/`updateEvent`, `scheduleTask`, `rescheduleEvent`, and
+   * `CandidateService.accept`, which had no guard of its own at all. Equal
+   * instants stay legal: the constraint is `start_time <= end_time`, and a
+   * zero-length marker is a real thing a calendar carries.
+   */
+  private assertTimeOrder(startTime?: Date | null, endTime?: Date | null): void {
+    if (startTime && endTime && endTime < startTime) {
+      throw new BadRequestException('`endTime` must not precede `startTime`');
+    }
+  }
+
   private async createOne(context: UserServiceContext, item: CreateEventDto): Promise<Event> {
+    this.assertTimeOrder(item.start_time, item.end_time);
+
     const toCreate = this.toEntityFields(item);
 
     // Idempotency: (source_type, source_system, source_id) is the stable
@@ -371,6 +511,19 @@ export class CalendarEventService {
     if (sourceWhere) {
       const existing = await this.eventRepository.findOne({ where: sourceWhere });
       if (existing) {
+        // A tombstoned PLANNING row is the one case where returning the match
+        // verbatim is wrong. Its identity is derived, not carried
+        // (`platformIdentity('planning', 'task', id)` → `task:<uuid>`), so it is
+        // single-use: after `PlannedBlockService.unschedule` tombstones the
+        // block, the next place() matches that same dead row, reports the task
+        // placed, and renders nothing — for good, since every retry re-matches.
+        // Restore and retime it instead. The return-verbatim contract above is
+        // unchanged for capture sources, where the identity comes from the
+        // provider and a deletion must outlive the next sync.
+        if (item.source_type === 'planning' && !isLivePlannedBlock(existing)) {
+          return this.restorePlannedBlock(context, existing.id, item);
+        }
+
         await this.ledgerArrival(context, existing.id, item);
 
         return this.composeOne(existing);
@@ -441,6 +594,49 @@ export class CalendarEventService {
       name: item.title,
       description: item.description ?? null,
     });
+  }
+
+  /**
+   * Bring a tombstoned planned block back at the slot the placer just chose.
+   *
+   * Clears the tombstone through {@link restore} (so the search index and the
+   * graph delta are re-published exactly as an Undo would), then writes the new
+   * timing over the stale one. The write goes straight at the repository rather
+   * than through {@link update}, because the fields that matter here —
+   * `status`, `planned_minutes`, `is_auto`, `last_moved_at` — are the ones a
+   * partial update is entitled to leave alone, and a restored block must not
+   * keep the previous placement's (a block revived by automation must not read
+   * as still manually-placed just because the dead row once was, and its
+   * "last moved" instant is now, not whenever it was tombstoned).
+   */
+  private async restorePlannedBlock(
+    context: UserServiceContext,
+    id: string,
+    item: CreateEventDto,
+  ): Promise<Event> {
+    const restored = await this.restore(context, id);
+
+    await this.eventRepository.update(
+      { id },
+      {
+        startTime: item.start_time,
+        endTime: item.end_time ?? null,
+        status: item.status ?? 'planned',
+        plannedMinutes: item.planned_minutes ?? null,
+        taskId: item.task_id ?? null,
+        isAuto: item.is_auto ?? false,
+        lastMovedAt: item.last_moved_at ?? new Date(),
+      },
+    );
+
+    await this.eventBaseRepository.update(
+      { id },
+      { name: item.title, description: item.description ?? null },
+    );
+
+    const reloaded = await this.eventRepository.findOne({ where: { id } });
+
+    return reloaded ? this.composeOne(reloaded) : (restored as Event);
   }
 
   /**
@@ -668,6 +864,21 @@ export class CalendarEventService {
    * EventResolver and events materialized by CandidateService when a schedule
    * suggestion is accepted both leave `event_type` unset, and dropping them
    * would empty the calendar of exactly the entries the user put there.
+   *
+   * ═══ RECURRING SERIES ARE EXPANDED HERE, AND ONLY HERE ═══
+   * `ci.events` holds one row per recurring SERIES, not one per occurrence —
+   * the Google connector fetches `singleEvents=false` deliberately
+   * (docs/design/cross-pipeline-identity.md) and the .ics importer does not
+   * expand either. Nothing else in the system walked an RRULE, so a weekly
+   * standup appeared on the grid once, the gap solver saw an empty morning
+   * every other week and booked straight over it, and peer free/busy answered
+   * FREE for every occurrence after the first.
+   *
+   * This method is the choke point that fixes all three at once: the schedule
+   * grid reads it and `PlannedBlockService` builds its occupied set from it.
+   * The occurrences are synthesized per-read and never persisted — see
+   * `recurrence/types.ts` for why writing them would collide with the override
+   * namespace.
    */
   async findInRange(context: ServiceContext, from: Date, to: Date): Promise<Event[]> {
     // Sargable floor for events_user_time_idx: the planner can now range-scan
@@ -678,7 +889,12 @@ export class CalendarEventService {
       .getRepository(EventEntity)
       .createQueryBuilder('event')
       .where('event.is_deleted = false')
-      .andWhere("event.status NOT IN ('cancelled', 'no_show')")
+      // COALESCE because `NOT IN` is three-valued: ci.events.status is still
+      // nullable in the database, and a NULL-status row makes the predicate
+      // NULL, not TRUE — the event would exist, be returned by every other
+      // read, and be missing from the calendar with nothing to explain why.
+      // Same guard as dailyAggregateSql's meeting counts.
+      .andWhere(LIVE_EVENT_SQL)
       .andWhere('event.start_time >= :lowerBound', { lowerBound })
       .andWhere('event.start_time < :to', { to })
       .andWhere('COALESCE(event.end_time, event.start_time) >= :from', { from })
@@ -694,8 +910,138 @@ export class CalendarEventService {
     }
 
     const result = await query.getMany();
+    const inWindow = await this.composeMany(result);
 
-    return this.composeMany(result);
+    // SYSTEM_USER reads the whole box, and both halves of expansion are
+    // per-user: the fallback zone comes from `ci.users.timezone`, and override
+    // suppression is scoped by user_id. Rather than guess a zone or leak one
+    // user's overrides into another's occurrences, the cross-user path keeps
+    // the old master-only behaviour.
+    if (context.userId === SYSTEM_USER) {
+      return inWindow;
+    }
+
+    const occurrences = await this.expandRecurring(context.userId, from, to, inWindow);
+
+    if (occurrences.length === 0) {
+      return inWindow;
+    }
+
+    return [...inWindow, ...occurrences]
+      .sort(
+        (left, right) =>
+          left.startTime.getTime() - right.startTime.getTime() ||
+          (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+      )
+      .slice(0, MAX_RANGE_EVENTS);
+  }
+
+  /**
+   * Series masters that could put an occurrence in the window.
+   *
+   * Two deliberate differences from the main query above:
+   *
+   *  1. **No `MAX_EVENT_LOOKBACK_DAYS` floor.** A series anchored in 2023 is
+   *     precisely the row whose occurrences are missing today; a floor would
+   *     silently expand only series younger than a quarter.
+   *  2. **No overlap predicate.** The main query also requires
+   *     `COALESCE(end_time, start_time) >= :from`, which a master's own DTSTART
+   *     almost never satisfies — that is why the masters have to be fetched
+   *     again rather than filtered out of `inWindow`.
+   *
+   * Everything else — the tombstone check, LIVE_EVENT_SQL and the event-type
+   * allowlist — is repeated verbatim so an occurrence can never appear on the
+   * grid under rules its own master would have been hidden by.
+   */
+  private recurringMasters(userId: string, to: Date): Promise<EventEntity[]> {
+    return this.dataSource
+      .getRepository(EventEntity)
+      .createQueryBuilder('event')
+      .where('event.is_deleted = false')
+      .andWhere(LIVE_EVENT_SQL)
+      .andWhere('event.is_recurring = true')
+      .andWhere('event.start_time < :to', { to })
+      .andWhere('(event.event_type IS NULL OR event.event_type IN (:...scheduleEventTypes))', {
+        scheduleEventTypes: [...SCHEDULE_EVENT_TYPES],
+      })
+      .andWhere('event.user_id = :userId', { userId })
+      .orderBy('event.start_time', 'DESC')
+      .take(MAX_RECURRING_MASTERS)
+      .getMany();
+  }
+
+  /**
+   * The synthetic occurrences to add to a range read.
+   *
+   * Masters already returned by the main query are reused rather than composed
+   * twice — `composeMany` is a second round-trip for the `ci.entities` base
+   * rows, and a master whose DTSTART falls inside the window is in BOTH result
+   * sets.
+   */
+  private async expandRecurring(
+    userId: string,
+    from: Date,
+    to: Date,
+    inWindow: readonly Event[],
+  ): Promise<Event[]> {
+    const alreadyComposed = new Set(inWindow.map((event) => event.id));
+    const extra = (await this.recurringMasters(userId, to)).filter((row) => !alreadyComposed.has(row.id));
+    const masters = [...(await this.composeMany(extra)), ...inWindow.filter((event) => event.isRecurring)];
+
+    if (masters.length === 0) {
+      return [];
+    }
+
+    const zone = await resolveExpansionZone(this.eventRepository, userId);
+    const specs = expandAll(
+      masters,
+      { from, to },
+      {
+        fallbackTimeZone: zone.timeZone,
+        fallbackTimeZoneSource: zone.source,
+        limits: { maxTotalOccurrences: MAX_EXPANDED_OCCURRENCES },
+      },
+    );
+    const kept = await dropExistingOverrides(this.eventRepository, userId, specs);
+    const byId = new Map(masters.map((master) => [master.id, master]));
+
+    return kept.flatMap((spec) => {
+      const master = byId.get(spec.seriesId);
+
+      return master ? [this.materializeOccurrence(master, spec)] : [];
+    });
+  }
+
+  /**
+   * One computed occurrence dressed as the event it stands for.
+   *
+   * It carries the master's whole payload — title, participants, location,
+   * tags — because to every reader it IS that meeting, just on another day.
+   * `parentEventId` is cleared rather than pointed at the master: that column
+   * means something else (a real FK to a real row) and the two must not be
+   * confused. `seriesMasterId` is the field that says where this came from, and
+   * it is what the GraphQL resolvers batch tags/content/media by, since the
+   * synthetic id backs no row.
+   */
+  private materializeOccurrence(master: Event, spec: OccurrenceSpec): Event {
+    return {
+      ...master,
+      id: spec.occurrenceId,
+      startTime: spec.startTime,
+      endTime: spec.endTime,
+      seriesMasterId: master.id,
+      recurrenceId: spec.recurrenceInstant,
+      parentEventId: null,
+      metadata: {
+        ...master.metadata,
+        occurrence: {
+          masterEventId: master.id,
+          recurrenceInstant: spec.recurrenceInstant,
+          timeZoneSource: spec.timeZoneSource,
+          synthetic: true,
+        },
+      },
+    };
   }
 
   /**
@@ -709,12 +1055,23 @@ export class CalendarEventService {
    * find (CI-Server-aan) and the UI can say so honestly.
    *
    * All-day events ignore the time component: their "when" is a date.
+   *
+   * Stamps `lastMovedAt` unconditionally — this method's whole purpose is "a
+   * move happened", for every event type, not only planned blocks (the column
+   * is inert for anything else today, but the semantics are the same: this is
+   * the last instant the row's placement changed). `opts.isAuto`, when given,
+   * overrides `isAuto` too: a human dragging a block onto a new time is a
+   * manual placement from that moment on, regardless of how the block got
+   * there — `PlannedBlockService.scheduleTaskAt` passes `{ isAuto: false }` for
+   * exactly that reason. Omit it (the plain `rescheduleEvent` GraphQL mutation
+   * does) to leave `isAuto` as it was.
    */
   async reschedule(
     context: ServiceContext,
     id: string,
     startTime: Date,
     endTime?: Date,
+    opts?: { isAuto?: boolean },
   ): Promise<Event | null> {
     const event = await this.eventRepository.findOne({
       where: {
@@ -731,6 +1088,8 @@ export class CalendarEventService {
       return null;
     }
 
+    this.assertTimeOrder(startTime, endTime);
+
     // Duration is the thing being preserved: a 90-minute meeting dragged to
     // Thursday is still 90 minutes, even though the caller only names a start.
     const priorSpanMs =
@@ -738,6 +1097,11 @@ export class CalendarEventService {
 
     event.startTime = startTime;
     event.endTime = endTime ?? (priorSpanMs > 0 ? new Date(startTime.getTime() + priorSpanMs) : null);
+    event.lastMovedAt = new Date();
+
+    if (opts?.isAuto !== undefined) {
+      event.isAuto = opts.isAuto;
+    }
 
     if (event.sourceSystem) {
       event.externalSyncStatus = 'pending';
@@ -764,6 +1128,74 @@ export class CalendarEventService {
     const result = await query.getMany();
 
     return this.composeMany(result);
+  }
+
+  /**
+   * Keyset-paginated page for the GraphQL connection — ordered by (start_time,
+   * event_id) DESC, reading one page (+1 sentinel) instead of the whole table.
+   *
+   * {@link findAll} loads every event the user owns and the resolver then threw
+   * all but `first` of them away. `ci.events` is the timeline for photos,
+   * visits and every ETL connector as well as calendar entries, so on a real
+   * library that is six figures of rows hydrated to serve a page of 20.
+   *
+   * The scope repeats findAll's two predicates rather than sharing them,
+   * because `keysetPaginate` runs its own COUNT for `totalCount`: if the count
+   * and the page disagreed on which rows exist, the connection would advertise
+   * pages that never arrive.
+   */
+  async findPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Event>> {
+    const page = await keysetPaginate(this.eventRepository, args, {
+      alias: 'event',
+      timeProp: 'startTime',
+      userId: context.userId,
+      scope: (qb) =>
+        qb
+          .andWhere("(event.event_type IS NULL OR event.event_type <> 'planned_block')")
+          .andWhere('event.is_deleted = false'),
+    });
+
+    return {
+      ...page,
+      entities: await this.composeMany(page.entities),
+    };
+  }
+
+  /**
+   * The tombstones — the only read path in the service that returns them.
+   *
+   * `deleteEvent` is a soft delete and `restoreEvent` genuinely reverses it, but
+   * until this existed the reversal was nominal: every other read here filters
+   * `is_deleted = false`, so the sole handle on a deleted event was the id
+   * echoed once in the delete payload. A caller that discarded that response —
+   * an agent, a failed request, a closed tab — had destroyed the event in every
+   * way it could observe, while the label said the operation was reversible.
+   *
+   * Deliberately its own method rather than an `includeDeleted` flag on
+   * {@link findPage}: a flag threaded through the normal read path is one
+   * defaulting mistake away from leaking tombstones into the timeline, and the
+   * two have opposite failure modes. This one returning nothing is an empty
+   * trash view; findPage returning tombstones is a bug users would report as
+   * "deleted events came back".
+   *
+   * Same keyset pagination and the same planned_block exclusion as
+   * {@link findPage}, so the two pages cannot disagree about what an event is.
+   */
+  async findDeletedPage(context: UserServiceContext, args: KeysetPageArgs): Promise<KeysetPage<Event>> {
+    const page = await keysetPaginate(this.eventRepository, args, {
+      alias: 'event',
+      timeProp: 'startTime',
+      userId: context.userId,
+      scope: (qb) =>
+        qb
+          .andWhere("(event.event_type IS NULL OR event.event_type <> 'planned_block')")
+          .andWhere('event.is_deleted = true'),
+    });
+
+    return {
+      ...page,
+      entities: await this.composeMany(page.entities),
+    };
   }
 
   /**
@@ -831,8 +1263,21 @@ export class CalendarEventService {
       updateData.startTime = data.start_time;
     }
 
-    if (data.end_time) {
+    // `!== undefined` from here down wherever false/0/null is a real value: a
+    // partial update distinguishes "not mentioned" from "cleared", and
+    // truthiness collapses the two. `end_time: null` is how an event
+    // mis-imported with a bogus end is made open-ended again.
+    if (data.end_time !== undefined) {
       updateData.endTime = data.end_time;
+    }
+
+    // "Any write that changes start_time/end_time" (roadmap M3) — not scoped
+    // to planned blocks specifically, because this is the shared partial-update
+    // path every event type goes through (`updateEvent` can retime a planned
+    // block without going via `reschedule`). Mirrors the unconditional stamp
+    // `reschedule` carries.
+    if (data.start_time || data.end_time !== undefined) {
+      updateData.lastMovedAt = new Date();
     }
 
     if (data.duration_minutes) {
@@ -875,27 +1320,34 @@ export class CalendarEventService {
       updateData.sourceId = data.source_id;
     }
 
-    if (data.confidence_score) {
+    // Every field below is one whose falsy value is the interesting one:
+    // `confidence_score: 0` is "no confidence", `priority: 0` is the baseline a
+    // de-prioritized event must be able to return to, and each boolean's `false`
+    // is the correction. Guarded on truthiness, a flag could be set and never
+    // cleared — the all-day toggle in EditEventModal turned on but not off.
+    if (data.confidence_score !== undefined) {
       updateData.confidenceScore = data.confidence_score;
     }
 
-    if (data.is_recurring) {
+    if (data.is_recurring !== undefined) {
       updateData.isRecurring = data.is_recurring;
     }
 
-    if (data.recurrence_pattern) {
+    // Null clears the pattern, which is what turning a series back into a
+    // one-off means; the column is nullable for exactly that.
+    if (data.recurrence_pattern !== undefined) {
       updateData.recurrencePattern = data.recurrence_pattern;
     }
 
-    if (data.is_all_day) {
+    if (data.is_all_day !== undefined) {
       updateData.isAllDay = data.is_all_day;
     }
 
-    if (data.is_private) {
+    if (data.is_private !== undefined) {
       updateData.isPrivate = data.is_private;
     }
 
-    if (data.priority) {
+    if (data.priority !== undefined) {
       updateData.priority = data.priority;
     }
 
@@ -903,11 +1355,14 @@ export class CalendarEventService {
       updateData.metadata = data.metadata;
     }
 
-    if (data.is_predicted) {
+    // `is_predicted: false` is the write that promotes a suggestion the user
+    // committed to — the same assertion toEntityFields spells out on the create
+    // side — so it must not be read as an omission here either.
+    if (data.is_predicted !== undefined) {
       updateData.isPredicted = data.is_predicted;
     }
 
-    if (data.is_inferred) {
+    if (data.is_inferred !== undefined) {
       updateData.isInferred = data.is_inferred;
     }
 
@@ -919,11 +1374,13 @@ export class CalendarEventService {
       updateData.tags = data.tags;
     }
 
-    if (data.sentiment_score) {
+    // 0 is a real reading for both: neutral sentiment, and the flat end of the
+    // energy scale toEntityFields already calls "a legal energy_level".
+    if (data.sentiment_score !== undefined) {
       updateData.sentimentScore = data.sentiment_score;
     }
 
-    if (data.energy_level) {
+    if (data.energy_level !== undefined) {
       updateData.energyLevel = data.energy_level;
     }
 
@@ -931,6 +1388,10 @@ export class CalendarEventService {
       updateData.status = data.status;
     }
 
+    // Deliberately still truthiness, unlike the booleans above: `is_deleted:
+    // false` must NOT be settable here. Clearing a tombstone is `restore`,
+    // which re-publishes the search index and the graph delta; doing it through
+    // a field patch would bring the row back invisible to both.
     if (data.is_deleted) {
       updateData.isDeleted = data.is_deleted;
     }
@@ -945,6 +1406,12 @@ export class CalendarEventService {
 
     if (data.created_by) {
       updateData.createdBy = data.created_by;
+    }
+
+    // Falsy is meaningful: `isLocked: false` unlocks a block, same reasoning
+    // as the boolean block above.
+    if (data.is_locked !== undefined) {
+      updateData.isLocked = data.is_locked;
     }
 
     // One transaction across both halves of the aggregate (see CtiAggregate).

@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
-import { OllamaService, UTILITY_MODEL } from '@ci/domains/llm/services/OllamaService';
+import { OllamaService } from '@ci/domains/llm/services/OllamaService';
 import { EventEntity, CalendarEventService } from '@ci/domains/memory';
 import { PersonalizationService } from '@ci/domains/personalization';
 import { SearchService } from '@ci/domains/search-next';
@@ -46,6 +46,23 @@ const PROCESS_MAX_OUTPUT_TOKENS = 600;
  * shares the tier.
  */
 const PROCESS_KEEP_ALIVE = '1h';
+
+/**
+ * Tasks one run reviews. Each costs an LLM call, so this is a spend cap per
+ * tick and not a statement about how many tasks matter.
+ */
+export const PROCESS_BATCH_SIZE = 40;
+
+/**
+ * Ceiling on the pool {@link PROCESS_BATCH_SIZE} rotates through. Bounded
+ * because this is still one unpaginated query; a user past this many ACTIVE
+ * tasks loses the tail of the ordering, which is the old behaviour rather than
+ * a new one.
+ */
+const PROCESS_CANDIDATE_CAP = 400;
+
+/** The todoProcess cron's six-hour interval, used only to index the rotation. */
+const PROCESS_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 const CANCEL_PHRASES = [
   'cancelled',
@@ -244,6 +261,35 @@ function toDate(value: Date | string | null | undefined): Date | null {
 }
 
 /**
+ * The slice of the candidate pool this run reviews.
+ *
+ * `findAll` orders by `due_at ASC NULLS LAST`, then priority, then created_at,
+ * and an overdue date never advances — so a bare `LIMIT 40` handed every tick
+ * the SAME forty rows. A user with 45 active tasks had five that were never
+ * reviewed at all: no append, no revise, no reparent, ever, for as long as the
+ * forty ahead of them stayed active. Nothing said so either, because `applied`
+ * and `pending` only count what the run did look at.
+ *
+ * The window index comes from the clock rather than from a counter on this
+ * instance on purpose: the worker restarts, and a counter restarts with it back
+ * at the same forty rows. Ticks six hours apart therefore land on consecutive
+ * windows without any state to keep.
+ *
+ * Wrapping (rather than a short final window) keeps every run's batch the same
+ * size, so the rotation costs no throughput.
+ */
+function rotateBatch<T>(candidates: T[], size: number, now: number): T[] {
+  if (candidates.length <= size) {
+    return candidates;
+  }
+
+  const windows = Math.ceil(candidates.length / size);
+  const offset = (Math.floor(now / PROCESS_INTERVAL_MS) % windows) * size;
+
+  return [...candidates, ...candidates].slice(offset, offset + size);
+}
+
+/**
  * Tokens distinctive enough to say a recall hit is ABOUT this title. Returning
  * `[]` (all-stopword or too short) means "not attributable" — callers must not
  * act on evidence they cannot tie to the thing they are about to mutate.
@@ -304,10 +350,14 @@ export class TodoProcessService {
     const context = { userId } as UserServiceContext;
     const tallies = { applied: 0, pending: 0 };
 
-    const tasks = await this.taskService.findAll(context, {
-      status: [...ACTIVE_TASK_STATUSES],
-      limit: 40,
-    });
+    const tasks = rotateBatch(
+      await this.taskService.findAll(context, {
+        status: [...ACTIVE_TASK_STATUSES],
+        limit: PROCESS_CANDIDATE_CAP,
+      }),
+      PROCESS_BATCH_SIZE,
+      Date.now(),
+    );
 
     for (const task of tasks) {
       try {
@@ -438,7 +488,7 @@ export class TodoProcessService {
       ].join('\n');
 
       const response = await this.ollamaService.chat(context as never, [{ role: 'user', content: prompt }], {
-        model: UTILITY_MODEL,
+        tier: 'utility',
         enableTools: false,
         format: SUGGESTION_JSON_SCHEMA,
         signal: controller.signal,
@@ -556,6 +606,17 @@ export class EventNowService {
           continue;
         }
 
+        // Same reasoning as VerifyDoneService's `complete` guard: a declined
+        // row leaves the `pending` set createPendingChange de-dupes against, so
+        // without this the ±2h window re-files the identical "was this
+        // cancelled?" prompt on every hourly tick it still covers. Bounded by
+        // `from` — the earliest moment a cancellation notice for THIS block
+        // could have arrived — so it is the same window the evidence is drawn
+        // from, and a later block asks again.
+        if (await this.taskService.hasDeclinedChangeSince(context, block.taskId, 'event_revise', from)) {
+          continue;
+        }
+
         await this.taskService.createPendingChange(context, {
           taskId: block.taskId,
           kind: 'event_revise',
@@ -615,7 +676,12 @@ export class VerifyDoneService {
       .where('event.user_id = :userId', { userId })
       .andWhere('event.task_id IS NOT NULL')
       .andWhere('event.is_deleted = false')
-      .andWhere('event.status NOT IN (:...doneStatuses)', {
+      // COALESCE for the same reason dailyAggregateSql.ts does it on this
+      // column: `status NOT IN (...)` is three-valued, so a NULL-status row
+      // evaluates to NULL and WHERE discards it. A block written before
+      // `ci.events.status` was backfilled would then never be verified — and
+      // "no status" is the one value that certainly does not mean done.
+      .andWhere("COALESCE(event.status, '') NOT IN (:...doneStatuses)", {
         doneStatuses: ['cancelled', 'completed', 'skipped', 'no_show'],
       })
       .andWhere('COALESCE(event.end_time, event.start_time) < :now', { now })
@@ -665,6 +731,23 @@ export class VerifyDoneService {
           await this.eventRepository.save(block);
           tallies.completed += 1;
         } else if (decision === 'review' || (decision === 'auto' && !doneSignal)) {
+          // A dismissal has to outlive the tick that produced the prompt.
+          // `createPendingChange` de-dupes only against a row that is still
+          // `pending`, so declining moved the row OUT of the set that was
+          // suppressing it and the next tick filed the identical question —
+          // roughly 36 more times before the block aged out of the lookback.
+          // Reading the declined history here is the same discipline
+          // PersonLinkStage applies to a `rejected` disposition: the producer
+          // honours the verdict rather than the writer remembering to.
+          //
+          // Bounded by the block's own end so this suppresses this occurrence
+          // only; a later block for the same task asks again.
+          const blockEnd = block.endTime ?? block.startTime;
+
+          if (await this.taskService.hasDeclinedChangeSince(context, task.id, 'complete', blockEnd)) {
+            continue;
+          }
+
           await this.taskService.createPendingChange(context, {
             taskId: task.id,
             kind: 'complete',

@@ -192,7 +192,7 @@ describe('GlobalSearchBox on a hub list page (people / places / things / tags / 
     expect(screen.queryByText('advanced filters')).not.toBeInTheDocument();
   });
 
-  it('seeds the input from the page\'s ?search= and X clears only the query', async () => {
+  it("seeds the input from the page's ?search= and X clears only the query", async () => {
     renderAt('/memory/content/42?search=shells&types=image');
 
     expect(screen.getByRole('textbox')).toHaveValue('shells');

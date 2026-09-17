@@ -4,6 +4,8 @@ import {
   Controller,
   Get,
   HttpCode,
+  HttpException,
+  HttpStatus,
   Post,
   Req,
   Res,
@@ -20,6 +22,8 @@ import { UserService } from '@ci/domains/user';
 import { CsrfGuard } from '../guards/CsrfGuard';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
+import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
+import { LoginThrottleService } from '../services/LoginThrottleService';
 import { JwtPayload, LoginDto } from '../types';
 import {
   clearCsrfCookie,
@@ -40,6 +44,8 @@ export class SessionController {
     private readonly userService: UserService,
     private readonly authService: AuthService,
     private readonly csrfService: CsrfService,
+    private readonly loginThrottle: LoginThrottleService,
+    private readonly hubBridge: HubForwardAuthBridgeService,
   ) {}
 
   /**
@@ -70,6 +76,28 @@ export class SessionController {
     return { csrfToken: token };
   }
 
+  /**
+   * Verified Hub identity for this request, or `{ username: null }` when
+   * forward-auth is off / headers are missing. The SPA uses this to refuse a
+   * stale Memory home when Traefik already named a different person.
+   */
+  @Get('hub-identity')
+  @HttpCode(200)
+  hubIdentity(@Req() req: Request) {
+    return { username: this.hubBridge.verifyUsername(req) };
+  }
+
+  /**
+   * If Traefik named a Hub person who does not match the Memory cookie, replace
+   * the session (and CSRF) so the next refresh/query is already the right user.
+   */
+  @Post('hub-bridge')
+  @HttpCode(200)
+  @UseGuards(CsrfGuard)
+  async hubBridgeAlign(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    return this.hubBridge.alignSession(req, res);
+  }
+
   @Post()
   @HttpCode(200)
   @UseGuards(CsrfGuard)
@@ -78,16 +106,42 @@ export class SessionController {
     @Res({ passthrough: true }) res: Response,
     @Body(new ValidationPipe(localStrategySchema)) input: LoginDto,
   ) {
+    // Same metadata the session row is bound to, so the throttle keys on the
+    // proxy-trust-resolved client IP rather than on a header an attacker can
+    // vary per request to buy themselves a fresh budget every guess.
+    const metadata = this.authService.getSessionMetadata(req);
+    const throttled = this.loginThrottle.check(metadata.ip, input.username);
+
+    if (throttled.locked) {
+      res.setHeader('Retry-After', String(throttled.retryAfterSeconds));
+
+      // Deliberately says nothing about whether the account exists — the 401
+      // below is careful not to be an enumeration oracle, and a 429 that named
+      // the account would hand back exactly what that hides.
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: 'Too many login attempts. Please try again later.',
+          retryAfterSeconds: throttled.retryAfterSeconds,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const user = await this.userService.validatePassword(input.username, input.password);
 
     if (user == null) {
+      this.loginThrottle.recordFailure(metadata.ip, input.username);
+
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const { sessionToken, sessionId } = await this.authService.issueSessionToken(
-      user.id,
-      this.authService.getSessionMetadata(req),
-    );
+    // Only failures spend the budget: a correct password wipes the counter, so
+    // an owner who fat-fingers their way to the right password is never locked
+    // out by the attempts that preceded it.
+    this.loginThrottle.recordSuccess(metadata.ip, input.username);
+
+    const { sessionToken, sessionId } = await this.authService.issueSessionToken(user.id, metadata);
 
     const accessToken = await this.authService.issueAccessToken(user.id);
 

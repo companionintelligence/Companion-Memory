@@ -44,6 +44,9 @@ const SCOPED_CONTROLLERS = [
   FilesController,
   BulkIngestController,
   PendingActionsController,
+  // Added by #2558; every route already declared a capability, only this
+  // hand-maintained mirror had not caught up.
+  AgentJobsController,
 ];
 
 /** Every own method on a controller prototype (route handlers and helpers alike). */

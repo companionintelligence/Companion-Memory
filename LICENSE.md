@@ -1,200 +1,135 @@
-# Commercial Standard License
+> Companion Memory uses the [PolyForm Noncommercial License 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0). For common questions, see the [License FAQ](docs/License-FAQ.md) or email support@companionintelligence.com.
+>
+> Required Notice: Copyright LifeScope INC, DBA Companion Intelligence (https://ci.computer)
 
-* **License Identifier:** CI-Commercial-1.0
-* **Version:** 1.0
-* **Effective Date:** Dec 1 2024
-* **Last Updated:** April 14 2026
-* **Product Name:** Companion Intelligence, Companion Hub, Companion Core,
-  Companion Memory, Companion Scan, and associated products and services.
+# PolyForm Noncommercial License 1.0.0
 
-Copyright (c) 2019-2026 LifeScope INC, DBA Companion Intelligence. All rights
-reserved.
+<https://polyformproject.org/licenses/noncommercial/1.0.0>
 
-## 1. Definitions
+## Acceptance
 
-* **"Licensor"** means LifeScope INC, a Delaware corporation doing business as
-  Companion Intelligence.
-* **"Licensee"** or **"You"** means the individual or entity that has purchased
-  or subscribed to a license to use the Software under this Agreement.
-* **"Software"** means the object code, documentation, and any associated
-  materials provided by the Licensor under this Agreement, including any updates
-  or patches provided to the Licensee.
-* **"Agreement"** means this Commercial Standard License and all terms contained
-  herein.
-* **"Authorized Users"** means the number of individual users or device
-  installations permitted under the license tier purchased or subscribed to by
-  the Licensee.
+In order to get any license under these terms, you must agree
+to them as both strict obligations and conditions to all
+your licenses.
 
-## 2. Grant of License
+## Copyright License
 
-Subject to the terms and conditions of this Agreement and payment of all
-applicable fees, the Licensor grants the Licensee a limited, non-exclusive,
-non-transferable, non-sublicensable, revocable license to use the Software
-solely for the Licensee's internal purposes and in accordance with any usage
-limits associated with the purchased license tier.
+The licensor grants you a copyright license for the
+software to do everything you might do with the software
+that would otherwise infringe the licensor's copyright
+in it for any permitted purpose.  However, you may
+only distribute the software according to [Distribution
+License](#distribution-license) and make changes or new works
+based on the software according to [Changes and New Works
+License](#changes-and-new-works-license).
 
-This Agreement constitutes a license, not a sale. The Licensor retains all
-right, title, and interest in and to the Software, including all intellectual
-property rights therein.
+## Distribution License
 
-## 3. Intellectual Property and Ownership
+The licensor grants you an additional copyright license
+to distribute copies of the software.  Your license
+to distribute covers distributing the software with
+changes and new works permitted by [Changes and New Works
+License](#changes-and-new-works-license).
 
-The Software and all copies thereof are proprietary to the Licensor and title
-thereto remains in the Licensor. All rights in the Software not specifically
-granted in this Agreement are reserved to the Licensor. The Licensee
-acknowledges that the Software and its structure, organization, source code, and
-documentation constitute valuable trade secrets of the Licensor.
+## Notices
 
-Nothing in this Agreement shall be construed to grant the Licensee any rights to
-the Licensor's trademarks, service marks, trade names, or logos.
+You must ensure that anyone who gets a copy of any part of
+the software from you also gets a copy of these terms or the
+URL for them above, as well as copies of any plain-text lines
+beginning with `Required Notice:` that the licensor provided
+with the software.  For example:
 
-## 4. Restrictions
+> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
 
-Unless prior written consent has been obtained from the Licensor, the Licensee
-shall not:
+## Changes and New Works License
 
-* Distribute, sublicense, lease, rent, loan, or otherwise transfer the Software
-  or any rights therein to any third party.
-* Copy, reproduce, or duplicate the Software except as reasonably necessary for
-  backup or archival purposes.
-* Merge, compile, or incorporate the Software into other software or products
-  unless expressly permitted in writing by the Licensor.
-* Alter, remove, or obscure any proprietary notices, labels, or marks on or
-  within the Software or accompanying documentation.
-* Disassemble, decompile, reverse engineer, or otherwise attempt to derive the
-  source code of the Software, except to the extent expressly permitted by
-  applicable law that cannot be waived by contract.
-* Disclose, publish, or make available any source code, header files, make
-  files, libraries, or other proprietary components of the Software to any third
-  party.
-* Exceed the number of Authorized Users or installations permitted under the
-  license tier purchased or subscribed to by the Licensee.
-* Use the Software for any purpose that violates the Licensor's Acceptable Use
-  Policy.
+The licensor grants you an additional copyright license to
+make changes and new works based on the software for any
+permitted purpose.
 
-## 5. Source Code
+## Patent License
 
-The Software is provided in object code form only. No source code is provided
-under this Agreement. The Licensee acknowledges that the source code constitutes
-confidential and proprietary information of the Licensor.
+The licensor grants you a patent license for the software that
+covers patent claims the licensor can license, or becomes able
+to license, that you would infringe by using the software.
 
-## 6. Data Handling and Privacy
+## Noncommercial Purposes
 
-The Licensee's use of the Software may involve the processing of data as
-described in the Licensor's Privacy Policy. The Licensor's collection, use, and
-handling of data is governed by the Privacy Policy available at
-[https://ci.computer/privacy-policy](https://ci.computer/privacy-policy), which
-is incorporated herein by reference.
+Any noncommercial purpose is a permitted purpose.
 
-For locally hosted deployments of the Software, the Licensee is solely
-responsible for the security and handling of any data processed or stored on the
-Licensee's own infrastructure.
+## Personal Uses
 
-## 7. Disclaimer of Warranties
+Personal use for research, experiment, and testing for
+the benefit of public knowledge, personal study, private
+entertainment, hobby projects, amateur pursuits, or religious
+observance, without any anticipated commercial application,
+is use for a permitted purpose.
 
-THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE," WITHOUT WARRANTY OF ANY
-KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
-THE LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL BE UNINTERRUPTED,
-ERROR-FREE, OR FREE OF HARMFUL COMPONENTS, OR THAT DEFECTS WILL BE CORRECTED.
+## Noncommercial Organizations
 
-THE LICENSOR'S WARRANTY POLICY, AVAILABLE AT
-[https://ci.computer/warranty-policy](https://ci.computer/warranty-policy), MAY
-PROVIDE ADDITIONAL TERMS. IN THE EVENT OF A CONFLICT BETWEEN THIS SECTION AND
-THE WARRANTY POLICY, THE WARRANTY POLICY SHALL CONTROL.
+Use by any charitable organization, educational institution,
+public research organization, public safety or health
+organization, environmental protection organization,
+or government institution is use for a permitted purpose
+regardless of the source of funding or obligations resulting
+from the funding.
 
-SOME JURISDICTIONS DO NOT ALLOW THE EXCLUSION OF CERTAIN WARRANTIES, SO SOME OF
-THE ABOVE EXCLUSIONS MAY NOT APPLY TO THE LICENSEE.
+## Fair Use
 
-## 8. Limitation of Liability
+You may have "fair use" rights for the software under the
+law. These terms do not limit them.
 
-TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE
-LICENSOR BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR
-PUNITIVE DAMAGES, OR ANY LOSS OF PROFITS, REVENUE, DATA, OR BUSINESS OPPORTUNITY
-ARISING OUT OF OR RELATED TO THIS AGREEMENT OR THE USE OF OR INABILITY TO USE
-THE SOFTWARE, REGARDLESS OF THE THEORY OF LIABILITY (CONTRACT, TORT, OR
-OTHERWISE), EVEN IF THE LICENSOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
-DAMAGES.
+## No Other Rights
 
-THE LICENSOR'S TOTAL AGGREGATE LIABILITY UNDER THIS AGREEMENT SHALL NOT EXCEED
-THE AMOUNTS PAID BY THE LICENSEE TO THE LICENSOR FOR THE SOFTWARE DURING THE
-TWELVE (12) MONTHS IMMEDIATELY PRECEDING THE EVENT GIVING RISE TO THE CLAIM.
+These terms do not allow you to sublicense or transfer any of
+your licenses to anyone else, or prevent the licensor from
+granting licenses to anyone else.  These terms do not imply
+any other licenses.
 
-## 9. Indemnification
+## Patent Defense
 
-The Licensee agrees to indemnify, defend, and hold harmless the Licensor and its
-officers, directors, employees, and agents from and against any and all claims,
-liabilities, damages, losses, costs, and expenses (including reasonable
-attorneys' fees) arising out of or related to:
+If you make any written claim that the software infringes or
+contributes to infringement of any patent, your patent license
+for the software granted under these terms ends immediately. If
+your company makes such a claim, your patent license ends
+immediately for work on behalf of your company.
 
-* The Licensee's use of the Software in violation of this Agreement.
-* The Licensee's violation of any applicable law or regulation.
-* Any third-party claim arising from the Licensee's use of the Software.
+## Violations
 
-## 10. Term and Termination
+The first time you are notified in writing that you have
+violated any of these terms, or done anything with the software
+not covered by your licenses, your licenses can nonetheless
+continue if you come into full compliance with these terms,
+and take practical steps to correct past violations, within
+32 days of receiving notice.  Otherwise, all your licenses
+end immediately.
 
-This Agreement is effective as of the date the Licensee first accesses or uses
-the Software and continues until terminated.
+## No Liability
 
-The Licensor may terminate this Agreement immediately upon written notice if the
-Licensee breaches any term of this Agreement and fails to cure such breach
-within thirty (30) days of receiving written notice thereof.
+***As far as the law allows, the software comes as is, without
+any warranty or condition, and the licensor will not be liable
+to you for any damages arising out of these terms or the use
+or nature of the software, under any kind of legal claim.***
 
-Upon termination, the Licensee shall immediately cease all use of the Software,
-destroy all copies in the Licensee's possession or control, and, upon request,
-certify such destruction in writing to the Licensor.
+## Definitions
 
-Sections 3, 7, 8, 9, 11, 12, and 13 shall survive any termination or expiration
-of this Agreement.
+The **licensor** is the individual or entity offering these
+terms, and the **software** is the software the licensor makes
+available under these terms.
 
-## 11. Export Compliance
+**You** refers to the individual or entity agreeing to these
+terms.
 
-The Licensee shall comply with all applicable export control laws and
-regulations, including without limitation the U.S. Export Administration
-Regulations, and shall not export or re-export the Software to any prohibited
-country, entity, or person.
+**Your company** is any legal entity, sole proprietorship,
+or other kind of organization that you work for, plus all
+organizations that have control over, are under the control of,
+or are under common control with that organization.  **Control**
+means ownership of substantially all the assets of an entity,
+or the power to direct its management and policies by vote,
+contract, or otherwise.  Control can be direct or indirect.
 
-## 12. Governing Law and Jurisdiction
+**Your licenses** are all the licenses granted to you for the
+software under these terms.
 
-This Agreement shall be governed by and construed in accordance with the laws of
-the State of Deleware, without regard to its conflict of laws provisions. Any
-dispute arising under or in connection with this Agreement shall be subject to
-the exclusive jurisdiction of the state and federal courts located in United
-States of America, Deleware
-
-## 13. General Provisions
-
-**Severability.** If any provision of this Agreement is held to be invalid or
-unenforceable, the remaining provisions shall continue in full force and effect.
-
-**Entire Agreement.** This Agreement, together with the policies referenced
-herein, constitutes the entire agreement between the parties with respect to the
-subject matter hereof and supersedes all prior or contemporaneous
-understandings, agreements, or representations.
-
-**Amendment.** The Licensor reserves the right to modify this Agreement at any
-time. The Licensee's continued use of the Software after any such modification
-constitutes acceptance of the modified terms.
-
-**Waiver.** The failure of either party to enforce any right or provision of
-this Agreement shall not constitute a waiver of such right or provision.
-
-**Assignment.** The Licensee may not assign or transfer this Agreement or any
-rights hereunder without the prior written consent of the Licensor. The Licensor
-may assign this Agreement without restriction.
-
-## Related Policies
-
-The following policies are incorporated by reference into this Agreement:
-
-* [Terms of Service](https://ci.computer/terms-of-service)
-* [Privacy Policy](https://ci.computer/privacy-policy)
-* [DMCA Content Policy](https://ci.computer/dmca-content-policy)
-* [Acceptable Use Policy](https://ci.computer/acceptable-use-policy)
-* [Warranty Policy](https://ci.computer/warranty-policy)
-
-## **Questions and Contact**
-
-For licensing inquiries or support, please visit
-[https://ci.computer/support-faqs](https://ci.computer/support-faqs) or contact
-us at **team@ci.computer**.
+**Use** means anything you do with the software requiring one
+of your licenses.
