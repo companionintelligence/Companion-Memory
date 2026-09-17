@@ -72,8 +72,15 @@ enum ResolutionState {
 
 /// Holds whatever child processes this module itself spawned, so main.rs can
 /// tear them down on quit. Never holds a handle for an instance we detected
-/// but don't own (the user's own pre-existing Ollama) — see ollama_sidecar's
-/// RunningInstance::child doc comment.
+/// but don't own (the user's own pre-existing Ollama).
+///
+/// Both `ollama_child` and `ollama_relay` are populated by
+/// `ollama_sidecar::ensure_available` itself, directly, as soon as each
+/// resource exists — not by its caller after the whole (potentially
+/// multi-minute, model-download-and-pull) call returns. A quit signal
+/// arriving mid-resolution must still be able to find and kill whatever has
+/// been spawned so far; populating these fields only on a successful return
+/// would leave that window unguarded.
 pub struct LocalModelHandles {
     ollama_child: Mutex<Option<Child>>,
     /// Linux only in practice: the bridge-gateway relay in front of the
@@ -107,19 +114,45 @@ impl Default for LocalModelHandles {
 }
 
 impl LocalModelHandles {
+    /// For `ollama_sidecar::ensure_available` to register the child it spawns
+    /// directly, as soon as it exists — see this struct's own doc comment for
+    /// why that can't wait until `ensure_available` returns.
+    pub(crate) fn ollama_child_slot(&self) -> &Mutex<Option<Child>> {
+        &self.ollama_child
+    }
+
+    /// Same reason as `ollama_child_slot`, for the Linux bridge relay.
+    pub(crate) fn ollama_relay_slot(&self) -> &Mutex<Option<bridge_relay::RelayHandle>> {
+        &self.ollama_relay
+    }
+
     pub fn shutdown(&self) {
         // Relay first: it holds connections INTO the sidecar, so closing it
         // before killing the process avoids a window where a container's
         // in-flight request is relayed to a pid that is already gone.
-        if let Some(relay) = self.ollama_relay.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        //
+        // `.take()` is split onto its own statement, deliberately: an
+        // `if let Some(x) = mutex.lock()...take() { ... }` keeps the
+        // MutexGuard alive for the whole block in this edition, so
+        // `relay.shutdown()` — which blocks on a socket connect and a thread
+        // join — would otherwise run while still holding this lock, blocking
+        // any other thread (e.g. a status probe) that needs it for as long as
+        // shutdown takes. Ending the statement before calling shutdown() lets
+        // the guard drop first.
+        let relay = self.ollama_relay.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(relay) = relay {
             relay.shutdown();
         }
-        if let Some(mut child) = self.ollama_child.lock().unwrap_or_else(|p| p.into_inner()).take() {
+        let child = self.ollama_child.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(mut child) = child {
             let _ = child.kill();
         }
         #[cfg(target_os = "macos")]
-        if let Some(handle) = self.apple_bridge.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            handle.shutdown();
+        {
+            let handle = self.apple_bridge.lock().unwrap_or_else(|p| p.into_inner()).take();
+            if let Some(handle) = handle {
+                handle.shutdown();
+            }
         }
     }
 
@@ -192,10 +225,27 @@ fn resolve_and_start(
 
     if !host_ollama_running {
         let need_chat_model = chat_backend == ChatBackend::BundledOllama;
-        let instance = ollama_sidecar::ensure_available(data_dir, logs_dir, need_chat_model)?;
+        // `handles` is passed through so `ensure_available` can register the
+        // child (and, later, the relay) into it directly, as soon as each
+        // exists — see LocalModelHandles's own doc comment for why.
+        let instance = ollama_sidecar::ensure_available(data_dir, logs_dir, need_chat_model, handles)?;
         log::info!("Local Ollama instance answering on port {}", instance.port);
-        *handles.ollama_child.lock().unwrap_or_else(|p| p.into_inner()) = instance.child;
-        *handles.ollama_relay.lock().unwrap_or_else(|p| p.into_inner()) = instance.relay;
+    } else {
+        // Reusing an already-answering instance we did not start — nothing to
+        // register in `handles` (we own neither the process nor, on Linux, a
+        // relay for it: see ensure_available's own "somebody else's Ollama"
+        // comment). Logged, not silent, because this is exactly the case
+        // where container reachability now depends entirely on how THAT
+        // instance happens to be bound, and there is nothing else here that
+        // will say so.
+        #[cfg(target_os = "linux")]
+        log::info!(
+            "An Ollama instance is already answering on port {} — reusing it as-is, no bridge relay \
+             started. If the appliance's containers report model errors, this is the instance to check: \
+             it needs to be reachable from the docker bridge gateway, which this app made no decision \
+             about since it isn't the one that started it.",
+            ollama_sidecar::OLLAMA_PORT
+        );
     }
 
     let detail = match chat_backend {

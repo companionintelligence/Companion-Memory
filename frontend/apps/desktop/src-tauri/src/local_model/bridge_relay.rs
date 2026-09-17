@@ -55,6 +55,17 @@ use std::time::Duration;
 /// connect, so this only ever trips when the sidecar has died.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a relayed connection may go with no bytes moving in either
+/// direction before it's torn down. This is a request/response protocol
+/// (chat/embed calls), not a long-lived idle keepalive, so a genuinely stuck
+/// peer — a container that opened a connection and never sent anything, or a
+/// sidecar that stopped responding mid-stream — otherwise parks two OS
+/// threads (see `relay_connection`) forever, since `shutdown()` deliberately
+/// leaves in-flight connections to end on their own. Generous enough not to
+/// cut off real token streaming (which keeps producing bytes well inside this
+/// window) while still bounding the leak from a truly stalled peer.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
 #[derive(Debug)]
 pub struct RelayHandle {
     /// The single address this relay listens on — the docker bridge gateway.
@@ -69,11 +80,28 @@ impl RelayHandle {
     /// Connections already in flight are left to end on their own: their
     /// threads are detached and finish when either side closes. On app quit the
     /// sidecar they point at is killed moments later, which closes them.
+    ///
+    /// If the wake-up connect itself fails, this returns WITHOUT joining the
+    /// accept thread, rather than blocking forever. `accept()` only observes
+    /// the shutdown flag by accepting one more connection, so a failed wake-up
+    /// (the bridge interface having been torn down and recreated with a
+    /// different gateway while the app was running, e.g. Docker Desktop
+    /// quitting or `docker network prune`) would otherwise hang this call —
+    /// and everything downstream of it, including app quit — indefinitely.
+    /// The accept thread is simply left running in that case; it costs one
+    /// leaked thread + socket for the rest of the process's life rather than
+    /// an unresponsive app.
     pub fn shutdown(mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
         // `accept()` is blocking, so it will not observe the flag until one
         // more connection arrives. Be that connection.
-        let _ = TcpStream::connect_timeout(&self.bind_addr, Duration::from_millis(500));
+        if let Err(e) = TcpStream::connect_timeout(&self.bind_addr, Duration::from_millis(500)) {
+            log::warn!(
+                "ollama bridge relay: could not wake its accept loop to shut it down cleanly ({e}); \
+                 leaving it running rather than blocking on a join that may never return"
+            );
+            return;
+        }
         if let Some(handle) = self.accept_thread.take() {
             let _ = handle.join();
         }
@@ -169,6 +197,17 @@ fn relay_connection(inbound: TcpStream, port: u16) -> std::io::Result<()> {
     let _ = inbound.set_nodelay(true);
     let _ = outbound.set_nodelay(true);
 
+    // Bounds how long either side may go with no bytes moving — see
+    // IDLE_TIMEOUT's own comment. Applies to both reads and writes on both
+    // sockets: a stalled peer can stop reading just as easily as stop
+    // sending, and either one otherwise parks its half of this connection
+    // forever, since `RelayHandle::shutdown` deliberately does not track or
+    // interrupt in-flight connections.
+    for stream in [&inbound, &outbound] {
+        let _ = stream.set_read_timeout(Some(IDLE_TIMEOUT));
+        let _ = stream.set_write_timeout(Some(IDLE_TIMEOUT));
+    }
+
     let inbound_read = inbound.try_clone()?;
     let outbound_write = outbound.try_clone()?;
 
@@ -176,13 +215,26 @@ fn relay_connection(inbound: TcpStream, port: u16) -> std::io::Result<()> {
     // either direction is propagated rather than deadlocking the pair.
     let upstream = std::thread::spawn(move || pump(inbound_read, outbound_write));
     let downstream = pump(outbound, inbound);
-    let _ = upstream.join();
+
+    // Both directions are logged, not just the one this function returns:
+    // a client->sidecar failure (upstream) is otherwise invisible — it never
+    // surfaces here, and it may not even show up as a downstream error if the
+    // sidecar had already sent a full response before the client side broke.
+    match upstream.join() {
+        Ok(Err(e)) => log::debug!("ollama bridge relay: upstream (client→sidecar) direction ended: {e}"),
+        Err(_) => log::debug!("ollama bridge relay: upstream (client→sidecar) pump thread panicked"),
+        Ok(Ok(())) => {}
+    }
+
     downstream
 }
 
-/// Copies until EOF, then half-closes the write side so the peer sees the EOF
-/// too. `io::copy` alone would leave the other direction waiting forever on a
-/// connection the client has finished writing to.
+/// Copies until EOF or the idle timeout trips, then half-closes the write
+/// side so the peer sees the EOF too. `io::copy` alone would leave the other
+/// direction waiting forever on a connection the client has finished writing
+/// to (and, absent the idle read/write timeouts set on both sockets in
+/// `relay_connection`, on a connection that just stopped producing bytes
+/// without closing).
 fn pump(mut from: impl Read, mut to: TcpStream) -> std::io::Result<()> {
     let result = std::io::copy(&mut from, &mut to).map(|_| ());
     let _ = to.shutdown(Shutdown::Write);
@@ -294,5 +346,40 @@ mod tests {
 
         // The listener is closed, so the port is free to take again.
         TcpListener::bind(bound).expect("port released after shutdown");
+    }
+
+    /// The exact scenario `shutdown`'s own doc comment describes: the wake-up
+    /// connect fails (the bridge interface was torn down / the address never
+    /// answers), and shutdown must return anyway rather than block on a join
+    /// that can never happen. Proven by handing it an accept thread that
+    /// would hang forever if joined — if shutdown ever reached the join in
+    /// this scenario, this test would hang instead of finishing quickly.
+    #[test]
+    fn shutdown_does_not_hang_when_the_wake_up_connect_fails() {
+        let (never_sent, park) = std::sync::mpsc::channel::<()>();
+        let hang_until_dropped = std::thread::spawn(move || {
+            // Blocks until `never_sent` is dropped (below), standing in for
+            // an accept thread that never observes the shutdown flag because
+            // the wake-up connection never reached it.
+            let _ = park.recv();
+        });
+
+        let handle = RelayHandle {
+            // TEST-NET-1 (RFC 5737): guaranteed unconnectable, same address
+            // `spawn_fails_on_an_address_this_host_does_not_have` uses.
+            bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1)), 11434),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            accept_thread: Some(hang_until_dropped),
+        };
+
+        let started = std::time::Instant::now();
+        handle.shutdown();
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "shutdown() blocked instead of returning once the wake-up connect failed"
+        );
+
+        // Let the stand-in thread finish so it doesn't outlive the test process.
+        drop(never_sent);
     }
 }

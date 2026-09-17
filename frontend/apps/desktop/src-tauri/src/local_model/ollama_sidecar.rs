@@ -119,16 +119,6 @@ fn binary_name() -> &'static str {
 
 pub struct RunningInstance {
     pub port: u16,
-    /// `None` when we detected and are reusing an instance we don't own
-    /// (either already running, or launched from a PATH-found install) —
-    /// only a binary we downloaded ourselves gets killed on app quit; a
-    /// pre-existing user install is left exactly as we found it.
-    pub child: Option<Child>,
-    /// Linux only: the bridge-gateway relay that lets the compose containers
-    /// reach this loopback-bound sidecar. `None` on macOS/Windows (Docker
-    /// Desktop tunnels for us), and on Linux whenever no gateway could be
-    /// discovered — see [`start_bridge_relay`].
-    pub relay: Option<crate::local_model::bridge_relay::RelayHandle>,
 }
 
 /// Liveness probe over loopback, which is now also exactly where spawn_serve
@@ -164,14 +154,28 @@ fn find_on_path() -> Option<PathBuf> {
 /// pulled, choosing the cheapest of the three strategies described in the
 /// module doc comment. `need_chat_model` is false when the Apple on-device
 /// bridge is handling chat and this instance only needs to serve embeddings.
-pub fn ensure_available(data_dir: &Path, logs_dir: &Path, need_chat_model: bool) -> Result<RunningInstance, String> {
+///
+/// `handles` is where the spawned child (and, on Linux, the bridge relay) get
+/// registered — directly, from inside this function, as soon as each exists,
+/// rather than only after this whole call returns. That distinction matters:
+/// `wait_until_ready`/`pull_model` below can take minutes (a multi-GB model
+/// download), and a quit signal arriving during that window needs
+/// `LocalModelHandles::shutdown()` to already be able to find and kill the
+/// process it spawned — not wait for a return value that may be minutes away.
+pub fn ensure_available(
+    data_dir: &Path,
+    logs_dir: &Path,
+    need_chat_model: bool,
+    handles: &crate::local_model::LocalModelHandles,
+) -> Result<RunningInstance, String> {
     if is_running(OLLAMA_PORT) {
         // Somebody else's Ollama, bound however they chose. No relay: this
         // function has never bound anything on that path, and standing one up
         // would be this app making a reachability decision about a service it
         // does not own. If their instance is loopback-only, the containers
-        // cannot reach it — the same as before this relay existed.
-        return Ok(RunningInstance { port: OLLAMA_PORT, child: None, relay: None });
+        // cannot reach it — the same as before this relay existed. (The
+        // caller logs this case explicitly — see resolve_and_start.)
+        return Ok(RunningInstance { port: OLLAMA_PORT });
     }
 
     let log_path = logs_dir.join("ollama-sidecar.log");
@@ -189,6 +193,22 @@ pub fn ensure_available(data_dir: &Path, logs_dir: &Path, need_chat_model: bool)
 
     let child = spawn_serve(&binary, OLLAMA_PORT, models_dir.as_deref(), &log_path)?;
 
+    // Register now, before the potentially-minutes-long readiness wait and
+    // model pulls below — see this function's own doc comment. `.take()` any
+    // previous value defensively rather than dropping it outright: dropping a
+    // live `Child` orphans the OS process instead of killing it, and this
+    // function is not supposed to run concurrently with itself (resolve_once
+    // serializes callers), so finding one here would mean that assumption
+    // broke — better to clean it up than leak it.
+    if owns_process {
+        let mut guard = handles.ollama_child_slot().lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(mut previous) = guard.take() {
+            log::warn!("ollama_sidecar::ensure_available: an Ollama child was already registered — killing it before replacing it");
+            let _ = previous.kill();
+        }
+        *guard = Some(child);
+    }
+
     if !wait_until_ready(OLLAMA_PORT, Duration::from_secs(30)) {
         return Err("The local model server did not become ready within 30s — check ollama-sidecar.log.".to_string());
     }
@@ -201,9 +221,15 @@ pub fn ensure_available(data_dir: &Path, logs_dir: &Path, need_chat_model: bool)
     // After the pulls, not before: the relay only matters to the containers,
     // which cannot ask for a model until the stack is up, and a failure here
     // must not cost the user a re-download.
-    let relay = start_bridge_relay(OLLAMA_PORT);
+    if let Some(relay) = start_bridge_relay(OLLAMA_PORT) {
+        let mut guard = handles.ollama_relay_slot().lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(previous) = guard.take() {
+            previous.shutdown();
+        }
+        *guard = Some(relay);
+    }
 
-    Ok(RunningInstance { port: OLLAMA_PORT, child: owns_process.then_some(child), relay })
+    Ok(RunningInstance { port: OLLAMA_PORT })
 }
 
 /// Linux: publish the loopback sidecar on the one address containers arrive
