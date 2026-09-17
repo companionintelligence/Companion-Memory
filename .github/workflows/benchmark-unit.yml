@@ -2,16 +2,20 @@ name: Benchmark unit tests + regression gate
 
 # Runs only when files in scripts/benchmark/ change. The benchmark is a
 # self-contained Python suite — the CI-Server backend doesn't need to be built.
+# >>> ci-local:gated original triggers below, restore with `ci-local restore`
+# on:
+#   pull_request:
+#     paths:
+#       - scripts/benchmark/**
+#       - .github/workflows/benchmark-unit.yml
+#   push:
+#     branches: [main]
+#     paths:
+#       - scripts/benchmark/**
+#       - .github/workflows/benchmark-unit.yml
+# <<< ci-local:gated
 on:
-  pull_request:
-    paths:
-      - scripts/benchmark/**
-      - .github/workflows/benchmark-unit.yml
-  push:
-    branches: [main]
-    paths:
-      - scripts/benchmark/**
-      - .github/workflows/benchmark-unit.yml
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

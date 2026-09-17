@@ -95,70 +95,30 @@ Makefile's text the same way, and throws if a pin has gone missing.
 `caddy` (admin API live on `:2019`) and `ollama` (on `:11434`) are present — those three
 checks now live in `scripts/xtask/commands/dev.ts`.
 
-**CI is `workflow_dispatch`-only, with four exceptions.** Most workflows do not
-run on push, pull request, tag or schedule — for those, an absent check means
-nobody dispatched it, not that anything passed. Start one with
+**CI is `workflow_dispatch`-only — no exceptions, as of 2026-09-17.** Nothing
+runs on push, pull request, tag or schedule, so an absent check means nobody
+dispatched it, not that anything passed. Start one with
 `gh workflow run <file> --ref <branch-or-tag>`.
 
-**`docs/CI.md` holds the only maintained trigger table** — per workflow, plus
-the two `grep` commands that re-derive it from the `on:` blocks. Do not restate
-counts here: this file, `README.md` and two QA documents each carried their own
-copy and three of the four went stale (one still read "twelve workflows, nine
-dispatch-only" long after the tree held fourteen and ten). At the time of
-writing it is ten of fourteen dispatch-only; recount before quoting that:
-`grep -lE '^[[:space:]]+(pull_request|push|schedule):' .github/workflows/*.yml`.
+Until 2026-09-17 there were four exceptions — `pr-gate.yml` on every PR,
+`benchmark-unit.yml` on `scripts/benchmark/**` changes, and the two tag-triggered
+release lanes. `pr-gate.yml` was deleted (its own header comment called this
+exact revert "one move"; deleting it was that move) to cut the GitHub Actions
+bill, and the other three were gated to `workflow_dispatch` the same day via
+`ci-local gate --repo CI-Server --apply`. `main`'s branch protection was updated
+in the same change to stop requiring the six status checks only `pr-gate.yml`
+ever produced — **nothing gates a merge now, automatically or by review.**
 
-The four exceptions are listed here only because an agent must know them before
-touching a workflow (re-verified 2026-09-07):
+**`docs/CI.md` holds the only maintained trigger table and per-workflow
+notes, including the release-lane dispatch commands that replaced the tag-push
+auto-trigger.** Do not restate counts or exception lists here: this file used
+to carry its own copy and it went stale within weeks, twice. Re-derive rather
+than quote:
 
-- **`pr-gate.yml`** — `pull_request` against `main`, no path filter, so it runs
-  on **every** PR. Seven jobs: `install`, lint (4 lanes), typecheck (**3**
-  lanes: backend, frontend and `packages`, the last covering the eight
-  `frontend/packages/*` workspaces via
-  `yarn workspaces foreach --all run typecheck` — and, since the root gained a
-  `typecheck` script, the root workspace too, which is what typechecks
-  `scripts/**` including `scripts/xtask/`), `test-frontend` (**the whole
-  frontend vitest suite**), `build-web` (two `tsc && vite build` runs, PWA on
-  and off), `mobile-guards` (two dependency-free Node scripts — Capacitor
-  native sync and iOS plist duplicate keys — that otherwise run only from
-  lint-staged, which is inert in the agent worktrees) and `desktop-guards`
-  (`node --test` over `frontend/apps/desktop/scripts/*.test.cjs`, the suite
-  covering the resolver that decides which server images a shipped desktop app
-  pulls — also dependency-free, no `needs: install`). This set has grown three
-  times in two days; re-derive it before relying on it —
-  `grep -nE '^  [a-z][a-z0-9_-]*:$' .github/workflows/pr-gate.yml`.
-  `Type check packages` was red when it landed (`Cannot find module
-  '@/lib/utils'`, raised from two @ci/shadcn sources that used the `@/` alias
-  only @ci/shadcn's own tsconfig declares); both now import relatively and the
-  lane exits 0 on this branch, measured 2026-09-07 (`pr-gate.yml`'s own comment
-  records the same fix — an earlier revision of this paragraph called that
-  comment stale, which it no longer is). The
-  *backend* unit suite and the Python lanes stay on dispatch in `ci.yml`; the
-  frontend one no longer does, so this file's earlier "the unit-test and Python
-  lanes stay on dispatch" was only half true and is corrected here. Its
-  lint and typecheck jobs reuse `ci.yml`'s job names on purpose, so a dispatched
-  `ci.yml` reports the same check contexts. `Run frontend tests` is the one
-  exception: `pr-gate.yml` shards it four ways (`Run frontend tests (1/4)`..
-  `(4/4)`) after an unsharded run was killed by its own 20-minute step ceiling
-  on a hosted runner, while `ci.yml` runs it unsharded, so those two do **not**
-  report interchangeable contexts.
-- **`benchmark-unit.yml`** — `pull_request` **and** push to `main`, path-filtered
-  to `scripts/benchmark/**` and to the workflow file itself. It runs `pytest`
-  and then a **pinned `ruff==0.16.1`** (`check` + `format --check`), added
-  2026-09-06 — earlier revisions of this file said "*no linter*", which was how
-  141 ruff violations landed in that directory unnoticed. The pin matches what
-  the root `uv.lock` resolves; keep the two in step or this lane and `ci.yml`'s
-  `python` lane will disagree about what a violation is. Expect the lane to be
-  red until that pre-existing debt is cleared.
-- **`mobile-release.yml`** — push `ios-v*`, `android-v*`, or
-  `mobile-release-v*` to upload to TestFlight / Play internal.
-- **`desktop-release.yml`** — push `desktop-v*`. **Gated since 2026-09-07:**
-  its first job `verify-desktop-build-passed` refuses to build or publish unless
-  a successful `desktop-build.yml` run exists for the same SHA — that workflow is
-  where `cargo test` lives and it is dispatch-only, so a desktop release is
-  `gh workflow run desktop-build.yml --ref <branch>`, wait for green, then push the
-  tag. Bypass is `skip_test_gate=true` **plus a non-blank `bypass_reason`**, and it
-  is dispatch-only — a tag push cannot bypass.
+```bash
+grep -lE '^[[:space:]]+(pull_request|push|schedule):' .github/workflows/*.yml   # should print nothing
+gh api repos/companionintelligence/CI-Server/branches/main/protection --jq '.required_status_checks, .required_pull_request_reviews'
+```
 
 **`publish.yml` must be dispatched on a release TAG, never on `main`.** Its
 `Resolve VERSION from tag` steps do `tag="${GITHUB_REF#refs/tags/}"`, so on a
@@ -189,26 +149,12 @@ run for reasons unrelated to any change: the scan completes, then the upload is
 rejected with `Code Security must be enabled for this repository to use code
 scanning`. TestFlight is `mobile-release.yml` (tag or dispatch), not Xcode Cloud.
 
-**Six checks gate a merge; reviews do not.** `main`'s branch protection requires
-`Lint root`, `Lint backend`, `Lint frontend`, `Lint format`, `Type check
-backend` and `Type check frontend` (`strict: false`, `enforce_admins: false`) —
-read back from the API 2026-09-07. An earlier revision of this file said
-"**Nothing gates a merge**", and that half is stale: `docs/CI.md` and
-`docs/qa/ci-gate-proposal.md` §3.4 already record the gate, both dating it
-2026-09-08. All six are `pr-gate.yml` job names, which is why they are the ones
-that run on every PR; because `ci.yml` reuses those names on purpose (see
-above), a dispatched `ci.yml` reports the same contexts and can satisfy them
-too. `pr-gate.yml`'s **other** contexts still block nothing — `Type check
-packages`, `Run frontend tests (1/4)`..`(4/4)`, `Build web bundle`, `Mobile
-native guards`, `Desktop native guards` and `Migration versions` all run on
-every PR, and a red one merges. Reviews are not required at all: the API returns
-`required_pull_request_reviews: null`, so the old paragraph's
-`required_approving_review_count: 0` half still holds. The required list has
-already changed once and this file is not where it lives — re-derive it rather
-than quoting this paragraph: `gh api
-repos/companionintelligence/CI-Server/branches/main/protection --jq
-'.required_status_checks.contexts'`. See `docs/qa/` for the release QA
-programme, the measured baseline, and what a wider gate would cost.
+**Nothing gates a merge — not CI, not reviews.** This has flipped twice: it was
+true before 2026-09-08, false (six `pr-gate.yml` job names required) from
+2026-09-08 to 2026-09-17, and is true again now that `pr-gate.yml` is gone and
+those six were dropped from branch protection in the same change. See
+`docs/qa/` for the release QA programme, the measured baseline, and what a
+gate would cost if one were reintroduced.
 
 See `README.md` for the full prerequisite setup and the complete `make` command reference.
 

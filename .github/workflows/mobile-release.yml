@@ -73,12 +73,39 @@ name: Mobile Release
 # (IOS_EXTENSION_PROVISIONING_PROFILE_BASE64 is deliberately outside that count — it
 # is optional, and its absence downgrades to a ::warning:: at the profile-install step.)
 
+# >>> ci-local:gated original triggers below, restore with `ci-local restore`
+# on:
+#   push:
+#     tags:
+#       - 'ios-v*'
+#       - 'android-v*'
+#       - 'mobile-release-v*'
+#   workflow_dispatch:
+#     inputs:
+#       dry_run:
+#         # Not "no store contact": iOS validates only, Android commits a Play *draft*
+#         # (no rollout, but the version code is spent). See the header note on `dry_run`.
+#         description: 'Build and sign; release to nobody (iOS validates only, Android commits a Play draft)'
+#         type: boolean
+#         default: true
+#       version_name:
+#         description: 'Marketing version (e.g. 1.0.0). Defaults to the tag or 0.1.0.'
+#         type: string
+#         required: false
+#       platform:
+#         description: 'Which store lane to run'
+#         type: choice
+#         options:
+#           - ios
+#           - android
+#           - both
+#         default: ios
+#
+# # The root install pulls the private @companionintelligence/tokens package from GitHub
+# # Packages; .yarnrc.yml authenticates with ${NODE_AUTH_TOKEN}. Without `packages: read`
+# # the job's GITHUB_TOKEN cannot read it and every install fails as an anonymous user.
+# <<< ci-local:gated
 on:
-  push:
-    tags:
-      - 'ios-v*'
-      - 'android-v*'
-      - 'mobile-release-v*'
   workflow_dispatch:
     inputs:
       dry_run:
