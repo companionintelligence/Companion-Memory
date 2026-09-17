@@ -124,14 +124,19 @@ pub struct RunningInstance {
     /// only a binary we downloaded ourselves gets killed on app quit; a
     /// pre-existing user install is left exactly as we found it.
     pub child: Option<Child>,
+    /// Linux only: the bridge-gateway relay that lets the compose containers
+    /// reach this loopback-bound sidecar. `None` on macOS/Windows (Docker
+    /// Desktop tunnels for us), and on Linux whenever no gateway could be
+    /// discovered — see [`start_bridge_relay`].
+    pub relay: Option<crate::local_model::bridge_relay::RelayHandle>,
 }
 
-/// Liveness probe, deliberately over loopback on every platform even though
-/// spawn_serve binds wider on Linux (see its bind_host comment): 127.0.0.1
-/// always reaches a server bound to 0.0.0.0, and this question is "is anything
-/// answering on this host's port 11434", which is exactly what the three-tier
-/// resolution in the module doc comment needs. Container-side reachability is
-/// a separate property, fixed at the bind, not here.
+/// Liveness probe over loopback, which is now also exactly where spawn_serve
+/// binds (it used to bind wider on Linux — see its bind_host comment). The
+/// question this answers is "is anything answering on this host's port 11434",
+/// which is what the three-tier resolution in the module doc comment needs, and
+/// loopback reaches a server however widely it is bound. Container-side
+/// reachability is a separate property, owned by bridge_relay, not by this.
 pub fn is_running(port: u16) -> bool {
     let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(800))
@@ -161,7 +166,12 @@ fn find_on_path() -> Option<PathBuf> {
 /// bridge is handling chat and this instance only needs to serve embeddings.
 pub fn ensure_available(data_dir: &Path, logs_dir: &Path, need_chat_model: bool) -> Result<RunningInstance, String> {
     if is_running(OLLAMA_PORT) {
-        return Ok(RunningInstance { port: OLLAMA_PORT, child: None });
+        // Somebody else's Ollama, bound however they chose. No relay: this
+        // function has never bound anything on that path, and standing one up
+        // would be this app making a reachability decision about a service it
+        // does not own. If their instance is loopback-only, the containers
+        // cannot reach it — the same as before this relay existed.
+        return Ok(RunningInstance { port: OLLAMA_PORT, child: None, relay: None });
     }
 
     let log_path = logs_dir.join("ollama-sidecar.log");
@@ -188,7 +198,68 @@ pub fn ensure_available(data_dir: &Path, logs_dir: &Path, need_chat_model: bool)
         pull_model(OLLAMA_PORT, DEFAULT_CHAT_MODEL)?;
     }
 
-    Ok(RunningInstance { port: OLLAMA_PORT, child: owns_process.then_some(child) })
+    // After the pulls, not before: the relay only matters to the containers,
+    // which cannot ask for a model until the stack is up, and a failure here
+    // must not cost the user a re-download.
+    let relay = start_bridge_relay(OLLAMA_PORT);
+
+    Ok(RunningInstance { port: OLLAMA_PORT, child: owns_process.then_some(child), relay })
+}
+
+/// Linux: publish the loopback sidecar on the one address containers arrive
+/// from. A no-op everywhere else, where Docker Desktop already tunnels
+/// `host.docker.internal` to the host's loopback.
+///
+/// Every failure is non-fatal and returns `None`. That is the deliberate
+/// trade: the app still runs, the sidecar still answers everything on this
+/// host, and the log says exactly what the containers will not be able to
+/// reach and why — which is strictly better than the `0.0.0.0` bind this
+/// replaced, where the same situations silently exposed an unauthenticated GPU
+/// to the LAN instead.
+fn start_bridge_relay(port: u16) -> Option<crate::local_model::bridge_relay::RelayHandle> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = port;
+        None
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use crate::local_model::bridge_relay;
+
+        let gateway = match bridge_relay::discover_host_gateway() {
+            Ok(gateway) => gateway,
+            Err(e) => {
+                // The rootless-Docker case among others (moby#47684). Loopback
+                // is also the bind most likely to work there, so this is a
+                // warning rather than an error — but it is a loud one, because
+                // if the containers DO fail to reach the model this line is the
+                // only thing that explains it.
+                log::warn!(
+                    "Local model server is bound to 127.0.0.1:{port} and no docker bridge gateway \
+                     could be discovered ({e}). If the appliance reports model errors, check \
+                     `docker network inspect bridge` — under rootless Docker the containers \
+                     should still reach the host on loopback."
+                );
+                return None;
+            }
+        };
+
+        match bridge_relay::spawn(gateway, port) {
+            Ok(handle) => {
+                log::info!("Local model server reachable by containers at {} (relayed to 127.0.0.1:{port})", handle.bind_addr);
+                Some(handle)
+            }
+            Err(e) => {
+                log::error!(
+                    "Local model server is bound to 127.0.0.1:{port} but the bridge-gateway relay \
+                     on {gateway}:{port} could not start ({e}). The appliance's containers will \
+                     not be able to reach it."
+                );
+                None
+            }
+        }
+    }
 }
 
 fn download_and_extract(dest_dir: &Path) -> Result<PathBuf, String> {
@@ -298,67 +369,36 @@ fn spawn_serve(binary: &Path, port: u16, models_dir: Option<&Path>, log_path: &P
         .map_err(|e| format!("Failed to open {}: {e}", log_path.display()))?;
     let log_file_err = log_file.try_clone().map_err(|e| format!("Failed to clone log handle: {e}"))?;
 
-    // Where the sidecar binds. Loopback is the narrowest thing that works on
-    // macOS/Windows, because Docker Desktop's VM tunnels
+    // Where the sidecar binds: LOOPBACK ONLY, on every platform.
+    //
+    // macOS/Windows need nothing more — Docker Desktop's VM tunnels
     // `host.docker.internal` back to the host's loopback for us.
-    #[cfg(not(target_os = "linux"))]
-    let bind_host = "127.0.0.1";
-    // Linux is different, and it is the platform this lane's .deb/.rpm
-    // targets. The containers reach the host through
+    //
+    // Linux used to bind `0.0.0.0` here, because on NATIVE Docker Engine
     // `host.docker.internal:host-gateway` (docker-compose.yml,
-    // docker-compose.production.yml), and on NATIVE Docker Engine that alias
-    // resolves to the docker BRIDGE GATEWAY address, not the host's loopback —
-    // so a sidecar bound to 127.0.0.1 refuses every chat/embedding call from
-    // `api`, hbpe-service and summary-service while `docker compose ps` and
-    // is_running() above both still say healthy. (Docker Desktop for Linux
-    // tunnels like macOS and is unaffected; we can't tell the two apart from
-    // here, so the wider bind covers both.)
+    // docker-compose.production.yml) resolves to the docker BRIDGE GATEWAY
+    // address rather than the host's loopback, so a loopback-bound sidecar
+    // refused every chat/embedding call from `api`, hbpe-service and
+    // summary-service while `docker compose ps` and is_running() below both
+    // still said healthy.
     //
-    // ⚠️ SECURITY — KNOWN TOO WIDE. This is a deliberate interim state, not a
-    // settled design, and it must be narrowed before the first desktop release
-    // ships. Nothing is exposed today only because desktop-release.yml has
-    // never run.
+    // That bind was too wide and is gone. Ollama has NO server-side auth on any
+    // route (`OLLAMA_AUTH` is a CLIENT-side request-signing flag, api/client.go;
+    // the server registers only CORS and allowedHosts middlewares), and binding
+    // non-loopback DISABLES the one guard it does have — allowedHostsMiddleware
+    // short-circuits on a non-loopback listen address. So `0.0.0.0` handed any
+    // LAN peer unauthenticated /api/generate, /api/chat and /api/embed (free use
+    // of this machine's GPU) plus destructive /api/delete + /api/create — and
+    // that last pair is a persistent model-substitution foothold, because
+    // OllamaService::resolveServedChatModel falls back to "whatever model is
+    // served" when the configured tag is absent.
     //
-    // What 0.0.0.0 actually costs, verified against the pinned Ollama
-    // v0.32.15 source rather than assumed:
-    //   * Ollama has NO server-side auth on any route. `OLLAMA_AUTH` is a
-    //     CLIENT-side request-signing flag (api/client.go); the server
-    //     registers exactly two middlewares, CORS and allowedHosts.
-    //   * Binding non-loopback DISABLES the one guard it does have:
-    //     allowedHostsMiddleware short-circuits (`if !addr.Addr().IsLoopback()
-    //     { c.Next(); return }`), so the wide bind is strictly worse than the
-    //     bind plus that check. OLLAMA_ORIGINS is CORS, irrelevant to a
-    //     non-browser client.
-    //   * Any LAN peer therefore gets unauthenticated /api/generate, /api/chat
-    //     and /api/embed (free use of this machine's GPU), AND destructive
-    //     /api/delete + /api/create. That last pair matters here beyond the
-    //     obvious: OllamaService::resolveServedChatModel falls back to
-    //     "whatever model is served" when the configured tag is absent, so
-    //     deleting gemma4:e4b and creating a substitute under that name is a
-    //     persistent model-substitution foothold in the component this
-    //     appliance hands its memory to. There is no direct read path to the
-    //     database — the sidecar holds no credentials and Postgres publishes
-    //     no port — but that is a smaller comfort than it sounds.
-    //
-    // Two things an earlier revision of this comment asserted are FALSE:
-    //   * "the gateway address differs per compose network, so there is no
-    //     narrower address that is reliably right" — wrong. `host-gateway` is
-    //     a single daemon-global value (moby's setHostGatewayIP uses the
-    //     DEFAULT bridge's IP), so containers on a user-defined compose
-    //     network still arrive from 172.17.0.1. It is discoverable before
-    //     compose runs via `docker network inspect bridge`.
-    //   * "the same trade docs/operations/gpu-model-residency.md already
-    //     makes" — that is a systemd tuning override an operator applies to
-    //     their OWN server-class host, not a bind this app chooses on a
-    //     user's laptop. The precedent does not transfer.
-    //
-    // TODO(desktop-release): bind Ollama to loopback and add a ~40-line raw
-    // TCP relay listening ONLY on the discovered host-gateway address, with a
-    // loud, documented fallback when it cannot be discovered (rootless Docker
-    // resolves host-gateway to an address in RootlessKit's namespace — see
-    // moby#47684 — so the fallback path is real and needs its own answer).
-    #[cfg(target_os = "linux")]
-    let bind_host = "0.0.0.0";
+    // Container reachability on Linux is now restored by local_model::
+    // bridge_relay, which listens on the discovered bridge-gateway address ONLY
+    // and forwards to this loopback socket — see ensure_available below and that
+    // module's doc comment, including what happens under rootless Docker, where
+    // no bridge gateway is discoverable.
+    let bind_host = "127.0.0.1";
 
     let mut cmd = Command::new(binary);
     cmd.arg("serve")

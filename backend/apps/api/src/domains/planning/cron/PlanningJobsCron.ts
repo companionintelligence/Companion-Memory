@@ -8,6 +8,7 @@ import { UserService } from '@ci/domains/user';
 
 import {
   PlanningEventNowEvent,
+  PlanningFireRemindersEvent,
   PlanningInboxScanEvent,
   PlanningTodoProcessEvent,
   PlanningTodoScanEvent,
@@ -24,6 +25,16 @@ const INBOX_SCAN_CRON = '*/30 * * * *';
 const EVENT_NOW_CRON = '15 * * * *';
 /** Catch-up after blocks end. */
 const VERIFY_DONE_CRON = '45 * * * *';
+/**
+ * Reminder claim-and-deliver tick, matching CI-Planning's `fire_reminders`
+ * cadence (`'* * * * *'` in the source). Every minute, same as the other four
+ * sub-hourly entries here — none of PlanningJobsCron's five siblings carry a
+ * seconds field or a non-zero-second offset (see
+ * `common/schedule/__tests__/cronSecondOffsets.test.ts`, whose registry does
+ * not include this cron at all), so this keeps that same shape rather than
+ * introducing one schedule here that behaves differently from its neighbours.
+ */
+const FIRE_REMINDERS_CRON = '* * * * *';
 
 /**
  * Fan-out only. Each job carries a real `userId`; planning services never see
@@ -65,13 +76,19 @@ export class PlanningJobsCron {
     await this.fanOut(PlanningVerifyDoneEvent, 'verify_done');
   }
 
+  @Cron(FIRE_REMINDERS_CRON, { name: 'PlanningJobsCron.fireReminders' })
+  async enqueueFireReminders() {
+    await this.fanOut(PlanningFireRemindersEvent, 'fire_reminders');
+  }
+
   private async fanOut(
     event:
       | typeof PlanningTodoScanEvent
       | typeof PlanningTodoProcessEvent
       | typeof PlanningInboxScanEvent
       | typeof PlanningEventNowEvent
-      | typeof PlanningVerifyDoneEvent,
+      | typeof PlanningVerifyDoneEvent
+      | typeof PlanningFireRemindersEvent,
     label: string,
   ) {
     if (!(await this.featureService.isFeatureEnabled('planning.enabled'))) {

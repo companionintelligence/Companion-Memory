@@ -98,6 +98,10 @@ on:
 
 permissions:
   contents: read
+  # The root `yarn install` below resolves @companionintelligence/tokens from
+  # GitHub Packages, which is private. Without this scope GITHUB_TOKEN reads as
+  # an anonymous user and the fetch step dies with YN0041 Invalid authentication.
+  packages: read
 
 concurrency:
   group: desktop-e2e-${{ github.ref }}
@@ -127,6 +131,27 @@ jobs:
       # write the .env somewhere compose never looks and fail at `--env-file`.
       COMPOSE_DIR: frontend/apps/desktop/src-tauri/resources
     steps:
+      # The full appliance image set — api, worker, migrate-database, database,
+      # object-store, summary-service and hbpe (which carries CUDA wheels) —
+      # does not fit beside the ~23 GB of preinstalled SDKs a hosted
+      # ubuntu-latest runner ships. The 2026-09-16 run died mid-`Extracting`
+      # with `No space left on device` after pulling six of them.
+      #
+      # Nothing this job does needs any of these: it installs Node, pulls
+      # published images and runs Playwright. `$AGENT_TOOLSDIRECTORY` goes too
+      # — setup-node below simply downloads Node instead of reading it from the
+      # tool cache, which costs seconds. Done before checkout so a failure
+      # costs nothing, and `|| true` throughout because a future runner image
+      # that drops one of these paths must not turn this lane red for it.
+      - name: Reclaim runner disk space
+        run: |
+          echo "Before:"; df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" \
+                      /usr/share/swift /usr/local/.ghcup || true
+          sudo docker image prune --all --force || true
+          echo "After:"; df -h / | tail -1
+
       # Full history + tags: the tag resolution below walks ancestor release
       # tags (`git tag --merged HEAD`), and a shallow clone has none — which
       # that script treats as a hard failure under CI rather than baking in an
@@ -147,8 +172,14 @@ jobs:
 
       # Only needed for @playwright/test itself — nothing in tests/desktop
       # imports application code. The stack under test is pulled, not built.
+      #
+      # NODE_AUTH_TOKEN is not optional: .yarnrc.yml points the
+      # `companionintelligence` scope at npm.pkg.github.com, so the canon
+      # tokens package cannot be fetched anonymously.
       - name: Install dependencies
         run: yarn install --immutable
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Mirrors `yarn build`'s own pre-step in frontend/apps/desktop: it copies
       # docker-compose.yml + docker-compose.production.yml from the repo root

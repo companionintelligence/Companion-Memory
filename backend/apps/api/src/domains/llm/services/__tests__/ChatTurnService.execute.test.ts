@@ -1,7 +1,13 @@
 import { Channel } from '@ci/common/rpc';
 
+import { LlmFirstResponseTimeoutError } from '../../firstResponseDeadline';
 import { ChatGenerationBroker } from '../ChatGenerationBroker';
-import { ChatTurnService, EMPTY_TURN_FALLBACK_TEXT, persistedAssistantContent } from '../ChatTurnService';
+import {
+  ChatTurnService,
+  EMPTY_TURN_FALLBACK_TEXT,
+  MAX_FIRST_RESPONSE_ATTEMPTS,
+  persistedAssistantContent,
+} from '../ChatTurnService';
 
 const payload = {
   ownerId: 'user-1',
@@ -17,6 +23,7 @@ const payload = {
 function streamFrom(
   chunks: Array<{ message: { content?: string; thinking?: string } }>,
   accumulated: Array<{ role: string; content: string }>,
+  error?: Error,
 ) {
   const generator = (async function* () {
     for (const chunk of chunks) {
@@ -26,6 +33,12 @@ function streamFrom(
 
   Object.defineProperty(generator, 'messages', {
     get: () => accumulated,
+  });
+
+  // Mirrors OllamaService.chatStream: a swallowed backend failure is exposed
+  // additively on the stream, never thrown at the consumer.
+  Object.defineProperty(generator, 'error', {
+    get: () => error,
   });
 
   return generator;
@@ -191,6 +204,42 @@ describe('ChatTurnService.execute providers', () => {
       expect.anything(),
       expect.objectContaining({ role: 'assistant', content: EMPTY_TURN_FALLBACK_TEXT }),
     );
+  });
+
+  it('asks again when the backend never started answering, then fails the job rather than faking a reply', async () => {
+    // The measured failure: the request sat in Ollama's scheduler with no
+    // response until a timeout tore it down, and the turn ended in fallback
+    // prose that read as if the model had answered. A no-response is now a
+    // bounded retry and then a FAILED job — pg-boss's retry/backoff applies,
+    // and the thread reads `failed`.
+    const noResponse = new LlmFirstResponseTimeoutError('gemma4:e4b', 90_000);
+    const chatStream = jest.fn(async () => streamFrom([], [], noResponse));
+    const messageService = {
+      findByThreadId: jest.fn(),
+      update: jest.fn(),
+      create: jest.fn(async () => ({})),
+    };
+    const { service, broker, ollamaService } = buildService(chatStream, messageService);
+    const published: Array<{ channel: Channel; text: string }> = [];
+    const original = broker.publish.bind(broker);
+    broker.publish = (threadId, chunk) => {
+      published.push(chunk);
+      original(threadId, chunk);
+    };
+
+    const threadUpdates: unknown[] = [];
+    const threadService = (service as unknown as { threadService: { update: jest.Mock } }).threadService;
+    threadService.update.mockImplementation(async (_ctx: unknown, _id: string, data: unknown) => {
+      threadUpdates.push(data);
+    });
+
+    await expect(service.execute(payload)).rejects.toBe(noResponse);
+
+    expect(ollamaService.chatStream).toHaveBeenCalledTimes(MAX_FIRST_RESPONSE_ATTEMPTS);
+    expect(published).not.toContainEqual({ channel: Channel.TEXT, text: EMPTY_TURN_FALLBACK_TEXT });
+    expect(messageService.create).not.toHaveBeenCalled();
+    expect(threadUpdates).toContainEqual({ generationStatus: 'failed' });
+    expect(threadUpdates).not.toContainEqual({ generationStatus: 'idle' });
   });
 
   it('does not substitute the fallback when the model streamed real text', async () => {

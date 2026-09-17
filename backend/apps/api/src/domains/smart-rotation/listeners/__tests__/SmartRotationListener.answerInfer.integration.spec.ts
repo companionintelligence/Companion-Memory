@@ -133,9 +133,9 @@ describeWithDatabase(`SmartRotationListener answer_infer selection (${availabili
         dispatched.data->>'questionId' AS question_id,
         COUNT(*)::text AS attempts
       FROM (
-        SELECT data FROM pgboss.job WHERE name = 'llm' AND data->>'name' = $1
+        SELECT data FROM pgboss.job WHERE name = 'llm-background' AND data->>'name' = $1
         UNION ALL
-        SELECT data FROM pgboss.archive WHERE name = 'llm' AND data->>'name' = $1
+        SELECT data FROM pgboss.archive WHERE name = 'llm-background' AND data->>'name' = $1
       ) dispatched
       WHERE dispatched.data->>'ownerId' IS NOT NULL
       GROUP BY 1, 2

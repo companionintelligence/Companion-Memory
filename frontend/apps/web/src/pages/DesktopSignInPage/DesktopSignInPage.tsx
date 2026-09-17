@@ -1,11 +1,32 @@
 import { useState } from 'react';
 
-import { Button } from '@ci/shadcn';
+import { Button, Input } from '@ci/shadcn';
 import { Link } from 'react-router-dom';
 
 import { OidcButton } from '@/components/OidcButton';
 import { QrCode } from '@/components/QrCode';
+import { useAuth } from '@/hooks';
 import { BrainMark, Reveal, SplashShell } from '@/pages/SplashPage/SplashChrome';
+
+/**
+ * What the browser round-trip came back with, in words. `useAuth` turns the
+ * deep link's `error=` into an Error whose message is the raw code; every one
+ * of them used to end here unread, so a rejected sign-in looked exactly like a
+ * button that had done nothing — the browser opened, the user came back, and
+ * the screen had not changed.
+ */
+function describeSignInError(error: unknown): { message: string; needsInvitation: boolean } {
+  const code = error instanceof Error ? error.message : '';
+
+  if (code === 'signup_code_required') {
+    return {
+      message: 'This Memory already belongs to someone. Ask its owner for an invitation and enter it below.',
+      needsInvitation: true,
+    };
+  }
+
+  return { message: 'Sign in failed. Please try again.', needsInvitation: false };
+}
 
 /**
  * The desktop app's first screen.
@@ -24,7 +45,17 @@ import { BrainMark, Reveal, SplashShell } from '@/pages/SplashPage/SplashChrome'
  * deep link, which useAuth already listens for.
  */
 export function DesktopSignInPage() {
+  const [{ error }] = useAuth();
   const [showPairing, setShowPairing] = useState(false);
+  // An invitation travels inside the OIDC round-trip (see OidcButton's
+  // signupCode), which is the only way a SECOND person can get into an
+  // appliance through Portal sign-in: the callback has nowhere else to learn
+  // they were invited. The field appears when the server asks for one, or when
+  // the person already knows they have one.
+  const [inviteCode, setInviteCode] = useState('');
+  const [showInvite, setShowInvite] = useState(false);
+  const signInError = error == null ? null : describeSignInError(error);
+  const inviteVisible = showInvite || signInError?.needsInvitation === true;
   // The address this appliance is reachable at — the same origin the shell
   // redirected to once the stack was healthy.
   const applianceUrl = typeof window === 'undefined' ? '' : window.location.origin;
@@ -42,8 +73,27 @@ export function DesktopSignInPage() {
         <Reveal delay={120} className="flex w-full max-w-sm flex-col items-center gap-4">
           <h1 className="text-center text-2xl font-bold tracking-tight">Sign in to your memory</h1>
 
+          {signInError && (
+            <p role="alert" className="text-center text-sm text-destructive">
+              {signInError.message}
+            </p>
+          )}
+
+          {inviteVisible && (
+            <label className="flex w-full flex-col gap-1 text-sm">
+              <span className="text-muted-foreground">Invitation</span>
+              <Input
+                value={inviteCode}
+                onChange={(event) => setInviteCode(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="Paste the invitation from this Memory's owner"
+              />
+            </label>
+          )}
+
           <div className="flex w-full flex-col gap-2">
-            <OidcButton label="Sign in with Companion account" />
+            <OidcButton label="Sign in with Companion account" signupCode={inviteCode} />
             <p className="text-center text-xs text-muted-foreground">Opens your browser to sign in.</p>
           </div>
 
@@ -51,6 +101,12 @@ export function DesktopSignInPage() {
             <Button asChild variant="link" className="text-muted-foreground">
               <Link to="/login">Use email and password instead</Link>
             </Button>
+
+            {!inviteVisible && (
+              <Button variant="link" className="text-muted-foreground" onClick={() => setShowInvite(true)}>
+                I have an invitation
+              </Button>
+            )}
 
             {/* Pairing, not sign-in. The code carries this appliance's address so a
                 phone can reach it; it cannot sign this machine in, because the

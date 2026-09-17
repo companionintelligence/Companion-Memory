@@ -56,11 +56,44 @@ make test-desktop   # cargo test in frontend/apps/desktop/src-tauri
 # Build images (ENV=local|staging|production, default local;
 # GPU=cpu|cuda|rocm, auto-detected)
 make build
+make build IMAGE=api    # just one image, not the whole ENV-appropriate set. Valid:
+                        # api gateway setup-database database object-store
+                        # setup-secrets summary hbpe
+make build DRY_RUN=1    # print the exact docker build commands — every --build-arg
+                        # and, on a cuda/rocm host, the wheel-image tags — without running Docker
 ```
+
+**Three of those targets are one-line delegations to `scripts/xtask/`, a TypeScript program
+run under `tsx`: `build`, `dev` and `test`.** Their logic is no
+longer in the Makefile — read the recipe before editing it. Dispatch, `--help` and signal
+handling are in `scripts/xtask/index.ts`; one file per subcommand under `commands/`; shared
+pieces under `lib/` — `exec.ts` (`run()` fail-fast / `tryRun()` tolerant), `gpu.ts` (GPU
+detection + the HBPE wheel-tag and build-arg derivation), `images.ts` (image repo names,
+`TAG`, the `ci.source-tree` sidecar stamp), `uv.ts` (the uv pin, read from `pyproject.toml`),
+`identity.ts` (`REPO` / `PROJECT_NAME`). Every subcommand takes `--help` and validates its
+arguments. Its unit tests run from the repo-root `yarn test` and are reached by `make test`,
+because the root `package.json` now declares `test` and `typecheck` scripts and so is picked
+up by `yarn workspaces foreach --all`; the root `tsconfig.json` (`include: scripts/**/*.ts`,
+bumped to `target: ES2022`) is what typechecks them. Every other Makefile target is untouched
+and `make help` still lists them all.
+
+**`health` is deliberately NOT ported.** It is the toolchain diagnostic, and a prerequisite
+checker must not require the prerequisites — a ported version died with a raw yarn error on a
+checkout that had not run `make install` yet. It stays pure shell in the Makefile, and
+`xtask dev` shells out to `make health` exactly as the old `$(MAKE) health` line did.
+`distribute-license` and `clean-license` also stay shell and stay **public** targets:
+`.github/workflows/e2e.yml`, `video/stage.sh`, `video/stage.real-corpus.sh` and
+`video/README.md` all invoke `make distribute-license`, and `xtask build` calls back into
+both. Four pins stay in the Makefile in their exact `NAME := value` / `NAME ?= value` form
+because the three wheel-publish scripts in `backend/apps/hbpe/` `sed` them out by name —
+`FLASH_ATTN_VERSION`, `LLAMA_CPP_PYTHON_REF`, `LLAMA_CPP_PYTHON_VERSION`,
+`AMDGPU_WHEEL_TARGETS`. `lib/gpu.ts` does not copy them; it reads them back out of the
+Makefile's text the same way, and throws if a pin has gone missing.
 
 `make dev` runs `make health` first (node present and matching `.nvmrc`, yarn matching
 `packageManager`, `uv` present — any mismatch exits 1), then hard-fails unless `overmind`,
-`caddy` (admin API live on `:2019`) and `ollama` (on `:11434`) are present.
+`caddy` (admin API live on `:2019`) and `ollama` (on `:11434`) are present — those three
+checks now live in `scripts/xtask/commands/dev.ts`.
 
 **CI is `workflow_dispatch`-only, with four exceptions.** Most workflows do not
 run on push, pull request, tag or schedule — for those, an absent check means
@@ -82,7 +115,9 @@ touching a workflow (re-verified 2026-09-07):
   on **every** PR. Seven jobs: `install`, lint (4 lanes), typecheck (**3**
   lanes: backend, frontend and `packages`, the last covering the eight
   `frontend/packages/*` workspaces via
-  `yarn workspaces foreach --all run typecheck`), `test-frontend` (**the whole
+  `yarn workspaces foreach --all run typecheck` — and, since the root gained a
+  `typecheck` script, the root workspace too, which is what typechecks
+  `scripts/**` including `scripts/xtask/`), `test-frontend` (**the whole
   frontend vitest suite**), `build-web` (two `tsc && vite build` runs, PWA on
   and off), `mobile-guards` (two dependency-free Node scripts — Capacitor
   native sync and iOS plist duplicate keys — that otherwise run only from

@@ -40,13 +40,13 @@ describe('ImportApiClient', () => {
     expect(calls[0].headers['x-api-key']).toBe('secret');
   });
 
-  it('keeps the literal /api prefix the maintenance routes declare', async () => {
+  it('uses the appliance-wide ingest lifecycle status route', async () => {
     const { fetchImpl, calls } = stubFetch(() => json({ tables: {}, searchIndex: {}, at: '' }));
     const client = new ImportApiClient({ baseUrl: 'http://box:3030', apiKey: null, fetchImpl });
 
     await client.ingestStatus();
 
-    expect(calls[0].url).toBe('http://box:3030/api/maintenance/ingest-status');
+    expect(calls[0].url).toBe('http://box:3030/v1/ingest/status?scope=appliance');
   });
 
   it('omits an absent api key entirely rather than sending an empty one', async () => {

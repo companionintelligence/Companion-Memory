@@ -10,6 +10,7 @@ import { UpdateSavedSearchPayload } from '@ci/domains/graphql/types/UpdateSavedS
 import type { IndexableEntity } from '@ci/domains/search-next';
 import { INDEXABLE_ENTITIES } from '@ci/domains/search-next';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { CreateSavedSearchInput } from '../types/CreateSavedSearchInput';
 import { CreateSavedSearchPayload } from '../types/CreateSavedSearchPayload';
 import { DeleteByIdInput } from '../types/DeleteByIdInput';
@@ -32,6 +33,8 @@ export class SavedSearchResolver {
   ) {}
 
   @Mutation(() => CreateSavedSearchPayload)
+  // Plain create — a new row, nothing pre-existing touched.
+  @GraphqlPrivacy({ destructive: false })
   async createSavedSearch(
     @Context() context: RequestContext,
     @Args('input') input: CreateSavedSearchInput,
@@ -68,6 +71,10 @@ export class SavedSearchResolver {
   }
 
   @Mutation(() => UpdateSavedSearchPayload)
+  // savedSearchService.update() patches only the caller's own row's fields (name/description/
+  // query/entityTypes/tags/filters); an absent `tags` is deliberately left alone rather than
+  // cleared (see the service's own comment), so no unrelated stored data is lost.
+  @GraphqlPrivacy({ destructive: false })
   async updateSavedSearch(
     @Context() context: RequestContext,
     @Args('input') input: UpdateSavedSearchInput,
@@ -98,6 +105,10 @@ export class SavedSearchResolver {
   }
 
   @Mutation(() => UpdateSavedSearchPayload)
+  // savedSearchService.setSharing() only flips isPublic and the shareToken/posture fields on the
+  // caller's own row (clearing posture when turning sharing off, per its doc comment); the saved
+  // search itself, and its name/query/filters, stay fully intact. Re-callable either direction.
+  @GraphqlPrivacy({ destructive: false })
   async setSavedSearchSharing(
     @Context() context: RequestContext,
     @Args('input') input: SetSavedSearchSharingInput,
@@ -134,6 +145,8 @@ export class SavedSearchResolver {
   }
 
   @Mutation(() => DeleteByIdPayload)
+  // savedSearchService.remove() hard-deletes the row with no restore path in the schema.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteSavedSearch(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

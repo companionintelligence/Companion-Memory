@@ -127,22 +127,34 @@ working. Resolved once per launch, cheapest option first:
    (titles, task breakdown, summaries), which is why the earlier `gemma3:1b`
    default was retired.
 
-   On **Linux** the sidecar currently binds `0.0.0.0`, not loopback. Containers
-   reach the host through `host.docker.internal:host-gateway`, which on native
-   Docker Engine is the bridge gateway rather than the host's loopback, so a
-   loopback-bound sidecar refuses every call from `api`/`hbpe-service` while the
-   stack still reports healthy.
+   The sidecar binds **`127.0.0.1` on every platform**. On macOS and Windows
+   that is all it needs: Docker Desktop's VM tunnels `host.docker.internal`
+   back to the host's loopback.
 
-   > ⚠️ **This bind is known to be too wide and is tracked for narrowing before
-   > the first desktop release.** Ollama has no server-side authentication, and
-   > binding non-loopback also disables its own host-header guard, so any LAN
-   > peer can run inference on your GPU and — more seriously — delete and
-   > recreate models, which the API's "use whatever model is served" fallback
-   > turns into a persistent model-substitution foothold. There is no direct
-   > read path to your data from that port. The fix is loopback plus a relay
-   > bound only to the discovered host-gateway address; see the TODO in
-   > `src-tauri/src/local_model/ollama_sidecar.rs`. Until then, keep port 11434
-   > off untrusted networks with a host firewall.
+   On **Linux** the containers reach the host through
+   `host.docker.internal:host-gateway`, which on native Docker Engine is the
+   docker bridge gateway rather than the host's loopback — so loopback alone
+   would leave `api`/`hbpe-service` unable to call the model while the stack
+   still reported healthy. `local_model::bridge_relay` closes that gap: it
+   discovers the bridge gateway from the daemon (`docker network inspect
+   bridge`) and runs a plain TCP relay bound to **that one address**, forwarding
+   to the loopback sidecar.
+
+   This replaced a `0.0.0.0` bind, which was too wide for a reason worth
+   recording: Ollama has no server-side authentication on any route, and
+   binding non-loopback additionally disables its own host-header guard. Any
+   LAN peer could run inference on your GPU and — more seriously — delete and
+   recreate models, which the API's "use whatever model is served" fallback
+   turns into a persistent model-substitution foothold. A single-address bind
+   means the kernel drops anything arriving on the machine's real NICs.
+
+   > **Under rootless Docker** no bridge gateway is discoverable (the
+   > `host-gateway` alias resolves inside RootlessKit's namespace, moby#47684).
+   > The relay is then simply not started and the sidecar stays loopback-only —
+   > which is also the arrangement most likely to work there, since slirp4netns
+   > forwards from the host's own namespace. It is not silent: `desktop.log`
+   > carries a warning naming `docker network inspect bridge`. If the appliance
+   > reports model errors on a rootless host, that line is the place to start.
 
 See `src-tauri/src/local_model/mod.rs` for the exact resolution logic and
 `ollama_sidecar.rs`/`apple_bridge.rs` for each backend. Known v1 limitations:

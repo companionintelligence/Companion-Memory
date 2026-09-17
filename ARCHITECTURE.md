@@ -26,14 +26,16 @@ backend/packages/<name>    Shared backend libraries
 frontend/apps/<name>       Shippable client applications
 frontend/packages/<name>   Shared frontend libraries
 infrastructure/<name>      Dockerfiles and entrypoints for non-application images
-scripts/                   Repo automation (dev stack, publish, checks, backups)
+scripts/                   Repo automation (xtask, dev stack, publish, checks, backups)
 docs/                      Documentation, runbooks, QA programme, ADRs
 tests/                     Root-level Playwright end-to-end tests
 ```
 
-Everything else at the root is repo-wide configuration: `Makefile` (the entry
-point for every workflow), `Procfile` (the three host processes `make dev`
-runs), `docker-compose.yml` plus its `.local`/`.staging`/`.production`/`.rocm`
+Everything else at the root is repo-wide configuration: `Makefile` (still the
+entry point for every workflow, though three of its targets are now one-line
+delegations to `scripts/xtask/` — see [Build and run](#build-and-run)),
+`Procfile` (the three host processes `make dev` runs),
+`docker-compose.yml` plus its `.local`/`.staging`/`.production`/`.rocm`
 overlays, `package.json` and `yarn.lock` for the JS workspace, `pyproject.toml`
 and `uv.lock` for the Python workspace, the shared TypeScript presets, the
 ESLint and lint-staged configs, and the Playwright configs.
@@ -45,7 +47,9 @@ the settings every project shares; `tsconfig.node.json` extends it with the
 Node-side settings (CommonJS, decorator metadata for Nest) that the API,
 `scripts/`, and future `backend/packages/*` all need. The root `tsconfig.json`
 is not a preset — it type-checks the root-level Playwright and `scripts/` code
-and explicitly excludes `backend` and `frontend`.
+and explicitly excludes `backend` and `frontend`. Nothing ever ran it until the
+root gained a `typecheck` script; its first run found a real error, which is why
+its `target` is now `ES2022` and not `ES2020`.
 
 Today those directories hold:
 
@@ -278,8 +282,66 @@ it.
 
 ## Build and run
 
-Everything goes through the `Makefile`. `make help` lists the targets with
-their descriptions; the ones that matter here:
+`make` is still the entry point and `make help` still lists every target with
+its description. What changed is what sits behind three of them — `build`, `dev`
+and `test` are now one-line delegations to **xtask**,
+a TypeScript program under `scripts/xtask/` run through `tsx`:
+
+```make
+build:
+	@yarn tsx scripts/xtask/index.ts build --env $(ENV) --gpu $(GPU) $(if $(DRY_RUN),--dry-run) $(IMAGE)
+```
+
+The Makefile keeps the interface, xtask holds the logic, and the other
+forty-odd targets are untouched.
+
+Those three were ported for what they had grown into: GPU auto-detection, an
+`ENV`-gated ordered set of images, a `ci.source-tree` comparison against the
+images already on the box, a lockfile freshness gate. In a Make recipe each of
+those is shell with `$$` on every variable and a process per line, with no way
+to unit-test it and no way to ask what it would do without doing it. As a
+program they get `--help` per subcommand, real argument validation, and a unit
+suite (`scripts/xtask/**/*.test.ts`, run by `tsx --test`) over the parts worth
+pinning: the build plan, GPU detection and the HBPE wheel-tag derivation, the
+`REPO`/`PROJECT_NAME` formula, image tagging, the uv pin. The root
+`package.json` now declares `test` and `typecheck` scripts, so that suite is
+reached by `make test` (the root is a workspace, and `make test` is
+`yarn workspaces foreach --all`) and the code is typechecked by `yarn typecheck`
+and by pr-gate's existing `Type check packages` lane, which runs the same
+`foreach`.
+
+Where the logic lives:
+
+```
+scripts/xtask/index.ts         Subcommand dispatch, --help, signal handling
+scripts/xtask/commands/*.ts    build, dev, test, lint, format, reset
+scripts/xtask/lib/exec.ts      run() (fail-fast) and tryRun() (tolerant)
+scripts/xtask/lib/gpu.ts       GPU detection, HBPE wheel tags and build args
+scripts/xtask/lib/images.ts    Image repo names, TAG tagging, the ci.source-tree stamp
+scripts/xtask/lib/identity.ts  REPO / PROJECT_NAME derivation
+scripts/xtask/lib/uv.ts        The uv pin, read from pyproject.toml
+```
+
+**`health` was deliberately not ported**, and the reason is the rule to apply
+before anyone ports a seventh target: **a prerequisite checker must not require
+the prerequisites.** `health` is the thing that tells you node is missing or
+yarn is the wrong version; routed through `yarn tsx` it fails on a checkout that
+has not run `make install` with a raw yarn error instead of the diagnostic it
+exists to print. It stays pure shell in the Makefile, and `xtask dev` shells out
+to `make health` exactly as the original recipe's `$(MAKE) health` line did.
+
+`distribute-license` and `clean-license` stayed shell for a different reason:
+they are public targets with callers outside the Makefile —
+`.github/workflows/e2e.yml`, `video/stage.sh`, `video/stage.real-corpus.sh` and
+`video/README.md` all invoke `make distribute-license` — so they have to keep
+existing, and `xtask build` calls back into them rather than carrying a second
+copy of the copy loop. Four pins stay in the Makefile byte-identical on the same
+principle: `FLASH_ATTN_VERSION`, `LLAMA_CPP_PYTHON_REF`,
+`LLAMA_CPP_PYTHON_VERSION` and `AMDGPU_WHEEL_TARGETS` are `sed`'d out by name by
+the three `backend/apps/hbpe/build-*-wheel.sh` scripts, so `lib/gpu.ts` reads
+them back out of the Makefile's text instead of restating them.
+
+The targets themselves:
 
 **`make install`** — authenticates to the GitHub npm registry
 (`scripts/gh-packages-auth.sh --install`) and syncs the Python workspace with
@@ -291,11 +353,12 @@ corepack activation pinned to `packageManager`, the Yarn VSCode SDKs,
 `packageManager`, `uv` present; any mismatch exits 1), then hard-fails unless
 `overmind` and `caddy` are installed with Caddy's admin API live on `:2019` and
 `ollama` answering on `:11434`, pulling any missing Ollama model rather than
-telling you to. It builds the local images only if one is missing or `REBUILD=1`
-is set, then hands off to `scripts/dev-stack/index.ts up`, which allocates
-ports, brings up the Compose stack, runs migrations, registers a Caddy route at
-`https://<project>.localhost`, and runs the `Procfile` under overmind. The
-Procfile is three processes: `api` (`CI_ROLE=web`), `worker`
+telling you to. It builds the local images only if one is missing, a sidecar
+image's `ci.source-tree` label says it was built from other source, or
+`REBUILD=1` is set, then hands off to `scripts/dev-stack/index.ts up`, which
+allocates ports, brings up the Compose stack, runs migrations, registers a Caddy
+route at `https://<project>.localhost`, and runs the `Procfile` under overmind.
+The Procfile is three processes: `api` (`CI_ROLE=web`), `worker`
 (`CI_ROLE=worker`), and `web` (the Vite dev server). Ctrl-C tears the route down.
 
 Because ports are allocated per worktree, several worktrees can run full stacks
@@ -312,10 +375,22 @@ host processes under overmind); the database, setup-database, object-store,
 summary and HBPE images are always built, and setup-secrets only for
 `production`.
 
+Two things it could not do before. **`IMAGE=<name>`** builds exactly that one
+image and ignores the `ENV` gate — one of `api`, `gateway`, `setup-database`,
+`database`, `object-store`, `setup-secrets`, `summary`, `hbpe` — instead of the
+old all-or-nothing recipe. **`DRY_RUN=1`** prints the exact `docker build`
+command lines, every `--build-arg` and — on a CUDA or ROCm host — the composed
+GHCR wheel-image tags
+included, and returns without touching Docker or uv. Both are ordinary
+arguments to the program underneath, so
+`yarn tsx scripts/xtask/index.ts build hbpe --dry-run` is the same thing.
+
 **`make test`** — `yarn workspaces foreach --all run test`, then `uv run pytest`.
 The `foreach` only runs workspaces that declare a `test` script, so a new
 workspace's tests are picked up without editing the Makefile — which is another
-reason to keep new code inside a workspace glob.
+reason to keep new code inside a workspace glob. The repo root is one of those
+workspaces now that it declares a `test` script, which is how the xtask suite
+is reached.
 
 **`make lint`** — `yarn lint` (oxlint then ESLint) and `yarn format:check`
 (Prettier), then `uv run ruff check .`, `uv run ruff format --check .`,

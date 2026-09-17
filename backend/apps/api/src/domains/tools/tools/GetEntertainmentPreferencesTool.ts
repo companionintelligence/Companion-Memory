@@ -8,11 +8,13 @@ import { GraphNodeEntity, GraphQueryService, GraphReadService } from '@ci/domain
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
+import { booleanish } from './booleanish';
+
 // Input schema for the tool
 const getEntertainmentPreferencesInputSchema = z.object({
   mediaType: z.enum(['movies', 'tv', 'music', 'books', 'all']).optional().default('all'),
   personName: z.string().optional(),
-  includeContext: z.boolean().default(true),
+  includeContext: booleanish().default(true),
 });
 
 type GetEntertainmentPreferencesInput = z.infer<typeof getEntertainmentPreferencesInputSchema>;

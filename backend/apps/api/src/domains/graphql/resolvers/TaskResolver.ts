@@ -137,6 +137,7 @@ export class TaskResolver {
   }
 
   @Mutation(() => CreateTaskPayload)
+  @GraphqlPrivacy({ destructive: false })
   async createTask(
     @Context() context: RequestContext,
     @Args('input') input: CreateTaskInput,
@@ -166,6 +167,7 @@ export class TaskResolver {
   }
 
   @Mutation(() => UpdateTaskPayload)
+  @GraphqlPrivacy({ destructive: false })
   async updateTask(
     @Context() context: RequestContext,
     @Args('input') input: UpdateTaskInput,
@@ -208,6 +210,7 @@ export class TaskResolver {
   }
 
   @Mutation(() => DeleteByIdPayload)
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteTask(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,
@@ -228,6 +231,9 @@ export class TaskResolver {
     nullable: true,
     description: 'Mark a task done. Idempotent — the original completion instant is preserved.',
   })
+  // Reversible via reopenTask, which exists in this same resolver — unlike the mergePeople/deleteTag
+  // family, this status transition has a real undo path in the schema.
+  @GraphqlPrivacy({ destructive: false })
   async completeTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -244,6 +250,7 @@ export class TaskResolver {
   }
 
   @Mutation(() => TaskType, { nullable: true, description: 'Move a completed task back to open.' })
+  @GraphqlPrivacy({ destructive: false })
   async reopenTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -263,6 +270,7 @@ export class TaskResolver {
     description:
       'Accept a proposed task into the open backlog. Keeps any preferred date as a hint; does not place a calendar block.',
   })
+  @GraphqlPrivacy({ destructive: false })
   async acceptProposedTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -281,6 +289,10 @@ export class TaskResolver {
     nullable: true,
     description: 'Decline a proposed task (archives it).',
   })
+  // Archives the task with no unarchive mutation exposed anywhere in this schema — irreversible
+  // through this surface, the same standard PlanningCompleteTaskTool uses ("nothing exposes an
+  // uncomplete path" -> destructive:true) even though the row itself is never hard-deleted.
+  @GraphqlPrivacy({ destructive: true })
   async declineProposedTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -298,6 +310,7 @@ export class TaskResolver {
   @Mutation(() => ResolveTaskPendingChangePayload, {
     description: 'Apply a pending automation change (mutate / complete / event revise).',
   })
+  @GraphqlPrivacy({ destructive: false })
   async acceptTaskPendingChange(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -327,6 +340,8 @@ export class TaskResolver {
   @Mutation(() => ResolveTaskPendingChangePayload, {
     description: 'Dismiss a pending automation change without applying it.',
   })
+  // Discards a queued automation suggestion, not user-entered data; the task itself is untouched.
+  @GraphqlPrivacy({ destructive: false })
   async declineTaskPendingChange(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -349,6 +364,7 @@ export class TaskResolver {
     nullable: true,
     description: 'Push a task to a later user-local date (`YYYY-MM-DD`) and count the push.',
   })
+  @GraphqlPrivacy({ destructive: false })
   async deferTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -368,6 +384,10 @@ export class TaskResolver {
     description:
       'Place an open task into the next free workday gap as a planned calendar block. The click is consent — trust dial does not re-ask.',
   })
+  // scheduleTaskAt (the startTime-given path) moves an existing block via eventService.reschedule
+  // — an in-place update, not delete-then-recreate. Unlike unscheduleTask/planTask below, no block
+  // row is ever removed here.
+  @GraphqlPrivacy({ destructive: false })
   async scheduleTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -430,6 +450,12 @@ export class TaskResolver {
     description:
       'Accept into Unscheduled: open if proposed, drop pending suggestions, remove any calendar block.',
   })
+  // Own description says "remove any calendar block", and PlannedBlockService.planAsUnscheduled
+  // confirms it: it calls the exact same `eventService.remove(context, existing.id)` unscheduleTask
+  // uses, plus discards every pending automation change on the task. Same destructive operation as
+  // unscheduleTask, reachable through a mutation named like a constructive "accept into backlog"
+  // action — the same bug class this audit exists to close.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async planTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

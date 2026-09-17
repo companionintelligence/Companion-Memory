@@ -364,6 +364,49 @@ describe('TaskService', () => {
 
       expect(result?.parentId).toBe('loop-a');
     });
+
+    // -------------------------------------------------------------------------
+    // Absent vs. `undefined` vs. `null`.
+    //
+    // TaskResolver.updateTask builds the DTO as an object literal with every
+    // field present, so an untouched field arrives here as `key: undefined`
+    // rather than an absent key — reproduced below rather than passing a
+    // sparse object, since a sparse `{ title: 'x' }` in a test would not catch
+    // a regression of this fix. `Object.assign` must not let that clobber the
+    // entity's current value; an explicit `null` must still clear it.
+    // -------------------------------------------------------------------------
+    it('leaves untouched fields alone when the caller sends every key, undefined for the ones it did not set', async () => {
+      await setup([makeTask({ priority: 3, status: 'open' })]);
+
+      const result = await service.update(ALICE, 'task-1', {
+        title: 'Renamed',
+        description: undefined,
+        notes: undefined,
+        status: undefined,
+        priority: undefined,
+        parentId: undefined,
+        dueAt: undefined,
+        taskTime: undefined,
+        scheduledFor: undefined,
+        deferUntil: undefined,
+        estimatedMinutes: undefined,
+        actualMinutes: undefined,
+        metadata: undefined,
+      });
+
+      expect(result?.title).toBe('Renamed');
+      expect(result?.priority).toBe(3);
+      expect(result?.status).toBe('open');
+    });
+
+    it('still clears a field when the caller sends an explicit null', async () => {
+      await setup([makeTask({ description: 'old description', priority: 3 })]);
+
+      const result = await service.update(ALICE, 'task-1', { description: null });
+
+      expect(result?.description).toBeNull();
+      expect(result?.priority).toBe(3);
+    });
   });
 
   describe('complete', () => {

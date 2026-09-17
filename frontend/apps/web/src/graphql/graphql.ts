@@ -818,6 +818,8 @@ export type CreateEventInput = {
   endTime?: InputMaybe<Scalars['DateTime']['input']>;
   eventType?: InputMaybe<Scalars['String']['input']>;
   isAllDay?: InputMaybe<Scalars['Boolean']['input']>;
+  /** CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced. */
+  isLocked?: InputMaybe<Scalars['Boolean']['input']>;
   isRecurring?: InputMaybe<Scalars['Boolean']['input']>;
   locationCoordinates?: InputMaybe<Scalars['JSON']['input']>;
   locationEntityId?: InputMaybe<Scalars['ID']['input']>;
@@ -989,6 +991,21 @@ export type CreateRelationshipInput = {
 export type CreateRelationshipPayload = {
   __typename?: 'CreateRelationshipPayload';
   relationship?: Maybe<RelationshipType>;
+  success: Scalars['Boolean']['output'];
+};
+
+export type CreateReminderInput = {
+  /** A planned block (`ci.events` id). See `taskId`. */
+  blockId?: InputMaybe<Scalars['ID']['input']>;
+  /** The instant this reminder fires. Must be in the future. */
+  fireAt: Scalars['DateTime']['input'];
+  /** Exactly one of `taskId`/`blockId` must be set. */
+  taskId?: InputMaybe<Scalars['ID']['input']>;
+};
+
+export type CreateReminderPayload = {
+  __typename?: 'CreateReminderPayload';
+  reminder?: Maybe<ReminderType>;
   success: Scalars['Boolean']['output'];
 };
 
@@ -1230,7 +1247,13 @@ export type EventType = Node & Taggable & {
   externalSyncStatus?: Maybe<Scalars['String']['output']>;
   id: Scalars['ID']['output'];
   isAllDay?: Maybe<Scalars['Boolean']['output']>;
+  /** True for a planned block placed by the deterministic placer running unattended; false for anything a human action produced (the Schedule button, a calendar drag, confirming a proposal). Lets the UI label honestly, e.g. "AI Briefing" vs "Day Overview". */
+  isAuto?: Maybe<Scalars['Boolean']['output']>;
+  /** CI-Planning's manually-locked-block flag. Settable via `updateEvent`; nothing currently refuses to move a locked block — a future reflow engine owns enforcing that. */
+  isLocked?: Maybe<Scalars['Boolean']['output']>;
   isRecurring?: Maybe<Scalars['Boolean']['output']>;
+  /** The last instant this row's startTime/endTime changed. Null means never observed moving. */
+  lastMovedAt?: Maybe<Scalars['DateTime']['output']>;
   location?: Maybe<PlaceType>;
   locationCoordinates?: Maybe<Scalars['JSON']['output']>;
   locationEntityId?: Maybe<Scalars['ID']['output']>;
@@ -1940,6 +1963,8 @@ export type Mutation = {
   breakDownTasks: Array<ScheduleCandidateType>;
   bulkIngestGraph: BulkGraphPayload;
   bulkIngestItemRelationships: BulkItemRelationshipResult;
+  /** Soft-cancel a reminder. The row survives. */
+  cancelReminder?: Maybe<ReminderType>;
   /** Mark a task done. Idempotent — the original completion instant is preserved. */
   completeTask?: Maybe<TaskType>;
   confirmObservation?: Maybe<ObjectObservationType>;
@@ -1970,6 +1995,7 @@ export type Mutation = {
   createQuestion: QuestionType;
   createQuestions: Array<QuestionType>;
   createRelationship: CreateRelationshipPayload;
+  createReminder: CreateReminderPayload;
   createSavedSearch: CreateSavedSearchPayload;
   createTask: CreateTaskPayload;
   createThings: Array<ItemType>;
@@ -2052,10 +2078,17 @@ export type Mutation = {
   /** Place an open task into the next free workday gap as a planned calendar block. The click is consent — trust dial does not re-ask. */
   scheduleTask: ScheduleTaskPayload;
   sendPeerAsk: SendPeerAskPayload;
+  setCategoryDirectionEnabled: Scalars['Boolean']['output'];
+  setEntityCategories: Array<TagType>;
   setHouseholdTier: HouseholdTierType;
   setSavedSearchSharing: UpdateSavedSearchPayload;
+  setTagCategories: SetTagGroupingPayload;
+  setTagDirections: SetTagGroupingPayload;
+  setTagKind: SetTagKindPayload;
   /** Defer a candidate until a future instant */
   snoozeCandidate: ScheduleCandidateType;
+  /** Register (or re-point) a browser Web Push endpoint. */
+  subscribeToPush: Scalars['Boolean']['output'];
   /** Refresh the slate from current actions and insight key_actions. Idempotent; returns rows written. */
   syncScheduleSuggestions: Scalars['Int']['output'];
   tagEntities: Array<TaggableEntityType>;
@@ -2063,6 +2096,8 @@ export type Mutation = {
   triggerHbpe: Scalars['String']['output'];
   /** Remove the planned block for this task and clear scheduledFor. */
   unscheduleTask?: Maybe<TaskType>;
+  /** Remove a browser Web Push endpoint. */
+  unsubscribeFromPush: Scalars['Boolean']['output'];
   untagEntities: Array<TaggableEntityType>;
   updateAnswer?: Maybe<AnswerType>;
   updateAskGrant: AskGrantPayload;
@@ -2134,6 +2169,11 @@ export type MutationBulkIngestGraphArgs = {
 
 export type MutationBulkIngestItemRelationshipsArgs = {
   input: Array<ItemRelationshipInput>;
+};
+
+
+export type MutationCancelReminderArgs = {
+  id: Scalars['ID']['input'];
 };
 
 
@@ -2282,6 +2322,11 @@ export type MutationCreateQuestionsArgs = {
 
 export type MutationCreateRelationshipArgs = {
   input: CreateRelationshipInput;
+};
+
+
+export type MutationCreateReminderArgs = {
+  input: CreateReminderInput;
 };
 
 
@@ -2576,6 +2621,16 @@ export type MutationSendPeerAskArgs = {
 };
 
 
+export type MutationSetCategoryDirectionEnabledArgs = {
+  input: SetCategoryDirectionEnabledInput;
+};
+
+
+export type MutationSetEntityCategoriesArgs = {
+  input: SetEntityCategoriesInput;
+};
+
+
 export type MutationSetHouseholdTierArgs = {
   input: SetHouseholdTierInput;
 };
@@ -2586,9 +2641,29 @@ export type MutationSetSavedSearchSharingArgs = {
 };
 
 
+export type MutationSetTagCategoriesArgs = {
+  input: SetTagCategoriesInput;
+};
+
+
+export type MutationSetTagDirectionsArgs = {
+  input: SetTagDirectionsInput;
+};
+
+
+export type MutationSetTagKindArgs = {
+  input: SetTagKindInput;
+};
+
+
 export type MutationSnoozeCandidateArgs = {
   id: Scalars['ID']['input'];
   until: Scalars['DateTime']['input'];
+};
+
+
+export type MutationSubscribeToPushArgs = {
+  input: PushSubscriptionInput;
 };
 
 
@@ -2599,6 +2674,11 @@ export type MutationTagEntitiesArgs = {
 
 export type MutationUnscheduleTaskArgs = {
   id: Scalars['ID']['input'];
+};
+
+
+export type MutationUnsubscribeFromPushArgs = {
+  endpoint: Scalars['String']['input'];
 };
 
 
@@ -3309,6 +3389,15 @@ export type ProviderType = Node & {
   theme?: Maybe<ProviderThemeType>;
 };
 
+export type PushSubscriptionInput = {
+  /** PushSubscription.getKey("auth"), base64url-encoded. */
+  auth: Scalars['String']['input'];
+  endpoint: Scalars['String']['input'];
+  /** PushSubscription.getKey("p256dh"), base64url-encoded. */
+  p256dh: Scalars['String']['input'];
+  userAgent?: InputMaybe<Scalars['String']['input']>;
+};
+
 export type Query = {
   __typename?: 'Query';
   action?: Maybe<ActionType>;
@@ -3352,6 +3441,7 @@ export type Query = {
   descriptiveQuestions: Array<DescriptiveQuestionType>;
   /** Fetch HBPE renewal predictions: periodic behaviors coming due or overdue */
   dueForecast?: Maybe<DueForecastType>;
+  entityCategories: Array<TagType>;
   event?: Maybe<EventType>;
   /** Distinct data sources / connectors (event.source_system) present for the user. */
   eventSources: Array<Scalars['String']['output']>;
@@ -3423,12 +3513,16 @@ export type Query = {
   productModels: ProductModelConnection;
   provider?: Maybe<ProviderType>;
   providers: ProviderConnection;
+  /** The VAPID public key, base64url — null when push is not configured on this appliance. */
+  pushPublicKey?: Maybe<Scalars['String']['output']>;
   question?: Maybe<QuestionType>;
   questions: QuestionConnection;
   receipt?: Maybe<ReceiptType>;
   receipts: ReceiptConnection;
   relationship?: Maybe<RelationshipType>;
   relationships: RelationshipConnection;
+  /** Reminders not soft-cancelled, ordered by fireAt. */
+  reminders: Array<ReminderType>;
   reverseGeocode: ReverseGeocodeResultType;
   savedSearch?: Maybe<SavedSearchType>;
   savedSearches: SavedSearchConnection;
@@ -3624,6 +3718,11 @@ export type QueryDescriptiveAnswersArgs = {
 
 export type QueryDescriptiveQuestionsArgs = {
   analyticType?: InputMaybe<Scalars['String']['input']>;
+};
+
+
+export type QueryEntityCategoriesArgs = {
+  entityId: Scalars['ID']['input'];
 };
 
 
@@ -4201,6 +4300,30 @@ export type RelationshipType = Node & {
   type: Scalars['String']['output'];
 };
 
+/** 'auto' is reserved for a future due-date derivation engine; today every reminder is 'manual'. */
+export type ReminderSource =
+  | 'auto'
+  | 'manual';
+
+/** A reminder's claim state. Fired is terminal in this milestone — there is no snooze yet. */
+export type ReminderStatus =
+  | 'cancelled'
+  | 'fired'
+  | 'pending';
+
+export type ReminderType = Node & {
+  __typename?: 'ReminderType';
+  /** A planned block — a `ci.events` row. */
+  blockId?: Maybe<Scalars['ID']['output']>;
+  createdAt: Scalars['DateTime']['output'];
+  fireAt: Scalars['DateTime']['output'];
+  firedAt?: Maybe<Scalars['DateTime']['output']>;
+  id: Scalars['ID']['output'];
+  source: ReminderSource;
+  status: ReminderStatus;
+  taskId?: Maybe<Scalars['ID']['output']>;
+};
+
 export type RemoveItemIdentifierInput = {
   itemId: Scalars['ID']['input'];
   namespace: ObjectIdentifierNamespace;
@@ -4397,6 +4520,17 @@ export type SendPeerAskPayload = {
   success: Scalars['Boolean']['output'];
 };
 
+export type SetCategoryDirectionEnabledInput = {
+  categoryId: Scalars['ID']['input'];
+  directionId: Scalars['ID']['input'];
+  enabled: Scalars['Boolean']['input'];
+};
+
+export type SetEntityCategoriesInput = {
+  categoryIds: Array<Scalars['ID']['input']>;
+  entityId: Scalars['ID']['input'];
+};
+
 export type SetHouseholdTierInput = {
   memberId: Scalars['ID']['input'];
   /** One of: household, family, trusted, peer, stranger */
@@ -4408,6 +4542,33 @@ export type SetSavedSearchSharingInput = {
   id: Scalars['ID']['input'];
   isPublic: Scalars['Boolean']['input'];
   maxDisclosure?: InputMaybe<Scalars['String']['input']>;
+};
+
+export type SetTagCategoriesInput = {
+  categoryIds: Array<Scalars['ID']['input']>;
+  id: Scalars['ID']['input'];
+};
+
+export type SetTagDirectionsInput = {
+  directionIds: Array<Scalars['ID']['input']>;
+  id: Scalars['ID']['input'];
+};
+
+export type SetTagGroupingPayload = {
+  __typename?: 'SetTagGroupingPayload';
+  success: Scalars['Boolean']['output'];
+  tags: Array<TagType>;
+};
+
+export type SetTagKindInput = {
+  id: Scalars['ID']['input'];
+  kind: TagKind;
+};
+
+export type SetTagKindPayload = {
+  __typename?: 'SetTagKindPayload';
+  success: Scalars['Boolean']['output'];
+  tag?: Maybe<TagType>;
 };
 
 export type SummaryConnection = Connection & {
@@ -4469,13 +4630,25 @@ export type TagEntitiesInput = {
   labels: Array<Scalars['String']['input']>;
 };
 
+/** The taxonomy LEVEL a tag sits at: a brand-set direction (Home/Work/Community), an intention grouped under directions, or a category grouped over intentions. Orthogonal to a tag application's level on EntityTagType, which is a per-entity dilution weight, not a taxonomy level. */
+export type TagKind =
+  | 'category'
+  | 'direction'
+  | 'intention';
+
 export type TagType = Node & {
   __typename?: 'TagType';
+  categories: Array<TagType>;
   description?: Maybe<Scalars['String']['output']>;
+  directionOptOuts: Array<TagType>;
+  directions: Array<TagType>;
   entities: TaggableEntityConnection;
   entityCount: Scalars['Int']['output'];
   id: Scalars['ID']['output'];
+  isBase: Scalars['Boolean']['output'];
+  kind?: Maybe<TagKind>;
   label: Scalars['String']['output'];
+  muted: Scalars['Boolean']['output'];
 };
 
 
@@ -4740,6 +4913,8 @@ export type UpdateEventInput = {
   eventType?: InputMaybe<Scalars['String']['input']>;
   id: Scalars['ID']['input'];
   isAllDay?: InputMaybe<Scalars['Boolean']['input']>;
+  /** CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced. */
+  isLocked?: InputMaybe<Scalars['Boolean']['input']>;
   isRecurring?: InputMaybe<Scalars['Boolean']['input']>;
   locationCoordinates?: InputMaybe<Scalars['JSON']['input']>;
   locationEntityId?: InputMaybe<Scalars['ID']['input']>;
@@ -5911,6 +6086,7 @@ export type GetCommunicationAttachmentsQuery = { __typename?: 'Query', node?:
     | { __typename: 'QuestionType', id: string }
     | { __typename: 'ReceiptType', id: string }
     | { __typename: 'RelationshipType', id: string }
+    | { __typename: 'ReminderType', id: string }
     | { __typename: 'SavedSearchType', id: string }
     | { __typename: 'SummaryType', id: string }
     | { __typename: 'TagType', id: string }
@@ -6137,6 +6313,7 @@ export type GetDrawerNodeQuery = { __typename?: 'Query', node?:
       & { ' $fragmentRefs'?: { 'ReceiptGridItemDataFragment': ReceiptGridItemDataFragment;'TableReceiptRowDataFragment': TableReceiptRowDataFragment } }
     )
     | { __typename: 'RelationshipType', id: string }
+    | { __typename: 'ReminderType', id: string }
     | { __typename: 'SavedSearchType', id: string }
     | { __typename: 'SummaryType', id: string }
     | { __typename: 'TagType', id: string }
@@ -6211,6 +6388,7 @@ export type GraphNodeEntityQuery = { __typename?: 'Query', node?:
     | { __typename: 'QuestionType', id: string }
     | { __typename: 'ReceiptType', id: string, tags: Array<{ __typename?: 'EntityTagType', label: string }> }
     | { __typename: 'RelationshipType', id: string }
+    | { __typename: 'ReminderType', id: string }
     | { __typename: 'SavedSearchType', id: string }
     | { __typename: 'SummaryType', id: string }
     | { __typename: 'TagType', id: string }

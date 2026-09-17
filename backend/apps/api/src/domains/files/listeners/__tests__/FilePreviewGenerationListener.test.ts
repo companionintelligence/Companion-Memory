@@ -1,21 +1,27 @@
+import { vipsCliAvailable } from '../../../__tests__/support/vipsCli';
 import { FilePreviewService } from '../../services/FilePreviewService';
+import { VipsService } from '../../services/VipsService';
 import { FilePreviewGenerationListener } from '../FilePreviewGenerationListener';
 
 /**
  * Preview generation must tolerate warning-level JPEG quirks. Real phone
  * JPEGs — Samsung above all — routinely carry defects like stray padding
  * before restart markers ("Corrupt JPEG data: N extraneous bytes before
- * marker 0xdN") that every mainstream viewer decodes fine, but sharp's
- * default failOn: 'warning' turned into failed preview jobs (~8% of a sampled
- * Google Takeout batch). The listener now decodes with failOn: 'error':
+ * marker 0xdN") that every mainstream viewer decodes fine, but libvips'
+ * default fail-on: 'warning' turned into failed preview jobs (~8% of a sampled
+ * Google Takeout batch). The renderer decodes with fail-on=error:
  * warning-level quirks produce a normal preview, and genuinely undecodable
  * bytes are skipped (the job completes) rather than dead-lettered.
  *
  * The fixture below is a real reproduction, not a mock: a tiny JPEG encoded
- * with restart markers and stray bytes stuffed before them, which makes the
- * default-strictness sharp throw exactly the production error
+ * with restart markers and stray bytes stuffed before them, which makes a
+ * default-strictness libvips emit exactly the production warning
  * ("Corrupt JPEG data: 6 extraneous bytes before marker 0xd1").
+ *
+ * These decode real bytes through the `vips` tools, so the suite skips on a
+ * machine without them (`make health` says what to install; CI has them).
  */
+const describeIfVips = vipsCliAvailable() ? describe : describe.skip;
 const QUIRKY_JPEG = Buffer.from(
   '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQ' +
     'ERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQU' +
@@ -86,6 +92,8 @@ function makeListener(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mediaDimensionsService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    new VipsService(makeLogger() as any),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     eventService as any,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger as any,
@@ -95,7 +103,7 @@ function makeListener(
   return { listener, fileService, eventService, created, logger };
 }
 
-describe('FilePreviewGenerationListener', () => {
+describeIfVips('FilePreviewGenerationListener', () => {
   it('generates a preview for a JPEG with warning-level defects (stray bytes before restart markers)', async () => {
     const { listener, fileService, eventService, created } = makeListener(QUIRKY_JPEG);
 
@@ -114,8 +122,8 @@ describe('FilePreviewGenerationListener', () => {
 
   /**
    * Routing on the MIME prefix alone (`contentType.startsWith('image/')`) hands
-   * sharp anything labelled image/*, and libvips throws "Input buffer contains
-   * unsupported image format" for any bytes it has no loader for. That throw
+   * the decoder anything labelled image/*, and libvips rejects any bytes it
+   * has no loader for ("is not a known file format"). That throw
    * used to reach the pg-boss worker: 3 retries and then a permanent dead
    * letter per file (32 on the QA appliance), re-earned on every re-import.
    * An undecodable file is a skip — the job must complete.
@@ -200,8 +208,8 @@ describe('FilePreviewGenerationListener', () => {
   });
 
   it('keeps the probed dimensions on a decode skip', async () => {
-    // The probe uses its own tolerant path and usually succeeds on bytes sharp
-    // will not resize. Those dimensions are the one thing a preview-less file
+    // The probe is mocked to succeed here; in production it can read a header
+    // the full decode then chokes on. Those dimensions are the one thing a preview-less file
     // can still show in the drawer, and they are already in hand.
     const { listener, fileService } = makeListener(Buffer.from('not an image'), 'image/heic');
 

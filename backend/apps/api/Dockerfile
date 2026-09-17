@@ -87,6 +87,12 @@ RUN apt-get update && \
     unzip \
     ffmpeg \
     poppler-utils \
+    # `libvips-tools` ships `vips` and `vipsheader`, the image decoder behind
+    # FilePreviewService and MediaDimensionsService (see VipsService). It
+    # replaced the `sharp` npm package because Debian's libvips links a
+    # libheif WITH the HEVC decoder and sharp's prebuilt one does not — every
+    # iPhone HEIC was undecodable, so it had no thumbnail and no description.
+    libvips-tools \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \

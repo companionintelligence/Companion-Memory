@@ -23,6 +23,21 @@ import type { CreateTaskDto, CreateTaskPendingChangeDto, FindTasksOptions, Updat
 const PLANNED_BLOCK = 'planned_block';
 
 /**
+ * An absent key in an update DTO means "leave alone"; an explicit `null` means
+ * "clear this field" (UpdateTaskDto's own contract). A resolver that builds the
+ * DTO as an object literal with every field present sends an untouched one as
+ * `key: undefined` rather than an absent key, and `Object.assign` cannot tell
+ * that apart from a real value — it clobbers the fetched entity's current value
+ * with `undefined`. TypeORM's `save()` skips `undefined` columns when building
+ * SQL, so the database stays correct, but the in-memory entity `save()` returns
+ * keeps the clobbered `undefined`, which then trips GraphQL's non-null check on
+ * read-back. Filtering once here protects every caller of `update()`.
+ */
+function withoutUndefined<T extends object>(data: T): Partial<T> {
+  return Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined)) as Partial<T>;
+}
+
+/**
  * Owner-scoped CRUD for planning tasks.
  *
  * Every method takes `UserServiceContext`, never `ServiceContext`. That is
@@ -261,7 +276,7 @@ export class TaskService {
       await this.assertOwnsParent(context, data.parentId, id);
     }
 
-    Object.assign(record, data);
+    Object.assign(record, withoutUndefined(data));
 
     const entity = await this.taskRepository.save(record);
 

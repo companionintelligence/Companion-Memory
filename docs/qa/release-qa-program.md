@@ -76,7 +76,9 @@ yarn workspace @ci/fe-web typecheck
 # only @ci/shadcn's own tsconfig declares — and was green the same day once
 # both imports were made relative (exit 0, measured). `foreach` has no
 # --no-bail, so it stops at the FIRST failing workspace: a green run means all
-# of them passed, but a red one tells you about exactly one.
+# of them passed, but a red one tells you about exactly one. The repo root is
+# now in the sweep as well — it declares a `typecheck` script, which is what
+# covers scripts/** (scripts/xtask, scripts/dev-stack) and tests/**.
 yarn workspaces foreach --all run typecheck
 yarn lint
 yarn workspace @ci/be-api lint

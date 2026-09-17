@@ -23,6 +23,9 @@
 
 pub mod ollama_sidecar;
 
+/// Compiled everywhere, used only on Linux — see its module doc comment.
+pub mod bridge_relay;
+
 #[cfg(target_os = "macos")]
 pub mod apple_bridge;
 
@@ -73,6 +76,11 @@ enum ResolutionState {
 /// RunningInstance::child doc comment.
 pub struct LocalModelHandles {
     ollama_child: Mutex<Option<Child>>,
+    /// Linux only in practice: the bridge-gateway relay in front of the
+    /// loopback-bound Ollama sidecar. Held for the same reason as
+    /// `ollama_child` — it owns a listening socket that must be released on
+    /// quit, or a relaunch cannot bind the gateway address again.
+    ollama_relay: Mutex<Option<bridge_relay::RelayHandle>>,
     #[cfg(target_os = "macos")]
     apple_bridge: Mutex<Option<apple_bridge::AppleBridgeHandle>>,
     /// Set once resolution finishes — read by get_local_model_status_command
@@ -89,6 +97,7 @@ impl Default for LocalModelHandles {
     fn default() -> Self {
         Self {
             ollama_child: Mutex::new(None),
+            ollama_relay: Mutex::new(None),
             #[cfg(target_os = "macos")]
             apple_bridge: Mutex::new(None),
             status: Mutex::new(None),
@@ -99,6 +108,12 @@ impl Default for LocalModelHandles {
 
 impl LocalModelHandles {
     pub fn shutdown(&self) {
+        // Relay first: it holds connections INTO the sidecar, so closing it
+        // before killing the process avoids a window where a container's
+        // in-flight request is relayed to a pid that is already gone.
+        if let Some(relay) = self.ollama_relay.lock().unwrap_or_else(|p| p.into_inner()).take() {
+            relay.shutdown();
+        }
         if let Some(mut child) = self.ollama_child.lock().unwrap_or_else(|p| p.into_inner()).take() {
             let _ = child.kill();
         }
@@ -180,6 +195,7 @@ fn resolve_and_start(
         let instance = ollama_sidecar::ensure_available(data_dir, logs_dir, need_chat_model)?;
         log::info!("Local Ollama instance answering on port {}", instance.port);
         *handles.ollama_child.lock().unwrap_or_else(|p| p.into_inner()) = instance.child;
+        *handles.ollama_relay.lock().unwrap_or_else(|p| p.into_inner()) = instance.relay;
     }
 
     let detail = match chat_backend {

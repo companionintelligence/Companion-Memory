@@ -1,9 +1,31 @@
+import type { ReactNode } from 'react';
+
 import { fireEvent, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { DesktopSignInPage } from './DesktopSignInPage';
+
+// What the last browser round-trip came back with. useAuth's deep-link
+// listener sets this from `companion://oidc/callback?error=...`; the page only
+// reads it, so the hook is the natural seam.
+let authError: unknown = null;
+
+vi.mock('@/hooks/useAuth', () => ({
+  AuthProvider: ({ children }: { children: ReactNode }) => children,
+  useAuth: () => [
+    {
+      expired: false,
+      authToken: null,
+      authenticated: false,
+      loading: false,
+      initializing: false,
+      error: authError,
+    },
+    { login: vi.fn(), logout: vi.fn(), signup: vi.fn() },
+  ],
+}));
 
 /**
  * Tauri is detected purely from `window.__TAURI_INTERNALS__`, so the desktop
@@ -41,6 +63,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete (window as unknown as { __TAURI_INTERNALS__?: TauriInternals }).__TAURI_INTERNALS__;
+  authError = null;
 });
 
 describe('DesktopSignInPage — the first screen of the desktop app', () => {
@@ -122,5 +145,50 @@ describe('DesktopSignInPage — sign-in leaves the webview', () => {
     // navigation for the anchor; that log is the proof the anchor ran.)
     expect(link).toHaveAttribute('href', '/api/authenticate/oidc');
     expect(fireEvent.click(link)).toBe(true);
+  });
+  it('says so when the browser came back with a rejection, instead of looking like nothing happened', () => {
+    // The deep link's error= landed in useAuth and was never read here: the
+    // browser opened, the person came back, and the screen was unchanged.
+    authError = new Error('oidc_failed');
+    renderPage();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Sign in failed. Please try again.');
+    expect(screen.queryByLabelText('Invitation')).not.toBeInTheDocument();
+  });
+
+  it('asks for an invitation when this Memory already has an owner, and sends it with the next attempt', () => {
+    // A SECOND person can only get in through Portal sign-in if the invitation
+    // rides inside the OIDC round-trip; there is no other request in which the
+    // callback could learn they were invited.
+    authError = new Error('signup_code_required');
+    renderPage();
+
+    expect(screen.getByRole('alert')).toHaveTextContent('already belongs to someone');
+
+    fireEvent.change(screen.getByLabelText('Invitation'), { target: { value: '  ABCD-1234 ' } });
+
+    const href =
+      screen.getByRole('link', { name: 'Sign in with Companion account' }).getAttribute('href') ?? '';
+    expect(new URL(href, window.location.origin).searchParams.get('signup_code')).toBe('ABCD-1234');
+  });
+
+  it('lets someone who already holds an invitation offer it before being refused', () => {
+    renderPage();
+
+    expect(screen.queryByLabelText('Invitation')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'I have an invitation' }));
+    fireEvent.change(screen.getByLabelText('Invitation'), { target: { value: 'WXYZ-9876' } });
+
+    const href =
+      screen.getByRole('link', { name: 'Sign in with Companion account' }).getAttribute('href') ?? '';
+    expect(new URL(href, window.location.origin).searchParams.get('signup_code')).toBe('WXYZ-9876');
+  });
+
+  it('sends no invitation parameter at all when none was entered', () => {
+    renderPage();
+
+    const href =
+      screen.getByRole('link', { name: 'Sign in with Companion account' }).getAttribute('href') ?? '';
+    expect(new URL(href, window.location.origin).searchParams.has('signup_code')).toBe(false);
   });
 });
