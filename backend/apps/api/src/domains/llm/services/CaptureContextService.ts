@@ -108,7 +108,11 @@ export class CaptureContextService {
    * logged at warn, never thrown: a missing hint costs a possibly-wrong city
    * name, a thrown one costs the whole description.
    */
-  async build(context: UserServiceContext, originalBytes: Buffer, fileId: string): Promise<CaptureContext | null> {
+  async build(
+    context: UserServiceContext,
+    originalBytes: Buffer,
+    fileId: string,
+  ): Promise<CaptureContext | null> {
     const exif = await this.readExif(originalBytes);
 
     if (exif == null || (exif.takenAt == null && exif.latitude == null)) {

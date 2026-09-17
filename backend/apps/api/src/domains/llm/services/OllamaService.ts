@@ -1439,11 +1439,14 @@ export class OllamaService implements OnModuleInit {
 
       if (!this.staleChatModelOverridesWarned.has(key)) {
         this.staleChatModelOverridesWarned.add(key);
-        this.logger.warn('Stored chat model is not served by the active LLM backend; ignoring the preference', {
-          userId,
-          storedModel: userOverride,
-          fallbackModel: served.includes(PROMPT_MODEL) ? PROMPT_MODEL : (served[0] ?? null),
-        });
+        this.logger.warn(
+          'Stored chat model is not served by the active LLM backend; ignoring the preference',
+          {
+            userId,
+            storedModel: userOverride,
+            fallbackModel: served.includes(PROMPT_MODEL) ? PROMPT_MODEL : (served[0] ?? null),
+          },
+        );
       }
     }
 

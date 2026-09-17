@@ -157,7 +157,10 @@ describe('useModel', () => {
   });
 
   it('does not clear a stored preference when the backend serves no models at all', async () => {
-    const { fetchMock, state } = setFetch({ models: [], state: { ...defaultServerState(), chatModel: 'qwen-vl' } });
+    const { fetchMock, state } = setFetch({
+      models: [],
+      state: { ...defaultServerState(), chatModel: 'qwen-vl' },
+    });
 
     const { result } = renderHook(() => useModel(), { wrapper });
 

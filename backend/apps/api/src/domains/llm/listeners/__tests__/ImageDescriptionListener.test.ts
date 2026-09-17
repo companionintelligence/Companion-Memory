@@ -15,10 +15,16 @@ function makeLogger() {
 }
 
 function makeListener(
-  opts: { enabled?: boolean; rendition?: unknown; content?: string; captureContext?: { text: string; source: string } | null } = {},
+  opts: {
+    enabled?: boolean;
+    rendition?: unknown;
+    content?: string;
+    captureContext?: { text: string; source: string } | null;
+  } = {},
 ) {
   const { enabled = true, content = ANSWER, captureContext = null } = opts;
-  const rendition = 'rendition' in opts ? opts.rendition : { jpeg: RENDERED, source: 'original', original: ORIGINAL };
+  const rendition =
+    'rendition' in opts ? opts.rendition : { jpeg: RENDERED, source: 'original', original: ORIGINAL };
   const files = new Map<string, Record<string, unknown>>([
     [PREVIEW_ID, { id: PREVIEW_ID, parentId: ORIGINAL_ID, key: 'preview-key', contentType: 'image/jpeg' }],
     [ORIGINAL_ID, { id: ORIGINAL_ID, parentId: null, key: 'orig-key', contentType: 'image/heic' }],
@@ -136,12 +142,19 @@ describe('ImageDescriptionListener', () => {
     expect(messages[0].content).toContain('only when it is legible or unmistakable in the image');
     expect(messages[0].content).not.toContain('Context:');
     // The original's bytes went to the context builder, keyed by the ORIGINAL's id.
-    expect(captureContextService.build).toHaveBeenCalledWith(expect.objectContaining({ userId: USER }), ORIGINAL, ORIGINAL_ID);
+    expect(captureContextService.build).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER }),
+      ORIGINAL,
+      ORIGINAL_ID,
+    );
   });
 
   it('adds the capture context to the prompt when the photo yields one', async () => {
     const { listener, ollamaService } = makeListener({
-      captureContext: { text: 'Context: the photo was taken on 2024-05-05. The owner was in Palermo.', source: 'events' },
+      captureContext: {
+        text: 'Context: the photo was taken on 2024-05-05. The owner was in Palermo.',
+        source: 'events',
+      },
     });
 
     await listener.handle({ userId: USER, previewId: PREVIEW_ID });

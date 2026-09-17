@@ -200,18 +200,28 @@ describe('OllamaService ignores a stored chat model the backend no longer serves
   });
 
   it('evaluates the vision default against the appliance default instead of the missing model', async () => {
-    const service = buildNativeService(['first-listed:7b', PROMPT_MODEL], [PROMPT_MODEL], { chatModel: 'removed:27b' });
+    const service = buildNativeService(['first-listed:7b', PROMPT_MODEL], [PROMPT_MODEL], {
+      chatModel: 'removed:27b',
+    });
 
-    await expect(service.resolveVisionModel('user-1')).resolves.toEqual({ model: PROMPT_MODEL, supportsVision: true });
+    await expect(service.resolveVisionModel('user-1')).resolves.toEqual({
+      model: PROMPT_MODEL,
+      supportsVision: true,
+    });
     // …and an image turn goes to the same model the default was evaluated for.
     const resolved = await service.resolveModel(ctx, { messages: IMAGE });
     expect(resolved.model).toBe(PROMPT_MODEL);
   });
 
   it('still honours the override while it is served', async () => {
-    const service = buildNativeService([PROMPT_MODEL, 'chosen:9b'], ['chosen:9b'], { chatModel: 'chosen:9b' });
+    const service = buildNativeService([PROMPT_MODEL, 'chosen:9b'], ['chosen:9b'], {
+      chatModel: 'chosen:9b',
+    });
 
-    await expect(service.resolveVisionModel('user-1')).resolves.toEqual({ model: 'chosen:9b', supportsVision: true });
+    await expect(service.resolveVisionModel('user-1')).resolves.toEqual({
+      model: 'chosen:9b',
+      supportsVision: true,
+    });
     expect((await service.resolveModel(ctx, { messages: TEXT })).model).toBe('chosen:9b');
   });
 });

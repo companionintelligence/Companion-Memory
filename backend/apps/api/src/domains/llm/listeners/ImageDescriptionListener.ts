@@ -46,7 +46,9 @@ const PROMPT_TAIL = `
 `;
 
 export function buildPrompt(captureContext: string | null): string {
-  return captureContext == null ? `${PROMPT_HEAD}${PROMPT_TAIL}` : `${PROMPT_HEAD}\n  ${captureContext}\n${PROMPT_TAIL}`;
+  return captureContext == null
+    ? `${PROMPT_HEAD}${PROMPT_TAIL}`
+    : `${PROMPT_HEAD}\n  ${captureContext}\n${PROMPT_TAIL}`;
 }
 
 /**

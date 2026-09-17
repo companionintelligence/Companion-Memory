@@ -289,9 +289,10 @@ export class TaskResolver {
     nullable: true,
     description: 'Decline a proposed task (archives it).',
   })
-  // Archives the task; the row survives and is not deleted. Flagged as a borderline judgment call:
-  // no explicit "unarchive" mutation is exposed here, though the row remains intact.
-  @GraphqlPrivacy({ destructive: false })
+  // Archives the task with no unarchive mutation exposed anywhere in this schema — irreversible
+  // through this surface, the same standard PlanningCompleteTaskTool uses ("nothing exposes an
+  // uncomplete path" -> destructive:true) even though the row itself is never hard-deleted.
+  @GraphqlPrivacy({ destructive: true })
   async declineProposedTask(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

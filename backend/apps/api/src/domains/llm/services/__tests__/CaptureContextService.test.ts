@@ -26,9 +26,13 @@ function makeService(
 ) {
   const failing = new Set(deps.failing ?? []);
   const reject = (name: string) => jest.fn(async () => Promise.reject(new Error(`${name} down`)));
-  const placeService = { placesNear: failing.has('places') ? reject('places') : jest.fn(async () => deps.places ?? []) };
+  const placeService = {
+    placesNear: failing.has('places') ? reject('places') : jest.fn(async () => deps.places ?? []),
+  };
   const positionService = {
-    findByDateRange: failing.has('positions') ? reject('positions') : jest.fn(async () => deps.positions ?? []),
+    findByDateRange: failing.has('positions')
+      ? reject('positions')
+      : jest.fn(async () => deps.positions ?? []),
   };
   const calendarEventService = {
     findInRange: failing.has('events') ? reject('events') : jest.fn(async () => deps.events ?? []),
@@ -63,7 +67,13 @@ function makeService(
 }
 
 const TAKEN_AT = new Date('2024-05-05T08:12:55.000Z');
-const DATED: CaptureExif = { takenAt: TAKEN_AT, zoneKnown: true, takenOn: '2024-05-05', latitude: null, longitude: null };
+const DATED: CaptureExif = {
+  takenAt: TAKEN_AT,
+  zoneKnown: true,
+  takenOn: '2024-05-05',
+  latitude: null,
+  longitude: null,
+};
 const LOCATED: CaptureExif = { ...DATED, latitude: 38.1146, longitude: 13.3562 };
 
 describe('CaptureContextService', () => {
@@ -88,45 +98,66 @@ describe('CaptureContextService', () => {
   });
 
   it('falls back to a reverse geocode when no place of the user’s is near the GPS point', async () => {
-    const { service, geocodeService } = makeService(LOCATED, { geocode: { status: 'OK', placeName: 'Palermo, Sicily, Italy' } });
+    const { service, geocodeService } = makeService(LOCATED, {
+      geocode: { status: 'OK', placeName: 'Palermo, Sicily, Italy' },
+    });
 
     const context = await service.build(USER, BYTES, FILE_ID);
 
     expect(context?.source).toBe('exif-gps');
-    expect(context?.text).toContain("GPS places it at Palermo, Sicily, Italy");
+    expect(context?.text).toContain('GPS places it at Palermo, Sicily, Italy');
     expect(geocodeService.reverseGeocode).toHaveBeenCalledWith(38.1146, 13.3562);
   });
 
   it('uses the nearest position fix around the shutter time, preferring its geocoded columns', async () => {
     const far = { time: new Date(TAKEN_AT.getTime() - 3 * 60 * 60 * 1000), city: 'Cefalù', country: 'Italy' };
-    const near = { time: new Date(TAKEN_AT.getTime() + 25 * 60 * 1000), city: 'Palermo', region: 'Sicily', country: 'Italy' };
+    const near = {
+      time: new Date(TAKEN_AT.getTime() + 25 * 60 * 1000),
+      city: 'Palermo',
+      region: 'Sicily',
+      country: 'Italy',
+    };
     const { service, positionService } = makeService(DATED, { positions: [far, near] });
 
     const context = await service.build(USER, BYTES, FILE_ID);
 
     expect(context?.source).toBe('position');
-    expect(context?.text).toContain('location history puts them at Palermo, Sicily, Italy within about 25 minutes of the shutter time');
+    expect(context?.text).toContain(
+      'location history puts them at Palermo, Sicily, Italy within about 25 minutes of the shutter time',
+    );
     const [, from, to] = positionService.findByDateRange.mock.calls[0] as unknown as [unknown, Date, Date];
     expect(to.getTime() - from.getTime()).toBe(12 * 60 * 60 * 1000);
   });
 
   it('names an un-geocoded position fix through the same place-then-geocode lookup', async () => {
     const fix = { time: TAKEN_AT, location: { type: 'Point', coordinates: [13.3562, 38.1146] } };
-    const { service, placeService } = makeService(DATED, { positions: [fix], places: [{ name: 'Palermo Cathedral' }] });
+    const { service, placeService } = makeService(DATED, {
+      positions: [fix],
+      places: [{ name: 'Palermo Cathedral' }],
+    });
 
     const context = await service.build(USER, BYTES, FILE_ID);
 
     expect(context?.source).toBe('position');
     expect(context?.text).toContain('puts them at Palermo Cathedral at that moment');
-    expect(placeService.placesNear).toHaveBeenCalledWith(USER, expect.objectContaining({ lat: 38.1146, lng: 13.3562 }));
+    expect(placeService.placesNear).toHaveBeenCalledWith(
+      USER,
+      expect.objectContaining({ lat: 38.1146, lng: 13.3562 }),
+    );
   });
 
   it('falls back to nearby calendar locations, nearest first and de-duplicated, capped at three', async () => {
     const day = 24 * 60 * 60 * 1000;
     const events = [
-      { startTime: new Date(TAKEN_AT.getTime() + 2 * day), locationName: 'Beccafico, Via Polara, 24, 90138 Palermo' },
+      {
+        startTime: new Date(TAKEN_AT.getTime() + 2 * day),
+        locationName: 'Beccafico, Via Polara, 24, 90138 Palermo',
+      },
       { startTime: new Date(TAKEN_AT.getTime() - 3 * day), locationName: 'Ristorante Vomero, Naples' },
-      { startTime: new Date(TAKEN_AT.getTime() + 2 * day + 1000), locationName: 'Beccafico, Via Polara, 24, 90138 Palermo' },
+      {
+        startTime: new Date(TAKEN_AT.getTime() + 2 * day + 1000),
+        locationName: 'Beccafico, Via Polara, 24, 90138 Palermo',
+      },
       { startTime: new Date(TAKEN_AT.getTime() - 1 * day), locationName: null },
       { startTime: new Date(TAKEN_AT.getTime() - 2 * day), locationName: 'Hotel, Cefalù' },
       { startTime: new Date(TAKEN_AT.getTime() + 3 * day), locationName: 'Airport, Catania' },
