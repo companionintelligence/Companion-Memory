@@ -37,6 +37,7 @@ import { UserService } from '@ci/domains/user';
 import { SessionController } from '../controllers/SessionController';
 import { AuthService } from '../services/AuthService';
 import { CsrfService } from '../services/CsrfService';
+import { HubForwardAuthBridgeService } from '../services/HubForwardAuthBridgeService';
 import { LoginThrottleService } from '../services/LoginThrottleService';
 
 // This file boots the REAL LoginThrottleService behind the REAL login route, so
@@ -94,6 +95,13 @@ const mockLogger = {
     { provide: CsrfService, useValue: mockCsrfService },
     { provide: LoggerService, useValue: mockLogger },
     LoginThrottleService,
+    {
+      provide: HubForwardAuthBridgeService,
+      useValue: {
+        verifyUsername: jest.fn().mockReturnValue(null),
+        alignSession: jest.fn().mockResolvedValue({ username: null, replaced: false }),
+      },
+    },
   ],
 })
 class TestModule implements NestModule {

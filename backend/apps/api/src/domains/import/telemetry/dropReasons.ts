@@ -203,7 +203,6 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   empty_trans_code: 'empty_record',
 
   // Nothing to key it by.
-  no_title: 'no_identity',
   unnamed_product: 'no_identity',
   // A tweets.js/tweet.js row with neither id_str nor id — the export's own
   // primary key absent from its own row.
@@ -212,6 +211,9 @@ export const DROP_SLUG_REASONS: Readonly<Record<string, DropReason>> = {
   // is keyed by url, so there is nothing to file it under.
   download_no_url: 'no_identity',
   unnamed_track: 'no_identity',
+  // hulu.ts: a watch-history row carrying neither an Episode Name nor a Series
+  // Name — the title is the only thing that identifies what was watched.
+  no_title: 'no_identity',
   // A Connections.csv row with no First Name and no Last Name.
   unnamed_connection: 'no_identity',
   grok_unknown_sender: 'no_identity',

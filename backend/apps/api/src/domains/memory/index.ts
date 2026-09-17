@@ -287,6 +287,12 @@ export {
 
 export type { Content } from './entities/ContentEntity';
 export type { MapPin } from './services/CalendarEventService';
+export { DEAD_EVENT_STATUSES, LIVE_EVENT_SQL } from './services/CalendarEventService';
+export { MAX_EXPANDED_OCCURRENCES, MAX_RECURRING_MASTERS } from './services/CalendarEventService';
+// Read-time RRULE expansion. Exported so `peers` can expand the same series for
+// free/busy without routing that read through findInRange, which would silently
+// impose SCHEDULE_EVENT_TYPES and LIVE_EVENT_SQL on it.
+export * from './recurrence';
 export type { PlaceKind } from './entities/PlaceEntity';
 export type { PlaceVisitStats } from './services/PlaceService';
 export { EntityMergeBlockEntity, orderPair, pairKey } from './entities/EntityMergeBlockEntity';

@@ -1,19 +1,26 @@
 import { z } from 'zod';
 
-export type CompleteConnectionDto =
-  | {
-      flow: 'proxy';
-      state: string;
-      accessToken: string;
-      refreshToken?: string;
-      expiresIn?: number;
-      userProviderId: string;
-    }
-  | {
-      flow: 'direct';
-      state: string;
-      code: string;
-    };
+/** Body of `POST /connections/complete`; `CompleteConnectionDto` is inferred from it, so the two cannot drift. */
+export const completeConnectionSchema = z.discriminatedUnion('flow', [
+  z.object({
+    flow: z.literal('proxy'),
+    state: z.string(),
+    // Optional: with a refresh token the access token is fetched from CI Portal, not
+    // taken from the browser (see `ConnectionsController.proxyTokens`). A body with
+    // neither is refused by `ConnectionsController.completeCallback`.
+    accessToken: z.string().optional(),
+    refreshToken: z.string().optional(),
+    expiresIn: z.number().int().positive().optional(),
+    userProviderId: z.string(),
+  }),
+  z.object({
+    flow: z.literal('direct'),
+    state: z.string(),
+    code: z.string(),
+  }),
+]);
+
+export type CompleteConnectionDto = z.infer<typeof completeConnectionSchema>;
 
 export interface CreateConnectionDto {
   name?: string;

@@ -53,6 +53,13 @@ const ctx = { userId: '00000000-0000-0000-0000-000000000001' };
 const USER_EMAIL = 'tester@example.com';
 const USER_FOLDER = 'tester_example.com';
 
+/** Keep the large-directory fixture from spending its timeout on serial I/O. */
+async function writeFilesInBatches(files: readonly string[], batchSize = 128): Promise<void> {
+  for (let offset = 0; offset < files.length; offset += batchSize) {
+    await Promise.all(files.slice(offset, offset + batchSize).map((file) => writeFile(file, 'x')));
+  }
+}
+
 function build(overrides?: { startRun?: jest.Mock; findActiveByPaths?: jest.Mock }) {
   const startRun = overrides?.startRun ?? jest.fn(async () => ({ run: { id: 'run-1', label: 'x' } }));
   const findActiveByPaths = overrides?.findActiveByPaths ?? jest.fn(async () => []);
@@ -401,9 +408,9 @@ describe('ImportInboxService.scan', () => {
     const inbox = await freshInbox();
 
     // 501 files with a fixed-width suffix so lexicographic order is total.
-    for (let index = 0; index < 501; index += 1) {
-      await writeFile(path.join(inbox, `f${String(index).padStart(4, '0')}.csv`), 'x');
-    }
+    await writeFilesInBatches(
+      Array.from({ length: 501 }, (_, index) => path.join(inbox, `f${String(index).padStart(4, '0')}.csv`)),
+    );
 
     const { service } = build();
 
@@ -427,9 +434,9 @@ describe('ImportInboxService.scan', () => {
     // `big` sorts before `zzz` and holds more entries than the walk's budget.
     const big = path.join(inbox, 'big');
     await mkdir(big);
-    for (let index = 0; index < 25_000; index += 1) {
-      await writeFile(path.join(big, `f${String(index).padStart(6, '0')}.txt`), 'x');
-    }
+    await writeFilesInBatches(
+      Array.from({ length: 25_000 }, (_, index) => path.join(big, `f${String(index).padStart(6, '0')}.txt`)),
+    );
 
     await mkdir(path.join(inbox, 'zzz'));
     await writeFile(path.join(inbox, 'zzz', 'export.csv'), 'x');

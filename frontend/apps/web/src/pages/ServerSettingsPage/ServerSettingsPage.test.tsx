@@ -13,6 +13,7 @@ vi.mock('react-router-dom', async (importOriginal) => {
 
 const h = vi.hoisted(() => ({
   apiBaseUrl: '',
+  ios: false,
   persistApiBaseUrl: vi.fn(),
   completeMemoryPasswordConnect: vi.fn(async () => true),
 }));
@@ -20,6 +21,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@ci/common', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@ci/common')>()),
   getApiBaseUrl: () => h.apiBaseUrl,
+  isIosPlatform: () => h.ios,
   persistApiBaseUrl: h.persistApiBaseUrl,
 }));
 
@@ -32,6 +34,7 @@ vi.mock('@/hooks', () => ({
 
 beforeEach(() => {
   h.apiBaseUrl = '';
+  h.ios = false;
   h.persistApiBaseUrl.mockReset();
   h.completeMemoryPasswordConnect.mockReset();
   h.completeMemoryPasswordConnect.mockResolvedValue(true);
@@ -40,13 +43,33 @@ beforeEach(() => {
 });
 
 describe('ServerSettingsPage', () => {
-  it('saves the Companion Portal URL and returns to Log in', () => {
+  it('defaults the Companion URL to production hub.ci.computer', () => {
     render(<ServerSettingsPage />);
 
-    fireEvent.change(screen.getByLabelText('Companion Portal URL'), {
+    expect(screen.getByLabelText('Companion URL')).toHaveValue('https://hub.ci.computer');
+    expect(screen.queryByText(/portal/i)).not.toBeInTheDocument();
+  });
+
+  it('names Safari on iOS and stays browser-neutral everywhere else', () => {
+    const { unmount } = render(<ServerSettingsPage />);
+
+    expect(screen.getByText(/Your browser signs in here\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Safari/)).not.toBeInTheDocument();
+    unmount();
+
+    h.ios = true;
+    render(<ServerSettingsPage />);
+
+    expect(screen.getByText(/Safari signs in here\./)).toBeInTheDocument();
+  });
+
+  it('saves the Companion URL and returns to Log in', () => {
+    render(<ServerSettingsPage />);
+
+    fireEvent.change(screen.getByLabelText('Companion URL'), {
       target: { value: 'https://hub.ci.computer' },
     });
-    fireEvent.submit(screen.getByRole('button', { name: /save portal url/i }).closest('form')!);
+    fireEvent.submit(screen.getByRole('button', { name: /^save url$/i }).closest('form')!);
 
     expect(localStorage.getItem('ci.deviceConnect.portalUrl')).toBe('https://hub.ci.computer');
     expect(navigate).toHaveBeenCalledWith('/device-connect');

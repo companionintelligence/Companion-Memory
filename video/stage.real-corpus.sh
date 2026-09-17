@@ -54,8 +54,8 @@ IMPORTER_PORT="${IMPORTER_PORT:-12009}"
 #
 # NOTE (2026-08-18): CI-Import-Tools has been retired (renamed
 # ZARCHIVED-CI-Import-Tools) and its import functionality is now native in
-# CI-Server (backend/apps/api/src/domains/import/, see docs/cli/ci-import.md
-# for the `ci-import` CLI). This script still shells out to a standalone
+# CI-Server (backend/apps/api/src/domains/import/, see docs/cli/ci.md
+# for the `ci` CLI). This script still shells out to a standalone
 # CI-Import-Tools checkout for its GraphQL-lane bulk push — porting it to the
 # native importer is a known follow-up, not yet done. Until then this stage
 # requires a local CI-Import-Tools clone (or ZARCHIVED-CI-Import-Tools) at

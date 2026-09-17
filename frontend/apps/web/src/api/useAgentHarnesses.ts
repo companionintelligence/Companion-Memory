@@ -10,6 +10,8 @@ export type DispatchBlocker =
   | 'not_installed'
   | 'not_connected'
   | 'not_running'
+  /** The APPLIANCE cannot ring Hub — nothing to do with OpenClaw's own state. */
+  | 'doorbell_unconfigured'
   | 'not_wakeable'
   | 'chat_only'
   | null;

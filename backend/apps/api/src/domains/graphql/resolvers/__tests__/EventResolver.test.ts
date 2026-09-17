@@ -1,3 +1,5 @@
+import { BadRequestException } from '@nestjs/common';
+
 import { type RequestContext } from '@ci/common/context';
 import { type Event } from '@ci/domains/memory';
 
@@ -39,6 +41,12 @@ function makeEvent(overrides: Partial<Event> = {}): Event {
 function makeResolver() {
   const eventService = {
     findAll: jest.fn().mockResolvedValue([] as Event[]),
+    findPage: jest.fn().mockResolvedValue({
+      entities: [] as Event[],
+      hasNextPage: false,
+      hasPreviousPage: false,
+      totalCount: 0,
+    }),
     findInRange: jest.fn(),
     findById: jest.fn(),
     create: jest.fn(),
@@ -75,50 +83,71 @@ function makeResolver() {
 }
 
 describe('EventResolver.events', () => {
-  it('scopes findAll to the requesting viewer', async () => {
+  /** What `CalendarEventService.findPage` hands back for one page. */
+  function page(entities: Event[], overrides: Record<string, unknown> = {}) {
+    return {
+      entities,
+      hasNextPage: false,
+      hasPreviousPage: false,
+      totalCount: entities.length,
+      ...overrides,
+    };
+  }
+
+  it('scopes the page read to the requesting viewer', async () => {
     const { resolver, eventService } = makeResolver();
 
     await resolver.events(viewerCtx, {});
 
-    expect(eventService.findAll).toHaveBeenCalledWith({ userId: 'viewer-1' });
+    expect(eventService.findPage).toHaveBeenCalledWith({ userId: 'viewer-1' }, expect.anything());
   });
 
-  it('composes findAll + Paginator.paginate: slices the page, keeps the full-set totalCount, and GlobalUID-encodes cursors', async () => {
+  // Pagination lives in the service now (keyset over (start_time, event_id)),
+  // not in an in-memory Paginator here: `events` used to findAll the user's
+  // whole event table — photos and every ETL row included — and throw all but
+  // `first` away. What the resolver still owns is the cursor translation, so
+  // that is what these pin.
+  it('passes first/last through and decodes after/before cursors to raw row ids', async () => {
     const { resolver, eventService } = makeResolver();
-    const events = [makeEvent({ id: 'e1' }), makeEvent({ id: 'e2' }), makeEvent({ id: 'e3' })];
-    eventService.findAll.mockResolvedValue(events);
+
+    await resolver.events(viewerCtx, {
+      first: 2,
+      after: GlobalUID.encode('event', 'e1'),
+    });
+
+    expect(eventService.findPage).toHaveBeenCalledWith(
+      { userId: 'viewer-1' },
+      { first: 2, last: undefined, afterId: 'e1', beforeId: null },
+    );
+  });
+
+  it('GlobalUID-encodes cursors and reports the full-set totalCount, not the page length', async () => {
+    const { resolver, eventService } = makeResolver();
+    eventService.findPage.mockResolvedValue(
+      page([makeEvent({ id: 'e1' }), makeEvent({ id: 'e2' })], { totalCount: 3, hasNextPage: true }),
+    );
 
     const result = await resolver.events(viewerCtx, { first: 2 });
 
     // totalCount must reflect the FULL matching set, not just the returned
-    // page — this is the exact contract that made SearchResolver's totalCount
-    // fabrication (fixed in 9d13b92c5) a bug: it fed a partial window into a
-    // paginator whose totalCount is items.length.
+    // page — the same contract that made SearchResolver's totalCount
+    // fabrication (fixed in 9d13b92c5) a bug.
     expect(result.totalCount).toBe(3);
-    expect(result.edges).toHaveLength(2);
-    expect(result.edges[0].cursor).toBe(GlobalUID.encode('event', 'e1'));
-    expect(result.edges[1].cursor).toBe(GlobalUID.encode('event', 'e2'));
-    expect(result.pageInfo.hasNextPage).toBe(true);
-    expect(result.pageInfo.hasPreviousPage).toBe(false);
-  });
-
-  it('pages past a cursor with after', async () => {
-    const { resolver, eventService } = makeResolver();
-    const events = [makeEvent({ id: 'e1' }), makeEvent({ id: 'e2' }), makeEvent({ id: 'e3' })];
-    eventService.findAll.mockResolvedValue(events);
-
-    const result = await resolver.events(viewerCtx, { first: 10, after: GlobalUID.encode('event', 'e1') });
-
-    expect(result.edges.map((edge) => edge.node.id)).toEqual([
+    expect(result.edges.map((edge) => edge.cursor)).toEqual([
+      GlobalUID.encode('event', 'e1'),
       GlobalUID.encode('event', 'e2'),
-      GlobalUID.encode('event', 'e3'),
     ]);
-    expect(result.pageInfo.hasNextPage).toBe(false);
+    expect(result.pageInfo).toEqual({
+      hasNextPage: true,
+      hasPreviousPage: false,
+      startCursor: GlobalUID.encode('event', 'e1'),
+      endCursor: GlobalUID.encode('event', 'e2'),
+    });
   });
 
   it('returns an empty connection (not an error) when the user has no events', async () => {
     const { resolver, eventService } = makeResolver();
-    eventService.findAll.mockResolvedValue([]);
+    eventService.findPage.mockResolvedValue(page([]));
 
     const result = await resolver.events(viewerCtx, {});
 
@@ -191,5 +220,63 @@ describe('EventResolver sub-resolvers: entityOwnerScope wiring', () => {
     await resolver.previewUrl(viewerCtx, parent);
 
     expect(eventMediaLoader.load).toHaveBeenCalledWith({ userId: 'owner-2' }, 'e1');
+  });
+});
+
+describe('EventResolver time ordering', () => {
+  const START = new Date('2026-09-10T10:00:00Z');
+  const BEFORE_START = new Date('2026-09-10T08:00:00Z');
+  const AFTER_START = new Date('2026-09-10T11:00:00Z');
+
+  // ci.events' `valid_time_range` CHECK is otherwise the first thing to see
+  // these, and formatError reduces the 23514 to a bare `Internal server
+  // error`. rescheduleEvent has always answered 400; every mutation that
+  // names both ends must agree with it.
+  it('createEvent refuses an endTime before its startTime', async () => {
+    const { resolver, eventService } = makeResolver();
+
+    await expect(
+      resolver.createEvent(viewerCtx, { title: 'Standup', startTime: START, endTime: BEFORE_START }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(eventService.create).not.toHaveBeenCalled();
+  });
+
+  it('createEvents refuses the whole batch when one row is reversed', async () => {
+    const { resolver, eventService } = makeResolver();
+
+    await expect(
+      resolver.createEvents(viewerCtx, [
+        { title: 'Standup', startTime: START, endTime: AFTER_START },
+        { title: 'Retro', startTime: START, endTime: BEFORE_START },
+      ]),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(eventService.create).not.toHaveBeenCalled();
+  });
+
+  it('updateEvent refuses a reversed pair', async () => {
+    const { resolver, eventService } = makeResolver();
+
+    await expect(
+      resolver.updateEvent(viewerCtx, {
+        id: GlobalUID.encode('event', '11111111-1111-1111-1111-111111111111'),
+        // UpdateEventInput declares `title` nullable but types it non-optional,
+        // so TS wants it even though the mutation does not.
+        title: 'Standup',
+        startTime: START,
+        endTime: BEFORE_START,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(eventService.update).not.toHaveBeenCalled();
+  });
+
+  // Equal instants are legal: the CHECK is `start_time <= end_time`, and a
+  // zero-length marker is a real thing to store.
+  it('accepts an endTime equal to startTime', async () => {
+    const { resolver, eventService } = makeResolver();
+    eventService.create.mockResolvedValue([makeEvent()]);
+
+    await resolver.createEvent(viewerCtx, { title: 'Marker', startTime: START, endTime: START });
+
+    expect(eventService.create).toHaveBeenCalled();
   });
 });

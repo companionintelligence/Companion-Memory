@@ -68,7 +68,7 @@ export function PlacePage() {
   const [tagsEditMode, setTagsEditMode] = useState(false);
   const properties = (place?.properties ?? {}) as PlaceProperties;
 
-  usePageTitle(place?.name ? `${place.name} - Companion Intelligence` : 'Place - Companion Intelligence');
+  usePageTitle(place?.name ? `${place.name} - Companion Memory` : 'Place - Companion Memory');
 
   /**
    * Patch one field. `UpdatePlaceInput.name` is non-null, so an address- or

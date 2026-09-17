@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 
-import { persistApiBaseUrl, resolveHttpOrigin } from '@ci/common';
+import { isIosPlatform, persistApiBaseUrl, resolveHttpOrigin } from '@ci/common';
 import { Button, Card, LoadingButton } from '@ci/shadcn';
 import { useNavigate } from 'react-router-dom';
 
@@ -329,7 +329,9 @@ export function DeviceConnectPage() {
 
             {oidcController ? (
               <div className="flex flex-col items-center gap-2 text-center text-xs text-muted-foreground">
-                <span>Finish signing in in Safari, then return to this app.</span>
+                <span>
+                  Finish signing in in {isIosPlatform() ? 'Safari' : 'your browser'}, then return to this app.
+                </span>
                 <Button
                   type="button"
                   variant="ghost"

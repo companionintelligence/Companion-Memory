@@ -16,6 +16,8 @@ export interface EditableFilters {
   places?: string[] | null;
   hasLocation?: boolean | null;
   semantic?: boolean | null;
+  /** Sent / received (`inbound` / `outbound`) — the Who field's toggle. */
+  direction?: string | null;
 }
 
 /** The list-valued dimensions, edited as removable chips with a free-text add. */
@@ -100,6 +102,7 @@ export function toFiltersInput(filters: EditableFilters): EditableFilters | null
   setIf('sortOrder', filters.sortOrder || undefined);
   setIf('hasLocation', filters.hasLocation ? true : undefined);
   setIf('semantic', filters.semantic ? true : undefined);
+  setIf('direction', filters.direction || undefined);
 
   return Object.keys(result).length > 0 ? result : null;
 }

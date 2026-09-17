@@ -3,13 +3,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { McpSection } from './McpSection';
 
-// McpSection reads useAuth from the @/hooks barrel and talks to /api/mcp/* through fetchJson.
+// McpSection reads useAuth and useCurrentUser from the @/hooks barrel and talks to /api/mcp/*
+// through fetchJson.
 const h = vi.hoisted(() => ({
   fetchJson: vi.fn(),
+  // Every config-changing route is admin-gated server-side, and the section disables its controls
+  // to match, so these tests need an owner. `isAdmin: false` is exercised separately below.
+  isAdmin: true,
 }));
 
 vi.mock('@/hooks', () => ({
   useAuth: () => [{ authToken: 'token' }, {}],
+  useCurrentUser: () => ({ user: { id: 'user-1', isAdmin: h.isAdmin }, loading: false }),
 }));
 
 vi.mock('@ci/common', async (importOriginal) => ({
@@ -68,6 +73,7 @@ async function renderAndExpand() {
 
 describe('McpSection tool approval', () => {
   beforeEach(() => {
+    h.isAdmin = true;
     h.fetchJson.mockReset();
     h.fetchJson.mockImplementation((url: string) => {
       if (url === '/api/mcp/servers') {
@@ -139,5 +145,78 @@ describe('McpSection tool approval', () => {
     expect(await screen.findAllByText('Approved')).toHaveLength(2);
     expect(screen.queryByRole('button', { name: /approve all changes/i })).toBeNull();
     expect(screen.queryByText(/awaiting approval/i)).toBeNull();
+  });
+});
+
+/**
+ * ═══ WHY THE UI GATES AT ALL ═══
+ *
+ * Every route that CHANGES an MCP server config carries `AdminOnlyGuard` server-side — create,
+ * update, delete, enable, disable, approve-tools and both test-connection routes; only
+ * `GET servers` and `GET catalog` do not. The client had no notion of role, so it rendered all of
+ * it to everyone and each 403 came back as a generic "Failed to …". A non-owner met a dead button
+ * with no explanation, and on a fresh appliance — where nothing granted the admin role at all —
+ * that was every user.
+ *
+ * These pin the presentation, not the boundary: the guard still refuses the request. What they
+ * protect against is the section quietly drifting back to offering what the server will refuse.
+ */
+describe('McpSection admin gating', () => {
+  beforeEach(() => {
+    h.isAdmin = false;
+    h.fetchJson.mockReset();
+    h.fetchJson.mockImplementation((url: string) => {
+      if (url === '/api/mcp/servers') {
+        return Promise.resolve([server]);
+      }
+
+      if (url === '/api/mcp/catalog') {
+        return Promise.resolve({ normal: [], highRisk: [] });
+      }
+
+      return Promise.resolve({ ...server, toolApprovals: [] });
+    });
+  });
+
+  it('says why the controls are inert rather than leaving a non-owner to guess', async () => {
+    render(<McpSection />);
+
+    expect(await screen.findByText(/only the appliance owner can add or change/i)).toBeInTheDocument();
+  });
+
+  it('disables approval for a non-owner, the control the server would 403', async () => {
+    await renderAndExpand();
+
+    const approve = (await screen.findAllByRole('button', { name: /^approve$/i }))[0]!;
+
+    expect(approve).toBeDisabled();
+    fireEvent.click(approve);
+    expect(approveBody()).toBeUndefined();
+  });
+
+  it('disables approve-all for a non-owner', async () => {
+    await renderAndExpand();
+
+    expect(await screen.findByRole('button', { name: /approve all changes/i })).toBeDisabled();
+  });
+
+  it('still SHOWS what is configured — reading is not admin-gated', async () => {
+    // `GET servers` carries no AdminOnlyGuard, so hiding the list would withhold something the
+    // server is willing to serve. The gate is on changing, not on seeing.
+    await renderAndExpand();
+
+    expect(screen.getByText('Files')).toBeInTheDocument();
+    expect(screen.getByText('exfiltrate')).toBeInTheDocument();
+    expect(await screen.findByText(/1 awaiting approval/i)).toBeInTheDocument();
+  });
+
+  it('leaves an owner every control, so the gate is the role and not the page', async () => {
+    h.isAdmin = true;
+
+    await renderAndExpand();
+
+    expect((await screen.findAllByRole('button', { name: /^approve$/i }))[0]!).toBeEnabled();
+    expect(screen.getByRole('button', { name: /approve all changes/i })).toBeEnabled();
+    expect(screen.queryByText(/only the appliance owner can add or change/i)).toBeNull();
   });
 });

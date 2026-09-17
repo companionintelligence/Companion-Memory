@@ -13,6 +13,7 @@ import {
   type AnalyticType,
 } from '@ci/domains/daily-metrics';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { DailyMetricsType } from '../types/DailyMetricsType';
 import { MetricAnomalyType, MetricCorrelationType, MetricSuggestionType } from '../types/DerivationTypes';
 import { DescriptiveAnswerType, DescriptiveQuestionType } from '../types/DescriptiveAnswerType';
@@ -128,6 +129,10 @@ export class DailyMetricsResolver {
   @Mutation(() => [DailyMetricsType], {
     description: 'Recompute and upsert a trailing window of daily metrics for the signed-in user.',
   })
+  // dailyMetricsService.refreshForUser() upserts (conflict on userId+date) one derived row per
+  // day in the window — a recompute of the caller's own analytics, not a deletion or a wholesale
+  // replace of unrelated stored data.
+  @GraphqlPrivacy({ destructive: false })
   async refreshDailyMetrics(
     @Context() context: RequestContext,
     @Args('days', { type: () => Int, nullable: true }) days?: number,

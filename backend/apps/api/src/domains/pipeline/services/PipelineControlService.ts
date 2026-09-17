@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 
@@ -17,6 +17,7 @@ import {
 import type { Stage } from '../types';
 
 import { EnrichmentWindowService } from './EnrichmentWindowService';
+import { IdentifierArrivalService } from './IdentifierArrivalService';
 import { PipelineDispatchService } from './PipelineDispatchService';
 import { PipelineRunService } from './PipelineRunService';
 import { PipelineStateService } from './PipelineStateService';
@@ -611,6 +612,12 @@ export interface ControlTickReport {
   /** Sweeps actually dispatched. */
   sweepsStarted: number;
 
+  /**
+   * Ledger rows re-opened because an identifier registered since could answer
+   * one of their unresolved claims (see IdentifierArrivalService).
+   */
+  claimsReopened: number;
+
   /** Stage legs with stale rows that were held back behind an undrained producer. */
   legsBlocked: number;
 
@@ -671,6 +678,7 @@ function emptyReport(): ControlTickReport {
     runsFinalized: 0,
     runsPaused: 0,
     sweepsStarted: 0,
+    claimsReopened: 0,
     legsBlocked: 0,
     legsDrained: 0,
     legsNotDue: 0,
@@ -714,6 +722,13 @@ export class PipelineControlService {
      */
     private readonly windowService: EnrichmentWindowService,
     private readonly logger: LoggerService,
+    /**
+     * Optional so the SQL-primitive halves of the spec can construct the
+     * service without it; the module always provides it. When absent, no
+     * decision is ever re-opened by new evidence — the version-bump path
+     * still works.
+     */
+    @Optional() private readonly identifierArrival?: IdentifierArrivalService,
   ) {
     this.logger.setContext(PipelineControlService.name);
   }
@@ -824,7 +839,12 @@ export class PipelineControlService {
       }
     }
 
-    if (report.sweepsStarted > 0 || report.runsFinalized > 0 || report.leasesReaped > 0) {
+    if (
+      report.sweepsStarted > 0 ||
+      report.runsFinalized > 0 ||
+      report.leasesReaped > 0 ||
+      report.claimsReopened > 0
+    ) {
       this.logger.log('Pipeline control tick', { ...report });
     }
   }
@@ -857,6 +877,15 @@ export class PipelineControlService {
       report.runsPaused += 1;
 
       return;
+    }
+
+    // ── 2. New evidence re-opens old decisions, before the candidates are counted ──
+    //
+    // An identifier registered since a person-link decision was recorded makes
+    // that decision provisional again. Done here so the re-opened rows count as
+    // candidates in the very same tick, rather than one tick later.
+    if (this.identifierArrival != null) {
+      report.claimsReopened += await this.identifierArrival.reopenForUser(userId);
     }
 
     const stageIds = this.stageSetFor(row);

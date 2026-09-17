@@ -17,7 +17,6 @@ import { MemorySubmenu } from './MemorySubmenu';
 import { NavLink } from './NavLink';
 import { PlanningSubmenu } from './PlanningSubmenu';
 import { SelfSubmenu } from './SelfSubmenu';
-import { SettingsRailButton } from './SettingsRailButton';
 
 interface ExternalNavLinkProps {
   href: string;
@@ -168,7 +167,6 @@ function OverlayRail({
         <div className="mt-auto flex flex-col gap-1 pb-2">
           <HelpSubmenu />
           {showSelf ? <SelfSubmenu /> : null}
-          <SettingsRailButton />
         </div>
       </Tooltip.Provider>
     </nav>
@@ -271,7 +269,6 @@ export function SecondaryNavigation() {
             <div className="mt-auto flex flex-col gap-1 pb-2">
               <HelpSubmenu />
               {showSelf ? <SelfSubmenu /> : null}
-              <SettingsRailButton />
             </div>
           </Tooltip.Provider>
         </nav>

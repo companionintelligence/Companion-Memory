@@ -47,6 +47,8 @@ export interface ExportStepProps {
   onIndex: (index: number) => void;
   onBackToPick: () => void;
   onFinish: () => void;
+  /** When false, the host wizard footer carries prev/next (onboarding). */
+  showNav?: boolean;
 }
 
 /**
@@ -67,6 +69,7 @@ export function ExportStep({
   onIndex,
   onBackToPick,
   onFinish,
+  showNav = true,
 }: ExportStepProps) {
   const api = useImportApi();
   const [busy, setBusy] = useState(false);
@@ -100,7 +103,9 @@ export function ExportStep({
     return (
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">No services selected yet.</p>
-        <Button onClick={onBackToPick}>← Pick services</Button>
+        {/* In host mode the footer's Back already goes to Pick; a second button
+            saying the same thing is the duplicate row this refactor removed. */}
+        {showNav && <Button onClick={onBackToPick}>← Pick services</Button>}
       </div>
     );
   }
@@ -389,17 +394,19 @@ export function ExportStep({
 
       <LiveRunList runIds={startedRuns} />
 
-      <div className="flex items-center justify-between gap-2">
-        <Button variant="outline" onClick={() => (clamped === 0 ? onBackToPick() : onIndex(clamped - 1))}>
-          ← {clamped === 0 ? 'Services' : 'Previous'}
-        </Button>
+      {showNav && (
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="outline" onClick={() => (clamped === 0 ? onBackToPick() : onIndex(clamped - 1))}>
+            ← {clamped === 0 ? 'Services' : 'Previous'}
+          </Button>
 
-        {clamped < entries.length - 1 ? (
-          <Button onClick={() => onIndex(clamped + 1)}>Next →</Button>
-        ) : (
-          <Button onClick={onFinish}>Finish → Sync</Button>
-        )}
-      </div>
+          {clamped < entries.length - 1 ? (
+            <Button onClick={() => onIndex(clamped + 1)}>Next →</Button>
+          ) : (
+            <Button onClick={onFinish}>Finish → Sync</Button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -41,13 +41,70 @@ const MODELS = [
   },
 ];
 
-function setFetch(body: unknown, ok = true) {
-  const fetchMock = vi.fn<typeof fetch>(() =>
-    Promise.resolve({ ok, status: ok ? 200 : 500, text: async () => JSON.stringify(body) } as Response),
-  );
+/** Preference server state this mock serves and records writes into. */
+interface ServerState {
+  chatModel: string | null;
+  toolsEnabled: boolean;
+  thinkingEnabled: boolean;
+}
+
+function defaultServerState(): ServerState {
+  return { chatModel: null, toolsEnabled: true, thinkingEnabled: true };
+}
+
+/**
+ * Routes by URL, unlike the single-body mock this replaced: `fetchModels` now
+ * fires four parallel requests (`/api/llm/models` plus the three preference
+ * endpoints that used to be `localStorage`), and each needs its own response
+ * for these tests to mean anything. POSTs to a preference endpoint mutate
+ * `state` and echo it back, the way the real controller does.
+ */
+function setFetch(opts: { models?: unknown; modelsOk?: boolean; state?: ServerState } = {}) {
+  const models = 'models' in opts ? opts.models : MODELS;
+  const modelsOk = opts.modelsOk ?? true;
+  const state = opts.state ?? defaultServerState();
+
+  const respond = (body: unknown, ok = true) =>
+    Promise.resolve({ ok, status: ok ? 200 : 500, text: async () => JSON.stringify(body) } as Response);
+
+  const fetchMock = vi.fn<typeof fetch>((input, init) => {
+    const url = String(input);
+    const method = (init?.method ?? 'GET').toUpperCase();
+
+    if (url.includes('/api/llm/models')) {
+      return respond(models, modelsOk);
+    }
+
+    if (url.includes('/api/personalization/chat-model')) {
+      if (method === 'POST') {
+        state.chatModel = (JSON.parse(String(init?.body)) as { chatModel: string | null }).chatModel;
+      }
+
+      return respond({ chatModel: state.chatModel });
+    }
+
+    if (url.includes('/api/personalization/tools')) {
+      if (method === 'POST') {
+        state.toolsEnabled = (JSON.parse(String(init?.body)) as { enabled: boolean }).enabled;
+      }
+
+      return respond({ enabled: state.toolsEnabled });
+    }
+
+    if (url.includes('/api/personalization/thinking')) {
+      if (method === 'POST') {
+        state.thinkingEnabled = (JSON.parse(String(init?.body)) as { enabled: boolean }).enabled;
+      }
+
+      return respond({ enabled: state.thinkingEnabled });
+    }
+
+    throw new Error(`useModel.test.tsx setFetch: unhandled URL ${url}`);
+  });
+
   vi.stubGlobal('fetch', fetchMock);
 
-  return fetchMock;
+  return { fetchMock, state };
 }
 
 const wrapper = ({ children }: { children: ReactNode }) => (
@@ -63,8 +120,8 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('useModel', () => {
-  it('loads models and selects the first by default', async () => {
-    setFetch(MODELS);
+  it('loads models and selects the first when the user has no chat-model preference', async () => {
+    setFetch();
 
     const { result } = renderHook(() => useModel(), { wrapper });
 
@@ -73,17 +130,51 @@ describe('useModel', () => {
     expect(result.current[0].selectedModel).toBe('llama3');
   });
 
-  it('restores the persisted model when still available', async () => {
-    localStorage.setItem('activeModel', 'qwen-vl');
-    setFetch(MODELS);
+  it('restores the server-side chat-model preference when still available', async () => {
+    setFetch({ state: { ...defaultServerState(), chatModel: 'qwen-vl' } });
 
     const { result } = renderHook(() => useModel(), { wrapper });
 
     await waitFor(() => expect(result.current[0].selectedModel).toBe('qwen-vl'));
   });
 
-  it('selecting a vision model also sets the vision model and persists both', async () => {
-    setFetch(MODELS);
+  it('clears a stored chat-model preference that names a model no longer served', async () => {
+    const { fetchMock, state } = setFetch({ state: { ...defaultServerState(), chatModel: 'removed:27b' } });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    // The page shows the first served model, and the server is told so — no
+    // stale name left behind to steer chat or the image-description default.
+    expect(result.current[0].selectedModel).toBe('llama3');
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/personalization/chat-model',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ chatModel: null }) }),
+      ),
+    );
+    await waitFor(() => expect(state.chatModel).toBeNull());
+  });
+
+  it('does not clear a stored preference when the backend serves no models at all', async () => {
+    const { fetchMock, state } = setFetch({
+      models: [],
+      state: { ...defaultServerState(), chatModel: 'qwen-vl' },
+    });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+    expect(result.current[0].selectedModel).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/personalization/chat-model',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(state.chatModel).toBe('qwen-vl');
+  });
+
+  it('selecting a model persists it to the server and (when vision-capable) also sets the vision model locally', async () => {
+    const { fetchMock } = setFetch();
     const { result } = renderHook(() => useModel(), { wrapper });
     await waitFor(() => expect(result.current[0].loading).toBe(false));
 
@@ -91,12 +182,36 @@ describe('useModel', () => {
 
     expect(result.current[0].selectedModel).toBe('qwen-vl');
     expect(result.current[0].selectedVisionModel).toBe('qwen-vl');
-    expect(localStorage.getItem('activeModel')).toBe('qwen-vl');
+    // The vision-only picker (Capture modal) stays a local convenience.
     expect(localStorage.getItem('activeVisionModel')).toBe('qwen-vl');
+    // The chat model itself is no longer written to localStorage at all.
+    expect(localStorage.getItem('activeModel')).toBeNull();
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/personalization/chat-model',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ chatModel: 'qwen-vl' }) }),
+      ),
+    );
   });
 
-  it('derives thinking/tools support from the selected model and respects the toggle', async () => {
-    setFetch(MODELS);
+  it('reverts the selection if the server rejects the write', async () => {
+    const { fetchMock } = setFetch();
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve({ ok: false, status: 500, text: async () => '{}' } as Response),
+    );
+
+    act(() => result.current[1].selectModel('qwen-vl'));
+    expect(result.current[0].selectedModel).toBe('qwen-vl');
+
+    await waitFor(() => expect(result.current[0].selectedModel).toBe('llama3'));
+  });
+
+  it('derives thinking/tools support from the selected model, and persists the toggle server-side', async () => {
+    const { fetchMock } = setFetch();
     const { result } = renderHook(() => useModel(), { wrapper });
     await waitFor(() => expect(result.current[0].loading).toBe(false));
 
@@ -111,10 +226,30 @@ describe('useModel', () => {
 
     act(() => result.current[1].toggleThinking());
     expect(result.current[0].thinkingEnabled).toBe(false);
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/personalization/thinking',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ enabled: false }) }),
+      ),
+    );
+  });
+
+  it('restores the tools/thinking preferences from the server, not defaulted true', async () => {
+    setFetch({ state: { ...defaultServerState(), toolsEnabled: false, thinkingEnabled: false } });
+
+    const { result } = renderHook(() => useModel(), { wrapper });
+    await waitFor(() => expect(result.current[0].loading).toBe(false));
+
+    act(() => result.current[1].selectModel('qwen-vl'));
+    // Both preferred false; qwen-vl supports both, so "enabled" tracks the
+    // stored preference exactly.
+    expect(result.current[0].toolsEnabled).toBe(false);
+    expect(result.current[0].thinkingEnabled).toBe(false);
   });
 
   it('surfaces an error when the model request fails', async () => {
-    setFetch({}, false);
+    setFetch({ modelsOk: false });
 
     const { result } = renderHook(() => useModel(), { wrapper });
 
@@ -127,7 +262,7 @@ describe('useModel', () => {
   // `data[0].model` threw a TypeError that the surrounding try/catch turned into
   // a bogus `error`, so the UI reported a failure for a request that succeeded.
   it('handles an empty model list as an empty selection, not an error', async () => {
-    setFetch([]);
+    setFetch({ models: [] });
 
     const { result } = renderHook(() => useModel(), { wrapper });
 
@@ -146,7 +281,7 @@ describe('useModel', () => {
   // ModelProvider wraps the whole routed tree in App.tsx, so that unmounted the
   // entire app: a blank page on every route, not just the model selector.
   it('tolerates a non-array payload without throwing during render', async () => {
-    setFetch({ error: 'llm endpoint misconfigured' });
+    setFetch({ models: { error: 'llm endpoint misconfigured' } });
 
     const { result } = renderHook(() => useModel(), { wrapper });
 
@@ -156,12 +291,11 @@ describe('useModel', () => {
     expect(result.current[0].thinkingSupported).toBe(false);
   });
 
-  // The empty list must not strand a stale selection from a previous session:
-  // a model that is no longer served cannot be used just because it is persisted.
-  it('drops a persisted model that the server no longer lists', async () => {
-    localStorage.setItem('activeModel', 'qwen-vl');
+  // The empty list must not strand a stale selection: a model that is no
+  // longer served cannot be used just because the user's preference names it.
+  it('drops a chat-model preference that the server no longer lists', async () => {
     localStorage.setItem('activeVisionModel', 'qwen-vl');
-    setFetch([]);
+    setFetch({ models: [], state: { ...defaultServerState(), chatModel: 'qwen-vl' } });
 
     const { result } = renderHook(() => useModel(), { wrapper });
 
@@ -175,7 +309,7 @@ describe('useModel', () => {
   it('loads models when authenticated with no JWT (native API key session)', async () => {
     h.auth.authToken = null;
     h.auth.authenticated = true;
-    const fetchMock = setFetch(MODELS);
+    const { fetchMock } = setFetch();
 
     const { result } = renderHook(() => useModel(), { wrapper });
 

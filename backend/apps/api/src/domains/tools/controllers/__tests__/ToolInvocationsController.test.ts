@@ -1,12 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { BadRequestException } from '@nestjs/common';
 
+import { encodeCursor } from '../../services/ToolInvocationLedgerService';
 import { ToolInvocationsController, parseInvocationQuery } from '../ToolInvocationsController';
 
 function makeLedger() {
   return {
-    listForUser: jest.fn().mockResolvedValue([]),
-    listSystem: jest.fn().mockResolvedValue([]),
+    listForUser: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
+    listSystem: jest.fn().mockResolvedValue({ items: [], nextCursor: null }),
   } as any;
 }
 
@@ -39,6 +40,35 @@ describe('ToolInvocationsController', () => {
 
     expect(ledger.listSystem).toHaveBeenCalledWith({ outcome: 'error' });
   });
+
+  it('passes the principal filters through, so "what has this app been doing" is one request', async () => {
+    const ledger = makeLedger();
+    const controller = new ToolInvocationsController(ledger);
+
+    await controller.listMine(
+      { userId: 'user-1' } as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'managed-app',
+      'app:ci-openclaw:ci-marketplace',
+    );
+
+    expect(ledger.listForUser).toHaveBeenCalledWith('user-1', {
+      principal: 'managed-app',
+      principalName: 'app:ci-openclaw:ci-marketplace',
+    });
+  });
+
+  it('returns the page envelope, not a bare array — the cursor has to reach the caller', async () => {
+    const ledger = makeLedger();
+    ledger.listForUser.mockResolvedValue({ items: [], nextCursor: 'abc' });
+
+    const page = await new ToolInvocationsController(ledger).listMine({ userId: 'user-1' } as any);
+
+    expect(page).toStrictEqual({ items: [], nextCursor: 'abc' });
+  });
 });
 
 describe('parseInvocationQuery', () => {
@@ -68,5 +98,34 @@ describe('parseInvocationQuery', () => {
     expect(parseInvocationQuery({ since: '2026-08-01T00:00:00Z' })).toStrictEqual({
       since: new Date('2026-08-01T00:00:00Z'),
     });
+  });
+
+  it('rejects an unknown principal, for the same reason it rejects an unknown outcome', () => {
+    // `?principal=app` silently dropped would answer "here is everything you did" to the question
+    // "what did the installed apps do".
+    expect(() => parseInvocationQuery({ principal: 'app' })).toThrow(BadRequestException);
+    expect(() => parseInvocationQuery({ principal: 'Owner' })).toThrow(BadRequestException);
+  });
+
+  it('accepts both real principals', () => {
+    expect(parseInvocationQuery({ principal: 'owner' })).toStrictEqual({ principal: 'owner' });
+    expect(parseInvocationQuery({ principal: 'managed-app' })).toStrictEqual({
+      principal: 'managed-app',
+    });
+  });
+
+  it('maps the wire name `app` onto the column name', () => {
+    expect(parseInvocationQuery({ app: 'app:ci-hermes:ci-marketplace' })).toStrictEqual({
+      principalName: 'app:ci-hermes:ci-marketplace',
+    });
+  });
+
+  it('round-trips a real cursor and 400s a forged one', () => {
+    const cursor = { occurredAt: new Date('2026-08-20T10:00:00.000Z'), id: 'aaaaaaaa-0000-7000-8000-000000000001' };
+
+    expect(parseInvocationQuery({ cursor: encodeCursor(cursor) })).toStrictEqual({ cursor });
+    // Never a silent first page: a client looping over page one would keep reporting the newest
+    // rows as if they were the next ones.
+    expect(() => parseInvocationQuery({ cursor: 'nonsense' })).toThrow(BadRequestException);
   });
 });

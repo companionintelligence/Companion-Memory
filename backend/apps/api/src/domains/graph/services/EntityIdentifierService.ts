@@ -153,10 +153,13 @@ export class EntityIdentifierService {
           .into(EntityIdentifierEntity)
           .values(rows.slice(offset, offset + chunkSize))
           .orIgnore() // ON CONFLICT DO NOTHING on the unique index.
+          // TypeORM's `identifiers` array is populated from the input entities
+          // after execution, so it also counts rows skipped by ON CONFLICT.
+          // RETURNING makes the actual inserted rows observable on Postgres.
+          .returning(['ownerUserId', 'kind', 'valueNormalized'])
           .execute();
 
-        // `identifiers` lists only the rows that were actually inserted.
-        inserted += result.identifiers.length;
+        inserted += Array.isArray(result.raw) ? result.raw.length : 0;
       } catch (err) {
         failures.push((err as Error).message);
       }

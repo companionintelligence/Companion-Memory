@@ -10,6 +10,19 @@ describe('dispatchNotReadyMessage', () => {
     expect(dispatchNotReadyMessage('not_wakeable')).toMatch(/cannot wake/i);
     expect(dispatchNotReadyMessage(null)).toMatch(/not ready/i);
   });
+
+  it('blames the appliance, not the app, when the doorbell is unconfigured', () => {
+    // The other four blockers are all things the user fixes in Hub. This one is
+    // a setting on this machine, and OpenClaw may be installed, connected and
+    // running perfectly — pointing someone at the app would send them to look
+    // at the part of the chain that is working.
+    const message = dispatchNotReadyMessage('doorbell_unconfigured');
+
+    expect(message).toMatch(/this appliance/i);
+    expect(message).toMatch(/CI_HUB_INTERNAL_URL/);
+    expect(message).toMatch(/CI_HUB_FORWARD_AUTH_SECRET/);
+    expect(message).not.toMatch(/OpenClaw is not/i);
+  });
 });
 
 describe('dispatchNotReadyAction', () => {
@@ -30,6 +43,15 @@ describe('dispatchNotReadyAction', () => {
     expect(
       dispatchNotReadyAction({
         dispatchBlocker: 'not_running',
+        connectUrl: 'https://hub.example/connect',
+      }),
+    ).toBeUndefined();
+  });
+
+  it('offers no Connect button for a doorbell problem — Hub is not where the fix is', () => {
+    expect(
+      dispatchNotReadyAction({
+        dispatchBlocker: 'doorbell_unconfigured',
         connectUrl: 'https://hub.example/connect',
       }),
     ).toBeUndefined();

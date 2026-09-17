@@ -37,7 +37,7 @@ const GET_TAGS_WITH_USAGE = gql(`
 export { GET_TAGS_WITH_USAGE };
 
 export function TagsPage() {
-  usePageTitle('Tags - Companion Intelligence');
+  usePageTitle('Tags - Companion Memory');
 
   // Search text is the header search box's `?search=` — it edits this page's
   // query in place (see GlobalSearchBox / isLiveSearchPath), so the page has

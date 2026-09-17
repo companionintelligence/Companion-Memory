@@ -17,7 +17,7 @@ const SETTINGS_HUB = '/self/settings';
  * this is the same section bodies plus Help and Log out, as a real page.
  */
 export function ProfilePage() {
-  usePageTitle('Settings - Companion Intelligence');
+  usePageTitle('Settings - Companion Memory');
 
   const { isMobile } = useDeviceLayout();
 

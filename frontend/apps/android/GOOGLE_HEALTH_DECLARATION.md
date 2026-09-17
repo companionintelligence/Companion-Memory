@@ -23,7 +23,7 @@ Severity + owner tags follow `DELIVERY.md`:
 
 **Does it apply to us right now? No — not yet. There is no live violation and nothing is overdue.**
 
-**When does it apply? The moment `com.companionintelligence.app` has a release active on a
+**When does it apply? The moment `com.ci.memory` has a release active on a
 Play *closed testing*, *open testing*, or *production* track.** The obligation binds
 **published** apps; ours has never been uploaded to Play at all.
 
@@ -427,7 +427,7 @@ That is a manufactured inconsistency and exactly what §2.5 punishes.
 
 ### 3.4 Verdict on truthfulness
 
-> ✅ **"My app doesn't provide any health features" is TRUE for `com.companionintelligence.app`
+> ✅ **"My app doesn't provide any health features" is TRUE for `com.ci.memory`
 > as it stands today**, on both limbs of the test. **Confidence: high (~95%).**
 >
 > The core of the verification is mechanical — absent permissions, absent entitlements, absent
@@ -469,13 +469,13 @@ Verified in-repo, 2026-08-13:
 - [`DELIVERY.md`](./DELIVERY.md) §2 describes shipping *to* Play closed/internal testing as a
   **future** step.
 
-**Conclusion: `com.companionintelligence.app` has never been uploaded to any Play track, and
+**Conclusion: `com.ci.memory` has never been uploaded to any Play track, and
 there is very likely no Play Console app record yet.** The declaration obligation has not
 attached. There is no violation, no missed deadline, and no exposure today.
 
 > 🟢 **[acct] Worth confirming in Console anyway.** This is an inference from the repo, and
 > the repo cannot see the Console. If a Lifescope Play developer account already exists with a
-> `com.companionintelligence.app` draft or an internal-testing upload someone made by hand,
+> `com.ci.memory` draft or an internal-testing upload someone made by hand,
 > the picture changes. **Two minutes: log in, check whether the app record exists and whether
 > any track has an active release.** Do this before trusting §0.
 

@@ -8,13 +8,27 @@
  * Docker image ships just `dist`, so a sibling `.html` would 404 in production.
  * A `.ts` module compiles into `dist` like any other file.
  *
- * Theming: GraphiQL 2.x reads its palette from HSL-component custom properties
+ * Theming: the canon design tokens come from `/brand/tokens.css`, which is
+ * `@companionintelligence/tokens/tokens.css` (the canon's vanilla-CSS sheet)
+ * published by the web build at a stable path — see `brandTokens()` in
+ * `frontend/apps/web/vite.config.ts`. This page cannot carry the package
+ * itself: the API image's Docker build has no GitHub Packages credential, and
+ * the canon rule is consume, never copy (CI-Common UI-STYLE-GUIDE §11), so the
+ * one copy this deployment ships — the web bundle's — is the one it reads.
+ * The page is forced dark (`<html class="dark">`), so every `var(--…)` below
+ * resolves to the canon dark value; nothing in the `--ci-*` namespace is
+ * declared here, and the few page-local derivations (accent gradient, glow)
+ * take the `--server-*` prefix. Reached without the gateway (the bare API
+ * port), the link 404s and only this chrome loses its palette — GraphiQL's
+ * own theme below is self-contained.
+ *
+ * GraphiQL 2.x reads its palette from HSL-component custom properties
  * (`--color-base`, `--color-neutral`, `--color-primary/secondary/tertiary`,
  * consumed via `hsla(var(--…), a)`), toggling `body.graphiql-dark` /
- * `body.graphiql-light`. We default to dark and override those variables with
- * the Companion Intelligence palette (mint #58ebbf → teal #409b9b → aqua
- * #00a9a7 on the ink #041620 ground) so the IDE reads as CI-branded. The custom
- * API-key bar reuses the same tokens (mint→teal brand gradient, teal borders).
+ * `body.graphiql-light`. Those want raw H, S, L components, which no token
+ * notation provides, so they are written out as the HSL of the canon hex they
+ * name (aqua-light #72ddd4 → teal-mid #409b9b → aqua #00a9a7 on the #041620
+ * ground) so the IDE reads as CI-branded.
  *
  * Auth: the CI GraphQL API accepts an `x-api-key` header (see ApiKeyStrategy /
  * JwtOrApiKeyAuthGuard). The user pastes a key created under
@@ -25,34 +39,28 @@
 const GRAPHIQL_VERSION = '2.4.5';
 
 export const GRAPHIQL_HTML = /* html */ `<!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GraphiQL · Companion Intelligence</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23041620'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%2358ebbf' stroke-width='3'/%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23041620'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%2372ddd4' stroke-width='3'/%3E%3C/svg%3E"
     />
+    <link rel="stylesheet" href="/brand/tokens.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://unpkg.com/graphiql@${GRAPHIQL_VERSION}/graphiql.min.css" />
     <style>
       :root {
         color-scheme: dark;
-        /* Companion Intelligence brand tokens */
-        --ci-mint: #58ebbf;
-        --ci-mint-hover: #82ffe1;
-        --ci-teal: #409b9b;
-        --ci-aqua: #00a9a7;
-        --ci-ink: #041620;
-        --ci-ink-2: #0a222e;
-        --ci-surface: #0e2029;
-        --ci-border: #0e4a52;
-        --ci-border-strong: #0d5f67;
-        --ci-text: #cfe6df;
-        --ci-muted: #7ea59d;
-        --ci-gradient: linear-gradient(135deg, #58ebbf, #409b9b);
-        --ci-gradient-hover: linear-gradient(135deg, #82ffe1, #58ebbf);
-        --ci-glow: 0 0 20px -4px rgb(88 235 191 / 35%);
+        /* Page-local derivations of the canon accent (everything else is a canon token). */
+        --server-accent-hover: color-mix(in srgb, var(--aqua-light) 80%, white);
+        --server-gradient: linear-gradient(135deg, var(--aqua-light), var(--teal-mid));
+        --server-gradient-hover: linear-gradient(135deg, var(--server-accent-hover), var(--aqua-light));
+        --server-glow: 0 0 20px -4px color-mix(in srgb, var(--aqua-light) 35%, transparent);
       }
 
       html,
@@ -60,9 +68,8 @@ export const GRAPHIQL_HTML = /* html */ `<!doctype html>
         margin: 0;
         height: 100%;
         background:
-          radial-gradient(1200px circle at 50% -20%, rgb(88 235 191 / 8%), transparent 55%),
-          var(--ci-ink);
-        font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+          radial-gradient(1200px circle at 50% -20%, color-mix(in srgb, var(--aqua-light) 8%, transparent), transparent 55%),
+          var(--background);
       }
 
       #root {
@@ -77,10 +84,10 @@ export const GRAPHIQL_HTML = /* html */ `<!doctype html>
         align-items: center;
         gap: 10px;
         padding: 9px 16px;
-        background: linear-gradient(180deg, var(--ci-ink-2), var(--ci-ink));
-        border-bottom: 1px solid var(--ci-border);
-        box-shadow: 0 1px 0 rgb(88 235 191 / 12%);
-        color: var(--ci-text);
+        background: linear-gradient(180deg, var(--teal-900), var(--background));
+        border-bottom: 1px solid var(--border);
+        box-shadow: 0 1px 0 color-mix(in srgb, var(--aqua-light) 12%, transparent);
+        color: var(--foreground);
         font-size: 13px;
         flex: 0 0 auto;
       }
@@ -90,23 +97,23 @@ export const GRAPHIQL_HTML = /* html */ `<!doctype html>
         gap: 8px;
         padding-right: 12px;
         margin-right: 2px;
-        border-right: 1px solid var(--ci-border);
+        border-right: 1px solid var(--border);
         white-space: nowrap;
       }
       #apiKeyBar .brand .dot {
         width: 12px;
         height: 12px;
         border-radius: 50%;
-        border: 2.5px solid var(--ci-mint);
-        box-shadow: var(--ci-glow);
+        border: 2.5px solid var(--aqua-light);
+        box-shadow: var(--server-glow);
       }
       #apiKeyBar .brand span {
         font-weight: 600;
         letter-spacing: 0.02em;
-        color: #e8f6f1;
+        color: var(--foreground);
       }
       #apiKeyBar label {
-        color: var(--ci-mint);
+        color: var(--aqua-light);
         font-weight: 600;
         white-space: nowrap;
       }
@@ -115,21 +122,21 @@ export const GRAPHIQL_HTML = /* html */ `<!doctype html>
         min-width: 120px;
         max-width: 460px;
         padding: 7px 11px;
-        border: 1px solid var(--ci-border-strong);
+        border: 1px solid var(--input);
         border-radius: 8px;
-        background: var(--ci-surface);
-        color: #e8f6f1;
+        background: var(--card);
+        color: var(--foreground);
         font-family: ui-monospace, 'SF Mono', Menlo, 'Fira Code', monospace;
         font-size: 12px;
         transition: border-color 0.15s ease, box-shadow 0.15s ease;
       }
       #apiKeyBar input::placeholder {
-        color: var(--ci-muted);
+        color: var(--muted-foreground);
       }
       #apiKeyBar input:focus {
         outline: none;
-        border-color: var(--ci-mint);
-        box-shadow: 0 0 0 3px rgb(88 235 191 / 18%);
+        border-color: var(--aqua-light);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--aqua-light) 18%, transparent);
       }
       #apiKeyBar button {
         padding: 7px 14px;
@@ -141,22 +148,22 @@ export const GRAPHIQL_HTML = /* html */ `<!doctype html>
         transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
       }
       #apiKeyBar button#apiKeySave {
-        background: var(--ci-mint);
-        background-image: var(--ci-gradient);
-        color: var(--ci-ink);
-        box-shadow: var(--ci-glow);
+        background: var(--aqua-light);
+        background-image: var(--server-gradient);
+        color: var(--primary-foreground);
+        box-shadow: var(--server-glow);
       }
       #apiKeyBar button#apiKeySave:hover {
-        background-image: var(--ci-gradient-hover);
+        background-image: var(--server-gradient-hover);
       }
       #apiKeyBar button#apiKeyClear {
         background: transparent;
-        border-color: var(--ci-border-strong);
-        color: var(--ci-text);
+        border-color: var(--input);
+        color: var(--foreground);
       }
       #apiKeyBar button#apiKeyClear:hover {
-        border-color: var(--ci-mint);
-        color: var(--ci-mint);
+        border-color: var(--aqua-light);
+        color: var(--aqua-light);
       }
       #apiKeyBar .status {
         white-space: nowrap;
@@ -164,18 +171,18 @@ export const GRAPHIQL_HTML = /* html */ `<!doctype html>
         font-weight: 600;
       }
       #apiKeyBar .status.ok {
-        color: var(--ci-mint);
+        color: var(--aqua-light);
       }
       #apiKeyBar .status.off {
-        color: #e0a03c;
+        color: var(--warning);
       }
       #apiKeyBar a {
-        color: var(--ci-mint);
+        color: var(--aqua-light);
         text-decoration: none;
         white-space: nowrap;
       }
       #apiKeyBar a:hover {
-        color: var(--ci-mint-hover);
+        color: var(--server-accent-hover);
         text-decoration: underline;
       }
 
@@ -188,22 +195,22 @@ export const GRAPHIQL_HTML = /* html */ `<!doctype html>
       body:not(.graphiql-light) .CodeMirror-info,
       body:not(.graphiql-light) .CodeMirror-lint-tooltip,
       body:not(.graphiql-light) reach-portal {
-        --color-primary: 162, 79%, 63%; /* CI mint  #58ebbf */
-        --color-secondary: 180, 42%, 43%; /* CI teal  #409b9b */
-        --color-tertiary: 179, 100%, 33%; /* CI aqua  #00a9a7 */
-        --color-base: 202, 78%, 7%; /* CI ink   #041620 */
-        --color-neutral: 174, 30%, 85%; /* mint-tinted foreground */
-        --font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        --color-primary: 175, 61%, 66%; /* --aqua-light  #72ddd4 */
+        --color-secondary: 180, 42%, 43%; /* --teal-mid    #409b9b */
+        --color-tertiary: 179, 100%, 33%; /* --aqua        #00a9a7 */
+        --color-base: 202, 78%, 7%; /* --background  #041620 (dark) */
+        --color-neutral: 190, 35%, 93%; /* --foreground  #e8f2f4 (dark) */
+        --font-family: var(--font-sans);
         --font-family-mono: ui-monospace, 'SF Mono', Menlo, 'Fira Code', monospace;
       }
       body.graphiql-light .graphiql-container,
       body.graphiql-light .CodeMirror-info,
       body.graphiql-light .CodeMirror-lint-tooltip,
       body.graphiql-light reach-portal {
-        --color-primary: 180, 42%, 43%; /* CI teal — reads better on white */
-        --color-secondary: 179, 100%, 33%; /* CI aqua */
-        --color-tertiary: 188, 65%, 40%;
-        --font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        --color-primary: 173, 82%, 21%; /* --primary      #0a6358 (light) */
+        --color-secondary: 179, 100%, 33%; /* --aqua         #00a9a7 */
+        --color-tertiary: 186, 42%, 30%; /* --teal-accent  #2c676d */
+        --font-family: var(--font-sans);
         --font-family-mono: ui-monospace, 'SF Mono', Menlo, 'Fira Code', monospace;
       }
 
@@ -216,7 +223,7 @@ export const GRAPHIQL_HTML = /* html */ `<!doctype html>
         align-items: center;
         justify-content: center;
         height: 100%;
-        color: var(--ci-muted);
+        color: var(--muted-foreground);
         font-size: 14px;
       }
     </style>

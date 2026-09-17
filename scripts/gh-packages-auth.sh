@@ -32,7 +32,12 @@ command -v gh >/dev/null 2>&1 || _die "gh CLI not found — https://cli.github.c
 gh auth status >/dev/null 2>&1 || _die "not logged in — run 'gh auth login' first"
 
 # Only round-trip through the browser/device flow if we don't already have the scope.
-if ! gh auth status 2>&1 | grep -q "read:packages"; then
+# `write:packages` implies `read:packages` on GitHub, but only the scope the
+# token was granted is listed — so match either, or a token that can already
+# read packages is sent through an interactive browser round-trip it does not
+# need (and which fails outright in a non-interactive shell: `gh auth refresh`
+# requires --hostname when it cannot prompt).
+if ! gh auth status 2>&1 | grep -qE "(read|write):packages"; then
   echo "gh-packages-auth: requesting read:packages scope..."
   gh auth refresh -s read:packages
 fi

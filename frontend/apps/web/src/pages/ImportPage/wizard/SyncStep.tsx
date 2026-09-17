@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Alert, Button, Card } from '@ci/shadcn';
 
@@ -8,6 +8,18 @@ import { LiveRunList } from './LiveRunList';
 
 export interface SyncStepProps {
   onBackToExport: () => void;
+  /** When false, the host wizard footer carries the way back (onboarding). */
+  showNav?: boolean;
+  /**
+   * Reports what the host footer's primary should be while this step is up.
+   *
+   * The sync IS the primary in host mode, and the handler lives here — but this
+   * component must not register with `WizardNav` itself: the slot has one
+   * owner (ImportWizard), and React runs child effects before parent effects,
+   * so a registration made here would be overwritten on the very next parent
+   * effect. It reports upward instead and lets the one owner publish it.
+   */
+  onNavState?: (state: { canSync: boolean; busy: boolean; sync: () => void }) => void;
 }
 
 /**
@@ -26,7 +38,7 @@ export interface SyncStepProps {
  * decided against. Discard is that way out, and because it is irreversible it
  * asks in the row rather than firing on the first click.
  */
-export function SyncStep({ onBackToExport }: SyncStepProps) {
+export function SyncStep({ onBackToExport, showNav = true, onNavState }: SyncStepProps) {
   const api = useImportApi();
   const [unpushed, setUnpushed] = useState<UnpushedRun[] | null>(null);
   const [pushed, setPushed] = useState<ImportRun[] | null>(null);
@@ -52,6 +64,11 @@ export function SyncStep({ onBackToExport }: SyncStepProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A ref so the reported `sync` identity is stable: `handleSync` is redeclared
+  // every render, and re-reporting on every render would re-register the host
+  // footer on every render too.
+  const syncRef = useRef<() => void>(() => undefined);
 
   async function handleSync() {
     setBusy(true);
@@ -85,6 +102,15 @@ export function SyncStep({ onBackToExport }: SyncStepProps) {
       setBusy(false);
     }
   }
+
+  syncRef.current = () => void handleSync();
+
+  const canSync = unpushed != null && unpushed.length > 0;
+  const syncBusy = busy || !api.ready;
+
+  useEffect(() => {
+    onNavState?.({ canSync, busy: syncBusy, sync: () => syncRef.current() });
+  }, [onNavState, canSync, syncBusy]);
 
   const pendingItems = (unpushed ?? []).reduce((sum, run) => sum + run.pendingItems, 0);
   const pendingEntities = (unpushed ?? []).reduce((sum, run) => sum + run.pendingEntities, 0);
@@ -191,11 +217,13 @@ export function SyncStep({ onBackToExport }: SyncStepProps) {
           </p>
         ))}
 
-      <div>
-        <Button variant="outline" onClick={onBackToExport}>
-          ← Back to export
-        </Button>
-      </div>
+      {showNav && (
+        <div>
+          <Button variant="outline" onClick={onBackToExport}>
+            ← Back to export
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

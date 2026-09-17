@@ -5,9 +5,25 @@ import { EventService } from '@ci/domains/events';
 import { ImageDescriptionBackfillRequestEvent } from '@ci/domains/files';
 import { PersonService, UserContextService } from '@ci/domains/memory';
 
+import { OllamaService } from './OllamaService';
+
 /**
- * Settings → Model "Describe images". Stored on the self person's
- * `properties.planner.image_description_enabled` (default false).
+ * Settings → Model "Describe images".
+ *
+ * Defaults to whatever {@link OllamaService.resolveVisionModel} says the
+ * user's vision work actually runs on: on when that model reports the
+ * `vision` capability, off when it does not — re-evaluated on every call, so
+ * switching chat models (or an operator setting/clearing the utility model)
+ * changes the default immediately, with nothing to migrate. A user can still
+ * override the default for the CURRENT model specifically
+ * (`properties.planner.image_description_overrides.<model>`); switching to a
+ * different model evaluates that model's own default and its own override,
+ * never inheriting the one that was set for a different model.
+ *
+ * Before this, the setting was a single unconditional boolean
+ * (`image_description_enabled`, default false) an operator had to remember to
+ * turn on — which is exactly why the images in the first library imported on
+ * this appliance carry no description at all.
  *
  * Lives in its own module so vision listeners can gate without importing
  * PersonalizationModule (which already depends on LlmCore → cycle).
@@ -20,6 +36,7 @@ export class ImageDescriptionPreferenceService {
     private readonly personService: PersonService,
     private readonly userContextService: UserContextService,
     private readonly eventService: EventService,
+    private readonly ollamaService: OllamaService,
   ) {}
 
   invalidate(userId: string): void {
@@ -38,7 +55,13 @@ export class ImageDescriptionPreferenceService {
     return enabled;
   }
 
-  async setEnabled(context: UserServiceContext, enabled: boolean): Promise<boolean> {
+  /**
+   * Sets (or clears, passing `enabled: null`) the explicit override for
+   * whichever model {@link OllamaService.resolveVisionModel} currently
+   * resolves to. Firing the one-time backfill on a false→true transition is
+   * unchanged from before this setting became per-model.
+   */
+  async setEnabled(context: UserServiceContext, enabled: boolean | null): Promise<boolean> {
     const userId = context.userId!;
     const selfIdentity = await this.userContextService.getSelfIdentity(userId);
 
@@ -46,26 +69,28 @@ export class ImageDescriptionPreferenceService {
       throw new Error('Self entity not found');
     }
 
-    const self = await this.personService.findById(context, selfIdentity.entityId);
+    const wasEnabled = await this.readEnabled(userId);
+    const { model } = await this.ollamaService.resolveVisionModel(userId);
 
-    if (!self) {
-      throw new Error('Self entity not found');
-    }
-
-    const priorPlanner = (self.properties?.planner as Record<string, unknown> | undefined) ?? {};
-    // Only used to decide whether to kick off a backfill — never sent back as a
-    // write payload. Re-sending the whole `planner` sub-object would resurrect
-    // the stale `trust_mode` we read before another writer changed it.
-    const wasEnabled = priorPlanner.image_description_enabled === true;
-
-    await this.personService.patchPropertyLeaves(context, self.id, [
-      { path: ['planner', 'image_description_enabled'], value: enabled },
+    // A true leaf write — `image_description_overrides.<model>`, not the
+    // container object — so a concurrent write to a DIFFERENT model's
+    // override (or to `chat_model`, `trust_mode`, anything else in `planner`)
+    // cannot be clobbered by this one; see jsonbLeafPatch.ts. Model ids can
+    // contain `.`/`:` (`qwen3.6:27b`) — safe here because the path travels as
+    // a parameterised `text[]`, never interpolated into the path string.
+    // `enabled: null` clears the override (readEnabled treats a non-boolean
+    // stored value as "automatic"); jsonb_set cannot delete the key, but a
+    // stored JSON null reads back as exactly that.
+    await this.personService.patchPropertyLeaves(context, selfIdentity.entityId, [
+      { path: ['planner', 'image_description_overrides', model], value: enabled },
       { path: ['planner', 'source'], value: 'settings' },
     ]);
 
     this.invalidate(userId);
 
-    if (enabled && !wasEnabled) {
+    const resolvedEnabled = await this.readEnabled(userId);
+
+    if (resolvedEnabled && !wasEnabled) {
       await this.eventService.send(
         ImageDescriptionBackfillRequestEvent,
         { userId },
@@ -73,7 +98,7 @@ export class ImageDescriptionPreferenceService {
       );
     }
 
-    return enabled;
+    return resolvedEnabled;
   }
 
   private async readEnabled(userId: string): Promise<boolean> {
@@ -84,9 +109,14 @@ export class ImageDescriptionPreferenceService {
     }
 
     const context = { userId } as UserServiceContext;
-    const self = await this.personService.findById(context, selfIdentity.entityId);
+    const [self, { model, supportsVision }] = await Promise.all([
+      this.personService.findById(context, selfIdentity.entityId),
+      this.ollamaService.resolveVisionModel(userId),
+    ]);
     const planner = (self?.properties?.planner ?? {}) as Record<string, unknown>;
+    const overrides = (planner.image_description_overrides as Record<string, unknown> | undefined) ?? {};
+    const override = overrides[model];
 
-    return planner.image_description_enabled === true;
+    return typeof override === 'boolean' ? override : supportsVision;
   }
 }

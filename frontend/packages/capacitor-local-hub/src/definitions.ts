@@ -97,7 +97,25 @@ export interface LocalHubPlugin {
   getCurrentLocation(): Promise<NativeCurrentLocation>;
 
   openAppSettings(): Promise<void>;
+
+  /**
+   * iOS only. Core Location authorization for the Always two-step
+   * (When In Use, then Always Allow). Android resolves `{ status: "unsupported" }`.
+   */
+  getLocationAuthorization(): Promise<{ status: NativeLocationAuthorization }>;
+
+  requestLocationAuthorization(options: {
+    always: boolean;
+  }): Promise<{ status: NativeLocationAuthorization }>;
 }
+
+export type NativeLocationAuthorization =
+  | 'notDetermined'
+  | 'denied'
+  | 'restricted'
+  | 'whenInUse'
+  | 'always'
+  | 'unsupported';
 
 export interface NativeCurrentLocation {
   latitude: number;

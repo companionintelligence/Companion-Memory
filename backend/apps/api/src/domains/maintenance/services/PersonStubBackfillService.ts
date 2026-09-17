@@ -109,8 +109,13 @@ interface SeenIdentifier {
  *
  * Hypertable safety: every read is bounded to a [start, end) `time` window so
  * Postgres can exclude non-matching TimescaleDB chunks — the same pattern the
- * link backfill uses. Operator-invoked via
- * POST /api/maintenance/extract-people-from-communications.
+ * link backfill uses. Invoked two ways: by an operator via
+ * POST /api/maintenance/extract-people-from-communications, and automatically
+ * after every bulk import of communications (PersonStubBackfillRequestEvent,
+ * emitted by the import domain's PushStage and consumed by
+ * PersonStubBackfillRequestListener). The person-link stage then resolves
+ * against what this pass registered; decisions it recorded before the pass
+ * ran are re-opened by the pipeline's IdentifierArrivalService.
  */
 @Injectable()
 export class PersonStubBackfillService {

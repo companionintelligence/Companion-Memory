@@ -1,10 +1,19 @@
 # CI-Server (Companion Memory) — Local-LLM Integration with CI Hub
 
 > **Private & Confidential — Property of Lifescope Inc. Do not distribute.**
-> Status: **Design / proposal.** Supersedes the earlier "Companion Memory, hermes,
+> Status: **Historical design / proposal.** Supersedes the earlier "Companion Memory, hermes,
 > openclaw — Config & Secret Injection from CI Hub" draft, which assumed Companion
-> Memory was an unknown third-party binary. **It is not: Companion Memory *is*
+> Memory was an unknown third-party binary. **It is not: Companion Memory _is_
 > CI-Server.** That single fact rewrites the plan.
+>
+> **Current operational contract (2026-09-07):** use
+> [Companion Memory setup](../setup/companion-memory.md) for first-run and
+> operator instructions. CI-Hub now injects first-party `ci-memory` inference
+> configuration, CI-Server supports native Ollama and OpenAI-compatible
+> endpoints, and the Memory UI/CLI run a bounded check from the API container.
+> The open questions and checklists below are retained as design history; they
+> are not a statement that the current endpoint, UI, or `ci-memory` injection is
+> absent.
 >
 > **Update 2026-07-06:** the marketplace slug question below is settled differently than
 > proposed — `scripts/publish/manifest/config.json` now publishes as **`ci-memory`**
@@ -34,7 +43,7 @@
 > What that leaves open is the **Hub side of the handshake**, not the client side: the
 > §7 blockers (Hub has no embedding model; the `v1/*` data plane is unguarded) and the
 > `APP_ENV_KEYS` entry for `ci-memory` in `app-bootstrap.service.ts`. CI-Server can
-> already be *pointed* at the Hub proxy by setting `LLM_API_BASE`; nothing yet fetches
+> already be _pointed_ at the Hub proxy by setting `LLM_API_BASE`; nothing yet fetches
 > `bootstrap.env` at boot to do it automatically.
 >
 > One path in §1 is also stale: `AnswerInferenceCron` moved out of `domains/llm` to
@@ -54,16 +63,16 @@ Ollama model selection + downloading. We adopt the **Hermes `bootstrap.env`
 pattern** as the transport, with a **hybrid model policy** (Hub picks the default;
 CI-Server overrides specific roles — vision and embeddings — from its own config).
 
-| Concern | Decision |
-|---|---|
-| Where inference comes from | Hub OpenAI proxy `http://ci-os-hub:3000/api/inference/v1` — **not** a host Ollama, **not** the Ollama sidecar directly |
-| Config transport | **Mechanism B (Hermes):** boot-time `GET /api/inference/apps/<slug>/bootstrap.env`, source into env, fail-open |
-| Model selection | **Hybrid:** Hub supplies the hardware-best default chat model; CI-Server overrides vision + embedding roles via its own config |
-| Model downloading | Hub-owned (`ModelPullerService` + `firePrePull` on bootstrap). CI-Server never pulls. |
-| Embeddings | Pin **`nomic-embed-text` (768-dim)** — CI-Server's pgvector schema is hard-coupled to 768 |
-| App config file | **No `config.yaml` render.** CI-Server uses `node-config` JSON + `.env`; the bootstrap writes a sourced env file only |
-| Wake webhook / `mcp_client` | **Not used for inference.** CI-Server self-schedules via internal cron |
-| Marketplace packaging | **Already exists** (currently slug `companion` → **rename to `companion-memory`**, gateway `isMain` @ 8642). Extend `scripts/publish/`, don't recreate |
+| Concern                     | Decision                                                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Where inference comes from  | Hub OpenAI proxy `http://ci-os-hub:3000/api/inference/v1` — **not** a host Ollama, **not** the Ollama sidecar directly                                 |
+| Config transport            | **Mechanism B (Hermes):** boot-time `GET /api/inference/apps/<slug>/bootstrap.env`, source into env, fail-open                                         |
+| Model selection             | **Hybrid:** Hub supplies the hardware-best default chat model; CI-Server overrides vision + embedding roles via its own config                         |
+| Model downloading           | Hub-owned (`ModelPullerService` + `firePrePull` on bootstrap). CI-Server never pulls.                                                                  |
+| Embeddings                  | Pin **`nomic-embed-text` (768-dim)** — CI-Server's pgvector schema is hard-coupled to 768                                                              |
+| App config file             | **No `config.yaml` render.** CI-Server uses `node-config` JSON + `.env`; the bootstrap writes a sourced env file only                                  |
+| Wake webhook / `mcp_client` | **Not used for inference.** CI-Server self-schedules via internal cron                                                                                 |
+| Marketplace packaging       | **Already exists** (currently slug `companion` → **rename to `companion-memory`**, gateway `isMain` @ 8642). Extend `scripts/publish/`, don't recreate |
 
 Two **hard prerequisites** in CI-Hub block this today (see
 [§7 Blockers](#7-hard-blockers--prerequisites)): the Hub has **no embedding model**
@@ -73,23 +82,23 @@ client**.
 
 ---
 
-## 1. The reframe: CI-Server *is* Companion Memory
+## 1. The reframe: CI-Server _is_ Companion Memory
 
 Everything the prior draft listed as "open questions about the Companion Memory
 binary" is answerable from this repo:
 
-| Prior assumption | Reality |
-|---|---|
-| Renders `/data/config.yaml` | **No YAML.** `node-config` JSON layers (`backend/apps/api/config/*.json`) + repo-root `.env` (dotenv); secrets at `/run/secrets/.env.secrets`. |
-| Main port `8080` | **3030** (API, `config/default.json`); marketplace **main port is the gateway: 8642** (`scripts/publish/manifest/config.json`). |
+| Prior assumption                                 | Reality                                                                                                                                                                                |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Renders `/data/config.yaml`                      | **No YAML.** `node-config` JSON layers (`backend/apps/api/config/*.json`) + repo-root `.env` (dotenv); secrets at `/run/secrets/.env.secrets`.                                         |
+| Main port `8080`                                 | **3030** (API, `config/default.json`); marketplace **main port is the gateway: 8642** (`scripts/publish/manifest/config.json`).                                                        |
 | Author a new `config.json`/`docker-compose.json` | **Already packaged** (currently slug `companion`, **renaming to `companion-memory`**) via `scripts/publish/publish.sh` (Runtipi v2; `gateway` service `isMain`, `internalPort: 8642`). |
-| Needs `/hooks/hub-wake` + `mcp_client: true` | **No wake route exists**; inference is driven by `@Cron(EVERY_MINUTE)` in `domains/smart-rotation/cron/AnswerInferenceCron.ts`. CI-Server self-schedules. |
-| pgvector sidecar vs shared Hub Postgres | **Neither** — CI-Server ships its own Postgres+pgvector image (`infrastructure/database/`); all embedding columns are `vector(768)`. |
-| Unknown inference var names | CI-Server already has `HUB_*` awareness, but **only for cloud OAuth** (`ciPortal`: `HUB_DEVICE_ID`/`HUB_API_KEY` in `CloudOAuthProxyService`) — **not inference**. |
+| Needs `/hooks/hub-wake` + `mcp_client: true`     | **No wake route exists**; inference is driven by `@Cron(EVERY_MINUTE)` in `domains/smart-rotation/cron/AnswerInferenceCron.ts`. CI-Server self-schedules.                              |
+| pgvector sidecar vs shared Hub Postgres          | **Neither** — CI-Server ships its own Postgres+pgvector image (`infrastructure/database/`); all embedding columns are `vector(768)`.                                                   |
+| Unknown inference var names                      | CI-Server already has `HUB_*` awareness, but **only for cloud OAuth** (`ciPortal`: `HUB_DEVICE_ID`/`HUB_API_KEY` in `CloudOAuthProxyService`) — **not inference**.                     |
 
 ### CI-Server's two LLM paths (as written; see the 2026-08-19 update at the top)
 
-1. **NestJS API** — *at the time of writing*, the native `ollama` npm client against
+1. **NestJS API** — _at the time of writing_, the native `ollama` npm client against
    `OLLAMA_HOST` (default `http://host.docker.internal:11434`), with **hardcoded models**
    (`gemma3:1b` prompts, `qwen3:14b` text, `gemma3:27b` vision) in
    `domains/llm/services/OllamaService.ts`, and a **hardcoded** `nomic-embed-text`
@@ -138,19 +147,19 @@ The Hub exposes an **OpenAI-compatible proxy** and owns all of Ollama.
 
 ### Two delivery mechanisms (we standardize on B)
 
-| | A — config render (`openclaw-ci-entrypoint.sh`) | **B — `bootstrap.env` (Hermes)** ✅ |
-|---|---|---|
-| Trigger | Hub-injected entrypoint renders a config file | App curls `GET /api/inference/apps/<slug>/bootstrap.env` at boot |
-| Model choice | App lists **all** `/v1/models` + synthetic `auto` | **Hub** picks one hardware-best model |
-| Downloads | None (consumes what's advertised) | **Triggers Hub pre-pull** of the chosen model |
-| Output | A rendered app config file | dotenv keys sourced into the process env |
-| Fits | user-facing model pickers | **backend services (CI-Server)** |
+|              | A — config render (`openclaw-ci-entrypoint.sh`)   | **B — `bootstrap.env` (Hermes)** ✅                              |
+| ------------ | ------------------------------------------------- | ---------------------------------------------------------------- |
+| Trigger      | Hub-injected entrypoint renders a config file     | App curls `GET /api/inference/apps/<slug>/bootstrap.env` at boot |
+| Model choice | App lists **all** `/v1/models` + synthetic `auto` | **Hub** picks one hardware-best model                            |
+| Downloads    | None (consumes what's advertised)                 | **Triggers Hub pre-pull** of the chosen model                    |
+| Output       | A rendered app config file                        | dotenv keys sourced into the process env                         |
+| Fits         | user-facing model pickers                         | **backend services (CI-Server)**                                 |
 
 Per-app key names live in a 2-entry table — `hermes-agent → HERMES_OPENAI_*`,
 `openclaw → OPENAI_API_BASE/OPENAI_API_KEY` (`app-bootstrap.service.ts`,
 `SUPPORTED_APP_SLUGS` + `APP_ENV_KEYS`). We add a third entry for CI-Server.
 
-> Note: every app *also* gets `HUB_INFERENCE_URL` injected statically at install
+> Note: every app _also_ gets `HUB_INFERENCE_URL` injected statically at install
 > (`app.helpers.ts`). That's just the endpoint pointer; it carries **no model
 > selection**. Bootstrap (B) is the source of truth for models.
 
@@ -174,7 +183,7 @@ Per-app key names live in a 2-entry table — `hermes-agent → HERMES_OPENAI_*`
    as-is. Provider config is **env only** — never written into `config.yaml`.
 
 OpenClaw's variant (Mechanism A) renders `openclaw.json` and discovers all models
-via `/v1/models`. We borrow **only** its `/v1/models` discovery for the *override*
+via `/v1/models`. We borrow **only** its `/v1/models` discovery for the _override_
 path (vision/embedding role resolution), not as the primary transport.
 
 ---
@@ -257,11 +266,11 @@ No controller change is needed — `apps/:slug/bootstrap.env` is slug-generic.
 runs role-specific models (prompt/text/**vision**/**embedding**) that a single Hub
 default can't cover, so resolution is layered:
 
-| Role | Source of truth | Resolution |
-|---|---|---|
-| Chat / prompt / text | **Hub default** | `LLM_DEFAULT_CHAT_MODEL` from bootstrap; operator may override |
-| **Vision** | **CI-Server override** | `LLM_VISION_MODEL` (operator-set). Validate availability via `GET /v1/models` (modality includes image/vision). If unset/unavailable → degrade or disable vision, don't crash |
-| **Embedding** | **Pinned, validated** | `nomic-embed-text` (768). Treat the Hub's `LLM_DEFAULT_EMBEDDING_MODEL` as advisory; **refuse to start embeddings if dim ≠ 768** — the pgvector schema is hard-coupled |
+| Role                 | Source of truth        | Resolution                                                                                                                                                                    |
+| -------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chat / prompt / text | **Hub default**        | `LLM_DEFAULT_CHAT_MODEL` from bootstrap; operator may override                                                                                                                |
+| **Vision**           | **CI-Server override** | `LLM_VISION_MODEL` (operator-set). Validate availability via `GET /v1/models` (modality includes image/vision). If unset/unavailable → degrade or disable vision, don't crash |
+| **Embedding**        | **Pinned, validated**  | `nomic-embed-text` (768). Treat the Hub's `LLM_DEFAULT_EMBEDDING_MODEL` as advisory; **refuse to start embeddings if dim ≠ 768** — the pgvector schema is hard-coupled        |
 
 **Precedence:** source the Hub `bootstrap.env` **first** (defaults), then apply
 CI-Server's own `.env`/config (wins) — the same "operator env overrides Hub-managed
@@ -281,14 +290,14 @@ hasn't pulled (e.g. a vision model), it should request it through the Hub's
 - **`hub_integration.mcp_client: true` + `/hooks/hub-wake`:** not needed for
   inference. CI-Server self-schedules via cron, and the Hub's webhook registry is
   **in-memory and not rehydrated on Hub restart** (`agent-notify.service.ts`) — an
-  unreliable basis for anything load-bearing. (CI-Server *does* expose an MCP
+  unreliable basis for anything load-bearing. (CI-Server _does_ expose an MCP
   server at `POST /mcp`, but that's CI-Server-as-a-tool, a separate concern.)
 - **pgvector sidecar vs shared Postgres:** CI-Server ships its own; nothing to decide.
 - **The `HUB_INFERENCE_URL → OPENAI_BASE_URL` "established precedent":** it doesn't
   exist anywhere. Real mappings use `OPENAI_API_BASE` (openclaw) /
   `HERMES_OPENAI_BASE_URL` (hermes). We standardize CI-Server on `LLM_*`.
 - **The "Hermes recompile trap" cautionary tale:** misattributed — Hermes is in
-  fact a clean runtime-injection design. The *principle* (never bake config/secrets
+  fact a clean runtime-injection design. The _principle_ (never bake config/secrets
   into the image; inject at runtime) stays; the Hermes example is removed.
 - **The "OpenClaw fallback safety net applies to us" assumption:** that bundled
   fallback is hard-gated to `appName === 'openclaw'` in `install-app-command.ts`,
@@ -303,7 +312,7 @@ These gate the whole integration:
 
 1. **Embeddings missing in the Hub.** No embedding model in `curated-models.ts`,
    and the bootstrap embeddings picker is disabled (`app-bootstrap.service.ts`
-   ~L120). CI-Server is a *memory brain* — embeddings are its core function.
+   ~L120). CI-Server is a _memory brain_ — embeddings are its core function.
    **Must:** add `nomic-embed-text` (768) to the catalog + re-enable the picker +
    ensure the Hub pulls it. (CI-Server's `vector(768)` schema is duplicated across
    ~20 migrations; a different-dimension model breaks everything.)
@@ -311,7 +320,7 @@ These gate the whole integration:
    the Hub proxy is **OpenAI `/v1` only** (no native Ollama passthrough). **Must:**
    migrate the API to an OpenAI-compatible client (the summary-service already is),
    or — explicitly not recommended — point the native client straight at
-   `ci-hub-ollama:11434`, which bypasses the Hub router/selection/pull and is *not*
+   `ci-hub-ollama:11434`, which bypasses the Hub router/selection/pull and is _not_
    the hermes/openclaw pattern.
 3. **Vision role not in the bootstrap contract.** Bootstrap conveys one chat model
    (+ embedding once fixed). CI-Server's vision use-case relies on the §5 override
@@ -370,22 +379,22 @@ These gate the whole integration:
 
 ## Appendix — evidence map
 
-| Claim | Source |
-|---|---|
-| Hub OpenAI proxy routes | `CI-Hub/packages/backend/src/modules/inference/inference.controller.ts` |
-| Hub endpoint URL builder | `…/inference/inference-router.service.ts` (`getInferenceEndpoint`) |
-| Ollama sidecar `ci-hub-ollama:11434`, `OLLAMA_URL` | `…/inference/backends/ollama.backend.ts` |
-| Per-app env mapping + slugs | `…/inference/app-bootstrap.service.ts` (`SUPPORTED_APP_SLUGS`, `APP_ENV_KEYS`) |
-| Model pick (index-0) + pre-pull | `…/inference/app-bootstrap.service.ts`, `…/model-registry.service.ts`, `…/model-puller.service.ts` |
-| Embeddings disabled / no embed model | `…/inference/app-bootstrap.service.ts` (~L120), `…/inference/catalog/curated-models.ts` |
-| `HUB_INFERENCE_URL` injected for all apps | `…/apps/app.helpers.ts` |
-| `bootstrap.env` route | `…/inference/inference.controller.ts` (`apps/:slug/bootstrap.env`) |
-| Hermes transport | `CI-Hermes/bootstrap-from-hub.sh`, `start-hermes.sh` |
-| OpenClaw render + `/models` | `CI-Hub/packages/backend/src/modules/app-lifecycle/data/openclaw-ci-entrypoint.sh` |
-| CI-Server API Ollama client + model resolution *(no longer hardcoded — see the 2026-08-19 update)* | `CI-Server/backend/apps/api/src/domains/llm/services/OllamaService.ts`, `…/OpenAiCompatChatDriver.ts`, `…/LlmEndpointService.ts` |
-| CI-Server embedding model *(now `config.embedding.model` ← `CI_EMBED_MODEL`)* | `CI-Server/backend/apps/api/src/common/embeddings/services/EmbeddingGenerationService.ts` |
-| CI-Server summary OpenAI client + `LLM_*` | `CI-Server/backend/apps/summary/src/ci/summary/llm_config.py`, `…/config.py` |
-| CI-Server config layering | `CI-Server/backend/apps/api/config/*.json`, `…/src/configuration.ts` |
-| CI-Server marketplace packaging (slug `companion` → rename `companion-memory`, 8642) | `CI-Server/scripts/publish/manifest/config.json`, `…/publish.sh` |
-| CI-Server cloud-OAuth-only Hub use | `CI-Server/backend/apps/api/src/domains/connections/services/CloudOAuthProxyService.ts` |
-| CI-Server internal inference cron | `CI-Server/backend/apps/api/src/domains/smart-rotation/cron/AnswerInferenceCron.ts` *(moved out of `domains/llm` in `edec81e6a`)* |
+| Claim                                                                                              | Source                                                                                                                            |
+| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Hub OpenAI proxy routes                                                                            | `CI-Hub/packages/backend/src/modules/inference/inference.controller.ts`                                                           |
+| Hub endpoint URL builder                                                                           | `…/inference/inference-router.service.ts` (`getInferenceEndpoint`)                                                                |
+| Ollama sidecar `ci-hub-ollama:11434`, `OLLAMA_URL`                                                 | `…/inference/backends/ollama.backend.ts`                                                                                          |
+| Per-app env mapping + slugs                                                                        | `…/inference/app-bootstrap.service.ts` (`SUPPORTED_APP_SLUGS`, `APP_ENV_KEYS`)                                                    |
+| Model pick (index-0) + pre-pull                                                                    | `…/inference/app-bootstrap.service.ts`, `…/model-registry.service.ts`, `…/model-puller.service.ts`                                |
+| Embeddings disabled / no embed model                                                               | `…/inference/app-bootstrap.service.ts` (~L120), `…/inference/catalog/curated-models.ts`                                           |
+| `HUB_INFERENCE_URL` injected for all apps                                                          | `…/apps/app.helpers.ts`                                                                                                           |
+| `bootstrap.env` route                                                                              | `…/inference/inference.controller.ts` (`apps/:slug/bootstrap.env`)                                                                |
+| Hermes transport                                                                                   | `CI-Hermes/bootstrap-from-hub.sh`, `start-hermes.sh`                                                                              |
+| OpenClaw render + `/models`                                                                        | `CI-Hub/packages/backend/src/modules/app-lifecycle/data/openclaw-ci-entrypoint.sh`                                                |
+| CI-Server API Ollama client + model resolution _(no longer hardcoded — see the 2026-08-19 update)_ | `CI-Server/backend/apps/api/src/domains/llm/services/OllamaService.ts`, `…/OpenAiCompatChatDriver.ts`, `…/LlmEndpointService.ts`  |
+| CI-Server embedding model _(now `config.embedding.model` ← `CI_EMBED_MODEL`)_                      | `CI-Server/backend/apps/api/src/common/embeddings/services/EmbeddingGenerationService.ts`                                         |
+| CI-Server summary OpenAI client + `LLM_*`                                                          | `CI-Server/backend/apps/summary/src/ci/summary/llm_config.py`, `…/config.py`                                                      |
+| CI-Server config layering                                                                          | `CI-Server/backend/apps/api/config/*.json`, `…/src/configuration.ts`                                                              |
+| CI-Server marketplace packaging (slug `companion` → rename `companion-memory`, 8642)               | `CI-Server/scripts/publish/manifest/config.json`, `…/publish.sh`                                                                  |
+| CI-Server cloud-OAuth-only Hub use                                                                 | `CI-Server/backend/apps/api/src/domains/connections/services/CloudOAuthProxyService.ts`                                           |
+| CI-Server internal inference cron                                                                  | `CI-Server/backend/apps/api/src/domains/smart-rotation/cron/AnswerInferenceCron.ts` _(moved out of `domains/llm` in `edec81e6a`)_ |

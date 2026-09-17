@@ -17,6 +17,7 @@ import {
 import { THING_VISION_QUEUE, THING_VISION_QUEUE_OPTIONS } from '../constants';
 import { ImageDescriptionPreferenceService } from '../services/ImageDescriptionPreferenceService';
 import { OllamaService } from '../services/OllamaService';
+import { VisionRenditionService } from '../services/VisionRenditionService';
 import { isNonMultimodalModelError } from '../visionErrors';
 
 const ItemAnalysisSchema = z.object({
@@ -162,6 +163,7 @@ export class ThingVisionListener {
     private readonly observationService: ObjectObservationService,
     private readonly resolutionService: ObjectResolutionService,
     private readonly imageDescriptionPreference: ImageDescriptionPreferenceService,
+    private readonly rendition: VisionRenditionService,
     private readonly logger: LoggerService,
   ) {
     this.logger.setContext(ThingVisionListener.name);
@@ -217,13 +219,24 @@ export class ThingVisionListener {
       return;
     }
 
-    const fileContent = await this.fileService.getFileContent(serviceContext, file.key);
-    const base64Image = Buffer.from(fileContent).toString('base64');
+    // Same bounded rendition of the original the description pass uses; a
+    // raw upload can be a 200 MP frame or a HEIC the model cannot read.
+    const rendition = await this.rendition.render(serviceContext, file);
+
+    if (rendition == null) {
+      this.logger.warn('Image could not be rendered for thing vision, skipping', {
+        fileId: payload.fileId,
+        contentType: file.contentType,
+      });
+
+      return;
+    }
+
     const messages = [
       {
         role: 'user' as const,
         content: PROMPT,
-        images: [base64Image],
+        images: [rendition.jpeg.toString('base64')],
       },
     ];
 

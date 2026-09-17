@@ -5,6 +5,7 @@ import { Context, type RequestContext, toServiceContext } from '@ci/common/conte
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ItemRelationshipService } from '@ci/domains/graph';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { BulkItemRelationshipResult } from '../types/BulkItemRelationshipResult';
 import { ItemRelationshipInput } from '../types/ItemRelationshipInput';
 
@@ -21,6 +22,10 @@ export class ItemRelationshipResolver {
    * from the authenticated context, like every other memory mutation.
    */
   @Mutation(() => BulkItemRelationshipResult)
+  // itemRelationshipService.createMany() is a single INSERT ... ON CONFLICT DO NOTHING from the
+  // importer into ci.item_relationships; it only ever adds rows, and never touches an external
+  // system, so this is neither destructive nor external.
+  @GraphqlPrivacy({ destructive: false })
   async bulkIngestItemRelationships(
     @Context() context: RequestContext,
     @Args('input', { type: () => [ItemRelationshipInput] }) input: ItemRelationshipInput[],

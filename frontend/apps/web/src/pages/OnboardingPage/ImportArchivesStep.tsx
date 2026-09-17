@@ -69,7 +69,7 @@ export function ImportArchivesStep() {
           so Capture-style source lists and this catalog share one scrollbar,
           with Next after the content. */}
       <div className="w-full text-left">
-        <ImportSurface variant="onboarding" onStageChange={handleStage} />
+        <ImportSurface variant="onboarding" nav="host" onStageChange={handleStage} />
       </div>
 
       <p className="text-center text-sm text-muted-foreground">

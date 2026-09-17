@@ -27,6 +27,14 @@
  *               is no standalone "create message" mutation to replay a local insert
  *               through.
  *   - files:    READ-ONLY. Metadata mirror only; the binary lives in Minio.
+ *   - events:   READ-ONLY. Written server-side by CI-Capture's lanes through
+ *               POST /v1/events, which materializes ci.capture_events into
+ *               ci.events; there is no mutation to replay a local insert
+ *               through, and a device only ever sees the window the server
+ *               admitted.
+ *   - entities: READ-ONLY. The CTI name rows for those events. Writing one
+ *               locally would mean editing the entity graph, which is server
+ *               territory.
  *
  * A local write against a read-only table would sit in the CRUD queue and get
  * dropped (logged, not retried — see `replay()`) rather than silently retried
@@ -90,7 +98,7 @@ const DELETE_NOTE_MUTATION = `
 `;
 
 /** Tables whose local writes are intentionally not replayed — see the module comment. */
-const READ_ONLY_TABLES = new Set(['tags', 'threads', 'messages', 'files']);
+const READ_ONLY_TABLES = new Set(['tags', 'threads', 'messages', 'files', 'events', 'entities']);
 
 type GraphQLResponse = {
   data?: Record<string, { success?: boolean } | null> | null;

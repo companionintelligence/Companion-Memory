@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { FindOperator } from 'typeorm';
 
 import { type PeerLinkEntity } from '../entities/PeerLinkEntity';
@@ -66,6 +67,181 @@ describe('PeerLinkService.upsert — the trust tier is validated before the writ
     await service.upsert(CTX as never, DTO);
 
     expect(repository.save).toHaveBeenCalledWith(expect.objectContaining({ trustTier: 'peer' }));
+  });
+});
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * THE (iss, sub) BINDING — VALIDATED IN FRONT OF THE WRITE.
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * `peerIssuer` / `peerSubject` decide WHICH REMOTE IDENTITY MAY ACT AS THIS
+ * PEER: an inbound token bearing that pair resolves to this link and inherits
+ * its `trustTier`, the ceiling on everything the box will disclose. Two ways to
+ * get that wrong that a type cannot catch, both refused here for the same
+ * reason the trust tier is:
+ *
+ *   * HALF A PAIR. `findActiveByPeerIdentity` filters on BOTH columns, so a
+ *     link carrying one alone can never match anything. It is inert while
+ *     looking bound — the worst of both, because the owner believes federation
+ *     is configured and every inbound ask 403s with "No peer link".
+ *   * A BLANK HALF. `PortalTokenService.verifyClaims` returns null unless both
+ *     claims are non-empty, so `''` is the same inert state wearing a value.
+ *
+ * The duplicate-identity rule is NOT here: it cannot be, because a
+ * read-then-write check races. It lives in `peer_links_owner_identity_live_uniq`
+ * and is proved in `PeerLinkIdentityBinding.integration.spec.ts`; what this
+ * block pins is the translation of that index's `23505` into a `409` rather
+ * than a bare `500`.
+ */
+describe('PeerLinkService.upsert — the peer identity binding', () => {
+  const IDENTITY_DTO = { peerIssuer: 'https://portal.example', peerSubject: 'devon-sub' };
+
+  it('writes both halves when both are given', async () => {
+    const { service, repository } = makeService();
+
+    await service.upsert(CTX as never, { ...DTO, ...IDENTITY_DTO });
+
+    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining(IDENTITY_DTO));
+  });
+
+  it('trims surrounding whitespace rather than storing a value that cannot match', async () => {
+    const { service, repository } = makeService();
+
+    await service.upsert(CTX as never, {
+      ...DTO,
+      peerIssuer: '  https://portal.example  ',
+      peerSubject: '\tdevon-sub\n',
+    });
+
+    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining(IDENTITY_DTO));
+  });
+
+  it('leaves both NULL when the caller says nothing — an unfederated link is the normal case', async () => {
+    const { service, repository } = makeService();
+
+    await service.upsert(CTX as never, DTO);
+
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ peerIssuer: null, peerSubject: null }),
+    );
+  });
+
+  it('refuses half a pair, in front of the insert', async () => {
+    for (const half of [{ peerIssuer: 'https://portal.example' }, { peerSubject: 'devon-sub' }]) {
+      const { service, repository } = makeService();
+
+      await expect(service.upsert(CTX as never, { ...DTO, ...half })).rejects.toThrow(/must be set together/);
+      expect(repository.save).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses a blank half by name, so `--peer-issuer ""` cannot look like it worked', async () => {
+    for (const [field, dto] of [
+      ['peerIssuer', { ...IDENTITY_DTO, peerIssuer: '   ' }],
+      ['peerSubject', { ...IDENTITY_DTO, peerSubject: '' }],
+    ] as const) {
+      const { service, repository } = makeService();
+
+      await expect(service.upsert(CTX as never, { ...DTO, ...dto })).rejects.toThrow(
+        new RegExp(`${field} must not be blank`),
+      );
+      expect(repository.save).not.toHaveBeenCalled();
+    }
+  });
+
+  it('accepts one half that COMPLETES an existing binding', async () => {
+    // The rule is about the merged ROW, not the input: re-pointing only the
+    // subject of an already-bound link is a legitimate write.
+    const { service, repository } = makeService();
+
+    repository.findOne.mockResolvedValue({
+      id: 'link-1',
+      ownerUserId: 'owner-1',
+      peerHandle: 'devon',
+      peerIssuer: 'https://portal.example',
+      peerSubject: 'old-sub',
+    });
+
+    await service.upsert(CTX as never, { ...DTO, peerSubject: 'devon-sub' });
+
+    expect(repository.save).toHaveBeenCalledWith(expect.objectContaining(IDENTITY_DTO));
+  });
+
+  it('lets an unrelated edit through on a link whose columns were left half-set by hand', async () => {
+    // Hand-written SQL was the ONLY way to set these columns before this change
+    // (docs/peer-federation.md), so half-set rows exist in the wild. Refusing
+    // every later rename or re-tier of such a row would turn a legacy
+    // inconsistency into an outage — the rule applies to writes that TOUCH the
+    // identity, not to every write that passes near one.
+    const { service, repository } = makeService();
+
+    repository.findOne.mockResolvedValue({
+      id: 'link-1',
+      ownerUserId: 'owner-1',
+      peerHandle: 'devon',
+      peerIssuer: 'https://portal.example',
+      peerSubject: null,
+    });
+
+    await service.upsert(CTX as never, { ...DTO, trustTier: 'family' });
+
+    expect(repository.save).toHaveBeenCalledWith(
+      expect.objectContaining({ trustTier: 'family', peerIssuer: 'https://portal.example' }),
+    );
+  });
+
+  it('reports the duplicate-identity index as a 409, not a bare 500', async () => {
+    const { service, repository } = makeService();
+
+    repository.save.mockRejectedValue(
+      Object.assign(new Error('duplicate key value violates unique constraint'), {
+        code: '23505',
+        constraint: 'peer_links_owner_identity_live_uniq',
+      }),
+    );
+
+    await expect(service.upsert(CTX as never, { ...DTO, ...IDENTITY_DTO })).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+  });
+
+  it('reads a 23505 with no constraint name as the identity clash — poolers drop the field', async () => {
+    const { service, repository } = makeService();
+
+    repository.save.mockRejectedValue(
+      Object.assign(new Error('duplicate key'), { driverError: { code: '23505' } }),
+    );
+
+    await expect(service.upsert(CTX as never, { ...DTO, ...IDENTITY_DTO })).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+  });
+
+  it('rethrows a 23505 naming ANOTHER constraint — a handle collision is not an identity clash', async () => {
+    const { service, repository } = makeService();
+    const handleClash = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      constraint: 'peer_links_owner_handle_uniq',
+    });
+
+    repository.save.mockRejectedValue(handleClash);
+
+    await expect(service.upsert(CTX as never, { ...DTO, ...IDENTITY_DTO })).rejects.toBe(handleClash);
+  });
+
+  it('rethrows the identity conflict untranslated when the write never touched the identity', async () => {
+    // A rename that trips a unique index did not "claim someone else's
+    // identity", and saying so would be a lie the caller cannot act on.
+    const { service, repository } = makeService();
+    const err = Object.assign(new Error('duplicate key'), {
+      code: '23505',
+      constraint: 'peer_links_owner_identity_live_uniq',
+    });
+
+    repository.save.mockRejectedValue(err);
+
+    await expect(service.upsert(CTX as never, { ...DTO, displayName: 'Devon' })).rejects.toBe(err);
   });
 });
 

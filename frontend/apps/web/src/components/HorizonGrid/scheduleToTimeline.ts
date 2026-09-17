@@ -7,8 +7,10 @@ import {
   TIMELINE_AXIS_PAD_DAYS,
 } from '@/components/TimelineJs/dates';
 import type { TimelineEra, TimelineJsData, TimelineSlide } from '@/components/TimelineJs/types';
+import { detectBrowserTimeZone } from '@/lib/timezone';
 
 import { isBrowserCapture } from './scheduleClusters';
+import { zonedDayKey } from './zonedClock';
 
 export { TIMELINE_AXIS_PAD_DAYS };
 export type {
@@ -108,15 +110,17 @@ function toSlide(event: ScheduleEvent): TimelineSlide {
   return slide;
 }
 
-export function localDayKey(date: Date): string {
-  const day = new Date(date);
-  day.setHours(0, 0, 0, 0);
-
-  return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+/** The calendar date an instant falls on, in the zone the surface draws in. */
+export function localDayKey(date: Date, zone: string = detectBrowserTimeZone()): string {
+  return zonedDayKey(date, zone);
 }
 
-export function eventFallsOnDay(event: ScheduleEvent, day: Date): boolean {
-  return localDayKey(new Date(event.startTime)) === localDayKey(day);
+export function eventFallsOnDay(
+  event: ScheduleEvent,
+  day: Date,
+  zone: string = detectBrowserTimeZone(),
+): boolean {
+  return localDayKey(new Date(event.startTime), zone) === localDayKey(day, zone);
 }
 
 function sampleDay(eventsOnDay: ScheduleEvent[]): ScheduleEvent[] {

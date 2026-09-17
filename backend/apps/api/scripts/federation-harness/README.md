@@ -179,7 +179,7 @@ usable: it is ten markdown *companion personas*, not a dataset.)
 
 **Box A** gets a bounded subset of the owner's real archive. Verified end to
 end: `--source apple --limit 1` stages the 1.8MB `calendar/liam.broza@gmail.com
-.ics` into `.federation-harness/staging/`, `ci-import` uploads *that copy*, and
+.ics` into `.federation-harness/staging/`, `ci` uploads *that copy*, and
 the run walks unpack → parse → media → push to `completed` with **1,143 real
 calendar events** in box A's memory. The archive is byte-for-byte unchanged
 afterwards.
@@ -202,8 +202,8 @@ reclaiming its source directory. Six independent things stop it here:
 2. **Every file is copied first**, into `.federation-harness/staging/`, and the
    importer only ever sees the copy — and is handed the staged FILES one by one,
    never a directory.
-3. **`ci-import inbox` is never used.** That is the command that consumes by
-   rename. `ci-import import` does not, and it is the only one here — worth
+3. **`ci inbox` is never used.** That is the command that consumes by
+   rename. `ci import` does not, and it is the only one here — worth
    saying out loud because when you hand `import` a directory it refuses and
    *suggests the inbox in its error message*.
 4. **Box A boots with `CI_IMPORT_ROOTS` pinned to the staging directory.** The
@@ -511,7 +511,7 @@ against a stale box.
 declares `role: 'worker'` on all four stage queues (unpack / parse / media /
 push), so a box running only `CI_ROLE=web` accepts the upload, writes an
 `ci_import.import_runs` row, and leaves it at **`queued`** with no error
-anywhere — `ci-import --wait` simply never returns, which reads as a slow import
+anywhere — `ci --wait` simply never returns, which reads as a slow import
 rather than an absent consumer. Each box now runs both roles, as the Procfile
 does.
 
@@ -522,8 +522,8 @@ with `EACCES: permission denied, mkdir '/var/lib/ci-import'`, surfaced to the
 CLI as a bare `500: Internal server error`. All three are pinned into
 `.federation-harness/import/`.
 
-**`ci-import import` takes archive FILES, not a directory** — and its refusal
-suggests `ci-import inbox --start`, which is the command that consumes by
+**`ci import` takes archive FILES, not a directory** — and its refusal
+suggests `ci inbox --start`, which is the command that consumes by
 rename. The staged file paths are passed individually.
 
 **A guard that runs before the thing it guards exists is worse than no guard.**

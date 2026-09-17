@@ -11,6 +11,7 @@ import {
 } from '@ci/domains/memory';
 import { type Person } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { AttachmentFileLoader } from '../loaders/AttachmentFileLoader';
 import { ContentFileLoader } from '../loaders/ContentFileLoader';
 import { ContentLoader } from '../loaders/ContentLoader';
@@ -106,6 +107,10 @@ export class CommunicationResolver {
    * order.
    */
   @Mutation(() => [CommunicationType])
+  // Idempotent bulk ingest: inserts new rows, and a re-sync only self-heals a
+  // fixed set of source-derived columns on conflict (INGEST_REFRESH_COLUMNS) —
+  // never a delete or a wholesale overwrite of unrelated data.
+  @GraphqlPrivacy({ destructive: false })
   async createCommunications(
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreateCommunicationInput] }, new MaxArraySizePipe())
@@ -140,6 +145,12 @@ export class CommunicationResolver {
   }
 
   @Mutation(() => CommunicationType, { nullable: true })
+  // CommunicationService.update only patches fields that are truthy/defined on
+  // this row (subject/content here); `content: input.content ?? ''` cannot
+  // blank an existing value because the service guards with `if (data.content)`,
+  // which treats '' as "not provided". The row and the people on it are
+  // otherwise untouched.
+  @GraphqlPrivacy({ destructive: false })
   async updateCommunication(
     @Context() context: RequestContext,
     @Args('input') input: UpdateCommunicationInput,
@@ -162,6 +173,10 @@ export class CommunicationResolver {
    * restored. The people it was with are untouched.
    */
   @Mutation(() => DeleteByIdPayload)
+  // Confirmed HARD delete per the method's own doc comment above: CommunicationService.remove
+  // deletes the base row (FK cascade removes the detail row too), with no
+  // restore path in the schema.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteCommunication(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

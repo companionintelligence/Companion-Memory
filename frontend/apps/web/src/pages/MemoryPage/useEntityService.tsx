@@ -11,8 +11,8 @@ import { gql } from '@/graphql';
 const PAGE_SIZE = 30;
 
 const SEARCH_QUERY = gql(`
-  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $bbox: [Float!], $semantic: Boolean, $shareToken: String, $first: Int, $after: String) {
-    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, bbox: $bbox, semantic: $semantic, shareToken: $shareToken, first: $first, after: $after }) {
+  query Search($query: String!, $includeTypes: [String!], $excludeTypes: [String!], $eventTypes: [String!], $tags: [String!], $startTime: String, $endTime: String, $sortBy: String, $sortOrder: String, $connectors: [String!], $people: [String!], $places: [String!], $hasLocation: Boolean, $bbox: [Float!], $semantic: Boolean, $direction: String, $shareToken: String, $first: Int, $after: String) {
+    search(input: { query: $query, includeTypes: $includeTypes, excludeTypes: $excludeTypes, eventTypes: $eventTypes, tags: $tags, startTime: $startTime, endTime: $endTime, sortBy: $sortBy, sortOrder: $sortOrder, connectors: $connectors, people: $people, places: $places, hasLocation: $hasLocation, bbox: $bbox, semantic: $semantic, direction: $direction, shareToken: $shareToken, first: $first, after: $after }) {
       totalCount
       pageInfo {
         hasNextPage
@@ -307,6 +307,7 @@ function useEntityService({
   hasLocation,
   bbox,
   semantic,
+  direction,
   shareToken,
   skip = false,
 }: {
@@ -325,6 +326,8 @@ function useEntityService({
   hasLocation?: boolean;
   bbox?: number[];
   semantic?: boolean;
+  /** Sent / received message direction (`inbound` / `outbound`); pins the browse to communications. */
+  direction?: string;
   // Shared-search capability token. When set, the server runs the referenced
   // public saved search as its owner and ignores every other filter above —
   // this drives the read-only /shared viewer with the same view components.
@@ -362,6 +365,7 @@ function useEntityService({
     hasLocation: hasLocation || undefined,
     bbox: bbox && bbox.length === 4 ? bbox : undefined,
     semantic: semantic || undefined,
+    direction: direction || undefined,
     shareToken: shareToken || undefined,
   };
 

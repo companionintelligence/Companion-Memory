@@ -1,6 +1,14 @@
 import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, IsNull, type FindOptionsOrder, type FindOptionsWhere } from 'typeorm';
+import {
+  DataSource,
+  Repository,
+  In,
+  IsNull,
+  type FindOptionsOrder,
+  type FindOptionsWhere,
+  type SelectQueryBuilder,
+} from 'typeorm';
 import { v7 as uuidv7 } from 'uuid';
 
 import { type ServiceContext, type UserServiceContext, SYSTEM_USER } from '@ci/common/context';
@@ -36,6 +44,20 @@ interface Options {
   endTime?: Date;
   /** The How filter: `source_system` values to keep (the explorer's connectors). */
   connectors?: string[];
+  /**
+   * The Who filter: person name patterns (case-insensitive substring) matched
+   * against the Person entities the message's sender / recipients resolved to
+   * — the same rule CalendarEventService applies to an event's participants.
+   * Any one pattern matching is enough (OR). With `direction` set the match
+   * binds to the role the direction implies; see applyPeopleFilter.
+   */
+  people?: string[];
+  /**
+   * Message direction to keep: `inbound` (received) or `outbound` (sent),
+   * relative to the user. Alongside `people` it also decides which role the
+   * person must hold: received *from* them, sent *to* them.
+   */
+  direction?: string;
   /** Composite keyset cursor for the timed search path (see CalendarEventService). */
   afterTime?: Date;
   afterId?: string;
@@ -802,6 +824,14 @@ export class CommunicationService {
       });
     }
 
+    if (options.people && options.people.length > 0) {
+      query = this.applyPeopleFilter(query, context, options.people, options.direction);
+    }
+
+    if (options.direction) {
+      query = query.andWhere('communications.direction = :direction', { direction: options.direction });
+    }
+
     if (options.startTime) {
       query = query.andWhere('communications.time >= :startTime', { startTime: options.startTime });
     }
@@ -825,7 +855,7 @@ export class CommunicationService {
    */
   async countEntitiesForCommunications(
     context: ServiceContext,
-    options: Pick<Options, 'startTime' | 'endTime' | 'connectors'>,
+    options: Pick<Options, 'startTime' | 'endTime' | 'connectors' | 'people' | 'direction'>,
   ): Promise<number> {
     let query = this.dataSource
       .getRepository(CommunicationEntity)
@@ -838,6 +868,14 @@ export class CommunicationService {
       });
     }
 
+    if (options.people && options.people.length > 0) {
+      query = this.applyPeopleFilter(query, context, options.people, options.direction);
+    }
+
+    if (options.direction) {
+      query = query.andWhere('communications.direction = :direction', { direction: options.direction });
+    }
+
     if (options.startTime) {
       query = query.andWhere('communications.time >= :startTime', { startTime: options.startTime });
     }
@@ -847,6 +885,44 @@ export class CommunicationService {
     }
 
     return query.getCount();
+  }
+
+  /**
+   * "Who": keep the messages the named person is party to. Without a
+   * direction that is either role — sender (`from_entity_id`) or any recipient
+   * (`to_entity_ids`, as linked by PersonLinkStage). With one, the person must
+   * hold the role the direction implies: `inbound` (received) keeps messages
+   * *from* them, `outbound` (sent) keeps messages *to* them. Otherwise a group
+   * chat the person merely belongs to would surface everyone else's messages
+   * under "Received", since those are inbound to the user and list the person
+   * among the recipients. The direction column itself is matched by the
+   * callers. Shared by the timed fetch and its COUNT(*) so a page and its total
+   * agree.
+   */
+  private applyPeopleFilter(
+    query: SelectQueryBuilder<CommunicationEntity>,
+    context: ServiceContext,
+    people: string[],
+    direction?: string,
+  ): SelectQueryBuilder<CommunicationEntity> {
+    const matchingPeople = `
+      SELECT entity_id FROM ci.entities
+      WHERE owner_user_id = :userId AND entity_type = 'Person' AND name ILIKE ANY(:peoplePatterns)
+    `;
+    const sentByPerson = `communications.from_entity_id IN (${matchingPeople})`;
+    const sentToPerson = `communications.to_entity_ids && ARRAY(${matchingPeople})::uuid[]`;
+
+    const predicate =
+      direction === 'inbound'
+        ? sentByPerson
+        : direction === 'outbound'
+          ? sentToPerson
+          : `(${sentByPerson} OR ${sentToPerson})`;
+
+    return query.andWhere(predicate, {
+      userId: context.userId,
+      peoplePatterns: people.map((name) => `%${name}%`),
+    });
   }
 
   /**

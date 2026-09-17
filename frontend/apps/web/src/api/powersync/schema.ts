@@ -94,12 +94,81 @@ const files = new Table({
   deleted_at: column.text,
 });
 
+// Read-only. Events are written server-side — CI-Capture's vizier and file-edit
+// lanes POST /v1/events, which materializes into ci.events — and there is no
+// mutation to replay a local insert through.
+//
+// Only rows inside the device window arrive (sync-rules.yaml filters on
+// sync_period, which SyncWindowSweepCron clears to evict), and vizier_patch rows
+// never do: they are JSON Patches a client has no way to fold.
+//
+// `metadata` is deliberately absent, matching the sync rule — it is the raw
+// capture payload (window titles, cwd, established connections) and is not
+// synced. The human-readable text is on `entities`, joined locally on id.
+//
+// duration_minutes is absent and cannot be added: it is a Postgres GENERATED
+// column and this publication does not replicate generated columns. Derive it
+// from start_time/end_time on device.
+const events = new Table({
+  user_id: column.text,
+  event_type: column.text,
+  category: column.text,
+  status: column.text,
+  start_time: column.text,
+  end_time: column.text,
+  observed_at: column.text,
+  sync_period: column.text,
+  source_type: column.text,
+  source_system: column.text,
+  source_id: column.text,
+  capture_tick_id: column.text,
+  // SQLite has no BOOLEAN type; PowerSync/Postgres booleans arrive as 0/1.
+  is_all_day: column.integer,
+  is_private: column.integer,
+  sharing_level: column.text,
+  priority: column.integer,
+  is_predicted: column.integer,
+  is_inferred: column.integer,
+  parent_event_id: column.text,
+  task_id: column.text,
+  created_at: column.text,
+  updated_at: column.text,
+});
+
+// Read-only. The CTI name rows for the events above: migration
+// 20260811061409_convert_events_to_cti moved title/description off ci.events onto
+// ci.entities, keyed entities.entity_id = events.event_id. Sync rules cannot
+// JOIN, so both tables sync and the join happens here —
+//   SELECT e.*, n.name, n.description
+//     FROM events e LEFT JOIN entities n ON n.id = e.id
+// — which is why an event's label is a local join, not a column.
+//
+// Only entity_type = 'Event' rows ever sync. People, places and things keep a
+// NULL sync_period server-side and are filtered out by the same predicate that
+// bounds the window, so none of their names, birth dates, geography or dossiers
+// reach a device.
+const entities = new Table({
+  user_id: column.text,
+  entity_type: column.text,
+  name: column.text,
+  description: column.text,
+  linked_table: column.text,
+  linked_id: column.text,
+  is_active: column.integer,
+  is_archived: column.integer,
+  sync_period: column.text,
+  created_at: column.text,
+  updated_at: column.text,
+});
+
 export const AppSchema = new Schema({
   notes,
   tags,
   threads,
   messages,
   files,
+  events,
+  entities,
 });
 
 export type Database = (typeof AppSchema)['types'];

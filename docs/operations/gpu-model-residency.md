@@ -145,6 +145,83 @@ containers, so this is not CI-Server's context budget — the source is still
 unidentified and is worth tracing, because the over-request is what inflates the
 admission prediction.
 
+## The utility model is planned, not hoped for (2026-09-14)
+
+The 2026-09-14 wedge was the fit veto above with nowhere to go. A `qwen3.6:27b`
+chat model sat resident at 32768 on a 24 GiB card and was never idle (the HBPE
+labeler sent it ~190 requests per ten minutes). CI-Server's background jobs
+asked for `gemma4:e4b` — the utility tier, which defaults to the chat default
+when `LLM_UTILITY_MODEL` is unset — and Ollama predicted 12.2 GiB against
+6.5 GiB available, chose to evict, and could not: the LRU runner was busy. Every
+request for any non-resident model then queued behind that load with no log
+line at all. Embeds hit their 270 s timeout, jobs their 600 s `JobTimeoutError`.
+
+`ResidencyPlannerService` (`backend/apps/api/src/domains/llm/services/`) now
+decides, per background call, what the utility tier runs on. The rule is that
+**a utility call never triggers an eviction**:
+
+1. Utility model already resident → use it, at the window it is loaded with
+   (a different `num_ctx` can make Ollama reload the runner).
+2. Otherwise read live GPU memory — AMD sysfs `mem_info_vram_*`, then
+   `nvidia-smi`, then `LLM_RESIDENCY_VRAM_TOTAL_BYTES` with Ollama's residents
+   as "used" — and estimate the utility model's footprint from `/api/tags`
+   (weights) and `/api/show` (attention geometry). Walk 32K → 16K → 8K → 4K and
+   load at the largest window that fits under `total − used − embed reserve −
+   1 GiB`. The estimate is deliberately at or above Ollama's own prediction
+   (measured: 12.7 GiB vs Ollama's 12.2 for gemma4:e4b; 18.5 vs 17.9 for
+   qwen3.6:27b once it has been seen loaded) — an estimate below Ollama's would
+   recreate the eviction attempt.
+3. Nothing fits, GPU memory unreadable, or the model not served → run the call
+   on the **resident chat model** at its own window. Slower, but it completes,
+   and nothing is evicted.
+
+Background call sites pass `tier: 'utility'` to `OllamaService.chat` instead of
+a model id; the non-streaming path now sends `num_ctx` (before this only the
+streaming chat path did, so every background call ran at Ollama's 32768
+default). Boot logs one line — `GPU residency plan: chat "…" resident @32768
+(17.2 GiB); utility "…" routed to chat model @32768 — …; embed "…" resident …;
+GPU 24.0 GiB total, 20.7 GiB used (sysfs card1)` — and one more each time the
+decision flips.
+
+Knobs (`LLM_RESIDENCY_*`): `MODE=off` restores the old behaviour;
+`VRAM_TOTAL_BYTES` for a machine where neither sysfs nor `nvidia-smi` is
+readable from the API process (otherwise an unknown total routes every utility
+call to the chat model); `SAFETY_MARGIN_BYTES` (default 1 GiB);
+`MAX_UTILITY_CONTEXT_TOKENS` (default 32768). The planner never touches the
+chat model's window — that stays Hub's `CI_LLM_NUM_CTX`. It does not un-wedge
+Ollama either; if a load has already hung, restart Ollama.
+
+**Calibration persists.** Every `/api/ps` sighting of a loaded model (weights,
+`size_vram`, `context_length`) is written to `llm-residency-calibration.json`
+— under `APP_DATA_DIR/data/` on a Hub-managed appliance, at
+`LLM_RESIDENCY_CALIBRATION_PATH` if set, else a dotfile in the API's working
+directory — and read back at boot. It is what lets a hybrid-architecture model
+(qwen3.5: three-quarters linear attention, `head_count_kv` stored per layer and
+dropped by the JSON API) be planned at all: the metadata-only estimate for
+qwen3.6:27b is 29 GiB, the calibrated one 18.5. Delete the file to forget.
+
+**The watchdog.** When the planner answers "load", it arms a timer
+(`LLM_RESIDENCY_LOAD_WATCHDOG_MS`, default 120 s). If the model is still absent
+from `/api/ps` when it fires — or the call that carried the load fails on the
+first-response deadline, which is exactly what a load stuck behind an
+impossible eviction looks like — co-residency is **paused** for
+`LLM_RESIDENCY_COOLDOWN_MS` (default 15 min): one ERROR line, then every
+utility call runs on the chat model until the pause ends. The planner cannot
+un-wedge Ollama; if embeds or chat hang as well, restart it.
+
+**The HBPE labeler is throttled.** `HBPE_LABEL_MAX_REQUESTS_PER_MINUTE`
+(default 6, so one request every 10 s; 0 disables) spaces the sidecar's
+chat-API label requests evenly — see `backend/apps/hbpe/src/ci/hbpe/label_ceiling.py`.
+Unthrottled it issued ~190 per ten minutes and the 27B runner never went idle,
+which is why Ollama could never evict it. This is on top of the existing
+yield-to-chat (`label_yield.py`), which covers a person waiting; the ceiling
+covers nobody waiting. The GGUF fallback is not throttled — it shares nothing
+with chat. The nightly labels fewer events per run under the ceiling; the
+backlog drains over more nights.
+
+Still open: the embedder is requested without a `num_ctx` and Ollama clamps it
+to its 2048 training window with a warning.
+
 ## HBPE is invisible to all of this
 
 HBPE holds the GPU through `/dev/kfd` directly, outside Ollama's process tree.

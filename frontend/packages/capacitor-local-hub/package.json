@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "description": "Capacitor plugin for the on-device Local Hub: a loopback-only embedded HTTP server hosting a durable SQLite capture outbox, and later local llama.cpp inference plus the same read endpoints CI-Server's memory domain exposes. Today: start()/stop()/getStatus(), a bearer-authenticated GET /api/health, and the /api/outbox routes -- see README.md. Unlike @ci/capacitor-local-llm (Android-only), this plugin ships both Android and iOS native implementations.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "main": "src/index.ts",
   "types": "src/index.ts",
   "packageManager": "yarn@4.9.1",

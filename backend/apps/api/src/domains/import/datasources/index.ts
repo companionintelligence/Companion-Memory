@@ -18,6 +18,7 @@ import './claude';
 import './coinbase';
 import './contactlist';
 import './discord';
+import './disney_plus';
 import './email';
 import './evernote';
 import './facebook';

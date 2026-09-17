@@ -1,4 +1,5 @@
-import sharp from 'sharp';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { type UserServiceContext } from '@ci/common/context';
 import { EventListenerRegistry } from '@ci/domains/events';
@@ -10,11 +11,16 @@ import { FilePreviewService, FileUploadedEvent, PreviewGeneratedEvent } from '@c
 import { FilePreviewGenerationListener } from '../../../files/listeners/FilePreviewGenerationListener';
 import { FileService } from '../../../files/services/FileService';
 import {
+  BROWSER_ACTIVITY_INSIGHT_QUEUE,
+  BROWSER_ACTIVITY_INSIGHT_QUEUE_OPTIONS,
   IMAGE_DESCRIPTION_QUEUE,
   IMAGE_DESCRIPTION_QUEUE_OPTIONS,
+  INTERACTIVE_CHAT_YIELD_GATE,
+  OLLAMA_BACKGROUND_LANE,
   THING_VISION_QUEUE,
   THING_VISION_QUEUE_OPTIONS,
 } from '../../constants';
+import { BrowserActivityInsightListener } from '../BrowserActivityInsightListener';
 import { ImageDescriptionBackfillListener } from '../ImageDescriptionBackfillListener';
 import { ImageDescriptionListener } from '../ImageDescriptionListener';
 import { ThingVisionListener } from '../ThingVisionListener';
@@ -41,6 +47,7 @@ import { ThingVisionListener } from '../ThingVisionListener';
 // ran it against the shared EventListenerRegistry.
 void ImageDescriptionListener;
 void ThingVisionListener;
+void BrowserActivityInsightListener;
 
 describe('image-description / thing-vision queue declarations', () => {
   it('declares "short" policy and a 1-slot local ceiling on image-description, agreed by both registrants', () => {
@@ -49,6 +56,37 @@ describe('image-description / thing-vision queue declarations', () => {
     );
     expect(IMAGE_DESCRIPTION_QUEUE_OPTIONS.policy).toBe('short');
     expect(IMAGE_DESCRIPTION_QUEUE_OPTIONS.localConcurrency).toBe(1);
+  });
+
+  it('stands aside for an interactive chat turn — the gate InteractiveChatYieldGate registers by that name', () => {
+    // Dispatching the next description the instant the last one finished is
+    // what kept the GPU busy enough that Ollama could never swap the chat
+    // model in (two turns in a row ended in the empty-answer fallback).
+    expect(IMAGE_DESCRIPTION_QUEUE_OPTIONS.yieldsTo).toBe(INTERACTIVE_CHAT_YIELD_GATE);
+    expect(EventListenerRegistry.getQueueOptions(IMAGE_DESCRIPTION_QUEUE)?.yieldsTo).toBe(
+      INTERACTIVE_CHAT_YIELD_GATE,
+    );
+  });
+
+  // Every Ollama-bound background queue shares the one single-slot runner
+  // with chat, so every one of them stands aside for the same gate.
+  it.each([
+    ['thing-vision', THING_VISION_QUEUE, THING_VISION_QUEUE_OPTIONS],
+    ['browser-activity-insight', BROWSER_ACTIVITY_INSIGHT_QUEUE, BROWSER_ACTIVITY_INSIGHT_QUEUE_OPTIONS],
+  ])('%s stands aside for the interactive-chat gate too', (_label, queue, options) => {
+    expect(options.yieldsTo).toBe(INTERACTIVE_CHAT_YIELD_GATE);
+    expect(EventListenerRegistry.getQueueOptions(queue)?.yieldsTo).toBe(INTERACTIVE_CHAT_YIELD_GATE);
+  });
+
+  // And they share ONE slot between them: four single-slot queues would
+  // otherwise put four generations in front of the runner at once.
+  it.each([
+    ['image-description', IMAGE_DESCRIPTION_QUEUE, IMAGE_DESCRIPTION_QUEUE_OPTIONS],
+    ['thing-vision', THING_VISION_QUEUE, THING_VISION_QUEUE_OPTIONS],
+    ['browser-activity-insight', BROWSER_ACTIVITY_INSIGHT_QUEUE, BROWSER_ACTIVITY_INSIGHT_QUEUE_OPTIONS],
+  ])('%s draws from the shared ollama-background lane', (_label, queue, options) => {
+    expect(options.lane).toBe(OLLAMA_BACKGROUND_LANE);
+    expect(EventListenerRegistry.getQueueOptions(queue)?.lane).toBe(OLLAMA_BACKGROUND_LANE);
   });
 
   it('keeps the 1-slot local ceiling on thing-vision but declares NO policy, because its producer sends keyless', () => {
@@ -215,15 +253,9 @@ describe('thing-vision: the real file.uploaded producer sends keyless', () => {
 });
 
 describe('image-description: live and backfill sends share one singletonKey', () => {
-  let jpeg: Buffer;
-
-  beforeAll(async () => {
-    jpeg = await sharp({
-      create: { width: 16, height: 16, channels: 3, background: { r: 10, g: 120, b: 200 } },
-    })
-      .jpeg()
-      .toBuffer();
-  });
+  // Any JPEG bytes will do: the decoder is stubbed below, since this suite is
+  // about the send, not the pixels.
+  const jpeg = readFileSync(join(__dirname, '../../../files/services/__tests__/__fixtures__/64x40.jpg'));
 
   async function livePreviewSend(previewId: string): Promise<SendOptions> {
     const fileService = {
@@ -239,7 +271,8 @@ describe('image-description: live and backfill sends share one singletonKey', ()
       setDimensions: jest.fn(async () => {}),
       create: jest.fn(async () => ({ id: previewId })),
     };
-    const mediaDimensionsService = { fromImageBuffer: jest.fn(async () => ({ width: 16, height: 16 })) };
+    const mediaDimensionsService = { fromImageBuffer: jest.fn(async () => ({ width: 64, height: 40 })) };
+    const vips = { renderJpeg: jest.fn(async () => ({ buffer: jpeg, width: 64, height: 40 })) };
     const eventService = makeEventService();
 
     // The send under test now lives in FilePreviewService; the listener is the
@@ -248,6 +281,7 @@ describe('image-description: live and backfill sends share one singletonKey', ()
       new FilePreviewService(
         fileService as never,
         mediaDimensionsService as never,
+        vips as never,
         eventService as never,
         makeLogger() as never,
       ),

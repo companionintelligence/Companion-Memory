@@ -8,6 +8,8 @@ import { GraphQueryService, GraphReadService, GraphNodeEntity } from '@ci/domain
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
+import { booleanish } from './booleanish';
+
 // Input schema for the tool
 const getUserPreferencesInputSchema = z.object({
   category: z
@@ -15,7 +17,7 @@ const getUserPreferencesInputSchema = z.object({
     .optional()
     .default('all'),
   personName: z.string().optional(),
-  includeContext: z.boolean().default(true),
+  includeContext: booleanish().default(true),
 });
 
 type GetUserPreferencesInput = z.infer<typeof getUserPreferencesInputSchema>;

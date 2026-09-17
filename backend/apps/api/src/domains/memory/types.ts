@@ -109,6 +109,12 @@ export interface CreateEventDto {
   task_id?: string;
   /** Intended duration; `duration_minutes` stays generated actual. */
   planned_minutes?: number;
+  /** Manually-locked-block flag; settable/readable only — nothing enforces it yet. */
+  is_locked?: boolean;
+  /** True for a block placed by the unattended placer; false for a human-triggered write. */
+  is_auto?: boolean;
+  /** Stamped by the writer when this row's placement (start/end) was just decided. */
+  last_moved_at?: Date;
   user?: {
     id: string;
   };
@@ -154,6 +160,8 @@ export interface UpdateEventDto {
   created_by?: string;
   user_id?: string;
   duration_minutes?: number;
+  /** Manually-locked-block flag; settable/readable only — nothing enforces it yet. */
+  is_locked?: boolean;
   content?: CreateContentDto[];
 }
 

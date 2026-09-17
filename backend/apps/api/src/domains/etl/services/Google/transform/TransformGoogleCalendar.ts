@@ -308,6 +308,13 @@ export class GoogleCalendarTransformService {
       ...(rawEvent.recurrence && rawEvent.recurrence.length > 0
         ? { recurrenceRule: rawEvent.recurrence }
         : {}),
+      // The zone the RRULE is anchored in, and the ONLY authoritative source
+      // for it — `start_time` is a UTC instant, which cannot say whether
+      // "every Monday at 09:00" means 09:00 in Los Angeles or in Berlin.
+      // Without it the expander falls back to the owner's own zone, which is
+      // right until the two zones disagree about when DST starts. Google
+      // already sends it and `extractEventDetails` was throwing it away.
+      ...(rawEvent.start?.timeZone ? { recurrenceTimeZone: rawEvent.start.timeZone } : {}),
     };
 
     const isAllDay = this.isAllDayEvent(eventDetails.startTime);

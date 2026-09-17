@@ -773,10 +773,17 @@ export class FileService implements OnModuleInit {
    * Originals that are still missing a description but already have a PREVIEW
    * child — candidates to re-fire {@link PreviewGeneratedEvent} after the user
    * turns image description back on.
+   *
+   * Newest first, paged by keyset on the original's id: `afterParentFileId`
+   * returns the page strictly older than that id. Ids are UUIDv7, so id order
+   * is creation order, and a cursor on it is stable while the descriptions
+   * the previous page enqueued are still being written (an OFFSET would slide
+   * as rows leave the "undescribed" set).
    */
   async findUndescribedImagePreviews(
     userId: string,
     limit: number,
+    afterParentFileId?: string,
   ): Promise<Array<{ previewId: string; parentFileId: string }>> {
     const rows: Array<{ preview_id: string; parent_file_id: string }> = await this.fileRepository
       .createQueryBuilder('preview')
@@ -792,10 +799,78 @@ export class FileService implements OnModuleInit {
       .andWhere('original.variant = :originalVariant', { originalVariant: FileVariant.ORIGINAL })
       .andWhere('original.contentType LIKE :imagePrefix', { imagePrefix: 'image/%' })
       .andWhere("(original.description IS NULL OR btrim(original.description) = '')")
-      .orderBy('original.createdAt', 'DESC')
+      .andWhere(afterParentFileId ? 'original.id < :afterParentFileId' : 'TRUE', { afterParentFileId })
+      .orderBy('original.id', 'DESC')
       .limit(Math.max(1, Math.min(limit, 2000)))
       .getRawMany();
 
     return rows.map((row) => ({ previewId: row.preview_id, parentFileId: row.parent_file_id }));
+  }
+
+  /**
+   * How much of the user's photo library a subject search can actually see.
+   *
+   * A photo reaches the search index through its title, description, filename
+   * and content type ({@link fileWeightedTexts}); of those, only the
+   * description — written by the image-description pass — says what the
+   * picture is OF. So "how many photos of rabbits" is really a question about
+   * the described subset, and a count that does not say how big that subset
+   * is invites the model to present a floor as a total. Measured 2026-09-16:
+   * 5,393 of 22,870 originals described.
+   *
+   * Counts ORIGINALs only (previews and thumbnails are derived copies of the
+   * same picture and are not indexed) and treats a blank description as
+   * absent, the same predicate {@link findUndescribedImagePreviews} uses to
+   * decide what is still owed a description.
+   */
+  async describedImageCoverage(context: UserServiceContext): Promise<{ images: number; described: number }> {
+    const rows: Array<{ images: string; described: string }> = await this.fileRepository.query(
+      `
+        SELECT
+          count(*) AS images,
+          count(*) FILTER (WHERE description IS NOT NULL AND btrim(description) <> '') AS described
+        FROM ci.files
+        WHERE user_id = $1
+          AND deleted_at IS NULL
+          AND variant = $2
+          AND content_type LIKE 'image/%'
+      `,
+      [context.userId, FileVariant.ORIGINAL],
+    );
+
+    return {
+      images: Number(rows[0]?.images ?? 0),
+      described: Number(rows[0]?.described ?? 0),
+    };
+  }
+
+  /**
+   * Every user who owns at least one image {@link findUndescribedImagePreviews}
+   * would return a row for — an EXISTS check, not the rows themselves.
+   *
+   * Exists for {@link ImageDescriptionSweepCron}: cheap enough to run over
+   * every user before the far more expensive per-user check (a live Ollama
+   * round trip, via `ImageDescriptionPreferenceService.isEnabled`) that
+   * decides whether the setting is actually on for them. A user with nothing
+   * left to describe — or nothing that ever needed describing — never reaches
+   * that second check.
+   */
+  async listUserIdsWithUndescribedImages(): Promise<string[]> {
+    const rows: Array<{ user_id: string }> = await this.fileRepository
+      .createQueryBuilder('original')
+      .select('DISTINCT original.userId', 'user_id')
+      .innerJoin(
+        FileEntity,
+        'preview',
+        'preview.parentId = original.id AND preview.userId = original.userId AND preview.variant = :previewVariant',
+        { previewVariant: FileVariant.PREVIEW },
+      )
+      .where('original.variant = :originalVariant', { originalVariant: FileVariant.ORIGINAL })
+      .andWhere('original.contentType LIKE :imagePrefix', { imagePrefix: 'image/%' })
+      .andWhere("(original.description IS NULL OR btrim(original.description) = '')")
+      .andWhere('original.userId IS NOT NULL')
+      .getRawMany();
+
+    return rows.map((row) => row.user_id);
   }
 }

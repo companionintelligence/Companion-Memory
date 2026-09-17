@@ -6,6 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { ClientFactory, ConnectionService, type Connection } from '@ci/domains/connections';
 import { DataDeletionService } from '@ci/domains/privacy';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { ProviderLoader } from '../loaders/ProviderLoader';
 import { ConnectionConnection } from '../types/ConnectionConnection';
 import { ConnectionEdge } from '../types/ConnectionEdge';
@@ -32,6 +33,11 @@ export class ConnectionResolver {
   ) {}
 
   @Mutation(() => CreateConnectionPayload)
+  // Plain create. Despite CreateConnectionInput declaring accessToken/refreshToken
+  // fields, this method never forwards them to ConnectionService.create — only
+  // name/schedule/endpoints/providerId are persisted, so no credential material
+  // is written here (contrast updateConnection, which does write tokens).
+  @GraphqlPrivacy({ destructive: false })
   async createConnection(
     @Context() context: RequestContext,
     @Args('input') input: CreateConnectionInput,
@@ -58,6 +64,10 @@ export class ConnectionResolver {
   }
 
   @Mutation(() => UpdateConnectionPayload)
+  // Field-level patch of this connection's own row — not destructive. Flagged
+  // `sensitive`, not the default `personal`, because it can write raw OAuth
+  // accessToken/refreshToken values straight onto the record.
+  @GraphqlPrivacy({ destructive: false, sensitivity: 'sensitive' })
   async updateConnection(
     @Context() context: RequestContext,
     @Args('input') input: UpdateConnectionInput,
@@ -99,6 +109,10 @@ export class ConnectionResolver {
    * path no longer leaves the token stored and derived data orphaned.
    */
   @Mutation(() => DeleteByIdPayload)
+  // Per the method's own doc comment above: DataDeletionService.disconnectConnection
+  // revokes the OAuth grant WITH THE PROVIDER (an external call) and then
+  // hard-deletes the connection plus its derived data, with no restore path.
+  @GraphqlPrivacy({ access: 'delete', destructive: true, external: true })
   async deleteConnection(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

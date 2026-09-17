@@ -1,7 +1,10 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
+import { EVENT_TYPES_QUERY } from '@/components/SearchBox/ActivityFilter';
+import { SOURCE_SYSTEMS_QUERY } from '@/components/SearchBox/ConnectorFilter';
 import { DropdownProvider } from '@/components/SearchBox/useDropdown';
+import { mockQuery } from '@/test/gql';
 import { renderWithProviders } from '@/test/renderWithProviders';
 
 import { mockSavedSearch } from './_storyHelpers';
@@ -25,6 +28,9 @@ function renderModal(onSave: (variables: Record<string, unknown>) => void) {
     </DropdownProvider>,
     {
       mocks: [
+        // The editor's How / Activity vocabulary — the same lists the memory toolbar offers.
+        mockQuery(SOURCE_SYSTEMS_QUERY, {}, { sourceSystems: ['gmail', 'reddit'] }),
+        mockQuery(EVENT_TYPES_QUERY, {}, { eventTypes: ['messaged', 'visited'] }),
         {
           request: { query: UPDATE_SAVED_SEARCH },
           variableMatcher: () => true,

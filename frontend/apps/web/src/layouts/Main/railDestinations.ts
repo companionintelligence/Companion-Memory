@@ -6,9 +6,11 @@ import {
   CircleUserRound,
   CloudSun,
   FolderSearch2,
+  History,
   LifeBuoy,
   ListTodo,
   MessageCircleQuestion,
+  ShieldCheck,
   Workflow,
 } from '@ci/shadcn/icons';
 
@@ -133,6 +135,26 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
       })),
     ],
   },
+  // Approvals and Activity: what SOFTWARE did on your behalf, as against Jobs
+  // above, which is what the appliance does for itself. Approvals is the head
+  // because it is the one that is waiting on you — an unanswered card is an
+  // agent stopped mid-task — and Activity is the record of the same events
+  // after the fact.
+  //
+  // Both routes shipped complete, tested and unflagged and nothing linked to
+  // either, so the only way to reach them was to type the URL. That is the
+  // failure this file's own `visibleRailDestinations` comment warns about: a
+  // page you can only type at. Neither carries a `flag`, matching the route
+  // decision in App.tsx — `tools.pendingActions` gates whether the owner's DIAL
+  // queues their own actions, but an installed app is queued unconditionally,
+  // so cards arrive with the flag off and a gated row would hide them.
+  {
+    id: 'approvals',
+    to: '/approvals',
+    label: 'Approvals',
+    icon: ShieldCheck,
+    children: [{ id: 'activity', to: '/activity', label: 'Activity', icon: History }],
+  },
   // Below Jobs, off the primary six, while its flag ships false — turning it
   // on later should not disturb the places you actually work.
   { id: 'forecast', to: '/forecast', label: 'Forecast', icon: CloudSun, flag: 'forecast.page' },
@@ -143,8 +165,9 @@ export const RAIL_DESTINATIONS: readonly RailDestination[] = [
   // ═══ THIS USED TO RIDE `stats.page`, AND THAT REMOVED LOG OUT ═══
   //
   // The tile is the only mount point for `NavUserMenu` (SelfSubmenu renders it;
-  // nothing else does), and `NavUserMenu` is the only Settings / Theme / Log out
-  // cluster in the shell. The other two logout call sites both live inside the
+  // nothing else does), and that menu is the only Theme / Log out cluster in
+  // the shell. Settings sits beside Profile in the same submenu. The other two
+  // logout call sites both live inside the
   // `/self/*` subtree, which was gated on the same flag. So turning off a flag
   // named for a STATISTICS PAGE removed the user's avatar, their whole identity
   // surface, the theme switcher, Settings, and every way to sign out — leaving

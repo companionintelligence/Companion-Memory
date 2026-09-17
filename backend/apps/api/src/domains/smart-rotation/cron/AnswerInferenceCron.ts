@@ -5,7 +5,7 @@ import { LoggerService } from '@ci/common/logging';
 import { Cron } from '@ci/common/schedule';
 import { EventService, Events } from '@ci/domains/events';
 import { QuestionService } from '@ci/domains/intelligence';
-import { LLM_QUEUE } from '@ci/domains/llm';
+import { LLM_BACKGROUND_QUEUE } from '@ci/domains/llm';
 
 import { INFERENCE_ATTEMPT_COOLDOWN_HOURS } from '../listeners/SmartRotationListener';
 
@@ -42,10 +42,11 @@ export class AnswerInferenceCron {
     this.logger.log('Processing question answer inference cron');
 
     // The attempt history keying: this cron dispatches INFER_QUESTION_ANSWER
-    // onto LLM_QUEUE (AnswerInferenceListener's binding), and the selection
-    // reads that same queue's pg-boss rows back as "already tried recently".
+    // onto LLM_BACKGROUND_QUEUE (AnswerInferenceListener's binding), and the
+    // selection reads that same queue's pg-boss rows back as "already tried
+    // recently".
     const unansweredQuestions = await this.questionService.findUnansweredByUserId({
-      queue: LLM_QUEUE,
+      queue: LLM_BACKGROUND_QUEUE,
       eventName: Events.INFER_QUESTION_ANSWER,
       cooldownHours: INFERENCE_ATTEMPT_COOLDOWN_HOURS,
     });

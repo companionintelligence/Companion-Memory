@@ -41,7 +41,7 @@ export function SourcesPage() {
   // the other three paths must exist whatever `import.page` says.
   const paths = SOURCE_PATHS.filter((path) => path !== 'import' || importEnabled);
 
-  usePageTitle('Sources - Companion Intelligence');
+  usePageTitle('Sources - Companion Memory');
 
   // A path that does not exist gets normalised rather than 404'd: /sources
   // itself, a typo, and — the case that matters — /sources/import on an

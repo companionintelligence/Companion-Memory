@@ -12,7 +12,7 @@ import { DOCTOR_CHECKS, DOCTOR_CHECK_IDS, findCheck } from '../checks';
  * `String.raw` loses its backslashes and quietly widens its own predicate. All
  * three still RUN. None of them would fail a smoke test. So the shape is
  * asserted here, and the predicates themselves are validated where they can only
- * be validated — against a real Postgres, which is what `ci-import doctor` is.
+ * be validated — against a real Postgres, which is what `ci doctor` is.
  */
 describe('doctor check registry', () => {
   it('has unique ids', () => {

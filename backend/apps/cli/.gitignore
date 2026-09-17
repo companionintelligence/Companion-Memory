@@ -1,0 +1,4 @@
+# The bundle `yarn build` emits. Per-package rather than at the root because
+# that is where `dist` is ignored for backend/apps/api too — the root .gitignore
+# deliberately has no `dist` rule.
+dist

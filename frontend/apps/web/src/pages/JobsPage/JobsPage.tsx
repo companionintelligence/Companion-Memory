@@ -29,7 +29,7 @@ import { DESKTOP_JOB_PAGE_SIZE, MOBILE_JOB_PAGE_SIZE, useJobsList, type JobFilte
 import { useJobTypes, type JobTypesResponse } from './useJobTypes';
 
 export function JobsPage() {
-  usePageTitle('Jobs - Companion Intelligence');
+  usePageTitle('Jobs - Companion Memory');
 
   const phone = usePhone();
   const { pathname } = useLocation();
@@ -134,6 +134,17 @@ export function JobsPage() {
     ]).finally(() => setRefreshing(false));
   }, [dashboard.refresh, list.refresh, history.refresh, deadLetters.refresh, controls.refresh]);
 
+  // Overview keeps Health at the top. Every other Jobs address — History,
+  // Schedules, Dead letters, a category — used to open on the same two cards,
+  // with the thing the rail just named buried below the fold. Those routes
+  // lead with their own surface; Health and Controls still follow so they
+  // stay reachable without looking like the page never changed.
+  const focusedSection =
+    section === 'jobs-history' ||
+    section === 'jobs-schedules' ||
+    section === 'jobs-dead-letters' ||
+    isCategoryRoute;
+
   const jobsTable = (
     <JobsTable
       data={list.data}
@@ -189,6 +200,77 @@ export function JobsPage() {
     />
   );
 
+  const healthAndControls = (
+    <>
+      {/* One card, not two. This and "Queue Activity" sat next to each
+          other answering the same question in two registers: the sentences
+          here already said "8,535 jobs have given up" and "36 are failing
+          but still retrying", and the six tiles below repeated both figures
+          at the weight of "Retrying 0".
+
+          Now the card says what it thinks, then shows its working — the six
+          live counts, then the proportional split by category. The counts
+          stayed clickable, because they are how an operator filters the
+          table underneath. */}
+      <JobHealthCard
+        stateCounts={healthStateCounts}
+        categoryCounts={list.data?.categoryCounts ?? {}}
+        crons={dashboard.data?.crons ?? []}
+        loading={list.loading || dashboard.loading}
+        onSelect={(filter) => onFilterChange(filter)}
+        onOpenSchedules={() => navigate('/jobs/schedules')}
+        onClearTerminal={clearTerminal}
+        summary={dashboard.data?.summary}
+        refreshing={refreshing || dashboard.refreshing}
+        error={dashboard.error}
+        staleSince={dashboard.staleSince}
+        updatedAt={dashboard.updatedAt}
+        onRefresh={refreshAll}
+        onSelectState={(state: string) => onFilterChange({ state, offset: 0 })}
+      />
+
+      {/* Controls sit directly under the counts on both form factors.
+          "Something is pegging this box" is answered by the tiles and acted
+          on here, and a control an operator has to scroll past four cards to
+          find is one they reach for after they have already restarted the
+          appliance. Folded closed by default, so the page it sits on is
+          still a monitoring page. */}
+      {controlsCard}
+    </>
+  );
+
+  // A focused section shows one surface. Overview keeps the whole
+  // stack, because "what is the queue doing right now" is a question
+  // you answer by scanning several cards at once, and that is the
+  // address someone lands on from the rail's Jobs row.
+  const sectionBody =
+    section === 'jobs-history' ? (
+      historyCharts
+    ) : section === 'jobs-schedules' ? (
+      schedules
+    ) : section === 'jobs-dead-letters' ? (
+      deadLettersCard
+    ) : isCategoryRoute ? (
+      jobsTable
+    ) : phone ? (
+      /* Phone: live work first (jobs), reference last (history, schedules,
+         dead letters). Desktop keeps history above the table and dead
+         letters next to the tab that points at them. */
+      <>
+        {jobsTable}
+        {historyCharts}
+        {schedules}
+        <div className="order-last">{deadLettersCard}</div>
+      </>
+    ) : (
+      <>
+        {historyCharts}
+        {jobsTable}
+        {deadLettersCard}
+        {schedules}
+      </>
+    );
+
   return (
     // Swipe-down refetches the whole page, the way People, Places and the
     // Memory list already do. `overscroll-y-contain` keeps the drag inside this
@@ -213,74 +295,15 @@ export function JobsPage() {
               is in flight, so the page is unchanged the rest of the time. */}
           <JobsImportActivity />
 
-          {/* One card, not two. This and "Queue Activity" sat next to each
-              other answering the same question in two registers: the sentences
-              here already said "8,535 jobs have given up" and "36 are failing
-              but still retrying", and the six tiles below repeated both figures
-              at the weight of "Retrying 0".
-
-              Now the card says what it thinks, then shows its working — the six
-              live counts, then the proportional split by category. The counts
-              stayed clickable, because they are how an operator filters the
-              table underneath. */}
-          <JobHealthCard
-            stateCounts={healthStateCounts}
-            categoryCounts={list.data?.categoryCounts ?? {}}
-            crons={dashboard.data?.crons ?? []}
-            loading={list.loading || dashboard.loading}
-            onSelect={(filter) => onFilterChange(filter)}
-            onOpenSchedules={() => navigate('/jobs/schedules')}
-            onClearTerminal={clearTerminal}
-            summary={dashboard.data?.summary}
-            refreshing={refreshing || dashboard.refreshing}
-            error={dashboard.error}
-            staleSince={dashboard.staleSince}
-            updatedAt={dashboard.updatedAt}
-            onRefresh={refreshAll}
-            onSelectState={(state: string) => onFilterChange({ state, offset: 0 })}
-          />
-
-          {/* Controls sit directly under the counts on both form factors.
-              "Something is pegging this box" is answered by the tiles and acted
-              on here, and a control an operator has to scroll past four cards to
-              find is one they reach for after they have already restarted the
-              appliance. Folded closed by default, so the page it sits on is
-              still a monitoring page.
-
-              Above the section switch, so it is reachable from every Jobs
-              address rather than only from Overview — the reason it is placed
-              high is the same reason it should not be one more thing to
-              navigate to. */}
-          {controlsCard}
-
-          {/* A focused section shows one surface. Overview keeps the whole
-              stack, because "what is the queue doing right now" is a question
-              you answer by scanning several cards at once, and that is the
-              address someone lands on from the rail's Jobs row. */}
-          {section === 'jobs-history' ? (
-            historyCharts
-          ) : section === 'jobs-schedules' ? (
-            schedules
-          ) : section === 'jobs-dead-letters' ? (
-            deadLettersCard
-          ) : isCategoryRoute ? (
-            jobsTable
-          ) : phone ? (
-            /* Phone: live work first (jobs), reference last (history, schedules,
-               dead letters). Desktop keeps history above the table and dead
-               letters next to the tab that points at them. */
+          {focusedSection ? (
             <>
-              {jobsTable}
-              {historyCharts}
-              {schedules}
-              <div className="order-last">{deadLettersCard}</div>
+              {sectionBody}
+              {healthAndControls}
             </>
           ) : (
             <>
-              {historyCharts}
-              {jobsTable}
-              {deadLettersCard}
-              {schedules}
+              {healthAndControls}
+              {sectionBody}
             </>
           )}
         </div>

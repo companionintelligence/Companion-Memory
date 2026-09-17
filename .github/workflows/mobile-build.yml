@@ -3,8 +3,8 @@ name: Mobile Build
 # Builds the native iOS + Android apps — the Capacitor thin client that wraps the
 # @ci/fe-web build (frontend/apps/ios + frontend/apps/android). Modelled on CI-Hub's desktop-build.yml.
 #
-# Runs on manual dispatch and on `mobile-v*` tags. By default it produces UNSIGNED
-# artifacts that need no secrets:
+# Runs on manual dispatch ONLY — the `mobile-v*` tag trigger it once had is gone; see
+# "GATED TO MANUAL" below. By default it produces UNSIGNED artifacts that need no secrets:
 #   • Android — a debug APK (sideload-installable; not for store distribution)
 #   • iOS     — a Simulator .app (runs in the iOS Simulator; not device-installable)
 # Signed, device-/store-ready artifacts (release APK/AAB, signed .ipa) require the
@@ -34,6 +34,8 @@ env:
   # PWA off for the native build — the Workbox service worker fights Capacitor's local
   # asset serving inside the webview.
   VITE_DISABLE_PWA: 'true'
+  # Phone cloud-connect talks to production Portal, not the internal Hub appliance host.
+  VITE_CI_CLOUD_URL: 'https://hub.ci.computer'
 
 jobs:
   android:
@@ -65,8 +67,10 @@ jobs:
           java-version: '21'
       - name: Android SDK
         uses: android-actions/setup-android@v3
+      # Keep this pair in lockstep with compileSdkVersion in
+      # frontend/apps/android/android/variables.gradle.
       - name: Install SDK components
-        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       # The mobile project is a STANDALONE (non-workspace) Yarn project with a
       # node-modules linker — installed on its own so the root PnP install stays intact.
@@ -84,9 +88,43 @@ jobs:
         working-directory: frontend/apps/android/android
         run: ./gradlew assembleDebug --no-daemon
 
+      # The JVM unit suites for the four modules this repo owns — :app plus the
+      # three :ci-capacitor-* plugins (Robolectric, no emulator, no device). They
+      # cost well under a minute on top of a toolchain and a Gradle cache the
+      # assembleDebug step above has already paid for, which is the whole reason
+      # they live here rather than in a job of their own.
+      #
+      # `testDebugUnitTest` with no module prefix runs every module that has a
+      # unit-test source set, so a new plugin package is covered without an edit
+      # here. Locally this is `make test-android`, which checks the same
+      # toolchain preconditions first.
+      #
+      # --continue: report every module's failures in one run instead of
+      # stopping at the first, so the uploaded reports below are complete.
+      - name: Gradle unit tests
+        working-directory: frontend/apps/android/android
+        run: ./gradlew testDebugUnitTest --no-daemon --continue
+
+      # Only on failure — a green run's reports say nothing the log does not, and
+      # the modules live under two different roots (the three plugins reach the
+      # build over `portal:` symlinks from frontend/packages), so both are listed.
+      - name: Upload unit test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          retention-days: 7
+          name: android-unit-test-reports
+          path: |
+            frontend/apps/android/android/app/build/reports/tests/testDebugUnitTest/**
+            frontend/apps/android/android/app/build/test-results/testDebugUnitTest/**
+            frontend/packages/capacitor-*/android/build/reports/tests/testDebugUnitTest/**
+            frontend/packages/capacitor-*/android/build/test-results/testDebugUnitTest/**
+          if-no-files-found: ignore
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: companion-android-apk
           path: frontend/apps/android/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
@@ -166,6 +204,7 @@ jobs:
       - name: Upload iOS app
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 7
           name: companion-ios-simulator-app
           path: companion-ios-simulator.app.zip
           if-no-files-found: error

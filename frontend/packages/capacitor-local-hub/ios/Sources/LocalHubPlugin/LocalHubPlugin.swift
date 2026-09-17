@@ -30,7 +30,9 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "secureRemove", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "openUrl", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getCurrentLocation", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "openAppSettings", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "getLocationAuthorization", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "requestLocationAuthorization", returnType: CAPPluginReturnPromise)
     ]
 
     private let server = LocalHubServer()
@@ -180,6 +182,23 @@ public class LocalHubPlugin: CAPPlugin, CAPBridgedPlugin {
                 } else {
                     call.reject("Could not open iOS Settings")
                 }
+            }
+        }
+    }
+
+    /// Current Core Location authorization. Used to finish the Always two-step
+    /// (When In Use, then Always) before starting background tracking.
+    @objc func getLocationAuthorization(_ call: CAPPluginCall) {
+        DispatchQueue.main.async {
+            call.resolve(["status": LocationTracker.shared.authorizationStatusName()])
+        }
+    }
+
+    @objc func requestLocationAuthorization(_ call: CAPPluginCall) {
+        let always = call.getBool("always") ?? false
+        DispatchQueue.main.async {
+            LocationTracker.shared.requestAuthorization(always: always) { status in
+                call.resolve(["status": status])
             }
         }
     }

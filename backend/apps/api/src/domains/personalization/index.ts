@@ -6,6 +6,7 @@ import { EventsModule } from '@ci/domains/events';
 import { GraphModule } from '@ci/domains/graph';
 import { IntelligenceModule } from '@ci/domains/intelligence';
 import { BrowserActivityInsightPreferenceModule } from '@ci/domains/llm/browser-activity-insight-preference.module';
+import { ChatModelPreferenceModule } from '@ci/domains/llm/chat-model-preference.module';
 import { LlmCoreModule } from '@ci/domains/llm/core.module';
 import { ImageDescriptionPreferenceModule } from '@ci/domains/llm/image-description-preference.module';
 import { MemoryModule } from '@ci/domains/memory';
@@ -37,6 +38,7 @@ import { PersonalizationService } from './services/PersonalizationService';
     LlmCoreModule,
     ImageDescriptionPreferenceModule,
     BrowserActivityInsightPreferenceModule,
+    ChatModelPreferenceModule,
   ],
   controllers: [PersonalizationController, ContextPromptController],
   providers: [

@@ -6,6 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
 import { QuestionService } from '@ci/domains/intelligence';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { CreateQuestionInput } from '../types/CreateQuestionInput';
 import { GlobalUID } from '../types/GlobalUID';
 import { PaginationArgs } from '../types/PaginationArgs';
@@ -21,6 +22,8 @@ export class QuestionResolver {
   constructor(private readonly questionService: QuestionService) {}
 
   @Mutation(() => QuestionType)
+  // Plain create — a new row, nothing pre-existing touched.
+  @GraphqlPrivacy({ destructive: false })
   async createQuestion(
     @Context() context: RequestContext,
     @Args('input') input: CreateQuestionInput,
@@ -40,6 +43,8 @@ export class QuestionResolver {
    * Returns the created questions in input order.
    */
   @Mutation(() => [QuestionType])
+  // Batch create — new rows only.
+  @GraphqlPrivacy({ destructive: false })
   async createQuestions(
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreateQuestionInput] }, new MaxArraySizePipe())
@@ -59,6 +64,9 @@ export class QuestionResolver {
   }
 
   @Mutation(() => QuestionType, { nullable: true })
+  // questionService.update() patches only text/subcategory on the caller's own row; see its
+  // own copy-on-write doc comment — it forks rather than mutating a shared catalogue row.
+  @GraphqlPrivacy({ destructive: false })
   async updateQuestion(
     @Context() context: RequestContext,
     @Args('input') input: UpdateQuestionInput,
@@ -76,6 +84,9 @@ export class QuestionResolver {
   }
 
   @Mutation(() => Boolean)
+  // questionService.remove() hard-deletes the row (own-private-only, per its doc comment) with
+  // no restore path in the schema.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removeQuestion(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

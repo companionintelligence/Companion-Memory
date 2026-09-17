@@ -39,7 +39,10 @@ import org.json.JSONObject
  */
 class LocalHubServer(
     private val token: String,
-    private val outbox: OutboxStore,
+    // The interface, not [OutboxStore] itself: this router is pure request-shape logic and the
+    // store is entirely behind libsqlcipher.so, which has no host build. Production still passes
+    // an OutboxStore; the narrower type is what lets the routing be tested off a device.
+    private val outbox: OutboxQueue,
 ) : NanoHTTPD(LOOPBACK_ADDRESS, 0) {
 
     override fun serve(session: IHTTPSession): Response =

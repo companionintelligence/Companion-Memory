@@ -68,4 +68,10 @@ export class UpdateEventInput {
 
   @Field(() => String, { nullable: true })
   status?: string;
+
+  @Field(() => Boolean, {
+    nullable: true,
+    description: "CI-Planning's manually-locked-block flag; settable/readable only, not yet enforced.",
+  })
+  isLocked?: boolean;
 }

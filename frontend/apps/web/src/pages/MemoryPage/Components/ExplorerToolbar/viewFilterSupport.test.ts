@@ -32,8 +32,9 @@ describe('unsupportedReason', () => {
   });
 
   it('names the graph dimensions the /api/graph endpoints have no notion of', () => {
-    expect(unsupportedDimensions('graph').sort()).toEqual(['bbox', 'semantic', 'sort']);
+    expect(unsupportedDimensions('graph').sort()).toEqual(['bbox', 'direction', 'semantic', 'sort']);
     expect(unsupportedReason('graph', 'semantic')).toMatch(/semantic/i);
+    expect(unsupportedReason('graph', 'direction')).toMatch(/sent or received/i);
     expect(unsupportedReason('graph', 'bbox')).toMatch(/map/i);
     expect(unsupportedReason('graph', 'sort')).toMatch(/order/i);
   });

@@ -103,7 +103,26 @@ describe('parseStreamingTitle', () => {
       kind: 'movie',
       title: 'The Raid: Redemption',
     });
-    expect(parseStreamingTitle('disney_plus', 'Anything')).toBeNull();
+    expect(parseStreamingTitle('peacock', 'Anything')).toBeNull();
+  });
+
+  it('reads Disney+ titles with the Netflix parser', () => {
+    expect(parseStreamingTitle('disney_plus', 'Andor: Season 2: Welcome to the Rebellion')).toEqual({
+      kind: 'tv',
+      title: 'Andor',
+      season: 2,
+      episode: undefined,
+      episodeTitle: 'Welcome to the Rebellion',
+    });
+    expect(
+      parseStreamingTitle('disney_plus', 'Star Wars: Tales of the Underworld: Season 1: Friends'),
+    ).toMatchObject({
+      kind: 'tv',
+      title: 'Star Wars: Tales of the Underworld',
+      season: 1,
+    });
+    // No season printed: no tv tell, so the work is the whole string.
+    expect(parseStreamingTitle('disney_plus', 'Tron: Ares')).toEqual({ kind: 'movie', title: 'Tron: Ares' });
   });
 });
 

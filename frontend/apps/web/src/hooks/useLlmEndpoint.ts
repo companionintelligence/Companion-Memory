@@ -9,9 +9,29 @@ export type LlmBackendKind = 'ollama' | 'openai_compatible';
 export interface LlmEndpointConfig {
   backend: LlmBackendKind;
   port: number;
-  apiKey?: string;
   hostGateway: string;
   locked: boolean;
+  endpoint: string;
+  /** The server intentionally never returns the credential itself. */
+  apiKeyConfigured: boolean;
+}
+
+export interface LlmEndpointUpdate {
+  backend: LlmBackendKind;
+  port: number;
+  /** Write-only replacement for a saved OpenAI-compatible credential. */
+  apiKey?: string;
+  /** Removes the appliance-saved credential and falls back to runtime config. */
+  clearApiKey?: boolean;
+}
+
+export interface LlmEndpointPreflight {
+  backend: LlmBackendKind;
+  endpoint: string;
+  ok: boolean;
+  models: string[];
+  message?: string;
+  status?: number;
 }
 
 export function useLlmEndpoint() {
@@ -19,7 +39,9 @@ export function useLlmEndpoint() {
   const [config, setConfig] = useState<LlmEndpointConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preflight, setPreflight] = useState<LlmEndpointPreflight | null>(null);
 
   const fetchEndpoint = useCallback(async () => {
     if (!ready) {
@@ -53,7 +75,7 @@ export function useLlmEndpoint() {
   }, [ready, headers]);
 
   const saveEndpoint = useCallback(
-    async (next: Pick<LlmEndpointConfig, 'backend' | 'port' | 'apiKey'>) => {
+    async (next: LlmEndpointUpdate) => {
       if (!ready) {
         return null;
       }
@@ -87,6 +109,37 @@ export function useLlmEndpoint() {
     [ready, headers],
   );
 
+  const checkEndpoint = useCallback(async () => {
+    if (!ready) {
+      return null;
+    }
+
+    setTesting(true);
+    setError(null);
+
+    try {
+      const data = await fetchJson<LlmEndpointPreflight>('/api/llm/endpoint/preflight', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+      });
+
+      setPreflight(data ?? null);
+
+      return data ?? null;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to check the inference server.';
+      setError(message);
+      setPreflight(null);
+
+      return null;
+    } finally {
+      setTesting(false);
+    }
+  }, [ready, headers]);
+
   useEffect(() => {
     void fetchEndpoint();
   }, [fetchEndpoint]);
@@ -95,8 +148,11 @@ export function useLlmEndpoint() {
     config,
     loading,
     saving,
+    testing,
     error,
+    preflight,
     fetchEndpoint,
     saveEndpoint,
+    checkEndpoint,
   };
 }

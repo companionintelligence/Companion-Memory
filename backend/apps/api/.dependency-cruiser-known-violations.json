@@ -116,6 +116,15 @@
   },
   {
     "type": "dependency",
+    "from": "src/domains/llm/services/ChatTurnService.ts",
+    "to": "src/domains/agent/services/RecallService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
     "from": "src/domains/memory/index.ts",
     "to": "src/domains/graph/entities/ObjectIdentifierEntity.ts",
     "rule": {
@@ -216,6 +225,15 @@
   {
     "type": "dependency",
     "from": "src/domains/personalization/controllers/PersonalizationController.ts",
+    "to": "src/domains/llm/chat-model-preference.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/personalization/controllers/PersonalizationController.ts",
     "to": "src/domains/llm/image-description-preference.module.ts",
     "rule": {
       "severity": "error",
@@ -226,6 +244,15 @@
     "type": "dependency",
     "from": "src/domains/personalization/index.ts",
     "to": "src/domains/llm/browser-activity-insight-preference.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/personalization/index.ts",
+    "to": "src/domains/llm/chat-model-preference.module.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -323,6 +350,15 @@
   },
   {
     "type": "dependency",
+    "from": "src/domains/planning/services/PlannedBlockService.ts",
+    "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
     "from": "src/domains/planning/services/TodoProcessService.ts",
     "to": "src/domains/llm/services/OllamaService.ts",
     "rule": {
@@ -341,6 +377,15 @@
   },
   {
     "type": "dependency",
+    "from": "src/domains/planning/task.module.ts",
+    "to": "src/domains/personalization/services/PersonalizationService.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
     "from": "src/domains/tools/index.ts",
     "to": "src/domains/personalization/services/PersonalizationService.ts",
     "rule": {
@@ -350,8 +395,8 @@
   },
   {
     "type": "dependency",
-    "from": "src/domains/tools/policy/__tests__/toolGate.test.ts",
-    "to": "src/domains/personalization/types.ts",
+    "from": "src/domains/tools/index.ts",
+    "to": "src/domains/planning/task.module.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
@@ -395,8 +440,125 @@
   },
   {
     "type": "dependency",
-    "from": "src/domains/llm/services/ChatTurnService.ts",
-    "to": "src/domains/agent/services/RecallService.ts",
+    "from": "src/domains/tools/tools/__tests__/DatabaseSearchTool.taskHydration.test.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/__tests__/PlanningCompleteTaskTool.test.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/__tests__/PlanningCreateTaskTool.test.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/__tests__/PlanningFindTasksTool.test.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/__tests__/PlanningPlannedBlocksTool.test.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/__tests__/PlanningScheduleTaskTool.test.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/__tests__/PlanningUpdateTaskTool.test.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/DatabaseSearchTool.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/PlanningCompleteTaskTool.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/PlanningCreateTaskTool.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/PlanningFindTasksTool.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/PlanningPlannedBlocksTool.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/PlanningScheduleTaskTool.ts",
+    "to": "src/domains/planning/task.module.ts",
+    "rule": {
+      "severity": "error",
+      "name": "no-cross-domain-internals"
+    }
+  },
+  {
+    "type": "dependency",
+    "from": "src/domains/tools/tools/PlanningUpdateTaskTool.ts",
+    "to": "src/domains/planning/task.module.ts",
     "rule": {
       "severity": "error",
       "name": "no-cross-domain-internals"
