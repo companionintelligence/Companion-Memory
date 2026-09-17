@@ -1668,19 +1668,32 @@ export const WIZARD_SOURCES: WizardSource[] = [
       'Open the Walt Disney Privacy Center (link below) and submit a "Data Subject Rights" request.',
       'Choose "Access" or "Download my data" and provide your Disney+ account email.',
       'Verify your identity via the email link that arrives.',
-      'Wait up to 45 days for the data archive. Download and unzip.',
+      'Disney emails a download link when the report is ready — this can take up to 45 days.',
+      'Download the PDF report (`<request id>_Final.pdf`, e.g. `77VH23XCAN_Final.pdf`).',
       UPLOAD_STEP,
     ],
+    expectedFormat:
+      'The Disney "Data Subject Access Request" report PDF (`<request id>_Final.pdf`). The report is a PDF and nothing else; it is read with `pdftotext`, which the appliance ships.',
+    whatImported: [
+      'Titles watched — one event per play from the Disney+/ESPN+ "Titles Watched" table, with the day, the profile, the program and the series and season',
+    ],
+    caveats: [
+      'Disney records the day of each play, not the time; plays land at midnight UTC.',
+      'Disney often lists an episode twice for one day — once by number ("Episode 8") and once by title — and not always both, so both rows are imported as printed.',
+      'Only the titles-watched table is imported. The profile sheet, account, subscription, profile and payment details, customer-service history, the advertiser list and the parks, cruise, store and other business-unit sheets are skipped.',
+    ],
     inboxPath: 'disney_plus',
-    importerReady: false,
+    signature: ['*.pdf'],
+    importer: 'disney_plus',
+    importerReady: true,
     notes: [
-      'Disney+ has no self-serve download button — all exports go through their DSAR (Data Subject Access Request) portal. US Hulu subscribers are redirected to the Hulu portal. No importer yet.',
+      'Disney+ has no self-serve download button — all exports go through their DSAR (Data Subject Access Request) portal. US Hulu subscribers are redirected to the Hulu portal.',
     ],
   },
   {
     id: 'hulu',
     title: 'Hulu',
-    blurb: 'Viewing history and account data from your Hulu subscription.',
+    blurb: 'Your Hulu watch history.',
     ecosystem: 'streaming',
     category: 'video',
     tier: 2,
@@ -1690,13 +1703,25 @@ export const WIZARD_SOURCES: WizardSource[] = [
     steps: [
       'Open the Hulu Privacy Rights page (link below).',
       'Submit a "Right to Know / Access My Data" request and verify your identity by email.',
-      'Wait up to 45 days for a download link.',
+      'Hulu emails a download link when the report is ready — this can take up to 45 days.',
+      'Download the PDF report (`rtk-report-<number>.pdf`).',
       UPLOAD_STEP,
     ],
+    expectedFormat:
+      'The Hulu "Personal Information Report" PDF (`rtk-report-<number>.pdf`). The report is a PDF and nothing else; it is read with `pdftotext`, which the appliance ships.',
+    whatImported: [
+      'Watch history — one event per play with the episode, series and season; older rows Hulu lists without a play time are kept as watched titles without a date',
+    ],
+    caveats: [
+      'Play times are taken as printed; Hulu does not state a timezone.',
+      'Only watch history is imported. Profiles, plan and billing history, devices and logins, the onboarding "tastes" list and the advertiser list are skipped — the tastes are Hulu\'s suggestions rather than anything you picked, and the rest is account bookkeeping.',
+    ],
     inboxPath: 'hulu',
-    importerReady: false,
+    signature: ['*.pdf'],
+    importer: 'hulu',
+    importerReady: true,
     notes: [
-      'Hulu (now part of Disney) routes all CCPA/GDPR exports through a manual review process. No self-serve download button. No importer yet.',
+      'Hulu (now part of Disney) routes all privacy exports through a manual review process — there is no self-serve download button.',
     ],
   },
   {

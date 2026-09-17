@@ -79,7 +79,13 @@ export class EntityTypeAuditCron {
     this.logger.setContext(EntityTypeAuditCron.name);
   }
 
-  @Cron(ENTITY_TYPE_AUDIT_CRON, { name: 'EntityTypeAuditCron.auditEntityTypes', role: 'worker' })
+  // `exclusive`: the sweep carries no guard of its own, and a second pass over
+  // the same window would race the first onto one `ON CONFLICT` key for nothing.
+  @Cron(ENTITY_TYPE_AUDIT_CRON, {
+    name: 'EntityTypeAuditCron.auditEntityTypes',
+    role: 'worker',
+    exclusive: true,
+  })
   async auditEntityTypes(): Promise<void> {
     await this.sweep();
   }

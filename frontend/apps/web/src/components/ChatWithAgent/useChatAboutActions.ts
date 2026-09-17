@@ -6,7 +6,12 @@ import { useNavigate } from 'react-router-dom';
 import { useAgentHarnesses, type AgentHarnessStatus } from '@/api/useAgentHarnesses';
 import { createDispatchJob } from '@/api/useDispatchJob';
 import { useAuth } from '@/hooks';
-import { type AgentChatContext, openAgentHarness, openInAppChat } from '@/lib/agentChat';
+import {
+  type AgentChatContext,
+  openAgentHarness,
+  openInAppChat,
+  taskUuidFromGlobalId,
+} from '@/lib/agentChat';
 import { chatThreadPath } from '@/pages/ChatPage/chatPaths';
 
 import { dispatchNotReadyAction, dispatchNotReadyMessage } from './dispatchNotReady';
@@ -82,7 +87,10 @@ export function useChatAboutActions(context: AgentChatContext) {
         sourceId,
         title: context.title,
         body: context.body,
-        taskId: sourceKind === 'Task' ? sourceId : null,
+        // `/v1` is a uuid-in, uuid-out plane; `sourceId` is the GraphQL global
+        // id the card was rendered from. Decode, and send nothing rather than
+        // something the controller has to reject.
+        taskId: sourceKind === 'Task' ? taskUuidFromGlobalId(sourceId) : null,
       });
 
       toast.success('Handed to OpenClaw. It writes back into the thread when it has something.', {

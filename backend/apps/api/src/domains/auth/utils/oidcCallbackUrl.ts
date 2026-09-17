@@ -137,6 +137,7 @@ export function resolveOidcOriginBounce(
   redirectPath?: string,
   alreadyBounced = false,
   client?: string,
+  signupCode?: string,
 ): string | null {
   // One hop only — never risk a redirect loop on the sign-in path.
   if (alreadyBounced) {
@@ -175,6 +176,15 @@ export function resolveOidcOriginBounce(
   // `companion://oidc/callback`. Web sign-in does not send this flag.
   if (client === 'native') {
     target.searchParams.set('client', 'native');
+  }
+
+  // An invitation must survive the hop for the same reason: the initiate
+  // handler parks it in a cookie for the callback to read — and, finding no
+  // code on the bounced request, CLEARS that cookie. So a second person
+  // signing in from a LAN address was refused for lacking the invitation they
+  // had just presented.
+  if (signupCode) {
+    target.searchParams.set('signup_code', signupCode);
   }
 
   target.searchParams.set(OIDC_ORIGIN_BOUNCE_PARAM, '1');

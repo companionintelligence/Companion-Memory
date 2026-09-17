@@ -15,7 +15,7 @@ import { UserEntity } from '@ci/domains/user';
 
 import { acquireSchemaWriteLock, type SchemaLock } from '../../../__tests__/support/schemaLock';
 import { PLANNING_PREFS_DEFAULTS } from '../../entities/PlanningPrefsEntity';
-import { TaskEntity } from '../../entities/TaskEntity';
+import { TASK_STATUSES, TaskEntity } from '../../entities/TaskEntity';
 import { TaskPendingChangeEntity } from '../../entities/TaskPendingChangeEntity';
 import { PlannedBlockService } from '../PlannedBlockService';
 import { PlanningTimeService } from '../PlanningTimeService';
@@ -86,10 +86,15 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
       );
     }
 
+    // `ci.events` is stubbed out here: this DataSource maps TaskEntity alone,
+    // and the suite is about the `user_id` predicate. The block cleanup
+    // `remove` now does is proved against real rows in the second suite below.
     service = new TaskService(
       dataSource.getRepository(TaskEntity),
       dataSource.getRepository(TaskPendingChangeEntity),
+      { find: async () => [] } as never,
       noopEvents,
+      { remove: async () => true } as never,
       noopLogger,
     );
   });
@@ -172,6 +177,45 @@ describeWithDb('TaskService — tenant isolation (integration)', () => {
 
   it('rejects an out-of-range priority at the database, not just in the app', async () => {
     await expect(service.create(alice, { title: 'Bad', priority: 99 })).rejects.toThrow();
+  });
+
+  /**
+   * ═══ THE VOCABULARY LIVED IN FIVE PLACES AND AGREED IN FOUR ═══
+   *
+   * #2558 added `delegated` to `TASK_STATUSES`, the entity, the GraphQL enum
+   * and the web client — and to no migration. `tasks_status_check` did not know
+   * the word, so the one line that writes it (`AgentDispatchService.dispatch`)
+   * failed at the database on every dispatch, while a fully green unit suite
+   * said otherwise: every other planning test mocks the repository, and a mock
+   * has no CHECK constraint.
+   *
+   * Iterating `TASK_STATUSES` rather than listing values is the whole point.
+   * The next status added to that array without a migration fails here on the
+   * day it is added, not on the day a user presses the button.
+   */
+  it('round-trips every declared status through the tasks_status_check constraint', async () => {
+    const task = await service.create(alice, { title: 'Every status' });
+
+    for (const status of TASK_STATUSES) {
+      const updated = await service.update(alice, task!.id, { status });
+
+      expect(updated?.status).toBe(status);
+
+      // Through SQL, not the ORM's in-memory copy: `save()` returns the object
+      // it was handed, so only a re-read proves Postgres accepted the value.
+      const [row] = await dataSource.query<Array<{ status: string }>>(
+        'SELECT status FROM ci.tasks WHERE id = $1',
+        [task!.id],
+      );
+
+      expect(row.status).toBe(status);
+    }
+  });
+
+  it('still refuses a status outside the vocabulary', async () => {
+    const task = await service.create(alice, { title: 'Not a status' });
+
+    await expect(service.update(alice, task!.id, { status: 'delegatd' as never })).rejects.toThrow();
   });
 
   it("will not let one user parent a task onto another user's task", async () => {
@@ -283,7 +327,9 @@ describeWithDb('PlannedBlockService — accepted event_revise (integration)', ()
     taskService = new TaskService(
       dataSource.getRepository(TaskEntity),
       dataSource.getRepository(TaskPendingChangeEntity),
+      dataSource.getRepository(EventEntity),
       { send: async () => undefined } as unknown as EventService,
+      eventService,
       noopLogger,
     );
 
@@ -388,5 +434,49 @@ describeWithDb('PlannedBlockService — accepted event_revise (integration)', ()
     ).toBeNull();
 
     expect(await storedStatus(event.id)).toBe('planned');
+  });
+
+  /**
+   * Deleting the task used to strand its block. `ci.events.task_id` is
+   * `ON DELETE SET NULL`, so the row survived the delete with a null task_id:
+   * it kept rendering under the dead task's title, kept occupying the slot
+   * `propose()` reads as busy, and `findActiveForTask` — the only way anything
+   * in the product reaches a block — could never match it again.
+   *
+   * Only a real database can show this one, because the orphan is made by the
+   * FK's own ON DELETE action rather than by any line of TypeScript.
+   */
+  it('takes the planned block with the task when the task is deleted', async () => {
+    const { task, event } = await placeBlock(owner, 'Deleted while scheduled');
+
+    expect(await taskService.remove(owner, task.id)).toBe(true);
+
+    const [row] = await dataSource.query<Array<{ is_deleted: boolean; task_id: string | null }>>(
+      'SELECT is_deleted, task_id FROM ci.events WHERE event_id = $1',
+      [event.id],
+    );
+
+    // Tombstoned, not orphaned: is_deleted keeps it out of every read path,
+    // and CalendarEventService.restore can still bring it back.
+    expect(row.is_deleted).toBe(true);
+    expect(await taskService.findById(owner, task.id)).toBeNull();
+
+    const onCalendar = await plannedBlocks.list(owner, new Date(0), new Date('2100-01-01T00:00:00.000Z'));
+
+    expect(onCalendar.map((block) => block.id)).not.toContain(event.id);
+  });
+
+  it("will not let another user's delete take a block off the calendar", async () => {
+    const { task, event } = await placeBlock(owner, 'Still mine');
+
+    expect(await taskService.remove(stranger, task.id)).toBe(false);
+
+    const [row] = await dataSource.query<Array<{ is_deleted: boolean }>>(
+      'SELECT is_deleted FROM ci.events WHERE event_id = $1',
+      [event.id],
+    );
+
+    expect(row.is_deleted).toBe(false);
+    expect(await taskService.findById(owner, task.id)).not.toBeNull();
   });
 });

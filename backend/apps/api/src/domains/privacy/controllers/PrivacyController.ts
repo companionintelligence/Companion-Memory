@@ -28,7 +28,11 @@ const deleteAccountSchema = z.object({
  * authenticated caller's own userId (from the auth guard), never an id from the
  * request body/params, so there is no cross-user deletion surface.
  */
-@Controller('api/users/me')
+// Mounted without the `api/` prefix its public URL carries: the gateway strips
+// `/api` before forwarding (nginx.conf `location /api/`), so a controller that
+// bakes it in never matches. See CI-Server#1684 and
+// common/__tests__/controllerGatewayPrefix.test.ts.
+@Controller('users/me')
 export class PrivacyController {
   constructor(
     private readonly dataDeletionService: DataDeletionService,

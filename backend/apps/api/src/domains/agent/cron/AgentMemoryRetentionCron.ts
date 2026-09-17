@@ -62,9 +62,12 @@ export class AgentMemoryRetentionCron {
    * puts raw error text in `msg` and buries the sentence in `data.message`, so
    * this cron's failures would not grep with any other cron's.
    */
+  // `exclusive`: the sweep holds no guard of its own, so a run that outlives a
+  // day would otherwise be joined by the next one on the same predicate.
   @Cron(AGENT_MEMORY_RETENTION_CRON, {
     name: 'AgentMemoryRetentionCron.runOnSchedule',
     role: 'worker',
+    exclusive: true,
   })
   async runOnSchedule(): Promise<void> {
     try {

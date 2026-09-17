@@ -10,16 +10,28 @@ const h = vi.hoisted(() => ({
   schedule: {} as Record<string, unknown>,
   plan: {} as Record<string, unknown>,
   forecast: [
-    { data: { systemStatus: 'READY' } as { systemStatus: string } | null, loading: false, stalled: false },
+    {
+      data: { systemStatus: 'READY', buckets: [] as unknown[] } as {
+        systemStatus: string;
+        generatedAt?: string;
+        buckets: unknown[];
+      } | null,
+      loading: false,
+      stalled: false,
+    },
     { refetch: vi.fn() },
   ] as [
-    { data: { systemStatus: string } | null; loading: boolean; stalled: boolean },
+    {
+      data: { systemStatus: string; generatedAt?: string; buckets: unknown[] } | null;
+      loading: boolean;
+      stalled: boolean;
+    },
     { refetch: ReturnType<typeof vi.fn> },
   ],
   reschedule: vi.fn(),
   hbpeEnabled: true,
-  forecastPageEnabled: true,
-  predictionBand: vi.fn(),
+  /** The profile zone `useCurrentUser` reports; null exercises the browser fallback. */
+  profileTimeZone: null as string | null,
 }));
 
 vi.mock('@/api/useScheduleService', () => ({
@@ -39,21 +51,9 @@ vi.mock('@/common/feature', () => ({
         return h.hbpeEnabled;
       }
 
-      if (flag === 'forecast.page') {
-        return h.forecastPageEnabled;
-      }
-
       return true;
     },
   }),
-}));
-
-vi.mock('./PredictionBand', () => ({
-  PredictionBand: (props: Record<string, unknown>) => {
-    h.predictionBand(props);
-
-    return <div data-testid="prediction-band" />;
-  },
 }));
 
 vi.mock('@/pages/PlanPage/usePlanTasks', () => ({
@@ -62,6 +62,17 @@ vi.mock('@/pages/PlanPage/usePlanTasks', () => ({
 
 vi.mock('@/api/useRescheduleEvent', () => ({
   useRescheduleEvent: () => h.reschedule,
+}));
+
+// The page reads the owner's zone to draw in. `useCurrentUser` reaches for the
+// auth hook context, which `renderWithProviders` deliberately does not supply.
+vi.mock('@/hooks/useCurrentUser', () => ({
+  useCurrentUser: () => ({
+    user: { id: 'u1', timezone: h.profileTimeZone },
+    loading: false,
+    error: undefined,
+    refetch: vi.fn(),
+  }),
 }));
 
 /**
@@ -76,11 +87,15 @@ vi.mock('@/components/HorizonGrid', () => ({
   VerticalCalendar: ({
     footer,
     colorMode,
+    occupancy,
+    timeZone,
     onMoveEvent,
     onSelectSlot,
   }: {
     footer?: string;
     colorMode?: string;
+    occupancy?: unknown[];
+    timeZone?: string;
     onMoveEvent: (id: string, at: Date) => void;
     onSelectSlot?: (slot: { instant: Date; allDay: boolean }) => void;
   }) => (
@@ -94,11 +109,20 @@ vi.mock('@/components/HorizonGrid', () => ({
       <button type="button" onClick={() => onMoveEvent('e1', new Date())}>
         stub-move
       </button>
+      {/* A second chip, so a test can drag the planner's block specifically. */}
+      <button type="button" onClick={() => onMoveEvent('pb1', MOVED_TO)}>
+        stub-move-planned
+      </button>
       <p data-testid="stub-color-mode">{colorMode}</p>
+      <p data-testid="stub-occupancy">{occupancy?.length ?? 0}</p>
+      <p data-testid="stub-time-zone">{timeZone}</p>
       <p>{footer}</p>
     </div>
   ),
 }));
+
+/** Where `stub-move-planned` drops its chip. */
+const MOVED_TO = new Date('2026-08-07T18:30:00Z');
 
 vi.mock('@/components/TaskSlate', () => {
   type DrawerProps = {
@@ -149,6 +173,16 @@ const event = (overrides: Partial<ScheduleEvent> = {}): ScheduleEvent => ({
   externalSyncStatus: null,
   ...overrides,
 });
+
+/** A planner-minted chip: the calendar row plus the task standing behind it. */
+const plannedBlock = (overrides: Partial<ScheduleEvent> = {}): ScheduleEvent =>
+  event({
+    id: 'pb1',
+    title: 'Call the dentist',
+    eventType: 'planned_block',
+    taskId: 't1',
+    ...overrides,
+  });
 
 const drawnCluster = {
   clusterId: 'c1',
@@ -207,62 +241,57 @@ function setPlan(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   setSchedule();
   setPlan();
-  h.forecast = [{ data: { systemStatus: 'READY' }, loading: false, stalled: false }, { refetch: vi.fn() }];
+  h.forecast = [
+    { data: { systemStatus: 'READY', buckets: [] }, loading: false, stalled: false },
+    { refetch: vi.fn() },
+  ];
   h.reschedule = vi.fn().mockResolvedValue(undefined);
   h.hbpeEnabled = true;
-  h.forecastPageEnabled = true;
+  h.profileTimeZone = null;
 });
 
 afterEach(() => vi.clearAllMocks());
 
-describe('SchedulePage — prediction audit band', () => {
-  it('places the unchanged HBPE response above the calendar', () => {
-    const forecast = h.forecast[0].data;
+describe('SchedulePage — occupancy belongs on the day strip', () => {
+  function todayBucket() {
+    const at = new Date();
+    at.setHours(9, 0, 0, 0);
+
+    return {
+      bucketIndex: 36,
+      startTime: at.toISOString(),
+      l0Probs: [{ label: 'WORK', probability: 0.8 }],
+      l1Probs: [],
+      l2Probs: null,
+      q10: 0.5,
+      q50: 0.8,
+      q90: 0.9,
+    };
+  }
+
+  it('hands the 96-bin histogram to the calendar instead of a band above it', () => {
+    h.forecast = [
+      { data: { systemStatus: 'READY', buckets: [todayBucket()] }, loading: false, stalled: false },
+      { refetch: vi.fn() },
+    ];
 
     renderWithProviders(<SchedulePage />);
-
-    const band = screen.getByTestId('prediction-band');
-    const calendar = screen.getByTestId('vertical-calendar');
-
-    expect(band.compareDocumentPosition(calendar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(h.predictionBand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        forecast,
-        loading: false,
-        stalled: false,
-        showFullForecastLink: true,
-      }),
-    );
-  });
-
-  it('removes the band with the HBPE flag, not with the full Forecast-page flag', () => {
-    h.forecastPageEnabled = false;
-    const { rerender } = renderWithProviders(<SchedulePage />);
-
-    expect(screen.getByTestId('prediction-band')).toBeInTheDocument();
-    expect(h.predictionBand).toHaveBeenLastCalledWith(
-      expect.objectContaining({ showFullForecastLink: false }),
-    );
-
-    h.hbpeEnabled = false;
-    rerender(<SchedulePage />);
 
     expect(screen.queryByTestId('prediction-band')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Tomorrow's prediction band/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('stub-occupancy')).toHaveTextContent('1');
   });
 
-  it("hands the band the hook's refetch so a failed forecast is recoverable", () => {
-    // The hook stops polling as soon as the forecast is null, so the band's own
-    // retry is the only thing that will ever re-issue the query. Dropping
-    // `refetch` at this call site is what made the unavailable state terminal.
-    const refetch = vi.fn();
-    h.forecast = [{ data: null, loading: false, stalled: false }, { refetch }];
+  it('withholds occupancy when the HBPE flag is off', () => {
+    h.hbpeEnabled = false;
+    h.forecast = [
+      { data: { systemStatus: 'READY', buckets: [todayBucket()] }, loading: false, stalled: false },
+      { refetch: vi.fn() },
+    ];
 
     renderWithProviders(<SchedulePage />);
 
-    const props = h.predictionBand.mock.lastCall?.[0] as { onRetry: () => void };
-    props.onRetry();
-
-    expect(refetch).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('stub-occupancy')).toHaveTextContent('0');
   });
 });
 
@@ -325,7 +354,7 @@ describe('SchedulePage — what the footer is allowed to claim', () => {
 
   it('tells the user to wait when Predict is running and the strip is empty', () => {
     h.forecast = [
-      { data: { systemStatus: 'NIGHTLY:label' }, loading: false, stalled: false },
+      { data: { systemStatus: 'NIGHTLY:label', buckets: [] }, loading: false, stalled: false },
       { refetch: vi.fn() },
     ];
     setSchedule({
@@ -336,7 +365,7 @@ describe('SchedulePage — what the footer is allowed to claim', () => {
 
     renderWithProviders(<SchedulePage />);
 
-    expect(screen.getByText(/Predict is still running/)).toBeInTheDocument();
+    expect(screen.getByText(/the day colours will fill in/)).toBeInTheDocument();
     expect(screen.queryByText(/Pattern rhythm \(HBPE\) from your history/)).not.toBeInTheDocument();
   });
 
@@ -347,6 +376,39 @@ describe('SchedulePage — what the footer is allowed to claim', () => {
     renderWithProviders(<SchedulePage />);
 
     expect(screen.getByText(/HBPE rhythm forecast is off/)).toBeInTheDocument();
+  });
+
+  it('treats in-window occupancy as a live layer when week clusters are empty', () => {
+    const at = new Date();
+    at.setHours(9, 0, 0, 0);
+    h.forecast = [
+      {
+        data: {
+          systemStatus: 'READY',
+          generatedAt: '2026-09-06T03:00:00.000Z',
+          buckets: [
+            {
+              bucketIndex: 36,
+              startTime: at.toISOString(),
+              l0Probs: [{ label: 'WORK', probability: 0.8 }],
+              l1Probs: [],
+              l2Probs: null,
+              q10: 0.5,
+              q50: 0.8,
+              q90: 0.9,
+            },
+          ],
+        },
+        loading: false,
+        stalled: false,
+      },
+      { refetch: vi.fn() },
+    ];
+    setSchedule({ generatedAt: null, rhythm: [], rhythmCoversWindow: false });
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByText(/Pattern rhythm \(HBPE\) from your history, updated/)).toBeInTheDocument();
   });
 
   it('says the call failed — not "off" — when the flag is on but the resolver returned nothing', () => {
@@ -770,7 +832,7 @@ describe('SchedulePage — colour mode only once colour means something', () => 
 
     expect(screen.getByRole('radio', { name: 'Source' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('radio', { name: 'Activity' })).toHaveAttribute('aria-checked', 'false');
-    // The grid (eventColor, RhythmStrip) is told, and the legend re-keys from
+    // The grid (eventColor, rhythm wash) is told, and the legend re-keys from
     // activity classes to connectors.
     expect(screen.getByTestId('stub-color-mode')).toHaveTextContent('source');
     expect(screen.getByText('Google')).toBeInTheDocument();
@@ -808,5 +870,125 @@ describe('SchedulePage — colour mode only once colour means something', () => 
     renderWithProviders(<SchedulePage />);
 
     expect(screen.getByRole('radiogroup')).toBeInTheDocument();
+  });
+});
+
+/**
+ * A planned block is two things at once, and a drag has to move both.
+ *
+ * `rescheduleEvent` writes the event's start and end and nothing else, so
+ * sending a planner chip through it moved the block and left the task's
+ * `scheduledFor` on the day the block used to sit on — `taskSections` files
+ * cards by that field, so the card dropped straight into Overdue, and the stale
+ * past date later made `proposedTimeIsPast` strip the task's `dueAt`.
+ * `placeOnDay` is the Plan page's path: `scheduleTask(startTime:)` reschedules
+ * the same block AND mirrors `scheduledFor`.
+ */
+describe('SchedulePage — dragging a planned block moves its task too', () => {
+  it('routes a planned-block chip through the mutation that re-dates the task', () => {
+    const placeOnDay = vi.fn().mockResolvedValue(undefined);
+    setSchedule({ events: [plannedBlock()] });
+    setPlan({ placeOnDay });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move-planned'));
+
+    expect(placeOnDay).toHaveBeenCalledWith('t1', MOVED_TO);
+    expect(h.reschedule).not.toHaveBeenCalled();
+  });
+
+  it('leaves an ordinary calendar event on the plain reschedule path', () => {
+    const placeOnDay = vi.fn().mockResolvedValue(undefined);
+    setSchedule({ events: [event()] });
+    setPlan({ placeOnDay });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move'));
+
+    expect(h.reschedule).toHaveBeenCalledTimes(1);
+    expect(placeOnDay).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the plain reschedule when the block names no task', () => {
+    const placeOnDay = vi.fn().mockResolvedValue(undefined);
+    setSchedule({ events: [plannedBlock({ taskId: null })] });
+    setPlan({ placeOnDay });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move-planned'));
+
+    expect(h.reschedule).toHaveBeenCalledWith('pb1', MOVED_TO);
+    expect(placeOnDay).not.toHaveBeenCalled();
+  });
+
+  it('tells the user when the task re-date is refused', async () => {
+    setSchedule({ events: [plannedBlock()] });
+    setPlan({ placeOnDay: vi.fn().mockRejectedValue(new Error('slot taken')) });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move-planned'));
+
+    expect(await screen.findByText(/Could not move that/)).toBeInTheDocument();
+  });
+
+  /**
+   * An expanded recurring occurrence backs no row.
+   *
+   * The server computes these from the series' RRULE at read time, so the id on
+   * the chip addresses nothing: `rescheduleEvent`'s findOne misses, the mutation
+   * resolves null WITHOUT throwing, `run`'s catch never fires, and the refetch
+   * puts the chip back where it was with nothing on screen to explain it. Say so
+   * instead — and the grid drops `draggable` on these chips as well.
+   */
+  it('refuses to move an expanded recurring occurrence, and says why', async () => {
+    const placeOnDay = vi.fn().mockResolvedValue(undefined);
+    setSchedule({ events: [event({ seriesMasterId: 'master-1' })] });
+    setPlan({ placeOnDay });
+
+    renderWithProviders(<SchedulePage />);
+    fireEvent.click(screen.getByText('stub-move'));
+
+    expect(await screen.findByText(/Recurring occurrences can't be moved yet/)).toBeInTheDocument();
+    expect(h.reschedule).not.toHaveBeenCalled();
+    expect(placeOnDay).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Which clock the week is drawn on.
+ *
+ * The backend places blocks in `ci.users.timezone`; the grid used to do all of
+ * its arithmetic in the browser's zone and never read the profile at all, so a
+ * traveller — or anyone whose laptop disagrees with their settings — saw every
+ * block at the wrong hour with nothing on screen looking inconsistent.
+ */
+describe('SchedulePage — the week is drawn in the profile zone', () => {
+  it('hands the grid the owner’s zone', () => {
+    h.profileTimeZone = 'America/New_York';
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByTestId('stub-time-zone')).toHaveTextContent('America/New_York');
+  });
+
+  it('falls back to the browser zone when the profile has none', () => {
+    h.profileTimeZone = null;
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByTestId('stub-time-zone')).toHaveTextContent(
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+  });
+
+  it('falls back rather than blanking the page on a zone Intl does not know', () => {
+    h.profileTimeZone = 'Mars/Olympus_Mons';
+
+    renderWithProviders(<SchedulePage />);
+
+    expect(screen.getByTestId('stub-time-zone')).toHaveTextContent(
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+    expect(screen.getByTestId('vertical-calendar')).toBeInTheDocument();
   });
 });

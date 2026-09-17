@@ -20,8 +20,9 @@ jest.mock('@ci/configuration', () => {
   };
 });
 
-import { UnauthorizedException, type INestApplication } from '@nestjs/common';
+import { Global, Module, UnauthorizedException, type INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { getDataSourceToken } from '@nestjs/typeorm';
 import { type Request, type Response, type NextFunction } from 'express';
 import request from 'supertest';
 
@@ -30,6 +31,25 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { LoggingModule } from '@ci/common/logging';
 
 import { PowerSyncModule } from '..';
+
+/**
+ * PowerSyncModule provides SyncWindowSweepCron, which injects the app
+ * DataSource. `TypeOrmModule.forRoot` makes that global in the running app, but
+ * a module compiled in isolation has no such ambient provider — and a provider
+ * declared on the testing module's own root is not visible inside an imported
+ * module, so it has to arrive as a @Global module of its own.
+ *
+ * These are route tests with no database behind them; the sweep's behaviour is
+ * covered by SyncWindowSweepCron.test.ts.
+ */
+@Global()
+@Module({
+  providers: [
+    { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([{ count: '0' }]) } },
+  ],
+  exports: [getDataSourceToken()],
+})
+class StubDataSourceModule {}
 
 // Regression coverage for the JwtAuthGuard -> JwtOrApiKeyAuthGuard swap on
 // PowerSyncController: overriding JwtOrApiKeyAuthGuard here only takes effect if
@@ -49,7 +69,7 @@ describe('PowerSync routes', () => {
     mockCanActivate.mockImplementation(() => true);
 
     const module = await Test.createTestingModule({
-      imports: [PowerSyncModule, LoggingModule],
+      imports: [StubDataSourceModule, PowerSyncModule, LoggingModule],
     })
       .overrideGuard(JwtOrApiKeyAuthGuard)
       .useClass(MockJwtOrApiKeyAuthGuard)

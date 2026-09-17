@@ -120,6 +120,15 @@ export class ApiKeyStrategy extends PassportStrategy(RequestStrategy, 'api-key')
     // ...and WHAT it may do on the surfaces those scopes reach. Scopes decide which tools a key
     // can see; capability decides which of those it may run.
     scopedRequest.apiKeyCapability = result.capability;
+    // ...and WHO it is. `managed_by === 'connect'` means CI-Hub minted this key for
+    // an installed app, so the caller is a borrowed harness acting for the owner
+    // rather than the owner. Two things turn on it: such a caller is confirmed
+    // before anything irreversible regardless of the owner's trust dial (the dial
+    // is an owner convenience, not a delegation policy), and it may not answer its
+    // own approval card. Provenance from the column, never from the `app:` name
+    // prefix — a user can hand-create a key with that name.
+    scopedRequest.apiKeyManagedBy = result.managedBy;
+    scopedRequest.apiKeyName = result.name;
 
     return user;
   }

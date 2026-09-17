@@ -18,7 +18,11 @@ describe('ContentResolver.contents filters', () => {
       hasPreviousPage: false,
       totalCount: 0,
     }));
-    const getFacets = jest.fn(async () => ({ types: ['image'], mimetypes: ['image/png'], sourceSystems: ['reddit'] }));
+    const getFacets = jest.fn(async () => ({
+      types: ['image'],
+      mimetypes: ['image/png'],
+      sourceSystems: ['reddit'],
+    }));
     const resolver = new ContentResolver(
       { findPage, getFacets } as never,
       { load: jest.fn() } as never,
@@ -33,7 +37,14 @@ describe('ContentResolver.contents filters', () => {
   it('forwards each list as a filter, mapping connectors onto source_system', async () => {
     const { resolver, findPage } = makeResolver();
 
-    await resolver.contents(ctx, { first: 50 } as PaginationArgs, ' shells ', ['image'], ['image/png'], ['reddit']);
+    await resolver.contents(
+      ctx,
+      { first: 50 } as PaginationArgs,
+      ' shells ',
+      ['image'],
+      ['image/png'],
+      ['reddit'],
+    );
 
     expect(findPage).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'user-1' }),

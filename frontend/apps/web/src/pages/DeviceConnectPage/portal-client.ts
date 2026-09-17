@@ -12,31 +12,43 @@ import { apiFetch } from '@ci/common';
  * the Portal origin.
  */
 
-const PRODUCTION_PORTAL_URL = 'https://hub.ci.computer';
-const DEVELOPMENT_PORTAL_URL = 'https://hub.companionintelligence.com';
+/**
+ * Phone cloud-connect always starts on production. `VITE_CI_CLOUD_URL` /
+ * `CI_CLOUD_URL` are the Memory server / Hub appliance Portal, not the phone —
+ * a local Vite or unmarked store build must not silently aim Sign in at the
+ * internal host (`hub.companionintelligence.com`). Advanced can override the
+ * Companion URL. A persisted internal host is ignored so old installs migrate
+ * to production.
+ */
+export const DEFAULT_PORTAL_URL = 'https://hub.ci.computer';
+const PORTAL_URL_STORAGE_KEY = 'ci.deviceConnect.portalUrl';
 
-function portalUrlFromEnv(): string {
+/** Portal Hub URL for the next Safari OIDC hop. Independent of the Memory origin. */
+export function readPersistedPortalUrl(): string {
   try {
-    const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
-    const baked = env?.VITE_CI_CLOUD_URL?.trim() || env?.CI_CLOUD_URL?.trim();
+    const stored = typeof localStorage === 'undefined' ? null : localStorage.getItem(PORTAL_URL_STORAGE_KEY);
 
-    if (baked) {
-      return baked.replace(/\/+$/, '');
+    if (stored && !stored.includes('companionintelligence.com')) {
+      return normalizePortalUrl(stored);
     }
 
-    // Native simulator/device talks to CI cloud *dev* unless the web build was
-    // explicitly marked production. Prod is hub.ci.computer.
-    if (env?.VITE_CI_HUB_ENVIRONMENT === 'production') {
-      return PRODUCTION_PORTAL_URL;
-    }
-
-    return DEVELOPMENT_PORTAL_URL;
+    return DEFAULT_PORTAL_URL;
   } catch {
-    return DEVELOPMENT_PORTAL_URL;
+    return DEFAULT_PORTAL_URL;
   }
 }
 
-export const DEFAULT_PORTAL_URL = portalUrlFromEnv();
+export function persistPortalUrl(url: string): string {
+  const next = normalizePortalUrl(url);
+
+  try {
+    localStorage.setItem(PORTAL_URL_STORAGE_KEY, next);
+  } catch {
+    /* private mode / quota */
+  }
+
+  return next;
+}
 
 export interface PortalAuth {
   token: string | null;

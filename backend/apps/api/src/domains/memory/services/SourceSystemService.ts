@@ -39,7 +39,13 @@ export interface SourcedBrowseTable {
  * cannot match a source, so a How selection sets them aside.
  */
 export const SOURCED_BROWSE_TABLES: ReadonlyArray<SourcedBrowseTable> = [
-  { type: 'event', table: 'ci.events', userColumn: 'user_id', where: 'is_deleted = false', browsedByDefault: true },
+  {
+    type: 'event',
+    table: 'ci.events',
+    userColumn: 'user_id',
+    where: 'is_deleted = false',
+    browsedByDefault: true,
+  },
   { type: 'communication', table: 'ci.communications', userColumn: 'user_id', browsedByDefault: true },
   { type: 'content', table: 'ci.content', userColumn: 'user_id', browsedByDefault: true },
   { type: 'browser-activity', table: 'ci.browser_activity', userColumn: 'user_id', browsedByDefault: true },

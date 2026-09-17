@@ -30,7 +30,14 @@ make install   # yarn install + uv sync --all-packages
 make dev       # full per-worktree stack: compose + migrations + Caddy + overmind
 make lint      # both stacks (eslint/prettier + ruff/mypy/uv lock --check)
 make test      # both stacks (yarn workspaces test + pytest)
+make build     # Build images. ENV=local|staging|production GPU=cpu|cuda|rocm IMAGE=<one image> DRY_RUN=1
 ```
+
+`build`, `dev` and `test` are one-line delegations to the TypeScript
+program in `scripts/xtask/` (run via tsx) — change the logic there. (Two pieces stay in the Makefile on purpose: the
+`distribute-license`/`clean-license` targets xtask calls back into, and the four wheel pins
+`lib/gpu.ts` reads out of it by name.) `health`
+stays shell on purpose: a prerequisite checker must not need the prerequisites.
 
 ## Rules
 

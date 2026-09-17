@@ -1,10 +1,10 @@
 /**
  * The advanced-filter panel's own logic: the date-range label (After/Before/
  * range/"Any time"), and tag add/remove wired through to the `?tags=` URL
- * state via `useDropdown`. EntityTypeFilter and HowFilter are exercised in
- * their own test files (HowFilter also needs an Apollo mock this component
- * doesn't care about), so they're stubbed here to keep this suite about what
- * DropdownContent itself computes and wires up.
+ * state via `useDropdown`. EntityTypeFilter has its own test file and
+ * ActivityFilter is exercised through the explorer toolbar's (it also needs an
+ * Apollo mock this component doesn't care about), so both are stubbed here to
+ * keep this suite about what DropdownContent itself computes and wires up.
  */
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { useLocation } from 'react-router-dom';
@@ -16,7 +16,7 @@ import { DropdownContent } from './DropdownContent';
 import { DropdownProvider } from './useDropdown';
 
 vi.mock('./EntityTypeFilter', () => ({ EntityTypeFilter: () => <div>entity type filter</div> }));
-vi.mock('./HowFilter', () => ({ HowFilter: () => <div>how filter</div> }));
+vi.mock('./ActivityFilter', () => ({ ActivityFilter: () => <div>activity filter</div> }));
 
 function LocationProbe() {
   const location = useLocation();

@@ -4,7 +4,7 @@ import type { DocumentParsedPayload } from '@ci/domains/parsing';
 import { FileChunkSearchIndexListener } from '../FileChunkSearchIndexListener';
 
 function makeAck(): Acknowledgement {
-  return { done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+  return { jobId: 'test-job', done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
 }
 
 function makeListener(chunks: Record<string, unknown>[]) {

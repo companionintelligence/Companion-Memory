@@ -75,7 +75,9 @@
     },
     "connect": {
       "hubOrigins": "",
-      "hubInternalUrl": "http://ci-os-hub:3000"
+      "hubInternalUrl": "http://ci-os-hub:3000",
+      "devDirectWakeUrl": "",
+      "devDirectWakeToken": ""
     },
     "portal": {
       "enabled": true,
@@ -89,6 +91,12 @@
       "enabled": false,
       "secret": "",
       "maxSkewMs": 300000
+    },
+    "loginThrottle": {
+      "enabled": true,
+      "maxAttempts": 10,
+      "windowSeconds": 900,
+      "lockoutSeconds": 900
     }
   },
   "db": {
@@ -112,7 +120,8 @@
     }
   },
   "graphql": {
-    "maxQueryComplexity": 150
+    "maxQueryComplexity": 150,
+    "maxDepth": 12
   },
   "powersync": {
     "url": "",
@@ -226,6 +235,7 @@
     "enable.system.prompt": true,
     "advanced.theme.tab": false,
     "require.signup.codes": true,
+    "today.page": false,
     "files.page": true,
     "insights.page": true,
     "chat.page": true,
@@ -233,7 +243,7 @@
     "import.page": true,
     "planning.enabled": true,
     "planning.page": true,
-    "planning.emptyState": false,
+    "planning.emptyState": true,
     "self.page": true,
     "stats.page": true,
     "schedule.page": true,
@@ -284,6 +294,14 @@
     "audience": "",
     "timeoutMs": 10000,
     "requireHttpSignature": false,
-    "signingKeyJwk": ""
+    "signingKeyJwk": "",
+    "allowCgnatEndpoints": false
+  },
+  "push": {
+    "vapid": {
+      "publicKey": "",
+      "privateKey": "",
+      "subject": "mailto:admin@companion.local"
+    }
   }
 }

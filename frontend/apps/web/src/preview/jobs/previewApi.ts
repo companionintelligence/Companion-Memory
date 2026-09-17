@@ -574,10 +574,27 @@ function topCounts(counts: Map<string, number>, limit: number, label: string): R
 /**
  * Health-card Clear — drop terminal rows from the live corpus so the next
  * dashboard poll matches what the appliance would show after `POST /jobs/clear`.
+ *
+ * The `dead-letter` scope keeps what the reaper has not HARVESTED, exactly as
+ * the server does: it deletes only rows already copied into
+ * `ci.pipeline_dead_letters` and reports the rest as `retained`. Modelled here
+ * rather than left as a clean sweep because the preview's whole job is to render
+ * the states the appliance really produces — and "the count did not reach zero,
+ * and here is why" is the state this button spends most of an incident in.
+ *
+ * The fixture's ledger ids are independent of its job ids (they are two
+ * unrelated corpora), so the harvest is modelled by COUNT rather than by the
+ * server's id join: the first `deadLetters.length` dead-letter rows stand in for
+ * the harvested ones. That reproduces the only thing the UI can observe — how
+ * many go, how many stay — without inventing a correspondence the fixtures do
+ * not have.
  */
 function clearTerminalJobs(body: unknown): Record<string, unknown> {
   const scope =
-    body && typeof body === 'object' && 'scope' in body && typeof (body as { scope: unknown }).scope === 'string'
+    body &&
+    typeof body === 'object' &&
+    'scope' in body &&
+    typeof (body as { scope: unknown }).scope === 'string'
       ? (body as { scope: string }).scope
       : null;
 
@@ -586,15 +603,38 @@ function clearTerminalJobs(body: unknown): Record<string, unknown> {
   }
 
   const current = getCorpus();
-  const before = current.jobs.length;
-  const nextJobs =
-    scope === 'dead-letter'
-      ? current.jobs.filter((row) => row.name !== DEAD_LETTER_QUEUE)
-      : current.jobs.filter((row) => !(row.state === 'failed' && row.name !== DEAD_LETTER_QUEUE));
+
+  if (scope === 'failed') {
+    const nextJobs = current.jobs.filter(
+      (row) => !(row.state === 'failed' && row.name !== DEAD_LETTER_QUEUE),
+    );
+
+    corpus = { ...current, jobs: nextJobs };
+
+    return { scope, deleted: current.jobs.length - nextJobs.length, retained: 0 };
+  }
+
+  let harvestedLeft = current.deadLetters.length;
+  let deleted = 0;
+
+  const nextJobs = current.jobs.filter((row) => {
+    if (row.name !== DEAD_LETTER_QUEUE || harvestedLeft <= 0) {
+      return true;
+    }
+
+    harvestedLeft -= 1;
+    deleted += 1;
+
+    return false;
+  });
 
   corpus = { ...current, jobs: nextJobs };
 
-  return { scope, deleted: before - nextJobs.length };
+  return {
+    scope,
+    deleted,
+    retained: nextJobs.filter((row) => row.name === DEAD_LETTER_QUEUE).length,
+  };
 }
 
 function dashboard(now: number): Record<string, unknown> {

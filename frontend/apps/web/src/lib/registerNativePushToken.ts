@@ -5,6 +5,13 @@
  *
  * Reached through `window.Capacitor.Plugins` so the web bundle never imports
  * `@capacitor/push-notifications`. Missing plugin or denied permission is a no-op.
+ *
+ * Android remote push uses FCM (Google's transport). That needs
+ * `google-services.json` so FirebaseApp initializes at startup. Calling
+ * `PushNotifications.register()` without it throws on the CapacitorPlugins
+ * thread and kills the process — JS try/catch cannot catch it. Probe via the
+ * native `FcmStatus` plugin and skip Android registration until FCM is wired.
+ * iOS (APNs) and local notifications are unaffected.
  */
 import { apiKeyHeaders, buildApiUrl, isNativePlatform } from '@ci/common';
 
@@ -19,18 +26,55 @@ type PushPlugin = {
   ) => Promise<{ remove: () => void }>;
 };
 
+type FcmStatusPlugin = {
+  isConfigured: () => Promise<{ configured: boolean }>;
+};
+
+type CapacitorGlobals = {
+  Capacitor?: {
+    Plugins?: {
+      PushNotifications?: PushPlugin;
+      FcmStatus?: FcmStatusPlugin;
+    };
+    getPlatform?: () => string;
+  };
+};
+
+function capacitor(): CapacitorGlobals['Capacitor'] {
+  return (window as unknown as CapacitorGlobals).Capacitor;
+}
+
 function pushPlugin(): PushPlugin | undefined {
-  return (
-    window as unknown as {
-      Capacitor?: { Plugins?: { PushNotifications?: PushPlugin }; getPlatform?: () => string };
-    }
-  ).Capacitor?.Plugins?.PushNotifications;
+  return capacitor()?.Plugins?.PushNotifications;
 }
 
 function nativePlatform(): 'ios' | 'android' {
-  const cap = (window as unknown as { Capacitor?: { getPlatform?: () => string } }).Capacitor;
+  return capacitor()?.getPlatform?.() === 'ios' ? 'ios' : 'android';
+}
 
-  return cap?.getPlatform?.() === 'ios' ? 'ios' : 'android';
+/**
+ * Android-only: true when FirebaseApp is initialized (google-services.json present).
+ * iOS always returns true — APNs does not use Firebase.
+ */
+async function isRemotePushTransportReady(): Promise<boolean> {
+  if (nativePlatform() !== 'android') {
+    return true;
+  }
+
+  const status = capacitor()?.Plugins?.FcmStatus;
+
+  if (!status?.isConfigured) {
+    // Older APKs without the probe must not call register() — that path crashes.
+    return false;
+  }
+
+  try {
+    const result = await status.isConfigured();
+
+    return result.configured === true;
+  } catch {
+    return false;
+  }
 }
 
 function readDeviceId(): string | null {
@@ -57,6 +101,10 @@ export async function registerNativePushToken(): Promise<void> {
   const push = pushPlugin();
 
   if (!push) {
+    return;
+  }
+
+  if (!(await isRemotePushTransportReady())) {
     return;
   }
 

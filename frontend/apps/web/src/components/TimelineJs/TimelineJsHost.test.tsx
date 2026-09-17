@@ -66,7 +66,9 @@ describe('TimelineJsHost', () => {
   beforeEach(() => {
     FakeTimeline.instances = [];
     (window as unknown as { TL: unknown }).TL = { Timeline: FakeTimeline };
-    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
+      window.setTimeout(() => callback(0), 0),
+    );
   });
 
   afterEach(() => {

@@ -102,6 +102,96 @@ export function zonedWallTimeToUTC(date: string, time: string, tz: string): Date
   return new Date(utc);
 }
 
+/** The digit fields of one wall clock — what an IANA zone's clock reads at some instant. */
+export interface WallClock {
+  year: number;
+  /** 1-12, NOT the 0-based month `Date` uses. */
+  month: number;
+  day: number;
+  /** 0-23. */
+  hour: number;
+  minute: number;
+  second: number;
+}
+
+/**
+ * The wall clock an instant reads as in `tz`, to the second.
+ *
+ * {@link utcToZonedWallTime} answers `HH:MM` and throws the date away, which is
+ * enough for a workday boundary but not for recurrence expansion: an RRULE is
+ * walked over whole local DATES, and a 23:30-local series sits on a different
+ * local day than its UTC instant does. The seconds matter too — a RECURRENCE-ID
+ * is a `YYYYMMDDTHHMMSS` stamp, and truncating it would key two overrides the
+ * same.
+ */
+export function wallClockInTZ(instant: Date, tz: string): WallClock {
+  const parts = formatter(tz).formatToParts(instant);
+  const field: Record<string, number> = {};
+
+  for (const part of parts) {
+    if (part.type !== 'literal') {
+      field[part.type] = Number(part.value);
+    }
+  }
+
+  return {
+    year: field.year,
+    month: field.month,
+    day: field.day,
+    // Some engines render local midnight as hour "24".
+    hour: field.hour === 24 ? 0 : field.hour,
+    minute: field.minute,
+    second: field.second,
+  };
+}
+
+/**
+ * The UTC instant at which `tz`'s wall clock reads `w`.
+ *
+ * The seconds-capable sibling of {@link zonedWallTimeToUTC}, which takes
+ * `HH:MM` strings and so cannot express a RECURRENCE-ID.
+ *
+ * It is also explicit about the two DST edges every weekly series walks into
+ * twice a year, where {@link zonedWallTimeToUTC}'s fixed two passes settle on
+ * whichever offset the second probe happened to land in:
+ *
+ *  - **Ambiguous** (the local hour repeats, autumn): the FIRST pass wins —
+ *    01:30 on a fall-back day is the one still on summer time. Every calendar
+ *    client resolves it that way, and picking the second pass would move a
+ *    standing 01:30 meeting an hour later on exactly one day a year.
+ *  - **Nonexistent** (the local hour is skipped, spring): the clock shifts
+ *    FORWARD by the gap — a daily 02:30 series lands at 03:30 that day. The
+ *    alternative is 01:30, which reads as the series jumping *backwards*, and
+ *    the alternative to both is dropping the day entirely.
+ *
+ * Neither case has a "correct" answer in RFC 5545; what matters is that the
+ * series keeps exactly one occurrence that day and nobody has to explain a
+ * missing standup.
+ */
+export function wallClockToUTC(w: WallClock, tz: string): Date {
+  // Wall clock treated as if it were UTC.
+  const naive = Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second);
+  const offsetA = offsetMsAt(naive, tz);
+  const candidateA = naive - offsetA;
+
+  // Self-consistent: the zone really is at `offsetA` when its clock reads `w`.
+  if (offsetMsAt(candidateA, tz) === offsetA) {
+    return new Date(candidateA);
+  }
+
+  const offsetB = offsetMsAt(candidateA, tz);
+  const candidateB = naive - offsetB;
+
+  if (offsetMsAt(candidateB, tz) === offsetB) {
+    return new Date(candidateB);
+  }
+
+  // Neither offset reproduces itself, so no instant in this zone reads `w`:
+  // the wall clock falls in a spring-forward gap. The SMALLER offset yields the
+  // LATER instant, which is the forward shift described above.
+  return new Date(naive - Math.min(offsetA, offsetB));
+}
+
 /**
  * The wall-clock `HH:MM` of a UTC instant in `tz`.
  *

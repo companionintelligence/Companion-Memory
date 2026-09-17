@@ -22,6 +22,7 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
 
     private var lastKnown: CLLocation?
     private var oneShotCompletions: [(Result<[String: Any], Error>) -> Void] = []
+    private var authCompletions: [(String) -> Void] = []
     private var oneShotTimeoutWork: DispatchWorkItem?
     private var oneShotInFlight = false
     private var oneShotStartedUpdates = false
@@ -71,8 +72,87 @@ final class LocationTracker: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Authorization
 
+    /// `notDetermined` / `denied` / `restricted` / `whenInUse` / `always`.
+    func authorizationStatusName() -> String {
+        switch manager.authorizationStatus {
+        case .authorizedAlways:
+            return "always"
+        case .authorizedWhenInUse:
+            return "whenInUse"
+        case .denied:
+            return "denied"
+        case .restricted:
+            return "restricted"
+        case .notDetermined:
+            return "notDetermined"
+        @unknown default:
+            return "notDetermined"
+        }
+    }
+
+    /// Prompts When In Use, or Always when that is already granted / requested.
+    /// Resolves with `authorizationStatusName` after the OS answers.
+    /// iOS 13+ shows When In Use first when status is still `notDetermined`;
+    /// callers that want Always must call again after that first grant.
+    func requestAuthorization(always: Bool, resolve: @escaping (String) -> Void) {
+        let current = manager.authorizationStatus
+        if always {
+            if current == .authorizedAlways || current == .denied || current == .restricted {
+                resolve(authorizationStatusName())
+                return
+            }
+        } else if current != .notDetermined {
+            resolve(authorizationStatusName())
+            return
+        }
+
+        lock.lock()
+        authCompletions.append(resolve)
+        lock.unlock()
+
+        if always {
+            manager.requestAlwaysAuthorization()
+            // Escalating from When In Use often shows no second dialog (the
+            // user already picked While Using). The delegate then never
+            // fires and the JS Always path would hang. Resolve with the
+            // current status shortly; a real Always prompt still wins if
+            // the delegate fires first.
+            if current == .authorizedWhenInUse {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    self?.finishPendingAuthorizationIfWaiting()
+                }
+            }
+        } else {
+            manager.requestWhenInUseAuthorization()
+        }
+    }
+
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        finishPendingAuthorization()
         continueOneShotAfterAuthorization()
+    }
+
+    private func finishPendingAuthorizationIfWaiting() {
+        lock.lock()
+        let waiting = !authCompletions.isEmpty
+        lock.unlock()
+        guard waiting else { return }
+        finishPendingAuthorization()
+    }
+
+    private func finishPendingAuthorization() {
+        // iOS 14+ fires this with `.notDetermined` when the dialog is still up.
+        if manager.authorizationStatus == .notDetermined {
+            return
+        }
+
+        lock.lock()
+        let completions = authCompletions
+        authCompletions.removeAll()
+        lock.unlock()
+        guard !completions.isEmpty else { return }
+        let status = authorizationStatusName()
+        completions.forEach { $0(status) }
     }
 
     // MARK: - Fixes

@@ -3,11 +3,12 @@ import { Args, Float, ID, Parent, Query, Mutation, Resolver, ResolveField } from
 
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
-import { derivePlayer, resolveTargetFor } from '@ci/domains/embed';
+import { derivePlayer, resolveTargetFor, watchLinkFor } from '@ci/domains/embed';
 import { CreateContentInput } from '@ci/domains/graphql/types/CreateContentInput';
 import { UpdateContentInput } from '@ci/domains/graphql/types/UpdateContentInput';
 import { ContentService, classifyExternalId, adoptIngestIdentity } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { type ContentFileMedia, ContentFileLoader } from '../loaders/ContentFileLoader';
 import { EventLoader } from '../loaders/EventLoader';
 import { TagLoader } from '../loaders/TagLoader';
@@ -75,6 +76,10 @@ export class ContentResolver {
    * only when a row is genuinely inserted, so a dedup re-send stays a no-op.
    */
   @Mutation(() => ContentType)
+  // Single-record ingest routed through the same idempotent createMany as
+  // createContents below: a re-send with the same provenance triple returns
+  // the existing row rather than inserting or overwriting anything.
+  @GraphqlPrivacy({ destructive: false })
   async createContent(
     @Context() context: RequestContext,
     @Args('input') input: CreateContentInput,
@@ -114,6 +119,10 @@ export class ContentResolver {
    * created-or-existing rows in input order.
    */
   @Mutation(() => [ContentType])
+  // Batch, idempotent ingest: dedupes on the provenance triple, so a re-sync
+  // returns the existing row instead of inserting a duplicate. No delete or
+  // wholesale overwrite of unrelated data.
+  @GraphqlPrivacy({ destructive: false })
   async createContents(
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreateContentInput] }) input: CreateContentInput[],
@@ -148,6 +157,10 @@ export class ContentResolver {
   }
 
   @Mutation(() => ContentType, { nullable: true })
+  // ContentService.update only patches fields explicitly present on this row
+  // (type/title/text/url/mimetype/externalId/sourceUrl/sourceData); the row
+  // stays intact and readable throughout.
+  @GraphqlPrivacy({ destructive: false })
   async updateContent(
     @Context() context: RequestContext,
     @Args('input') input: UpdateContentInput,
@@ -176,6 +189,9 @@ export class ContentResolver {
    * convention the rest of this family uses.
    */
   @Mutation(() => Boolean)
+  // Deprecated alias for deleteContent, same ContentService.remove call below —
+  // declared so deprecating it cannot quietly downgrade it.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async removeContent(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -193,6 +209,9 @@ export class ContentResolver {
    * restored.
    */
   @Mutation(() => DeleteByIdPayload)
+  // Confirmed HARD delete per the method's own doc comment above: the content
+  // row and its `ci.entities` base row are destroyed with no restore path.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteContent(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,
@@ -413,13 +432,27 @@ export class ContentResolver {
       return null;
     }
 
-    const view = await this.unfurlLoader.load(entityOwnerScope(context, userId), target.key);
-    if (!view) {
+    const cached = await this.unfurlLoader.load(entityOwnerScope(context, userId), target.key);
+    if (!cached) {
       return null;
     }
 
-    // The cache row is per WORK and shared by every episode; the episode
-    // coordinates are this row's own, parsed from its title.
+    // The cache row is per WORK and shared by every source that resolved to
+    // it. When Wikidata knows the provider's own page for THIS row's source
+    // (embed/watchLinks.ts), that page is the row's "open" target and the
+    // Wikipedia article steps aside into the payload.
+    const watch = watchLinkFor(sourceSystem, cached.payload);
+    const view = watch
+      ? {
+          ...cached,
+          canonicalUrl: watch.url,
+          siteName: watch.siteName,
+          payload: { ...cached.payload, wikipedia_url: cached.canonicalUrl ?? undefined },
+        }
+      : cached;
+
+    // Shared by every episode too; the episode coordinates are this row's
+    // own, parsed from its title.
     const work = target.work;
     if (!work || (work.season == null && work.episode == null && !work.episodeTitle)) {
       return UnfurlType.toType(view);

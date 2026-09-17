@@ -412,6 +412,46 @@ export class PipelineStateService {
   }
 
   /**
+   * Re-open rows already decided at the current version, so THE ONE RULE
+   * re-selects them on the next sweep.
+   *
+   * Sets `stage_version` back to 0 — the value a fresh claim carries — on
+   * TERMINAL rows only. A `running` row is a live claim and is left alone; a
+   * `failed` row already has its own retry gate. `status` and `reason` are
+   * kept: they still describe the last decision, and the next result
+   * overwrites them. Returns how many rows moved.
+   *
+   * This is the per-row form of a version bump, for the case where new
+   * evidence arrived for SOME rows rather than the rule changing for all of
+   * them — a name identifier registered after the person-link stage had
+   * already claimed the messages naming it (see IdentifierArrivalService).
+   * Nothing else re-visits a decided row, by design: "tried and produced
+   * nothing" is a recorded answer, not an invitation to try again every tick.
+   */
+  async reopen(entityType: string, stageId: string, ids: string[]): Promise<number> {
+    const uniqueIds = [...new Set(ids)];
+
+    if (uniqueIds.length === 0) {
+      return 0;
+    }
+
+    const rows = await this.dataSource.query<Array<{ entity_id: string }>>(
+      `UPDATE ci.pipeline_state ps
+          SET stage_version = 0,
+              updated_at    = now()
+        WHERE ps.entity_type = $1
+          AND ps.stage = $2
+          AND ps.entity_id = ANY($3::uuid[])
+          AND ps.status IN ('done', 'skipped')
+          AND ps.stage_version > 0
+        RETURNING ps.entity_id`,
+      [entityType, stageId, uniqueIds],
+    );
+
+    return rows.length;
+  }
+
+  /**
    * Record terminal outcomes for a whole slice in ONE upsert.
    *
    * `done` and `skipped` are stamped with the stage's current version, which is

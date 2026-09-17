@@ -3,7 +3,7 @@ import type { Acknowledgement, EventPayloads, Events } from '@ci/domains/events'
 import { GraphEventListener } from '../GraphEventListener';
 
 function makeAck(): Acknowledgement {
-  return { done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+  return { jobId: 'test-job', done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
 }
 
 type Payload = EventPayloads[Events.GRAPH_NODE_UPSERTED];

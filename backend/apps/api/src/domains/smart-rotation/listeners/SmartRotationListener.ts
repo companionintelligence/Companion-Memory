@@ -6,7 +6,7 @@ import { type UserServiceContext } from '@ci/common/context';
 import { LoggerService } from '@ci/common/logging';
 import { Events, EventService, OnEvent } from '@ci/domains/events';
 import { excludeForkedOriginsSql, QuestionService } from '@ci/domains/intelligence';
-import { LLM_QUEUE } from '@ci/domains/llm';
+import { LLM_BACKGROUND_QUEUE } from '@ci/domains/llm';
 import { GraphEnrichmentService, MaintenanceOrchestratorService } from '@ci/domains/maintenance';
 import {
   ContextPromptGenerateService,
@@ -431,8 +431,8 @@ export class SmartRotationListener {
    * 72 dispatches a day) rather than all of them.
    *
    * The queue name is matched as well as the event name so Postgres can prune
-   * to the `llm` partition (`AnswerInferenceListener` binds
-   * `Events.INFER_QUESTION_ANSWER` to `LLM_QUEUE`). If that binding ever moves,
+   * to the `llm-background` partition (`AnswerInferenceListener` binds
+   * `Events.INFER_QUESTION_ANSWER` to `LLM_BACKGROUND_QUEUE`). If that binding ever moves,
    * this reads as "no attempt history" and degrades to the old
    * oldest-unanswered order — which is the safe direction to fail.
    *
@@ -503,7 +503,7 @@ export class SmartRotationListener {
       ORDER BY a.last_attempt_at ASC NULLS FIRST, q.created_at ASC, q.question_id ASC
       LIMIT 1;
       `,
-      [userId, LLM_QUEUE, Events.INFER_QUESTION_ANSWER, INFERENCE_ATTEMPT_COOLDOWN_HOURS, userId],
+      [userId, LLM_BACKGROUND_QUEUE, Events.INFER_QUESTION_ANSWER, INFERENCE_ATTEMPT_COOLDOWN_HOURS, userId],
     )) as Row[];
 
     return rows[0]?.id ?? null;

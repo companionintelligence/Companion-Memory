@@ -69,4 +69,10 @@ export const CI_ENTITIES: readonly CiEntityDescriptor[] = [
     description: 'A web page view, with dwell time and navigation context.',
     idKind: 'global-uid',
   },
+  {
+    type: 'task',
+    title: 'Task',
+    description: 'A unit of planned work — has a status, may have an estimate, a due date and a parent.',
+    idKind: 'global-uid',
+  },
 ] as const;

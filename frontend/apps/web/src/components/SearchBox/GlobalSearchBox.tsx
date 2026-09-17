@@ -6,7 +6,11 @@ import { Clock, FilterX, Search, SearchX, X } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
-import { isMemoryExplorerPath, isLiveSearchPath, isMemoryHubPath } from '@/components/MemoryHub/memoryHubSections';
+import {
+  isMemoryExplorerPath,
+  isLiveSearchPath,
+  isMemoryHubPath,
+} from '@/components/MemoryHub/memoryHubSections';
 import { DropdownProvider } from '@/components/SearchBox/useDropdown';
 import { useRecentSearches } from '@/hooks';
 import { useKeyboardShortcut } from '@/hooks/useKeyboardShortcut';

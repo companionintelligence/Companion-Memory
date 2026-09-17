@@ -25,7 +25,7 @@ import { useStatsService, type MemoryStats } from './useStatsService';
 const BAR_COLOR = 'var(--chart-2)';
 
 export function StatsPage() {
-  usePageTitle('Stats - Companion Intelligence');
+  usePageTitle('Stats - Companion Memory');
 
   const [range, setRange] = useState<StatsRange>(DEFAULT_STATS_RANGE);
   const { data, loading, error, refresh } = useStatsService(range);

@@ -5,6 +5,19 @@ name: CI
 # means "nobody dispatched it", NOT "everything passed". Run it deliberately:
 #   gh workflow run <file> --ref <branch>
 # Restore a trigger by re-adding it to the `on:` block below.
+#
+# The cheap half of this file — the `lint` and `typecheck` lanes, identically
+# defined — DOES run on every PR, from `pr-gate.yml`. It lives in its own file
+# so the cost decision that gated this one stays revertible in a single move.
+# `pr-gate.yml` also carries a copy of `test-frontend` (without `--coverage`,
+# since only this file uploads the report) plus two jobs with no twin here: a
+# `build-web` PWA guard and a third `Type check packages` lane over
+# `frontend/packages/*`. Those two are deliberately NOT mirrored here:
+# `publish.yml`'s release gate reads whether THIS workflow concluded success, so
+# every lane added here is a lane that can block a release — mirroring one is a
+# release decision to take deliberately, once it has a green history on `main`.
+# The remaining expensive lanes here (`test`, `python`, `imports`, `graphql`)
+# are dispatch-only.
 on:
   workflow_dispatch:
 
@@ -55,9 +68,104 @@ jobs:
     # `gh pr checks`) with no indication of which step ran out of time, and it
     # skips every remaining step, so nothing can report on the way out. A STEP
     # timeout fails that step and lets the job finish normally.
-    timeout-minutes: 15
+    #
+    # Raised from 15 when the Postgres service below landed: the job now also
+    # pays for a client install, the role/extension bootstrap and ~300
+    # migrations, and the suite itself grew by the 57 DB-backed files that used
+    # to skip. That prefix is measured, not guessed — 1m53s on run
+    # 34409425373 (container init 53s, checkout 6s, corepack 1s, cache restore
+    # 21s, install 16s, bootstrap + migrations the rest).
+    #
+    # Raised again to 65 with the test step's own ceiling: the four step
+    # ceilings below now sum to 58, and this number has to stay above their sum
+    # PLUS that prefix or the invariant the paragraph above describes is a
+    # fiction. 58 + 2 = 60, so 65 keeps five minutes of slack.
+    timeout-minutes: 65
     container:
       image: node:22
+    services:
+      # The appliance's OWN Postgres image, not a stock one: the migrations need
+      # TimescaleDB, PostGIS and pgvector together, and
+      # 20260611030000_use_native_uuidv7 calls PG18's native `uuidv7()`. No
+      # public image carries that combination. This package is PUBLIC, so the
+      # pull needs no credentials.
+      #
+      # Same image and same pin as `consent-path-gate.yml` — a floating tag
+      # would let an unrelated release change what the suite runs against,
+      # silently. Bump the two together:
+      #   gh api orgs/companionintelligence/packages/container/companion%2Fdatabase/versions \
+      #     --jq '.[0].metadata.container.tags'
+      postgres:
+        image: ghcr.io/companionintelligence/companion/database:2026.8.20
+        env:
+          # Throwaway credentials for an ephemeral CI database that is destroyed
+          # with the job. Not a secret, and deliberately not the dev values.
+          PASSWORD: ci_test_admin_pw
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      # Note the host: unlike `consent-path-gate.yml`, this job runs INSIDE a
+      # container, so the service is reached by its label on the job's Docker
+      # network (`postgres`) rather than through a published port on the runner.
+      # That is also why there is no `ports:` mapping above — nothing on the
+      # runner host needs to reach it.
+      #
+      # `DATABASE_URL` is what `bin/dbmate.js` reads, so the migrations and the
+      # suites cannot disagree about which database this is.
+      DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PGPASSWORD: ci_test_admin_pw
+      # EVERY ONE of the sixteen per-suite variables is enumerated below, and
+      # that is NOT redundant with `DATABASE_URL` above. Thirteen of the sixteen
+      # resolve through `domains/__tests__/support/databaseConnection.ts`, which
+      # checks the suite's own `<DOMAIN>_TEST_DATABASE_URL` FIRST and falls
+      # through to `DATABASE_URL` — for those, these lines are a restatement of
+      # the fallback. The other three read their variable DIRECTLY off
+      # `process.env` with no fallback at all, and gate `describe` on it:
+      #   PLANNING_ — planning/services/__tests__/TaskService.tenancy.integration.test.ts
+      #   NOTES_    — notes/__tests__/NoteCapture.integration.spec.ts
+      #   SCHEDULE_ — schedule/services/__tests__/CandidateService.lifecycle.integration.test.ts
+      #               (it chains `SCHEDULE_ ?? PLANNING_`, so PLANNING_ alone
+      #               would in fact cover it — set anyway, so nobody has to know)
+      # With only `DATABASE_URL` set those four `describe` blocks resolve to
+      # `describe.skip` and jest still exits 0 — the green-but-tested-nothing
+      # outcome this job exists to end. The list is enumerated in full rather
+      # than trimmed to the three so that a new suite written in either style is
+      # covered, and so nobody has to know which style each file uses. Keep it
+      # in step with the sixteen named in
+      # `docs/architecture/test-strategy.md` §3.
+      ASKS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      BROWSER_ACTIVITY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      CONNECTIONS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      EVENTS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      IMPORT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      MEMORY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      NOTES_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PEERS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PERSISTENCE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PERSONALIZATION_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PIPELINE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PLANNING_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      PORTABILITY_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      SCHEDULE_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      SEARCH_INGRESS_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      SEARCH_NEXT_TEST_DATABASE_URL: postgres://companion:ci_test_app_pw@postgres:5432/companion?sslmode=disable
+      # DATABASE_ADMIN_PASSWORD is deliberately NOT set, so this is not an
+      # oversight to "fix" by adding it. SEVEN further suites gate on
+      # `scratchDatabaseAvailability()` (`domains/__tests__/support/scratchDatabase.ts`)
+      # — `user/…/AccountPurgeService.integration.spec.ts`, the four `etl/…`
+      # `ConnectionSyncJobService`/`SyncOrchestrator` specs,
+      # `pipeline/__tests__/enrichmentLoop.integration.spec.ts` and
+      # `domains/__tests__/support/__tests__/scratchDatabase.spec.ts` — and each
+      # one CREATEs a database of its own and replays every migration into it —
+      # roughly another two minutes apiece on top of the run below, against a
+      # 20-minute step ceiling. THEY STILL SKIP IN THIS JOB. That is visible,
+      # not disguised: each prints `SKIPPED — no administrative database
+      # connection configured …` naming this variable. Turning them on is a
+      # separate cost decision (and needs the step timeout revisited), not a
+      # side effect of this one.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -80,11 +188,100 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Everything below is what turns 57 silently-skipped suites into suites
+      # that run. Without a database they all resolve `describe.skip` and jest
+      # still exits 0 — a green run that executed none of the integration
+      # coverage. `docs/architecture/test-strategy.md` §3.1 calls this "a skip is
+      # not a pass" and names this job as its standing example.
+      #
+      # This is what the `ci/setup-database` init container does in compose,
+      # reduced to what a test database needs: the least-privilege application
+      # role, its database, and the extensions the migrations assume are already
+      # there. No migration issues `CREATE EXTENSION` for these — see
+      # 20250528215624_enable_pgvector, a no-op that exists to document exactly
+      # that — so a database that skips this step fails on a type it has never
+      # heard of. Keep the list in step with
+      # `infrastructure/setup-database/entrypoint.sh`.
+      #
+      # `apt-get` needs no sudo: the node:22 container runs as root.
+      #
+      # `shell: bash` is load-bearing. This job runs in the `node:22` container,
+      # where the default shell for a `run:` block is `sh -e` — that is dash,
+      # which has no `set -o pipefail`. Without this line the step died on its
+      # very first command with `set: Illegal option -o pipefail` (exit 2)
+      # before creating the role, so the whole backend lane had never passed
+      # since the Postgres service landed: run 34184853130, 2026-09-08. The
+      # image ships bash, so ask for it rather than dropping `pipefail`.
+      #
+      # Same defect and same fix as `pr-gate.yml`'s plist guard. If you add a
+      # `run:` block to a containerized job here, either keep it POSIX or say
+      # `shell: bash`.
+      - name: Bootstrap role, database and extensions
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          # `libvips-tools`: the image decoder the files domain shells out to
+          # (VipsService). The suites that exercise real decoding skip without
+          # it, which would silently hide a decode regression here.
+          apt-get install -y --no-install-recommends postgresql-client libvips-tools
+          psql -h postgres -U postgres -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE companion WITH LOGIN PASSWORD 'ci_test_app_pw';" \
+            -c "CREATE DATABASE companion OWNER companion;"
+          for ext in timescaledb postgis vector pg_stat_statements btree_gist; do
+            psql -h postgres -U postgres -d companion -v ON_ERROR_STOP=1 \
+              -c "CREATE EXTENSION IF NOT EXISTS \"$ext\";"
+          done
+
+      # "Port open" and "schema correct" are different questions, and the suites
+      # only probe the first (test-strategy.md §3.1, trap 2). An unmigrated
+      # database therefore does not skip — it fails every DB-backed test with
+      # `relation "ci.…" does not exist`, which reads like a defect in the change
+      # under test. `migrate` also runs check-migration-versions.js, so a
+      # timestamp collision fails here rather than inside the production image.
+      - name: Run migrations
+        run: yarn workspace @ci/be-api migrate
+
+      # pg-boss builds its own tables at boot, not through dbmate, so a migrated
+      # database still has no `pgboss.job` until the API starts once. CI never
+      # starts it. `DeadLetterReaperListener.spec.ts` guards on that table and
+      # deliberately FAILS rather than skips when the database is present but the
+      # table is not — and that block went live the moment this file gained
+      # `PIPELINE_TEST_DATABASE_URL` (#2584), which is why this workflow has been
+      # red ever since and releases have been shipping on `skip_test_gate=true`.
+      #
+      # Uses pg-boss's own start/stop rather than hand-written DDL, so the schema
+      # tracks the resolved pg-boss version instead of drifting from it.
+      - name: Install the pg-boss schema
+        timeout-minutes: 3
+        run: yarn workspace @ci/be-api pgboss:ensure
+
       # Several times the measured cost: ~400 files in about 2.5 minutes in a
       # two-core container, so a few minutes on a runner whose cores are slower.
-      # Anything approaching ten means the suite has stopped making progress
-      # rather than merely got slower, and failing the step says so while
-      # leaving the job alive to finish and report.
+      # The ceiling was ten while every DB-backed suite skipped, then twenty once
+      # the 57 of them actually connected. Twenty was still not enough, and the
+      # sentence that used to sit here — "anything approaching that means the
+      # suite has stopped making progress rather than merely got slower" — was
+      # disproven by the run that forced this change: it was killed at exactly
+      # 20:00 having completed 455 of 894 test files with ZERO failures. Steady
+      # progress, simply unfinished.
+      #
+      # Forty-five is sized off that measurement rather than guessed: the same
+      # rate extrapolates the whole suite (with `--coverage`, which this step
+      # keeps) to ~39 minutes, so this is ~15% headroom.
+      #
+      # Why a bigger ceiling and not shards, given pr-gate.yml shards the
+      # frontend suite four ways: `coverageThreshold` in jest.config.mjs is
+      # scoped to `./src/domains/planning/` and jest evaluates thresholds per
+      # invocation, so a sharded `--coverage` run measures a fraction of the
+      # planning suite against a floor calibrated on all of it and fails. The
+      # ways out — dropping `--coverage` here and re-deriving the ratchet from a
+      # narrower test set, or merging per-shard coverage — either weaken the one
+      # floor this repo has or add machinery. Sharding also measured MORE
+      # expensive, not less: ~50 runner-minutes across four legs each re-paying
+      # the ~1m53s setup, against ~41 for one job simply allowed to finish. It
+      # buys wall clock (~17 min vs ~44), which is worth revisiting the day this
+      # workflow runs on anything more frequent than a manual dispatch.
       #
       # What used to sit here was a `--detectOpenHandles --runInBand` step meant
       # to diagnose the hang on failure. It never once ran — the job timeout
@@ -92,20 +289,92 @@ jobs:
       # could not have helped if it had: both of those flags force jest to run
       # in the main process, which is precisely the configuration that hangs.
       # See the note in backend/apps/api/jest.config.mjs.
+      #
+      # `--coverage` is load-bearing, not a report nobody reads. The scoped
+      # ratchet in jest.config.mjs (`./src/domains/planning/`: statements 88 /
+      # branches 76 / functions 76 / lines 90) is only evaluated when coverage
+      # is collected, so without the flag the one floor this repo has was
+      # enforced in NO workflow — a threshold that cannot fail is the same
+      # false comfort as no threshold. The frontend lane below has always run
+      # with it. This is the right job for it: the floor is set just under what
+      # planning reaches with no database, and the env block above gives the
+      # DB-backed planning suites a real connection, so the number measured
+      # here is at or above the one the floor was calibrated against.
+      # Before the API suite, because it is ~0.5s against ~3 minutes and covers
+      # the rules everything else stands on. `@ci/tool-core` holds the 75 cases
+      # for the capability check, the dispatch tiers, the confirmation gate and
+      # the registry that applies them — they used to live in
+      # `src/domains/tools` and run inside the step below, and this workflow
+      # names workspaces one at a time, so extracting the package without this
+      # line would have quietly stopped running them. `publish.yml` gates a
+      # release on this workflow, which is what makes "quietly" expensive.
+      #
+      # Not a `foreach`: that would also re-run @ci/be-api's suite here without
+      # coverage and pick up @ci/fe-web's, which has its own job.
+      - name: Run tool-core tests
+        timeout-minutes: 5
+        run: yarn workspace @ci/tool-core test
+
       - name: Run backend API tests
-        timeout-minutes: 10
-        run: yarn workspace @ci/be-api test
+        timeout-minutes: 45
+        run: yarn workspace @ci/be-api test --coverage
+
+      # @ci/cli's 200 tests across 33 files, which until now ran in NO workflow.
+      # PR #2632 moved the CLI out of `domains/import/cli` into its own
+      # workspace and reasoned that CI needed no new lanes because `make test`
+      # and pr-gate's `packages` typecheck lane both loop over every workspace
+      # declaring the script. That is true of those two and false of this file:
+      # the job above names its workspaces one at a time, and `pr-gate.yml` has
+      # no backend test lane at all, so `grep -rn "@ci/cli" .github/workflows/`
+      # returned nothing. It matters here specifically because `publish.yml`
+      # gates a release on THIS workflow (`ci.yml` is `required` in its
+      # `GATED_WORKFLOWS` block), so the suite was absent from the one place a
+      # release actually reads.
+      #
+      # A named workspace rather than `yarn workspaces foreach --all run test`,
+      # for the same reason the step above names one: `--all` would re-run
+      # @ci/be-api's jest suite a second time WITHOUT `--coverage` — silently
+      # dropping the planning ratchet that the flag above exists to enforce —
+      # and re-run the whole @ci/fe-web vitest suite that `test-frontend` below
+      # already owns. `foreach` also has no `--no-bail` here, so it would stop
+      # at the first failing workspace and hide the rest.
+      #
+      # Five minutes is generous by two orders of magnitude: the suite is pure
+      # unit tests (the clients take an injected `fetch`, the commands an
+      # injected context, the waits an injected clock) and runs in ~1.2s
+      # locally. The ceiling is there to catch a hang, not to bound normal work.
+      # It needs none of the Postgres service, bootstrap or migrations above —
+      # it sits in this job because this is the job the release gate reads, and
+      # last so that a CLI failure cannot mask the larger suite's result.
+      - name: Run CLI tests
+        timeout-minutes: 5
+        run: yarn workspace @ci/cli test
 
   test-frontend:
     name: Run frontend tests
     needs: install
     runs-on: ubuntu-latest
+    # Headroom over the step ceiling below, the same job-vs-step split the
+    # backend `test` job above explains at length. This job had NO ceiling of
+    # either kind while it was `continue-on-error` and therefore harmless; now
+    # that it is blocking and `publish.yml` gates on this workflow, a hung suite
+    # would sit on GitHub's 360-minute default and hold a release for six hours
+    # before anyone saw a result.
+    timeout-minutes: 50
     container:
       image: node:22
-    # Non-blocking while the suite stabilizes: the job runs and reports, but a
-    # failure does not fail the workflow. Promote to blocking (drop this line and
-    # add the check to branch protection) once coverage is established.
-    continue-on-error: true
+    # This job is BLOCKING, and that is load-bearing rather than tidiness.
+    # `publish.yml`'s `verify-ci-passed` gate asks GitHub one question — did the
+    # latest `ci.yml` run for this SHA conclude `success` — and a job-level
+    # `continue-on-error: true` makes the *run* succeed no matter how the job
+    # ends. This job carried that line, so a fully red frontend suite (381 files
+    # / 3,714 cases when measured on 2026-09-07) satisfied the release gate and
+    # an image could ship on top of it. Nothing else in the pipeline looks at the
+    # frontend result, so if this job cannot fail the workflow, the suite cannot
+    # stop a release. Do not re-add the line; if the
+    # suite is flaky, fix the flake (the 5s-timeout flake that motivated the
+    # original "while the suite stabilizes" note is fixed in
+    # frontend/apps/web/vitest.config.ts).
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -128,7 +397,27 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # 40 minutes, and the number is measured rather than guessed. `pr-gate.yml`
+      # ran this suite unsharded on a hosted runner once (run 34180056712,
+      # 2026-09-08) and its 20-minute ceiling killed it mid-run — not a test
+      # failure, just a suite that does not fit a 2-core runner in one job.
+      # Constrained locally to two workers to approximate that runner it is 355s
+      # wall / 14m28s CPU, dominated by `collect` (311s of module transform and
+      # load) rather than by the 79s the assertions cost.
+      #
+      # This copy is SLOWER than the one that died, because `--coverage` adds v8
+      # instrumentation and the html/lcov reporters over the widened include set
+      # (src plus every frontend/packages/*/src). It is not sharded, unlike the
+      # gate copy: this workflow is dispatch-only so wall clock is cheap here,
+      # and a single job keeps one coverage report instead of needing a merge
+      # step. The ceiling is a hang detector, not a performance budget.
+      #
+      # Getting this wrong is expensive now: `publish.yml`'s release gate reads
+      # whether THIS workflow concluded success, so a timeout here blocks
+      # releases. Failing the STEP rather than the job leaves `Upload coverage
+      # report` below alive to say what it got.
       - name: Run frontend unit/component tests
+        timeout-minutes: 40
         run: yarn workspace @ci/fe-web test --coverage
 
       - name: Upload coverage report
@@ -152,8 +441,39 @@ jobs:
         include:
           - name: backend
             command: yarn workspace @ci/be-api typecheck
+          - name: tool-core
+            command: yarn workspace @ci/tool-core typecheck
           - name: frontend
             command: yarn workspace @ci/fe-web typecheck
+          # Same gap as the `Run CLI tests` step in the `test` job above, and
+          # closed here for the same reason. @ci/cli IS typechecked on every PR
+          # — `pr-gate.yml`'s `packages` lane runs
+          # `yarn workspaces foreach --all run typecheck`, which picks up any
+          # workspace declaring the script — but that lane is advisory in BOTH
+          # directions, so until this line a CLI type error could reach a
+          # release unchallenged:
+          #   * it cannot block a merge. `main` does require status checks
+          #     (verified against the API 2026-09-07, not read off a doc), but
+          #     the required list is exactly six contexts — `Lint root`,
+          #     `Lint backend`, `Lint frontend`, `Lint format`,
+          #     `Type check backend`, `Type check frontend`. `Type check
+          #     packages` is deliberately not among them.
+          #   * it cannot block a release either: `publish.yml`'s
+          #     `GATED_WORKFLOWS` reads `ci.yml`, and `pr-gate.yml` is not in
+          #     that list.
+          # So the workspace the release gate reads was typechecked by no lane
+          # in this file at all.
+          #
+          # A `cli` entry rather than mirroring pr-gate's `foreach --all` lane:
+          # this file's header notes that every lane added here can block a
+          # release, so mirroring is a decision to take deliberately per lane.
+          # This one is scoped to the workspace with the demonstrated gap and
+          # exits 0 on this branch, measured 2026-09-07. Note it reports a NEW
+          # context, `Type check cli`, which is not in the six required above —
+          # adding it here gates the RELEASE, not the merge. Making it block a
+          # merge too is a separate, deliberate branch-protection change.
+          - name: cli
+            command: yarn workspace @ci/cli typecheck
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -193,10 +513,20 @@ jobs:
             command: yarn lint
           - name: backend
             command: yarn workspace @ci/be-api lint
+          - name: tool-core
+            command: yarn workspace @ci/tool-core lint
           - name: frontend
             command: yarn workspace @ci/fe-web lint
           - name: format
             command: yarn format:check
+          # No `cli` lane on purpose, unlike `typecheck` above. @ci/cli declares
+          # no `lint` script, and it does not need one: the `root` lane's
+          # `eslint` ignore list names `backend/apps/api/*` and
+          # `frontend/apps/web/*` — the two workspaces with their own lanes — but
+          # not `backend/apps/cli`, and `.oxlintrc.json` does not ignore it
+          # either, so `yarn lint` already covers all 75 files under it (counted
+          # 2026-09-07 with `yarn eslint --no-cache backend/apps/cli`, 0
+          # problems). Adding a script and a lane would lint that tree twice.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

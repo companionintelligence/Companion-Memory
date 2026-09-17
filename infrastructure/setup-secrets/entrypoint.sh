@@ -37,6 +37,7 @@ if [ -f "$SECRETS_FILE" ]; then
   echo "[bootstrap] Secrets file exists at ${SECRETS_FILE}, skipping generation."
   ensure_secret POWERSYNC_DATABASE_USERNAME powersync
   ensure_secret POWERSYNC_DATABASE_PASSWORD "$(random_password)"
+  ensure_secret POWERSYNC_JWT_SECRET "$(random_password)"
   exit 0
 fi
 
@@ -50,6 +51,7 @@ mkdir -p "$(dirname "$SECRETS_FILE")"
 DB_ADMIN_PASSWORD=$(random_password)
 DB_APP_PASSWORD=$(random_password)
 DB_SYNC_PASSWORD=$(random_password)
+PS_JWT_SECRET=$(random_password)
 S3_USERNAME=$(random_password)
 S3_PASSWORD=$(random_password)
 JWT_ACCESS_SECRET=$(head -c 64 /dev/urandom | base64 | tr -d '\n')
@@ -87,6 +89,13 @@ DATABASE_NAME=companion
 # ──────────────────────────────
 POWERSYNC_DATABASE_USERNAME=powersync
 POWERSYNC_DATABASE_PASSWORD=${DB_SYNC_PASSWORD}
+# Shared HS256 key between the two halves of sync auth: the API signs client
+# tokens with it in /api/powersync/token, and the powersync service validates
+# them against the same value as a JWKS `oct` key. The service wants it
+# base64url-encoded; that is derived at container start rather than stored
+# beside this one, so the two can never drift apart. See
+# infrastructure/powersync/README.md.
+POWERSYNC_JWT_SECRET=${PS_JWT_SECRET}
 
 # ──────────────────────────────
 # Object Store (MinIO)

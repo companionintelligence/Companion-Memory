@@ -6,7 +6,7 @@ import { LoggerService } from '@ci/common/logging';
 import { BaseTool } from '../core/BaseTool';
 import type { IntentDefinition, ToolExecutionContext } from '../core/types';
 
-import { DatabaseSearchTool, type SearchResult } from './DatabaseSearchTool';
+import { DatabaseSearchTool, type SearchToolResult } from './DatabaseSearchTool';
 
 const PlacesFindInputSchema = z.object({
   query: z.string().min(1).max(500),
@@ -20,7 +20,7 @@ export type PlacesFindInput = z.infer<typeof PlacesFindInputSchema>;
  * search: delegates to {@link DatabaseSearchTool} with a fixed `place` entity scope.
  */
 @Injectable()
-export class PlacesFindTool extends BaseTool<PlacesFindInput, SearchResult[]> {
+export class PlacesFindTool extends BaseTool<PlacesFindInput, SearchToolResult> {
   readonly schema: IntentDefinition = {
     name: 'places.find',
     domain: 'places',
@@ -56,7 +56,7 @@ export class PlacesFindTool extends BaseTool<PlacesFindInput, SearchResult[]> {
   protected async executeInternal(
     context: ToolExecutionContext,
     input: PlacesFindInput,
-  ): Promise<SearchResult[]> {
+  ): Promise<SearchToolResult> {
     return this.search.run(context, {
       query: input.query,
       maxResults: input.maxResults,

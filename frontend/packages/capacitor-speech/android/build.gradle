@@ -11,6 +11,7 @@ ext {
     junitVersion = project.hasProperty('junitVersion') ? rootProject.ext.junitVersion : '4.13.2'
     androidxAppCompatVersion = project.hasProperty('androidxAppCompatVersion') ? rootProject.ext.androidxAppCompatVersion : '1.7.0'
     androidxJunitVersion = project.hasProperty('androidxJunitVersion') ? rootProject.ext.androidxJunitVersion : '1.2.1'
+    androidxTestRunnerVersion = project.hasProperty('androidxTestRunnerVersion') ? rootProject.ext.androidxTestRunnerVersion : '1.6.1'
     androidxEspressoCoreVersion = project.hasProperty('androidxEspressoCoreVersion') ? rootProject.ext.androidxEspressoCoreVersion : '3.6.1'
 }
 
@@ -21,7 +22,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.7.2'
+        classpath 'com.android.tools.build:gradle:8.10.0'
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$speechKotlinVersion"
     }
 }
@@ -31,7 +32,7 @@ apply plugin: 'org.jetbrains.kotlin.android'
 
 android {
     namespace "com.companionintelligence.speech"
-    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 35
+    compileSdk project.hasProperty('compileSdkVersion') ? rootProject.ext.compileSdkVersion : 36
     defaultConfig {
         // Must not exceed the app's own minSdk (23) — the manifest merger rejects a library
         // requiring a higher floor than its consumer. The API-31/33/34 speech APIs this
@@ -39,7 +40,7 @@ android {
         // call site (see SpeechRecognitionController's tier selection), with a documented
         // best-effort path for API 23–30.
         minSdkVersion project.hasProperty('minSdkVersion') ? rootProject.ext.minSdkVersion : 23
-        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 35
+        targetSdkVersion project.hasProperty('targetSdkVersion') ? rootProject.ext.targetSdkVersion : 36
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
@@ -62,6 +63,16 @@ android {
     }
 }
 
+// SpeechRecognitionLogicTest reads ../src/definitions.ts off disk to check that the
+// RecognitionTier wire values are members of the TypeScript SpeechRecognitionTier union.
+// Gradle cannot see that dependency — the file is on no classpath and in no source set — so
+// without declaring it the test task stays UP-TO-DATE through exactly the TypeScript edit it
+// exists to catch. Verified: renaming a union member left the task skipped and the build
+// green until this was added.
+tasks.withType(Test).configureEach {
+    inputs.file("${projectDir}/../src/definitions.ts").withPropertyName('speechPluginDefinitions')
+}
+
 repositories {
     google()
     mavenCentral()
@@ -77,5 +88,12 @@ dependencies {
 
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    // Declared explicitly, not left to arrive transitively. `testInstrumentationRunner`
+    // above names androidx.test.runner.AndroidJUnitRunner, so this artifact has to be on
+    // the androidTest runtime classpath or every instrumented run in this module dies with
+    // "Unable to find instrumentation info". Until this line existed it resolved only as a
+    // transitive of espresso-core, which no test here imports -- dropping that unused
+    // dependency would have silently taken the runner with it.
+    androidTestImplementation "androidx.test:runner:$androidxTestRunnerVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
 }

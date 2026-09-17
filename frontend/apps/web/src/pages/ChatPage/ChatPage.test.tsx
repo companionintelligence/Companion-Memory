@@ -62,13 +62,22 @@ vi.mock('@/hooks', async (importOriginal) => {
 
   return {
     ...actual,
-    useAuth: () => [{ authToken: 'test-token', authenticated: true }, {}],
     useChatRequester: () => [
       { stream: null, loading: false, error: null, streaming: false, hasStartedReceiving: null },
       { submit: h.submit, attach: h.attach, detach: h.detach, stop: h.stop, cancel: h.cancel },
     ],
     useModel: () => [{ selectedModel: 'llama3' }, {}],
     useCounter: () => [{ count: 0 }, { increment: vi.fn() }],
+    // #2558 added `useAuth()` to ChatPageContent so a dispatch thread can call
+    // /v1/agent/jobs. `renderWithProviders` deliberately provides no Auth
+    // context (it fetches on mount), so from that commit every test in this
+    // file threw before its first assertion — 10 of 10, red on `main` and
+    // unnoticed because CI here is dispatch-only. Stubbed the way the harness'
+    // own doc comment says to, and the way App.test.tsx already does.
+    useAuth: () => [
+      { expired: false, authToken: 'test-token', authenticated: true, loading: false, error: null },
+      { login: vi.fn(), logout: vi.fn(), signup: vi.fn() },
+    ],
   };
 });
 

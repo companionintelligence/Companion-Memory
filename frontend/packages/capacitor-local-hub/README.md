@@ -336,6 +336,41 @@ These are deliberate follow-up slices, not oversights:
 
 ### Verification status
 
+- **Android: 35 JVM tests, no device required.** These are the ones a human or a CI runner
+  actually gets to run — `make test-android` from the repo root, or
+  `./gradlew :ci-capacitor-local-hub:testDebugUnitTest` from `frontend/apps/android/android`
+  — and `mobile-build.yml` runs them after the APK build. They cover the parts of
+  `LocalHubServer` that are decisions rather than I/O, with a fake store standing in for
+  SQLCipher:
+  - `LocalHubServerAuthTest` (7) — the bearer check: header case-insensitivity, scheme
+    matched case-**sensitively**, a prefix and a one-character-off token both rejected, a
+    missing header answered `401` **with the CORS headers still attached**, the body drained
+    even on a rejection, and preflight answered without a token for any URI.
+  - `LocalHubServerRoutingTest` (7) — non-routes `404` before the store is touched, trailing
+    and empty segments collapsing onto the same routes, the `507` cap and the capacity block
+    echoing the store's own limits, a queue failure becoming a `500` that keeps CORS, and
+    unknown ids reported `404` rather than pretended-successful.
+  - `LocalHubServerJsonTest` (8) — the wire contract: a non-object body is `400` not a crash,
+    blank strings rejected exactly like missing ones, `capturedAt` passed through verbatim,
+    a replayed idempotency key answering identically, and the strict typing that a missing or
+    non-boolean `ok`/`permanent` is refused rather than coerced.
+  - `OutboxDatabaseKeyTest` (8) — key lifecycle: first run mints a raw key and hands SQLCipher
+    the quoted 64-hex form, an existing key is reused verbatim, a key that does not read back
+    is refused **before** anything is encrypted with it, and every way of losing the key over
+    an existing database is *reported* rather than silently replacing the data.
+  - `PlaintextShredderTest` (5) — the shredder overwrites in place (not by appending), scrubs
+    past the end of its buffer, handles a missing or empty file, and scrubs every journal /
+    WAL / shm sidecar before unlinking.
+
+  Robolectric is load-bearing here rather than decorative: `LocalHubServer` speaks
+  `org.json`, and AGP's mockable `android.jar` stubs every `org.json` method into a
+  "not mocked" thrower. Robolectric supplies the real AOSP implementation — which matters
+  precisely because the router's strict typing (`opt("ok") as? Boolean`) is where `org.json`
+  implementations differ.
+
+  **What these do not prove**: anything about encryption at rest, the keystore, or durability
+  on a real filesystem. That is the instrumented suite below, and it is not a substitute.
+
 - **Android: verified on-device.** **42 instrumented tests, 0 failures**, run against a real
   bound socket, a real on-disk SQLCipher database, and the real AndroidKeyStore on an
   API-35 emulator.

@@ -5,20 +5,24 @@ import { Button, IconButton, cn } from '@ci/shadcn';
 import { CalendarRange, ChevronLeft, ChevronRight } from '@ci/shadcn/icons';
 import { useTranslation } from 'react-i18next';
 
-import { useForecastService } from '@/api/useForecastService';
+import { type ForecastBucket, useForecastService } from '@/api/useForecastService';
 import { useRescheduleEvent } from '@/api/useRescheduleEvent';
 import { type RhythmDay, type ScheduleEvent, useScheduleService } from '@/api/useScheduleService';
 import { useFeatures } from '@/common/feature';
 import { VerticalCalendar } from '@/components/HorizonGrid';
+import { addDays, startOfLocalDay } from '@/components/HorizonGrid/nowNext';
 import {
   type CalendarSlot,
   RHYTHM_NOISE_FLOOR,
   daypartWeights,
+  occupancySignalInRange,
   slotForecastLine,
 } from '@/components/HorizonGrid/scheduleGeometry';
 import { TodayNowNext, WeekDayChips } from '@/components/HorizonGrid/TodayNowNext';
+import { resolveTimeZone } from '@/components/HorizonGrid/zonedClock';
 import { PageContent } from '@/components/layout';
 import { TaskSlateDrawer } from '@/components/TaskSlate';
+import { useCurrentUser } from '@/hooks';
 import {
   type ActivityClass,
   type ColorMode,
@@ -33,29 +37,20 @@ import {
 } from '@/lib/activityPalette';
 import { usePlanTasks } from '@/pages/PlanPage/usePlanTasks';
 
-import { PredictionBand } from './PredictionBand';
-
 const DAYS_IN_VIEW = 7;
+const NO_OCCUPANCY: ForecastBucket[] = [];
 
-function startOfLocalDay(date: Date): Date {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-
-  return d;
-}
-
-function addDays(date: Date, days: number): Date {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-
-  return d;
-}
+/**
+ * Chips minted by the planner, which own a task the calendar must keep in step.
+ * The same literal as `PLANNED_BLOCK` in `PlannedBlockService`.
+ */
+const PLANNED_BLOCK = 'planned_block';
 
 /** "Aug 3 – Aug 9" — the window, stated plainly. */
-function formatRange(start: Date, end: Date): string {
-  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+function formatRange(start: Date, end: Date, zone: string): string {
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', timeZone: zone };
 
-  return `${start.toLocaleDateString([], opts)} – ${addDays(end, -1).toLocaleDateString([], opts)}`;
+  return `${start.toLocaleDateString([], opts)} – ${addDays(end, -1, zone).toLocaleDateString([], opts)}`;
 }
 
 /**
@@ -89,7 +84,7 @@ function rhythmFooter(
   }
 
   if (pipelineRunning && !hasRhythmSignal) {
-    return 'Predict is still running — the boxes on the left will fill in. This can take a while.';
+    return 'Predict is still running — the day colours will fill in. This can take a while.';
   }
 
   if (!generatedAt) {
@@ -126,13 +121,22 @@ const COLOR_MODE_LABEL: Record<ColorMode, string> = {
  * Both lanes contribute a class: one the rhythm predicts but you have not
  * committed to is exactly the kind of thing this page exists to show.
  */
-function windowVocabulary(events: ScheduleEvent[], rhythm: RhythmDay[]) {
+function windowVocabulary(events: ScheduleEvent[], rhythm: RhythmDay[], occupancy: ForecastBucket[] = []) {
   const classes = new Set<ActivityClass>(events.map(classifyEvent));
 
   for (const day of rhythm) {
     for (const cluster of day.clusters) {
       classes.add(normalizeClass(cluster.l0Class));
     }
+  }
+
+  for (const bucket of occupancy) {
+    if (bucket.q50 < RHYTHM_NOISE_FLOOR || bucket.l0Probs.length === 0) {
+      continue;
+    }
+
+    const top = bucket.l0Probs.reduce((best, cur) => (cur.probability > best.probability ? cur : best));
+    classes.add(normalizeClass(top.label));
   }
 
   return { classes, sources: new Set(events.map(sourceOf)) };
@@ -148,8 +152,12 @@ function windowVocabulary(events: ScheduleEvent[], rhythm: RhythmDay[]) {
  * that, not a special case, so this is derived from what loaded rather than
  * from the viewport.
  */
-function colorSaysSomething(events: ScheduleEvent[], rhythm: RhythmDay[]): boolean {
-  const { classes, sources } = windowVocabulary(events, rhythm);
+function colorSaysSomething(
+  events: ScheduleEvent[],
+  rhythm: RhythmDay[],
+  occupancy: ForecastBucket[] = [],
+): boolean {
+  const { classes, sources } = windowVocabulary(events, rhythm, occupancy);
 
   return classes.size > 1 || sources.size > 1;
 }
@@ -174,13 +182,15 @@ function ScheduleLegend({
   mode,
   events,
   rhythm,
+  occupancy,
 }: {
   mode: ColorMode;
   events: ScheduleEvent[];
   rhythm: RhythmDay[];
+  occupancy: ForecastBucket[];
 }) {
   const keys = useMemo(() => {
-    const { classes, sources } = windowVocabulary(events, rhythm);
+    const { classes, sources } = windowVocabulary(events, rhythm, occupancy);
 
     if (mode === 'source') {
       return [...sources].sort().map((source) => ({
@@ -195,7 +205,7 @@ function ScheduleLegend({
       color: classColor(cls),
       label: CLASS_LABEL[cls],
     }));
-  }, [mode, events, rhythm]);
+  }, [mode, events, rhythm, occupancy]);
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
@@ -220,19 +230,26 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   const { t } = useTranslation();
   const { isMobile } = useDeviceLayout();
   const { isFeatureEnabled } = useFeatures();
+  const { user } = useCurrentUser();
   const hbpeEnabled = isFeatureEnabled('hbpe');
-  const forecastPageEnabled = isFeatureEnabled('forecast.page');
+  /**
+   * The grid draws in the OWNER'S zone, not the browser's — the backend places
+   * planned blocks in `ci.users.timezone`, so a browser that disagrees with the
+   * profile would draw every block at the wrong hour. The browser zone is the
+   * fallback, never a second source of truth. See `HorizonGrid/zonedClock`.
+   */
+  const timeZone = resolveTimeZone(user?.timezone);
   const [weekOffset, setWeekOffset] = useState(0);
   const [colorMode, setColorMode] = useState<ColorMode>('type');
   const [slot, setSlot] = useState<CalendarSlot | null>(null);
 
-  usePageTitle(embedded ? null : 'Schedule - Companion Intelligence');
+  usePageTitle(embedded ? null : 'Schedule - Companion Memory');
 
   const { start, end } = useMemo(() => {
-    const from = addDays(startOfLocalDay(new Date()), weekOffset * DAYS_IN_VIEW);
+    const from = addDays(startOfLocalDay(new Date(), timeZone), weekOffset * DAYS_IN_VIEW, timeZone);
 
-    return { start: from, end: addDays(from, DAYS_IN_VIEW) };
-  }, [weekOffset]);
+    return { start: from, end: addDays(from, DAYS_IN_VIEW, timeZone) };
+  }, [timeZone, weekOffset]);
 
   const [selectedDay, setSelectedDay] = useState(start);
 
@@ -247,14 +264,12 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
 
   const { events, rhythm, generatedAt, rhythmCoversWindow, loading, fetching, error, refetch } =
     useScheduleService(start, end);
-  // The band's retry has to come from here: a swallowed HBPE error resolves as
-  // `null`, `useForecastService` reads that as "nothing to poll for" and stops
-  // polling, so unless `refetch` is threaded down there is no way back from the
-  // unavailable state short of leaving the page and returning.
-  const [
-    { data: occupancy, loading: occupancyLoading, stalled: occupancyStalled },
-    { refetch: refetchForecast },
-  ] = useForecastService();
+  // Occupancy is the 96-bin day-ahead histogram. It paints the left-hand boxes
+  // on the day(s) those bins actually fall on — not a second strip above the
+  // calendar. Pipeline status still comes from this call because weekForecast
+  // does not name nightly/Predict steps.
+  const [{ data: occupancy, stalled: occupancyStalled }] = useForecastService();
+  const occupancyBuckets = hbpeEnabled ? (occupancy?.buckets ?? NO_OCCUPANCY) : NO_OCCUPANCY;
   const pipelineRunning = Boolean(
     hbpeEnabled && Boolean(occupancy?.systemStatus?.includes(':')) && !occupancyStalled,
   );
@@ -262,10 +277,12 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   // the strip lights a cell only at or above RHYTHM_NOISE_FLOOR, so a day of
   // clusters that all fall under it renders exactly like a day of no clusters
   // at all. Measuring the same weights the strip does keeps the footer from
-  // announcing a layer the user cannot see.
-  const hasRhythmSignal = rhythm.some((day) =>
-    daypartWeights(day).some((weight) => weight >= RHYTHM_NOISE_FLOOR),
-  );
+  // announcing a layer the user cannot see. Occupancy is scoped to the drawn
+  // window so tomorrow's histogram cannot speak for a later week.
+  const hasOccupancySignal = occupancySignalInRange(occupancyBuckets, start, end);
+  const hasRhythmSignal =
+    rhythm.some((day) => daypartWeights(day).some((weight) => weight >= RHYTHM_NOISE_FLOOR)) ||
+    hasOccupancySignal;
 
   // Placing a backlog task mints a planned block, so the committed lane has to re-read.
   const {
@@ -322,10 +339,10 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
         return;
       }
 
-      const at = slot.allDay ? startOfLocalDay(slot.instant) : slot.instant;
+      const at = slot.allDay ? startOfLocalDay(slot.instant, timeZone) : slot.instant;
       run(placeOnDay(taskId, at), 'Could not put that on the calendar. Try again shortly.');
     },
-    [placeOnDay, run, slot],
+    [placeOnDay, run, slot, timeZone],
   );
 
   const slotInsight = useMemo(() => {
@@ -335,16 +352,46 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
 
     const lookup = (key: string) => rhythm.find((day) => day.date === key);
 
-    return slotForecastLine(slot, lookup);
-  }, [hbpeEnabled, rhythm, rhythmCoversWindow, slot]);
+    return slotForecastLine(slot, lookup, timeZone);
+  }, [hbpeEnabled, rhythm, rhythmCoversWindow, slot, timeZone]);
 
   const rescheduleEvent = useRescheduleEvent(refetch);
 
+  /**
+   * Move a chip — and, for a planner chip, the task it stands for.
+   *
+   * ═══ WHAT THIS USED TO DO ═══
+   * Send EVERY chip through `rescheduleEvent`, which writes the event's start
+   * and end and nothing else. A planned block owns a task whose `scheduledFor`
+   * is what `taskSections` files the card by, so dragging Tuesday's block to
+   * Friday moved the block and left the card in Overdue — and the stale past
+   * date later made `proposedTimeIsPast` strip the task's `dueAt`. `placeOnDay`
+   * goes through `scheduleTask(startTime:)`, whose `scheduleTaskAt` reschedules
+   * the SAME block and mirrors `scheduledFor` onto the task; the Plan page's
+   * drag has always used it. Two entry points for one gesture, now one write.
+   */
   const handleMove = useCallback(
     (eventId: string, startTime: Date) => {
+      const moved = events.find((entry) => entry.id === eventId);
+
+      // An expanded occurrence has no row behind it, so `rescheduleEvent`'s
+      // findOne misses, the mutation resolves null, the refetch puts the chip
+      // back where it was and nothing explains why. Say so instead.
+      if (moved?.seriesMasterId) {
+        setActionError("Recurring occurrences can't be moved yet.");
+
+        return;
+      }
+
+      if (moved?.eventType === PLANNED_BLOCK && moved.taskId) {
+        run(placeOnDay(moved.taskId, startTime), 'Could not move that. Try again shortly.');
+
+        return;
+      }
+
       run(rescheduleEvent(eventId, startTime), 'Could not move that. Try again shortly.');
     },
-    [rescheduleEvent, run],
+    [events, placeOnDay, rescheduleEvent, run],
   );
 
   const handleDismissProposed = useCallback(
@@ -380,7 +427,10 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   const Frame: ElementType = embedded ? 'div' : PageContent;
 
   // Shown only once hue has more than one thing to say — see `colorSaysSomething`.
-  const colorKey = useMemo(() => colorSaysSomething(events, rhythm), [events, rhythm]);
+  const colorKey = useMemo(
+    () => colorSaysSomething(events, rhythm, occupancyBuckets),
+    [events, rhythm, occupancyBuckets],
+  );
 
   const colorModeToggle = (
     <div
@@ -419,7 +469,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
   // more than one category to tell apart.
   const colorChrome = colorKey ? (
     <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-      <ScheduleLegend mode={colorMode} events={events} rhythm={rhythm} />
+      <ScheduleLegend mode={colorMode} events={events} rhythm={rhythm} occupancy={occupancyBuckets} />
       {colorModeToggle}
     </div>
   ) : null;
@@ -433,8 +483,8 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
         <IconButton variant="ghost" label={t('SCHEDULE_PREVIOUS_WEEK')} onClick={goBack}>
           <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
         </IconButton>
-        <h2 className="min-w-[9rem] text-center text-base font-semibold text-foreground tabular-nums">
-          {formatRange(start, end)}
+        <h2 className="min-w-[9rem] text-center text-base font-semibold leading-none text-foreground tabular-nums">
+          {formatRange(start, end, timeZone)}
         </h2>
         <IconButton variant="ghost" label={t('SCHEDULE_NEXT_WEEK')} onClick={goForward}>
           <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
@@ -470,16 +520,6 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
           </p>
         )}
 
-        {hbpeEnabled && (
-          <PredictionBand
-            forecast={occupancy}
-            loading={occupancyLoading}
-            stalled={occupancyStalled}
-            showFullForecastLink={forecastPageEnabled}
-            onRetry={refetchForecast}
-          />
-        )}
-
         {isTrulyEmpty && (
           <>
             {weekChrome}
@@ -495,7 +535,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
             {/* One schedule, one geometry. Week chrome, then the week — where
                 what a day usually holds rides in beside the hours rather than
                 as a second tab of the same seven days. */}
-            <div className={cn('flex min-h-0 flex-1 flex-col', isMobile ? 'gap-3' : 'gap-4')}>
+            <div className="flex min-h-0 flex-1 flex-col gap-3">
               {isMobile ? (
                 <div className="flex flex-col gap-2">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -504,7 +544,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                         <ChevronLeft className="h-4 w-4" strokeWidth={1.5} />
                       </IconButton>
                       <h2 className="min-w-[8rem] text-center text-sm font-semibold text-foreground tabular-nums">
-                        {formatRange(start, end)}
+                        {formatRange(start, end, timeZone)}
                       </h2>
                       <IconButton variant="ghost" label={t('SCHEDULE_NEXT_WEEK')} onClick={goForward}>
                         <ChevronRight className="h-4 w-4" strokeWidth={1.5} />
@@ -523,6 +563,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                     days={DAYS_IN_VIEW}
                     selectedDay={selectedDay}
                     onSelectDay={handleSelectDay}
+                    timeZone={timeZone}
                   />
 
                   {colorChrome}
@@ -531,7 +572,7 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                 weekChrome
               )}
 
-              {isMobile && <TodayNowNext events={events} day={selectedDay} />}
+              {isMobile && <TodayNowNext events={events} day={selectedDay} timeZone={timeZone} />}
 
               <VerticalCalendar
                 className="min-h-0 flex-1"
@@ -539,16 +580,18 @@ export function SchedulePage({ embedded = false }: SchedulePageProps = {}) {
                 days={isMobile ? 1 : DAYS_IN_VIEW}
                 events={events}
                 rhythm={rhythm}
+                occupancy={occupancyBuckets}
                 colorMode={colorMode}
                 pipelineRunning={pipelineRunning}
+                timeZone={timeZone}
                 selectedDay={selectedDay}
                 onSelectDay={handleSelectDay}
                 selectedSlot={slot}
                 onSelectSlot={handleSelectSlot}
                 onMoveEvent={handleMove}
                 footer={rhythmFooter(
-                  generatedAt,
-                  rhythmCoversWindow,
+                  generatedAt ?? (hasOccupancySignal ? (occupancy?.generatedAt ?? null) : null),
+                  rhythmCoversWindow || hasOccupancySignal,
                   hbpeEnabled,
                   pipelineRunning,
                   hasRhythmSignal,

@@ -6,6 +6,7 @@ these tests double-check the contract too.
 
 from __future__ import annotations
 
+import statistics
 from typing import Any
 
 from benchmark.regression import compare, format_summary
@@ -165,3 +166,158 @@ def test_summary_announces_pass_when_within_tolerance():
     cur = _report([_system("ci_server", 10, 20)])
     text = format_summary(compare(base, cur))
     assert "within tolerance" in text
+
+
+# ── multi-run reports ────────────────────────────────────────────────────────
+
+
+def _multirun_system(
+    name: str,
+    *,
+    ratios: list[float],
+    hit: int,
+    total: int,
+    cats: dict[str, list] | None = None,
+    cat_medians: dict[str, float] | None = None,
+    runs_errored: int = 0,
+    error: str | None = None,
+) -> dict[str, Any]:
+    """A system entry shaped like ``aggregated_to_json`` emits.
+
+    ``hit``/``total`` and ``ratios`` are set independently on purpose: the
+    point of these tests is which of the two the gate actually reads.
+    """
+    stats = {
+        "median": statistics.median(ratios) if ratios else 0.0,
+        "mean": statistics.fmean(ratios) if ratios else 0.0,
+        "min": min(ratios) if ratios else 0.0,
+        "max": max(ratios) if ratios else 0.0,
+        "iqr": 0.0,
+        "stddev": 0.0,
+    }
+    return {
+        "name": name,
+        "error": error,
+        "runs": len(ratios) + runs_errored,
+        "runs_ok": len(ratios),
+        "runs_errored": runs_errored,
+        "errors": ["boom"] * runs_errored,
+        "score": {
+            "hit": hit,
+            "total": total,
+            "ratio": (hit / total) if total else 0.0,
+            **stats,
+        },
+        "categories": dict(cats or {}),
+        "category_stats": {
+            c: {**stats, "median": m} for c, m in (cat_medians or {}).items()
+        },
+        "timings_ms": {k: dict(stats) for k in ("ingest", "flush", "search")},
+        "questions": [],
+    }
+
+
+def test_multirun_gate_compares_the_median_not_run0():
+    # Run 0 was a clean sweep and four later runs scored 40%. A gate that
+    # reads the run-0 hit/total cell sees no change at all.
+    base = _report([_system("ci_server", 10, 10)])
+    cur = _report(
+        [
+            _multirun_system(
+                "ci_server", ratios=[1.0, 0.4, 0.4, 0.4, 0.4], hit=10, total=10
+            )
+        ]
+    )
+    r = compare(base, cur, tolerance=0.05)
+    overall = next(c for c in r.changes if c.category == "overall")
+    assert overall.kind == "regression"
+    assert overall.current == 0.4
+    assert not r.passed
+
+
+def test_multirun_gate_compares_the_category_median():
+    base = _report([_system("ci_server", 10, 10, {"flat-recall": [10, 10]})])
+    cur = _report(
+        [
+            _multirun_system(
+                "ci_server",
+                ratios=[1.0, 1.0],
+                hit=10,
+                total=10,
+                cats={"flat-recall": [10, 10]},  # run-0 cell: a clean sweep
+                cat_medians={"flat-recall": 0.6},  # what the runs actually did
+            )
+        ]
+    )
+    r = compare(base, cur, tolerance=0.05)
+    cat = next(c for c in r.changes if c.category == "flat-recall")
+    assert cat.kind == "regression"
+    assert cat.current == 0.6
+
+
+def test_multirun_gate_stays_stable_when_the_median_holds():
+    base = _report([_system("ci_server", 8, 10, {"flat-recall": [8, 10]})])
+    cur = _report(
+        [
+            _multirun_system(
+                "ci_server",
+                ratios=[0.8, 0.8, 0.8],
+                hit=24,
+                total=30,
+                cats={"flat-recall": [24, 30]},
+                cat_medians={"flat-recall": 0.8},
+            )
+        ]
+    )
+    r = compare(base, cur, tolerance=0.05)
+    assert r.passed
+    assert {c.kind for c in r.changes} == {"stable"}
+
+
+def test_a_category_with_no_questions_is_missing_not_zero():
+    base = _report([_system("ci_server", 8, 10, {"ghost": [0, 0]})])
+    cur = _report(
+        [
+            _multirun_system(
+                "ci_server",
+                ratios=[0.8],
+                hit=8,
+                total=10,
+                cats={"ghost": [0, 0]},
+                cat_medians={"ghost": 0.0},
+            )
+        ]
+    )
+    r = compare(base, cur, tolerance=0.05)
+    ghost = next(c for c in r.changes if c.category == "ghost")
+    assert ghost.kind == "missing"
+
+
+def test_new_errored_runs_fail_the_gate():
+    base = _report([_system("ci_server", 10, 10)])
+    # Four of five runs fell over; the one that survived scored perfectly.
+    cur = _report(
+        [_multirun_system("ci_server", ratios=[1.0], hit=10, total=10, runs_errored=4)]
+    )
+    r = compare(base, cur, tolerance=0.05)
+    errored = next(c for c in r.changes if c.category == "runs")
+    assert errored.kind == "runs_errored"
+    assert errored.is_failure
+    assert not r.passed
+
+
+def test_clean_multirun_reports_no_errored_runs_row():
+    base = _report([_system("ci_server", 10, 10)])
+    cur = _report([_multirun_system("ci_server", ratios=[1.0, 1.0], hit=20, total=20)])
+    r = compare(base, cur, tolerance=0.05)
+    assert not any(c.category == "runs" for c in r.changes)
+    assert r.passed
+
+
+def test_errored_runs_row_reads_as_failed_runs_not_a_score():
+    base = _report([_system("ci_server", 10, 10)])
+    cur = _report(
+        [_multirun_system("ci_server", ratios=[1.0], hit=10, total=10, runs_errored=4)]
+    )
+    summary = format_summary(compare(base, cur, tolerance=0.05))
+    assert "80% of runs failed (baseline 0%)" in summary

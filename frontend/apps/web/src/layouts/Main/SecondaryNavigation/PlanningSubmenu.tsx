@@ -1,4 +1,4 @@
-import { CalendarRange, ListTodo } from '@ci/shadcn/icons';
+import { CalendarRange, ListTodo, Sparkles } from '@ci/shadcn/icons';
 import { useLocation } from 'react-router-dom';
 
 import { useFeatures } from '@/common/feature';
@@ -29,7 +29,7 @@ function badgePill(count: number) {
 }
 
 /**
- * Power Rail Planning entry with two sub-views: Tasks and Calendar.
+ * Power Rail Planning entry with three sub-views: Today, Tasks and Calendar.
  *
  * Static children, not a shared sections module — nothing else in the app
  * consumes a "Planning sections" list the way MemoryHubNav also consumes
@@ -38,15 +38,27 @@ function badgePill(count: number) {
 export function PlanningSubmenu() {
   const { pathname } = useLocation();
   const { isFeatureEnabled } = useFeatures();
-  const routeOpen = pathname === '/plan' || pathname.startsWith('/plan/');
+  // Today lives outside /plan but hangs off this submenu, so its own route has
+  // to hold the submenu open too — otherwise navigating to it collapses the
+  // rail entry you navigated from.
+  const routeOpen =
+    pathname === '/plan' ||
+    pathname.startsWith('/plan/') ||
+    pathname === '/today' ||
+    pathname.startsWith('/today/');
   const { open, clickOpen, onOpenChange, onHeadClick } = useRailSubmenuOpen('plan', routeOpen);
 
   const planBadgeCount = usePlanBadgeCount();
   const feedBadgeCount = useFeedBadgeCount();
 
+  // The unseen-actions/summaries badge belongs to Today, the page that can
+  // actually open them; it sat on Calendar, which cannot show either since the
+  // brief cards were removed from it. `useFeedBadgeCount` returns 0 while
+  // `today.page` is off, so this row's absence and its count agree.
   const sections: PlanningSection[] = [
+    { to: '/today', label: 'Today', icon: Sparkles, flag: 'today.page', badgeCount: feedBadgeCount },
     { to: '/plan/tasks', label: 'Tasks', icon: ListTodo, flag: 'planning.page', badgeCount: planBadgeCount },
-    { to: '/plan/calendar', label: 'Calendar', icon: CalendarRange, badgeCount: feedBadgeCount },
+    { to: '/plan/calendar', label: 'Calendar', icon: CalendarRange, badgeCount: 0 },
   ];
 
   const visible = sections.filter((section) => !section.flag || isFeatureEnabled(section.flag));

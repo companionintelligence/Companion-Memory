@@ -58,7 +58,9 @@ export class RecallProbeCron {
     this.logger.setContext(RecallProbeCron.name);
   }
 
-  @Cron(RECALL_PROBE_CRON, { name: 'RecallProbeCron.probeRecall', role: 'worker' })
+  // `exclusive`: the probe has no guard of its own, and two overlapping runs
+  // would double the sequential scans and write two measurements of one week.
+  @Cron(RECALL_PROBE_CRON, { name: 'RecallProbeCron.probeRecall', role: 'worker', exclusive: true })
   async probeRecall(): Promise<void> {
     const run = await this.recallProbeService.probe();
 

@@ -116,6 +116,30 @@ describe('the connect-time address guard, over a real socket', () => {
   });
 
   /**
+   * `peers.allowCgnatEndpoints` only ever takes 100.64.0.0/10 out of the
+   * table — this is the real-socket proof that turning it on does not also,
+   * even by accident, loosen the guard for loopback. Same rebind resolver,
+   * same real server, same wiring; the only difference from the test above is
+   * `{ allowCgnat: true }`, and the request still never arrives.
+   */
+  it('with allowCgnat:true, a rebind to the REAL loopback service still never reaches the socket', async () => {
+    const agent = createPeerEgressAgent(createEgressLookup(rebindResolver, { allowCgnat: true }));
+
+    await expect(
+      undiciFetch(`http://peer.example.com:${port}/api/pull`, {
+        method: 'POST',
+        body: '{"prompt":"a private question"}',
+        redirect: 'manual',
+        dispatcher: agent,
+      }),
+    ).rejects.toThrow();
+
+    expect(hits).toEqual([]);
+
+    await (agent as unknown as { close(): Promise<void> }).close();
+  });
+
+  /**
    * ═══ A LITERAL IP NEVER REACHES THE LOOKUP — SO THE URL POLICY IS NOT
    *     BELT-AND-BRACES, IT IS THE ONLY THING GUARDING THAT CASE ═══
    *

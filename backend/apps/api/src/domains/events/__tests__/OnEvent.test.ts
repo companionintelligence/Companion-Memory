@@ -2,7 +2,7 @@ import { OnEvent } from '../decorators/OnEvent';
 import type { Acknowledgement } from '../types';
 
 function makeAck(): Acknowledgement {
-  return { done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
+  return { jobId: 'test-job', done: jest.fn(), fail: jest.fn(), defer: jest.fn() };
 }
 
 describe('OnEvent decorator', () => {
@@ -57,6 +57,40 @@ describe('OnEvent decorator', () => {
       expect(ack.fail).toHaveBeenCalledWith(expect.any(Error));
       expect(ack.done).not.toHaveBeenCalled();
       expect(ack.defer).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The sharpest hazard in the de-injection change.
+     *
+     * `trackedAck` REBUILDS the acknowledgement to intercept done/fail/defer.
+     * Anything it forgets to copy is silently `undefined` for the handler — and
+     * `jobId` is what the two deferring listeners hand to `completeJob`.
+     *
+     * Drop that one line and python-functions fails SILENTLY: the sidecar
+     * guards its callback on `if record.job_id and record.queue`, so the work
+     * runs, succeeds, reports nothing, and the job sits `active` until its
+     * 8-hour expiry and then retries forever, with no exception and no log
+     * naming the cause. Nothing else in the suite can see that.
+     */
+    class JobIdReadingListener {
+      seen: string | undefined;
+
+      @OnEvent('on-event.test.jobid' as never, { autoAcknowledge: false })
+      async handle(_payload: unknown, ack: Acknowledgement): Promise<void> {
+        this.seen = ack.jobId;
+        ack.defer();
+      }
+    }
+
+    it('forwards every ack field to the handler, not only the three callbacks', async () => {
+      const listener = new JobIdReadingListener();
+      const ack = makeAck();
+      ack.jobId = 'pgboss-job-42';
+
+      await listener.handle({}, ack);
+
+      expect(listener.seen).toBe('pgboss-job-42');
+      expect(ack.defer).toHaveBeenCalledTimes(1);
     });
 
     class SelfAckingListener {

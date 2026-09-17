@@ -100,7 +100,11 @@ export class DeadLetterReaperListener {
    * every tick from then on — an unbounded table that reports itself healthy,
    * which is the exact failure class this leg exists to remove.
    */
-  @Cron(DEAD_LETTER_REAP_CRON, { name: 'DeadLetterReaperListener.reapOnSchedule' })
+  // `exclusive`: the reap is safe to run concurrently with itself (the anti-join
+  // and the primary key see to that) but it is not USEFUL to — a two-minute tick
+  // landing on a reap that is still copying just runs the same anti-join twice.
+  // Nothing here guards that, so the wrapper does.
+  @Cron(DEAD_LETTER_REAP_CRON, { name: 'DeadLetterReaperListener.reapOnSchedule', exclusive: true })
   async reapOnSchedule(): Promise<void> {
     // Nothing awaits a @Cron method, so a rejection here is an unhandled promise
     // rejection — which this process treats as fatal. On a timer that means a

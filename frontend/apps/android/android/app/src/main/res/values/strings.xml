@@ -2,8 +2,8 @@
 <resources>
     <string name="app_name">Memory</string>
     <string name="title_activity_main">Memory</string>
-    <string name="package_name">com.companionintelligence.app</string>
-    <string name="custom_url_scheme">com.companionintelligence.app</string>
+    <string name="package_name">com.ci.memory</string>
+    <string name="custom_url_scheme">com.ci.memory</string>
 
     <!-- @capacitor-community/background-geolocation persistent notification (Android
          requires one to keep recording location in the background). -->

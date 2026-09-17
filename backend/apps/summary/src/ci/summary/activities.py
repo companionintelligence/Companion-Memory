@@ -318,7 +318,11 @@ async def store_summary_activity(
             source_types = EXCLUDED.source_types,
             title = EXCLUDED.title,
             content = EXCLUDED.content,
-            summary_embedding = EXCLUDED.summary_embedding,
+            -- COALESCE, not a straight overwrite: a run whose embedding call failed
+            -- arrives as NULL (summarizer returns `embedding: []`), and overwriting
+            -- would drop an already-embedded window out of vector search. NULL ->
+            -- vector still upgrades when a later retry does produce one.
+            summary_embedding = COALESCE(EXCLUDED.summary_embedding, summaries.summary_embedding),
             updated_at = NOW()
         """,
         params,

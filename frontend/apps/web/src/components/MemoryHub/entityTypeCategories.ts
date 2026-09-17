@@ -17,7 +17,6 @@ import {
 } from '@/components/icons';
 import { EVENTS_EXPLORER_TYPES, isEventsExplorer } from '@/pages/MemoryPage/explorerRoute';
 
-
 export type EntityTypeIcon = ComponentType<{ className?: string; colorized?: boolean }>;
 
 export type WhatEntityTypeItem = {

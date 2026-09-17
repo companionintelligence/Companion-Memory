@@ -33,7 +33,8 @@ export function ContentFacetFilter({ label, param, options, icon: Icon, modal = 
 
   const { CheckboxItem, Content, Label, Separator, Trigger } = DropdownMenu;
 
-  const value = selected.length === 0 ? 'all' : selected.length === 1 ? selected[0] : `${selected.length} selected`;
+  const value =
+    selected.length === 0 ? 'all' : selected.length === 1 ? selected[0] : `${selected.length} selected`;
 
   const setSelected = (next: string[]) => {
     setSearchParams((params) => {
@@ -48,7 +49,9 @@ export function ContentFacetFilter({ label, param, options, icon: Icon, modal = 
   };
 
   const toggle = (option: string) => {
-    setSelected(selected.includes(option) ? selected.filter((item) => item !== option) : [...selected, option]);
+    setSelected(
+      selected.includes(option) ? selected.filter((item) => item !== option) : [...selected, option],
+    );
   };
 
   return (

@@ -1,4 +1,5 @@
 import type { ComponentProps, MouseEvent } from 'react';
+import { useState } from 'react';
 
 import {
   buildApiUrl,
@@ -28,17 +29,35 @@ export function OidcButton({
   label,
   variant,
   redirect,
+  signupCode,
 }: {
   label: string;
   variant?: ButtonVariant;
   redirect?: string;
+  /**
+   * An invitation to an appliance that already has an owner. The backend
+   * stashes it in a cookie on the initiate hop and burns it on the callback
+   * (OidcController), so it rides the same round-trip as the sign-in itself —
+   * there is no second request in which to present it.
+   */
+  signupCode?: string;
 }) {
+  // A rejected open is the difference between "signing you in" and nothing at
+  // all, so it has to be visible. This was console.error only, which on the
+  // desktop app means invisible: the button looked dead and gave the user
+  // nothing to act on.
+  const [openError, setOpenError] = useState<string | null>(null);
+
   // Optional post-login destination (a safe same-origin path the server re-validates),
   // carried through the full-page OIDC round-trip so the user lands back where they were.
   const params = new URLSearchParams();
 
   if (redirect) {
     params.set('redirect', redirect);
+  }
+
+  if (signupCode?.trim()) {
+    params.set('signup_code', signupCode.trim());
   }
 
   // Web: same-origin path, anchor navigates normally (unchanged behavior).
@@ -59,21 +78,34 @@ export function OidcButton({
       // has navigated to http://127.0.0.1:8642.
       const oidcUrl = isTauriPlatform() ? `${window.location.origin}${oidcPath}` : buildApiUrl(oidcPath);
 
+      setOpenError(null);
       openExternalUrl(oidcUrl).catch((err: unknown) => {
-        // Surface the failure instead of `void`-ing it — a rejected native/Tauri
-        // open call (bad URL, ACL denial, no default browser, ...) must not look
-        // like a successful click.
-        console.error('Failed to open the CI Portal sign-in page', err);
+        // A rejected native/Tauri open call (bad URL, ACL denial, no default
+        // browser, ...) must not look like a successful click.
+        console.error('Failed to open the Companion sign-in page', err);
+        setOpenError('Could not open your browser to sign in. Use email and password instead.');
       });
     }
     // Web: let the anchor navigate normally.
   };
 
   return (
-    <Button variant={variant} className="w-full" asChild>
-      <a href={webHref} onClick={handleClick}>
-        {label}
-      </a>
-    </Button>
+    <>
+      <Button variant={variant} className="w-full" asChild>
+        <a href={webHref} onClick={handleClick}>
+          {label}
+        </a>
+      </Button>
+      {/* `role="alert"` so the failure is announced: focus stays on the link
+          after the click, and a paragraph appearing below it is otherwise
+          silent — which is the same dead button, for a screen-reader user.
+          Matches the inline-error shape used elsewhere (DeviceConnectPage,
+          TaskSlate); `<Alert>` is this app's page-level banner, not this. */}
+      {openError && (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {openError}
+        </p>
+      )}
+    </>
   );
 }

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Brackets, Repository } from 'typeorm';
 
@@ -172,9 +172,30 @@ export type TerminalJobClearScope = 'dead-letter' | 'failed';
 
 export interface TerminalJobClearDto {
   readonly scope: TerminalJobClearScope;
-  /** Rows removed from `pgboss.job` for this scope. */
+  /** Rows actually removed for this scope, across every table it touches. */
   readonly deleted: number;
+  /**
+   * Rows this scope deliberately LEFT BEHIND, so the caller can say why the
+   * number on screen did not reach zero rather than leaving an operator to
+   * click again.
+   *
+   * Only `dead-letter` can be non-zero: it is the count of dead letters the
+   * reaper has not copied into `ci.pipeline_dead_letters` yet, which this
+   * refuses to delete. Always 0 for `failed`.
+   */
+  readonly retained: number;
 }
+
+/**
+ * The one predicate standing between `Clear` and permanent data loss.
+ *
+ * Schema-qualified rather than aliased on purpose: TypeORM's DELETE builder
+ * emits `DELETE FROM "pgboss"."job"` with no alias, so the correlated reference
+ * has to name the table. Writing it as `"pgboss"."job"."id"` also survives
+ * TypeORM later choosing to emit one.
+ */
+const HARVESTED_DEAD_LETTER =
+  'EXISTS (SELECT 1 FROM ci.pipeline_dead_letters d WHERE d.id = "pgboss"."job"."id")';
 
 @Injectable()
 export class JobQueryService {
@@ -192,30 +213,137 @@ export class JobQueryService {
   /**
    * Permanently delete terminal jobs the Health card has already named.
    *
-   * `dead-letter` removes every row on the dead-letter queue (exhausted retries,
-   * payload kept only until retention). `failed` removes the origin rows that
-   * minted those copies — still in state `failed`, not already on the DLQ.
-   * Neither touches live work (`created` / `active` / `retry`) or completed
-   * history. Irreversible; the Health card asks before calling.
+   * `dead-letter` removes dead-letter rows **that have already been harvested**;
+   * `failed` removes the origin rows that minted those copies, wherever they
+   * currently live. Neither touches live work (`created` / `active` / `retry`)
+   * or completed history. Irreversible; the Health card asks before calling.
    */
   async clearTerminal(context: RequestContext, scope: TerminalJobClearScope): Promise<TerminalJobClearDto> {
     if (!context.userId) {
       throw new UnauthorizedException('A user context is required.');
     }
 
-    const builder = this.jobRepository.createQueryBuilder().delete().from(PgBossJobEntity);
+    return scope === 'dead-letter' ? this.clearHarvestedDeadLetters() : this.clearFailedOrigins();
+  }
 
-    if (scope === 'dead-letter') {
-      builder.where('name = :deadLetter', { deadLetter: DEAD_LETTER_QUEUE });
-    } else {
-      builder
-        .where('state = :failed', { failed: 'failed' })
-        .andWhere('name != :deadLetter', { deadLetter: DEAD_LETTER_QUEUE });
+  /**
+   * Delete only the dead letters `DeadLetterReaperListener` has already copied
+   * into `ci.pipeline_dead_letters`.
+   *
+   * ── Why this cannot be an unqualified DELETE ───────────────────────────────
+   *
+   * It shipped as one — `DELETE FROM pgboss.job WHERE name = 'dead-letter'`,
+   * no predicate — and the dead-letter queue is not unconsumed. The reaper
+   * copies at most DEAD_LETTER_REAP_BATCH (500) rows every two minutes into
+   * `ci.pipeline_dead_letters`, which is the table the Dead letters card on this
+   * same page renders and replays from. So `Clear` was racing a harvest it could
+   * not see: at 20,000 dead letters the reaper needs ~80 minutes to drain, and a
+   * click ten minutes in destroyed ~19,500 payloads plus their failure output
+   * from BOTH tables, with no ledger row and no replay path.
+   *
+   * It is worst in exactly the case the button is most tempting. When the worker
+   * is down the reaper's cron is not ticking either, so nothing has been
+   * harvested at all and an unqualified Clear destroys 100% of the evidence
+   * about what died — during the incident that produced it.
+   *
+   * `DeadLetterReaperListener`'s own header states the invariant this broke:
+   * it never deletes, so pg-boss's copy stays inspectable alongside ours, and
+   * `purgeReplayed` refuses to touch an unreplayed letter at ANY age because the
+   * payload is frequently the only surviving copy of a record the source will
+   * not re-send. A Clear button is not a licence to make that decision for the
+   * operator, so it deletes only what the ledger already holds.
+   *
+   * The predicate is exact rather than approximate: `ci.pipeline_dead_letters.id`
+   * IS the originating `pgboss.job.id` (the reaper sets it deliberately, as its
+   * idempotency key), so `EXISTS (… WHERE d.id = job.id)` matches a row if and
+   * only if its payload is safe in our table. There is no clock and no window
+   * involved, so nothing about it can be too aggressive under load.
+   */
+  private async clearHarvestedDeadLetters(): Promise<TerminalJobClearDto> {
+    // Fail CLOSED when the ledger is absent. `ci.pipeline_dead_letters` is
+    // created by a migration, so it is missing on a node that started before
+    // `migrate-database` finished — and on such a node "nothing is harvested" is
+    // indistinguishable from "everything is", which is precisely the confusion
+    // that must not end in a DELETE. Raising here is also what keeps the
+    // predicate honest: without the guard the missing relation would surface as
+    // a raw Postgres error an operator would reasonably read as a UI bug.
+    const [ledger] = await this.jobRepository.query<Array<{ present: boolean }>>(
+      `SELECT to_regclass('ci.pipeline_dead_letters') IS NOT NULL AS present`,
+    );
+
+    if (ledger?.present !== true) {
+      throw new ServiceUnavailableException(
+        'Dead letters cannot be cleared until ci.pipeline_dead_letters exists — run the database ' +
+          'migrations first. Clearing without it would delete payloads nothing has copied.',
+      );
     }
 
-    const result = await builder.execute();
+    const result = await this.jobRepository
+      .createQueryBuilder()
+      .delete()
+      .from(PgBossJobEntity)
+      .where('name = :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
+      .andWhere(HARVESTED_DEAD_LETTER)
+      .execute();
 
-    return { scope, deleted: result.affected ?? 0 };
+    // Counted AFTER the delete, so it is what is still there rather than what we
+    // predicted would be: every dead-letter row left is by definition one the
+    // reaper has not reached. Slightly racy against a concurrent harvest, which
+    // is the harmless direction — it can only over-report, and the next tick
+    // fixes it.
+    const retained = await this.jobRepository
+      .createQueryBuilder('job')
+      .where('job.name = :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
+      .getCount();
+
+    return { scope: 'dead-letter', deleted: result.affected ?? 0, retained };
+  }
+
+  /**
+   * Delete the `failed` origin rows — from `pgboss.archive` as well as
+   * `pgboss.job`.
+   *
+   * The archive half is not an extension of scope, it is what makes the button
+   * finish. The number this clears is `JobMonitorService.getSummary`'s
+   * `failed`, which is `job('failed') + archived('failed')`; the delete covered
+   * only the first term, so on any appliance old enough for pg-boss's
+   * maintenance to have archived a failure — which is every appliance, the
+   * archive being where finished rows go — the count could not reach zero. The
+   * operator clicks, watches a number that does not move, and clicks again.
+   *
+   * Safe to widen precisely because of what the OTHER scope now refuses to
+   * touch: every queue is created with `deadLetter: 'dead-letter'`, so a job
+   * that exhausts its retries mints an independent dead-letter copy carrying the
+   * same payload, and that copy is a different row with a different id which
+   * nothing here deletes. A failed origin row is a duplicate of evidence held
+   * elsewhere; an unharvested dead letter is the evidence.
+   *
+   * `name != 'dead-letter'` on both tables for the same reason it was always
+   * there: a dead letter that pg-boss has since archived is still a dead letter,
+   * and it is the other scope's business, under the other scope's predicate.
+   */
+  private async clearFailedOrigins(): Promise<TerminalJobClearDto> {
+    const live = await this.jobRepository
+      .createQueryBuilder()
+      .delete()
+      .from(PgBossJobEntity)
+      .where('state = :failed', { failed: 'failed' })
+      .andWhere('name != :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
+      .execute();
+
+    const archived = await this.archiveRepository
+      .createQueryBuilder()
+      .delete()
+      .from(PgBossArchiveEntity)
+      .where('state = :failed', { failed: 'failed' })
+      .andWhere('name != :deadLetter', { deadLetter: DEAD_LETTER_QUEUE })
+      .execute();
+
+    return {
+      scope: 'failed',
+      deleted: (live.affected ?? 0) + (archived.affected ?? 0),
+      retained: 0,
+    };
   }
 
   async list(context: RequestContext, query: JobQuery): Promise<JobListDto> {

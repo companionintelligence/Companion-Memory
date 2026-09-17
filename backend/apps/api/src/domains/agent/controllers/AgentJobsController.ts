@@ -14,12 +14,26 @@ import { ValidationPipe } from '@ci/common/pipes';
 
 import { AgentDispatchService } from '../services/AgentDispatchService';
 
-const createSchema = z.object({
+/**
+ * `/v1/agent/jobs` is a raw-uuid plane in both directions: the `taskId` it
+ * writes to `ci.agent_jobs` and echoes back in every response IS the
+ * `ci.tasks.id`. GraphQL clients hold a global id (`base64("task:<uuid>")`)
+ * and must decode before calling — the web app does so in
+ * `lib/agentChat.ts:taskUuidFromGlobalId`. Say that in the rejection, because
+ * a bare "Invalid uuid" against a base64 blob reads as a server bug and cost
+ * this endpoint one silent outage already.
+ */
+const taskIdSchema = z
+  .string()
+  .uuid('taskId must be the raw ci.tasks uuid, not a GraphQL global id — decode base64("task:<uuid>") first');
+
+/** Exported so the id contract can be asserted without standing up Nest. */
+export const createDispatchSchema = z.object({
   sourceKind: z.string().min(1).max(80),
   sourceId: z.string().min(1).max(200),
   title: z.string().min(1).max(400),
   body: z.string().max(8000).optional().nullable(),
-  taskId: z.string().uuid().optional().nullable(),
+  taskId: taskIdSchema.optional().nullable(),
   packetMode: z.enum(['details', 'intents', 'both']).optional(),
   ask: z.string().max(4000).optional().nullable(),
 });
@@ -56,7 +70,7 @@ export class AgentJobsController {
   @RequireCapability(WRITE_CAPABILITY)
   async create(
     @Context() context: RequestContext,
-    @Body(new ValidationPipe(createSchema)) body: z.infer<typeof createSchema>,
+    @Body(new ValidationPipe(createDispatchSchema)) body: z.infer<typeof createDispatchSchema>,
   ) {
     return this.dispatchService.dispatch(toServiceContext(context), body);
   }

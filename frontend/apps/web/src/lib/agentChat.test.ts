@@ -9,8 +9,29 @@ import {
   stashAgentChatContext,
   readAgentChatContext,
   clearAgentChatContext,
+  taskUuidFromGlobalId,
   type AgentChatContext,
 } from './agentChat';
+
+describe('taskUuidFromGlobalId', () => {
+  const TASK_UUID = '018f3a2b-4c5d-7e8f-9a0b-1c2d3e4f5061';
+
+  it('unwraps a task global id to the raw uuid /v1 wants', () => {
+    expect(taskUuidFromGlobalId(btoa(`task:${TASK_UUID}`))).toBe(TASK_UUID);
+  });
+
+  it('refuses another entity type, so a Note id never becomes a taskId', () => {
+    expect(taskUuidFromGlobalId(btoa(`note:${TASK_UUID}`))).toBeNull();
+  });
+
+  it("refuses sourceId's title fallback and anything else undecodable", () => {
+    expect(taskUuidFromGlobalId('Book the dentist')).toBeNull();
+    expect(taskUuidFromGlobalId(btoa('task:not-a-uuid'))).toBeNull();
+    expect(taskUuidFromGlobalId(TASK_UUID)).toBeNull();
+    expect(taskUuidFromGlobalId(null)).toBeNull();
+    expect(taskUuidFromGlobalId(undefined)).toBeNull();
+  });
+});
 
 describe('namedChatContext', () => {
   it('trims fields and falls back when the title is blank', () => {

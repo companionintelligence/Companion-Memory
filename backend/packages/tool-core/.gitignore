@@ -1,0 +1,4 @@
+# Build output. `tsc --build` writes here; @ci/be-api references this project,
+# so its own `yarn build` produces this as a side effect.
+dist
+coverage

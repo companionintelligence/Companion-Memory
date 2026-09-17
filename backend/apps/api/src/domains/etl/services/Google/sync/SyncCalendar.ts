@@ -95,7 +95,18 @@ export async function syncCalendar({
       const params = new URLSearchParams({
         maxResults: '200',
         showDeleted: 'true',
-        // Masters + overrides only — see the historical branch above.
+        // Masters + overrides only — see the historical branch above. The
+        // recurring-series gap this leaves (nothing expands the stored RRULE,
+        // so the planner and free/busy see only the first occurrence) is real,
+        // but a bounded forward expansion here — singleEvents=true plus
+        // timeMin/timeMax, the shape SyncOutlookCalendar gets for free because
+        // calendarView/delta expands server-side — is not available on this
+        // branch even setting identity aside: Google forbids timeMin/timeMax
+        // alongside syncToken, so a forward window would cost every incremental
+        // run its token and re-list the whole window each tick. Closing the gap
+        // is a read-time expansion of the RRULE that TransformGoogleCalendar
+        // persists on metadata.recurrenceRule for exactly that purpose, not a
+        // change to what this sync fetches.
         singleEvents: 'false',
       });
 

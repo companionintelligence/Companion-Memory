@@ -125,6 +125,14 @@ interface ConflictState {
   otherProductTitle: string | null;
 }
 
+interface PendingRemoval {
+  namespace: ObjectIdentifierNamespace;
+  /** Normalized matching key — what the mutation is keyed on. */
+  value: string;
+  /** What the row shows (the raw form, when there is one), for the copy. */
+  displayValue: string;
+}
+
 interface Props {
   /** GlobalUID-encoded item id — the mutations decode it server-side. */
   itemId: string;
@@ -153,6 +161,7 @@ export function ObjectIdentifierList({ itemId, identifiers, onChanged, readOnly 
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictState | null>(null);
   const [mergeOpen, setMergeOpen] = useState(false);
+  const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
 
   const [addIdentifier, { loading: adding }] = useMutation(ADD_ITEM_IDENTIFIER);
   const [removeIdentifier, { loading: removing }] = useMutation(REMOVE_ITEM_IDENTIFIER);
@@ -196,15 +205,24 @@ export function ObjectIdentifierList({ itemId, identifiers, onChanged, readOnly 
     }
   };
 
-  const remove = async (row: { namespace: ObjectIdentifierNamespace; value: string }) => {
+  /**
+   * Confirmed removal. A code IS how this thing is recognised again — a scan
+   * that no longer resolves is silent data loss with nothing to undo it — so
+   * the trash control only opens the confirmation, and this runs from there.
+   */
+  const remove = async (row: PendingRemoval) => {
     setError(null);
 
     try {
       await removeIdentifier({
         variables: { input: { itemId, namespace: row.namespace, value: row.value } },
       });
+      setPendingRemoval(null);
       await onChanged?.();
     } catch (cause) {
+      // Close on failure too: the message renders in the list underneath,
+      // which an open dialog would cover.
+      setPendingRemoval(null);
       setError(cause instanceof Error ? cause.message : 'Could not remove that code.');
     }
   };
@@ -275,7 +293,9 @@ export function ObjectIdentifierList({ itemId, identifiers, onChanged, readOnly 
                     variant="ghost"
                     aria-label={`Remove ${displayValue}`}
                     disabled={removing}
-                    onClick={() => void remove({ namespace: row.namespace, value: row.value })}
+                    onClick={() =>
+                      setPendingRemoval({ namespace: row.namespace, value: row.value, displayValue })
+                    }
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -362,6 +382,38 @@ export function ObjectIdentifierList({ itemId, identifiers, onChanged, readOnly 
           </div>
         </div>
       )}
+
+      <AlertDialog open={pendingRemoval !== null} onOpenChange={(open) => !open && setPendingRemoval(null)}>
+        <AlertDialog.Content>
+          <AlertDialog.Header>
+            <AlertDialog.Title>Remove this code?</AlertDialog.Title>
+            <AlertDialog.Description>
+              {`"${pendingRemoval?.displayValue ?? ''}" will no longer identify this thing, so scanning it will not find it again. This cannot be undone — the code has to be added back by hand.`}
+            </AlertDialog.Description>
+          </AlertDialog.Header>
+          <AlertDialog.Footer>
+            <AlertDialog.Cancel disabled={removing}>Cancel</AlertDialog.Cancel>
+            <AlertDialog.Action
+              // AlertDialog.Action renders the DEFAULT button variant, so the
+              // destructive styling the Dialog-based delete modals get from
+              // `variant="destructive"` has to be spelled out here.
+              className="bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60"
+              disabled={removing}
+              onClick={(e) => {
+                // Radix auto-closes on Action click; keep it open so the
+                // in-flight state stays visible until the write finishes.
+                e.preventDefault();
+
+                if (pendingRemoval) {
+                  void remove(pendingRemoval);
+                }
+              }}
+            >
+              {removing ? 'Removing…' : 'Remove code'}
+            </AlertDialog.Action>
+          </AlertDialog.Footer>
+        </AlertDialog.Content>
+      </AlertDialog>
 
       <AlertDialog open={mergeOpen} onOpenChange={setMergeOpen}>
         <AlertDialog.Content>

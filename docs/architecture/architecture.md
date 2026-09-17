@@ -212,7 +212,7 @@ The table below is grouped roughly by concern rather than alphabetically.
 | `onboarding` | First-run flow and account bootstrap |
 | `connections` | OAuth clients (Google, MS, Facebook, Spotify, Slack, Reddit, …), token storage |
 | `etl` | Per-provider sync services (`Google/`, `Microsoft/`, `Facebook/`, `Spotify/`, `Steam/`, `GitHub/`, `Slack/`, `Reddit/`, `Signal/`), `SyncOrchestrator`, `PromoteService` (raw → graph) |
-| `import` | **The native import/ETL subsystem** (ported from the retired CI-Import-Tools): file datasources, the `unpack → parse → media → push` stage machine over the `ci_import` staging schema, the `ci-import` CLI, and `doctor` data-quality checks |
+| `import` | **The native import/ETL subsystem** (ported from the retired CI-Import-Tools): file datasources, the `unpack → parse → media → push` stage machine over the `ci_import` staging schema, and `doctor` data-quality checks. The `ci` CLI that drives it is its own workspace, `backend/apps/cli` |
 | `ingest` | The REST bulk-ingest plane (`/v1/*`): NDJSON + JSON-envelope batches for events, communications, contents, inventory, browser-activity, notes, positions, receipts, product-models and observations, plus `/v1/ingest/finish` + `/v1/ingest/status` |
 | `graph` | Graph primitives over the relational `ci.entities`/`ci.relationships` tables (no graph extension), plus `entity_identifiers`, `object_identifiers`, `item_relationships`, and bulk graph ingest |
 | `memory` | High-level domain services: `PersonService`, `PlaceService`, `EventService`, `ContentService`, `FileService`, `ItemService`, `ConceptService`, `CommunicationService`, `UserContextService`, the merge/duplicate services (`PersonMergeService`, `ObjectMergeService`, `MergeCandidateService`, …), the object-identity services (`ObjectMintService`, `ObjectResolutionService`, `ProductModelService`, `ReceiptService`) and `GraphDeltaWriter` |
@@ -236,7 +236,7 @@ The table below is grouped roughly by concern rather than alphabetically.
 | `maintenance` | Post-ingest enrichment + operator endpoints (`/api/maintenance/*`): geocoding, linking backfills, search-index backfill (now deferring to the pipeline ledger for types it owns), index deferral, ingest reset |
 | `geocode` | Forward/reverse geocoding + `ci.geocode_cache` |
 | `agent` | Agent memory (`/memory/*`) and the intent catalog (`GET /api/intents`, `GET /api/agent/intents`) |
-| `tools` | The shared **ToolRegistry** — `IntentDefinition` is the canonical tool schema; feeds MCP, the intent catalog and the on-device tool layers |
+| `tools` | The shared **ToolRegistry** — `IntentDefinition` is the canonical tool schema; feeds MCP, the intent catalog and the on-device tool layers. The framework-free half (vocabulary, execution policy, registry) is `@ci/tool-core` in `backend/packages/tool-core`; this domain holds the 33 tools, the pending-action queue and the Nest wiring |
 | `mcp` | The MCP server (`POST /mcp`) — every registered tool exposed as a privacy-labelled MCP tool |
 | `asks` | The interpersonal **Ask**: bounded questions against another user's memory, gated by standing consent grants, with a per-ask audit log |
 | `peers` | Peer federation — two appliances exchanging asks (`POST /agent/v1/ask`); discovery is CI-Portal's job, the relationship and every answer stay on the two boxes |
@@ -386,7 +386,7 @@ throughput, and rows become searchable when the pipeline's `index.*` stages (or 
 `/api/maintenance/search-index/backfill` safety net) reach them. See
 [api/rest.md](../api/rest.md#ingest-bulk-capture-write-path),
 [api/graphql.md §4.7](../api/graphql.md#47-bulk-ingest-mutations-the-importer-surface--detailed),
-[docs/cli/ci-import.md](../cli/ci-import.md),
+[docs/cli/ci.md](../cli/ci.md),
 and the [bulk load runbook](../../backend/apps/api/db/postgres/BULK_LOAD_RUNBOOK.md).
 
 ---

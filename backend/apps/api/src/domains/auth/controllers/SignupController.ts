@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Post, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 
@@ -31,6 +31,38 @@ export class SignupController {
     private readonly csrfService: CsrfService,
   ) {}
 
+  /**
+   * Whether a signup code is required *right now*.
+   *
+   * The feature flag ships on, which on a self-hosted appliance meant nobody
+   * could ever create the first account: the code table starts empty, no
+   * migration seeds it, and nothing in the product mints one — so the box a
+   * user just installed had no way in at all.
+   *
+   * An appliance with zero accounts has nothing to protect yet, so the first
+   * one is always allowed. The gate closes again the moment it exists, which is
+   * the only window that matters — everyone after the owner still needs a code
+   * wherever the flag is on.
+   */
+  private async isSignupCodeRequired(): Promise<boolean> {
+    if (!(await this.featureService.isFeatureEnabled('require.signup.codes'))) {
+      return false;
+    }
+
+    return !(await this.userService.hasNoUsers());
+  }
+
+  /**
+   * What the signup form needs to render itself correctly, before the user has
+   * an account and therefore before any authenticated query is available.
+   * Public by necessity, and says nothing an unauthenticated caller could not
+   * already learn by posting an empty signup.
+   */
+  @Get('signup/requirements')
+  async signupRequirements() {
+    return { codeRequired: await this.isSignupCodeRequired() };
+  }
+
   @Post('signup')
   @UseGuards(CsrfGuard)
   async signup(
@@ -40,7 +72,7 @@ export class SignupController {
   ) {
     const { name, email, password, signup_code } = input;
 
-    const isSignupCodeRequired = await this.featureService.isFeatureEnabled('require.signup.codes');
+    const isSignupCodeRequired = await this.isSignupCodeRequired();
 
     if (isSignupCodeRequired) {
       if (signup_code == null) {

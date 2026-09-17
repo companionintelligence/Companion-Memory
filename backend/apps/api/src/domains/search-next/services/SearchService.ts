@@ -236,6 +236,85 @@ type PromptSearchOptions = BuildPromptQueryOptions & {
   excludeTypes?: IndexableEntity[];
 };
 
+/** The strategy {@link SearchService.search} actually ran, after `'auto'` resolved. */
+export type SearchModeTaken = 'semantic' | 'keyword' | 'boosted' | 'hybrid';
+
+/**
+ * What {@link SearchService.searchPage} returns: the page AND how big the
+ * match set behind it is.
+ *
+ * `search()` hands back a bare array, so a caller cannot tell a set that
+ * happens to be exactly `maxResults` long from one that was cut off there —
+ * the same blind spot {@link PromptSearchResult} closes for asks. A chat tool
+ * that turns a full page into "you have 100 photos of rabbits" states a number
+ * that is only the cap. This shape is what lets it say "at least 100" instead,
+ * or the exact figure when the mode can count.
+ *
+ * `totalMatches` is EXACT for the lexical modes (`keyword`, `boosted`): both
+ * already rank every matching row before the LIMIT, so `count(*) OVER ()` is
+ * free. It is `null` for `semantic` and `hybrid`, where "the match set" is a
+ * nearest-neighbour list bounded by the HNSW candidate budget rather than a
+ * predicate — there is no honest number to report, only whether the page came
+ * back full.
+ */
+export interface SearchPage {
+  items: EntityIdentifier<IndexableEntity>[];
+  /** Exact size of the match set before the cap, or `null` when the mode cannot count. */
+  totalMatches: number | null;
+  /**
+   * The page may not be the whole match set: `totalMatches > items.length`,
+   * or a full page from a mode that cannot count. "At least", not "exactly".
+   */
+  truncated: boolean;
+  /** The cap that was applied, so a caller can explain the truncation. */
+  limit: number;
+  modeTaken: SearchModeTaken;
+}
+
+/**
+ * Options for {@link SearchService.count}: the lexical `WHERE` of a keyword
+ * search and nothing else. No mode, because only the lexical predicate has a
+ * countable match set; no `maxResults`, because a count is the one thing a cap
+ * must not touch.
+ *
+ * `query` is optional: absent or blank means "everything in scope", which is
+ * how "how many photos do I have" is answered — a question with no search
+ * term, which a tool that demanded one turned into a validation error
+ * (measured live 2026-09-16: the model sent `query: ""` and the turn died).
+ */
+type CountOptions = { query?: string } & (
+  | { includeTypes: IndexableEntity[]; excludeTypes?: never }
+  | { excludeTypes: IndexableEntity[]; includeTypes?: never }
+  | { includeTypes?: never; excludeTypes?: never }
+);
+
+/** A ranked row that may also carry the window count of its whole match set. */
+type CountedRowResult = ScoredRowResult & { total_matches?: string | number | null };
+
+/** What each private strategy hands the dispatcher: its rows, its count (if any), and the LIMIT it ran. */
+type StrategyResult = {
+  results: ScoredSearchResult[];
+  totalMatches: number | null;
+  limit: number;
+};
+
+/** Default page size for the lexical modes; the semantic default is the retrieval policy's. */
+const DEFAULT_MAX_RESULTS = 25;
+
+/**
+ * The tsquery both lexical modes AND {@link SearchService.count} search on, as
+ * one SQL fragment so a count can never disagree with the page it explains.
+ *
+ * `websearch_to_tsquery` builds an AND-joined query; the `&` → `|` rewrite
+ * turns it into an OR so a 2-3 word query like "dog breed" matches an entity
+ * whose vector has only one of the tokens (Mochi's vector has 'dog' but not
+ * 'breed'). `ts_rank` still rewards entities matching more terms. Single-term
+ * queries are unaffected (no `&` to replace); phrase queries (`<->`) and
+ * negations (`!`) survive the literal string replace. Expects the query text
+ * bound as `$2`.
+ */
+const KEYWORD_TSQUERY_SQL = `replace(websearch_to_tsquery('english', $2)::text, ' & ', ' | ')::tsquery`;
+
 @Injectable()
 export class SearchService {
   constructor(
@@ -279,6 +358,20 @@ export class SearchService {
     context: UserServiceContext,
     options: SearchOptions,
   ): Promise<EntityIdentifier<IndexableEntity>[]> {
+    const page = await this.searchPage(context, options);
+
+    return page.items;
+  }
+
+  /**
+   * {@link search}, plus how many rows the query matched before the cap.
+   *
+   * Same dispatch, same telemetry row, same page — `search()` is this with the
+   * count thrown away, so the two can never rank differently. Callers that
+   * report a NUMBER to someone (the chat tools, which turn a page into "you
+   * have N ...") read this; callers that only consume the rows keep `search()`.
+   */
+  async searchPage(context: UserServiceContext, options: SearchOptions): Promise<SearchPage> {
     const resolvedOptions = this.applyDefaultTypeExclusions(options);
     const { mode = 'auto' } = resolvedOptions;
 
@@ -287,32 +380,34 @@ export class SearchService {
     // and can record. Logged as 'auto' it would be unreadable: auto is the
     // default, so it is most calls, and the three strategies it picks between
     // have completely different recall behaviour.
-    const modeTaken = mode === 'auto' ? resolveAutoMode(resolvedOptions.query) : mode;
+    const modeTaken: SearchModeTaken = mode === 'auto' ? resolveAutoMode(resolvedOptions.query) : mode;
     const startedAt = Date.now();
 
-    let results: ScoredSearchResult[];
+    let outcome: StrategyResult;
 
     switch (modeTaken) {
       case 'semantic':
-        results = await this.semanticSearch(context, resolvedOptions);
+        outcome = await this.semanticSearch(context, resolvedOptions);
         break;
 
       case 'keyword':
-        results = await this.keywordSearch(context, resolvedOptions);
+        outcome = await this.keywordSearch(context, resolvedOptions);
         break;
 
       case 'boosted':
-        results = await this.boostedKeywordSearch(context, resolvedOptions);
+        outcome = await this.boostedKeywordSearch(context, resolvedOptions);
         break;
 
       case 'hybrid':
-        results = await this.hybridSearch(context, resolvedOptions);
+        outcome = await this.hybridSearch(context, resolvedOptions);
         break;
 
       default:
-        results = await this.keywordSearch(context, resolvedOptions);
+        outcome = await this.keywordSearch(context, resolvedOptions);
         break;
     }
+
+    const { results, totalMatches, limit } = outcome;
 
     this.recordQuery({
       userId: context.userId,
@@ -326,10 +421,122 @@ export class SearchService {
       latencyMs: Date.now() - startedAt,
     });
 
-    return results.map((result) => ({
-      id: result.id,
-      type: result.type,
-    }));
+    return {
+      items: results.map((result) => ({
+        id: result.id,
+        type: result.type,
+      })),
+      totalMatches,
+      // A mode that cannot count can still say when its page came back full:
+      // the index may well have had more, so "exactly this many" is the one
+      // claim a full page never supports.
+      truncated: totalMatches == null ? results.length >= limit : totalMatches > results.length,
+      limit,
+      modeTaken,
+    };
+  }
+
+  /**
+   * How many indexed rows match `query` lexically — the whole match set, with
+   * no LIMIT, no ranking, no rows.
+   *
+   * Runs the same tsquery and the same type scope as the keyword page
+   * ({@link KEYWORD_TSQUERY_SQL}, {@link applyDefaultTypeExclusions}), so the
+   * number it returns is the number a `searchPage` of the same query would
+   * report as `totalMatches`. It exists so a caller asked "how many" can answer
+   * with a `count(*)` against the GIN index instead of paging entities through
+   * a context budget that drops most of them.
+   *
+   * Lexical only, deliberately. A semantic "match set" is a nearest-neighbour
+   * list cut at a distance threshold and an HNSW candidate budget; counting it
+   * would report a property of the index settings, not of the corpus.
+   */
+  async count(context: UserServiceContext, options: CountOptions): Promise<number> {
+    const query = options.query?.trim() ?? '';
+    const resolvedOptions = this.applyDefaultTypeExclusions({ ...options, query });
+    const startedAt = Date.now();
+
+    // No term: count the scope itself. The type filter is the only predicate,
+    // so it binds as $2 rather than after the query text.
+    const { sql, params } =
+      query.length > 0
+        ? this.buildKeywordCountPlan(context.userId, query, resolvedOptions)
+        : this.buildScopeCountPlan(context.userId, resolvedOptions);
+
+    const rows: { total_matches: string | number }[] = await this.dataSource.query(sql, params);
+    const totalMatches = Number(rows[0]?.total_matches ?? 0);
+
+    this.recordQuery({
+      userId: context.userId,
+      caller: 'search_count',
+      // 'scope' is a count with no term — the honest name for a mode that ran
+      // no text match at all, and one a dashboard can tell apart from keyword.
+      modeTaken: query.length > 0 ? 'keyword' : 'scope',
+      queryTokenCount: queryTokenCount(query),
+      includeTypes: resolvedOptions.includeTypes ?? null,
+      excludeTypes: resolvedOptions.excludeTypes ?? null,
+      // The count IS the result: this path returns no rows, so "how many did
+      // it produce" and "how many matched" are the same number here.
+      resultCount: totalMatches,
+      topScore: null,
+      latencyMs: Date.now() - startedAt,
+    });
+
+    return totalMatches;
+  }
+
+  /** `count(*)` of the rows in scope that match `query` lexically — the page's own predicate, uncapped. */
+  private buildKeywordCountPlan(
+    userId: string,
+    query: string,
+    scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
+  ): { sql: string; params: (string | string[])[] } {
+    const typeFilter = this.buildTypeFilter(scope, 3);
+
+    const sql = `
+      WITH q AS (
+        SELECT ${KEYWORD_TSQUERY_SQL} AS tq
+      )
+      SELECT count(*) AS total_matches
+      FROM
+        ci_search.vectors
+        CROSS JOIN q
+      WHERE user_id = $1
+        AND q.tq <> ''::tsquery
+        AND vector @@ q.tq
+        ${typeFilter.clause}
+    `;
+
+    const params: (string | string[])[] = [userId, query];
+
+    if (typeFilter.param) {
+      params.push(typeFilter.param);
+    }
+
+    return { sql, params };
+  }
+
+  /** `count(*)` of every indexed row in scope, no text match — "how many photos do I have". */
+  private buildScopeCountPlan(
+    userId: string,
+    scope: Pick<SemanticSearchScope, 'includeTypes' | 'excludeTypes'>,
+  ): { sql: string; params: (string | string[])[] } {
+    const typeFilter = this.buildTypeFilter(scope, 2);
+
+    const sql = `
+      SELECT count(*) AS total_matches
+      FROM ci_search.vectors
+      WHERE user_id = $1
+        ${typeFilter.clause}
+    `;
+
+    const params: (string | string[])[] = [userId];
+
+    if (typeFilter.param) {
+      params.push(typeFilter.param);
+    }
+
+    return { sql, params };
   }
 
   /**
@@ -779,11 +986,8 @@ export class SearchService {
    * Weighting: 50% semantic + 50% keyword (when both present)
    * If only one type matches, that score is used directly.
    */
-  private async hybridSearch(
-    context: UserServiceContext,
-    options: SearchOptions,
-  ): Promise<ScoredSearchResult[]> {
-    const { maxResults = 25 } = options;
+  private async hybridSearch(context: UserServiceContext, options: SearchOptions): Promise<StrategyResult> {
+    const { maxResults = DEFAULT_MAX_RESULTS } = options;
 
     // Over-fetch so fusion has something to fuse: a row that ranks 30th on the
     // semantic side and 5th on the keyword side has to be present in BOTH lists
@@ -803,7 +1007,7 @@ export class SearchService {
     const doubledMaxResults = maxResults * 2;
 
     // Run both semantic and keyword searches in parallel
-    const [semanticResults, keywordResults] = await Promise.all([
+    const [semanticLeg, keywordLeg] = await Promise.all([
       this.semanticSearch(context, {
         ...options,
         maxResults: doubledMaxResults,
@@ -813,6 +1017,8 @@ export class SearchService {
         maxResults: doubledMaxResults,
       }),
     ]);
+    const semanticResults = semanticLeg.results;
+    const keywordResults = keywordLeg.results;
 
     // Normalize keyword scores (ts_rank scores vary widely, normalize to 0-1)
     const maxKeywordScore = Math.max(...keywordResults.map((r) => r.score), 0.001);
@@ -865,8 +1071,14 @@ export class SearchService {
       });
     });
 
-    // Sort by fused score and limit
-    return fusedResults.sort((a, b) => b.score - a.score).slice(0, maxResults);
+    // Sort by fused score and limit. The keyword leg knows its own match
+    // count, but the fused set is a union with the uncountable semantic leg, so
+    // no single number describes it honestly.
+    return {
+      results: fusedResults.sort((a, b) => b.score - a.score).slice(0, maxResults),
+      totalMatches: null,
+      limit: maxResults,
+    };
   }
 
   /**
@@ -938,10 +1150,7 @@ export class SearchService {
     return { sql, params, maxResults };
   }
 
-  private async semanticSearch(
-    context: UserServiceContext,
-    options: SearchOptions,
-  ): Promise<ScoredSearchResult[]> {
+  private async semanticSearch(context: UserServiceContext, options: SearchOptions): Promise<StrategyResult> {
     const vector = await this.embeddingGenerationService.generateEmbeddingString(options.query);
     const policy = await this.retrievalPolicy.get();
 
@@ -958,11 +1167,16 @@ export class SearchService {
 
     const results = await this.runSemanticPlan(plan);
 
-    return results.map((row: ScoredRowResult) => ({
-      id: row.entity_id,
-      type: row.entity_type as IndexableEntity,
-      score: parseFloat(row.score),
-    }));
+    return {
+      results: results.map((row: ScoredRowResult) => ({
+        id: row.entity_id,
+        type: row.entity_type as IndexableEntity,
+        score: parseFloat(row.score),
+      })),
+      // A KNN list has no match set to count — see {@link SearchPage}.
+      totalMatches: null,
+      limit: plan.maxResults,
+    };
   }
 
   /**
@@ -1019,29 +1233,25 @@ export class SearchService {
     }
   }
 
-  private async keywordSearch(
-    context: UserServiceContext,
-    options: SearchOptions,
-  ): Promise<ScoredSearchResult[]> {
-    const { query, maxResults = 25 } = options;
+  private async keywordSearch(context: UserServiceContext, options: SearchOptions): Promise<StrategyResult> {
+    const { query, maxResults = DEFAULT_MAX_RESULTS } = options;
 
     const typeFilter = this.buildTypeFilter(options, 3);
     const { weights } = await this.rankingLiterals();
 
-    // Same OR-rewriting as boostedKeywordSearch: turn the AND-joined tsquery
-    // from websearch_to_tsquery into an OR-joined one so a 2-3 word query like
-    // "dog breed" matches an entity whose vector has only one of the tokens
-    // (e.g. Mochi's vector has 'dog' but not 'breed').  ts_rank still rewards
-    // entities matching more terms.  Single-term queries are unaffected
-    // (no '&' to replace).
+    // `count(*) OVER ()` is evaluated after WHERE and before LIMIT, so it is
+    // the size of the whole match set on every returned row — and it is free
+    // here, because ORDER BY score already ranks every matching row before the
+    // LIMIT takes the top of it.
     const sql = `
       WITH q AS (
-        SELECT replace(websearch_to_tsquery('english', $2)::text, ' & ', ' | ')::tsquery AS tq
+        SELECT ${KEYWORD_TSQUERY_SQL} AS tq
       )
       SELECT
         entity_id,
         entity_type,
-        ts_rank('${weights}', vector, q.tq) as score
+        ts_rank('${weights}', vector, q.tq) as score,
+        count(*) OVER () AS total_matches
       FROM
         ci_search.vectors
         CROSS JOIN q
@@ -1059,13 +1269,17 @@ export class SearchService {
       params.push(typeFilter.param);
     }
 
-    const results = await this.dataSource.query(sql, params);
+    const rows: CountedRowResult[] = await this.dataSource.query(sql, params);
 
-    return results.map((row: ScoredRowResult) => ({
-      id: row.entity_id,
-      type: row.entity_type as IndexableEntity,
-      score: parseFloat(row.score),
-    }));
+    return {
+      results: rows.map((row) => ({
+        id: row.entity_id,
+        type: row.entity_type as IndexableEntity,
+        score: parseFloat(row.score),
+      })),
+      totalMatches: totalMatchesOf(rows),
+      limit: maxResults,
+    };
   }
 
   /**
@@ -1079,8 +1293,8 @@ export class SearchService {
   private async boostedKeywordSearch(
     context: UserServiceContext,
     options: SearchOptions,
-  ): Promise<ScoredSearchResult[]> {
-    const { query, maxResults = 25 } = options;
+  ): Promise<StrategyResult> {
+    const { query, maxResults = DEFAULT_MAX_RESULTS } = options;
 
     // Generate query embedding for similarity comparison
     const queryEmbedding = await this.embeddingGenerationService.generateEmbeddingString(query);
@@ -1090,23 +1304,24 @@ export class SearchService {
     const { weights, boost } = await this.rankingLiterals();
 
     // The natural-language questions we get from clients ("Where does Jordan
-    // live?") are routed here, but `websearch_to_tsquery` builds an AND-joined
-    // tsquery — every non-stopword has to appear in the SAME entity's vector,
-    // which almost never holds: "jordan" lives in the Person entity, "live"
-    // lives in the Place entity.  Flip the join from `&` to `|` so any token
-    // match qualifies and ts_rank still rewards entities matching more terms,
-    // with the embedding boost discriminating among them.  Single-term queries
-    // are unaffected (no `&` to replace) and phrase queries (`<->`) and
-    // negations (`!`) are preserved by the literal string replace.
+    // live?") are routed here, and an AND-joined tsquery would need every
+    // non-stopword in the SAME entity's vector, which almost never holds:
+    // "jordan" lives in the Person entity, "live" lives in the Place entity.
+    // {@link KEYWORD_TSQUERY_SQL} is the OR-joined form, so any token match
+    // qualifies and the embedding boost discriminates among them.
+    //
+    // `count(*) OVER ()` counts joined rows, which is one per match: the LEFT
+    // JOIN target has `UNIQUE (entity_type, entity_id)`, so it can add nothing.
     const sql = `
       WITH q AS (
-        SELECT replace(websearch_to_tsquery('english', $2)::text, ' & ', ' | ')::tsquery AS tq
+        SELECT ${KEYWORD_TSQUERY_SQL} AS tq
       )
       SELECT
         v.entity_id,
         v.entity_type,
         ts_rank('${weights}', v.vector, q.tq)
-          * (1 + ${boost} * COALESCE(1 - (e.embedding <=> $3::vector), 0)) as score
+          * (1 + ${boost} * COALESCE(1 - (e.embedding <=> $3::vector), 0)) as score,
+        count(*) OVER () AS total_matches
       FROM
         ci_search.vectors v
         CROSS JOIN q
@@ -1128,13 +1343,17 @@ export class SearchService {
       params.push(typeFilter.param);
     }
 
-    const results = await this.dataSource.query(sql, params);
+    const rows: CountedRowResult[] = await this.dataSource.query(sql, params);
 
-    return results.map((row: ScoredRowResult) => ({
-      id: row.entity_id,
-      type: row.entity_type as IndexableEntity,
-      score: parseFloat(row.score),
-    }));
+    return {
+      results: rows.map((row) => ({
+        id: row.entity_id,
+        type: row.entity_type as IndexableEntity,
+        score: parseFloat(row.score),
+      })),
+      totalMatches: totalMatchesOf(rows),
+      limit: maxResults,
+    };
   }
 
   private buildTypeFilter(
@@ -1167,6 +1386,26 @@ export class SearchService {
 
 function makeCompositeKey(type: IndexableEntity, id: string): string {
   return `${type}:${id}`;
+}
+
+/**
+ * The match-set size a `count(*) OVER ()` column reports, read off the first
+ * row. No rows means nothing matched, so zero — the window count cannot appear
+ * on a row that does not exist. A row WITHOUT the column (a stubbed DataSource
+ * in a unit test, or a statement that forgot it) falls back to the page size,
+ * which is the pre-count behaviour: never more wrong than before, and never a
+ * NaN in a number the model will repeat.
+ */
+function totalMatchesOf(rows: { total_matches?: string | number | null }[]): number {
+  const reported = rows[0]?.total_matches;
+
+  if (reported == null) {
+    return rows.length;
+  }
+
+  const total = Number(reported);
+
+  return Number.isFinite(total) ? total : rows.length;
 }
 
 /**

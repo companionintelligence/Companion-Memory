@@ -1,6 +1,6 @@
-import { type Task } from '@ci/domains/planning';
+import { TASK_STATUSES, type Task } from '@ci/domains/planning';
 
-import { TaskType } from '../TaskType';
+import { TaskStatusEnum, TaskType } from '../TaskType';
 
 const task = {
   id: '11111111-1111-1111-1111-111111111111',
@@ -37,5 +37,17 @@ describe('TaskType.toType', () => {
 
     expect(result.placedOnCalendar).toBeUndefined();
     expect('placedOnCalendar' in result).toBe(false);
+  });
+});
+
+describe('TaskStatusEnum', () => {
+  it('mirrors TASK_STATUSES exactly', () => {
+    // A hand-maintained second copy of the vocabulary: Nest needs a real enum
+    // object to register a GraphQL enum, so it cannot be derived from the const
+    // tuple in `domains/planning/taskStatus.ts`. #2558 remembered to update it
+    // while forgetting every status FILTER; the next change might invert that,
+    // and a missing member here makes the status unrepresentable in every
+    // GraphQL response rather than merely unfiltered.
+    expect(Object.values(TaskStatusEnum).sort()).toEqual([...TASK_STATUSES].sort());
   });
 });

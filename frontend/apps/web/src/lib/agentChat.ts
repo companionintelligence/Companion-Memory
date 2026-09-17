@@ -50,6 +50,40 @@ export function graphNodeChatContext(node: {
   });
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The raw `ci.tasks.id` behind a GraphQL global id, or null.
+ *
+ * ═══ THE DISPATCH BUTTON POSTED AN UNDECODABLE ID ═══
+ *
+ * `TaskRowFragment.id` is `base64("task:<uuid>")` — every GraphQL id on this
+ * client is. `POST /v1/agent/jobs` takes the raw uuid (and returns one in
+ * `job.taskId`), so handing it the fragment id 400s at the Zod boundary before
+ * `AgentDispatchService` is ever entered.
+ *
+ * Null for anything that is not a task global id, `sourceId`'s title fallback
+ * included: sending a value the controller must reject is worse than sending
+ * no `taskId` at all, because the dispatch itself still has value without one.
+ */
+export function taskUuidFromGlobalId(globalId: string | null | undefined): string | null {
+  if (!globalId) {
+    return null;
+  }
+
+  let decoded: string;
+
+  try {
+    decoded = atob(globalId);
+  } catch {
+    return null;
+  }
+
+  const [type, id] = decoded.split(':');
+
+  return type === 'task' && id && UUID_PATTERN.test(id) ? id : null;
+}
+
 const SESSION_KEY = 'ci.agentChat.seed';
 
 /** Persist context for ChatPage to pick up after navigation. */

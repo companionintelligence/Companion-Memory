@@ -138,7 +138,7 @@ function topL1(probs: ProbabilityEntry[]): { name: string; prob: number } | null
 
 // ── Tooltip content ───────────────────────────────────────────────────────────
 
-function SlotTooltip({
+export function SlotTooltip({
   bucket,
   localMin,
   minutes,

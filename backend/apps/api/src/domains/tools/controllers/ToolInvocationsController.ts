@@ -3,10 +3,12 @@ import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/
 import { Context, type RequestContext, toServiceContext } from '@ci/common/context';
 import { AdminOnlyGuard, JwtOrPortalAuthGuard } from '@ci/common/guards';
 
-import type { ToolInvocationEntity } from '../entities/ToolInvocationEntity';
+import { TOOL_PRINCIPALS, type ToolPrincipal } from '../core/types';
 import { TOOL_INVOCATION_OUTCOMES, type ToolInvocationOutcome } from '../events';
 import {
   ToolInvocationLedgerService,
+  decodeCursor,
+  type ToolInvocationPage,
   type ToolInvocationQuery,
 } from '../services/ToolInvocationLedgerService';
 
@@ -29,7 +31,11 @@ import {
  * Rows carry no request or response bodies (see the table's migration), so neither route can
  * disclose the user's content — only which capability ran, when, and how it ended.
  */
-@Controller('api/tools')
+// Mounted without the `api/` prefix its public URL carries: the gateway strips
+// `/api` before forwarding (nginx.conf `location /api/`), so a controller that
+// bakes it in never matches. See CI-Server#1684 and
+// common/__tests__/controllerGatewayPrefix.test.ts.
+@Controller('tools')
 export class ToolInvocationsController {
   constructor(private readonly ledger: ToolInvocationLedgerService) {}
 
@@ -41,10 +47,16 @@ export class ToolInvocationsController {
     @Query('outcome') outcome?: string,
     @Query('since') since?: string,
     @Query('limit') limit?: string,
-  ): Promise<ToolInvocationEntity[]> {
+    @Query('principal') principal?: string,
+    @Query('app') app?: string,
+    @Query('cursor') cursor?: string,
+  ): Promise<ToolInvocationPage> {
     const { userId } = toServiceContext(context);
 
-    return this.ledger.listForUser(userId, parseInvocationQuery({ tool, outcome, since, limit }));
+    return this.ledger.listForUser(
+      userId,
+      parseInvocationQuery({ tool, outcome, since, limit, principal, app, cursor }),
+    );
   }
 
   @UseGuards(JwtOrPortalAuthGuard, AdminOnlyGuard)
@@ -54,8 +66,13 @@ export class ToolInvocationsController {
     @Query('outcome') outcome?: string,
     @Query('since') since?: string,
     @Query('limit') limit?: string,
-  ): Promise<ToolInvocationEntity[]> {
-    return this.ledger.listSystem(parseInvocationQuery({ tool, outcome, since, limit }));
+    @Query('principal') principal?: string,
+    @Query('app') app?: string,
+    @Query('cursor') cursor?: string,
+  ): Promise<ToolInvocationPage> {
+    return this.ledger.listSystem(
+      parseInvocationQuery({ tool, outcome, since, limit, principal, app, cursor }),
+    );
   }
 }
 
@@ -71,6 +88,9 @@ export function parseInvocationQuery(raw: {
   outcome?: string;
   since?: string;
   limit?: string;
+  principal?: string;
+  app?: string;
+  cursor?: string;
 }): ToolInvocationQuery {
   const query: ToolInvocationQuery = {};
 
@@ -106,6 +126,36 @@ export function parseInvocationQuery(raw: {
     }
 
     query.limit = limit;
+  }
+
+  if (raw.principal != null && raw.principal !== '') {
+    if (!(TOOL_PRINCIPALS as readonly string[]).includes(raw.principal)) {
+      throw new BadRequestException(
+        `Unknown principal: ${raw.principal}. Expected one of: ${TOOL_PRINCIPALS.join(', ')}`,
+      );
+    }
+
+    query.principal = raw.principal as ToolPrincipal;
+  }
+
+  // `app` on the wire, `principalName` in the query: the URL should read the way the question is
+  // asked ("what has this app been doing"), and the column name is an implementation detail of
+  // storing an api-key name rather than a display one.
+  if (raw.app != null && raw.app !== '') {
+    query.principalName = raw.app;
+  }
+
+  // A cursor this reader cannot decode is a 400, never a silent first page. Paging a ledger is
+  // how someone reads back what happened; quietly restarting at the top would report the newest
+  // rows over and over as if they were older ones.
+  if (raw.cursor != null && raw.cursor !== '') {
+    try {
+      query.cursor = decodeCursor(raw.cursor);
+    } catch {
+      throw new BadRequestException(
+        `Invalid cursor: ${raw.cursor}. Pass back the \`nextCursor\` from a previous page.`,
+      );
+    }
   }
 
   return query;

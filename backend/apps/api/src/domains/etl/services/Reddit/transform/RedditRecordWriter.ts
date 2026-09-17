@@ -179,9 +179,13 @@ export function savedRecord(item: RedditSavedItem): RedditRecord {
  * importer stamps on the same CSV row (memory/identity/reddit.ts).
  *
  * Earlier versions of these transforms wrote each post and comment as a
- * `ci.content` row plus a `ci.events` row keyed on the bare fullname. Those are
- * removed as each record is re-transformed, so the model change does not leave
- * a copy of every post behind in two other tables.
+ * `ci.content` row plus a `ci.events` row keyed on the bare fullname.
+ * {@link RedditRecordWriter.removeLegacyRows} drops that pair as a record is
+ * re-transformed — but only for a record the sync hands back, which for posts
+ * and comments never happens (see its own note). The rows written before this
+ * model change are repaired by migration
+ * `20260904035958_rekey_reddit_connection_records_onto_shared_identity`, not
+ * here.
  */
 @Injectable()
 export class RedditRecordWriter {
@@ -380,7 +384,23 @@ export class RedditRecordWriter {
     return row;
   }
 
-  /** Drop the `ci.content` + `ci.events` rows the previous transforms wrote for this post/comment. */
+  /**
+   * Drop the `ci.content` + `ci.events` rows the previous transforms wrote for
+   * this post/comment.
+   *
+   * Reaches only records the sync re-delivers, which is NOT the population it
+   * looks like it covers. `ci.providers` gives the Reddit Posts and Comments
+   * endpoints `"TTL": null` (migration 20260819151815), and
+   * `SyncOrchestrator.orchestrateHistorical` returns early on a null TTL once
+   * the cursor is exhausted, so those two endpoints are never walked again;
+   * the incremental path (`syncRedditUserListing`) stops at the first item
+   * older than the last sync, so a stored post is never re-delivered either.
+   * Only the Saved endpoint (`"TTL": 86400`) re-walks, and only over items
+   * still saved and still inside Reddit's ~1000-entry listing cap.
+   *
+   * Kept for those, and for a re-authorized connection that walks history
+   * again. Everything else is the migration's job.
+   */
   private async removeLegacyRows(userId: string, fullname: string): Promise<void> {
     const context = { userId };
 

@@ -1,18 +1,22 @@
 import { cn } from '@ci/shadcn';
 
 import type { ScheduleEvent } from '@/api/useScheduleService';
+import { detectBrowserTimeZone } from '@/lib/timezone';
 
 import { addDays, formatClock, pickNowNext, sameLocalDay, startOfLocalDay } from './nowNext';
+import { zonedDayOfMonth } from './zonedClock';
 
 interface TodayNowNextProps {
   events: readonly ScheduleEvent[];
   day: Date;
   now?: Date;
+  /** IANA zone to read the day in — the owner's profile zone on the schedule page. */
+  timeZone?: string;
   /** Opens the week grid when the list is truncated. */
   onShowMore?: () => void;
 }
 
-function timeLabel(status: 'now' | 'next' | 'later', event: ScheduleEvent): string {
+function timeLabel(status: 'now' | 'next' | 'later', event: ScheduleEvent, zone: string): string {
   if (status === 'now') {
     return 'Now';
   }
@@ -21,7 +25,7 @@ function timeLabel(status: 'now' | 'next' | 'later', event: ScheduleEvent): stri
     return 'All day';
   }
 
-  return formatClock(new Date(event.startTime));
+  return formatClock(new Date(event.startTime), zone);
 }
 
 /**
@@ -29,10 +33,16 @@ function timeLabel(status: 'now' | 'next' | 'later', event: ScheduleEvent): stri
  * 360px TimelineJS strip. Tap a row does not need a hover state: time and
  * title are already on the card; "+N more" is a real button.
  */
-export function TodayNowNext({ events, day, now = new Date(), onShowMore }: TodayNowNextProps) {
-  const { items, remaining, done } = pickNowNext(events, day, now);
-  const heading = day.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
-  const lookingAtToday = sameLocalDay(day, now);
+export function TodayNowNext({ events, day, now = new Date(), timeZone, onShowMore }: TodayNowNextProps) {
+  const zone = timeZone ?? detectBrowserTimeZone();
+  const { items, remaining, done } = pickNowNext(events, day, now, 3, zone);
+  const heading = day.toLocaleDateString([], {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    timeZone: zone,
+  });
+  const lookingAtToday = sameLocalDay(day, now, zone);
 
   return (
     <section aria-label={heading} className="rounded-lg border border-border bg-card px-3 py-2.5">
@@ -52,7 +62,7 @@ export function TodayNowNext({ events, day, now = new Date(), onShowMore }: Toda
                   status === 'now' ? 'font-semibold text-primary' : 'text-muted-foreground',
                 )}
               >
-                {timeLabel(status, event)}
+                {timeLabel(status, event, zone)}
               </span>
               <span className="min-w-0 flex-1 truncate font-medium text-foreground">{event.title}</span>
             </li>
@@ -78,23 +88,38 @@ interface WeekDayChipsProps {
   selectedDay: Date;
   onSelectDay: (day: Date) => void;
   now?: Date;
+  /** IANA zone to read the days in — the owner's profile zone on the schedule page. */
+  timeZone?: string;
 }
 
 /**
  * Seven day buttons. The week grid's row labels need a pointer hover to feel
  * selected; these are always tappable and always show weekday + date.
  */
-export function WeekDayChips({ start, days, selectedDay, onSelectDay, now = new Date() }: WeekDayChipsProps) {
-  const today = startOfLocalDay(now);
-  const origin = startOfLocalDay(start);
+export function WeekDayChips({
+  start,
+  days,
+  selectedDay,
+  onSelectDay,
+  now = new Date(),
+  timeZone,
+}: WeekDayChipsProps) {
+  const zone = timeZone ?? detectBrowserTimeZone();
+  const today = startOfLocalDay(now, zone);
+  const origin = startOfLocalDay(start, zone);
 
   return (
     <div role="tablist" aria-label="Days this week" className="flex gap-1">
       {Array.from({ length: days }, (_, index) => {
-        const day = addDays(origin, index);
-        const selected = sameLocalDay(day, selectedDay);
-        const isToday = sameLocalDay(day, today);
-        const label = day.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+        const day = addDays(origin, index, zone);
+        const selected = sameLocalDay(day, selectedDay, zone);
+        const isToday = sameLocalDay(day, today, zone);
+        const label = day.toLocaleDateString([], {
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+          timeZone: zone,
+        });
 
         return (
           <button
@@ -115,9 +140,11 @@ export function WeekDayChips({ start, days, selectedDay, onSelectDay, now = new 
             )}
           >
             <span className="text-[10px] font-medium uppercase leading-none tracking-wide">
-              {day.toLocaleDateString([], { weekday: 'short' })}
+              {day.toLocaleDateString([], { weekday: 'short', timeZone: zone })}
             </span>
-            <span className="mt-1 text-sm font-semibold tabular-nums leading-none">{day.getDate()}</span>
+            <span className="mt-1 text-sm font-semibold tabular-nums leading-none">
+              {zonedDayOfMonth(day, zone)}
+            </span>
           </button>
         );
       })}

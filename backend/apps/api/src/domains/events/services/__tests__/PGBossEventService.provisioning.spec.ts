@@ -175,6 +175,8 @@ describe('PGBossEventService queue provisioning', () => {
       policy: 'short',
       expireInSeconds: 600,
       localConcurrency: 1,
+      yieldsTo: 'some-gate',
+      lane: 'some-lane',
     });
   });
 
@@ -186,6 +188,23 @@ describe('PGBossEventService queue provisioning', () => {
     booted.length = 0;
     EventListenerRegistry.clear();
     jest.useRealTimers();
+  });
+
+  it('keeps our own worker-loop options (localConcurrency, role, yieldsTo, lane) out of what pg-boss sees', async () => {
+    const { createQueueCalls, updateQueueCalls } = await boot();
+
+    for (const call of [...createQueueCalls, ...updateQueueCalls]) {
+      if (call.queue !== 'fixture-tuned') {
+        continue;
+      }
+
+      expect(call.options).not.toHaveProperty('localConcurrency');
+      expect(call.options).not.toHaveProperty('role');
+      expect(call.options).not.toHaveProperty('yieldsTo');
+      expect(call.options).not.toHaveProperty('lane');
+      // The real pg-boss options rode through untouched.
+      expect(call.options).toMatchObject({ policy: 'short', expireInSeconds: 600 });
+    }
   });
 
   it('stamps a 90-day retention on every work queue it creates', async () => {

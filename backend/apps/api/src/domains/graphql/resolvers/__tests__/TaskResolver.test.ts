@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 
 import { type RequestContext } from '@ci/common/context';
 
@@ -25,6 +25,7 @@ function makeResolver(enabled = true) {
   const plannedBlockService = {
     tryPlaceAfterOpen: jest.fn(),
     scheduleTask: jest.fn(),
+    scheduleTaskAt: jest.fn(),
     unschedule: jest.fn(),
     planAsUnscheduled: jest.fn(),
     list: jest.fn().mockResolvedValue([]),
@@ -330,5 +331,169 @@ describe('TaskResolver.tags', () => {
     const tags = await resolver.tags(ownerCtx, { __source: { id: 'task-2' } } as never);
 
     expect(tags).toEqual([]);
+  });
+});
+
+describe('TaskResolver.updateTask parentId', () => {
+  const TASK_ID = '11111111-1111-1111-1111-111111111111';
+  const PARENT_ID = '22222222-2222-2222-2222-222222222222';
+
+  // `null` and `undefined` are two different instructions here, and the
+  // resolver used to collapse both onto "leave it alone" — so a subtask could
+  // never be promoted to top level by any argument value at all.
+  it('forwards parentId: null as null so a subtask can be detached', async () => {
+    const { resolver, taskService } = makeResolver();
+    taskService.update.mockResolvedValue(null);
+
+    await resolver.updateTask(ownerCtx, {
+      id: GlobalUID.encode('task', TASK_ID),
+      parentId: null as unknown as string,
+    });
+
+    expect(taskService.update).toHaveBeenCalledWith(
+      { userId: 'owner-1' },
+      TASK_ID,
+      expect.objectContaining({ parentId: null }),
+    );
+  });
+
+  it('leaves the parent alone when parentId is absent', async () => {
+    const { resolver, taskService } = makeResolver();
+    taskService.update.mockResolvedValue(null);
+
+    await resolver.updateTask(ownerCtx, { id: GlobalUID.encode('task', TASK_ID), title: 'x' });
+
+    expect(taskService.update).toHaveBeenCalledWith(
+      { userId: 'owner-1' },
+      TASK_ID,
+      expect.objectContaining({ parentId: undefined }),
+    );
+  });
+
+  it('decodes a supplied parentId to its raw uuid', async () => {
+    const { resolver, taskService } = makeResolver();
+    taskService.update.mockResolvedValue(null);
+
+    await resolver.updateTask(ownerCtx, {
+      id: GlobalUID.encode('task', TASK_ID),
+      parentId: GlobalUID.encode('task', PARENT_ID),
+    });
+
+    expect(taskService.update).toHaveBeenCalledWith(
+      { userId: 'owner-1' },
+      TASK_ID,
+      expect.objectContaining({ parentId: PARENT_ID }),
+    );
+  });
+});
+
+describe('TaskResolver.scheduleTask time ordering', () => {
+  const TASK_ID = '11111111-1111-1111-1111-111111111111';
+
+  // ci.events' valid_time_range CHECK is the only thing that used to catch
+  // this, and formatError masks the 23514 as a bare `Internal server error`.
+  // The identical drag sent to EventResolver.rescheduleEvent has always
+  // answered 400, so the two mutations must not disagree.
+  it('rejects an endTime that precedes startTime without touching the writer', async () => {
+    const { resolver, plannedBlockService } = makeResolver();
+
+    await expect(
+      resolver.scheduleTask(
+        ownerCtx,
+        GlobalUID.encode('task', TASK_ID),
+        undefined,
+        undefined,
+        new Date('2026-09-10T10:00:00Z'),
+        new Date('2026-09-10T08:00:00Z'),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(plannedBlockService.scheduleTaskAt).not.toHaveBeenCalled();
+  });
+
+  it('places a well-ordered interval', async () => {
+    const { resolver, plannedBlockService } = makeResolver();
+    plannedBlockService.scheduleTaskAt.mockResolvedValue({ status: 'placed', task: null, event: null });
+
+    const start = new Date('2026-09-10T10:00:00Z');
+    const end = new Date('2026-09-10T11:00:00Z');
+    const result = await resolver.scheduleTask(
+      ownerCtx,
+      GlobalUID.encode('task', TASK_ID),
+      undefined,
+      undefined,
+      start,
+      end,
+    );
+
+    expect(plannedBlockService.scheduleTaskAt).toHaveBeenCalledWith(
+      { userId: 'owner-1' },
+      TASK_ID,
+      start,
+      end,
+      undefined,
+    );
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('TaskResolver input bounds', () => {
+  const TASK_ID = '11111111-1111-1111-1111-111111111111';
+
+  // Every one of these is schema-legal but violates a ci.tasks CHECK or NOT
+  // NULL, and formatError turns that QueryFailedError into an unclassified
+  // 500 that never names the offending argument.
+  it.each([
+    ['priority above the CHECK range', { title: 'Call the dentist', priority: 9 }],
+    ['priority below the CHECK range', { title: 'Call the dentist', priority: -1 }],
+    ['estimatedMinutes of zero', { title: 'Call the dentist', estimatedMinutes: 0 }],
+    ['a null priority', { title: 'Call the dentist', priority: null as unknown as number }],
+  ])('createTask rejects %s', async (_label, input) => {
+    const { resolver, taskService } = makeResolver();
+
+    await expect(resolver.createTask(ownerCtx, input)).rejects.toBeInstanceOf(BadRequestException);
+    expect(taskService.create).not.toHaveBeenCalled();
+  });
+
+  it('createTask accepts both endpoints of the priority range', async () => {
+    const { resolver, taskService } = makeResolver();
+    taskService.create.mockResolvedValue(null);
+
+    await resolver.createTask(ownerCtx, { title: 'Call the dentist', priority: 0, estimatedMinutes: 1 });
+    await resolver.createTask(ownerCtx, { title: 'Call the dentist', priority: 5 });
+
+    expect(taskService.create).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['a null title', { title: null as unknown as string }],
+    ['a null status', { status: null as unknown as undefined }],
+    ['a null actualMinutes', { actualMinutes: null as unknown as number }],
+    ['an out-of-range priority', { priority: 6 }],
+  ])('updateTask rejects %s', async (_label, patch) => {
+    const { resolver, taskService } = makeResolver();
+
+    await expect(
+      resolver.updateTask(ownerCtx, { id: GlobalUID.encode('task', TASK_ID), ...patch }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(taskService.update).not.toHaveBeenCalled();
+  });
+
+  // estimatedMinutes IS nullable in ci.tasks — null clears the estimate, and
+  // must not be swept up by the bounds check.
+  it('updateTask still lets estimatedMinutes be cleared', async () => {
+    const { resolver, taskService } = makeResolver();
+    taskService.update.mockResolvedValue(null);
+
+    await resolver.updateTask(ownerCtx, {
+      id: GlobalUID.encode('task', TASK_ID),
+      estimatedMinutes: null as unknown as number,
+    });
+
+    expect(taskService.update).toHaveBeenCalledWith(
+      { userId: 'owner-1' },
+      TASK_ID,
+      expect.objectContaining({ estimatedMinutes: null }),
+    );
   });
 });

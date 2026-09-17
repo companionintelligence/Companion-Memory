@@ -8,15 +8,25 @@ import { PythonFunctionRunEvent } from '../events';
 import {
   PYTHON_FUNCTION_QUEUE_OPTIONS,
   PYTHON_FUNCTION_QUEUES,
+  PYTHON_FUNCTIONS,
   type PythonFunctionRunPayload,
   type PythonFunctionTarget,
 } from '../types';
 
-type DispatchJob = PythonFunctionRunPayload & { jobId: string };
+// WAS: `type DispatchJob = PythonFunctionRunPayload & { jobId: string }` — a
+// hand-written intersection that was the repo's only written admission that the
+// event bus smuggled a runtime key through a domain payload. The bus no longer
+// writes into the payload; the queue's job id rides `ack.jobId`, where tsc can
+// see it.
 
 // The runner replies as soon as the run is accepted into its worker pool, so
 // this bounds connection/accept time only — never function runtime.
 const DISPATCH_TIMEOUT_MS = 30_000;
+
+// The catalog and health routes are dict lookups on an already-booted service;
+// anything slower than this is the sidecar being unreachable, which the
+// dispatch immediately after reports on its own.
+const PREFLIGHT_TIMEOUT_MS = 5_000;
 
 /**
  * Forwards `python.function.run` jobs to the target Python service and DEFERS
@@ -26,9 +36,16 @@ const DISPATCH_TIMEOUT_MS = 30_000;
  *
  * Both listeners are `autoAcknowledge: false` — a failed dispatch (service
  * down, pool full → 429) calls `fail()` so pg-boss retries with backoff.
+ *
+ * The first dispatch to each target also runs a one-off catalog preflight
+ * (`checkFunctionCatalog`), which is the only thing anywhere that checks the
+ * API↔sidecar contract.
  */
 @Injectable()
 export class PythonFunctionDispatchListener {
+  /** One in-flight-or-settled catalog probe per target; see `preflight()`. */
+  private readonly preflights = new Map<PythonFunctionTarget, Promise<void>>();
+
   constructor(private readonly logger: LoggerService) {
     this.logger.setContext(PythonFunctionDispatchListener.name);
   }
@@ -38,7 +55,7 @@ export class PythonFunctionDispatchListener {
     autoAcknowledge: false,
     queueOptions: PYTHON_FUNCTION_QUEUE_OPTIONS.summary,
   })
-  async dispatchSummary(payload: DispatchJob, ack: Acknowledgement): Promise<void> {
+  async dispatchSummary(payload: PythonFunctionRunPayload, ack: Acknowledgement): Promise<void> {
     await this.dispatch('summary', config.services.summary.host, payload, ack);
   }
 
@@ -47,17 +64,19 @@ export class PythonFunctionDispatchListener {
     autoAcknowledge: false,
     queueOptions: PYTHON_FUNCTION_QUEUE_OPTIONS.hbpe,
   })
-  async dispatchHbpe(payload: DispatchJob, ack: Acknowledgement): Promise<void> {
+  async dispatchHbpe(payload: PythonFunctionRunPayload, ack: Acknowledgement): Promise<void> {
     await this.dispatch('hbpe', config.services.hbpe.host, payload, ack);
   }
 
   private async dispatch(
     target: PythonFunctionTarget,
     baseUrl: string,
-    payload: DispatchJob,
+    payload: PythonFunctionRunPayload,
     ack: Acknowledgement,
   ): Promise<void> {
     const url = `${baseUrl.replace(/\/+$/, '')}/functions/run`;
+
+    await this.preflight(target, baseUrl);
 
     try {
       const response = await fetch(url, {
@@ -66,7 +85,11 @@ export class PythonFunctionDispatchListener {
         body: JSON.stringify({
           function: payload.function,
           args: payload.args,
-          job_id: payload.jobId,
+          // From the ACK: this is pg-boss's job id, which is what the sidecar
+          // hands back to PythonFunctionCallbackController and what
+          // `boss.complete(queue, jobId)` needs. The wire field name is
+          // unchanged — the sidecars' pytest suites pin `job_id`.
+          job_id: ack.jobId,
           queue: PYTHON_FUNCTION_QUEUES[target],
         }),
         signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
@@ -81,7 +104,7 @@ export class PythonFunctionDispatchListener {
       this.logger.log('Dispatched function run to python service', {
         target,
         functionName: payload.function,
-        jobId: payload.jobId,
+        jobId: ack.jobId,
       });
 
       // Completion arrives via the callback controller (or queue expiration).
@@ -90,11 +113,121 @@ export class PythonFunctionDispatchListener {
       this.logger.warn('Python function dispatch failed — job will retry', {
         target,
         functionName: payload.function,
-        jobId: payload.jobId,
+        jobId: ack.jobId,
         error: err instanceof Error ? err.message : String(err),
       });
 
       ack.fail(err);
+    }
+  }
+
+  /**
+   * Run the catalog check at most once per target per process.
+   *
+   * Memoized on the promise, not on a boolean, so concurrent first dispatches
+   * share one probe. `checkFunctionCatalog` never rejects, so awaiting this can
+   * neither fail a dispatch nor leave a rejected promise cached.
+   */
+  private preflight(target: PythonFunctionTarget, baseUrl: string): Promise<void> {
+    let probe = this.preflights.get(target);
+
+    if (!probe) {
+      probe = this.checkFunctionCatalog(target, baseUrl);
+      this.preflights.set(target, probe);
+    }
+
+    return probe;
+  }
+
+  /**
+   * Assert that the sidecar actually serves the functions this API dispatches
+   * to it, and say so in the log when it does not.
+   *
+   * A sidecar built from older source answers `GET /health` 200 while 404ing
+   * the only route the API uses, so every job on that target fails into retry
+   * and then queue expiry — hours of silence in which forecasts and summaries
+   * simply stop appearing, with nothing naming the cause. This turns that into
+   * one ERROR line at the first dispatch.
+   *
+   * pythonFunctionRegistryDrift.test.ts pins PYTHON_FUNCTIONS to the sidecar
+   * *source*; this is the same assertion against the image actually running,
+   * which is the half that a stale or partially-updated appliance breaks.
+   *
+   * Advisory only: it logs and returns. A broken sidecar must degrade the
+   * appliance loudly, not take the API down with it, and the probe itself
+   * failing (sidecar still booting, transient network) must not stop a
+   * dispatch that may well succeed.
+   */
+  private async checkFunctionCatalog(target: PythonFunctionTarget, baseUrl: string): Promise<void> {
+    const url = `${baseUrl.replace(/\/+$/, '')}/functions`;
+    const expected = PYTHON_FUNCTIONS[target];
+
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS) });
+
+      if (!response.ok) {
+        this.logger.error('Python sidecar does not serve its function catalog', {
+          target,
+          url,
+          status: response.status,
+          version: await this.reportedVersion(baseUrl),
+          expected,
+        });
+
+        return;
+      }
+
+      const body = (await response.json()) as { functions?: unknown };
+      const served = new Set((Array.isArray(body.functions) ? body.functions : []).map(String));
+      const missing = expected.filter((name) => !served.has(name));
+
+      if (missing.length > 0) {
+        this.logger.error('Python sidecar is missing functions the API dispatches to it', {
+          target,
+          url,
+          missing,
+          served: [...served],
+          version: await this.reportedVersion(baseUrl),
+        });
+
+        return;
+      }
+
+      this.logger.log('Python sidecar function catalog matches the dispatch allowlist', {
+        target,
+        functionCount: expected.length,
+      });
+    } catch (err) {
+      this.logger.warn('Python sidecar function-catalog preflight could not run', {
+        target,
+        url,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Whatever the sidecar calls itself, for the error above — never throws.
+   *
+   * Only the summary service reports a `version` today; HBPE's /health does
+   * not, so 'not reported' is itself a useful signal about which image is
+   * running.
+   */
+  private async reportedVersion(baseUrl: string): Promise<string> {
+    try {
+      const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/health`, {
+        signal: AbortSignal.timeout(PREFLIGHT_TIMEOUT_MS),
+      });
+
+      if (!response.ok) {
+        return `unavailable (health HTTP ${response.status})`;
+      }
+
+      const body = (await response.json()) as { version?: unknown };
+
+      return typeof body.version === 'string' ? body.version : 'not reported';
+    } catch {
+      return 'unavailable';
     }
   }
 }

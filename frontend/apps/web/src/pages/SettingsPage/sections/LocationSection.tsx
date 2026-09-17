@@ -178,22 +178,15 @@ export function LocationSection() {
         onOpenChange={(open) => !open && setPendingMode(null)}
       >
         <AlertDialog.Content>
-          <AlertDialog.Header>
+          <AlertDialog.Header className="text-left">
             <AlertDialog.Title>Record your location while using Companion?</AlertDialog.Title>
             <AlertDialog.Description>
               <span className="block">
-                Companion collects this device&apos;s location — including precise GPS location — while the
-                app is open, so it can place your notes, photos and events on a map and work out where you
-                were when something happened.
+                Companion uses this phone&apos;s location while the app is open so notes, photos, and events
+                can go on the map.
               </span>
               <span className="mt-2 block">
-                Locations are sent only to your own Companion server. They are not shared with anyone else and
-                are never used for advertising. They stay in your private position history until you delete
-                them, and turning this off stops new recordings.
-              </span>
-              <span className="mt-2 block">
-                Your device will ask for permission next. You can say no and keep using Companion — only this
-                feature turns off.
+                Locations go only to your Companion server — never ads. You can say no and keep using the app.
               </span>
             </AlertDialog.Description>
           </AlertDialog.Header>
@@ -213,22 +206,17 @@ export function LocationSection() {
 
       <AlertDialog open={pendingMode === 'always'} onOpenChange={(open) => !open && setPendingMode(null)}>
         <AlertDialog.Content>
-          <AlertDialog.Header>
+          <AlertDialog.Header className="text-left">
             <AlertDialog.Title>Remember places in the background?</AlertDialog.Title>
             <AlertDialog.Description>
               <span className="block">
-                Companion records your location in the background, including while your phone is locked or the
-                app is closed, so it can attach places to your memories after you leave the app. Your device
-                will show an ongoing indicator while this is on — a persistent notification on Android, the
-                blue location indicator on iOS.
+                Companion records location even when the app is closed, so memories can get places after you
+                leave. iOS shows the blue location indicator; Android shows a persistent notification.
               </span>
               <span className="mt-2 block">
-                This cannot work with While Using only. Locations are sent only to your own Companion server,
-                are never used for advertising, and you can turn this off here at any time.
-              </span>
-              <span className="mt-2 block">
-                Your device will ask for background/Always Allow next. You can stay on While Using and keep
-                using Companion.
+                iOS asks twice: Allow While Using the App, then Always Allow. If the second prompt does not
+                appear, use Open Settings and set Location to Always. Locations go only to your Companion
+                server, never ads. You can stay on While Using and keep using Companion.
               </span>
             </AlertDialog.Description>
           </AlertDialog.Header>

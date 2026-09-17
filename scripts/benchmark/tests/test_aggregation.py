@@ -49,12 +49,14 @@ def test_aggregate_shape_has_required_fields():
 def test_aggregated_to_json_carries_locked_keys():
     agg = aggregate_runs(_runs(), categories=["flat-recall", "relational"])
     js = aggregated_to_json(agg, categories=["flat-recall", "relational"])
-    # Run-0 representative fields
-    assert js["categories"]["flat-recall"] == [1, 2]  # run 0: q1 hit, q2 miss
-    assert js["categories"]["relational"] == [1, 1]  # run 0: q3 hit
+    # Category cells pool every completed run, not just run 0.
+    assert js["categories"]["flat-recall"] == [3, 6]  # 1/2 + 2/2 + 0/2
+    assert js["categories"]["relational"] == [3, 3]  # 1/1 + 1/1 + 1/1
     assert len(js["questions"]) == 3
     # Multi-run fields
     assert js["runs"] == 3
+    assert js["runs_ok"] == 3
+    assert js["runs_errored"] == 0
     for key in ("median", "mean", "min", "max", "iqr", "stddev"):
         assert key in js["score"]
         assert key in js["category_stats"]["flat-recall"]
@@ -76,14 +78,16 @@ def test_aggregate_empty_raises():
         aggregate_runs([], categories=["flat-recall"])
 
 
-def test_aggregated_overall_ratio_is_run0_not_median():
-    # Locked contract: score.{hit,total,ratio} are from run 0; the new stats
-    # fields are aggregations.
+def test_aggregated_overall_score_pools_runs_and_reports_the_median():
+    # score.{hit,total,ratio} pool every completed run; median/IQR/etc.
+    # describe the per-run distribution.
     agg = aggregate_runs(_runs(), categories=["flat-recall", "relational"])
     js = aggregated_to_json(agg, categories=["flat-recall", "relational"])
-    # Run 0 had 2 hits / 3 questions.
-    assert js["score"]["hit"] == 2
-    assert js["score"]["total"] == 3
-    assert js["score"]["ratio"] == pytest.approx(2 / 3)
-    # Median of [2/3, 3/3, 1/3] = 2/3 (coincidence here, still useful)
+    # Runs scored 2/3, 3/3 and 1/3.
+    assert js["score"]["hit"] == 6
+    assert js["score"]["total"] == 9
+    assert js["score"]["ratio"] == pytest.approx(6 / 9)
+    # Median of [2/3, 3/3, 1/3] = 2/3.
     assert js["score"]["median"] == pytest.approx(2 / 3)
+    assert js["score"]["min"] == pytest.approx(1 / 3)
+    assert js["score"]["max"] == pytest.approx(1.0)

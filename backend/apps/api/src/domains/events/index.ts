@@ -22,6 +22,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { ApplianceAdminGuard } from '@ci/common/guards';
+
 import { JobsController } from './controllers/JobsController';
 import { CronRunEntity } from './entities/CronRunEntity';
 import { JobCategoryMetricEntity } from './entities/JobCategoryMetricEntity';
@@ -68,6 +70,10 @@ import { PGBossEventService } from './services/PGBossEventService';
     JobMetricsCollector,
     CronRunTracker,
     JobControlTracker,
+    // A route-scoped guard, registered so Nest resolves its DataSource from this
+    // module rather than instantiating it bare. See its own doc for why /jobs'
+    // appliance-wide routes need a PRINCIPAL check on top of @RequireCapability.
+    ApplianceAdminGuard,
   ],
   controllers: [JobsController],
   exports: [EventService],
@@ -97,3 +103,4 @@ export { defineEvent, EventListenerRegistry } from './event-registration';
 // is interactive. Exported because the Jobs surface and its tests need it and
 // must not reach into `events/queueInventory` directly (no-cross-domain-internals).
 export { queueInventory, type QueueInventoryEntry } from './queueInventory';
+export { YieldGateRegistry, type YieldGate } from './yieldGates';

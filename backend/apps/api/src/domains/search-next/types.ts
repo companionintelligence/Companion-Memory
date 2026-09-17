@@ -56,6 +56,20 @@ export const TAGGABLE_ENTITIES = [
 
 export type TaggableEntity = (typeof TAGGABLE_ENTITIES)[number];
 
+/**
+ * The taxonomy LEVEL a tag sits at (`ci_search.tags.kind`) -- orthogonal to
+ * `entity_tag.level`, which is a per-*entity* dilution weight and has nothing
+ * to do with this. A 'direction' is a top-level, brand-set grouping
+ * (Home/Work/Community, `is_base`); an 'intention' groups under 0+
+ * directions via `tag_directions`; a 'category' is a SECOND, orthogonal
+ * grouping over intentions via `tag_categories`, with its own per-direction
+ * opt-outs. `null` (untyped) is the state of every tag that predates this
+ * column.
+ */
+export const TAG_KINDS = ['direction', 'intention', 'category'] as const;
+
+export type TagKind = (typeof TAG_KINDS)[number];
+
 export interface EntityIdentifier<T> {
   type: T;
   id: string;

@@ -1,6 +1,6 @@
 
 <p align="center">
-    <img width="512" height="512" alt="companion-memory-logo" src="https://github.com/user-attachments/assets/e8f0d40b-3e84-44ad-85ee-55f677b08cb3" />
+    <img width="320" height="320" alt="Companion Memory" src="docs/images/companion-memory-mark.gif" />
 </p>
 
 
@@ -10,11 +10,9 @@
 ### [INSTALL FROM STORE](https://hub.ci.computer/store?category=companion-intelligence)
 
 
-#### COPYRIGHT COMPANION INTELLIGENCE - LIFESCOPE INC
+Companion Memory uses the [PolyForm Noncommercial License 1.0.0](LICENSE.md). For common questions, see the [License FAQ](docs/License-FAQ.md).
 
-#### DO NOT DISTRIBUTE
-
-## PRIVATE AND CONFIDENTIAL
+Required Notice: Copyright LifeScope INC, DBA Companion Intelligence (https://ci.computer)
 
 Front + Back End API + Web Monorepo
 
@@ -28,7 +26,7 @@ Full index: [`docs/README.md`](docs/README.md)
 - **Architecture:** [`docs/architecture/architecture.md`](docs/architecture/architecture.md) (platform, services, data flows) and [`docs/architecture/Database.md`](docs/architecture/Database.md) (schemas, idempotency design, indexing, hypertables, migration workflow).
 - **Backend developer guide:** [`backend/apps/api/README.md`](backend/apps/api/README.md) — domain/module layout, common infrastructure, the event bus, config system, DB workflow.
 - **Runbooks:** [bulk load](backend/apps/api/db/postgres/BULK_LOAD_RUNBOOK.md) · [ingest reset](backend/apps/api/db/postgres/INGEST_RESET_RUNBOOK.md).
-- **Import & ETL:** [`docs/import/etl-agent-guide.md`](docs/import/etl-agent-guide.md) (how a personal archive becomes rows in `ci.*`, and how to fix an import bug) and [`docs/cli/ci-import.md`](docs/cli/ci-import.md) (the `ci-import` command line). Import is a domain inside this repo — `backend/apps/api/src/domains/import/` — not a separate service.
+- **Import & ETL:** [`docs/import/etl-agent-guide.md`](docs/import/etl-agent-guide.md) (how a personal archive becomes rows in `ci.*`, and how to fix an import bug) and [`docs/cli/ci.md`](docs/cli/ci.md) (the `ci` command line, its own workspace at `backend/apps/cli`). Import is a domain inside this repo — `backend/apps/api/src/domains/import/` — not a separate service.
 - **Features:** [`docs/saved-search-sharing.md`](docs/saved-search-sharing.md) (sharing + filter capture + read-only viewer) · [`docs/peer-federation.md`](docs/peer-federation.md) (asking questions across two Companion memories — Portal discovery, the three ask archetypes, free/busy without leaking a calendar).
 - **The consent path (`/asks`):** [`docs/asks-system-guide.md`](docs/asks-system-guide.md) is the reference document — **read it before changing anything on the consent path**: grants, the disclosure ladder and its four ceilings, the capture-at-consent-time rule, the ask lifecycle local and federated, how to run the `/asks` page and the two-box federation harness, and the current gap list. Its companion [`docs/asks-threat-model.md`](docs/asks-threat-model.md) states what the feature does *not* defend against. Neither was linked from here before 2026-08-23.
 - **Screenshots & the nav map:** [`docs/screenshots.md`](docs/screenshots.md) — the Power Rail, the Memory and Self hubs, every route that is now a redirect, and how the committed shots were captured and compressed.
@@ -41,14 +39,17 @@ This is a Yarn workspace monorepo, with a uv-managed Python workspace alongside 
 ```
 ├── backend/apps/
 │   ├── api/                    # Main backend API service (NestJS)
+│   ├── cli/                    # The `ci` command line (bundled HTTP client — no NestJS)
 │   ├── hbpe/                   # HBPE behavioral-prediction sidecar (Python/FastAPI, ONNX)
 │   └── summary/                # Summarization + document-parser sidecar (Python/FastAPI)
 ├── backend/packages/
-│   └── telemetry/              # Shared Python library: Sentry error reporting for the sidecars
+│   ├── telemetry/              # Shared Python library: Sentry error reporting for the sidecars
+│   └── tool-core/              # `@ci/tool-core` — the tool/intent vocabulary, execution policy and registry, with no NestJS in it, so MCP, the LLM dispatcher and the CLI can share one implementation of "may this caller run this intent?"
 ├── frontend/apps/
 │   ├── web/                    # Main web application (React + Vite)
 │   ├── ios/                    # Capacitor iOS shell around the web app (not a Yarn workspace)
 │   ├── android/                # Capacitor Android shell around the web app (not a Yarn workspace)
+│   ├── desktop/                # Tauri desktop app (not a Yarn workspace) — local orchestrator: runs this repo's own Compose stack, unlike ios/android which point at a remote appliance
 │   └── mobile/                 # Pointer README left by the iOS/Android split
 └── frontend/packages/
     ├── capacitor-local-hub/    # Capacitor plugin: on-device hub bridge (iOS + Android)
@@ -346,6 +347,15 @@ ollama pull nomic-embed-text
 ollama run nomic-embed-text "embed this"
 ```
 
+#### poppler-utils (optional)
+
+The Hulu importer reads the "Personal Information Report" PDF with `pdftotext`, which ships in `poppler-utils`. The API image installs it; on a dev machine it is only needed to import or recognize a Hulu report (the Hulu PDF tests skip without it).
+
+```bash
+brew install poppler        # macOS
+sudo apt install poppler-utils   # Debian / Ubuntu
+```
+
 ## Initialize development environment
 
 Everything below is orchestrated by a single command:
@@ -371,6 +381,18 @@ make dev-down
 ```
 
 To run the api/web individually instead, see their READMEs ([api](backend/apps/api/README.md), [web](frontend/apps/web/README.md)).
+
+#### libvips (required)
+
+Image previews, image dimensions and the renditions sent to the vision model are produced by the `vips` command-line tools (`libvips-tools`). The API shells out to them, so the machine running the API needs them — `make health` checks. This replaced the `sharp` npm package because sharp's prebuilt libvips has no HEVC decoder, the codec inside every iPhone HEIC.
+
+```bash
+brew install vips                                        # macOS
+sudo apt install libvips-tools                           # Debian (HEVC decoder is built into libheif)
+sudo apt install libvips-tools libheif-plugin-libde265   # Ubuntu 24.04 / Mint 22 (HEVC decoder is a separate plugin)
+```
+
+On Ubuntu 24.04 the plugin is not optional: its `libheif1` used to depend on `libheif-plugin-libde265` and the current security update (1.17.6-1ubuntu4.8) demoted that to a suggestion, so a fresh or upgraded machine opens a HEIC and then fails every tile with `heif: Unsupported feature: Unsupported codec`. `make health` decodes a HEIC fixture to catch this; the Docker image is Debian and is unaffected.
 
 ### Reaching the right database
 
@@ -450,6 +472,21 @@ make reset
 
 Run `make` from the project root to see all available commands with descriptions.
 
+Three of those targets — `build`, `dev` and `test` — are
+one-line delegations to a TypeScript program at [`scripts/xtask/`](scripts/xtask),
+run through `tsx` (`yarn tsx scripts/xtask/index.ts <command> ...`). The `make`
+targets stay the documented entry point and still take the variables they always
+did — `ENV`, `GPU`, `REBUILD`, and overrides like `AMDGPU_TARGETS` or
+`FLASH_ATTN_WHEEL_IMAGE=`, which a `make build VAR=value` still hands through as
+environment even though the Makefile no longer declares most of them. The program
+is where the logic those recipes used to carry as shell now lives — the image set
+and its build order, the GPU/wheel-image tag derivation, the `ci.source-tree`
+staleness stamp `dev` reads before deciding to rebuild — and every subcommand
+takes `--help`. `make health` is deliberately *not* one of them: a prerequisite
+checker must not require the prerequisites, so it stays pure shell in the
+Makefile and `xtask dev` shells back out to `make health` before anything else.
+Every other `make` target is unchanged.
+
 ### Setup & Initialization
 
 | Command | Description |
@@ -499,13 +536,36 @@ source scripts/gh-packages-auth.sh
 
 | Command | Description |
 |---------|-------------|
-| `make build` | Build images (`ENV=local\|staging\|production`, default `local`; `GPU=cpu\|cuda\|rocm`, auto-detected from this host's GPU if not passed — see `scripts/detect-gpu.sh`) |
+| `make build` | Build images (`ENV=local\|staging\|production`, default `local`; `GPU=cpu\|cuda\|rocm`, auto-detected from this host's GPU if not passed — see `scripts/detect-gpu.sh`; `IMAGE=<name>` builds a single image; `DRY_RUN=1` prints the plan instead of building) |
 | `make smoke-api` | Verify the built API image can run `migrate` with production-only dependencies (a devDependency in either half fails the container at startup). Runs as part of `make publish` |
 | `make staging` | Run the staging deployment |
 | `make production` | Run the production deployment |
 | `make publish` | Publish CI-Server images and metadata to the CI-Portal store (builds `ENV=production`, then `smoke-api`) |
 | `make publish-quiet` | Publish to the CI-Portal store in quiet mode (skips the build/smoke steps) |
 | `make seed-production` | Seed the production database via an ephemeral proxy |
+
+#### Building one image, and seeing what a build would do
+
+With no `IMAGE`, `make build` builds the `ENV`-appropriate set, in this order:
+
+```
+local        setup-database database object-store summary hbpe
+staging      api gateway setup-database database object-store summary hbpe
+production   api gateway setup-database database object-store setup-secrets summary hbpe
+```
+
+```bash
+make build IMAGE=hbpe    # just this one — api, gateway, setup-database, database,
+                         #   object-store, setup-secrets, summary or hbpe
+make build DRY_RUN=1     # print the exact docker build commands — every --build-arg
+                         #   and, on a cuda/rocm host, the wheel-image tags — and build nothing
+```
+
+`IMAGE=` bypasses the `ENV` set rather than filtering it, so any of the eight can
+be built from any `ENV`. `DRY_RUN=1` touches no Docker daemon and skips the
+`uv lock --check` freshness gate, so it also answers what a wheel-pin bump would
+compose from a host that cannot build that variant — `make build DRY_RUN=1 GPU=cuda`
+prints the CUDA wheel-image tags with no NVIDIA hardware in sight.
 
 #### GPU acceleration (HBPE)
 
@@ -548,15 +608,43 @@ docker compose exec hbpe-service python -c \
 `.github/workflows/publish.yml` builds every `companion/*` image natively per architecture, merges
 the legs into a multi-arch manifest list, and registers the result with CI-Portal.
 
-**Image publish is not triggered by pushing a tag.** The *check* workflows —
-`ci.yml`, `e2e.yml`, `migration-integrity-check.yml`, `style-canon-lint.yml`,
-`consent-path-gate.yml` — are `workflow_dispatch`-only, so an absent or green
-check means nobody dispatched it, not that anything passed. Two workflows do run
-on their own (verified 2026-08-23): `mobile-release.yml` on `ios-v*` /
-`android-v*` / `mobile-release-v*` tags, which uploads to TestFlight / Play; and
-`codeql.yml` on push/PR to `main` plus a weekly cron, which is **red on every run
-by baseline** — see [`docs/CI.md`](docs/CI.md). Cut a container release by
-tagging and then dispatching **on that tag**, since `VERSION` is parsed from the ref:
+**Image publish is not triggered by pushing a tag.** Most workflows — including
+the *check* workflows `ci.yml`, `e2e.yml`, `desktop-e2e.yml`,
+`migration-integrity-check.yml`, `style-canon-lint.yml`, `consent-path-gate.yml`
+and `codeql.yml` — are `workflow_dispatch`-only, so an absent or green check
+means nobody dispatched it, not that anything passed. (`codeql.yml` used to run
+on push/PR plus a weekly cron and was **red on every run by baseline**; it was
+gated to dispatch for exactly that reason, so it no longer reports at all.) A
+handful do run on their own — as of 2026-09-07, `pr-gate.yml` on every
+`pull_request` against `main` (lint, typecheck, **the frontend unit suite, a
+web-bundle build**, and the dependency-free `mobile-guards` job — still no
+Docker, no Postgres, no Xcode/Gradle, but no longer the two-minute lane it
+started as) and `benchmark-unit.yml` for `scripts/benchmark/**`.
+
+**The *client* release lanes are the exception to this section's headline, and
+that asymmetry catches people out.** Unlike container images, pushing a tag
+*does* release them: `mobile-release.yml` on `ios-v*` / `android-v*` /
+`mobile-release-v*` uploads to TestFlight / Play internal, and
+`desktop-release.yml` on `desktop-v*` builds the signed desktop lanes
+(`frontend/apps/desktop`; a lane whose signing secrets are unset skips rather
+than fails). Push one of those tags only when you mean to ship.
+
+**[`docs/CI.md`](docs/CI.md) carries the maintained per-workflow trigger table,
+and is the only place it is maintained** — the full list is deliberately not
+repeated here, because the same counts were restated in four files and went
+stale in three of them. It also ships the `grep` that re-derives the table from
+the `on:` blocks, so check there rather than trusting this paragraph's summary.
+
+**No check gates a merge**, whether it ran or not: `main` carries no
+`required_status_checks` and `required_approving_review_count: 0`, so a red
+`pr-gate.yml` stops nothing (verify with
+`gh api repos/companionintelligence/CI-Server/branches/main/protection --jq 'keys'`).
+Cut a container release by
+tagging and then dispatching **on that tag**, since `VERSION` is parsed from the ref
+(on a branch ref it resolves to the literal `refs/heads/main`, which is not a legal
+image tag — publish.yml's `Refuse to publish a non-release ref` guard rejects a
+`--ref main` dispatch in seconds, before either 150-minute build leg starts, but
+the run still ends red and publishes nothing):
 
 ```bash
 git tag v2026.7.27 && git push origin v2026.7.27
@@ -605,6 +693,14 @@ The `make` targets cover **both stacks** — the TypeScript one and the Python o
 | `make format` | `prettier --write` across the JS/TS sources, then `ruff format` and `ruff check --fix` |
 | `make test` | `yarn workspaces foreach --all run test`, then `uv run pytest` |
 
+The repo root now declares `test` and `typecheck` scripts of its own: `yarn test`
+runs the xtask unit suite (`tsx --test "scripts/xtask/**/*.test.ts"`), and
+`yarn typecheck` runs `tsc --noEmit` over what the root `tsconfig.json` includes —
+`scripts/**`, `tests/**` and the Playwright config, which nothing ran before.
+Neither needs naming anywhere else: `foreach --all` stopped excluding the root
+workspace the moment those scripts existed, so `make test` runs the suite and
+pr-gate's `Type check packages` lane runs the type-check.
+
 The underlying Yarn scripts are still there if you only want the JS half:
 
 ```bash
@@ -619,13 +715,25 @@ yarn dev                    # Start development server with nodemon
 yarn migrate:make <name>    # Create a new migration file
 yarn migrate:down           # Roll back the last migration
 yarn depcheck               # Check import boundaries / cycles (dependency-cruiser)
-yarn ci-import <cmd>        # The import CLI, run from source (datasources, recognize,
-                            #   import, inbox, runs, push, stats, doctor, backfill).
-                            #   Shipped as the `ci-import` bin from the built package.
 yarn test                   # Run the backend Jest suite
 yarn typecheck              # Type-check without emitting
 yarn lint                   # Lint backend code
 yarn lint:fix               # Auto-fix backend linting issues
+```
+
+### CLI Commands (`backend/apps/cli`)
+
+The `ci` command line — its own workspace, one dependency, no NestJS. Full
+reference: [`docs/cli/ci.md`](docs/cli/ci.md).
+
+```bash
+yarn dev <cmd>              # Run from source via tsx (datasources, recognize, import,
+                            #   inbox, runs, push, stats, doctor, backfill, peers,
+                            #   grants, asks). From the root:
+                            #   yarn workspace @ci/cli dev <cmd>
+yarn build                  # Bundle to a single file at dist/ci.cjs
+yarn test                   # Run the Vitest suite
+yarn typecheck              # Type-check without emitting
 ```
 
 ### Frontend SPA Commands (`frontend/apps/web`)

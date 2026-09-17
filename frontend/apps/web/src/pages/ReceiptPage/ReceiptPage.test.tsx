@@ -129,5 +129,24 @@ describe('ReceiptPage', () => {
     renderPage({ receipt: null });
 
     expect(await screen.findByText('Receipt not found')).toBeInTheDocument();
+    expect(screen.queryByText('Could not load this receipt')).not.toBeInTheDocument();
+  });
+
+  /**
+   * The page dropped the query's `error`, so a 500, a dead connection or an
+   * expired session all landed on the branch above — the appliance telling the
+   * owner a receipt they own does not exist. The shared ErrorState says the
+   * fetch failed instead, and offers a retry.
+   */
+  it('renders the shared ErrorState with a retry when the query fails, not the not-found state', async () => {
+    renderWithProviders(<ReceiptPage />, {
+      path: '/receipts/:id',
+      route: `/receipts/${RAW_ID}`,
+      mocks: [mockQuery(GET_RECEIPT, { id: RECEIPT_ID }, { error: new Error('network down') })],
+    });
+
+    expect(await screen.findByText('Could not load this receipt')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(screen.queryByText('Receipt not found')).not.toBeInTheDocument();
   });
 });
