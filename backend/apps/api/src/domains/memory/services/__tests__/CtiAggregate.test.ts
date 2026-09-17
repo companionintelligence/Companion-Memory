@@ -75,3 +75,88 @@ describe('CtiAggregate.fetchBaseMap', () => {
     expect(map.size).toBe(0);
   });
 });
+
+/**
+ * `applyUpdate` builds `after` — the merged before/patch state a caller's
+ * `base` callback derives its base-row patch from — with a plain
+ * `Object.assign`, not a TypeORM write. An untouched field arriving as
+ * `key: undefined` (a resolver that always builds its DTO with every optional
+ * field present, per #2703/#2713) must not clobber `before`'s real value here:
+ * unlike the `repository.update(byId, detailPatch)` call a few lines above,
+ * which TypeORM's own UpdateQueryBuilder normalizes by dropping undefined
+ * values before building SQL, this line has no such guard of its own, and its
+ * result is what a caller's `base` callback reads to build the patch that
+ * actually gets persisted to the base row.
+ */
+describe('CtiAggregate.applyUpdate', () => {
+  class Detail {
+    id!: string;
+
+    name!: string;
+
+    summary!: string | null;
+  }
+
+  class Base {
+    id!: string;
+
+    name!: string | null;
+
+    description!: string | null;
+  }
+
+  function makeAggregate() {
+    const detailRepo = {
+      findOne: jest.fn(),
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+    const baseRepo = {
+      update: jest.fn().mockResolvedValue(undefined),
+    };
+    const manager = {
+      getRepository: jest.fn((entityClass: unknown) => {
+        if (entityClass === Detail) {return detailRepo;}
+
+        if (entityClass === Base) {return baseRepo;}
+
+        throw new Error('unexpected entity class passed to getRepository');
+      }),
+    };
+    const detailRepository = {
+      manager: {
+        transaction: jest.fn(async (fn: (manager: unknown) => unknown) => fn(manager)),
+      },
+      metadata: { updateDateColumn: undefined },
+    };
+
+    const aggregate = new CtiAggregate({
+      detailRepository: detailRepository as never,
+      detailEntity: Detail as never,
+      baseEntity: Base as never,
+      linkedTable: 'items',
+      scopedWhere: () => ({}) as never,
+    });
+
+    return { aggregate, detailRepo, baseRepo };
+  }
+
+  it('does not let an untouched field sent as undefined clobber the before-value a base() callback derives from', async () => {
+    const { aggregate, detailRepo, baseRepo } = makeAggregate();
+
+    const before = { id: 'd1', name: 'Old name', summary: 'Real summary' };
+    detailRepo.findOne
+      .mockResolvedValueOnce(before)
+      .mockResolvedValueOnce({ ...before, name: 'New name' });
+
+    const result = await aggregate.applyUpdate({} as never, 'd1', {
+      detail: { name: 'New name', summary: undefined },
+      base: ((after: typeof before) => ({ description: after.summary })) as never,
+    } as never);
+
+    expect(result?.name).toBe('New name');
+    // Without withoutUndefined() guarding the `after` merge, `after.summary`
+    // would be clobbered to `undefined` by the untouched-field patch, and this
+    // would assert `{ description: undefined }` instead of the real value.
+    expect(baseRepo.update).toHaveBeenCalledWith({ id: 'd1' }, { description: 'Real summary' });
+  });
+});

@@ -348,3 +348,84 @@ describe('RelationshipService.update', () => {
     expect(result?.properties).toEqual({ fromRefetch: true });
   });
 });
+
+describe('RelationshipService.upsert', () => {
+  function makeStoredRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'rel-1',
+      fromNodeId: 'p1',
+      fromNodeType: 'person',
+      toNodeId: 'p2',
+      toNodeType: 'person',
+      type: 'FRIENDS_WITH',
+      userId: 'owner-1',
+      strength: 1,
+      isBidirectional: true,
+      startDate: null,
+      endDate: null,
+      properties: {},
+      createdAt: new Date('2026-08-18T00:00:00Z'),
+      updatedAt: new Date('2026-08-18T00:00:00Z'),
+      ...overrides,
+    };
+  }
+
+  it('leaves an untouched field alone on an existing row when the caller sends every key, undefined for the ones it did not set', async () => {
+    // Guards against the exact bug class fixed in RelationshipService.update
+    // (#2703/#2713) recurring here: unlike update(), upsert() has no
+    // load-bearing re-fetch after save() — it returns the saved in-memory
+    // record directly, so an undefined-valued clobber would reach the caller
+    // with nothing to catch it.
+    const repo = makeRepo();
+    const stored = makeStoredRow({ strength: 5 });
+    repo.findOne.mockResolvedValue(stored);
+    const { service } = makeService(repo);
+
+    const result = await service.upsert(ownerCtx, {
+      fromNodeId: 'p1',
+      fromNodeType: 'person',
+      toNodeId: 'p2',
+      toNodeType: 'person',
+      type: 'FRIENDS_WITH',
+      strength: undefined,
+    });
+
+    expect(result?.strength).toBe(5);
+  });
+
+  it('still clears a field when the caller sends an explicit null', async () => {
+    const repo = makeRepo();
+    const stored = makeStoredRow({ startDate: new Date('2026-01-01') });
+    repo.findOne.mockResolvedValue(stored);
+    const { service } = makeService(repo);
+
+    const result = await service.upsert(ownerCtx, {
+      fromNodeId: 'p1',
+      fromNodeType: 'person',
+      toNodeId: 'p2',
+      toNodeType: 'person',
+      type: 'FRIENDS_WITH',
+      startDate: null,
+    });
+
+    expect(result?.startDate).toBeNull();
+  });
+
+  it('creates a new row when none exists yet', async () => {
+    const repo = makeRepo();
+    repo.findOne.mockResolvedValue(null);
+    const { service } = makeService(repo);
+
+    const result = await service.upsert(ownerCtx, {
+      fromNodeId: 'p1',
+      fromNodeType: 'person',
+      toNodeId: 'p2',
+      toNodeType: 'person',
+      type: 'FRIENDS_WITH',
+      strength: 3,
+    });
+
+    expect(repo.create).toHaveBeenCalledTimes(1);
+    expect(result?.strength).toBe(3);
+  });
+});

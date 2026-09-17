@@ -277,7 +277,7 @@ export class RelationshipService {
     } else {
       const { id, properties, type, toNodeId, fromNodeId, ...updateData } = prepared;
 
-      Object.assign(record, updateData);
+      Object.assign(record, withoutUndefined(updateData));
       record.isBidirectional = prepared.isBidirectional ?? record.isBidirectional;
       // TODO: Merge properties instead of ignoring them.
     }

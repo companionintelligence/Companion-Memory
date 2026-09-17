@@ -9,7 +9,7 @@ import {
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 
 import type { ServiceContext } from '@ci/common/context';
-import { chunkedConflictInsert } from '@ci/common/persistence';
+import { chunkedConflictInsert, withoutUndefined } from '@ci/common/persistence';
 
 import type { BaseEntity } from '../entities/BaseEntity';
 
@@ -222,10 +222,15 @@ export class CtiAggregate<TDetail extends ObjectLiteral & { id: string }, TBase 
 
       // Before-state merged with the patch — what the detail row now holds —
       // without waiting on the reload, so base derivation sees real values.
+      // withoutUndefined() guards this the same way RelationshipService.update
+      // and TaskService.update do (#2703, #2713): an untouched field arriving
+      // as `key: undefined` must not clobber `before`'s real value here, since
+      // `after` (unlike the `repository.update()` call above, which TypeORM
+      // already normalizes) is built with a plain Object.assign.
       const after = Object.assign(
         Object.create(Object.getPrototypeOf(before) as object),
         before,
-        detailPatch,
+        withoutUndefined(detailPatch),
       ) as TDetail;
 
       const basePatch = typeof patches.base === 'function' ? patches.base(after) : (patches.base ?? null);
