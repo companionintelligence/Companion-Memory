@@ -376,7 +376,7 @@ describe('TaskService', () => {
     // entity's current value; an explicit `null` must still clear it.
     // -------------------------------------------------------------------------
     it('leaves untouched fields alone when the caller sends every key, undefined for the ones it did not set', async () => {
-      await setup([makeTask({ priority: 3, status: 'open' })]);
+      await setup([makeTask()]);
 
       const result = await service.update(ALICE, 'task-1', {
         title: 'Renamed',
@@ -400,7 +400,7 @@ describe('TaskService', () => {
     });
 
     it('still clears a field when the caller sends an explicit null', async () => {
-      await setup([makeTask({ description: 'old description', priority: 3 })]);
+      await setup([makeTask({ description: 'old description' })]);
 
       const result = await service.update(ALICE, 'task-1', { description: null });
 
