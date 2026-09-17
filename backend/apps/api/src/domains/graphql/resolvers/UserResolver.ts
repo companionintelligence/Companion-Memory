@@ -7,6 +7,7 @@ import { NodeService } from '@ci/domains/graph';
 import { PersonService } from '@ci/domains/memory';
 import { UserService } from '@ci/domains/user';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { PersonType } from '../types/PersonType';
 import { UpdateCurrentUserInput } from '../types/UpdateCurrentUserInput';
 import { UserType } from '../types/UserType';
@@ -41,6 +42,9 @@ export class UserResolver {
   }
 
   @Mutation(() => UserType, { nullable: true })
+  // userService.update() patches only the caller's own timezone field; the account row stays
+  // fully intact. Not account deletion — see UserService.requestDeletion for that path.
+  @GraphqlPrivacy({ destructive: false })
   async updateCurrentUser(
     @Context() context: RequestContext,
     @Args('input') input: UpdateCurrentUserInput,

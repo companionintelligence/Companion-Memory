@@ -140,6 +140,9 @@ export class PeerLinkResolver {
    * the refusal honest and keeps the handle out of the write path entirely.
    */
   @Mutation(() => PeerLinkPayload)
+  // Field update on the existing row (including trustTier); nothing is removed. Purely local — it
+  // does not contact the peer.
+  @GraphqlPrivacy({ destructive: false })
   async updatePeerLink(
     @Context() context: RequestContext,
     @Args('input') input: UpdatePeerLinkInput,
@@ -181,6 +184,9 @@ export class PeerLinkResolver {
    * stays readable so the owner can see the relationship existed.
    */
   @Mutation(() => PeerLinkPayload)
+  // Sets revokedAt only — "nothing is deleted" per this method's own doc comment, and revoking is
+  // a privacy-protective action like revokeAskGrant.
+  @GraphqlPrivacy({ destructive: false })
   async revokePeerLink(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,

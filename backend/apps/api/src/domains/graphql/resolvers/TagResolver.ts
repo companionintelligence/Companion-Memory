@@ -262,6 +262,13 @@ export class TagResolver {
    * rename — otherwise they would quietly stop matching anything.
    */
   @Mutation(() => UpdateTagPayload)
+  // Not a plain rename. Per this method's own doc comment: renaming onto a label the caller
+  // already owns runs TagService.update's merge branch, which calls the same mergeInto/purge path
+  // as deleteTag — the tag being "updated" is hard-deleted and its own description is dropped in
+  // favor of the surviving tag's (unless a new description is also passed). The label collision is
+  // caller-triggerable, not a rare edge case, so the whole mutation is declared destructive rather
+  // than trying to express a conditional privacy label.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async updateTag(
     @Context() context: RequestContext,
     @Args('input') input: UpdateTagInput,
@@ -339,6 +346,7 @@ export class TagResolver {
   }
 
   @Mutation(() => [TaggableEntityType])
+  @GraphqlPrivacy({ destructive: false })
   async tagEntities(
     @Context() context: RequestContext,
     @Args('input') input: TagEntitiesInput,
@@ -400,6 +408,8 @@ export class TagResolver {
 
   /** Set a tag's taxonomy level (direction / intention / category). */
   @Mutation(() => SetTagKindPayload)
+  // TagService.setKind is a plain single-column UPDATE; no join rows touched.
+  @GraphqlPrivacy({ destructive: false })
   async setTagKind(
     @Context() context: RequestContext,
     @Args('input') input: SetTagKindInput,
@@ -419,6 +429,12 @@ export class TagResolver {
    * silently dropped rather than failing the whole call.
    */
   @Mutation(() => SetTagGroupingPayload)
+  // "Replace" per its own doc comment, and TagService.setTagDirections implements that literally:
+  // `manager.getRepository(TagDirectionEntity).delete({ intentionTagId })` unconditionally, THEN
+  // re-inserts only the ids the caller passed. A caller (or an agent) that omits a previously-set
+  // direction permanently drops that join row — the same category of loss untagEntities is already
+  // declared destructive for, just reached through a "set" name instead of "untag".
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async setTagDirections(
     @Context() context: RequestContext,
     @Args('input') input: SetTagDirectionsInput,
@@ -440,6 +456,9 @@ export class TagResolver {
    * grouping axis. Same contract as {@link setTagDirections}.
    */
   @Mutation(() => SetTagGroupingPayload)
+  // Same delete-then-reinsert replace shape as setTagDirections (TagCategoryEntity in place of
+  // TagDirectionEntity) — see that mutation's comment.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async setTagCategories(
     @Context() context: RequestContext,
     @Args('input') input: SetTagCategoriesInput,
@@ -463,6 +482,10 @@ export class TagResolver {
    * its role requires.
    */
   @Mutation(() => Boolean)
+  // A single-row toggle, not a replace: enabled:true DELETES one opt-out row (restoring the
+  // default — an unblock, like revokeAskGrant), enabled:false inserts one. Neither branch can drop
+  // unrelated state the way setTagDirections/setTagCategories/setEntityCategories can.
+  @GraphqlPrivacy({ destructive: false })
   async setCategoryDirectionEnabled(
     @Context() context: RequestContext,
     @Args('input') input: SetCategoryDirectionEnabledInput,
@@ -487,6 +510,10 @@ export class TagResolver {
    * labels, this cannot touch more than one entity's assignments per call.
    */
   @Mutation(() => [TagType])
+  // Same delete-then-reinsert replace shape as setTagDirections/setTagCategories, this time over
+  // EntityCategoryEntity — TagService.setEntityCategories unconditionally deletes every existing
+  // (entityType, entityId) row before re-inserting only the ids passed.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async setEntityCategories(
     @Context() context: RequestContext,
     @Args('input') input: SetEntityCategoriesInput,

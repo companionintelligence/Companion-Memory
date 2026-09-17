@@ -232,6 +232,8 @@ export class ForecastResolver {
   }
 
   @Mutation(() => String, { description: 'Manually trigger the HBPE pipeline for the current user' })
+  // Only enqueues the existing nightly pg-boss job; no direct write here.
+  @GraphqlPrivacy({ destructive: false })
   async triggerHbpe(@Context() context: RequestContext): Promise<string> {
     if (!(await this.featureService.isFeatureEnabled('hbpe'))) {
       return 'disabled';

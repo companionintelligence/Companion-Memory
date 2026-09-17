@@ -6,6 +6,7 @@ import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { MaxArraySizePipe } from '@ci/common/pipes';
 import { NoteService } from '@ci/domains/notes';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
 import { CreateNoteInput } from '../types/CreateNoteInput';
 import { CreateNotePayload } from '../types/CreateNotePayload';
@@ -30,6 +31,8 @@ export class NoteResolver {
   ) {}
 
   @Mutation(() => CreateNotePayload)
+  // Plain create — a new row, nothing pre-existing touched.
+  @GraphqlPrivacy({ destructive: false })
   async createNote(
     @Context() context: RequestContext,
     @Args('input') input: CreateNoteInput,
@@ -54,6 +57,8 @@ export class NoteResolver {
   }
 
   @Mutation(() => [NoteType])
+  // Batch create — new rows only.
+  @GraphqlPrivacy({ destructive: false })
   async createNotes(
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreateNoteInput] }, new MaxArraySizePipe())
@@ -73,6 +78,8 @@ export class NoteResolver {
   }
 
   @Mutation(() => UpdateNotePayload)
+  // noteService.update() patches only title/content on the caller's own row; nothing else is dropped.
+  @GraphqlPrivacy({ destructive: false })
   async updateNote(
     @Context() context: RequestContext,
     @Args('input') input: UpdateNoteInput,
@@ -99,6 +106,8 @@ export class NoteResolver {
   }
 
   @Mutation(() => DeleteByIdPayload)
+  // noteService.remove() hard-deletes the row (ci.notes) with no restore path in the schema.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteNote(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

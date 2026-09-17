@@ -6,6 +6,7 @@ import { FeatureService } from '@ci/common/feature';
 import { JwtOrApiKeyAuthGuard } from '@ci/common/guards';
 import { PushSubscriptionService, ReminderService, WebPushService } from '@ci/domains/planning';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { CreateReminderInput } from '../types/CreateReminderInput';
 import { CreateReminderPayload } from '../types/CreateReminderPayload';
 import { GlobalUID } from '../types/GlobalUID';
@@ -60,6 +61,7 @@ export class ReminderResolver {
   }
 
   @Mutation(() => CreateReminderPayload)
+  @GraphqlPrivacy({ destructive: false })
   async createReminder(
     @Context() context: RequestContext,
     @Args('input') input: CreateReminderInput,
@@ -81,6 +83,8 @@ export class ReminderResolver {
   }
 
   @Mutation(() => ReminderType, { nullable: true, description: 'Soft-cancel a reminder. The row survives.' })
+  // Own description says it: the row survives.
+  @GraphqlPrivacy({ destructive: false })
   async cancelReminder(
     @Context() context: RequestContext,
     @Args('id', { type: () => ID }) gid: string,
@@ -96,6 +100,7 @@ export class ReminderResolver {
   }
 
   @Mutation(() => Boolean, { description: 'Register (or re-point) a browser Web Push endpoint.' })
+  @GraphqlPrivacy({ destructive: false })
   async subscribeToPush(
     @Context() context: RequestContext,
     @Args('input') input: PushSubscriptionInput,
@@ -113,6 +118,9 @@ export class ReminderResolver {
   }
 
   @Mutation(() => Boolean, { description: 'Remove a browser Web Push endpoint.' })
+  // Deletes a device push-subscription registration, not user memory data; trivially re-created by
+  // the browser re-subscribing. Judgment call: flagged for review.
+  @GraphqlPrivacy({ destructive: false })
   async unsubscribeFromPush(
     @Context() context: RequestContext,
     @Args('endpoint') endpoint: string,

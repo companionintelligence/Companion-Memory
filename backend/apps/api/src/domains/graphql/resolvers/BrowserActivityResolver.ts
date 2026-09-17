@@ -7,6 +7,7 @@ import { MaxArraySizePipe } from '@ci/common/pipes';
 import { BrowserActivityService, type CreateBrowserActivityDto } from '@ci/domains/browser-activity';
 import { adoptIngestIdentity } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { TagLoader } from '../loaders/TagLoader';
 import { BrowserActivityConnection } from '../types/BrowserActivityConnection';
 import { BrowserActivityEdge } from '../types/BrowserActivityEdge';
@@ -88,6 +89,10 @@ export class BrowserActivityResolver {
    * Returns created-or-existing rows in input order.
    */
   @Mutation(() => [BrowserActivityType])
+  // Idempotent bulk ingest: inserts new rows, and a re-sync only self-heals a
+  // fixed set of capture-derived columns on conflict (INGEST_REFRESH_COLUMNS) —
+  // never a delete or a wholesale overwrite of unrelated data.
+  @GraphqlPrivacy({ destructive: false })
   async createBrowserActivities(
     @Context() context: RequestContext,
     @Args('input', { type: () => [CreateBrowserActivityInput] }, new MaxArraySizePipe())
@@ -124,6 +129,8 @@ export class BrowserActivityResolver {
   }
 
   @Mutation(() => BrowserActivityType, { nullable: true })
+  // Patches only this row's own title/url; nothing else is touched or removed.
+  @GraphqlPrivacy({ destructive: false })
   async updateBrowserActivity(
     @Context() context: RequestContext,
     @Args('input') input: UpdateBrowserActivityInput,
@@ -145,6 +152,9 @@ export class BrowserActivityResolver {
    * visit and its `ci.entities` base row are destroyed and cannot be restored.
    */
   @Mutation(() => DeleteByIdPayload)
+  // Confirmed HARD delete per the method's own doc comment above: BrowserActivityService.remove
+  // issues a `repository.delete`, with no restore path in the schema.
+  @GraphqlPrivacy({ access: 'delete', destructive: true })
   async deleteBrowserActivity(
     @Context() context: RequestContext,
     @Args('input') input: DeleteByIdInput,

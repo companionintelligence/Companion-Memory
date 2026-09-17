@@ -7,6 +7,7 @@ import { isGeocodingConfigured } from '@ci/configuration';
 import { DailyMetricsService } from '@ci/domains/daily-metrics';
 import { type KnownPlaceKind, KnownPlacesService, type KnownPlaceSource } from '@ci/domains/memory';
 
+import { GraphqlPrivacy } from '../decorators/GraphqlPrivacy';
 import { KnownPlaceCandidateType } from '../types/KnownPlaceCandidateType';
 import { KnownPlaceType } from '../types/KnownPlaceType';
 import { UpdateKnownPlaceInput } from '../types/UpdateKnownPlaceInput';
@@ -71,6 +72,8 @@ export class KnownPlacesResolver {
 
   /** Confirm / update a known place, upserting the LIVES_IN/WORKS_AT/VISITED graph relationship. */
   @Mutation(() => KnownPlaceType)
+  // Upserts one (kind, place) relationship; other known places are untouched.
+  @GraphqlPrivacy({ destructive: false })
   async updateKnownPlace(
     @Context() context: RequestContext,
     @Args('input') input: UpdateKnownPlaceInput,
