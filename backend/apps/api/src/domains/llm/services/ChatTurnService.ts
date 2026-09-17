@@ -30,6 +30,8 @@ import {
   attachmentStub,
   isContextOverflowError,
   messageBytes,
+  NUM_CTX_ENV_VAR,
+  parseNumCtx,
   planContextAdmission,
   planInlineAttachments,
   resolveContextBudget,
@@ -531,7 +533,17 @@ export class ChatTurnService {
     // stale tool-call payloads the fold would have dropped anyway.
     const foldedMessages = foldHistory(seededMessages);
 
-    const budget = resolveContextBudget({ shrinkLevel: options.shrinkLevel });
+    // CI-Hub's exported window is authoritative. Without one, the machine
+    // decides: the planner returns the loaded window of a resident chat model
+    // or the largest ladder rung that fits the card, and null when nothing can
+    // be proven — which leaves the static tier profile as the last resort. The
+    // optional call is for unit tests that build this service on a partial
+    // OllamaService; production always has the method.
+    const measuredContextTokens =
+      parseNumCtx(process.env[NUM_CTX_ENV_VAR]) == null
+        ? ((await this.ollamaService.resolveChatContextTokens?.(payload.model)) ?? null)
+        : null;
+    const budget = resolveContextBudget({ shrinkLevel: options.shrinkLevel, measuredContextTokens });
     const plan = planContextAdmission(
       foldedMessages.map((message) => ({
         role: message.role,

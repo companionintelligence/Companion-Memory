@@ -44,11 +44,32 @@ describe('resolveContextBudget', () => {
     expect(budget.source).toBe(NUM_CTX_ENV_VAR);
   });
 
-  it('falls back to the tier profile when Hub did not export one', () => {
+  it('falls back to the tier profile when Hub did not export one and nothing was measured', () => {
     const budget = resolveContextBudget({ env: {} });
 
     expect(budget.maxContextTokens).toBe(TIER_PROFILES.on_device.maxContextTokens);
     expect(budget.source).toBe('tier-profile');
+  });
+
+  it('uses the window the residency planner measured when Hub exported nothing', () => {
+    const budget = resolveContextBudget({ env: {}, measuredContextTokens: 16384 });
+
+    expect(budget.maxContextTokens).toBe(16384);
+    expect(budget.source).toBe('residency-planner');
+  });
+
+  it('lets the Hub-exported window outrank the measured one: a configured window is a decision', () => {
+    const budget = resolveContextBudget({ env: { [NUM_CTX_ENV_VAR]: '8192' }, measuredContextTokens: 32768 });
+
+    expect(budget.maxContextTokens).toBe(8192);
+    expect(budget.source).toBe(NUM_CTX_ENV_VAR);
+  });
+
+  it('treats a measured value that is not a positive integer as absent', () => {
+    for (const measured of [null, undefined, 0, -1, 1.5, Number.NaN]) {
+      const budget = resolveContextBudget({ env: {}, measuredContextTokens: measured });
+      expect(budget.source).toBe('tier-profile');
+    }
   });
 
   it('never lets the byte budget exceed the token headroom (tokens <= bytes)', () => {

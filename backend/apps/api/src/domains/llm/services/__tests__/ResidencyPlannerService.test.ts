@@ -498,3 +498,52 @@ describe('load watchdog and cooldown', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 });
+
+describe('ResidencyPlannerService.resolveChatContextTokens', () => {
+  const residentChatAndEmbed = {
+    models: [
+      { name: 'qwen3.6:27b', size_vram: QWEN_RESIDENT_32K, context_length: 32_768 },
+      { name: 'nomic-embed-text:latest', size_vram: 323_150_151, context_length: 2_048 },
+    ],
+  };
+
+  it('returns the loaded window of a resident chat model, without asking /api/show for it', async () => {
+    psMock.mockResolvedValue(residentChatAndEmbed);
+    probeMock.mockResolvedValue({ totalBytes: CARD, usedBytes: 22_240_452_608, source: 'sysfs', device: 'card1' });
+    const { service, logger } = loadService();
+
+    await expect(service.resolveChatContextTokens()).resolves.toBe(32_768);
+    expect(showMock).not.toHaveBeenCalledWith({ model: 'qwen3.6:27b' });
+    expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('already resident at that window'));
+
+    // Steady state: the same answer again logs nothing new.
+    logger.log.mockClear();
+    await expect(service.resolveChatContextTokens()).resolves.toBe(32_768);
+    expect(logger.log).not.toHaveBeenCalledWith(expect.stringContaining('Chat context'));
+  });
+
+  it('plans the largest rung that fits the card when the chat model is not loaded (gemma4 as chat, empty card)', async () => {
+    psMock.mockResolvedValue({ models: [] });
+    probeMock.mockResolvedValue({ totalBytes: CARD, usedBytes: 0, source: 'sysfs', device: 'card1' });
+    const { service, logger } = loadService({ chatModel: 'gemma4:e4b' });
+
+    await expect(service.resolveChatContextTokens()).resolves.toBe(32_768);
+    expect(showMock).toHaveBeenCalledWith({ model: 'gemma4:e4b' });
+    expect(logger.log).toHaveBeenCalledWith(expect.stringContaining('Chat context for "gemma4:e4b": 32768 tokens'));
+  });
+
+  it('answers null, never a guess, when the planner is off or the backend is OpenAI-compatible', async () => {
+    psMock.mockResolvedValue(residentChatAndEmbed);
+    probeMock.mockResolvedValue({ totalBytes: CARD, usedBytes: 0, source: 'sysfs' });
+    await expect(loadService({ mode: 'off' }).service.resolveChatContextTokens()).resolves.toBeNull();
+    await expect(loadService({ openAi: true }).service.resolveChatContextTokens()).resolves.toBeNull();
+  });
+
+  it('answers null when the backend cannot be reached, and says so once', async () => {
+    psMock.mockRejectedValue(new Error('ECONNREFUSED'));
+    const { service, logger } = loadService();
+
+    await expect(service.resolveChatContextTokens()).resolves.toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith('Chat context planning failed; the chat path keeps its configured fallback', expect.objectContaining({ error: 'ECONNREFUSED' }));
+  });
+});

@@ -14,6 +14,7 @@ import {
   GIB,
   kvBytesPerToken,
   parseModelGeometry,
+  planChatContext,
   planUtilityResidency,
   sameModel,
   type ModelGeometry,
@@ -315,5 +316,90 @@ describe('planUtilityResidency', () => {
     });
 
     expect(plan.kind).toBe('routed');
+  });
+});
+
+describe('planChatContext', () => {
+  const CARD = 25_753_026_560;
+  const noResidents = { residents: [], gpu: { totalBytes: CARD, usedBytes: 0, source: 'sysfs' as const }, embedReserveBytes: 0, safetyMarginBytes: GIB };
+  const gemma4Chat = {
+    chatModel: 'gemma4:e4b',
+    candidate: { weightBytes: GEMMA4_WEIGHTS, geometry: gemma4, observation: null },
+  };
+
+  it('answers with the loaded window when the chat model is already resident, without estimating', () => {
+    const plan = planChatContext({
+      ...noResidents,
+      ...gemma4Chat,
+      residents: [{ name: 'gemma4:e4b', sizeVramBytes: 11 * GIB, contextLength: 16_384 }],
+      // Even with no candidate data the resident answer stands: nothing needs proving.
+      candidate: null,
+    });
+    expect(plan).toEqual({ kind: 'resident', numCtx: 16_384 });
+  });
+
+  it('plans the LARGEST ladder rung whose footprint fits the whole card, not the card minus residents', () => {
+    // Another model resident does not shrink the chat model\'s headroom: Ollama evicts for the primary.
+    const plan = planChatContext({
+      ...noResidents,
+      ...gemma4Chat,
+      residents: [{ name: 'some-other:7b', sizeVramBytes: 20 * GIB, contextLength: 8_192 }],
+    });
+    expect(plan).toMatchObject({ kind: 'planned', numCtx: 32_768 });
+  });
+
+  it('steps down the ladder on a smaller card', () => {
+    // 12.7 GiB at 32k for gemma4; a 12 GiB card with a 1 GiB margin leaves ~11 GiB.
+    const plan = planChatContext({ ...noResidents, ...gemma4Chat, gpu: { totalBytes: 12 * GIB, usedBytes: 0, source: 'sysfs' } });
+    expect(plan.kind).toBe('planned');
+    if (plan.kind === 'planned') {
+      expect(plan.numCtx).toBeLessThan(32_768);
+      expect(plan.numCtx).toBeGreaterThanOrEqual(4_096);
+      expect(plan.footprintBytes).toBeLessThanOrEqual(plan.headroomBytes);
+    }
+  });
+
+  it('never plans above 32k, whatever the card: larger windows are an explicit operator or Hub decision', () => {
+    const plan = planChatContext({ ...noResidents, ...gemma4Chat, gpu: { totalBytes: 80 * GIB, usedBytes: 0, source: 'nvidia-smi' } });
+    expect(plan).toMatchObject({ kind: 'planned', numCtx: 32_768 });
+  });
+
+  it('caps the ladder at the training window', () => {
+    const plan = planChatContext({
+      ...noResidents,
+      chatModel: 'tiny:1b',
+      candidate: {
+        weightBytes: GIB,
+        geometry: { ...gemma4, trainingContextLength: 8_192 },
+        observation: null,
+      },
+    });
+    expect(plan).toMatchObject({ kind: 'planned', numCtx: 8_192 });
+  });
+
+  it('keeps the embedding reserve out of the headroom when the embedder is not resident', () => {
+    // Enough card for 32k only if the reserve is ignored — so the reserve must step it down.
+    const at32k = 13 * GIB;
+    const plan = planChatContext({
+      ...noResidents,
+      ...gemma4Chat,
+      gpu: { totalBytes: at32k + GIB, usedBytes: 0, source: 'sysfs' },
+      embedReserveBytes: 2 * GIB,
+    });
+    expect(plan.kind).toBe('planned');
+    if (plan.kind === 'planned') {expect(plan.numCtx).toBeLessThan(32_768);}
+  });
+
+  it('reports unknown, never a guess, when the GPU, the model or its geometry cannot be read', () => {
+    expect(planChatContext({ ...noResidents, ...gemma4Chat, gpu: null })).toMatchObject({ kind: 'unknown' });
+    expect(planChatContext({ ...noResidents, chatModel: 'ghost:1b', candidate: null })).toMatchObject({ kind: 'unknown' });
+    expect(
+      planChatContext({ ...noResidents, chatModel: 'ghost:1b', candidate: { weightBytes: GIB, geometry: null, observation: null } }),
+    ).toMatchObject({ kind: 'unknown' });
+  });
+
+  it('reports unknown when even the smallest rung does not fit', () => {
+    const plan = planChatContext({ ...noResidents, ...gemma4Chat, gpu: { totalBytes: 4 * GIB, usedBytes: 0, source: 'sysfs' } });
+    expect(plan).toMatchObject({ kind: 'unknown' });
   });
 });

@@ -13,11 +13,16 @@ import { TIER_PROFILES } from '@ci/domains/model-routing';
  * own maximum window. Hub then hands that number to every app it launches as
  * **`CI_LLM_NUM_CTX`**. CI-Server has never read it. This module does.
  *
- * Fallback, when the env var is absent (a bare `docker compose up`, a dev box,
- * a CI run), is `TIER_PROFILES.on_device.maxContextTokens` from
+ * When the env var is absent (a standalone ci-server, a dev box, a CI run, or a
+ * Hub whose manifest for this app never mapped `num_ctx`), the chat path asks
+ * the residency planner for the window this machine can actually carry —
+ * `ResidencyPlannerService.resolveChatContextTokens` — and passes it in as
+ * `measuredContextTokens`. Only when that cannot be proven either (no GPU
+ * counters, an OpenAI-compatible backend, a model the backend does not serve)
+ * does the last resort apply: `TIER_PROFILES.on_device.maxContextTokens` from
  * `domains/model-routing/services/ModelTierRouter.ts`. That number is a guess
  * by its own doc comment ("set to 8K to match typical local Ollama defaults"),
- * so it is the fallback and not the primary.
+ * so it is the fallback of the fallback and never the primary.
  *
  * ## Why the budget is measured in BYTES and there is no bytes-per-token factor
  *
@@ -62,7 +67,7 @@ const MIN_PROMPT_BUDGET_BYTES = 2_048;
 /** How many times a context-overflow failure may halve the history budget. */
 export const MAX_CONTEXT_SHRINK_LEVEL = 2;
 
-export type ContextBudgetSource = typeof NUM_CTX_ENV_VAR | 'tier-profile';
+export type ContextBudgetSource = typeof NUM_CTX_ENV_VAR | 'residency-planner' | 'tier-profile';
 
 export interface ContextBudget {
   /** `num_ctx` we ask the backend for. */
@@ -106,13 +111,31 @@ export function parseNumCtx(raw: string | undefined): number | null {
 }
 
 export function resolveContextBudget(
-  options: { env?: NodeJS.ProcessEnv; shrinkLevel?: number } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    shrinkLevel?: number;
+    /**
+     * The window the residency planner derived from this machine (the loaded
+     * window of a resident chat model, or the largest ladder rung whose
+     * footprint fits the card). Consulted only when CI-Hub exported nothing:
+     * a configured window is an operator's decision and always wins. Anything
+     * that is not a positive integer is treated as absent.
+     */
+    measuredContextTokens?: number | null;
+  } = {},
 ): ContextBudget {
   const env = options.env ?? process.env;
   const shrinkLevel = clamp(Math.floor(options.shrinkLevel ?? 0), 0, MAX_CONTEXT_SHRINK_LEVEL);
   const fromHub = parseNumCtx(env[NUM_CTX_ENV_VAR]);
-  const maxContextTokens = fromHub ?? TIER_PROFILES.on_device.maxContextTokens;
-  const source: ContextBudgetSource = fromHub == null ? 'tier-profile' : NUM_CTX_ENV_VAR;
+  const measured =
+    typeof options.measuredContextTokens === 'number' &&
+    Number.isSafeInteger(options.measuredContextTokens) &&
+    options.measuredContextTokens > 0
+      ? options.measuredContextTokens
+      : null;
+  const maxContextTokens = fromHub ?? measured ?? TIER_PROFILES.on_device.maxContextTokens;
+  const source: ContextBudgetSource =
+    fromHub != null ? NUM_CTX_ENV_VAR : measured != null ? 'residency-planner' : 'tier-profile';
 
   const reservedOutputTokens = clamp(
     Math.round(maxContextTokens * OUTPUT_RESERVE_FRACTION),

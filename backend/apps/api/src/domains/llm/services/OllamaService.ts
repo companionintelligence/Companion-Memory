@@ -1209,6 +1209,21 @@ export class OllamaService implements OnModuleInit {
     return this.residencyPlanner.resolveUtilityModel();
   }
 
+  /**
+   * The chat model's context window as the machine can carry it, from
+   * {@link ResidencyPlannerService.resolveChatContextTokens}. The chat path
+   * asks only when `CI_LLM_NUM_CTX` is absent; `null` (no planner, planner
+   * off, OpenAI-compatible backend, or nothing provable) leaves the static
+   * tier-profile fallback in place. Never throws.
+   */
+  async resolveChatContextTokens(model?: string): Promise<number | null> {
+    if (!this.residencyPlanner) {
+      return null;
+    }
+
+    return this.residencyPlanner.resolveChatContextTokens(model);
+  }
+
   async resolveModel(context: RequestContext, opts?: ValidateModelOptions): Promise<ValidateModelResult> {
     const { messages = [], requestedModel, enableThinking = false, enableTools = false } = opts ?? {};
 

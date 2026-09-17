@@ -330,6 +330,90 @@ function routeToChat(
  * Headroom is measured against LIVE used memory, so HBPE's direct `/dev/kfd`
  * allocation — invisible to Ollama's own fit check — is already subtracted.
  */
+/**
+ * Context windows tried for the CHAT model when nothing configured one, largest
+ * first. Same rungs as {@link UTILITY_CONTEXT_LADDER}, and the 32k top is
+ * deliberate: {@link estimateFootprintBytes} counts weights and KV cache, not
+ * the vision encoder's compute buffers or llama.cpp's scratch — measured
+ * 2026-09-17, a 27B at 32k held 16.2 GiB by `/api/ps` while the card showed
+ * 22.5 GiB in use. A 64k rung would pass the estimate on a 24 GB card and
+ * spill to CPU on the real one. Windows above 32k are an operator's or
+ * CI-Hub's explicit call, via `CI_LLM_NUM_CTX`, never this planner's.
+ */
+export const CHAT_CONTEXT_LADDER: readonly number[] = [32_768, 16_384, 8_192, 4_096];
+
+export interface ChatContextInputs {
+  chatModel: string;
+  residents: ResidentModel[];
+  gpu: GpuMemory | null;
+  /** Weights, geometry and any live sighting of the chat model; null when the backend does not serve it. */
+  candidate: UtilityCandidate | null;
+  /** Bytes to keep free for the embedding model when it is not already resident. */
+  embedReserveBytes: number;
+  safetyMarginBytes: number;
+  ladder?: readonly number[];
+}
+
+export type ChatContextPlan =
+  /** The chat model is loaded; asking for its loaded window never reloads it. */
+  | { kind: 'resident'; numCtx: number }
+  /** Not loaded; the largest rung whose estimated footprint fits the card. */
+  | { kind: 'planned'; numCtx: number; footprintBytes: number; headroomBytes: number }
+  /** Nothing can be proven; the caller keeps its configured fallback. */
+  | { kind: 'unknown'; reason: string };
+
+/**
+ * The chat model's context window, derived from the machine rather than from a
+ * guess, for the case where CI-Hub exported no `CI_LLM_NUM_CTX` (a standalone
+ * ci-server, or a manifest that never mapped it).
+ *
+ * Unlike {@link planUtilityResidency} this does NOT refuse to evict: the chat
+ * model is the appliance's primary and Ollama will displace whatever else is
+ * resident to load it. Its headroom is therefore the whole card less the
+ * embedding model's reserve and the safety margin — not the card less the
+ * current residents.
+ */
+export function planChatContext(inputs: ChatContextInputs): ChatContextPlan {
+  const { chatModel, residents, gpu, candidate, embedReserveBytes, safetyMarginBytes } = inputs;
+  const ladder = inputs.ladder ?? CHAT_CONTEXT_LADDER;
+
+  const resident = residents.find((model) => sameModel(model.name, chatModel));
+  if (resident?.contextLength != null && resident.contextLength > 0) {
+    return { kind: 'resident', numCtx: resident.contextLength };
+  }
+
+  if (gpu == null) {
+    return { kind: 'unknown', reason: 'GPU memory is unknown, so a fit cannot be proven' };
+  }
+
+  if (candidate == null) {
+    return { kind: 'unknown', reason: `"${chatModel}" is not served by the backend` };
+  }
+
+  if (candidate.weightBytes == null || candidate.geometry == null) {
+    return { kind: 'unknown', reason: `"${chatModel}" reports no usable size or attention geometry` };
+  }
+
+  const headroomBytes = gpu.totalBytes - embedReserveBytes - safetyMarginBytes;
+  const trainingMax = candidate.geometry.trainingContextLength;
+  const rungs = ladder.filter((ctx) => trainingMax == null || ctx <= trainingMax);
+  const candidates = rungs.length > 0 ? rungs : trainingMax != null ? [trainingMax] : [];
+
+  for (const numCtx of candidates) {
+    const footprintBytes = estimateFootprintBytes({
+      weightBytes: candidate.weightBytes,
+      geometry: candidate.geometry,
+      numCtx,
+      observation: candidate.observation,
+    });
+    if (footprintBytes <= headroomBytes) {
+      return { kind: 'planned', numCtx, footprintBytes, headroomBytes };
+    }
+  }
+
+  return { kind: 'unknown', reason: `"${chatModel}" does not fit on the card at any rung of the ladder` };
+}
+
 export function planUtilityResidency(inputs: PlanInputs): UtilityPlan {
   const { utilityModel, residents, gpu, candidate, embedReserveBytes, safetyMarginBytes } = inputs;
   const ladder = inputs.ladder ?? UTILITY_CONTEXT_LADDER;

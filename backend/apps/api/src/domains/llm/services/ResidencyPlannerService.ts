@@ -20,6 +20,8 @@ import {
   type UtilityCandidate,
   type UtilityModelChoice,
   type UtilityPlan,
+  planChatContext,
+  type ChatContextPlan,
 } from '../residency/footprint';
 import { probeGpuMemory } from '../residency/gpuMemory';
 
@@ -226,6 +228,73 @@ export class ResidencyPlannerService implements OnModuleInit {
   }
 
   /** Compute (or reuse, within {@link SNAPSHOT_TTL_MS}) the full plan with its inputs. */
+  /**
+   * The chat model's context window as this machine can actually carry it —
+   * the loaded window when the model is resident, else the largest rung of
+   * {@link CHAT_CONTEXT_LADDER} whose estimated footprint fits the card. Used
+   * by the chat path only when `CI_LLM_NUM_CTX` is absent, so a configured or
+   * Hub-supplied window always wins. `null` means "nothing can be proven";
+   * the caller keeps its static fallback. Never throws.
+   */
+  async resolveChatContextTokens(model: string = config.llm.chatModel): Promise<number | null> {
+    if (!this.enabled) {
+      return null;
+    }
+
+    try {
+      const embedModel = config.embedding.model;
+      const snapshot = await this.takeSnapshot();
+      // A resident chat model answers from `/api/ps` alone; `/api/show` and the
+      // embed reserve are only needed to size a load that has not happened yet.
+      const resident = snapshot.residents.some((entry) => sameModel(entry.name, model));
+      const candidate = resident ? null : await this.describeCandidate(model, snapshot);
+      const embedReserveBytes =
+        resident || snapshot.residents.some((entry) => sameModel(entry.name, embedModel))
+          ? 0
+          : await this.embedReserve(embedModel, snapshot);
+      const plan = planChatContext({
+        chatModel: model,
+        residents: snapshot.residents,
+        gpu: snapshot.gpu,
+        candidate,
+        embedReserveBytes,
+        safetyMarginBytes: config.llm.residency.safetyMarginBytes,
+      });
+      this.logChatContextChange(model, plan);
+
+      return plan.kind === 'unknown' ? null : plan.numCtx;
+    } catch (err: unknown) {
+      this.logger.warn('Chat context planning failed; the chat path keeps its configured fallback', {
+        model,
+        error: err instanceof Error ? err.message : String(err),
+      });
+
+      return null;
+    }
+  }
+
+  /** Per-model memory of the last answer, so a steady state costs no log lines. */
+  private readonly lastChatContext = new Map<string, string>();
+
+  private logChatContextChange(model: string, plan: ChatContextPlan): void {
+    const key =
+      plan.kind === 'unknown' ? `unknown:${plan.reason}` : `${plan.kind}:${plan.numCtx}`;
+    if (this.lastChatContext.get(model) === key) {
+      return;
+    }
+
+    this.lastChatContext.set(model, key);
+    if (plan.kind === 'unknown') {
+      this.logger.log(`Chat context for "${model}" cannot be planned (${plan.reason}); using the configured fallback`);
+    } else if (plan.kind === 'resident') {
+      this.logger.log(`Chat context for "${model}": ${plan.numCtx} tokens (already resident at that window)`);
+    } else {
+      this.logger.log(
+        `Chat context for "${model}": ${plan.numCtx} tokens (estimated ${formatGiB(plan.footprintBytes)} of ${formatGiB(plan.headroomBytes)} headroom)`,
+      );
+    }
+  }
+
   async report(): Promise<ResidencyReport> {
     const utilityModel = config.llm.utilityModel;
     const chatModel = config.llm.chatModel;

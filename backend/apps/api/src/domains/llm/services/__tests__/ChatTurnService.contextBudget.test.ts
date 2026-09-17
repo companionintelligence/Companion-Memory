@@ -36,6 +36,8 @@ function buildService(options: {
   rows: Array<Record<string, unknown>>;
   chatStream: jest.Mock;
   getFileContent?: jest.Mock;
+  /** Absent: the facade has no planner, the shape older tests build. */
+  resolveChatContextTokens?: jest.Mock;
 }) {
   const broker = new ChatGenerationBroker();
   const threadService = {
@@ -54,6 +56,7 @@ function buildService(options: {
       enableTools: false,
     })),
     chatStream: options.chatStream,
+    ...(options.resolveChatContextTokens && { resolveChatContextTokens: options.resolveChatContextTokens }),
   };
   const fileService = {
     getFileContent: options.getFileContent ?? jest.fn(async () => new Uint8Array([1, 2, 3])),
@@ -292,5 +295,74 @@ describe('ChatTurnService context budget', () => {
         overBudget: false,
       }),
     );
+  });
+});
+
+describe('ChatTurnService context budget without a Hub-exported window', () => {
+  const originalNumCtx = process.env[NUM_CTX_ENV_VAR];
+
+  beforeEach(() => {
+    delete process.env[NUM_CTX_ENV_VAR];
+  });
+
+  afterEach(() => {
+    if (originalNumCtx === undefined) {
+      delete process.env[NUM_CTX_ENV_VAR];
+    } else {
+      process.env[NUM_CTX_ENV_VAR] = originalNumCtx;
+    }
+  });
+
+  it('asks the residency planner for the window this machine carries and sends that', async () => {
+    const chatStream = jest.fn(async () => streamFrom([{ role: 'assistant', content: 'hi' }]));
+    const resolveChatContextTokens = jest.fn(async () => 16_384);
+    const { service, ollamaService } = buildService({
+      rows: [row({ id: 'user-msg', role: 'user', content: 'hello' })],
+      chatStream,
+      resolveChatContextTokens,
+    });
+
+    await service.execute(payload);
+
+    expect(resolveChatContextTokens).toHaveBeenCalledWith(payload.model);
+    expect(ollamaService.chatStream).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      // 16384 → 4096 output reserve; the window itself is the planner's answer.
+      expect.objectContaining({ numCtx: 16_384, maxOutputTokens: 4096 }),
+    );
+  });
+
+  it('falls back to the tier profile when the planner cannot prove a window', async () => {
+    const chatStream = jest.fn(async () => streamFrom([{ role: 'assistant', content: 'hi' }]));
+    const { service, ollamaService } = buildService({
+      rows: [row({ id: 'user-msg', role: 'user', content: 'hello' })],
+      chatStream,
+      resolveChatContextTokens: jest.fn(async () => null),
+    });
+
+    await service.execute(payload);
+
+    expect(ollamaService.chatStream).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      expect.objectContaining({ numCtx: 8192 }),
+    );
+  });
+
+  it('does not consult the planner when Hub exported a window', async () => {
+    process.env[NUM_CTX_ENV_VAR] = '4096';
+    const chatStream = jest.fn(async () => streamFrom([{ role: 'assistant', content: 'hi' }]));
+    const resolveChatContextTokens = jest.fn(async () => 32_768);
+    const { service, ollamaService } = buildService({
+      rows: [row({ id: 'user-msg', role: 'user', content: 'hello' })],
+      chatStream,
+      resolveChatContextTokens,
+    });
+
+    await service.execute(payload);
+
+    expect(resolveChatContextTokens).not.toHaveBeenCalled();
+    expect(ollamaService.chatStream).toHaveBeenCalledWith(expect.anything(), expect.any(Array), expect.objectContaining({ numCtx: 4096 }));
   });
 });
